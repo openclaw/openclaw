@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { buildConfiguredAcpSessionKey } from "../persistent-bindings.types.js";
 import {
@@ -15,11 +16,16 @@ import {
 
 installAcpSessionManagerTestLifecycle();
 
-function setup<T extends SessionAcpMeta | undefined>(meta: T, sessionKey: string) {
+function setup(meta: SessionAcpMeta | undefined, sessionKey: string) {
   const f = managerFixture(sessionKey);
-  const state = { currentMeta: meta };
+  const state: { currentMeta: SessionAcpMeta | undefined } = { currentMeta: meta };
   mockMutableSession(sessionKey, state);
-  return { ...f, ...f.runtimeState, state, readMeta: () => state.currentMeta };
+  return {
+    ...f,
+    ...f.runtimeState,
+    state,
+    readMeta: () => expectDefined(state.currentMeta, "session metadata"),
+  };
 }
 
 async function runTurn(

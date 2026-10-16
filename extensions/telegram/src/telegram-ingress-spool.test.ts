@@ -50,7 +50,12 @@ async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Promise<T
   }
 }
 
-const chat = { id: -100123, type: "supergroup" as const, title: "Reviewers", is_forum: true };
+const chat = {
+  id: -100123,
+  type: "supergroup" as const,
+  title: "Reviewers",
+  is_forum: true as const,
+};
 const sender = { id: 111, first_name: "Ada" };
 function pollEntry(pollId: string) {
   return {

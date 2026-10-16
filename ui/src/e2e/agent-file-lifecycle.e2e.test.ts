@@ -142,7 +142,7 @@ suite.define(() => {
         await waitForControlUiProofSurface(tooltip, [hint, expand]);
         expect(
           await expand.evaluate((anchor) => {
-            const host = anchor.closest("openclaw-tooltip");
+            const host = anchor.closest<HTMLElement & { anchor?: Element }>("openclaw-tooltip");
             const tooltipAnchor =
               host?.anchor ??
               host?.shadowRoot

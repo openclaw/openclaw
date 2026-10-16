@@ -136,10 +136,7 @@ function locator(threadId: string, extra: Record<string, unknown> = {}) {
   return { catalogId: "codex", hostId: "gateway:local", threadId, ...extra };
 }
 
-function expectForbidden(
-  respond: ReturnType<typeof vi.fn>,
-  message?: string | ReturnType<typeof expect.stringContaining>,
-) {
+function expectForbidden(respond: ReturnType<typeof vi.fn>, message?: unknown) {
   expect(respond).toHaveBeenCalledWith(
     false,
     undefined,

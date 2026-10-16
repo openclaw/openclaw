@@ -155,7 +155,7 @@ describe("runtime.llm.complete diagnostics", () => {
     ["legacy USD zero", { totalUsd: 0, total: 1 }, 0],
   ] as const)(
     "preserves cost evidence without inventing prices: %s",
-    async (_name, cost, expected, free) => {
+    async (_name, cost, expected, free?: boolean) => {
       const prepared = {
         ...preparedModel,
         selection: { ...preparedModel.selection, provider: "pricing-fixture", modelId: "unpriced" },
@@ -174,6 +174,7 @@ describe("runtime.llm.complete diagnostics", () => {
                   models: [
                     {
                       ...prepared.model,
+                      api: "openai-completions",
                       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                     },
                   ],
@@ -205,7 +206,13 @@ describe("runtime.llm.complete diagnostics", () => {
     ["disabled", { input: 1 }, undefined, undefined, true],
   ] as const)(
     "emits usage only for positive enabled tokens or cost: %s",
-    async (_name, rawUsage, expectedEventUsage, expectedCostUsd, disabled) => {
+    async (
+      _name,
+      rawUsage,
+      expectedEventUsage?: typeof emptyUsage,
+      expectedCostUsd?: number,
+      disabled?: boolean,
+    ) => {
       hoisted.complete.mockResolvedValueOnce(completion(rawUsage));
       const usageEvents = captureUsageEvents();
       await complete(disabled ? { ...cfg, diagnostics: { enabled: false } } : cfg);

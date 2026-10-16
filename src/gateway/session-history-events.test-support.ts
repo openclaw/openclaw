@@ -1,8 +1,10 @@
 import path from "node:path";
-import type { DatabaseSync, StatementSync } from "node:sqlite";
+import type { StatementSync } from "node:sqlite";
 import { expect, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { SessionHistoryWorkerRequest } from "../config/sessions/session-history-types.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -53,20 +55,21 @@ export function expectMessageIds(messages: unknown[], ids: (string | undefined)[
   expect(messages.map(readChatHistoryMessageId)).toEqual(ids);
 }
 
-export function observeHistorySql(database: DatabaseSync, matches: (sql: string) => boolean) {
-  const prototype: StatementSync = Object.getPrototypeOf(database.prepare("SELECT 1"));
+export function observeHistorySql(database: EngineConnection, matches: (sql: string) => boolean) {
+  const prototype: StatementSync = Object.getPrototypeOf(
+    requireNativeSqliteDatabase(database).prepare("SELECT 1"),
+  );
   const queries: string[] = [];
   const observers = (["all", "get", "iterate", "run"] as const).map((method) => {
-    return vi.spyOn(prototype, method).mockImplementation(
-      new Proxy(prototype[method], {
-        apply(read, receiver: StatementSync, args) {
-          if (matches(receiver.sourceSQL)) {
-            queries.push(receiver.sourceSQL);
-          }
-          return Reflect.apply(read, receiver, args);
-        },
-      }),
-    );
+    const observer = new Proxy(prototype[method], {
+      apply(read, receiver: StatementSync, args) {
+        if (matches(receiver.sourceSQL)) {
+          queries.push(receiver.sourceSQL);
+        }
+        return Reflect.apply(read, receiver, args);
+      },
+    });
+    return vi.spyOn(prototype, method).mockImplementation(observer);
   });
   return { queries, restore: () => observers.forEach((observer) => observer.mockRestore()) };
 }

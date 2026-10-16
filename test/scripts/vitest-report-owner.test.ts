@@ -53,7 +53,7 @@ const inventory = (report: {
   report.testResults
     .flatMap((file) => file.assertionResults.map((test) => [test.fullName.trim(), test.status]))
     .toSorted(compareCases);
-const expected = [
+const expected: [string, string][] = [
   ["alpha/one", "passed"],
   ["alpha/two", "passed"],
   ["beta/one", "passed"],

@@ -46,7 +46,7 @@ async function withHistory(
     database: ReturnType<typeof openOpenClawAgentDatabase>;
     reader: HistoryReader;
     readRecent: (
-      options?: RecentOptions,
+      options?: Partial<RecentOptions>,
     ) => ReturnType<HistoryReader["readRecentSessionMessagesWithStatsAsync"]>;
   }) => Promise<void>,
   options: { sharedStore?: boolean } = {},
@@ -392,7 +392,7 @@ it("retains the matching-entry and blank-key validation bypass", async () => {
 it.each(["missing", "successor", "retained"] as const)(
   "does not retarget or reject requested history for a %s entry",
   async (state) => {
-    await withHistory(async ({ target, database, readRecent }) => {
+    await withHistory(async ({ target, database }) => {
       if (state === "missing") {
         target.entryValidationKey = "agent:main:missing-row";
         target.transcript.sessionKey = target.entryValidationKey;
@@ -409,7 +409,9 @@ it.each(["missing", "successor", "retained"] as const)(
           .prepare("UPDATE session_nodes SET entry_valid = -1 WHERE session_key = ?")
           .run(target.entryValidationKey!);
       }
-      const page = await readRecent();
+      const page = await createReadonlySessionHistoryReader(
+        target,
+      ).readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 });
       expectMessageIds(page.messages, ["requested-message"]);
       expect(target.transcript.sessionId).toBe("requested-history");
     });

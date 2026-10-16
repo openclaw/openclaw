@@ -54,7 +54,7 @@ describe("vitest process group helpers", () => {
     });
     vi.spyOn(fs, "readFileSync").mockImplementation((file) => {
       if (String(file) === "/proc/self/mounts") {
-        return procRead(mounts);
+        return procRead<string>(mounts);
       }
       const task = /^\/proc\/(\d+)\/task\/(\d+)\/stat$/.exec(String(file));
       const pid = /^\/proc\/(\d+)\/stat$/.exec(String(file))?.[1] ?? "";
@@ -83,9 +83,12 @@ describe("vitest process group helpers", () => {
     return completion;
   }
 
-  function cleanupFixture(forceSignal?: NodeJS.Signals, capacity = false) {
+  function cleanupFixture(
+    forceSignal?: Parameters<typeof installVitestProcessGroupCleanup>[0]["forceSignal"],
+    capacity = false,
+  ) {
     const fakeProcess = new EventEmitter().setMaxListeners(10);
-    vi.spyOn(fakeProcess, "setMaxListeners");
+    const setMaxListeners = vi.spyOn(fakeProcess, "setMaxListeners");
     const processObject = capacity
       ? fakeProcess
       : {
@@ -105,8 +108,9 @@ describe("vitest process group helpers", () => {
       install,
       kill,
       fakeProcess,
+      setMaxListeners,
       emit: (event: string) => fakeProcess.emit(event),
-      expectCounts(count: number) {
+      expectCounts(this: void, count: number) {
         expect(
           ["SIGINT", "SIGTERM", "exit"].map((event) => fakeProcess.listenerCount(event)),
         ).toEqual([count, count, count]);
@@ -326,10 +330,10 @@ describe("vitest process group helpers", () => {
   });
 
   it("raises process listener limits for highly parallel cleanup handlers", () => {
-    const { install, fakeProcess, expectCounts } = cleanupFixture(undefined, true);
+    const { install, fakeProcess, setMaxListeners, expectCounts } = cleanupFixture(undefined, true);
     const cleanups = Array.from({ length: 12 }, (_, index) => install(4200 + index));
     expect(fakeProcess.getMaxListeners()).toBeGreaterThan(10);
-    expect(fakeProcess.setMaxListeners).toHaveBeenCalled();
+    expect(setMaxListeners).toHaveBeenCalled();
 
     for (const cleanup of cleanups) {
       cleanup.teardown();

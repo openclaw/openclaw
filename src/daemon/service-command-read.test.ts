@@ -323,7 +323,7 @@ describe("native service command inspection", () => {
     ],
   ] satisfies Array<[object, ServiceInspectionDiagnostic, string, boolean?]>)(
     "preserves safe Scheduler diagnostics: %j",
-    async (response, diagnostic, reported, missingStartupHome = false) => {
+    async (response, diagnostic, reported, missingStartupHome?: boolean) => {
       vi.spyOn(performance, "now").mockReturnValue(0);
       native.scheduler.mockReturnValue(response);
       const inspectionEnv = missingStartupHome

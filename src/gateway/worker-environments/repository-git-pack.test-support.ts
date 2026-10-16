@@ -83,7 +83,10 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
   const disconnected = createDeferred();
   const mode = { reject: false, stall: false };
   const requests: string[] = [];
-  const server = http.createServer(async (request, response) => {
+  const serve: http.RequestListener = (request, response) => {
+    void handleRequest(request, response);
+  };
+  async function handleRequest(request: http.IncomingMessage, response: http.ServerResponse) {
     requests.push(request.headers.authorization ?? "");
     received.resolve();
     response.once("close", disconnected.resolve);
@@ -134,7 +137,8 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
       response.writeHead(500);
       response.end("Synthetic Git backend failed");
     }
-  });
+  }
+  const server = http.createServer(serve);
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
   });

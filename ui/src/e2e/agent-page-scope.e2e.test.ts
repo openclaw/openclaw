@@ -118,7 +118,7 @@ suite.define(() => {
         featureMethods: ["cron.list"],
         methodResponses: {
           "agents.list": roster([
-            multiAgentRoster[0],
+            ...multiAgentRoster.slice(0, 1),
             { id: "alpha", name: "Needle Alpha" },
             { id: "charlie", name: "Needle Charlie" },
           ]),

@@ -1,11 +1,11 @@
 import { expect, it } from "vitest";
-import type { GatewaySessionRow } from "../api/types.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import type { ControlUiSessionFixture } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI Home context updates" });
@@ -14,8 +14,8 @@ const homeKey = "agent:main:main";
 function session(
   key: string,
   label: string,
-  overrides: Partial<GatewaySessionRow> = {},
-): GatewaySessionRow {
+  overrides: Partial<ControlUiSessionFixture> = {},
+): ControlUiSessionFixture {
   return { key, label, kind: "direct", updatedAt: Date.now(), ...overrides };
 }
 const pageOptions = { viewport: { width: 1280, height: 900 } };
@@ -27,9 +27,17 @@ suite.define(() => {
       await suite.withPage(pageOptions, async ({ page }) => {
         const savedLayout = {
           columns: [
-            { side: "right", panels: [mainSlot, "conversation"].map((slot) => ({ slot })) },
+            {
+              id: "side-panel-column",
+              side: "right",
+              panels: [mainSlot, "conversation"].map((slot) => ({ id: slot, slot })),
+              activePanelId: "conversation",
+              width: 480,
+              height: 360,
+            },
           ],
           mainPanelId: mainSlot,
+          open: true,
         };
         const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
         await page.addInitScript(

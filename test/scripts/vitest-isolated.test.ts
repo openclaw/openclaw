@@ -339,6 +339,9 @@ function lifecycle(
           return result(125);
         }
         present = false;
+        break;
+      default:
+        throw new Error(`Unexpected fixture command: ${args.join(" ")}`);
     }
     return result();
   };

@@ -342,7 +342,7 @@ describe("telegram thread bindings", () => {
   });
 
   it("drops stopped-manager bindings without clearing a replacement generation", async () => {
-    const stopped = await createTelegramThreadBindingManager({
+    const stopped = await createManager({
       accountId: "manager-lifecycle",
       persist: false,
     });
@@ -358,7 +358,7 @@ describe("telegram thread bindings", () => {
 
     await stopped.stop();
 
-    const replacement = await createTelegramThreadBindingManager({
+    const replacement = await createManager({
       accountId: "manager-lifecycle",
       persist: false,
     });

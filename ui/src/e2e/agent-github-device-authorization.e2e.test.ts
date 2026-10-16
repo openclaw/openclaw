@@ -147,10 +147,44 @@ async function beginAuthorization(
 suite.define(() => {
   it("keeps native GitHub status compact across Profile and agent Settings without changing setup scope", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
+      const native = {
+        ...systemOAuth,
+        source: "system-detected",
+        credentialKind: "native",
+        credentialState: "unavailable",
+        account: null,
+        gitAuthor: { name: null, email: null },
+        evidence: "none",
+        accessExpiresAtMs: null,
+        refreshState: "not_applicable",
+        oauthScopes: [],
+      } as const;
       const gateway = await installMockGateway(page, {
         operatorScopes: adminScopes,
         methodResponses: {
           ...tools,
+          "tools.github.status": {
+            cases: [
+              {
+                match: { selectedScope: "system" },
+                response: {
+                  agentId: "main",
+                  selectedScope: "system",
+                  selected: { scope: "system", configured: false, identity: native },
+                  effective: native,
+                },
+              },
+              {
+                match: { selectedScope: "agent" },
+                response: {
+                  agentId: "main",
+                  selectedScope: "agent",
+                  selected: { scope: "agent", configured: false, identity: null },
+                  effective: native,
+                },
+              },
+            ],
+          },
         },
       });
       await page.goto(`${suite.server.baseUrl}settings/profile`);

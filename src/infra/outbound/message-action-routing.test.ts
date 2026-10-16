@@ -261,6 +261,10 @@ describe("runMessageAction plugin dispatch", () => {
     const handleAction = vi.fn<NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>>(
       async () => jsonResult({ ok: true }),
     );
+    const accountActions = {
+      describeMessageTool: () => ({ actions: ["send" as const] }),
+      handleAction,
+    };
     const accountPlugin: ChannelPlugin = {
       id: "accountchat",
       meta: {
@@ -278,7 +282,7 @@ describe("runMessageAction plugin dispatch", () => {
       directory: {
         listGroupsLive: async () => [{ id: "channel:resolved", name: "resolved", kind: "group" }],
       },
-      actions: { describeMessageTool: () => ({ actions: ["send"] }), handleAction },
+      actions: accountActions,
     };
     const setGatewayAccountPlugin = (overrides: Partial<ChannelPlugin>) =>
       setTestPlugin(
@@ -348,7 +352,7 @@ describe("runMessageAction plugin dispatch", () => {
 
     it("leaves an omitted account absent when delegating an action to the Gateway", async () => {
       setGatewayAccountPlugin({
-        actions: { ...accountPlugin.actions, resolveExecutionMode: () => "gateway" },
+        actions: { ...accountActions, resolveExecutionMode: () => "gateway" },
       });
       mocks.callGatewayLeastPrivilege.mockResolvedValue({ ok: true });
       await sendAccountAction(

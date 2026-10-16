@@ -123,7 +123,7 @@ function createContinuationHarness(options?: {
     get draft() {
       return draft;
     },
-    adopt(candidate: RetainedDraft) {
+    adopt(this: void, candidate: RetainedDraft) {
       draft = candidate;
       return true;
     },

@@ -249,7 +249,7 @@ it.each([
         const viewer = {
           sessions: { others: "view" as const },
           agents: "*" as const,
-          scopes: ["operator.read", "operator.write"],
+          scopes: ["operator.read" as const, "operator.write" as const],
         };
         cfg = { gateway: { roles: { default: "viewer", definitions: { viewer } } } };
         setRuntimeConfigSnapshot(cfg);

@@ -28,7 +28,7 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "./gateway-request-scope.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
-import type { LlmCompleteParams } from "./types-core.js";
+import type { LlmCompleteParams, LlmIsolatedAgentRuntimeCompleteParams } from "./types-core.js";
 
 const mocks = vi.hoisted(() => ({
   acquire: vi.fn<typeof CompletionRuntime.acquireSimpleCompletionModelForAgent>(),
@@ -125,11 +125,12 @@ function operator(assertCurrent: () => void = () => {}, retain?: () => () => voi
 
 type CompletionMode = "direct" | "isolated";
 function request(mode: CompletionMode): LlmCompleteParams {
-  return {
-    messages: [{ role: "user", content: "Answer the synthetic question." }],
-    model: "friendly-alias",
-    ...(mode === "isolated" ? { execution: { mode: "isolated-agent-runtime" as const } } : {}),
-  };
+  const messages: LlmIsolatedAgentRuntimeCompleteParams["messages"] = [
+    { role: "user", content: "Answer the synthetic question." },
+  ];
+  return mode === "isolated"
+    ? { messages, model: "friendly-alias", execution: { mode: "isolated-agent-runtime" } }
+    : { messages, model: "friendly-alias" };
 }
 
 function completion() {

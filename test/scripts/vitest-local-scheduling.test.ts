@@ -8,7 +8,7 @@ import {
 } from "../../scripts/lib/vitest-local-scheduling.mts";
 
 const GiB = 1024 ** 3;
-const hostInfo = (overrides: VitestHostInfo) => ({
+const hostInfo = (overrides: Partial<VitestHostInfo>) => ({
   cpuCount: 16,
   totalMemoryBytes: 128 * GiB,
   freeMemoryBytes: 32 * GiB,

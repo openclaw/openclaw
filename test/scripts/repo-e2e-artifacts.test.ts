@@ -100,7 +100,16 @@ function fixture() {
   );
   git(root, "init", "-q");
   git(root, "add", ".");
-  git(root, "-cuser.name=Fixture", "-cuser.email=fixture@example.test", "commit", "-qm", "fixture");
+  git(
+    root,
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.test",
+    "commit",
+    "-qm",
+    "fixture",
+  );
   const head = git(root, "rev-parse", "HEAD").trim();
   write("dist/index.js", "#!/usr/bin/env node\nconsole.log('artifact');\n");
   fs.chmodSync(path.join(root, "dist/index.js"), 0o755);

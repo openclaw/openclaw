@@ -471,7 +471,9 @@ describe("node worker provider provisioning", () => {
 
   it("destroys an unreported node allocation without reenrolling or admitting its worker", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", state.root);
-    onTestFinished(() => vi.unstubAllEnvs());
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+    });
     const leaseId = "cloud-lease-destroy-replay";
     const deviceId = "cloud-device-destroy-replay";
     const operationIds: string[] = [];

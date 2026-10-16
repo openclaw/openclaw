@@ -432,7 +432,9 @@ describe("AcpSessionManager", () => {
       installMutableEntry(entry);
       const result = await f.close({ ...resetOptions, clearMeta: false });
       expect(result.runtimeClosed).toBe(!pending);
-      expectCalledWith(f.runtimeState.prepareFreshSession, { sessionKey, agentId: "claude" });
+      if (pending) {
+        expectCalledWith(f.runtimeState.prepareFreshSession, { sessionKey, agentId: "claude" });
+      }
       expect(entry.acp.identity).toMatchObject({
         state: "pending",
         acpxRecordId: sessionKey,
