@@ -3,7 +3,9 @@ import { WebSocketServer } from "../../packages/gateway-client/src/websocket.js"
 import { REDACTED_SENTINEL } from "../config/redact-sentinel.js";
 import type {
   GatewayControlUiIngressOpenOptionsV2,
+  GatewayControlUiIngressRequestV1,
   GatewayControlUiIngressV2,
+  GatewayControlUiIngressWebSocketRequestV1,
 } from "../plugins/gateway-ingress.types.js";
 import {
   createOpenClawTestState,
@@ -75,13 +77,31 @@ function fixture() {
   return { host, options, factory, open };
 }
 
-function request(handle: GatewayControlUiIngressV2, pathAndQuery = "/claw/") {
+function request(
+  handle: GatewayControlUiIngressV2,
+  pathAndQuery = "/claw/",
+  overrides: Partial<GatewayControlUiIngressRequestV1> = {},
+) {
   return handle.request({
     surface: "control-ui",
     method: "GET",
     pathAndQuery,
     headers: [],
     signal: new AbortController().signal,
+    ...overrides,
+  });
+}
+
+function connect(
+  handle: GatewayControlUiIngressV2,
+  overrides: Partial<GatewayControlUiIngressWebSocketRequestV1> = {},
+) {
+  return handle.openWebSocket({
+    pathAndQuery: "/claw",
+    origin: handle.presentation.publicOrigin,
+    protocols: [],
+    signal: new AbortController().signal,
+    ...overrides,
   });
 }
 
@@ -94,17 +114,18 @@ describe("remote Control UI handle", () => {
     ).rejects.toMatchObject({ code: "invalid-options" });
   });
 
-  it.each(["password"] as const)(
-    "rejects a redacted configured %s before opening transport",
-    async (mode) => {
-      const { host, open } = fixture();
-      host.getResolvedAuth = () => ({ mode, [mode]: REDACTED_SENTINEL, allowTailscale: false });
-      await expect(open()).rejects.toMatchObject({
-        code: "unsupported-auth",
-        message: expect.stringContaining("redacted Gateway credential"),
-      });
-    },
-  );
+  it("rejects a redacted configured password before opening transport", async () => {
+    const { host, open } = fixture();
+    host.getResolvedAuth = () => ({
+      mode: "password",
+      password: REDACTED_SENTINEL,
+      allowTailscale: false,
+    });
+    await expect(open()).rejects.toMatchObject({
+      code: "unsupported-auth",
+      message: expect.stringContaining("redacted Gateway credential"),
+    });
+  });
   it.each([
     ["new", 302],
     ["https://outside.example.test/", "forbidden"],
@@ -126,25 +147,14 @@ describe("remote Control UI handle", () => {
   });
 
   it("rejects invalid HTTP bytes and duplicate WebSocket protocols through native parsers", async () => {
-    const { open, options } = fixture();
+    const { open } = fixture();
     const handle = await open();
     await expect(
-      handle.request({
-        surface: "control-ui",
-        method: "GET",
-        pathAndQuery: "/claw/",
+      request(handle, "/claw/", {
         headers: [["accept", "\u0100"]],
-        signal: new AbortController().signal,
       }),
     ).rejects.toThrow();
-    await expect(
-      handle.openWebSocket({
-        pathAndQuery: "/claw",
-        origin: options.publicOrigin,
-        protocols: ["chat", "chat"],
-        signal: new AbortController().signal,
-      }),
-    ).rejects.toThrow();
+    await expect(connect(handle, { protocols: ["chat", "chat"] })).rejects.toThrow();
     const { response } = await request(handle);
     expect(response.status).toBe(200);
     await response.body?.cancel();
@@ -165,18 +175,15 @@ describe("remote Control UI handle", () => {
     expect(reopened.response.status).toBe(200);
     await reopened.response.body?.cancel();
   });
-  it.each(["trusted-proxy"] as const)(
-    "rejects unsupported %s auth with actionable typed error",
-    async (mode) => {
-      const { host, open } = fixture();
-      host.getResolvedAuth = () => ({ mode, allowTailscale: false });
-      await expect(open()).rejects.toMatchObject({
-        name: "GatewayControlUiIngressError",
-        code: "unsupported-auth",
-        message: expect.stringContaining("token or password"),
-      });
-    },
-  );
+  it("rejects unsupported trusted-proxy auth with actionable typed error", async () => {
+    const { host, open } = fixture();
+    host.getResolvedAuth = () => ({ mode: "trusted-proxy", allowTailscale: false });
+    await expect(open()).rejects.toMatchObject({
+      name: "GatewayControlUiIngressError",
+      code: "unsupported-auth",
+      message: expect.stringContaining("token or password"),
+    });
+  });
 
   it("rejects role-configured Gateways at open and after config publication", async () => {
     const { host, open } = fixture();
@@ -236,11 +243,7 @@ describe("remote Control UI handle", () => {
     const handle = await open({ operatorScopeCeiling: scopes });
     scopes.push("operator.admin");
     expect(handle.presentation.operatorScopeCeiling).toEqual(["operator.read"]);
-    const { response } = await handle.request({
-      surface: "control-ui",
-      method: "GET",
-      pathAndQuery: "/claw/",
-      signal: new AbortController().signal,
+    const { response } = await request(handle, "/claw/", {
       headers: [
         ["host", "localhost"],
         ["x-forwarded-for", "127.0.0.1"],
@@ -276,14 +279,7 @@ describe("remote Control UI handle", () => {
       "https://other.example.test",
       "http://localhost",
     ]) {
-      await expect(
-        handle.openWebSocket({
-          pathAndQuery: "/claw",
-          origin,
-          protocols: [],
-          signal: new AbortController().signal,
-        }),
-      ).rejects.toMatchObject({ code: "forbidden" });
+      await expect(connect(handle, { origin })).rejects.toMatchObject({ code: "forbidden" });
     }
   });
 
@@ -294,21 +290,18 @@ describe("remote Control UI handle", () => {
   });
 
   it("bounds main and auxiliary sockets independently", async () => {
-    const { open, options } = fixture();
+    const { open } = fixture();
     const handle = await open();
-    const connect = (pathAndQuery: string) =>
-      handle.openWebSocket({
-        pathAndQuery,
-        origin: options.publicOrigin,
-        protocols: [],
-        signal: new AbortController().signal,
-      });
     for (const path of ["/claw", "/claw", "/desktop/observe", "/browser/screencast"]) {
-      await connect(path);
+      await connect(handle, { pathAndQuery: path });
     }
     for (const path of ["/claw", "/desktop/audio"]) {
-      await expect(connect(path)).rejects.toMatchObject({ code: "limit-exceeded" });
+      await expect(connect(handle, { pathAndQuery: path })).rejects.toMatchObject({
+        code: "limit-exceeded",
+      });
     }
-    await expect(connect("/browser/extension")).rejects.toMatchObject({ code: "forbidden" });
+    await expect(connect(handle, { pathAndQuery: "/browser/extension" })).rejects.toMatchObject({
+      code: "forbidden",
+    });
   });
 });

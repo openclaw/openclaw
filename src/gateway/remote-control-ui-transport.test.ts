@@ -219,9 +219,7 @@ describe("remote Control UI memory transport", () => {
     });
     const browser = new AbortController();
     const { socket } = await transport.openWebSocket({
-      pathAndQuery: "/claw",
-      origin: "https://ui.example.test",
-      protocols: [],
+      ...websocketRequest,
       signal: browser.signal,
     });
     const authority = await admitted.promise;
@@ -246,9 +244,7 @@ describe("remote Control UI memory transport", () => {
     });
     const result = await transport.request(input);
     const bytes = new Uint8Array(await result.response.arrayBuffer());
-    expect(bytes.byteLength).toBe(256 * 1024);
-    expect(bytes[0]).toBe(1);
-    expect(bytes[bytes.byteLength - 1]).toBe(2);
+    expect([bytes.byteLength, bytes[0], bytes[bytes.byteLength - 1]]).toEqual([256 * 1024, 1, 2]);
     await result.closed;
   });
 

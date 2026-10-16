@@ -21,7 +21,6 @@ import {
   ensureCanonicalGatewayOwnerProfile,
   ensureCanonicalUserProfileForEmail,
   mergeCanonicalUserProfiles,
-  setCanonicalUserProfileRole,
   setCanonicalUserProfileAvatar,
 } from "../state/user-profile-writes.js";
 import {
@@ -31,7 +30,6 @@ import {
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { createSandboxHostHttpRequestHandler } from "./mcp-app-sandbox-http.js";
-import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import {
   connect,
   request,
@@ -45,7 +43,10 @@ import {
   TEAM_ROLES,
 } from "./remote-control-ui-ingress.integration.test-support.js";
 import { createGatewayControlUiIngressFactory } from "./remote-control-ui-ingress.js";
-import { expectMcpRelayPrincipalAuthority } from "./remote-control-ui-mcp-relay.test-support.js";
+import {
+  expectMcpRelayPrincipalAuthority,
+  setIngressRole,
+} from "./remote-control-ui-mcp-relay.test-support.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import { getControlUiModule } from "./server-http-modules.js";
@@ -595,12 +596,8 @@ describe("remote Control UI ingress production composition", () => {
     await ingress!.close();
     const admin = await ensureCanonicalUserProfileForEmail("admin@ingress.example.test");
     const reader = await ensureCanonicalUserProfileForEmail("reader@ingress.example.test");
-    await setCanonicalUserProfileRole(admin.id, "admin", {
-      onCommitted: invalidateOperatorRolePolicy,
-    });
-    await setCanonicalUserProfileRole(reader.id, "reader", {
-      onCommitted: invalidateOperatorRolePolicy,
-    });
+    await setIngressRole(admin.id, "admin");
+    await setIngressRole(reader.id, "reader");
     const people = [admin, reader];
     for (const person of people) {
       await setCanonicalUserProfileAvatar(person.id, PNG_BYTES, "image/png");
@@ -616,18 +613,17 @@ describe("remote Control UI ingress production composition", () => {
         },
       );
     }
-    auth = { mode: "trusted-proxy", trustedProxy: TRUSTED_PROXY, allowTailscale: false };
-    config = {
-      ...config,
-      gateway: {
-        ...config.gateway,
-        auth: { mode: "trusted-proxy", trustedProxy: TRUSTED_PROXY },
-        roles: TEAM_ROLES,
+    await configure(
+      {
+        ...config,
+        gateway: {
+          ...config.gateway,
+          auth: { mode: "trusted-proxy", trustedProxy: TRUSTED_PROXY },
+          roles: TEAM_ROLES,
+        },
       },
-    };
-    setRuntimeConfigSnapshot(config, config);
-    projection?.dispose();
-    projection = await createSessionRowProjection({ cfg: config, modelCatalog: [] });
+      { mode: "trusted-proxy", trustedProxy: TRUSTED_PROXY, allowTailscale: false },
+    );
     let adminMediaTicket: string | undefined;
     for (const person of people) {
       const isAdmin = person.id === admin.id;
@@ -683,9 +679,7 @@ describe("remote Control UI ingress production composition", () => {
       ).rejects.toMatchObject({ code: "forbidden" });
     }
     const policyPerson = await ensureCanonicalUserProfileForEmail("policy@ingress.example.test");
-    await setCanonicalUserProfileRole(policyPerson.id, "policy", {
-      onCommitted: invalidateOperatorRolePolicy,
-    });
+    await setIngressRole(policyPerson.id, "policy");
     await expect(
       factory.bindPrincipal({
         ...principalOptions,
@@ -694,9 +688,7 @@ describe("remote Control UI ingress production composition", () => {
     ).rejects.toMatchObject({ code: "forbidden" });
     for (const change of ["role", "merge", "grant"] as const) {
       const subject = await ensureCanonicalUserProfileForEmail(`${change}@ingress.example.test`);
-      await setCanonicalUserProfileRole(subject.id, "admin", {
-        onCommitted: invalidateOperatorRolePolicy,
-      });
+      await setIngressRole(subject.id, "admin");
       const grant = new AbortController();
       const binding = await factory.bindPrincipal({
         ...principalOptions,
@@ -706,9 +698,7 @@ describe("remote Control UI ingress production composition", () => {
       try {
         expect(await binding.request("users.self", {})).toHaveProperty("profile.id", subject.id);
         if (change === "role") {
-          await setCanonicalUserProfileRole(subject.id, "reader", {
-            onCommitted: invalidateOperatorRolePolicy,
-          });
+          await setIngressRole(subject.id, "reader");
         } else if (change === "merge") {
           await mergeCanonicalUserProfiles(subject.id, reader.id);
         } else {

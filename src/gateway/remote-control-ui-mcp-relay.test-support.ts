@@ -47,6 +47,15 @@ import { prepareGatewayRequestHandler } from "./server-methods/lazy-core-handler
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { GatewayClientRegistry } from "./server/client-registry.js";
 
+export function setIngressRole(
+  profileId: string,
+  role: Parameters<typeof setCanonicalUserProfileRole>[1],
+) {
+  return setCanonicalUserProfileRole(profileId, role, {
+    onCommitted: invalidateOperatorRolePolicy,
+  });
+}
+
 const { default: mcpRelayPlugin } = await loadBundledPluginFacade<{
   default: Required<Pick<OpenClawPluginDefinition, "register">>;
 }>({ pluginId: "mcp-relay", artifactBasename: "index.js" });
@@ -142,9 +151,7 @@ export async function expectMcpRelayPrincipalAuthority(params: {
   const admin = await ensureCanonicalUserProfileForEmail("relay-admin@ingress.example.test");
   const reader = await ensureCanonicalUserProfileForEmail("relay-reader@ingress.example.test");
   for (const person of [admin, reader]) {
-    await setCanonicalUserProfileRole(person.id, "admin", {
-      onCommitted: invalidateOperatorRolePolicy,
-    });
+    await setIngressRole(person.id, "admin");
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: `agent:main:ingress-${person.id}` },
       {
@@ -157,22 +164,18 @@ export async function expectMcpRelayPrincipalAuthority(params: {
     );
   }
   for (const profileId of [undefined, reader.id]) {
+    const auth: ResolvedGatewayAuth = profileId
+      ? { mode: "trusted-proxy", trustedProxy: TRUSTED_PROXY, allowTailscale: false }
+      : { mode: "token", token: params.sharedToken, allowTailscale: false };
     const config: OpenClawConfig = {
       ...params.config,
       gateway: {
         ...params.config.gateway,
         roles: profileId ? TEAM_ROLES : undefined,
-        auth: profileId
-          ? { mode: "trusted-proxy", trustedProxy: TRUSTED_PROXY }
-          : { mode: "token", token: params.sharedToken },
+        auth,
       },
     };
-    await params.configure(
-      config,
-      profileId
-        ? { mode: "trusted-proxy", trustedProxy: TRUSTED_PROXY, allowTailscale: false }
-        : { mode: "token", token: params.sharedToken, allowTailscale: false },
-    );
+    await params.configure(config, auth);
     const approvingUi = await params.factory.open({
       ...params.openOptions,
       audienceId: `relay-consent-${profileId ?? "owner"}`,
@@ -404,9 +407,7 @@ export async function expectMcpRelayPrincipalAuthority(params: {
           ).toMatchObject({ ok: true, result: { conversationId: ownKey, messages: [] } });
           if (profileId) {
             // Existing UI authority retires; the same live grant then binds the current role.
-            await setCanonicalUserProfileRole(profileId, "reader", {
-              onCommitted: invalidateOperatorRolePolicy,
-            });
+            await setIngressRole(profileId, "reader");
             expect(await dataRequest("status", {})).toMatchObject({ ok: false });
             expect(
               await relay.next(
