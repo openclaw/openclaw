@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.10.3",
+  "version": "2026.10.4",
   "openclaw": {
     "updateAdmissionProtocol": 1,
     "databaseEngines": ["sqlite", "postgres"],
