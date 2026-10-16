@@ -158,6 +158,75 @@ function validate(
 }
 
 describe("full release validation evidence", () => {
+  it.each([
+    "accepted",
+    "undeclared",
+    "unsatisfied",
+    "wrong-attempt",
+    "different-declaration",
+    "changed-projection",
+  ])(
+    "requires the authenticated exact P projection before accepting a failed parent: %s",
+    (scenario) => {
+      const validationWaivers = {
+        schema: "openclaw.release-validation-waivers/v1",
+        targetVersion: "2026.10.4",
+        candidateSha: targetSha,
+        parentRunId: "123",
+        parentRunAttempt: 2,
+        waivers: [
+          {
+            childRole: "releaseChecksIndependent",
+            childRunId: "456",
+            childRunAttempt: 1,
+            jobName:
+              "Run repo/live E2E validation / Native live suites (Native live Z.AI Coding Plan)",
+            suiteId: "native-live-src-agents-zai-coding",
+            reason: "Provider rejected the shared credential",
+            approvedBy: "maintainer",
+          },
+        ],
+      };
+      const manifest = releaseManifest({ validationWaivers });
+      const strictEvidence = {
+        valid: true,
+        current: {
+          runId: "123",
+          runAttempt: scenario === "wrong-attempt" ? 1 : 2,
+          targetSha,
+          manifest:
+            scenario === "changed-projection" ? { ...manifest, targetRef: workflowSha } : manifest,
+        },
+        validationWaivers:
+          scenario === "different-declaration"
+            ? { ...validationWaivers, parentRunId: "789" }
+            : validationWaivers,
+        conclusions: {
+          allRequiredSucceeded: false,
+          allRequiredSatisfied: scenario !== "unsatisfied",
+        },
+      };
+      const verify = () =>
+        validateFullReleaseValidationEvidence({
+          run: releaseRun({ conclusion: "failure" }),
+          manifest,
+          expectedRepository: "openclaw/openclaw",
+          expectedRunId: "123",
+          expectedTargetSha: targetSha,
+          isTrustedMainAncestor: () => true,
+          validationWaivers:
+            scenario === "undeclared" ? undefined : JSON.stringify(validationWaivers),
+          validateEvidenceReuseStrictly: () => strictEvidence,
+        });
+      if (scenario === "accepted") {
+        expect(verify().run.conclusion).toBe("failure");
+        expect(strictEvidence.conclusions.allRequiredSucceeded).toBe(false);
+      } else {
+        expect(verify).toThrow(/conclusion=success|authenticated exact-run projection/);
+      }
+    },
+  );
+
   it("rejects retained windows-node-ci advisory evidence under current strict tooling (v4)", () => {
     const version = 4;
 

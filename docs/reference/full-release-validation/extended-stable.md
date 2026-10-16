@@ -161,28 +161,13 @@ keep Telegram selected by default. The existing
 deferral; it is rejected for `stable` and `full` and does not disable the focused
 `rerun_group=npm-telegram` workflow.
 
-Selected-test requirements are separate from explicit omissions. The reviewed
-Telegram-only exceptions are `2026.8.1-owner-approved` and
-`2026.9.1-owner-approved`. The reviewed Telegram and Matrix QA-live exceptions
-are `2026.9.5-owner-approved`, `2026.9.7-owner-approved`,
-`2026.9.8-owner-approved`, and `2026.9.9-owner-approved`. Pass the selected value
-with `-f telegram_waiver=<value>`.
-Any future exception requires a reviewed code change; a matching
-`<target-version>-owner-approved` string alone is not authorization. The value
-must name the validated target's actual
-`package.json` version, the sealed candidate version must match, and the profile
-must be `stable` or `full`. Beta, prerelease, and unlisted targets are rejected.
-Package-spec overrides must be exactly `openclaw@<target-version>`; blank specs
-select the sealed candidate.
-It omits source Telegram QA, Package Acceptance Telegram E2E, and the
-published-package Telegram E2E; their evidence states **waived / not run**,
-never passed. Telegram unit tests and every other selected gate remain active,
-including stable soak and performance checks. An explicit Telegram rerun or
-suite filter, including an aggregate such as `qa-live` or `qa-live-non-slack`
-that selects Telegram, conflicts with the waiver and is rejected. The declaration and
-target version bind the immutable execution plan, manifest, and reuse identity;
-the publisher carries the waiver into release verification notes. The beta-only
-package deferral above remains unchanged.
+Stable/full qualification always selects its Telegram coverage. The only waiver
+path is the trusted [P-side publication declaration](/reference/full-release-validation/evidence#publication-waivers)
+against exact failed jobs in an already-run FRV. It does not change the
+candidate, omit tests, or dispatch another FRV. Empty retired inputs in frozen
+release and extended-stable evidence remain readable; non-empty historical
+grants are rejected, never converted into failed-lane proof. The beta-only
+package deferral above is unchanged.
 
 Source Telegram QA uses the release checks' shared context check: an exact candidate
 SHA must remain an ancestor of its release branch, or equal its release tag.

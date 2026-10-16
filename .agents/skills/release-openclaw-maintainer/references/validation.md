@@ -129,7 +129,10 @@ to clear a flake; the selected job must still pass before publication. See the
 Native platform publication remains independent and follows its own gates.
 All-group cross-OS qualification requires all nine Linux/Windows/macOS
 install/upgrade pairs. Focused recovery may select individual lanes but does
-not itself qualify publication. No lane or soak waiver can bypass failures.
+not itself qualify publication. Soak and hard gates cannot be waived. Exact
+failed live-provider/Telegram lanes may use only the trusted
+[P-side declaration](../../../../docs/reference/full-release-validation/evidence.md#publication-waivers)
+against the existing FRV; no candidate or validation dispatch changes are needed.
 
 ## Postpublish confidence
 

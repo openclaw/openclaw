@@ -68,10 +68,13 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   access first; unset preserves ordinary routing. Shared workers inherit the
   caller group; PR/main CI and unrelated scheduled work remain outside it.
 - Check the nightly parent for the Code SHA before dispatching a fresh main validation; it seals per-child receipts that exact-target dispatches adopt when inputs match. The nightly runs this explicit trusted-main helper route (`--sha <main-sha> --workflow-sha <main-sha> --trusted-workflow-ref main`), so its parent runs on a `release-ci/<sha12>-<id>` branch, not `main`.
-- Every selected validation lane must pass; see
+- Every selected validation lane must pass or have an exact failed allowlisted
+  live-provider/Telegram job accepted by trusted P at verification/publication; see
   [Publication requirements](#publication-requirements). Stable tags require stable/full
   evidence, soak, and blocking performance. Beta-profile evidence cannot qualify
-  stable. No lane or soak waiver bypasses these requirements. All-group
+  stable. No waiver bypasses CI, artifacts, install/upgrade, soak, performance,
+  plugin prerelease, or seal/evidence integrity. Candidate workflows never grant
+  waivers or skip Telegram for one. All-group
   qualification requires all nine Linux/Windows/macOS Gateway install/upgrade
   combinations. Preserve first failures, identity, and complete evidence.
 - Native macOS, Windows, Linux, and Android publication is independent of
@@ -611,7 +614,13 @@ Decide blocker or flake for every failed test. Rerun flakes on the same Release
 SHA at most twice and file a fix-in-parallel issue/PR on `main`. A selected job
 that remains red still blocks publication; never re-cut, change tooling, or
 start a new FRV solely to clear a flake. Skipped, cancelled, missing, and unknown
-coverage also blocks. No lane or soak waiver applies.
+coverage also blocks. The sole exception for failed jobs is the trusted
+[P-side publication waiver](../../../docs/reference/full-release-validation/evidence.md#publication-waivers)
+allowlist for live-provider and Telegram lanes. Declare it against an existing
+run with `--validation-waivers-json`; never change C/Q, pass a candidate-side
+waiver input, or dispatch another FRV to grant it. Waived evidence stays failed,
+not green; every other required job and all existing publication approvals remain
+mandatory. Soak and performance can never be waived.
 
 ### Publish children
 

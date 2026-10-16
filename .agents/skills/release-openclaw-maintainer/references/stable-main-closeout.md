@@ -8,8 +8,10 @@ and closeout on `main` are separate state transitions; never imply that
 publishing stable also advanced `main`.
 
 Closeout requires the original strict stable/full publication evidence with
-soak, blocking performance, and successful selected validation lanes. Historical
-waiver-bearing receipt replay and repair are unsupported. Completion requires both the closeout manifest and its matching checksum. If only the checksum is missing,
+soak, blocking performance, and successful selected validation lanes or exact
+P-side failed-job waivers authenticated against the original publication request.
+Those failed lanes remain **waived — not a pass**. Historical candidate-side
+waiver-bearing receipt replay and repair remain unsupported. Completion requires both the closeout manifest and its matching checksum. If only the checksum is missing,
 replay an eligible strict-evidence closeout to regenerate identical bytes; do not manufacture
 new evidence. Invalid or mismatched assets remain blocking.
 
@@ -93,10 +95,12 @@ new evidence. Invalid or mismatched assets remain blocking.
    `gh workflow run openclaw-stable-main-closeout.yml --ref main -f tag=vYYYY.M.PATCH`
    after a direct Actions publication. Unrelated source pushes do not poll for
    publication completion. Manual initial closeout or replay needs only `tag`
-   when repository drill variables are configured. Replay requires successful
-   stable/full evidence with soak and blocking performance. Complete
-   manifest/checksum pairs remain recorded without rewriting. Historical
-   waiver-bearing receipt replay and repair are unsupported: the original
+   when repository drill variables are configured. Replay requires strict
+   stable/full evidence with soak and blocking performance. Published P-side
+   waivers must match the authenticated original publication input and retain
+   current approver authority; a manifest field alone grants no exception. Complete
+   manifest/checksum pairs remain recorded without rewriting. Historical candidate-side
+   waiver-bearing receipt replay and repair remain unsupported: the original
    postpublish evidence binds its validation run, which a fresh run cannot
    replace. Preserve those artifacts and stop instead of overwriting them or
    publishing again to repair a receipt.

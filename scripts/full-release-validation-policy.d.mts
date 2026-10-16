@@ -23,13 +23,6 @@ export function validateReleaseCoveragePolicyBinding(
   plan: ReleaseRecord | undefined,
   validationInputs?: ReleaseRecord,
 ): void;
-export function normalizeReleaseTelegramWaiver(input: ReleaseRecord): string;
-export function releaseWaivedIntegrationChannels(input: ReleaseRecord): string[];
-export function validateReleaseTelegramWaiverBinding(
-  plan: ReleaseRecord | undefined,
-  validationInputs?: ReleaseRecord,
-): void;
-
 export interface ReleaseRecord {
   [key: string]: unknown;
 }

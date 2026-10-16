@@ -348,6 +348,7 @@ export function validateReleasePreflightTagIdentity({ branches, ...identity }) {
  * @param {{ manifest?: unknown, repository: string, sourceSha: string, toolingSha: string,
  *   publisherSha: string, producerRunId: string | number, producerRunAttempt: string | number,
  *   publisherFullRef?: string, runGh?: typeof runReleaseToolingGh,
+ *   validationWaivers?: unknown, approverLogin?: string,
  *   publicationAuthority?: Parameters<typeof verifyReleaseToolingIdentity>[0],
  *   evidenceClient?: Parameters<typeof import("./release-ci-summary.mjs").validateReleaseRunEvidence>[1] }} options
  */
@@ -363,6 +364,8 @@ export async function verifyNpmPreflightPublicationLineage({
   evidenceClient,
   publisherFullRef = "refs/heads/main",
   publicationAuthority,
+  validationWaivers,
+  approverLogin,
 }) {
   if (manifest?.sourceAdmission?.qualificationAdmission) {
     const { authenticateCandidateOwnedArtifact } =
@@ -374,6 +377,8 @@ export async function verifyNpmPreflightPublicationLineage({
       qualificationSha: toolingSha,
       publisherSha,
       publisherFullRef,
+      validationWaivers,
+      approverLogin,
       client: evidenceClient,
     });
     if (!authenticated) {
@@ -546,6 +551,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
         identity = verifyReleaseToolingIdentity(publicationAuthority);
       } else {
         identity = await verifyNpmPreflightPublicationLineage({
+          validationWaivers: env.VALIDATION_WAIVERS_JSON,
+          approverLogin: env.VALIDATION_WAIVER_APPROVER_LOGIN ?? env.GITHUB_ACTOR,
           manifest: fullManifest,
           repository: env.GITHUB_REPOSITORY,
           sourceSha: env.EXPECTED_RELEASE_SHA,
@@ -559,6 +566,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
       }
     } else if (values["verify-publication-lineage"]) {
       identity = await verifyNpmPreflightPublicationLineage({
+        validationWaivers: process.env.VALIDATION_WAIVERS_JSON,
+        approverLogin: process.env.VALIDATION_WAIVER_APPROVER_LOGIN ?? process.env.GITHUB_ACTOR,
         manifest: values["full-release-manifest"]
           ? JSON.parse(readFileSync(values["full-release-manifest"], "utf8"))
           : undefined,

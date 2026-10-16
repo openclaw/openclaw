@@ -66,7 +66,7 @@ export function evaluateReleasePublishGates(input: {
       "publish-inputs",
       false,
       error instanceof Error ? error.message : String(error),
-      "Reseal publication inputs for the exact release source and npm selector without waivers.",
+      "Use exact source/npm inputs; retired candidate-side and soak waivers are unsupported.",
     );
   }
   const rerunGroup = scalar(field(manifest, "rerunGroup"));
@@ -148,7 +148,7 @@ export function evaluateReleasePublishGates(input: {
     "selected-lanes",
     selectedLanesError === "",
     selectedLanesError,
-    "Use authenticated Full Release Validation evidence with every selected lane passing and no waivers.",
+    "Use authenticated Full Release Validation evidence; only exact failed allowlisted live-provider/Telegram jobs may use trusted P-side publication waivers.",
   );
   if (consumer === "stable-closeout") {
     for (const gate of gates) {

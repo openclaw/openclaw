@@ -169,7 +169,6 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:process.env.C
           FAIL_FAST: "false",
           ALLOW_UNRELEASED_CHANGELOG: "false",
           SKIP_PACKAGE_TELEGRAM_E2E: "false",
-          TELEGRAM_WAIVER: "",
           RERUN_GROUP: "all",
           LIVE_SUITE_FILTER: "",
           CROSS_OS_SUITE_FILTER: "",

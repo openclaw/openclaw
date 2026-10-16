@@ -45,7 +45,6 @@ import {
   validateReleaseChildRunProvenance,
   validateReleaseCoveragePolicyBinding,
   validateReleaseExecutionPlanArtifact,
-  validateReleaseTelegramWaiverBinding,
   verifyReleaseStateArtifacts,
 } from "./full-release-validation-policy.mjs";
 import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
@@ -530,7 +529,6 @@ async function validateReuse(executionPlan, signal) {
     ) {
       throw new Error("reused release evidence no longer matches the requested validation");
     }
-    validateReleaseTelegramWaiverBinding(executionPlan, evidence.manifest.validationInputs);
     validateReleaseCoveragePolicyBinding(executionPlan, evidence.manifest.validationInputs);
     const source = validatePublicationSourceBinding(evidence.manifest, {
       sourceAdmissionContract: executionPlan.sourceAdmissionContract,
@@ -677,7 +675,6 @@ function planExpected() {
     sourceAdmissionContract: process.env.FULL_RELEASE_SOURCE_ADMISSION_CONTRACT || undefined,
     targetContextRef: process.env.TARGET_CONTEXT_REF || undefined,
     coveragePolicy: process.env.COVERAGE_POLICY || undefined,
-    telegramWaiver: process.env.TELEGRAM_WAIVER ?? "",
     ...(process.env.TARGET_VERSION ? { targetVersion: process.env.TARGET_VERSION } : {}),
     parentRunId: requiredString(process.env.GITHUB_RUN_ID, "parent run ID"),
     repository: requiredString(process.env.GITHUB_REPOSITORY, "GitHub repository"),
@@ -705,7 +702,6 @@ function publicationKnownBudget(record, evidenceReuse) {
     targetVersion: context.validationInputs.targetVersion,
     runReleaseSoak: context.runReleaseSoak,
     coveragePolicy: source.coverage.coverage_policy || undefined,
-    telegramWaiver: source.coverage.telegram_waiver,
     releasePackageSpec: source.coverage.release_package_spec,
     npmTelegramPackageSpec: source.coverage.npm_telegram_package_spec,
     liveSuiteFilter: source.coverage.live_suite_filter,
@@ -1125,7 +1121,6 @@ async function planMode() {
     gates: built.gates,
     releaseProfile: expected.releaseProfile,
     rerunGroup: expected.rerunGroup,
-    telegramWaiver: planInputs.telegramWaiver,
     targetVersion: planInputs.targetVersion,
     trustedWorkflow: planInputs.trustedWorkflow,
   };
@@ -1463,7 +1458,6 @@ async function validateManifestMode() {
   ) {
     throw new Error("release manifest publication admission differs from its immutable plan");
   }
-  validateReleaseTelegramWaiverBinding(executionPlan, manifest.validationInputs);
   validateReleaseCoveragePolicyBinding(executionPlan, manifest.validationInputs);
   const expectedChildRunIds = Object.fromEntries(
     executionPlan.children.map((child) => [

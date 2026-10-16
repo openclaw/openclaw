@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { escapeRegExp } from "./regexp.mjs";
 import { evaluateStableRollbackDrill } from "./release-publish-gates.mts";
 import {
@@ -34,6 +35,127 @@ export function verifyReleaseEvidenceChecksum({ assetName, assetBytes, checksum 
   if (!entry || entry[2] !== assetName || entry[1] !== sha256(assetBytes)) {
     throw new Error(`Release evidence checksum must bind exactly ${assetName} and its bytes.`);
   }
+}
+
+// Legacy success manifests keep their original replay contract. A failed FRV
+// needs the declaration actually consumed by trusted P, not authority serialized
+// into a release asset; the strict reader then reauthenticates its hard gates.
+export async function authenticateStableCloseoutValidation(
+  {
+    run,
+    manifest,
+    repository,
+    fullReleaseValidationRunId,
+    fullReleaseValidationRunAttempt,
+    sourceSha,
+    releasePublishRunId,
+    verifierSourceSha,
+    verifierSourceContent,
+    runGh,
+  },
+  client,
+) {
+  for (const [key, expected] of [
+    ["name", "Full Release Validation"],
+    ["event", "workflow_dispatch"],
+    ["status", "completed"],
+    ["run_attempt", Number(fullReleaseValidationRunAttempt)],
+  ]) {
+    if (run[key] !== expected) {
+      throw new Error(
+        `Full Release Validation must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`,
+      );
+    }
+  }
+  if (
+    manifest.workflowName !== "Full Release Validation" ||
+    manifest.runId !== String(fullReleaseValidationRunId) ||
+    manifest.runAttempt !== String(fullReleaseValidationRunAttempt) ||
+    manifest.targetSha !== sourceSha
+  ) {
+    throw new Error("Full Release Validation manifest does not match the closeout identity.");
+  }
+  if (run.conclusion === "success" && manifest.validationWaivers === undefined) {
+    return undefined;
+  }
+  if (run.conclusion !== "failure" || !manifest.validationWaivers) {
+    throw new Error(
+      "Full Release Validation must succeed or have authenticated original P-side waivers.",
+    );
+  }
+  const { createReleaseEvidenceClient, validateReleaseRunEvidence } =
+    await import("../release-ci-summary.mjs");
+  const { verifyReleaseToolingIdentity } = await import("../release-tooling-identity.mjs");
+  const { requireRecoveryJob } = await import("./stable-publish-recovery.mjs");
+  const evidenceClient = client ?? createReleaseEvidenceClient(repository);
+  const publisher = await evidenceClient.getRun(String(releasePublishRunId));
+  const ref = publisher.head_branch;
+  const fullRef = `refs/${ref?.startsWith("release-publish/") ? "tags" : "heads"}/${ref}`;
+  const identity = verifyReleaseToolingIdentity({
+    repository,
+    workflowRef: ref,
+    workflowFullRef: fullRef,
+    workflowSha: publisher.head_sha,
+    releasePublishRunId: String(releasePublishRunId),
+    releasePublishRunAttempt: String(publisher.run_attempt),
+    releasePublishRef: ref,
+    releasePublishFullRef: fullRef,
+    releasePublishParentStatePolicy: "manual-recovery",
+    runGh,
+  });
+  // P uses GITHUB_ACTOR, not a later rerunner's triggering_actor.
+  const approverLogin = publisher.actor?.login;
+  if (typeof approverLogin !== "string" || /\[bot\]$/iu.test(approverLogin)) {
+    throw new Error(
+      "Closeout waivers require the original authenticated human publication operator.",
+    );
+  }
+  const jobs = await evidenceClient.getRunAttemptJobs(publisher.id, publisher.run_attempt, {
+    requireComplete: true,
+  });
+  const job = requireRecoveryJob(jobs, publisher, "Resolve release target");
+  const inputs = await evidenceClient.getRunStepInputs(
+    String(publisher.id),
+    { ...job, acceptedRunAttempt: publisher.run_attempt },
+    "Validate full release validation manifest",
+  );
+  if (
+    inputs.FULL_RELEASE_VALIDATION_RUN_ID !== String(fullReleaseValidationRunId) ||
+    inputs.FULL_RELEASE_VALIDATION_RUN_ATTEMPT !== String(fullReleaseValidationRunAttempt) ||
+    inputs.EXPECTED_SHA !== sourceSha
+  ) {
+    throw new Error("Original publication validation inputs differ from the closeout identity.");
+  }
+  const declaration = JSON.parse(inputs.VALIDATION_WAIVERS_JSON);
+  if (!isDeepStrictEqual(declaration, manifest.validationWaivers)) {
+    throw new Error("Published validation waivers differ from the original publication input.");
+  }
+  const evidence = await validateReleaseRunEvidence(
+    {
+      repository,
+      runId: String(fullReleaseValidationRunId),
+      expectedTargetSha: sourceSha,
+      trustedWorkflowRef: identity.ref,
+      trustedWorkflowFullRef: identity.fullRef,
+      trustedWorkflowSha: identity.sha,
+      verifierSourceSha,
+      verifierSourceContent,
+      validationWaivers: declaration,
+      approverLogin,
+    },
+    evidenceClient,
+  );
+  if (
+    !evidence.valid ||
+    !evidence.conclusions.allRequiredSatisfied ||
+    evidence.current.runAttempt !== Number(fullReleaseValidationRunAttempt) ||
+    !isDeepStrictEqual(evidence.current.manifest, manifest)
+  ) {
+    throw new Error(
+      "Published validation manifest differs from authenticated original P-side evidence.",
+    );
+  }
+  return evidence;
 }
 
 export function parseStableReleaseTag(tag) {

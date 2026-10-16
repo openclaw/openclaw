@@ -30,6 +30,11 @@ on:
         description: Exact successful Full Release Validation run attempt for this tag/SHA
         required: false
         type: string
+      validation_waivers_json:
+        description: Exact P-side waiver envelope for the already-run Full Release Validation; never changes qualification
+        required: false
+        default: ""
+        type: string
       release_evidence_mode:
         description: Publication evidence contract
         required: true
@@ -98,6 +103,12 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  VALIDATION_WAIVERS_JSON: ${{ inputs.validation_waivers_json }}
+  RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+  RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+  RELEASE_PUBLISH_REF: ${{ inputs.release_publish_branch }}
+  RELEASE_PUBLISH_FULL_REF: ${{ inputs.release_publish_full_ref }}
+  RELEASE_PUBLISH_PARENT_STATE_POLICY: ${{ inputs.release_publish_run_id != '' && (github.actor == 'github-actions[bot]' && 'active' || 'manual-recovery') || '' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.21.0"
 
@@ -426,7 +437,7 @@ jobs:
           sparse-checkout: scripts
 
       - name: Download full release validation manifest
-        if: ${{ inputs.release_evidence_mode == 'full-release-validation' && inputs.full_release_validation_run_id != '' }}
+        if: ${{ inputs.validation_waivers_json == '' && inputs.release_evidence_mode == 'full-release-validation' && inputs.full_release_validation_run_id != '' }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ inputs.full_release_validation_run_attempt }}

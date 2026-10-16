@@ -544,83 +544,6 @@ describe("full release execution plan", () => {
     },
   );
 
-  it.each([{ liveSuiteFilter: "TELEGRAM" }, { releasePackageSpec: "openclaw@2026.8.2" }])(
-    "rejects a Telegram waiver outside its owner-approved scope: %j",
-    (override) => {
-      expect(() =>
-        plan({
-          telegramWaiver: "2026.8.1-owner-approved",
-          targetVersion: "2026.8.1",
-          releaseProfile: "stable",
-          ...override,
-        }),
-      ).toThrow(/Telegram waiver/u);
-    },
-  );
-
-  it("seals the Telegram waiver and exact version 2026.9.5 into the immutable plan", () => {
-    const version = "2026.9.5";
-    const waiver = { telegramWaiver: `${version}-owner-approved`, targetVersion: version };
-    const artifact = executionPlan(
-      {
-        ...waiver,
-        releaseProfile: "stable",
-        releasePackageSpec: `openclaw@${version}`,
-        children: {},
-      },
-      waiver,
-    );
-    expect(validateReleaseExecutionPlanArtifact(artifact)).toMatchObject(waiver);
-    for (const result of ["success", "failure"]) {
-      const claimed = {
-        ...artifact,
-        children: artifact.children.map((plannedChild) =>
-          plannedChild.key === "npmTelegram" ? { ...plannedChild, result } : plannedChild,
-        ),
-      };
-      expect(() =>
-        validateReleaseExecutionPlanArtifact({
-          ...claimed,
-          sha256: releaseExecutionPlanSha256(claimed),
-        }),
-      ).toThrow("Telegram waiver requires an unrun Telegram child");
-    }
-    const changed = { ...artifact, targetVersion: "2026.8.2" };
-    expect(() => validateReleaseExecutionPlanArtifact(changed)).toThrow(/digest/u);
-    expect(() =>
-      validateReleaseExecutionPlanArtifact({
-        ...changed,
-        sha256: releaseExecutionPlanSha256(changed),
-      }),
-    ).toThrow(/Telegram waiver/u);
-    expect(() => validateReleaseExecutionPlanArtifact(artifact, { telegramWaiver: "" })).toThrow(
-      /Telegram waiver/u,
-    );
-    const candidate = candidateBinding();
-    expect(() =>
-      executionPlan(
-        { ...waiver, releaseProfile: "stable", children: {} },
-        { ...waiver, attemptEvidenceVersion: 2, candidate, candidateRequest: candidate.request },
-      ),
-    ).toThrow("Telegram waiver target version differs from the release candidate");
-    const manifest = fullReleaseCandidateManifestFixture(candidateRequestInput());
-    manifest.package.version = version;
-    const matchingCandidate = buildFullReleaseCandidateBinding({
-      manifest,
-      artifact: candidate.evidenceArtifact,
-    });
-    const sealedCandidatePlan = executionPlan(
-      { ...waiver, releaseProfile: "stable", children: {} },
-      {
-        ...waiver,
-        attemptEvidenceVersion: 2,
-        candidate: matchingCandidate,
-        candidateRequest: matchingCandidate.request,
-      },
-    );
-    expect(validateReleaseExecutionPlanArtifact(sealedCandidatePlan)).toMatchObject(waiver);
-  });
-
   it.each([
     ["target", { targetSha: "c".repeat(40) }],
     ["soak", { releaseSoak: false }],
@@ -2368,44 +2291,30 @@ console.log(JSON.stringify({
   });
 
   it.each([
-    { name: "owner-waived evidence", waived: true, mutation: "none", blocker: "" },
+    { name: "unchanged source manifest", mutation: "none", blocker: "" },
     {
       name: "changed source manifest",
-      waived: false,
       mutation: "sha",
       blocker: "provenance_mismatch",
     },
-    {
-      name: "missing source waiver",
-      waived: true,
-      mutation: "waiver",
-      blocker: "reused_evidence_invalid",
-    },
-  ])("revalidates $name at the Decision boundary", ({ waived, mutation, blocker }) => {
+  ])("revalidates $name at the Decision boundary", ({ mutation, blocker }) => {
     const root = tempDirs.make("frv-reuse-decision-");
     const output = join(root, "decision.json");
     const executionPlanPath = join(root, "plan.json");
     const gh = join(root, "gh");
     const validator = join(root, "validator.mjs");
-    const waiver = waived
-      ? { telegramWaiver: "2026.8.1-owner-approved", targetVersion: "2026.8.1" }
-      : {};
-    const sourceManifest = { ...evidenceManifest(), validationInputs: waiver };
+    const sourceManifest = { ...evidenceManifest(), validationInputs: {} };
     const revalidatedManifest = structuredClone(sourceManifest);
     if (mutation === "sha") {
       revalidatedManifest.targetSha = "c".repeat(40);
-    } else if (mutation === "waiver") {
-      revalidatedManifest.validationInputs = {};
     }
     const sealedPlan = executionPlan(
       {
         rerunGroup: "ci",
         releaseProfile: "stable",
         children: { normalCi: { result: "success", runAttempt: 1, runId: "101" } },
-        ...waiver,
       },
       {
-        ...waiver,
         evidenceReuse: {
           changedPaths: [],
           evidenceSha: TARGET_SHA,

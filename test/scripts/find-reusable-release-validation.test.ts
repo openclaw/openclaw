@@ -232,7 +232,6 @@ function normalizedEvidence(options: {
   const npmTelegramRequired =
     !npmBetaCoverage &&
     validationInputs !== null &&
-    !validationInputs.telegramWaiver &&
     Boolean(validationInputs.npmTelegramPackageSpec || validationInputs.releasePackageSpec);
   const manifest = {
     version: 4,
@@ -746,41 +745,30 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     });
   });
 
-  it.each(["", "2026.8.1"])(
-    "reuses strict protected-tag evidence with Telegram waiver %j",
-    (version) => {
-      const { priorSha } = getSharedRepo();
-      const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
-      const producerRef = `release-ci/${VERIFIER_SHA.slice(0, 12)}-122`;
-      const record = normalizedEvidence({
-        producerSha: VERIFIER_SHA,
-        targetSha: priorSha,
-        trustedWorkflowRef,
-        workflowRef: producerRef,
-        validationInputs: version
-          ? {
-              ...DEFAULT_INPUTS,
-              telegramWaiver: `${version}-owner-approved`,
-              targetVersion: version,
-              releasePackageSpec: `openclaw@${version}`,
-            }
-          : DEFAULT_INPUTS,
-      });
+  it("reuses strict protected-tag evidence", () => {
+    const { priorSha } = getSharedRepo();
+    const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
+    const producerRef = `release-ci/${VERIFIER_SHA.slice(0, 12)}-122`;
+    const record = normalizedEvidence({
+      producerSha: VERIFIER_SHA,
+      targetSha: priorSha,
+      trustedWorkflowRef,
+      workflowRef: producerRef,
+    });
 
-      const result = resolveEvidence(record, {
-        inputs: record.validationInputs,
-        trustedWorkflowRef,
-        verifierOnMain: false,
-        workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
-      });
+    const result = resolveEvidence(record, {
+      inputs: record.validationInputs,
+      trustedWorkflowRef,
+      verifierOnMain: false,
+      workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
+    });
 
-      expect(result.status).toBe(0);
-      expect(parseOutput(result.stdout)).toMatchObject({
-        evidence_run_id: "111",
-        reuse: "true",
-      });
-    },
-  );
+    expect(result.status).toBe(0);
+    expect(parseOutput(result.stdout)).toMatchObject({
+      evidence_run_id: "111",
+      reuse: "true",
+    });
+  });
 
   it("reuses strict evidence produced by an ancestor of the protected tooling tag", () => {
     const { priorSha } = getSharedRepo();
@@ -871,32 +859,6 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
 
     expect(result.status).toBe(0);
     expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
-  });
-
-  it("reuses Telegram failures only when the strict verifier accepted their policy", () => {
-    const releaseProfile = "full";
-    const { priorSha } = getSharedRepo();
-    const validationInputs = {
-      ...DEFAULT_INPUTS,
-      npmTelegramPackageSpec: "openclaw@2026.7.1",
-    };
-    const record = normalizedEvidence({ targetSha: priorSha, validationInputs, releaseProfile });
-    for (const child of record.children) {
-      if (
-        ["npmTelegram", "releaseChecksIndependent", "releaseChecksCandidate"].includes(child.role)
-      ) {
-        child.conclusion = "failure";
-        record.conclusions.children[child.role] = "failure";
-      }
-    }
-
-    const result = resolveEvidence(record, {
-      inputs: validationInputs,
-      releaseProfile,
-    });
-
-    expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({ evidence_run_id: "111", reuse: "true" });
   });
 
   it("rejects noncanonical release refs and workflow SHAs outside trusted main", () => {
@@ -1014,6 +976,14 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       },
     },
     {
+      label: "failed child is not reusable green evidence",
+      mutate(record: NormalizedEvidence) {
+        const child = record.children.find((entry) => entry.role === "releaseChecksIndependent");
+        expectDefined(child, "release checks child").conclusion = "failure";
+        record.conclusions.children.releaseChecksIndependent = "failure";
+      },
+    },
+    {
       label: "extra child role",
       mutate(record: NormalizedEvidence) {
         record.children.push({
@@ -1056,8 +1026,8 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       resolverOptions: {},
     },
     {
-      expected: "validation inputs differ",
-      label: "owner-waived Telegram evidence for an unwaived request",
+      expected: "not a strict direct-root full validation",
+      label: "nonempty legacy Telegram waiver",
       recordOptions: {
         validationInputs: {
           ...DEFAULT_INPUTS,

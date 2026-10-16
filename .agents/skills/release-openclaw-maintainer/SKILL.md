@@ -27,15 +27,22 @@ Read only the references needed for the selected phase:
 
 ## Shared release boundaries
 
-Every selected validation lane must succeed: Windows and macOS Node and other
+Every selected validation lane must succeed unless an exact failed third-party
+live-provider or Telegram lane is accepted by the sole trusted P-side
+[publication waiver mechanism](../../../docs/reference/full-release-validation/evidence.md#publication-waivers).
+Waivers are declared at verification/publication against an already-run FRV,
+never in candidate workflows or dispatch inputs. They do not change C/Q or
+dispatch a new FRV, and remain **waived — not a pass**, with reason and approver.
+Never-waivable requirements include Windows and macOS Node and other
 normal CI jobs, install smoke, survivor
 lanes, `update-first-hop-compat*`, pack/npm qualification, package integrity,
 and Linux/Windows/macOS Gateway checks, including Windows packaged
 install/upgrade checks in Release Checks. A cancelled run still blocks. Preserve
 first failures and classify each one as below before recovery. Stable
 publication requires stable/full evidence, soak, and blocking performance.
-Beta-profile evidence cannot authorize stable publication. No lane or soak
-waiver can bypass these requirements. All nine Gateway install/upgrade
+Beta-profile evidence cannot authorize stable publication. No waiver can bypass
+these artifact, CI, install/upgrade, soak, performance, or integrity requirements.
+All nine Gateway install/upgrade
 combinations across Linux, Windows, and macOS are required for all-group
 qualification. Preserve identity, provenance, complete evidence, and existing
 publication approvals.
@@ -49,7 +56,8 @@ blocker is a regression in shipped bytes or behavior, or an update/install/
 publish defect; fix it on the release branch. Rerun a flake on
 the same Release SHA with at most two recorded reruns by default, and file a
 fix-in-parallel issue or PR on `main` with the evidence. Never re-cut, change
-tooling, or start a new FRV for a flake. A flake that remains red blocks publication. Main-only failures and infrastructure
+tooling, or start a new FRV for a flake. A flake that remains red blocks publication
+unless the exact P-side allowlist exception applies. Main-only failures and infrastructure
 failures (runner outages, GitHub ghost jobs, hosted-runner offload) count as
 flakes for the release.
 
@@ -79,7 +87,11 @@ workflow SHA) and current attempt. The sealed
 manifest supplies the SDK evidence digest and npm publication decisions; it
 never acknowledges SDK API changes, so supply
 `plugin_sdk_api_acknowledgement` whenever the SDK report contains changes. The
-publisher cannot accept waived validation evidence. Explicit
+publisher accepts only independently authenticated P-side waivers on its data
+allowlist; candidate-side skips and legacy non-empty Telegram grants are rejected.
+Use `--validation-waivers-json` with an existing `--full-release-run` and the
+normal direct publisher, not the prepared button. Every other required job must
+still be successful. Explicit
 publisher inputs select publication scope; the candidate helper still validates its explicit
 SDK acknowledgement when needed.
 

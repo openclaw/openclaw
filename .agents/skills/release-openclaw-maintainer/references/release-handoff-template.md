@@ -96,6 +96,12 @@ reference for commands rather than redispatching the release parent.
 
 ## Failure policy
 
+- P-side waivers: `<none | exact declaration, parent/child runs and attempts,
+  job/suite, reason, approving maintainer>`; always label **waived — not a pass**.
+  Preserve the failed candidate conclusions and strict P verification evidence.
+  No candidate-side skip, artifact/CI/install/upgrade, soak, performance, plugin
+  prerelease, or integrity waiver is allowed.
+
 - confirmed product defect that a required lane blocks on (update/install
   path, publish bytes, or another required gate proven by diagnosis): fix the
   release branch, freeze a new Code SHA, and invalidate downstream product

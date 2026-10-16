@@ -40,9 +40,15 @@ export function candidatePublicationFixture(
     transportRef?: string;
     runId?: string;
     purpose?: "publish" | "main-qualification" | "diagnostic";
+    version?: string;
+    releaseProfile?: "beta" | "stable";
+    legacyTelegramInput?: "";
   } = {},
 ) {
-  const fixture = trustedMainNpmFixture();
+  const releaseProfile = options.releaseProfile ?? "beta";
+  const version = options.version ?? "2026.8.28-beta.1";
+  const contextRef = "release/" + version.split("-")[0];
+  const fixture = trustedMainNpmFixture(releaseProfile);
   const q = options.candidateSha ?? defaultQ;
   const branch =
     options.transportRef ??
@@ -70,11 +76,11 @@ export function candidatePublicationFixture(
   Object.assign(inputs, {
     ref: q,
     expected_sha: q,
-    target_context_ref: "release/2026.8.28",
-    release_profile: "beta",
+    target_context_ref: contextRef,
+    release_profile: releaseProfile,
     rerun_group: "all",
     mode: "both",
-    run_release_soak: "false",
+    run_release_soak: String(releaseProfile !== "beta"),
     trusted_workflow_json: publicationDispatchEnvelope(
       tooling,
       { validationPurpose: purpose, publicationSelection: publishing ? selection : null },
@@ -85,7 +91,7 @@ export function candidatePublicationFixture(
     inputs,
     candidateSha: q,
     transportRef: branch,
-    candidateVersion: "2026.8.28-beta.1",
+    candidateVersion: version,
     policy: JSON.parse(readFileSync("scripts/lib/release-qualification-coverage.json", "utf8")),
     workflowSource,
   });
@@ -105,25 +111,29 @@ export function candidatePublicationFixture(
         .replaceAll('"main"', JSON.stringify(branch))
         .replaceAll("refs/heads/main", tooling.fullRef),
     );
+  const sourceRequest = publicationSourceRequest({
+    PUBLICATION_INPUTS_JSON: JSON.stringify(inputs),
+    PUBLICATION_TOOLING_JSON: JSON.stringify(tooling),
+    PUBLICATION_TARGET_CONTEXT: inputs.target_context_ref,
+    PUBLICATION_TARGET_SHA: q,
+    PUBLICATION_COVERAGE_POLICY: `npm-${releaseProfile}-v1`,
+    PUBLICATION_SKIP_TELEGRAM: String(releaseProfile === "beta"),
+    GITHUB_REPOSITORY: repository,
+    GITHUB_REF: tooling.fullRef,
+    GITHUB_SHA: q,
+    GITHUB_RUN_ID: runId,
+    GITHUB_RUN_ATTEMPT: "1",
+  });
+  if (options.legacyTelegramInput !== undefined) {
+    sourceRequest.coverage.telegram_waiver = options.legacyTelegramInput;
+  }
   const source = createPublicationSourceFact(
-    publicationSourceRequest({
-      PUBLICATION_INPUTS_JSON: JSON.stringify(inputs),
-      PUBLICATION_TOOLING_JSON: JSON.stringify(tooling),
-      PUBLICATION_TARGET_CONTEXT: inputs.target_context_ref,
-      PUBLICATION_TARGET_SHA: q,
-      PUBLICATION_COVERAGE_POLICY: "npm-beta-v1",
-      PUBLICATION_SKIP_TELEGRAM: "true",
-      GITHUB_REPOSITORY: repository,
-      GITHUB_REF: tooling.fullRef,
-      GITHUB_SHA: q,
-      GITHUB_RUN_ID: runId,
-      GITHUB_RUN_ATTEMPT: "1",
-    }),
+    sourceRequest,
     publishing ? { packages: [], platforms: [] } : null,
     publishing
       ? {
-          version: "2026.8.28-beta.1",
-          packages: [{ name: "openclaw", version: "2026.8.28-beta.1", targets: ["npm"] }],
+          version,
+          packages: [{ name: "openclaw", version, targets: ["npm"] }],
           platforms: [],
         }
       : null,
@@ -140,7 +150,7 @@ export function candidatePublicationFixture(
       npm: [
         {
           name: "openclaw",
-          version: "2026.8.28-beta.1",
+          version,
           required: true,
           observedAt: time,
           outcome: "observed",
@@ -179,6 +189,7 @@ export function candidatePublicationFixture(
     );
   })();
   const plan = Object.assign(mapped(fixture.executionPlan), {
+    targetVersion: version,
     sourceAdmissionContract: "1",
     sourceAdmission: source,
     publicationAdmissionContract: "1",
@@ -238,6 +249,7 @@ export function candidatePublicationFixture(
     inputs.target_context_ref,
     "normalized target context ref",
   );
+  manifest.validationInputs.targetVersion = version;
   for (const child of plan.children) {
     const composite = composeReleaseAttemptJobs([{ jobs: jobsFor(child.runId), runAttempt: 1 }], {
       effectiveRunAttempt: 1,
@@ -378,7 +390,7 @@ export function candidatePublicationFixture(
   const npmManifest = {
     version: 3,
     releaseSha: q,
-    releaseTag: "v2026.8.28-beta.1",
+    releaseTag: `v${version}`,
     tarballName: "openclaw.tgz",
     tarballSha256: hash(npmBytes),
     producer: npmProducer,
@@ -396,7 +408,7 @@ export function candidatePublicationFixture(
   });
   const npmArtifact = {
     id: 781,
-    name: "openclaw-npm-preflight-v2026.8.28-beta.1",
+    name: `openclaw-npm-preflight-v${version}`,
     digest: "sha256:" + hash(npmArchive),
     size_in_bytes: npmArchive.length,
     expired: false,
@@ -440,8 +452,8 @@ export function candidatePublicationFixture(
     repository,
     sourceSha: q,
     toolingSha: q,
-    tag: "v2026.8.28-beta.1",
-    version: "2026.8.28-beta.1",
+    tag: `v${version}`,
+    version,
     imageTagSuffix: "",
     builtAt: time,
     includeBrowser: false,

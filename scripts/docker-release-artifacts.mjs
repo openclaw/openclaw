@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import {
   appendFileSync,
   createReadStream,
+  existsSync,
   lstatSync,
   mkdirSync,
   readFileSync,
@@ -551,6 +552,7 @@ function verifyDockerProducerRun(runInfo, manifest, runAttempt) {
  * @param {{publisherSha: string, publisherRunId?: string, publisherRunAttempt?: string,
  *   readApi?: typeof ghJson, fullReleaseManifest?: import("./validate-full-release-validation-evidence.mjs").FullReleaseValidationManifest,
  *   evidenceClient?: ReturnType<typeof import("./release-ci-summary.mjs").createReleaseEvidenceClient>,
+ *   validationWaivers?: unknown, approverLogin?: string,
  *   publisherFullRef?: string}} options
  */
 export async function verifyDockerReleaseProducer(
@@ -563,6 +565,8 @@ export async function verifyDockerReleaseProducer(
     fullReleaseManifest,
     evidenceClient,
     publisherFullRef = "refs/heads/main",
+    validationWaivers,
+    approverLogin,
   },
 ) {
   const { repository, toolingSha, producer } = manifest;
@@ -638,6 +642,8 @@ export async function verifyDockerReleaseProducer(
       qualificationSha: toolingSha,
       publisherSha,
       publisherFullRef,
+      validationWaivers,
+      approverLogin,
       client: evidenceClient,
     });
     if (!authenticated) {
@@ -696,14 +702,44 @@ async function loadPreparedManifest(values, env) {
     runId: values["run-id"],
     runAttempt: values["run-attempt"],
   });
+  const qualificationPath = values["full-release-manifest"];
+  let fullReleaseManifest;
+  if (qualificationPath) {
+    if (!existsSync(qualificationPath) && env.VALIDATION_WAIVERS_JSON) {
+      // Failed candidates have no success seal to download. Reconstruct only
+      // with P's strict owner; this local projection is authenticated again at
+      // the exact Docker artifact/publication boundary below.
+      const { validateReleaseRunEvidence } = await import("./release-ci-summary.mjs");
+      const evidence = await validateReleaseRunEvidence({
+        repository: env.GITHUB_REPOSITORY,
+        runId: env.FULL_RELEASE_VALIDATION_RUN_ID,
+        trustedWorkflowFullRef: env.GITHUB_REF,
+        trustedWorkflowRef: env.GITHUB_REF_NAME,
+        trustedWorkflowSha: env.GITHUB_WORKFLOW_SHA,
+        verifierSourceSha: env.GITHUB_WORKFLOW_SHA,
+        verifierSourceContent: readFileSync(new URL("./release-ci-summary.mjs", import.meta.url)),
+        validationWaivers: env.VALIDATION_WAIVERS_JSON,
+        approverLogin: env.GITHUB_ACTOR,
+      });
+      requireValue(
+        evidence.valid && evidence.conclusions.allRequiredSatisfied,
+        "Docker publication requires authenticated satisfied Full Release Validation evidence.",
+      );
+      fullReleaseManifest = evidence.current.manifest;
+      mkdirSync(path.dirname(qualificationPath), { recursive: true });
+      writeFileSync(qualificationPath, JSON.stringify(fullReleaseManifest, null, 2) + "\n");
+    } else {
+      fullReleaseManifest = readJson(qualificationPath);
+    }
+  }
   return verifyDockerReleaseProducer(manifest, {
     publisherSha: env.GITHUB_WORKFLOW_SHA,
     publisherRunId: env.GITHUB_RUN_ID,
     publisherRunAttempt: env.GITHUB_RUN_ATTEMPT,
     publisherFullRef: env.GITHUB_REF,
-    fullReleaseManifest: values["full-release-manifest"]
-      ? readJson(values["full-release-manifest"])
-      : undefined,
+    fullReleaseManifest,
+    validationWaivers: env.VALIDATION_WAIVERS_JSON,
+    approverLogin: env.GITHUB_ACTOR,
   });
 }
 

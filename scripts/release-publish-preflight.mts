@@ -43,6 +43,7 @@ import {
   observeReleaseNpmState,
   readReleasePublicationPackages,
 } from "./lib/release-publish-state.mts";
+import { formatReleaseValidationWaivers } from "./lib/release-validation-waivers.mjs";
 import { verifyReleasePreflightToolingIdentity } from "./npm-preflight-tooling-identity.mjs";
 import { validateNpmPublishBoundary } from "./openclaw-npm-extended-stable-release.mjs";
 import { verifyOpenClawNpmResumeRun } from "./openclaw-npm-resume-run.mts";
@@ -62,6 +63,7 @@ type PreflightContext = {
   npmManifestPath?: string;
   npmPreflightRun?: PublishPreflightRecord;
   fullValidationEvidence?: unknown;
+  approverLogin?: string;
 };
 const SHA = /^[a-f0-9]{40}$/u;
 const POSITIVE_ID = /^[1-9][0-9]*$/u;
@@ -103,6 +105,11 @@ export async function runReleasePublishPreflight(
     "Publication inputs are consistent.",
     "Correct the named dispatch inputs and repeat preflight.",
     () => {
+      if (options.validationWaiversJson && !context.fullValidationEvidence) {
+        throw new Error(
+          "Waiver preflight requires authenticated release:candidate evidence; use pnpm release:candidate with --full-release-run and --validation-waivers-json.",
+        );
+      }
       if (
         options.tag.includes("-alpha.") ||
         options.npmDistTag === "alpha" ||
@@ -290,7 +297,7 @@ export async function runReleasePublishPreflight(
   if (evidenceRequired) {
     const run = await check(
       "validation.run",
-      "Exact successful validation attempt selected.",
+      "Exact validation attempt selected; waived failures are not passes.",
       "Supply the successful Full Release Validation run and exact attempt; use pnpm frv status --run <id> to inspect.",
       () => {
         if (!POSITIVE_ID.test(options.fullReleaseValidationRunId)) {
@@ -302,7 +309,12 @@ export async function runReleasePublishPreflight(
         );
         if (
           selectedRun.status !== "completed" ||
-          selectedRun.conclusion !== "success" ||
+          (selectedRun.conclusion !== "success" &&
+            !(
+              options.validationWaiversJson &&
+              context.fullValidationEvidence &&
+              selectedRun.conclusion === "failure"
+            )) ||
           !POSITIVE_ID.test(String(selectedRun.run_attempt))
         ) {
           throw new Error("Validation run is not completed/success with an exact attempt.");
@@ -350,7 +362,7 @@ export async function runReleasePublishPreflight(
         };
       }
       if (run && sourceSha && SHA.test(toolingSha)) {
-        await check(
+        const authenticated = await check(
           "validation.provenance",
           "Full Release Validation provenance and publication selection authenticated.",
           "Use evidence admitted for this exact release source, tooling lineage, publication route and package selection.",
@@ -384,6 +396,8 @@ export async function runReleasePublishPreflight(
             const validationOptions = {
               run,
               manifest: fullManifest,
+              validationWaivers: options.validationWaiversJson,
+              approverLogin: context.approverLogin,
               expectedRepository: options.repo,
               expectedRunId: options.fullReleaseValidationRunId,
               expectedRunAttempt: attempt,
@@ -427,6 +441,13 @@ export async function runReleasePublishPreflight(
             return authenticateFullReleaseValidationEvidence(validationOptions, client);
           },
         );
+        if (authenticated && options.validationWaiversJson) {
+          warn(
+            "validation.waivers",
+            formatReleaseValidationWaivers(options.validationWaiversJson),
+            "Waived lanes are not passes; retain this declaration with publication evidence.",
+          );
+        }
       }
       for (const consumer of [
         "publisher",
@@ -550,6 +571,8 @@ export async function runReleasePublishPreflight(
                 preflightRunId: options.preflightRunId ?? options.fullReleaseValidationRunId,
                 fullReleaseValidationRunId: options.fullReleaseValidationRunId,
                 fullReleaseValidationRunAttempt: attempt,
+                validationWaiversJson: options.validationWaiversJson,
+                approverLogin: context.approverLogin,
                 fullManifest: manifest,
                 pluginSdkApiAcknowledgement: options.pluginSdkApiAcknowledgement ?? "",
                 currentSelectorRef: `v${version}`,

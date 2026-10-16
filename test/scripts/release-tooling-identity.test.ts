@@ -14,6 +14,7 @@ import {
 } from "../../scripts/npm-preflight-tooling-identity.mjs";
 import {
   resolveReleaseToolingIdentity,
+  resolveReleasePublicationOperator,
   validateReleasePublishParentRun,
   validateReleaseToolingIdentity,
   verifyReleaseToolingIdentity,
@@ -194,7 +195,7 @@ describe("release tooling identity", () => {
     ).toThrow("branch is missing or moved");
   });
 
-  it("binds a distinct current parent run independently from tag provenance", () => {
+  it("binds bot-child approval to the original parent actor independently from tag provenance", () => {
     const runGh = vi.fn((args: string[]) => {
       if (args[1]?.includes("/git/ref/tags/")) {
         return JSON.stringify({
@@ -202,7 +203,12 @@ describe("release tooling identity", () => {
           object: { sha: SHA, type: "commit" },
         });
       }
-      return JSON.stringify(parentRun());
+      return JSON.stringify(
+        parentRun({
+          actor: { login: "original-operator" },
+          triggering_actor: { login: "maintainer" },
+        }),
+      );
     });
 
     expect(
@@ -216,6 +222,48 @@ describe("release tooling identity", () => {
         runGh,
       }),
     ).toMatchObject({ route: "protected-tag", sha: SHA });
+    expect(
+      resolveReleasePublicationOperator({
+        ...protectedIdentity(),
+        actorLogin: "github-actions[bot]",
+        releasePublishFullRef: "refs/heads/main",
+        releasePublishParentStatePolicy: "active",
+        releasePublishRef: "main",
+        releasePublishRunAttempt: PARENT_RUN_ATTEMPT,
+        releasePublishRunId: PARENT_RUN_ID,
+        runGh,
+      }),
+    ).toBe("original-operator");
+    expect(() =>
+      resolveReleasePublicationOperator({
+        ...protectedIdentity(),
+        actorLogin: "github-actions[bot]",
+        releasePublishFullRef: "refs/heads/main",
+        releasePublishParentStatePolicy: "active",
+        releasePublishRef: "main",
+        releasePublishRunAttempt: "999",
+        releasePublishRunId: PARENT_RUN_ID,
+        runGh,
+      }),
+    ).toThrow("runAttempt does not match");
+    expect(() =>
+      resolveReleasePublicationOperator({
+        ...protectedIdentity(),
+        actorLogin: "github-actions[bot]",
+        runGh,
+      }),
+    ).toThrow("verified parent publication run with a human operator");
+    const noRead = vi.fn(() => {
+      throw new Error("Unexpected GitHub read");
+    });
+    expect(
+      resolveReleasePublicationOperator({
+        ...protectedIdentity(),
+        actorLogin: "maintainer",
+        runGh: noRead,
+      }),
+    ).toBe("maintainer");
+    expect(noRead).not.toHaveBeenCalled();
     expect(runGh.mock.calls.map(([args]) => args)).toContainEqual([
       "api",
       `repos/openclaw/openclaw/actions/runs/${PARENT_RUN_ID}`,

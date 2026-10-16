@@ -28,6 +28,11 @@ on:
         description: Exact Full Release Validation run attempt; when omitted, the current attempt is resolved once before publish
         required: false
         type: string
+      validation_waivers_json:
+        description: Exact P-side waiver envelope for an already-run FRV; waived lanes are not passes
+        required: false
+        default: ""
+        type: string
       release_evidence_mode:
         description: Publication evidence contract
         required: true
@@ -124,6 +129,7 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.21.0"
+  VALIDATION_WAIVERS_JSON: ${{ inputs.validation_waivers_json }}
 
 jobs:
   resolve_release_target:
@@ -177,6 +183,7 @@ jobs:
           WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          VALIDATION_WAIVERS_JSON="${VALIDATION_WAIVERS_JSON:-}"
           RELEASE_EVIDENCE_MODE="${RELEASE_EVIDENCE_MODE:-full-release-validation}"
           FOCUSED_RELEASE_EVIDENCE_RUN_ID="${FOCUSED_RELEASE_EVIDENCE_RUN_ID:-}"
           FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT="${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT:-}"
@@ -190,6 +197,14 @@ jobs:
           fi
           if [[ "${RELEASE_TAG}" == *"-beta."* && "${RELEASE_NPM_DIST_TAG}" != "beta" ]]; then
             echo "Beta prerelease tags must publish OpenClaw to npm dist-tag beta." >&2
+            exit 1
+          fi
+          if [[ -n "${VALIDATION_WAIVERS_JSON//[[:space:]]/}" && ( "${RELEASE_EVIDENCE_MODE}" != "full-release-validation" || -z "${FULL_RELEASE_VALIDATION_RUN_ID}" ) ]]; then
+            echo "validation_waivers_json requires an existing full_release_validation_run_id in full-release-validation mode." >&2
+            exit 1
+          fi
+          if [[ -n "${VALIDATION_WAIVERS_JSON//[[:space:]]/}" && -n "${PREPARED_PLUGINS//[[:space:]]/}" ]]; then
+            echo "Validation waivers require normal direct protected-P publication; the prepared handoff does not carry an authenticated initiating human." >&2
             exit 1
           fi
           release_evidence_required=false
@@ -475,7 +490,7 @@ jobs:
           echo "attempt=$run_attempt" >> "$GITHUB_OUTPUT"
 
       - name: Download full release validation manifest
-        if: ${{ inputs.release_evidence_mode == 'full-release-validation' && (inputs.publish_openclaw_npm || inputs.plugin_publish_scope == 'all-publishable' || inputs.preflight_run_id != '' || inputs.full_release_validation_run_id != '') }}
+        if: ${{ inputs.validation_waivers_json == '' && inputs.release_evidence_mode == 'full-release-validation' && (inputs.publish_openclaw_npm || inputs.plugin_publish_scope == 'all-publishable' || inputs.preflight_run_id != '' || inputs.full_release_validation_run_id != '') }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ steps.full_run.outputs.attempt }}
@@ -519,8 +534,9 @@ jobs:
           STRICT_VALIDATOR_FILE: ${{ github.workspace }}/.release-validation-tooling/scripts/release-ci-summary.mjs
         run: |
           set -euo pipefail
+          VALIDATION_WAIVERS_JSON="${VALIDATION_WAIVERS_JSON:-}"
           manifest="${RUNNER_TEMP}/full-release-validation-manifest/full-release-validation-manifest.json"
-          if [[ ! -f "$manifest" ]]; then
+          if [[ ! -f "$manifest" && -z "${VALIDATION_WAIVERS_JSON//[[:space:]]/}" ]]; then
             echo "Full release validation manifest is missing." >&2
             ls -la "${RUNNER_TEMP}/full-release-validation-manifest" >&2 || true
             exit 1
@@ -1314,7 +1330,7 @@ jobs:
           persist-credentials: false
 
       - name: Download full release validation manifest
-        if: ${{ inputs.publish_openclaw_npm && inputs.release_evidence_mode == 'full-release-validation' }}
+        if: ${{ inputs.validation_waivers_json == '' && inputs.publish_openclaw_npm && inputs.release_evidence_mode == 'full-release-validation' }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}
@@ -1899,6 +1915,7 @@ jobs:
             evidence_args+=(
               -f full_release_validation_run_id="${FULL_RELEASE_VALIDATION_RUN_ID}"
               -f full_release_validation_run_attempt="${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}"
+              -f validation_waivers_json="${VALIDATION_WAIVERS_JSON:-}"
             )
           fi
           if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" ]]; then
@@ -2244,6 +2261,7 @@ jobs:
       prepared_manifest_sha256: ${{ needs.resolve_release_target.outputs.prepared_docker_manifest_sha256 }}
       full_release_validation_run_id: ${{ inputs.full_release_validation_run_id }}
       full_release_validation_run_attempt: ${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}
+      validation_waivers_json: ${{ inputs.validation_waivers_json }}
       focused_release_evidence_run_id: ${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' && inputs.focused_release_evidence_run_id || '' }}
       focused_release_evidence_run_attempt: ${{ needs.resolve_release_target.outputs.focused_release_evidence_run_attempt }}
       focused_release_evidence_workflow_full_ref: ${{ needs.resolve_release_target.outputs.focused_release_evidence_workflow_full_ref }}

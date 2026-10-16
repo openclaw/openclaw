@@ -339,7 +339,6 @@ function executeReleaseGroupCapture(
       RELEASE_RUN_MATURITY_SCORECARD_INPUT: "false",
       RELEASE_RUN_RELEASE_SOAK_INPUT: String(runReleaseSoak),
       RELEASE_SKIP_PACKAGE_TELEGRAM_E2E_INPUT: "false",
-      TELEGRAM_WAIVER: "",
     },
   });
   const outputText = readFileSync(output, "utf8").trim();
@@ -834,7 +833,6 @@ describe("release validation no-push transport", () => {
       expect(outputs.run_release_soak).toBe(String(effectiveSoak));
       expect(outputs.docker_required).toBe(String(effectiveSoak));
       expect(outputs.skip_package_telegram_e2e).toBe(String(!effectiveSoak));
-      expect(outputs.telegram_waiver).toBe("");
     },
   );
 
@@ -1974,6 +1972,7 @@ describe("release validation no-push transport", () => {
       full_release_validation_run_id: "${{ inputs.full_release_validation_run_id }}",
       full_release_validation_run_attempt:
         "${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}",
+      validation_waivers_json: "${{ inputs.validation_waivers_json }}",
       tag: "${{ inputs.tag }}",
       release_sha: "${{ needs.resolve_release_target.outputs.sha }}",
       prepared_run_id: "${{ needs.resolve_release_target.outputs.prepared_docker_run_id }}",

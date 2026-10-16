@@ -168,22 +168,6 @@ export function classifyReleaseChangelogEvidenceComparison(comparison, { baseSha
     policy: split ? SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY : CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY,
   };
 }
-const REVIEWED_TELEGRAM_WAIVERS = new Map([
-  ["2026.8.1-owner-approved", ["telegram"]],
-  ["2026.9.1-owner-approved", ["telegram"]],
-  ["2026.9.5-owner-approved", ["telegram", "matrix"]],
-  // Peter approved waiving minor live-channel QA for 2026.9.7 (2026-09-29 00:40 PT) when
-  // repair is not possible before release: QA Live Matrix 7/24 deterministic on
-  // 01d71319 (FRV 36534008742, jobs 109299525565 and rerun 109316259401) and Telegram
-  // QA 4/25 on 56fb8872 and e61efb6c (job 109279074202).
-  ["2026.9.7-owner-approved", ["telegram", "matrix"]],
-  // The release owner approved the same Telegram and Matrix QA-live scope for 2026.9.8
-  // on 2026-10-02. Every other stable-release gate remains blocking.
-  ["2026.9.8-owner-approved", ["telegram", "matrix"]],
-  // The release owner approved the same Telegram and Matrix QA-live scope for 2026.9.9
-  // on 2026-10-03. Every other stable-release gate remains blocking.
-  ["2026.9.9-owner-approved", ["telegram", "matrix"]],
-]);
 const HARD_GH_TRANSPORT_PATTERN =
   /HTTP (?:400|401|403|404|410|422)\b|Bad credentials|authentication required|not authenticated|gh auth login|unknown (?:command|flag)|Usage: gh\b|ENOENT|EACCES/iu;
 const RATE_LIMITED_403_PATTERN =
@@ -540,89 +524,6 @@ export function validateReleaseCoveragePolicyBinding(plan, validationInputs = {}
   }
 }
 
-// Each omission requires a reviewed code change; waived or unrun never means passed.
-export function normalizeReleaseTelegramWaiver({
-  telegramWaiver,
-  targetVersion,
-  candidateVersion,
-  releaseProfile,
-  rerunGroup,
-  liveSuiteFilter = "",
-  releasePackageSpec = "",
-  packageAcceptancePackageSpec = "",
-  npmTelegramPackageSpec = "",
-}) {
-  if (telegramWaiver === undefined || telegramWaiver === "") {
-    return "";
-  }
-  if (
-    !REVIEWED_TELEGRAM_WAIVERS.has(telegramWaiver) ||
-    telegramWaiver !== `${targetVersion}-owner-approved` ||
-    parseReleaseVersion(stringValue(targetVersion))?.baseVersion !== stringValue(targetVersion) ||
-    !["stable", "full"].includes(releaseProfile)
-  ) {
-    throw new Error("Telegram waiver requires an exact stable/full owner declaration");
-  }
-  if (candidateVersion !== undefined && candidateVersion !== targetVersion) {
-    throw new Error("Telegram waiver target version differs from the release candidate");
-  }
-  if (
-    rerunGroup === "npm-telegram" ||
-    liveSuiteFilter
-      .toLowerCase()
-      .split(",")
-      .some((lane) =>
-        [
-          "qa-live",
-          "qa-live-all",
-          "qa-all",
-          "qa-live-non-slack",
-          "qa-non-slack",
-          "non-slack",
-          "no-slack",
-          "without-slack",
-          ...REVIEWED_TELEGRAM_WAIVERS.get(telegramWaiver).flatMap((channel) => [
-            `qa-live-${channel}`,
-            `qa-${channel}`,
-            channel,
-          ]),
-        ].includes(lane.trim()),
-      )
-  ) {
-    throw new Error(
-      "Telegram waiver conflicts with explicitly requested waived-channel validation",
-    );
-  }
-  // Blank specs select the sealed SHA candidate. Registry overrides must name
-  // the waived release exactly; a moving dist-tag does not establish version.
-  if (
-    [releasePackageSpec, packageAcceptancePackageSpec, npmTelegramPackageSpec].some(
-      (spec) => spec !== "" && spec !== `openclaw@${targetVersion}`,
-    )
-  ) {
-    throw new Error(`Telegram waiver package overrides must be openclaw@${targetVersion}`);
-  }
-  return telegramWaiver;
-}
-
-export function releaseWaivedIntegrationChannels(input) {
-  return [...(REVIEWED_TELEGRAM_WAIVERS.get(normalizeReleaseTelegramWaiver(input)) ?? [])];
-}
-
-export function validateReleaseTelegramWaiverBinding(plan, validationInputs = {}) {
-  const telegramWaiver = normalizeReleaseTelegramWaiver({
-    ...validationInputs,
-    releaseProfile: plan?.releaseProfile,
-    rerunGroup: plan?.rerunGroup,
-  });
-  if (
-    telegramWaiver !== (plan?.telegramWaiver ?? "") ||
-    (telegramWaiver && validationInputs.targetVersion !== plan?.targetVersion)
-  ) {
-    throw new Error("Telegram waiver differs from the immutable execution plan");
-  }
-}
-
 export function releaseChildSpecs() {
   return [...CHILD_SPECS, ...LEGACY_CHILD_SPECS];
 }
@@ -910,7 +811,6 @@ function executionPlanChildRequired(spec, rerunGroup) {
 }
 
 export function buildReleaseExecutionPlan(input) {
-  const telegramWaiver = normalizeReleaseTelegramWaiver(input);
   if (!input.qualificationCoverage) {
     normalizeReleaseCoveragePolicy({
       ...input,
@@ -929,7 +829,6 @@ export function buildReleaseExecutionPlan(input) {
       ? input.children
       : {};
   const npmTelegramForAll =
-    !telegramWaiver &&
     rerunGroup === "all" &&
     Boolean(
       stringValue(input.npmTelegramPackageSpec).trim() ||
@@ -1094,6 +993,7 @@ function releaseExecutionPlanShape(payload) {
       ...(Object.hasOwn(payload, "qualificationCoverage")
         ? ["qualificationCoverage", "qualificationInputs"]
         : []),
+      // Frozen execution plans retain this retired field in their authenticated schema.
       ...(Object.hasOwn(payload, "telegramWaiver") ? ["targetVersion", "telegramWaiver"] : []),
       ...(Object.hasOwn(payload, "coveragePolicy") ? ["targetVersion", "coveragePolicy"] : []),
       ...(Object.hasOwn(payload, "sourceAdmissionContract")
@@ -1133,7 +1033,8 @@ function executionPlanDigestPayload(plan) {
         publicationAdmission: plan.publicationAdmission,
       }
     : {};
-  const waiver = Object.hasOwn(plan, "telegramWaiver")
+  // Hash historical bytes unchanged; publication tooling rejects nonempty legacy grants.
+  const legacyFields = Object.hasOwn(plan, "telegramWaiver")
     ? { targetVersion: plan.targetVersion, telegramWaiver: plan.telegramWaiver }
     : {};
   const coverage = Object.hasOwn(plan, "coveragePolicy")
@@ -1143,7 +1044,7 @@ function executionPlanDigestPayload(plan) {
   return {
     ...source,
     ...publication,
-    ...waiver,
+    ...legacyFields,
     ...(attemptAware
       ? {
           ...coverage,
@@ -1202,15 +1103,8 @@ export function buildReleaseExecutionPlanArtifact({
   qualificationCoverage,
   qualificationInputs,
   targetVersion,
-  telegramWaiver,
   trustedWorkflow,
 }) {
-  const waiver = normalizeReleaseTelegramWaiver({
-    telegramWaiver,
-    targetVersion,
-    releaseProfile,
-    rerunGroup,
-  });
   const attemptAware = attemptEvidenceVersion !== undefined;
   const normalizedAttemptEvidenceVersion = attemptAware
     ? Number(attemptEvidenceVersion)
@@ -1265,7 +1159,6 @@ export function buildReleaseExecutionPlanArtifact({
     ...(publicationAdmissionContract !== undefined
       ? { publicationAdmissionContract, publicationAdmission }
       : {}),
-    ...(waiver ? { telegramWaiver: waiver, targetVersion } : {}),
     ...(coveragePolicy !== undefined ? { coveragePolicy, targetVersion } : {}),
     ...(childReuse !== undefined ? { childReuse: structuredClone(childReuse) } : {}),
     version: 1,
@@ -1407,7 +1300,6 @@ function validateCandidatePlanBinding(plan, expectedCandidateRequest) {
     if (JSON.stringify(candidate.request) !== JSON.stringify(request)) {
       throw new Error("release candidate binding request differs from the execution plan");
     }
-    normalizeReleaseTelegramWaiver({ ...plan, candidateVersion: candidate.package.version });
   }
 }
 
@@ -1428,16 +1320,6 @@ export function validateReleaseExecutionPlanArtifact(payload, expected = {}) {
     payload.coveragePolicy !== expected.coveragePolicy
   ) {
     throw new Error("release coverage policy differs from the expected execution plan");
-  }
-  const telegramWaiver = normalizeReleaseTelegramWaiver(payload);
-  if (
-    (Object.hasOwn(payload, "telegramWaiver") && !telegramWaiver) ||
-    (expected.telegramWaiver !== undefined && telegramWaiver !== expected.telegramWaiver) ||
-    (telegramWaiver &&
-      expected.targetVersion !== undefined &&
-      payload.targetVersion !== expected.targetVersion)
-  ) {
-    throw new Error("Telegram waiver differs from the expected execution plan");
   }
   if (
     payload.version !== 1 ||
@@ -1939,17 +1821,6 @@ function validateExecutionPlanChildBindings(children, payload, expectedCoverage)
         child.result !== "skipped")
     ) {
       throw new Error("release coverage policy requires unrun confidence children");
-    }
-    if (
-      payload.telegramWaiver &&
-      child.key === "npmTelegram" &&
-      (child.required ||
-        child.selected ||
-        child.runId ||
-        child.runAttempt ||
-        child.result !== "skipped")
-    ) {
-      throw new Error("Telegram waiver requires an unrun Telegram child");
     }
     if (
       child.source === "fresh" &&

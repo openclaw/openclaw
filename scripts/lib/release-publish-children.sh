@@ -1242,10 +1242,21 @@ sync_npm_beta_floor() {
   echo "- npm beta floor: ${reason}; ${manual}" >> "$GITHUB_STEP_SUMMARY"
 }
 
+# This module lives in the verified P checkout, never the candidate checkout.
+release_validation_waiver_summary() {
+  node --input-type=module - "${BASH_SOURCE[0]%/*}/release-validation-waivers.mjs" "$1" <<'NODE'
+import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+const { formatReleaseValidationWaivers } = await import(pathToFileURL(process.argv[2]).href);
+const record = JSON.parse(readFileSync(process.argv[3], "utf8"));
+if (record.validationWaivers) console.log(formatReleaseValidationWaivers(record.validationWaivers));
+NODE
+}
+
 verify_published_release() {
   local release_version evidence_path canonical_evidence_path clawhub_runtime_state_path bootstrap_run_arg_present
   local expected_attempt expected_id run_attempt run_id run_label run_url target_sha
-  local validation_file workflow_ref telegram_waiver verifier
+  local validation_file workflow_ref validation_waivers verifier
   local -a verify_args
 
   release_version="${RELEASE_TAG#v}"
@@ -1322,6 +1333,16 @@ verify_published_release() {
     run_label="Authorized Beta Focused Validation"
   else
     validation_file="${FULL_RELEASE_VALIDATION_MANIFEST_DIR}/full-release-validation-manifest.json"
+    if [[ ! -f "${validation_file}" && -n "${VALIDATION_WAIVERS_JSON:-}" ]]; then
+      # Failed FRVs have no candidate success seal. Reauthenticate at the
+      # existing evidence boundary; no projection artifact/cache is transferred.
+      git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+      gh_read api "repos/${GITHUB_REPOSITORY}/actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" |
+        MANIFEST_FILE="${validation_file}" EXPECTED_SHA="${TARGET_SHA}" \
+        PUBLICATION_CONSUMER=core-npm TRUSTED_WORKFLOW_FULL_REF="${PARENT_WORKFLOW_FULL_REF}" \
+        TRUSTED_WORKFLOW_REF="${PARENT_WORKFLOW_BRANCH}" TRUSTED_WORKFLOW_SHA="${PARENT_WORKFLOW_SHA}" \
+        node "${BASH_SOURCE[0]%/*}/../validate-full-release-validation-evidence.mjs"
+    fi
     run_id="$(jq -er '.runId | select(type == "string" and length > 0)' "${validation_file}")"
     run_attempt="$(jq -er '.runAttempt | select(type == "string" and test("^[1-9][0-9]*$"))' "${validation_file}")"
     workflow_ref="$(jq -er '.workflowRef | select(type == "string" and length > 0)' "${validation_file}")"
@@ -1336,13 +1357,13 @@ verify_published_release() {
     echo "Release validation evidence changed after prepublish validation." >&2
     exit 1
   fi
-  telegram_waiver=""
+  validation_waivers="null"
   if [[ "${RELEASE_EVIDENCE_MODE}" != "authorized-beta-focused-v1" ]]; then
-    telegram_waiver="$(jq -r '.validationInputs.telegramWaiver // ""' "${validation_file}")"
+    validation_waivers="$(jq -c '.validationWaivers // null' "${validation_file}")"
   fi
   run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
   jq \
-    --arg telegram_waiver "${telegram_waiver}" \
+    --argjson validation_waivers "${validation_waivers}" \
     --arg release_publish_run_id "$GITHUB_RUN_ID" \
     --arg validation_label "${run_label}" \
     --arg validation_run_id "${run_id}" \
@@ -1350,7 +1371,7 @@ verify_published_release() {
     --arg validation_target_sha "${target_sha}" \
     --arg validation_url "${run_url}" \
     --arg validation_workflow_ref "${workflow_ref}" '
-      (if $telegram_waiver == "" then . else .telegramWaiver = $telegram_waiver end) |
+      (if $validation_waivers == null then . else .validationWaivers = $validation_waivers end) |
       .releasePublishRunId = $release_publish_run_id |
       .workflowRuns += [{
         id: $validation_run_id,
@@ -1370,12 +1391,13 @@ verify_published_release() {
   {
     echo "- Postpublish verification: passed"
     echo "- Postpublish evidence: \`${canonical_evidence_path}\`"
+    release_validation_waiver_summary "${canonical_evidence_path}"
   } >> "$GITHUB_STEP_SUMMARY"
 }
 
 append_release_proof_to_github_release() {
   local release_version proof_file notes_file metadata_file evidence_path tarball integrity telegram_line clawhub_line clawhub_bootstrap_line clawhub_runtime_state_path android_line
-  local current_body
+  local current_body validation_waivers_summary
   current_body="$(gh_read release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json body --jq '.body')" || return 1
   assert_initial_release_body "${current_body}" || return 1
 
@@ -1387,9 +1409,8 @@ append_release_proof_to_github_release() {
   tarball="$(jq -er '.openclawNpmTarball | select(type == "string" and length > 0)' "${evidence_path}")"
   integrity="$(jq -er '.openclawNpmIntegrity | select(type == "string" and length > 0)' "${evidence_path}")"
 
-  if [[ "$(jq -r '.telegramWaiver // ""' "${evidence_path}")" == "${release_version}-owner-approved" ]]; then
-    telegram_line="- Telegram integration checks: waived by the release owner for ${release_version} (source QA, Package Acceptance, published-package E2E); not run."
-  elif [[ -n "${NPM_TELEGRAM_RUN_ID// }" ]]; then
+  validation_waivers_summary="$(release_validation_waiver_summary "${evidence_path}")"
+  if [[ -n "${NPM_TELEGRAM_RUN_ID// }" ]]; then
     telegram_line="- npm Telegram beta E2E: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${NPM_TELEGRAM_RUN_ID}"
   else
     telegram_line="- npm Telegram beta E2E: not supplied"
@@ -1423,6 +1444,7 @@ append_release_proof_to_github_release() {
     CLAWHUB_LINE="${clawhub_line}" \
     CLAWHUB_BOOTSTRAP_LINE="${clawhub_bootstrap_line}" \
     TELEGRAM_LINE="${telegram_line}" \
+    VALIDATION_WAIVERS_SUMMARY="${validation_waivers_summary}" \
     ANDROID_LINE="${android_line}" \
     node --input-type=module <<'NODE'
 import { writeFileSync } from "node:fs";
@@ -1453,6 +1475,7 @@ const section = [
       ]
     : []),
   process.env.TELEGRAM_LINE,
+  ...(process.env.VALIDATION_WAIVERS_SUMMARY ? ["", process.env.VALIDATION_WAIVERS_SUMMARY] : []),
   ...(process.env.ANDROID_LINE ? [process.env.ANDROID_LINE] : []),
 ].join("\n");
 

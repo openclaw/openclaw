@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Coordinates release-candidate validation runs and emits the publish command
-// only after required local, CI, npm, plugin, and E2E evidence is green.
+// only after required evidence is satisfied; P-waived lanes remain failed, not passes.
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -36,6 +36,10 @@ import { loadChangelogCollection } from "./lib/release-changelog.mjs";
 import { releaseBranchForTag } from "./lib/release-context.mjs";
 import { ensureReleasePublishToolingTag } from "./lib/release-publish-preflight-evidence.mts";
 import { formatReleasePublishPreflight } from "./lib/release-publish-preflight-interface.mts";
+import {
+  formatReleaseValidationWaivers,
+  parseReleaseValidationWaivers,
+} from "./lib/release-validation-waivers.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 import { sleep as wait } from "./lib/sleep.mjs";
 import {
@@ -91,7 +95,7 @@ type TelegramArtifactParams = {
   sourceSha: string;
 };
 type TelegramResult = { status: string } & Partial<
-  StringFields<"artifactName" | "providerMode" | "runId" | "url">
+  StringFields<"artifactName" | "providerMode" | "runId" | "url" | "reason" | "approvedBy">
 >;
 type LocalCheckResult =
   | { status: "passed"; command: string; reason?: never }
@@ -158,7 +162,7 @@ function usage() {
   return `Usage: pnpm release:candidate -- --tag vYYYY.M.PATCH-beta.N [options]
 
 Dispatches or consumes release validation runs, validates the prepared npm tarball,
-builds plugin publish plans, writes a green evidence bundle, then prints the exact
+builds plugin publish plans, writes a qualified evidence bundle, then prints the exact
 selected publication command. --publication-route prepared selects the
 prepare-once release button for complete regular beta/stable releases.
 
@@ -171,7 +175,8 @@ Options:
   --publication-route <normal|prepared>
                                       Intended publication route. Default: normal; not inferred from a protected ref.
   --repo <owner/repo>                 GitHub repo. Default: ${DEFAULT_REPO}
-  --full-release-run <id>             Reuse successful Full Release Validation run.
+  --full-release-run <id>             Reuse an existing Full Release Validation run.
+  --validation-waivers-json <JSON>     Exact P-side waiver declaration for that already-run FRV; normal direct publication only, never dispatches validation.
   --npm-preflight-run <id>            Reuse successful OpenClaw NPM Release preflight run.
   --plugin-sdk-api-acknowledgement <digest>
                                       8-character digest from the Plugin SDK API diff report.
@@ -225,6 +230,7 @@ export function parseArgs(argv: string[]) {
     publishWorkflowRef: "",
     publicationRoute: "normal",
     fullReleaseRunId: "",
+    validationWaiversJson: "",
     npmPreflightRunId: "",
     pluginSdkApiAcknowledgement: "",
     windowsNodeTag: "",
@@ -246,6 +252,7 @@ export function parseArgs(argv: string[]) {
           ["--publication-route", "publicationRoute"],
           ["--repo", "repo"],
           ["--full-release-run", "fullReleaseRunId"],
+          ["--validation-waivers-json", "validationWaiversJson"],
           ["--npm-preflight-run", "npmPreflightRunId"],
           ["--plugin-sdk-api-acknowledgement", "pluginSdkApiAcknowledgement"],
           ["--windows-node-tag", "windowsNodeTag"],
@@ -355,6 +362,17 @@ export function parseArgs(argv: string[]) {
     : "";
   if (options.skipDispatch && !options.fullReleaseRunId) {
     throw new Error("--skip-dispatch requires --full-release-run");
+  }
+  const validationWaivers = parseReleaseValidationWaivers(options.validationWaiversJson);
+  if (validationWaivers && options.publicationRoute === "prepared") {
+    throw new Error(
+      "--validation-waivers-json requires --publication-route normal and the protected P publisher; the prepared handoff does not carry an authenticated initiating human",
+    );
+  }
+  if (validationWaivers && !options.fullReleaseRunId) {
+    throw new Error(
+      "--validation-waivers-json requires an existing --full-release-run; a waiver must never dispatch Full Release Validation",
+    );
   }
   if (options.pluginPublishScope === "selected" && !options.plugins.trim()) {
     throw new Error("--plugin-publish-scope selected requires --plugins");
@@ -1509,6 +1527,7 @@ async function waitForSuccessfulRun(
   runId: string,
   expected: {
     allowShaPinnedWorkflowRef?: boolean;
+    allowFailedForWaiver?: boolean;
     workflowName: string;
     workflowRef: string;
     validateSource?: (info: RunInfo) => ReturnType<typeof validateNpmPreflightRunSource>;
@@ -1533,7 +1552,10 @@ async function waitForSuccessfulRun(
       lastState = state;
     }
     if (info.status === "completed") {
-      if (info.conclusion !== "success") {
+      if (
+        info.conclusion !== "success" &&
+        !(expected.allowFailedForWaiver && info.conclusion === "failure")
+      ) {
         throw new Error(summarizeFailedRun(info));
       }
       if (info.workflowName !== expected.workflowName) {
@@ -1656,6 +1678,11 @@ export function buildPrepareCommand(
   },
   npmPreflightSource?: Awaited<ReturnType<typeof validateNpmPreflightRunSource>>,
 ) {
+  if (options.validationWaiversJson) {
+    throw new Error(
+      "Validation waivers require normal direct protected-P publication, not the prepared handoff.",
+    );
+  }
   const workflowRef =
     options.publishWorkflowRef || npmPreflightSource?.workflowRef || options.workflowRef;
   if (
@@ -1982,12 +2009,17 @@ async function runTelegramIfNeeded(
     (fullValidationEvidence.source === "candidate-owned-admission-v1" &&
       (qualificationManifest.releaseProfile === "stable" ||
         qualificationManifest.releaseProfile === "full"));
-  if (
-    npmUsesFullRun &&
-    coversPackageTelegram &&
-    options.telegramProviderMode === "mock-openai" &&
-    !qualificationManifest.validationInputs?.telegramWaiver
-  ) {
+  if (npmUsesFullRun && coversPackageTelegram && options.telegramProviderMode === "mock-openai") {
+    const waivedPackageTelegram = fullValidationEvidence.validationWaivers?.waivers.find(
+      (row) => row.suiteId === "package-telegram-e2e",
+    );
+    if (waivedPackageTelegram) {
+      return {
+        status: "waived — not a pass",
+        reason: waivedPackageTelegram.reason,
+        approvedBy: waivedPackageTelegram.approvedBy,
+      };
+    }
     // Authentication proves package acceptance passed with Q's mock Telegram
     // harness. Reuse only its exact qualified package, not a separately packed one.
     return { status: "covered-by-full-release-validation", providerMode: "mock-openai" };
@@ -2238,12 +2270,17 @@ async function main() {
     workflowName: "Full Release Validation",
     workflowRef: options.workflowRef,
     allowShaPinnedWorkflowRef: true,
+    allowFailedForWaiver: Boolean(options.validationWaiversJson),
   });
   const npmUsesFullRun = options.npmPreflightRunId === options.fullReleaseRunId;
   const { run: selectedNpmRun, source: npmPreflightSource } = npmUsesFullRun
     ? {
         run: fullRun,
-        source: { status: "passed", headSha: fullRun.headSha, workflowRef: options.workflowRef },
+        source: {
+          status: fullRun.conclusion === "failure" ? "waived — not a pass" : "passed",
+          headSha: fullRun.headSha,
+          workflowRef: options.workflowRef,
+        },
       }
     : await waitForSuccessfulRun(options.repo, options.npmPreflightRunId, {
         workflowName: "OpenClaw NPM Release",
@@ -2264,17 +2301,21 @@ async function main() {
     throw new Error(`Full Release Validation run ${options.fullReleaseRunId} has invalid attempt.`);
   }
   const fullArtifactName = `full-release-validation-${options.fullReleaseRunId}-${fullRun.runAttempt}`;
-  downloadArtifact(options.repo, options.fullReleaseRunId, fullArtifactName, fullDir);
-  const fullManifest = readJson(
-    join(fullDir, "full-release-validation-manifest.json"),
-    "full validation manifest",
-  );
+  const fullManifestPath = join(fullDir, "full-release-validation-manifest.json");
+  let providedFullManifest: JsonRecord | undefined;
+  if (!options.validationWaiversJson) {
+    downloadArtifact(options.repo, options.fullReleaseRunId, fullArtifactName, fullDir);
+    providedFullManifest = readJson(fullManifestPath, "full validation manifest");
+  }
+  const approverLogin = options.validationWaiversJson
+    ? run("gh", ["api", "user", "--jq", ".login"], { capture: true }).trim()
+    : undefined;
   run("git", ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"], {
     capture: true,
   });
   const fullValidationEvidence = await authenticateFullReleaseValidationEvidence({
     run: fullRun,
-    manifest: fullManifest,
+    manifest: providedFullManifest,
     expectedRepository: options.repo,
     expectedRunId: options.fullReleaseRunId,
     expectedRunAttempt: fullRun.runAttempt,
@@ -2283,10 +2324,15 @@ async function main() {
     expectedWorkflowBranch: options.workflowRef,
     expectedPublicationSelection: () => publicationSelectionForChecklist(options),
     isTrustedMainAncestor: (sha: string) => gitIsAncestor(sha, "refs/remotes/origin/main"),
-    manifestPath: join(fullDir, "full-release-validation-manifest.json"),
+    manifestPath: providedFullManifest ? fullManifestPath : undefined,
+    validationWaivers: options.validationWaiversJson,
+    approverLogin,
     verifierSourceSha: toolingSha,
     verifierSourceContent: readFileSync(join(TOOLING_ROOT, "scripts/release-ci-summary.mjs")),
   });
+  const fullManifest = fullValidationEvidence.evidence.current.manifest;
+  mkdirSync(fullDir, { recursive: true });
+  writeFileSync(fullManifestPath, `${JSON.stringify(fullManifest, null, 2)}\n`);
   if (fullValidationEvidence.source === "direct" && fullRun.headSha !== targetSha) {
     throw new Error(`run SHA mismatch: tag=${targetSha} full=${fullRun.headSha}`);
   }
@@ -2487,6 +2533,7 @@ async function main() {
       tag: options.tag,
       fullReleaseValidationRunId: options.fullReleaseRunId,
       fullReleaseValidationRunAttempt: fullRun.runAttempt,
+      validationWaiversJson: options.validationWaiversJson,
       preflightRunId: options.npmPreflightRunId,
       npmDistTag: options.npmDistTag,
       pluginPublishScope: publicationSelection.pluginPublishScope,
@@ -2512,6 +2559,7 @@ async function main() {
       npmManifestPath: join(npmDir, "preflight-manifest.json"),
       npmPreflightRun: npmRun,
       fullValidationEvidence,
+      approverLogin,
     },
   );
   const publishPreflightTable = formatReleasePublishPreflight(publishPreflight, {
@@ -2534,6 +2582,8 @@ async function main() {
     publishWorkflowIdentity,
     publicationRoute: options.publicationRoute,
     sourceAdmission: fullManifest.sourceAdmission ?? null,
+    validationWaivers: fullValidationEvidence.validationWaivers ?? null,
+    validationConclusions: fullValidationEvidence.evidence.conclusions,
     publicationAdmission,
     npmDistTag: options.npmDistTag,
     fullReleaseValidationRunId: options.fullReleaseRunId,
@@ -2551,7 +2601,7 @@ async function main() {
     pluginSdkApiValidation,
     artifacts: {
       npmPreflight: npmArtifactName,
-      fullReleaseValidation: fullArtifactName,
+      fullReleaseValidation: options.validationWaiversJson ? undefined : fullArtifactName,
     },
     releaseNotesCheck,
     releaseNotesProvenance,
@@ -2583,6 +2633,9 @@ async function main() {
       `- target SHA: ${targetSha}`,
       ...(androidVersionCheck ? [`- **${androidVersionCheck.message}**`] : []),
       `- full release validation: ${options.fullReleaseRunId} ${fullRun.url}`,
+      ...(fullValidationEvidence.validationWaivers
+        ? ["", formatReleaseValidationWaivers(fullValidationEvidence.validationWaivers), ""]
+        : []),
       `- npm preflight: ${npmProducerRunId} ${npmRun.url}`,
       ...(windowsNodeSourceRelease
         ? [
@@ -2596,7 +2649,7 @@ async function main() {
       `- Plugin SDK API evidence: ${pluginSdkApiValidation.status}${
         pluginSdkApiValidation.digest ? ` (${pluginSdkApiValidation.digest})` : ""
       }`,
-      `- full release artifact: ${fullArtifactName}`,
+      `- full release artifact: ${options.validationWaiversJson ? "P-authenticated plan-and-jobs projection (not a candidate success seal)" : fullArtifactName}`,
       `- GitHub release notes: ${releaseNotesCheck.status} (${releaseNotesCheck.mode}, ${releaseNotesCheck.characters} characters, ${releaseNotesCheck.bytes} bytes)`,
       `- changelog provenance: passed (${releaseNotesProvenance.base}..${releaseNotesProvenance.target})`,
       `- ${

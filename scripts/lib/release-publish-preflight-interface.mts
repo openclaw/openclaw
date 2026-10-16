@@ -6,6 +6,7 @@ export type ReleasePublishPreflightOptions = {
   tag: string;
   fullReleaseValidationRunId: string;
   fullReleaseValidationRunAttempt?: string | number;
+  validationWaiversJson?: string;
   preflightRunId?: string;
   npmDistTag: string;
   pluginPublishScope: "selected" | "all-publishable";
@@ -42,6 +43,7 @@ export function buildReleasePublishDispatchCommand(
     preflight_run_id: options.preflightRunId ?? options.fullReleaseValidationRunId,
     full_release_validation_run_id: options.fullReleaseValidationRunId,
     full_release_validation_run_attempt: attempt,
+    validation_waivers_json: options.validationWaiversJson,
     npm_dist_tag: options.npmDistTag,
     plugin_publish_scope: options.pluginPublishScope,
     plugins: options.plugins,

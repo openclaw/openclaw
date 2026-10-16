@@ -73,15 +73,24 @@ Every failed test needs an explicit release-lead decision: blocker or flake.
 Rerun a flake on the same Release SHA at most twice, file its fix-in-parallel
 issue or PR on `main`, and retain the original failure. Do not re-cut, change
 tooling, or start another Full Release Validation solely to clear a flake; a
-selected job that remains red blocks publication.
+selected job that remains red blocks publication unless the exact P-side
+allowlist exception below applies.
 
 Blocking jobs include the CI coverage gate, seal/evidence,
 Build Artifacts, install smoke, survivor lanes, `update-first-hop-compat*`, pack/npm
 qualification, package integrity, and all Linux/Windows/macOS Gateway checks,
 including Windows packaged install/upgrade checks in Release Checks. A cancelled
 run still blocks. The selected `openclaw/ci-gate` must succeed; failed, missing,
-skipped, or cancelled coverage blocks. Publication waivers cannot bypass failures
-or required coverage. Validation covers source CI, packages, plugins,
+skipped, or cancelled coverage blocks. The only waiver path is an explicit
+trusted publication-tooling (P) declaration against an already-run FRV. It may
+accept exact failed allowlisted third-party live-provider or Telegram lanes,
+recorded as **waived — not a pass** with reason and approving maintainer. It
+cannot waive any blocking job listed above, soak, performance, plugin prerelease,
+or evidence integrity. Every other required job must be authenticated successful.
+Granting a waiver changes neither C/Q nor its workflows and never dispatches a
+new FRV. See [Publication waivers](/reference/full-release-validation/evidence#publication-waivers)
+for exact bindings, authentication, and legacy-branch handling.
+Validation covers source CI, packages, plugins,
 Gateway installs and upgrades, and selected app, UI, Telegram, QA, and
 live-provider checks. All-group qualification includes all nine Gateway
 install/upgrade combinations across Linux, Windows, and macOS. Coverage otherwise

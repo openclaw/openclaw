@@ -112,9 +112,7 @@ export function formatDispatchSelection(
   request: Pick<DispatchRequest, "targetSha" | "workflowSha" | "inputs" | "effectiveSoak">,
 ): string {
   const { inputs } = request;
-  // Waiver values remain in the private request; operator output records selection only.
-  const waiver = inputs.telegram_waiver ? "selected (redacted)" : "omitted";
-  return `Frozen validation selection: candidate=${request.targetSha} tooling=${request.workflowSha} release_profile=${inputs.release_profile} rerun_group=${inputs.rerun_group} soak=${request.effectiveSoak} telegram_waiver=${waiver}`;
+  return `Frozen validation selection: candidate=${request.targetSha} tooling=${request.workflowSha} release_profile=${inputs.release_profile} rerun_group=${inputs.rerun_group} soak=${request.effectiveSoak}`;
 }
 
 function validateDispatchRecord(value: unknown): asserts value is DispatchRecord {
@@ -186,6 +184,11 @@ function validateDispatchRecord(value: unknown): asserts value is DispatchRecord
     "Invalid retained dispatch request identity",
   );
   const wireInputs: Record<string, string> = {};
+  // Retained frozen requests may record the old input, never a new omission grant.
+  requireDispatch(
+    request.inputs.telegram_waiver === undefined || request.inputs.telegram_waiver === "",
+    "Legacy telegram_waiver must be empty. Declare a P-side publication waiver against the already-run Full Release Validation instead; do not resume or redispatch a candidate waiver.",
+  );
   for (const [key, input] of Object.entries(request.inputs)) {
     requireDispatch(
       /^[a-z][a-z0-9_]*$/u.test(key) &&

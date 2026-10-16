@@ -43,7 +43,6 @@ const coverageInputs = {
   extension_test_exclude_patterns_json: "extensionTestExcludePatternsJson",
   qualification_baselines_json: "qualificationBaselinesJson",
   skip_package_telegram_e2e: "skipPackageTelegramE2e",
-  telegram_waiver: "telegramWaiver",
   allow_unreleased_changelog: "allowUnreleasedChangelog",
 };
 
@@ -199,8 +198,18 @@ function validatePublicationSourceFact(value, expected = {}) {
     "run_release_soak",
     "coverage_policy",
   ];
-  // Published admissions bind this retired empty field into their digest.
-  object(value.coverage, [...coverageKeys, "known_flaky_jobs_json"], "source admission coverage");
+  // Frozen release lines bind retired empty fields into their original digests.
+  // Remove once pre-cutover lines and their retained publication recovery retire.
+  object(
+    value.coverage,
+    [...coverageKeys, "known_flaky_jobs_json", "telegram_waiver"],
+    "source admission coverage",
+  );
+  if (value.coverage.telegram_waiver !== undefined && value.coverage.telegram_waiver !== "") {
+    throw new Error(
+      "Non-empty legacy telegram_waiver cannot authorize omitted coverage; declare exact failed jobs using validation_waivers_json at publication.",
+    );
+  }
   if (
     Object.hasOwn(value.coverage, "known_flaky_jobs_json") &&
     value.coverage.known_flaky_jobs_json !== "[]"

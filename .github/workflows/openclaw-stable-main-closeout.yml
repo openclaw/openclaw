@@ -459,29 +459,13 @@ jobs:
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ needs.resolve.outputs.full_release_validation_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ needs.resolve.outputs.full_release_validation_run_attempt }}
           RELEASE_PUBLISH_RUN_ID: ${{ needs.resolve.outputs.release_publish_run_id }}
+          VERIFIER_SOURCE_SHA: ${{ github.workflow_sha }}
           ALLOW_FAILED_PUBLISH_RECOVERY: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_failed_publish_recovery && 'true' || 'false' }}
         run: |
           set -euo pipefail
           . "$RUNNER_TEMP/github-api-backoff.sh"
           gh_with_retry api "repos/${GITHUB_REPOSITORY}/actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" \
             > "$RUNNER_TEMP/full-release-validation-run.json"
-          node --input-type=module - "$RUNNER_TEMP/full-release-validation-run.json" <<'NODE'
-          import { readFileSync } from "node:fs";
-          const run = JSON.parse(readFileSync(process.argv[2], "utf8"));
-          for (const [key, expected] of [
-            ["name", "Full Release Validation"],
-            ["event", "workflow_dispatch"],
-            ["status", "completed"],
-            ["conclusion", "success"],
-          ]) {
-            if (run[key] !== expected) {
-              throw new Error(`Full Release Validation must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`);
-            }
-          }
-          if (String(run.run_attempt ?? "") !== process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT) {
-            throw new Error(`Full Release Validation run attempt mismatch: expected ${process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT}, got ${run.run_attempt ?? "<missing>"}.`);
-          }
-          NODE
           gh_with_retry run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" \
             --json workflowName,event,status,conclusion,headSha,jobs \
             > "$RUNNER_TEMP/release-publish-run.json"
@@ -498,18 +482,21 @@ jobs:
             --dir "$manifest_dir"
           node .closeout-tooling/scripts/verify-stable-main-closeout.mjs verify-checksum "$manifest_dir/$manifest_asset"
           tag_sha="$(git -C "$GITHUB_WORKSPACE/release-tag" rev-parse HEAD)"
-          jq -e \
-            --arg tag_sha "$tag_sha" \
-            --arg run_id "$FULL_RELEASE_VALIDATION_RUN_ID" \
-            --arg run_attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" '
-            .workflowName == "Full Release Validation" and
-            .runId == $run_id and
-            .runAttempt == $run_attempt and
-            .targetSha == $tag_sha
-          ' "$manifest_dir/$manifest_asset" >/dev/null || {
-            echo "Full Release Validation manifest does not contain the required stable release controls." >&2
-            exit 1
-          }
+          SOURCE_SHA="$tag_sha" node --input-type=module - "$RUNNER_TEMP/full-release-validation-run.json" "$manifest_dir/$manifest_asset" <<'NODE'
+          import { readFileSync } from "node:fs";
+          import { authenticateStableCloseoutValidation } from "./.closeout-tooling/scripts/lib/stable-release-closeout.mjs";
+          await authenticateStableCloseoutValidation({
+            run: JSON.parse(readFileSync(process.argv[2], "utf8")),
+            manifest: JSON.parse(readFileSync(process.argv[3], "utf8")),
+            repository: process.env.GITHUB_REPOSITORY,
+            fullReleaseValidationRunId: process.env.FULL_RELEASE_VALIDATION_RUN_ID,
+            fullReleaseValidationRunAttempt: process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT,
+            sourceSha: process.env.SOURCE_SHA,
+            releasePublishRunId: process.env.RELEASE_PUBLISH_RUN_ID,
+            verifierSourceSha: process.env.VERIFIER_SOURCE_SHA,
+            verifierSourceContent: readFileSync(".closeout-tooling/scripts/release-ci-summary.mjs"),
+          });
+          NODE
           node .closeout-tooling/scripts/lib/release-publish-gates.mts \
             --consumer stable-closeout --manifest "$manifest_dir/$manifest_asset"
 

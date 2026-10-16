@@ -900,6 +900,68 @@ describe("stable closeout workflow publication routing", () => {
   });
 });
 
+describe("stable closeout workflow validation routing", () => {
+  it.each([
+    { name: "successful frozen legacy evidence", conclusion: "success", attempt: 2, code: 0 },
+    { name: "failed FRV without original P waivers", conclusion: "failure", attempt: 2, code: 1 },
+    { name: "wrong immutable attempt", conclusion: "success", attempt: 3, code: 1 },
+  ])("preserves $name", ({ conclusion, attempt, code }) => {
+    const workflow = readFileSync(".github/workflows/openclaw-stable-main-closeout.yml", "utf8");
+    const block = workflow.match(
+      /node --input-type=module - "\$RUNNER_TEMP\/full-release-validation-run.json"[^\n]*<<'NODE'\n([\s\S]*?)\n {10}NODE/u,
+    )?.[1];
+    if (!block) {
+      throw new Error("Validation verifier node block missing");
+    }
+    const script = block
+      .split("\n")
+      .map((line) => line.slice(10))
+      .join("\n")
+      .replace(
+        '"./.closeout-tooling/scripts/lib/stable-release-closeout.mjs"',
+        JSON.stringify(pathToFileURL(path.resolve("scripts/lib/stable-release-closeout.mjs")).href),
+      )
+      .replace(
+        '".closeout-tooling/scripts/release-ci-summary.mjs"',
+        JSON.stringify(path.resolve("scripts/release-ci-summary.mjs")),
+      );
+    const dir = tempDirs.make("openclaw-closeout-validation-");
+    const run = path.join(dir, "run.json");
+    const manifest = path.join(dir, "manifest.json");
+    writeFileSync(
+      run,
+      JSON.stringify({
+        name: "Full Release Validation",
+        event: "workflow_dispatch",
+        status: "completed",
+        conclusion,
+        run_attempt: attempt,
+      }),
+    );
+    writeFileSync(
+      manifest,
+      JSON.stringify({
+        workflowName: "Full Release Validation",
+        runId: "11",
+        runAttempt: "2",
+        targetSha: "a".repeat(40),
+        validationInputs: { telegramWaiver: "" },
+      }),
+    );
+    const result = spawnSync(process.execPath, ["--input-type=module", "-", run, manifest], {
+      input: script,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        FULL_RELEASE_VALIDATION_RUN_ID: "11",
+        FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "2",
+        SOURCE_SHA: "a".repeat(40),
+      },
+    });
+    expect(result.status, result.stderr).toBe(code);
+  });
+});
+
 describe("stable closeout Full Release Validation checksum", () => {
   it.each(["valid", "wrong-file", "duplicate", "mismatch"])(
     "checks %s FRV manifest evidence",
@@ -970,6 +1032,42 @@ const header = [
 ];
 
 describe("stable publication recovery boundaries", () => {
+  it("preserves multiline runner inputs without accepting stdout or duplicate-field forgeries", () => {
+    const declaration = JSON.stringify(
+      { reason: "Credential outage", approvedBy: "maintainer" },
+      null,
+      2,
+    );
+    const lines = [
+      ...header.slice(0, -1),
+      ...`  VALIDATION_WAIVERS_JSON: ${declaration}\n`.split("\n"),
+      "  EXPECTED_SHA: exact-source",
+      "##[endgroup]",
+      "env:",
+      "  VALIDATION_WAIVERS_JSON: forged stdout",
+    ];
+    expect(readRecoveryStepInputs(log(lines), job, "Publish")).toEqual({
+      RELEASE_PUBLISH_RUN_ID: "100",
+      RELEASE_PUBLISH_RUN_ATTEMPT: "3",
+      VALIDATION_WAIVERS_JSON: `${declaration}\n`,
+      EXPECTED_SHA: "exact-source",
+    });
+    expect(() =>
+      readRecoveryStepInputs(
+        log([...lines.slice(0, -3), "  VALIDATION_WAIVERS_JSON: forged duplicate", "##[endgroup]"]),
+        job,
+        "Publish",
+      ),
+    ).toThrow("duplicate environment field");
+    expect(() =>
+      readRecoveryStepInputs(
+        log([...header.slice(0, 3), "orphan continuation", ...header.slice(3)]),
+        job,
+        "Publish",
+      ),
+    ).toThrow("continuation has no field");
+  });
+
   it("rejects recovery for another tag even when both tags have the same source SHA", async () => {
     await expect(
       verifyStablePublishRecovery({

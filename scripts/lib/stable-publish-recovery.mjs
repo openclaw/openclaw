@@ -239,13 +239,21 @@ export function readRecoveryStepInputs(log, job, stepName) {
     `${stepName} environment must be unique.`,
   );
   const env = {};
+  let key;
   for (const line of header.slice(header.indexOf("env:") + 1)) {
     const match = /^ {2}([A-Z][A-Z0-9_]*): (.*)$/u.exec(line);
+    if (!match) {
+      // Actions prefixes the key once; embedded newlines retain their bytes.
+      requireValue(key !== undefined, `${stepName} environment continuation has no field.`);
+      env[key] += `\n${line}`;
+      continue;
+    }
     requireValue(
-      match && !Object.hasOwn(env, match[1]),
+      !Object.hasOwn(env, match[1]),
       `${stepName} malformed or duplicate environment field.`,
     );
-    env[match[1]] = match[2];
+    key = match[1];
+    env[key] = match[2];
   }
   return env;
 }
@@ -254,10 +262,10 @@ function expectInputs(inputs, expected) {
     requireValue(inputs[key] === String(value), `step input ${key} mismatch.`);
   }
 }
-function attemptLogs(run) {
+export function readRecoveryAttemptLogs(run, repository = REPOSITORY) {
   const bytes = execFileSync(
     "gh",
-    ["api", `repos/${REPOSITORY}/actions/runs/${id(run.id)}/attempts/${id(run.run_attempt)}/logs`],
+    ["api", `repos/${repository}/actions/runs/${id(run.id)}/attempts/${id(run.run_attempt)}/logs`],
     { maxBuffer: 32 * 1024 * 1024, timeout: 120_000 },
   );
   return inspectActionsArtifactZipWithPolicy(bytes, {
@@ -583,7 +591,7 @@ export async function verifyStablePublishRecovery({ evidence, manifest, sourceSh
     npm,
     "publish_openclaw_npm",
   );
-  const npmLog = attemptLogs(npm);
+  const npmLog = readRecoveryAttemptLogs(npm);
   const npmInputs = readRecoveryStepInputs(npmLog, npmJob, "Publish");
   const originalAttempt = id(npmInputs.RELEASE_PUBLISH_RUN_ATTEMPT);
   expectInputs(npmInputs, { RELEASE_PUBLISH_RUN_ID: originalId, WORKFLOW_SHA: npm.head_sha });
@@ -627,7 +635,7 @@ export async function verifyStablePublishRecovery({ evidence, manifest, sourceSh
     docker,
     "Publish Docker images / Publish prepared Docker images",
   );
-  const dockerLogs = attemptLogs(docker);
+  const dockerLogs = readRecoveryAttemptLogs(docker);
   // The successful promotion consumed exactly the OCI tuple qualified by this
   // FRV; no whole-job resolver output is needed to reconstruct its inputs.
   const prepared = manifest.publicationArtifacts?.docker;

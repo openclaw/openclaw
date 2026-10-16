@@ -142,9 +142,6 @@ export function resolveQualificationCoverage(policy, inputs) {
       throw new Error("Candidate-owned qualification cannot narrow " + key);
     }
   }
-  // The release policy separately validates the exact owner-approved Telegram
-  // declaration. It does not remove the Telegram child or any required job
-  // from this frozen qualification inventory.
   if (
     inputs.allow_frozen_target_scenario_omissions === true ||
     inputs.allow_frozen_target_scenario_omissions === "true"
