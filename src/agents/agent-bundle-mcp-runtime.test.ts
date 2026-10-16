@@ -37,10 +37,7 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { startCatalogRecoveryMcpServer } from "./agent-bundle-mcp-catalog-recovery.test-support.js";
-import {
-  createCombinedSessionMcpRuntime,
-  mergeMcpToolCatalogs,
-} from "./agent-bundle-mcp-combined.js";
+import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import { createConnectionInvalidationMcpFixture } from "./agent-bundle-mcp-invalidation.test-support.js";
 import { disposeAllSessionMcpRuntimes } from "./agent-bundle-mcp-manager-api.js";
 import { completeDeferredSessionMcpRuntimeRetirement } from "./agent-bundle-mcp-manager-cleanup.js";
@@ -2387,7 +2384,12 @@ describe("requester-scoped MCP connection resolution", () => {
       expect(catalogB.servers["mail.prod"]?.safeServerName).toBe("mail-prod");
 
       // Merge preserves precomputed names (no further re-suffix).
-      const merged = mergeMcpToolCatalogs([catalogA, catalogB]);
+      const combined = createCombinedSessionMcpRuntime({
+        sessionId: "session-safe-names",
+        workspaceDir: "/workspace",
+        parts: [runtimeA, runtimeB],
+      });
+      const merged = await combined.getCatalog();
       expect(merged.servers["mail.prod"]?.safeServerName).toBe("mail-prod");
       expect(
         new Set(
