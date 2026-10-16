@@ -295,14 +295,18 @@ function writeFixtureFile(repoDir: string, name: string, contents: string | read
   return fixture;
 }
 
+function writeExecutable(repoDir: string, name: string, contents: string | readonly string[]) {
+  const fixture = writeFixtureFile(repoDir, name, contents);
+  chmodSync(fixture, 0o755);
+  return fixture;
+}
+
 function writeOperationFixture(repoDir: string, name: string, commands: string[]) {
-  const fixture = writeFixtureFile(repoDir, name, [
+  return writeExecutable(repoDir, name, [
     "#!/usr/bin/env bash",
     ...bashSource(repoDir),
     ...commands,
   ]);
-  chmodSync(fixture, 0o755);
-  return fixture;
 }
 
 function writeEscapedPipeHolderLauncher(repoDir: string, pidFile: string) {
@@ -338,9 +342,7 @@ function installPrCliFixture(repoDir: string, env?: NodeJS.ProcessEnv) {
 
 function installRequiredPrCommandStubs(binDir: string) {
   for (const command of ["gh", "jq", "pnpm", "rg"]) {
-    const stub = join(binDir, command);
-    writeFileSync(stub, "#!/bin/sh\nexit 0\n");
-    chmodSync(stub, 0o755);
+    writeExecutable(binDir, command, "#!/bin/sh\nexit 0\n");
   }
 }
 
@@ -365,7 +367,7 @@ async function runSupervisedFixture(
     copyPrWrapperSources(anchorDir);
   }
   const groupFile = writeFixtureFile(entryDir, "supervised-fixture.pgid", "");
-  const entry = writeFixtureFile(
+  const entry = writeExecutable(
     anchorDir ?? entryDir,
     anchorDir ? "scripts/pr" : "supervised-fixture-entry.sh",
     [
@@ -374,7 +376,6 @@ async function runSupervisedFixture(
       `exec ${shellQuote(fixture)}`,
     ],
   );
-  chmodSync(entry, 0o755);
   const nodeArgs = [
     ...(options.accelerateTimeouts
       ? [
@@ -487,14 +488,33 @@ function expectResult(result: ReturnType<typeof runLockShell>, status: number, s
   expect(result.stdout.trim()).toBe(stdout);
 }
 
+function gitOverride(commands: string[]) {
+  return ["pr_git() {", ...commands, '  command git "$@"', "}"];
+}
+
+function expectRecovery(stderr: string, ownerOid: string) {
+  expect(stderr).toContain(`scripts/pr lock-recover 42 ${ownerOid} --confirmed-no-running-tools`);
+}
+
+function addWorktree(repoDir: string, branch = "pr-42", name = branch) {
+  const path = join(repoDir, ".worktrees", name);
+  gitOutput(repoDir, ["worktree", "add", "-q", "-b", branch, path]);
+  return path;
+}
+
+function captureStatus(command: string, output = 'printf "%s\\n" "$lock_status"') {
+  return ["set +e", command, "lock_status=$?", "set -e", output];
+}
+
+function runStatus(repoDir: string, command: string, output?: string) {
+  return runLockShell(repoDir, captureStatus(command, output));
+}
+
 function probeOperationLock(repoDir: string, command: "blocking" | "try" = "try") {
-  return runLockShell(repoDir, [
-    "set +e",
+  return runStatus(
+    repoDir,
     command === "try" ? "try_acquire_pr_operation_lock 42" : "acquire_pr_operation_lock 42",
-    "lock_status=$?",
-    "set -e",
-    'printf "%s\\n" "$lock_status"',
-  ]);
+  );
 }
 
 function recoverOperationLock(repoDir: string, ownerOid: string, commands: string[] = []) {
@@ -741,13 +761,12 @@ describe("scripts/pr process-group platform guard", () => {
   it.runIf(process.platform !== "win32")(
     "preserves exit status when completion FD is closed",
     async ({ repoDir, signal }) => {
-      const fixture = writeFixtureFile(repoDir, "closed-completion-fd.sh", [
+      const fixture = writeExecutable(repoDir, "closed-completion-fd.sh", [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
         `source '${lockScript}'`,
         "exit 7",
       ]);
-      chmodSync(fixture, 0o755);
       const child = spawnDetached("bash", [fixture], {
         cwd: repoDir,
         env: {
@@ -814,14 +833,13 @@ describePosix("scripts/pr per-PR operation lock", () => {
     execFileSync("git", ["checkout", "--detach", head], { cwd: repoDir });
     const binDir = tempDirs.make("openclaw-pr-query-failure-");
     const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
-    const proxy = writeFixtureFile(binDir, "git", [
+    writeExecutable(binDir, "git", [
       "#!/usr/bin/env bash",
       'args=("$@")',
       'while [ "${1:-}" = -c ]; do shift 2; done',
       `case "$*" in ${JSON.stringify(query)}*) echo 'fixture query failed' >&2; exit 7 ;; esac`,
       `exec '${realGit}' "\${args[@]}"`,
     ]);
-    chmodSync(proxy, 0o755);
     const result = runLockShell(repoDir, [
       `export PATH='${binDir}':"$PATH"`,
       `${guard} 42 ${head} ${target} || exit $?`,
@@ -889,23 +907,14 @@ describePosix("scripts/pr per-PR operation lock", () => {
       () => {
         const ownerOid = refOid(repoDir);
         const wrongOid = gitOutput(repoDir, ["rev-parse", "HEAD"]).trim();
-        const unconfirmed = runLockShell(repoDir, [
-          "set +e",
-          `recover_pr_operation_lock 42 '${ownerOid}'`,
-          "recovery_status=$?",
-          "set -e",
-          'printf "%s\\n" "$recovery_status"',
-        ]);
+        const unconfirmed = runStatus(repoDir, `recover_pr_operation_lock 42 '${ownerOid}'`);
         expectResult(unconfirmed, 0, "2");
         expect(unconfirmed.stderr).toContain("Recovery requires --confirmed-no-running-tools");
         expect(refOid(repoDir)).toBe(ownerOid);
-        const wrongOwner = runLockShell(repoDir, [
-          "set +e",
+        const wrongOwner = runStatus(
+          repoDir,
           `recover_pr_operation_lock 42 '${wrongOid}' --confirmed-no-running-tools`,
-          "recovery_status=$?",
-          "set -e",
-          'printf "%s\\n" "$recovery_status"',
-        ]);
+        );
         expectResult(wrongOwner, 0, "1");
         expect(refOid(repoDir)).toBe(ownerOid);
       },
@@ -918,18 +927,16 @@ describePosix("scripts/pr per-PR operation lock", () => {
       "owner_oid=$(printf 'owner-lock\\n' | git hash-object -w --stdin)",
       "successor_oid=$(printf 'successor-lock\\n' | git hash-object -w --stdin)",
       `git update-ref '${lockRef}' "$owner_oid"`,
-      "pr_git() {",
-      `  if [ "$*" = "-C ${repoDir} update-ref --no-deref -d ${lockRef} $owner_oid" ]; then`,
-      `    command git -C '${repoDir}' update-ref '${lockRef}' "$successor_oid" "$owner_oid"`,
-      "    return 1",
-      "  fi",
-      '  command git "$@"',
-      "}",
-      "set +e",
-      'recover_pr_operation_lock 42 "$owner_oid" --confirmed-no-running-tools',
-      "recovery_status=$?",
-      "set -e",
-      `printf '%s\\t%s\\n' "$recovery_status" "$(command git rev-parse '${lockRef}')"`,
+      ...gitOverride([
+        `  if [ "$*" = "-C ${repoDir} update-ref --no-deref -d ${lockRef} $owner_oid" ]; then`,
+        `    command git -C '${repoDir}' update-ref '${lockRef}' "$successor_oid" "$owner_oid"`,
+        "    return 1",
+        "  fi",
+      ]),
+      ...captureStatus(
+        'recover_pr_operation_lock 42 "$owner_oid" --confirmed-no-running-tools',
+        `printf '%s\\t%s\\n' "$lock_status" "$(command git rev-parse '${lockRef}')"`,
+      ),
     ]);
     const successorOid = execFileSync("git", ["hash-object", "--stdin"], {
       cwd: repoDir,
@@ -966,72 +973,57 @@ describePosix("scripts/pr per-PR operation lock", () => {
     expectResult(result, 0, "Recovered the stale operation lock for PR #42.");
     expect(refExists(repoDir)).toBe(false);
   });
-  it("ignores an ambient dedicated-group marker", ({ repoDir }) => {
-    const { binDir, cli } = installPrCliFixture(repoDir);
-    const reviewScript = join(repoDir, "scripts/pr-lib/review.sh");
-    writeFileSync(reviewScript, `${readFileSync(reviewScript, "utf8")}\nreview_init() { :; }\n`);
-    installRequiredPrCommandStubs(binDir);
-    const env: NodeJS.ProcessEnv = {
-      ...createIndependentPrFixtureEnv(),
-      OPENCLAW_PR_DEDICATED_PROCESS_GROUP: "1",
-      PATH: `${binDir}:${process.env.PATH ?? ""}`,
-    };
-    const result = spawnSync(cli, ["review-init", "42"], {
-      cwd: repoDir,
-      encoding: "utf8",
-      env,
-    });
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(refExists(repoDir)).toBe(false);
-  });
   it.for([
-    {
-      name: "temporary storage is unavailable",
-      overrides: "review_init() { printf 'review ran\\n'; }",
-      error: "mktemp: No space left on device",
-      unexpectedOutput: "review ran",
-      unavailableStorage: true,
-    },
-    {
-      name: "review-init metadata fails",
-      overrides:
-        "enter_worktree() { printf 'entered-worktree\\n'; }\npr_meta_json() { echo 'fixture metadata failure' >&2; return 1; }",
-      error: "fixture metadata failure",
-      unexpectedOutput: "entered-worktree",
-      unavailableStorage: false,
-    },
-  ])(
-    "releases a validation-phase lock when $name",
-    ({ overrides, error, unexpectedOutput, unavailableStorage }, { repoDir }) => {
+    ["ambient group marker", "review_init() { :; }", "", "", false],
+    [
+      "unavailable storage",
+      "review_init() { printf 'review ran\\n'; }",
+      "mktemp: No space left on device",
+      "review ran",
+      true,
+    ],
+    [
+      "metadata failure",
+      "enter_worktree() { printf 'entered-worktree\\n'; }\npr_meta_json() { echo 'fixture metadata failure' >&2; return 1; }",
+      "fixture metadata failure",
+      "entered-worktree",
+      false,
+    ],
+  ] as const)(
+    "releases validation locks after %s",
+    ([name, overrides, error, unexpectedOutput, unavailableStorage], { repoDir }) => {
       const { binDir, cli } = installPrCliFixture(repoDir);
       const reviewScript = join(repoDir, "scripts/pr-lib/review.sh");
       writeFileSync(reviewScript, `${readFileSync(reviewScript, "utf8")}\n${overrides}\n`);
       installRequiredPrCommandStubs(binDir);
       if (unavailableStorage) {
-        const mktempStub = join(binDir, "mktemp");
         writeFileSync(
-          mktempStub,
+          join(binDir, "mktemp"),
           "#!/bin/sh\necho 'mktemp: No space left on device' >&2\nexit 1\n",
+          { mode: 0o755 },
         );
-        chmodSync(mktempStub, 0o755);
       }
-
       const result = spawnSync(cli, ["review-init", "42"], {
         cwd: repoDir,
         encoding: "utf8",
-        env: { ...createIndependentPrFixtureEnv(), PATH: `${binDir}:${process.env.PATH ?? ""}` },
+        env: {
+          ...createIndependentPrFixtureEnv(),
+          ...(name === "ambient group marker" ? { OPENCLAW_PR_DEDICATED_PROCESS_GROUP: "1" } : {}),
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        },
       });
-
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
+      expect(result.status, result.stderr).toBe(error ? 1 : 0);
       expect(refExists(repoDir), result.stderr).toBe(false);
-      expect(result.stderr).toContain(error);
+      if (error) {
+        expect(result.stderr).toContain(error);
+        expect(result.stderr).not.toContain("Retaining the operation lock");
+        expect(result.stderr).not.toContain("scripts/pr lock-recover");
+        expect(result.stdout).not.toContain(unexpectedOutput);
+      }
       if (unavailableStorage) {
         expect(result.stderr).toContain("temporary-storage preflight failed");
         expect(result.stderr).toContain("Free disk space or set TMPDIR");
       }
-      expect(result.stderr).not.toContain("Retaining the operation lock");
-      expect(result.stderr).not.toContain("scripts/pr lock-recover");
-      expect(result.stdout).not.toContain(unexpectedOutput);
     },
   );
   it("retries release between failed create CAS and ref read", ({ repoDir }) => {
@@ -1040,14 +1032,13 @@ describePosix("scripts/pr per-PR operation lock", () => {
       "prepare_pr_operation_lock_candidate 99",
       "old_oid=$PR_OPERATION_LOCK_CANDIDATE_OID",
       `git update-ref '${lockRef}' "$old_oid"`,
-      "pr_git() {",
-      `  if [ ! -e '${raceTriggered}' ] && [[ "$*" == *"rev-parse --verify ${lockRef}"* ]]; then`,
-      `    : >'${raceTriggered}'`,
-      `    command git -C '${repoDir}' update-ref --no-deref -d '${lockRef}' "$old_oid"`,
-      "    return 1",
-      "  fi",
-      '  command git "$@"',
-      "}",
+      ...gitOverride([
+        `  if [ ! -e '${raceTriggered}' ] && [[ "$*" == *"rev-parse --verify ${lockRef}"* ]]; then`,
+        `    : >'${raceTriggered}'`,
+        `    command git -C '${repoDir}' update-ref --no-deref -d '${lockRef}' "$old_oid"`,
+        "    return 1",
+        "  fi",
+      ]),
       "acquire_pr_operation_lock 42",
       "release_pr_operation_lock",
     ]);
@@ -1083,36 +1074,32 @@ describePosix("scripts/pr per-PR operation lock", () => {
     expectResult(result, 0, "2\t1");
   });
   it.for([
-    {
-      title: "releases a failed lock while the child is still in validation phase",
-      commands: ["acquire_pr_operation_lock 42", "begin_pr_operation_validation_phase", "exit 3"],
-      status: 3,
-      retained: false,
+    [3, false],
+    [137, true],
+  ] as const)(
+    "handles validation exit %s (retained=%s)",
+    async ([status, retained], { repoDir, signal }) => {
+      const result = await runSupervisedOperation(
+        repoDir,
+        ["acquire_pr_operation_lock 42", "begin_pr_operation_validation_phase", `exit ${status}`],
+        { signal },
+      );
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(status);
+      if (retained) {
+        const ownerOid = refOid(repoDir);
+        expect(result.stderr).toContain(`reason: child exited with code ${status}`);
+        recoverOperationLock(repoDir, ownerOid);
+      } else {
+        expect(refExists(repoDir)).toBe(false);
+        expect(result.stderr).not.toContain("Retaining the operation lock");
+      }
     },
-
-    {
-      title: "retains a validation-phase lock for untrapped signal exit statuses",
-      commands: ["acquire_pr_operation_lock 42", "begin_pr_operation_validation_phase", "exit 137"],
-      status: 137,
-      retained: true,
-    },
-  ])("$title", async ({ commands, status, retained }, { repoDir, signal }) => {
-    const result = await runSupervisedOperation(repoDir, commands, { signal });
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(status);
-    if (retained) {
-      const ownerOid = refOid(repoDir);
-      expect(result.stderr).toContain(`reason: child exited with code ${status}`);
-      recoverOperationLock(repoDir, ownerOid);
-    } else {
-      expect(refExists(repoDir)).toBe(false);
-      expect(result.stderr).not.toContain("Retaining the operation lock");
-    }
-  });
+  );
   it.for([false, true])(
     "cleans linked GC worktrees before exact-owner release (failure=%s)",
     (failure, { repoDir }) => {
       const { binDir, wrapperSources } = installPrCliFixture(repoDir);
-      const rg = writeFixtureFile(binDir, "rg", [
+      writeExecutable(binDir, "rg", [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
         'if [ "$#" -ne 4 ] || [ "$1" != "-n" ] || [ "$2" != "-i" ]; then',
@@ -1121,7 +1108,6 @@ describePosix("scripts/pr per-PR operation lock", () => {
         "fi",
         'exec grep -n -i -E -- "$3" "$4"',
       ]);
-      chmodSync(rg, 0o755);
       linkPrWrapperDependencies(repoDir);
       const git = (...args: string[]) => gitOutput(repoDir, args).trim();
       const lifecycle = join(repoDir, "lifecycle.log");
@@ -1155,7 +1141,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
       git("add", "scripts/pr-lib/worktree.sh");
       git("commit", "-qm", "test: canonical wrapper drift");
       const canonicalHead = git("rev-parse", "HEAD");
-      const gh = writeFixtureFile(binDir, "gh", [
+      const gh = writeExecutable(binDir, "gh", [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
         'case "$*" in',
@@ -1166,10 +1152,9 @@ describePosix("scripts/pr per-PR operation lock", () => {
         '  *) echo "unexpected fixture gh call: $*" >&2; exit 99 ;;',
         "esac",
       ]);
-      chmodSync(gh, 0o755);
       const realGit = realpathSync(join(binDir, "git"));
       unlinkSync(join(binDir, "git"));
-      const gitShim = writeFixtureFile(binDir, "git", [
+      writeExecutable(binDir, "git", [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
         'case "$*" in',
@@ -1187,7 +1172,6 @@ describePosix("scripts/pr per-PR operation lock", () => {
         "esac",
         'exec "$OPENCLAW_TEST_REAL_GIT" "$@"',
       ]);
-      chmodSync(gitShim, 0o755);
       const linked = join(repoDir, ".worktrees/pr-42");
       const result = spawnSync(join(linked, "scripts/pr"), ["gc"], {
         cwd: linked,
@@ -1231,9 +1215,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
         const ownerOid = readFileSync(ownerFile, "utf8").trim();
         expect(refOid(repoDir)).toBe(ownerOid);
         expect(result.stderr).toContain("Unable to release the operation lock for 42");
-        expect(result.stderr).toContain(
-          "scripts/pr lock-recover 42 " + ownerOid + " --confirmed-no-running-tools",
-        );
+        expectRecovery(result.stderr, ownerOid);
       } else {
         expect(result.stderr).not.toContain("Retaining the operation lock");
       }
@@ -1242,17 +1224,11 @@ describePosix("scripts/pr per-PR operation lock", () => {
   it("reports exact recovery when lock notification fails", ({ repoDir }) => {
     const result = runLockShell(repoDir, [
       "OPENCLAW_PR_LOCK_NOTIFY_FD=9",
-      "set +e",
-      "acquire_pr_operation_lock 42",
-      "lock_status=$?",
-      "set -e",
-      'printf "%s\\n" "$lock_status"',
+      ...captureStatus("acquire_pr_operation_lock 42"),
     ]);
     expectResult(result, 0, "2");
     const ownerOid = refOid(repoDir);
-    expect(result.stderr).toContain(
-      `scripts/pr lock-recover 42 ${ownerOid} --confirmed-no-running-tools`,
-    );
+    expectRecovery(result.stderr, ownerOid);
     recoverOperationLock(repoDir, ownerOid);
   });
   it("rejects another group's lock notification", async ({ repoDir, signal }) => {
@@ -1301,9 +1277,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     const ownerOid = refOid(repoDir);
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
     expect(result.stderr).toContain(expectedError);
-    expect(result.stderr).toContain(
-      `scripts/pr lock-recover 42 ${ownerOid} --confirmed-no-running-tools`,
-    );
+    expectRecovery(result.stderr, ownerOid);
     recoverOperationLock(repoDir, ownerOid);
   });
   it("joins Git read producers before releasing the lock", async ({ repoDir, signal }) => {
@@ -1314,7 +1288,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     const validatorStarted = join(binDir, "validator-started");
     const validatorExited = join(binDir, "validator-exited");
     const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
-    const proxy = writeFixtureFile(binDir, "git", [
+    writeExecutable(binDir, "git", [
       "#!/usr/bin/env bash",
       'args=("$@")',
       'while [ "${1:-}" = -c ]; do shift 2; done',
@@ -1334,7 +1308,6 @@ describePosix("scripts/pr per-PR operation lock", () => {
       "fi",
       `exec '${realGit}' "\${args[@]}"`,
     ]);
-    chmodSync(proxy, 0o755);
     const result = await runSupervisedOperation(
       repoDir,
       [
@@ -1586,23 +1559,14 @@ describePosix("scripts/pr per-PR operation lock", () => {
         headers[0] === historicalHeader,
       );
       expect(refOid(repoDir)).toBe(ownerOid);
-      expect(result.stderr).toContain(
-        `scripts/pr lock-recover 42 ${ownerOid} --confirmed-no-running-tools`,
-      );
+      expectRecovery(result.stderr, ownerOid);
       recoverOperationLock(repoDir, ownerOid);
     } finally {
       await cleanupRecordedProcessGroup(operationPgidFile, operationPgid);
     }
   });
   it("keeps supervisor ownership until GC exits", async ({ repoDir, signal }) => {
-    gitOutput(repoDir, [
-      "worktree",
-      "add",
-      "-q",
-      "-b",
-      "pr-42",
-      join(repoDir, ".worktrees", "pr-42"),
-    ]);
+    addWorktree(repoDir);
     const ghStarted = join(repoDir, "gc-gh-started");
     const outputFile = join(repoDir, "gc-output");
     const controller = startOperation(
@@ -1656,13 +1620,11 @@ describePosix("scripts/pr per-PR operation lock", () => {
       await withinTest(stopChild(controller, "SIGKILL"), signal);
       expect(processGroupExists(pgid!)).toBe(true);
       expect(refOid(repoDir)).toBe(ownerOid);
-      const blockedWhileGroupLives = runLockShell(repoDir, [
-        "set +e",
+      const blockedWhileGroupLives = runStatus(
+        repoDir,
         "try_acquire_pr_operation_lock 42",
-        "lock_status=$?",
-        "set -e",
         'printf "%s\\t%s\\t%s\\n" "$lock_status" "$PR_OPERATION_LOCK_BLOCKED_REASON" "$PR_OPERATION_LOCK_BLOCKED_OID"',
-      ]);
+      );
       expectResult(blockedWhileGroupLives, 0, `2\torphaned\t${ownerOid}`);
       expect(processGroupExists(pgid!)).toBe(true);
       expect(refOid(repoDir)).toBe(ownerOid);
@@ -1847,9 +1809,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     ]);
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(result.stdout).toContain("operation lock is unreadable");
-    expect(result.stderr).toContain(
-      `scripts/pr lock-recover 42 ${refOid(repoDir)} --confirmed-no-running-tools`,
-    );
+    expectRecovery(result.stderr, refOid(repoDir));
     expect(existsSync(worktreeDir)).toBe(true);
   });
   it("removes NUL-framed escaped Unicode worktree paths", () => {
@@ -1891,13 +1851,12 @@ describePosix("scripts/pr per-PR operation lock", () => {
     { name: "truncated", listing: "worktree %s\\0branch refs/heads/pr-42", code: 0 },
   ])("rejects $name NUL-framed worktree listings", ({ listing, code }, { repoDir }) => {
     const result = runLockShell(repoDir, [
-      "pr_git() {",
-      '  if [ "${1:-} ${2:-}" = "worktree list" ]; then',
-      `    printf '${listing}' "$PWD"`,
-      `    return ${code}`,
-      "  fi",
-      '  command git "$@"',
-      "}",
+      ...gitOverride([
+        '  if [ "${1:-} ${2:-}" = "worktree list" ]; then',
+        `    printf '${listing}' "$PWD"`,
+        `    return ${code}`,
+        "  fi",
+      ]),
       "set +e",
       'worktree_registration_state "$PWD" >/dev/null',
       'registered_status="$?"',
@@ -1907,69 +1866,65 @@ describePosix("scripts/pr per-PR operation lock", () => {
     ]);
     expectResult(result, 0, `${code || 1} ${code || 1}`);
   });
-  it("distinguishes absent branches from checked-out descendants", ({ repoDir }) => {
-    const branch = "temp/pr-42";
-    const sibling = join(repoDir, ".worktrees", "pr-99");
-    gitOutput(repoDir, ["worktree", "add", "-q", "-b", `${branch}/topic`, sibling]);
-    const otherBranch = "pr-42-prep";
-    execFileSync("git", ["branch", otherBranch], { cwd: repoDir });
-    const head = gitOutput(repoDir, ["rev-parse", `refs/heads/${branch}/topic`]);
-    const result = runLockShell(repoDir, [
-      'cleanup_pr_worktree ".worktrees/pr-42" || exit $?',
-      "echo cleanup-completed",
-    ]);
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.stdout).toContain("cleanup-completed");
-    expect(gitOutput(repoDir, ["rev-parse", `refs/heads/${branch}/topic`])).toBe(head);
-    expect(gitOutput(sibling, ["rev-parse", "HEAD"])).toBe(head);
-    expectWorktreeBranch(sibling, `${branch}/topic`);
-    expect(
-      gitStatus(repoDir, ["show-ref", "--verify", "--quiet", `refs/heads/${otherBranch}`]),
-    ).toBe(1);
-  });
-  it("verifies only the exact branch after native deletion", ({ repoDir }) => {
-    const branch = "temp/pr-42";
-    const sibling = join(repoDir, ".worktrees", "pr-99");
-    execFileSync("git", ["branch", branch], { cwd: repoDir });
-    const head = gitOutput(repoDir, ["rev-parse", `refs/heads/${branch}`]);
-    const result = runLockShell(repoDir, [
-      "pr_git() {",
-      '  command git "$@" || return $?',
-      `  if [ "$*" = "branch -d -- ${branch}" ]; then`,
-      `    command git worktree add -q -b ${branch}/topic .worktrees/pr-99 || return $?`,
-      "  fi",
-      "}",
-      `delete_local_branch_if_safe ${branch} || exit $?`,
-      "echo cleanup-completed",
-    ]);
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.stdout).toContain("cleanup-completed");
-    expect(gitOutput(repoDir, ["rev-parse", `refs/heads/${branch}/topic`])).toBe(head);
-    expect(gitOutput(sibling, ["rev-parse", "HEAD"])).toBe(head);
-    expectWorktreeBranch(sibling, `${branch}/topic`);
-  });
+  it.for(["already absent", "deleted natively"])(
+    "preserves descendants when the exact branch is %s",
+    (state, { repoDir }) => {
+      const branch = "temp/pr-42";
+      const sibling = join(repoDir, ".worktrees", "pr-99");
+      const head = gitOutput(repoDir, ["rev-parse", "HEAD"]);
+      const absent = state === "already absent";
+      if (absent) {
+        addWorktree(repoDir, `${branch}/topic`, "pr-99");
+        gitOutput(repoDir, ["branch", "pr-42-prep"]);
+      } else {
+        gitOutput(repoDir, ["branch", branch]);
+      }
+      const result = runLockShell(repoDir, [
+        ...(absent
+          ? ['cleanup_pr_worktree ".worktrees/pr-42" || exit $?']
+          : [
+              "pr_git() {",
+              '  command git "$@" || return $?',
+              `  if [ "$*" = "branch -d -- ${branch}" ]; then`,
+              `    command git worktree add -q -b ${branch}/topic .worktrees/pr-99 || return $?`,
+              "  fi",
+              "}",
+              `delete_local_branch_if_safe ${branch} || exit $?`,
+            ]),
+        "echo cleanup-completed",
+      ]);
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain("cleanup-completed");
+      expect(gitOutput(repoDir, ["rev-parse", `refs/heads/${branch}/topic`])).toBe(head);
+      expect(gitOutput(sibling, ["rev-parse", "HEAD"])).toBe(head);
+      expectWorktreeBranch(sibling, `${branch}/topic`);
+      if (absent) {
+        expect(
+          gitStatus(repoDir, ["show-ref", "--verify", "--quiet", "refs/heads/pr-42-prep"]),
+        ).toBe(1);
+      }
+    },
+  );
   it.for([23, 0])(
     "preserves sibling branches on unavailable listings (%s)",
     (code, { repoDir }) => {
-      const sibling = join(repoDir, ".worktrees", "pr-99");
-      gitOutput(repoDir, ["worktree", "add", "-q", "-b", "pr-42", sibling]);
+      const sibling = addWorktree(repoDir, "pr-42", "pr-99");
       const head = gitOutput(repoDir, ["rev-parse", "refs/heads/pr-42"]);
       const result = runLockShell(repoDir, [
-        "pr_git() {",
-        '  printf "%s\\n" "$*" >> git-calls',
-        '  if [ "${1:-} ${2:-}" = "worktree list" ]; then',
-        '    case " ${FUNCNAME[*]} " in',
-        '      *" worktree_path_for_branch "*)',
-        // A successful but stale listing must still face Git's checked-out guard.
-        ...(code === 0
-          ? ["        printf 'worktree %s\\0branch refs/heads/main\\0\\0' \"$PWD\""]
-          : []),
-        `        return ${code} ;;`,
-        "    esac",
-        "  fi",
-        '  if [ "${1:-} ${2:-}" = "update-ref -d" ]; then echo unexpected-raw-delete >&2; return 97; fi',
-        '  command git "$@"',
-        "}",
+        ...gitOverride([
+          '  printf "%s\\n" "$*" >> git-calls',
+          '  if [ "${1:-} ${2:-}" = "worktree list" ]; then',
+          '    case " ${FUNCNAME[*]} " in',
+          '      *" worktree_path_for_branch "*)',
+          // A successful but stale listing must still face Git's checked-out guard.
+          ...(code === 0
+            ? ["        printf 'worktree %s\\0branch refs/heads/main\\0\\0' \"$PWD\""]
+            : []),
+          `        return ${code} ;;`,
+          "    esac",
+          "  fi",
+          '  if [ "${1:-} ${2:-}" = "update-ref -d" ]; then echo unexpected-raw-delete >&2; return 97; fi',
+        ]),
         'cleanup_pr_worktree ".worktrees/pr-42" || exit $?',
         "echo unexpected-cleanup-completed",
       ]);
@@ -2046,10 +2001,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
         }
       }
       const result = runLockShell(repoDir, [
-        "pr_git() {",
-        ...overrides,
-        '  command git "$@"',
-        "}",
+        ...gitOverride(overrides),
         'cleanup_pr_worktree ".worktrees/pr-42" || exit $?',
         "echo unexpected-cleanup-completed",
       ]);
@@ -2115,18 +2067,18 @@ describePosix("scripts/pr per-PR operation lock", () => {
     writeFileSync(join(sibling, "marker"), "preserve sibling\n");
     rmSync(worktree, { recursive: true });
     const result = runLockShell(repoDir, [
-      "pr_git() {",
-      '  printf "%s\\n" "$*" >> git-calls',
-      '  if [[ "$*" == *"worktree prune"* ]]; then return 97; fi',
-      '  if [ "${1:-} ${2:-}" = "update-ref -d" ]; then return 96; fi',
-      '  command git "$@"',
-      "}",
+      ...gitOverride([
+        '  printf "%s\\n" "$*" >> git-calls',
+        '  if [[ "$*" == *"worktree prune"* ]]; then return 97; fi',
+        '  if [ "${1:-} ${2:-}" = "update-ref -d" ]; then return 96; fi',
+      ]),
       'cleanup_pr_worktree ".worktrees/pr-42" || exit $?',
       "echo cleanup-completed",
     ]);
-    expect(result.error).toBeUndefined();
-    expect(result.signal).toBeNull();
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(
+      [result.error, result.signal, result.status],
+      `${result.stdout}\n${result.stderr}`,
+    ).toEqual([undefined, null, 0]);
     expect(result.stdout.includes("cleanup-completed")).toBe(true);
     const calls = readFileSync(join(repoDir, "git-calls"), "utf8");
     expect(calls).not.toMatch(/worktree prune|update-ref -d/u);
@@ -2144,8 +2096,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     const physicalWorktreesDir = join(repoDir, "linked-worktrees");
     mkdirSync(physicalWorktreesDir);
     symlinkSync(physicalWorktreesDir, join(repoDir, ".worktrees"), "dir");
-    const worktreeDir = join(repoDir, ".worktrees", "pr-42");
-    gitOutput(repoDir, ["worktree", "add", "-q", "-b", "temp/pr-42", worktreeDir]);
+    const worktreeDir = addWorktree(repoDir, "temp/pr-42", "pr-42");
     rmSync(worktreeDir, { recursive: true });
     addTrackedUiConfig(repoDir);
     const { result } = enterPrWorktree(repoDir, 42);
@@ -2156,8 +2107,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
   it("materializes sparse worktrees before reuse", ({ repoDir }) => {
     addTrackedUiConfig(repoDir);
     execFileSync("git", ["remote", "add", "origin", repoDir], { cwd: repoDir });
-    const worktreeDir = join(repoDir, ".worktrees", "pr-45");
-    gitOutput(repoDir, ["worktree", "add", "-q", "-b", "temp/pr-45", worktreeDir]);
+    const worktreeDir = addWorktree(repoDir, "temp/pr-45", "pr-45");
     setSparseCheckout(worktreeDir);
     expect(existsSync(join(worktreeDir, "ui", "config", "control-ui-chunking.ts"))).toBe(false);
     enterPrWorktree(repoDir, 45);
