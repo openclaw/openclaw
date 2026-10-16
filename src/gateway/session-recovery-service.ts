@@ -329,7 +329,12 @@ export async function recoverGatewaySession(params: {
           sessionEntry: initialSource,
         });
         const fullAccess =
-          execPolicy.mode === "full" && execPolicy.security === "full" && execPolicy.ask === "off";
+          execPolicy.mode === "full" &&
+          execPolicy.security === "full" &&
+          execPolicy.ask === "off" &&
+          initialSource.restartRecoveryDeliveryMediaUrls === undefined &&
+          initialSource.restartRecoveryDisableMessageTool !== true &&
+          initialSource.restartRecoverySuppressTextDelivery !== true;
         const retainedSafeTools =
           initialSource.restartRecoveryForceSafeTools === true && !fullAccess;
         const noticeKey = `main-session-restart-recovery:${initialSource.restartRecoveryDeliverySourceRunId ?? initialSource.restartRecoveryDeliveryRunId ?? initialSource.sessionId}:failed-notice`;

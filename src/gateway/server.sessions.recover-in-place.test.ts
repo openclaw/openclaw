@@ -39,6 +39,7 @@ async function fixture(
   name: string,
   runtime?: "codex" | "claude-cli",
   restricted = runtime === "claude-cli",
+  deliveryConstraint?: "media" | "message" | "text",
 ) {
   const { storePath } = await createSessionStoreDir();
   const key = `agent:main:dashboard:${name}`;
@@ -70,7 +71,15 @@ async function fixture(
         ...retainedMetadata,
         status: "failed",
         abortedLastRun: false,
-        ...(restricted ? { permissionMode: "guarded", restartRecoveryForceSafeTools: true } : {}),
+        ...(restricted
+          ? {
+              permissionMode: deliveryConstraint ? "full" : "guarded",
+              restartRecoveryForceSafeTools: true,
+            }
+          : {}),
+        ...(deliveryConstraint === "media" ? { restartRecoveryDeliveryMediaUrls: [] } : {}),
+        ...(deliveryConstraint === "message" ? { restartRecoveryDisableMessageTool: true } : {}),
+        ...(deliveryConstraint === "text" ? { restartRecoverySuppressTextDelivery: true } : {}),
         mainRestartRecovery: {
           cycleId: recoveryCycleId,
           revision: 4,
@@ -269,62 +278,70 @@ test.for([false, true])(
   },
 );
 
-test("restricted CLI resume leaves its tombstone actionable without admitting input", async () => {
-  const current = await fixture("cli-restricted-resume", "claude-cli");
-  const previousRegistry = { ...getTestPluginRegistry() };
-  setTestPluginRegistry({
-    ...previousRegistry,
-    cliBackends: [
-      ...previousRegistry.cliBackends,
-      {
-        pluginId: "anthropic",
-        source: "test",
-        backend: {
-          id: "claude-cli",
-          modelProvider: "anthropic",
-          config: { command: "unused-fixture" },
+test.for([undefined, "media", "message", "text"] as const)(
+  "restricted CLI resume leaves its tombstone actionable without admitting input (%s)",
+  async (deliveryConstraint) => {
+    const current = await fixture(
+      `cli-restricted-resume-${deliveryConstraint ?? "guarded"}`,
+      "claude-cli",
+      true,
+      deliveryConstraint,
+    );
+    const previousRegistry = { ...getTestPluginRegistry() };
+    setTestPluginRegistry({
+      ...previousRegistry,
+      cliBackends: [
+        ...previousRegistry.cliBackends,
+        {
+          pluginId: "anthropic",
+          source: "test",
+          backend: {
+            id: "claude-cli",
+            modelProvider: "anthropic",
+            config: { command: "unused-fixture" },
+          },
         },
-      },
-    ],
-  });
-  try {
-    const before = current.entry();
-    if (!before) {
-      throw new Error("CLI fixture session is missing");
-    }
-    expect(
-      await resolveWorkerPlacementSessionRuntimeAsync({
-        cfg: current.context.getRuntimeConfig(),
-        entry: before,
-        agentId: "main",
-        sessionKey: current.key,
-      }),
-    ).toBe("claude-cli");
-    const transcript = await current.transcript();
-    const rejected = await recover(current);
-    expect(rejected, JSON.stringify(rejected)).toMatchObject({
-      ok: true,
-      payload: {
-        key: current.key,
-        sessionId: current.sessionId,
-        continuation: {
-          status: "rejected",
-          error: { details: { reason: "restart-safe-tools-unavailable" } },
-        },
-      },
+      ],
     });
-    expect(current.entry()).toEqual(before);
-    expect(await current.transcript()).toEqual(transcript);
-    expect((await listSessionPendingInputs(current.scope)).items).toEqual([]);
-    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-  } finally {
     try {
-      await current.drain();
+      const before = current.entry();
+      if (!before) {
+        throw new Error("CLI fixture session is missing");
+      }
+      expect(
+        await resolveWorkerPlacementSessionRuntimeAsync({
+          cfg: current.context.getRuntimeConfig(),
+          entry: before,
+          agentId: "main",
+          sessionKey: current.key,
+        }),
+      ).toBe("claude-cli");
+      const transcript = await current.transcript();
+      const rejected = await recover(current);
+      expect(rejected, JSON.stringify(rejected)).toMatchObject({
+        ok: true,
+        payload: {
+          key: current.key,
+          sessionId: current.sessionId,
+          continuation: {
+            status: "rejected",
+            error: { details: { reason: "restart-safe-tools-unavailable" } },
+          },
+        },
+      });
+      expect(current.entry()).toEqual(before);
+      expect(await current.transcript()).toEqual(transcript);
+      expect((await listSessionPendingInputs(current.scope)).items).toEqual([]);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
-      setTestPluginRegistry(previousRegistry);
+      try {
+        await current.drain();
+      } finally {
+        setTestPluginRegistry(previousRegistry);
+      }
     }
-  }
-});
+  },
+);
 
 test.for(["sessionId", "recoveryCycleId"] as const)(
   "a stale resume %s cannot clear the current tombstone",
