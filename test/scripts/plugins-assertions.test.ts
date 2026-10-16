@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import {
   chmodSync,
   copyFileSync,
@@ -11,9 +12,16 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { createServer, request as httpRequest, type Server, type RequestListener } from "node:http";
+import {
+  createServer,
+  request as httpRequest,
+  type Server,
+  type RequestListener,
+  type IncomingMessage,
+} from "node:http";
 import path from "node:path";
 import { createInterface } from "node:readline";
+import { text } from "node:stream/consumers";
 import { pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
@@ -34,6 +42,8 @@ const npmArtifact = {
   npmTarballName: "package.tgz",
 };
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/plugins/assertions.mjs";
+const CLAWHUB_ID = "openclaw-kitchen-sink-fixture";
+const CLAWHUB_SPEC = "clawhub:@openclaw/kitchen-sink";
 const fixtures = createFixtureLifetime();
 const autoCleanupTempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
@@ -57,6 +67,24 @@ function runAssertion(command: string, env: NodeJS.ProcessEnv) {
   });
 }
 
+function pluginHome(prefix: string) {
+  const root = autoCleanupTempDirs.make(prefix);
+  const home = path.join(root, "home");
+  const state = path.join(home, ".openclaw");
+  const scratch = path.join(root, "scratch");
+  return {
+    root,
+    state,
+    scratch,
+    env: {
+      HOME: home,
+      OPENCLAW_STATE_DIR: state,
+      OPENCLAW_CONFIG_PATH: path.join(state, "openclaw.json"),
+      OPENCLAW_PLUGINS_TMP_DIR: scratch,
+    },
+  };
+}
+
 async function listen(server: Server) {
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
@@ -77,40 +105,28 @@ async function closeServer(server: Server, force = false) {
   });
 }
 
-function registryFiles(prefix: string) {
-  const root = autoCleanupTempDirs.make(prefix);
-  const tarballPath = path.join(root, "demo-plugin.tgz");
-  writeFileSync(tarballPath, "fixture package archive", "utf8");
-  return { root, tarballPath, portFile: path.join(root, "port") };
-}
-
 async function clawhubPreflight(
   signal: AbortSignal,
   listener: RequestListener,
   env: NodeJS.ProcessEnv,
 ) {
-  const server = createServer(listener);
-  const origin = await listen(server);
-  try {
-    const result = await runNodeScript(
-      [ASSERTIONS_SCRIPT, "clawhub-preflight"],
-      {
-        ...process.env,
-        CLAWHUB_PLUGIN_ID: "openclaw-kitchen-sink-fixture",
-        CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
-        OPENCLAW_CLAWHUB_URL: origin,
-        ...env,
-      },
-      undefined,
-      { signal, executable: process.execPath },
-    );
-    if (result.error) {
-      throw result.error;
-    }
-    return result;
-  } finally {
-    await closeServer(server);
+  const { origin } = await useUpstream(listener);
+  const result = await runNodeScript(
+    [ASSERTIONS_SCRIPT, "clawhub-preflight"],
+    {
+      ...process.env,
+      CLAWHUB_PLUGIN_ID: CLAWHUB_ID,
+      CLAWHUB_PLUGIN_SPEC: CLAWHUB_SPEC,
+      OPENCLAW_CLAWHUB_URL: origin,
+      ...env,
+    },
+    undefined,
+    { signal, executable: process.execPath },
+  );
+  if (result.error) {
+    throw result.error;
   }
+  return result;
 }
 
 function writeFixtureServerShims(
@@ -152,28 +168,15 @@ function runPluginsSweepShell(script: string, env: NodeJS.ProcessEnv = {}) {
   });
 }
 
-function requestFixtureRegistry(
+async function requestFixtureRegistry(
   port: number,
   requestPath: string,
   headers: Record<string, string> = {},
-): Promise<{ body: string; contentLength: string | undefined; statusCode: number | undefined }> {
-  return new Promise((resolve, reject) => {
+) {
+  const response = await new Promise<IncomingMessage>((resolve, reject) => {
     const request = httpRequest(
       { headers, host: "127.0.0.1", method: "GET", path: requestPath, port },
-      (response) => {
-        let body = "";
-        response.setEncoding("utf8");
-        response.on("data", (chunk: string) => {
-          body += chunk;
-        });
-        response.on("end", () => {
-          resolve({
-            body,
-            contentLength: response.headers["content-length"],
-            statusCode: response.statusCode,
-          });
-        });
-      },
+      resolve,
     );
     request.setTimeout(2_000, () => {
       request.destroy(new Error(`timed out requesting ${requestPath}`));
@@ -181,77 +184,96 @@ function requestFixtureRegistry(
     request.on("error", reject);
     request.end();
   });
-}
-
-function startFixtureRegistry(
-  portFile: string,
-  tarballPath: string,
-  env: NodeJS.ProcessEnv = {},
-  preload?: string,
-  options: { packageName?: string; version?: string; cwd?: string } = {},
-) {
-  const child = spawn(
-    process.execPath,
-    [
-      ...(preload ? ["--import", pathToFileURL(preload).href] : []),
-      path.resolve("scripts/e2e/lib/plugins/npm-registry-server.mjs"),
-      portFile,
-      options.packageName ?? "@openclaw/demo-plugin-npm",
-      options.version ?? "1.0.0",
-      tarballPath,
-    ],
-    {
-      cwd: options.cwd ?? process.cwd(),
-      env: { ...process.env, ...env },
-      stdio: ["ignore", "pipe", "pipe", "ipc"],
-    },
-  );
-  const closed = new Promise<void>((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", () => resolve());
-  });
-  const listening = new Promise<number>((resolve, reject) => {
-    child.once("message", (message: unknown) => {
-      if (typeof message === "number" && Number.isInteger(message) && message > 0) {
-        resolve(message);
-      } else {
-        reject(new Error(`invalid fixture registry readiness: ${JSON.stringify(message)}`));
-      }
-    });
-  });
-  const stderr = child.stderr;
-  if (stderr === null) {
-    throw new Error("expected fixture registry stderr pipe");
-  }
-  const diagnostic = createBoundedChildOutput();
-  stderr.setEncoding("utf8");
-  stderr.on("data", diagnostic.append);
   return {
-    child,
-    diagnostic,
-    closed,
-    ready: awaitGateBeforeSettlement(listening, closed, `timed out waiting for ${portFile}`).then(
-      (port) => {
-        expect(Number(readFileSync(portFile, "utf8"))).toBe(port);
-        return port;
-      },
-    ),
+    body: await text(response),
+    contentLength: response.headers["content-length"],
+    statusCode: response.statusCode,
   };
 }
 
-async function stopFixtureRegistry({ child, closed }: ReturnType<typeof startFixtureRegistry>) {
-  if (child.exitCode === null && child.signalCode === null) {
-    child.kill();
+async function useRegistry(
+  signal: AbortSignal,
+  options: {
+    packageName?: string;
+    version?: string;
+    cwd?: string;
+    portFile?: string;
+    tarballPath?: string;
+    tarballName?: string;
+    archive?: string;
+    env?: NodeJS.ProcessEnv;
+    upstream?: RequestListener;
+    force?: boolean;
+    preload?: string;
+  } = {},
+) {
+  const root = options.portFile
+    ? path.dirname(options.portFile)
+    : autoCleanupTempDirs.make("openclaw-plugin-registry-");
+  const portFile = options.portFile ?? path.join(root, "port");
+  const tarballPath =
+    options.tarballPath ?? path.join(root, options.tarballName ?? "demo-plugin.tgz");
+  if (!options.tarballPath) {
+    writeFileSync(tarballPath, options.archive ?? "fixture package archive", "utf8");
   }
-  await closed;
-}
-
-async function useRegistry(signal: AbortSignal, ...args: Parameters<typeof startFixtureRegistry>) {
+  const upstream = options.upstream
+    ? await useUpstream(options.upstream, options.force)
+    : undefined;
+  const preload = options.preload ? path.join(root, "preload.mjs") : undefined;
+  if (options.preload && preload) {
+    writeFileSync(preload, options.preload);
+  }
   return fixtures.acquire(async (rollback) => {
-    const registry = startFixtureRegistry(...args);
-    const cleanup = () => stopFixtureRegistry(registry);
+    const child = spawn(
+      process.execPath,
+      [
+        ...(preload ? ["--import", pathToFileURL(preload).href] : []),
+        path.resolve("scripts/e2e/lib/plugins/npm-registry-server.mjs"),
+        portFile,
+        options.packageName ?? "@openclaw/demo-plugin-npm",
+        options.version ?? "1.0.0",
+        tarballPath,
+      ],
+      {
+        cwd: options.cwd ?? process.cwd(),
+        env: {
+          ...process.env,
+          ...(upstream ? { OPENCLAW_NPM_REGISTRY_UPSTREAM: upstream.origin } : {}),
+          ...options.env,
+        },
+        stdio: ["ignore", "pipe", "pipe", "ipc"],
+      },
+    );
+    const closed = once(child, "close");
+    const listening = new Promise<number>((resolve, reject) => {
+      child.once("message", (message: unknown) => {
+        if (typeof message === "number" && Number.isInteger(message) && message > 0) {
+          resolve(message);
+        } else {
+          reject(new Error(`invalid fixture registry readiness: ${JSON.stringify(message)}`));
+        }
+      });
+    });
+    const stderr = child.stderr;
+    if (stderr === null) {
+      throw new Error("expected fixture registry stderr pipe");
+    }
+    const diagnostic = createBoundedChildOutput();
+    stderr.setEncoding("utf8");
+    stderr.on("data", diagnostic.append);
+    const cleanup = async () => {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill();
+      }
+      await closed;
+    };
     try {
-      return { ...registry, port: await withinTest(registry.ready, signal), cleanup };
+      const port = await withinTest(
+        awaitGateBeforeSettlement(listening, closed, `timed out waiting for ${portFile}`),
+        signal,
+      );
+      expect(Number(readFileSync(portFile, "utf8"))).toBe(port);
+      return { child, diagnostic, port, cleanup };
     } catch (error) {
       return rollback(error, cleanup);
     }
@@ -285,33 +307,6 @@ async function useUpstream(listener: RequestListener, force = false) {
   });
 }
 
-async function useProxyRegistry(
-  signal: AbortSignal,
-  listener: RequestListener,
-  {
-    force = false,
-    env = {},
-    preload,
-  }: { force?: boolean; env?: NodeJS.ProcessEnv; preload?: string } = {},
-) {
-  const { root, portFile, tarballPath } = registryFiles("openclaw-plugin-npm-proxy-");
-  const upstream = await useUpstream(listener, force);
-  const preloadPath = preload ? path.join(root, "preload.mjs") : undefined;
-  if (preload !== undefined && preloadPath !== undefined) {
-    writeFileSync(preloadPath, preload);
-  }
-  return useRegistry(
-    signal,
-    portFile,
-    tarballPath,
-    {
-      OPENCLAW_NPM_REGISTRY_UPSTREAM: upstream.origin,
-      ...env,
-    },
-    preloadPath,
-  );
-}
-
 describe("plugins Docker assertions", () => {
   it("preserves caller-provided plugin sweep scratch roots", () => {
     const root = autoCleanupTempDirs.make("openclaw-plugin-sweep-caller-");
@@ -338,7 +333,7 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
     { mode: "logged", status: 23, traceEnabled: false, traceValue: "0", changeAfterSource: false },
     { mode: "logged", status: 0, traceEnabled: true, traceValue: "1", changeAfterSource: true },
   ])(
-    "bounds $mode diagnostics with exit $status and lifecycle tracing $traceEnabled ($traceValue, changed after source: $changeAfterSource)",
+    "bounds $mode diagnostics (exit $status, trace $traceValue, changed: $changeAfterSource)",
     (testCase) => {
       const root = autoCleanupTempDirs.make("openclaw-plugin-sweep-diagnostics-");
       const outputFile = path.join(root, "plugins-git-inspect.json");
@@ -449,11 +444,7 @@ ${command}
       ]) {
         expect(result.stderr).toContain(fragment);
       }
-      if (testCase.traceValue === "1") {
-        expect(result.stderr).toContain("[plugins:lifecycle]");
-      } else {
-        expect(result.stderr).not.toContain("[plugins:lifecycle]");
-      }
+      expect(result.stderr.includes("[plugins:lifecycle]")).toBe(testCase.traceValue === "1");
       if (testCase.status !== 0) {
         expect(result.stderr).toContain(
           `Plugin sweep command failed with status ${testCase.status}: install-git`,
@@ -462,7 +453,7 @@ ${command}
     },
   );
 
-  it("routes npm through both registry environment spellings after replacing a parent registry", () => {
+  it("replaces both npm registry environment spellings", () => {
     const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-routing-");
     writeFileSync(path.join(root, "fixture.tgz"), "fixture package archive");
     const result = runPluginsSweepShell(
@@ -542,7 +533,7 @@ done
     { initial: "12345", fault: "", label: "existing port" },
     { initial: null, fault: "write", label: "failed write" },
     { initial: "12345", fault: "rename", label: "failed replacement" },
-  ])("publishes complete npm fixture port bytes: $label", ({ initial, fault }, { signal }) =>
+  ])("publishes complete registry port bytes: $label", ({ initial, fault }, { signal }) =>
     fixtures.run(async () => {
       const root = fixtures.createTempDir("openclaw-plugin-npm-publication-");
       const registryScript = "scripts/e2e/lib/plugins/npm-registry-server.mjs";
@@ -652,11 +643,10 @@ fs.renameSync = (source, destination) => {
           observations.map(({ phase }) => phase),
           stderr.text(),
         ).toEqual(
-          fault === "write"
-            ? ["opened", "first-byte"]
-            : fault === "rename"
-              ? ["opened", "first-byte", "complete"]
-              : ["opened", "first-byte", "complete", "ready"],
+          ["opened", "first-byte", "complete", "ready"].slice(
+            0,
+            fault === "write" ? 2 : fault === "rename" ? 3 : 4,
+          ),
         );
         for (const { phase, payload, observed } of observations) {
           expect(payload).toMatch(/^[1-9][0-9]*$/u);
@@ -702,11 +692,9 @@ fs.renameSync = (source, destination) => {
     }),
   );
 
-  it("keeps npm fixture registry alive after malformed package paths", ({ signal }) =>
+  it("survives malformed npm package paths", ({ signal }) =>
     fixtures.run(async () => {
-      const { portFile, tarballPath } = registryFiles("openclaw-plugin-npm-fixture-request-");
-
-      const registry = await useRegistry(signal, portFile, tarballPath);
+      const registry = await useRegistry(signal);
       const valid = await assertRegistryRecovers(registry, "/%", 404, "not found");
       expect(JSON.parse(valid.body)).toMatchObject({
         name: "@openclaw/demo-plugin-npm",
@@ -714,25 +702,15 @@ fs.renameSync = (source, destination) => {
       });
     }));
 
-  it("serves scoped candidate tarballs through canonical npm shrinkwrap paths", ({ signal }) =>
+  it("serves scoped tarballs through shrinkwrap paths", ({ signal }) =>
     fixtures.run(async () => {
       const archive = "scoped candidate package archive";
-      const root = autoCleanupTempDirs.make("openclaw-plugin-npm-scoped-tarball-");
-      const portFile = path.join(root, "port");
-      const tarballPath = path.join(root, "openclaw-ai-2026.7.34.tgz");
-      writeFileSync(tarballPath, archive);
-
-      const { port, diagnostic: stderr } = await useRegistry(
-        signal,
-        portFile,
-        tarballPath,
-        {},
-        undefined,
-        {
-          packageName: "@openclaw/ai",
-          version: "2026.7.34",
-        },
-      );
+      const { port, diagnostic: stderr } = await useRegistry(signal, {
+        archive,
+        tarballName: "openclaw-ai-2026.7.34.tgz",
+        packageName: "@openclaw/ai",
+        version: "2026.7.34",
+      });
       for (const pathname of [
         "/@openclaw/ai/-/ai-2026.7.34.tgz",
         "/@openclaw%2Fai/-/ai-2026.7.34.tgz",
@@ -744,9 +722,7 @@ fs.renameSync = (source, destination) => {
       }
     }));
 
-  it("serves drive-qualified tarball dependencies using the request-visible registry origin", ({
-    signal,
-  }) =>
+  it("uses request origins for drive-qualified tarballs", ({ signal }) =>
     fixtures.run(async () => {
       const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-package-");
       const packageDir = path.join(root, "package");
@@ -756,16 +732,13 @@ fs.renameSync = (source, destination) => {
       const tarballPath = path.join(archiveDir, "openclaw.tgz");
       mkdirSync(path.resolve(root, archiveDir), { recursive: true });
       mkdirSync(packageDir);
+      const dependencies = { "@openclaw/ai": "2026.7.1-beta.3", zod: "4.3.6" };
+      const optionalDependencies = { "sqlite-vec": "0.1.7-alpha.2" };
       writeJson(path.join(packageDir, "package.json"), {
         name: "openclaw",
         version: "2026.7.1-beta.3",
-        dependencies: {
-          "@openclaw/ai": "2026.7.1-beta.3",
-          zod: "4.3.6",
-        },
-        optionalDependencies: {
-          "sqlite-vec": "0.1.7-alpha.2",
-        },
+        dependencies,
+        optionalDependencies,
       });
       const packed = spawnSync("tar", ["-czf", "openclaw.tgz", "-C", root, "package"], {
         cwd: path.resolve(root, archiveDir),
@@ -773,18 +746,18 @@ fs.renameSync = (source, destination) => {
       });
       expect(packed.status, packed.stderr).toBe(0);
 
-      const { port } = await useRegistry(
-        signal,
+      const { port } = await useRegistry(signal, {
         portFile,
         tarballPath,
-        {
+        cwd: root,
+        packageName: "openclaw",
+        version: "2026.7.1-beta.3",
+        env: {
           OPENCLAW_NPM_REGISTRY_DIST_TAGS: "latest=0.0.0,beta=2026.7.1-beta.3",
           // Fail locally if GNU tar mistakes the synthetic drive letter for a remote host.
           TAR_OPTIONS: "--rsh-command=false",
         },
-        undefined,
-        { cwd: root, packageName: "openclaw", version: "2026.7.1-beta.3" },
-      );
+      });
 
       const response = await requestFixtureRegistry(port, "/openclaw", {
         host: `192.0.2.2:${port}`,
@@ -799,38 +772,29 @@ fs.renameSync = (source, destination) => {
         optionalDependencies: manifest.optionalDependencies,
         tarball: manifest.dist.tarball,
       }).toEqual({
-        dependencies: { "@openclaw/ai": "2026.7.1-beta.3", zod: "4.3.6" },
-        optionalDependencies: { "sqlite-vec": "0.1.7-alpha.2" },
+        dependencies,
+        optionalDependencies,
         tarball: `http://192.0.2.2:${port}/openclaw/-/openclaw.tgz`,
       });
     }));
 
   it.for([false, true])(
-    "projects upstream tarballs per request origin without changing external URLs (merged=%s)",
+    "projects upstream tarballs per request origin (merged=%s)",
     (merged, { signal }) =>
       fixtures.run(async () => {
         const packageName = merged ? "@openclaw/demo-plugin-npm" : "upstream-package";
         const externalTarball = "https://external.invalid/upstream-package.tgz";
         let upstreamRequests = 0;
-        const { port } = await useProxyRegistry(
-          signal,
-          (request, response) => {
+        const { port } = await useRegistry(signal, {
+          upstream: (request, response) => {
             upstreamRequests += 1;
+            const tarball = `http://${request.headers.host}/upstream-package/-/package.tgz?download=1`;
+            const versions = {
+              "0.9.0": { dist: { tarball } },
+              "0.8.0": { dist: { tarball: externalTarball } },
+            };
             const compressedBody = gzipSync(
-              JSON.stringify({
-                name: packageName,
-                payload: "x".repeat(1_000),
-                versions: {
-                  "0.9.0": {
-                    dist: {
-                      tarball: `http://${request.headers.host}/upstream-package/-/package.tgz?download=1`,
-                    },
-                  },
-                  "0.8.0": {
-                    dist: { tarball: externalTarball },
-                  },
-                },
-              }),
+              JSON.stringify({ name: packageName, payload: "x".repeat(1_000), versions }),
             );
             response.writeHead(200, {
               "content-encoding": "gzip",
@@ -839,10 +803,8 @@ fs.renameSync = (source, destination) => {
             });
             response.end(compressedBody);
           },
-          {
-            env: { OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM: merged ? "1" : "" },
-          },
-        );
+          env: { OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM: merged ? "1" : "" },
+        });
 
         for (const host of [`192.0.2.2:${port}`, `192.0.2.3:${port}`]) {
           const response = await requestFixtureRegistry(
@@ -868,13 +830,15 @@ fs.renameSync = (source, destination) => {
       }),
   );
 
-  it("streams proxied npm tarballs without buffering a content length", ({ signal }) =>
+  it("streams npm tarballs without a content length", ({ signal }) =>
     fixtures.run(async () => {
       const upstreamBody = "x".repeat(1024 * 1024);
-      const { port } = await useProxyRegistry(signal, (_request, response) => {
-        response.writeHead(200, { "content-type": "application/octet-stream" });
-        response.write(upstreamBody.slice(0, upstreamBody.length / 2));
-        response.end(upstreamBody.slice(upstreamBody.length / 2));
+      const { port } = await useRegistry(signal, {
+        upstream: (_request, response) => {
+          response.writeHead(200, { "content-type": "application/octet-stream" });
+          response.write(upstreamBody.slice(0, upstreamBody.length / 2));
+          response.end(upstreamBody.slice(upstreamBody.length / 2));
+        },
       });
 
       const response = await requestFixtureRegistry(
@@ -885,95 +849,83 @@ fs.renameSync = (source, destination) => {
       expect(response).toEqual({ statusCode: 200, contentLength: undefined, body: upstreamBody });
     }));
 
-  it("rejects oversized upstream bodies without stopping the fixture registry", ({ signal }) =>
-    fixtures.run(async () => {
-      const registry = await useProxyRegistry(
-        signal,
-        (_request, response) => {
-          response.writeHead(200, {
-            "content-length": String(64 * 1024 * 1024 + 1),
-            "content-type": "application/octet-stream",
-          });
-          response.end("oversized");
-        },
-        { force: true },
-      );
+  it.for(["oversized", "stalled"])(
+    "rejects %s upstream bodies without stopping the registry",
+    (mode, { signal }) =>
+      fixtures.run(async () => {
+        const stalled = mode === "stalled";
+        let upstreamHits = 0;
+        const preload = [
+          "const nativeFetch = globalThis.fetch;",
+          "let timeoutController;",
+          "let timeoutWatchdog;",
+          "AbortSignal.timeout = () => {",
+          "  timeoutController = new AbortController();",
+          "  timeoutWatchdog = setTimeout(() => process.exit(86), 5_000);",
+          "  timeoutWatchdog.unref();",
+          "  return timeoutController.signal;",
+          "};",
+          "globalThis.fetch = async (...args) => {",
+          "  const response = await nativeFetch(...args);",
+          "  let firstChunk = true;",
+          "  const body = response.body.pipeThrough(",
+          "    new TransformStream({",
+          "      transform(chunk, controller) {",
+          "        controller.enqueue(chunk);",
+          "        if (firstChunk) {",
+          "          firstChunk = false;",
+          "          clearTimeout(timeoutWatchdog);",
+          '          queueMicrotask(() => timeoutController.abort(new DOMException("timeout", "TimeoutError")));',
+          "        }",
+          "      },",
+          "    }),",
+          "  );",
+          "  return new Response(body, response);",
+          "};",
+          "",
+        ].join("\n");
 
-      await assertRegistryRecovers(
-        registry,
-        "/oversized-package",
-        502,
-        "npm registry upstream response body exceeded 67108864 bytes",
-      );
-    }));
+        const registry = await useRegistry(signal, {
+          upstream: (_request, response) => {
+            upstreamHits += 1;
+            response.writeHead(200, {
+              "content-length": stalled ? "1024" : String(64 * 1024 * 1024 + 1),
+              "content-type": stalled ? "application/json" : "application/octet-stream",
+            });
+            if (stalled) {
+              response.write('{"partial":');
+            } else {
+              response.end("oversized");
+            }
+          },
+          force: true,
+          preload: stalled ? preload : undefined,
+        });
 
-  it("times out stalled upstream response bodies without stopping the fixture registry", ({
-    signal,
-  }) =>
-    fixtures.run(async () => {
-      let upstreamHits = 0;
-      const preload = [
-        "const nativeFetch = globalThis.fetch;",
-        "let timeoutController;",
-        "let timeoutWatchdog;",
-        "AbortSignal.timeout = () => {",
-        "  timeoutController = new AbortController();",
-        "  timeoutWatchdog = setTimeout(() => process.exit(86), 5_000);",
-        "  timeoutWatchdog.unref();",
-        "  return timeoutController.signal;",
-        "};",
-        "globalThis.fetch = async (...args) => {",
-        "  const response = await nativeFetch(...args);",
-        "  let firstChunk = true;",
-        "  const body = response.body.pipeThrough(",
-        "    new TransformStream({",
-        "      transform(chunk, controller) {",
-        "        controller.enqueue(chunk);",
-        "        if (firstChunk) {",
-        "          firstChunk = false;",
-        "          clearTimeout(timeoutWatchdog);",
-        '          queueMicrotask(() => timeoutController.abort(new DOMException("timeout", "TimeoutError")));',
-        "        }",
-        "      },",
-        "    }),",
-        "  );",
-        "  return new Response(body, response);",
-        "};",
-        "",
-      ].join("\n");
+        await assertRegistryRecovers(
+          registry,
+          `/${mode}-package`,
+          502,
+          stalled
+            ? "upstream registry request failed"
+            : "npm registry upstream response body exceeded 67108864 bytes",
+        );
+        expect(upstreamHits).toBe(1);
+      }),
+  );
 
-      const registry = await useProxyRegistry(
-        signal,
-        (_request, response) => {
-          upstreamHits += 1;
-          response.writeHead(200, {
-            "content-length": "1024",
-            "content-type": "application/json",
-          });
-          response.write('{"partial":');
-        },
-        { force: true, preload },
-      );
-
-      await assertRegistryRecovers(
-        registry,
-        "/stalled-package",
-        502,
-        "upstream registry request failed",
-      );
-      expect(upstreamHits).toBe(1);
-    }));
-
-  it("does not let absolute-form request targets escape the configured upstream", ({ signal }) =>
+  it("rejects absolute-form requests escaping upstream", ({ signal }) =>
     fixtures.run(async () => {
       let configuredUpstreamHits = 0;
       let escapeServerHits = 0;
       let configuredUpstreamTarget: string | undefined;
-      const { port } = await useProxyRegistry(signal, (request, response) => {
-        configuredUpstreamHits += 1;
-        configuredUpstreamTarget = request.url;
-        response.writeHead(200, { "content-type": "text/plain" });
-        response.end("configured upstream");
+      const { port } = await useRegistry(signal, {
+        upstream: (request, response) => {
+          configuredUpstreamHits += 1;
+          configuredUpstreamTarget = request.url;
+          response.writeHead(200, { "content-type": "text/plain" });
+          response.end("configured upstream");
+        },
       });
       const escapeServer = await useUpstream((_request, response) => {
         escapeServerHits += 1;
@@ -998,39 +950,24 @@ fs.renameSync = (source, destination) => {
       expect(escapeServerHits).toBe(0);
     }));
 
-  it("requires the resolved legacy profile before allowing the pre-marker uninstall contract", () => {
-    const root = autoCleanupTempDirs.make("openclaw-plugins-assertions-");
-    const home = path.join(root, "home");
-    const scratchRoot = path.join(root, "scratch");
-    const removedInstallPath = path.join(home, ".openclaw", "extensions", "demo-plugin-tgz");
-
-    writeJson(path.join(scratchRoot, "plugins2-uninstalled.json"), { plugins: [] });
-    writeFileSync(path.join(scratchRoot, "plugins2-install-path.txt"), removedInstallPath, "utf8");
-    writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
-      installRecords: {},
-    });
-
-    const baseEnv = {
-      ...process.env,
-      HOME: home,
-      OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
-      OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
-      OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
-    };
-    const current = runAssertion("plugin-tgz-removed", baseEnv);
-    const rawFrozenAuthorization = runAssertion("plugin-tgz-removed", {
-      ...baseEnv,
-      OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
-    });
+  it("gates pre-marker uninstall on the resolved legacy profile", () => {
+    const { state, scratch, env } = pluginHome("openclaw-plugins-assertions-");
+    writeJson(path.join(scratch, "plugins2-uninstalled.json"), { plugins: [] });
+    writeFileSync(
+      path.join(scratch, "plugins2-install-path.txt"),
+      path.join(state, "extensions", "demo-plugin-tgz"),
+    );
+    writeJson(path.join(state, "plugins", "installs.json"), { installRecords: {} });
+    for (const overrides of [{}, { OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1" }]) {
+      const current = runAssertion("plugin-tgz-removed", { ...env, ...overrides });
+      expect(current.status).not.toBe(0);
+      expect(current.stderr).toContain("exact disabled uninstall marker missing");
+    }
     const legacy = runAssertion("plugin-tgz-removed", {
-      ...baseEnv,
+      ...env,
       OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE: "legacy",
     });
 
-    expect(current.status).not.toBe(0);
-    expect(current.stderr).toContain("exact disabled uninstall marker missing");
-    expect(rawFrozenAuthorization.status).not.toBe(0);
-    expect(rawFrozenAuthorization.stderr).toContain("exact disabled uninstall marker missing");
     expect(legacy.status).toBe(0);
   });
 
@@ -1039,13 +976,11 @@ fs.renameSync = (source, destination) => {
     (boundary) => {
       const escaped = boundary === "managed root";
       const wrongPeerTarget = boundary === "peer host";
-      const root = autoCleanupTempDirs.make("openclaw-plugins-clawhub-path-");
-      const home = path.join(root, "home");
-      const scratchRoot = path.join(root, "scratch");
-      const extensionsRoot = path.join(home, ".openclaw", "extensions");
+      const { root, state, scratch, env } = pluginHome("openclaw-plugins-clawhub-path-");
+      const extensionsRoot = path.join(state, "extensions");
       const installPath = escaped
         ? `${extensionsRoot}${path.sep}..${path.sep}escaped-clawhub`
-        : path.join(extensionsRoot, "openclaw-kitchen-sink-fixture");
+        : path.join(extensionsRoot, CLAWHUB_ID);
       mkdirSync(extensionsRoot, { recursive: true });
       mkdirSync(installPath, { recursive: true });
       const record = {
@@ -1055,7 +990,7 @@ fs.renameSync = (source, destination) => {
         clawhubPackage: "@openclaw/kitchen-sink",
         installPath,
         source: "clawhub",
-        spec: "clawhub:@openclaw/kitchen-sink",
+        spec: CLAWHUB_SPEC,
         ...(!escaped ? npmArtifact : {}),
       };
       if (record.artifactKind === "npm-pack") {
@@ -1081,25 +1016,18 @@ fs.renameSync = (source, destination) => {
         }
       }
 
-      writeJson(path.join(scratchRoot, "plugins-clawhub-installed.json"), {
-        plugins: [{ id: "openclaw-kitchen-sink-fixture", status: "loaded" }],
+      writeJson(path.join(scratch, "plugins-clawhub-installed.json"), {
+        plugins: [{ id: CLAWHUB_ID, status: "loaded" }],
       });
-      writeJson(path.join(scratchRoot, "plugins-clawhub-inspect.json"), {
-        plugin: { id: "openclaw-kitchen-sink-fixture" },
-      });
-      writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
-        installRecords: {
-          "openclaw-kitchen-sink-fixture": record,
-        },
+      writeJson(path.join(scratch, "plugins-clawhub-inspect.json"), { plugin: { id: CLAWHUB_ID } });
+      writeJson(path.join(state, "plugins", "installs.json"), {
+        installRecords: { [CLAWHUB_ID]: record },
       });
 
       const result = runAssertion("clawhub-installed", {
-        CLAWHUB_PLUGIN_ID: "openclaw-kitchen-sink-fixture",
-        CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
-        HOME: home,
-        OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
-        OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
-        OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
+        ...env,
+        CLAWHUB_PLUGIN_ID: CLAWHUB_ID,
+        CLAWHUB_PLUGIN_SPEC: CLAWHUB_SPEC,
       });
 
       expect(result.status).toBe(1);
@@ -1134,13 +1062,11 @@ fs.renameSync = (source, destination) => {
             }
           },
           {
-            ...(bodyTimeout
-              ? {
-                  NODE_OPTIONS: `--import=data:text/javascript,${encodeURIComponent(
-                    "const response = await fetch(process.env.OPENCLAW_CLAWHUB_URL); globalThis.fetch = async () => response;",
-                  )}`,
-                }
-              : {}),
+            NODE_OPTIONS: bodyTimeout
+              ? `--import=data:text/javascript,${encodeURIComponent(
+                  "const response = await fetch(process.env.OPENCLAW_CLAWHUB_URL); globalThis.fetch = async () => response;",
+                )}`
+              : process.env.NODE_OPTIONS,
             ...(bodyLimit ? { OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_BODY_MAX_BYTES: "16" } : {}),
             OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: timeout,
           },

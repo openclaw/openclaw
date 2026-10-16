@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { loadInstalledPluginIndex } from "../../src/plugins/installed-plugin-index.js";
 import { createInstalledPluginOwnershipResolver } from "../../src/plugins/installed-plugin-package-ownership.js";
 import { closeOpenClawStateDatabaseByPath } from "../../src/state/openclaw-state-db-cache.js";
@@ -99,115 +99,107 @@ fi
   };
 }
 
-describe("plugin update unchanged Docker E2E", () => {
-  it.each([false, true])(
-    "seeds plugin ownership with initialized state=%s",
-    async (initialized) => {
-      const root = tempDirs.make("openclaw-plugin-update-seed-");
-      const { configPath, env, stateDir } = seedInstallState(root, initialized);
-      const config = JSON.parse(readFileSync(configPath, "utf8")) as {
-        plugins?: Record<string, unknown>;
-      };
-      expect(config).toEqual({ plugins: {} });
-      expect(
-        JSON.parse(
-          execFileSync("node", [PLUGIN_UPDATE_PROBE_SCRIPT, "snapshot"], {
-            encoding: "utf8",
-            env,
-          }),
-        ),
-      ).toMatchObject({ source: "npm", resolvedVersion: "0.9.0" });
+it.each([false, true])("seeds plugin ownership with initialized state=%s", async (initialized) => {
+  const root = tempDirs.make("openclaw-plugin-update-seed-");
+  const { configPath, env, stateDir } = seedInstallState(root, initialized);
+  const config = JSON.parse(readFileSync(configPath, "utf8")) as {
+    plugins?: Record<string, unknown>;
+  };
+  expect(config).toEqual({ plugins: {} });
+  expect(
+    JSON.parse(
+      execFileSync("node", [PLUGIN_UPDATE_PROBE_SCRIPT, "snapshot"], {
+        encoding: "utf8",
+        env,
+      }),
+    ),
+  ).toMatchObject({ source: "npm", resolvedVersion: "0.9.0" });
 
-      const { readPluginInstallIndex } = await import(PLUGIN_INDEX_MODULE_URL);
-      const persisted = readPluginInstallIndex({ configPath, stateDir });
-      expect(persisted).toMatchObject({
-        installRecords: {
-          "lossless-claw": {
-            source: "npm",
-            installPath: "~/.openclaw/extensions/lossless-claw",
-          },
-        },
-        plugins: [
-          {
-            pluginId: "lossless-claw",
-            installOwner: "lossless-claw",
-            rootDir: path.join(stateDir, "extensions", "lossless-claw"),
-          },
-        ],
-      });
-
-      const database = openOpenClawStateDatabase({ env });
-      closeOpenClawStateDatabaseByPath(database.path);
-      const liveIndex = loadInstalledPluginIndex({ config, env, stateDir });
-      expect(
-        createInstalledPluginOwnershipResolver(liveIndex, env).resolvePackage("lossless-claw"),
-      ).toMatchObject({
-        ok: true,
-        value: {
-          installOwner: "lossless-claw",
-          pluginIds: ["lossless-claw"],
-        },
-      });
+  const { readPluginInstallIndex } = await import(PLUGIN_INDEX_MODULE_URL);
+  const persisted = readPluginInstallIndex({ configPath, stateDir });
+  expect(persisted).toMatchObject({
+    installRecords: {
+      "lossless-claw": {
+        source: "npm",
+        installPath: "~/.openclaw/extensions/lossless-claw",
+      },
     },
-  );
-
-  it.each([
-    [
-      "bounds saved diagnostics",
-      "DO_NOT_PRINT_OLD_PLUGIN_UPDATE_LOG",
-      "missing marker tail",
-      "Expected up-to-date output missing",
+    plugins: [
+      {
+        pluginId: "lossless-claw",
+        installOwner: "lossless-claw",
+        rootDir: path.join(stateDir, "extensions", "lossless-claw"),
+      },
     ],
-    [
-      "detects downloads before the tail",
-      "Downloading @example/lossless-claw",
-      "lossless-claw is up to date (0.9.0).",
-      "Unexpected npm download/reinstall path",
-    ],
-  ])("assert-output %s", (_name, prefix, suffix, error) => {
-    const root = tempDirs.make("openclaw-plugin-update-probe-");
-    const logPath = path.join(root, "plugin-update-output.log");
-    writeFileSync(logPath, `${prefix}\n${"filler line\n".repeat(12 * 1024)}${suffix}`, "utf8");
-
-    const result = runProbeFileStatus("assert-output", logPath);
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(error);
-    if (suffix === "missing marker tail") {
-      expect(result.stderr).toContain("Output tail:");
-      expect(result.stderr).toContain(suffix);
-      expect(result.stderr).not.toContain(prefix);
-      expect(result.stderr.length).toBeLessThan(80 * 1024);
-    }
   });
 
-  it("keeps a historical override out of the same-schema repair lane", () => {
-    const result = runCorruptUpdateDockerBaseline({
-      OPENCLAW_UPDATE_CORRUPT_PLUGIN_BASELINE: "openclaw@2026.9.2",
-      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@2026.9.2",
-    });
-    expect(result.result.status, result.result.stderr).toBe(0);
-    expect(result.baseline).toBeUndefined();
+  const database = openOpenClawStateDatabase({ env });
+  closeOpenClawStateDatabaseByPath(database.path);
+  const liveIndex = loadInstalledPluginIndex({ config, env, stateDir });
+  expect(
+    createInstalledPluginOwnershipResolver(liveIndex, env).resolvePackage("lossless-claw"),
+  ).toMatchObject({
+    ok: true,
+    value: { installOwner: "lossless-claw", pluginIds: ["lossless-claw"] },
   });
+});
 
-  it("preserves the explicit allow policy after target-owned additions", () => {
-    const result = runPolicyProbe([CORRUPT_PLUGIN_ID, "memory-core", "codex"]);
-    expect(result.status, result.stderr).toBe(0);
+it.each([
+  [
+    "bounds saved diagnostics",
+    "DO_NOT_PRINT_OLD_PLUGIN_UPDATE_LOG",
+    "missing marker tail",
+    "Expected up-to-date output missing",
+  ],
+  [
+    "detects downloads before the tail",
+    "Downloading @example/lossless-claw",
+    "lossless-claw is up to date (0.9.0).",
+    "Unexpected npm download/reinstall path",
+  ],
+])("assert-output %s", (_name, prefix, suffix, error) => {
+  const root = tempDirs.make("openclaw-plugin-update-probe-");
+  const logPath = path.join(root, "plugin-update-output.log");
+  writeFileSync(logPath, `${prefix}\n${"filler line\n".repeat(12 * 1024)}${suffix}`, "utf8");
+
+  const result = runProbeFileStatus("assert-output", logPath);
+
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain(error);
+  if (suffix === "missing marker tail") {
+    expect(result.stderr).toContain("Output tail:");
+    expect(result.stderr).toContain(suffix);
+    expect(result.stderr).not.toContain(prefix);
+    expect(result.stderr.length).toBeLessThan(80 * 1024);
+  }
+});
+
+it("keeps a historical override out of the same-schema repair lane", () => {
+  const result = runCorruptUpdateDockerBaseline({
+    OPENCLAW_UPDATE_CORRUPT_PLUGIN_BASELINE: "openclaw@2026.9.2",
+    OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@2026.9.2",
   });
+  expect(result.result.status, result.result.stderr).toBe(0);
+  expect(result.baseline).toBeUndefined();
+});
 
-  it.each([
-    ["non-array allow policy", CORRUPT_PLUGIN_ID, false, "plugins.allow to be an array"],
-    ["missing fixture membership", ["memory-core"], false, "exactly once"],
-    [
-      "loss of the Codex opt-out",
-      [CORRUPT_PLUGIN_ID],
-      true,
-      "explicit Codex opt-out to survive, got true",
-    ],
-  ])("rejects corrupt update recovery with %s", (_case, allow, codexEnabled, expectedError) => {
-    const result = runPolicyProbe(allow, codexEnabled);
+it("preserves the explicit allow policy after target-owned additions", () => {
+  const result = runPolicyProbe([CORRUPT_PLUGIN_ID, "memory-core", "codex"]);
+  expect(result.status, result.stderr).toBe(0);
+});
 
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(expectedError);
-  });
+it.each([
+  ["non-array allow policy", CORRUPT_PLUGIN_ID, false, "plugins.allow to be an array"],
+  ["missing fixture membership", ["memory-core"], false, "exactly once"],
+  [
+    "loss of the Codex opt-out",
+    [CORRUPT_PLUGIN_ID],
+    true,
+    "explicit Codex opt-out to survive, got true",
+  ],
+])("rejects corrupt update recovery with %s", (_case, allow, codexEnabled, expectedError) => {
+  const result = runPolicyProbe(allow, codexEnabled);
+
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain(expectedError);
 });

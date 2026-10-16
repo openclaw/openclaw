@@ -33,8 +33,15 @@ function prune(
     ...options,
   });
 }
-async function writeFiles(root: string, files: Record<string, string>) {
-  for (const [relative, content] of Object.entries(files)) {
+async function writeFiles(
+  root: string,
+  files: Record<string, string> | string[],
+  contents = "{}\n",
+) {
+  const entries = Array.isArray(files)
+    ? files.map((file): [string, string] => [file, contents])
+    : Object.entries(files);
+  for (const [relative, content] of entries) {
     const target = path.join(root, relative);
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.writeFile(target, content);
@@ -49,26 +56,33 @@ async function seedDist(
   await writePackageDistInventory(root);
   await writeFiles(path.join(root, "dist"), stale);
 }
-function runPostinstall(packageRoot: string, env: NodeJS.ProcessEnv = {}) {
+function runPostinstall(packageRoot: string, env: NodeJS.ProcessEnv = {}, windows = false) {
   const home = path.join(packageRoot, "home");
-  return spawnSync(
-    process.execPath,
-    [path.join(packageRoot, "scripts/postinstall-bundled-plugins.mjs")],
-    {
-      cwd: packageRoot,
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        HOME: home,
-        OPENCLAW_HOME: home,
-        OPENCLAW_STATE_DIR: path.join(packageRoot, "state"),
-        OPENCLAW_CONFIG_PATH: undefined,
-        STATE_DIRECTORY: undefined,
-        OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: undefined,
-        ...env,
-      },
+  const script = path.join(packageRoot, "scripts/postinstall-bundled-plugins.mjs");
+  const args = windows
+    ? [
+        "--input-type=module",
+        "--eval",
+        `Object.defineProperty(process, "platform", { value: "win32" });
+process.argv[1] = ${JSON.stringify(script)};
+await import(${JSON.stringify(pathToFileURL(script).href)});`,
+      ]
+    : [script];
+  return spawnSync(process.execPath, args, {
+    cwd: packageRoot,
+    encoding: "utf8",
+    timeout: windows ? 10_000 : undefined,
+    env: {
+      ...process.env,
+      HOME: home,
+      OPENCLAW_HOME: home,
+      OPENCLAW_STATE_DIR: path.join(packageRoot, "state"),
+      OPENCLAW_CONFIG_PATH: undefined,
+      STATE_DIRECTORY: undefined,
+      OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: undefined,
+      ...env,
     },
-  );
+  });
 }
 
 async function makePackage(files: string[] = []) {
@@ -100,8 +114,10 @@ async function expectPathExists(...paths: string[]) {
   }
 }
 
-async function expectPathMissing(filePath: string) {
-  await expect(fs.access(filePath)).rejects.toHaveProperty("code", "ENOENT");
+async function expectPathMissing(...paths: string[]) {
+  for (const filePath of paths) {
+    await expect(fs.access(filePath)).rejects.toHaveProperty("code", "ENOENT");
+  }
 }
 
 describe("bundled plugin postinstall", () => {
@@ -147,26 +163,10 @@ describe("bundled plugin postinstall", () => {
     });
     const pending = at(PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
     await fs.writeFile(pending, "pending\n");
-    const script = at("scripts", "postinstall-bundled-plugins.mjs");
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--input-type=module",
-        "--eval",
-        `Object.defineProperty(process, "platform", { value: "win32" });
-process.argv[1] = ${JSON.stringify(script)};
-await import(${JSON.stringify(pathToFileURL(script).href)});`,
-      ],
-      {
-        cwd: packageRoot,
-        encoding: "utf8",
-        timeout: 10_000,
-        env: {
-          ...process.env,
-          OPENCLAW_UPDATE_IN_PROGRESS: "1",
-          OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: "1",
-        },
-      },
+    const result = runPostinstall(
+      packageRoot,
+      { OPENCLAW_UPDATE_IN_PROGRESS: "1", OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: "1" },
+      true,
     );
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(1);
@@ -227,12 +227,8 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
     );
     await writeFiles(
       packageRoot,
-      Object.fromEntries(
-        sentinels.map((file) => [
-          path.relative(packageRoot, file),
-          "owned by another Node application\n",
-        ]),
-      ),
+      sentinels.map((file) => path.relative(packageRoot, file)),
+      "owned by another Node application\n",
     );
 
     const result = runPostinstall(packageRoot, {
@@ -248,19 +244,15 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
   });
 
   it("does not classify published packages with source files as source checkouts", () => {
-    const packageRoot = "/pkg";
-    const at = (...parts: string[]) => path.join(packageRoot, ...parts);
-    const existingPaths = new Set([
-      at("package.json"),
-      at("pnpm-workspace.yaml"),
-      at("src"),
-      at("extensions"),
-      at("dist", "postinstall-inventory.json"),
-    ]);
+    const existingPaths = new Set(
+      ["pnpm-workspace.yaml", "src", "extensions", "dist/postinstall-inventory.json"].map((file) =>
+        path.join("/pkg", file),
+      ),
+    );
 
     expect(
       isSourceCheckoutRoot({
-        packageRoot,
+        packageRoot: "/pkg",
         existsSync: (value: string) => existingPaths.has(value),
       }),
     ).toBe(false);
@@ -287,7 +279,6 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
 
   it("honors the disable env before packaged cleanup", async () => {
     const { packageRoot, at } = await makePackage();
-    const staleFile = at("dist", "stale.js");
     await writeFiles(packageRoot, {
       "dist/postinstall-inventory.json": "[]\n",
       "dist/stale.js": "export {};\n",
@@ -298,7 +289,7 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
       packageRoot,
     });
 
-    await expectPathExists(staleFile);
+    await expectPathExists(at("dist/stale.js"));
   });
 
   it("completes packaged lifecycle without changing operator databases", async () => {
@@ -309,10 +300,7 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
     const stateDir = path.join(home, ".openclaw");
     const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
     const markerPath = at(PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
-    const migrationPath = path.join(
-      packageRoot,
-      "dist/commands/doctor/shared/plugin-registry-migration.js",
-    );
+    const migrationPath = at("dist/commands/doctor/shared/plugin-registry-migration.js");
     await copyPostinstallFixture(packageRoot);
     await fs.mkdir(path.dirname(migrationPath), { recursive: true });
     await fs.mkdir(path.dirname(databasePath), { recursive: true });
@@ -352,8 +340,6 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
 
   it("prunes from the authoritative inventory without reading dist JavaScript", async () => {
     const { packageRoot, at } = await makePackage();
-    const currentFile = at("dist", "current.js");
-    const staleFile = at("dist", "stale.js");
     const inventoryPath = at("dist", "postinstall-inventory.json");
     await seedDist(packageRoot, { "current.js": "export {};\n" }, { "stale.js": "export {};\n" });
     const readFileSync = vi.fn((filePath: string | Buffer | URL, options?: BufferEncoding) => {
@@ -367,8 +353,8 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
       "dist/stale.js",
     ]);
 
-    await expectPathExists(currentFile);
-    await expectPathMissing(staleFile);
+    await expectPathExists(at("dist/current.js"));
+    await expectPathMissing(at("dist/stale.js"));
     expect(readFileSync).toHaveBeenCalledOnce();
     expect(readFileSync).toHaveBeenCalledWith(inventoryPath, "utf8");
   });
@@ -396,7 +382,7 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
 
     await seedDist(packageRoot, { "entry.js": "export {};\n" });
     for (const root of retainedRoots) {
-      await writeFiles(root, { "package.json": "{}\n" });
+      await writeFiles(root, ["package.json"]);
     }
     await fs.mkdir(legacySymlinkTarget, { recursive: true });
     await fs.mkdir(slackScope, { recursive: true });
@@ -404,11 +390,7 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
 
     const log = quietLog();
     runBundledPluginPostinstall({
-      env: {
-        HOME: home,
-        OPENCLAW_STATE_DIR: stateOverride,
-        STATE_DIRECTORY: systemState,
-      },
+      env: { HOME: home, OPENCLAW_STATE_DIR: stateOverride, STATE_DIRECTORY: systemState },
       packageRoot,
       log,
     });
@@ -420,9 +402,6 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
 
   it("prunes stale private QA files without restoring compat sidecars", async () => {
     const { packageRoot, at } = await makePackage();
-    const currentManifest = at("dist/extensions/example/openclaw.plugin.json");
-    const stalePackage = at("dist", "extensions", "qa-lab", "package.json");
-    const staleManifest = at("dist/extensions/qa-lab/openclaw.plugin.json");
     await seedDist(
       packageRoot,
       {
@@ -438,22 +417,19 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
       expect((await fs.stat(at("dist", "postinstall-inventory.json"))).mode & 0o777).toBe(0o644);
     }
 
-    runBundledPluginPostinstall({
-      packageRoot,
-      log: { log: vi.fn(), warn: vi.fn() },
-    });
+    runBundledPluginPostinstall({ packageRoot, log: quietLog() });
 
-    await expectPathExists(currentManifest);
-    await expectPathMissing(stalePackage);
-    await expectPathMissing(staleManifest);
-    for (const relative of [
-      "qa-channel/runtime-api.js",
-      "qa-channel/package.json",
-      "qa-channel/openclaw.plugin.json",
-      "qa-lab/runtime-api.js",
-    ]) {
-      await expectPathMissing(at("dist/extensions", relative));
-    }
+    await expectPathExists(at("dist/extensions/example/openclaw.plugin.json"));
+    await expectPathMissing(
+      ...[
+        "qa-lab/package.json",
+        "qa-lab/openclaw.plugin.json",
+        "qa-channel/runtime-api.js",
+        "qa-channel/package.json",
+        "qa-channel/openclaw.plugin.json",
+        "qa-lab/runtime-api.js",
+      ].map((relative) => at("dist/extensions", relative)),
+    );
   });
 
   it.each(["missing", "invalid"])(
@@ -535,12 +511,12 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
     expect(prune(packageRoot, ["dist/extensions/slack/package.json"])).toEqual([
       "dist/stale-runtime.js",
     ]);
-    await expectPathMissing(path.join(slackRoot, "node_modules"));
-    await expectPathMissing(path.dirname(path.join(slackRoot, installStage)));
-    await expectPathMissing(path.dirname(path.join(slackRoot, retryStage)));
-    for (const directory of emptyDirs) {
-      await expectPathMissing(directory);
-    }
+    await expectPathMissing(
+      path.join(slackRoot, "node_modules"),
+      path.dirname(path.join(slackRoot, installStage)),
+      path.dirname(path.join(slackRoot, retryStage)),
+      ...emptyDirs,
+    );
     expect(prune(packageRoot, ["dist/extensions/slack/package.json"])).toEqual([]);
   });
 

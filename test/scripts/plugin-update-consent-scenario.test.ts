@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const adapters = vi.hoisted(() => ({
   spawn: vi.fn(),
@@ -60,6 +60,12 @@ const readJson = (file: string) => JSON.parse(fs.readFileSync(file, "utf8"));
 const hostPackagePath = () => path.resolve(path.dirname(entry), "..", "package.json");
 const toolsFor = (version: number) =>
   Array.from({ length: version }, (_, i) => `consent_tool_${i + 1}`);
+function writeOutput(descriptor: unknown, output: string) {
+  if (typeof descriptor !== "number") {
+    throw new Error("expected scenario-owned output descriptor");
+  }
+  fs.writeSync(descriptor, output);
+}
 
 function makeDenial(coreVersion: string, repair: boolean) {
   return {
@@ -85,18 +91,14 @@ function install(version: number) {
     throw new Error(`unprepared fixture ${version}`);
   }
   const tools = toolsFor(version);
-  const surface = {
-    channels: [],
-    providers: [],
-    tools,
-    contracts: tools.map((tool) => `tools: ${tool}`),
-    hooks: [],
-    mcpServers: [],
-    cliCommands: [],
-    cliBackends: [],
-    skills: [],
-    dangerousConfigFlags: [],
-  };
+  // The key order is part of the scenario's surface hash.
+  const surface: Record<string, string[]> = Object.fromEntries(
+    "channels providers tools contracts hooks mcpServers cliCommands cliBackends skills dangerousConfigFlags"
+      .split(" ")
+      .map((key) => [key, []]),
+  );
+  surface.tools = tools;
+  surface.contracts = tools.map((tool) => `tools: ${tool}`);
   record = {
     version: `${version}.0.0`,
     installPath,
@@ -228,7 +230,7 @@ beforeEach(() => {
     return filename;
   });
   adapters.spawn.mockImplementation(
-    (command: string, args: string[], options: { stdio: unknown[]; env: NodeJS.ProcessEnv }) => {
+    (command: string, args: string[], options: { stdio: unknown[] }) => {
       const child = new FixtureChild();
       if (
         command === process.execPath &&
@@ -248,21 +250,14 @@ beforeEach(() => {
       const entryIndex = args.indexOf(entry);
       expect(entryIndex).toBeGreaterThan(0);
       const cliArgs = args.slice(entryIndex + 1);
-      if (timeoutExit && cliArgs[0] === "update" && cliArgs.includes("--tag")) {
-        child.observation.code = timeoutExit;
-        const stderr = options.stdio[2];
-        if (typeof stderr !== "number") {
-          throw new Error("expected scenario-owned stderr descriptor");
-        }
-        fs.writeSync(stderr, "package replacement still running");
-        return child;
+      const code = cliArgs[0] === "update" && cliArgs.includes("--tag") ? timeoutExit : undefined;
+      if (code) {
+        child.observation.code = code;
       }
-      const output = cliReply(cliArgs, child);
-      const descriptor = options.stdio[1];
-      if (typeof descriptor !== "number") {
-        throw new Error("expected scenario-owned stdout descriptor");
-      }
-      fs.writeSync(descriptor, output);
+      writeOutput(
+        options.stdio[code ? 2 : 1],
+        code ? "package replacement still running" : cliReply(cliArgs, child),
+      );
       return child;
     },
   );
@@ -279,72 +274,62 @@ afterEach(() => {
 const runScenario = (options?: Parameters<typeof runConsentScenario>[2]) =>
   runConsentScenario(entry, coreTarball, options);
 
-describe("installed-CLI consent scenario report contract", () => {
-  it("accepts successful core updates with explicit plugin refusal warnings and preserves consent boundaries", async () => {
-    await expect(runScenario()).resolves.toBeUndefined();
-    expect(installed).toBe(3);
-    expect(fs.existsSync(path.join(installPath, "index.js"))).toBe(true);
-  });
-
-  it("reports a core update timeout (exit 124) with retained diagnostics", async () => {
-    timeoutExit = 124;
-    await expect(runScenario()).rejects.toThrow(
-      /update-denied timed out after 900s .*ledger: .*runs\.json\n\npackage replacement still running/,
-    );
-    const scenarioRoot = roots.find((root) =>
-      path.basename(root).startsWith("openclaw-update-consent-"),
-    );
-    if (!scenarioRoot) {
-      throw new Error("missing scenario evidence root");
+it.each(["current", "extended-stable", "frozen"])(
+  "preserves consent through the %s update scenario",
+  async (host) => {
+    if (host === "extended-stable") {
+      writeJson(hostPackagePath(), { version: "2026.9.33" });
     }
-    const runs = readJson(path.join(scenarioRoot, "runs.json"));
-    expect(runs.at(-1)).toMatchObject({ label: "update-denied", code: 124 });
-    const updateSpawn = adapters.spawn.mock.calls.find(([, args]) => args.includes("--tag"));
-    expect(updateSpawn?.[2].env.OPENCLAW_E2E_COMMAND_TIMEOUT).toBe("900s");
-  });
+    await expect(
+      runScenario(host === "frozen" ? { coreUpdateConsent: false } : undefined),
+    ).resolves.toBeUndefined();
+    expect(installed).toBe(host === "frozen" ? 2 : 3);
+    expect(fs.existsSync(path.join(installPath, "index.js"))).toBe(true);
+    if (host === "extended-stable") {
+      expect(tagUpdates.map((args) => args.includes("--channel"))).toEqual([true, false]);
+      expect(tagUpdates[0]?.slice(1, 3)).toEqual(["--channel", "stable"]);
+    } else if (host === "frozen") {
+      expect(adapters.future).not.toHaveBeenCalled();
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('"core-update-consent"'));
+    }
+  },
+);
 
-  it("selects stable before tag updates only from an extended-stable host", async () => {
-    writeJson(hostPackagePath(), { version: "2026.9.33" });
-
-    await expect(runScenario()).resolves.toBeUndefined();
-    expect(tagUpdates.map((args) => args.includes("--channel"))).toEqual([true, false]);
-    expect(tagUpdates[0]?.slice(1, 3)).toEqual(["--channel", "stable"]);
-  });
-
-  it("retains plugin consent proof when a frozen target predates core update consent", async () => {
-    await expect(runScenario({ coreUpdateConsent: false })).resolves.toBeUndefined();
-    expect(installed).toBe(2);
-    expect(adapters.future).not.toHaveBeenCalled();
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('"core-update-consent"'));
-  });
-
-  it("rejects a consent warning attributed to another plugin", async () => {
-    mutateDenial = (result) => {
-      result.postUpdate.plugins.warnings = [
-        { pluginId: "another-plugin", reason: "requires capability consent" },
-      ];
-    };
-    await expect(runScenario()).rejects.toThrow();
-  });
-
-  it.each([false, true])(
-    "rejects payload widening despite a warning (repair: %s)",
-    async (repairStep) => {
-      mutateDenial = (_result, repair) => {
-        if (repair === repairStep) {
-          install(available);
-        }
-      };
-      await expect(runScenario()).rejects.toThrow();
-    },
+it("reports a core update timeout (exit 124) with retained diagnostics", async () => {
+  timeoutExit = 124;
+  await expect(runScenario()).rejects.toThrow(
+    /update-denied timed out after 900s .*ledger: .*runs\.json\n\npackage replacement still running/,
   );
+  const scenarioRoot = roots.find((root) =>
+    path.basename(root).startsWith("openclaw-update-consent-"),
+  );
+  if (!scenarioRoot) {
+    throw new Error("missing scenario evidence root");
+  }
+  const runs = readJson(path.join(scenarioRoot, "runs.json"));
+  expect(runs.at(-1)).toMatchObject({ label: "update-denied", code: 124 });
+  const updateSpawn = adapters.spawn.mock.calls.find(([, args]) => args.includes("--tag"));
+  expect(updateSpawn?.[2].env.OPENCLAW_E2E_COMMAND_TIMEOUT).toBe("900s");
+});
 
-  it("still rejects a restart after a denied plugin update", async () => {
-    mutateDenial = (_result, repair, child) => {
-      if (!repair) {
-        child.observation.children.push({ argv: ["gateway", "restart"], postCore: false });
+it.each(["another plugin", "update widening", "repair widening", "restart"])(
+  "rejects invalid consent handling: %s",
+  async (fault) => {
+    mutateDenial = (result, repair, child) => {
+      if (fault === "another plugin") {
+        result.postUpdate.plugins.warnings = [
+          { pluginId: "another-plugin", reason: "requires capability consent" },
+        ];
+      } else if (fault === "restart") {
+        if (!repair) {
+          child.observation.children.push({ argv: ["gateway", "restart"], postCore: false });
+        }
+      } else if (repair === (fault === "repair widening")) {
+        install(available);
       }
     };
-    await expect(runScenario()).rejects.toThrow("denied update attempted a Gateway restart");
-  });
-});
+    await expect(runScenario()).rejects.toThrow(
+      fault === "restart" ? "denied update attempted a Gateway restart" : undefined,
+    );
+  },
+);

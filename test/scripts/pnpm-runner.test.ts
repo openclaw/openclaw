@@ -101,8 +101,7 @@ it("wraps an explicit pnpm.cmd path via cmd.exe on Windows", () => {
 
 posixIt("does not resolve parent npm_execpath or PATH for an explicit empty env", () => {
   const tempDir = path.join(fixturesRoot, "parent");
-  const npmExecPath = path.join(tempDir, "pnpm");
-  vi.stubEnv("npm_execpath", npmExecPath);
+  vi.stubEnv("npm_execpath", path.join(tempDir, "pnpm"));
   vi.stubEnv("PATH", tempDir);
   expectRunner({ env: {}, platform: "linux" }, "pnpm");
 });
@@ -110,9 +109,7 @@ posixIt("does not resolve parent npm_execpath or PATH for an explicit empty env"
 posixIt("preserves native PATH selection for trailing empty segments", () => {
   const root = path.join(fixturesRoot, "empty-path");
   const cwd = path.join(root, "cwd");
-  const env = {
-    PATH: `${path.join(root, "corepack-only")}:`,
-  };
+  const env = { PATH: `${path.join(root, "corepack-only")}:` };
   const args = ["run", "build", "literal & argument", ""];
   const expectedOutput = ["cwd", ...args, ""].join("\n");
   const spec = createPnpmRunnerSpawnSpec({
@@ -173,25 +170,16 @@ it("uses Corepack on Windows when no pnpm shim is available", () => {
 
 it("builds a shared spawn spec with inherited stdio and env overrides", () => {
   const env = { PATH: "/custom/bin", FOO: "bar" };
-  expect(
-    createPnpmRunnerSpawnSpec({
-      cwd: "/repo",
-      detached: true,
-      npmExecPath: "",
-      pnpmArgs,
-      platform: "linux",
-      env,
-    }),
-  ).toEqual({
+  const options = { cwd: "/repo", detached: true, env };
+  const spec = createPnpmRunnerSpawnSpec({
+    ...options,
+    npmExecPath: "",
+    pnpmArgs,
+    platform: "linux",
+  });
+  expect(spec).toEqual({
     command: "pnpm",
     args: ["exec", "vitest", "run"],
-    options: {
-      cwd: "/repo",
-      detached: true,
-      stdio: "inherit",
-      env,
-      shell: false,
-      windowsVerbatimArguments: undefined,
-    },
+    options: { ...options, stdio: "inherit", shell: false, windowsVerbatimArguments: undefined },
   });
 });
