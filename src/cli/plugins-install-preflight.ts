@@ -1,5 +1,7 @@
 // Resolve and validate plugin install requests without opening mutable runtime state.
 import fs from "node:fs";
+import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
+import { isExactSemverVersion } from "../infra/npm-registry-spec.js";
 import { resolvePluginInstallRequestContext } from "../plugins/install-config.js";
 import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
 import { resolvePluginInstallSourcePlan } from "../plugins/install-source-plan.js";
@@ -22,6 +24,7 @@ export type RunPluginInstallCommandParams = {
     link?: boolean;
     pin?: boolean;
     marketplace?: string;
+    expectedIntegrity?: string;
   };
   invalidateRuntimeCache?: boolean;
   runtime?: RuntimeEnv;
@@ -38,6 +41,9 @@ type ResolvedPluginInstallSourcePlan = Extract<
 function resolveMarketplaceOptionError(opts: RunPluginInstallCommandParams["opts"]): string | null {
   if (opts.link) {
     return `--link is not supported with --marketplace. Remove --link, or install a local path with ${formatCliCommand(`openclaw plugins install --link <path> ${NON_CLAWHUB_INSTALL_FORCE_FLAG}`)}.`;
+  }
+  if (opts.expectedIntegrity !== undefined) {
+    return "--expected-integrity is not supported with --marketplace. Use a clawhub:<package>@<version> spec.";
   }
   if (opts.pin) {
     return `--pin is not supported with --marketplace. Use ${formatCliCommand(`openclaw plugins install <plugin> --marketplace <name> ${NON_CLAWHUB_INSTALL_FORCE_FLAG}`)} without --pin.`;
@@ -67,6 +73,45 @@ function resolveSourceOptionError(
     return `--link requires a local path. Run ${formatCliCommand(`openclaw plugins install --link <path> ${NON_CLAWHUB_INSTALL_FORCE_FLAG}`)}.`;
   }
   return null;
+}
+
+/**
+ * Bind an operator-supplied archive digest to one exact ClawHub release. The ClawHub
+ * installer hashes the downloaded archive and refuses a mismatch before extracting
+ * it. npm resolves its tarball separately from the metadata it checks, so it is not
+ * offered here.
+ */
+function applyExpectedIntegrity(
+  expectedIntegrity: string,
+  sourcePlan: ResolvedPluginInstallSourcePlan,
+): { ok: true; sourcePlan: ResolvedPluginInstallSourcePlan } | { ok: false; error: string } {
+  const request = sourcePlan.request;
+  if (request.source === "clawhub") {
+    const normalized = normalizeClawHubSha256Integrity(expectedIntegrity);
+    if (!normalized) {
+      return {
+        ok: false,
+        error: `--expected-integrity for a ClawHub install must be a SHA-256 digest (sha256-<base64> or 64 hex characters): ${expectedIntegrity}`,
+      };
+    }
+    // A missing version or a tag selects whichever release is current, not the one
+    // the digest describes.
+    if (!request.version || !isExactSemverVersion(request.version)) {
+      return {
+        ok: false,
+        error:
+          "--expected-integrity requires an exact ClawHub version: clawhub:<package>@<version>.",
+      };
+    }
+    return {
+      ok: true,
+      sourcePlan: { ...sourcePlan, request: { ...request, expectedIntegrity: normalized } },
+    };
+  }
+  return {
+    ok: false,
+    error: "--expected-integrity is only supported with clawhub:<package>@<version> installs.",
+  };
 }
 
 /** Complete source and option validation before acquiring the persistent lifecycle lease. */
@@ -123,6 +168,13 @@ export async function resolvePluginInstallPreflight(params: RunPluginInstallComm
       : "Plugin install source could not be resolved.";
   if (optionError) {
     return { ok: false as const, error: optionError };
+  }
+  if (sourcePlan && opts.expectedIntegrity !== undefined) {
+    const pinned = applyExpectedIntegrity(opts.expectedIntegrity, sourcePlan);
+    if (!pinned.ok) {
+      return { ok: false as const, error: pinned.error };
+    }
+    sourcePlan = pinned.sourcePlan;
   }
 
   const requestResolution = resolvePluginInstallRequestContext({

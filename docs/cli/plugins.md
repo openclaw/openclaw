@@ -60,7 +60,7 @@ IDs and Gateway method names retain the plugin's declared spelling.
 ```bash
 openclaw plugins list [--enabled] [--verbose] [--json]
 openclaw plugins search <query> [--limit <n>] [--json]
-openclaw plugins install <path-or-spec> [--link] [--force] [--pin] [--no-enable] [--accept-capabilities] [--acknowledge-install-policy-warning] [--marketplace <source>]
+openclaw plugins install <path-or-spec> [--link] [--force] [--pin] [--expected-integrity <digest>] [--no-enable] [--accept-capabilities] [--acknowledge-install-policy-warning] [--marketplace <source>]
 openclaw plugins inspect <id> [--runtime] [--json]
 openclaw plugins inspect --all [--runtime] [--json]
 openclaw plugins info <id>                    # alias for inspect
@@ -123,6 +123,7 @@ points at the page that now holds the content.
 - <a id="config-includes-and-invalid-config-repair" />[Config includes and invalid-config repair](/cli/plugins/install#config-includes-and-invalid-config-repair)
 - <a id="force-confirmation-and-reinstall-vs-update" />[`--force` confirmation and reinstall vs update](/cli/plugins/install#force-confirmation-and-reinstall-vs-update)
 - <a id="pin-scope" />[`--pin` scope](/cli/plugins/install#pin-scope)
+- <a id="expected-integrity" />[`--expected-integrity`](/cli/plugins/install#expected-integrity)
 - <a id="acknowledge-install-policy-warning" />[`--acknowledge-install-policy-warning`](/cli/plugins/install#acknowledge-install-policy-warning)
 - <a id="clawhub-security-audit" />[ClawHub Security Audit](/cli/plugins/install#clawhub-security-audit)
 - <a id="hook-packs-and-npm-specs" />[Hook packs and npm specs](/cli/plugins/install#hook-packs-and-npm-specs)

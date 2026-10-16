@@ -52,6 +52,7 @@ openclaw plugins install <plugin>@<marketplace>             # marketplace shorth
 openclaw plugins install <plugin> --marketplace <name>      # marketplace (explicit)
 openclaw plugins install <package> --force                  # confirm source / overwrite existing
 openclaw plugins install <package> --pin                    # pin resolved npm version
+openclaw plugins install clawhub:<package>@<version> --expected-integrity <digest>  # refuse other bytes
 openclaw plugins install <package> --no-enable              # preserve activation policy
 openclaw plugins install <package> --acknowledge-install-policy-warning
 ```
@@ -204,6 +205,32 @@ Later updates of OpenClaw-owned release plugins can restore automatic tracking f
 recorded versions no newer than core. This applies to old manual and automatic
 pins; an explicit version supplied to the current update command still wins. See
 [plugin update behavior](/cli/plugins/uninstall-and-update).
+
+### --expected-integrity
+
+`--expected-integrity <digest>` refuses a ClawHub install whose downloaded archive
+does not match a digest you reviewed, before OpenClaw extracts or installs it. Use it
+to pin the exact release you approved, so a registry that later serves different
+bytes under the same version cannot change what you install.
+
+```bash
+openclaw plugins install clawhub:@openclaw/lobster@2026.9.7 \
+  --expected-integrity sha256-JcZWME9XIGfIGl8TZb+oeW2DyHqKNX+O3Y90W2lg40Q=
+```
+
+- The digest is the archive's SHA-256, as `sha256-<base64>`, `sha256:<hex>`, or 64
+  hex characters. A mismatch fails with `ClawHub archive integrity mismatch`, and
+  nothing is extracted or recorded. The installed record's `integrity` is this
+  digest.
+- The spec must name one exact ClawHub release: `clawhub:<package>@<version>`.
+  Unversioned specs, tags, and other sources (npm, local paths, archives, `git:`,
+  marketplace, bundled, and official catalog ids) are refused, so the digest can
+  never silently describe a different artifact. npm installs resolve their tarball
+  separately from the registry metadata they check, so they are not offered.
+- When the official catalog already pins a different digest for that release, the
+  install is refused.
+- The digest covers the plugin archive. npm dependencies the plugin declares are
+  resolved when it installs, with lifecycle scripts disabled.
 
 ### --acknowledge-install-policy-warning
 

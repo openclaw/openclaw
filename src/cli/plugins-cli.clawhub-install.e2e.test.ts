@@ -199,6 +199,7 @@ async function startClawHubServer(options: TestServerOptions = {}) {
 
   return {
     registry,
+    artifactSha256,
     requestLog,
     telemetryBodies,
     close: async () => {
@@ -369,6 +370,70 @@ describe("openclaw plugins install ClawHub E2E", () => {
         version: PACKAGE_VERSION,
       });
       expect(testServer.telemetryBodies).toHaveLength(1);
+    } finally {
+      await testServer.close();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("installs when the operator digest matches the served archive", async () => {
+    const testServer = await startClawHubServer();
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-pin-ok-"));
+    // The operator passes the hex form; the install record keeps the SRI form.
+    const expected = `sha256-${Buffer.from(testServer.artifactSha256, "hex").toString("base64")}`;
+    try {
+      const result = await spawnOpenClaw(
+        [
+          "plugins",
+          "install",
+          `clawhub:${PACKAGE_NAME}@${PACKAGE_VERSION}`,
+          "--accept-capabilities",
+          "--expected-integrity",
+          `sha256:${testServer.artifactSha256}`,
+        ],
+        { cwd: process.cwd(), env: buildEnv(stateDir, testServer.registry) },
+      );
+
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+      await expect(readPersistedInstallRecord(stateDir)).resolves.toMatchObject({
+        source: "clawhub",
+        clawhubPackage: PACKAGE_NAME,
+        version: PACKAGE_VERSION,
+        integrity: expected,
+      });
+    } finally {
+      await testServer.close();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  // The registry is consistent with itself, so only the operator's pin can catch that
+  // these bytes are not the release the operator reviewed. The download happens; the
+  // archive is never extracted, recorded, or reported.
+  it("refuses a served archive that differs from the operator digest before extracting it", async () => {
+    const testServer = await startClawHubServer();
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-pin-mismatch-"));
+    try {
+      const result = await spawnOpenClaw(
+        [
+          "plugins",
+          "install",
+          `clawhub:${PACKAGE_NAME}@${PACKAGE_VERSION}`,
+          "--accept-capabilities",
+          "--expected-integrity",
+          `sha256-${Buffer.alloc(32, 1).toString("base64")}`,
+        ],
+        { cwd: process.cwd(), env: buildEnv(stateDir, testServer.registry) },
+      );
+
+      expect(result.status).not.toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`).toContain("ClawHub archive integrity mismatch");
+      expect(testServer.requestLog).toContain(`GET ${PACKAGE_API_PATH}/download`);
+      expect(testServer.telemetryBodies).toEqual([]);
+      await expect(readPersistedInstallRecord(stateDir)).resolves.toBeUndefined();
+      // No extracted plugin directory, whether or not extensions/ was ever created.
+      const extensions = await fs.readdir(path.join(stateDir, "extensions")).catch(() => []);
+      expect(extensions).not.toContain(PLUGIN_ID);
     } finally {
       await testServer.close();
       await fs.rm(stateDir, { recursive: true, force: true });

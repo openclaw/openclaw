@@ -514,6 +514,33 @@ describe("plugins cli install", () => {
     }
   });
 
+  // A digest describes one exact ClawHub archive; anything else is refused before
+  // any installer runs or configuration is written.
+  it.each([
+    ["git:https://example.invalid/demo.git", "sha256-x", "only supported with clawhub"],
+    [
+      "npm:@acme/demo@1.0.0",
+      `sha512-${Buffer.alloc(64, 1).toString("base64")}`,
+      "only supported with clawhub",
+    ],
+    ["clawhub:demo", `sha256-${Buffer.alloc(32, 7).toString("base64")}`, "exact ClawHub version"],
+    [
+      "clawhub:demo@beta",
+      `sha256-${Buffer.alloc(32, 7).toString("base64")}`,
+      "exact ClawHub version",
+    ],
+    ["clawhub:demo@1.2.3", "sha256-abc", "must be a SHA-256 digest"],
+  ])("refuses --expected-integrity for %s (%s)", async (spec, digest, message) => {
+    await expect(installAcknowledged(spec, "--expected-integrity", digest)).rejects.toThrow(
+      message,
+    );
+
+    expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(installPluginFromGitSpecMock).not.toHaveBeenCalled();
+    expect(configWriteMock).not.toHaveBeenCalled();
+  });
+
   it("does not report a ClawHub install when durable persistence fails", async () => {
     primeSuccessfulClawHubPluginInstall();
     configWriteMock.mockRejectedValueOnce(new Error("persistence failed"));
