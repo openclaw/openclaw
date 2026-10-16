@@ -636,9 +636,6 @@ export class ShellOwner
     if (!context) {
       return;
     }
-    if (this.querySelector(".settings-sidebar__agent")) {
-      void context.agentIdentity.ensure([context.settingsAgentSelection.state.selectedId]);
-    }
     if (this.workspaceChromeVisible) {
       this.shellChrome.panels.restore();
     }
