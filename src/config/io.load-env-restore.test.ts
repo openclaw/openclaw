@@ -13,12 +13,42 @@ import {
   withConfigReadEnvChanges,
 } from "./config-env-vars.js";
 import { createConfigIO, restoreEnvChangesIfUnchanged } from "./io.js";
+import type { ConfigIoFactoryOptions } from "./io.types.js";
 import { getConfigResolutionFacts } from "./resolution-facts.js";
 import { withTempHome, writeOpenClawConfig, writeStateDirDotEnv } from "./test-helpers.js";
 import { withConfigWriteLock } from "./write-lock.js";
 
 function configIO(home: string, env: NodeJS.ProcessEnv) {
   return createConfigIO({ env, homedir: () => home, logger: { warn: () => {}, error: () => {} } });
+}
+
+function snapshotIO(options: ConfigIoFactoryOptions) {
+  return createConfigIO({ observe: false, pluginValidation: "skip", ...options });
+}
+
+function changeOwned(env: NodeJS.ProcessEnv, key: string, change: string) {
+  if (change === "replaced") {
+    env[key] = "replacement-owner";
+  } else if (change === "deleted") {
+    delete env[key];
+  }
+}
+
+function expectedOwned(change: string, unchanged: string) {
+  return change === "unchanged"
+    ? unchanged
+    : change === "replaced"
+      ? "replacement-owner"
+      : undefined;
+}
+
+async function withWindowsEnv(run: () => Promise<void>) {
+  const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+  try {
+    await run();
+  } finally {
+    platform.mockRestore();
+  }
 }
 
 describe("restoreEnvChangesIfUnchanged", () => {
@@ -106,13 +136,9 @@ describe("loadConfig env restoration", () => {
   });
 });
 
-it.each(
-  (["for-write"] as const).flatMap((entry) =>
-    (["unchanged", "replaced", "deleted"] as const).map((change) => ({ entry, change })),
-  ),
-)(
-  "preserves foreign env changes during invalid $entry validation (owned=$change)",
-  async ({ entry, change }) => {
+it.each(["unchanged", "replaced", "deleted"] as const)(
+  "preserves foreign env changes during invalid for-write validation (owned=%s)",
+  async (change) => {
     await withTempHome(async (home) => {
       const ownedKey = "OPENCLAW_TEST_READER_OWNED";
       const addedKey = "OPENCLAW_TEST_READER_ADDED";
@@ -128,12 +154,10 @@ it.each(
       };
       let reachedBoundary = false;
       let producedValue: string | undefined;
-      const io = createConfigIO({
+      const io = snapshotIO({
         configPath,
         env,
         lowerPrecedenceEnv: { [ownedKey]: "lower-precedence" },
-        observe: false,
-        pluginValidation: "skip",
         measure: async (name, run) => {
           const result = await run();
           if (name === "config.snapshot.read.legacy-issues") {
@@ -141,29 +165,16 @@ it.each(
             producedValue = env[ownedKey];
             env[addedKey] = "new-owner";
             delete env[deletedKey];
-            if (change === "replaced") {
-              env[ownedKey] = "replacement-owner";
-            } else if (change === "deleted") {
-              delete env[ownedKey];
-            }
+            changeOwned(env, ownedKey, change);
           }
           return result;
         },
       });
-      const snapshot =
-        entry === "for-write"
-          ? (await io.readConfigFileSnapshotForWrite()).snapshot
-          : await io.readConfigFileSnapshot();
+      const { snapshot } = await io.readConfigFileSnapshotForWrite();
       expect(snapshot.valid).toBe(false);
       expect(reachedBoundary).toBe(true);
       expect(producedValue).toBe("candidate");
-      expect(env[ownedKey]).toBe(
-        change === "unchanged"
-          ? "lower-precedence"
-          : change === "replaced"
-            ? "replacement-owner"
-            : undefined,
-      );
+      expect(env[ownedKey]).toBe(expectedOwned(change, "lower-precedence"));
       expect(env[addedKey]).toBe("new-owner");
       expect(env[deletedKey]).toBeUndefined();
     });
@@ -195,12 +206,10 @@ describe("config read producer receipts", () => {
             let producedKey: string | undefined;
             let producedValue: string | undefined;
             let producedOwnedValue: string | undefined;
-            const io = createConfigIO({
+            const io = snapshotIO({
               configPath,
               env: process.env,
               lowerPrecedenceEnv: { [ownedKey]: "same" },
-              observe: false,
-              pluginValidation: "skip",
               measure: async (name, run) => {
                 const result = await run();
                 if (name === "config.snapshot.read.legacy-issues") {
@@ -214,11 +223,7 @@ describe("config read producer receipts", () => {
                   ];
                   process.env[addedKey.toLowerCase()] = "new-owner";
                   delete process.env[deletedKey.toLowerCase()];
-                  if (change === "replaced") {
-                    process.env[originalKey] = "replacement-owner";
-                  } else if (change === "deleted") {
-                    delete process.env[originalKey];
-                  }
+                  changeOwned(process.env, originalKey, change);
                 }
                 return result;
               },
@@ -229,12 +234,7 @@ describe("config read producer receipts", () => {
             expect(producedKey).toBe(ownedKey);
             expect(producedValue).toBe("same");
             expect(producedOwnedValue).toBeUndefined();
-            const expected =
-              change === "unchanged"
-                ? "same"
-                : change === "replaced"
-                  ? "replacement-owner"
-                  : undefined;
+            const expected = expectedOwned(change, "same");
             expect(process.env[ownedKey]).toBe(expected);
             expect(process.env[originalKey]).toBe(expected);
             expect(createConfigRuntimeEnvBase({ env: cfg.env }, process.env)[ownedKey]).toBe(
@@ -258,12 +258,10 @@ describe("config read producer receipts", () => {
       const cfg = { env: { vars: { KEY: "same" } }, gateway: { port: "invalid" } };
       const configPath = await writeOpenClawConfig(home, cfg);
       const env = { HOME: home, KEY: "same" };
-      const io = createConfigIO({
+      const io = snapshotIO({
         configPath,
         env,
         lowerPrecedenceEnv: { KEY: "same" },
-        observe: false,
-        pluginValidation: "skip",
       });
       expect((await io.readConfigFileSnapshot()).valid).toBe(false);
       expect(env.KEY).toBe("same");
@@ -305,8 +303,7 @@ describe("config read producer receipts", () => {
   });
 
   it.each(["plain", "alias"] as const)("retains Windows %s key semantics", async (kind) => {
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    try {
+    await withWindowsEnv(async () => {
       const env: NodeJS.ProcessEnv =
         kind === "alias"
           ? cloneEnvWithPlatformSemantics({ key: "old" })
@@ -323,16 +320,13 @@ describe("config read producer receipts", () => {
         expect(env.KEY).toBe(kind === "alias" ? "old" : "separate");
         expect(env.UNRELATED).toBe("foreign");
       });
-    } finally {
-      platform.mockRestore();
-    }
+    });
   });
 
   it.each(["plain", "alias"] as const)(
     "restores ownership-only changes with Windows %s key spelling",
     async (kind) => {
-      const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      try {
+      await withWindowsEnv(async () => {
         const env: NodeJS.ProcessEnv =
           kind === "alias" ? cloneEnvWithPlatformSemantics({ key: "" }) : { key: "" };
         const config = { env: { vars: { KEY: "value" } } };
@@ -350,9 +344,7 @@ describe("config read producer receipts", () => {
         if (kind === "plain") {
           expect(env.key).toBe("");
         }
-      } finally {
-        platform.mockRestore();
-      }
+      });
     },
   );
 
@@ -373,11 +365,9 @@ describe("config read producer receipts", () => {
           },
         },
       );
-      const io = createConfigIO({
+      const io = snapshotIO({
         configPath,
         env,
-        observe: false,
-        pluginValidation: "skip",
         logger: { warn: () => {}, error: () => {} },
         measure: async (name, run) => {
           try {
@@ -417,11 +407,9 @@ describe("snapshot source authority", () => {
             OPENCLAW_CONFIG_PATH: configPath,
           },
           async () => {
-            const io = createConfigIO({
+            const io = snapshotIO({
               configPath,
               env: process.env,
-              observe: false,
-              pluginValidation: "skip",
             });
             const refusal = new Error("snapshot source owner changed");
             let current = true;
@@ -451,14 +439,12 @@ describe("snapshot source authority", () => {
   );
 
   it.each(
-    (["for-write"] as const).flatMap((entry) =>
-      (["env", "invalid-restore"] as const).flatMap((boundary) =>
-        [false, true].map((revoked) => ({ entry, boundary, revoked })),
-      ),
+    (["env", "invalid-restore"] as const).flatMap((boundary) =>
+      [false, true].map((revoked) => ({ boundary, revoked })),
     ),
   )(
-    "preserves $entry reader authority at $boundary (revoked=$revoked)",
-    async ({ entry, boundary, revoked }) => {
+    "preserves for-write reader authority at $boundary (revoked=$revoked)",
+    async ({ boundary, revoked }) => {
       await withTempHome(async (home) => {
         const envKey = "OPENCLAW_TEST_SNAPSHOT_ENV";
         const configPath = await writeOpenClawConfig(home, {
@@ -470,11 +456,9 @@ describe("snapshot source authority", () => {
         let current = true;
         let reachedBoundary = false;
         let valueAtBoundary: string | undefined;
-        const io = createConfigIO({
+        const io = snapshotIO({
           configPath,
           env,
-          observe: false,
-          pluginValidation: "skip",
           measure: async (name, run) => {
             if (boundary === "env" && name === "config.snapshot.read.env") {
               await Promise.resolve();
@@ -501,10 +485,7 @@ describe("snapshot source authority", () => {
         });
         const read = withConfigWriteLock(
           configPath,
-          async () =>
-            entry === "for-write"
-              ? (await io.readConfigFileSnapshotForWrite()).snapshot
-              : await io.readConfigFileSnapshot(),
+          async () => (await io.readConfigFileSnapshotForWrite()).snapshot,
           env,
           () => {
             if (!current) {

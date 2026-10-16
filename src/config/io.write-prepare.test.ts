@@ -28,6 +28,8 @@ const main = { default: true };
 const worker = { workspace: "/srv/worker" };
 const roster = (entries: Record<string, unknown>) => ({ agents: { entries } });
 const listRoster = (list: unknown[]) => ({ agents: { list } });
+const fallbacks = (values: unknown[]) => withDefaults({ model: { fallbacks: values } });
+const pluginPaths = (paths: unknown[]) => ({ plugins: { load: { paths } } });
 const explicitRoster = (entries: unknown) => ({ agents: { ownership: "explicit", entries } });
 const tony = { workspace: "/w/tony" };
 const tonyInclude = { $include: "./tony.json5" };
@@ -303,48 +305,42 @@ const writeCases: WriteCase[] = [
     next: { gateway: { mode: "remote", legacyKey: "new" } },
     error: "Config write would flatten $include-owned config at gateway",
   },
-  ...[{ fallbacks: ["fixture/replacement"], envRef: false }].map(({ fallbacks, envRef }) => {
+  ...["fixture/replacement"].map((replacement) => {
     const model = { primary: "fixture/primary", fallbacks: ["fixture/root"] };
     const source = withDefaults({ model });
     const authored = {
-      agents: {
-        $include: "./agents.json",
-        defaults: { model: { fallbacks: [envRef ? "${FALLBACK}" : "fixture/root"] } },
-      },
+      agents: { $include: "./agents.json", ...fallbacks(["fixture/root"]).agents },
     };
     return {
-      name: `allows root-array replacement ${JSON.stringify(fallbacks)} (env ref: ${envRef})`,
+      name: "allows root-array replacement beside an include",
       current: withDefaults({ model, maxConcurrent: 16 }),
       source,
-      before: envRef ? source : undefined,
       authored,
-      next: withDefaults({ model: { ...model, fallbacks }, maxConcurrent: 16 }),
-      expected: { agents: { $include: "./agents.json", defaults: { model: { fallbacks } } } },
+      next: withDefaults({ model: { ...model, fallbacks: [replacement] }, maxConcurrent: 16 }),
+      expected: { agents: { $include: "./agents.json", ...fallbacks([replacement]).agents } },
     };
   }),
   {
     name: "does not infer array ownership from a normalized baseline that dropped included values",
-    before: {
-      agents: { defaults: { model: { fallbacks: ["fixture/included", "fixture/root"] } } },
-    },
-    current: { agents: { defaults: { model: { fallbacks: ["fixture/root"] } } } },
+    before: fallbacks(["fixture/included", "fixture/root"]),
+    current: fallbacks(["fixture/root"]),
     authored: {
-      agents: { $include: "./agents.json", defaults: { model: { fallbacks: ["fixture/root"] } } },
+      agents: { $include: "./agents.json", ...fallbacks(["fixture/root"]).agents },
     },
-    next: { agents: { defaults: { model: { fallbacks: [] } } } },
+    next: fallbacks([]),
     error: "Config write would flatten $include-owned config at agents",
   },
   {
     name: "rejects replacing root arrays that contain nested includes",
-    before: { agents: { defaults: { model: { fallbacks: ["fixture/root"] } } } },
-    current: { agents: { defaults: { model: { fallbacks: ["fixture/root"] } } } },
+    before: fallbacks(["fixture/root"]),
+    current: fallbacks(["fixture/root"]),
     authored: {
       agents: {
         $include: "./agents.json",
-        defaults: { model: { fallbacks: [{ $include: "./fallback.json" }] } },
+        ...fallbacks([{ $include: "./fallback.json" }]).agents,
       },
     },
-    next: { agents: { defaults: { model: { fallbacks: [] } } } },
+    next: fallbacks([]),
     error: "Config write would flatten $include-owned config at agents",
   },
   {
@@ -369,27 +365,23 @@ const writeCases: WriteCase[] = [
   },
   {
     name: "allows unrelated removals after duplicate include-resolved values",
-    current: { plugins: { load: { paths: ["/same", "/same", "/other"] } } },
-    authored: {
-      plugins: { load: { paths: [{ $include: "./path.json5" }, "/same", "/other"] } },
-    },
-    next: { plugins: { load: { paths: ["/same", "/same"] } } },
-    expected: { plugins: { load: { paths: [{ $include: "./path.json5" }, "/same"] } } },
+    current: pluginPaths(["/same", "/same", "/other"]),
+    authored: pluginPaths([{ $include: "./path.json5" }, "/same", "/other"]),
+    next: pluginPaths(["/same", "/same"]),
+    expected: pluginPaths([{ $include: "./path.json5" }, "/same"]),
   },
   {
     name: "rejects included-entry removals hidden by duplicate sibling edits",
-    current: { plugins: { load: { paths: ["/same", "/same", "/old"] } } },
-    authored: {
-      plugins: { load: { paths: [{ $include: "./path.json5" }, "/same", "/old"] } },
-    },
-    next: { plugins: { load: { paths: ["/same", "/new"] } } },
+    current: pluginPaths(["/same", "/same", "/old"]),
+    authored: pluginPaths([{ $include: "./path.json5" }, "/same", "/old"]),
+    next: pluginPaths(["/same", "/new"]),
     error: "Config write would flatten $include-owned config at plugins.load.paths.0",
   },
   {
     name: "rejects newly introduced duplicates of include-owned array entries",
-    current: { plugins: { load: { paths: ["/root", "/included"] } } },
-    authored: { plugins: { load: { paths: ["/root", { $include: "./path.json5" }] } } },
-    next: { plugins: { load: { paths: ["/included", "/included"] } } },
+    current: pluginPaths(["/root", "/included"]),
+    authored: pluginPaths(["/root", { $include: "./path.json5" }]),
+    next: pluginPaths(["/included", "/included"]),
     error: "Config write would flatten $include-owned config at plugins.load.paths.1",
   },
   {
@@ -479,56 +471,49 @@ describe("config io write prepare", () => {
     });
   }
 
-  it.each([{ includeAt: "agents", authoredDefaults: false }])(
-    "preserves explicit sibling intent beside a $includeAt include (authored defaults: $authoredDefaults)",
-    ({ includeAt, authoredDefaults }) => {
-      const authoredAgents = {
-        ownership: "explicit",
-        ...(authoredDefaults ? { defaults: { workspace: "/old" } } : {}),
-        entries: { main: {}, spare: {} },
-      };
-      const rootAuthoredConfig =
-        includeAt === "root"
-          ? { $include: "./base.json", agents: authoredAgents }
-          : { agents: { $include: "./base.json", ...authoredAgents } };
-      const sourceConfig = {
-        agents: {
-          ...authoredAgents,
-          defaults: { ...authoredAgents.defaults, model: { primary: "fixture/primary" } },
-        },
-      };
-      const runtimeConfig = {
-        commands: { restart: true },
-        agents: {
-          ...sourceConfig.agents,
-          defaults: { ...sourceConfig.agents.defaults, maxConcurrent: 16 },
-        },
-      };
-      const entries = { ...authoredAgents.entries, worker: {} };
-      expect(
-        resolvePersistCandidateForWrite({
-          sourceConfig,
-          rootAuthoredConfig,
-          runtimeConfig,
-          nextConfig: { ...runtimeConfig, agents: { ...runtimeConfig.agents, entries } },
-          explicitSetPaths: [
-            ["agents", "entries"],
-            ["agents", "defaults", "maxConcurrent"],
-            ["commands", "restart"],
-          ],
-          allowIncludeAncestorExplicitSetPaths: true,
-        }),
-      ).toEqual({
-        ...rootAuthoredConfig,
-        commands: { restart: true },
-        agents: {
-          ...rootAuthoredConfig.agents,
-          entries,
-          defaults: { ...authoredAgents.defaults, maxConcurrent: 16 },
-        },
-      });
-    },
-  );
+  it("preserves explicit sibling intent beside an agents include", () => {
+    const authoredAgents = {
+      ownership: "explicit",
+      entries: { main: {}, spare: {} },
+    };
+    const rootAuthoredConfig = { agents: { $include: "./base.json", ...authoredAgents } };
+    const sourceConfig = {
+      agents: {
+        ...authoredAgents,
+        defaults: { model: { primary: "fixture/primary" } },
+      },
+    };
+    const runtimeConfig = {
+      commands: { restart: true },
+      agents: {
+        ...sourceConfig.agents,
+        defaults: { ...sourceConfig.agents.defaults, maxConcurrent: 16 },
+      },
+    };
+    const entries = { ...authoredAgents.entries, worker: {} };
+    expect(
+      resolvePersistCandidateForWrite({
+        sourceConfig,
+        rootAuthoredConfig,
+        runtimeConfig,
+        nextConfig: { ...runtimeConfig, agents: { ...runtimeConfig.agents, entries } },
+        explicitSetPaths: [
+          ["agents", "entries"],
+          ["agents", "defaults", "maxConcurrent"],
+          ["commands", "restart"],
+        ],
+        allowIncludeAncestorExplicitSetPaths: true,
+      }),
+    ).toEqual({
+      ...rootAuthoredConfig,
+      commands: { restart: true },
+      agents: {
+        ...rootAuthoredConfig.agents,
+        entries,
+        defaults: { maxConcurrent: 16 },
+      },
+    });
+  });
 
   it.each(
     [
@@ -716,15 +701,7 @@ describe("config io write prepare", () => {
     expect([...changedPaths].toSorted()).toEqual(["collision", "safe.mode"]);
   });
 
-  it.each([
-    {
-      name: "allows an explicit local leaf override below a nested include",
-      authored: { agents: { $include: "./agents.json5" } },
-      expected: {
-        agents: { $include: "./agents.json5", defaults: { workspace: "/srv/next" } },
-      },
-    },
-  ])("$name", ({ authored, expected }) => {
+  it("allows an explicit local leaf override below a nested include", () => {
     const sourceConfig = {
       agents: { defaults: { workspace: "/srv/old" }, entries: { ops: main } },
     };
@@ -732,27 +709,16 @@ describe("config io write prepare", () => {
       resolvePersistCandidateForWrite({
         runtimeConfig: sourceConfig,
         sourceConfig,
-        rootAuthoredConfig: authored,
+        rootAuthoredConfig: { agents: { $include: "./agents.json5" } },
         nextConfig: sourceConfig,
         explicitSetPaths: [["agents", "defaults", "workspace"]],
         explicitSetValueSource: { agents: { defaults: { workspace: "/srv/next" } } },
         allowIncludeAncestorExplicitSetPaths: true,
       }),
-    ).toEqual(expected);
+    ).toEqual({ agents: { $include: "./agents.json5", defaults: { workspace: "/srv/next" } } });
   });
 
-  it.each([
-    {
-      name: "ignores unsafe array-index explicit set paths",
-      paths: [
-        ["models", "providers", "openai", "models", "0abc", "contextWindow"],
-        ["models", "providers", "openai", "models", "+0", "contextWindow"],
-        ["models", "providers", "openai", "models", "9007199254740993", "contextWindow"],
-        ["models", "providers", "openai", "models", "4294967294", "contextWindow"],
-      ],
-      includesDefault: false,
-    },
-  ])("$name", ({ paths, includesDefault }) => {
+  it("ignores unsafe array-index explicit set paths", () => {
     const withProviderModels = (models: Record<string, unknown>[]) => ({
       models: { providers: { openai: { models } } },
     });
@@ -764,9 +730,16 @@ describe("config io write prepare", () => {
         sourceConfig,
         nextConfig: sourceConfig,
         explicitSetValueSource: runtimeConfig,
-        explicitSetPaths: paths,
+        explicitSetPaths: ["0abc", "+0", "9007199254740993", "4294967294"].map((index) => [
+          "models",
+          "providers",
+          "openai",
+          "models",
+          index,
+          "contextWindow",
+        ]),
       }),
-    ).toEqual(includesDefault ? runtimeConfig : sourceConfig);
+    ).toEqual(sourceConfig);
   });
 
   it("rejects default-valued explicit writes under include-owned paths", () => {
