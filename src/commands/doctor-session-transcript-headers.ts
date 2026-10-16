@@ -18,6 +18,7 @@ import {
 import { MIN_READABLE_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import { backupDoctorSqliteRepair } from "../infra/sqlite-index-recovery.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   runOpenClawAgentWriteTransaction,
@@ -167,6 +168,7 @@ export async function noteSessionTranscriptHeaderHealth(params: {
   const env = params.env ?? process.env;
   let found = 0;
   let repaired = 0;
+  const preserved = new Set<string>();
 
   scanDoctorSessionTranscripts(
     {
@@ -228,6 +230,11 @@ export async function noteSessionTranscriptHeaderHealth(params: {
               sessionId,
               timestamp: headerTimestamp,
             });
+            if (!preserved.has(sqlitePath)) {
+              const backup = backupDoctorSqliteRepair(sqlitePath, "transcript-headers");
+              preserved.add(sqlitePath);
+              note(`- Saved pre-repair SQLite backup: ${backup}`, NOTE_TITLE);
+            }
             replaceSqliteTranscriptEventsInTransaction(
               database,
               {

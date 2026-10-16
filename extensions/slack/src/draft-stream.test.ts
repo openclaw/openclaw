@@ -5,13 +5,31 @@ import { noteSlackDraftConversationMessage } from "./draft-message-boundaries.js
 import { createSlackDraftStream } from "./draft-stream.js";
 
 type DraftStreamParams = Parameters<typeof createSlackDraftStream>[0];
-type DraftSendFn = NonNullable<DraftStreamParams["send"]>;
-type DraftEditFn = NonNullable<DraftStreamParams["edit"]>;
-type DraftRemoveFn = NonNullable<DraftStreamParams["remove"]>;
+type DraftSendFn = typeof import("./send.js").sendMessageSlack;
+type DraftEditFn = typeof import("./actions.js").editSlackMessage;
+type DraftRemoveFn = typeof import("./actions.js").deleteSlackMessage;
 type DraftWarnFn = NonNullable<DraftStreamParams["warn"]>;
 type MockCalls<TArgs extends readonly unknown[]> = { mock: { calls: TArgs[] } };
 
 const TEST_CFG = {};
+
+const transport = vi.hoisted(() => ({
+  send: vi.fn<DraftSendFn>(),
+  edit: vi.fn<DraftEditFn>(),
+  editRendered: vi.fn<typeof import("./actions.js").editSlackRenderedMessage>(),
+  remove: vi.fn<DraftRemoveFn>(),
+}));
+
+vi.mock("./send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./send.js")>()),
+  sendMessageSlack: transport.send,
+}));
+vi.mock("./actions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./actions.js")>()),
+  editSlackMessage: transport.edit,
+  editSlackRenderedMessage: transport.editRendered,
+  deleteSlackMessage: transport.remove,
+}));
 
 function mockCalls<TArgs extends readonly unknown[]>(fn: unknown): TArgs[] {
   return (fn as MockCalls<TArgs>).mock.calls;
@@ -36,30 +54,33 @@ function createDraftStreamHarness(
     send?: DraftSendFn;
     edit?: DraftEditFn;
     eventScope?: DraftStreamParams["eventScope"];
+    identity?: DraftStreamParams["identity"];
     remove?: DraftRemoveFn;
     warn?: DraftWarnFn;
   } = {},
 ) {
   const send = params.send ?? vi.fn<DraftSendFn>(async () => slackDraftSendResult("111.222"));
   const edit = params.edit ?? vi.fn<DraftEditFn>(async () => {});
+  const editRendered = vi.fn<DraftEditFn>(async () => {});
   const remove = params.remove ?? vi.fn<DraftRemoveFn>(async () => {});
   const warn = params.warn ?? vi.fn<DraftWarnFn>();
+  transport.send.mockReset().mockImplementation(send);
+  transport.edit.mockReset().mockImplementation(edit);
+  transport.editRendered.mockReset().mockImplementation(editRendered);
+  transport.remove.mockReset().mockImplementation(remove);
   const stream = createSlackDraftStream({
     target: "channel:C123",
     cfg: TEST_CFG,
     token: "xoxb-test",
     accountId: params.accountId,
-    conversationChannelId: "C123",
     throttleMs: 250,
     maxChars: params.maxChars,
     eventScope: params.eventScope,
+    identity: params.identity,
     resolveThreadTs: params.threadTs ? () => params.threadTs : undefined,
-    send,
-    edit,
-    remove,
     warn,
   });
-  return { stream, send, edit, remove, warn };
+  return { stream, send, edit, editRendered, remove, warn };
 }
 
 describe("createSlackDraftStream", () => {
@@ -95,9 +116,11 @@ describe("createSlackDraftStream", () => {
       teamId: "T_TEST",
       client,
     };
-    const { stream, send, edit, remove } = createDraftStreamHarness({ eventScope });
+    const identity = { username: "test-agent", iconEmoji: ":robot_face:" };
+    const text = "a".repeat(4205);
+    const { stream, send, edit, remove, warn } = createDraftStreamHarness({ eventScope, identity });
 
-    stream.update("hello");
+    stream.update(text);
     await stream.flush();
     stream.update("hello world");
     await stream.flush();
@@ -105,9 +128,11 @@ describe("createSlackDraftStream", () => {
 
     expect(send).toHaveBeenCalledWith(
       "channel:C123",
-      "hello",
-      expect.objectContaining({ eventScope }),
+      text,
+      expect.objectContaining({ eventScope, identity, token: "xoxb-test" }),
     );
+    expect(send).toHaveBeenCalledOnce();
+    expect(warn).not.toHaveBeenCalled();
     expect(edit).toHaveBeenCalledWith(
       "C123",
       "111.222",
@@ -115,29 +140,6 @@ describe("createSlackDraftStream", () => {
       expect.objectContaining({ client }),
     );
     expect(remove).toHaveBeenCalledWith("C123", "111.222", expect.objectContaining({ client }));
-  });
-
-  it("forwards identity to the initial send call", async () => {
-    const identity = { username: "test-agent", iconEmoji: ":robot_face:" };
-    const send = vi.fn<DraftSendFn>(async () => slackDraftSendResult("111.222"));
-    const stream = createSlackDraftStream({
-      target: "channel:C123",
-      cfg: TEST_CFG,
-      token: "xoxb-test",
-      throttleMs: 250,
-      identity,
-      send,
-      edit: vi.fn<DraftEditFn>(async () => {}),
-      remove: vi.fn<DraftRemoveFn>(async () => {}),
-    });
-
-    stream.update("hello");
-    await stream.flush();
-
-    const sendCall = mockCalls<Parameters<DraftSendFn>>(send)[0];
-    expect(sendCall?.[0]).toBe("channel:C123");
-    expect(sendCall?.[1]).toBe("hello");
-    expect((sendCall?.[2] as { identity?: unknown } | undefined)?.identity).toEqual(identity);
   });
 
   it("does not send duplicate text", async () => {
@@ -406,23 +408,8 @@ describe("createSlackDraftStream", () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
-  it("allows a 4205-character preview with the default max chars", async () => {
-    const { stream, send, warn } = createDraftStreamHarness();
-    const text = "a".repeat(4205);
-
-    stream.update(text);
-    await stream.flush();
-
-    expect(send).toHaveBeenCalledTimes(1);
-    const sendCall = mockCalls<Parameters<DraftSendFn>>(send)[0];
-    expect(sendCall?.[0]).toBe("channel:C123");
-    expect(sendCall?.[1]).toBe(text);
-    expect((sendCall?.[2] as { token?: string } | undefined)?.token).toBe("xoxb-test");
-    expect(warn).not.toHaveBeenCalled();
-  });
-
-  it("keeps mention-safe rendered text through the supplied edit owner", async () => {
-    const { stream, send, edit } = createDraftStreamHarness();
+  it("keeps mention-safe rendered text through the rendered edit owner", async () => {
+    const { stream, send, edit, editRendered } = createDraftStreamHarness();
     const native = "<@U0456EFGH> <#C0456EFGH> <!here>";
     const escaped = "&lt;@U0456EFGH&gt; &lt;#C0456EFGH&gt; &lt;!here&gt;";
 
@@ -435,7 +422,9 @@ describe("createSlackDraftStream", () => {
     expect(sent[1]).toContain(escaped);
     expect(sent[1]).not.toContain(native);
     expect(sent[2]).toEqual(expect.objectContaining({ textIsSlackMrkdwn: true }));
-    const edited = mockCalls<Parameters<DraftEditFn>>(edit)[0]!;
+    expect(edit).not.toHaveBeenCalled();
+    expect(editRendered).toHaveBeenCalledOnce();
+    const edited = mockCalls<Parameters<DraftEditFn>>(editRendered)[0]!;
     expect(edited[2]).toContain(escaped);
     expect(edited[2]).not.toContain(native);
   });

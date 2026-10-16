@@ -297,7 +297,8 @@ export const en: TranslationMap & {
   sessionProgressCard: {
     title: "Progress",
     composerTitle: "Task progress",
-    shortCount: "{completed} of {total}",
+    stepCount: "Step {current} of {total}",
+    hide: "Hide this card",
     noteLabel: "Progress note",
     dismiss: "Dismiss progress card",
     clearSaved: "Clear saved progress for everyone",
@@ -558,14 +559,14 @@ export const en: TranslationMap & {
     stylesFailed: "Styles failed to load, so the page may look broken.",
   },
   communityInvite: {
-    title: "Pull up a chair.",
-    body: "There’s a place for you in the AI future. Join the Community on Reddit, Discord, and X.",
-    join: "Join",
-    follow: "Follow",
+    title: "Community",
+    body: "Connect, ask questions, share what you build.",
+    discord: "Chat with the community",
+    reddit: "Discussions and ideas",
+    x: "News and updates",
+    opensNewTab: "Links open in a new tab.",
     joinPlatform: "Join the OpenClaw community on {platform}",
     followPlatform: "Follow OpenClaw on {platform}",
-    dismissForever: "Dismiss and don't show again",
-    dismissFailed: "Invitation dismissed, but your preference couldn't be saved.",
   },
   updates: {
     adminRequired: "Administrator access is required to change update settings or start an update.",
@@ -634,6 +635,7 @@ export const en: TranslationMap & {
       checkFailed: "Could not check the latest update. Try again.",
       updating: "Updating Gateway…",
       availableTitle: "Update available",
+      availableBadge: "Available",
       availableSummary: "A newer revision is ready.",
       blockedTitle: "Update blocked",
       blockedSummary: "The selected revision could not be applied to this checkout.",
@@ -786,7 +788,6 @@ export const en: TranslationMap & {
     advanced: "Advanced",
     copyDetails: "Copy details",
     copyLink: "Copy link",
-    archiveSessionOnly: "Session only",
     communication: {
       title: "Cross-session messaging",
       send: "Send messages",
@@ -1781,6 +1782,7 @@ export const en: TranslationMap & {
     plugins: "Plugins",
     skillWorkshop: "Skill workshop",
     devices: "Devices",
+    claws: "Claws",
     cloudWorkers: "Cloud environments",
     chat: "Chat",
     dashboards: "Dashboards",
@@ -1829,6 +1831,7 @@ export const en: TranslationMap & {
     plugins: "Extend your Claw with tools",
     skillWorkshop: "Skills your agent learned, recent changes, and undo.",
     devices: "Paired devices, pairing approvals, and exec bindings.",
+    claws: "Explore and add official Claws.",
     cloudWorkers: "Repository snapshots and machines for cloud sessions.",
     chat: "Gateway chat for quick interventions.",
     dashboards: "Tasks with saved dashboards.",
@@ -1978,7 +1981,7 @@ export const en: TranslationMap & {
       dialogLabel: "Provider sign-in",
       prepareDialogLabel: "Local model setup",
       title: "Sign in with a provider",
-      connected: "Account connected. Choose a model when you want to test a reply.",
+      connected: "Account connected.",
       prepareTitle: "Set up a local model",
       starting: "Starting provider sign-in…",
       prepareStarting: "Starting local model setup…",
@@ -2063,7 +2066,10 @@ export const en: TranslationMap & {
     connectionChanged: "The Gateway connection changed. Retry to continue this setup.",
     sessionRestarted:
       "{error} OpenClaw started a fresh session; earlier messages remain for context.",
-    unsupportedGateway: "Update the Gateway to continue setup with OpenClaw.",
+    unsupportedGateway:
+      "This Gateway does not offer openclaw.chat. Update the Gateway and reconnect to continue setup.",
+    accessRequired:
+      "Setup requires openclaw.chat with operator.admin access. Pair this browser with operator.admin scope, then reconnect.",
     autoSetup: {
       title: "AI setup",
       connecting: "Connecting your AI...",
@@ -2213,6 +2219,9 @@ export const en: TranslationMap & {
       hint: "Connected with the Gateway token or over a tunnel, not a personal sign-in.",
     },
     rosterTitle: "Online",
+    usersTitle: "Users",
+    allUsers: "All users",
+    directoryFailed: "Could not load all users. Retry",
     filters: {
       label: "Filter & sort people",
       noMatches: "No people match this filter",
@@ -2503,7 +2512,6 @@ export const en: TranslationMap & {
       stillRequired: "Sign-in is still required. Finish signing in, then check again.",
       unavailable: "Could not verify access. Check your connection and try again.",
     },
-    disconnectedTitle: "Disconnected",
     connecting: "Connecting…",
     starting: "Starting…",
     restoring: "Restoring…",
@@ -2748,9 +2756,32 @@ export const en: TranslationMap & {
   login: {},
   chat: {
     sessionDetails: {
+      menu: "Session details",
       title: "Details",
       close: "Close details",
       session: "Session details",
+      environment: "Environment",
+      context: "Context",
+      contextMessages: "Messages & other",
+      contextFiles: "Workspace memory",
+      contextTools: "Tool schemas",
+      contextSkills: "Skills",
+      contextSystem: "System prompt",
+      contextFree: "Free space",
+      contextUnverified: "Unverified",
+      contextEstimate:
+        "Last saved prompt · token sizes estimated from characters. Messages include other untracked context.",
+      contextLoading: "Loading context breakdown…",
+      contextError: "Couldn't load the context breakdown. Try refreshing.",
+      contextOffline: "Connect to the Gateway to load the context breakdown.",
+      contextUnavailable: "No matching context report. Send a message to capture one.",
+      contextHeadroom: "{tokens} tokens until the last run's prompt budget",
+      contextReserve: "{tokens} tokens reserved outside this prompt budget",
+      contextCompact: "Compact session",
+      contextCompacting: "Compacting…",
+      worktree: "Worktree",
+      changes: "Changes",
+      backgroundTasks: "Background tasks",
       createdBy: "Created by",
       owner: "Owner",
       participants: "{count} participants",
@@ -2812,7 +2843,6 @@ export const en: TranslationMap & {
       failedTitle: "Unable to finish this reply",
       failedHelp: "Automatic recovery has stopped. Check any completed work before trying again.",
       tryAgain: "Try again",
-      changeModel: "Change model",
       continuePrompt:
         "Continue from where you stopped. Check which actions already completed before retrying anything.",
     },
@@ -2866,6 +2896,7 @@ export const en: TranslationMap & {
     },
     waitingForApproval: "Waiting for approval…",
     waitingOnSubagents: "Waiting on subagents",
+    waitingForMessage: "Waiting for a message",
     turnElapsed: "Total time since your message, including subagent waits",
     waitingOnSubagent: "Waiting on {name}",
     subagentsRunning: "{count} subagents running",
@@ -2881,8 +2912,11 @@ export const en: TranslationMap & {
       preparingCloudEnvironment: "Preparing cloud environment…",
       savingSnapshot: "Saving snapshot…",
       preparingContext: "Preparing this turn…",
+      waitingForTurn: "Waiting for turn to start…",
       memoryFlushing: "Saving conversation memory…",
-      startingModel: "Waiting for a response…",
+      startingModel: "Waiting for a response",
+      waitingForLocalModel: "Waiting for the local model to respond",
+      waitingForModelSlot: "Waiting for a free model slot",
       waitingForState: "Temporarily busy—retrying…",
     },
     archivedSessionDisabled: "This session is archived. Unarchive it to continue the conversation.",
@@ -3060,10 +3094,8 @@ export const en: TranslationMap & {
       emoji: "Emoji",
       more: "More…",
       back: "Back to quick reactions",
-      placeholder: "Any emoji",
-      shortcut: "{shortcut} opens your emoji picker.",
-      hint: "Type or paste an emoji.",
-      invalid: "Reactions are a single emoji.",
+      search: "Search emoji…",
+      noMatches: "No matching emoji",
       you: "You",
       andOthers: "{names} and {count} others",
       reactedWith: "{names} reacted with {emoji}",
@@ -3143,7 +3175,7 @@ export const en: TranslationMap & {
       fullscreenFailed: "Could not change fullscreen mode: {error}",
       workboardCard: "Workboard card: {title}, {status}",
       defaultTab: "Main",
-      mockPlaceholder: "Board view seam · {tabs} tabs · {widgets} widgets",
+      mockPlaceholder: "Board view · {tabs} tabs · {widgets} widgets",
       resetTitle: "Reset conversation?",
       resetDescription: "The conversation context resets. Your dashboard stays.",
     },
@@ -3331,8 +3363,11 @@ export const en: TranslationMap & {
     incognitoExpiredBody:
       "Incognito sessions last for 24 hours or until the Gateway restarts. Your unsent input stays in this tab.",
     newIncognitoSession: "New Incognito session",
-    restartRecoveryTitle: "This session ended during a restart.",
-    restartRecoveryDisabled: "Its transcript is safe.",
+    restartRecoveryTitle: "This task was interrupted by a restart.",
+    restartRecoveryDisabled: "Your transcript is safe. Resume to continue in this session.",
+    restartRecoveryNewSession:
+      "This provider cannot safely resume tool work here. Your transcript can continue in a new session.",
+    resumeSession: "Resume",
     resumeInNewSession: "Resume in new session",
     resumingSession: "Resuming…",
     systemNotice: {
@@ -3350,8 +3385,6 @@ export const en: TranslationMap & {
       },
       restartRecovery: {
         label: "System · restart recovery",
-        summary:
-          "Turn interrupted by a gateway restart — asked the agent to resume and finish the response.",
         interrupted:
           "The Gateway restarted. Automatic recovery was interrupted before the agent could resume. Send a message to continue.",
         cancelled:
@@ -3370,7 +3403,11 @@ export const en: TranslationMap & {
       claudeCliTaskNotification: {
         label: "System · background task",
       },
+      pluginSteering: {
+        label: "{plugin} guidance",
+      },
       showContent: "Show content",
+      hideContent: "Hide content",
     },
     skillLearned: {
       label: "Learned",
@@ -3583,6 +3620,8 @@ export const en: TranslationMap & {
       loadFailed: "Could not load this question. Try again.",
     },
     imageLightbox: {
+      loadingDetail: "Loading sharper image…",
+      detailFailed: "Preview shown. Sharper image could not load.",
       actions: "Image actions",
       previous: "Previous image",
       next: "Next image",
@@ -3667,7 +3706,6 @@ export const en: TranslationMap & {
       selectionQuoteOnly:
         "The selection is too long to attach. A short quote is ready in Side chat.",
       askSubmit: "Ask",
-      askPending: "Answering from this session…",
       askBusy: "Side chat is already answering a question.",
       askHistoryUnavailable: "Couldn't load this session's history.",
       askMissing: "This session is no longer available.",
@@ -3713,6 +3751,8 @@ export const en: TranslationMap & {
       dockRight: "Move side panel right",
       dockBottom: "Move side panel below",
       conversation: "Chat",
+      showChat: "Show this conversation",
+      hideChat: "Hide this conversation",
       conversationEmpty: "The conversation for this task.",
       minimize: "Minimize side panel",
       resize: "Resize side panel",
@@ -3756,7 +3796,6 @@ export const en: TranslationMap & {
     },
     pendingInputs: {
       agentUpdate: {
-        queued: "Agent update received · waiting for delivery.",
         cancelled: "This agent update was cancelled before delivery.",
         interrupted: "Delivery interrupted. This saved agent update is not scheduled to retry.",
       },
@@ -3779,6 +3818,11 @@ export const en: TranslationMap & {
     composer: {
       running: "running",
       composerInput: "Chat composer",
+      usePrediction: "Use suggestion",
+      predictionShortcut: "Tab",
+      dismissPrediction: "Dismiss suggestion",
+      predictionAvailable:
+        "Suggested message: {text}. Press Tab to use it, or Escape to dismiss. It will not be sent automatically.",
       emojiSuggestions: "Emoji suggestions",
       placeholder: "Message {name}",
       emptyHint: "Write a message to send.",
@@ -3938,6 +3982,8 @@ export const en: TranslationMap & {
         "No transcription provider is configured for dictation. Choose one in Settings to dictate.",
       realtimeTalkCancellationRejected: "Realtime output cancellation was not accepted.",
       realtimeTalkMissingTurnIdentity: "Realtime output is missing its turn identity.",
+      realtimeTalkRelayUnresponsive:
+        "Talk ended because the Gateway has not acknowledged microphone audio for 30 seconds. Check the connection and start Talk again.",
       realtimeTalkRequiresMicrophone: "Realtime voice input requires browser microphone access.",
       selectedMicrophoneUnavailable:
         "The selected microphone is unavailable. Choose another input or System default.",
@@ -3970,6 +4016,16 @@ export const en: TranslationMap & {
       readFailed: "Could not attach: {names}{more}",
       imagesOnly: "Side chat accepts image attachments only.",
       tooLarge: "Too large to send: {names}{more}",
+      openOriginal: "Open original",
+      retryHelp: "Choose a smaller file, remove other attachments, or try attaching it again.",
+      compressToFit: "Compress to fit",
+      compressionHint:
+        "Video is too large. Compress a copy on this device; the original stays unchanged.",
+      compressing: "Compressing… {progress}%",
+      compressionUnsupported:
+        "This browser cannot compress this video with its audio. Try another browser or a smaller file.",
+      compressionTooLarge: "This video could not fit. Trim it or choose a smaller file.",
+      compressionFailed: "Could not compress this video. Try again or choose a smaller file.",
       showInTextField: "Show in text field",
       pastedText: "Pasted text",
       outsideAllowedFolders: "Outside allowed folders",
@@ -3990,6 +4046,8 @@ export const en: TranslationMap & {
     voice: {
       asking: "Asking OpenClaw...",
       replyFailed: "The voice reply was interrupted. Start Talk again to retry.",
+      replyTimedOut:
+        "Talk stopped waiting. The agent's answer will appear in chat when it finishes.",
       preparing: "Preparing voice session...",
       connecting: "Connecting voice input...",
       listening: "Listening...",
@@ -4187,6 +4245,12 @@ export const en: TranslationMap & {
       branchName: "Branch name",
       uncommittedStay: "Uncommitted changes stay in the session checkout.",
       viewOptions: "Change view options",
+      collapseCode: "Collapse Code",
+      collapseFunctions: "Collapse Functions and Classes",
+      expandCode: "Expand Code",
+      collapseCodeRegion: "Collapse code at line {line}",
+      expandCodeRegion: "Expand code at line {line}",
+      foldedLines: "{count} folded lines",
       collapseAll: "Collapse All",
       expandAll: "Expand All",
       enableWrapping: "Enable Wrapping",
@@ -4279,6 +4343,7 @@ export const en: TranslationMap & {
     nl: "Nederlands (Dutch)",
     fa: "فارسی (Persian)",
     ru: "Русский (Russian)",
+    sv: "Svenska (Swedish)",
   },
   secretsStore: {
     name: "Name",

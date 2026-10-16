@@ -17,7 +17,11 @@ import { getActivePluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearDiscordComponentEntriesForTest } from "../components-registry.test-support.js";
 import type { DiscordInteractiveHandlerContext } from "../interactive-dispatch.js";
-import type { ButtonInteraction, ComponentData, ModalInteraction } from "../internal/discord.js";
+import type {
+  BaseComponentInteraction,
+  ComponentData,
+  ModalInteraction,
+} from "../internal/discord.js";
 import { createDiscordSendReceipt } from "../send.receipt.js";
 import {
   createButtonEntry,
@@ -162,8 +166,11 @@ describe("discord component interactions", () => {
           guild_id: "guild-1",
           id: interactionId,
           member: { roles: [] },
-        } as unknown as ButtonInteraction["rawData"],
-        guild: { id: "guild-1", name: "Test Guild" } as unknown as ButtonInteraction["guild"],
+        } as unknown as BaseComponentInteraction["rawData"],
+        guild: {
+          id: "guild-1",
+          name: "Test Guild",
+        } as unknown as BaseComponentInteraction["guild"],
       },
       senderId,
     );
@@ -572,8 +579,8 @@ describe("discord component interactions", () => {
         guild_id: "gone",
         id: "interaction-guild-removed",
         member: { roles: [] },
-      } as unknown as ButtonInteraction["rawData"],
-      guild: { id: "gone", name: "Test Guild" } as unknown as ButtonInteraction["guild"],
+      } as unknown as BaseComponentInteraction["rawData"],
+      guild: { id: "gone", name: "Test Guild" } as unknown as BaseComponentInteraction["guild"],
     });
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
@@ -638,11 +645,11 @@ describe("discord component interactions", () => {
         guild_id: params.guildId,
         id: params.interactionId,
         member: { roles: [] },
-      } as unknown as ButtonInteraction["rawData"],
+      } as unknown as BaseComponentInteraction["rawData"],
       guild: {
         id: params.guildId,
         name: "Test Guild",
-      } as unknown as ButtonInteraction["guild"],
+      } as unknown as BaseComponentInteraction["guild"],
     });
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
@@ -742,11 +749,11 @@ describe("discord component interactions", () => {
       rawData: {
         channel_id: "group-dm-1",
         id: "interaction-group-dm-1",
-      } as unknown as ButtonInteraction["rawData"],
+      } as unknown as BaseComponentInteraction["rawData"],
       channel: {
         id: "group-dm-1",
         type: ChannelType.GroupDM,
-      } as unknown as ButtonInteraction["channel"],
+      } as unknown as BaseComponentInteraction["channel"],
     });
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
@@ -778,12 +785,12 @@ describe("discord component interactions", () => {
       rawData: {
         channel_id: "group-dm-1",
         id: "interaction-group-dm-fallback",
-      } as unknown as ButtonInteraction["rawData"],
+      } as unknown as BaseComponentInteraction["rawData"],
       channel: {
         id: "group-dm-1",
         type: ChannelType.GroupDM,
         name: "incident-room",
-      } as unknown as ButtonInteraction["channel"],
+      } as unknown as BaseComponentInteraction["channel"],
     });
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
@@ -809,12 +816,12 @@ describe("discord component interactions", () => {
       rawData: {
         channel_id: "group-dm-1",
         id: "interaction-group-dm-modal-trigger",
-      } as unknown as ButtonInteraction["rawData"],
+      } as unknown as BaseComponentInteraction["rawData"],
       channel: {
         id: "group-dm-1",
         type: ChannelType.GroupDM,
         name: "incident-room",
-      } as unknown as ButtonInteraction["channel"],
+      } as unknown as BaseComponentInteraction["channel"],
       showModal,
     });
 
@@ -930,7 +937,7 @@ describe("discord component interactions", () => {
       acknowledge,
       reply,
       update,
-    } as unknown as ButtonInteraction;
+    } as unknown as BaseComponentInteraction;
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
@@ -963,7 +970,7 @@ describe("discord component interactions", () => {
       ...baseInteraction,
       acknowledge,
       followUp,
-    } as unknown as ButtonInteraction;
+    } as unknown as BaseComponentInteraction;
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 

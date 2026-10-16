@@ -542,6 +542,21 @@ describe("doctor config flow", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it("retains plugin repair warnings for the app-owned update report", async () => {
+    const warning =
+      'Plugin "slack" remains at 2026.10.3. Run `openclaw update repair` to retry plugin repair.';
+    runDoctorRepairSequenceMock.mockImplementation(async (params: { state: unknown }) => ({
+      state: params.state,
+      changeNotes: [],
+      configChangeNotes: [],
+      warningNotes: [warning],
+      authProfilesRepaired: false,
+    }));
+
+    await using result = await runConfig({ config: {}, repair: true });
+    expect(result.warnings).toContain(warning);
+  });
+
   it("keeps doctor repair silent when gateway secrets reload fails", async () => {
     callGatewayMock.mockRejectedValueOnce(new Error("gateway unavailable"));
     runDoctorRepairSequenceMock.mockImplementation(async (params: { state: unknown }) => ({

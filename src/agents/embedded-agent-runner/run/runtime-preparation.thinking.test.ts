@@ -28,7 +28,7 @@ import type { ModelCatalogEntry } from "../../model-catalog.types.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import { createEmptyAgentDiscoveryStores } from "../model.js";
 import { resolveBundledStaticCatalogModel } from "../model.static-catalog.js";
-import { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+import { prepareEmbeddedRunRuntime } from "./runtime.js";
 
 // Credential acquisition and native process installation are outside this network-free
 // composition. Route planning, model resolution, auth commit, and the overlay remain real.
@@ -52,7 +52,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
 }));
 vi.mock("openclaw/plugin-sdk/provider-catalog-live-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-catalog-live-runtime")>()),
-  getCachedLiveProviderModelRows: async () => [
+  fetchLiveProviderModelRows: async () => [
     {
       slug: "gpt-5.6-luna",
       supported_reasoning_levels: ["none", "low", "medium", "high", "xhigh", "max", "ultra"],

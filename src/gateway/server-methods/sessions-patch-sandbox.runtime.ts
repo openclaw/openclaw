@@ -13,8 +13,51 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { isSessionWorkAdmissionActive } from "../../sessions/session-lifecycle-admission.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
-import { readSessionWorkerPlacementAsync } from "../worker-environments/session-placement-lifecycle.js";
+import {
+  readSessionWorkerPlacementAsync,
+  type SessionWorkerPlacementContext,
+} from "../worker-environments/session-placement-lifecycle.js";
+import {
+  prepareSessionPatchPermissionChange,
+  type ActiveSessionPermissionChange,
+} from "./sessions-patch-permissions.runtime.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
+
+export type PreparedSessionPatchExecutionPermission =
+  | { ok: false; error: ErrorShape }
+  | {
+      ok: true;
+      validate?: () => ErrorShape | undefined;
+      change?: ActiveSessionPermissionChange;
+    };
+
+export async function prepareSessionPatchExecutionPermissionChange(
+  params: Parameters<typeof prepareSessionPatchSandboxChange>[0] & {
+    context: GatewayRequestContext;
+    agentId: string;
+    assertCurrent: () => ErrorShape | undefined;
+  },
+): Promise<PreparedSessionPatchExecutionPermission> {
+  const permissionChanged = params.entry.permissionMode !== params.existingEntry?.permissionMode;
+  const sandboxChanged =
+    params.entry.sandboxMode !== params.existingEntry?.sandboxMode ||
+    params.entry.nativeRuntimeConsent !== params.existingEntry?.nativeRuntimeConsent;
+  const validate =
+    (permissionChanged && !("permissionMode" in params.patch)) ||
+    sandboxChanged ||
+    "sandboxMode" in params.patch ||
+    "nativeRuntimeConsent" in params.patch
+      ? await prepareSessionPatchSandboxChange(params)
+      : undefined;
+  const permission =
+    (permissionChanged || "permissionMode" in params.patch) && params.existingEntry?.sessionId
+      ? prepareSessionPatchPermissionChange({
+          ...params,
+          sessionId: params.existingEntry.sessionId,
+        })
+      : { ok: true as const };
+  return permission.ok ? { ...permission, validate } : permission;
+}
 
 export async function prepareSessionPatchSandboxChange(
   params: Parameters<typeof validateSessionPatchSandboxChange>[0],
@@ -29,7 +72,7 @@ export async function prepareSessionPatchSandboxChange(
 /** Check authority and idle execution at the synchronous write boundary. */
 function validateSessionPatchSandboxChange(params: {
   client: GatewayClient | null;
-  context: GatewayRequestContext;
+  context: SessionWorkerPlacementContext;
   patch: SessionsPatchParams;
   existingEntry: SessionEntry | undefined;
   entry: SessionEntry;
@@ -64,6 +107,7 @@ function validateSessionPatchSandboxChange(params: {
   if (
     !grantingConsent &&
     params.existingEntry?.sandboxMode === params.entry.sandboxMode &&
+    params.existingEntry?.permissionMode === params.entry.permissionMode &&
     params.existingEntry?.nativeRuntimeConsent === params.entry.nativeRuntimeConsent
   ) {
     return undefined;

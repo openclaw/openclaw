@@ -170,7 +170,7 @@ describe("ExecApprovalManager", () => {
     expect(manager.getLiveSnapshot(record.id)).toBeNull();
   });
 
-  it("ignores a stale cleanup callback after handoff restarts the grace period", async (testContext) => {
+  it("cancels old cleanup and restarts the grace period after handoff", async (testContext) => {
     const manager = createTestApprovalManager(testContext);
     const timers = scheduled.wakes;
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
@@ -180,12 +180,14 @@ describe("ExecApprovalManager", () => {
     const staleCleanup = timers.find((timer) => timer.delayMs === 15_000);
 
     const release = manager.retainForHandoff(record.id);
+    expect(staleCleanup).toMatchObject({ atMs: 16_000, cancelled: true });
     now.mockReturnValue(2_000);
     release?.();
     const cleanupTimers = timers.filter((timer) => timer.delayMs === 15_000);
     expect(cleanupTimers).toHaveLength(2);
 
-    await runTimer(staleCleanup);
+    expect(cleanupTimers[1]).toMatchObject({ atMs: 17_000, cancelled: false });
+    now.mockReturnValue(16_000);
     expect(manager.getLiveSnapshot(record.id)).toMatchObject({ decision: "allow-once" });
     await runTimer(cleanupTimers[1]);
     expect(manager.getLiveSnapshot(record.id)).toBeNull();
@@ -219,33 +221,32 @@ describe("ExecApprovalManager", () => {
     expect(manager.projectDecisionIfActive(unbound.id, "allow-always")).toBe("allow-always");
   });
 
-  it("clamps oversized approval timers instead of letting Node fire them immediately", async (testContext) => {
-    const manager = createTestApprovalManager(testContext);
-    const timers = scheduled.wakes;
-    vi.spyOn(Date, "now").mockReturnValue(1_000);
-    const record = manager.create(
-      { command: "echo ok" },
-      MAX_TIMER_TIMEOUT_MS + 1,
-      "approval-long",
-    );
-
-    await manager.register(record, MAX_TIMER_TIMEOUT_MS + 1);
-
-    expect(record.expiresAtMs).toBe(1_000 + MAX_TIMER_TIMEOUT_MS);
-    deadlineTimers(timers, [MAX_TIMER_TIMEOUT_MS]);
-  });
-
-  it("schedules registration from the record's remaining lifetime", async (testContext) => {
-    const manager = createTestApprovalManager(testContext);
-    const timers = scheduled.wakes;
-    vi.spyOn(Date, "now").mockReturnValueOnce(1_000).mockReturnValue(1_250);
-    const record = manager.create({ command: "echo ok" }, 60_000, "approval-delayed");
-
-    await manager.register(record, 60_000);
-
-    expect(record.expiresAtMs).toBe(61_000);
-    deadlineTimers(timers, [59_750]);
-  });
+  it.for([
+    {
+      name: "clamps oversized timers",
+      timeout: MAX_TIMER_TIMEOUT_MS + 1,
+      now: 1_000,
+      expires: 1_000 + MAX_TIMER_TIMEOUT_MS,
+      delay: MAX_TIMER_TIMEOUT_MS,
+    },
+    {
+      name: "uses the remaining lifetime",
+      timeout: 60_000,
+      now: 1_250,
+      expires: 61_000,
+      delay: 59_750,
+    },
+  ])(
+    "schedules approval deadlines: $name",
+    async ({ timeout, now, expires, delay }, testContext) => {
+      const manager = createTestApprovalManager(testContext);
+      vi.spyOn(Date, "now").mockReturnValueOnce(1_000).mockReturnValue(now);
+      const record = manager.create({ command: "echo ok" }, timeout, "approval-deadline");
+      await manager.register(record, timeout);
+      expect(record.expiresAtMs).toBe(expires);
+      deadlineTimers(scheduled.wakes, [delay]);
+    },
+  );
 
   it("reschedules a deadline timer when the wall clock rolls backward", async () => {
     const timers = scheduled.wakes;
@@ -535,37 +536,28 @@ describe("ExecApprovalManager", () => {
   });
 
   it.for([
-    ["plugin approval UUID", "plugin:12345678-1234-1234-1234-123456789abc"],
-    ["128-character id", "a".repeat(128)],
-  ])("preserves a safe explicit %s byte-for-byte", ([_label, id], testContext) => {
+    { name: "plugin approval UUID", id: "plugin:12345678-1234-1234-1234-123456789abc" },
+    { name: "128-character id", id: "a".repeat(128) },
+    { name: "undefined sentinel", id: undefined },
+    { name: "null sentinel", id: null },
+    { name: "empty sentinel", id: "" },
+    { name: "URL dot segment", id: ".", rejected: true },
+    { name: "URL parent segment", id: "..", rejected: true },
+    { name: "ANSI escape", id: "approval-\u001b[31mred", rejected: true },
+    { name: "trailing line feed", id: "approval-safe\n", rejected: true },
+    { name: "overlong value", id: "a".repeat(129), rejected: true },
+  ])("validates approval IDs: $name", ({ id, rejected }, testContext) => {
     const manager = createTestApprovalManager(testContext);
-
-    expect(manager.create({ command: "echo exact" }, 60_000, id).id).toBe(id);
-  });
-
-  it.for([[undefined], [null], [""]])(
-    "generates an id for an empty id sentinel (%s)",
-    ([id], testContext) => {
-      const manager = createTestApprovalManager(testContext);
-
-      expect(manager.create({ command: "echo generated" }, 60_000, id).id).toMatch(
+    const create = () => manager.create({ command: "echo id" }, 60_000, id);
+    if (rejected) {
+      expect(create).toThrow(InvalidApprovalIdError);
+    } else if (id) {
+      expect(create().id).toBe(id);
+    } else {
+      expect(create().id).toMatch(
         /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       );
-    },
-  );
-
-  it.for([
-    ["URL dot segment", "."],
-    ["URL parent segment", ".."],
-    ["ANSI escape", "approval-\u001b[31mred"],
-    ["trailing line feed", "approval-safe\n"],
-    ["overlong value", "a".repeat(129)],
-  ])("rejects an explicit approval id containing an %s", ([_label, id], testContext) => {
-    const manager = createTestApprovalManager(testContext);
-
-    expect(() => manager.create({ command: "echo unsafe" }, 60_000, id)).toThrow(
-      InvalidApprovalIdError,
-    );
+    }
   });
 
   it("rejects unrenderable persistent plugin requests before creating a row or waiter", async () => {
@@ -594,71 +586,51 @@ describe("ExecApprovalManager", () => {
     }
   });
 
-  it("persists timeout denial while preserving the null waiter result", async () => {
-    const { manager, databaseOptions } = createPersistentManager();
-    const record = manager.create({ command: "echo ok" }, 60_000, "approval-timeout");
-    const decisionPromise = (await manager.register(record, 60_000)).decision;
+  it.each([
+    { resolvedBy: null, status: "expired", reason: "timeout" },
+    { resolvedBy: "no-approval-route", status: "denied", reason: "no-route" },
+  ])(
+    "persists $reason denial while preserving the null waiter result",
+    async ({ resolvedBy, status, reason }) => {
+      const { manager, databaseOptions } = createPersistentManager();
+      const record = manager.create({ command: "echo ok" }, 60_000, "approval-expire");
+      const decisionPromise = (await manager.register(record, 60_000)).decision;
 
-    expect(await manager.expire(record.id)).toBe(true);
-    await expect(decisionPromise).resolves.toBeNull();
-    expect(await manager.getSnapshot(record.id)).toMatchObject({
-      status: "expired",
-      terminalReason: "timeout",
-      resolvedBy: null,
-    });
-    expect((await manager.getSnapshot(record.id))?.decision).toBeUndefined();
-    expect(await getOperatorApproval({ id: record.id, databaseOptions })).toMatchObject({
-      status: "expired",
-      decision: "deny",
-      terminalReason: "timeout",
-    });
-  });
+      expect(await manager.expire(record.id, resolvedBy)).toBe(true);
+      await expect(decisionPromise).resolves.toBeNull();
+      expect(await manager.getSnapshot(record.id)).toMatchObject({
+        status,
+        terminalReason: reason,
+        resolvedBy,
+      });
+      expect((await manager.getSnapshot(record.id))?.decision).toBeUndefined();
+      expect(await getOperatorApproval({ id: record.id, databaseOptions })).toMatchObject({
+        status,
+        decision: "deny",
+        terminalReason: reason,
+      });
+    },
+  );
 
-  it("persists no-route denial while preserving the null waiter result", async () => {
-    const { manager, databaseOptions } = createPersistentManager();
-    const record = manager.create({ command: "echo ok" }, 60_000, "approval-no-route");
-    const decisionPromise = (await manager.register(record, 60_000)).decision;
+  it.each(["snapshot", "waiter"] as const)(
+    "reconciles the %s read with the durable expiry boundary",
+    async (read) => {
+      vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const { manager } = createPersistentManager();
+      const record = manager.create({ command: "echo ok" }, 60_000, "approval-read-expiry");
+      const decisionPromise = (await manager.register(record, 60_000)).decision;
+      vi.mocked(Date.now).mockReturnValue(record.expiresAtMs);
 
-    expect(await manager.expire(record.id, "no-approval-route")).toBe(true);
-    await expect(decisionPromise).resolves.toBeNull();
-    expect(await manager.getSnapshot(record.id)).toMatchObject({
-      status: "denied",
-      terminalReason: "no-route",
-      resolvedBy: "no-approval-route",
-    });
-    expect((await manager.getSnapshot(record.id))?.decision).toBeUndefined();
-    expect(await getOperatorApproval({ id: record.id, databaseOptions })).toMatchObject({
-      status: "denied",
-      decision: "deny",
-      terminalReason: "no-route",
-    });
-  });
-
-  it("reconciles local reads with the durable expiry boundary", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(1_000);
-    const { manager } = createPersistentManager();
-    const record = manager.create({ command: "echo ok" }, 60_000, "approval-read-expiry");
-    const decisionPromise = (await manager.register(record, 60_000)).decision;
-    vi.mocked(Date.now).mockReturnValue(record.expiresAtMs);
-
-    expect(await manager.getSnapshot(record.id)).toMatchObject({ status: "expired" });
-    expect(await manager.listPendingRecords()).toEqual([]);
-    await expect(decisionPromise).resolves.toBeNull();
-  });
-
-  it("reconciles awaitDecision with the durable expiry boundary", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(1_000);
-    const { manager } = createPersistentManager();
-    const record = manager.create({ command: "echo ok" }, 60_000, "approval-await-expiry");
-    await manager.register(record, 60_000);
-    vi.mocked(Date.now).mockReturnValue(record.expiresAtMs);
-
-    const decisionPromise = manager.awaitDecision(record.id);
-
-    expect(decisionPromise).not.toBeNull();
-    await expect(decisionPromise).resolves.toBeNull();
-    expect(await manager.getSnapshot(record.id)).toMatchObject({ status: "expired" });
-  });
+      if (read === "waiter") {
+        const waiter = manager.awaitDecision(record.id);
+        expect(waiter).not.toBeNull();
+        await expect(waiter).resolves.toBeNull();
+      }
+      expect(await manager.getSnapshot(record.id)).toMatchObject({ status: "expired" });
+      expect(await manager.listPendingRecords()).toEqual([]);
+      await expect(decisionPromise).resolves.toBeNull();
+    },
+  );
 
   it("reports persistence failures from the timeout callback without throwing", async () => {
     const timers = scheduled.wakes;

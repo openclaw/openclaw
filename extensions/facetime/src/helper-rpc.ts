@@ -7,9 +7,12 @@ import {
   FaceTimeHelperActionError,
   FaceTimeHelperAmbiguousError,
   FaceTimeHelperUnavailableError,
+  type FaceTimeHelperPeer,
   type HelperActionResult,
 } from "./helper-results.js";
 import type { FaceTimeDialRequest } from "./outbound-call.js";
+
+export type { FaceTimeHelperPeer } from "./helper-results.js";
 
 type HelperSocketServerParams = {
   host: string;
@@ -22,13 +25,6 @@ type HelperSocketServerParams = {
   onConnect?: (bundleIdentifier: string) => void;
   onDisconnect?: (bundleIdentifier: string) => void;
   onStale?: (bundleIdentifier: string, processId: number) => void;
-};
-
-export type FaceTimeHelperPeer = {
-  bundleIdentifier: string;
-  processId: number;
-  processStartedAtMs: number;
-  connectionGeneration: number;
 };
 
 const FACETIME_DIAL_HELPER_BUNDLES = new Set([
@@ -314,14 +310,24 @@ export class FaceTimeHelperSocketServer {
     if (pending) {
       this.#pending.delete(transactionId);
       clearTimeout(pending.timeout);
+      // Native payloads cannot supply the socket owner's peer or aggregate facts.
+      const peer = this.#socketPeers.get(socket);
+      const result = Object.assign(payload, {
+        helperBundleIdentifier: peer?.bundleIdentifier ?? "unknown",
+        helperPeer: peer,
+        helperResults: undefined,
+        helpersContacted: undefined,
+        topologyGeneration: undefined,
+        topologyComplete: undefined,
+      });
       if (typeof payload.error === "string" && payload.error) {
         pending.reject(
           payload.ambiguous === true
-            ? new FaceTimeHelperAmbiguousError(payload.error, payload)
+            ? new FaceTimeHelperAmbiguousError(payload.error, result)
             : new FaceTimeHelperActionError(payload.error),
         );
       } else {
-        pending.resolve(payload);
+        pending.resolve(result);
       }
       return;
     }
@@ -527,11 +533,7 @@ export class FaceTimeHelperSocketServer {
         "Authenticated FaceTime dialing helper is not connected to the facetime event socket",
       );
     }
-    return {
-      ...(await this.#sendActionOnSocket(socket, action, data)),
-      helperBundleIdentifier: this.#socketPeers.get(socket)?.bundleIdentifier ?? "unknown",
-      helperPeer: this.#socketPeers.get(socket),
-    };
+    return await this.#sendActionOnSocket(socket, action, data);
   }
 
   async #sendActionToAll(
@@ -550,33 +552,24 @@ export class FaceTimeHelperSocketServer {
         "FaceTime helper is not connected to the facetime event socket",
       );
     }
-    const peers = sockets.map((socket) => this.#socketPeers.get(socket));
     const results = await Promise.allSettled(
       sockets.map((socket) => this.#sendActionOnSocket(socket, action, data, timeoutMs)),
     );
-    const fulfilled = results.flatMap((result, index) =>
-      result.status === "fulfilled" && sockets[index]
-        ? [
-            {
-              ...result.value,
-              helperBundleIdentifier: peers[index]?.bundleIdentifier ?? "unknown",
-              helperPeer: peers[index],
-            },
-          ]
-        : [],
+    const fulfilled = results.flatMap((result) =>
+      result.status === "fulfilled" ? [result.value] : [],
     );
     if (fulfilled.length > 0) {
       const fulfilledProcessIds = new Set(
         fulfilled.flatMap(({ helperPeer }) => (helperPeer ? [helperPeer.processId] : [])),
       );
       return {
+        ...fulfilled[fulfilled.length - 1],
         helpersContacted: sockets.length,
         topologyGeneration: this.#connectionGeneration,
         topologyComplete:
           fulfilled.length === sockets.length &&
           requiredPeerProcessIds.every((processId) => fulfilledProcessIds.has(processId)),
         helperResults: fulfilled,
-        ...fulfilled[fulfilled.length - 1],
       };
     }
     const firstRejected = results.find(

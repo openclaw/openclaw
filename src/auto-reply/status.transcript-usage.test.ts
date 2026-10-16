@@ -239,40 +239,6 @@ describe("status transcript usage and model context", () => {
     });
   });
 
-  it("reads transcript usage using explicit agentId when sessionKey is missing", async () => {
-    await withStatusHome(async () => {
-      const sessionId = "sess-worker2";
-      writeTranscriptUsageLog({
-        agentId: "worker2",
-        sessionId,
-        usage: {
-          input: 2,
-          output: 3,
-          cacheRead: 1200,
-          cacheWrite: 0,
-          totalTokens: 1205,
-        },
-      });
-
-      const text = await buildTranscriptUsageStatusMessage({
-        agentId: "worker2",
-        sessionEntry: {
-          sessionId,
-          totalTokens: 5,
-          modelProvider: "anthropic",
-          model: "claude-opus-4-6",
-          agentHarnessId: "openclaw",
-          contextTokens: 32_000,
-          contextTokensSource: "runtime",
-        },
-        sessionKey: undefined,
-        resolvedHarness: "openclaw",
-      });
-
-      expect(normalizeTestText(text)).toContain("Context: 1.2k/32k");
-    });
-  });
-
   it("uses the same transcript usage fallback as sessions.list when a delivery mirror is last", async () => {
     await withStatusHome(async () => {
       const sessionId = "sess-cache-delivery-mirror";

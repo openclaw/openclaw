@@ -114,7 +114,7 @@ export function createNativeSessionInitializationOwner<TStore, TIdentity, TBindi
           }
           initialization.assertCurrent();
         },
-        /** @deprecated Await linkAsync. Retained for released harnesses during stable deprecation. */
+        /** @deprecated Await linkAsync. Supported through 2026-12-31. */
         link(input: Parameters<typeof upsertSessionUpstreamLink>[0]) {
           initialization.assertCurrent();
           const prepared = prepareLink(input);

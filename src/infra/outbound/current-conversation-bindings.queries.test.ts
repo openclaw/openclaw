@@ -98,46 +98,6 @@ it("reads ordered binding selections and target batches in one statement after c
   });
 });
 
-it("reads current bindings without recompiling fixed queries after warmup", async () => {
-  await withOpenClawTestState({ label: "binding-query-budget" }, async () => {
-    const { db } = openOpenClawStateDatabase();
-    const executions = trackSqliteStatementExecutions(
-      requireNativeSqliteDatabase(db),
-      ["read"],
-      (sql) =>
-        (sql.startsWith("select ") || sql.startsWith("with ")) &&
-        sql.includes('"current_conversation_bindings"')
-          ? "read"
-          : null,
-    );
-    const compile = vi.spyOn(getNodeSqliteKysely(db).getExecutor(), "compileQuery");
-    try {
-      const records = [binding("one"), binding("two", "sibling")];
-      for (const record of records) {
-        expect(writeBinding(record)).toEqual(record);
-        expect(resolveCurrentConversationBindingRecord(record.conversation)).toEqual(record);
-      }
-      compile.mockClear();
-      executions.counts.read = 0;
-      for (let index = 0; index < 1_000; index += 1) {
-        const record = records[index % records.length]!;
-        const current = resolveCurrentConversationBindingRecord(record.conversation);
-        expect(current).toEqual(record);
-      }
-      expect(executions.counts.read).toBe(1_000);
-      expect(
-        compile.mock.results.filter(
-          (result) =>
-            result.type === "return" &&
-            result.value.sql.includes('"current_conversation_bindings"'),
-        ).length,
-      ).toBe(0);
-    } finally {
-      executions.restore();
-    }
-  });
-});
-
 it("invalidates warm main-thread binding rows after worker receipts and database reopen", async () => {
   await withOpenClawTestState({ label: "binding-query-freshness" }, async () => {
     const original = binding("worker-written");

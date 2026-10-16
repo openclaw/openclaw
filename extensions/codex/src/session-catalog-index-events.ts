@@ -1,9 +1,5 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type {
-  CodexServerNotification,
-  CodexThread,
-  CodexThreadStatus,
-} from "./app-server/protocol.js";
+import type { CodexServerNotification, CodexThread } from "./app-server/protocol.js";
 import type { CodexCatalogStatus } from "./session-catalog-index-field.js";
 import type { CodexCatalogIndexRow } from "./session-catalog-index-row.js";
 import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-limits.js";
@@ -99,12 +95,7 @@ export class CodexCatalogIndexEvents {
       if (!isRecord(params.status)) {
         return;
       }
-      this.owner.updateStatus(
-        id,
-        // SAFETY: native v2 ThreadStatusChangedNotification carries the protocol status union.
-        codexCatalogThreadStatus(params.status as CodexThreadStatus),
-        source,
-      );
+      this.owner.updateStatus(id, codexCatalogThreadStatus(params.status), source);
       return;
     }
     if (event.method === "thread/settings/updated") {

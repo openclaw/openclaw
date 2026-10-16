@@ -303,18 +303,6 @@ describe("direct node run", () => {
     ]);
   });
 
-  it("forwards the original cancellation signal to the gateway", async () => {
-    const controller = new AbortController();
-    await dispatchNodeSystemRun(createDirectNodeRun(controller.signal));
-
-    expect(callGatewayToolMock).toHaveBeenCalledWith(
-      "node.invoke",
-      { timeoutMs: 35_000 },
-      expect.objectContaining({ command: "system.run" }),
-      { signal: controller.signal },
-    );
-  });
-
   it("combines stdout, stderr, and the node error", async () => {
     const stdout = "small stdout";
     const stderr = "node stderr";

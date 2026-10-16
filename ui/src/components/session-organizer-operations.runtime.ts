@@ -5,6 +5,7 @@ import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-s
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
+import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import { resolveSessionRenamePatch } from "../lib/session-rename.ts";
 import { isSubagentSessionKey, resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
 import {
@@ -30,7 +31,6 @@ import type { SessionActionHost, SessionActionRow } from "./session-organizer-ba
 import { rememberSessionGroup, type SessionGroupActionHost } from "./session-organizer-catalog.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
 import { patchSession } from "./session-organizer-patch.runtime.ts";
-import type { SessionOwnerOption } from "./session-owner-chip.ts";
 import {
   formatBatchSessionRemovalError,
   withSessionWorkspaceRecovery,
@@ -55,7 +55,6 @@ export { patchSession } from "./session-organizer-patch.runtime.ts";
 export { setSessionInvolvement } from "./session-organizer-batch-mutations.ts";
 export {
   archiveSessionWithUndo,
-  archiveSessionTreeWithUndo,
   confirmRunningSessionsArchive,
   promoteSession,
   snoozeSessionWithUndo,
@@ -180,6 +179,7 @@ async function acknowledgeUnreadHiddenRuns(
       const access = readSessionMethodAccess(scope.gateway.snapshot, {
         method: "sessions.patch",
         params: { key: run.key, unread: false, agentId, ...expectedSessionId },
+        sessionScope: true,
         session: run,
       });
       // Runs the caller cannot patch keep their state without a second error.
@@ -246,7 +246,7 @@ export async function runBatchSessionAction(
 ): Promise<void> {
   switch (action.kind) {
     case "toggle-unread":
-      await patchSessionRows(host, rows, { unread: !allUnread }, scope);
+      await patchSessionRows(host, rows, { unread: !allUnread }, scope, { sessionScope: true });
       if (allUnread) {
         await acknowledgeUnreadHiddenRuns(host, rows, scope);
       }
@@ -591,16 +591,12 @@ export async function deleteSession(
           return;
         }
         if (removeWorktree) {
-          try {
-            const result = await scope.client.request<WorktreesRemoveResult>("worktrees.remove", {
-              id: preserved.id,
-              force: true,
-            });
-            if (result.snapshotError) {
-              host.sessionData.publishSessionMutationError(scope, result.snapshotError);
-            }
-          } catch (error) {
-            host.sessionData.publishSessionMutationError(scope, error);
+          const result = await scope.client.request<WorktreesRemoveResult>("worktrees.remove", {
+            id: preserved.id,
+            force: true,
+          });
+          if (result.snapshotError) {
+            host.sessionData.publishSessionMutationError(scope, result.snapshotError);
           }
         }
       }

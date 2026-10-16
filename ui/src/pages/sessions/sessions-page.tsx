@@ -1,55 +1,32 @@
-import { createEffect, createMemo, onCleanup, untrack, Show } from "solid-js";
+import { createEffect, createMemo, untrack, Show } from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { AgentScopeControl } from "../../components/agent-scope-control.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { LearnMoreLink } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
-import { i18n } from "../../i18n/index.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { projectI18n, t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import "../../styles/settings.css";
 import type { SessionsRouteData } from "./route.ts";
 import { SessionManagementMenu } from "./session-menu.tsx";
-import { SessionsPageController } from "./sessions-page.ts";
+import { createSessionsPage, type SessionsPageOwner } from "./sessions-page-state.ts";
 import { SessionsView } from "./view.tsx";
 
-export function SessionsPageContent(props: { controller: SessionsPageController }) {
+export function SessionsPageContent(props: { page: SessionsPageOwner }) {
   const context = useApplication();
-  const controller = untrack(() => props.controller);
-  controller.connect(context);
-  onCleanup(() => controller.disconnect());
-  const projection = projectSource(controller, {
-    read: (owner) => owner.viewProps(),
-    subscribe: (owner, notify) => owner.subscribe(notify),
-    equality: "revision",
-  });
-  const locale = projectI18n(i18n);
   const view = createMemo(() => {
-    locale.revision();
-    return projection.read();
+    i18nRevision();
+    return props.page.view();
   });
-  const menu = createMemo(() => {
-    projection.revision();
-    return controller.sessionMenuProps();
-  });
+  const menu = () => props.page.menu();
   return (
     <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
       <section class="content-header content-header--settings content-header--page hub-page-header sessions-hub-header">
         <div class="hub-page-header__title">
-          <div class="page-title">
-            {(() => {
-              locale.revision();
-              return titleForRoute("sessions");
-            })()}
-          </div>
+          <div class="page-title">{titleForRoute("sessions", t)}</div>
           <div class="page-subtitle">
-            {(() => {
-              locale.revision();
-              return subtitleForRoute("sessions");
-            })()}{" "}
+            {subtitleForRoute("sessions", t)}{" "}
             <LearnMoreLink url="https://docs.openclaw.ai/concepts/session" />
           </div>
         </div>
@@ -73,12 +50,12 @@ export function SessionsPageContent(props: { controller: SessionsPageController 
         <div class="hub-page-header__actions">
           <AgentScopeControl
             agents={(() => {
-              projection.revision();
+              props.page.revision();
               return context.agents.state.agentsList?.agents ?? [];
             })()}
             selection={context.agentSelection}
             selectedId={(() => {
-              projection.revision();
+              props.page.revision();
               return context.agentSelection.state.scopeId;
             })()}
           />
@@ -92,18 +69,27 @@ export function SessionsPageContent(props: { controller: SessionsPageController 
   );
 }
 
-function SessionsPageRoot(props: { routeData?: SessionsRouteData }) {
-  const controller = new SessionsPageController();
-  controller.routeData = untrack(() => props.routeData);
+export function SessionsPage(props: { routeData?: SessionsRouteData }) {
+  // Initial route options belong to this mounted page; later options use the effect.
+  const page = createSessionsPage(
+    useApplication(),
+    untrack(() => props.routeData),
+  );
   createEffect(
     () => props.routeData,
-    (routeData) => controller.setRouteData(routeData),
+    (routeData) => page.setRouteData(routeData),
   );
-  return <SessionsPageContent controller={controller} />;
+  return (
+    <openclaw-sessions-page>
+      <SessionsPageContent page={page} />
+    </openclaw-sessions-page>
+  );
 }
 
-export const SessionsPage = defineSolidBridge<{ routeData?: SessionsRouteData }>(
-  "openclaw-sessions-page",
-  SessionsPageRoot,
-  { properties: { routeData: { default: undefined, attribute: false } } },
-);
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-sessions-page": HTMLAttributes<HTMLElement>;
+    }
+  }
+}

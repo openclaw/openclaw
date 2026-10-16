@@ -18,6 +18,9 @@ spend limits, and backend failover without changing OpenClaw config.
     openclaw onboard --auth-choice litellm-api-key
     ```
 
+    Onboarding prompts for the proxy base URL. Press Enter to keep the `http://localhost:4000`
+    default, or enter your proxy's URL.
+
     For non-interactive setup against a remote proxy, pass the proxy URL explicitly:
 
     ```bash
@@ -90,13 +93,22 @@ spend limits, and backend failover without changing OpenClaw config.
 }
 ```
 
-The default model onboarding writes is `litellm/claude-opus-4-6`.
+The default model onboarding writes is `litellm/claude-opus-4-6`. Onboarding does not yet select
+from the proxy's live model list. If your proxy does not serve that alias, select one it advertises:
+
+```bash
+openclaw models list --provider litellm --refresh --json
+openclaw models set litellm/your-model-id
+```
 
 In merge mode, onboarding with an explicit proxy URL preserves any authored provider models and
 otherwise leaves the provider model list empty for discovery. Run
 `openclaw models list --provider litellm --refresh --json` to list the proxy's models.
 With `models.mode: "replace"`, discovery is disabled, so onboarding keeps the documented default
 in the provider model list while preserving existing model definitions.
+
+Re-running authentication also combines case-variant provider keys, such as `LiteLLM` and `litellm`,
+into one canonical row while preserving authored provider options and model settings.
 
 ## Image generation
 
@@ -130,6 +142,13 @@ LiteLLM can back the `image_generate` tool through OpenAI-compatible `/images/ge
 Loopback LiteLLM URLs (`http://localhost:4000`, `127.0.0.1`, `::1`, `host.docker.internal`) work
 without a global private-network override. For a LAN-hosted proxy, set
 `models.providers.litellm.request.allowPrivateNetwork: true` because the API key is sent to that host.
+
+Backends that answer with image URLs (`data[].url`, for example `dall-e-3`) work like base64
+results: OpenClaw downloads URLs at the configured provider origin automatically. Other private
+image hosts (including another port on loopback) require
+`models.providers.litellm.request.allowPrivateNetwork: true`. Redirects are checked at every hop.
+Downloads share the request deadline and the image size cap from `agents.defaults.mediaMaxMb`,
+without sending the LiteLLM API key or configured HTTP credentials to the image host.
 
 ## Advanced
 

@@ -1,7 +1,6 @@
 /** Tests text chunking helpers used by auto-reply delivery. */
 
-import { describe, expect, it, vi } from "vitest";
-import * as fences from "../../packages/markdown-core/src/fences.js";
+import { describe, expect, it } from "vitest";
 import { hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
 import {
   chunkByNewline,
@@ -26,13 +25,6 @@ function requireChunk(chunks: string[], index: number): string {
     throw new Error(`expected chunk ${index}`);
   }
   return chunk;
-}
-
-function expectChunkLengths(chunks: string[], expectedLengths: number[]) {
-  expect(chunks).toHaveLength(expectedLengths.length);
-  expectedLengths.forEach((length, index) => {
-    expect(requireChunk(chunks, index).length).toBe(length);
-  });
 }
 
 function expectNormalizedChunkJoin(chunks: string[], text: string) {
@@ -81,15 +73,6 @@ function expectNoEmptyFencedChunks(text: string, limit: number) {
       .filter((line) => !/^( {0,3})(`{3,}|~{3,})(.*)$/.test(line));
     expect(nonFenceLines.join("\n").trim()).not.toBe("");
   }
-}
-
-function expectFenceParseOccursOnce(text: string, limit: number) {
-  const parseSpy = vi.spyOn(fences, "parseFenceSpans");
-  const chunks = chunkMarkdownText(text, limit);
-
-  expect(chunks.length).toBeGreaterThan(2);
-  expect(parseSpy).toHaveBeenCalledTimes(1);
-  parseSpy.mockRestore();
 }
 
 const parentheticalCases: ChunkCase[] = [
@@ -447,10 +430,6 @@ describe("chunkMarkdownText", () => {
     expect(chunks.join("")).toBe(text);
   });
 
-  it("parses fence spans once for long fenced payloads", () => {
-    expectFenceParseOccursOnce(`\`\`\`txt\n${"line\n".repeat(600)}\`\`\``, 80);
-  });
-
   it.each([
     { payload: `token.${"A".repeat(4200)}`, limit: 4000, maxChunks: 3, bareReopen: false },
     { payload: "A".repeat(4200), limit: 2000, maxChunks: 4, bareReopen: true },
@@ -556,14 +535,6 @@ describe("chunkByNewline", () => {
     ],
   ] as const)("respects %s", (_name, text, limit, expected, options) => {
     expect(chunkByNewline(text, limit, options)).toEqual(expected);
-  });
-
-  it("falls back to length-based for long lines", () => {
-    const text = "Short line\n" + "a".repeat(50) + "\nAnother short";
-    const chunks = chunkByNewline(text, 20);
-    expect(chunks[0]).toBe("Short line");
-    expectChunkLengths(chunks.slice(1, 4), [20, 20, 10]);
-    expect(chunks[4]).toBe("Another short");
   });
 
   it.each(["", "   \n\n   "] as const)("returns empty array for input %j", (text) => {

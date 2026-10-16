@@ -55,7 +55,7 @@ export function writeAcpSessionMetaForMigration(params: {
   );
 }
 
-/** @deprecated Use readAcpSessionEntryAsync; retained for the v2026.9.4 Plugin SDK contract. */
+/** @deprecated Use readAcpSessionEntryAsync; final compatibility day: 2026-12-31. */
 export function readAcpSessionEntry(params: {
   sessionKey: string;
   agentId?: string;

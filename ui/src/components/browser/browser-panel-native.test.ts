@@ -422,6 +422,7 @@ describe("native Browser panel ownership", () => {
     const input = document.createElement("input");
     input.className = "bp-url";
     controller.host.renderRoot.append(input);
+    controller.addressInput = input;
     const focus = vi.spyOn(input, "focus");
     await controller.native.beginNewTab();
     expect(controller.activeTargetId).toMatch(/^mac-[0-9a-f-]{36}$/);
@@ -440,6 +441,7 @@ describe("native Browser panel ownership", () => {
     const input = document.createElement("input");
     input.className = "bp-url";
     controller.host.renderRoot.append(input);
+    controller.addressInput = input;
     const focus = vi.spyOn(input, "focus");
     const reply = createDeferred<{ ok: true; tabId: string }>();
     native.postMessage.mockImplementationOnce(() => reply.promise);
@@ -529,7 +531,7 @@ describe("native Browser panel ownership", () => {
     flushFrames();
     expect(native.messages().at(-1)).toMatchObject({ type: "present", visible: false });
     stageRect = new DOMRect(700, 100, 500, 600);
-    controller.hostUpdated();
+    controller.native.presentation.update();
     flushFrames();
     flushFrames();
     expect(native.messages().at(-1)).toMatchObject({ type: "present", visible: true });
@@ -548,7 +550,7 @@ describe("native Browser panel ownership", () => {
     const { controller } = controllerFixture();
     flushFrames();
     native.postMessage.mockClear();
-    controller.hostUpdated();
+    controller.native.presentation.update();
     window.dispatchEvent(new Event("resize"));
     document.dispatchEvent(new Event("scroll"));
     flushFrames();

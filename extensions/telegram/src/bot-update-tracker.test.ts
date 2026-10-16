@@ -185,11 +185,10 @@ describe("createTelegramUpdateTracker", () => {
       tracker.finishUpdate(begun.update, { completed: true });
     }
 
-    // Pending ids stay in the numeric set (never pruned) so re-begin is rejected
-    // as accepted-watermark, not re-dispatched.
+    // Pending ids stay in the numeric set, but rejection is not a terminal fact.
     expect(tracker.beginUpdate(updateCtx(pendingId))).toEqual({
       accepted: false,
-      reason: "accepted-watermark",
+      reason: "pending",
     });
     expect(tracker.beginUpdate(updateCtx(3)).accepted).toBe(true);
     expect(tracker.beginUpdate(updateCtx(lastId)).accepted).toBe(false);

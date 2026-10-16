@@ -23,17 +23,17 @@ import re
 import urllib.request
 
 preferred_names = [
-    "MinGit-2.55.0.5-64-bit.zip",
-    "MinGit-2.55.0.5-arm64.zip",
+    "MinGit-2.56.0.2-64-bit.zip",
+    "MinGit-2.56.0.2-arm64.zip",
 ]
 fallback_assets = {
-    "MinGit-2.55.0.5-arm64.zip": {
-        "browser_download_url": "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.5/MinGit-2.55.0.5-arm64.zip",
-        "digest": "sha256:05843f9d6e60306c3ab886799e2c67200caab921571f10512df3493049179ddb",
+    "MinGit-2.56.0.2-arm64.zip": {
+        "browser_download_url": "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/MinGit-2.56.0.2-arm64.zip",
+        "digest": "sha256:38b33dc6024026e3315cf88ab2cfea65205bbd7bb3a8e824bd21c8ad4fe609a7",
     },
-    "MinGit-2.55.0.5-64-bit.zip": {
-        "browser_download_url": "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.5/MinGit-2.55.0.5-64-bit.zip",
-        "digest": "sha256:56d7b226b7693196cfc71fef26568f536c4a021ab6c37ff2db4287bed908e96e",
+    "MinGit-2.56.0.2-64-bit.zip": {
+        "browser_download_url": "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/MinGit-2.56.0.2-64-bit.zip",
+        "digest": "sha256:da35e72aa21c005a5a0d298cfbae110bc1609a815730ea0dde84b01a1b3cd3be",
     },
 }
 
@@ -166,7 +166,7 @@ New-Item -ItemType Directory -Force -Path $portableGit | Out-Null
 curl.exe -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 ${psSingleQuote(minGitUrl)} -o $archive
 tar.exe -xf $archive -C $portableGit
 Remove-Item $archive -Force -ErrorAction SilentlyContinue
-$env:PATH = "$portableGit\\cmd;$portableGit\\mingw64\\bin;$portableGit\\usr\\bin;$env:PATH"
+$env:PATH = "$portableGit\\cmd;$portableGit\\ucrt64\\bin;$portableGit\\usr\\bin;$env:PATH"
 git.exe --version`,
     { timeoutMs: 1_200_000 },
   );

@@ -1,12 +1,4 @@
-import {
-  createMemo,
-  createRenderEffect,
-  createSignal,
-  For,
-  onCleanup,
-  Show,
-  untrack,
-} from "solid-js";
+import { createMemo, createSignal, createStore, For, onCleanup, Show, untrack } from "solid-js";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { registerMcpAppEnglish } from "../../i18n/locales/en-mcp-app.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -22,7 +14,8 @@ import {
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { projectSource } from "../../lib/reactive/projection.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { Icon } from "./icon.tsx";
 import "../../styles/mcp-app-extensions.css";
 
@@ -34,24 +27,25 @@ export type McpAppContextStripElement = SolidBridgeElement<McpAppContextStripPro
 export function McpAppContextStripContent(props: McpAppContextStripProps) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const [error, setError] = createSignal<string | null>(null);
-  const [pending, setPending] = createSignal(new Set<string>());
+  const [pending, setPending] = createStore<Record<string, boolean>>({});
   let mounted = true;
   onCleanup(() => {
     mounted = false;
   });
-  createRenderEffect(
-    () => gateway.read().snapshot.client,
-    (client) =>
-      client ? subscribeMcpAppContexts(client, () => setRevision((value) => value + 1)) : undefined,
-  );
-  const entries = createMemo(() => {
-    revision();
-    return readMcpAppContexts(gateway.read().snapshot.client, props.sessionKey, props.agentId);
+  const contexts = createMemo(() => {
+    const client = gateway.read().snapshot.client;
+    const sessionKey = props.sessionKey;
+    const agentId = props.agentId;
+    return projectSource(client, {
+      read: (source) => readMcpAppContexts(source, sessionKey, agentId),
+      subscribe: (source, notify) => (source ? subscribeMcpAppContexts(source, notify) : () => {}),
+      equality: "revision",
+    });
   });
   onCleanup(
     context.gateway.subscribeEvents((event) =>
+      // Event delivery must not attach view reads to the publisher's reactive scope.
       untrack(() => {
         if (event.event !== "mcp.app.hostContextChanged") {
           return;
@@ -101,7 +95,9 @@ export function McpAppContextStripContent(props: McpAppContextStripProps) {
     const scope = gatewayPresentationScope(context.gateway).key;
     const sessionKey = props.sessionKey;
     const agentId = props.agentId;
-    setPending((value) => new Set([...value, entry.viewId]));
+    setPending((value) => {
+      value[entry.viewId] = true;
+    });
     setError(null);
     const current = () =>
       mounted &&
@@ -120,7 +116,7 @@ export function McpAppContextStripContent(props: McpAppContextStripProps) {
           ...(index !== undefined ? { index } : {}),
         },
       );
-      if (untrack(current)) {
+      if (current()) {
         const rendered = readMcpAppContexts(client, sessionKey, agentId).find(
           (item) => item.viewId === entry.viewId,
         );
@@ -129,22 +125,24 @@ export function McpAppContextStripContent(props: McpAppContextStripProps) {
         }
       }
     } catch (failure) {
-      if (untrack(current)) {
+      if (current()) {
         setError(formatUiError(failure));
       }
     } finally {
       if (mounted) {
-        setPending((value) => new Set([...value].filter((id) => id !== entry.viewId)));
+        setPending((value) => {
+          delete value[entry.viewId];
+        });
       }
     }
   }
   return (
-    <Show when={entries().length}>
+    <Show when={contexts().read().length}>
       <section class="mcp-app-context" aria-label={t("mcpApp.contextTitle")}>
         <div class="mcp-app-context__header" title={t("mcpApp.contextDescription")}>
           <Icon name="puzzle" /> {t("mcpApp.contextTitle")}
         </div>
-        <For each={entries()}>
+        <For each={contexts().read()}>
           {(entry) => (
             <div class="mcp-app-context__items">
               <For each={entry.state?.content ?? []}>
@@ -175,7 +173,7 @@ export function McpAppContextStripContent(props: McpAppContextStripProps) {
                       </span>
                       <button
                         type="button"
-                        disabled={pending().has(entry.viewId)}
+                        disabled={pending[entry.viewId]}
                         aria-label={t("mcpApp.removeContext", { title: title() })}
                         onClick={() => void removeItem(entry, index())}
                       >
@@ -190,7 +188,7 @@ export function McpAppContextStripContent(props: McpAppContextStripProps) {
                   <span>{entry.title}</span>
                   <button
                     type="button"
-                    disabled={pending().has(entry.viewId)}
+                    disabled={pending[entry.viewId]}
                     aria-label={t("mcpApp.removeContext", { title: entry.title })}
                     onClick={() => void removeItem(entry)}
                   >

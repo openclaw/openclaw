@@ -341,9 +341,9 @@ describe("resolvePreferredBunPath", () => {
     }
   });
 
-  it("uses the stable BUN_INSTALL executable when Bun 1.4 provides WAL-safe node:sqlite", async () => {
+  it("uses the stable BUN_INSTALL executable when Bun 1.4.3 provides WAL-safe node:sqlite", async () => {
     const bunPath = "/home/test/.bun/bin/bun";
-    const execFile = vi.fn().mockResolvedValue(bunRuntime("1.4.0"));
+    const execFile = vi.fn().mockResolvedValue(bunRuntime("1.4.3"));
 
     const result = await resolvePreferredBunPath({
       env: { BUN_INSTALL: "/home/test/.bun", HOME: "/home/test" },
@@ -363,7 +363,7 @@ describe("resolvePreferredBunPath", () => {
 
   it("resolves the default Windows Bun executable", async () => {
     const bunPath = "C:\\Users\\test\\.bun\\bin\\bun.exe";
-    const execFile = vi.fn().mockResolvedValue(bunRuntime("1.4.0"));
+    const execFile = vi.fn().mockResolvedValue(bunRuntime("1.4.3"));
 
     const result = await resolvePreferredBunPath({
       env: { USERPROFILE: "C:\\Users\\test" },
@@ -397,7 +397,7 @@ describe("resolvePreferredBunPath", () => {
     // Apple's SQLite would report 3.54.0 here; the selected Homebrew library is what the Gateway opens.
     const execFile = vi
       .fn()
-      .mockResolvedValue(bunRuntime("1.4.2", true, "3.53.4", null, sqliteLibraryPath));
+      .mockResolvedValue(bunRuntime("1.4.3", true, "3.53.4", null, sqliteLibraryPath));
     const env = {
       PATH: "/opt/homebrew/bin",
       HOMEBREW_PREFIX: "/opt/homebrew",
@@ -408,7 +408,7 @@ describe("resolvePreferredBunPath", () => {
 
     await expect(resolveBunRuntimeInfo(bunPath, execFile, env)).resolves.toEqual({
       status: "supported",
-      version: "1.4.2",
+      version: "1.4.3",
       sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
       sqliteVersion: "3.53.4",
       sqliteLibraryPath,
@@ -463,7 +463,7 @@ describe("resolvePreferredBunPath", () => {
           Buffer,
           Uint8Array,
           process: {
-            versions: { bun: "1.4.2", node: "24.3.0" },
+            versions: { bun: "1.4.3", node: "24.3.0" },
             stdout: {
               write: (value: string) => {
                 stdout += value;
@@ -476,7 +476,7 @@ describe("resolvePreferredBunPath", () => {
     );
 
     await expect(resolveBunRuntimeInfo("/opt/bun", execFile, {})).resolves.toMatchObject({
-      version: "1.4.2",
+      version: "1.4.3",
       sqliteLibraryPath: path.resolve(selectedPath),
       sqliteProbe: { available: true },
     });
@@ -486,7 +486,7 @@ describe("resolvePreferredBunPath", () => {
   it("reports an invalid SQLite library override instead of advising a Bun upgrade", async () => {
     const execFile = vi
       .fn()
-      .mockResolvedValue(bunRuntime("1.4.2", true, null, INVALID_SQLITE_OVERRIDE));
+      .mockResolvedValue(bunRuntime("1.4.3", true, null, INVALID_SQLITE_OVERRIDE));
 
     await expect(
       resolvePreferredBunPath({

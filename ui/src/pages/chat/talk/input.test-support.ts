@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, onTestFinished, vi } from "vitest";
-import { RealtimeTalkInputController } from "./input.ts";
+import { RealtimeTalkInputOwner } from "./input.ts";
 
 export async function prepareRealtimeTalkTestInput(
   inputDeviceId?: string,
-): Promise<RealtimeTalkInputController> {
-  const input = new RealtimeTalkInputController(() => undefined);
+): Promise<RealtimeTalkInputOwner> {
+  const input = new RealtimeTalkInputOwner(() => undefined);
   onTestFinished(() => input.stop());
   await input.open(inputDeviceId);
   return input;

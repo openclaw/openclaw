@@ -6,7 +6,6 @@ import { isRemoteControlUiIngress } from "./app/remote-ingress.ts";
 import {
   installMissingStylesheetRecovery,
   installStaleChunkReloadListener,
-  scheduleStaleChunkReload,
 } from "./app/stale-chunk-reload.ts";
 import { CONTROL_UI_BUILD_INFO, controlUiWorkerActivationRetires } from "./build-info.ts";
 import kbdStyles from "./components/kbd.css?inline";
@@ -59,22 +58,24 @@ if (!unsupportedControlUiBrowser) {
     if (document.documentElement.dataset.openclawProxySessionEntry === "true") {
       swUrl.searchParams.set("session-entry", "1");
     }
-    navigator.serviceWorker.addEventListener("message", (event) => {
-      if (controlUiWorkerActivationRetires(event.data)) {
-        void scheduleStaleChunkReload({
-          canReload: () => event.source === navigator.serviceWorker.controller,
-        });
-      }
-      if (event.data?.type === "sw-version-probe") {
-        event.ports[0]?.postMessage({ version: currentControlUiBuildId });
-      }
-    });
     const refresh = () =>
       import("./app/sw-refresh.runtime.ts")
         .then(({ refreshControlUiServiceWorker }) => refreshControlUiServiceWorker())
         .catch((error: unknown) => {
           console.warn("OpenClaw service worker refresh failed.", error);
         });
+    navigator.serviceWorker.addEventListener("message", (event) => {
+      if (
+        event.source === navigator.serviceWorker.controller &&
+        controlUiWorkerActivationRetires(event.data)
+      ) {
+        // A fresh document can still be controlled by the preceding build.
+        void refresh();
+      }
+      if (event.data?.type === "sw-version-probe") {
+        event.ports[0]?.postMessage({ version: currentControlUiBuildId });
+      }
+    });
     navigator.serviceWorker.addEventListener("controllerchange", () => void refresh());
     void navigator.serviceWorker
       .register(swUrl, { updateViaCache: "none" })

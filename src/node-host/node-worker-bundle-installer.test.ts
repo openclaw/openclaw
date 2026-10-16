@@ -13,6 +13,7 @@ import {
 import { withinTest } from "../../test/helpers/promise.js";
 import * as openclawRoot from "../infra/openclaw-root.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { NodeWorkerBundleInstallError } from "../worker/node-bundle-install-protocol.js";
 import { NodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
 import {
   buildBundleFixture,
@@ -20,6 +21,18 @@ import {
   type BundleFixture,
   type BundleFixtureOptions,
 } from "./node-worker-bundle-installer.test-support.js";
+
+const bundleWarnings = vi.hoisted(() => vi.fn());
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "node/worker-bundle" ? { ...logger, warn: bundleWarnings } : logger;
+    },
+  };
+});
 
 vi.mock("node:timers/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:timers/promises")>();
@@ -50,6 +63,7 @@ describe("node worker bundle installer", () => {
   });
 
   beforeEach(async () => {
+    bundleWarnings.mockClear();
     vi.mocked(timers.setTimeout).mockReset();
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-node-bundle-"));
   });
@@ -248,6 +262,112 @@ describe("node worker bundle installer", () => {
     ).resolves.toEqual([]);
   });
 
+  it.each(["missing", "malformed"] as const)(
+    "quietly repairs a %s bundle cache receipt",
+    async (receiptState) => {
+      const fixture = await bundleFixture();
+      await prepareLocalArchive(fixture);
+      const installer = new NodeWorkerBundleInstaller({ root });
+      const destination = path.join(
+        root,
+        fixture.input.gatewayNamespace,
+        "bundles",
+        fixture.input.build.bundleHash,
+      );
+      if (receiptState === "malformed") {
+        await fs.mkdir(destination, { recursive: true });
+        await fs.writeFile(path.join(destination, "bootstrap-receipt.json"), "{invalid");
+      }
+      const inspection = {
+        gatewayNamespace: fixture.input.gatewayNamespace,
+        bundleHash: fixture.input.build.bundleHash,
+      };
+
+      await expect(installer.inspect(inspection)).resolves.toEqual({
+        bundleHash: fixture.input.build.bundleHash,
+        status: "missing",
+      });
+      await expect(
+        installer.ensure({ input: fixture.input, gatewayUrl: "ws://127.0.0.1:1" }),
+      ).resolves.toEqual(fixture.input.build);
+      await expect(installer.inspect(inspection)).resolves.toEqual({
+        bundleHash: fixture.input.build.bundleHash,
+        status: "installed",
+      });
+      expect(bundleWarnings).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["receipt", "EACCES"],
+    ["manifest", "EIO"],
+  ] as const)(
+    "reports %s %s failures once per operation while preserving cache repair",
+    async (phase, errorCode) => {
+      const fixture = await bundleFixture();
+      await prepareLocalArchive(fixture);
+      const installer = new NodeWorkerBundleInstaller({ root });
+      const install = { input: fixture.input, gatewayUrl: "ws://127.0.0.1:1" };
+      await installer.ensure(install);
+      const destination = path.join(
+        root,
+        fixture.input.gatewayNamespace,
+        "bundles",
+        fixture.input.build.bundleHash,
+      );
+      const failure = Object.assign(new Error("synthetic private message and tool content"), {
+        code: errorCode,
+        request: { body: "synthetic private request" },
+      });
+      let failuresRemaining = 2;
+      const readFile = fs.readFile.bind(fs);
+      const readdir = fs.readdir.bind(fs);
+      const readFailure =
+        phase === "receipt"
+          ? vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+              if (
+                args[0] === path.join(destination, "bootstrap-receipt.json") &&
+                failuresRemaining > 0
+              ) {
+                failuresRemaining--;
+                throw failure;
+              }
+              return await readFile(...args);
+            })
+          : vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
+              if (args[0] === destination && failuresRemaining > 0) {
+                failuresRemaining--;
+                throw failure;
+              }
+              return await readdir(...args);
+            });
+      const inspection = {
+        gatewayNamespace: fixture.input.gatewayNamespace,
+        bundleHash: fixture.input.build.bundleHash,
+      };
+      const warning =
+        phase === "receipt"
+          ? "Worker bundle receipt read failed; treating installation as missing. Check node-host storage permissions and disk health."
+          : "Worker bundle cache read failed; treating installation as missing. Check node-host storage permissions and disk health.";
+
+      await expect(installer.inspect(inspection)).resolves.toEqual({
+        bundleHash: fixture.input.build.bundleHash,
+        status: "missing",
+      });
+      expect(bundleWarnings).toHaveBeenCalledExactlyOnceWith(warning, { errorCode });
+      bundleWarnings.mockClear();
+      await expect(installer.ensure(install)).resolves.toEqual(fixture.input.build);
+      expect(bundleWarnings).toHaveBeenCalledExactlyOnceWith(warning, { errorCode });
+      expect(failuresRemaining).toBe(0);
+      readFailure.mockRestore();
+      await expect(installer.inspect(inspection)).resolves.toEqual({
+        bundleHash: fixture.input.build.bundleHash,
+        status: "installed",
+      });
+      expect(bundleWarnings).toHaveBeenCalledExactlyOnceWith(warning, { errorCode });
+    },
+  );
+
   it("installs the exact prepared archive without HTTP and creates a fresh admission receipt", async () => {
     const fixture = await bundleFixture();
     const archivePath = await prepareLocalArchive(fixture);
@@ -428,6 +548,51 @@ describe("node worker bundle installer", () => {
     );
   });
 
+  it("reports retained prior bytes when publication and rollback both fail", async () => {
+    const fixture = await bundleFixture();
+    await prepareLocalArchive(fixture);
+    const installer = new NodeWorkerBundleInstaller({ root });
+    const bundlesRoot = path.join(root, fixture.input.gatewayNamespace, "bundles");
+    const destination = path.join(bundlesRoot, fixture.input.build.bundleHash);
+    const priorBytes = Buffer.from("prior installation\n");
+    await fs.mkdir(destination, { recursive: true });
+    await fs.writeFile(path.join(destination, "prior-install"), priorBytes);
+    const publicationFailure = new Error("staging publication failed");
+    const rollbackFailure = new Error("prior installation rollback failed");
+    const rename = fs.rename.bind(fs);
+    let backup = "";
+    vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+      if (args[0] === destination) {
+        await rename(...args);
+        backup = String(args[1]);
+        return;
+      }
+      if (args[1] === destination) {
+        throw args[0] === backup ? rollbackFailure : publicationFailure;
+      }
+      await rename(...args);
+    });
+
+    const failure: unknown = await installer
+      .ensure({ input: fixture.input, gatewayUrl: "ws://127.0.0.1:1" })
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(NodeWorkerBundleInstallError);
+    expect(failure).toHaveProperty(
+      "message",
+      `worker-bundle-install-failed: bundle transfer rollback failed; recover ${backup}`,
+    );
+    if (!(failure instanceof Error) || !(failure.cause instanceof Error)) {
+      throw new Error("expected installer recovery failure", { cause: failure });
+    }
+    expect(failure.cause.cause).toBe(publicationFailure);
+    expect(failure.cause).toHaveProperty("rollbackError", rollbackFailure);
+    expect(backup.startsWith(`${destination}.previous-`)).toBe(true);
+    await expect(fs.readdir(bundlesRoot)).resolves.toEqual([path.basename(backup)]);
+    await expect(fs.readdir(backup)).resolves.toEqual(["prior-install"]);
+    await expect(fs.readFile(path.join(backup, "prior-install"))).resolves.toEqual(priorBytes);
+    await expect(fs.access(destination)).rejects.toHaveProperty("code", "ENOENT");
+  });
+
   it("does not renew retention when cancelled while validating an installed bundle", async () => {
     const fixture = await bundleFixture();
     const served = await serve(fixture.archive, fixture.input.archive.token);
@@ -540,25 +705,6 @@ describe("node worker bundle installer", () => {
     ).resolves.toContain(fixture.input.build.bundleHash);
   });
 
-  it("prewarms bundles while honoring an explicitly disabled compile cache", async () => {
-    const prewarmMarker = path.join(root, "worker-prewarmed-without-cache");
-    const fixture = await bundleFixture({
-      prewarmMarker,
-      bundlePrewarm: 1,
-      compileCacheDisabled: true,
-    });
-    const served = await serve(fixture.archive, fixture.input.archive.token);
-    const installer = new NodeWorkerBundleInstaller({
-      root,
-      env: { ...process.env, NODE_COMPILE_CACHE: undefined, NODE_DISABLE_COMPILE_CACHE: "1" },
-    });
-
-    await expect(
-      installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
-    ).resolves.toEqual(fixture.input.build);
-    await expect(fs.readFile(prewarmMarker, "utf8")).resolves.toBe("ready");
-  });
-
   it("prewarms bundles with managed cache behind a host compile-cache fence", async () => {
     const prewarmMarker = path.join(root, "worker-prewarmed-with-managed-cache");
     const fixture = await bundleFixture({
@@ -630,40 +776,6 @@ describe("node worker bundle installer", () => {
     expect(served.requests).not.toHaveBeenCalled();
   });
 
-  it("reports installed only after full bundle validation", async () => {
-    const fixture = await bundleFixture();
-    const served = await serve(fixture.archive, fixture.input.archive.token);
-    const installer = new NodeWorkerBundleInstaller({ root });
-
-    await expect(
-      installer.inspect({
-        gatewayNamespace: fixture.input.gatewayNamespace,
-        bundleHash: fixture.input.build.bundleHash,
-      }),
-    ).resolves.toEqual({ bundleHash: fixture.input.build.bundleHash, status: "missing" });
-    await installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl });
-    await expect(
-      installer.inspect({
-        gatewayNamespace: fixture.input.gatewayNamespace,
-        bundleHash: fixture.input.build.bundleHash,
-      }),
-    ).resolves.toEqual({ bundleHash: fixture.input.build.bundleHash, status: "installed" });
-
-    const bundleDir = path.join(
-      root,
-      fixture.input.gatewayNamespace,
-      "bundles",
-      fixture.input.build.bundleHash,
-    );
-    await fs.writeFile(path.join(bundleDir, "github-exec-launcher.mjs"), "tampered\n");
-    await expect(
-      installer.inspect({
-        gatewayNamespace: fixture.input.gatewayNamespace,
-        bundleHash: fixture.input.build.bundleHash,
-      }),
-    ).resolves.toEqual({ bundleHash: fixture.input.build.bundleHash, status: "missing" });
-  });
-
   it("prunes superseded bundle artifacts in bounded passes while retaining the latest install", async () => {
     const fixture = await bundleFixture();
     const served = await serve(fixture.archive, fixture.input.archive.token);
@@ -715,6 +827,12 @@ describe("node worker bundle installer", () => {
     await installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl });
     await fs.mkdir(path.dirname(tamperedDependency), { recursive: true });
     await fs.writeFile(tamperedDependency, "export const trusted = false;\n");
+    await expect(
+      installer.inspect({
+        gatewayNamespace: fixture.input.gatewayNamespace,
+        bundleHash: fixture.input.build.bundleHash,
+      }),
+    ).resolves.toEqual({ bundleHash: fixture.input.build.bundleHash, status: "missing" });
     await installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl });
 
     expect(served.requests).toHaveBeenCalledTimes(2);

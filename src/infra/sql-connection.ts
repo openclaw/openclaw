@@ -46,6 +46,7 @@ const postgresConnectionBrand = Symbol.for("openclaw.postgres-sync-connection");
 
 export interface PostgresSqlConnection extends SqlConnection {
   readonly anchor: DatabaseSync;
+  readonly mutationRevision: number;
   readonly advisoryLockKey: bigint;
   query: (
     sql: string,

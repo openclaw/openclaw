@@ -14,6 +14,7 @@ import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "./embedded-agent-runner/run/types.js";
+import { resolveCommandReplyExpectation } from "./reply-completion.js";
 import {
   buildEmbeddedRunnerAssistant,
   cleanupEmbeddedAgentRunnerTestWorkspace,
@@ -227,6 +228,7 @@ describe("source reply settlement across provider retries", () => {
           agentDir: workspace.agentDir,
           config,
           prompt: "Finish the work and reply.",
+          terminalReplyExpectation: "required",
           provider: "openai",
           model: "mock-1",
           runId: id,
@@ -245,14 +247,102 @@ describe("source reply settlement across provider retries", () => {
           expect(result.payloads).toEqual([
             expect.objectContaining({
               isError: true,
-              text: expect.stringContaining("couldn't generate a response"),
+              isStatusNotice: true,
+              text:
+                mode === "dry-run"
+                  ? "No answer was returned. Ask again if you still need one."
+                  : "No answer was returned. Ask again if you still need one. Note: some tool actions may have already been executed — please verify before retrying.",
             }),
           ]);
+          expect(result.meta.error?.kind).toBe("incomplete_turn");
+          expect(result.meta.terminalReply).toEqual({ disposition: "empty" });
+          expect(result.meta.finalAssistantVisibleText).toBeUndefined();
+          expect(result.meta.finalAssistantRawText).toBeUndefined();
         }
       } finally {
         admission.close();
         operation.complete();
         revokeCapability(capability);
+        clearConfig();
+        resetRegistry();
+      }
+    },
+  );
+
+  it.each(
+    (
+      [
+        {
+          name: "subagent",
+          sessionKey: "agent:test:subagent:required",
+          messageChannel: "telegram",
+          opts: { lane: "subagent" },
+        },
+        {
+          name: "private",
+          sessionKey: "agent:test:private",
+          messageChannel: "telegram",
+          opts: { privateCompletion: true },
+        },
+        {
+          name: "webchat",
+          sessionKey: "agent:test:webchat:required",
+          messageChannel: "webchat",
+          opts: {},
+        },
+      ] as const
+    ).flatMap((scenario) =>
+      ["NO_REPLY", "", "NO_REPLY\n<final></final>"].map((raw) => Object.assign({ raw }, scenario)),
+    ),
+  )(
+    "recovers a $name result after '$raw'",
+    async ({ name, sessionKey, messageChannel, opts, raw }) => {
+      const config = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
+      const id = `internal-${name}-${raw === "NO_REPLY" ? "silent" : raw ? "rendered-empty" : "empty"}`;
+      const admission = prepareAdmission(config, id, "test", "internal-result-recovery");
+      const answer = `Recovered ${name} result`;
+      let attempt = 0;
+      runAttempt.mockImplementation(async (params) => {
+        const text = attempt++ === 0 ? raw : answer;
+        const assistant = buildEmbeddedRunnerAssistant({
+          content: [{ type: "text", text }],
+          stopReason: "stop",
+        });
+        return makeEmbeddedRunnerAttempt({
+          sessionIdUsed: params.sessionId,
+          assistantTexts: [text],
+          lastAssistant: assistant,
+          currentAttemptCompletedAssistant: assistant,
+        });
+      });
+      setRegistry(createTestRegistry([]));
+      setConfig(config);
+      try {
+        const result = await runEmbeddedAgent({
+          agentId: "test",
+          sessionId: id,
+          sessionKey,
+          preparedRunAdmission: admission,
+          workspaceDir: workspace.workspaceDir,
+          agentDir: workspace.agentDir,
+          config,
+          prompt: "Return a result.",
+          provider: "openai",
+          model: "mock-1",
+          runId: id,
+          timeoutMs: 10_000,
+          enqueue: async (task) => await task(),
+          terminalReplyExpectation: resolveCommandReplyExpectation({
+            cfg: config,
+            sessionKey,
+            messageChannel,
+            opts,
+          }),
+        });
+        expect(result.payloads).toEqual([expect.objectContaining({ text: answer })]);
+        expect(result.meta.error).toBeUndefined();
+      } finally {
+        admission.close();
         clearConfig();
         resetRegistry();
       }

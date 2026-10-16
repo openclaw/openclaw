@@ -10,10 +10,6 @@ export { parsePositiveInteger } from "./positive-integer.js";
 
 export const MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE =
   "OpenClaw transport error: malformed_streaming_fragment";
-export const CHARS_PER_TOKEN_ESTIMATE = 4;
-const NON_LATIN_RE =
-  /[\u2E80-\u9FFF\uA000-\uA4FF\uAC00-\uD7AF\uF900-\uFAFF\uFF01-\uFF60\uFFE0-\uFFE6\u{20000}-\u{2FA1F}]/gu;
-const CJK_SURROGATE_HIGH_RE = /[\uD840-\uD87E][\uDC00-\uDFFF]/g;
 
 /** Keep provider payloads out of parse errors without replacing unrelated failures. */
 export function streamFragmentError(
@@ -23,10 +19,6 @@ export function streamFragmentError(
   return cause instanceof SyntaxError
     ? new ErrorType(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, { cause })
     : cause;
-}
-
-export function redactSensitiveText(text: string): string {
-  return getAiTransportHost().redactToolPayloadText(text);
 }
 
 export function resolveModelHeaderSentinels<TModel extends Model>(model: TModel): TModel {
@@ -42,18 +34,6 @@ export function resolveModelHeaderSentinels<TModel extends Model>(model: TModel)
     }
   }
   return headers ? ({ ...model, headers } as TModel) : model;
-}
-
-export function estimateStringChars(text: string): number {
-  if (!text) {
-    return 0;
-  }
-  const nonLatinCount = (text.match(NON_LATIN_RE) ?? []).length;
-  const codePointLength =
-    nonLatinCount === 0
-      ? text.length
-      : text.length - (text.match(CJK_SURROGATE_HIGH_RE) ?? []).length;
-  return codePointLength + nonLatinCount * (CHARS_PER_TOKEN_ESTIMATE - 1);
 }
 
 export function supportsModelTools(model: { compat?: unknown }): boolean {
@@ -109,15 +89,16 @@ export async function readResponseTextSnippet(
             ? readChunkWithIdleTimeout(reader, options.chunkTimeoutMs, options.onIdleTimeout)
             : reader.read(),
         onChunk: (chunk) => chunks.push(chunk),
-        onLimit: async () => {
-          await reader.cancel().catch(() => undefined);
+        onLimit: () => {
+          // Capture tees must not delay the byte limit or timeout outcome.
+          void reader.cancel().catch(() => undefined);
         },
       });
       bytes = Math.min(result.size, maxBytes);
       truncated = result.truncated;
     }
   } catch (error) {
-    await reader.cancel(error).catch(() => undefined);
+    void reader.cancel(error).catch(() => undefined);
     throw error;
   } finally {
     reader.releaseLock();

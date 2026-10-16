@@ -13,6 +13,7 @@ import {
   shouldBundleRuntimeSqliteDependency,
   standaloneRuntimeProcessBuildEntries,
 } from "./runtime-process-core-build-entries.mts";
+import { createSqliteSchemaAssetsPlugin } from "./sqlite-schema-assets.mts";
 import { createStateSchemaInlinePlugin } from "./state-schema-inline-plugin.mts";
 import {
   hashVitestWorkerArtifact,
@@ -118,6 +119,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     const schemaPlugin = createStateSchemaInlinePlugin(root);
     return [
       createPublicSessionCardAssetsPlugin(root, recordInput),
+      createSqliteSchemaAssetsPlugin(root, recordInput),
       {
         ...schemaPlugin,
         name: "openclaw:worker-build-inputs",

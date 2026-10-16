@@ -1,8 +1,12 @@
 import fs from "node:fs";
 import type { MessagePort } from "node:worker_threads";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { requestCliParentTermination } from "../../cli-parent-lifetime.mjs";
 import { hasErrnoCode } from "./errno.js";
-import { parseGatewayLockPayload } from "./gateway-lock-payload.js";
+import {
+  isGatewayMaintenanceParentStale,
+  parseGatewayLockPayload,
+} from "./gateway-lock-payload.js";
 
 export type GatewayStateOwnerHeartbeatData = {
   clock?: "epoch";
@@ -58,6 +62,7 @@ export function runGatewayStateOwnerHeartbeat(
 ) {
   const lastBeat = new BigInt64Array(data.lastBeat);
   const rootPath = Object.keys(data.locks)[0];
+  const owner = parseGatewayLockPayload(rootPath === undefined ? "" : (data.locks[rootPath] ?? ""));
   const clock = selectHeartbeatClock(data, Atomics.load(lastBeat, 0));
   if (!clock) {
     data.events.postMessage(`${rootPath}: heartbeat clock could not be identified`, []);
@@ -95,7 +100,13 @@ export function runGatewayStateOwnerHeartbeat(
     data.events.close();
     parent?.close();
   };
+  let parentLost = false;
   const beat = () => {
+    // Keep renewing custody while cancellation settles; peers must not race its rollback.
+    if (!parentLost && owner?.pid === process.pid && isGatewayMaintenanceParentStale(owner)) {
+      parentLost = true;
+      requestCliParentTermination(() => data.events.postMessage("parent-lost", []));
+    }
     let failure: string | null = null;
     let renewedAt: bigint | undefined;
     for (const [lockPath, raw] of Object.entries(data.locks)) {

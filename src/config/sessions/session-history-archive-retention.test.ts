@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
+import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
@@ -22,8 +27,22 @@ import * as pageReclamation from "./session-accessor.sqlite-page-reclamation.js"
 import {
   getSessionKysely,
   resolveSqliteTranscriptArchiveDirectory,
+  runExclusiveSqliteSessionWrite,
 } from "./session-accessor.sqlite-scope.js";
 import type { PublishedSessionTranscriptArchive } from "./session-history-archive-pruning.types.js";
+
+const deletionFault = useSqliteWorkerFault([
+  {
+    name: "refuse_late_archive_retention",
+    match: /^delete from session_transcript_archives\b/u,
+    sql: `CREATE TEMP TRIGGER refuse_late_archive_retention
+      BEFORE DELETE ON main.session_transcript_archives
+      WHEN OLD.session_id LIKE 'rollback-%' AND
+        (SELECT count(*) FROM main.session_transcript_archives
+         WHERE session_id LIKE 'rollback-%') = 1
+      BEGIN SELECT RAISE(ABORT, 'synthetic late archive retention failure'); END;`,
+  },
+]);
 
 let state: OpenClawTestState;
 let database: OpenClawAgentDatabase;
@@ -125,6 +144,104 @@ it("selects at most 256 published rows in stable order before applying retention
   }
   expect(await prune()).toBe(256);
   expect(retainedIds()).toEqual(["bounded-256", "bounded-257"]);
+});
+
+it("rolls back the entire retention batch on a late delete failure and permits retry", async () => {
+  seed("prime-retention-owner");
+  expect(await prune()).toBe(1);
+  for (let index = 0; index < 16; index++) {
+    seed(`rollback-${String(index).padStart(3, "0")}`);
+  }
+  seed("retained-reset", { reason: "reset" });
+  const readRows = () =>
+    executeSqliteQuerySync(
+      database.db,
+      getSessionKysely(database.db)
+        .selectFrom("session_transcript_archives")
+        .selectAll()
+        .orderBy("session_id"),
+    ).rows;
+  const before = readRows();
+  deletionFault.enable();
+  try {
+    await expect(prune()).rejects.toThrow("synthetic late archive retention failure");
+    database = openOpenClawAgentDatabase(options());
+    expect(readRows()).toEqual(before);
+  } finally {
+    deletionFault.disable();
+  }
+
+  expect(await prune()).toBe(16);
+  expect(readRows()).toEqual(before.filter((row) => row.session_id === "retained-reset"));
+});
+
+it("admits foreground writes during retention selection and between deletion batches", async ({
+  signal,
+}) => {
+  for (let index = 0; index < 17; index++) {
+    seed(`batch-${String(index).padStart(3, "0")}`);
+  }
+  const entered = createDeferred();
+  const release = createDeferred();
+  const scope = {
+    agentId: "main",
+    storePath: database.path,
+    env: state.env,
+    sessionKey: "agent:main:retention-owner",
+  };
+  replaceSessionEntrySync(scope, { sessionId: "live-generation", updatedAt: Date.now() });
+  const writeForeground = (previousSessionId?: string) =>
+    runExclusiveSqliteSessionWrite(
+      options(),
+      async () =>
+        replaceSessionEntrySync(scope, {
+          sessionId: "live-generation",
+          updatedAt: Date.now(),
+          label: previousSessionId ?? "selection write",
+          ...(previousSessionId ? { previousSessionId } : {}),
+        }),
+      "session-entry.patch",
+    );
+  const withPages = pageReclamation.withSqliteSessionPageReclamation;
+  let selectionWrite: Promise<unknown> | undefined;
+  let foreground: Promise<unknown> | undefined;
+  vi.spyOn(pageReclamation, "withSqliteSessionPageReclamation").mockImplementation(
+    <T>(...args: Parameters<typeof withPages<T>>) => {
+      const [input, run] = args;
+      return withPages(input, (reclaim, assertCurrent, prepared, archives) =>
+        run(reclaim, assertCurrent, prepared, {
+          ...archives,
+          readRetentionCandidates: async () => {
+            entered.resolve();
+            await release.promise;
+            return archives.readRetentionCandidates();
+          },
+          pruneRetention: async (retention) => {
+            const removed = await archives.pruneRetention(retention);
+            // Queue the foreground update while the first batch still owns the writer.
+            foreground ??= writeForeground("batch-016");
+            return removed;
+          },
+        }),
+      );
+    },
+  );
+  const work = prune();
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(entered.promise, work, "retention never reached selection"),
+      signal,
+    );
+    selectionWrite = writeForeground();
+    await withinTest(selectionWrite, signal);
+    release.resolve();
+    expect(await withinTest(work, signal)).toBe(16);
+    await foreground;
+    expect(retainedIds()).toEqual(["batch-016"]);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([work, foreground, selectionWrite]);
+  }
 });
 
 it.each(["changed", "revoked", "rejected"])(

@@ -15,16 +15,6 @@ export type TelephonyTtsProvider = Awaited<ReturnType<typeof createTelephonyTtsP
 
 export const TELEPHONY_DEFAULT_TTS_TIMEOUT_MS = 8000;
 
-class UnsupportedTelephonyTtsOutputFormatError extends Error {
-  constructor(
-    readonly outputFormat: string,
-    readonly provider: string,
-  ) {
-    super(`Unsupported telephony TTS output format "${outputFormat}" from provider "${provider}"`);
-    this.name = "UnsupportedTelephonyTtsOutputFormatError";
-  }
-}
-
 function convertTelephonyTtsOutput(result: {
   audioBuffer: Buffer;
   outputFormat?: string;
@@ -48,9 +38,13 @@ function convertTelephonyTtsOutput(result: {
   if (isPcm) {
     return convertPcmToMulaw8k(result.audioBuffer, result.sampleRate);
   }
-  throw new UnsupportedTelephonyTtsOutputFormatError(
-    result.outputFormat ?? "absent",
-    result.provider ?? "unknown",
+  const outputFormat = result.outputFormat ?? "absent";
+  const provider = result.provider ?? "unknown";
+  throw Object.assign(
+    new Error(
+      `Unsupported telephony TTS output format "${outputFormat}" from provider "${provider}"`,
+    ),
+    { outputFormat, provider, name: "UnsupportedTelephonyTtsOutputFormatError" },
   );
 }
 

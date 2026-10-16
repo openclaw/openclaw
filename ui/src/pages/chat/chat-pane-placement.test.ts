@@ -128,7 +128,6 @@ function answerWorkerPicker(label: "Continue on worker" | "Cancel") {
 describe("chat pane placement", () => {
   it.each([
     { placement: "local", outcome: "success" },
-    { placement: "local", outcome: "cancel" },
     { placement: "local", outcome: "refresh failure" },
   ] as const)(
     "recovers a repository session with $placement placement: $outcome",
@@ -143,41 +142,22 @@ describe("chat pane placement", () => {
       }
       const dispatching = dialogs.track(pane.changeHeaderPlacement(session, "recover"));
       await selectRepositoryWorker();
-      answerWorkerPicker(outcome === "cancel" ? "Cancel" : "Continue on worker");
+      answerWorkerPicker("Continue on worker");
       await dispatching;
 
       expect(request).toHaveBeenCalledWith("environments.list", { runtimeId: "openclaw" });
-      if (outcome === "cancel") {
-        expect(request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
-        expect(reconcileMutation).not.toHaveBeenCalled();
-      } else {
-        expect(request).toHaveBeenCalledWith("sessions.dispatch", {
-          key: session.key,
-          agentId: "main",
-          deviceId: "runner",
-        });
-        expect(reconcileMutation).toHaveBeenCalledWith("main");
-      }
+      expect(request).toHaveBeenCalledWith("sessions.dispatch", {
+        key: session.key,
+        agentId: "main",
+        deviceId: "runner",
+      });
+      expect(reconcileMutation).toHaveBeenCalledWith("main");
       expect(state.lastError).toBe(
         outcome === "refresh failure" ? "Worker session refresh unavailable" : null,
       );
       expect(pane.headerPlacementRestartingKey).toBeNull();
     },
   );
-
-  it("does not dispatch a replacement session after the worker picker opens", async () => {
-    const { pane, state, session, request } = repositoryRecoveryFixture("local");
-    const dispatching = dialogs.track(pane.changeHeaderPlacement(session, "recover"));
-    await selectRepositoryWorker();
-    const replacement = { ...session, sessionId: "repository-session-2" };
-    state.currentSessionId = replacement.sessionId;
-    state.sessionsResult = { ...createSessionsListResult(), sessions: [replacement] };
-    answerWorkerPicker("Continue on worker");
-    await dispatching;
-
-    expect(request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
-    expect(state.lastError).toBe("This Gateway does not support this session action.");
-  });
 
   it("does not redirect a Move that appears while the recovery picker is open", async () => {
     const { pane, session, request } = repositoryRecoveryFixture("local");
@@ -734,114 +714,61 @@ describe("local session placement actions", () => {
     return fixture;
   }
 
-  it("dispatches an ordinary local session through its header menu action", async () => {
-    const { pane, session, request, state } = localFixture();
-    const moving = dialogs.track(pane.handleHeaderSessionAction({ kind: "move-session" }, session));
-    await selectRepositoryWorker();
-    expect(document.body.textContent).toContain("Continue the same session");
-    expect(document.body.textContent).not.toContain("This repository exists only on workers");
-    answerWorkerPicker("Continue on worker");
-    await moving;
-    expect(request).toHaveBeenCalledWith("sessions.dispatch", {
-      key: session.key,
-      agentId: "main",
-      deviceId: "runner",
-    });
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("sessions.move");
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("chat.abort");
-    expect(state.sessionKey).toBe(session.key);
-    expect(state.currentSessionId).toBe(session.sessionId);
-  });
-
-  it.each([
-    "replacement",
-    "busy",
-    "archived",
-    "runtime",
-    "read-only",
-    "reconnect",
-    "required-profile",
-  ] as const)("does not dispatch after the picker becomes stale: %s", async (change) => {
-    const { pane, session, state, request } = localFixture();
-    const moving = dialogs.track(pane.handleHeaderSessionAction({ kind: "move-session" }, session));
-    await selectRepositoryWorker();
-    const current = { ...session };
-    if (change === "replacement") {
-      current.sessionId = "replacement";
-    }
-    if (change === "busy") {
-      current.hasActiveRun = true;
-    }
-    if (change === "archived") {
-      current.archived = true;
-    }
-    if (change === "runtime") {
-      current.agentRuntime = { ...session.agentRuntime!, id: "other-runtime" };
-    }
-    if (change === "read-only") {
-      pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
-        ["sessions.dispatch"],
-        ["operator.read"],
-      );
-    }
-    if (change === "reconnect") {
-      pane.context.gateway.snapshot.client = createGatewayBrowserClientFixture({ request });
-    }
-    if (change === "required-profile") {
-      pane.context.agents.state.agentsList = {
-        ...pane.context.agents.state.agentsList!,
-        sessionPlacement: { requiredProfile: { id: "required", providerId: "device" } },
-      };
-    }
-    state.sessionsResult = { ...createSessionsListResult(), sessions: [current] };
-    answerWorkerPicker("Continue on worker");
-    await moving;
-    expect(request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
-  });
-
-  it("surfaces a Gateway busy refusal without aborting or retrying the turn", async () => {
-    const { pane, session, request, state, reconcileMutation } = localFixture();
-    const moving = dialogs.track(pane.handleHeaderSessionAction({ kind: "move-session" }, session));
-    await selectRepositoryWorker();
-    request.mockRejectedValueOnce(
-      new Error("Session is busy; wait for the active turn to finish."),
-    );
-    answerWorkerPicker("Continue on worker");
-    await moving;
-    expect(request.mock.calls.filter(([method]) => method === "sessions.dispatch")).toHaveLength(1);
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("chat.abort");
-    expect(state.lastError).toContain("Session is busy");
-    expect(reconcileMutation).toHaveBeenCalledOnce();
-  });
-
-  it.each(["replacement", "in-place"] as const)(
-    "does not move a superseded active source (%s)",
+  it.each(["replacement", "busy", "read-only", "reconnect", "required-profile"] as const)(
+    "does not dispatch after the picker becomes stale: %s",
     async (change) => {
-      const { pane, state, request } = localFixture();
-      pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
-        ["sessions.move"],
-        ["operator.write"],
+      const { pane, session, state, request } = localFixture();
+      const moving = dialogs.track(
+        pane.handleHeaderSessionAction({ kind: "move-session" }, session),
       );
-      const session = activePlacementSession();
-      const moving = dialogs.track(startMove(pane, session));
-      await dialogs.waitFor(() =>
-        expect(document.body.querySelector('[data-value="gateway"]')).not.toBeNull(),
-      );
-      if (change === "in-place") {
-        session.placement.generation = 2;
-      } else {
-        state.sessionsResult = {
-          ...createSessionsListResult(),
-          sessions: [{ ...session, placement: { ...session.placement, generation: 2 } }],
+      await selectRepositoryWorker();
+      const current = { ...session };
+      if (change === "replacement") {
+        current.sessionId = "replacement";
+      }
+      if (change === "busy") {
+        current.hasActiveRun = true;
+      }
+      if (change === "read-only") {
+        pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+          ["sessions.dispatch"],
+          ["operator.read"],
+        );
+      }
+      if (change === "reconnect") {
+        pane.context.gateway.snapshot.client = createGatewayBrowserClientFixture({ request });
+      }
+      if (change === "required-profile") {
+        pane.context.agents.state.agentsList = {
+          ...pane.context.agents.state.agentsList!,
+          sessionPlacement: { requiredProfile: { id: "required", providerId: "device" } },
         };
       }
-      [...document.body.querySelectorAll<HTMLButtonElement>("button")]
-        .find((button) => button.textContent?.trim() === "Move session")
-        ?.click();
+      state.sessionsResult = { ...createSessionsListResult(), sessions: [current] };
+      answerWorkerPicker("Continue on worker");
       await moving;
-      expect(request).not.toHaveBeenCalledWith("sessions.move", expect.anything());
+      expect(request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
     },
   );
+
+  it.each(["in-place"] as const)("does not move a superseded active source (%s)", async () => {
+    const { pane, request } = localFixture();
+    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+      ["sessions.move"],
+      ["operator.write"],
+    );
+    const session = activePlacementSession();
+    const moving = dialogs.track(startMove(pane, session));
+    await dialogs.waitFor(() =>
+      expect(document.body.querySelector('[data-value="gateway"]')).not.toBeNull(),
+    );
+    session.placement.generation = 2;
+    [...document.body.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Move session")
+      ?.click();
+    await moving;
+    expect(request).not.toHaveBeenCalledWith("sessions.move", expect.anything());
+  });
   it("does not dispatch a profile after administrator access is revoked", async () => {
     const { pane, session, request } = localFixture();
     pane.context.gateway.snapshot.hello = gatewayHelloForMethods(

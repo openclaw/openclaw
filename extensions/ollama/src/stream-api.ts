@@ -1,5 +1,4 @@
 export { parseNdjsonStream } from "./stream-ndjson.js";
-export { convertToOllamaMessages } from "./stream-messages.js";
 export {
   createConfiguredOllamaCompatStreamWrapper,
   isOllamaCompatProvider,

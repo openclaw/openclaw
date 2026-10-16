@@ -1,5 +1,6 @@
-import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
+import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import {
@@ -27,7 +28,8 @@ export function createStateDatabaseCacheAdmission(owner: CacheAdmissionOwner) {
     initialize(database: OpenClawStateDatabase) {
       const db = database.db;
       if (isPostgresSqlConnection(db)) {
-        requireNativeDatabaseFile("postgres", "repair");
+        assertSupportedStateSchemaVersion(db, database.path);
+        return getPostgresPhysicalFacts(db);
       }
       admitSqliteSchema(db);
       return runSqliteReadOperationSync(db, () => {
@@ -37,6 +39,8 @@ export function createStateDatabaseCacheAdmission(owner: CacheAdmissionOwner) {
     },
     closeTerminalFailure(pathname: string, error: Error): void {
       markOpenClawStateDatabaseFailure(error, pathname);
+      // A refused open must also retire schema facts republished during acquisition.
+      revokeSqliteDatabaseAdmissionsForPath(pathname);
       owner.invalidate(pathname);
       const cached = owner.cachedDatabases.get(pathname);
       const errors: unknown[] = [];
@@ -64,7 +68,9 @@ export function createStateDatabaseCacheAdmission(owner: CacheAdmissionOwner) {
       }
       const db = database.db;
       if (isPostgresSqlConnection(db)) {
-        requireNativeDatabaseFile("postgres", "repair");
+        assertSupportedStateSchemaVersion(db, database.path);
+        database.schemaFacts = getPostgresPhysicalFacts(db);
+        return operation(database);
       }
       let admitted = false;
       try {

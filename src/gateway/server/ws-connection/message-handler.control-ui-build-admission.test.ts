@@ -356,6 +356,7 @@ describe("Control UI build admission over WebSocket", () => {
       );
       expect(await withDeadline(closed, "socket close")).toBe(1008);
       expect(connectedClient).toBeNull();
+      expect(await getPairedDevice(device.id)).toBeNull();
       expect(upsertPresenceMock).not.toHaveBeenCalled();
       expect(setLastFrameMetaMock).toHaveBeenCalledWith({
         type: "req",

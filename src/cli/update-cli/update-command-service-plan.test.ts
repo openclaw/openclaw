@@ -143,7 +143,7 @@ describe("package runtime compatibility guidance", () => {
       if (!supported) {
         vi.mocked(resolveBunRuntimeInfo).mockResolvedValue({
           status: "probe-failed",
-          error: new Error("Bun 1.4+ with WAL-reset-safe node:sqlite is required."),
+          error: new Error("Bun 1.4.3+ with WAL-reset-safe node:sqlite is required."),
         });
       }
       const result = await resolvePackageRuntimePreflight({
@@ -169,7 +169,7 @@ describe("package runtime compatibility guidance", () => {
                 },
               },
             }
-          : { ok: false, error: "Bun 1.4+ with WAL-reset-safe node:sqlite is required." },
+          : { ok: false, error: "Bun 1.4.3+ with WAL-reset-safe node:sqlite is required." },
       );
       expect(resolveBunRuntimeInfo).toHaveBeenCalledWith(executable, undefined, runtimeEnv);
       expect(resolveNodeRuntimeInfo).not.toHaveBeenCalled();

@@ -89,6 +89,7 @@ describe("Decision prefilter policy", () => {
     expect(options).toEqual({
       agentId: "main",
       purpose: "tool-prefilter.semantic-gate",
+      priority: "optional",
       rubricVersion: "9",
       timeoutMs: 500,
       signal: input.signal,

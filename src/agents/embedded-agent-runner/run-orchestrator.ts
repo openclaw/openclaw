@@ -3,7 +3,6 @@ import {
   createAgentLifecycleTerminalBackstop,
   resolveAgentLifecycleTerminalMetadata,
 } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { prepareCronRootSessionGeneration } from "../../config/sessions/session-delivery-generation.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -36,17 +35,18 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { createStageTimingTracker } from "../../shared/stage-timing.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
+import { sanitizeAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveModelFallbackAvailability,
-  resolveRunModelFallbacksOverride,
 } from "../agent-scope.js";
 import { createAssistantErrorTranscript } from "../assistant-error-transcript.js";
-import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
-import type { AgentHarnessPluginSelection } from "../harness/runtime-plugin-load-plan.js";
+import {
+  runBestEffortCallback,
+  serializeAgentEventCallback,
+} from "../embedded-agent-subscribe.callback.js";
 import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
-import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
 import {
   getPreparedModelRuntimePluginGeneration,
   runOutsidePreparedModelRuntimePluginGenerationScope,
@@ -95,7 +95,10 @@ import {
 } from "./run/prepared-runtime-context.js";
 import { createEmbeddedRunProgressController } from "./run/progress-controller.js";
 import { createRecoveryMessageActionTurnCapability } from "./run/recovery-message-action-capability.js";
-import { resolveInitialEmbeddedRunModel } from "./run/runtime-resolution.js";
+import {
+  resolveEmbeddedRuntimePluginSelections,
+  resolveInitialEmbeddedRunModel,
+} from "./run/runtime-resolution.js";
 import { prepareEmbeddedRunSession } from "./run/session-bootstrap.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 import {
@@ -236,6 +239,8 @@ async function runEmbeddedAgentForSession(
     throwIfAborted();
     return enqueueGlobal(async () => {
       const started = Date.now();
+      const onAgentEvent = serializeAgentEventCallback(params.onAgentEvent);
+      params = { ...params, onAgentEvent };
       const refresh = createEmbeddedAgentPluginRuntimeRefresh(params);
       const usage = createUsageAccumulator();
       let refreshed = false;
@@ -243,8 +248,8 @@ async function runEmbeddedAgentForSession(
       let terminal: ReturnType<typeof createAgentLifecycleTerminalBackstop> | undefined;
       let assistantErrorTranscript: ReturnType<typeof createAssistantErrorTranscript> | undefined;
       const ownsAssistantErrorTranscript = params.assistantErrorTranscript === undefined;
-      const onAgentEvent = params.onAgentEvent;
       const onAttemptStart = params.onAttemptStart;
+      const onAttemptTerminalReplaced = params.onAttemptTerminalReplaced;
       const runGeneration = async (): Promise<EmbeddedAgentRunResult> => {
         throwIfAborted();
         assertInitialOperatorModelPolicy(params, sessionAdmission?.entry);
@@ -291,16 +296,6 @@ async function runEmbeddedAgentForSession(
           provider: params.provider,
           model: params.model,
         });
-        const explicitHarnessRuntime = params.agentHarnessId ?? params.agentHarnessRuntimeOverride;
-        const requestedHarnessRuntime =
-          explicitHarnessRuntime ?? params.agentHarnessRuntimePreparationHint;
-        const runtimePluginFallbacksOverride =
-          params.modelFallbacksOverride ??
-          resolveRunModelFallbacksOverride({
-            cfg: config,
-            agentId: requestedWorkspaceResolution.agentId,
-            sessionKey: params.sessionKey,
-          });
         const pluginMetadataSnapshot =
           params.pluginGeneration?.pluginMetadataSnapshot ??
           loadPluginMetadataSnapshot({
@@ -308,24 +303,13 @@ async function runEmbeddedAgentForSession(
             workspaceDir: runtimeWorkspaceResolution.workspaceDir,
             env: process.env,
           });
-        const runtimePluginSelections = resolveModelCandidateChain({
-          cfg: config,
+        const runtimePluginSelections = resolveEmbeddedRuntimePluginSelections({
+          run: params,
+          config,
           agentId: requestedWorkspaceResolution.agentId,
           manifestPlugins: pluginMetadataSnapshot,
-          provider: requestedRuntimeSelection.provider,
-          model: requestedRuntimeSelection.modelId,
-          requestedRouteResolution: params.requestedRouteResolution,
-          fallbacksOverride: runtimePluginFallbacksOverride,
-        }).map((candidate, index): AgentHarnessPluginSelection =>
-          Object.assign(
-            { provider: candidate.provider, modelId: candidate.model },
-            // Preparation hints apply only to the requested route; fallbacks resolve their own policy.
-            requestedHarnessRuntime && (index === 0 || explicitHarnessRuntime)
-              ? { runtime: requestedHarnessRuntime }
-              : {},
-            { agentId: requestedWorkspaceResolution.agentId },
-          ),
-        );
+          requestedModel: requestedRuntimeSelection,
+        });
         const preparedInput = {
           config,
           agentId: requestedWorkspaceResolution.agentId,
@@ -401,8 +385,8 @@ async function runEmbeddedAgentForSession(
             ) {
               throw new Error("prepared model runtime replaced the admitted plugin generation");
             }
-            // A reload may complete while admission waits. The committed generation owns config,
-            // directories, model selection, hooks, fallbacks, and every later run projection.
+            // Admission follows committed config, directories, model selection, hooks, and fallbacks.
+            // Connection recovery may refresh transport while retaining this admitted run policy.
             const rebound = bindRunToPreparedModelRuntime({
               runParams: params,
               requestedWorkspaceResolution,
@@ -520,16 +504,13 @@ async function runEmbeddedAgentForSession(
                   payloads: buildHandledBeforeAgentReplyPayloads(hookResult.reply),
                   meta: {
                     durationMs: Date.now() - started,
-                    agentMeta: {
-                      sessionId: params.sessionId,
-                      provider,
-                      model: modelId,
-                    },
-                    finalAssistantVisibleText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
-                    finalAssistantRawText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
+                    agentMeta: { sessionId: params.sessionId, provider, model: modelId },
+                    terminalReply: hookResult.reply
+                      ? sanitizeAgentRunTerminalReply(hookResult.reply.text ?? "")
+                      : { disposition: "silent" },
                     providerStarted: false,
                   },
-                };
+                } satisfies EmbeddedAgentRunResult;
               }
 
               assistantErrorTranscript ??=
@@ -564,6 +545,10 @@ async function runEmbeddedAgentForSession(
                   onAttemptStart: () => {
                     runTerminal?.beginAttempt();
                     onAttemptStart?.();
+                  },
+                  onAttemptTerminalReplaced: () => {
+                    runTerminal?.replaceAttemptTerminal();
+                    onAttemptTerminalReplaced?.();
                   },
                   onAgentEvent: runTerminal
                     ? (event) => {

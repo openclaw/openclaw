@@ -336,7 +336,6 @@ it("joins an execution registered while its accepted Stop awaits kill-claim pers
     cfg: getRuntimeConfig(),
     request: { message: "Continue admitted work", idempotencyKey: runId },
     runId,
-    lifecycleGeneration,
     agentDedupeKeys,
     suppressVisibleSessionEffects: false,
     context,
@@ -368,7 +367,6 @@ it("joins an execution registered while its accepted Stop awaits kill-claim pers
     let admissionEntry: SessionEntry | undefined = sessionEntry;
     const nativeAdmission = createAgentAdmissionController({
       runId,
-      lifecycleGeneration,
       agentDedupeKeys,
       expectedSession: { handoffId: admission.createHandoff(), sessionId },
       context,

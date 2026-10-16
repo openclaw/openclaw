@@ -6,6 +6,7 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import type { AgentContextPruningConfig } from "../../config/types.agent-defaults.js";
+import type { TranscriptRewriteReplacement as ToolResultReplacement } from "../../context-engine/types.js";
 import { createDedupeCache } from "../../infra/dedupe.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -297,7 +298,6 @@ const MIN_KEEP_CHARS = 2_000;
 const RECOVERY_MIN_KEEP_CHARS = 0;
 const TOOL_RESULT_WARNING_DEDUPE_LIMIT = 1_024;
 export const toolResultWarningDedupe = {
-  promptPressure: createDedupeCache({ ttlMs: 0, maxSize: TOOL_RESULT_WARNING_DEDUPE_LIMIT }),
   sessionRecovery: createDedupeCache({ ttlMs: 0, maxSize: TOOL_RESULT_WARNING_DEDUPE_LIMIT }),
 };
 
@@ -759,11 +759,6 @@ function buildToolResultPlanningBranch(messages: AgentMessage[]): ToolResultMess
   }));
 }
 
-type ToolResultReplacement = {
-  entryId: string;
-  message: AgentMessage;
-};
-
 type MeasuredToolResultBranchEntry = {
   readonly entry: ToolResultBranchEntry;
   readonly textLength: number;
@@ -778,7 +773,6 @@ export function restoreCacheTtlToolResultProjections(
 ): void {
   const checkpoint = readCacheTtlCheckpoint(entries);
   projectionState.cacheTtlCheckpoint = checkpoint;
-  projectionState.cacheTtlRevision = (projectionState.cacheTtlRevision ?? 0) + 1;
   if (!checkpoint) {
     return;
   }

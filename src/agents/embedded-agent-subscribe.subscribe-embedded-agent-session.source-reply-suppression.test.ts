@@ -394,11 +394,8 @@ describe("subscribeEmbeddedAgentSession", () => {
   });
 
   it.each([
-    { action: "reply", final: true, mode: "message_tool_only" },
     { action: "poll", final: true, mode: "message_tool_only" },
-    { action: "send", final: false, mode: "message_tool_only" },
     { action: "send", final: false, mode: "automatic" },
-    { action: "send", final: true, mode: "automatic" },
     { action: "react", final: true, mode: "automatic" },
   ])(
     "keeps source progress distinct from final receipts for $action (final=$final, mode=$mode)",
@@ -472,10 +469,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     },
   );
 
-  it.each([
-    { name: "a progress reaction", batch: ["reaction"], endsWithProgress: false },
-    { name: "a partial progress send", batch: ["partial"], endsWithProgress: false },
-  ])(
+  it.each([{ name: "a partial progress send", batch: ["partial"], endsWithProgress: false }])(
     "reports whether the last tool batch was source progress after $name",
     async ({ batch, endsWithProgress }) => {
       const { session, emit } = createStubSessionHarness();

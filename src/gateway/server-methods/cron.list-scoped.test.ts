@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as listRevision from "../../cron/list-snapshot-revision.js";
 import { CronService } from "../../cron/service.js";
@@ -12,13 +13,11 @@ import { loadCronQuarantinedJobs, loadCronStore, saveCronStore } from "../../cro
 import { cronStoreKey } from "../../cron/store/key.js";
 import type { CronJob } from "../../cron/types.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import {
-  closeOpenClawStateDatabaseByPathAsync,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { withLocalGatewayRequestScope } from "../local-request-context.js";
 import { cronHandlers } from "./cron.js";
 import { createCronCallerClient, createCronJob } from "./cron.validation.test-support.js";
@@ -49,13 +48,14 @@ async function withCronStore(
   options: {
     config?: OpenClawConfig;
     defaultAgentId?: string;
+    jobs?: CronJob[];
   } = {},
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "cron-list-scoped-"));
   try {
     await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(root, "state") }, async () => {
       const storePath = path.join(root, "jobs.json");
-      await saveCronStore(storePath, { version: 1, jobs: createJobs(count) });
+      await saveCronStore(storePath, { version: 1, jobs: options.jobs ?? createJobs(count) });
       const cron = new CronService({
         scheduler: createTestGatewayScheduler(),
         nowMs: () => Date.now(),
@@ -89,9 +89,7 @@ async function withCronStore(
     });
   } finally {
     // Retire worker admissions before removing storage, including failed fixture setup.
-    await closeOpenClawStateDatabaseByPathAsync(
-      resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: path.join(root, "state") }),
-    );
+    await cleanupSessionStateForTest({ stateDir: path.join(root, "state"), rootPath: root });
     await fs.rm(root, { recursive: true, force: true });
   }
 }
@@ -134,6 +132,57 @@ async function listScoped(
 }
 
 describe("cron.list scoped SQLite snapshots", () => {
+  it("lists 146 jobs with delivery previews through the real session worker", async () => {
+    const cfg: OpenClawConfig = {};
+    const jobs = createJobs(146).map((job, index) =>
+      Object.assign(job, {
+        agentId: "main",
+        sessionKey: `agent:main:preview-${index}`,
+        delivery: { mode: "announce" as const, channel: "last" as const },
+      }),
+    );
+    await withCronStore(
+      146,
+      async ({ context, storePath }) => {
+        const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
+        cfg.session = { store: sessionStorePath };
+        replaceSessionEntrySync(
+          { agentId: "main", storePath: sessionStorePath, sessionKey: "agent:main:main" },
+          {
+            sessionId: "main",
+            updatedAt: 1,
+            delivery: normalizeSessionDeliveryState({
+              context: { channel: "telegram", to: "main-recipient", accountId: "work" },
+            }),
+          },
+        );
+        const respond = vi.fn();
+        await expectDefined(
+          cronHandlers["cron.list"],
+          "cron.list handler",
+        )({
+          req: { type: "req", id: "preview-capacity", method: "cron.list" },
+          params: { includeDisabled: true, limit: 200 },
+          context,
+          client: null,
+          respond,
+          isWebchatConnect: () => false,
+        });
+        expect(respond).toHaveBeenCalledExactlyOnceWith(
+          true,
+          expect.objectContaining({ jobs: expect.any(Array), total: 146 }),
+          undefined,
+        );
+        const page = respond.mock.calls[0]?.[1] as { jobs: CronJob[] };
+        expect(page.jobs).toHaveLength(146);
+        expect(page.jobs.map((job) => job.id).toSorted()).toEqual(
+          jobs.map((job) => job.id).toSorted(),
+        );
+      },
+      { config: cfg, jobs },
+    );
+  });
+
   it.each([{ enabled: true, quarantine: true }])(
     "keeps unsupported enabled=$enabled delivery repairable beside healthy work and quarantine=$quarantine",
     async ({ enabled, quarantine }) => {

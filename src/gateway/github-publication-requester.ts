@@ -67,13 +67,13 @@ async function preparePublicationSession(
   }
 }
 
-/** @deprecated Use GitHubPublicationRequesterPolicyV2; removed in the next Plugin SDK major. */
+/** @deprecated Use GitHubPublicationRequesterPolicyV2; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
 export type GitHubPublicationRequesterPolicy = Readonly<{
   snapshot: GitHubPublicationRequesterSnapshot;
   assertCurrent: () => void;
 }>;
 
-/** @deprecated Use GitHubPublicationRequesterV2; removed in the next Plugin SDK major. */
+/** @deprecated Use GitHubPublicationRequesterV2; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
 export type GitHubPublicationRequester = GitHubPublicationRequesterPolicy &
   Readonly<{
     /** An accepted row keeps its own policy while the current invocation retains its fences. */

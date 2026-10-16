@@ -9,6 +9,7 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import * as sessionReads from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -140,6 +141,82 @@ test("does not advertise detached continuation when process is unavailable", asy
   expect(result.details).toMatchObject({ status: "completed", aggregated: "FOREGROUND_COMPLETE" });
   expect(result.details).not.toHaveProperty("followUp");
 });
+
+test.for(["ordinary", "live cron", "ended cron", "cron ended during admission"])(
+  "keeps exec completion bound to its origin: %s",
+  async (scenario, { signal }) => {
+    const cron = scenario !== "ordinary";
+    const sessionKey = cron ? "agent:main:cron:nightly:run:abc123" : "agent:main:main";
+    await seedOrigin(sessionKey);
+    const claim = claimAgentRunContext(
+      "cron-run-followup",
+      { sessionKey, sessionId: sessionKey.replaceAll(":", "-"), agentId: "main" },
+      { trackOwner: true },
+    );
+    const release = () => releaseAgentRunContext("cron-run-followup", claim);
+    vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockImplementation((text, options) => {
+      expect(options.sessionKey).toBe(sessionKey);
+      if (scenario === "ended cron") {
+        release();
+      }
+      const receipt = enqueue(text, options);
+      receipts.push(receipt);
+      if (scenario === "cron ended during admission") {
+        release();
+      }
+      return receipt;
+    });
+    const exec = createExecTool({
+      config,
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      agentId: "main",
+      sessionKey,
+      scopeKey: sessionKey,
+      notifyOnExit: true,
+      allowBackground: true,
+    });
+    try {
+      const started = await exec.execute("cron-followup", {
+        command: nodeCommand('process.stdout.write("CRON_EXEC_DONE")'),
+        background: true,
+      });
+      expect(started.details.status).toBe("running");
+      await withinTest(waitForExecScope(sessionKey), signal);
+      if (scenario.includes("ended")) {
+        if (scenario === "cron ended during admission") {
+          expect(receipts).toHaveLength(1);
+          const receipt = expectDefined(receipts[0], "cron completion receipt");
+          expect(await withinTest(receipt.settled, signal)).toMatchObject({
+            status: "failed",
+            executionStarted: false,
+            error: expect.stringContaining("Originating cron run ended"),
+          });
+        } else {
+          expect(receipts).toHaveLength(0);
+        }
+        expect(model).not.toHaveBeenCalled();
+      } else {
+        await completion(signal);
+        expect(receipts).toHaveLength(1);
+        expect(model).toHaveBeenCalledOnce();
+        const [params] = expectDefined(model.mock.calls[0], "completion turn");
+        expect(params.sessionKey).toBe(sessionKey);
+      }
+      if (started.details.status !== "running") {
+        throw new Error("Expected a background process");
+      }
+      const result = await createProcessTool({ scopeKey: sessionKey }).execute("collect", {
+        action: "log",
+        sessionId: started.details.sessionId,
+      });
+      expect(result.content).toContainEqual({ type: "text", text: "CRON_EXEC_DONE" });
+    } finally {
+      release();
+    }
+  },
+);
 
 test("starts and notifies when identity enrichment fails, then resolves child identity again", async ({
   signal,

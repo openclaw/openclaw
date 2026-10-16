@@ -177,34 +177,34 @@ function normalizeRealtimeBaseUrl(value: unknown): string | undefined {
 
 export function normalizeProviderConfig(config: RealtimeVoiceProviderConfig) {
   const raw = resolveOpenAIProviderConfigRecord(config);
-  const baseUrl = normalizeRealtimeBaseUrl(raw?.baseUrl);
-  const azureEndpoint = normalizeOptionalString(raw?.azureEndpoint);
-  const azureDeployment = normalizeOptionalString(raw?.azureDeployment);
+  const baseUrl = normalizeRealtimeBaseUrl(raw.baseUrl);
+  const azureEndpoint = normalizeOptionalString(raw.azureEndpoint);
+  const azureDeployment = normalizeOptionalString(raw.azureDeployment);
   if (baseUrl && (azureEndpoint || azureDeployment)) {
     throw new Error("OpenAI realtime baseUrl cannot be combined with Azure endpoint or deployment");
   }
   return {
     baseUrl,
     apiKey: normalizeResolvedSecretInputString({
-      value: raw?.apiKey,
+      value: raw.apiKey,
       path: "plugins.entries.voice-call.config.realtime.providers.openai.apiKey",
     }),
-    model: normalizeOptionalString(raw?.model),
+    model: normalizeOptionalString(raw.model),
     // Session creation selects the effective model; an earlier family fallback loses overrides.
-    voice: normalizeOptionalLowercaseString(raw?.speakerVoice ?? raw?.voice),
-    temperature: asFiniteNumber(raw?.temperature),
-    vadThreshold: asFiniteNumberInRange(raw?.vadThreshold, { min: 0, max: 1 }),
-    silenceDurationMs: asSafeIntegerInRange(raw?.silenceDurationMs, { min: 0 }),
-    prefixPaddingMs: asSafeIntegerInRange(raw?.prefixPaddingMs, { min: 0 }),
+    voice: normalizeOptionalLowercaseString(raw.speakerVoice ?? raw.voice),
+    temperature: asFiniteNumber(raw.temperature),
+    vadThreshold: asFiniteNumberInRange(raw.vadThreshold, { min: 0, max: 1 }),
+    silenceDurationMs: asSafeIntegerInRange(raw.silenceDurationMs, { min: 0 }),
+    prefixPaddingMs: asSafeIntegerInRange(raw.prefixPaddingMs, { min: 0 }),
     interruptResponseOnInputAudio:
-      typeof raw?.interruptResponseOnInputAudio === "boolean"
+      typeof raw.interruptResponseOnInputAudio === "boolean"
         ? raw.interruptResponseOnInputAudio
         : undefined,
-    minBargeInAudioEndMs: asSafeIntegerInRange(raw?.minBargeInAudioEndMs, { min: 0 }),
-    reasoningEffort: normalizeOptionalString(raw?.reasoningEffort),
+    minBargeInAudioEndMs: asSafeIntegerInRange(raw.minBargeInAudioEndMs, { min: 0 }),
+    reasoningEffort: normalizeOptionalString(raw.reasoningEffort),
     azureEndpoint,
     azureDeployment,
-    azureApiVersion: normalizeOptionalString(raw?.azureApiVersion),
+    azureApiVersion: normalizeOptionalString(raw.azureApiVersion),
   };
 }
 
@@ -493,6 +493,7 @@ export async function resolveOpenAIQuicksilverBridgeAuth(
   );
 }
 
+// Retained for public synchronous SDK calls through 2026-12-31.
 export function hasOpenAIRealtimePlatformAuthInput(
   params: Parameters<typeof resolveOpenAIRealtimePlatformAuth>[0],
   {
@@ -588,7 +589,7 @@ export async function hasOpenAIChatGptSubscriptionAuthInputAsync(
     cfg: params.cfg,
     agentDir:
       params.cfg && params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined,
-    profileTypes: ["oauth"],
+    profileTypes: OPENAI_CHATGPT_SUBSCRIPTION_PROFILE_TYPES,
     includeExternalCliAuth: false,
   });
 }

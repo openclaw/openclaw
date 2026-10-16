@@ -49,11 +49,19 @@ cutoff controls are runtime controls, not request overrides.
 
 ### Restricted turns and ring zero
 
-OpenClaw applies Codex restrictions per turn, not as a permanent session mode.
-An existing session can therefore run one restricted turn and return to its
-normal Codex thread on the next unrestricted turn. When a restriction is
-temporary, OpenClaw preserves the normal thread binding and uses a temporary
-restricted thread where necessary.
+OpenClaw evaluates Codex tool policy on every turn. Compatible conversation-wide
+restrictions reuse the same native thread, including after a connection restart.
+Temporary restrictions, such as per-run allowlists, scheduled restrictions, or
+sender-specific restrictions, use an isolated thread where necessary and preserve
+the conversation's existing binding. A temporary first turn does not establish
+a permanent restricted binding.
+
+When a managed restricted thread's creation policy changes, or an older binding
+has no saved policy fingerprint, OpenClaw creates a compatible successor and
+projects the prepared conversation history into it. A failed replacement keeps
+the previous binding. Existing ownership guards still reject replacing an
+externally owned thread or one protected by active work; changing policy does
+not broaden that thread's permissions.
 
 An ordinary **policy-restricted turn** occurs when an explicit OpenClaw tool
 policy cannot be mapped safely onto Codex's native tool surface. Common
@@ -136,6 +144,15 @@ model catalog. When the model entry has no authored cap, OpenClaw sends no
 override. Sessions pinned to an existing native runtime retain their own
 context settings instead of inheriting the outer agent's model cap.
 
+On ordinary configured model chats, that authored cap also bounds host context
+engine assembly and maintenance. OpenClaw reserves space for the current input,
+instructions, tools, and output before assembling history, and retains the
+successful assembly's budget when recovering accepted turns. A smaller current
+run budget still wins. This is operator policy, not discovery of Codex's usable
+allowance: Codex can apply a smaller native limit or a model-specific reserve.
+Choose the authored limit with enough native headroom. Unconfigured models do
+not inherit another model's cap.
+
 Lossless remains supported as a context engine for assembly, ingestion, and
 maintenance around Codex turns, configured through
 `plugins.slots.contextEngine: "lossless-claw"` and
@@ -146,6 +163,13 @@ context-engine slot when Codex is the active runtime, but native Codex still
 owns compaction. The native app-server harness supports context engines
 that need pre-prompt assembly; generic CLI backends, including `codex-cli`,
 do not provide that host capability.
+
+When OpenClaw has no resolved token budget, context engines receive the usable
+window reported by Codex. Assembly can reuse a bound thread's observation only
+for the same model and when no newer unreported turn superseded it. Before an
+observation is available, only an explicit authored cap supplies a budget;
+otherwise the budget remains unknown. Resolved OpenClaw budgets take precedence,
+and learning a native window does not change the thread's bootstrap policy.
 
 Fresh Codex threads, including ordinary **Fork conversation** sessions, receive
 recent saved history within a bounded continuity window. Conversation text and

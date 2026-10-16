@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
 import { threadId, workerData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  getDatabaseEngineSelection,
+  type DatabaseEngineSelection,
+} from "./database-engine/context.js";
 import { serveWorkerTasks } from "./worker-task-server.js";
 
 export type PoolFixtureInput = {
   label: string;
   readStartupOptions?: boolean;
+  readEngineSelection?: boolean;
   exchanges?: number;
   opaqueRequest?: boolean;
   consumeInput?: boolean;
@@ -23,6 +28,7 @@ export type PoolFixtureResult = {
   previousBufferBytes?: number;
   relayedBufferBytes?: number;
   startupOptions?: { data: unknown; argv: string[] };
+  engineSelection?: DatabaseEngineSelection;
 };
 
 let previousBuffer: ArrayBuffer | undefined;
@@ -81,6 +87,7 @@ serveWorkerTasks<PoolFixtureResult>(
     return {
       label: input.label,
       threadId,
+      ...(input.readEngineSelection ? { engineSelection: getDatabaseEngineSelection() } : {}),
       buffer: input.buffer,
       previousBufferBytes,
       relayedBufferBytes,

@@ -199,9 +199,6 @@ suite.define(() => {
         expect(
           await sidebar.locator('.sidebar-agent-roster__menu [role^="menuitem"]').count(),
         ).toBe(0);
-        expect(await sidebar.locator('.sidebar-new-session-menu [role="menu"]').isVisible()).toBe(
-          false,
-        );
         const rosterMenu = sidebar.locator('[data-agent-group="main"] .sidebar-agent-roster__menu');
         await rosterMenu.getByRole("button", { name: "Options for Harbor", exact: true }).focus();
         await page.keyboard.press("Enter");
@@ -311,15 +308,8 @@ suite.define(() => {
         await page.mouse.move(1100, 700);
         await expect.poll(() => workspaceMenu.count()).toBe(0);
         await workspace.focus();
-        await Promise.all([
-          sidebar.evaluate(
-            (element) =>
-              new Promise<void>((resolve) => {
-                element.addEventListener("overlay-after-show", () => resolve(), { once: true });
-              }),
-          ),
-          workspace.hover(),
-        ]);
+        await workspace.hover();
+        await expect.poll(() => workspaceMenu.getAttribute("data-phase")).toBe("open");
         expect(await workspace.evaluate((element) => element === document.activeElement)).toBe(
           true,
         );
@@ -355,20 +345,9 @@ suite.define(() => {
         await expect.poll(() => workspaceMenu.count()).toBe(0);
         await expectFocused(workspace);
 
+        await sidebar.locator('[data-agent-id="scout"]').click();
+        await waitForControlUiRoute(page, { routeId: "chat", pathname: "/chat/scout" });
         await sidebar.locator(".sidebar-rail .sidebar-new-session").click();
-        const newMenu = sidebar.locator(".sidebar-new-session-menu");
-        await expect
-          .poll(() => newMenu.locator('a[role="menuitem"]').first().isVisible())
-          .toBe(true);
-        await page.keyboard.press("Escape");
-        expect(await newMenu.locator('a[role="menuitem"]').count()).toBe(4);
-        await sidebar.locator(".sidebar-rail .sidebar-new-session").click();
-        expect(
-          await newMenu
-            .locator('a[role="menuitem"]')
-            .evaluateAll((links) => links.map((link) => link.getAttribute("href"))),
-        ).toEqual(["main", "forge", "scout", "bloom"].map((id) => `/new?agent=${id}`));
-        await newMenu.locator('a[role="menuitem"][data-value="scout"]').click();
         await waitForControlUiRoute(page, { routeId: "new-session", pathname: "/new" });
         expect(new URL(page.url()).searchParams.get("agent")).toBe("scout");
         await sidebar.locator('[data-agent-id="forge"]').click();

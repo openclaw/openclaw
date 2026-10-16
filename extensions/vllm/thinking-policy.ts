@@ -24,7 +24,7 @@ export function resolveVllmEffortProfile(
     ...model.thinkingLevelMap,
     ...compat?.reasoningEffortMap,
   })
-    .filter(([, effort]) => typeof effort === "string" && efforts.includes(effort.trim()))
+    .filter(([, effort]) => effort != null && efforts.includes(effort.trim()))
     .map(([level]) => level.trim().toLowerCase());
   const profile = resolveEffortThinkingProfile([...efforts, ...mappedLevels]);
   return profile?.levels.some(({ id }) => id !== "off")

@@ -22,7 +22,7 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import type { SessionActorOperations } from "./session-actor-contract.js";
 import { createSessionActorReplica } from "./session-actor-replica.js";
-import { seedSessionActorOutcomeTransferTranscript } from "./session-actor-worker.test-support.js";
+import { seedSessionActorOutcomeTransferEntry } from "./session-actor-worker.test-support.js";
 import { createSessionActor, type SessionActorTransport } from "./session-actor.js";
 import { createSessionActorWorker } from "./session-actor.worker.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
@@ -44,7 +44,7 @@ export async function withActor(
       admissionCancelled?: boolean;
       disclosureRevoked?: boolean;
     };
-    seedTransferTranscript(this: void): void;
+    seedTransferEntry(this: void): void;
     readEntry(
       this: void,
     ): ReturnType<ReturnType<typeof createSessionCompoundWorkerFixture>["read"]>;
@@ -227,8 +227,8 @@ export async function withActor(
         admissions,
         commands,
         fault,
-        seedTransferTranscript() {
-          seedSessionActorOutcomeTransferTranscript(fixture);
+        seedTransferEntry() {
+          seedSessionActorOutcomeTransferEntry(fixture);
         },
         readEntry() {
           return readExactSessionEntryRow(database, fixture.scope.sessionKey)?.entry;

@@ -10,6 +10,7 @@ import {
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   type CodexAppServerRuntimeOptions,
+  readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   type CodexPluginConfig,
 } from "./src/app-server/config.js";
@@ -68,7 +69,7 @@ export function resolveCodexPromptSnapshotAppServerOptions(
   pluginConfig?: unknown,
 ): CodexAppServerRuntimeOptions {
   return resolveCodexAppServerRuntimeOptions({
-    pluginConfig,
+    pluginConfig: readCodexPluginConfig(pluginConfig),
     env: {},
     requirementsToml: null,
   });

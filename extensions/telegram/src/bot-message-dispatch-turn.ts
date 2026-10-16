@@ -71,9 +71,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
     enqueueDraftEvent(turn, task).then(() => false);
 
   try {
-    const { onModelSelected, ...replyPipeline } = (
-      turn.telegramDeps.createChannelMessageReplyPipeline ?? createChannelMessageReplyPipeline
-    )({
+    const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
       cfg: turn.cfg,
       agentId: context.route.agentId,
       channel: "telegram",

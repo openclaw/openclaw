@@ -56,6 +56,8 @@ import { getSessionRepositoryWorkspaceStore } from "../../state/session-reposito
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import { sharingPolicyClient } from "../session-sharing.test-utils.js";
+import * as sessionEntryReader from "../session-utils-store-worker.js";
 import * as repositoryCheckpoints from "../worker-environments/session-repository-checkpoints.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { sessionRewindHandlers } from "./sessions-rewind.js";
@@ -148,67 +150,80 @@ it.each(mutationMethods)(
 );
 
 it.each([
-  { kind: "visible", hidden: false },
-  { kind: "hidden internal-effects", hidden: true },
-])("lists $kind session branches without decoding saved snapshots", async ({ hidden }) => {
-  await withOpenClawTestState({ label: "branch-list-bounded-read" }, async (state) => {
-    await state.writeConfig(cfg);
-    const identity = hidden
-      ? resolveInternalSessionEffectsIdentity({ agentId: "main", runId: "branch-list-hidden" })
-      : undefined;
-    const scope = await seedMessageCutSource(false, identity);
-    const selectedPrompt = "selected-session-unused-skill-prompt".repeat(128);
-    await upsertSessionEntryCore(scope, {
-      sessionId: scope.sessionId,
-      updatedAt: 1,
-      skillsSnapshot: { prompt: selectedPrompt, skills: [] },
-    });
-    const unrelatedPrompt = "unrelated-session-skill-prompt".repeat(128);
-    for (let index = 0; index < 3; index += 1) {
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: `agent:main:unrelated-${index}` },
-        {
-          sessionId: `unrelated-${index}`,
-          updatedAt: index + 1,
-          skillsSnapshot: { prompt: unrelatedPrompt, skills: [] },
-        },
-      );
-    }
-    const method = "sessions.branches.list";
-    const params = { sessionKey: scope.sessionKey };
-    const respond = vi.fn<RespondFn>();
-    const parse = vi.spyOn(JSON, "parse");
-    try {
-      await expectDefined(
-        sessionRewindHandlers[method],
-        method,
-      )({
-        req: { type: "req", id: "branch-list-bounded-read", method, params },
-        params,
-        respond,
-        context: context(),
-        client: null,
-        isWebchatConnect: () => false,
-      });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        {
-          branches: hidden
-            ? []
-            : expect.arrayContaining([
-                expect.objectContaining({ leafEntryId: "user-2", active: true }),
-                expect.objectContaining({ leafEntryId: "alternate-user", active: false }),
-              ]),
-        },
-        undefined,
-      );
-      expect(parse.mock.calls.filter(([text]) => text.includes(unrelatedPrompt))).toHaveLength(0);
-      expect(parse.mock.calls.filter(([text]) => text.includes(selectedPrompt))).toHaveLength(0);
-    } finally {
-      parse.mockRestore();
-    }
-  });
-});
+  { kind: "visible", hidden: false, identified: false },
+  { kind: "visible to an identified reader", hidden: false, identified: true },
+  { kind: "hidden internal-effects", hidden: true, identified: true },
+])(
+  "lists $kind session branches without decoding saved snapshots",
+  async ({ hidden, identified }) => {
+    await withOpenClawTestState(
+      { label: "branch-list-bounded-read", prepareProfileCatalog: true },
+      async (state) => {
+        await state.writeConfig(cfg);
+        const identity = hidden
+          ? resolveInternalSessionEffectsIdentity({ agentId: "main", runId: "branch-list-hidden" })
+          : undefined;
+        const scope = await seedMessageCutSource(false, identity);
+        const selectedPrompt = "selected-session-unused-skill-prompt".repeat(128);
+        await upsertSessionEntryCore(scope, {
+          sessionId: scope.sessionId,
+          updatedAt: 1,
+          skillsSnapshot: { prompt: selectedPrompt, skills: [] },
+        });
+        const unrelatedPrompt = "unrelated-session-skill-prompt".repeat(128);
+        for (let index = 0; index < 3; index += 1) {
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: `agent:main:unrelated-${index}` },
+            {
+              sessionId: `unrelated-${index}`,
+              updatedAt: index + 1,
+              skillsSnapshot: { prompt: unrelatedPrompt, skills: [] },
+            },
+          );
+        }
+        const method = "sessions.branches.list";
+        const params = { sessionKey: scope.sessionKey };
+        const respond = vi.fn<RespondFn>();
+        const parse = vi.spyOn(JSON, "parse");
+        const reads = vi.spyOn(sessionEntryReader, "loadGatewaySessionEntryReadOnlyInWorker");
+        try {
+          await expectDefined(
+            sessionRewindHandlers[method],
+            method,
+          )({
+            req: { type: "req", id: "branch-list-bounded-read", method, params },
+            params,
+            respond,
+            context: context(),
+            client: identified ? sharingPolicyClient({ user: "branch-reader" }) : null,
+            isWebchatConnect: () => false,
+          });
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            {
+              branches: hidden
+                ? []
+                : expect.arrayContaining([
+                    expect.objectContaining({ leafEntryId: "user-2", active: true }),
+                    expect.objectContaining({ leafEntryId: "alternate-user", active: false }),
+                  ]),
+            },
+            undefined,
+          );
+          expect(parse.mock.calls.filter(([text]) => text.includes(unrelatedPrompt))).toHaveLength(
+            0,
+          );
+          expect(parse.mock.calls.filter(([text]) => text.includes(selectedPrompt))).toHaveLength(
+            0,
+          );
+          expect(reads).toHaveBeenCalledTimes(1);
+        } finally {
+          parse.mockRestore();
+        }
+      },
+    );
+  },
+);
 
 async function revokeDuringWriterWait(
   scope: SourceScope,

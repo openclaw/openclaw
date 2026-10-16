@@ -41,6 +41,7 @@ import {
   CRON_JOB_READ_COLUMNS,
   getCronStoreKysely,
 } from "./schema.js";
+import { serializeCronJobState } from "./state-codec.js";
 import type { LoadedCronStore } from "./types.js";
 
 function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Record<string, unknown> {
@@ -81,15 +82,6 @@ export function resolveCronJobGrantDefinitionRevision(job: CronStoredJob): strin
   }
   const { enabled: _enabled, state: _state, ...definition } = storedDefinition;
   return hashCronJobDefinition(definition);
-}
-
-function serializeCronJobState(state: CronJobState): string {
-  return JSON.stringify({
-    ...state,
-    ...(state.lastRunStatus === undefined && state.lastStatus !== undefined
-      ? { lastRunStatus: state.lastStatus }
-      : {}),
-  });
 }
 
 function bindCronJobRow(storeKey: string, job: CronStoredJob, sortOrder: number): CronJobInsert {

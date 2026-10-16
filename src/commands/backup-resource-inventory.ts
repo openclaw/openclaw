@@ -35,7 +35,7 @@ export type BackupCoreDatabase = Readonly<
   {
     sourcePath: string;
     identity?: BigIntStats;
-  } & ({ role: "global" | "quarantine" } | { role: "agent"; agentId: string })
+  } & ({ role: "global" | "quarantine" | "client" } | { role: "agent"; agentId: string })
 >;
 
 /** Ephemeral coverage of a captured canonical image; never part of the archive manifest. */
@@ -412,7 +412,9 @@ export function describeCapturedBackupSqliteSnapshots(
   const capturedPaths = new Set(capturedSourcePaths);
   return Object.freeze(
     inventory.coreDatabases.flatMap((owner) =>
-      owner.role !== "quarantine" && owner.identity && capturedPaths.has(owner.sourcePath)
+      (owner.role === "global" || owner.role === "agent") &&
+      owner.identity &&
+      capturedPaths.has(owner.sourcePath)
         ? [
             Object.freeze({
               sourcePath: owner.sourcePath,

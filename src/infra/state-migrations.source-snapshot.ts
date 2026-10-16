@@ -302,12 +302,12 @@ export function readLegacyMigrationSourceSnapshotSync(params: {
   });
   const raw = buffer.toString("utf8");
   return {
-    buffer: Buffer.from(raw),
+    buffer,
     dev: exactIdentity.dev,
     ino: exactIdentity.ino,
     mtimeMs: stat.mtimeMs,
     raw,
-    sha256: createHash("sha256").update(raw).digest("hex"),
+    sha256: createHash("sha256").update(buffer).digest("hex"),
     size: buffer.byteLength,
     sourcePath: params.sourcePath,
   };

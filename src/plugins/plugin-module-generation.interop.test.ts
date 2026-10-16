@@ -1,11 +1,12 @@
 import fs from "node:fs";
-import { createRequire } from "node:module";
+import Module, { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createJiti } from "jiti";
 import { describe, expect, it } from "vitest";
 import { isPathInside } from "../infra/path-guards.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
+import { useNodeModuleHooks } from "./native-module-require.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { createPluginModuleGenerationTestHarness } from "./plugin-module-generation.test-support.js";
 
@@ -16,6 +17,31 @@ function loadLegacy(source: string) {
 }
 
 describe("native plugin generation interop", () => {
+  it.skipIf(!useNodeModuleHooks())(
+    "preserves source import attributes for JSON resolved outside the capture",
+    async () => {
+      const root = fixture({
+        "entry.ts":
+          "export const read = async () => (await import('fixture:host-json')).default.answer;",
+      });
+      const json = path.join(temp.make("plugin-host-json-"), "answer.json");
+      fs.writeFileSync(json, '{"answer":42}');
+      const hooks = Module.registerHooks({
+        resolve(specifier, context, nextResolve) {
+          return specifier === "fixture:host-json"
+            ? { url: pathToFileURL(json).href, shortCircuit: true }
+            : nextResolve(specifier, context);
+        },
+      });
+      try {
+        const plugin = host(root).load("entry.ts") as { read(): Promise<number> };
+        await expect(plugin.read()).resolves.toBe(42);
+      } finally {
+        hooks.deregister();
+      }
+    },
+  );
+
   it.each(["", "@fixture/"])(
     "preserves %ssibling dependency assets across nested installs and generations",
     async (scope) => {
@@ -339,6 +365,38 @@ describe("native plugin generation interop", () => {
     const current = host(root).load("entry.ts") as typeof legacy;
     expect((await current.load()).read()).toEqual(["first", "first"]);
   });
+
+  it.skipIf(!useNodeModuleHooks())(
+    "waits for a concurrent lazy import to finish initializing its dependencies",
+    async () => {
+      const enteredEvent = "plugin-concurrent-import-entered";
+      const releaseEvent = "plugin-concurrent-import-release";
+      const root = fixture({
+        "entry.ts": `const importModule = './parent.ts';
+          export const read = async () => (await import(importModule)).read();`,
+        "parent.ts":
+          "import { answer } from './child.ts'; export function read() { return answer; }",
+        "child.ts": `await new Promise(resolve => {
+        process.once(${JSON.stringify(releaseEvent)}, resolve);
+        process.emit(${JSON.stringify(enteredEvent)});
+      }); export const answer = 42;`,
+      });
+      const entered = Promise.withResolvers<void>();
+      process.once(enteredEvent, entered.resolve);
+      const current = host(root).load("entry.ts") as { read(): Promise<number> };
+      const first = current.read();
+      await entered.promise;
+      const second = current.read();
+      const results = Promise.all([first, second]);
+      void results.catch(() => {});
+      // Let the second import reach the in-flight module before completing its dependency.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      process.emit(releaseEvent);
+      await expect(results).resolves.toEqual([42, 42]);
+    },
+  );
 
   it.each(["static", "dynamic"])(
     "preserves native TypeScript JSON import attributes (%s)",

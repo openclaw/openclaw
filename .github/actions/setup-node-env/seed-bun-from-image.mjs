@@ -5,10 +5,10 @@ import { chmod, mkdir, mkdtemp, open, readFile, rm, symlink, writeFile } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const version = "1.4.2";
+const version = "1.4.3";
 const archives = {
-  "linux-x64": "36368faef7527875d5ffa52e53cd48021741f2a83eb6208a8dd64068d422a913",
-  "linux-x64-baseline": "c678040f14fe0440eb839d37cbd0ce4c051a32da72806ac97de6a6aab6bf728f",
+  "linux-x64": "3e730528d89775f03f87f05c06787c4df4099d0a37f3f252e7b829cb23816e18",
+  "linux-x64-baseline": "1fc2edac843102909e3a1be1d8d9802cc6071cf074e67e88231f4ffe0f8b397b",
 };
 
 async function optimizedSupported() {

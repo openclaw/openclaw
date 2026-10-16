@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
-import "./appearance-picker.ts";
+import "./appearance-picker.tsx";
 
 const forms: HTMLFormElement[] = [];
 afterEach(() => {

@@ -1,8 +1,8 @@
-import type { DatabaseSync } from "node:sqlite";
 import type {
   CommittedCompactionAppend,
   PreparedCompactionAppend,
 } from "../../agents/sessions/session-compaction-persistence.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
@@ -67,7 +67,7 @@ type CompactionParams = {
 };
 
 type CompactionWorkerContext = {
-  database: DatabaseSync;
+  database: EngineConnection;
   admit(stage: "transaction" | "commit"): void;
 };
 

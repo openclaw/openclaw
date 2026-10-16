@@ -4,12 +4,17 @@ import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { bindAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import { rewrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.wrapper.js";
 import type { OpenClawCodingToolsOptions } from "./agent-tools.options.js";
+import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isToolWrappedWithBeforeToolCallHook } from "./before-tool-call-metadata.js";
 import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { isConversationToolAllowed } from "./conversation-tool-policy-pipeline.js";
 import { captureDelegatedToolPolicyAssertion } from "./delegated-tool-policy.js";
 import { createToolPolicyMatcher } from "./tool-policy-match.js";
-import { buildPluginToolGroups, expandPolicyWithPluginGroups } from "./tool-policy.js";
+import {
+  buildPluginToolGroups,
+  expandPolicyWithPluginGroups,
+  normalizeToolPolicyName,
+} from "./tool-policy.js";
 import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-context.js";
 
 /** Carries the coding surface's prepared policy and requesting route into plugin delegation. */
@@ -19,9 +24,18 @@ export function createCodingToolsGatewayCaller(params: {
   sessionKey?: string;
   accountId?: string;
   capabilityProfile: ResolvedConversationCapabilityProfile;
+  tools?: readonly AnyAgentTool[];
   sessionEventSourcePolicy?: SessionEventSourcePolicy;
 }) {
   const { options, agentId, sessionKey, capabilityProfile } = params;
+  // Dispatch controls and their targets share the same admitted ownership snapshot.
+  const toolMetadata = new Map<string, { pluginId: string }>();
+  for (const tool of params.tools ?? []) {
+    const meta = getPluginToolMeta(tool);
+    if (meta) {
+      toolMetadata.set(normalizeToolPolicyName(tool.name), { pluginId: meta.pluginId });
+    }
+  }
   const delegatedPolicy = capabilityProfile.policy.delegatedToolPolicy;
   if (delegatedPolicy && !options?.config) {
     throw new Error("Delegated execution requires its source configuration.");
@@ -58,7 +72,13 @@ export function createCodingToolsGatewayCaller(params: {
             ? [settleBatch.receiptAdmission]
             : undefined,
           assertToolAllowed: (toolName: string) => {
-            if (!isConversationToolAllowed(capabilityProfile, toolName)) {
+            if (
+              !isConversationToolAllowed(
+                capabilityProfile,
+                toolName,
+                toolMetadata.get(normalizeToolPolicyName(toolName)),
+              )
+            ) {
               throw new Error(`${toolName} is not allowed by this conversation's tool policy`);
             }
           },

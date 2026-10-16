@@ -86,7 +86,6 @@ export function isEmbeddedCyberFailoverTargetUsable(result: EmbeddedAgentRunResu
       hasVisibleAgentPayload(result, {
         includeErrorPayloads: false,
         includeReasoningPayloads: false,
-        includeSilentReplyPayloads: false,
       }))
   );
 }

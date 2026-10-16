@@ -138,6 +138,7 @@ export function installGatewaySessionsTestResources(
 
   installGatewayTestHooks({
     scope: "suite",
+    prepareServer: startServer,
     setup: async () => {
       const workspace = getRuntimeConfig().agents?.defaults?.workspace;
       if (!workspace) {

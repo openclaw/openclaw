@@ -2487,14 +2487,7 @@ final class NodeAppModel {
             let content = UNMutableNotificationContent()
             content.title = title
             content.body = body
-            switch params.priority ?? .active {
-            case .passive:
-                content.interruptionLevel = .passive
-            case .timeSensitive:
-                content.interruptionLevel = .timeSensitive
-            case .active:
-                content.interruptionLevel = .active
-            }
+            content.interruptionLevel = (params.priority ?? .active).interruptionLevel
             let soundValue = params.sound?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             if let soundValue, ["none", "silent", "off", "false", "0"].contains(soundValue) {
                 content.sound = nil
@@ -4128,7 +4121,6 @@ extension NodeAppModel {
         }
         self.admitTalkAfterSessionHydration()
         await self.talkMode.prefetchRealtimeSessionIfReady(
-            reason: "operator_connected",
             shouldApply: shouldContinue)
         guard shouldContinue() else { return }
         await refreshShareRouteFromGateway(shouldApply: shouldContinue)

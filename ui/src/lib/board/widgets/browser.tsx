@@ -22,11 +22,11 @@ import {
 } from "../../../components/browser/browser-client.ts";
 import { BrowserPanelHost } from "../../../components/browser/browser-panel.ts";
 import { registerBrowserEnglish } from "../../../i18n/locales/en-browser.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
 import { formatUiError } from "../../format-error.ts";
 import { useOptionalApplication } from "../../reactive/context.ts";
 import { t } from "../../reactive/i18n.ts";
 import { projectSource } from "../../reactive/projection.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../solid-bridge.ts";
 import type { BoardWidget } from "../types.ts";
 import "./browser.css";
 
@@ -105,6 +105,7 @@ function BrowserDashboardWidgetContent(
       }
     }
   }
+  // Requests share a synchronous pending latch; Solid only schedules scope reconciliation.
   createEffect(
     () =>
       [

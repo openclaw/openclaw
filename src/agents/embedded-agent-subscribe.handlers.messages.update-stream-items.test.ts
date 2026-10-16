@@ -97,6 +97,28 @@ describe("handleMessageUpdate text signatures", () => {
     });
   });
 
+  it.each([
+    { chunks: ["NO_", "REPLY", "\nHello ", "world"], text: "Hello world" },
+    {
+      chunks: ["NO_", "REPLY", " is literal ", "text"],
+      text: "NO_REPLY is literal text",
+    },
+  ])("preserves visible text after a split protocol prefix: $text", async ({ chunks, text }) => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({ onAgentEvent });
+    for (const delta of chunks) {
+      await updateMessage(context, {
+        message: { role: "assistant", content: [] },
+        assistantMessageEvent: { type: "text_delta", delta },
+      });
+    }
+
+    const replies = onAgentEvent.mock.calls.map(([event]) => event.data);
+    expect(replies.map((reply) => reply.delta).join("")).toBe(text);
+    expect(replies.at(-1)?.text).toBe(text);
+    expect(context.getPartialReplySourceText()).toBe(text);
+  });
+
   it("uses full partial text for suffix deltas after a suppressed commentary item", async () => {
     const onAgentEvent = vi.fn();
     const context = createMessageUpdateContext({ onAgentEvent });

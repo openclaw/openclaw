@@ -37,6 +37,7 @@ export function resolveCiCheckFamilyScope(changedPaths: readonly string[]): CiCh
   const bunLauncher = changedPaths.some(
     (file) =>
       file === "openclaw.mjs" ||
+      file === "cli-invocation.mjs" ||
       file === "test/openclaw-launcher.e2e.test.ts" ||
       /^src\/plugins\/plugin-module-generation(?:\.|-)/u.test(file) ||
       file.startsWith("src/infra/sqlite-existing-database."),

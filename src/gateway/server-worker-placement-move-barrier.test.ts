@@ -175,7 +175,6 @@ describe("worker placement move destination", () => {
               effects.push("claims released");
             },
           },
-          awaitTurnClaimRelease: async (_sessionId: string, wait: () => Promise<void>) => wait(),
           revokeSessionAuthority: () => {
             effects.push("revoke");
           },
@@ -276,7 +275,6 @@ describe("worker placement move destination", () => {
             claimsReleased.resolve();
           },
         },
-        awaitTurnClaimRelease: async (_sessionId, wait) => await wait(),
         loadSessionRuntime: async () => ({
           managedWorktrees: { findLiveByOwner: async () => undefined },
           resolveCanonicalSessionEntryFromStoreKeys,
@@ -361,7 +359,6 @@ describe("worker placement move destination", () => {
       const revokeSessionAuthority = vi.fn(() => observed.push("revoke"));
       const barrier = createGatewayWorkerPlacementMoveBarrier({
         placements: { waitForTurnClaimRelease: vi.fn() },
-        awaitTurnClaimRelease: (_sessionId, wait) => wait(),
         loadSessionRuntime: async () => ({
           managedWorktrees: { findLiveByOwner: async () => undefined },
           resolveCanonicalSessionEntryFromStoreKeys,

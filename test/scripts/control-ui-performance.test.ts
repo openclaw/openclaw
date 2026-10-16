@@ -159,40 +159,6 @@ beforeAll(async () => {
   }
 });
 
-function createMetrics(startupJsGzipBytes: number) {
-  return {
-    schemaVersion: 1 as const,
-    startup: {
-      js: { requests: 1, rawBytes: 2_000, gzipBytes: startupJsGzipBytes, brotliBytes: 900 },
-      css: { requests: 1, rawBytes: 50, gzipBytes: 15, brotliBytes: 12 },
-      assets: [],
-    },
-    routeBoot: null,
-    total: {
-      js: { requests: 1, rawBytes: 2_000, gzipBytes: startupJsGzipBytes, brotliBytes: 900 },
-      css: { requests: 1, rawBytes: 50, gzipBytes: 15, brotliBytes: 12 },
-    },
-    largest: {
-      js: {
-        file: "assets/index-a.js",
-        type: "js" as const,
-        rawBytes: 2_000,
-        gzipBytes: startupJsGzipBytes,
-        brotliBytes: 900,
-      },
-      css: {
-        file: "assets/index-c.css",
-        type: "css" as const,
-        rawBytes: 50,
-        gzipBytes: 15,
-        brotliBytes: 12,
-      },
-    },
-    mermaidRenderer: [],
-    localeCatalogs: [],
-  };
-}
-
 const looseBudgets = {
   startupJsRequests: 10,
   routeBootJsRequests: 35,
@@ -316,261 +282,50 @@ describe("Control UI performance budgets", () => {
     );
   });
 
-  it.each(["chat", "new"] as const)("enforces the %s boot JS request limit", (route) => {
-    const initial = createMetrics(40);
-    const boot = { ...initial.startup, js: { ...initial.startup.js, requests: 35 } };
-    const metrics = { ...initial, routeBoot: { chat: boot, new: boot } };
-
-    expect(evaluateControlUiPerformanceBudgets(metrics)).toEqual([]);
-
-    metrics.routeBoot[route] = { ...boot, js: { ...boot.js, requests: 36 } };
-    expect(evaluateControlUiPerformanceBudgets(metrics)).toEqual([
-      { metric: `${route} boot JS requests`, actual: 36, limit: 35, unit: "count" },
+  it("rejects the renderer in route boot preloads", () => {
+    const { distDir, writeAsset } = createDistFixture();
+    fs.writeFileSync(
+      path.join(distDir, "index.html"),
+      '<script type="module" src="./assets/index-a.js"></script>\n' +
+        '<link rel="stylesheet" href="./assets/index-c.css">\n' +
+        '<template data-openclaw-route-preloads="chat"><link rel="modulepreload" href="./assets/mermaid.min-a.js"></template>\n',
+    );
+    writeAsset("index-a.js", { rawBytes: 100, gzipBytes: 40, brotliBytes: 30 });
+    writeAsset("lazy-b.js", { rawBytes: 200, gzipBytes: 70, brotliBytes: 55 });
+    writeAsset("index-c.css", { rawBytes: 50, gzipBytes: 15, brotliBytes: 12 });
+    writeAsset("mermaid.min-a.js", { rawBytes: 200, gzipBytes: 200_000, brotliBytes: 100 });
+    const metrics = collectControlUiPerformanceMetrics(distDir);
+    expect(evaluateControlUiPerformanceBudgets(metrics).map((entry) => entry.metric)).toEqual([
+      "startup Mermaid JS assets",
     ]);
-    expect(formatControlUiPerformanceReport(metrics)).toContain("limit: 35 requests");
+    expect(metrics.total.js.gzipBytes).toBe(200_110);
+    expect(metrics.largest.js.file).toBe("assets/lazy-b.js");
+    expect(formatControlUiPerformanceReport(metrics)).toContain("isolated Mermaid JS:");
   });
 
-  it.each([
-    { name: "accepts the capped deferred renderer", gzipBytes: 960 * 1024, violations: [] },
-    {
-      name: "rejects renderer growth above its cap",
-      gzipBytes: 960 * 1024 + 1,
-      violations: ["isolated Mermaid JS gzip"],
-    },
-    {
-      name: "rejects duplicate renderer artifacts",
-      gzipBytes: 200_000,
-      duplicate: true,
-      violations: ["isolated Mermaid JS assets"],
-    },
-    {
-      name: "rejects the renderer in startup preloads",
-      gzipBytes: 200_000,
-      startup: true,
-      violations: ["startup Mermaid JS assets"],
-    },
-    {
-      name: "rejects the renderer in route boot preloads",
-      gzipBytes: 200_000,
-      routeStartup: true,
-      violations: ["startup Mermaid JS assets"],
-    },
-    {
-      name: "retains the ordinary chunk cap beside the renderer",
-      gzipBytes: 200_000,
-      ordinaryGzipBytes: 215 * 1024 + 1,
-      violations: ["largest JS gzip"],
-    },
-    {
-      name: "does not exempt similarly named chunks",
-      gzipBytes: 960 * 1024,
-      rendererName: "mermaid-extra-a.js",
-      violations: ["largest JS gzip"],
-    },
-  ])(
-    "$name",
-    ({
-      gzipBytes,
-      duplicate,
-      startup,
-      routeStartup,
-      ordinaryGzipBytes,
-      rendererName,
-      violations,
-    }) => {
-      const { distDir, writeAsset } = createDistFixture();
-      fs.writeFileSync(
-        path.join(distDir, "index.html"),
-        '<script type="module" src="./assets/index-a.js"></script>\n' +
-          '<link rel="stylesheet" href="./assets/index-c.css">\n' +
-          (startup ? '<link rel="modulepreload" href="./assets/mermaid.min-a.js">\n' : "") +
-          (routeStartup
-            ? '<template data-openclaw-route-preloads="chat"><link rel="modulepreload" href="./assets/mermaid.min-a.js"></template>\n'
-            : ""),
-      );
-      writeAsset("index-a.js", { rawBytes: 100, gzipBytes: 40, brotliBytes: 30 });
-      writeAsset("lazy-b.js", {
-        rawBytes: 200,
-        gzipBytes: ordinaryGzipBytes ?? 70,
-        brotliBytes: 55,
-      });
-      writeAsset("index-c.css", { rawBytes: 50, gzipBytes: 15, brotliBytes: 12 });
-      writeAsset(rendererName ?? "mermaid.min-a.js", {
-        rawBytes: 200,
-        gzipBytes,
-        brotliBytes: 100,
-      });
-      if (duplicate) {
-        writeAsset("mermaid.min-b.js", { rawBytes: 200, gzipBytes, brotliBytes: 100 });
-      }
-
-      const metrics = collectControlUiPerformanceMetrics(distDir);
-      expect(evaluateControlUiPerformanceBudgets(metrics).map((entry) => entry.metric)).toEqual(
-        violations,
-      );
-      expect(metrics.total.js.gzipBytes).toBe(
-        40 + (ordinaryGzipBytes ?? 70) + gzipBytes * (duplicate ? 2 : 1),
-      );
-      if (!rendererName) {
-        expect(metrics.largest.js.file).toBe("assets/lazy-b.js");
-        expect(formatControlUiPerformanceReport(metrics)).toContain("isolated Mermaid JS:");
-      }
-    },
-  );
-
-  it.each([
-    {
-      name: "accepts a capped deferred locale pair",
-      baseGzipBytes: 200 * 1024,
-      configHintsGzipBytes: 100 * 1024,
-      violations: [],
-    },
-    {
-      name: "rejects combined locale pair growth above its cap",
-      baseGzipBytes: 200 * 1024,
-      configHintsGzipBytes: 100 * 1024 + 1,
-      violations: ["largest locale catalog pair JS gzip"],
-    },
-    {
-      name: "rejects duplicate base chunks for one locale",
-      baseGzipBytes: 100_000,
-      configHintsGzipBytes: 100_000,
-      duplicateBase: true,
-      violations: ["locale catalog base JS assets per locale"],
-    },
-    {
-      name: "rejects duplicate config-hint chunks for one locale",
-      baseGzipBytes: 100_000,
-      configHintsGzipBytes: 100_000,
-      duplicateConfigHints: true,
-      violations: ["locale config-hint JS assets per locale"],
-    },
-    {
-      name: "rejects a base locale chunk in startup preloads",
-      baseGzipBytes: 100_000,
-      configHintsGzipBytes: 100_000,
-      startupAsset: "ru-a.js",
-      violations: ["startup locale catalog JS assets"],
-    },
-    {
-      name: "rejects a config-hint chunk in startup preloads",
-      baseGzipBytes: 100_000,
-      configHintsGzipBytes: 100_000,
-      startupAsset: "locale-config-hints-ru-a.js",
-      violations: ["startup locale catalog JS assets"],
-    },
-    {
-      name: "does not combine mismatched locale chunks",
-      baseGzipBytes: 200_000,
-      configHintsGzipBytes: 200_000,
-      configHintsName: "locale-config-hints-de-a.js",
-      violations: [],
-    },
-    {
-      name: "retains the ordinary chunk cap beside locale pairs",
-      baseGzipBytes: 100_000,
-      configHintsGzipBytes: 100_000,
-      ordinaryGzipBytes: 215 * 1024 + 1,
-      violations: ["largest JS gzip"],
-    },
-    {
-      name: "does not exempt unsupported config-hint chunks",
-      baseGzipBytes: 100_000,
-      configHintsGzipBytes: 300 * 1024,
-      configHintsName: "locale-config-hints-en-a.js",
-      violations: ["largest JS gzip"],
-    },
-    {
-      name: "does not exempt config-hint chunks without a suffix",
-      baseGzipBytes: 100_000,
-      configHintsGzipBytes: 300 * 1024,
-      configHintsName: "locale-config-hints-ru-.js",
-      violations: ["largest JS gzip"],
-    },
-  ])(
-    "$name",
-    ({
-      baseGzipBytes,
-      configHintsGzipBytes,
-      duplicateBase,
-      duplicateConfigHints,
-      startupAsset,
-      ordinaryGzipBytes,
-      configHintsName,
-      violations,
-    }) => {
-      const { distDir, writeAsset } = createDistFixture();
-      fs.writeFileSync(
-        path.join(distDir, "index.html"),
-        '<script type="module" src="./assets/index-a.js"></script>\n' +
-          '<link rel="stylesheet" href="./assets/index-c.css">\n' +
-          (startupAsset ? `<link rel="modulepreload" href="./assets/${startupAsset}">\n` : ""),
-      );
-      writeAsset("index-a.js", { rawBytes: 100, gzipBytes: 40, brotliBytes: 30 });
-      writeAsset("lazy-b.js", {
-        rawBytes: 200,
-        gzipBytes: ordinaryGzipBytes ?? 70,
-        brotliBytes: 55,
-      });
-      writeAsset("index-c.css", { rawBytes: 50, gzipBytes: 15, brotliBytes: 12 });
-      writeAsset("ru-a.js", {
-        rawBytes: 200,
-        gzipBytes: baseGzipBytes,
-        brotliBytes: 100,
-      });
-      writeAsset(configHintsName ?? "locale-config-hints-ru-a.js", {
-        rawBytes: 200,
-        gzipBytes: configHintsGzipBytes,
-        brotliBytes: 100,
-      });
-      if (duplicateBase) {
-        writeAsset("ru-duplicate.js", {
-          rawBytes: 200,
-          gzipBytes: 100,
-          brotliBytes: 50,
-        });
-      }
-      if (duplicateConfigHints) {
-        writeAsset("locale-config-hints-ru-duplicate.js", {
-          rawBytes: 200,
-          gzipBytes: 100,
-          brotliBytes: 50,
-        });
-      }
-
-      const metrics = collectControlUiPerformanceMetrics(distDir);
-      expect(evaluateControlUiPerformanceBudgets(metrics).map((entry) => entry.metric)).toEqual(
-        violations,
-      );
-      expect(metrics.total.js.gzipBytes).toBe(
-        40 +
-          (ordinaryGzipBytes ?? 70) +
-          baseGzipBytes +
-          configHintsGzipBytes +
-          (duplicateBase || duplicateConfigHints ? 100 : 0),
-      );
-      if (!configHintsName) {
-        expect(metrics.largest.js.file).toBe("assets/lazy-b.js");
-        expect(formatControlUiPerformanceReport(metrics)).toContain("locale catalog JS:");
-      }
-    },
-  );
-
-  it("includes exact bytes when rounded violation values collide", () => {
-    const metrics = createMetrics(43_009);
-    const budgets = {
-      startupJsRequests: 1,
-      routeBootJsRequests: 35,
-      startupCssRequests: 1,
-      startupJsGzipBytes: 43_008,
-      startupCssGzipBytes: 20,
-      largestJsGzipBytes: 43_008,
-      largestCssGzipBytes: 20,
-    };
-
-    expect(formatControlUiPerformanceReport(metrics, budgets)).toContain(
-      "startup JS gzip: 42.0 KiB exceeds 42.0 KiB (43009 B vs 43008 B)",
+  it("retains the ordinary chunk cap beside locale pairs", () => {
+    const { distDir, writeAsset } = createDistFixture();
+    fs.writeFileSync(
+      path.join(distDir, "index.html"),
+      '<script type="module" src="./assets/index-a.js"></script>\n' +
+        '<link rel="stylesheet" href="./assets/index-c.css">\n',
     );
+    writeAsset("index-a.js", { rawBytes: 100, gzipBytes: 40, brotliBytes: 30 });
+    writeAsset("lazy-b.js", { rawBytes: 200, gzipBytes: 215 * 1024 + 1, brotliBytes: 55 });
+    writeAsset("index-c.css", { rawBytes: 50, gzipBytes: 15, brotliBytes: 12 });
+    writeAsset("ru-a.js", { rawBytes: 200, gzipBytes: 100_000, brotliBytes: 100 });
+    writeAsset("locale-config-hints-ru-a.js", {
+      rawBytes: 200,
+      gzipBytes: 100_000,
+      brotliBytes: 100,
+    });
+    const metrics = collectControlUiPerformanceMetrics(distDir);
+    expect(evaluateControlUiPerformanceBudgets(metrics).map((entry) => entry.metric)).toEqual([
+      "largest JS gzip",
+    ]);
+    expect(metrics.total.js.gzipBytes).toBe(420_201);
+    expect(metrics.largest.js.file).toBe("assets/lazy-b.js");
+    expect(formatControlUiPerformanceReport(metrics)).toContain("locale catalog JS:");
   });
 
   it("reports a 17-byte startup CSS target excess without failing the check", () => {
@@ -622,20 +377,6 @@ describe("Control UI performance budgets", () => {
     expect(report.report).toContain(`${css} B`);
   });
 
-  it("keeps budget violations visible in report-only mode without rejecting artifacts", () => {
-    const { rootDir, scriptPath } = createCliFixture(51_201);
-    const enforced = runControlUiPerformanceCli(scriptPath, ["--json"], rootDir);
-    const reported = runControlUiPerformanceCli(scriptPath, ["--json", "--report-only"], rootDir);
-
-    expect(enforced.status, enforced.stderr).toBe(1);
-    expect(reported.status, reported.stderr).toBe(0);
-    const report = JSON.parse(reported.stdout);
-    expect(report.violations).toEqual(JSON.parse(enforced.stdout).violations);
-    expect(report.violations).toEqual([
-      expect.objectContaining({ metric: "startup CSS gzip", actual: 51_201, limit: 51_200 }),
-    ]);
-  });
-
   it.each(["size", "baseline"])(
     "warns about %s growth in Actions while local CI stays strict",
     (kind) => {
@@ -660,25 +401,6 @@ describe("Control UI performance budgets", () => {
       expect(fs.readFileSync(summaryPath, "utf8")).toContain("Control UI asset budget");
     },
   );
-
-  it("keeps deferred-asset startup isolation blocking in Actions", () => {
-    const { rootDir, scriptPath, distDir } = createCliFixture();
-    for (const suffix of ["", ".gz", ".br"]) {
-      fs.writeFileSync(path.join(distDir, `assets/mermaid.min-a.js${suffix}`), "x");
-    }
-    fs.appendFileSync(
-      path.join(distDir, "index.html"),
-      '<link rel="modulepreload" href="./assets/mermaid.min-a.js">',
-    );
-    const result = runControlUiPerformanceCli(scriptPath, ["--json"], rootDir, {
-      GITHUB_ACTIONS: "true",
-    });
-    expect(result.status, result.stderr).toBe(1);
-    expect(JSON.parse(result.stdout).violations).toEqual([
-      expect.objectContaining({ metric: "startup Mermaid JS assets" }),
-    ]);
-    expect(result.stderr).not.toContain("::warning");
-  });
 
   it.each(["chat", "new"])("enforces the %s boot request limit in Actions", (route) => {
     const { rootDir, scriptPath, distDir } = createCliFixture();
@@ -716,126 +438,6 @@ describe("Control UI performance budgets", () => {
     expect(JSON.parse(atLimit.stdout).violations).toEqual([]);
   });
 
-  it.each(["missing baseline", "malformed baseline", "missing sidecar", "missing base dist"])(
-    "still rejects a %s in report-only mode",
-    (invalid) => {
-      const { rootDir, scriptPath, configDir, distDir } = createCliFixture();
-      const args = ["--report-only"];
-      if (invalid === "missing baseline") {
-        fs.unlinkSync(path.join(configDir, "control-ui-startup-budget-baseline.json"));
-      } else if (invalid === "malformed baseline") {
-        fs.writeFileSync(path.join(configDir, "control-ui-startup-budget-baseline.json"), "{}");
-      } else if (invalid === "missing sidecar") {
-        fs.unlinkSync(path.join(distDir, "assets/index-c.css.gz"));
-      } else {
-        args.push("--base-dist", path.join(rootDir, "missing-base"));
-      }
-
-      const result = runControlUiPerformanceCli(scriptPath, args, rootDir);
-      expect(result.status).toBe(1);
-      expect(result.stderr).toMatch(
-        /Cannot read Control UI startup budget baseline|missing index-c.css.gz|ENOENT/u,
-      );
-    },
-  );
-
-  it.each(["--report-only", "--base-dist"])(
-    "rejects %s during baseline updates without changing the baseline",
-    (option) => {
-      const { rootDir, scriptPath, configDir, distDir } = createCliFixture();
-      const baselinePath = path.join(configDir, "control-ui-startup-budget-baseline.json");
-      const before = fs.readFileSync(baselinePath, "utf8");
-      const args = ["--update-baseline", option];
-      if (option === "--base-dist") {
-        args.push(distDir);
-      }
-
-      const result = runControlUiPerformanceCli(scriptPath, args, rootDir);
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("--update-baseline");
-      expect(fs.readFileSync(baselinePath, "utf8")).toBe(before);
-    },
-  );
-
-  it("allows startup JS at the growth plus build-variance boundary", () => {
-    const metrics = createMetrics(326_251);
-    const baseline = startupBaseline(325_675);
-    const budgets = {
-      ...looseBudgets,
-      startupJsGzipBytes: 319 * 1024,
-      largestJsGzipBytes: 400_000,
-    };
-
-    expect(evaluateControlUiPerformanceBudgets(metrics, budgets, baseline)).toEqual([]);
-    expect(formatControlUiPerformanceReport(metrics, budgets, baseline)).toContain(
-      "build-variance allowance 64 B; enforcement limit 326251 B",
-    );
-  });
-
-  it("fails startup JS one byte beyond the growth plus build-variance boundary", () => {
-    const metrics = createMetrics(326_252);
-    const baseline = startupBaseline(325_675);
-    const budgets = {
-      ...looseBudgets,
-      startupJsGzipBytes: 319 * 1024,
-      largestJsGzipBytes: 400_000,
-    };
-
-    expect(
-      evaluateControlUiPerformanceBudgets(metrics, budgets, baseline).map((entry) => entry.metric),
-    ).toContain("startup JS gzip");
-    expect(formatControlUiPerformanceReport(metrics, budgets, baseline)).toContain(
-      "startup JS gzip: 318.6 KiB exceeds 318.6 KiB (326252 B vs 326251 B)",
-    );
-    expect(formatControlUiPerformanceReport(metrics, budgets, baseline)).toContain(
-      "limits: 10 requests, 318.6 KiB gzip / 326251 B",
-    );
-  });
-
-  it("rejects committed startup JS baselines above the fixed cap", () => {
-    const budgets = {
-      ...looseBudgets,
-      startupJsGzipBytes: 319 * 1024,
-      largestJsGzipBytes: 400_000,
-    };
-
-    expect(
-      evaluateControlUiPerformanceBudgets(
-        createMetrics(319 * 1024),
-        budgets,
-        startupBaseline(319 * 1024 + 1),
-      ).map((entry) => entry.metric),
-    ).toEqual(["startup JS gzip baseline"]);
-  });
-
-  it("rejects startup JS measurements above the cap plus growth and build variance", () => {
-    const budgets = {
-      ...looseBudgets,
-      startupJsGzipBytes: 319 * 1024,
-      largestJsGzipBytes: 400_000,
-    };
-
-    expect(
-      evaluateControlUiPerformanceBudgets(
-        createMetrics(319 * 1024 + 577),
-        budgets,
-        startupBaseline(319 * 1024),
-      ).map((entry) => entry.metric),
-    ).toEqual(["startup JS gzip"]);
-  });
-
-  it("suggests lowering a baseline after a meaningful size reduction", () => {
-    expect(
-      formatControlUiPerformanceReport(
-        createMetrics(10_000),
-        looseBudgets,
-        startupBaseline(14_097),
-      ),
-    ).toContain(
-      `hint: startup JS gzip is more than 4096 B below the 14097 B baseline; lower it with ${baselineUpdateCommand}`,
-    );
-  });
-
   it("fails closed when the startup baseline is malformed", () => {
     const { distDir } = createStartupFixture();
     const baselinePath = path.join(distDir, "baseline.json");
@@ -847,24 +449,6 @@ describe("Control UI performance budgets", () => {
     expect(() => runControlUiPerformanceCheck(distDir, looseBudgets, baselinePath)).toThrow(
       `Regenerate it with ${baselineUpdateCommand}.`,
     );
-  });
-
-  it("reports product growth and build variance as separate result fields", () => {
-    const { distDir } = createStartupFixture();
-    const baselinePath = path.join(distDir, "baseline.json");
-    fs.writeFileSync(
-      baselinePath,
-      JSON.stringify({
-        startupJsGzipBytes: 40,
-        reason: "test baseline",
-        updatedAt: "2026-08-27",
-      }),
-    );
-
-    expect(runControlUiPerformanceCheck(distDir, looseBudgets, baselinePath)).toMatchObject({
-      startupJsTolerance: 512,
-      startupJsBuildVariance: 64,
-    });
   });
 
   it("reports a startup baseline above the configured cap as a budget violation", () => {

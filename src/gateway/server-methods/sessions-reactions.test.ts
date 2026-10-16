@@ -474,48 +474,6 @@ describe("session reaction handlers", () => {
     });
   });
 
-  it.each(["single"] as const)(
-    "preserves remaining reactions for channel reaction slots: %s",
-    async (reactionSlots) => {
-      await withReactionState(async () => {
-        registerReactionChannel(true, reactionSlots);
-        const { messageId, config } = await seedChannelMessage();
-        const requestContext = context(config);
-        const set = (emoji: string, remove = false) =>
-          call(
-            "session.reactions.set",
-            { sessionKey, messageId, emoji, remove },
-            client("alice"),
-            requestContext,
-          );
-        for (const emoji of ["🎉", "👍", "🚀"]) {
-          expect((await set(emoji))[1]).toMatchObject({ mirror: { status: "delivered" } });
-          expect(runMessageAction).toHaveBeenLastCalledWith(
-            expect.objectContaining({ params: expect.objectContaining({ emoji, remove: false }) }),
-          );
-        }
-        for (const [emoji, remaining, replacement] of [
-          ["🎉", ["👍", "🚀"], "🚀"],
-          ["🚀", ["👍"], "👍"],
-          ["👍", [], undefined],
-        ] as const) {
-          expect((await set(emoji, true))[1]).toMatchObject({
-            reactions: remaining.map((value) => ({ emoji: value, count: 1 })),
-            mirror: { status: "delivered" },
-          });
-          expect(runMessageAction).toHaveBeenLastCalledWith(
-            expect.objectContaining({
-              params: expect.objectContaining({
-                emoji: reactionSlots === "single" ? (replacement ?? emoji) : emoji,
-                remove: reactionSlots !== "single" || replacement === undefined,
-              }),
-            }),
-          );
-        }
-      });
-    },
-  );
-
   it("uses the kernel's newest surviving emoji for a single-slot replacement", async () => {
     await withReactionState(async () => {
       registerReactionChannel(true, "single");

@@ -13,6 +13,8 @@ import {
 } from "../infra/state-migrations.messages.js";
 import { recordUpdateDoctorDeferredInspectionChecks } from "../infra/update-doctor-result.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
+import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
   runAuthProfileMigration,
   runAuthProfileDiagnostics as runAuthProfileHealth,
@@ -548,6 +550,8 @@ async function runDoctorHealthContributionList(
   ctx: DoctorHealthFlowContext,
   contributions: readonly DoctorHealthContribution[],
 ): Promise<void> {
+  const signal = resolveCommandProcessSignal(getAsyncWorkSignal());
+  signal?.throwIfAborted();
   const runWithPluginMetadataSnapshot = ctx.runWithPluginMetadataSnapshot;
   throwIfDoctorStateMigrationRefused(ctx.configResult.stateMigrationStepReceipts);
   const env = ctx.env ?? process.env;
@@ -601,6 +605,7 @@ async function runDoctorHealthContributionList(
     : contributions;
   try {
     for (const contribution of ordered) {
+      signal?.throwIfAborted();
       const inspectionIds = postActivationInspections.get(contribution);
       if (inspectionIds) {
         deferredCheckIds = recordUpdateDoctorDeferredInspectionChecks(inspectionIds);
@@ -629,6 +634,7 @@ async function runDoctorHealthContributionList(
       }
       try {
         const run = async () => {
+          signal?.throwIfAborted();
           try {
             await contribution.run(ctx);
           } finally {
@@ -648,12 +654,15 @@ async function runDoctorHealthContributionList(
             await runWithPluginMetadataSnapshot({ config: ctx.cfg, workspaceDir }, run);
           }
         });
+        signal?.throwIfAborted();
         if (ctx.configWriteRefusal) {
           // Later repairs consume the candidate. Stop before they persist state
           // derived from config that the writer deliberately left non-durable.
           return;
         }
       } catch (error) {
+        // Cancellation ends the command, including when an optional check reports a warning.
+        signal?.throwIfAborted();
         if (
           contribution.required ||
           error instanceof DoctorStateMigrationRefusalError ||

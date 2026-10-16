@@ -557,25 +557,13 @@ export async function waitForSessionTranscriptProjection(
   }
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const databaseOptions = prepareReconcileParams(toDatabaseOptions(resolved));
-  return waitForPreparedSessionTranscriptProjection(
-    resolved.sessionId,
-    databaseOptions,
-    abortSignal,
-  );
-}
-
-async function waitForPreparedSessionTranscriptProjection(
-  sessionId: string,
-  databaseOptions: PreparedReconcileParams,
-  abortSignal?: AbortSignal,
-): Promise<void> {
   const key = resolveOpenClawAgentSqlitePath(databaseOptions);
   let running = runningReconciles.get(key);
   if (!running) {
     return;
   }
   const needsReconcile = () =>
-    readSessionTranscriptProjectionStatus(databaseOptions, sessionId, abortSignal);
+    readSessionTranscriptProjectionStatus(databaseOptions, resolved.sessionId, abortSignal);
   try {
     while (running) {
       abortSignal?.throwIfAborted();

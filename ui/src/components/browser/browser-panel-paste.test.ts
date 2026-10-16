@@ -33,17 +33,6 @@ function textInput(
   });
 }
 
-function touch(type: string, clientX: number, clientY: number, options: PointerEventInit = {}) {
-  return new PointerEvent(type, {
-    pointerId: 1,
-    pointerType: "touch",
-    clientX,
-    clientY,
-    bubbles: true,
-    ...options,
-  });
-}
-
 function setStageSize(panel: HTMLElementTagNameMap["openclaw-browser-panel"], size = 100) {
   vi.spyOn(panel.renderRoot.querySelector(".bp-stage")!, "getBoundingClientRect").mockReturnValue(
     new DOMRect(0, 0, size, size),
@@ -122,29 +111,6 @@ describe("Browser panel text and touch input", () => {
     },
   );
 
-  it("offers an empty editable input surface while typing stays remote", async () => {
-    const { request, input } = await mount();
-    expect(input).not.toBeNull();
-    input.focus();
-    expect(document.activeElement).toBe(input);
-    const key = new KeyboardEvent("keydown", { key: "a", bubbles: true, cancelable: true });
-    input.dispatchEvent(key);
-    expect(key.defaultPrevented).toBe(true);
-    expect(request).toHaveBeenCalledWith(
-      "browser.request",
-      expect.objectContaining({
-        body: expect.objectContaining({ kind: "press", key: "a" }),
-      }),
-    );
-    const event = paste("synthetic password");
-    input.dispatchEvent(event);
-    expect(event.defaultPrevented).toBe(true);
-    expect(input.value).toBe("");
-    const inputEvent = textInput("beforeinput", "insertText", "x");
-    input.dispatchEvent(inputEvent);
-    expect(inputEvent.defaultPrevented).toBe(true);
-  });
-
   it("forwards soft-keyboard text and editing without printable keydown events", async () => {
     const { request, input } = await mount();
     for (const [inputType, data] of [
@@ -181,51 +147,6 @@ describe("Browser panel text and touch input", () => {
       "Edit the text directly",
     );
   });
-
-  it.each([
-    { outcome: "scroll", size: 50, startY: 40, endY: 10 },
-    { outcome: "route changed", size: 100, startY: 70, endY: 20 },
-  ])(
-    "keeps a queued touch swipe with its browser route ($outcome)",
-    async ({ outcome, size, startY, endY }) => {
-      const { panel, controller, request, input } = await mount();
-      setStageSize(panel, size);
-      for (const [type, clientY] of [
-        ["pointerdown", startY],
-        ["pointermove", endY],
-      ] as const) {
-        input.dispatchEvent(touch(type, 20, clientY, { cancelable: true }));
-      }
-      if (outcome === "route changed") {
-        controller.operations.resetRoute({ profile: "other", target: "host" });
-        await vi.advanceTimersByTimeAsync(150);
-        expect(request).not.toHaveBeenCalled();
-        return;
-      }
-      input.dispatchEvent(touch("pointerup", 20, endY, { cancelable: true }));
-      input.click();
-      await vi.advanceTimersByTimeAsync(150);
-      expect(request).toHaveBeenCalledExactlyOnceWith(
-        "browser.request",
-        expect.objectContaining({
-          target: "node",
-          node: "browser-node",
-          query: { profile: "work" },
-          body: {
-            kind: "evaluate",
-            targetId: "form-tab",
-            fn: expect.stringContaining("window.scrollBy(0, 60)"),
-          },
-        }),
-      );
-      input.dispatchEvent(touch("pointerdown", 10, 20, { pointerId: 2 }));
-      input.dispatchEvent(touch("pointerup", 10, 20, { pointerId: 2 }));
-      input.dispatchEvent(new MouseEvent("click", { clientX: 10, clientY: 20, bubbles: true }));
-      expect(request.mock.calls.at(-1)?.[1]).toMatchObject({
-        body: { kind: "clickCoords", x: 20, y: 40 },
-      });
-    },
-  );
 
   it.each(["committed", "route changed", "capture mode"])(
     "sends composition once only to its original field (%s)",

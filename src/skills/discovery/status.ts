@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { prepareBinaryAvailability } from "../../shared/config-eval.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "../../shared/entry-status.js";
+import { isOsRequirementSatisfied } from "../../shared/requirements.js";
 import { CONFIG_DIR } from "../../utils.js";
 import { prepareSkillLibrarySelection } from "../library/selection.js";
 import { resolveBundledSkillsDir } from "../loading/bundled-dir.js";
@@ -120,16 +121,13 @@ function normalizeInstallOptions(
   platform: string,
 ): SkillInstallOption[] {
   // Recipes execute where the workspace dependencies live.
-  const requiredOs = entry.metadata?.os ?? [];
-  if (requiredOs.length > 0 && !requiredOs.includes(platform)) {
+  if (!isOsRequirementSatisfied(entry.metadata?.os ?? [], [platform])) {
     return [];
   }
 
   const install = entry.metadata?.install ?? [];
-  const supportsPlatform = (spec: SkillInstallSpec) => {
-    const osList = spec.os ?? [];
-    return osList.length === 0 || osList.includes(platform);
-  };
+  const supportsPlatform = (spec: SkillInstallSpec) =>
+    isOsRequirementSatisfied(spec.os ?? [], [platform]);
   const filtered = install.filter(supportsPlatform);
 
   const toOption = (spec: SkillInstallSpec, index: number): SkillInstallOption => {
@@ -373,10 +371,7 @@ export async function prepareWorkspaceSkillStatus(
   let runtime = sources.runtime;
   if (!getAgentWorkspaceAccess(workspaceDir, "loadSkills")?.loadSkills) {
     const bins = [...new Set(["brew", ...sources.entries.flatMap(resolveSkillRequiredBins)])];
-    let facts = await prepareBinaryAvailability(bins);
-    while (!facts.isCurrent()) {
-      facts = await prepareBinaryAvailability(bins);
-    }
+    const facts = await prepareBinaryAvailability(bins);
     runtime = { platform: process.platform, bins: bins.filter(facts.hasBinary) };
   }
   return {

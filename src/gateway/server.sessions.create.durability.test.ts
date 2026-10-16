@@ -18,6 +18,7 @@ import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js"
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { readLoggingConfig } from "../logging/config.js";
 import { applyLoggingConfig } from "../logging/logger.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { runOutsideStoreWriterContext } from "../shared/store-writer-queue.js";
@@ -38,6 +39,104 @@ const turnBoundary = vi.hoisted(() => ({
   afterPrepare: undefined as (() => void) | undefined,
   afterCommit: undefined as (() => void) | undefined,
 }));
+const chatDiagnostics = vi.hoisted(() => ({
+  current: undefined as
+    | {
+        started: number;
+        requests: number;
+        scopes: number;
+        acknowledgements: number;
+        dropped: number;
+        events: Array<{
+          request: number;
+          scope?: number;
+          event: string;
+          phase?: string;
+          elapsedMs: number;
+        }>;
+      }
+    | undefined,
+}));
+vi.mock("./server-methods/chat-send-diagnostics.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./server-methods/chat-send-diagnostics.js")>();
+  return {
+    ...actual,
+    startChatSendDiagnostics: (...args: Parameters<typeof actual.startChatSendDiagnostics>) => {
+      const real = actual.startChatSendDiagnostics(...args);
+      const recorder = chatDiagnostics.current;
+      if (!recorder) {
+        return real;
+      }
+      const request = ++recorder.requests;
+      const phases = new Set([
+        "authority",
+        "admission",
+        "preparation",
+        "attachments",
+        "replyContext",
+        "authoring",
+        "persist",
+        "runAdmission",
+        "replyInitialization",
+        "snapshot",
+        "worktree",
+        "effects",
+        "response",
+        "dispatch",
+      ]);
+      const record = (event: string, scope?: number, phase?: string) => {
+        if (recorder !== chatDiagnostics.current) {
+          return;
+        }
+        if (recorder.events.length === 64) {
+          recorder.events.shift();
+          recorder.dropped += 1;
+        }
+        recorder.events.push({
+          request,
+          scope,
+          event,
+          phase: phase === undefined ? undefined : phases.has(phase) ? phase : "detail",
+          elapsedMs: Math.round(performance.now() - recorder.started),
+        });
+      };
+      record("start");
+      return {
+        ...real,
+        // observeSpan keeps its original closure; this records only the public
+        // request/scope calls and never substitutes their ownership or timing.
+        scope: (...scopeArgs: Parameters<typeof real.scope>) => {
+          const owned = real.scope(...scopeArgs);
+          if (!owned) {
+            return owned;
+          }
+          const scope = ++recorder.scopes;
+          record("scope", scope, scopeArgs[0]);
+          return {
+            ...owned,
+            mark: (...markArgs: Parameters<typeof owned.mark>) => {
+              record("mark", scope, markArgs[0]);
+              return owned.mark(...markArgs);
+            },
+            finish: () => {
+              record("finish", scope);
+              return owned.finish();
+            },
+            [Symbol.dispose]: () => {
+              record("dispose", scope);
+              return owned[Symbol.dispose]();
+            },
+          };
+        },
+        acknowledge: (...ackArgs: Parameters<typeof real.acknowledge>) => {
+          recorder.acknowledgements += 1;
+          record("acknowledge");
+          return real.acknowledge(...ackArgs);
+        },
+      };
+    },
+  };
+});
 vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../state/openclaw-agent-execution.js")>();
   return {
@@ -99,6 +198,7 @@ const { createSessionStoreDir, openClient } = setupSessionCreateTestHarness(asyn
 });
 
 afterEach(() => {
+  chatDiagnostics.current = undefined;
   turnBoundary.committing = false;
   turnBoundary.afterPrepare = undefined;
   turnBoundary.afterCommit = undefined;
@@ -688,11 +788,35 @@ test.for([
       expect(before.pendingWorktree !== undefined).toBe(worktree);
       const followup = "Also retain this queued follow-up.";
       if (worktree) {
+        const recorder = {
+          started: performance.now(),
+          requests: 0,
+          scopes: 0,
+          acknowledgements: 0,
+          dropped: 0,
+          events: [],
+        };
+        chatDiagnostics.current = recorder;
         const sent = await rpcReq(ws, "chat.send", {
           sessionKey: key,
           message: followup,
           idempotencyKey: `followup-${id}`,
-        });
+        })
+          .catch((error: unknown) => {
+            process.stderr.write(
+              `[chat-send-phase] ${JSON.stringify({
+                ...recorder,
+                started: undefined,
+                elapsedMs: Math.round(performance.now() - recorder.started),
+                dispatches: dispatch.start.mock.calls.length,
+                activeRoots: getActiveGatewayRootWorkCount({ excludeCurrent: true }),
+              })}\n`,
+            );
+            throw error;
+          })
+          .finally(() => {
+            chatDiagnostics.current = undefined;
+          });
         expect(sent.ok, JSON.stringify(sent)).toBe(true);
         const pending = await rpcReq<{ pendingInputs: { items: unknown[] } }>(ws, "chat.history", {
           sessionKey: key,
@@ -743,6 +867,7 @@ test.for([
         expect(JSON.stringify(history.payload?.messages)).not.toContain(followup);
       }
     } finally {
+      chatDiagnostics.current = undefined;
       for (const [turn] of dispatch.start.mock.calls) {
         turn.replyAdmissionTicket?.release();
         turn.admission.cleanupAdmittedRun();

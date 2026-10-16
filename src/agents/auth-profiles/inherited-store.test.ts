@@ -89,6 +89,7 @@ it.each([
   "ensure",
   "prepared-snapshot",
   "local-update",
+  "local-update-async",
   "model-runtime",
   "model-snapshot",
 ] as const)("keeps local credentials through a refused inherited store via %s", async (mode) => {
@@ -137,6 +138,9 @@ it.each([
     }
     if (mode === "local-update") {
       return runtime.ensureAuthProfileStoreForLocalUpdate(workerDir);
+    }
+    if (mode === "local-update-async") {
+      return runtime.ensureAuthProfileStoreForLocalUpdateAsync(workerDir);
     }
     if (mode === "prepared-snapshot") {
       setRuntimeAuthProfileStoreSnapshot(local, workerDir);

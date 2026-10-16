@@ -1,32 +1,11 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu } from "../../../components/solid/menu.tsx";
 import { beginClipboardCopy } from "../../../lib/clipboard.ts";
+import { downloadImageBlob } from "../../../lib/image-download.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { showToast } from "../../../lib/toast.ts";
 
 let nextMenuId = 0;
-
-function imageDownloadFileName(title: string, mimeType: string): string {
-  const extension = mimeType === "image/jpeg" ? "jpg" : mimeType.split("/", 2)[1] || "img";
-  const rawStem = Array.from(title, (character) =>
-    character.codePointAt(0)! <= 0x1f || '<>:"/\\|?*'.includes(character) ? "-" : character,
-  )
-    .join("")
-    .replace(/\.[a-z0-9]{1,10}$/iu, "")
-    .replace(/[. -]+$/u, "");
-  const stem = truncateUtf16Safe(rawStem, 120);
-  return `${stem || "generated-image"}.${/^[a-z0-9.+-]{1,12}$/u.test(extension) ? extension : "img"}`;
-}
-
-function downloadImageBlob(blob: Blob, fileName: string): void {
-  const blobUrl = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = blobUrl;
-  anchor.download = fileName;
-  anchor.click();
-  globalThis.setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
-}
 
 async function convertImageBlobToPng(blob: Blob): Promise<Blob> {
   if (blob.type === "image/png") {
@@ -58,7 +37,7 @@ export function ChatImageActions(props: { title: string; readOriginalBlob: () =>
   const download = async () => {
     try {
       const blob = await props.readOriginalBlob();
-      downloadImageBlob(blob, imageDownloadFileName(props.title, blob.type));
+      downloadImageBlob(blob, props.title);
     } catch {
       showToast({ message: t("chat.imageLightbox.downloadFailed") });
     }

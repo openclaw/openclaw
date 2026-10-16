@@ -10,11 +10,111 @@ import {
   GATEWAY_STORE_TEST_HELLO,
   stubGatewayStoreTestGlobals,
 } from "../app/gateway-store.test-support.ts";
+import { controlUiPluginAssetUrls } from "./control-ui-assets.ts";
+import type { ControlUiPluginDistribution } from "./control-ui-distribution.ts";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
 import { initializeControlUiPlugin } from "./control-ui-loader.ts";
 import { ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 
 vi.mock("./control-ui-loader.ts", () => ({ initializeControlUiPlugin: vi.fn() }));
+const packaged = vi.hoisted(() => [] as ControlUiPluginDistribution[]);
+vi.mock("./control-ui-distribution.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./control-ui-distribution.ts")>()),
+  controlUiPluginDistributions: packaged,
+}));
+
+it.each(["cross-origin", "authenticated HTTP", "pending import"])(
+  "loads only the matching distribution and retires same-revision eligibility loss: %s",
+  async (scenario) => {
+    const distribution = {
+      pluginId: "workboard",
+      revision: "same-bytes",
+      bundledDistribution: { packageName: "@openclaw/workboard", packageVersion: "1.0.0" },
+      entry: new URL("/assets/plugins/workboard/same-bytes/index.js", location.href).href,
+      styles: [new URL("/assets/plugins/workboard/same-bytes/index.css", location.href).href],
+      imports: [],
+    };
+    packaged.push(distribution);
+    let descriptor: PluginsControlUiCatalog["plugins"][number] = {
+      ...distribution,
+      name: "Workboard",
+      entryUrl: "/untrusted-gateway-path.js",
+    };
+    const pending = createDeferred();
+    const started = createDeferred();
+    const owners: Parameters<typeof initializeControlUiPlugin>[2][] = [];
+    const reports: unknown[] = [];
+    const refresh = vi.fn(async () => ({ pluginAssetsRequireAuth: true, pluginFrameGrants: [] }));
+    const client = {
+      gatewayUrl:
+        scenario === "authenticated HTTP"
+          ? location.origin.replace(/^http/u, "ws")
+          : "ws://gateway.example",
+      request: async (method: string, params: unknown) => {
+        if (method === "plugins.controlUi.list") {
+          return { plugins: [descriptor], diagnostics: [], revision: "catalog" };
+        }
+        reports.push(params);
+        return { ok: true };
+      },
+    };
+    const context = {
+      resourceBasePath: "",
+      config: { ...createApplicationConfigCapability({ resourceBasePath: "" }), refresh },
+      gateway: {
+        snapshot: {
+          phase: "connected",
+          client,
+          hello: { features: { methods: ["plugins.controlUi.list"] } },
+        },
+        subscribe: () => () => undefined,
+        subscribeEvents: () => () => undefined,
+      },
+    } as unknown as ApplicationContext;
+    vi.stubGlobal("isSecureContext", false);
+    vi.mocked(initializeControlUiPlugin).mockImplementation(async (getContext, runtime, owner) => {
+      owners.push(owner);
+      expect(controlUiPluginAssetUrls(owner.descriptor, "")).toEqual(distribution);
+      started.resolve();
+      if (scenario === "pending import") {
+        await pending.promise;
+        if (!runtime.isCurrent(owner)) {
+          return undefined;
+        }
+      }
+      const host = createControlUiPluginHost(getContext, runtime, owner);
+      host.ui.registerNavigation({ id: "board", label: "Workboard", page: { id: "board" } });
+      return Object.assign(owner, { host });
+    });
+    const runtime = new ControlUiPluginRuntime(() => context);
+    try {
+      runtime.start();
+      await started.promise;
+      if (scenario !== "pending import") {
+        await vi.waitFor(() => expect(runtime.registrations("navigation")).toHaveLength(1));
+      }
+      // Same revision, package fields and code; only the loaded owner lost eligibility.
+      descriptor = { ...descriptor, bundledDistribution: undefined };
+      await runtime.refresh();
+      pending.resolve();
+      expect(owners[0]?.abort.signal.aborted).toBe(true);
+      expect(runtime.registrations("navigation")).toEqual([]);
+      expect(owners).toHaveLength(1);
+      expect(reports).toContainEqual(
+        expect.objectContaining({ status: "failed", pluginId: "workboard" }),
+      );
+      if (scenario !== "authenticated HTTP") {
+        expect(refresh).not.toHaveBeenCalled();
+      }
+    } finally {
+      pending.resolve();
+      runtime.dispose();
+      packaged.length = 0;
+      vi.mocked(initializeControlUiPlugin).mockReset();
+      vi.unstubAllGlobals();
+    }
+  },
+);
 
 it.each(["document", "published", "listener"] as const)(
   "preloads authorized config assets before connection from %s config",

@@ -4,6 +4,7 @@ import type { DatabaseSync, StatementSync as NativeStatement } from "node:sqlite
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
@@ -57,14 +58,16 @@ function observeMaintenance(
   });
 }
 
-it.each(["cold", "warm-cap", "removal"] as const)(
+it.for(["cold", "warm-cap", "removal"] as const)(
   "runs automatic maintenance row planning off-thread (%s)",
-  async (scenario) => {
+  async (scenario, { signal }) => {
     const remove = scenario === "removal" || scenario === "warm-cap";
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const storePath = path.join(state.sessionsDir(), "sessions.json");
       const active = { sessionKey: "agent:main:maintenance-worker-active", storePath };
       const stale = { sessionKey: "agent:main:subagent:maintenance-worker-stale", storePath };
+      const locked = { sessionKey: "agent:main:maintenance-worker-locked", storePath };
+      const protectedEntry = { sessionKey: "agent:main:maintenance-worker-protected", storePath };
       replaceSessionEntrySync(active, { sessionId: "active", updatedAt: Date.now() });
       const staleEvent = { type: "session", id: "stale", content: "synthetic maintenance archive" };
       const seedStale = (updatedAt: number) => {
@@ -76,7 +79,7 @@ it.each(["cold", "warm-cap", "removal"] as const)(
       }
       const policy = resolveMaintenanceConfigFromInput({
         mode: "enforce",
-        maxEntries: scenario === "warm-cap" ? 1 : 100,
+        maxEntries: scenario === "warm-cap" ? 3 : 100,
         pruneAfter: "1h",
       });
       if (scenario === "warm-cap") {
@@ -89,11 +92,39 @@ it.each(["cold", "warm-cap", "removal"] as const)(
         vi.restoreAllMocks();
       }
       if (scenario === "warm-cap") {
+        replaceSessionEntrySync(locked, {
+          sessionId: "locked",
+          updatedAt: Date.now() - 3,
+          modelSelectionLocked: true,
+        });
+        replaceSessionEntrySync(protectedEntry, {
+          sessionId: "protected",
+          updatedAt: Date.now() - 2,
+        });
         seedStale(Date.now() - 1);
       }
-      const maintenanceReads: string[] = [];
+      const planningPhases: string[] = [];
+      const workerThreadIds: number[] = [];
+      let foregroundProgressed = false;
       observeSessionMaintenancePlanningWorker({
-        onRead: (kind) => maintenanceReads.push(kind),
+        async afterPrepare() {
+          planningPhases.push("prepared");
+          if (scenario === "warm-cap" && !foregroundProgressed) {
+            // A foreground writer must finish while automatic preparation remains held.
+            await racePromiseWithAbortSignal(
+              patchSessionEntryCore(active, () => ({ label: "foreground progressed" }), {
+                skipMaintenance: true,
+                workerGuard: {},
+              }),
+              signal,
+            );
+            foregroundProgressed = true;
+          }
+        },
+        beforeExecute: () => planningPhases.push("planning"),
+        afterExecute: (result) => {
+          workerThreadIds.push(result.workerThreadId);
+        },
       });
       const completed = observeMaintenance();
       const observation = new AsyncLocalStorage<boolean>();
@@ -145,9 +176,8 @@ it.each(["cold", "warm-cap", "removal"] as const)(
           }),
         );
       });
-      const preservation = vi.fn(() => []);
       const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
-        capture: preservation,
+        capture: () => (scenario === "warm-cap" ? [protectedEntry.sessionKey] : []),
         dispose() {},
       }));
       const result = await (async () => {
@@ -156,7 +186,7 @@ it.each(["cold", "warm-cap", "removal"] as const)(
             maintenanceConfig: policy,
             workerGuard: {},
           });
-          return await completed;
+          return await racePromiseWithAbortSignal(completed, signal);
         } finally {
           unregister();
           prepare.mockRestore();
@@ -172,10 +202,16 @@ it.each(["cold", "warm-cap", "removal"] as const)(
       ).toEqual([]);
       if (!remove) {
         expect(counts).toEqual(emptyCounts);
-        expect(preservation).not.toHaveBeenCalled();
-        expect(maintenanceReads).toEqual(["maintenance-plan"]);
       }
-      expect(loadSessionEntry(active)?.label).toBe("updated");
+      expect(planningPhases).toEqual(["prepared", "planning"]);
+      expect(workerThreadIds[0]).toBeGreaterThan(0);
+      const expectedLabel = scenario === "warm-cap" ? "foreground progressed" : "updated";
+      expect(loadSessionEntry(active)?.label).toBe(expectedLabel);
+      if (scenario === "warm-cap") {
+        expect(foregroundProgressed).toBe(true);
+        expect(loadSessionEntry(locked)?.sessionId).toBe("locked");
+        expect(loadSessionEntry(protectedEntry)?.sessionId).toBe("protected");
+      }
       if (remove) {
         if (!("archivedTranscripts" in result)) {
           throw new Error("Session removals did not complete maintenance finalization");
@@ -191,7 +227,7 @@ it.each(["cold", "warm-cap", "removal"] as const)(
       }
       const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       await closeOpenClawAgentDatabaseByPathAsync(database.path);
-      expect(loadSessionEntry(active)?.label).toBe("updated");
+      expect(loadSessionEntry(active)?.label).toBe(expectedLabel);
       if (remove) {
         expect(loadSessionEntry(stale)).toBeUndefined();
       }
@@ -426,7 +462,6 @@ it.each([
   { mutation: "backdate", boundary: "before-authorization" },
   { mutation: "restore", boundary: "after-settlement" },
   { mutation: "backdate", boundary: "missing-after-settlement" },
-  { mutation: "backdate", boundary: "before-read-consumption" },
 ] as const)(
   "keeps $mutation authority at $boundary across real Worker planning",
   async ({ mutation, boundary }) => {
@@ -440,13 +475,15 @@ it.each([
         pruneAfter: "1s",
         preserveRecent: "1h",
       });
-      // Cap pressure requires Worker admission even with a warm age fact. Recent
-      // rows remain protected until the injected backdate/restore makes the victim old.
+      // Recent protection keeps the victim until the boundary probe makes it old.
       replaceSessionEntrySync(
         { sessionKey: "agent:main:age-worker-pressure", storePath },
         { sessionId: "pressure", updatedAt: Date.now() },
       );
-      replaceSessionEntrySync(active, { sessionId: "active", updatedAt: Date.now() });
+      replaceSessionEntrySync(active, {
+        sessionId: "active",
+        updatedAt: Date.now(),
+      });
       replaceSessionEntrySync(victim, {
         sessionId: "victim",
         updatedAt: mutation === "restore" ? 1 : Date.now(),
@@ -483,7 +520,6 @@ it.each([
         replaceSessionEntrySync(victim, { sessionId: "victim", updatedAt: 1 });
       };
       const workerThreadIds: number[] = [];
-      let readOnlySettled = false;
       observeSessionMaintenancePlanningWorker({
         beforeExecute() {
           if (boundary === "before-authorization" && !changed) {
@@ -492,20 +528,7 @@ it.each([
         },
         async afterExecute(result, native) {
           workerThreadIds.push(result.workerThreadId);
-          if (result.kind === "read-only") {
-            expect(native.admission).toBeUndefined();
-            expect(native.retained).toBeUndefined();
-            readOnlySettled = true;
-            if (boundary === "before-read-consumption" && !changed) {
-              mutate();
-            }
-          }
-          if (
-            boundary !== "before-authorization" &&
-            boundary !== "before-read-consumption" &&
-            result.kind === "committed" &&
-            !changed
-          ) {
+          if (boundary !== "before-authorization" && result.kind === "committed" && !changed) {
             expect(native.admission?.committed).toMatchObject({
               facts: { kind: "session-entry-replacements" },
             });
@@ -515,25 +538,6 @@ it.each([
             mutate();
           }
         },
-      });
-      const rejectedSnapshots: string[] = [];
-      const reclaim = reclamationRun.runSqliteSessionReclamation;
-      vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementation(async (params) => {
-        const result = await reclaim(params);
-        if (
-          readOnlySettled &&
-          result.kind === "maintenance-plan" &&
-          result.readOnlyInput &&
-          (boundary === "after-settlement" || boundary === "missing-after-settlement") &&
-          !changed
-        ) {
-          // Read-only completion has no COMMIT receipt; retain the same caller-adoption race.
-          mutate();
-        }
-        if (changed && result.kind === "maintenance-plan-stale") {
-          rejectedSnapshots.push(params.plan.kind);
-        }
-        return result;
       });
       const completed = observeMaintenance((result) => result.archived === 1);
       await patchSessionEntryCore(active, () => ({ label: "change during planning" }), {
@@ -549,9 +553,6 @@ it.each([
       }
       if (boundary !== "before-authorization") {
         expect(workerThreadIds.length).toBeGreaterThanOrEqual(2);
-      }
-      if (boundary === "before-read-consumption") {
-        expect(rejectedSnapshots).toContain("maintenance-plan");
       }
       expect(loadSessionEntry(victim)).toMatchObject({
         archivedAt: expect.any(Number),
@@ -818,22 +819,8 @@ it("invalidates the retained maintenance age when a worker commits a backdate", 
       const settled = createDeferredCore<number | undefined>();
       const reclaim = reclamationRun.runSqliteSessionReclamation;
       vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementation(async (params) => {
-        const consumption: { deadline?: { nextAt: number | undefined } } = {};
-        const consume = params.consumeReadOnlyMaintenancePlan;
-        const result = await reclaim({
-          ...params,
-          ...(consume
-            ? {
-                consumeReadOnlyMaintenancePlan(read, assertCurrent) {
-                  consume(read, assertCurrent);
-                  consumption.deadline = { nextAt: read.nextAt };
-                },
-              }
-            : {}),
-        });
-        if (result.kind === "maintenance-plan" && consumption.deadline) {
-          settled.resolve(consumption.deadline.nextAt);
-        } else if (params.plan.kind === "maintenance-age" && result.kind === "maintenance-age") {
+        const result = await reclaim(params);
+        if (result.kind === "maintenance-plan" || result.kind === "maintenance-age") {
           settled.resolve(result.nextAt);
         }
         return result;

@@ -4,11 +4,15 @@ import { createGatewayMethodRegistry } from "../../../gateway/methods/registry.j
 import { createChatRunState } from "../../../gateway/server-chat-state.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { resetCommandQueueStateForTest } from "../../../process/command-queue.test-support.js";
+import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { trackAsyncWork } from "../../../shared/async-work-scope.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import * as deliveryRuntime from "./subagent-announce-delivery.runtime.js";
 import * as announceOutput from "./subagent-announce-output.js";
-import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
+import {
+  outputTesting,
+  setSubagentAnnounceDeliveryDepsForTest,
+} from "./subagent-announce-overrides.test-support.js";
 import {
   deliver,
   registryRead,
@@ -25,6 +29,27 @@ const readChildCompletionFindings = announceOutput.readChildCompletionFindings;
 export function useRequesterSettleDispatchFixture() {
   let restoreRequesterCurrent: (() => void) | undefined;
   beforeEach(() => {
+    outputTesting.setDepsForTest({
+      readSubagentSessionEntry: (_storePath, sessionKey) => ({
+        sessionId: `session-${sessionKey}`,
+        updatedAt: 1,
+      }),
+      findTranscriptEvent: async ({ sessionId }, match) => {
+        const child = registryRead
+          .listSubagentRunsForRequester()
+          .find((entry) => `session-${entry.childSessionKey}` === sessionId);
+        const event = {
+          type: "message",
+          message: {
+            role: "assistant",
+            display: true,
+            content: [{ type: "text", text: child?.completion?.resultText }],
+            __openclaw: { runId: child?.runId },
+          },
+        };
+        return child && matchesTranscriptEvent(event, match) ? { event } : undefined;
+      },
+    });
     const requesterCurrent = vi
       .spyOn(deliveryRuntime, "captureRequesterSessionEntryCurrent")
       .mockResolvedValue({
@@ -54,6 +79,7 @@ export function useRequesterSettleDispatchFixture() {
     vi.mocked(announceOutput.readChildCompletionFindings).mockRestore();
     resetCommandQueueStateForTest();
     setSubagentAnnounceDeliveryDepsForTest();
+    outputTesting.setDepsForTest();
     restoreRequesterCurrent?.();
     vi.useRealTimers();
   });
@@ -84,7 +110,12 @@ export function settledChild(): SubagentRunRecord {
     createdAt: 1_000,
     execution: { status: "terminal", startedAt: 2_000, endedAt: 3_000, outcome: { status: "ok" } },
     expectsCompletionMessage: true,
-    completion: { required: true, resultText: "child result", capturedAt: 3_000 },
+    completion: {
+      required: true,
+      resultText: "child result",
+      terminalReply: { disposition: "visible", text: "child result" },
+      capturedAt: 3_000,
+    },
     delivery: { status: "delivered" },
     requesterSettleWake: {
       status: "pending",

@@ -573,7 +573,7 @@ export async function resolvePinnedDaemonRuntimePath(
       info.capabilityError ??
       (runtime === "node"
         ? `Node ${SUPPORTED_NODE_VERSIONS} with WAL-reset-safe SQLite is required.`
-        : "Bun 1.4+ with WAL-reset-safe node:sqlite is required.");
+        : "Bun 1.4.3+ with WAL-reset-safe node:sqlite is required.");
     throw new Error(`Pinned runtime ${runtimePath} is unsupported: ${detail}`);
   }
   return runtimePath;

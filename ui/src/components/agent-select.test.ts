@@ -74,6 +74,27 @@ it("preserves complete grapheme clusters in emoji avatar fallback", async () => 
   }
 });
 
+it("renders named scope icons and restores the selected agent avatar", async () => {
+  const element = await createAgentSelect({
+    options: [
+      { value: "", label: "All agents", icon: "users" },
+      { value: "alpha", label: "Alpha", agent: { id: "alpha", identity: { emoji: "🦞" } } },
+    ],
+    value: "",
+  });
+
+  const trigger = element.querySelector(".agent-select__trigger")!;
+  const icon = trigger.querySelector(".agent-select__avatar--icon svg");
+  expect(icon?.namespaceURI).toBe("http://www.w3.org/2000/svg");
+  expect(icon?.childElementCount).toBeGreaterThan(0);
+  expect(trigger.textContent).not.toContain("users");
+
+  element.value = "alpha";
+  await element.updateComplete;
+  expect(trigger.querySelector(".agent-select__avatar--icon")).toBeNull();
+  expect(trigger.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe("🦞");
+});
+
 it("keeps a failed avatar on its fallback until the image changes", async () => {
   const invalidAvatar = "data:image/gif;base64,bm90LWFuLWltYWdl";
   const replacementAvatar = "data:image/png;base64,cmVwbGFjZW1lbnQ=";
@@ -105,6 +126,31 @@ it("keeps a failed avatar on its fallback until the image changes", async () => 
   await element.updateComplete;
   expect(element.querySelector(".agent-select__avatar img")?.getAttribute("src")).toBe(
     replacementAvatar,
+  );
+});
+
+it("does not let a removed option's image error poison its replacement lease", async () => {
+  const avatar = "data:image/png;base64,cmV0YWluZWQ=";
+  const element = await createAgentSelect({
+    identityById: { alpha: createIdentity("alpha", { avatar }) },
+  });
+  const retired = element.querySelector<HTMLImageElement>(".agent-select__trigger img")!;
+  expect(retired.getAttribute("src")).toBe(avatar);
+  element.options = options.filter((option) => option.value === "beta");
+  element.value = "beta";
+  await element.updateComplete;
+  await waitForSolid(() => expect(element.querySelector(".agent-select__trigger img")).toBeNull());
+
+  element.options = options;
+  element.value = "alpha";
+  await element.updateComplete;
+  await waitForSolid(() =>
+    expect(element.querySelector(".agent-select__trigger img")?.getAttribute("src")).toBe(avatar),
+  );
+  retired.dispatchEvent(new Event("error"));
+  await element.updateComplete;
+  await waitForSolid(() =>
+    expect(element.querySelector(".agent-select__trigger img")?.getAttribute("src")).toBe(avatar),
   );
 });
 

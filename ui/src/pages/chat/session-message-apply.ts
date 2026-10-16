@@ -1,4 +1,5 @@
 import {
+  normalizeSessionProjectionRunId,
   readSessionMessageIdentity,
   readSessionMessageSequence,
 } from "@openclaw/gateway-client/browser";
@@ -63,6 +64,7 @@ export function applySessionMessagePayload(
   const event = asNonArrayRecord(payload);
   const sourceMessage = event.message;
   const sourceRecord = asNonArrayRecord(sourceMessage);
+  const sourceMetadata = asNonArrayRecord(sourceRecord["__openclaw"]);
   const incoming = readSessionMessageIdentity(sourceMessage, event);
   if (!incoming) {
     return;
@@ -76,9 +78,11 @@ export function applySessionMessagePayload(
     source.activeRunId &&
     incoming.runId !== source.activeRunId,
   );
-  // Only the producer's explicit run ID admits an assistant before its run
-  // ends; clientRunId describes the session event, not transcript ownership.
-  const producerRunId = incoming.runId === event.runId ? incoming.runId : null;
+  // Interim tool-use rows retain producer ownership in transcript metadata;
+  // the outer run ID is only published for terminal assistant rows.
+  // Client correlation keys cannot establish ownership, nor override a conflict.
+  const explicitRunId = normalizeSessionProjectionRunId(event.runId ?? sourceMetadata.runId);
+  const producerRunId = incoming.runId === explicitRunId ? incoming.runId : null;
   const assistantOwnerRunId =
     incoming.role === "assistant" &&
     incoming.id &&
@@ -122,7 +126,6 @@ export function applySessionMessagePayload(
   if (!incoming.id && !incoming.idempotencyKey && incoming.sequence === null) {
     return;
   }
-  const sourceMetadata = asNonArrayRecord(sourceRecord["__openclaw"]);
   const message = {
     ...sourceRecord,
     __openclaw: {

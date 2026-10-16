@@ -16,7 +16,9 @@ import type {
 export const MEMORY_INDEX_WRITE_SCOPE = "memory-index";
 export const MEMORY_EMBEDDING_CACHE_WRITE_SCOPE = "memory-embedding-cache";
 
-export type MemoryPublicationConnection = MemoryShadowConnection | { kind: "agent" };
+export type MemoryPublicationConnection =
+  | MemoryShadowConnection
+  | { kind: "agent"; stageId?: string };
 export type MemoryPublicationState = {
   vector: { enabled: boolean; available: boolean | null };
   fts: { enabled: boolean; available: boolean };
@@ -42,6 +44,13 @@ export type MemoryPublicationResult<T> =
   | { ok: true; value: T; facts?: MemoryDatabaseFacts; writeToken?: string }
   | { ok: false; error: MemoryShadowFailure; entered: boolean; committed: boolean };
 export type MemoryPublicationOperations = {
+  "database.reset": { input: undefined; output: MemoryPublicationResult<boolean> };
+  "database.stage.start": { input: undefined; output: MemoryPublicationResult<void> };
+  "database.stage.discard": { input: { stageId: string }; output: void };
+  "database.stage.publish": {
+    input: { stageId?: string; expectedRevision: number; vectorIndexComplete: boolean };
+    output: MemoryPublicationResult<void>;
+  };
   "connection.inspect": { input: undefined; output: MemoryShadowConnection };
   "vector.ensure": {
     input: { dimensions: number; currentDimensions?: number; state: MemoryPublicationState };

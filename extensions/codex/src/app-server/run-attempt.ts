@@ -119,6 +119,7 @@ export async function runCodexAppServerAttempt(
               lifecycle,
               notifications,
               turnStart,
+              turnRequest.codexModelCallDiagnostics.emitResponseObserved,
             );
             activeTurnOwnsCleanup = true;
             let finalizedResult: EmbeddedRunAttemptResult | undefined;

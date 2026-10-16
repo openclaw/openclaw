@@ -23,6 +23,7 @@ import {
 import {
   isActiveUnusableWindow,
   isModelScopedCooldownReason,
+  readAuthProfileUsageStats,
 } from "../auth-profiles/usage-state.js";
 import { isProfileInCooldown } from "../auth-profiles/usage.js";
 import { resolveProviderModelAuthPolicy } from "../model-auth-policy.js";
@@ -251,7 +252,7 @@ function isProfileGloballyInCooldown(store: AuthProfileStore, profileId: string)
   if (!isProfileInCooldown(store, profileId)) {
     return false;
   }
-  const usage = store.usageStats?.[profileId];
+  const usage = readAuthProfileUsageStats(store, profileId);
   if (!usage) {
     return true;
   }

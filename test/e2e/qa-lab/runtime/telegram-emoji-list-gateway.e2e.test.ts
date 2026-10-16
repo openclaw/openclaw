@@ -9,7 +9,6 @@ import {
   writeJson,
 } from "../../../../extensions/qa-lab/api.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
-import { createQaPreparedRepoCliCommand } from "../../../helpers/qa-prepared-repo-cli.js";
 
 type JsonObject = Record<string, unknown>;
 type TelegramCall = { pathname: string; method: string; body: JsonObject };
@@ -114,12 +113,49 @@ async function settleCleanup(...cleanups: Array<() => Promise<void>>) {
   }
 }
 
-test("binds Telegram emoji discovery to the current conversation before Bot API I/O", async () => {
+test("binds Telegram emoji discovery to the current conversation before Bot API I/O", async ({
+  signal,
+  onTestFailed,
+  onTestFinished,
+}) => {
   const telegramCalls: TelegramCall[] = [];
   const pendingUpdates: unknown[] = [];
   const pendingPolls = new Set<ServerResponse>();
   const scriptedCalls: Array<{ scenario: string; arguments: JsonObject }> = [];
   let mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
+  const started = performance.now();
+  let phase = "test-enter";
+  let reported = false;
+  let providerRequests = 0;
+  // Raw stderr remains visible under the E2E configuration silent mode.
+  const emitPhase = (event: "enter" | "failure") => {
+    process.stderr.write(
+      `[qa-phase] ${JSON.stringify({
+        event,
+        phase,
+        elapsedMs: Math.round(performance.now() - started),
+        providerRequests,
+        pendingUpdates: pendingUpdates.length,
+        scriptedCalls: scriptedCalls.length,
+        sends: telegramCalls.filter((call) => call.method === "sendMessage").length,
+      })}\n`,
+    );
+  };
+  const enterPhase = (next: string) => {
+    phase = next;
+    emitPhase("enter");
+  };
+  const report = () => {
+    if (reported) {
+      return;
+    }
+    reported = true;
+    emitPhase("failure");
+  };
+  signal.addEventListener("abort", report, { once: true });
+  onTestFailed(report);
+  onTestFinished(() => signal.removeEventListener("abort", report));
+  emitPhase("enter");
 
   const queueUpdate = (update: unknown) => {
     const poll = pendingPolls.values().next().value;
@@ -140,6 +176,7 @@ test("binds Telegram emoji discovery to the current conversation before Bot API 
       writeJson(res, 503, { error: "mock provider is not ready" });
       return;
     }
+    providerRequests += 1;
     const raw = await readRequest(req);
     const upstream = await fetch(`${mock.baseUrl}${pathname}`, {
       method: req.method,
@@ -241,6 +278,7 @@ test("binds Telegram emoji discovery to the current conversation before Bot API 
     succeed(res);
   };
 
+  enterPhase("http-start");
   await withServer(
     (req, res) => {
       void handleRequest(req, res).catch((error: unknown) => {
@@ -249,15 +287,18 @@ test("binds Telegram emoji discovery to the current conversation before Bot API 
         });
       });
     },
-    async (apiRoot) =>
-      await withTempDir("openclaw-telegram-emoji-list-", async (workspace) => {
+    async (apiRoot) => {
+      enterPhase("temp-dir-start");
+      return await withTempDir("openclaw-telegram-emoji-list-", async (workspace) => {
         const gatewayOwner = createQaGatewayChild();
         try {
           const repoRoot = path.resolve(import.meta.dirname, "../../../..");
+          enterPhase("mock-start");
           mock = await startQaMockOpenAiServer();
+          enterPhase("gateway-start");
           await gatewayOwner.start({
+            onListening: () => enterPhase("gateway-listening"),
             repoRoot,
-            command: createQaPreparedRepoCliCommand(repoRoot),
             providerBaseUrl: `${apiRoot}/v1`,
             mockSessionObserverUrl: mock.sessionObserverUrl,
             transportBaseUrl: apiRoot,
@@ -301,6 +342,7 @@ test("binds Telegram emoji discovery to the current conversation before Bot API 
             },
           });
 
+          enterPhase("gateway-ready");
           const findToolResult = async (scenario: string) => {
             const response = await fetch(`${mock!.baseUrl}/debug/requests`);
             expect(response.ok).toBe(true);
@@ -310,6 +352,7 @@ test("binds Telegram emoji discovery to the current conversation before Bot API 
             );
           };
 
+          enterPhase("turn");
           queueUpdate(inboundUpdate(1, CURRENT_CHAT_SCENARIO));
           await expect
             .poll(
@@ -366,11 +409,13 @@ test("binds Telegram emoji discovery to the current conversation before Bot API 
             },
           ]);
         } finally {
+          enterPhase("cleanup");
           await settleCleanup(
             async () => await stopQaGatewayFixture(gatewayOwner),
             async () => await mock?.stop(),
           );
         }
-      }),
+      });
+    },
   );
 }, 120_000);

@@ -1,9 +1,7 @@
-import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
 import type { SQLInputValue } from "node:sqlite";
-import type { Worker } from "node:worker_threads";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as queue from "../../shared/store-writer-queue.js";
@@ -26,6 +24,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
+import { drainSessionDiskBudgetWorkers } from "./disk-budget-runtime.js";
 import * as diskBudget from "./disk-budget.js";
 import { appendTranscriptMessage, resetSessionEntryLifecycle } from "./session-accessor.js";
 import * as archiveStore from "./session-accessor.sqlite-archive-store.js";
@@ -48,23 +47,17 @@ import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 const states: OpenClawTestState[] = [];
 const work: Promise<unknown>[] = [];
 const releaseGates: Array<() => void> = [];
-const workers: Worker[] = [];
-const workerChannel = channel("worker_threads");
-const trackWorker = (message: unknown) => workers.push((message as { worker: Worker }).worker);
-beforeEach(() => workerChannel.subscribe(trackWorker));
 afterEach(async () => {
   for (const release of releaseGates.splice(0)) {
     release();
   }
   await Promise.allSettled(work.splice(0));
   vi.restoreAllMocks();
+  await drainSessionDiskBudgetWorkers();
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
-  workerChannel.unsubscribe(trackWorker);
-  // Archive/reclamation promises above already joined their Workers; the measurement pool is idle.
-  await Promise.all(workers.splice(0).map((worker) => worker.terminate()));
   vi.unstubAllEnvs();
   for (const state of states.splice(0).toReversed()) {
     await state.cleanup();
@@ -455,6 +448,56 @@ it.each([
     ).toEqual([]);
   },
 );
+
+it("measures the disk budget after a committed patch but not after unchanged entry attempts", async () => {
+  const state = await createOpenClawTestState({ layout: "state-only", scenario: "minimal" });
+  states.push(state);
+  const storePath = path.join(state.sessionsDir(), "sessions.json");
+  const scope = {
+    agentId: "main",
+    env: state.env,
+    storePath,
+    sessionKey: "agent:main:budget-noop",
+  };
+  const queueSpy = vi.spyOn(queue, "runQueuedStoreWrite");
+  replaceSessionEntrySync(scope, { sessionId: "budget-noop", updatedAt: 1, label: "unchanged" });
+  await joinSessionHistoryBudgetSweeps(queueSpy, work);
+  queueSpy.mockClear();
+  const measureSpy = vi.spyOn(diskBudget, "measureSessionPhysicalDiskUsage");
+  const options = {
+    skipMaintenance: true,
+    preserveActivity: true,
+    maintenanceConfig: resolveMaintenanceConfigFromInput({
+      mode: "enforce",
+      maxDiskBytes: 1024 * 1024 * 1024,
+      highWaterBytes: 512 * 1024 * 1024,
+    }),
+  };
+  try {
+    for (const update of [() => null, () => ({ label: "unchanged" })]) {
+      await expect(patchSessionEntryCore(scope, update, options)).resolves.toMatchObject({
+        sessionId: "budget-noop",
+        updatedAt: 1,
+        label: "unchanged",
+      });
+    }
+    await joinSessionHistoryBudgetSweeps(queueSpy, work);
+    expect(
+      queueSpy.mock.calls.filter(
+        ([params]) => params.label === "enforceSqliteSessionHistoryDiskBudget",
+      ),
+    ).toEqual([]);
+    expect(measureSpy).not.toHaveBeenCalled();
+
+    await expect(
+      patchSessionEntryCore(scope, () => ({ label: "committed" }), options),
+    ).resolves.toMatchObject({ sessionId: "budget-noop", label: "committed" });
+    await joinSessionHistoryBudgetSweeps(queueSpy, work);
+    expect(measureSpy).toHaveBeenCalledExactlyOnceWith(storePath);
+  } finally {
+    await joinSessionHistoryBudgetSweeps(queueSpy, work);
+  }
+});
 
 it("skips an originating incognito budget kick without disk or background work", async () => {
   const state = await createOpenClawTestState({ layout: "state-only", scenario: "empty" });

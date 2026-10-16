@@ -129,7 +129,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
           if (snapshot.progressCard !== undefined) {
             const target = this.resolveChatReadTarget();
             if (target) {
-              this.progressCard.hydrate(target, snapshot.progressCard);
+              this.progressCards.hydrate(target, snapshot.progressCard);
             }
           }
           // Release the history response before Lit queues the cached transcript render.
@@ -223,13 +223,13 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       !this.visuallyPresented ||
       document.visibilityState === "hidden" ||
       !this.state?.connected ||
+      !this.hasOlderMessages() ||
       (!this.historyObserverArmed && this.historyViewportFillPages >= 3) ||
       !this.transcript.isPositionSettled ||
       this.transcript.isProgrammaticScroll ||
       this.transcript.isMaintenanceScroll ||
       this.loadingOlder ||
-      this.historyAutoLoadBlocked ||
-      !this.hasOlderMessages()
+      this.historyAutoLoadBlocked
     ) {
       this.clearHistoryObserver();
       return;

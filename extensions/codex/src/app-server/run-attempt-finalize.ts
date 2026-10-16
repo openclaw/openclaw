@@ -109,7 +109,7 @@ export async function finalizeCodexAttempt(
     isActive: isSettlementActive,
     readRetainedNativeCommands,
   } = await beginCodexAttemptSettlement(resources, turnRuntime, notifications, activeTurn);
-  let projectionDrained = false;
+  let projectionDrained: boolean;
   try {
     try {
       // Native completion does not end accepted projection or checkpoint work.
@@ -494,7 +494,7 @@ export async function finalizeCodexAttempt(
               assertActive: connection.assertCurrent,
               withCurrent: connection.withCurrent,
             })
-          : undefined) ?? Object.freeze({ source: "unavailable" as const }))
+          : undefined) ?? { source: "unavailable" as const })
       : undefined;
     if (settledTurnFinalizationContext?.source === "unavailable") {
       embeddedAgentLog.warn("codex settled-turn finalization context is unavailable", {

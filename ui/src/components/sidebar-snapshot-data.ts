@@ -116,7 +116,11 @@ export const sidebarSnapshotSchema = z.object({
   onlineCounts: z.tuple([text, z.object({ open: z.number(), running: z.number() })]).array(),
   peopleSortMode: z.enum(["presence", "running", "open", "name"]),
   peopleStatusFilter: z.enum(["all", "running"]),
-  onlineExpanded: z.boolean(),
+  peoplePresenceFilter: z.enum(["online", "all"]).default("online"),
+  offlineUsers: user
+    .extend({ watchedSessions: z.array(text).max(0), entries: z.array(z.never()).max(0) })
+    .array()
+    .default([]),
   ownerId: text.nullable(),
   involvingMe: z.boolean(),
   footer: user.nullable(),

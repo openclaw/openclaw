@@ -19,7 +19,12 @@ export async function retainSessionScopedRead(
   options: GatewayRequestHandlerOptions,
   sessionKey: string,
   agentId: string,
-  readOptions: { requireMaterialized?: boolean; allowMetadataChanges?: boolean } = {},
+  readOptions: {
+    requireMaterialized?: boolean;
+    allowMetadataChanges?: boolean;
+    retain?: boolean;
+    entryMatches?: NonNullable<Parameters<typeof retainGatewaySessionEntryReadOnly>[2]>;
+  } = {},
 ) {
   const authority = readGatewayRequestMutationAuthority(options);
   const actor = resolveGatewayOperatorRoleActor(options.client);
@@ -33,7 +38,7 @@ export async function retainSessionScopedRead(
     client: options.client,
     cfg,
   });
-  if (!narrow && !initialVisibility) {
+  if (!readOptions.retain && !narrow && !initialVisibility) {
     return undefined;
   }
   const assertRoutingCurrent = captureSessionMutationRouting(cfg, undefined, [
@@ -42,9 +47,10 @@ export async function retainSessionScopedRead(
   const read = await retainGatewaySessionEntryReadOnly(
     sessionKey,
     agentId,
-    readOptions.allowMetadataChanges
-      ? (previous, current) => !hasSessionReadAccessChanged(previous, current)
-      : undefined,
+    readOptions.entryMatches ??
+      (readOptions.allowMetadataChanges
+        ? (previous, current) => !hasSessionReadAccessChanged(previous, current)
+        : undefined),
     cfg,
   );
   const assertCurrent = () => {
@@ -73,7 +79,7 @@ export async function retainSessionScopedRead(
   };
   try {
     assertCurrent();
-    return { assertCurrent, release: read.release };
+    return { assertCurrent, release: read.release, prepared: read };
   } catch (error) {
     read.release();
     throw error;

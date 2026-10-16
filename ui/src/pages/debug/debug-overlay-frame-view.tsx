@@ -3,7 +3,7 @@ import { children, createEffect, createMemo, onCleanup, onSettled, Show, untrack
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../styles/debug.css";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { DebugOverlayLayout } from "./debug-overlay-layout.runtime.ts";
+import type { createDebugOverlayLayout } from "./debug-overlay-layout.runtime.ts";
 import type { DebugOverlayMode } from "./debug-overlay-state.ts";
 
 export function DebugOverlayFrame(props: {
@@ -14,7 +14,7 @@ export function DebugOverlayFrame(props: {
 }) {
   const body = children(() => props.body);
   let element!: HTMLElement;
-  let layout: DebugOverlayLayout | undefined;
+  let layout: ReturnType<typeof createDebugOverlayLayout> | undefined;
   let disposed = false;
   // Capture the previous box before Solid applies the new mode's class.
   const mode = createMemo(() => {
@@ -23,12 +23,12 @@ export function DebugOverlayFrame(props: {
   });
   onSettled(() => {
     void import("./debug-overlay-layout.runtime.ts")
-      .then(({ DebugOverlayLayout }) => {
+      .then(({ createDebugOverlayLayout }) => {
         if (disposed || !element.isConnected) {
           return;
         }
-        layout = new DebugOverlayLayout(element);
-        layout.update(untrack(mode));
+        layout = createDebugOverlayLayout(element);
+        layout.update(mode());
       })
       .catch((error: unknown) =>
         console.error("System busyness position controls could not load. Reload to retry.", error),

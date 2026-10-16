@@ -39,6 +39,12 @@ const detailedTiming = isDiagnosticFlagEnabled("sqlite.worker-timing");
 
 // Exact owner commands only: SDK callers may supply private suffixes.
 const coreCommands = new Set([
+  "devicePairing.lookup",
+  "devicePairing.list",
+  "devicePairing.updateMetadata",
+  "devicePairing.updatePresence",
+  "devicePairing.verifyToken",
+  "devicePairing.ensureToken",
   "session.actor.read",
   "session.actor.acceptInput",
   "session.actor.adoptRun",
@@ -54,7 +60,6 @@ const coreCommands = new Set([
   "session.entry.replacements.prepare",
   "session.entry.replacements.commit",
   "session.lifecycle.project",
-  "session.maintenance.read",
   "session.maintenance.metadata",
   "session.maintenance.prepare",
   "session.maintenance.release",
@@ -163,7 +168,7 @@ export function trackWorkerRequest(
   const enqueuedAt = performance.now();
   const timing: DiagnosticWorkerRequestFields["timing"] =
     kind === "sqlite_writer" &&
-    (detailedTiming || hasInternalDiagnosticEventInterest("worker.request"))
+    (detailedTiming || hasInternalDiagnosticEventInterest("worker.request", true))
       ? { enqueued: enqueuedAt }
       : undefined;
   let startedAt: number | undefined;
@@ -172,7 +177,7 @@ export function trackWorkerRequest(
     phase: DiagnosticWorkerRequestFields["phase"],
     durations: Pick<DiagnosticWorkerRequestFields, "queueWaitMs" | "durationMs"> = {},
   ) => {
-    if (!hasInternalDiagnosticEventInterest("worker.request")) {
+    if (!hasInternalDiagnosticEventInterest("worker.request", true)) {
       return;
     }
     emitTrustedDiagnosticEvent({

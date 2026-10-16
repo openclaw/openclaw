@@ -45,6 +45,10 @@ export NOVITA_API_KEY="<your-novita-api-key>" # pragma: allowlist secret
 | Env var       | `NOVITA_API_KEY`                  |
 | Default model | `novita/deepseek/deepseek-v4-pro` |
 
+Chat completions sent to the Novita endpoint use `system` messages and
+`max_tokens`, including for reasoning models. This applies to catalog,
+configured, and discovered models without per-model compatibility settings.
+
 ## Model catalog
 
 - `novita/moonshotai/kimi-k3`

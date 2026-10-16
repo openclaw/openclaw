@@ -77,6 +77,8 @@ export type AgentRunMessageContext = {
   currentChannelId?: string;
   /** Current thread timestamp for auto-threading (Slack). */
   currentThreadTs?: string;
+  /** Authentication-derived provenance for MCP conversation fields. */
+  currentConversationOrigin?: import("../../gateway/mcp-grant-store.js").McpCurrentConversationOrigin;
   /** Current inbound message id for action fallbacks (e.g. Telegram react). */
   currentMessageId?: string | number;
   currentInboundAudio?: boolean;

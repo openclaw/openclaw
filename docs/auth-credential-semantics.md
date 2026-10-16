@@ -121,6 +121,10 @@ closing that scope; retained callbacks cannot write after it closes.
 Each catalog request carries the Gateway's committed shared-store ownership. A
 reused worker installs that fact before reading credentials, so the first login's
 empty-store relocation cannot leave discovery attached to the legacy location.
+Catalog preparation carries the persisted-store inspection result and selected
+display path with the credential view. Labels reuse that source selection for the
+request; the next refresh observes committed changes. External credential refresh
+and the final credential authority check remain unchanged.
 Temporary probe stores wait for their database work and shared-registry removal
 before deleting credential files. If disposal fails, cleanup retains the directory
 and reports its location.

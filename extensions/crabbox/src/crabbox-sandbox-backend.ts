@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/sandbox";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCrabboxBinary } from "./crabbox-binary.js";
+import { ensureManagedCrabboxBinary } from "./crabbox-managed-binary.js";
 import { runCrabboxProcess } from "./crabbox-process.js";
 import type { ResolvedCrabboxSandboxConfig } from "./crabbox-sandbox-config.js";
 import { CRABBOX_SANDBOX_LEASE_ID_PATTERN } from "./crabbox-sandbox-lease.js";
@@ -30,6 +31,7 @@ type CrabboxSandboxBackendDependencies = {
 type CrabboxSandboxClient = {
   binary: string;
   pluginConfig: ResolvedCrabboxSandboxConfig;
+  acquisition?: Promise<void>;
   execSupport?: Promise<void>;
 };
 
@@ -54,6 +56,15 @@ async function runCrabbox(
   cwd: string | undefined,
   timeoutMs: number,
 ): Promise<SpawnResult> {
+  client.acquisition ??= ensureManagedCrabboxBinary({ binary: client.binary, cwd })
+    .then(({ binary }) => {
+      client.binary = binary;
+    })
+    .catch((error: unknown) => {
+      client.acquisition = undefined;
+      throw error;
+    });
+  await client.acquisition;
   let result: SpawnResult;
   try {
     result = await runCrabboxProcess([client.binary, ...args], {

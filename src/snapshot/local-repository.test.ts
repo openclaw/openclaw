@@ -405,26 +405,22 @@ describe("local SQLite snapshot repository", () => {
     await expect(provider.list()).resolves.toEqual([snapshot]);
   });
 
-  it("rejects a hardlinked pending marker without committing the snapshot", async () => {
-    const { provider, snapshot, tempDir } = await createGenericSnapshotFixture(
-      "hardlinked-pending-recovery",
-    );
+  it.each([
+    { defect: "hardlinked marker", error: /pending marker is unsafe/u },
+    { defect: "corrupt artifact", error: /size mismatch|hash mismatch/u },
+  ])("preserves a pending snapshot with a $defect", async ({ defect, error }) => {
+    const { provider, snapshot, tempDir } = await createGenericSnapshotFixture("invalid-pending");
     const pendingPath = path.join(snapshot.ref.path, ".pending");
-    const markerSourcePath = path.join(tempDir, "pending-marker");
-    await fs.writeFile(markerSourcePath, "");
-    await fs.link(markerSourcePath, pendingPath);
+    if (defect === "hardlinked marker") {
+      const markerSourcePath = path.join(tempDir, "pending-marker");
+      await fs.writeFile(markerSourcePath, "");
+      await fs.link(markerSourcePath, pendingPath);
+    } else {
+      await fs.writeFile(pendingPath, "");
+      await fs.appendFile(path.join(snapshot.ref.path, SNAPSHOT_SQLITE_FILENAME), "corrupt");
+    }
 
-    await expect(provider.list()).rejects.toThrow(/pending marker is unsafe/u);
-    await fs.access(pendingPath);
-  });
-
-  it("preserves a complete pending snapshot that fails recovery verification", async () => {
-    const { provider, snapshot } = await createGenericSnapshotFixture("reject-invalid-pending");
-    const pendingPath = path.join(snapshot.ref.path, ".pending");
-    await fs.writeFile(pendingPath, "");
-    await fs.appendFile(path.join(snapshot.ref.path, SNAPSHOT_SQLITE_FILENAME), "corrupt");
-
-    await expect(provider.list()).rejects.toThrow(/size mismatch|hash mismatch/u);
+    await expect(provider.list()).rejects.toThrow(error);
     await fs.access(pendingPath);
   });
 
@@ -486,37 +482,12 @@ describe("local SQLite snapshot repository", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "rejects verification and restore staging roots writable by other users",
-    async () => {
-      const tempDir = await createTempDir();
-      const sourcePath = path.join(tempDir, "source.sqlite");
-      const repositoryPath = path.join(tempDir, "snapshots");
-      const validationRootPath = path.join(tempDir, "validation");
-      const restoreParentPath = path.join(tempDir, "restore");
-      const restorePath = path.join(restoreParentPath, "source.sqlite");
-      createGenericDatabase(sourcePath);
-      await fs.mkdir(validationRootPath, { mode: 0o777 });
-      await fs.chmod(validationRootPath, 0o777);
-      await fs.mkdir(restoreParentPath, { mode: 0o777 });
-      await fs.chmod(restoreParentPath, 0o777);
-      const provider = createLocalSqliteSnapshotProvider({
-        repositoryPath,
-        validationRootPath,
-      });
-      const snapshot = await createGenericSnapshot(provider, sourcePath, "untrusted-staging-root");
-
-      await expect(provider.verify(snapshot.ref)).rejects.toThrow(/not writable by other users/u);
-      await expect(provider.restoreFresh(snapshot.ref, restorePath)).rejects.toThrow(
-        /not writable by other users/u,
-      );
-      await expectMissing(restorePath);
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "rejects private staging roots beneath a replaceable ancestor",
-    async () => {
+  it.runIf(process.platform !== "win32").each([
+    { scope: "root", mode: 0o777, error: /not writable by other users/u },
+    { scope: "ancestor", mode: 0o700, error: /ancestor must not allow another user/u },
+  ])(
+    "rejects verification and restore staging with an untrusted $scope",
+    async ({ scope, mode, error }) => {
       const tempDir = await createTempDir();
       const sourcePath = path.join(tempDir, "source.sqlite");
       const repositoryPath = path.join(tempDir, "snapshots");
@@ -525,23 +496,21 @@ describe("local SQLite snapshot repository", () => {
       const restoreParentPath = path.join(sharedPath, "restore");
       const restorePath = path.join(restoreParentPath, "source.sqlite");
       createGenericDatabase(sourcePath);
-      await fs.mkdir(validationRootPath, { recursive: true, mode: 0o700 });
-      await fs.chmod(validationRootPath, 0o700);
-      await fs.mkdir(restoreParentPath, { mode: 0o700 });
-      await fs.chmod(restoreParentPath, 0o700);
-      await fs.chmod(sharedPath, 0o777);
+      await fs.mkdir(validationRootPath, { recursive: true, mode });
+      await fs.chmod(validationRootPath, mode);
+      await fs.mkdir(restoreParentPath, { mode });
+      await fs.chmod(restoreParentPath, mode);
+      if (scope === "ancestor") {
+        await fs.chmod(sharedPath, 0o777);
+      }
       const provider = createLocalSqliteSnapshotProvider({
         repositoryPath,
         validationRootPath,
       });
       const snapshot = await createGenericSnapshot(provider, sourcePath, "replaceable-ancestor");
 
-      await expect(provider.verify(snapshot.ref)).rejects.toThrow(
-        /ancestor must not allow another user/u,
-      );
-      await expect(provider.restoreFresh(snapshot.ref, restorePath)).rejects.toThrow(
-        /ancestor must not allow another user/u,
-      );
+      await expect(provider.verify(snapshot.ref)).rejects.toThrow(error);
+      await expect(provider.restoreFresh(snapshot.ref, restorePath)).rejects.toThrow(error);
       await expectMissing(restorePath);
     },
   );
@@ -668,53 +637,51 @@ describe("local SQLite snapshot repository", () => {
     },
   );
 
-  it("preserves both restore and cleanup failures", async () => {
-    const { provider, restorePath, snapshot } =
-      await createGenericSnapshotFixture("combined-failure");
-    const publicationSpy = vi
-      .spyOn(directoryDurability, "publishFileExclusive")
-      .mockRejectedValue(Object.assign(new Error("hard links unsupported"), { code: "ENOTSUP" }));
-    const originalUnlink = fs.unlink.bind(fs);
-    const unlinkSpy = vi.spyOn(fs, "unlink").mockImplementation(async (filePath) => {
-      if (path.basename(path.dirname(String(filePath))).startsWith(".tmp-restore-")) {
-        throw Object.assign(new Error("cleanup denied"), { code: "EACCES" });
-      }
-      return await originalUnlink(filePath);
-    });
-
-    await withRestoredSpies([unlinkSpy, publicationSpy], async () => {
-      const error = await provider
-        .restoreFresh(snapshot.ref, restorePath)
-        .catch((cause: unknown) => cause);
-      expect(error).toBeInstanceOf(AggregateError);
-      expect((error as AggregateError).errors.map(String)).toEqual([
-        expect.stringMatching(/requires hard-link support/u),
-        expect.stringMatching(/cleanup denied/u),
-      ]);
-    });
-    await expectMissing(restorePath);
-  });
-
-  it("preserves a published restore when staging cleanup fails", async () => {
-    const { provider, restorePath, snapshot } = await createGenericSnapshotFixture(
-      "restore-cleanup-failure",
-      { database: { values: ["published-before-cleanup"] } },
-    );
-    const originalUnlink = fs.unlink.bind(fs);
-    const unlinkSpy = vi.spyOn(fs, "unlink").mockImplementation(async (filePath) => {
-      if (path.basename(path.dirname(String(filePath))).startsWith(".tmp-restore-")) {
-        throw Object.assign(new Error("restore cleanup denied"), { code: "EACCES" });
-      }
-      return await originalUnlink(filePath);
-    });
-
-    await withRestoredSpies([unlinkSpy], async () => {
-      await expect(provider.restoreFresh(snapshot.ref, restorePath)).rejects.toThrow(
-        /Failed to clean private SQLite staging directory/u,
+  it.each([false, true])(
+    "preserves restore state and errors when cleanup fails (publication failed=%s)",
+    async (publicationFailed) => {
+      const { provider, restorePath, snapshot } = await createGenericSnapshotFixture(
+        "restore-cleanup-failure",
+        { database: { values: ["published-before-cleanup"] } },
       );
-    });
-    expect(readGenericValues(restorePath)).toEqual([{ value: "published-before-cleanup" }]);
-  });
+      const publicationSpy = publicationFailed
+        ? vi
+            .spyOn(directoryDurability, "publishFileExclusive")
+            .mockRejectedValue(
+              Object.assign(new Error("hard links unsupported"), { code: "ENOTSUP" }),
+            )
+        : undefined;
+      const originalUnlink = fs.unlink.bind(fs);
+      const unlinkSpy = vi.spyOn(fs, "unlink").mockImplementation(async (filePath) => {
+        if (path.basename(path.dirname(String(filePath))).startsWith(".tmp-restore-")) {
+          throw Object.assign(new Error("cleanup denied"), { code: "EACCES" });
+        }
+        return await originalUnlink(filePath);
+      });
+
+      await withRestoredSpies(
+        publicationSpy ? [unlinkSpy, publicationSpy] : [unlinkSpy],
+        async () => {
+          if (publicationFailed) {
+            const error = await provider
+              .restoreFresh(snapshot.ref, restorePath)
+              .catch((cause: unknown) => cause);
+            expect(error).toBeInstanceOf(AggregateError);
+            expect((error as AggregateError).errors.map(String)).toEqual([
+              expect.stringMatching(/requires hard-link support/u),
+              expect.stringMatching(/cleanup denied/u),
+            ]);
+            await expectMissing(restorePath);
+          } else {
+            await expect(provider.restoreFresh(snapshot.ref, restorePath)).rejects.toThrow(
+              /Failed to clean private SQLite staging directory/u,
+            );
+            expect(readGenericValues(restorePath)).toEqual([{ value: "published-before-cleanup" }]);
+          }
+        },
+      );
+    },
+  );
 
   it("fails restore when the final cleanup directory sync fails", async () => {
     const { provider, restorePath, snapshot } = await createGenericSnapshotFixture(

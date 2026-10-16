@@ -1,19 +1,16 @@
 import { readCurrentConfigForResolution } from "../config/io.runtime.js";
 import { resolveStateDir } from "../config/paths.js";
-import { assertNoRetiredStateFiles } from "../infra/state-migrations.retired-files.js";
-import { assertNoRetiredRuntimeStateFiles } from "../infra/state-migrations.retired-runtime-files.js";
+import { listExistingRetiredStateFiles } from "../infra/state-migrations.retired-files.js";
+import { listRetiredRuntimeStateFiles } from "../infra/state-migrations.retired-runtime-files.js";
 import {
-  assertNoRetiredOAuthSidecarsBeforeConfigRecovery,
+  inspectLegacyOAuthSidecarsBeforeConfigRecovery,
   listReferencedLegacyOAuthSidecarPaths,
 } from "./doctor-auth-legacy-paths.js";
 
-/** Refuse unsupported sources before Doctor stops the Gateway or changes shared state. */
+/** Inspect source access before Doctor stops the Gateway; Doctor owns forward migration. */
 export function assertDoctorRetiredStateAdmission(): void {
-  assertNoRetiredRuntimeStateFiles(resolveStateDir(process.env));
-  assertNoRetiredOAuthSidecarsBeforeConfigRecovery({ env: process.env });
+  listExistingRetiredStateFiles(listRetiredRuntimeStateFiles(resolveStateDir(process.env)));
+  inspectLegacyOAuthSidecarsBeforeConfigRecovery({ env: process.env });
   const { config, env } = readCurrentConfigForResolution();
-  assertNoRetiredStateFiles(
-    "OAuth credential sidecars",
-    listReferencedLegacyOAuthSidecarPaths(env, config),
-  );
+  listExistingRetiredStateFiles(listReferencedLegacyOAuthSidecarPaths(env, config));
 }

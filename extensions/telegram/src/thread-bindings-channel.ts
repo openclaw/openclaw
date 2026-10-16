@@ -28,6 +28,7 @@ export const telegramThreadBindingLifecycle: Pick<
       persist: false,
       enableSweeper: false,
     }),
+  // Released synchronous runtime setters dispatch here through 2026-12-31.
   setIdleTimeoutBySessionKey: (params) =>
     setTelegramThreadBindingIdleTimeoutBySessionKey(withOptionalAccountId(params)),
   setMaxAgeBySessionKey: (params) =>

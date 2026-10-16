@@ -216,6 +216,60 @@ export function registerSessionNativeRuntimeConsentTests(support: {
       expect(support.configMutationRequested()).toBe(false);
     });
 
+    it.each(["explicit", "model-only", "create"] as const)(
+      "refuses a remembered native permission promotion during an active run (%s)",
+      async (kind) => {
+        const fixture = await prepareConsent();
+        const cfg = support.getConfig();
+        cfg.agents!.entries = { main: { nativeRuntimeConsent: [harness.id] } };
+        const runId = `remembered-native-${kind}`;
+        const claim = claimAgentRunContext(
+          runId,
+          { sessionKey: fixture.scope.sessionKey, sessionId: fixture.patch.expectedSessionId },
+          { trackOwner: true, ownsContext: true },
+        );
+        try {
+          const response =
+            kind === "create"
+              ? await createGatewaySession({
+                  cfg,
+                  key: fixture.scope.sessionKey,
+                  model: `${nativeModel.provider}/${nativeModel.id}`,
+                  commandSource: "test",
+                  operatorRoleActor: { kind: "system" },
+                  requestingOperatorScopes: ["operator.admin"],
+                  allowExistingModelSelection: true,
+                  loadGatewayModelCatalogSnapshot:
+                    fixture.requestContext.loadGatewayModelCatalogSnapshot,
+                })
+              : await patchSession(
+                  kind === "explicit"
+                    ? fixture.patch
+                    : {
+                        key: fixture.scope.sessionKey,
+                        model: `${nativeModel.provider}/${nativeModel.id}`,
+                      },
+                  ["operator.admin"],
+                  fixture.requestContext,
+                );
+          const error = Array.isArray(response)
+            ? response[2]
+            : response.ok
+              ? undefined
+              : response.error;
+          expect(Array.isArray(response) ? response[0] : response.ok).toBe(false);
+          expect(error).toMatchObject({
+            message: "Stop the active run before changing this session's execution permissions.",
+          });
+          expect(loadSessionEntry(fixture.scope)).toEqual(fixture.before);
+        } finally {
+          if (claim) {
+            releaseAgentRunContext(runId, claim);
+          }
+        }
+      },
+    );
+
     it.each(["run-started", "admin-revoked"] as const)(
       "rechecks %s after runtime preparation even when sandbox mode is already off",
       async (change) => {

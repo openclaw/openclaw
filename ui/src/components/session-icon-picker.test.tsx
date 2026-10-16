@@ -16,7 +16,7 @@ it("keeps custom icon entry focused and ignores Enter while an IME composition i
         () => false,
         runAction,
       );
-      return appearance.render(true);
+      return appearance.render();
     },
     { container: host },
   );
@@ -57,7 +57,7 @@ it("moves the icon grid tab stop and sends appearance actions through the menu o
         () => ({ session: { icon: "🦞", color: null }, actionDisabledReasons: {} }),
         () => false,
         runAction,
-      ).render(true),
+      ).render(),
     { container: host },
   );
   const choices = mounted.container.querySelectorAll<HTMLButtonElement>(

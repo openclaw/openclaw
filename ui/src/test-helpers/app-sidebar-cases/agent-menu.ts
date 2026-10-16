@@ -17,6 +17,7 @@ import {
   TWO_AGENTS,
 } from "../app-sidebar.ts";
 import "../../components/app-sidebar.tsx";
+import { settleRoster } from "./roster.test-support.ts";
 
 describe("AppSidebar agent chip", () => {
   it("keeps a configured avatar blank while waiting for authentication", async () => {
@@ -72,6 +73,22 @@ describe("AppSidebar agent chip", () => {
       );
     });
     expect(request).toHaveBeenCalledWith("agent.identity.get", { agentId: "main" });
+    await settleRoster(sidebar);
+    request.mockResolvedValue({
+      agentId: "main",
+      name: "Updated workspace",
+      emoji: "⚓",
+      avatar: "data:image/png;base64,dXBkYXRlZA==",
+    });
+    gatewayHarness.publishEvent("agent.identity.changed", { agentId: "main" });
+    await agentIdentity.ensure(["main"]);
+    await settleRoster(sidebar);
+    expect(sidebar.querySelector(".sidebar-agent-card__name")?.textContent).toContain(
+      "Updated workspace",
+    );
+    expect(sidebar.querySelector<HTMLImageElement>(".sidebar-agent-card__avatar img")?.src).toBe(
+      "data:image/png;base64,dXBkYXRlZA==",
+    );
   });
 
   it.each(["loading", "excluded"] as const)(

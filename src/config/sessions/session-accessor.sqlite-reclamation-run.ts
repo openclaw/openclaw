@@ -1,11 +1,9 @@
 import { isMainThread } from "node:worker_threads";
-import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
 } from "../../infra/sqlite-worker-identity.js";
 import { ownedWorkerBytes } from "../../infra/worker-transfer-bytes.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { hasAgentDatabaseMaintenanceAuthority } from "../../state/openclaw-agent-db-lease.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -31,7 +29,6 @@ import type {
   SessionDeletionPlanningOperation,
   SessionDeletionPlanningResult,
   SessionMaintenanceLiveProtection,
-  SessionMaintenanceReadResult,
   SqliteArchiveReclamationPlan,
   SqliteSessionReclamationPlan,
   SqliteSessionReclamationResult,
@@ -59,10 +56,7 @@ import {
   withSqliteMutationWorkerLifetime,
   type SqliteMutationWorkerValidationOwner,
 } from "./session-accessor.sqlite-worker-request.js";
-import { SessionEntryChangedDuringReadError } from "./session-entry-read-errors.js";
-import { captureSessionEntryNativeMutationWitness } from "./session-entry-read-ordered.js";
 import { publishSessionLifecycleWorkerEffects } from "./session-lifecycle-worker-publication.js";
-import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import type { SessionMaintenancePreservationPlan } from "./store-maintenance-preserve-snapshot.types.js";
 
 function hasNativeReclamationOwner(): boolean {
@@ -122,10 +116,6 @@ export async function runSqliteSessionReclamation(params: {
   assertCommitAllowed?: () => void;
   refreshMaintenanceProtection?: () => SessionMaintenanceLiveProtection;
   assertMaintenanceCommitAllowed?: (plans?: readonly SessionMaintenancePreservationPlan[]) => void;
-  consumeReadOnlyMaintenancePlan?: (
-    result: Extract<SessionMaintenanceReadResult, { kind: "maintenance-plan" }>,
-    assertCurrent: () => void,
-  ) => void;
   onInProcessCommit?: (database: OpenClawAgentDatabase) => void;
   onWorkerResult?: (
     result: SqliteSessionReclamationResult,
@@ -199,9 +189,8 @@ export async function runSqliteSessionReclamation(params: {
       params.diagnostics,
     );
   }
-  const maintenanceReadIdentity =
-    params.plan.kind === "maintenance-plan" ||
-    (params.plan.kind === "maintenance-age" && params.plan.readOnly)
+  const maintenanceIdentity =
+    params.plan.kind === "maintenance-plan"
       ? readDatabasePathIdentitySync(params.plan.databaseOptions.path)
       : undefined;
   return await withSqliteMutationWorkerLifetime(
@@ -210,161 +199,14 @@ export async function runSqliteSessionReclamation(params: {
       const assertRequestCurrent = () => {
         assertCurrent();
         params.assertCommitAllowed?.();
-        if (maintenanceReadIdentity) {
+        if (maintenanceIdentity) {
           assertExistingDatabaseIdentity(
             params.plan.databaseOptions.path,
-            maintenanceReadIdentity.key,
-            maintenanceReadIdentity.birthtime,
+            maintenanceIdentity.key,
+            maintenanceIdentity.birthtime,
           );
         }
       };
-      const readPlan = params.plan;
-      if (
-        readPlan.kind === "maintenance-plan" ||
-        (readPlan.kind === "maintenance-age" && readPlan.readOnly)
-      ) {
-        const options = readPlan.databaseOptions;
-        const source = {
-          agentId: normalizeAgentId(options.agentId),
-          path: options.path,
-          env: options.env,
-        };
-        const identity = maintenanceReadIdentity;
-        if (!identity) {
-          throw new Error("Maintenance read omitted its original physical source");
-        }
-        const execution = identity.key.startsWith("file:")
-          ? captureOpenClawAgentDatabaseExecution(options, {
-              expectedIdentity: {
-                kind: "file",
-                physicalIdentity: identity.key.slice(5),
-                birthtime: identity.birthtime,
-                nativeLocation: identity.canonicalPath,
-              },
-            })
-          : undefined;
-        try {
-          const preparedClaim = execution?.capturePreparedGenerationClaim();
-          const result = await runExclusiveSqliteSessionWrite(
-            options,
-            async () => {
-              assertRequestCurrent();
-              if (readPlan.kind === "maintenance-plan") {
-                Object.assign(readPlan.input, params.refreshMaintenanceProtection?.());
-              }
-              const assertNativeCurrent = captureSessionEntryNativeMutationWitness([source]);
-              const consume = (reply: {
-                workerThreadId: number;
-                result: SessionMaintenanceReadResult;
-              }) => {
-                assertRequestCurrent();
-                if (params.diagnostics) {
-                  params.diagnostics.workerThreadId = reply.workerThreadId;
-                }
-                let readResult = reply.result;
-                try {
-                  assertNativeCurrent();
-                } catch (error) {
-                  if (!(error instanceof SessionEntryChangedDuringReadError)) {
-                    throw error;
-                  }
-                  readResult = { kind: "maintenance-plan-stale" };
-                }
-                if (readResult.kind !== "maintenance-write-required") {
-                  params.onWorkerResult?.(readResult, identity.key.slice(5));
-                }
-                if (
-                  readResult.kind === "maintenance-plan" &&
-                  params.consumeReadOnlyMaintenancePlan
-                ) {
-                  let consuming = true;
-                  const assertConsumptionCurrent = () => {
-                    if (!consuming) {
-                      throw new Error("Session maintenance consumption has ended");
-                    }
-                    assertRequestCurrent();
-                    assertNativeCurrent();
-                  };
-                  try {
-                    assertConsumptionCurrent();
-                    const value = params.consumeReadOnlyMaintenancePlan(
-                      readResult,
-                      assertConsumptionCurrent,
-                    );
-                    if (isPromiseLike(value)) {
-                      void Promise.resolve(value).catch(() => {});
-                      throw new Error("Session maintenance consumers must remain synchronous");
-                    }
-                    assertConsumptionCurrent();
-                  } catch (error) {
-                    if (!(error instanceof SessionEntryChangedDuringReadError)) {
-                      throw error;
-                    }
-                    readResult = { kind: "maintenance-plan-stale" };
-                  } finally {
-                    consuming = false;
-                  }
-                }
-                return readResult;
-              };
-              if (execution && preparedClaim) {
-                return withSessionEntryWorker(
-                  options,
-                  identity.key.slice(5),
-                  () => {
-                    assertRequestCurrent();
-                    preparedClaim.assertCurrent();
-                  },
-                  (owner, authority) =>
-                    owner
-                      .runExisting(authority, async (worker) =>
-                        consume(
-                          await worker.execute(
-                            {
-                              type: "session.maintenance.read",
-                              input: { ...readPlan, expectedIdentity: identity },
-                            },
-                            { signal },
-                          ),
-                        ),
-                      )
-                      .then((value) => {
-                        if (!value) {
-                          throw new Error("Maintenance lost its prepared reader");
-                        }
-                        return value;
-                      }),
-                  undefined,
-                  execution,
-                  signal,
-                  undefined,
-                  undefined,
-                  undefined,
-                  undefined,
-                  "prepared-read",
-                );
-              }
-              return withSessionHistoryWorkerDatabase(source, async (reader) => {
-                const reply = await reader.readSessionMaintenance(
-                  { env: options.env, plan: { ...readPlan, expectedIdentity: identity } },
-                  signal,
-                );
-                reader.assertCurrent();
-                return consume(reply);
-              });
-            },
-            "session.maintenance.plan",
-            params.diagnostics,
-            "foreground",
-            signal,
-          );
-          if (result.kind !== "maintenance-write-required") {
-            return result;
-          }
-        } finally {
-          await execution?.release();
-        }
-      }
       const runWorker = async (
         claim: SqliteReclamationClaim,
         nativeLocation: string,
@@ -415,29 +257,27 @@ export async function runSqliteSessionReclamation(params: {
           params.plan.databaseOptions.path,
         );
       };
-      const retained = await runExclusiveSqliteSessionWrite(
-        params.plan.databaseOptions,
-        async () => {
-          assertRequestCurrent();
-          if (
-            params.plan.kind === "maintenance-plan" ||
-            params.plan.kind === "maintenance-statistics" ||
-            params.plan.kind === "maintenance-age"
-          ) {
-            // Metadata uses its worker's generation claim, not a host read admission.
-            return undefined;
-          }
-          const database = getOpenClawAgentDatabaseIfOpen(params.plan.databaseOptions);
-          // Reuse an already-owned handle, but never open a host connection for reclamation.
-          return database && !database.db.isTransaction
-            ? retainOpenClawAgentDatabaseReadOnly(params.plan.databaseOptions)
-            : undefined;
-        },
-        "session.reclamation.retain",
-        undefined,
-        "foreground",
-        signal,
-      );
+      // Metadata uses its worker's generation claim, not a host read admission.
+      const retained =
+        params.plan.kind === "maintenance-plan" ||
+        params.plan.kind === "maintenance-statistics" ||
+        params.plan.kind === "maintenance-age"
+          ? undefined
+          : await runExclusiveSqliteSessionWrite(
+              params.plan.databaseOptions,
+              async () => {
+                assertRequestCurrent();
+                const database = getOpenClawAgentDatabaseIfOpen(params.plan.databaseOptions);
+                // Reuse an already-owned handle, but never open a host connection for reclamation.
+                return database && !database.db.isTransaction
+                  ? retainOpenClawAgentDatabaseReadOnly(params.plan.databaseOptions)
+                  : undefined;
+              },
+              "session.reclamation.retain",
+              undefined,
+              "foreground",
+              signal,
+            );
       if (retained?.found) {
         const { database, claim } = retained;
         try {
@@ -452,13 +292,13 @@ export async function runSqliteSessionReclamation(params: {
       const plan = params.plan;
       const execution = captureOpenClawAgentDatabaseExecution(
         plan.databaseOptions,
-        maintenanceReadIdentity?.key.startsWith("file:")
+        maintenanceIdentity?.key.startsWith("file:")
           ? {
               expectedIdentity: {
                 kind: "file",
-                physicalIdentity: maintenanceReadIdentity.key.slice(5),
-                birthtime: maintenanceReadIdentity.birthtime,
-                nativeLocation: maintenanceReadIdentity.canonicalPath,
+                physicalIdentity: maintenanceIdentity.key.slice(5),
+                birthtime: maintenanceIdentity.birthtime,
+                nativeLocation: maintenanceIdentity.canonicalPath,
               },
             }
           : undefined,
@@ -600,9 +440,6 @@ async function runPreparedSqliteSessionReclamation(
 ): Promise<SqliteSessionReclamationResult> {
   const { claim, worker, assertRequestCurrent } = owner;
   const identity = claim.identity;
-  if (typeof identity !== "string") {
-    throw new Error("SQLite reclamation Worker requires an admitted file generation");
-  }
   const { plan } = params;
   const assertCommitAllowed = () => {
     worker.assertCurrent(plan.databaseOptions, claim);

@@ -516,10 +516,7 @@ export function finalizeCronFailureNotifications(
     resolveFailureIncident(params.job);
     return undefined;
   }
-  if (
-    params.result.errorClassification?.kind === "aborted" &&
-    (params.job.schedule.kind === "at" || params.job.schedule.kind === "on-exit")
-  ) {
+  if (params.result.errorClassification?.kind === "aborted") {
     return undefined;
   }
   recordUnresolvedFailure(params.job, params.result.failureNotificationDetail);

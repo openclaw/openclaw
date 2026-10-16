@@ -1,6 +1,7 @@
 // TTS directive tests cover parsing and applying speech directives.
 import { describe, expect, it } from "vitest";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
+import { createSpeechDirectiveParser } from "./directive-parser.js";
 import { createTtsDirectiveTextStreamCleaner, parseTtsDirectives } from "./directives.js";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -59,6 +60,34 @@ const fullPolicy: SpeechModelOverridePolicy = {
 };
 
 describe("parseTtsDirectives provider-aware routing", () => {
+  it("accumulates provider patches without asking the provider to copy prior overrides", () => {
+    const provider = makeProvider(
+      "example",
+      10,
+      createSpeechDirectiveParser({
+        voice: ["allowVoice", ["voice"]],
+        speed: [
+          "allowVoiceSettings",
+          ["speed"],
+          {
+            number: { range: { min: 0.5, max: 2 }, warning: () => "invalid speed" },
+          },
+        ],
+      }),
+    );
+    const result = parseTtsDirectives(
+      "[[tts:provider=example voice=speaker speed=1.25]]",
+      fullPolicy,
+      {
+        providers: [provider],
+      },
+    );
+    expect(result.overrides.providerOverrides?.example).toStrictEqual({
+      voice: "speaker",
+      speed: 1.25,
+    });
+    expect(result.warnings).toStrictEqual([]);
+  });
   it("does not resolve providers when text has no directives", () => {
     const failProvider = {
       get id() {

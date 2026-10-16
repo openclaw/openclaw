@@ -5,6 +5,7 @@ import { resolveTelegramReactionLevel } from "./reaction-level.js";
 import { resolveTelegramRichMessages } from "./rich-messages-config.js";
 
 export const telegramAgentPrompt: NonNullable<ChannelPlugin["agentPrompt"]> = {
+  questionInputMode: "buttons",
   messageToolHints: telegramMessageToolHints,
   messageToolCapabilities: (params) =>
     resolveTelegramInlineButtonsScope(params) === "off" ? [] : ["inlineButtons"],

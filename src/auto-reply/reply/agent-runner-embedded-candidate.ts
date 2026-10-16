@@ -180,6 +180,7 @@ export async function runEmbeddedFallbackCandidate(
         forceHeartbeatTool: turn.opts?.forceHeartbeatTool,
         deferTerminalLifecycle: true,
         onAttemptStart: lifecycleBackstop.beginAttempt,
+        onAttemptTerminalReplaced: lifecycleBackstop.replaceAttemptTerminal,
         onCompactionAccounting: (fact) => {
           compactionAccounting = fact;
         },

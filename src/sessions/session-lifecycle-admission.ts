@@ -1,6 +1,5 @@
 // Serializes lifecycle mutations and work admission for logical session identities.
 import { AsyncLocalStorage } from "node:async_hooks";
-import { isAgentRunDirectAbortReason } from "../agents/run-termination.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
@@ -16,6 +15,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { notifyListeners } from "../shared/listeners.js";
 import type { StoreWriterQueue } from "../shared/store-writer-queue.js";
 import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
 import {
@@ -79,6 +79,7 @@ type SessionLifecycleAdmissionState = {
   lifecycleQueues: Map<string, StoreWriterQueue>;
   mutationQueues: Map<string, StoreWriterQueue>;
   activeAdmissions: Map<string, Set<SessionWorkAdmission>>;
+  workReleaseListeners: Map<string, Set<() => void>>;
   activeMutationRuns: Set<SessionLifecycleMutationOwner>;
   idleWaiters: Map<string, Set<() => void>>;
   currentAdmissions: AsyncLocalStorage<ReadonlySet<SessionWorkAdmission>>;
@@ -107,6 +108,7 @@ const SESSION_LIFECYCLE_ADMISSION_STATE = resolveGlobalSingleton(
     lifecycleQueues: new Map(),
     mutationQueues: new Map(),
     activeAdmissions: new Map(),
+    workReleaseListeners: new Map(),
     activeMutationRuns: new Set(),
     idleWaiters: new Map(),
     currentAdmissions: new AsyncLocalStorage(),
@@ -114,6 +116,7 @@ const SESSION_LIFECYCLE_ADMISSION_STATE = resolveGlobalSingleton(
 );
 const {
   activeAdmissions: ACTIVE_SESSION_WORK_ADMISSIONS,
+  workReleaseListeners: SESSION_WORK_RELEASE_LISTENERS,
   activeMutationRuns: ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS,
   idleWaiters: SESSION_LIFECYCLE_IDLE_WAITERS,
   currentAdmissions: CURRENT_SESSION_WORK_ADMISSIONS,
@@ -122,6 +125,7 @@ const {
   collectSessionWorkAdmissions,
   collectActiveSessionWorkAdmissions,
   captureSessionWorkRunInterruptions,
+  captureGatewaySessionWorkAdmissions,
   getActiveSessionWorkAdmissionCount,
   getSessionWorkAdmissionRelease,
   getSessionWorkAdmissionOwnerRelease,
@@ -135,6 +139,7 @@ const {
 export {
   collectActiveSessionWorkAdmissions,
   captureSessionWorkRunInterruptions,
+  captureGatewaySessionWorkAdmissions,
   getActiveSessionWorkAdmissionCount,
   getSessionWorkAdmissionRelease,
   getSessionWorkAdmissionOwnerRelease,
@@ -371,53 +376,6 @@ export function hasOnlySessionLifecycleMutationKindActive(
   );
 }
 
-function isRestartRecoverableAdmission(admission: SessionWorkAdmission): boolean {
-  // Finished execution can still owe delivery; only a settled explicit stop ends that custody.
-  const abortReason = admission.getAbortReason?.() ?? admission.interrupted;
-  return (
-    admission.phase === "acquired" &&
-    (!admission.isSettling?.() || !isAgentRunDirectAbortReason(abortReason))
-  );
-}
-
-function isSessionWorkAdmissionTargetActive(params: {
-  scope: string;
-  sessionKey: string;
-  sessionId: string;
-  owners?: ReadonlySet<object>;
-}): boolean {
-  const identities = normalizeSessionIdentities(params.scope, [
-    params.sessionKey,
-    params.sessionId,
-  ]);
-  // Singleton leases intentionally own one identity. Multi-identity leases must
-  // cover the pair together; pooling owners would manufacture a false pair.
-  return identities.some((identity) =>
-    Array.from(ACTIVE_SESSION_WORK_ADMISSIONS.get(identity) ?? []).some(
-      (admission) =>
-        isRestartRecoverableAdmission(admission) &&
-        (!params.owners || params.owners.has(admission)) &&
-        (admission.identities.size === 1 ||
-          identities.every((target) => admission.identities.has(target))),
-    ),
-  );
-}
-
-/** Capture exact host-owned admissions; replacements after an await cannot inherit the snapshot. */
-export function captureGatewaySessionWorkAdmissions(resolveGatewayContext: GatewayContextResolver) {
-  const owners = collectSessionWorkAdmissions(
-    ACTIVE_SESSION_WORK_ADMISSIONS.keys(),
-    (admission) =>
-      isRestartRecoverableAdmission(admission) &&
-      hasGatewayContextOwner(admission, resolveGatewayContext),
-  );
-  return {
-    targets: collectActiveSessionWorkAdmissions(owners),
-    isActive: (target: { scope: string; sessionKey: string; sessionId: string }) =>
-      isSessionWorkAdmissionTargetActive({ ...target, owners }),
-  };
-}
-
 /** Unique active lifecycle mutations; one run can be indexed under several identities. */
 export function getActiveSessionLifecycleMutationCount(): number {
   return ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.size;
@@ -427,6 +385,23 @@ export function getActiveSessionLifecycleMutationCount(): number {
 export function collectActiveSessionLifecycleMutationIdentities(scope: string): string[] {
   const identities = [...ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS].flatMap((run) => run.identities);
   return [...(collectSessionIdentityTargets(identities).get(scope.trim()) ?? [])].toSorted();
+}
+
+/** Observe acquired protection disappearing, independently of terminal row publication. */
+export function observeSessionWorkAdmissionReleases(
+  scope: string,
+  listener: () => void,
+): () => void {
+  const key = scope.trim();
+  const listeners = SESSION_WORK_RELEASE_LISTENERS.get(key) ?? new Set();
+  listeners.add(listener);
+  SESSION_WORK_RELEASE_LISTENERS.set(key, listeners);
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0 && SESSION_WORK_RELEASE_LISTENERS.get(key) === listeners) {
+      SESSION_WORK_RELEASE_LISTENERS.delete(key);
+    }
+  };
 }
 
 export async function beginSessionWorkAdmission(params: {
@@ -520,15 +495,27 @@ export async function beginSessionWorkAdmission(params: {
       return;
     }
     released = true;
+    const listeners = SESSION_WORK_RELEASE_LISTENERS.get(params.scope.trim());
+    let protectionReleased = false;
     for (const identity of identities) {
       const active = ACTIVE_SESSION_WORK_ADMISSIONS.get(identity);
       active?.delete(admission);
       if (!active?.size) {
         ACTIVE_SESSION_WORK_ADMISSIONS.delete(identity);
       }
+      if (
+        listeners?.size &&
+        admission.phase === "acquired" &&
+        ![...(active ?? [])].some((other) => other.phase === "acquired")
+      ) {
+        protectionReleased = true;
+      }
     }
     clearSessionWorkAdmissionHandoffs(admission);
     resolveReleased();
+    if (protectionReleased) {
+      notifyListeners(listeners ?? [], undefined);
+    }
   };
   const lease: SessionWorkAdmissionLease = {
     isActive: () => !released,

@@ -158,6 +158,7 @@ export async function loadCronRuns(
   state.cronRunsLoadingMore = append;
   try {
     const res = await client.request<CronRunsResult>("cron.runs", {
+      view: "summary",
       // An exact job owns its history; the overview's agent filter may select another owner.
       ...(request.scope === "all" && request.agentId ? { agentId: request.agentId } : {}),
       scope: request.scope,

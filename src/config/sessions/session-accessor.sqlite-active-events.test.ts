@@ -806,10 +806,15 @@ describe("SQLite active transcript event projection", () => {
   );
 
   it("skips the preparation worker when the projection is already current", async () => {
-    await persistSessionTranscriptTurn(scope, {
-      messages: [{ eventId: "seed", message: { role: "user", content: "seed" } }],
-      touchSessionEntry: false,
-    });
+    runOpenClawAgentWriteTransaction(
+      (database) =>
+        expect(
+          appendTranscriptEventsInTransaction(database, scope, [
+            transcriptMessage("seed", null, { role: "user", content: "seed" }),
+          ]),
+        ).toBe(1),
+      { agentId: scope.agentId, env: scope.env },
+    );
     await closeSessionTranscriptReconcileWorkerPool();
     const poolBefore = getSessionTranscriptReconcileWorkerPoolSnapshot();
     expect(poolBefore.workersCreated).toBe(0);

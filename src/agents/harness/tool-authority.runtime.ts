@@ -3,9 +3,9 @@ import { getAttachedBackend } from "../../auto-reply/reply/reply-run-registry.st
 import { createReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.tool-authority.js";
 import {
   prepareReplyToolAuthority,
-  type ReplyToolAuthorityInput,
   type ReplyToolAuthorityNarrow,
 } from "../../auto-reply/reply/reply-tool-authority.js";
+import type { ReplyToolAuthorityInput } from "../../auto-reply/reply/reply-tool-authority.types.js";
 import { readChannelSourceTurnId } from "../../auto-reply/reply/source-turn-id.js";
 import { withSessionTranscriptQuestionAnswers } from "../../config/sessions/session-transcript-read-fence.js";
 import {
@@ -74,8 +74,6 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
       senderName: attempt.senderName ?? undefined,
       senderUsername: attempt.senderUsername ?? undefined,
       senderE164: attempt.senderE164 ?? undefined,
-      messageProvider: attempt.messageProvider ?? undefined,
-      agentAccountId: attempt.agentAccountId ?? undefined,
       groupId: attempt.groupId ?? undefined,
       groupChannel: attempt.groupChannel ?? undefined,
       groupSpace: attempt.groupSpace ?? undefined,

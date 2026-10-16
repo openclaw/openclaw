@@ -9,6 +9,7 @@ import {
 import {
   generateOAuthState,
   startProviderOAuthLoopbackCallbackServer,
+  type OAuthCallbackResult as OpenRouterOAuthCallbackResult,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   readProviderJsonResponse,
@@ -33,11 +34,6 @@ const OPENROUTER_OAUTH_TIMEOUT_MS = 5 * 60 * 1000;
 const OPENROUTER_OAUTH_FETCH_TIMEOUT_MS = 30 * 1000;
 const OPENROUTER_OAUTH_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const OPENROUTER_OAUTH_PROFILE_ID = "openrouter:default";
-
-type OpenRouterOAuthCallbackResult = {
-  code: string;
-  state: string;
-};
 
 type OpenRouterOAuthCallbackServer = Awaited<
   ReturnType<typeof startProviderOAuthLoopbackCallbackServer>

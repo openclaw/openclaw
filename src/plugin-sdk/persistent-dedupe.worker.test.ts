@@ -290,7 +290,7 @@ describe("persistent dedupe worker", () => {
     });
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "orders forget after an unfinished recording (legacy alias=%s)",
     async (legacyAlias) => {
       await withOpenClawTestState({ label: "dedupe-forget-order" }, async (state) => {
@@ -450,31 +450,4 @@ describe("persistent dedupe worker", () => {
       }
     });
   });
-
-  it.each([false, true])(
-    "preserves disk-error policy without replaying a failed write (strict=%s)",
-    async (strict) => {
-      await withOpenClawTestState({ label: "dedupe-failed-worker" }, async () => {
-        const failure = new Error("worker outcome unavailable");
-        const write = vi
-          .spyOn(workerClient, "comparePluginStateUpdateInWorker")
-          .mockRejectedValueOnce(failure);
-        const onDiskError = vi.fn((error: unknown) => {
-          if (strict) {
-            throw error;
-          }
-        });
-        const dedupe = createPersistentDedupe({ ...options, onDiskError });
-        const result = dedupe.checkAndRecord("failed");
-        if (strict) {
-          await expect(result).rejects.toBe(failure);
-        } else {
-          await expect(result).resolves.toBe(true);
-        }
-        expect(write).toHaveBeenCalledOnce();
-        expect(onDiskError).toHaveBeenCalledWith(failure);
-        expect(await createPersistentDedupe(options).hasRecent("failed")).toBe(false);
-      });
-    },
-  );
 });

@@ -103,6 +103,23 @@ describe("resident sessions.list", () => {
         ts: initial.ts + 1_000,
       });
       expect(unchanged.sharedFacts).toBeUndefined();
+      for (const unrelated of [
+        { agentId: "work", sessionKey: "agent:work:active" },
+        { agentId: "main", sessionKey: "agent:main:archived" },
+      ]) {
+        await replaceSessionEntry(unrelated, {
+          ...loadSessionEntry(unrelated)!,
+          label: "Changed outside the held window",
+        });
+        const retained = await listSessions({ client, context, request: conditional });
+        expect(retained).toMatchObject({
+          sessions: [],
+          rowsUnchanged: true,
+          rowsRevision: initial.rowsRevision,
+          count: initial.count,
+          totalCount: initial.totalCount,
+        });
+      }
       const filtered = await listSessions({
         client,
         context,
@@ -121,11 +138,29 @@ describe("resident sessions.list", () => {
       expect(changed.sessions.find((row) => row.key === scope.sessionKey)?.label).toBe(
         "Renamed sidebar row",
       );
+      const admitted = { agentId: "main", sessionKey: "agent:main:archived" };
+      await replaceSessionEntry(admitted, {
+        ...loadSessionEntry(admitted)!,
+        archivedAt: undefined,
+        updatedAt: Date.now(),
+      });
+      const membership = await listSessions({
+        client,
+        context,
+        request: { ...request, ifRowsRevision: changed.rowsRevision },
+      });
+      expect(membership.rowsUnchanged).toBeUndefined();
+      expect(membership.rowsRevision).not.toBe(changed.rowsRevision);
+      expect(membership.sessions.map((row) => row.key)).toEqual([
+        "agent:main:archived",
+        "agent:main:active",
+        "agent:main:draft",
+      ]);
       await replaceSessionEntry(scope, { ...loadSessionEntry(scope)!, visibility: "draft" });
       const revoked = await listSessions({
         client: identifiedClient("other@example.com"),
         context,
-        request: { ...request, ifRowsRevision: changed.rowsRevision },
+        request: { ...request, ifRowsRevision: membership.rowsRevision },
       });
       expect(revoked.rowsUnchanged).toBeUndefined();
       expect(revoked.sessions.some((row) => row.key === scope.sessionKey)).toBe(false);

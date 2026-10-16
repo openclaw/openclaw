@@ -125,8 +125,8 @@ update warning; callers using only the existing synchronous guard remain support
 For runtime storage, use the owning domain's awaited operations or
 `openOpenClawAgentSqliteWorkerStoreV2`; see
 [native SQLite migration](/plugins/sdk-migration/how-to-migrate#replace-native-sqlite-runtime-writes).
-The following `sqlite-runtime` callback helper is deprecated compatibility until
-the next Plugin SDK major. Awaiting admission does not move its SQL off the
+The following `sqlite-runtime` callback helper is deprecated compatibility through
+2026-12-31. Awaiting admission does not move its SQL off the
 caller's thread.
 
 `runSqliteImmediateTransaction(db, prepare, options?)` from
@@ -178,6 +178,9 @@ side of the host/worker boundary:
   for snapshot reads. `runEngineWorkerWrite` selects the extra PostgreSQL worker
   envelope using the kernel's transaction callback; SQLite executes the operation
   directly. Keep the kernel's own write-transaction API atomic on both engines.
+  `jsonPathValue(connection, value, path, kind)` projects an object-member JSON
+  path as text, a number, or JSON text. It preserves SQLite's `json_extract`
+  statement and bindings and selects the PostgreSQL expression for that engine.
 
 The worker entrypoint exports the `EngineConnection`, `StoreSchema`, and
 `DatabaseEngineAdapter` types; it does not export a PostgreSQL connection
@@ -185,6 +188,18 @@ constructor. Open physical connections through `openEngineStore`. A store
 without registered PostgreSQL DDL stays on SQLite; a selected PostgreSQL store that
 fails admission never falls back. See [Database engines](/reference/database-engines)
 for configuration, supported stores, durability, anchors, and observation events.
+
+Experimental search capabilities use the same worker entrypoint. Call
+`admitStoreSearch` with an admitted store and its existing index declarations to
+bind `TextIndex` and `VectorIndex` handles. `FullTextCapability` supplies native
+Kysely expressions; `VectorCapability` owns native candidate queries and derived
+index maintenance. Callers retain filters, limits, chronology, snippets' display
+bounds, and scoring policy. The adapter's existing capability labels remain
+diagnostic metadata. SQLite retains its L2 candidate selection and cosine
+reranking, with the memory owner's exact fallback when native vectors are
+unavailable. PostgreSQL search capabilities are currently `null` with an admission
+diagnostic; their later implementation will use explicitly documented native
+ranking rather than promise SQLite ranking equivalence.
 
 ### Owned stdio processes
 
@@ -317,7 +332,7 @@ provides explicit worker-owned `prepare()` for creation, and checks live
 authority at transaction and commit admission. `executeExisting` leaves missing
 storage absent. See the [migration example](/plugins/sdk-migration/how-to-migrate#replace-native-sqlite-runtime-writes).
 Released raw native callbacks retain their ordering and warn on use until their
-removal in the next Plugin SDK major.
+removal in the first January 2027 stable release.
 
 Use `openSqliteWorkerStore<Operations>` from
 `openclaw/plugin-sdk/sqlite-runtime` to move a feature's SQLite lifecycle off the

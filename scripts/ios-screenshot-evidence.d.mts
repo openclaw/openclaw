@@ -18,7 +18,6 @@ export type XcresultSummary = {
 };
 
 export function collectIosScreenshotEvidence(options: {
-  family: string;
   screenshotDirectory: string;
   xcresultDirectory: string;
   outputDirectory: string;

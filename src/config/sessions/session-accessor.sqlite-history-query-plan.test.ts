@@ -1,8 +1,14 @@
 import type { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createReadonlySessionHistoryReader } from "../../gateway/session-history-readonly-reader.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
+import {
+  OpenClawAgentDatabaseReadOnlyScope,
+  withScopedOpenClawAgentDatabaseReadOnly,
+} from "../../state/openclaw-agent-db-readonly-scope.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -13,6 +19,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   appendTranscriptEvent,
@@ -46,11 +53,12 @@ function readHistoryWithQueryPlans(
   database: OpenClawAgentDatabase,
   scope: SessionTranscriptReadScope,
 ) {
-  clearNodeSqliteKyselyCacheForDatabase(database.db);
-  const prepare = database.db.prepare.bind(database.db);
+  const nativeDb = requireNativeSqliteDatabase(database.db);
+  clearNodeSqliteKyselyCacheForDatabase(nativeDb);
+  const prepare = nativeDb.prepare.bind(nativeDb);
   const markerStatements: StatementSync[] = [];
   const anchorStatements: StatementSync[] = [];
-  const spy = vi.spyOn(database.db, "prepare").mockImplementation((query) => {
+  const spy = vi.spyOn(nativeDb, "prepare").mockImplementation((query) => {
     const statement = prepare(query);
     const columns = statement.columns().map(({ name }) => name);
     if (columns.includes("following_message_position")) {
@@ -214,6 +222,127 @@ it.each([false, true])("keeps history marker reads selective (analyzed=%s)", asy
   expect(sparseBranch.page.totalMessages).toBe(22);
   expect(sparseBranch.drivingSearch).toMatch(/\(session_id=\? AND event_type=\?/u);
   expect(readSessionTranscriptHistoryEventCount(plainScope)).toBe(22);
+});
+
+it("reads only appended metadata for a warm marker-heavy page and quoted messages", async () => {
+  const scope = {
+    agentId: "main",
+    env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("openclaw-history-incremental-") },
+    sessionId: "incremental-history",
+    sessionKey: "agent:main:incremental-history",
+  };
+  await persistSessionTranscriptTurn(scope, {
+    messages: [transcriptMessage("seed", null, { role: "user", content: "seed" })],
+    touchSessionEntry: false,
+  });
+  const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+  insertSyntheticHistory(database, scope.sessionId, 2_000, true);
+  const limits = { maxMessages: 3, maxLines: 3, maxBytes: 64 * 1024 };
+  const target = {
+    transcript: { ...scope, sessionFile: scope.sessionKey, storePath: database.path },
+    database: { agentId: database.agentId, path: database.path },
+  };
+  const owner = new OpenClawAgentDatabaseReadOnlyScope();
+  const reader = createReadonlySessionHistoryReader(target);
+  const readPage = () =>
+    owner.run(target.database, () =>
+      reader.readHistoryEventPage({ ...limits, offset: 0, recentAtHead: limits }),
+    );
+  try {
+    expect(readPage().totalMessages).toBe(4_001);
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        transcriptMessage("new-tail", "synthetic-message-4001", {
+          role: "assistant",
+          content: "New reply",
+        }),
+      ],
+      touchSessionEntry: false,
+    });
+    const retained = owner.run(target.database, () =>
+      withScopedOpenClawAgentDatabaseReadOnly(({ db }) => db, target.database),
+    );
+    if (!retained.found) {
+      throw new Error("Expected the retained history reader");
+    }
+    const nativeDb = requireNativeSqliteDatabase(retained.value);
+    const prototype: StatementSync = Object.getPrototypeOf(nativeDb.prepare("SELECT 1"));
+    const executed = new Set<StatementSync>();
+    const observers = (["all", "get", "iterate"] as const).map((method) => {
+      const original = prototype[method];
+      return vi.spyOn(prototype, method).mockImplementation(
+        new Proxy(original, {
+          apply(invoke, statement: StatementSync, args) {
+            executed.add(statement);
+            return Reflect.apply(invoke, statement, args);
+          },
+        }),
+      );
+    });
+    const counter = trackSqliteStatementExecutions(nativeDb, ["read"], () => "read");
+    try {
+      const page = readPage();
+      expect(page.totalMessages).toBe(4_002);
+      expect(page.events.map(({ event }) => event)).toEqual(
+        ["synthetic-boundary-4000", "synthetic-message-4001", "new-tail"].map((id) =>
+          expect.objectContaining({ id }),
+        ),
+      );
+      expect(page.events.map(({ seq }) => seq)).toEqual([4_000, 4_001, 4_002]);
+      for (const seq of [3, 1_999, 3_999]) {
+        expect(
+          await owner.run(target.database, () =>
+            reader.readSessionMessageByIdAsync(target.transcript, `synthetic-message-${seq}`),
+          ),
+        ).toMatchObject({ found: true, seq, message: { content: "synthetic" } });
+      }
+      expect(
+        await owner.run(target.database, () =>
+          reader.readSessionMessageByIdAsync(target.transcript, "synthetic-boundary-2000"),
+        ),
+      ).toMatchObject({ found: true, seq: 2_000 });
+      // Bound transferred rows across both native execution methods, including cached statements.
+      expect(counter.rowCounts.read).toBeGreaterThan(3);
+      expect(counter.rowCounts.read).toBeLessThan(100);
+    } finally {
+      counter.restore();
+      observers.forEach((observer) => observer.mockRestore());
+    }
+    const searches = [...executed].flatMap((statement) =>
+      nativeDb
+        .prepare(`EXPLAIN QUERY PLAN ${statement.expandedSQL}`)
+        .all()
+        .map(({ detail }) => detail),
+    );
+    expect(searches).toContainEqual(
+      expect.stringMatching(/SEARCH event .*\(session_id=\? AND seq>\? AND seq<\?\)/u),
+    );
+    await appendTranscriptEvent(scope, {
+      type: "custom_message",
+      id: "branch",
+      parentId: "seed",
+      customType: "notice",
+      content: "Different active branch",
+      display: true,
+    });
+    await waitForSessionTranscriptProjection(scope);
+    const branched = readPage();
+    expect(branched.totalMessages).toBe(2);
+    expect(branched.events.map(({ event }) => event)).toEqual(
+      ["seed", "branch"].map((id) => expect.objectContaining({ id })),
+    );
+    expect(branched.events.map(({ seq }) => seq)).toEqual([1, 2]);
+    expect(
+      await owner.run(target.database, () =>
+        reader.readSessionMessageByIdAsync(target.transcript, "synthetic-boundary-2000", {
+          currentOnly: true,
+          maxBytes: limits.maxBytes,
+        }),
+      ),
+    ).toMatchObject({ found: false });
+  } finally {
+    owner.close();
+  }
 });
 
 it("looks up nested activity anchors without scanning unrelated transcript identities", async () => {

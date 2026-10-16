@@ -9,6 +9,7 @@ import { parseCronDurationMs } from "../../lib/cron/decimal.ts";
 import type { CronFormState } from "../../lib/cron/types.ts";
 import { formatMs } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { EventSourceFields } from "./view-event-source.tsx";
 import {
   FieldRow,
   inputIdForField,
@@ -44,6 +45,12 @@ function describeFormSchedule(form: CronFormState): string | null {
     }
     const tz = form.cronTz.trim();
     return tz ? t("cron.form.summaryCronTz", { expr, tz }) : t("cron.form.summaryCron", { expr });
+  }
+  if (form.scheduleKind === "event") {
+    return t("cron.events.summary", {
+      server: form.eventServer,
+      name: form.eventName || form.eventSource,
+    });
   }
   if (form.scheduleKind === "on-exit") {
     return t("cron.form.repeatOnExit");
@@ -123,6 +130,16 @@ export function ScheduleSection(props: CronProps) {
       { value: "every", label: t("cron.form.repeatInterval"), testId: "cron-schedule-kind-every" },
       { value: "at", label: t("cron.form.repeatOnce"), testId: "cron-schedule-kind-at" },
       { value: "cron", label: t("cron.form.cronOption"), testId: "cron-schedule-kind-cron" },
+      ...((props.eventSource?.available && props.status?.triggersEnabled !== false) ||
+      form().scheduleKind === "event"
+        ? [
+            {
+              value: "event" as const,
+              label: t("cron.events.label"),
+              testId: "cron-schedule-kind-event",
+            },
+          ]
+        : []),
     ];
   });
   const summary = createMemo(() => describeFormSchedule(form()));
@@ -140,6 +157,7 @@ export function ScheduleSection(props: CronProps) {
             onChange={(value) =>
               props.onFormChange({
                 scheduleKind: value,
+                ...(value === "event" ? { triggerEnabled: false, deleteAfterRun: false } : {}),
                 ...(value === "at" &&
                 (form().scheduleKind === "every" || form().scheduleKind === "cron")
                   ? { deleteAfterRun: true }
@@ -183,6 +201,7 @@ export function ScheduleSection(props: CronProps) {
           />
         </>
       ) : undefined}
+      {form().scheduleKind === "event" ? <EventSourceFields {...props} /> : undefined}
       {summary() ? (
         <div class="cron-schedule-summary">
           <Icon name="clock" />

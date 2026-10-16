@@ -133,20 +133,19 @@ describe("session companion context", () => {
   );
 
   it("distinguishes a missing session from an empty selected transcript", async () => {
-    const missing = createScope("companion-context-missing");
-    await expect(defaultSessionCompanionContextReader.read(missing)).resolves.toEqual({
+    const scope = createScope("companion-context-empty");
+    await expect(defaultSessionCompanionContextReader.read(scope)).resolves.toEqual({
       kind: "missing",
     });
 
-    const empty = createScope("companion-context-empty");
-    await upsertSessionEntryCore(empty, { sessionId: empty.sessionId, updatedAt: 1 });
-    const result = await defaultSessionCompanionContextReader.read(empty);
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const result = await defaultSessionCompanionContextReader.read(scope);
     expect(result).toEqual({
       kind: "ready",
       context: {
         empty: true,
         messages: [],
-        sessionId: empty.sessionId,
+        sessionId: scope.sessionId,
       },
     });
   });

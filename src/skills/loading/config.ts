@@ -162,7 +162,7 @@ export async function prepareSkillBinaryProbe(
 ) {
   if (runtime) {
     const available = new Set(runtime.bins);
-    return { hasBin: (bin: string) => available.has(bin), needsRetry: () => false };
+    return { hasBin: (bin: string) => available.has(bin) };
   }
   const bins = new Set<string>();
   const bundledAllowlist = resolveBundledAllowlist(opts?.config);
@@ -194,18 +194,7 @@ export async function prepareSkillBinaryProbe(
     }
   }
   const facts = await prepareBinaryAvailability(bins, assertCurrent);
-  let unprepared = false;
-  return {
-    hasBin: (bin: string) => {
-      // Eligibility can change while probing; prepare newly requested facts before publishing.
-      if (!bins.has(bin)) {
-        unprepared = true;
-        return false;
-      }
-      return facts.hasBinary(bin);
-    },
-    needsRetry: () => unprepared || !facts.isCurrent(),
-  };
+  return { hasBin: facts.hasBinary };
 }
 
 export function resolveSkillRequiredBins(entry: SkillEntry): string[] {

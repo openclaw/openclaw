@@ -13,6 +13,7 @@ import {
   normalizeRoleForGrouping,
   normalizeMessage,
 } from "../../lib/chat/message-normalizer.ts";
+import { hasVisiblePreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import {
   extractToolCardsCached,
   extractToolPreview,
@@ -423,7 +424,8 @@ export function hasRenderableNormalizedMessage(
     normalized.content.length ||
     normalized.replyTarget ||
     label ||
-    (role === "user" && readTranscriptMediaEntries(message).length),
+    hasVisiblePreparedActivity(message) ||
+    readTranscriptMediaEntries(message).length,
   );
 }
 

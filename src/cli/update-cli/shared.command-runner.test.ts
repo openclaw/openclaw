@@ -15,6 +15,7 @@ import {
   resolveGlobalManager,
   resolveUpdateRoot,
   runUpdateStep,
+  tryWriteCompletionCache,
   UpdatePreMutationError,
 } from "./shared.js";
 
@@ -59,6 +60,52 @@ describe("update CLI shared helpers", () => {
     vi.clearAllMocks();
     runCommandWithTimeout.mockResolvedValue(successfulCommandResult);
   });
+
+  it("refreshes standalone completion without a loose launcher", async () => {
+    await withTestDir({ prefix: "completion-standalone-" }, async (root) => {
+      const runtime = path.join(root, "runtime");
+      const executable = path.join(root, "openclaw");
+      await fs.mkdir(runtime);
+      await fs.writeFile(
+        path.join(root, "manifest.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          mode: "jit",
+          executable: { path: "openclaw" },
+          runtime: { path: "runtime" },
+          openclaw: { version: "2026.10.15" },
+          bun: { version: "1.3.0" },
+        }),
+      );
+
+      await expect(tryWriteCompletionCache(runtime, true, 500, executable)).resolves.toBe(
+        "completed",
+      );
+      expect(runCommandWithTimeout).toHaveBeenCalledExactlyOnceWith(
+        [executable, "completion", "--write-state"],
+        expect.objectContaining({ cwd: runtime, timeoutMs: 500 }),
+      );
+    });
+  });
+
+  it.each([false, true])(
+    "does not hide uncertain completion cleanup (uncertain=%s)",
+    async (uncertain) => {
+      await withTestDir({ prefix: "completion-cleanup-" }, async (root) => {
+        await fs.writeFile(path.join(root, "openclaw.mjs"), "");
+        const error = uncertain
+          ? new CommandProcessCleanupError()
+          : new Error("cache write failed");
+        runCommandWithTimeout.mockRejectedValueOnce(error);
+        const result = tryWriteCompletionCache(root, true, 500);
+        if (uncertain) {
+          await expect(result).rejects.toBe(error);
+        } else {
+          await expect(result).resolves.toBe("failed");
+        }
+      });
+    },
+  );
 
   it("accepts only complete positive integer timeout seconds", () => {
     for (const timeout of [

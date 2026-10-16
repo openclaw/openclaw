@@ -5,10 +5,8 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   asDateTimestampMs,
   asFiniteNumberInRange,
-  isFutureDateTimestampMs,
   parseStrictFiniteNumber,
   parseStrictNonNegativeInteger,
-  resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
@@ -169,7 +167,6 @@ function normalizeMessageContent(content: unknown): string {
 }
 
 function resolveInboundTimestamp(rawTs: unknown): number {
-  const fallbackTimestamp = () => asDateTimestampMs(Date.now()) ?? 0;
   const parsed =
     typeof rawTs === "number"
       ? rawTs
@@ -182,15 +179,15 @@ function resolveInboundTimestamp(rawTs: unknown): number {
     max: Number.MAX_SAFE_INTEGER,
   });
   if (timestamp === undefined) {
-    return fallbackTimestamp();
+    return Date.now();
   }
   if (timestamp > ZALO_TIMESTAMP_MS_THRESHOLD) {
-    return asDateTimestampMs(Math.trunc(timestamp)) ?? fallbackTimestamp();
+    return asDateTimestampMs(Math.trunc(timestamp)) ?? Date.now();
   }
   if (timestamp > MAX_SAFE_ZALO_TIMESTAMP_SECONDS) {
-    return fallbackTimestamp();
+    return Date.now();
   }
-  return asDateTimestampMs(Math.trunc(timestamp * 1000)) ?? fallbackTimestamp();
+  return asDateTimestampMs(Math.trunc(timestamp * 1000)) ?? Date.now();
 }
 
 function extractMentionIds(rawMentions: unknown): string[] {
@@ -509,7 +506,7 @@ function readCachedGroupContext(profile: string, groupId: string): ZaloGroupCont
   if (!cached) {
     return null;
   }
-  if (!isFutureDateTimestampMs(cached.expiresAt)) {
+  if (cached.expiresAt <= Date.now()) {
     groupContextCache.delete(key);
     return null;
   }
@@ -521,7 +518,7 @@ function readCachedGroupContext(profile: string, groupId: string): ZaloGroupCont
 
 function trimGroupContextCache(now: number): void {
   for (const [key, value] of groupContextCache) {
-    if (isFutureDateTimestampMs(value.expiresAt, { nowMs: now })) {
+    if (value.expiresAt > now) {
       continue;
     }
     groupContextCache.delete(key);
@@ -535,13 +532,9 @@ function writeCachedGroupContext(profile: string, context: ZaloGroupContext): vo
   if (groupContextCache.has(key)) {
     groupContextCache.delete(key);
   }
-  const expiresAt = resolveExpiresAtMsFromDurationMs(GROUP_CONTEXT_CACHE_TTL_MS, { nowMs: now });
-  if (expiresAt === undefined) {
-    return;
-  }
   groupContextCache.set(key, {
     value: context,
-    expiresAt,
+    expiresAt: now + GROUP_CONTEXT_CACHE_TTL_MS,
   });
   trimGroupContextCache(now);
 }
@@ -1155,12 +1148,7 @@ export async function startZaloQrLogin(params: {
         assertCurrent();
         await login.beforeCredentialPersistence?.();
         assertCurrent();
-        await credentials.writeApiCredentials(
-          profile,
-          api,
-          assertCurrent,
-          capturedCredentials ?? undefined,
-        );
+        await credentials.writeApiCredentials(profile, api, assertCurrent, capturedCredentials);
         assertCurrent();
         invalidateApi(profile);
         apiByProfile.set(profile, api);

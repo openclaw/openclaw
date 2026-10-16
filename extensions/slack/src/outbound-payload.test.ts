@@ -31,16 +31,9 @@ type PostedSlackMessage = Pick<SlackSendOptions, "blocks"> & {
 };
 
 function sentSlackMessage(sendMock: MockWithCalls, index: number) {
-  const call = sendMock.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected Slack send call ${index}`);
-  }
-  const options = call[2];
-  if (!options) {
-    throw new Error("Expected Slack send options");
-  }
+  const call = sendMock.mock.calls[index]!;
   return {
-    options: options as SlackSendOptions,
+    options: call[2] as SlackSendOptions,
     text: call[1],
     to: call[0],
   };

@@ -367,6 +367,10 @@ describe("probeGateway", () => {
       missingScope: "operator.read",
       requiredScopes: ["operator.read"],
     });
+    expectProbeAuthFields(result, {
+      scopes: ["operator.write"],
+      capability: "write_capable",
+    });
   });
 
   it("falls back to token/password auth when device identity cannot be persisted", async () => {
@@ -440,20 +444,6 @@ describe("probeGateway", () => {
     expect(gatewayClientState.stopAndWaitCalls).toHaveLength(1);
     expect(gatewayClientState.stopCalls).toBe(1);
     expect(gatewayClientState.requests).toStrictEqual([]);
-  });
-
-  it("reports write-capable auth when hello-ok scopes include operator.write", async () => {
-    gatewayClientState.helloAuth = {
-      role: "operator",
-      scopes: ["operator.write"],
-    };
-
-    const result = await runTokenLightweightProbe();
-
-    expectProbeAuthFields(result, {
-      scopes: ["operator.write"],
-      capability: "write_capable",
-    });
   });
 
   it("keeps capability unknown when hello-ok omits auth metadata", async () => {

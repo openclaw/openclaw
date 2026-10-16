@@ -22,10 +22,7 @@ import {
   bindPluginStateNativeBindingStore,
   type PluginStateOperationModuleSource,
 } from "./plugin-state-store.native-binding.js";
-import {
-  validatePluginStateKeyRange,
-  type PluginStateKeyRangeParams,
-} from "./plugin-state-store.reads.js";
+import { validatePluginStateKeyRange } from "./plugin-state-store.reads.js";
 import {
   closePluginStateDatabase,
   MAX_PLUGIN_STATE_VALUE_BYTES,
@@ -36,6 +33,7 @@ import type {
   PluginStateActionAuthority,
   PluginStateCompareResult,
   PluginStateEntry,
+  PluginStateKeyRangeParams,
   PluginStateKeyedStore,
   PluginStateObservation,
   PluginStateStoreError,
@@ -162,9 +160,9 @@ function createKeyedStoreForPluginId<T>(
         moduleSource,
       );
     },
-    /** @deprecated Use observe and compareAndApply; removal follows a stable deprecation period. */
+    /** @deprecated Use observe and compareAndApply; final compatibility day: 2026-12-31. */
     update: async (...args) => getLegacyStore().update(...args),
-    /** @deprecated Use observe and compareAndApply; removal follows a stable deprecation period. */
+    /** @deprecated Use observe and compareAndApply; final compatibility day: 2026-12-31. */
     deleteIf: async (...args) => getLegacyStore().deleteIf(...args),
   };
   return bindPluginStateNativeBindingStore(
@@ -486,7 +484,7 @@ export function createPluginStateRuntimeStores(
 /**
  * Named adapter for the plugin-state-sync-keyed-store compatibility contract.
  * @deprecated Use createPluginStateKeyedStoreV2 or api.runtime.state.openKeyedStoreV2
- * and await its operations. This adapter will be removed after a stable deprecation period.
+ * and await its operations. This adapter will be removed in the first January 2027 stable release, after the final compatibility day 2026-12-31.
  */
 export function createPluginStateSyncKeyedStore<T>(
   pluginId: string,
@@ -573,7 +571,7 @@ export async function registerPluginStateSequencedJournalEntry(params: {
   });
 }
 
-/** Internal bounded read through the same shared-state worker as journal writes. */
+/** Internal bounded read after preceding journal writes have settled. */
 export async function pluginStateEntriesInKeyRange(
   params: PluginStateKeyRangeParams & { env?: NodeJS.ProcessEnv },
 ): Promise<PluginStateEntry<unknown>[]> {

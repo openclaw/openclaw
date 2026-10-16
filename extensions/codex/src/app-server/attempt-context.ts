@@ -90,7 +90,6 @@ export function readContextEngineThreadBootstrapProjection(
 export function resolveContextEngineBootstrapProjectionDecision(params: {
   startupBinding: CodexAppServerThreadBinding | undefined;
   expectedBinding: ReturnType<typeof buildContextEngineBinding>;
-  projection: CodexContextEngineThreadBootstrapProjection;
   dynamicToolsFingerprint: string;
   legacyDynamicToolsFingerprint?: string;
 }): { project: boolean; reason: string } {
@@ -118,13 +117,7 @@ export function resolveContextEngineBootstrapProjectionDecision(params: {
   ) {
     return { project: true, reason: "dynamic-tools-mismatch" };
   }
-  const projectionChanged =
-    bindingProjection.mode !== "thread_bootstrap" ||
-    bindingProjection.epoch !== params.projection.epoch ||
-    bindingProjection.fingerprint !== params.projection.fingerprint;
-  return projectionChanged
-    ? { project: true, reason: "projection-mismatch" }
-    : { project: false, reason: "matching-thread-bootstrap-binding" };
+  return { project: false, reason: "matching-thread-bootstrap-binding" };
 }
 
 export function buildCodexSystemPromptReport(params: {
@@ -141,12 +134,8 @@ export function buildCodexSystemPromptReport(params: {
   const toolEntries = flattenCodexDynamicToolFunctions(params.tools).map(buildCodexToolReportEntry);
   const schemaChars = toolEntries.reduce((sum, tool) => sum + tool.schemaChars, 0);
   const skillsPrompt = params.skillsPrompt.trim();
-  const bootstrapMaxChars = readPositiveNumber(
-    params.attempt.config?.agents?.defaults?.bootstrapMaxChars,
-  );
-  const bootstrapTotalMaxChars = readPositiveNumber(
-    params.attempt.config?.agents?.defaults?.bootstrapTotalMaxChars,
-  );
+  const bootstrapMaxChars = params.attempt.config?.agents?.defaults?.bootstrapMaxChars;
+  const bootstrapTotalMaxChars = params.attempt.config?.agents?.defaults?.bootstrapTotalMaxChars;
   return {
     source: "run",
     generatedAt: Date.now(),
@@ -305,12 +294,6 @@ function indexCodexContextFileContent(files: EmbeddedContextFile[]) {
       (baseName ? byBaseName.get(baseName) : undefined)
     );
   };
-}
-
-function readPositiveNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
 }
 
 export function buildCodexOpenClawPromptContext(params: {

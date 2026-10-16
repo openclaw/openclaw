@@ -63,6 +63,7 @@ export function withLocalWorkspaceStore<T>(
   params: {
     worktreeId: string;
     env?: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
     assertCurrent?: () => void;
     workerAuthority?: WorktreeWorkerAuthority;
     requireAbsent?: boolean;
@@ -84,6 +85,7 @@ export function withLocalWorkspaceStore<T>(
         key: params.worktreeId,
         leaseMs: 60_000,
         waitMs: 600_000,
+        signal: params.signal,
         leaseLabel: "local sandbox workspace",
         operationLabel: "workspace.local-reconciliation",
       },

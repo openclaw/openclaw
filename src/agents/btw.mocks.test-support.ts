@@ -5,7 +5,6 @@ import { getActivePluginRegistry } from "../plugins/runtime.js";
 import type { AgentHarnessHostCapabilities } from "./harness/host-capability-types.js";
 import type { AgentHarness } from "./harness/types.js";
 const streamSimpleMock = vi.fn();
-const readFileMock = vi.fn();
 const parseSessionEntriesMock = vi.fn();
 const migrateSessionEntriesMock = vi.fn();
 const buildSessionContextMock = vi.fn();
@@ -64,18 +63,6 @@ vi.mock("../llm/stream.js", async () => {
   return {
     ...original,
     streamSimple: (...args: unknown[]) => streamSimpleMock(...args),
-  };
-});
-
-vi.mock("node:fs/promises", async () => {
-  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-  return {
-    ...actual,
-    default: {
-      ...actual,
-      readFile: (...args: unknown[]) => readFileMock(...args),
-    },
-    readFile: (...args: unknown[]) => readFileMock(...args),
   };
 });
 
@@ -359,7 +346,6 @@ vi.mock("../config/sessions/session-entry-read-runtime.js", async (importOrigina
 
 export {
   streamSimpleMock,
-  readFileMock,
   parseSessionEntriesMock,
   migrateSessionEntriesMock,
   buildSessionContextMock,

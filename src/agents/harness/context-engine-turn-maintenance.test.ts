@@ -105,7 +105,7 @@ async function createAcceptedTurn(
     promptError: false,
     aborted: false,
     yieldAborted: false,
-    runtimeContext: { provider: "fixture", modelId: "fixture-model", tokenBudget: 1_000 },
+    runtimeContext: { provider: "fixture", modelId: "fixture-model", tokenBudget: 900 },
   };
 
   // The logical lease must retain this database after its supplying inspection
@@ -270,6 +270,14 @@ describe("durable accepted-turn maintenance handoff", () => {
               ]),
             ).toBe("maintenance");
             expect(fixture.pendingTurn()).toBeUndefined();
+            expect(fixture.commitTurn.mock.calls[0]?.[0].runtimeSettings).toMatchObject({
+              model: { provider: "fixture", resolved: "fixture-model" },
+              limits: { promptTokenBudget: 900 },
+            });
+            expect(fixture.maintain.mock.calls[0]?.[0].runtimeSettings).toMatchObject({
+              model: { provider: "fixture", resolved: "fixture-model" },
+              limits: { promptTokenBudget: 900 },
+            });
             const runtimeContext = fixture.maintain.mock.calls[0]?.[0].runtimeContext;
             expect(runtimeContext).toMatchObject({
               ...fixture.facts.runtimeContext,

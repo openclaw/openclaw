@@ -8,34 +8,24 @@ import {
   resolveCommandArgChoices,
   type ChatCommandDefinition,
 } from "openclaw/plugin-sdk/native-command-registry";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { AutocompleteInteraction, CommandOptions } from "../internal/discord.js";
-
-const log = createSubsystemLogger("discord/native-command");
 
 // Discord application command and option descriptions are limited to 1-100 chars.
 // https://discord.com/developers/docs/interactions/application-commands#application-command-object-application-command-structure
 const DISCORD_COMMAND_DESCRIPTION_MAX = 100;
 
-export function truncateDiscordCommandDescription(params: {
-  value: string;
-  label: string;
-}): string {
-  const { value, label } = params;
+export function truncateDiscordCommandDescription(params: { value: string }): string {
+  const { value } = params;
   if (value.length <= DISCORD_COMMAND_DESCRIPTION_MAX) {
     return value;
   }
-  log.debug(
-    `discord: truncating native command description (${label}) from ${value.length} to ${DISCORD_COMMAND_DESCRIPTION_MAX}: ${JSON.stringify(value)}`,
-  );
   return truncateUtf16Safe(value, DISCORD_COMMAND_DESCRIPTION_MAX);
 }
 
 export function truncateDiscordCommandDescriptionLocalizations(params: {
   value?: Record<string, string>;
-  label: string;
 }): Record<string, string> | undefined {
   const entries = Object.entries(params.value ?? {});
   if (entries.length === 0) {
@@ -46,7 +36,6 @@ export function truncateDiscordCommandDescriptionLocalizations(params: {
       locale,
       truncateDiscordCommandDescription({
         value: description,
-        label: `${params.label} locale:${locale}`,
       }),
     ]),
   );
@@ -69,7 +58,6 @@ export function buildDiscordCommandOptions(params: {
   } | null>;
 }): CommandOptions | undefined {
   const { command, cfg, resolveConfig, authorizeChoiceContext, resolveChoiceContext } = params;
-  const commandLabel = command.nativeName?.trim() ? command.nativeName : command.key;
   const args = command.args;
   if (!args || args.length === 0) {
     return undefined;
@@ -79,7 +67,6 @@ export function buildDiscordCommandOptions(params: {
       name: arg.name,
       description: truncateDiscordCommandDescription({
         value: arg.description,
-        label: `command:${commandLabel} arg:${arg.name}`,
       }),
       required: arg.required ?? false,
     };

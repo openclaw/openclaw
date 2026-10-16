@@ -2,7 +2,7 @@ import type { BackupStatusResult } from "@openclaw/gateway-protocol";
 import { For } from "solid-js";
 import { formatByteSize, formatDateTimeMs, formatTimeAgo } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { SystemsController } from "./systems-controller.ts";
+import type { Systems } from "./systems-state.ts";
 
 const byteFormat = {
   style: "legacy-binary",
@@ -89,30 +89,30 @@ function renderTarget(target: BackupStatusResult["targets"][number], status: Bac
   );
 }
 
-export function SystemsBackups(props: { controller: SystemsController }) {
-  const status = () => props.controller.backups;
+export function SystemsBackups(props: { controller: Systems }) {
+  const status = () => props.controller.state.backups;
   return (
     <section
       class="systems-backups"
       aria-label={t("systems.backups.title")}
-      aria-busy={props.controller.backupsLoading ? "true" : "false"}
+      aria-busy={props.controller.backupsLoading() ? "true" : "false"}
     >
       <h2>{t("systems.backups.title")}</h2>
-      {props.controller.backupsError ? (
+      {props.controller.state.backupsError ? (
         <p class="systems-backup__error" role="alert">
-          {props.controller.backupsError}
+          {props.controller.state.backupsError}
           <button
             class="systems-backups__check"
-            disabled={props.controller.backupsLoading || !props.controller.connected}
+            disabled={props.controller.backupsLoading() || !props.controller.connected()}
             onClick={() => void props.controller.refreshBackups()}
           >
             {t("common.retry")}
           </button>
         </p>
       ) : null}
-      {!status() && !props.controller.backupsError ? (
+      {!status() && !props.controller.state.backupsError ? (
         <p class="systems-backups__hint" role="status">
-          {t(props.controller.connected ? "systems.backups.loading" : "systems.offlineGateway")}
+          {t(props.controller.connected() ? "systems.backups.loading" : "systems.offlineGateway")}
         </p>
       ) : null}
       {status() ? (
@@ -170,7 +170,7 @@ export function SystemsBackups(props: { controller: SystemsController }) {
                         </div>
                         <button
                           class="systems-backups__check"
-                          disabled={busy() || !props.controller.connected}
+                          disabled={busy() || !props.controller.connected()}
                           aria-label={t("systems.backups.checkLocation", { name: location.name })}
                           onClick={() => void props.controller.probeStorage(location.name)}
                         >

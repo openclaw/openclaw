@@ -104,7 +104,7 @@ export function formatMattermostFinalDeliveryOutcomeLog(params: {
   }
   if (params.outcome === "empty") {
     // Detect dropped substantive payloads even when the agent run succeeded (#80501).
-    const finalText = typeof params.payload.text === "string" ? params.payload.text.trim() : "";
+    const finalText = params.payload.text?.trim() ?? "";
     const mediaUrlCount = countOutboundMedia(params.payload);
     if (finalText.length > 0 || mediaUrlCount > 0) {
       return (

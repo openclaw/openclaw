@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { Kysely } from "kysely";
 import type { Client } from "pg";
+import { OpenClawPostgresDialect } from "../../src/infra/sql-query-compiler.js";
+import type { DB as AgentSchema } from "../../src/state/openclaw-agent-db.generated.js";
 
 /** Exercise generated DDL, including its triggers, against the canonical SQLite owner. */
 export async function checkAgentPostgresBehavior(client: Client): Promise<void> {
@@ -30,12 +33,13 @@ export async function checkAgentPostgresBehavior(client: Client): Promise<void> 
     sql: string,
     expected: Record<string, unknown>[],
     postgresSql = pgSql(sql),
+    parameters: readonly unknown[] = [],
   ) => {
     const canonical = sqlite
       .prepare(sql)
       .all()
       .map((row) => Object.fromEntries(Object.entries(row)));
-    const result = await client.query(postgresSql);
+    const result = await client.query(postgresSql, [...parameters]);
     const actual = result.rows.map((row) =>
       Object.fromEntries(
         result.fields.map((field) => [
@@ -66,6 +70,121 @@ export async function checkAgentPostgresBehavior(client: Client): Promise<void> 
     await client.query(action);
   };
   try {
+    const queue = new Kysely<Pick<AgentSchema, "context_engine_turn_outbox">>({
+      dialect: new OpenClawPostgresDialect({
+        pool: async () => {
+          throw new Error("Compile-only conformance query");
+        },
+      }),
+    });
+    const pending = queue
+      .selectFrom("context_engine_turn_outbox")
+      .where("engine_id", "=", "fifo")
+      .where("owner_plugin_id", "is", null)
+      .where("payload_state", "is distinct from", "blocked");
+    const recovery = pending
+      .where("session_id", "=", "session-a")
+      .select(["advancement_key", "payload_json"])
+      .orderBy("enqueue_sequence", "asc")
+      .compile();
+    const sessions = pending
+      .select("session_id")
+      .select((eb) => eb.fn.min("enqueue_sequence").as("oldest_enqueue_sequence"))
+      .groupBy("session_id")
+      .orderBy("oldest_enqueue_sequence", "asc")
+      .limit(2)
+      .compile();
+    const next = pending
+      .where("session_id", "=", "session-a")
+      .select(["advancement_key", "payload_json", "session_id"])
+      .orderBy("enqueue_sequence", "asc")
+      .limit(1)
+      .compile();
+    for (const [key, session, state, timestamp] of [
+      ["session-a:z-first", "session-a", "ready", 90],
+      ["session-a:m-blocked", "session-a", "blocked", 1],
+      ["session-a:a-second", "session-a", "accepted", 90],
+      ["session-b:first", "session-b", "ready", 0],
+    ] as const) {
+      await insert("context_engine_turn_outbox", {
+        advancement_key: key,
+        engine_id: "fifo",
+        session_id: session,
+        payload_json: JSON.stringify({ state }),
+        payload_state: state,
+        created_at: timestamp,
+      });
+    }
+    const fifo =
+      "FROM context_engine_turn_outbox WHERE engine_id = 'fifo' AND owner_plugin_id IS NULL AND payload_state IS DISTINCT FROM 'blocked'";
+    await rows(
+      "outbox recovery FIFO",
+      `SELECT advancement_key, payload_json ${fifo} AND session_id = 'session-a' ORDER BY enqueue_sequence`,
+      [
+        { advancement_key: "session-a:z-first", payload_json: '{"state":"ready"}' },
+        { advancement_key: "session-a:a-second", payload_json: '{"state":"accepted"}' },
+      ],
+      recovery.sql,
+      recovery.parameters,
+    );
+    await rows(
+      "pending session FIFO",
+      `SELECT session_id, MIN(enqueue_sequence) AS oldest_enqueue_sequence ${fifo} GROUP BY session_id ORDER BY oldest_enqueue_sequence LIMIT 2`,
+      [
+        { session_id: "session-a", oldest_enqueue_sequence: 1 },
+        { session_id: "session-b", oldest_enqueue_sequence: 4 },
+      ],
+      sessions.sql,
+      sessions.parameters,
+    );
+    await execute(
+      "UPDATE context_engine_turn_outbox SET attempt_count = attempt_count + 1, last_error = 'retry' WHERE advancement_key = 'session-a:z-first'",
+    );
+    await execute(
+      "UPDATE context_engine_turn_outbox SET payload_json = '{\"state\":\"ready\"}', payload_state = 'ready' WHERE advancement_key = 'session-a:a-second'",
+    );
+    await execute(
+      "INSERT INTO context_engine_turn_outbox (advancement_key, engine_id, session_id, payload_json, created_at) VALUES ('session-a:z-first', 'fifo', 'session-a', '{}', 0) ON CONFLICT (advancement_key) DO NOTHING",
+    );
+    await rows(
+      "retry remains the head",
+      `SELECT advancement_key, payload_json, session_id ${fifo} AND session_id = 'session-a' ORDER BY enqueue_sequence LIMIT 1`,
+      [
+        {
+          advancement_key: "session-a:z-first",
+          payload_json: '{"state":"ready"}',
+          session_id: "session-a",
+        },
+      ],
+      next.sql,
+      next.parameters,
+    );
+    await rows(
+      "payload and attempt updates retain sequence",
+      "SELECT advancement_key, enqueue_sequence, attempt_count FROM context_engine_turn_outbox ORDER BY enqueue_sequence",
+      [
+        { advancement_key: "session-a:z-first", enqueue_sequence: 1, attempt_count: 1 },
+        { advancement_key: "session-a:m-blocked", enqueue_sequence: 2, attempt_count: 0 },
+        { advancement_key: "session-a:a-second", enqueue_sequence: 3, attempt_count: 0 },
+        { advancement_key: "session-b:first", enqueue_sequence: 4, attempt_count: 0 },
+      ],
+    );
+    await execute(
+      "DELETE FROM context_engine_turn_outbox WHERE advancement_key = 'session-a:z-first'",
+    );
+    await rows(
+      "blocked evidence does not hold the next turn",
+      `SELECT advancement_key, payload_json, session_id ${fifo} AND session_id = 'session-a' ORDER BY enqueue_sequence LIMIT 1`,
+      [
+        {
+          advancement_key: "session-a:a-second",
+          payload_json: '{"state":"ready"}',
+          session_id: "session-a",
+        },
+      ],
+      next.sql,
+      next.parameters,
+    );
     // PostgreSQL runtime DDL leaves bootstrap rows to the runtime owner.
     await client.query("INSERT INTO memory_index_state (id, revision) VALUES (1, 0)");
     for (const key of ["snap-a", "snap-b", "route"]) {

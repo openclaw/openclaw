@@ -169,8 +169,11 @@ export async function handleAgentExecutionError(params: {
         resolveReplyExpectation(turn.followupRun.run),
         "pending",
       );
-      takePendingLifecycleTerminal().emit("end", undefined, { yielded: true });
-      return { kind: "final", payload: { text: SILENT_REPLY_TOKEN } };
+      takePendingLifecycleTerminal().emit("end", undefined, {
+        yielded: true,
+        terminalReply: { disposition: "empty" },
+      });
+      return { kind: "final", payload: { text: "" } };
     }
     delete runState?.replyCompletion;
     return settleFailure({ text: `${err.message} This turn will not be continued automatically.` });

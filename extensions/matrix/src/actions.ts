@@ -59,7 +59,7 @@ const MATRIX_PROFILE_MEDIA_PROPERTIES = {
     }),
   ),
 } as const;
-const MATRIX_PROFILE_MEDIA_SOURCE_PARAMS = Object.freeze(["avatarUrl", "avatarPath"]);
+const MATRIX_PROFILE_MEDIA_SOURCE_PARAMS = ["avatarUrl", "avatarPath"] as const;
 
 function createMatrixExposedActions(params: {
   gate: ReturnType<typeof createActionGate>;
@@ -168,7 +168,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
     "member-info",
     "channel-info",
   ],
-  /** @deprecated Use describeMessageToolAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Use describeMessageToolAsync. Final compatibility day: 2026-12-31. */
   describeMessageTool: ({ cfg, accountId, senderIsOwner }) => {
     return describeMatrixMessageTool(
       resolveMatrixActionAccount({ cfg: cfg as CoreConfig, accountId }),

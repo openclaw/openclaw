@@ -22,7 +22,7 @@ export function mergeProcessEnv(
   sources: ReadonlyArray<NodeJS.ProcessEnv | undefined>,
   platform: NodeJS.Platform = process.platform,
 ): Record<string, string> {
-  const merged: Record<string, string> = {};
+  const merged: Record<string, string> = Object.create(null);
   const mergedKeys = new Map<string, string>();
   for (const source of sources) {
     if (!source) {

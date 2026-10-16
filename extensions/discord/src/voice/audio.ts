@@ -41,7 +41,6 @@ const FFMPEG_PCM_ARGUMENTS = [
 
 type OpusDecodeCallbacks = {
   onError?: (err: unknown) => void;
-  onVerbose: (message: string) => void;
   onWarn: (message: string) => void;
 };
 
@@ -335,12 +334,11 @@ async function* decodeOpusFrames(
     if (!warnedOpusMissing) {
       warnedOpusMissing = true;
       params.onWarn(
-        `discord voice: no usable opus decoder available (libopus-wasm: ${formatErrorMessage(err)}); cannot decode voice audio`,
+        "discord voice: no usable opus decoder available (libopus-wasm); cannot decode voice audio",
       );
     }
     return;
   }
-  params.onVerbose("opus decoder: libopus-wasm");
   try {
     for await (const chunk of stream) {
       if (!chunk || !(chunk instanceof Buffer) || chunk.length === 0) {
@@ -357,7 +355,7 @@ async function* decodeOpusFrames(
   } catch (err) {
     params.onError?.(err);
     if (shouldLogVerbose()) {
-      logVerbose(`discord voice: opus decode failed: ${formatErrorMessage(err)}`);
+      logVerbose("discord voice: opus decode failed");
     }
   } finally {
     decoder.free();
@@ -441,7 +439,7 @@ export function createRealtimePcmToDiscordConverter() {
 
 export async function writeVoiceWavFile(
   chunks: readonly Buffer[],
-): Promise<{ path: string; durationSeconds: number; cleanup: () => Promise<void> }> {
+): Promise<{ path: string; cleanup: () => Promise<void> }> {
   // Snapshot borrowed PCM before workspace creation can suspend the receive owner.
   const wav = buildWavBuffer(chunks);
   const workspace = await tempWorkspace({
@@ -452,8 +450,6 @@ export async function writeVoiceWavFile(
     const filePath = await workspace.write("segment.wav", wav);
     return {
       path: filePath,
-      durationSeconds:
-        (wav.length - VOICE_WAV_HEADER_BYTES) / ((BIT_DEPTH / 8) * CHANNELS * SAMPLE_RATE),
       cleanup: () => workspace[Symbol.asyncDispose](),
     };
   } catch (error) {

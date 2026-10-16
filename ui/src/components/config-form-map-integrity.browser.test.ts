@@ -6,6 +6,7 @@ import {
 } from "../lib/config/config-draft-model.ts";
 import { createInitialConfigState } from "../lib/config/config-state-model.ts";
 import { renderAnalyzedFormFixture } from "../test-helpers/config-form-fixtures.tsx";
+import { flush } from "../test-helpers/solid-settle.ts";
 import type { JsonSchema } from "./config-form.shared.ts";
 import { analyzeConfigSchema } from "./config-form.ts";
 
@@ -207,93 +208,90 @@ describe("config form map integrity", () => {
   it.each([
     { label: "pattern", names: { type: "string", pattern: "^[a-z]+$" }, invalid: "bad/key" },
     { label: "enumeration", names: { enum: ["primary", "backup"] }, invalid: "other" },
-  ])(
-    "rejects $label key edits even when an existing value is invalid",
-    async ({ names, invalid }) => {
-      const analysis = analyzeConfigSchema({
-        type: "object",
-        properties: {
-          values: {
-            type: "object",
-            propertyNames: names,
-            additionalProperties: { type: "string", pattern: "^[0-9]+$" },
-          },
+  ])("rejects $label key edits even when an existing value is invalid", ({ names, invalid }) => {
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: {
+        values: {
+          type: "object",
+          propertyNames: names,
+          additionalProperties: { type: "string", pattern: "^[0-9]+$" },
         },
+      },
+    });
+    expect(analysis.unsupportedPaths).toEqual([]);
+    const state = createInitialConfigState();
+    state.configSchema = analysis.schema;
+    state.configForm = { values: { primary: "invalid existing value" } };
+    const onPatch = vi.fn((path: Array<string | number>, value: unknown) =>
+      updateConfigFormValue(state, path, value),
+    );
+    const container = document.createElement("div");
+    document.body.append(container);
+    try {
+      renderAnalyzedFormFixture(container, analysis, {
+        value: state.configForm,
+        onPatch,
       });
-      expect(analysis.unsupportedPaths).toEqual([]);
-      const state = createInitialConfigState();
-      state.configSchema = analysis.schema;
-      state.configForm = { values: { primary: "invalid existing value" } };
-      const onPatch = vi.fn((path: Array<string | number>, value: unknown) =>
-        updateConfigFormValue(state, path, value),
+      const keyInput = expectElement(
+        container.querySelector<HTMLInputElement>('[aria-label="Key: primary"]'),
+        "existing key",
       );
-      const container = document.createElement("div");
-      document.body.append(container);
-      try {
-        renderAnalyzedFormFixture(container, analysis, {
-          value: state.configForm,
-          onPatch,
-        });
-        const keyInput = expectElement(
-          container.querySelector<HTMLInputElement>('[aria-label="Key: primary"]'),
-          "existing key",
-        );
-        keyInput.value = invalid;
-        keyInput.dispatchEvent(new Event("change", { bubbles: true }));
-        expect(keyInput.value).toBe("primary");
-        expect(onPatch).not.toHaveBeenCalled();
+      keyInput.value = invalid;
+      keyInput.dispatchEvent(new Event("change", { bubbles: true }));
+      expect(keyInput.value).toBe("primary");
+      expect(onPatch).not.toHaveBeenCalled();
 
-        const draft = expectElement(
-          container.querySelector("openclaw-config-form-collection-draft"),
-          "map draft",
-        );
-        expectElement(
-          Array.from(container.querySelectorAll("button")).find(
-            (button) => button.textContent?.trim() === "Add Entry",
-          ),
-          "add entry",
-        ).click();
-        await draft.updateComplete;
-        const key = expectElement(
-          draft.querySelector<HTMLInputElement>("[data-collection-draft-key]"),
-          "draft key",
-        );
-        const value = expectElement(
-          draft.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
-          "draft value",
-        );
-        key.value = invalid;
-        key.dispatchEvent(new Event("input", { bubbles: true }));
-        value.value = "123";
-        value.dispatchEvent(new Event("input", { bubbles: true }));
-        await draft.updateComplete;
-        expectElement(
-          Array.from(draft.querySelectorAll("button")).find(
-            (button) => button.textContent?.trim() === "Add Entry",
-          ),
-          "commit entry",
-        ).click();
-        await draft.updateComplete;
-        expect(key.getAttribute("aria-invalid")).toBe("true");
-        expect(key.value).toBe(invalid);
-        expect(onPatch).not.toHaveBeenCalled();
-        key.value = "backup";
-        key.dispatchEvent(new Event("input", { bubbles: true }));
-        await draft.updateComplete;
-        expectElement(
-          Array.from(draft.querySelectorAll("button")).find(
-            (button) => button.textContent?.trim() === "Add Entry",
-          ),
-          "commit valid entry",
-        ).click();
-        expect(state.configForm).toEqual({
-          values: { primary: "invalid existing value", backup: "123" },
-        });
-      } finally {
-        container.remove();
-      }
-    },
-  );
+      const draft = expectElement(
+        container.querySelector("openclaw-config-form-collection-draft"),
+        "map draft",
+      );
+      expectElement(
+        Array.from(container.querySelectorAll("button")).find(
+          (button) => button.textContent?.trim() === "Add Entry",
+        ),
+        "add entry",
+      ).click();
+      flush();
+      const key = expectElement(
+        draft.querySelector<HTMLInputElement>("[data-collection-draft-key]"),
+        "draft key",
+      );
+      const value = expectElement(
+        draft.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
+        "draft value",
+      );
+      key.value = invalid;
+      key.dispatchEvent(new Event("input", { bubbles: true }));
+      value.value = "123";
+      value.dispatchEvent(new Event("input", { bubbles: true }));
+      flush();
+      expectElement(
+        Array.from(draft.querySelectorAll("button")).find(
+          (button) => button.textContent?.trim() === "Add Entry",
+        ),
+        "commit entry",
+      ).click();
+      flush();
+      expect(key.getAttribute("aria-invalid")).toBe("true");
+      expect(key.value).toBe(invalid);
+      expect(onPatch).not.toHaveBeenCalled();
+      key.value = "backup";
+      key.dispatchEvent(new Event("input", { bubbles: true }));
+      flush();
+      expectElement(
+        Array.from(draft.querySelectorAll("button")).find(
+          (button) => button.textContent?.trim() === "Add Entry",
+        ),
+        "commit valid entry",
+      ).click();
+      expect(state.configForm).toEqual({
+        values: { primary: "invalid existing value", backup: "123" },
+      });
+    } finally {
+      container.remove();
+    }
+  });
 
   it.each(["map"])("keeps supported %s children editable beside Raw-only fields", (kind) => {
     const rowSchema = {

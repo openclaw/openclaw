@@ -39,7 +39,8 @@ vi.mock("./update-immutable-service.js", () => ({ verifyImmutableService: async 
 vi.mock("./update-git-runtime.js", () => ({ collectGitRuntimeErrors: async () => [] }));
 // mock-isolation: The synthetic installation cannot launch native systemd build services.
 vi.mock("./update-immutable-build.js", () => ({ runImmutableBuild: mocks.build }));
-vi.mock("./update-runner-git-target.js", () => ({
+vi.mock("./update-runner-git-schema.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-runner-git-schema.js")>()),
   readGitTargetSchemaVersions: async () => ({ status: "ok", schemaVersions: { state: 1 } }),
 }));
 vi.mock("./update-runner-command.js", async (original) => ({

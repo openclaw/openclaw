@@ -115,7 +115,7 @@ export const finalizeSubagentCleanup = async (
       finalizeDelivery,
     });
   if (entry.expectsCompletionMessage === false || skipRequesterDelivery) {
-    await commit((draft) => {
+    const finalizeDelivery = (draft: SubagentRunRecord) => {
       const intentionalNonDelivery = draft.delivery?.disposition === "intentional_non_delivery";
       clearSubagentPendingDelivery(draft);
       if (skipRequesterDelivery) {
@@ -126,8 +126,8 @@ export const finalizeSubagentCleanup = async (
         draft.suppressCompletionDelivery = undefined;
       }
       draft.wakeOnDescendantSettle = undefined;
-    });
-    await finishCleanup(skipRequesterDelivery);
+    };
+    await finishCleanup(skipRequesterDelivery, undefined, finalizeDelivery);
     return;
   }
   if (announceOutcome === "delivered" || announceOutcome === "intentional_non_delivery") {
@@ -300,7 +300,6 @@ export const finalizeResumedAnnounceGiveUp = async (
   const { reason, cleanup, cleanupGeneration, retryCount, completedAt } = giveUpParams;
   let entry = giveUpParams.entry;
   const stateContext = giveUpParams.stateContext ?? captureOpenClawStateWorkerContext();
-  const generation = entry.generation;
   const isCurrent = () => {
     assertSubagentRegistryWriteSourceCurrent(stateContext);
     const current = getCurrentSubagentRunOwner(params.runs, entry);
@@ -309,8 +308,7 @@ export const finalizeResumedAnnounceGiveUp = async (
     }
     entry = current;
     return (
-      entry.generation === generation &&
-      (cleanupGeneration === undefined || context.isCleanupAttemptCurrent(entry, cleanupGeneration))
+      cleanupGeneration === undefined || context.isCleanupAttemptCurrent(entry, cleanupGeneration)
     );
   };
   if (!isCurrent()) {
@@ -363,7 +361,6 @@ export const finalizeResumedAnnounceGiveUp = async (
     entry,
     cleanup: cleanup ?? entry.cleanup,
     cleanupGeneration,
-    generation,
     completedAt,
     stateContext,
     isCurrent,
@@ -377,7 +374,6 @@ async function finishSubagentCleanup(
     entry: SubagentRunRecord;
     cleanup: "delete" | "keep";
     cleanupGeneration?: number;
-    generation?: number;
     completedAt?: number;
     stateContext: OpenClawStateWorkerContext;
     isCurrent: () => boolean;
@@ -423,11 +419,7 @@ async function finishSubagentCleanup(
   entry = getCurrentSubagentRunOwner(context.options.runs, entry) ?? entry;
   const endedHookOwnerCurrent = () => {
     assertSubagentRegistryWriteSourceCurrent(stateContext);
-    return (
-      (!args.giveUpReason || entry.generation === args.generation) &&
-      cleanupOwnerCurrent() &&
-      context.sessionEffectsHostCurrent(entry)
-    );
+    return cleanupOwnerCurrent() && context.sessionEffectsHostCurrent(entry);
   };
   if (!(await context.shouldSuppressSessionEffects(entry)) && endedHookOwnerCurrent()) {
     const reason = completionReason ?? entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE;

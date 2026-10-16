@@ -64,8 +64,6 @@ export class BrowserPanelPresentation
     reservationPrefix: "browser",
     isAvailable: () => this.available,
   });
-  private viewportResizeObserver: ResizeObserver | null = null;
-  private observedViewportElement: Element | null = null;
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -83,9 +81,6 @@ export class BrowserPanelPresentation
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
-    this.viewportResizeObserver?.disconnect();
-    this.viewportResizeObserver = null;
-    this.observedViewportElement = null;
   }
 
   override updated(changed: Map<PropertyKey, unknown>): void {
@@ -148,24 +143,6 @@ export class BrowserPanelPresentation
     this.browserPanelController.native.presentation.update();
     this.dockLayout.syncReservation();
     this.browserPanelController.input.paintOverlay();
-    const viewportElement = this.renderRoot.querySelector(".bp-viewport");
-    if (viewportElement !== this.observedViewportElement) {
-      // The viewport is transient while the dock opens, closes, or becomes unavailable.
-      this.viewportResizeObserver?.disconnect();
-      this.observedViewportElement = viewportElement;
-      if (viewportElement && typeof ResizeObserver === "function") {
-        this.viewportResizeObserver ??= new ResizeObserver((entries) => {
-          const entry = entries[0];
-          if (entry) {
-            this.browserPanelController.handleViewportResize(
-              entry.contentRect.width,
-              entry.contentRect.height,
-            );
-          }
-        });
-        this.viewportResizeObserver.observe(viewportElement);
-      }
-    }
     const controller = this.browserPanelController;
     notifyPanelHostedTabsChanged(this.element, [
       controller.activeTargetId,
@@ -174,7 +151,7 @@ export class BrowserPanelPresentation
   }
 
   get hostedTabs() {
-    return browserPanelHostedTabs(this.browserPanelController.tabs);
+    return browserPanelHostedTabs(this.browserPanelController.tabs, this.ownerDocument);
   }
 
   get activeHostedTabId(): string | null {

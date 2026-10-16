@@ -49,7 +49,7 @@ type SidebarAgentMenuParams = Omit<SidebarAgentMenuSwitcherParams, "allAgentsSco
   activeName: string;
   connected: boolean;
   onQueryChange: (query: string) => void;
-  onToggleRoster: () => void;
+  onShowAllAgents: () => void;
   onPointerEnter: () => void;
   onPointerLeave: () => void;
   onAfterShow: () => void;
@@ -213,9 +213,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams): JSX.Elem
         }
         switch (value) {
           case "scope:all":
-            if (!params.rosterMode) {
-              params.onToggleRoster();
-            }
+            params.onShowAllAgents();
             break;
           case `${COMMAND_VALUE_PREFIX}agents-directory`:
             params.onNavigate("agents-home");

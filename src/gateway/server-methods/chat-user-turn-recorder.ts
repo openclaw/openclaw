@@ -88,7 +88,9 @@ export function createGatewayChatUserTurnController(params: {
       : [];
   const baseInput: UserTurnInput = {
     ...params.transcript,
-    ...(request.goalOperation?.action === "resume" ? { display: false } : {}),
+    ...(request.goalOperation?.action === "resume" || request.restartResume
+      ? { display: false }
+      : {}),
     text: request.rawMessage,
     ...(request.workContext ? { workContext: request.workContext } : {}),
     ...(request.mentions ? { mentions: request.mentions } : {}),
@@ -203,18 +205,18 @@ export function createGatewayChatUserTurnController(params: {
       admission.operatorAuthority?.assertCurrent,
     ]),
     beforeMessageWrite: (event) => {
+      const originalInput = event.message.idempotencyKey === sourceId;
       const next = runAgentHarnessBeforeMessageWriteHook(event);
-      if (
-        event.message.idempotencyKey === sourceId &&
-        next?.role === "user" &&
-        contextFreeCommand
-      ) {
+      if (originalInput && next?.role === "user") {
+        const metadata = { ...asOptionalRecord(Reflect.get(next, "__openclaw")) };
+        delete metadata.chatRequestIdentity;
         return {
           ...next,
-          excludeFromContext: true,
+          ...(contextFreeCommand ? { excludeFromContext: true } : {}),
           __openclaw: {
-            ...asOptionalRecord(Reflect.get(next, "__openclaw")),
-            contextFreeCommand: true,
+            ...metadata,
+            ...(request.requestIdentity ? { chatRequestIdentity: request.requestIdentity } : {}),
+            ...(contextFreeCommand ? { contextFreeCommand: true } : {}),
           },
         };
       }
@@ -297,7 +299,8 @@ export function createGatewayChatUserTurnController(params: {
     replyContextFieldsPromise,
     getSessionInitializationOptions: () => ({
       requestedSessionId: session.requestedSessionId,
-      resumeRequestedSession: request.reconnectResumeRequested,
+      resumeRequestedSession: request.reconnectResumeRequested || Boolean(request.restartResume),
+      ...(request.restartResume ? { pinExpectedExistingSession: true } : {}),
       ...(admission.restartSafeAdmission
         ? {
             expectedExistingSessionId: admission.admittedSessionId,

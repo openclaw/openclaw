@@ -5,7 +5,7 @@ import type {
 } from "../../../src/plugin-sdk/control-ui-components.js";
 import type { ApplicationContext } from "../app/context.ts";
 import { readGatewayOperatorAccess } from "../app/operator-access.ts";
-import { icons } from "../components/icons.ts";
+import { listen as listenTo } from "../lib/reactive/listener.ts";
 
 function resolveAppearanceColor(value: string | null | undefined): string {
   const color = normalizeSessionColorValue(value ?? "");
@@ -53,12 +53,12 @@ export function createControlUiComponents(options: {
         return;
       }
       active = false;
-      options.signal.removeEventListener("abort", dispose);
+      unlistenAbort();
       unsubscribe?.();
       unlisten?.();
       element?.remove();
     };
-    options.signal.addEventListener("abort", dispose, { once: true });
+    const unlistenAbort = listenTo(options.signal, "abort", dispose, { once: true });
     void load()
       .then((loaded) => {
         // Imports can finish after navigation or reload. The retired mount must
@@ -108,7 +108,7 @@ export function createControlUiComponents(options: {
         container,
         props,
         async () => {
-          await import("../components/agent-avatar.ts");
+          await import("../components/solid/agent-avatar.tsx");
           return document.createElement("openclaw-agent-avatar");
         },
         (element, next, current) => {
@@ -131,7 +131,7 @@ export function createControlUiComponents(options: {
         container,
         props,
         async () => {
-          await import("../components/appearance-picker.ts");
+          await import("../components/appearance-picker.tsx");
           return document.createElement("openclaw-appearance-picker");
         },
         (element, next, current) => {
@@ -149,7 +149,7 @@ export function createControlUiComponents(options: {
         container,
         props,
         async () => {
-          await import("../components/appearance-picker.ts");
+          await import("../components/appearance-picker.tsx");
           return document.createElement("openclaw-appearance-glyph");
         },
         (element, next) => {
@@ -187,15 +187,12 @@ export function createControlUiComponents(options: {
             content = next.content;
           }
         },
-        (element, getProps) => {
-          const cancel = (event: Event) => {
+        (element, getProps) =>
+          listenTo(element, "modal-cancel", (event) => {
             if (getProps().onCancel() === false) {
               event.preventDefault();
             }
-          };
-          element.addEventListener("modal-cancel", cancel);
-          return () => element.removeEventListener("modal-cancel", cancel);
-        },
+          }),
       );
     },
     mountAgentPicker: (container, props) =>
@@ -211,7 +208,6 @@ export function createControlUiComponents(options: {
           element.options = next.options.map((option) => ({
             ...option,
             agent: agents.find((agent) => agent.id === option.agent?.id) ?? option.agent,
-            icon: option.icon ? icons[option.icon] : undefined,
           }));
           element.value = next.value;
           element.placeholder = next.placeholder ?? "";

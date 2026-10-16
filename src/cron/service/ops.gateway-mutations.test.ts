@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDueIsolatedJob } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { createCronTool } from "../../agents/tools/cron-tool.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
@@ -56,9 +57,22 @@ async function withCronGateway(
   await withOpenClawTestState({ prefix: "cron-mutation-dispatch-" }, async (state) => {
     resetCommandQueueStateForTest();
     const cfg: OpenClawConfig = {
-      agents: { entries: { main: {} }, defaults: { workspace: state.workspaceDir } },
+      agents: {
+        entries: { main: {} },
+        defaults: { workspace: state.workspaceDir, model: "openai/gpt-4.1" },
+      },
       cron: { enabled: false },
     };
+    await state.writeAuthProfiles({
+      version: 1,
+      profiles: {
+        "openai:mutation-fixture": {
+          type: "api_key",
+          provider: "openai",
+          key: "synthetic-mutation-inference-key",
+        },
+      },
+    });
     await state.writeConfig(cfg);
     setRuntimeConfigSnapshot(cfg);
     const storePath = state.statePath("cron", "jobs.json");
@@ -142,6 +156,62 @@ async function withCronGateway(
 }
 
 describe("Cron mutation outcomes through the in-process router", () => {
+  it("persists the current timezone on expression-only tool edits, including revision conflicts", async () => {
+    await withCronGateway(async (fixture) => {
+      const job = await fixture.cron.add({
+        name: "morning brief",
+        description: "Synthetic timezone regression",
+        enabled: true,
+        schedule: { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "Synthetic brief" },
+      });
+      const calls: string[] = [];
+      let concurrentTimezone: string | undefined;
+      const tool = createCronTool(undefined, {
+        callGatewayTool: async <T>(method: string, _opts: unknown, params: unknown) => {
+          calls.push(method);
+          if (method === "cron.update" && concurrentTimezone) {
+            const tz = concurrentTimezone;
+            concurrentTimezone = undefined;
+            // Commit a real competing edit after cron.get, before the guarded write.
+            await fixture.call({
+              method: "cron.update",
+              params: { id: job.id, patch: { schedule: { ...job.schedule, tz } } },
+            });
+          }
+          return await fixture.call<T>({ method, params });
+        },
+      });
+      for (const tz of ["Asia/Shanghai", "Europe/Paris"]) {
+        calls.length = 0;
+        concurrentTimezone = tz === "Europe/Paris" ? tz : undefined;
+        await tool.execute("edit-time", {
+          action: "update",
+          jobId: job.id,
+          job: { schedule: { kind: "cron", expr: "0 9 * * *" } },
+        });
+        await fixture.settle();
+        const persisted = (await loadCronStore(fixture.storePath)).jobs.find(
+          (entry) => entry.id === job.id,
+        );
+        expect(persisted).toMatchObject({
+          name: job.name,
+          description: job.description,
+          payload: job.payload,
+          schedule: { kind: "cron", expr: "0 9 * * *", tz },
+        });
+        expect(calls).toEqual(
+          tz === "Asia/Shanghai"
+            ? ["cron.get", "cron.update"]
+            : ["cron.get", "cron.update", "cron.get", "cron.update"],
+        );
+      }
+      expect(fixture.runIsolatedAgentJob).not.toHaveBeenCalled();
+    });
+  });
+
   it.each(["execute", "revoke", "abort", "stop"] as const)(
     "retains caller cleanup only through accepted manual admission: %s",
     async (outcome) => {

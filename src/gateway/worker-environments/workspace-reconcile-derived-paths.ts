@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { FsSafeError, root as openFsSafeRoot, type Root } from "../../infra/fs-safe.js";
+import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import {
   createStagedInputPathMatcher,
   isStagedInputPath,
@@ -103,19 +104,17 @@ export async function prepareNonDirectoryTargets(
   const isRetainedInput = retainedInput ?? createStagedInputPathMatcher(workspaceRoot);
   // Entries are an already-selected delta; an unchanged ownership marker may be absent.
   for (const entry of entries) {
-    if (await hasWorkspaceSymlinkAncestor(root, entry.path)) {
-      continue;
-    }
-    let stats;
-    try {
-      stats = await workspaceRoot.stat(entry.path);
-    } catch (error) {
-      if (error instanceof FsSafeError && ["not-found", "path-alias"].includes(error.code)) {
-        continue;
+    const stats = await fs.lstat(path.join(root, entry.path)).catch(async (error: unknown) => {
+      if (
+        hasNodeErrorCode(error, "ENOENT") ||
+        hasNodeErrorCode(error, "ENOTDIR") ||
+        (await hasWorkspaceSymlinkAncestor(root, entry.path))
+      ) {
+        return undefined;
       }
       throw error;
-    }
-    if (stats.isDirectory) {
+    });
+    if (stats?.isDirectory() && !(await hasWorkspaceSymlinkAncestor(root, entry.path))) {
       // Excluded descendants cannot fence a namespace replacement, but Git
       // cannot replace their still-nonempty parent until they are removed.
       // fs-safe binds traversal/removal to root-relative directory handles, so

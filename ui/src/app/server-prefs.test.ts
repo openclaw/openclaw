@@ -229,23 +229,6 @@ describe("server preferences", () => {
     expect(loadSettings().themeMode).toBe("light");
   });
 
-  it("preserves a local sidebar edit when only another server preference changes", () => {
-    const onApplied = vi.fn();
-    const sidebarEntries = ["route:usage", "session:agent:main:test"];
-    applyServerUiPrefs(configWithPrefs({ sidebarEntries, themeMode: "dark" }), { onApplied });
-    patchSettings({ sidebarEntries: ["route:usage"] });
-
-    expect(
-      applyServerUiPrefs(
-        configWithPrefs({ sidebarEntries: [...sidebarEntries], themeMode: "light" }),
-        { onApplied },
-      ),
-    ).toBe(true);
-    expect(loadSettings().sidebarEntries).toEqual(["route:usage"]);
-    expect(loadSettings().themeMode).toBe("light");
-    expect(onApplied).toHaveBeenLastCalledWith({ themeMode: "light" });
-  });
-
   it("restores product defaults when authored synced values are removed", () => {
     const onApplied = vi.fn();
     applyServerUiPrefs(

@@ -14,6 +14,28 @@ afterEach(() => {
   resetConfigRuntimeState();
 });
 
+function createProgram() {
+  const program = new Command().name("openclaw").exitOverride();
+  program.configureOutput({ writeErr: () => undefined });
+  registerWorktreesCli(program);
+  return program;
+}
+
+const run = (args: string[]) =>
+  createProgram().parseAsync(["worktrees", ...args], { from: "user" });
+const admission = { signal: expect.any(AbortSignal), commitGuard: expect.any(Function) };
+const owner = ManagedWorktreeService.prototype;
+const muteOutput = (json = true) =>
+  vi.spyOn(defaultRuntime, json ? "writeJson" : "log").mockImplementation(() => undefined);
+
+function parseProfile(args: string[]) {
+  const parsed = parseCliProfileArgs(["node", "openclaw", ...args]);
+  if (!parsed.ok) {
+    throw new Error(parsed.error);
+  }
+  return parsed;
+}
+
 describe("worktrees cli", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const exactRequest = {
@@ -33,26 +55,17 @@ describe("worktrees cli", () => {
       if (exact) {
         await fs.writeFile(filename, JSON.stringify(exactRequest));
       }
-      const remove = vi
-        .spyOn(ManagedWorktreeService.prototype, "remove")
-        .mockResolvedValue({ removed: true });
-      vi.spyOn(defaultRuntime, exact ? "writeJson" : "log").mockImplementation(() => undefined);
-      const program = new Command().name("openclaw");
-      registerWorktreesCli(program);
-      await program.parseAsync(
-        [
-          "worktrees",
-          "remove",
-          "worktree-id",
-          ...(exact ? ["--exact-state", filename, "--json"] : ["--force"]),
-        ],
-        { from: "user" },
-      );
+      const remove = vi.spyOn(owner, "remove").mockResolvedValue({ removed: true });
+      muteOutput(exact);
+      await run([
+        "remove",
+        "worktree-id",
+        ...(exact ? ["--exact-state", filename, "--json"] : ["--force"]),
+      ]);
       expect(remove).toHaveBeenCalledWith({
         id: "worktree-id",
         reason: "manual-delete",
-        signal: expect.any(AbortSignal),
-        commitGuard: expect.any(Function),
+        ...admission,
         allowSnapshotLoss: !exact,
         ...(exact ? { exactState: exactRequest } : {}),
       });
@@ -63,38 +76,31 @@ describe("worktrees cli", () => {
     ["--exact-state", "/missing-request", "--if-lossless"],
     ["--if-lossless", "--force"],
   ])("rejects conflicting removal policies %j before reading or mutating", async (...flags) => {
-    const remove = vi.spyOn(ManagedWorktreeService.prototype, "remove");
-    const lossless = vi.spyOn(ManagedWorktreeService.prototype, "removeIfLossless");
-    const program = new Command().exitOverride().configureOutput({ writeErr: () => undefined });
-    registerWorktreesCli(program);
-    await expect(
-      program.parseAsync(["worktrees", "remove", "worktree-id", ...flags], { from: "user" }),
-    ).rejects.toThrow("cannot be used with option");
+    const remove = vi.spyOn(owner, "remove");
+    const lossless = vi.spyOn(owner, "removeIfLossless");
+    await expect(run(["remove", "worktree-id", ...flags])).rejects.toThrow(
+      "cannot be used with option",
+    );
     expect(remove).not.toHaveBeenCalled();
     expect(lossless).not.toHaveBeenCalled();
   });
 
   it.each([
-    { runtime: [], selected: [], profiles: undefined, state: null },
-    { runtime: [], selected: ["--source-profile", "alpha"], profiles: ["alpha"], state: null },
-    {
-      runtime: ["--profile", "work"],
-      selected: ["--source-profile", "alpha", "--source-profile=beta"],
-      profiles: ["alpha", "beta"],
-      state: "work",
-    },
-    { runtime: ["--dev"], selected: ["--source-profile=alpha"], profiles: ["alpha"], state: "dev" },
-    {
-      runtime: [],
-      selected: ["--source-profile=alpha", "--profile", "work"],
-      profiles: ["alpha"],
-      state: "work",
-    },
-  ])(
-    "passes source profiles through early parsing without changing runtime state: $state $selected",
-    async ({ runtime, selected, profiles, state }) => {
+    [[], [], undefined, null],
+    [[], ["--source-profile", "alpha"], ["alpha"], null],
+    [
+      ["--profile", "work"],
+      ["--source-profile", "alpha", "--source-profile=beta"],
+      ["alpha", "beta"],
+      "work",
+    ],
+    [["--dev"], ["--source-profile=alpha"], ["alpha"], "dev"],
+    [[], ["--source-profile=alpha", "--profile", "work"], ["alpha"], "work"],
+  ] satisfies [string[], string[], string[] | undefined, string | null][])(
+    "passes source profiles through early parsing: %j %j",
+    async (runtime, selected, profiles, state) => {
       const repoRoot = await fs.realpath(tempDirs.make("openclaw-cli-profile-input-"));
-      const create = vi.spyOn(ManagedWorktreeService.prototype, "create").mockResolvedValue({
+      const create = vi.spyOn(owner, "create").mockResolvedValue({
         id: "created",
         name: "task",
         repoFingerprint: "fingerprint",
@@ -106,10 +112,8 @@ describe("worktrees cli", () => {
         createdAt: 1,
         lastActiveAt: 1,
       });
-      vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
-      const parsed = parseCliProfileArgs([
-        "node",
-        "openclaw",
+      muteOutput();
+      const parsed = parseProfile([
         ...runtime,
         "worktrees",
         "create",
@@ -119,69 +123,44 @@ describe("worktrees cli", () => {
         "--json",
         ...selected,
       ]);
-      if (!parsed.ok) {
-        throw new Error(parsed.error);
-      }
       expect(parsed.profile).toBe(state);
-      const program = new Command().name("openclaw").exitOverride();
-      registerWorktreesCli(program);
-      await program.parseAsync(parsed.argv);
+      await createProgram().parseAsync(parsed.argv);
       expect(create).toHaveBeenCalledWith({
         repoRoot,
         name: "task",
         baseRef: undefined,
         ownerKind: "manual",
-        signal: expect.any(AbortSignal),
-        commitGuard: expect.any(Function),
+        ...admission,
         ...(profiles ? { profiles } : {}),
       });
     },
   );
 
   it("leaves missing source profile values to Commander and performs no creation", async () => {
-    const create = vi.spyOn(ManagedWorktreeService.prototype, "create");
-    const parsed = parseCliProfileArgs([
-      "node",
-      "openclaw",
-      "worktrees",
-      "create",
-      "/repo",
-      "--source-profile",
-    ]);
-    if (!parsed.ok) {
-      throw new Error(parsed.error);
-    }
-    const program = new Command()
-      .name("openclaw")
-      .exitOverride()
-      .configureOutput({ writeErr: () => undefined });
-    registerWorktreesCli(program);
-    await expect(program.parseAsync(parsed.argv)).rejects.toThrow(/argument missing/);
+    const create = vi.spyOn(owner, "create");
+    const parsed = parseProfile(["worktrees", "create", "/repo", "--source-profile"]);
+    await expect(createProgram().parseAsync(parsed.argv)).rejects.toThrow(/argument missing/);
     expect(create).not.toHaveBeenCalled();
   });
 
   it("requires an exact pending commit and returns recovery's actual outcome", async () => {
     const snapshot = "a".repeat(40);
-    const recover = vi.spyOn(ManagedWorktreeService.prototype, "recoverRemoval").mockResolvedValue({
+    const recover = vi.spyOn(owner, "recoverRemoval").mockResolvedValue({
       removed: true,
       snapshotRef: "refs/openclaw/snapshots/worktree-id",
     });
-    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
-    const program = new Command().exitOverride().configureOutput({ writeErr: () => undefined });
-    registerWorktreesCli(program);
-    await expect(
-      program.parseAsync(["worktrees", "recover-removal", "worktree-id"], { from: "user" }),
-    ).rejects.toThrow(/required option/);
-    expect(recover).not.toHaveBeenCalled();
-    await program.parseAsync(
-      ["worktrees", "recover-removal", "worktree-id", "--snapshot", snapshot, "--json"],
-      { from: "user" },
+    const output = muteOutput();
+    const program = createProgram();
+    const recoverArgs = ["worktrees", "recover-removal", "worktree-id"];
+    await expect(program.parseAsync(recoverArgs, { from: "user" })).rejects.toThrow(
+      /required option/,
     );
+    expect(recover).not.toHaveBeenCalled();
+    await program.parseAsync([...recoverArgs, "--snapshot", snapshot, "--json"], { from: "user" });
     expect(recover).toHaveBeenCalledWith({
       id: "worktree-id",
       snapshot,
-      signal: expect.any(AbortSignal),
-      commitGuard: expect.any(Function),
+      ...admission,
     });
     expect(output).toHaveBeenCalledWith({
       removed: true,
@@ -216,16 +195,9 @@ describe("worktrees cli", () => {
       retiredCheckoutPaths: [],
       limitsSatisfied: !partial,
     };
-    const gc = vi.spyOn(ManagedWorktreeService.prototype, "gc").mockResolvedValue(result);
-    const output = vi
-      .spyOn(defaultRuntime, partial ? "writeJson" : "log")
-      .mockImplementation(() => undefined);
-    const program = new Command().name("openclaw");
-    registerWorktreesCli(program);
-    const pending = program.parseAsync(
-      ["worktrees", "gc", ...(partial ? ["--json", "--retry-deferred"] : [])],
-      { from: "user" },
-    );
+    const gc = vi.spyOn(owner, "gc").mockResolvedValue(result);
+    const output = muteOutput(partial);
+    const pending = run(["gc", ...(partial ? ["--json", "--retry-deferred"] : [])]);
     if (partial) {
       await expect(pending).rejects.toThrow();
       expect(output).toHaveBeenCalledWith(result);
@@ -235,8 +207,7 @@ describe("worktrees cli", () => {
     }
     expect(gc).toHaveBeenCalledWith(
       expect.objectContaining({
-        signal: expect.any(AbortSignal),
-        commitGuard: expect.any(Function),
+        ...admission,
         retryDeferred: partial,
         readOwnerState: expect.any(Function),
       }),

@@ -15,7 +15,7 @@ import {
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
 import { clearFollowupDrainCallback } from "./queue/drain.js";
-import { resetRecentQueuedMessageIdDedupe } from "./queue/enqueue.test-support.js";
+import { resetRecentQueuedMessageIdDedupe } from "./queue/recent-message-ids.test-support.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
@@ -102,7 +102,9 @@ describe("followup queue deduplication", () => {
       const controller = new AbortController();
       const onAbandoned = vi.fn();
       const onSettled = vi.fn();
-      const runFollowup = vi.fn(async (_run: FollowupRun) => {});
+      const runFollowup = vi.fn(async (run: FollowupRun) => {
+        expect(run.abortSignal?.aborted).toBe(true);
+      });
       const capped: QueueSettings = { ...settings, cap };
       const first = source("retry me");
       first.abortSignal = controller.signal;
@@ -142,8 +144,8 @@ describe("followup queue deduplication", () => {
       expect(onAbandoned).toHaveBeenCalledOnce();
       expect(onSettled).toHaveBeenCalledOnce();
       await Promise.resolve();
-      expect(runFollowup.mock.calls.map(([run]) => run.messageId)).toEqual(
-        storage === "pending" ? ["same-id"] : [],
+      expect(runFollowup).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ messageId: "same-id", abortSignal: controller.signal }),
       );
       expect(getExistingFollowupQueue(key)?.draining).toBe(false);
     },

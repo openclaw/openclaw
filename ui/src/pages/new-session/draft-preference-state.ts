@@ -45,7 +45,7 @@ type PreferenceScope = Pick<
   "source" | "client" | "connected" | "recoveryScope" | "connectionEpoch"
 > & { profileId: string | undefined };
 
-type PreferenceWriter = { selection: object; write: Promise<void> };
+type PreferenceWriter = { write: Promise<void> };
 type PreferenceWrites = {
   agents: Map<string, PreferenceWriter>;
   revision: object;
@@ -66,7 +66,7 @@ export class DraftPreferenceState {
   constructor(
     private readonly read: () => DraftPreferenceSnapshot,
     private readonly callbacks: DraftPreferenceOptions & {
-      requestUpdate: () => void;
+      changed: () => void;
       onAdoptAgentDefaults: () => void;
     },
   ) {}
@@ -113,7 +113,7 @@ export class DraftPreferenceState {
         if (consumed) {
           this.adoptPreferences();
         } else {
-          this.callbacks.requestUpdate();
+          this.callbacks.changed();
         }
       };
       listeners.add(listener);
@@ -141,7 +141,7 @@ export class DraftPreferenceState {
     if (this.read().agentsHydrated) {
       this.callbacks.onAdoptAgentDefaults();
     }
-    this.callbacks.requestUpdate();
+    this.callbacks.changed();
   }
 
   readPreference(agentId: string): NewSessionPreference | null {
@@ -212,10 +212,9 @@ export class DraftPreferenceState {
     const writes = this.preferenceWrites(source);
     let writer = writes.agents.get(agentId);
     if (!writer) {
-      writer = { selection: {}, write: Promise.resolve() };
+      writer = { write: Promise.resolve() };
       writes.agents.set(agentId, writer);
     }
-    const capturedSelection = writer.selection;
     const ownsConnection = () =>
       Boolean(
         client &&
@@ -252,22 +251,14 @@ export class DraftPreferenceState {
       return (current.baseRef ?? "") === (expected.baseRef ?? "") ? "match" : "superseded";
     };
     return async (consume) => {
-      if (accepted && (!ownsConnection() || writer.selection !== capturedSelection)) {
+      if (accepted && !ownsConnection()) {
         return;
       }
-      // Model controls share persistence, but do not replace the submitted checkout intent.
-      const changesPlacement = Object.keys(patch).some(
-        (field) => !["model", "agentRuntime", "thinkingLevel", "fastMode"].includes(field),
-      );
-      const selection = changesPlacement ? {} : writer.selection;
-      writer.selection = selection;
       consume?.();
       if (!persist) {
         return;
       }
-      const isCurrent = () =>
-        ownsConnection() &&
-        (accepted ? writer.selection === selection : this.preferenceScope === scope);
+      const isCurrent = () => ownsConnection() && (accepted || this.preferenceScope === scope);
       // A disconnected controller must still fence work admitted to its Gateway queue.
       const queued = this.preferenceModeValue !== "local";
       const write = async () => {
@@ -335,7 +326,7 @@ export class DraftPreferenceState {
             }
             if (current && this.preferenceScope === scope) {
               this.identityPreferences = { ...this.identityPreferences, [agentId]: next };
-              this.callbacks.requestUpdate();
+              this.callbacks.changed();
             }
             return true;
           }
@@ -439,7 +430,7 @@ export class DraftPreferenceState {
     } catch {
       if (this.preferenceScope === params.scope) {
         this.preferenceModeValue = conflicts > 0 ? "remote" : "local";
-        this.callbacks.requestUpdate();
+        this.callbacks.changed();
       }
     }
   }

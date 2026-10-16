@@ -196,7 +196,7 @@ suite.define(() => {
           path.join(suite.artifactDir, "cli-agents-picker", "picker-group.png"),
           await takeControlUiViewportScreenshot(
             page,
-            page.locator('.chat-controls__model-picker wa-popup [part="popup"]'),
+            page.locator(".chat-controls__model-picker > [data-anchored-overlay]"),
             [cliGroup],
           ),
         );

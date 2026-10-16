@@ -61,6 +61,7 @@ it.skipIf(process.platform === "win32")(
         const { runtimeAuthProfileRowsCache } = await import(workerData.cache);
         const { acquireAuthProfileReadDatabase } = await import(workerData.pool);
         const { readAuthProfileRowsReadOnly } = await import(workerData.rows);
+        const { openSqliteReadOnlyDatabase } = await import(workerData.opener);
         const { runInDetachedAsyncContext } = await import(workerData.detached);
         const { closeOpenClawStateDatabaseAsync } = await import(workerData.cleanup);
         const databasePath = path.join(workerData.directory, "openclaw-agent.sqlite");
@@ -81,7 +82,7 @@ it.skipIf(process.platform === "win32")(
         const writer = create(databasePath, "worker-original");
         try {
           writer.exec("PRAGMA journal_mode=WAL; PRAGMA wal_checkpoint(TRUNCATE)");
-          const acquired = acquireAuthProfileReadDatabase(databasePath);
+          const acquired = acquireAuthProfileReadDatabase(databasePath, openSqliteReadOnlyDatabase);
           assert.equal(acquired.status, "readable");
           const reader = acquired.db;
           const owner = { databasePath, sharedDatabasePath: databasePath, location: "legacy-main" };
@@ -108,7 +109,7 @@ it.skipIf(process.platform === "win32")(
             assert.ok(changes.some((change) => change.identityChanged));
             assert.equal(reader.isOpen, false);
             assert.equal(snapshots.getRuntimeAuthProfileStoreSnapshotAtDatabasePath(databasePath), undefined);
-            assert.deepEqual(readAuthProfileRowsReadOnly(databasePath).store, {
+            assert.deepEqual(readAuthProfileRowsReadOnly(databasePath, openSqliteReadOnlyDatabase).store, {
               status: "readable", raw: store("worker-replacement")
             });
             assert.equal(spawned, 0);
@@ -137,6 +138,7 @@ it.skipIf(process.platform === "win32")(
           cache: new URL("./runtime-persisted-rows.ts", import.meta.url).href,
           pool: new URL("./sqlite-read-pool.ts", import.meta.url).href,
           rows: new URL("./sqlite-json.ts", import.meta.url).href,
+          opener: new URL("../../infra/sqlite-snapshot-source.ts", import.meta.url).href,
           detached: new URL("../../shared/detached-async-context.ts", import.meta.url).href,
           cleanup: new URL("../../state/openclaw-state-db-cache.ts", import.meta.url).href,
         },

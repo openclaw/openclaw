@@ -234,20 +234,8 @@ export async function submitUpdateFailureReport(
     receipt: UpdateFailureReportReceipt,
   ): Promise<boolean> =>
     await retryUpdateReportStateWriteAfterNoStart(async () => {
-      try {
-        if (await finalizeReceipt(prepared.attemptId, receipt, stateEnv, context)) {
-          return true;
-        }
-      } catch (error) {
-        if (
-          await confirmUpdateFailureReportReceipt(
-            () => readReceipt(prepared.attemptId, stateEnv, context),
-            receipt,
-          )
-        ) {
-          return true;
-        }
-        throw error;
+      if (await finalizeReceipt(prepared.attemptId, receipt, stateEnv, context)) {
+        return true;
       }
       return confirmUpdateFailureReportReceipt(
         () => readReceipt(prepared.attemptId, stateEnv, context),
@@ -407,33 +395,14 @@ export async function submitUpdateFailureReport(
   const beforeIssueCreate = async () => {
     assertPublicationCurrent();
     const markPending = options.markPending ?? markUpdateFailureReportReceiptPending;
-    let marked: boolean;
-    try {
-      marked = await markPending(
-        prepared.attemptId,
-        reservationId,
-        prepared.previewDigest,
-        stateEnv,
-        context,
-        assertPublicationCurrent,
-      );
-    } catch (error) {
-      // If both worker replies were lost, the exact durable pending row still proves admission.
-      let current: UpdateFailureReportReceipt | null;
-      try {
-        current = await readReceipt(prepared.attemptId, stateEnv, context);
-      } catch {
-        throw error;
-      }
-      if (
-        current?.status !== "pending" ||
-        current.reservationId !== reservationId ||
-        current.previewDigest !== prepared.previewDigest
-      ) {
-        throw error;
-      }
-      marked = true;
-    }
+    const marked = await markPending(
+      prepared.attemptId,
+      reservationId,
+      prepared.previewDigest,
+      stateEnv,
+      context,
+      assertPublicationCurrent,
+    );
     if (!marked) {
       throw new UpdateReportPreCreateGuardError(
         "Update report preparation is no longer owned by this request.",

@@ -198,7 +198,7 @@ describe("awaited binding read ownership", () => {
       expect(warning.mock.calls[0]?.[0]).toContain(
         "SessionBindingService.resolveByConversationAsync",
       );
-      expect(warning.mock.calls[0]?.[0]).toContain("later release after stable deprecation");
+      expect(warning.mock.calls[0]?.[0]).toContain("Final compatibility day: 2026-12-31");
     } finally {
       warning.mockRestore();
     }

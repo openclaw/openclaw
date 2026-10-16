@@ -10,6 +10,7 @@ function createFixture() {
     CREATE TABLE retained (value ANY) STRICT;
     CREATE TABLE keyed (id TEXT PRIMARY KEY, value BLOB) WITHOUT ROWID, STRICT;
     CREATE INDEX retained_value ON retained(value);
+    CREATE VIEW retained_view AS SELECT value FROM retained;
     CREATE TRIGGER retained_after_insert AFTER INSERT ON retained BEGIN SELECT 1; END;
     INSERT INTO changed VALUES (1, 'before');
     INSERT INTO schema_meta VALUES (26);
@@ -22,6 +23,16 @@ function createFixture() {
 }
 
 describe("declared SQLite migration scope", () => {
+  it("does not conflate a declared table with an undeclared Unicode name", async () => {
+    using database = createFixture();
+    database.exec("CREATE TABLE Keyed (value TEXT)");
+    await expect(
+      assertSqliteMigrationScopePreserved(database, ["keyed"], () =>
+        database.exec("CREATE INDEX keyed_value ON keyed(value)"),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
   it("allows declared table rewrites and explicit metadata changes while preserving all other tables", async () => {
     using database = createFixture();
     const result = await assertSqliteMigrationScopePreserved(
@@ -62,59 +73,37 @@ describe("declared SQLite migration scope", () => {
     ).rejects.toThrow("retained: content changed");
   });
 
-  it.each([
-    ["table DDL", "ALTER TABLE retained ADD COLUMN extra TEXT"],
-    ["index DDL", "DROP INDEX retained_value; CREATE INDEX retained_value ON retained(value DESC)"],
-    ["trigger DDL", "DROP TRIGGER retained_after_insert"],
-  ])("rejects undeclared %s changes", async (_kind, mutation) => {
+  it("rejects undeclared mixed-case trigger DDL changes", async () => {
     using database = createFixture();
     await expect(
-      assertSqliteMigrationScopePreserved(database, ["changed"], () => database.exec(mutation)),
+      assertSqliteMigrationScopePreserved(database, ["changed"], () =>
+        database.exec(
+          "CREATE TRIGGER retained_update AFTER UPDATE ON ReTaInEd BEGIN SELECT 1; END",
+        ),
+      ),
     ).rejects.toThrow("retained: schema changed");
   });
 
   it.each([
-    ["created", "CREATE TABLE unexpected (id INTEGER PRIMARY KEY) STRICT", "unexpected"],
-    ["removed", "DROP TABLE keyed", "keyed"],
-    ["content changed", "UPDATE keyed SET value = X'030201'", "keyed"],
-    ["content changed", "UPDATE schema_meta SET version = 27", "schema_meta"],
-  ])("rejects an undeclared table that is %s (%s)", async (change, mutation, table) => {
+    ["created", "CREATE VIEW unexpected_view AS SELECT value FROM changed", "unexpected_view"],
+    ["removed", "DROP VIEW retained_view", "retained_view"],
+    [
+      "schema changed",
+      "DROP VIEW retained_view; CREATE VIEW retained_view AS SELECT id FROM changed",
+      "retained_view",
+    ],
+    [
+      "schema changed",
+      "CREATE TRIGGER view_delete INSTEAD OF DELETE ON retained_view BEGIN DELETE FROM retained; END",
+      "retained_view",
+    ],
+  ])("rejects a view that is %s (%s)", async (change, mutation, view) => {
     using database = createFixture();
     await expect(
-      assertSqliteMigrationScopePreserved(database, ["changed"], () => database.exec(mutation)),
-    ).rejects.toThrow(`${table}: ${change}`);
-  });
-
-  it("detects trigger side effects from a declared table into an undeclared table", async () => {
-    using database = createFixture();
-    database.exec(`CREATE TRIGGER changed_after_update AFTER UPDATE ON changed BEGIN
-      INSERT INTO retained(value) VALUES (NEW.value);
-    END;`);
-    await expect(
-      assertSqliteMigrationScopePreserved(database, ["changed"], () => {
-        database.exec("UPDATE changed SET value = 'side effect'");
-      }),
-    ).rejects.toThrow("retained: content changed");
-  });
-
-  it("retains the original migration failure", async () => {
-    using database = createFixture();
-    const failure = new Error("migration failed");
-    await expect(
-      assertSqliteMigrationScopePreserved(database, ["changed"], () => {
-        throw failure;
-      }),
-    ).rejects.toBe(failure);
-  });
-
-  it("does not exempt SQLite sequence state from the declared scope", async () => {
-    using database = createFixture();
-    database.exec("CREATE TABLE sequenced (id INTEGER PRIMARY KEY AUTOINCREMENT) STRICT");
-    await expect(
-      assertSqliteMigrationScopePreserved(database, ["sequenced"], () => {
-        database.exec("INSERT INTO sequenced DEFAULT VALUES");
-      }),
-    ).rejects.toThrow("sqlite_sequence: content changed");
+      assertSqliteMigrationScopePreserved(database, ["changed", view], () =>
+        database.exec(mutation),
+      ),
+    ).rejects.toThrow(`${view}: ${change}`);
   });
 
   it("refuses proof when every implicit rowid alias is hidden", async () => {

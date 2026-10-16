@@ -18,7 +18,7 @@ import type {
 } from "./binding-generation.js";
 
 /**
- * @deprecated Use resolvePreparedNativeSessionBinding and release its capture.
+ * @deprecated Use resolvePreparedNativeSessionBinding and release its capture. Supported through 2026-12-31.
  */
 export async function resolveNativeSessionBindingWithAuthority<TBinding>(
   params: NativeSessionBindingResolveOptions<TBinding> & {

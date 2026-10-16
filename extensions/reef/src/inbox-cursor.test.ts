@@ -7,7 +7,7 @@ import type {
   PluginStateOperationDefinitions,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -40,11 +40,15 @@ describe("Reef inbox cursor persistence", () => {
     const runtime = createPluginRuntimeMock();
     const commands: string[] = [];
     const hooks: { before?: () => Promise<void> | void; after?: () => Promise<void> | void } = {};
-    runtime.state.openKeyedStore = <T>(storeOptions: OpenAsyncKeyedStoreOptions) => {
-      const store: PluginStateKeyedStore<T> = createPluginStateKeyedStoreForTests<T>("reef", {
-        ...storeOptions,
-        env: { OPENCLAW_STATE_DIR: stateDir },
-      });
+    runtime.state.openKeyedStoreV2 = <T>(storeOptions: OpenAsyncKeyedStoreOptions) => {
+      const store: PluginStateKeyedStore<T, 2> = createPluginStateKeyedStoreV2ForTests<T>(
+        "reef",
+        {
+          ...storeOptions,
+          env: { OPENCLAW_STATE_DIR: stateDir },
+        },
+        { assertCurrent() {} },
+      );
       const createOperation = store.createOperation!;
       store.createOperation = <Operations extends PluginStateOperationDefinitions>(
         ...args: Parameters<typeof createOperation>
@@ -140,7 +144,7 @@ describe("Reef inbox cursor persistence", () => {
     "observes a foreign %s committed before cursor admission",
     async (change) => {
       const runtime = createRuntime();
-      const competing = runtime.state.openKeyedStore(options);
+      const competing = runtime.state.openKeyedStoreV2(options);
       runtime.hooks.before = () =>
         competing.register("current", {
           ...binding,
@@ -166,7 +170,7 @@ describe("Reef inbox cursor persistence", () => {
 
   it("uses a repair committed before its worker transaction", async () => {
     const runtime = createRuntime();
-    const competing = runtime.state.openKeyedStore(options);
+    const competing = runtime.state.openKeyedStoreV2(options);
     await competing.register("current", { ...binding, handle: "clawd", cursor: 3 });
     runtime.hooks.before = () => competing.register("current", { ...binding, cursor: 5 });
     const store = new ReefInboxCursorStore(runtime, binding);
@@ -176,7 +180,7 @@ describe("Reef inbox cursor persistence", () => {
 
   it("refuses invalid stored state", async () => {
     const runtime = createRuntime();
-    const raw = runtime.state.openKeyedStore(options);
+    const raw = runtime.state.openKeyedStoreV2(options);
     await raw.register("current", { ...binding, cursor: "invalid" });
     const store = new ReefInboxCursorStore(runtime, binding);
     await expectReefStateOperationError(store.load(), "invalid Reef inbox cursor state");

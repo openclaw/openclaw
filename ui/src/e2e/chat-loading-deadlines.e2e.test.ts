@@ -402,4 +402,26 @@ suite.define(() => {
       });
     },
   );
+
+  it("sends from an existing chat while models.list never answers", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          sessionKey: "agent:main:main",
+          heldMethods: ["models.list"],
+          historyMessages: [{ role: "assistant", content: readyText }],
+        });
+        await page.goto(new URL("/chat/main", suite.server.baseUrl).href);
+        await gateway.waitForRequest("models.list");
+        await page.getByText(readyText, { exact: true }).waitFor();
+        const composer = page.locator("textarea:visible").first();
+        await composer.fill(draft);
+        await page.getByRole("button", { name: "Send message", exact: true }).click();
+        const sent = await gateway.waitForRequest("chat.send");
+        expect(sent.params).toMatchObject({ sessionKey: "agent:main:main", message: draft });
+        expect(await gateway.getRequests("models.list")).toHaveLength(1);
+      },
+    );
+  });
 });

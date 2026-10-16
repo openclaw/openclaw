@@ -203,12 +203,6 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
   display: none;
 }
 
-/* Native-nav hosts provide the expanded sidebar toggle in AppKit, while the
-   in-sidebar search remains the only pointer path to the palette. */
-html.openclaw-native-nav .sidebar-brand__collapse {
-  display: none;
-}
-
 html.openclaw-native-web-chrome .shell--mobile-nav .sidebar-brand__desktop-control {
   display: none;
 }
@@ -264,10 +258,6 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
       var(--openclaw-native-titlebar-height, 52px)
     );
   }
-}
-
-html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrome) .sidebar-brand {
-  --sidebar-agent-avatar-size: 32px;
 }
 
 .macos-titlebar-controls {
@@ -762,6 +752,14 @@ html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrom
   color: var(--muted);
 }
 
+.settings-sidebar__footer > openclaw-sidebar-build-chip {
+  display: contents;
+}
+
+.settings-sidebar__connection {
+  min-height: 1lh;
+}
+
 openclaw-settings-save-indicator {
   min-width: 0;
 }
@@ -1101,57 +1099,10 @@ openclaw-settings-save-indicator:empty {
   box-shadow: none;
 }
 
-.sidebar-brand {
-  --shell-chrome-control-size: 28px;
-  --sidebar-agent-avatar-size: 28px;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  min-height: 34px;
-  padding: 0 2px 10px 0;
-  flex-shrink: 0;
-}
-
-/* Desktop web shares the pane centerline. Drawers and native windows keep
-   the identity row below their own chrome and retain its separate clearance. */
 :where(html:not(.openclaw-native-macos, .openclaw-native-desktop)) .shell:not(.shell--mobile-nav) {
   .sidebar-shell {
     padding-top: 0;
   }
-
-  .sidebar-brand {
-    min-height: var(--rail-header-height);
-    padding-bottom: 0;
-    margin-bottom: 9px;
-  }
-}
-
-.sidebar-brand__actions {
-  display: flex;
-  align-items: center;
-  /* One hit-box size and one gap for every header control: the glyph inset
-     inside each 28px box is the only spacing. A per-button offset here reads
-     as a hole in the rail once that button has no border to sit inside. */
-  gap: 0;
-  /* Keep the action rail independent from the fit-content identity card so
-     short agent names never pull navigation controls away from the edge. */
-  margin-inline-start: auto;
-  flex: 0 0 auto;
-}
-
-.sidebar-brand__header-control svg {
-  opacity: var(--sidebar-header-icon-opacity, 0.72);
-  stroke-width: 1.6px;
-  transition: opacity var(--duration-fast) ease;
-}
-
-.sidebar-brand__icon.sidebar-brand__header-control {
-  width: var(--shell-chrome-control-size);
-  height: var(--shell-chrome-control-size);
-}
-
-.sidebar-brand__header-control:hover:not(:disabled, [aria-disabled="true"]) {
-  --sidebar-header-icon-opacity: 1;
 }
 
 .sidebar-brand__icon {
@@ -1161,8 +1112,6 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-brand__icon:hover:not(:disabled, [aria-disabled="true"]),
 .sidebar-brand__icon:focus-visible,
-.sidebar-nav__head-action:hover,
-.sidebar-nav__head-action:focus-visible,
 .settings-sidebar__back:hover,
 .settings-sidebar__search-clear:hover,
 .topbar-icon-btn:hover:not(:disabled),
@@ -1183,12 +1132,6 @@ openclaw-settings-save-indicator:empty {
   width: 16px;
   height: 16px;
   stroke-width: 1.7px;
-}
-
-.sidebar-brand__new-thread svg {
-  /* The plus path occupies less of its viewBox than the panel/search artwork. */
-  width: 20px;
-  height: 20px;
 }
 
 .sidebar-shell__content,
@@ -1228,16 +1171,6 @@ openclaw-settings-save-indicator:empty {
   margin-block-end: calc(-1 * var(--sidebar-pad-bottom));
   padding: 4px var(--sidebar-pad-x);
   border-block-start: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
-}
-
-.sidebar-nav {
-  position: relative;
-  padding: 0;
-}
-
-/* Inset highlight surfaces without narrowing the header or agent roster. */
-.shell:not(.shell--mobile-nav) .sidebar-nav {
-  margin-inline: 2px;
 }
 
 /* Keep the live session tree mounted while a route owns the lower region. */
@@ -2078,30 +2011,6 @@ openclaw-settings-save-indicator:empty {
   color: var(--muted);
 }
 
-/* Expanded parents already show their children below, so the collapse control
-   is quiet until row hover; collapsed toggles stay visible because the count
-   and status tint are the only signal that hidden children exist. */
-.sidebar-child-session-toggle[aria-expanded="true"] {
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity var(--duration-fast) ease;
-}
-
-.session-row-host:hover .sidebar-child-session-toggle[aria-expanded="true"],
-.session-row-host:focus-within .sidebar-child-session-toggle[aria-expanded="true"] {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-/* Touch has no hover: keep the collapse control usable, matching the
-   session-action touch override in components.css. */
-@media (hover: none), (pointer: coarse) {
-  .sidebar-child-session-toggle[aria-expanded="true"] {
-    opacity: 1;
-    pointer-events: auto;
-  }
-}
-
 .sidebar-child-session-toggle:hover,
 .sidebar-child-session-toggle:focus-visible {
   background: color-mix(in srgb, var(--bg-hover) 88%, transparent);
@@ -2333,11 +2242,6 @@ openclaw-settings-save-indicator:empty {
   color: inherit;
 }
 
-.nav-section__items {
-  display: grid;
-  gap: 2px;
-}
-
 .sidebar-online {
   gap: 4px;
   padding-top: 12px;
@@ -2362,13 +2266,6 @@ openclaw-settings-save-indicator:empty {
     opacity: 1;
     pointer-events: auto;
   }
-}
-
-.sidebar-online__facepile {
-  display: inline-flex;
-  min-width: 0;
-  margin-left: auto;
-  overflow: hidden;
 }
 
 .sidebar-online__row {
@@ -2420,7 +2317,7 @@ openclaw-settings-save-indicator:empty {
   height: 20px;
 }
 
-/* All rows are connected; a hollow ring avoids implying observed activity. */
+/* A hollow ring distinguishes connected people without observed activity. */
 .sidebar-online__avatar::after {
   position: absolute;
   right: -2px;
@@ -2441,6 +2338,10 @@ openclaw-settings-save-indicator:empty {
 .sidebar-online__person[data-presence-activity="unknown"] .sidebar-online__avatar::after {
   background: var(--bg);
   box-shadow: inset 0 0 0 1.5px var(--ok);
+}
+
+.sidebar-online__person[data-presence-activity="offline"] .sidebar-online__avatar::after {
+  background: var(--muted);
 }
 
 .sidebar-online__person-name {
@@ -2658,26 +2559,6 @@ openclaw-settings-save-indicator:empty {
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
-.sidebar-customize-menu__item--active {
-  color: var(--text-strong);
-  background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
-}
-
-.sidebar-customize-menu__item--active .nav-item__icon {
-  color: var(--accent);
-}
-
-wa-dropdown.session-menu,
-wa-dropdown.sidebar-session-sort-menu {
-  position: fixed;
-  z-index: 121;
-}
-
-wa-dropdown.session-menu::part(menu) {
-  min-width: 224px;
-  max-width: 264px;
-}
-
 /* Popover hosts live in the top layer so menus escape in-page stacking
    contexts (e.g. the sidebar resizer above the nav); the host itself must
    stay a zero-size shell around its fixed-position menu. */
@@ -2693,8 +2574,7 @@ openclaw-session-menu[popover] {
   background: transparent;
 }
 
-.sidebar-session-sort-menu:not(wa-dropdown),
-wa-dropdown.sidebar-session-sort-menu::part(menu) {
+.sidebar-session-sort-menu {
   min-width: 176px;
   max-width: 220px;
   padding: var(--menu-padding);
@@ -2702,9 +2582,6 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
-}
-
-.sidebar-session-sort-menu:not(wa-dropdown) {
   position: fixed;
   z-index: 121;
   animation: menu-in 140ms var(--ease-out);
@@ -3023,7 +2900,6 @@ a:is(
     .nav-item,
     .sidebar-recent-session__link,
     .sidebar-online__person,
-    .sidebar-brand__new-thread,
     .sidebar-new-session,
     .header-new-session,
     .sidebar-session-catalog-new,
@@ -3202,7 +3078,6 @@ a:is(
   padding-right: 0;
 }
 
-.sidebar-brand > openclaw-sidebar-agent-card,
 .sidebar-workspace-header {
   display: flex;
   min-width: 0;
@@ -3344,18 +3219,6 @@ a:is(
   gap: 5px;
 }
 
-.sidebar-brand .control-ui-environment-pill {
-  /* At the 240px sidebar minimum, keep the pill boundary inside the identity
-     column and truncate its label before the fixed header actions. */
-  display: block;
-  min-width: 0;
-  max-width: 100%;
-  overflow: hidden;
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .sidebar-agent-card__menu-unread {
   position: absolute;
   top: -1px;
@@ -3363,75 +3226,6 @@ a:is(
   width: 6px;
   height: 6px;
   box-shadow: 0 0 0 2px var(--sidebar-bg);
-}
-
-.sidebar-nav__lead {
-  display: flex;
-  align-items: flex-start;
-  min-width: 0;
-  padding-inline-end: 8px;
-}
-
-.sidebar-nav__lead > :first-child {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.sidebar-nav__head-slot {
-  display: flex;
-  align-items: center;
-  flex: none;
-  block-size: var(--sidebar-nav-row-height);
-}
-
-.sidebar-nav__head-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  flex: none;
-  border: none;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--muted);
-  cursor: var(--cursor-action);
-  opacity: 0;
-  transition:
-    color var(--duration-fast) ease,
-    background var(--duration-fast) ease,
-    opacity var(--duration-fast) ease;
-}
-
-.sidebar-nav:hover .sidebar-nav__head-action,
-.sidebar-nav:focus-within .sidebar-nav__head-action {
-  opacity: 1;
-}
-
-/* Touch has no hover: keep the Pages editor discoverable, matching the
-   child-session-toggle touch override above. */
-@media (hover: none), (pointer: coarse) {
-  .sidebar-nav__head-action {
-    opacity: 1;
-  }
-}
-
-.sidebar-nav__head-action svg {
-  width: 13px;
-  height: 13px;
-  stroke-width: 1.5px;
-}
-
-/* Home keeps run state plus outbox/draft counts together at the row edge. */
-.nav-item__state {
-  flex: none;
-  margin-left: auto;
-}
-
-.sidebar-home-session-states {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
 }
 
 /* Zone 5: product chrome in one slim footer bar. The shell footer's top
@@ -4228,7 +4022,7 @@ button.gateway-status:focus-visible {
   text-overflow: ellipsis;
 }
 
-.sidebar-footer-build__update {
+.sidebar-identity-menu__update-badge {
   color: var(--inbox-attention);
 }
 

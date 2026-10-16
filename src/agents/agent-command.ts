@@ -18,7 +18,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
-import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { defaultRuntime, type RuntimeEnv, withoutRuntimeOutput } from "../runtime.js";
 import { isSubagentCoordinationInputProvenance } from "../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
@@ -529,6 +529,7 @@ async function agentCommandInternal(
       sessionEntry = embeddedAttempt.sessionEntry;
       lifecycleGeneration = embeddedAttempt.lifecycleGeneration;
       const finalized = await finalizeEmbeddedAgentCommand({
+        admittedRecoverySource: preparedRunAdmission.pendingFinalRecoverySource,
         prepared: attemptPrepared,
         opts,
         deps: resolvedDeps,
@@ -632,6 +633,7 @@ async function agentCommandFromIngressInternal(
   if (typeof opts.allowModelOverride !== "boolean") {
     throw new Error("allowModelOverride must be explicitly set for ingress agent runs.");
   }
+  const ingressRuntime = withoutRuntimeOutput(runtime);
   const lifecycleGeneration =
     opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(opts.runId ?? "");
   const generation = runtimeContext?.pluginGeneration;
@@ -647,7 +649,7 @@ async function agentCommandFromIngressInternal(
           senderIsOwner: opts.senderIsOwner === true,
         },
         prepare: async (preparedOpts) =>
-          await prepareAgentCommandExecution(preparedOpts, runtime, runtimeContext),
+          await prepareAgentCommandExecution(preparedOpts, ingressRuntime, runtimeContext),
         restoreAdmittedRecovery: recovery?.restoreAdmittedRecovery,
         run: async (prepared) => {
           preparedAgentDir = prepared.agentDir;
@@ -655,7 +657,7 @@ async function agentCommandFromIngressInternal(
             await agentCommandInternal(
               prepared,
               { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
-              runtime,
+              ingressRuntime,
               deps,
               true,
             );

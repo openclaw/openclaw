@@ -5,6 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import type { HeapSpaceInfo } from "node:v8";
 import * as v8 from "node:v8";
+import { isMainThread } from "node:worker_threads";
 import { parseNodeOptionsEnvVar } from "../infra/node-options.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 
@@ -227,11 +228,13 @@ export function sanitizeDiagnosticProfileFrame(
   };
 }
 
-/** Owns one ephemeral main-isolate capture; it never opens an inspector listener. */
+/** Owns one ephemeral isolate-local capture; it never opens an inspector listener. */
 export async function captureDiagnosticProfile<Profile, Result>(options: {
   signal: AbortSignal;
   hasAuthority: () => boolean;
   durationMs: number;
+  /** Worker captures require tracing admission from the Gateway; trace_events is main-only. */
+  workerTracingInactive?: true;
   create: (inspector: typeof import("node:inspector/promises")) => ProfileCapture<Profile>;
   sanitize: (
     profile: Profile,
@@ -275,9 +278,14 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
     const inspector = await import("node:inspector/promises").catch(() => {
       throw new ProfileFailure("unsupported");
     });
-    const { getEnabledCategories } = await import("node:trace_events").catch(() => {
-      throw new ProfileFailure("unsupported");
-    });
+    const getEnabledCategories =
+      !isMainThread && options.workerTracingInactive
+        ? () => undefined
+        : (
+            await import("node:trace_events").catch(() => {
+              throw new ProfileFailure("unsupported");
+            })
+          ).getEnabledCategories;
     const assertTracingInactive = () => {
       // V8 can stream raw ProfileChunk data to an existing trace writer before
       // sanitization. Refuse all tracing; legacy and Perfetto match categories differently.

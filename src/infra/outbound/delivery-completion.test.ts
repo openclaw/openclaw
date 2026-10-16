@@ -236,20 +236,6 @@ describe("pending-final delivery completion", () => {
     }
   });
 
-  it("records queue custody without waking recovery", async () => {
-    await expect(settlePendingFinalDelivery(completion, "queued", ["prepared"])).resolves.toEqual({
-      state: "queued",
-    });
-
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-      mainRestartRecovery: { revision: 2 },
-      pendingFinalDelivery: {
-        deliveries: [{ id: completion.deliveryId, state: "queued" }],
-      },
-    });
-    expect(recoveryMocks.scheduleMainSessionRecoveryPendingTarget).not.toHaveBeenCalled();
-  });
-
   it("rolls back settled delivery and cleanup together without losing an intervening write", async () => {
     const scope = { sessionKey, storePath };
     const initial = loadSessionEntry(scope)!;

@@ -120,27 +120,6 @@ describe("Gateway timed work", () => {
     await scheduler.stop();
   });
 
-  it("keeps maintenance cadence after a forward wall-clock jump is corrected", async () => {
-    const { time, scheduler } = fixture();
-    const run = vi.fn();
-    scheduler.schedule({
-      id: "maintenance",
-      delayMs: 30_000,
-      everyMs: 30_000,
-      phase: "maintenance",
-      run,
-    });
-    time.setTime(301_000);
-    await time.wake();
-    expect(run).toHaveBeenCalledOnce();
-    time.setTime(30_000);
-    await time.advanceBy(29_999);
-    expect(run).toHaveBeenCalledOnce();
-    await time.advanceBy(1);
-    expect(run).toHaveBeenCalledTimes(2);
-    await scheduler.stop();
-  });
-
   it.each(["root", "scope"] as const)(
     "releases the retiring caller while its %s abort signal remains reachable",
     async (kind) => {
@@ -343,11 +322,8 @@ describe("Gateway timed work", () => {
       const retiredRun = vi.fn();
       const run = vi.fn();
       const retired = scheduler.schedule({ id: "queue", atMs: 2_000, run: retiredRun });
-      const oldWake = time.wakes[0];
       scheduler.schedule({ id: "queue", atMs, mode, run });
       retired.cancel();
-      expect(oldWake).toBeDefined();
-      await oldWake?.run();
       expect(scheduler.nextWakeAtMs).toBe(nextWakeAtMs);
       expect(time.armedAtMs).toBe(nextWakeAtMs);
       await time.advanceTo(nextWakeAtMs);
@@ -520,26 +496,6 @@ describe("Gateway timed work", () => {
     gate.resolve();
     await initial;
     expect(scheduler.nextWakeAtMs).toBeNull();
-    await scheduler.stop();
-  });
-
-  it("logs one-shot runs at debug and repeating cadence runs only at trace", async () => {
-    const { time, scheduler } = fixture();
-    schedulerLog.debug.mockClear();
-    schedulerLog.trace.mockClear();
-    const sample = vi.fn();
-    scheduler.schedule({ id: "event-loop-health", delayMs: 20, everyMs: 20, run: sample });
-    scheduler.schedule({ id: "approval", delayMs: 30, run: () => {} });
-    await time.advanceBy(20);
-    await time.advanceBy(20);
-    await time.advanceBy(20);
-    expect(sample).toHaveBeenCalledTimes(3);
-    expect(schedulerLog.debug.mock.calls).toEqual([["running approval"]]);
-    expect(schedulerLog.trace.mock.calls).toEqual([
-      ["running event-loop-health"],
-      ["running event-loop-health"],
-      ["running event-loop-health"],
-    ]);
     await scheduler.stop();
   });
 

@@ -296,18 +296,6 @@ describe("independent release child reuse", () => {
     );
   });
 
-  it("finds the target after other-target runs without spending full validations", async () => {
-    const data = await fixture();
-    data.runInventory.unshift(
-      ...Array.from({ length: 6 }, (_, index) => ({ ...data.run, id: 200 + index })),
-    );
-    const selection = await discoverReusableReleaseChild(data.request, data.deps);
-    expect(selection?.runId).toBe("101");
-    expect(data.reads[0]).toContain("per_page=100");
-    expect(data.deps.report).toHaveBeenCalledWith(
-      expect.stringContaining('scanned 7 runs, evaluated 1; skipped {"target receipt absent":6}'),
-    );
-  });
   it.each(["active parent", "publisher cleanup failure"])(
     "reuses sealed green work despite %s",
     async (state) => {

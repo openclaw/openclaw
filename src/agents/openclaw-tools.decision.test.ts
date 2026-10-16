@@ -16,6 +16,7 @@ import {
 } from "../plugins/current-plugin-metadata-state.js";
 import { runPluginRegisterSyncInRegistry } from "../plugins/loader-module-runtime.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
+import { normalizeManifestModelCatalog } from "../plugins/manifest-decision-catalog.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
@@ -181,17 +182,23 @@ describe("core decision_evaluate registered flow", () => {
         {
           id: "decision-fixture",
           contracts: { decisionProviders: ["fixture"] },
-          decisionModels: [
-            {
-              provider: "fixture",
-              id: "default",
-              name: "Fixture",
-              capabilities: {
-                questionTypes: ["boolean", "choice", "score"],
-                maxQuestions: 99,
+          modelCatalog: normalizeManifestModelCatalog({
+            modelCatalog: undefined,
+            providers: [],
+            cliBackends: [],
+            decisionProviders: ["fixture"],
+            decisionModels: [
+              {
+                provider: "fixture",
+                id: "default",
+                name: "Fixture",
+                capabilities: {
+                  questionTypes: ["boolean", "choice", "score"],
+                  maxQuestions: 99,
+                },
               },
-            },
-          ],
+            ],
+          }),
         },
       ],
     });
@@ -203,7 +210,10 @@ describe("core decision_evaluate registered flow", () => {
       undefined,
       "gateway",
     );
-    const tool = requiredTool();
+    const tool = assembled("main", {
+      ...config,
+      agents: { defaults: { decisionModel: "fixture/default@synthetic-profile" } },
+    })!;
     expect(tool.description).toContain("at most 99 questions");
     setRuntimeConfigSnapshot({
       agents: {

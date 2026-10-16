@@ -148,7 +148,7 @@ function normalizeGraphAttachment(att: MSTeamsAttachmentLike): MSTeamsAttachment
   }
   return {
     id: att.id ?? undefined,
-    contentType: normalizeContentType(att.contentType) ?? undefined,
+    contentType: normalizeContentType(att.contentType),
     contentUrl: att.contentUrl ?? undefined,
     name: att.name ?? undefined,
     thumbnailUrl: att.thumbnailUrl ?? undefined,

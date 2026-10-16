@@ -94,3 +94,38 @@ it("retains grouped rewind and timestamp controls with current callbacks and met
   expect(view.container.querySelector(".chat-group.assistant .msg-meta__summary")).toBe(timestamp);
   expect(document.activeElement).toBe(timestamp);
 });
+
+it("leaves timestamp attributes untouched when only message usage changes", () => {
+  const answer = createMessageGroup(
+    { role: "assistant", content: "Answer", timestamp: 1000, usage: { input: 100, output: 10 } },
+    "assistant",
+  );
+  const [group, setGroup] = createSignal(answer);
+  const view = mountSolid(() => (
+    <MessageGroup group={group()} options={{ showReasoning: false, contextWindow: 4000 }} />
+  ));
+  const time = view.container.querySelector<HTMLTimeElement>(".chat-group-timestamp")!;
+  const summary = view.container.querySelector<HTMLButtonElement>(".msg-meta__summary")!;
+  const observer = new MutationObserver(() => {});
+  observer.observe(time, { attributes: true });
+  observer.observe(summary, { attributes: true });
+  setGroup({
+    ...answer,
+    messages: [
+      {
+        ...answer.messages[0]!,
+        message: {
+          role: "assistant",
+          content: "Answer",
+          timestamp: 1000,
+          usage: { input: 200, output: 20 },
+        },
+      },
+    ],
+  });
+  flush();
+  expect(view.container.querySelector(".msg-meta__tokens")?.textContent).toBe("↑200");
+  expect(time.dateTime).toBe("1970-01-01T00:00:01.000Z");
+  expect(observer.takeRecords()).toEqual([]);
+  observer.disconnect();
+});

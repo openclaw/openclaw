@@ -8,7 +8,7 @@ import type {
   ControlUiAppearanceGlyphProps,
   ControlUiAppearancePickerProps,
 } from "../../../src/plugin-sdk/control-ui-components.js";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { SessionIconGraphic } from "./session-icon-glyph-solid.tsx";
 import { AppearancePicker as AppearanceGrid } from "./session-icon-picker-solid.tsx";
 import "../styles/sidebar-menus.css";
@@ -48,7 +48,6 @@ export const AppearancePicker = defineSolidBridge<PickerProperties>(
     });
     return (
       <AppearanceGrid
-        inline
         clearable={properties.props.clearable}
         mode={mode()}
         currentIcon={properties.props.icon}

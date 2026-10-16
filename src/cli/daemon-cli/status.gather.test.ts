@@ -25,6 +25,7 @@ import {
   sendMinimalGatewayConnectChallenge,
   sendMinimalGatewayResponse,
 } from "../../gateway/minimal-gateway.test-helpers.js";
+import * as gatewayBootLifecycle from "../../infra/gateway-boot-lifecycle.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
@@ -88,9 +89,8 @@ const fetchNpmPackageTargetStatus = vi.fn(
 const readGatewayRestartHandoffSync = vi.fn<
   (_env?: NodeJS.ProcessEnv) => GatewayRestartHandoff | null
 >(() => null);
-const readGatewayLastShutdown = vi.fn<
-  (_env?: NodeJS.ProcessEnv) => { reason: string | null; completedAtMs: number } | undefined
->(() => undefined);
+const originalReadGatewayLastShutdown = gatewayBootLifecycle.readGatewayLastShutdownAsync;
+const readGatewayLastShutdownAsync = vi.spyOn(gatewayBootLifecycle, "readGatewayLastShutdownAsync");
 const findSystemdGatewayInstallation = vi.fn<
   typeof import("../../daemon/systemd-scope.js").findSystemdGatewayInstallation
 >(async () => ({ kind: "none" }));
@@ -237,10 +237,6 @@ vi.mock("../../daemon/diagnostics.js", () => ({
 
 vi.mock("../../daemon/inspect.js", () => ({
   findExtraGatewayServices: (env: unknown, opts?: unknown) => findExtraGatewayServices(env, opts),
-}));
-
-vi.mock("../../infra/gateway-boot-lifecycle.js", () => ({
-  readGatewayLastShutdown: (env?: NodeJS.ProcessEnv) => readGatewayLastShutdown(env),
 }));
 
 vi.mock("../../state/openclaw-database-preflight.js", () => ({
@@ -509,7 +505,7 @@ describe("gatherDaemonStatus", () => {
     readLastGatewayErrorLine.mockReset();
     readLastGatewayErrorLine.mockResolvedValue(null);
     readGatewayRestartHandoffSync.mockClear();
-    readGatewayLastShutdown.mockReset().mockReturnValue(undefined);
+    readGatewayLastShutdownAsync.mockReset().mockResolvedValue(undefined);
     preflightOpenClawDatabaseSchemas
       .mockReset()
       .mockResolvedValue({ incompatible: [], indeterminate: [] });
@@ -1209,7 +1205,7 @@ describe("gatherDaemonStatus", () => {
       expect(output).toContain("pre-upgrade backup");
       expect(exit).toHaveBeenCalledWith(1);
       expect(createConfigIOCalls).not.toHaveBeenCalled();
-      expect(readGatewayLastShutdown).not.toHaveBeenCalled();
+      expect(readGatewayLastShutdownAsync).not.toHaveBeenCalled();
       expect(await fs.readFile(databasePath)).toEqual(before);
     } finally {
       log.mockRestore();
@@ -1291,10 +1287,7 @@ describe("gatherDaemonStatus", () => {
     preflightOpenClawDatabaseSchemas.mockImplementation(
       originalPreflight.preflightOpenClawDatabaseSchemas,
     );
-    const originalLifecycle = await vi.importActual<
-      typeof import("../../infra/gateway-boot-lifecycle.js")
-    >("../../infra/gateway-boot-lifecycle.js");
-    readGatewayLastShutdown.mockImplementation(originalLifecycle.readGatewayLastShutdown);
+    readGatewayLastShutdownAsync.mockImplementation(originalReadGatewayLastShutdown);
     serviceReadCommand.mockResolvedValueOnce(serviceCommand(env));
 
     const status = await gatherStatus({ deep: true, probe: false });

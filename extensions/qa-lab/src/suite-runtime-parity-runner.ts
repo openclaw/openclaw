@@ -186,7 +186,7 @@ export async function runQaRuntimeParitySuite(
                     writeEvidenceFile: params.writeEvidenceFile,
                     evidenceAnchors: [cells.invocation.anchors[cellIndex]!],
                     onEvidence: (summary) => {
-                      childEvidence = structuredClone(summary);
+                      childEvidence = summary;
                       importChild();
                     },
                   }),

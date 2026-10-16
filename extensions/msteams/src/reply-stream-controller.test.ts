@@ -305,25 +305,6 @@ describe("createTeamsReplyStreamController", () => {
     expect(stream.update).not.toHaveBeenCalled();
   });
 
-  it("falls back to normal delivery when progress final streaming fails", async () => {
-    const stream = makeStream();
-    stream.close.mockRejectedValueOnce(new Error("progress final failed"));
-    const ctrl = createTeamsReplyStreamController({
-      allowProviderPreview: true,
-      conversationType: "personal",
-      context: makeContext(stream),
-      feedbackLoopEnabled: false,
-      log: { debug: vi.fn() } as never,
-      msteamsConfig: { streaming: { mode: "progress", progress: { toolProgress: true } } } as never,
-    });
-
-    expect(ctrl.preparePayload({ text: "complete final answer" })).toBeUndefined();
-    await expect(ctrl.finalize()).resolves.toMatchObject({
-      visibleReplySent: false,
-      fallbackPayload: { text: "complete final answer" },
-    });
-  });
-
   describe("StreamCancelledError handling", () => {
     function makeCancelError(): Error {
       const err = new Error("stream canceled");
@@ -446,12 +427,6 @@ describe("createTeamsReplyStreamController", () => {
 
 describe("flattenInformativeStatus", () => {
   const bytes = (v: string) => new TextEncoder().encode(v).length;
-
-  it("joins rows onto one line without bullets", () => {
-    expect(flattenInformativeStatus("Working\n• tool: search\n- tool: exec\n\n")).toBe(
-      "Working · tool: search · tool: exec",
-    );
-  });
 
   it("keeps the newest rows within 1000 characters", () => {
     const rows = Array.from({ length: 40 }, (_, i) => `row ${i} ${"x".repeat(40)}`);

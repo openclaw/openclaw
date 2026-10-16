@@ -151,6 +151,7 @@ vi.mock("../agents/github-tool-identity.js", () => ({
   prepareGitHubPublicationOptionsIdentity: mocks.identity,
   matchesPreparedGitHubPublicationIdentity: () => true,
   resolveConfiguredGitHubToolIdentity: () => undefined,
+  onManagedGitHubProfileChanged: () => () => {},
 }));
 // mock-isolation: Exclude OAuth credentials and network activity from this reader fixture.
 vi.mock("./github-oauth-lifecycle.js", () => ({
@@ -437,3 +438,54 @@ it.each(["branch replacement", "turn cancellation and release"])(
     }
   },
 );
+
+it("retains the memory session outside its async scope and rejects a replacement writer", async () => {
+  const selected = { ...session, sessionKey: "agent:main:dashboard:incognito-retained-writer" };
+  await deleteRegistryWorktree(process.env, worktree.id);
+  await insertRegistryWorktree(process.env, { ...worktree, ownerId: selected.sessionKey });
+  const authority = { assertCurrent() {}, authorize() {} };
+  const location = {
+    agentId: selected.agentId,
+    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: selected.agentId }),
+  };
+  const owner = memorySessionActorOwners.get(location);
+  const actor = await owner.acquire(
+    { database: owner.identity, sessionKey: selected.sessionKey },
+    { assertCurrent() {}, assertReadable() {} },
+  );
+  readSessionActorStorageResult(
+    await actor.storage!.mutate(
+      {
+        type: "session.entry.create",
+        input: {
+          entry: { ...mocks.session().entry, activeWriterRunId: "writer", updatedAt: Date.now() },
+        },
+      },
+      authority,
+    ),
+  );
+  const binding = { ...location, actor, authority };
+  let prepared: Awaited<ReturnType<typeof prepareGitHubPublicationWorkspaceOwner>> | undefined;
+  try {
+    prepared = await runWithSessionActorStorage(binding, () =>
+      prepareGitHubPublicationWorkspaceOwner(selected, {
+        sessionTarget: { ...selected, storePath: location.path, expectedWriterRunId: "writer" },
+      }),
+    );
+    mocks.session.mockImplementation(() => {
+      throw new Error("Must not read the routed store");
+    });
+    expect((await prepared.read()).loaded.entry.activeWriterRunId).toBe("writer");
+    await runWithSessionActorStorage(binding, () =>
+      patchSessionEntryCore(
+        { agentId: selected.agentId, sessionKey: selected.sessionKey, storePath: location.path },
+        () => ({ activeWriterRunId: "replacement" }),
+      ),
+    );
+    expect(() => prepared!.current()).toThrow();
+  } finally {
+    prepared?.release();
+    await actor.release();
+    memorySessionActorOwners.closeDatabase(location);
+  }
+});

@@ -26,12 +26,16 @@ vi.mock("../../config/sessions/main-session.js", () => ({
   resolveAgentMainSessionKey: vi.fn().mockReturnValue("agent:test:main"),
 }));
 
-vi.mock("../../config/sessions/delivery-info.js", () => ({
+vi.mock("../../config/sessions/delivery-info.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/delivery-info.js")>()),
   extractDeliveryInfo: extractDeliveryInfoMock,
-  extractDeliveryInfoBatch: (keys: Array<string | undefined>, options: unknown) =>
-    keys.map((key) =>
-      key
-        ? extractDeliveryInfoMock(key, options)
+  extractDeliveryInfoBatch: (
+    requests: Array<{ sessionKey?: string; agentId?: string }>,
+    options: { cfg?: OpenClawConfig },
+  ) =>
+    requests.map(({ sessionKey, agentId }) =>
+      sessionKey
+        ? extractDeliveryInfoMock(sessionKey, { ...options, agentId })
         : { deliveryContext: undefined, threadId: undefined },
     ),
 }));
@@ -614,6 +618,7 @@ describe("resolveDeliveryTarget", () => {
 
     expect(extractDeliveryInfoMock).toHaveBeenCalledWith("agent:agent-b:main", {
       cfg: expect.any(Object),
+      agentId: AGENT_ID,
     });
     expect(result).toMatchObject({
       ok: true,

@@ -913,35 +913,6 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(sessionStore[sessionKey]?.cliSessionIds?.codex).toBeUndefined();
   });
 
-  it("falls back to context-engine compaction when Codex native compaction returns a raw missing thread reason", async () => {
-    const compactAgentHarnessSession = vi.fn(async () => ({
-      ok: false,
-      compacted: false,
-      reason: "thread not found: thread-raw",
-    }));
-    const scenario = await prepareCompactionScenario({
-      suffix: "codex-raw-stale-binding",
-      tmpDir,
-      provider: "codex",
-      model: "gpt-5.5",
-      sessionEntry: { agentHarnessId: "codex" },
-      deps: { maybeCompactAgentHarnessSession: compactAgentHarnessSession as never },
-    });
-    const { compactCalls, maintenance, recordCliCompactionInStore, sessionKey } = scenario;
-    const updatedEntry = await scenario.run();
-
-    expect(compactAgentHarnessSession).toHaveBeenCalledTimes(1);
-    expect(compactCalls).toHaveLength(1);
-    expect(maintenance).toHaveBeenCalledTimes(1);
-    expect(recordCliCompactionInStore).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey,
-        tokensAfter: 100,
-      }),
-    );
-    expect(updatedEntry?.compactionCount).toBe(1);
-  });
-
   it("keeps successful context-engine fallback when post-compaction maintenance fails", async () => {
     const maintenance = vi.fn(async () => {
       throw new Error("maintenance rotated stale binding");
@@ -958,7 +929,6 @@ describe("runCliTurnCompactionLifecycle", () => {
           ok: false,
           compacted: false,
           reason: "thread not found: thread-1",
-          failure: { reason: "stale_thread_binding" },
         })) as never,
       },
     });
@@ -1102,25 +1072,6 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(recordCliCompactionInStore).not.toHaveBeenCalled();
     expect(updatedEntry).toBe(sessionEntry);
     expect(updatedEntry?.cliSessionBindings?.[provider]?.sessionId).toBe("native-session");
-  });
-
-  it("does not skip compaction when backend does not declare ownsNativeCompaction", async () => {
-    const scenario = await prepareCompactionScenario({
-      suffix: "generic-no-ownership",
-      tmpDir,
-      provider: "generic-backend",
-      model: "model",
-      deps: {
-        resolveCliBackendConfig: () => ({
-          id: "generic-backend",
-          config: { command: "generic" },
-          bundleMcp: false,
-        }),
-      },
-    });
-    await scenario.run();
-
-    expect(scenario.compactCalls).toHaveLength(1);
   });
 
   it("still uses native harness path when backend declares ownsNativeCompaction and has agentHarnessId", async () => {

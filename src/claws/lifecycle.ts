@@ -1,15 +1,17 @@
 import { lstat, realpath } from "node:fs/promises";
-import { homedir } from "node:os";
 import { relative, resolve } from "node:path";
 import { assertNoSymlinkParents } from "@openclaw/fs-safe/advanced";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { FsSafeError, root as fsSafeRoot, type Root } from "../infra/fs-safe.js";
+import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { resolveUserPath } from "../utils.js";
+import { clawAgentCopyNumber, selectNextClawAgentId } from "./add-agent-id.js";
+import { clawOwnedAgentConfig } from "./agent-config-ownership.js";
 import {
   clawAddCapabilityChange,
   clawAgentCapabilityChange,
-  clawAgentConfigurationNotices,
   findClawExtensionPackageCollisions,
   planClawExtensions,
 } from "./application-plan.js";
@@ -144,9 +146,12 @@ export async function buildClawAddPlan(params: {
   context?: ClawAddPlanContext;
 }): Promise<ClawAddPlan> {
   const context = params.context ?? {};
-  const finalId = context.agentId ?? params.manifest.agent.id;
+  const finalId = context.agentId
+    ? context.agentId
+    : selectNextClawAgentId(params.manifest.agent.id, context.existingAgentIds ?? []);
+  const copyNumber = clawAgentCopyNumber(params.manifest.agent.id, finalId);
   const workspace = canonicalWorkspacePath(
-    context.workspace ?? resolve(homedir(), ".openclaw", `workspace-${finalId}`),
+    context.workspace ?? resolve(resolveRequiredHomeDir(), ".openclaw", `workspace-${finalId}`),
   );
   const packageRoot = await realpath(params.source.packageRoot).catch(
     () => params.source.packageRoot,
@@ -186,12 +191,13 @@ export async function buildClawAddPlan(params: {
   const persistedOpenClawAgentSettings = params.reconstructLegacyDynamicToolProfilePlan
     ? openClawAgentSettings
     : materializeClawToolProfile(openClawAgentSettings);
-  const agentConfig: ClawAddPlan["agent"]["config"] = {
+  const agentConfig: ClawAddPlan["agent"]["config"] = clawOwnedAgentConfig({
     ...params.manifest.agent,
     ...persistedOpenClawAgentSettings,
+    ...(copyNumber > 1 ? { name: `${params.manifest.agent.name} ${copyNumber}` } : {}),
     id: finalId,
     workspace,
-  };
+  });
   if (agentBlocked) {
     blockers.push(
       blocker(
@@ -214,10 +220,12 @@ export async function buildClawAddPlan(params: {
     capabilityChanges.push(agentCapability);
   }
 
-  const configuredWorkspacePaths = new Set(
-    [...(context.existingWorkspacePaths ?? [])].map((path) => canonicalWorkspacePath(path)),
+  const configuredWorkspacePaths = [...(context.existingWorkspacePaths ?? [])].map((path) =>
+    canonicalWorkspacePath(path),
   );
-  const configuredWorkspaceConflict = configuredWorkspacePaths.has(workspace);
+  const configuredWorkspaceConflict = configuredWorkspacePaths.some(
+    (path) => isPathInside(path, workspace) || isPathInside(workspace, path),
+  );
   const workspaceExistsOnDisk = await lstat(workspace)
     .then(() => true)
     .catch(() => false);
@@ -226,12 +234,15 @@ export async function buildClawAddPlan(params: {
     : undefined;
   const workspaceBlocked =
     configuredWorkspaceConflict || (workspaceExistsOnDisk && resumableWorkspace !== workspace);
+  const workspaceCollisionMessage = configuredWorkspaceConflict
+    ? `Workspace ${JSON.stringify(workspace)} overlaps an existing agent workspace.`
+    : `Workspace ${JSON.stringify(workspace)} already exists.`;
   if (workspaceBlocked) {
     blockers.push(
       blocker(
         "workspace_collision",
         "$.workspace",
-        `Workspace ${JSON.stringify(workspace)} already exists; a Claw requires a new workspace.`,
+        `${workspaceCollisionMessage} A Claw requires a new workspace.`,
       ),
     );
   }
@@ -242,9 +253,7 @@ export async function buildClawAddPlan(params: {
     target: workspace,
     details: { expectedState: "absent" },
     blocked: workspaceBlocked,
-    ...(workspaceBlocked
-      ? { reason: `Workspace ${JSON.stringify(workspace)} already exists.` }
-      : {}),
+    ...(workspaceBlocked ? { reason: workspaceCollisionMessage } : {}),
   });
 
   if (params.packageBootstrap && params.includePackageBootstrap !== false) {
@@ -411,13 +420,22 @@ export async function buildClawAddPlan(params: {
           code: "package_install_unavailable",
           message: "Package preflight is unavailable.",
         };
-    const diagnostic = preflight.ok
-      ? undefined
-      : blocker(
+    const diagnostic = !preflight.ok
+      ? blocker(
           preflight.code ?? "package_install_unavailable",
           `$.packages[${index}]`,
           preflight.message ?? "Package preflight failed.",
-        );
+        )
+      : pkg.kind === "plugin" &&
+          (!preflight.declaredCapabilities ||
+            !preflight.capabilityGrants ||
+            !preflight.capabilityGrantsByPluginId)
+        ? blocker(
+            "plugin_capability_provenance_incomplete",
+            `$.packages[${index}]`,
+            `Plugin ${JSON.stringify(pkg.ref)} did not resolve its declared capability surface.`,
+          )
+        : undefined;
     if (diagnostic) {
       blockers.push(diagnostic);
     }
@@ -434,15 +452,22 @@ export async function buildClawAddPlan(params: {
         ...pkg,
         ...(preflight.integrity ? { integrity: preflight.integrity } : {}),
         ...(preflight.installId ? { installId: preflight.installId } : {}),
+        ...(preflight.declaredCapabilities
+          ? { declaredCapabilities: preflight.declaredCapabilities }
+          : {}),
+        ...(preflight.capabilityGrants ? { capabilityGrants: preflight.capabilityGrants } : {}),
+        ...(preflight.capabilityGrantsByPluginId
+          ? { capabilityGrantsByPluginId: preflight.capabilityGrantsByPluginId }
+          : {}),
         ...(preflight.warning ? { riskWarning: preflight.warning } : {}),
         ...(preflight.requirements ? { prerequisites: preflight.requirements } : {}),
-        expectedState: !preflight.ok
+        expectedState: diagnostic
           ? "unresolved"
           : preflight.action === "reuse"
             ? "present-exact"
             : "absent",
         ownerAction: preflight.action,
-        requirementState: !preflight.ok
+        requirementState: diagnostic
           ? "conflicting"
           : preflight.action === "install"
             ? "missing-installable"
@@ -450,7 +475,7 @@ export async function buildClawAddPlan(params: {
               ? "setup-required"
               : "satisfied",
       },
-      blocked: !preflight.ok,
+      blocked: Boolean(diagnostic),
       ...(diagnostic ? { reason: diagnostic.message } : {}),
     });
     capabilityChanges.push(
@@ -470,6 +495,13 @@ export async function buildClawAddPlan(params: {
           version: pkg.version,
           integrity: preflight.integrity ?? "unresolved",
           ...(preflight.installId ? { installId: preflight.installId } : {}),
+          ...(preflight.declaredCapabilities
+            ? { declaredCapabilities: preflight.declaredCapabilities }
+            : {}),
+          ...(preflight.capabilityGrants ? { capabilityGrants: preflight.capabilityGrants } : {}),
+          ...(preflight.capabilityGrantsByPluginId
+            ? { capabilityGrantsByPluginId: preflight.capabilityGrantsByPluginId }
+            : {}),
           ...(preflight.warning ? { riskWarning: preflight.warning } : {}),
         },
       }),
@@ -589,11 +621,6 @@ export async function buildClawAddPlan(params: {
     `${left.kind}:${left.id}:${left.path}`.localeCompare(`${right.kind}:${right.id}:${right.path}`),
   );
 
-  const notices = clawAgentConfigurationNotices(
-    openClawAgentSettings,
-    context.config ?? {},
-    new Set([...existingAgentIds, finalId]),
-  );
   const planIntegrity = digestClawValue({
     manifestSchemaVersion: params.manifest.schemaVersion,
     clawIntegrity: source.integrity,
@@ -603,7 +630,6 @@ export async function buildClawAddPlan(params: {
     capabilityChanges,
     blockers,
     extensions,
-    ...(notices.length > 0 ? { notices } : {}),
   });
 
   return {
@@ -643,6 +669,6 @@ export async function buildClawAddPlan(params: {
     },
     extensions,
     blockers,
-    diagnostics: [...(params.diagnostics ?? []), ...notices],
+    diagnostics: params.diagnostics ?? [],
   };
 }

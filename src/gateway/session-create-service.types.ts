@@ -184,6 +184,8 @@ export type CreateGatewaySessionParams = {
   resetMainWhenUnspecified?: boolean;
   commandSource: string;
   loadGatewayModelCatalogSnapshot?: () => Promise<ModelCatalogSnapshot>;
+  /** Request-owned deadline and cancellation; shared discovery may outlive this wait. */
+  waitForModelCatalog?: <T>(operation: () => Promise<T>) => Promise<T>;
   /** Trusted in-process initializer; never populated from public Gateway params. */
   initialEntry?: TrustedInitialSessionEntry;
   /** Keep a new ordinary session unusable until afterCreate succeeds, or roll it back. */

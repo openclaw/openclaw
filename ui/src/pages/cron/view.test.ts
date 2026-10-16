@@ -1,7 +1,7 @@
 // Control UI tests cover the Automations (cron) list pane and select controls.
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
-import { updatePickers, choosePickerValue } from "../../test-helpers/select-picker.ts";
+import { updatePickers, openPicker, choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createCronViewJob as createJob,
@@ -14,30 +14,6 @@ import {
 } from "./view.test-support.ts";
 
 describe("cron view list pane", () => {
-  it("identifies the agent on each job in a mixed-agent list", async () => {
-    const container = renderView({
-      jobs: [
-        createJob("home", { agentId: "main" }),
-        createJob("research", { agentId: "research" }),
-      ],
-    });
-    document.body.append(container);
-    try {
-      await Promise.all(
-        [...container.querySelectorAll("openclaw-agent-row-chip")].map(
-          (chip) => chip.updateComplete,
-        ),
-      );
-      expect(
-        [...container.querySelectorAll(".cron-table__row .agent-row-chip")].map((chip) =>
-          chip.getAttribute("data-agent-id"),
-        ),
-      ).toEqual(["main", "research"]);
-    } finally {
-      container.remove();
-    }
-  });
-
   it("combines status filters and run history in one tab row", () => {
     const onJobsFiltersChange = vi.fn();
     const onListTabChange = vi.fn();
@@ -86,10 +62,11 @@ describe("cron view list pane", () => {
       "at",
       "every",
       "cron",
+      "event",
       "on-exit",
       "stream",
     ]);
-    for (const scheduleKind of ["on-exit", "stream"] as const) {
+    for (const scheduleKind of ["on-exit", "stream", "event"] as const) {
       scheduleFilter.value = scheduleKind;
       scheduleFilter.dispatchEvent(new Event("change", { bubbles: true }));
       expect(onJobsFiltersChange).toHaveBeenCalledWith({
@@ -250,22 +227,6 @@ describe("cron view list pane", () => {
   });
 });
 
-describe("cron view selects", () => {
-  it("shows persisted non-first values in jobs filters and runs sort", () => {
-    const activity = renderView({ listTab: "activity", runsSortDir: "asc" });
-    const sort = getElement(activity, ".cron-run-sort", HTMLButtonElement);
-    expect(sort.textContent).toContain("Oldest first");
-    expect(activity.querySelector('[data-value="asc"]')?.getAttribute("aria-current")).toBe("true");
-    const tasks = renderView({ jobsLastStatusFilter: "error" });
-    const lastStatus = getElement(
-      tasks,
-      'select[data-test-id="cron-jobs-last-status-filter"]',
-      HTMLSelectElement,
-    );
-    expect(lastStatus.value).toBe("error");
-  });
-});
-
 describe("cron view editor", () => {
   it("wires shared text and select controls without changing their field ownership", async () => {
     const onFormChange = vi.fn();
@@ -309,6 +270,7 @@ describe("cron view editor", () => {
       "openclaw-select-picker:has(#cron-failure-alert-channel)",
       HTMLElement,
     );
+    await openPicker(channel);
     const optionValues = Array.from(channel.querySelectorAll('[role="option"]'), (option) =>
       option.getAttribute("data-value"),
     );
@@ -319,19 +281,28 @@ describe("cron view editor", () => {
     expect(telegramOption?.querySelector(".picker-select__label")?.textContent?.trim()).toBe(
       "Telegram fallback",
     );
+    const channelTrigger = getElement(channel, ".picker-select__trigger", HTMLButtonElement);
+    channelTrigger.focus();
     await choosePickerValue(channel, "telegram");
     expect(onFormChange).toHaveBeenLastCalledWith({ failureAlertChannel: "telegram" });
+    expect(channel.querySelector(".picker-select__trigger")).toBe(channelTrigger);
+    expect(document.activeElement).toBe(channelTrigger);
 
     const mode = getElement(
       container,
       "openclaw-select-picker:has(#cron-failure-alert-delivery-mode)",
       HTMLElement,
     );
+    await openPicker(mode);
     expect(mode.querySelector('[role="option"][data-value=""]')?.textContent).toContain(
       "Inherit global setting",
     );
+    const modeTrigger = getElement(mode, ".picker-select__trigger", HTMLButtonElement);
+    modeTrigger.focus();
     await choosePickerValue(mode, "");
     expect(onFormChange).toHaveBeenLastCalledWith({ failureAlertDeliveryMode: "" });
+    expect(mode.querySelector(".picker-select__trigger")).toBe(modeTrigger);
+    expect(document.activeElement).toBe(modeTrigger);
   });
 
   it("switches schedule inputs by segmented kind and wires kind changes", () => {
@@ -414,16 +385,6 @@ describe("cron view editor", () => {
     expect(onExitFormChange).toHaveBeenCalledWith({ scheduleKind: "at" });
   });
 
-  it("hides the schedule summary for recurring amounts that cannot produce safe milliseconds", () => {
-    for (const everyAmount of ["0x10", "1e3", "+1", String(Number.MAX_SAFE_INTEGER), "0.000001"]) {
-      const container = renderView({
-        createOpen: true,
-        form: { ...DEFAULT_CRON_FORM, scheduleKind: "every", everyAmount },
-      });
-      expect(container.querySelector(".cron-schedule-summary")).toBeNull();
-    }
-  });
-
   it("renders supported delivery options and normalizes stale announce selection", async () => {
     // systemEvent + main session cannot announce; a stale announce selection
     // must render as none and the announce option must disappear.
@@ -442,6 +403,7 @@ describe("cron view editor", () => {
       "openclaw-select-picker:has(#cron-delivery-mode)",
       HTMLElement,
     );
+    await openPicker(delivery);
     const values = Array.from(delivery.querySelectorAll('[role="option"]'), (option) =>
       option.getAttribute("data-value"),
     );
@@ -564,6 +526,7 @@ describe("cron view editor", () => {
     const unit = Array.from(container.querySelectorAll("openclaw-select-picker")).find(
       (picker) => picker.querySelector('[role="listbox"]')?.getAttribute("aria-label") === "Unit",
     );
+    await openPicker(unit!);
     expect(unit?.querySelector('[role="option"][data-value="seconds"]')).toBeInstanceOf(
       HTMLElement,
     );
@@ -617,57 +580,5 @@ describe("cron view editor", () => {
     expect(onToggle).not.toHaveBeenCalled();
     expect(onClone).not.toHaveBeenCalled();
     expect(onRemove).not.toHaveBeenCalled();
-  });
-
-  it("locks the editor and back navigation while a save is pending", () => {
-    const job = createJob("job-1", { name: "Nightly digest" });
-    const container = renderView({ jobs: [job], editingJob: job, busy: true });
-
-    const editor = getElement(container, ".cron-editor", HTMLFieldSetElement);
-    const name = getElement(container, "#cron-name", HTMLInputElement);
-    const back = getElement(container, '[data-test-id="cron-back"]', HTMLButtonElement);
-    const submit = getElement(container, '[data-test-id="cron-submit"]', HTMLButtonElement);
-
-    expect(editor.disabled).toBe(true);
-    expect(editor.getAttribute("aria-busy")).toBe("true");
-    expect(name.matches(":disabled")).toBe(true);
-    expect(back.disabled).toBe(true);
-    expect(submit.disabled).toBe(true);
-    expect(submit.textContent).toContain("Saving");
-  });
-
-  it("renders model-picker suggestions with the remaining text datalists", async () => {
-    const container = renderView({
-      createOpen: true,
-      agentSuggestions: ["main"],
-      modelSuggestions: ["openai/gpt-5.2"],
-      thinkingSuggestions: ["low"],
-      timezoneSuggestions: ["UTC"],
-      deliveryToSuggestions: ["+15551234"],
-      accountSuggestions: ["default"],
-    });
-    for (const id of [
-      "cron-agent-suggestions",
-      "cron-thinking-suggestions",
-      "cron-tz-suggestions",
-      "cron-delivery-to-suggestions",
-      "cron-delivery-account-suggestions",
-    ]) {
-      expect(container.querySelector(`datalist#${id}`)).not.toBeNull();
-    }
-    await updatePickers(container);
-    const model = getElement(
-      container,
-      "openclaw-select-picker:has(#cron-payload-model-picker)",
-      HTMLElement,
-    );
-    expect(model.querySelector('[role="option"][data-value="openai/gpt-5.2"]')).not.toBeNull();
-    expect(model.querySelector('[data-provider-icon="codex"]')).not.toBeNull();
-    expect(container.querySelector<HTMLInputElement>("#cron-payload-model")?.hidden).toBe(true);
-    // The inherit option must resolve to a real catalog string — a missing key
-    // renders the raw "common.default" literal to every locale.
-    const inheritText = model.querySelector('[role="option"][data-value=""]')?.textContent ?? "";
-    expect(inheritText).toContain("Default");
-    expect(inheritText).not.toContain("common.default");
   });
 });

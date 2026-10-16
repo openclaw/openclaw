@@ -57,10 +57,9 @@ it.each([
         });
         return params.useStateDbOnly
           ? projectCodexCatalogDeltaPage(response, {
-              sanitize: terminalText.sanitizeTerminalText,
               getRow: (id) => index.get(id),
             })
-          : projectCodexCatalogPage(response, { sanitize: terminalText.sanitizeTerminalText });
+          : projectCodexCatalogPage(response);
       },
     });
     try {

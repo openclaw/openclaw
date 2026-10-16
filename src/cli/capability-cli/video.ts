@@ -4,10 +4,14 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
-import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  parseStrictFiniteNumber,
+  parseStrictPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
+import { positiveDurationError } from "../../shared/positive-duration.js";
 import { registerMediaUnderstandingCommand } from "./media-understanding-command.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText } from "./output.js";
@@ -105,8 +109,12 @@ export function registerVideoCapabilityCommands(capability: Command): void {
         const output = opts.output as string | undefined;
         const resolution = parseVideoOption(opts.resolution, VIDEO_RESOLUTIONS, "video resolution");
         const durationSeconds = parseStrictFiniteNumber(opts.duration);
-        if (opts.duration !== undefined && durationSeconds === undefined) {
-          throw new Error("--duration must be a finite number");
+        if (
+          opts.duration !== undefined &&
+          (durationSeconds === undefined ||
+            parseStrictPositiveInteger(Math.round(durationSeconds)) === undefined)
+        ) {
+          throw positiveDurationError("--duration", "s");
         }
         const timeoutMs = parseOptionalTimeoutMs(opts.timeoutMs);
         const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");

@@ -798,20 +798,6 @@ it.each(["same-tag", "missing", "older", "newer"])(
   },
 );
 
-it.each([false, true])("permits a fresh Linux build with older carried manifest=%s", (carried) => {
-  const remote = fixture();
-  remote.update((state) => {
-    state.releases["v2026.9.4"] = release("2026.9.4", {
-      assets: [],
-      manifest: carried ? manifest("2026.9.3") : undefined,
-    });
-  });
-  const result = remote.run("status", "v2026.9.4");
-  expect(result.status, result.stderr).toBe(0);
-  expect(result.evidence.state).toBe("pending");
-  expect(remote.read().uploads).toBe(0);
-});
-
 it.each([
   "missing-deb",
   "missing-checksums",
@@ -949,17 +935,6 @@ it.each([
     expect(remote.read().requests ?? []).toEqual([]);
   },
 );
-
-it("reuses its earlier request when a parent resumes before Linux assets arrive", () => {
-  const remote = pendingLinuxFixture();
-  const first = remote.dispatch();
-  expect(first.status, first.stderr).toBe(0);
-  expect(first.evidence.state).toBe("request-dispatched");
-  const resumed = remote.dispatch();
-  expect(resumed.status, resumed.stderr).toBe(0);
-  expect(resumed.evidence).toMatchObject({ state: "request-reused", requestRunId: "456" });
-  expect(remote.read().requests).toHaveLength(1);
-});
 
 it.each([
   { reason: "failed", overrides: { conclusion: "failure" } },

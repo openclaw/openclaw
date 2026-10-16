@@ -1,21 +1,33 @@
+import type { JSX } from "@solidjs/web";
+import type { IconName } from "../../../components/solid/icon.tsx";
+import type { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
+import type { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import type { AgentIdentity } from "../../../lib/identity-avatar-view.ts";
 import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
-import type { SolidBridgeElement } from "../../../lit/solid-bridge.ts";
-import { emptyLegacyContent, type LegacyTemplateResult } from "../../../lit/solid-content.tsx";
+import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
+import type {
+  SidebarPanelData,
+  SidebarPanelDefinitionParams,
+} from "../chat-pane-embedded-types.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import type { SidebarLayout, SidebarSlotId } from "../sidebar-layout.ts";
 
 export type SidebarPanelDefinition = {
   slot: SidebarSlotId;
   label: string;
-  icon: LegacyTemplateResult;
+  icon: IconName;
   shortcut?: KeyboardShortcutCombo;
   available: boolean;
-  content: LegacyTemplateResult | typeof emptyLegacyContent | null;
-  loading: LegacyTemplateResult;
-  headerAction?: LegacyTemplateResult;
+  content: JSX.Element;
+  view?: SidebarPanelData;
+  loadState?: Parameters<typeof LazyViewError>[0] | null;
+  loading: Parameters<typeof PanelLoadingSkeleton>[0];
+  headerAction?: JSX.Element;
+  headerActionView?: SidebarPanelDefinitionParams;
+  headerLink?: { href: string; label: string };
   empty: {
     description: string;
-    action?: LegacyTemplateResult;
+    action?: JSX.Element;
   };
 };
 
@@ -31,7 +43,9 @@ export type SidebarRegionCallbacks = {
 
 export type RegionProps = {
   panelIdPrefix: string;
-  conversationTab?: Pick<SidebarPanelDefinition, "label" | "icon">;
+  conversationTab?: Pick<SidebarPanelDefinition, "label"> & {
+    avatar: AgentIdentity;
+  };
   layout: SidebarLayout;
   panelDefinitions: SidebarPanelDefinition[];
   fetchFavicon?: LinkFaviconFetcher;

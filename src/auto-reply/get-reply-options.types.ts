@@ -98,7 +98,22 @@ export type TaskSuggestionDeliveryMode = "gateway";
 
 /** Correlates queued reply ownership transfer with later delivery drains. */
 export type QueuedReplyDeliveryCorrelation = {
-  begin: () => (() => void) | void;
+  /** Source-owned suppression for origin-routed replies that bypass the dispatcher.
+   * A collected batch is suppressed only when all participating policies agree. */
+  shouldSuppressReply?: (payload: ReplyPayload) => boolean;
+  /** Called only after the origin transport confirms visible delivery. */
+  onReplyDelivered?: (payload: ReplyPayload) => void;
+  /** No settlement means a source retry or a separate source-owned delivery outcome. */
+  begin: () =>
+    | ((settlement?: {
+        visibleReplySent: boolean;
+        failed: boolean;
+        /** True only for a successfully completed execution, not cancellation. */
+        completed?: boolean;
+        /** Transport retained delivery without a callback to this source; clear activity UI. */
+        transportPending?: boolean;
+      }) => void)
+    | void;
 };
 
 /**
@@ -192,7 +207,7 @@ export type GetReplyOptions = {
   /** Return "reply-dispatch" synchronously to accept the offered completion ownership. */
   onPreparedAgentRunStart?: (start: PreparedAgentRunStart) => unknown;
   /**
-   * @deprecated Use onPreparedAgentRunStart with a prepared transcript boundary.
+   * @deprecated Use onPreparedAgentRunStart with a prepared transcript boundary. Supported through 2026-12-31.
    * Notifies when an agent run starts. Return "reply-dispatch" synchronously to accept
    * completion ownership offered in options; all other legacy callback results are ignored.
    */
@@ -204,6 +219,10 @@ export type GetReplyOptions = {
   ) => unknown;
   /** Reports the terminal agent-run classification to the shared dispatch owner. */
   onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;
+  /** Reports terminal queue-cap rejection or eviction when no agent run will report an outcome. */
+  onFollowupQueueDisposition?: (
+    disposition: "queue-cap" | "queue-cap-old" | "queue-cap-new",
+  ) => void;
   /**
    * Reports fresh visible children before their first turn and accepted spawns at settlement.
    * Creation reports include the key even when no public session URL is configured.
@@ -248,6 +267,10 @@ export type GetReplyOptions = {
   bootstrapContextMode?: "full" | "lightweight";
   /** If true, run the model without OpenClaw tools for this turn. */
   disableTools?: boolean;
+  /** @internal Preserve the recovery owner's replay-safe tool restriction for this turn. */
+  forceRestartSafeTools?: boolean;
+  /** @internal Retain restart-safe Code Mode controls for an interrupted continuation. */
+  forceCodeModeTools?: boolean;
   /** Runtime tool allow-list for this turn. Empty means no tools. */
   toolsAllow?: string[];
   /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
@@ -279,7 +302,7 @@ export type GetReplyOptions = {
    * commentary progress inside an ephemeral streaming draft should yield those
    * draft lines while the getter returns true, so progress is not rendered in
    * both lanes at once.
-   * @deprecated Use onVerboseProgressVisibilityAsync. Retained during stable deprecation.
+   * @deprecated Use onVerboseProgressVisibilityAsync. Supported through 2026-12-31.
    */
   onVerboseProgressVisibility?: (isActive: () => boolean) => void;
   /** Registers awaited visibility before dispatch; preferred over the deprecated callback. */

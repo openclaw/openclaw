@@ -632,6 +632,9 @@ describe("BrowserPanelController capture and input ownership", () => {
       { container: renderedPanel },
     );
     flush();
+    vi.spyOn(renderedPanel.querySelector(".bp-stage")!, "getBoundingClientRect").mockReturnValue(
+      controller.host.renderRoot.firstElementChild!.getBoundingClientRect(),
+    );
     expect(renderedPanel.querySelector('[role="alert"]')?.textContent).toBe(
       "Browser request failed: Browser connection temporarily unavailable",
     );

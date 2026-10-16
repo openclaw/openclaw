@@ -24,6 +24,8 @@ import type { WorkerGitHubLaunchBinding } from "../../worker/launch-descriptor.j
 import type { PreparedWorkerComputer } from "./computer-transport.js";
 import * as skillTransfer from "./skill-resource-transfer.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
+import type { WorkerGitHubBindingGrant } from "./worker-github-binding-contract.js";
+import * as githubBinding from "./worker-github-binding.js";
 import {
   createWorkerTurnTunnel,
   ENVIRONMENT_ID,
@@ -79,23 +81,41 @@ describe("worker launch capabilities", () => {
         remoteUrl: "https://github.com/owner/repo.git",
         gitAuthor: { name: "Shared Bot", email: "shared@example.test" },
       };
-      readGitHubFact.mockReturnValue(
-        available ? { available: true, github } : { available: false },
+      let current = true;
+      const controller = new AbortController();
+      const revokedError = new Error("GitHub grant revoked before dispatch");
+      const grant: WorkerGitHubBindingGrant = {
+        binding: github,
+        signal: controller.signal,
+        assertCurrent() {
+          if (!current) {
+            throw revokedError;
+          }
+        },
+        refresh: async () => undefined,
+        revoke: async () => controller.abort(),
+      };
+      using binding = vi.spyOn(githubBinding, "bindWorkerGitHubTurn");
+      binding.mockResolvedValue(available ? grant : undefined);
+      const dispatchLaunch = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(
+        async ({ plan }) => {
+          if (available) {
+            expect(plan.assignment.github).toEqual(github);
+          } else {
+            expect(plan.assignment).not.toHaveProperty("github");
+          }
+          throw new WorkerRunnerCapacityError();
+        },
       );
-      const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async ({ plan }) => {
-        if (available) {
-          expect(plan.assignment.github).toEqual(github);
-        } else {
-          expect(plan.assignment).not.toHaveProperty("github");
-        }
-        throw new WorkerRunnerCapacityError();
-      });
       const tunnel: WorkerTunnelHandle = createWorkerTurnTunnel({
-        launchTurn,
+        launchTurn: async (request) => {
+          request.assertCurrent?.();
+          return dispatchLaunch(request);
+        },
         measureLaunchTurn: (plan, claim) => {
           if (revoked) {
             expect(plan.assignment.github).toEqual(github);
-            readGitHubFact.mockReturnValue({ available: true });
+            current = false;
           }
           return measureLaunchTurn(plan, claim);
         },
@@ -117,14 +137,13 @@ describe("worker launch capabilities", () => {
         vi.fn(),
       );
       if (revoked) {
-        await expect(execution).rejects.toThrow(
-          "GitHub identity changed before worker launch; retry the turn.",
-        );
-        expect(launchTurn).not.toHaveBeenCalled();
+        await expect(execution).rejects.toBe(revokedError);
+        expect(dispatchLaunch).not.toHaveBeenCalled();
       } else {
         await expect(execution).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
-        expect(launchTurn).toHaveBeenCalledOnce();
+        expect(dispatchLaunch).toHaveBeenCalledOnce();
       }
+      expect(controller.signal.aborted).toBe(available);
     },
   );
 

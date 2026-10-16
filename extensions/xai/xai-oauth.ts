@@ -13,7 +13,7 @@ import {
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { sleep, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asOptionalRecord,
@@ -385,26 +385,14 @@ async function pollXaiDeviceCodeToken(
 }
 
 async function waitForXaiDeviceCodePoll(delayMs: number, signal?: AbortSignal): Promise<void> {
-  if (!signal) {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, delayMs);
-    });
-    return;
-  }
-  await new Promise<void>((resolve, reject) => {
-    const onAbort = () => {
-      clearTimeout(timeout);
-      reject(signal.reason instanceof Error ? signal.reason : new Error("xAI login cancelled"));
-    };
-    const timeout = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, delayMs);
-    signal.addEventListener("abort", onAbort, { once: true });
-    if (signal.aborted) {
-      onAbort();
+  try {
+    await sleepWithAbort(delayMs, signal);
+  } catch (error) {
+    if (signal?.aborted) {
+      throw signal.reason instanceof Error ? signal.reason : new Error("xAI login cancelled");
     }
-  });
+    throw error;
+  }
 }
 
 function decodeJwtPayload(token: string | undefined): Record<string, unknown> {
