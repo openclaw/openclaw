@@ -1,11 +1,8 @@
-// Package Mac Dist tests cover package mac dist script behavior.
 import { spawnSync } from "node:child_process";
 import {
-  chmodSync,
   copyFileSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readdirSync,
   readFileSync,
   renameSync,
@@ -13,14 +10,26 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs: string[] = [];
 const scriptPath = "scripts/package-mac-dist.sh";
 const checkpointDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function writeExecutable(file: string, body: string) {
+  writeFileSync(file, `#!/usr/bin/env bash\nset -euo pipefail\n${body}\n`, { mode: 0o755 });
+}
+
+function fixtureFiles(root: string) {
+  const file = (...parts: string[]) => path.join(root, ...parts);
+  return {
+    root,
+    file,
+    read: (...parts: string[]) => readFileSync(file(...parts), "utf8"),
+    exists: (...parts: string[]) => existsSync(file(...parts)),
+  };
+}
 
 function makeCheckpointFixture() {
   const root = checkpointDirs.make("openclaw-dist-checkpoint-");
@@ -140,7 +149,7 @@ else: sys.exit("unexpected fake tool: " + name)
   writeFileSync(path.join(symbols, "symbols"), "debug symbols");
   const checkpoint = path.join(root, "dist/macos-notarization-recovery");
   return {
-    root,
+    ...fixtureFiles(root),
     checkpoint,
     events: () => readFileSync(path.join(root, "events"), "utf8"),
     run: (mode: string, env: NodeJS.ProcessEnv = {}) =>
@@ -185,16 +194,14 @@ describe("macOS packaging checkpoint boundary", () => {
     expect(f.events().indexOf("audit-async-sleep-frames.py")).toBeLessThan(
       f.events().indexOf("create-dmg.sh"),
     );
-    rmSync(path.join(f.root, "apps/macos/.build"), { recursive: true });
-    rmSync(path.join(f.root, "scripts/package-mac-app.sh"));
-    rmSync(path.join(f.root, "scripts/create-dmg.sh"));
+    rmSync(f.file("apps/macos/.build"), { recursive: true });
+    rmSync(f.file("scripts/package-mac-app.sh"));
+    rmSync(f.file("scripts/create-dmg.sh"));
     const resumed = f.run("--resume-notarization", { SIGN_IDENTITY: "unavailable" });
     expect(resumed.status, resumed.stderr).toBe(0);
     expect(f.events().match(/notarize-mac-artifact.sh/g)).toHaveLength(2);
-    expect(existsSync(path.join(f.root, "dist/OpenClaw.app/Contents/stapled"))).toBe(true);
-    expect(readFileSync(path.join(f.root, "dist/OpenClaw-2026.8.2.dmg"), "utf8")).toBe(
-      "dmgsignedstapled",
-    );
+    expect(f.exists("dist/OpenClaw.app/Contents/stapled")).toBe(true);
+    expect(f.read("dist/OpenClaw-2026.8.2.dmg")).toBe("dmgsignedstapled");
     for (const suffix of ["zip", "dSYM.zip"]) {
       expect(existsSync(path.join(f.root, `dist/OpenClaw-2026.8.2.${suffix}`))).toBe(true);
     }
@@ -217,8 +224,8 @@ describe("macOS packaging checkpoint boundary", () => {
       const resumed = f.run("--resume-notarization", smoke);
       expect(resumed.status, resumed.stderr).toBe(0);
       expect(f.events()).not.toContain("notarize-mac-artifact.sh");
-      expect(existsSync(path.join(f.root, "dist/OpenClaw.app/Contents/stapled"))).toBe(false);
-      expect(existsSync(path.join(f.root, "appcast.xml"))).toBe(false);
+      expect(f.exists("dist/OpenClaw.app/Contents/stapled")).toBe(false);
+      expect(f.exists("appcast.xml")).toBe(false);
     },
   );
 
@@ -243,7 +250,7 @@ describe("macOS packaging checkpoint boundary", () => {
         rmSync(path.join(f.checkpoint, "app.dmg"));
       }
       if (failure === "audit") {
-        writeFileSync(path.join(f.root, "reject-audit"), "");
+        writeFileSync(f.file("reject-audit"), "");
       }
       const resumed = f.run(
         "--resume-notarization",
@@ -273,12 +280,12 @@ describe("macOS packaging checkpoint boundary", () => {
       const built = f.run("--checkpoint-only");
       expect(built.status, built.stderr).toBe(0);
       const dmg = path.join(f.checkpoint, "app.dmg");
-      const alias = path.join(f.root, "recovery alias");
+      const alias = f.file("recovery alias");
       symlinkSync(f.checkpoint, alias, "dir");
       // The fake reports another spelling of the image path; cleanup matches real paths.
-      writeFileSync(path.join(f.root, "attach-eagain"), path.join(alias, "app.dmg"));
+      writeFileSync(f.file("attach-eagain"), path.join(alias, "app.dmg"));
       if (detachFails) {
-        writeFileSync(path.join(f.root, "detach-fails"), "");
+        writeFileSync(f.file("detach-fails"), "");
       }
 
       const resumed = f.run("--resume-notarization");
@@ -298,11 +305,11 @@ describe("macOS packaging checkpoint boundary", () => {
         "hdiutil info -plist",
       ]);
       expect(f.events()).not.toContain("notarize-mac-artifact.sh");
-      expect(existsSync(path.join(f.root, "attached-image"))).toBe(detachFails);
+      expect(f.exists("attached-image")).toBe(detachFails);
       expect(existsSync(dmg)).toBe(true);
-      expect(
-        readdirSync(path.join(f.root, "dist")).filter((name) => name.startsWith(".notary-dmg.")),
-      ).toEqual([]);
+      expect(readdirSync(f.file("dist")).filter((name) => name.startsWith(".notary-dmg."))).toEqual(
+        [],
+      );
       expect(resumed.stderr).toContain("hdiutil: attach failed - Resource temporarily unavailable");
       if (detachFails) {
         expect(resumed.stderr).toContain(
@@ -316,7 +323,7 @@ describe("macOS packaging checkpoint boundary", () => {
 
   it("fails the frame audit before creating a checkpoint", () => {
     const f = makeCheckpointFixture();
-    writeFileSync(path.join(f.root, "reject-audit"), "");
+    writeFileSync(f.file("reject-audit"), "");
     const result = f.run("--checkpoint-only");
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("async frame allocation is undersized");
@@ -326,8 +333,7 @@ describe("macOS packaging checkpoint boundary", () => {
 });
 
 function makeDistributionFixture(layout: "native" | "xcode", missingArch?: string) {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-dist-symbols-"));
-  tempDirs.push(root);
+  const root = checkpointDirs.make("openclaw-dist-symbols-");
   const scripts = path.join(root, "scripts");
   const tools = path.join(root, "tools");
   mkdirSync(path.join(scripts, "lib"), { recursive: true });
@@ -343,13 +349,10 @@ function makeDistributionFixture(layout: "native" | "xcode", missingArch?: strin
   ]) {
     copyFileSync(path.join("scripts", file), path.join(scripts, file));
   }
-  const executable = (file: string, body: string) => {
-    writeFileSync(file, `#!/usr/bin/env bash\nset -euo pipefail\n${body}\n`, { mode: 0o755 });
-  };
-  executable(path.join(scripts, "package-mac-app.sh"), "exit 0");
-  executable(path.join(tools, "swift"), "echo 'Apple Swift version 6.3'");
-  executable(path.join(tools, "xcrun"), "echo 'Xcode 26.4'");
-  executable(path.join(tools, "node"), "echo 2608000290");
+  writeExecutable(path.join(scripts, "package-mac-app.sh"), "exit 0");
+  writeExecutable(path.join(tools, "swift"), "echo 'Apple Swift version 6.3'");
+  writeExecutable(path.join(tools, "xcrun"), "echo 'Xcode 26.4'");
+  writeExecutable(path.join(tools, "node"), "echo 2608000290");
   const contents = path.join(root, "dist", "OpenClaw.app", "Contents");
   mkdirSync(path.join(contents, "MacOS"), { recursive: true });
   const auditScript = path.join(root, "apps/macos/scripts/audit-async-sleep-frames.py");
@@ -404,7 +407,7 @@ Path(__file__).resolve().parents[3].joinpath("async-frame-audit.log").write_text
     }
   }
   return {
-    root,
+    ...fixtureFiles(root),
     auditScript,
     expectedUUIDs,
     run: (options: { resume?: boolean; notarize?: boolean; dmg?: boolean; archs?: string } = {}) =>
@@ -437,22 +440,19 @@ Path(__file__).resolve().parents[3].joinpath("async-frame-audit.log").write_text
 }
 
 function makePlist(): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "openclaw-dist-plist-"));
-  tempDirs.push(dir);
+  const dir = checkpointDirs.make("openclaw-dist-plist-");
   const plist = path.join(dir, "Info.plist");
   writeFileSync(
     plist,
-    [
-      '<?xml version="1.0" encoding="UTF-8"?>',
-      '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
-      '<plist version="1.0">',
-      "<dict>",
-      "<key>CFBundleShortVersionString</key>",
-      "<string>1.2.3</string>",
-      "</dict>",
-      "</plist>",
-      "",
-    ].join("\n"),
+    `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+<key>CFBundleShortVersionString</key>
+<string>1.2.3</string>
+</dict>
+</plist>
+`,
     "utf8",
   );
   return plist;
@@ -482,8 +482,7 @@ function runSparkleBootstrap(nodeAfterInstall: string, pnpmBody: string) {
     script.indexOf("DIST_PNPM_CMD=()"),
     script.indexOf("correction_build_from_exact_tag()"),
   );
-  const dir = mkdtempSync(path.join(tmpdir(), "openclaw-dist-sparkle-"));
-  tempDirs.push(dir);
+  const dir = checkpointDirs.make("openclaw-dist-sparkle-");
   const tools = path.join(dir, "tools");
   const marker = path.join(dir, "installed");
   mkdirSync(tools);
@@ -518,12 +517,6 @@ echo 2026060200
     require_canonical_sparkle_build 2026.6.2
   `);
 }
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
 
 describe("package-mac-dist plist validation", () => {
   it("fails closed for required Info.plist reads", () => {
@@ -572,41 +565,19 @@ describe("package-mac-dist plist validation", () => {
   });
 
   it("fails on old Swift before reading package metadata", () => {
-    const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-dist-swift-tools-"));
-    tempDirs.push(toolsDir);
-
-    writeFileSync(
+    const toolsDir = checkpointDirs.make("openclaw-dist-swift-tools-");
+    writeExecutable(
       path.join(toolsDir, "swift"),
-      [
-        "#!/usr/bin/env bash",
-        "echo 'swift-driver version: 1.115.1 Apple Swift version 6.0.3 (swiftlang-6.0.3.1.10 clang-1600.0.30.1)'",
-        "",
-      ].join("\n"),
-      "utf8",
+      "echo 'swift-driver version: 1.115.1 Apple Swift version 6.0.3 (swiftlang-6.0.3.1.10 clang-1600.0.30.1)'",
     );
-    chmodSync(path.join(toolsDir, "swift"), 0o755);
-    writeFileSync(
+    writeExecutable(
       path.join(toolsDir, "xcrun"),
-      [
-        "#!/usr/bin/env bash",
-        '[[ "${1:-}" == "xcodebuild" && "${2:-}" == "-version" ]] || exit 2',
-        "echo 'Xcode 26.4'",
-        "",
-      ].join("\n"),
-      "utf8",
+      '[[ "${1:-}" == "xcodebuild" && "${2:-}" == "-version" ]] || exit 2\necho \'Xcode 26.4\'',
     );
-    chmodSync(path.join(toolsDir, "xcrun"), 0o755);
-    writeFileSync(
+    writeExecutable(
       path.join(toolsDir, "node"),
-      [
-        "#!/usr/bin/env bash",
-        "echo 'node should not run before Swift preflight' >&2",
-        "exit 42",
-        "",
-      ].join("\n"),
-      "utf8",
+      "echo 'node should not run before Swift preflight' >&2\nexit 42",
     );
-    chmodSync(path.join(toolsDir, "node"), 0o755);
 
     const result = runHelper(`
       set -euo pipefail
@@ -622,11 +593,10 @@ describe("package-mac-dist plist validation", () => {
 
   it("prefers repo Corepack pnpm over a global pnpm shim", () => {
     const helperBlock = getPackageManagerHelperBlock();
-    const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-dist-pnpm-root-"));
-    const outerRoot = mkdtempSync(path.join(tmpdir(), "openclaw-dist-pnpm-outer-"));
-    const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-dist-pnpm-tools-"));
+    const tempRoot = checkpointDirs.make("openclaw-dist-pnpm-root-");
+    const outerRoot = checkpointDirs.make("openclaw-dist-pnpm-outer-");
+    const toolsDir = checkpointDirs.make("openclaw-dist-pnpm-tools-");
     const logPath = path.join(tempRoot, "pnpm.log");
-    tempDirs.push(tempRoot, outerRoot, toolsDir);
 
     writeFileSync(
       path.join(tempRoot, "package.json"),
@@ -636,32 +606,18 @@ describe("package-mac-dist plist validation", () => {
       path.join(outerRoot, "package.json"),
       '{\n  "packageManager": "pnpm@11.8.0+sha512.test"\n}\n',
     );
-    writeFileSync(
+    writeExecutable(
       path.join(toolsDir, "pnpm"),
-      [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        'printf "global|%s|%s\\n" "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"',
-        'if [[ "${1:-}" == "--version" ]]; then echo "11.8.0"; fi',
-        "",
-      ].join("\n"),
-      "utf8",
+      `printf "global|%s|%s\\n" "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"
+if [[ "\${1:-}" == "--version" ]]; then echo "11.8.0"; fi`,
     );
-    writeFileSync(
+    writeExecutable(
       path.join(toolsDir, "corepack"),
-      [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        'printf "corepack|%s|%s\\n" "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"',
-        'if [[ "${1:-}" == "pnpm" && "${2:-}" == "--version" ]]; then',
-        '  if grep -q "pnpm@11.2.2" package.json 2>/dev/null; then echo "11.2.2"; else echo "11.8.0"; fi',
-        "fi",
-        "",
-      ].join("\n"),
-      "utf8",
+      `printf "corepack|%s|%s\\n" "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"
+if [[ "\${1:-}" == "pnpm" && "\${2:-}" == "--version" ]]; then
+  if grep -q "pnpm@11.2.2" package.json 2>/dev/null; then echo "11.2.2"; else echo "11.8.0"; fi
+fi`,
     );
-    chmodSync(path.join(toolsDir, "pnpm"), 0o755);
-    chmodSync(path.join(toolsDir, "corepack"), 0o755);
 
     const result = runHelper(`
       set -euo pipefail
@@ -711,7 +667,7 @@ describe("package-mac-dist plist validation", () => {
     "re-audits the retained %s before resuming without build products",
     (artifact) => {
       const fixture = makeDistributionFixture("native");
-      const app = path.join(fixture.root, "dist/OpenClaw.app");
+      const app = fixture.file("dist/OpenClaw.app");
       const signed = spawnSync("/usr/bin/codesign", ["--force", "--sign", "-", app], {
         encoding: "utf8",
       });
@@ -734,7 +690,7 @@ describe("package-mac-dist plist validation", () => {
         const result = spawnSync("git", args, { cwd: fixture.root, encoding: "utf8" });
         expect(result.status, result.stderr).toBe(0);
       }
-      const tools = path.join(fixture.root, "tools");
+      const tools = fixture.file("tools");
       const jq = spawnSync("sh", ["-c", "command -v jq"], { encoding: "utf8" });
       expect(jq.status).toBe(0);
       symlinkSync(jq.stdout.trim(), path.join(tools, "jq"));
@@ -759,7 +715,7 @@ fi
         { mode: 0o755 },
       );
       writeFileSync(
-        path.join(fixture.root, "scripts/create-dmg.sh"),
+        fixture.file("scripts/create-dmg.sh"),
         `#!/bin/bash
 set -eu
 stage="$(mktemp -d)"
@@ -775,18 +731,15 @@ hdiutil create -fs HFS+ -format UDZO -srcfolder "$stage" "$2" >/dev/null
       const failed = fixture.run(options);
       expect(failed.status).not.toBe(0);
       expect(failed.stderr).toContain("stapling interrupted");
-      const checkpoint = path.join(fixture.root, "dist/macos-notarization-recovery");
+      const checkpoint = fixture.file("dist/macos-notarization-recovery");
       expect(existsSync(path.join(checkpoint, "app.zip"))).toBe(true);
       expect(existsSync(path.join(checkpoint, "symbols.zip"))).toBe(true);
-      renameSync(
-        path.join(fixture.root, "apps/macos/.build"),
-        path.join(fixture.root, "saved-build-products"),
-      );
+      renameSync(fixture.file("apps/macos/.build"), fixture.file("saved-build-products"));
       writeFileSync(
-        path.join(fixture.root, "scripts/package-mac-app.sh"),
+        fixture.file("scripts/package-mac-app.sh"),
         "#!/bin/bash\necho 'unexpected rebuild' >&2\nexit 97\n",
       );
-      const submissions = readFileSync(path.join(fixture.root, "submissions"), "utf8");
+      const submissions = fixture.read("submissions");
       const auditor = readFileSync(fixture.auditScript, "utf8");
       writeFileSync(
         fixture.auditScript,
@@ -795,7 +748,7 @@ hdiutil create -fs HFS+ -format UDZO -srcfolder "$stage" "$2" >/dev/null
       const rejected = fixture.run({ ...options, resume: true });
       expect(rejected.status, rejected.stdout).not.toBe(0);
       expect(rejected.stderr).toContain("async frame allocation is undersized");
-      expect(readFileSync(path.join(fixture.root, "submissions"), "utf8")).toBe(submissions);
+      expect(fixture.read("submissions")).toBe(submissions);
       expect(
         JSON.parse(readFileSync(path.join(checkpoint, "manifest.json"), "utf8")),
       ).toMatchObject({
@@ -806,31 +759,26 @@ hdiutil create -fs HFS+ -format UDZO -srcfolder "$stage" "$2" >/dev/null
         const missing = fixture.run({ ...options, resume: true });
         expect(missing.status).not.toBe(0);
         expect(missing.stderr).toContain("audit-async-sleep-frames.py");
-        expect(existsSync(path.join(fixture.root, "dist/OpenClaw-2026.8.2.zip"))).toBe(false);
+        expect(fixture.exists("dist/OpenClaw-2026.8.2.zip")).toBe(false);
       }
       writeFileSync(fixture.auditScript, auditor);
       const resumed = fixture.run({ ...options, resume: true });
       expect(resumed.status, resumed.stderr).toBe(0);
-      expect(readFileSync(path.join(fixture.root, "async-frame-audit.log"), "utf8")).toContain(
+      expect(fixture.read("async-frame-audit.log")).toContain(
         `.notary-${artifact === "app" ? "resume" : "dmg"}.`,
       );
-      expect(readFileSync(path.join(fixture.root, "submissions"), "utf8")).toBe(submissions);
-      expect(existsSync(path.join(fixture.root, "dist/OpenClaw-2026.8.2.zip"))).toBe(true);
-      expect(existsSync(path.join(fixture.root, "dist/OpenClaw-2026.8.2.dSYM.zip"))).toBe(true);
-      renameSync(
-        path.join(fixture.root, "saved-build-products"),
-        path.join(fixture.root, "apps/macos/.build"),
-      );
+      expect(fixture.read("submissions")).toBe(submissions);
+      expect(fixture.exists("dist/OpenClaw-2026.8.2.zip")).toBe(true);
+      expect(fixture.exists("dist/OpenClaw-2026.8.2.dSYM.zip")).toBe(true);
+      renameSync(fixture.file("saved-build-products"), fixture.file("apps/macos/.build"));
       writeFileSync(
-        path.join(fixture.root, "scripts/package-mac-app.sh"),
+        fixture.file("scripts/package-mac-app.sh"),
         "#!/bin/bash\ntouch fresh-build-started\n",
       );
       const fresh = fixture.run(options);
       expect(fresh.status, fresh.stderr).toBe(0);
-      expect(existsSync(path.join(fixture.root, "fresh-build-started"))).toBe(true);
-      expect(readFileSync(path.join(fixture.root, "submissions"), "utf8")).toBe(
-        submissions.repeat(2),
-      );
+      expect(fixture.exists("fresh-build-started")).toBe(true);
+      expect(fixture.read("submissions")).toBe(submissions.repeat(2));
     },
   );
 
@@ -884,11 +832,11 @@ describe.runIf(process.platform === "darwin")("package-mac-dist symbol archives"
       const fixture = makeDistributionFixture(layout);
       const result = fixture.run();
       expect(result.status, result.stderr).toBe(0);
-      expect(readFileSync(path.join(fixture.root, "async-frame-audit.log"), "utf8")).toBe(
-        path.join(fixture.root, "dist/OpenClaw.app/Contents/MacOS/OpenClaw"),
+      expect(fixture.read("async-frame-audit.log")).toBe(
+        fixture.file("dist/OpenClaw.app/Contents/MacOS/OpenClaw"),
       );
-      const archive = path.join(fixture.root, "dist", "OpenClaw-2026.8.2.dSYM.zip");
-      const extracted = path.join(fixture.root, "extracted");
+      const archive = fixture.file("dist", "OpenClaw-2026.8.2.dSYM.zip");
+      const extracted = fixture.file("extracted");
       const unpack = spawnSync("ditto", ["-x", "-k", archive, extracted], { encoding: "utf8" });
       expect(unpack.status, unpack.stderr).toBe(0);
       const uuid = spawnSync(
@@ -904,7 +852,7 @@ describe.runIf(process.platform === "darwin")("package-mac-dist symbol archives"
           .map((line) => line.split(" ").slice(0, 3).join(" "))
           .toSorted(),
       ).toEqual(fixture.expectedUUIDs.toSorted());
-      expect(existsSync(path.join(fixture.root, "dist", "OpenClaw.dSYM"))).toBe(false);
+      expect(fixture.exists("dist", "OpenClaw.dSYM")).toBe(false);
     },
   );
 
@@ -913,8 +861,8 @@ describe.runIf(process.platform === "darwin")("package-mac-dist symbol archives"
     const missingArm64 = failure === "missing ARM64 slice";
     if (missingArm64) {
       copyFileSync(
-        path.join(fixture.root, "apps/macos/.build/x86_64/release/OpenClaw"),
-        path.join(fixture.root, "dist/OpenClaw.app/Contents/MacOS/OpenClaw"),
+        fixture.file("apps/macos/.build/x86_64/release/OpenClaw"),
+        fixture.file("dist/OpenClaw.app/Contents/MacOS/OpenClaw"),
       );
       rmSync(fixture.auditScript);
     } else {
@@ -944,8 +892,8 @@ describe.runIf(process.platform === "darwin")("package-mac-dist symbol archives"
   it("packages an x86_64-only build without the arm64 audit", () => {
     const fixture = makeDistributionFixture("native");
     copyFileSync(
-      path.join(fixture.root, "apps/macos/.build/x86_64/release/OpenClaw"),
-      path.join(fixture.root, "dist/OpenClaw.app/Contents/MacOS/OpenClaw"),
+      fixture.file("apps/macos/.build/x86_64/release/OpenClaw"),
+      fixture.file("dist/OpenClaw.app/Contents/MacOS/OpenClaw"),
     );
     rmSync(fixture.auditScript);
 
@@ -960,6 +908,6 @@ describe.runIf(process.platform === "darwin")("package-mac-dist symbol archives"
     const result = fixture.run();
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("dSYM not found for architecture(s): x86_64");
-    expect(existsSync(path.join(fixture.root, "dist", "OpenClaw-2026.8.2.dSYM.zip"))).toBe(false);
+    expect(fixture.exists("dist", "OpenClaw-2026.8.2.dSYM.zip")).toBe(false);
   });
 });

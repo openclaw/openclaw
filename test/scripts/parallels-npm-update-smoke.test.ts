@@ -1,10 +1,9 @@
-// Parallels Npm Update Smoke tests cover parallels npm update smoke script behavior.
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi, type TestContext } from "vitest";
 import { runWindowsBackgroundPowerShell } from "../../scripts/e2e/parallels/guest-transports.ts";
 import { run as hostCommandRun } from "../../scripts/e2e/parallels/host-command.ts";
 import {
@@ -43,6 +42,12 @@ const TEST_AUTH = {
   apiKeyValue: "test-key",
   modelId: "gpt-5.4",
 };
+const updateInput = (version = "2026.5.3-beta.2") => ({
+  auth: TEST_AUTH,
+  expectedNeedle: version,
+  updateTarget: version,
+});
+
 const tempDirs = createTempDirTracker();
 let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
@@ -144,9 +149,66 @@ async function runAfterFixtureReady(
   return command;
 }
 
+function processFixture(onTestFinished: TestContext["onTestFinished"], graceful: boolean) {
+  let command: Promise<number> | undefined;
+  // Join the aborted body before releasing files still used by process cleanup.
+  const dirs = useAutoCleanupTempDirTracker((removeDirs) => {
+    onTestFinished(async () => {
+      await command?.catch(() => {});
+      removeDirs();
+    });
+  });
+  const root = dirs.make("openclaw-parallels-npm-update-");
+  const logPath = path.join(root, "fresh.log");
+  const scriptPath = path.join(root, "lane.mjs");
+  const readyPath = path.join(root, "ready");
+  const donePath = path.join(root, "done");
+  const descendantScript = [
+    "import { writeFileSync } from 'node:fs';",
+    fixtureReceiptClientSource(receipts.endpoint),
+    graceful
+      ? `process.on('SIGTERM', () => {\n  setTimeout(() => { writeFileSync(${JSON.stringify(donePath)}, 'done'); process.exit(0); }, 75);\n});`
+      : "process.on('SIGTERM', () => {});",
+    `writeFileSync(${JSON.stringify(readyPath)}, ${graceful ? "'ready'" : "String(process.pid)"});`,
+    `sendReceipt(${JSON.stringify(readyPath)}, "ready");`,
+    "setInterval(() => {}, 1000);",
+  ].join("\n");
+  writeFileSync(
+    scriptPath,
+    [
+      "import { spawn } from 'node:child_process';",
+      `spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(descendantScript)}], { stdio: "ignore" });`,
+      "process.on('SIGTERM', () => process.exit(0));",
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  return {
+    logPath,
+    scriptPath,
+    readyPath,
+    donePath,
+    run: (start: () => Promise<number>, timeout: number, label: string, signal: AbortSignal) =>
+      (command = runAfterFixtureReady(start, readyPath, timeout, label, signal)),
+  };
+}
+
 function decodePowerShellFromArgs(args: string[]): string {
   const encoded = args[args.indexOf("-EncodedCommand") + 1];
   return encoded ? Buffer.from(encoded, "base64").toString("utf16le") : "";
+}
+
+const commandResult = (stdout = "", status = 0) => ({ status, stderr: "", stdout });
+type WindowsJob = Parameters<typeof runWindowsBackgroundPowerShell>[0];
+function windowsJob(options: Pick<WindowsJob, "label" | "runCommand"> & Partial<WindowsJob>) {
+  return runWindowsBackgroundPowerShell({
+    pollIntervalMs: 1,
+    script: "Write-Output done",
+    timeoutMs: 5,
+    vmName: "Windows Test",
+    ...options,
+  });
 }
 
 function extractWindowsBackgroundControlMarkers(decoded: string): {
@@ -442,11 +504,7 @@ ${script}`,
   );
 
   it("restarts POSIX gateways only after an exact current-launch migration refusal", () => {
-    const input = {
-      auth: TEST_AUTH,
-      expectedNeedle: "2026.7.2-beta.5",
-      updateTarget: "2026.7.2-beta.5",
-    };
+    const input = updateInput("2026.7.2-beta.5");
 
     for (const script of [macosUpdateScript(input), linuxUpdateScript(input)]) {
       expect(script).toContain(
@@ -465,11 +523,7 @@ ${script}`,
   });
 
   it("restarts the Windows gateway only after its current launch exits with the exact refusal", () => {
-    const script = windowsUpdateScript({
-      auth: TEST_AUTH,
-      expectedNeedle: "2026.7.2-beta.5",
-      updateTarget: "2026.7.2-beta.5",
-    });
+    const script = windowsUpdateScript(updateInput("2026.7.2-beta.5"));
 
     expect(script).toContain(
       "OpenClaw plugin migration inputs changed during startup convergence;",
@@ -485,11 +539,7 @@ ${script}`,
   });
 
   it("keeps POSIX provider secrets out of executable command lines", () => {
-    const input = {
-      auth: TEST_AUTH,
-      expectedNeedle: "2026.7.2-beta.5",
-      updateTarget: "2026.7.2-beta.5",
-    };
+    const input = updateInput("2026.7.2-beta.5");
     const exportLine = `  export ${TEST_AUTH.apiKeyEnv}='${TEST_AUTH.apiKeyValue}'`;
 
     for (const script of [macosUpdateScript(input), linuxUpdateScript(input)]) {
@@ -561,18 +611,9 @@ ${script}`,
   });
 
   it("bounds POSIX guest failure logs", () => {
-    const scripts = [
-      macosUpdateScript({
-        auth: TEST_AUTH,
-        expectedNeedle: "2026.5.3-beta.2",
-        updateTarget: "2026.5.3-beta.2",
-      }),
-      linuxUpdateScript({
-        auth: TEST_AUTH,
-        expectedNeedle: "2026.5.3-beta.2",
-        updateTarget: "2026.5.3-beta.2",
-      }),
-    ].join("\n");
+    const scripts = [macosUpdateScript, linuxUpdateScript]
+      .map((build) => build(updateInput()))
+      .join("\n");
 
     expect(scripts).toContain("print_log_tail()");
     expect(scripts).toContain("OPENCLAW_PARALLELS_NPM_UPDATE_LOG_TAIL_BYTES");
@@ -583,11 +624,7 @@ ${script}`,
   });
 
   it("passes platform model timeouts to POSIX update agent turns", () => {
-    const input = {
-      auth: TEST_AUTH,
-      expectedNeedle: "2026.5.3-beta.2",
-      updateTarget: "2026.5.3-beta.2",
-    };
+    const input = updateInput();
     withEnv(
       {
         OPENCLAW_PARALLELS_LINUX_MODEL_TIMEOUT_S: undefined,
@@ -671,58 +708,23 @@ ${script}`,
   it.runIf(process.platform !== "win32")(
     "times out fresh lane process groups",
     async ({ signal, onTestFinished }) => {
-      let command: Promise<number> | undefined = undefined;
-      // onTestFinished joins the aborted body before releasing files still used by cleanup.
-      const fixtureDirs = useAutoCleanupTempDirTracker((removeDirs) => {
-        onTestFinished(async () => {
-          await command?.catch(() => {});
-          removeDirs();
-        });
-      });
-      const root = fixtureDirs.make("openclaw-parallels-npm-update-");
-      const logPath = path.join(root, "fresh.log");
-      const scriptPath = path.join(root, "hung-fresh-lane.mjs");
-      const descendantPidPath = path.join(root, "descendant.pid");
-      const descendantScript = [
-        "import { writeFileSync } from 'node:fs';",
-        fixtureReceiptClientSource(receipts.endpoint),
-        "process.on('SIGTERM', () => {});",
-        `writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
-        `sendReceipt(${JSON.stringify(descendantPidPath)}, "ready");`,
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
-      writeFileSync(
-        scriptPath,
-        [
-          "import { spawn } from 'node:child_process';",
-          `spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
-            descendantScript,
-          )}], { stdio: "ignore" });`,
-          "process.on('SIGTERM', () => process.exit(0));",
-          "setInterval(() => {}, 1000);",
-          "",
-        ].join("\n"),
-        "utf8",
-      );
-
-      command = runAfterFixtureReady(
+      const f = processFixture(onTestFinished, false);
+      const code = await f.run(
         () =>
-          spawnLoggedCommand(process.execPath, [scriptPath], logPath, {}, undefined, {
+          spawnLoggedCommand(process.execPath, [f.scriptPath], f.logPath, {}, undefined, {
             timeoutKillGraceMs: 25,
             timeoutLabel: "fresh lane test",
             timeoutMs: 250,
           }),
-        descendantPidPath,
         250,
         "fresh lane descendant readiness",
         signal,
       );
-      const code = await command;
 
       expect(code).toBe(124);
-      expect(readFileSync(logPath, "utf8")).toContain("fresh lane test timed out after 250ms");
-      expect(existsSync(descendantPidPath)).toBe(true);
-      const descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
+      expect(readFileSync(f.logPath, "utf8")).toContain("fresh lane test timed out after 250ms");
+      expect(existsSync(f.readyPath)).toBe(true);
+      const descendantPid = Number(readFileSync(f.readyPath, "utf8"));
       try {
         await waitForDead(descendantPid, signal);
       } finally {
@@ -736,58 +738,20 @@ ${script}`,
   it.runIf(process.platform !== "win32")(
     "lets fresh lane descendants exit during timeout kill grace",
     async ({ signal, onTestFinished }) => {
-      let command: Promise<number> | undefined = undefined;
-      // onTestFinished joins the aborted body before releasing files still used by cleanup.
-      const fixtureDirs = useAutoCleanupTempDirTracker((removeDirs) => {
-        onTestFinished(async () => {
-          await command?.catch(() => {});
-          removeDirs();
-        });
-      });
-      const root = fixtureDirs.make("openclaw-parallels-npm-update-");
-      const logPath = path.join(root, "fresh.log");
-      const scriptPath = path.join(root, "graceful-fresh-lane.mjs");
-      const readyPath = path.join(root, "ready");
-      const donePath = path.join(root, "done");
-      const descendantScript = [
-        "import { writeFileSync } from 'node:fs';",
-        fixtureReceiptClientSource(receipts.endpoint),
-        "process.on('SIGTERM', () => {",
-        `  setTimeout(() => { writeFileSync(${JSON.stringify(donePath)}, 'done'); process.exit(0); }, 75);`,
-        "});",
-        `writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
-        `sendReceipt(${JSON.stringify(readyPath)}, "ready");`,
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
-      writeFileSync(
-        scriptPath,
-        [
-          "import { spawn } from 'node:child_process';",
-          `spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
-            descendantScript,
-          )}], { stdio: "ignore" });`,
-          "process.on('SIGTERM', () => process.exit(0));",
-          "setInterval(() => {}, 1000);",
-          "",
-        ].join("\n"),
-        "utf8",
-      );
-
-      command = runAfterFixtureReady(
+      const f = processFixture(onTestFinished, true);
+      const code = await f.run(
         () =>
-          spawnLoggedCommand(process.execPath, [scriptPath], logPath, {}, undefined, {
+          spawnLoggedCommand(process.execPath, [f.scriptPath], f.logPath, {}, undefined, {
             timeoutKillGraceMs: 500,
             timeoutLabel: "fresh lane grace test",
             timeoutMs: 500,
           }),
-        readyPath,
         500,
         "fresh lane descendant readiness",
         signal,
       );
-      const code = await command;
       expect(code).toBe(124);
-      expect(readFileSync(donePath, "utf8")).toBe("done");
+      expect(readFileSync(f.donePath, "utf8")).toBe("done");
     },
   );
 
@@ -807,60 +771,23 @@ ${script}`,
   it.runIf(process.platform !== "win32")(
     "lets update stream descendants exit during timeout kill grace",
     async ({ signal, onTestFinished }) => {
-      let command: Promise<number> | undefined = undefined;
-      // onTestFinished joins the aborted body before releasing files still used by cleanup.
-      const fixtureDirs = useAutoCleanupTempDirTracker((removeDirs) => {
-        onTestFinished(async () => {
-          await command?.catch(() => {});
-          removeDirs();
-        });
-      });
-      const root = fixtureDirs.make("openclaw-parallels-npm-update-");
-      const scriptPath = path.join(root, "stream-update-grace.mjs");
-      const readyPath = path.join(root, "stream-ready");
-      const donePath = path.join(root, "stream-done");
+      const f = processFixture(onTestFinished, true);
       const smoke = withEnv(
         { OPENAI_API_KEY: "test-key" },
         () => new NpmUpdateSmoke(smokeOptions()),
       );
-      const descendantScript = [
-        "import { writeFileSync } from 'node:fs';",
-        fixtureReceiptClientSource(receipts.endpoint),
-        "process.on('SIGTERM', () => {",
-        `  setTimeout(() => { writeFileSync(${JSON.stringify(donePath)}, 'done'); process.exit(0); }, 75);`,
-        "});",
-        `writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
-        `sendReceipt(${JSON.stringify(readyPath)}, "ready");`,
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
-      writeFileSync(
-        scriptPath,
-        [
-          "import { spawn } from 'node:child_process';",
-          `spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
-            descendantScript,
-          )}], { stdio: "ignore" });`,
-          "process.on('SIGTERM', () => process.exit(0));",
-          "setInterval(() => {}, 1000);",
-          "",
-        ].join("\n"),
-        "utf8",
-      );
-
-      command = runAfterFixtureReady(
+      const code = await f.run(
         () =>
-          smoke["runStreamingToJobLog"](process.execPath, [scriptPath], 500, {
+          smoke["runStreamingToJobLog"](process.execPath, [f.scriptPath], 500, {
             append: () => undefined,
             signal: new AbortController().signal,
           }),
-        readyPath,
         500,
         "update stream descendant readiness",
         signal,
       );
-      const code = await command;
       expect(code).toBe(124);
-      expect(readFileSync(donePath, "utf8")).toBe("done");
+      expect(readFileSync(f.donePath, "utf8")).toBe("done");
     },
   );
 
@@ -874,22 +801,19 @@ ${script}`,
         inputs.push(options.input);
       }
       if (decoded.includes('cmd.exe /d /s /c start "" /b powershell.exe')) {
-        return { status: 0, stderr: "", stdout: "started\n" };
+        return commandResult("started\n");
       }
       if (args.includes("cmd.exe")) {
-        return { status: 0, stderr: "", stdout: "wait\n" };
+        return commandResult("wait\n");
       }
-      return { status: 0, stderr: "", stdout: "" };
+      return commandResult();
     };
 
     await expect(
-      runWindowsBackgroundPowerShell({
+      windowsJob({
         label: "windows background timeout",
-        pollIntervalMs: 1,
         runCommand: fakeRun,
         script: "Start-Sleep -Seconds 60",
-        timeoutMs: 5,
-        vmName: "Windows Test",
       }),
     ).rejects.toThrow("windows background timeout timed out");
 
@@ -942,25 +866,22 @@ ${script}`,
     const fakeRun: typeof hostCommandRun = (_command, args, options) => {
       if (options?.input) {
         now += 2;
-        return { status: 0, stderr: "", stdout: "" };
+        return commandResult();
       }
       const decoded = decodePowerShellFromArgs(args);
       if (decoded.includes('cmd.exe /d /s /c start "" /b powershell.exe')) {
         launchAttempts++;
         return { status: testCase.launchStatus, stderr: "", stdout: testCase.launchOutput };
       }
-      return { status: 0, stderr: "", stdout: "" };
+      return commandResult();
     };
 
     try {
       await expect(
-        runWindowsBackgroundPowerShell({
+        windowsJob({
           label: "windows setup deadline",
-          pollIntervalMs: 1,
           runCommand: fakeRun,
           script: "Write-Output test",
-          timeoutMs: 5,
-          vmName: "Windows Test",
         }),
       ).rejects.toThrow(testCase.expectedError);
       expect(launchAttempts).toBe(1);
@@ -977,11 +898,11 @@ ${script}`,
     const fakeRun: typeof hostCommandRun = (_command, args, options) => {
       if (options?.input) {
         now += 2;
-        return { status: 0, stderr: "", stdout: "" };
+        return commandResult();
       }
       const decoded = decodePowerShellFromArgs(args);
       if (decoded.includes('cmd.exe /d /s /c start "" /b powershell.exe')) {
-        return { status: 0, stderr: "", stdout: "started\n" };
+        return commandResult("started\n");
       }
       if (args.includes("cmd.exe")) {
         const command = args.at(-1) ?? "";
@@ -996,21 +917,17 @@ ${script}`,
         }
         if (command.includes("(echo done) else (echo wait)")) {
           completionProbes++;
-          return { status: 0, stderr: "", stdout: "done\n" };
+          return commandResult("done\n");
         }
       }
-      return { status: 0, stderr: "", stdout: "" };
+      return commandResult();
     };
 
     try {
       await expect(
-        runWindowsBackgroundPowerShell({
+        windowsJob({
           label: "windows completed before first poll",
-          pollIntervalMs: 1,
           runCommand: fakeRun,
-          script: "Write-Output done",
-          timeoutMs: 5,
-          vmName: "Windows Test",
         }),
       ).resolves.toBeUndefined();
       expect(completionProbes).toBe(1);
@@ -1026,23 +943,19 @@ ${script}`,
       const decoded = decodePowerShellFromArgs(args);
       decodedCommands.push(decoded);
       if (decoded.includes('cmd.exe /d /s /c start "" /b powershell.exe')) {
-        return { status: 0, stderr: "", stdout: "started\n" };
+        return commandResult("started\n");
       }
       if (args.includes("cmd.exe")) {
-        return { status: 0, stderr: "", stdout: "done\n" };
+        return commandResult("done\n");
       }
-      return { status: 0, stderr: "", stdout: "" };
+      return commandResult();
     };
 
     await expect(
-      runWindowsBackgroundPowerShell({
+      windowsJob({
         label: "windows background marker smuggle",
-        pollIntervalMs: 1,
         runCommand: fakeRun,
-        script: "Write-Output done",
-        timeoutMs: 5,
         completedLogDrainGraceMs: 5,
-        vmName: "Windows Test",
       }),
     ).rejects.toThrow("windows background marker smuggle timed out");
 
@@ -1059,7 +972,7 @@ ${script}`,
       const decoded = decodePowerShellFromArgs(args);
       decodedCommands.push(decoded);
       if (decoded.includes('cmd.exe /d /s /c start "" /b powershell.exe')) {
-        return { status: 0, stderr: "", stdout: "started\n" };
+        return commandResult("started\n");
       }
       if (args.includes("cmd.exe")) {
         const command = args.at(-1) ?? "";
@@ -1073,23 +986,21 @@ ${script}`,
           };
         }
         if (command.includes("if exist")) {
-          return { status: 0, stderr: "", stdout: "done\n" };
+          return commandResult("done\n");
         }
-        return { status: 0, stderr: "", stdout: "" };
+        return commandResult();
       }
-      return { status: 0, stderr: "", stdout: "" };
+      return commandResult();
     };
 
     await expect(
-      runWindowsBackgroundPowerShell({
+      windowsJob({
         append: (chunk) => output.push(String(chunk)),
         completedLogDrainGraceMs: 1000,
         label: "windows background drain",
         pollIntervalMs: 5000,
         runCommand: fakeRun,
-        script: "Write-Output done",
         timeoutMs: 20,
-        vmName: "Windows Test",
       }),
     ).resolves.toBeUndefined();
 
@@ -1103,16 +1014,8 @@ ${script}`,
 
   it("scrubs future plugin entries before invoking old same-guest updaters", () => {
     const script = readFileSync(UPDATE_SCRIPTS_PATH, "utf8");
-    const windowsScript = windowsUpdateScript({
-      auth: TEST_AUTH,
-      expectedNeedle: "2026.5.3-beta.2",
-      updateTarget: "2026.5.3-beta.2",
-    });
-    const macosScript = macosUpdateScript({
-      auth: TEST_AUTH,
-      expectedNeedle: "2026.5.3-beta.2",
-      updateTarget: "2026.5.3-beta.2",
-    });
+    const windowsScript = windowsUpdateScript(updateInput());
+    const macosScript = macosUpdateScript(updateInput());
 
     expect(script).toContain("Remove-FuturePluginEntries");
     expect(script).toContain("scrub_future_plugin_entries");
@@ -1137,11 +1040,7 @@ ${script}`,
   });
 
   it("preserves bundled plugin inventory during updates while isolating POSIX gateway stops", () => {
-    const input = {
-      auth: TEST_AUTH,
-      expectedNeedle: "2026.5.3-beta.2",
-      updateTarget: "2026.5.3-beta.2",
-    };
+    const input = updateInput();
     const windowsScript = windowsUpdateScript(input);
     const macosScript = macosUpdateScript(input);
     const linuxScript = linuxUpdateScript(input);

@@ -5,7 +5,7 @@ import path from "node:path";
 import { compileFunction } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const WORKFLOW_CASES = [
   {
@@ -56,12 +56,8 @@ type ScopeOptions = {
   files?: Array<string | { filename: string; previous_filename?: string }>;
 };
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const require = createRequire(import.meta.url);
-
-afterEach(() => {
-  cleanupTempDirs(tempDirs);
-});
 
 function readWorkflow(workflowPath: string): ScopeWorkflow {
   return parse(readFileSync(workflowPath, "utf8")) as ScopeWorkflow;
@@ -154,6 +150,19 @@ function writeFixture(repoRoot: string, relativePath: string, contents: string):
   writeFileSync(filePath, contents, "utf8");
 }
 
+function makeTempRepoRoot() {
+  const root = tempDirs.make("openclaw-periphery-");
+  git(root, ["init", "--initial-branch=main"]);
+  git(root, ["config", "user.name", "OpenClaw Test"]);
+  git(root, ["config", "user.email", "openclaw-test@example.com"]);
+  return root;
+}
+
+function commit(root: string, message = "fixture") {
+  git(root, ["add", "."]);
+  git(root, ["commit", "-m", message]);
+}
+
 describe("Periphery scope workflows", () => {
   it.each(WORKFLOW_CASES)(
     "uses the synthetic merge parent for $name scope",
@@ -168,31 +177,23 @@ describe("Periphery scope workflows", () => {
       expect(steps.some((step) => step.name === "Ensure base commit")).toBe(false);
       expect(script).toContain('"HEAD^1"');
       expect(script).not.toContain("pulls.listFiles");
-      expect(() =>
-        compileFunction(`return (async () => {\n${script}\n})();`, ["context", "core", "exec"]),
-      ).not.toThrow();
     },
   );
 
   it.each(WORKFLOW_CASES)(
     "selects only $name scope changes",
     async ({ path: workflowPath, scopedPath }) => {
-      await expect(runScope(workflowPath, { files: [scopedPath] })).resolves.toBe("true");
-      await expect(
-        runScope(workflowPath, { files: ["scripts/install-periphery.sh"] }),
-      ).resolves.toBe("true");
-      await expect(runScope(workflowPath, { files: ["docs/index.md"] })).resolves.toBe("false");
-      await expect(runScope(workflowPath, { draft: true, files: [scopedPath] })).resolves.toBe(
-        "false",
-      );
-      await expect(runScope(workflowPath, { eventName: "workflow_dispatch" })).resolves.toBe(
+      const check = (options: ScopeOptions, expected: string) =>
+        expect(runScope(workflowPath, options)).resolves.toBe(expected);
+      await check({ files: [scopedPath] }, "true");
+      await check({ files: ["scripts/install-periphery.sh"] }, "true");
+      await check({ files: ["docs/index.md"] }, "false");
+      await check({ draft: true, files: [scopedPath] }, "false");
+      await check({ eventName: "workflow_dispatch" }, "true");
+      await check(
+        { files: [{ filename: "docs/Moved.swift", previous_filename: scopedPath }] },
         "true",
       );
-      await expect(
-        runScope(workflowPath, {
-          files: [{ filename: "docs/Moved.swift", previous_filename: scopedPath }],
-        }),
-      ).resolves.toBe("true");
       await expect(runScope(workflowPath, { diffExitCode: 128 })).rejects.toThrow(
         "git diff failed with exit code 128",
       );
@@ -202,16 +203,9 @@ describe("Periphery scope workflows", () => {
   it.each(WORKFLOW_CASES)(
     "excludes prose but keeps source, mixed changes, resources and renames for $name",
     async ({ path: workflowPath, scopedPath }) => {
-      const repoRoot = makeTempRepoRoot(tempDirs, "openclaw-periphery-prose-");
-      git(repoRoot, ["init", "--initial-branch=main"]);
-      git(repoRoot, ["config", "user.name", "OpenClaw Test"]);
-      git(repoRoot, ["config", "user.email", "openclaw-test@example.com"]);
+      const repoRoot = makeTempRepoRoot();
       writeFixture(repoRoot, "seed", "base\n");
-      const commit = () => {
-        git(repoRoot, ["add", "."]);
-        git(repoRoot, ["commit", "-m", "fixture"]);
-      };
-      commit();
+      commit(repoRoot);
       const { script } = scopeWorkflows.get(workflowPath)!;
       const prosePaths = [...script.matchAll(/":\(exclude\)([^"]+)"/g)].flatMap((match) =>
         match[1] ? [match[1]] : [],
@@ -223,12 +217,12 @@ describe("Periphery scope workflows", () => {
       for (const prosePath of prosePaths) {
         writeFixture(repoRoot, prosePath, "documentation\n");
       }
-      commit();
+      commit(repoRoot);
       await expect(runScope(workflowPath, { repoRoot })).resolves.toBe("false");
 
       writeFixture(repoRoot, firstProsePath, "updated documentation\n");
       writeFixture(repoRoot, scopedPath, "struct Example {}\n");
-      commit();
+      commit(repoRoot);
       await expect(runScope(workflowPath, { repoRoot })).resolves.toBe("true");
 
       writeFixture(
@@ -236,11 +230,11 @@ describe("Periphery scope workflows", () => {
         path.join(path.dirname(scopedPath), "Resources/README.md"),
         "runtime resource\n",
       );
-      commit();
+      commit(repoRoot);
       await expect(runScope(workflowPath, { repoRoot })).resolves.toBe("true");
 
       renameSync(path.join(repoRoot, scopedPath), path.join(repoRoot, firstProsePath));
-      commit();
+      commit(repoRoot);
       await expect(runScope(workflowPath, { repoRoot })).resolves.toBe("true");
     },
   );
@@ -258,20 +252,14 @@ describe("Periphery scope workflows", () => {
   });
 
   it("ignores scoped files added only by base-branch drift", async () => {
-    const repoRoot = makeTempRepoRoot(tempDirs, "openclaw-periphery-scope-");
-    git(repoRoot, ["init", "--initial-branch=main"]);
-    git(repoRoot, ["config", "user.name", "OpenClaw Test"]);
-    git(repoRoot, ["config", "user.email", "openclaw-test@example.com"]);
-
+    const repoRoot = makeTempRepoRoot();
     writeFixture(repoRoot, "docs/base.md", "base\n");
-    git(repoRoot, ["add", "."]);
-    git(repoRoot, ["commit", "-m", "base"]);
+    commit(repoRoot, "base");
     const eventBase = git(repoRoot, ["rev-parse", "HEAD"]);
 
     git(repoRoot, ["switch", "-c", "pr"]);
     writeFixture(repoRoot, "docs/pr.md", "pull request\n");
-    git(repoRoot, ["add", "."]);
-    git(repoRoot, ["commit", "-m", "pull request"]);
+    commit(repoRoot, "pull request");
 
     git(repoRoot, ["switch", "main"]);
     writeFixture(
@@ -279,8 +267,7 @@ describe("Periphery scope workflows", () => {
       "apps/shared/OpenClawKit/Sources/OpenClawKit/Main.swift",
       "struct Main {}\n",
     );
-    git(repoRoot, ["add", "."]);
-    git(repoRoot, ["commit", "-m", "advance main"]);
+    commit(repoRoot, "advance main");
     git(repoRoot, ["merge", "--no-ff", "pr", "-m", "synthetic merge"]);
 
     const oldDiff = spawnSync(
@@ -290,21 +277,9 @@ describe("Periphery scope workflows", () => {
     );
     expect(oldDiff.status).toBe(1);
 
-    const outputs = new Map<string, string>();
-    const { execute } = scopeWorkflows.get(".github/workflows/shared-openclawkit-periphery.yml")!;
-    await execute(
-      { eventName: "pull_request", payload: { pull_request: { draft: false, number: 123 } } },
-      { setOutput: (name: string, value: string) => outputs.set(name, value) },
-      {
-        async getExecOutput(command: string, args: string[]) {
-          const result = spawnSync(command, args, { cwd: repoRoot });
-          return { exitCode: result.status ?? 128 };
-        },
-      },
-      require,
-    );
-
-    expect(outputs.get("should-scan")).toBe("false");
+    await expect(
+      runScope(".github/workflows/shared-openclawkit-periphery.yml", { repoRoot }),
+    ).resolves.toBe("false");
     expect(git(repoRoot, ["diff", "--name-only", "HEAD^1", "HEAD"])).toBe("docs/pr.md");
   });
 });

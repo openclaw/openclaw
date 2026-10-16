@@ -9,118 +9,100 @@ import {
   SmokeRunController,
   type SmokeCliOptions,
 } from "../../scripts/e2e/parallels/smoke-common.ts";
-import type { Mode } from "../../scripts/e2e/parallels/types.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("Parallels smoke controller", () => {
   it.each([
-    {
-      mode: "fresh",
-      failFresh: false,
-      json: false,
-      keepServer: false,
-      expectedEvents: ["fresh", "summary", "stop"],
-      expectedStatus: { freshMain: "pass", upgrade: "skip" },
-    },
-    {
-      mode: "upgrade",
-      failFresh: false,
-      json: true,
-      keepServer: true,
-      expectedEvents: ["upgrade", "summary"],
-      expectedStatus: { freshMain: "skip", upgrade: "pass" },
-    },
-    {
-      mode: "both",
-      failFresh: true,
-      json: true,
-      keepServer: false,
-      expectedEvents: ["fresh", "upgrade", "summary", "stop"],
-      expectedStatus: { freshMain: "fail", upgrade: "pass" },
-    },
-  ] as const)("runs selected lanes and finalizes artifacts: %j", async (scenario) => {
-    const root = tempDirs.make("parallels-smoke-controller-");
-    const artifacts = path.join(root, "tgz");
-    mkdirSync(artifacts);
-    const events: string[] = [];
-    const stop = vi.fn(async () => {
-      events.push("stop");
-      throw new Error("server already stopped");
-    });
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    const previousExitCode = process.exitCode;
-    process.exitCode = undefined;
-    class FixtureSmoke extends SmokeRunController<SmokeCliOptions> {
-      protected status = { freshMain: "skip", upgrade: "skip" };
+    ["fresh", false, false, false, ["fresh", "summary", "stop"], "pass", "skip"],
+    ["upgrade", false, true, true, ["upgrade", "summary"], "skip", "pass"],
+    ["both", true, true, false, ["fresh", "upgrade", "summary", "stop"], "fail", "pass"],
+  ] as const)(
+    "runs %s lanes and finalizes artifacts",
+    async (mode, failFresh, json, keepServer, expectedEvents, freshMain, upgrade) => {
+      const expectedStatus = { freshMain, upgrade };
+      const root = tempDirs.make("parallels-smoke-controller-");
+      const artifacts = path.join(root, "tgz");
+      mkdirSync(artifacts);
+      const events: string[] = [];
+      const stop = vi.fn(async () => {
+        events.push("stop");
+        throw new Error("server already stopped");
+      });
+      const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      const previousExitCode = process.exitCode;
+      process.exitCode = undefined;
+      class FixtureSmoke extends SmokeRunController<SmokeCliOptions> {
+        protected status = { freshMain: "skip", upgrade: "skip" };
 
-      constructor(mode: Mode) {
-        super({
-          mode,
-          json: scenario.json,
-          keepServer: scenario.keepServer,
-          hostPort: 0,
-          hostPortExplicit: false,
-          installUrl: "https://example.invalid/install.sh",
-          provider: "openai",
-          snapshotHint: "fixture",
-          vmName: "fixture",
-        });
-        this.tgzDir = artifacts;
-        this.server = { hostIp: "127.0.0.1", port: 0, stop, urlFor: () => "" };
-      }
+        constructor() {
+          super({
+            mode,
+            json,
+            keepServer,
+            hostPort: 0,
+            hostPortExplicit: false,
+            installUrl: "https://example.invalid/install.sh",
+            provider: "openai",
+            snapshotHint: "fixture",
+            vmName: "fixture",
+          });
+          this.tgzDir = artifacts;
+          this.server = { hostIp: "127.0.0.1", port: 0, stop, urlFor: () => "" };
+        }
 
-      async run(): Promise<void> {
-        try {
-          await this.runLanesAndFinish();
-        } finally {
-          await this.cleanupArtifacts();
+        async run(): Promise<void> {
+          try {
+            await this.runLanesAndFinish();
+          } finally {
+            await this.cleanupArtifacts();
+          }
+        }
+
+        protected async runFreshLane(): Promise<void> {
+          events.push("fresh");
+          if (failFresh) {
+            throw new Error("fresh assertion failed");
+          }
+        }
+
+        protected async runUpgradeLane(): Promise<void> {
+          events.push("upgrade");
+        }
+
+        protected async writeSummary(): Promise<string> {
+          events.push("summary");
+          const summaryPath = path.join(root, "summary.json");
+          writeFileSync(summaryPath, `${JSON.stringify(this.status)}\n`);
+          return summaryPath;
+        }
+
+        protected printSummary(summaryPath: string): void {
+          process.stdout.write(`summary: ${summaryPath}\n`);
         }
       }
-
-      protected async runFreshLane(): Promise<void> {
-        events.push("fresh");
-        if (scenario.failFresh) {
-          throw new Error("fresh assertion failed");
-        }
+      try {
+        await new FixtureSmoke().run();
+        expect(events).toEqual(expectedEvents);
+        expect(stdout.mock.calls.map(([text]) => text).join("")).toBe(
+          json
+            ? `${JSON.stringify(expectedStatus)}\n`
+            : `summary: ${path.join(root, "summary.json")}\n`,
+        );
+        expect(stderr.mock.calls.map(([text]) => text).join("")).toBe(
+          failFresh ? "warn: fresh lane failed: fresh assertion failed\n" : "",
+        );
+        expect(process.exitCode).toBe(failFresh ? 1 : undefined);
+        expect(existsSync(artifacts)).toBe(keepServer);
+      } finally {
+        stdout.mockRestore();
+        stderr.mockRestore();
+        process.exitCode = previousExitCode;
       }
-
-      protected async runUpgradeLane(): Promise<void> {
-        events.push("upgrade");
-      }
-
-      protected async writeSummary(): Promise<string> {
-        events.push("summary");
-        const summaryPath = path.join(root, "summary.json");
-        writeFileSync(summaryPath, `${JSON.stringify(this.status)}\n`);
-        return summaryPath;
-      }
-
-      protected printSummary(summaryPath: string): void {
-        process.stdout.write(`summary: ${summaryPath}\n`);
-      }
-    }
-    try {
-      await new FixtureSmoke(scenario.mode).run();
-      expect(events).toEqual(scenario.expectedEvents);
-      expect(stdout.mock.calls.map(([text]) => text).join("")).toBe(
-        scenario.json
-          ? `${JSON.stringify(scenario.expectedStatus)}\n`
-          : `summary: ${path.join(root, "summary.json")}\n`,
-      );
-      expect(stderr.mock.calls.map(([text]) => text).join("")).toBe(
-        scenario.failFresh ? "warn: fresh lane failed: fresh assertion failed\n" : "",
-      );
-      expect(process.exitCode).toBe(scenario.failFresh ? 1 : undefined);
-      expect(existsSync(artifacts)).toBe(scenario.keepServer);
-    } finally {
-      stdout.mockRestore();
-      stderr.mockRestore();
-      process.exitCode = previousExitCode;
-    }
-  });
+    },
+  );
 });
 
 describe("Parallels runtime companion setup", () => {
@@ -143,25 +125,23 @@ describe("Parallels runtime companion setup", () => {
     expect(installCli).not.toHaveBeenCalled();
   });
 
-  it.each(["2026.8.1-beta.2"])(
-    "pins only the reviewed runtime companion to installed candidate %s",
-    async (version) => {
-      const readCli = vi.fn((args: string[]) =>
-        args[0] === "--version"
-          ? `OpenClaw ${version} (abcdef0)\n`
-          : "Options:\n  --accept-capabilities  Accept declared capabilities\n",
-      );
-      const installCli = vi.fn().mockResolvedValue(undefined);
-      await installSmokeRuntimeCompanions({ provider: "openai", readCli, installCli });
-      expect(installCli).toHaveBeenCalledExactlyOnceWith([
-        "plugins",
-        "install",
-        `npm:@openclaw/codex@${version}`,
-        "--pin",
-        "--accept-capabilities",
-      ]);
-    },
-  );
+  it("pins only the reviewed runtime companion to the installed candidate", async () => {
+    const version = "2026.8.1-beta.2";
+    const readCli = vi.fn((args: string[]) =>
+      args[0] === "--version"
+        ? `OpenClaw ${version} (abcdef0)\n`
+        : "Options:\n  --accept-capabilities  Accept declared capabilities\n",
+    );
+    const installCli = vi.fn().mockResolvedValue(undefined);
+    await installSmokeRuntimeCompanions({ provider: "openai", readCli, installCli });
+    expect(installCli).toHaveBeenCalledExactlyOnceWith([
+      "plugins",
+      "install",
+      `npm:@openclaw/codex@${version}`,
+      "--pin",
+      "--accept-capabilities",
+    ]);
+  });
 
   it("refuses an unidentifiable core version instead of installing a moving tag", async () => {
     const readCli = (args: string[]) =>

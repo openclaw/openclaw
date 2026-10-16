@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { NpmUpdateSmoke, parseArgs } from "../../scripts/e2e/parallels/npm-update-smoke.ts";
@@ -8,7 +8,7 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../src/infra/runtime-worker-url.js";
-import { withEnv, withEnvAsync } from "../../src/test-utils/env.js";
+import { withEnvAsync } from "../../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -28,46 +28,56 @@ function smokeOptions(platform: "linux" | "macos" = "linux") {
   ]);
 }
 
+function guestFixture() {
+  const root = tempDirs.make("openclaw-parallels-npm-update-");
+  const file = (name: string) => path.join(root, name);
+  return {
+    logPath: file("prlctl.log"),
+    guestScriptPath: file("guest-script"),
+    uploadedScriptPath: file("uploaded-script"),
+    runArgsPath: file("run-args"),
+    install: (script: string) => writeFileSync(file("prlctl"), script, { mode: 0o755 }),
+    run: <T>(callback: () => Promise<T> | T) =>
+      withEnvAsync(
+        {
+          OPENAI_API_KEY: "test-key",
+          PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
+        },
+        callback,
+      ),
+  };
+}
+
 describe("Parallels npm update guest scripts", () => {
   it.runIf(process.platform !== "win32")(
     "uses the selected Windows VM for same-guest update transport",
     async () => {
-      const root = tempDirs.make("openclaw-parallels-windows-selection-");
-      const logPath = path.join(root, "prlctl.log");
-      const prlctlPath = path.join(root, "prlctl");
-      writeFileSync(
-        prlctlPath,
-        `#!/usr/bin/env bash\nprintf '%s|%s|%s\\n' "$1" "$2" "$3" >'${logPath}'\ncat >/dev/null\nexit 7\n`,
+      const f = guestFixture();
+      f.install(
+        `#!/usr/bin/env bash\nprintf '%s|%s|%s\\n' "$1" "$2" "$3" >'${f.logPath}'\ncat >/dev/null\nexit 7\n`,
       );
-      chmodSync(prlctlPath, 0o755);
-
-      await withEnvAsync(
-        { OPENAI_API_KEY: "test-key", PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}` },
-        async () => {
-          const smoke = new NpmUpdateSmoke({ ...parseArgs([]), windowsVm: "Windows Test Guest" });
-          const guestWindows = Reflect.get(smoke, "guestWindows") as (
-            script: string,
-            timeoutMs: number,
-            ctx: { append: (chunk: string) => void },
-          ) => Promise<void>;
-          await expect(
-            guestWindows.call(smoke, "Write-Output update", 180_000, { append: () => undefined }),
-          ).rejects.toThrow("background script write failed");
-        },
-      );
-      expect(readFileSync(logPath, "utf8")).toBe("exec|Windows Test Guest|--current-user\n");
+      await f.run(async () => {
+        const smoke = new NpmUpdateSmoke({ ...parseArgs([]), windowsVm: "Windows Test Guest" });
+        const guestWindows = Reflect.get(smoke, "guestWindows") as (
+          script: string,
+          timeoutMs: number,
+          ctx: { append: (chunk: string) => void },
+        ) => Promise<void>;
+        await expect(
+          guestWindows.call(smoke, "Write-Output update", 180_000, { append: () => undefined }),
+        ).rejects.toThrow("background script write failed");
+      });
+      expect(readFileSync(f.logPath, "utf8")).toBe("exec|Windows Test Guest|--current-user\n");
     },
   );
 
-  it.each(["write", "chmod"] as const)("removes guest update scripts when %s fails", (phase) => {
-    const root = tempDirs.make("openclaw-parallels-npm-update-");
-    const logPath = path.join(root, "prlctl.log");
-    const guestScriptPath = path.join(root, "guest-script");
-    const uploadedScriptPath = path.join(root, "uploaded-script");
-    const prlctlPath = path.join(root, "prlctl");
-    writeFileSync(
-      prlctlPath,
-      `#!/usr/bin/env bash
+  it.each(["write", "chmod"] as const)(
+    "removes guest update scripts when %s fails",
+    async (phase) => {
+      const f = guestFixture();
+      const { logPath, guestScriptPath, uploadedScriptPath } = f;
+      f.install(
+        `#!/usr/bin/env bash
 set -euo pipefail
 log_path=${JSON.stringify(logPath)}
 printf '%s\\n' "$*" >>"$log_path"
@@ -88,15 +98,8 @@ if [[ "$args" == *" /bin/rm -f /tmp/openclaw-parallels-npm-update-linux-"* ]]; t
 fi
 exit 1
 `,
-    );
-    chmodSync(prlctlPath, 0o755);
-
-    withEnv(
-      {
-        OPENAI_API_KEY: "test-key",
-        PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
-      },
-      () => {
+      );
+      await f.run(() => {
         const smoke = new NpmUpdateSmoke(smokeOptions());
 
         expect(() =>
@@ -106,34 +109,29 @@ exit 1
             "openclaw-parallels-npm-update-linux",
           ),
         ).toThrow(new RegExp(`failed to ${phase} guest script .+: ${phase} denied`));
-      },
-    );
+      });
 
-    const log = readFileSync(logPath, "utf8");
-    expect(readFileSync(uploadedScriptPath, "utf8")).toBe(
-      phase === "write" ? "echo" : "echo update",
-    );
-    expect(existsSync(guestScriptPath)).toBe(false);
-    expect(log.includes("/bin/chmod 755 /tmp/openclaw-parallels-npm-update-linux-")).toBe(
-      phase === "chmod",
-    );
-    expect(log).toContain("/bin/rm -f /tmp/openclaw-parallels-npm-update-linux-");
-    expect(log.match(/^cleanup$/gm)).toHaveLength(1);
-  });
+      const log = readFileSync(logPath, "utf8");
+      expect(readFileSync(uploadedScriptPath, "utf8")).toBe(
+        phase === "write" ? "echo" : "echo update",
+      );
+      expect(existsSync(guestScriptPath)).toBe(false);
+      expect(log.includes("/bin/chmod 755 /tmp/openclaw-parallels-npm-update-linux-")).toBe(
+        phase === "chmod",
+      );
+      expect(log).toContain("/bin/rm -f /tmp/openclaw-parallels-npm-update-linux-");
+      expect(log.match(/^cleanup$/gm)).toHaveLength(1);
+    },
+  );
 
   it.each([0, 7, "chown"] as const)(
     "uses one macOS guest identity through upload, outcome %s, and cleanup",
     async (outcome) => {
       const chownFailed = outcome === "chown";
       const exitCode = chownFailed ? 0 : outcome;
-      const root = tempDirs.make("openclaw-parallels-npm-update-");
-      const logPath = path.join(root, "prlctl.log");
-      const runArgsPath = path.join(root, "run-args");
-      const uploadedScriptPath = path.join(root, "uploaded-script");
-      const guestScriptPath = path.join(root, "guest-script");
-      const prlctlPath = path.join(root, "prlctl");
-      writeFileSync(
-        prlctlPath,
+      const f = guestFixture();
+      const { logPath, runArgsPath, uploadedScriptPath, guestScriptPath } = f;
+      f.install(
         `#!/usr/bin/env bash
 set -euo pipefail
 log_path=${JSON.stringify(logPath)}
@@ -166,56 +164,49 @@ fi
 exit 1
 `,
       );
-      chmodSync(prlctlPath, 0o755);
       const output: string[] = [];
 
-      await withEnvAsync(
-        {
-          OPENAI_API_KEY: "test-key",
-          PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
-        },
-        async () => {
-          if (chownFailed) {
-            const entry = resolveRuntimeWorkerUrl(scriptProcessEntrypoints.npmUpdateSmoke);
-            const options = smokeOptions("macos");
-            const result = spawnSync(
-              process.execPath,
-              [
-                ...resolveRuntimeWorkerArgv(entry).slice(0, -1),
-                "--input-type=module",
-                "--eval",
-                `const { NpmUpdateSmoke } = await import(${JSON.stringify(entry.href)});
+      await f.run(async () => {
+        if (chownFailed) {
+          const entry = resolveRuntimeWorkerUrl(scriptProcessEntrypoints.npmUpdateSmoke);
+          const options = smokeOptions("macos");
+          const result = spawnSync(
+            process.execPath,
+            [
+              ...resolveRuntimeWorkerArgv(entry).slice(0, -1),
+              "--input-type=module",
+              "--eval",
+              `const { NpmUpdateSmoke } = await import(${JSON.stringify(entry.href)});
 const options = ${JSON.stringify(options)};
 options.platforms = new Set(["macos"]);
 await new NpmUpdateSmoke(options)["guestMacos"]("echo update", 30_000, {
   append() {},
   signal: new AbortController().signal,
 });`,
-              ],
-              { encoding: "utf8", env: process.env, timeout: 10_000 },
-            );
-            expect(result.status, result.stderr).toBe(1);
-            expect(result.stderr).toContain("chown denied\n");
-            expect(result.stderr).toMatch(
-              /error: command failed \(7\): [^\n]+ exec macOS Tahoe \/usr\/sbin\/chown desktop-user \/tmp\/openclaw-parallels-npm-update-macos-/,
-            );
-            return;
-          }
-          const smoke = new NpmUpdateSmoke(smokeOptions("macos"));
-          const result = smoke["guestMacos"]("echo update", 30_000, {
-            append: (chunk) =>
-              output.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8")),
-            signal: new AbortController().signal,
-          });
-          if (exitCode === 0) {
-            await expect(result).resolves.toBeUndefined();
-          } else {
-            await expect(result).rejects.toThrow(
-              `macOS update command failed with exit code ${exitCode}`,
-            );
-          }
-        },
-      );
+            ],
+            { encoding: "utf8", env: process.env, timeout: 10_000 },
+          );
+          expect(result.status, result.stderr).toBe(1);
+          expect(result.stderr).toContain("chown denied\n");
+          expect(result.stderr).toMatch(
+            /error: command failed \(7\): [^\n]+ exec macOS Tahoe \/usr\/sbin\/chown desktop-user \/tmp\/openclaw-parallels-npm-update-macos-/,
+          );
+          return;
+        }
+        const smoke = new NpmUpdateSmoke(smokeOptions("macos"));
+        const result = smoke["guestMacos"]("echo update", 30_000, {
+          append: (chunk) =>
+            output.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8")),
+          signal: new AbortController().signal,
+        });
+        if (exitCode === 0) {
+          await expect(result).resolves.toBeUndefined();
+        } else {
+          await expect(result).rejects.toThrow(
+            `macOS update command failed with exit code ${exitCode}`,
+          );
+        }
+      });
 
       if (chownFailed) {
         expect(existsSync(runArgsPath)).toBe(false);
@@ -275,11 +266,9 @@ fi`,
     },
   ] as const)(
     "resolves macOS desktop $field on spaced mounted volumes",
-    ({ field, script, expected }) => {
-      const root = tempDirs.make("openclaw-parallels-npm-update-");
-      const prlctlPath = path.join(root, "prlctl");
-      writeFileSync(
-        prlctlPath,
+    async ({ field, script, expected }) => {
+      const f = guestFixture();
+      f.install(
         `#!/usr/bin/env bash
 set -euo pipefail
 args=" $* "
@@ -287,22 +276,14 @@ ${script}
 exit 7
 `,
       );
-      chmodSync(prlctlPath, 0o755);
-
-      withEnv(
-        {
-          OPENAI_API_KEY: "test-key",
-          PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
-        },
-        () => {
-          const smoke = new NpmUpdateSmoke(smokeOptions("macos"));
-          const actual =
-            field === "user"
-              ? smoke["resolveMacosDesktopUser"]()
-              : smoke["resolveMacosDesktopHome"]("clawuser");
-          expect(actual).toBe(expected);
-        },
-      );
+      await f.run(() => {
+        const smoke = new NpmUpdateSmoke(smokeOptions("macos"));
+        const actual =
+          field === "user"
+            ? smoke["resolveMacosDesktopUser"]()
+            : smoke["resolveMacosDesktopHome"]("clawuser");
+        expect(actual).toBe(expected);
+      });
     },
   );
 });
