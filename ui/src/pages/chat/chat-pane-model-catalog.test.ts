@@ -15,12 +15,12 @@ import {
   publishModelCatalogResult,
 } from "../../lib/model-catalog-cache.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
-import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { makeChatHost, makeRequestMock } from "./chat-host.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
+import { renderPaneModelControl } from "./chat-pane-model-control.test-support.ts";
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
@@ -62,7 +62,7 @@ describe("chat pane composer controls", () => {
       state.sessionKey = "agent:main:main";
       state.chatModelCatalogInitialized = false;
       const container = document.createElement("div");
-      const draw = () => renderPaneLegacyContent(composerControls(state), container);
+      const draw = () => renderPaneModelControl(composerControls(state), container);
       onTestFinished(() => {
         checking.resolve({ models: [] });
         retireChatMetadataRequests(state);
@@ -184,7 +184,7 @@ describe("chat pane composer controls", () => {
         expect(requestUpdate).not.toHaveBeenCalled();
         invalidateModelCatalogCache(client, scope);
       }
-      renderPaneLegacyContent(composerControls(state), container);
+      renderPaneModelControl(composerControls(state), container);
 
       const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
       picker!.open = true;
@@ -198,7 +198,7 @@ describe("chat pane composer controls", () => {
         sessionKey: "main",
       });
       expect(state.chatModelsLoading).toBe(!cachedCatalog);
-      renderPaneLegacyContent(composerControls(state), container);
+      renderPaneModelControl(composerControls(state), container);
       if (cachedCatalog) {
         expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
         expect(
@@ -271,7 +271,7 @@ describe("chat pane composer controls", () => {
     expect(host.chatModelCatalog).toEqual([cachedModel]);
     expect(host.chatModelsLoading).toBe(false);
     const container = document.createElement("div");
-    renderPaneLegacyContent(composerControls(host), container);
+    renderPaneModelControl(composerControls(host), container);
     expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
     expect(container.textContent).toContain("Cached Model");
     expect(container.textContent).not.toContain("Loading models…");

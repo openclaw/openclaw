@@ -1,7 +1,6 @@
 import type { SkillsWorkshopUndoResult } from "@openclaw/gateway-protocol";
 import { createSignal, For, onCleanup, Show } from "solid-js";
 import type { SkillWorkshopChangeNotice } from "../../../../../src/shared/skill-workshop-change-notice.js";
-import { toolIcons } from "../../../components/icons-tools.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
@@ -84,7 +83,7 @@ export const ChatSkillLearnedNotice = defineSolidBridge<{
             >
               <div class="chat-skill-notice__line">
                 <span class="chat-skill-notice__icon" aria-hidden="true">
-                  {toolIcons.lightbulb()}
+                  <Icon name="lightbulb" />
                 </span>
                 <span class="chat-skill-notice__label">{t("chat.skillLearned.label")}</span>
                 <For each={notice.skills}>

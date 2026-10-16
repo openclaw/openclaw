@@ -105,6 +105,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/e2e/qa-lab/runtime/codex-isolated-app-server.fixture.mjs!",
   // The physical-admission test resolves this worker from physicalFactsTestEntrypoint.
   "src/infra/database-engine/physical-facts-worker.test-support.ts!",
+  // The PostgreSQL namespace isolation test resolves this worker through resolveRuntimeWorkerUrl.
+  "src/infra/database-engine/multi-namespace.worker.test-support.ts!",
   // The proxy owner test spawns this capture child through resolveRuntimeWorkerUrl.
   "src/proxy-capture/child-transport.process.test-support.ts!",
   // The PostgreSQL state owner test resolves this worker through resolveRuntimeWorkerUrl.

@@ -240,7 +240,6 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
             <Show when={view().settingsTakeover} fallback={props.host.navigationSidebar}>
               <LazySettingsSidebar
                 loader={props.host.settingsSidebar}
-                revision={props.host.shellRevision()}
                 sidebarProps={view().settingsSidebarProps}
               />
             </Show>
@@ -279,7 +278,6 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
           id="control-ui-main"
           class={[
             "content",
-            (props.host.shellRevision(), props.host.shellLayout.className),
             {
               "content--chat": view().chatLikeRoute,
               "content--workbench": view().workbenchRoute,
@@ -325,7 +323,6 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
           <Show when={view().embedNavigation}>
             <LazySettingsSidebar
               loader={props.host.settingsSidebar}
-              revision={props.host.shellRevision()}
               sidebarProps={view().settingsSidebarProps}
             />
           </Show>
@@ -421,7 +418,6 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
         </Show>
         <DevicePairSetup
           loader={props.host.devicePairSetup}
-          revision={props.host.shellRevision()}
           props={{
             open: view().overlaySnapshot.devicePairSetupOpen,
             lifecycle: view().overlaySnapshot.devicePairSetupLifecycle,

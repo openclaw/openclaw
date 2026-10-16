@@ -35,7 +35,7 @@ import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import "./app-shell-locale-recovery.ts";
 import { loadFocusDashboard, type FocusDashboardRouteState } from "./app-root-focus.ts";
-import { connectLegacyApplicationContext, createLegacyFocusEscape } from "./app-root-lit.ts";
+import { createLegacyFocusEscape } from "./app-root-lit.ts";
 import { ShellLoader } from "./app-shell-loader.tsx";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import type { ControlUiReadiness } from "./control-ui-readiness.ts";
@@ -134,7 +134,6 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
     lazyRevision();
     return loginGateLoader.visibleState;
   };
-  const disconnectLegacyContext = connectLegacyApplicationContext(host, context);
   const disconnectViewport = connectShellViewport();
   const disconnectTooltips = installTitleTooltips(host.ownerDocument);
   const embedHost = nativeEmbedHost();
@@ -307,7 +306,6 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
     translations.dispose();
     disconnectViewport();
     disconnectTooltips();
-    disconnectLegacyContext();
     focusDashboardAbort.abort();
     lazyCustomElements.abandon();
     loginGateLoader.abandon();
@@ -613,7 +611,7 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
     );
   }
   return (
-    <ApplicationProvider value={context}>
+    <ApplicationProvider value={context} host={host}>
       <openclaw-tooltip-provider>
         <Switch>
           <Match when={runtime.focusLocation?.status === "unsupported"}>

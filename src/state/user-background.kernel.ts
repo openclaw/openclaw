@@ -134,5 +134,18 @@ export function commitUserBackgroundInDatabase(
     // Roll back the asset too, including a quota failure after first upload.
     throw new Error(`Failed to save background preference: ${result.error.code}`);
   }
-  return readSnapshot(db, profileId);
+  return {
+    status: "ok",
+    asset:
+      image && assetId
+        ? {
+            assetId,
+            width: image.width,
+            height: image.height,
+            mime: "image/jpeg",
+            byteLength: image.image.byteLength,
+          }
+        : null,
+    preference,
+  };
 }

@@ -8,7 +8,6 @@ import { normalizeComparablePath, readRegularFile, statRegularFile } from "./fs-
 import { hashText } from "./hash.js";
 import { createSubsystemLogger } from "./openclaw-runtime-io.js";
 import { isCronRunSessionKey } from "./openclaw-runtime-paths.js";
-import { prepareAssistantTranscriptText } from "./openclaw-runtime-session-visibility.js";
 import {
   assertBoundIncognitoMemorySyncAccess,
   captureIncognitoMemoryReader,
@@ -28,6 +27,7 @@ import {
   parseUsageCountedSessionIdFromFileName,
   prepareSessionEntryInWorker,
   prepareSessionEntriesInWorker,
+  prepareAssistantTranscriptText,
   readSessionEntrySnapshotInWorker,
   readRestoredSessionTranscript,
   readTranscriptStatsAsync,
@@ -688,7 +688,9 @@ async function buildSessionEntryFromSource(
       (sqliteIdentity
         ? readTranscriptExportSnapshotReadOnlySync(sqliteIdentity, {
             // Observers require original messages and run only after the snapshot closes.
-            projectEvent: opts.onTranscriptMessage ? undefined : projectSessionEntryRecord,
+            projectEvent: opts.onTranscriptMessage
+              ? undefined
+              : (event) => projectSessionEntryRecord(event, prepareAssistantTranscriptText),
           })
         : null);
     const sqliteSource =

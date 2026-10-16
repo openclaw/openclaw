@@ -29,7 +29,6 @@ export type ChatPaneLayoutMenuProps = {
   paneId: string;
   narrow: boolean;
   mobile?: boolean;
-  onOpenDetails?: (source: HTMLElement) => void;
   actionsDisabled?: boolean;
   panelMenuActions?: HeaderPanelAction[];
   layoutMenuActions?: HeaderMenuQuickAction[];
@@ -44,7 +43,7 @@ export type ChatPaneLayoutMenuProps = {
   onClosePane?: (paneId: string) => void;
 };
 
-function layoutModel(props: ChatPaneLayoutMenuProps, openDetails: () => void) {
+function layoutModel(props: ChatPaneLayoutMenuProps) {
   const layout = props.sidebarLayout;
   const definitions = props.panelDefinitions ?? [];
   const side = layout ? sidebarActivePanel(layout) : undefined;
@@ -148,19 +147,7 @@ function layoutModel(props: ChatPaneLayoutMenuProps, openDetails: () => void) {
       });
     }
   }
-  const panelActions: ChatQuickAction[] = [
-    ...(props.mobile && props.onOpenDetails
-      ? [
-          {
-            id: "details",
-            label: t("chat.sessionDetails.title"),
-            icon: icons.listChecks,
-            onActivate: openDetails,
-          },
-        ]
-      : []),
-    ...(props.panelMenuActions ?? []),
-  ];
+  const panelActions: ChatQuickAction[] = props.panelMenuActions ?? [];
   const allActions = [...actions, ...panelActions];
   return {
     actions,
@@ -178,14 +165,7 @@ export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
   const id = `chat-pane-layout-${++nextLayoutId}`;
   const [opened, setOpened] = createSignal(false);
   let menu: MenuHandle | undefined;
-  const model = createMemo(() =>
-    layoutModel(props, () => {
-      const trigger = menu?.overlay.trigger;
-      if (trigger) {
-        props.onOpenDetails?.(trigger);
-      }
-    }),
-  );
+  const model = createMemo(() => layoutModel(props));
   const headerActions = (
     <Show when={opened() || model().allActions.length === 0}>
       <LitContent value={model().mainHeaderAction} />

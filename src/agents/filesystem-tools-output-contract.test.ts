@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createOpenClawReadTool } from "./agent-tools.read.js";
+import { createOpenClawReadTool, resolveAdaptiveReadMaxBytes } from "./agent-tools.read.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
@@ -179,6 +179,55 @@ describe("filesystem tool output contracts", () => {
       });
     },
   );
+
+  it.each([
+    { name: "one leading blank line", prefix: "\n", size: 52 * 1024 },
+    { name: "no leading blank line", prefix: "", size: 52 * 1024 },
+    { name: "two leading blank lines", prefix: "\n\n", size: 52 * 1024 },
+    { name: "a short file", prefix: "\n", size: 10 },
+    { name: "an offset on a blank line", prefix: "\n", size: 52 * 1024, offset: 2 },
+    {
+      name: "a blank page before a fitting continuation",
+      prefix: "\n",
+      size: 2_000,
+      maxBytes: 1_024,
+    },
+  ])("preserves $name across read continuations", async ({ prefix, size, offset, maxBytes }) => {
+    const expected = `${prefix}${JSON.stringify({ generated: "x".repeat(size) })}`;
+    await fs.writeFile(path.join(tmpDir, "paged.json"), `${offset ? "before\n" : ""}${expected}`);
+    const tool = createOpenClawReadTool(
+      createReadTool(tmpDir, { maxBytes: maxBytes ?? resolveAdaptiveReadMaxBytes() }),
+    );
+    let args: { path: string; offset?: number; cursor?: number; limit?: number } = {
+      path: "paged.json",
+      ...(offset ? { offset } : {}),
+    };
+    let actual = "";
+    let display = "";
+    let separator = "";
+    for (let page = 0; page < 8; page++) {
+      const result = await tool.execute(`read-page-${page}`, args);
+      expectContract(tool, result.details);
+      const details = result.details;
+      if (details.kind !== "text" && details.kind !== "truncated") {
+        throw new Error("Expected file text");
+      }
+      const text = result.content.find((block) => block.type === "text")!.text;
+      actual += separator + details.content;
+      display +=
+        separator +
+        (details.kind === "truncated" ? text.slice(0, text.lastIndexOf("\n\n[")) : text);
+      if (details.kind === "text") {
+        expect(actual).toBe(expected);
+        expect(display).toBe(expected);
+        return;
+      }
+      const { kind, ...continuation } = details.continuation;
+      separator = kind === "line" ? "\n" : "";
+      args = { path: "paged.json", ...continuation };
+    }
+    throw new Error("Read did not reach EOF");
+  });
 
   it("bounds structured blank pages independently of their short display summary", async () => {
     await fs.writeFile(path.join(tmpDir, "blank.txt"), "\n".repeat(10_000));
