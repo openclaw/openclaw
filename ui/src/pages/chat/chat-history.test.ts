@@ -263,10 +263,7 @@ it("rejects in-flight history after switching branches on the same session", asy
   const pending = createDeferred<ChatHistoryResult>();
   const old = message("assistant", "private old branch");
   const next = message("assistant", "selected branch");
-  const state = withSessions(
-    { messages: [next] },
-    { listBranches: vi.fn().mockResolvedValue([]), switchBranch: vi.fn().mockResolvedValue({}) },
-  );
+  const state = withSessions({ messages: [next] }, { switchBranch: vi.fn().mockResolvedValue({}) });
   state.sessionKey = "agent:main:branches";
   state.chatMessages = [old];
   const request = vi
@@ -287,10 +284,7 @@ it("rejects in-flight history after switching branches on the same session", asy
 it("reconciles a committed branch switch after a same-client reconnect", async () => {
   const pending = createDeferred<object>();
   const next = message("assistant", "selected branch after reconnect");
-  const state = withSessions(
-    { messages: [next] },
-    { listBranches: vi.fn().mockResolvedValue([]), switchBranch: vi.fn(() => pending.promise) },
-  );
+  const state = withSessions({ messages: [next] }, { switchBranch: vi.fn(() => pending.promise) });
   state.chatMessages = [message("assistant", "stale branch")];
   const loading = switchChatHistoryBranch(state, "stale-leaf");
   state.connectionEpoch += 2;
@@ -443,13 +437,20 @@ describe("chat history run errors", () => {
   ) {
     handleChatGatewayEvent(state, { sessionKey: "main", runId, ...event });
   }
+  const reply = (content: string): ChatEventPayload => ({
+    state: "final",
+    message: { role: "assistant", content },
+  });
+  const turn = (
+    role: string,
+    content: string,
+    id: string,
+    seq: number,
+    idempotencyKey: string,
+  ) => ({ role, content, __openclaw: { id, seq, idempotencyKey } });
 
   it("retires a recovered failure after a newer successful history and rejects its stale replay", async () => {
-    const first = {
-      role: "user",
-      content: "Start working",
-      __openclaw: { id: "first", idempotencyKey: "run:user", seq: 1 },
-    };
+    const first = turn("user", "Start working", "first", 1, "run:user");
     const failed = { sessionId: "session", messages: [first], sessionInfo: row() };
     let history: ChatHistoryResult = failed;
     const state = host(() => history);
@@ -459,16 +460,8 @@ describe("chat history run errors", () => {
       sessionId: "session",
       messages: [
         first,
-        {
-          role: "user",
-          content: "Try again",
-          __openclaw: { id: "retry", idempotencyKey: "retry:user", seq: 2 },
-        },
-        {
-          role: "assistant",
-          content: "Recovered",
-          __openclaw: { id: "answer", idempotencyKey: "retry", seq: 3 },
-        },
+        turn("user", "Try again", "retry", 2, "retry:user"),
+        turn("assistant", "Recovered", "answer", 3, "retry"),
       ],
       sessionInfo: row({ status: "done", lastRunId: "retry", lastRunError: undefined }),
     };
@@ -498,7 +491,7 @@ describe("chat history run errors", () => {
         state,
         "2",
         snapshotStatus === "done"
-          ? { state: "final", message: { role: "assistant", content: "Old reply" } }
+          ? reply("Old reply")
           : { state: "error", errorMessage: "Old failure" },
       );
       let loading = requestOrder === "before" ? loadChatHistory(state) : undefined;
@@ -507,7 +500,7 @@ describe("chat history run errors", () => {
         state,
         "1",
         newerState === "completed"
-          ? { state: "final", message: { role: "assistant", content: "New reply" } }
+          ? reply("New reply")
           : { state: "error", errorMessage: "Current full diagnostic" },
       );
       const currentError = state.chatRunError;
@@ -545,10 +538,7 @@ describe("chat history run errors", () => {
     const response = createDeferred<ChatHistoryResult>();
     const state = host(() => response.promise);
     emit(state, "run", { state: "delta" });
-    emit(state, "run", {
-      state: "final",
-      message: { role: "assistant", content: "Delivered answer" },
-    });
+    emit(state, "run", reply("Delivered answer"));
     const loading = loadChatHistory(state);
     emit(state, "run", { state: "error", errorMessage: "Full late diagnostic after delivery" });
     const diagnostic = state.chatRunError;
@@ -565,14 +555,14 @@ describe("chat history run errors", () => {
   it("retains a newer-run diagnostic when a completed run delivers another final", () => {
     const state = host({ messages: [] });
     emit(state, "run", { state: "delta" });
-    emit(state, "run", { state: "final", message: { role: "assistant", content: "First answer" } });
+    emit(state, "run", reply("First answer"));
     emit(state, "newer-run", {
       state: "error",
       errorMessage: "Diagnostic that must remain visible",
     });
     const diagnostic = state.chatRunError;
     expect(diagnostic?.summary).toContain("Diagnostic that must remain visible");
-    emit(state, "run", { state: "final", message: { role: "assistant", content: "Late answer" } });
+    emit(state, "run", reply("Late answer"));
     expect(state.chatMessages).toContainEqual(expect.objectContaining({ content: "Late answer" }));
     expect(state.chatRunId).toBeNull();
     expect(state.chatRunError).toEqual(diagnostic);

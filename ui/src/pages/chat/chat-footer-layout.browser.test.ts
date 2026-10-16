@@ -18,6 +18,15 @@ import {
 const describeBrowserLayout = canRunChatLayoutBrowser ? describe : describe.skip;
 const layoutBrowser = createChatLayoutBrowser();
 const { openBrowserPage } = layoutBrowser;
+type Box = Awaited<ReturnType<typeof getBoundingBox>>;
+const center = (box: Box) => ({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
+function overlapCenter(first: Box, second: Box) {
+  const left = Math.max(first.x, second.x);
+  const top = Math.max(first.y, second.y);
+  const right = Math.min(first.x + first.width, second.x + second.width);
+  const bottom = Math.min(first.y + first.height, second.y + second.height);
+  return { x: (left + right) / 2, y: (top + bottom) / 2 };
+}
 
 // Playwright types generic trace records as string dictionaries, while Chromium
 // sends structured arguments. Validate the records this regression relies on.
@@ -436,11 +445,9 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
           expect(pullRequest.bottom).toBeLessThanOrEqual(notices.top);
           await page.getByRole("link", { name: "PR #42" }).click({ trial: true });
         }
-        expect(
-          await page
-            .locator(".chat-topbar-notices")
-            .evaluate((node) => getComputedStyle(node).position),
-        ).toBe("absolute");
+        const position = (selector: string) =>
+          page.locator(selector).evaluate((node) => getComputedStyle(node).position);
+        expect(await position(".chat-topbar-notices")).toBe("absolute");
         const header = await getBoundingBox(page, ".chat-pane__header");
         const overlayTops = await Promise.all(
           [".chat-topbar-notices", ".chat-gutter-stack", ".app-toast"].map(async (selector) => ({
@@ -489,10 +496,10 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
         const option = page.getByRole("option");
         const optionBounds = await getBoundingBox(page, ".slash-menu-item");
         const noticeBounds = await getBoundingBox(page, ".chat-error");
-        expect(
-          await page.locator(".slash-menu").evaluate((node) => getComputedStyle(node).position),
-        ).toBe(menuPlacement === "inline" ? "sticky" : "absolute");
-        let optionPoint: { x: number; y: number };
+        expect(await position(".slash-menu")).toBe(
+          menuPlacement === "inline" ? "sticky" : "absolute",
+        );
+        let optionPoint = center(optionBounds);
         if (menuPlacement === "inline") {
           // Short landscape keeps the menu inside the input; notices remain above it.
           const inputBounds = await getBoundingBox(page, ".agent-chat__input");
@@ -502,32 +509,8 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
           expect(optionBounds.y + optionBounds.height).toBeLessThanOrEqual(
             inputBounds.y + inputBounds.height,
           );
-          optionPoint = {
-            x: optionBounds.x + optionBounds.width / 2,
-            y: optionBounds.y + optionBounds.height / 2,
-          };
         } else if (rectsOverlap(optionBounds, noticeBounds)) {
-          optionPoint = {
-            x:
-              (Math.max(optionBounds.x, noticeBounds.x) +
-                Math.min(
-                  optionBounds.x + optionBounds.width,
-                  noticeBounds.x + noticeBounds.width,
-                )) /
-              2,
-            y:
-              (Math.max(optionBounds.y, noticeBounds.y) +
-                Math.min(
-                  optionBounds.y + optionBounds.height,
-                  noticeBounds.y + noticeBounds.height,
-                )) /
-              2,
-          };
-        } else {
-          optionPoint = {
-            x: optionBounds.x + optionBounds.width / 2,
-            y: optionBounds.y + optionBounds.height / 2,
-          };
+          optionPoint = overlapCenter(optionBounds, noticeBounds);
         }
         expect(
           await option.evaluate((node, point) => {
@@ -538,10 +521,7 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
         await page.mouse.click(optionPoint.x, optionPoint.y);
         expect(await option.getAttribute("data-selected")).toBe("true");
         await page.locator(".slash-menu").evaluate((node) => node.remove());
-        const noticePoint = {
-          x: noticeBounds.x + noticeBounds.width / 2,
-          y: noticeBounds.y + noticeBounds.height / 2,
-        };
+        const noticePoint = center(noticeBounds);
         expect(
           await page
             .locator(".chat-error")

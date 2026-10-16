@@ -32,6 +32,11 @@ function readHistory(client: GatewayBrowserClient, key: string, isCurrent = () =
     { isCurrent },
   );
 }
+const timeout = (method = "chat.history") =>
+  new GatewayProtocolRequestTimeoutError({ method, timeoutMs: 30_000, requestSent: true });
+const rejectedTimeout = () => vi.fn().mockRejectedValue(timeout());
+const requestError = (code: string, message: string, retryable: boolean) =>
+  new GatewayRequestError({ code, message, retryable });
 
 describe("shared chat history transient recovery", () => {
   it.each([
@@ -67,11 +72,7 @@ describe("shared chat history transient recovery", () => {
     async (startup) => {
       vi.useFakeTimers();
       const method = startup ? "chat.startup" : "chat.history";
-      const request = vi
-        .fn()
-        .mockRejectedValue(
-          new GatewayProtocolRequestTimeoutError({ method, timeoutMs: 30_000, requestSent: true }),
-        );
+      const request = vi.fn().mockRejectedValue(timeout(method));
       const messages = [{ role: "assistant", content: "Cached transcript" }];
       const state = makeChatHost({
         sessionKey: "agent:main:history-timeout",
@@ -130,42 +131,14 @@ describe("shared chat history transient recovery", () => {
   );
 
   it.each([
+    { error: requestError("RATE_LIMITED", "Rate limited", true), retryable: true, elapsedMs: 0 },
     {
-      error: new GatewayRequestError({
-        code: "RATE_LIMITED",
-        message: "Rate limited",
-        retryable: true,
-      }),
-      retryable: true,
-      elapsedMs: 0,
-    },
-    {
-      error: new GatewayRequestError({
-        code: "PERMISSION_DENIED",
-        message: "Permission denied",
-        retryable: false,
-      }),
+      error: requestError("PERMISSION_DENIED", "Permission denied", false),
       retryable: false,
       elapsedMs: 0,
     },
-    {
-      error: new GatewayProtocolRequestTimeoutError({
-        method: "chat.send",
-        timeoutMs: 30_000,
-        requestSent: true,
-      }),
-      retryable: false,
-      elapsedMs: 0,
-    },
-    {
-      error: new GatewayProtocolRequestTimeoutError({
-        method: "chat.history",
-        timeoutMs: 30_000,
-        requestSent: true,
-      }),
-      retryable: true,
-      elapsedMs: 60_000,
-    },
+    { error: timeout("chat.send"), retryable: false, elapsedMs: 0 },
+    { error: timeout(), retryable: true, elapsedMs: 60_000 },
   ])(
     "preserves manual retry policy for $error.name after $elapsedMs ms",
     async ({ error, retryable, elapsedMs }) => {
@@ -188,13 +161,7 @@ describe("shared chat history transient recovery", () => {
 
   it("does not publish an old pane timeout over the newly loaded conversation", async () => {
     vi.useFakeTimers();
-    const request = vi.fn().mockRejectedValue(
-      new GatewayProtocolRequestTimeoutError({
-        method: "chat.history",
-        timeoutMs: 30_000,
-        requestSent: true,
-      }),
-    );
+    const request = rejectedTimeout();
     const state = makeChatHost({ requestHandlers: { "chat.history": request } });
     const loading = loadChatHistory(state, { deferBranches: true });
     await vi.advanceTimersByTimeAsync(0);
@@ -249,16 +216,10 @@ describe("shared chat history transient recovery", () => {
     await vi.advanceTimersByTimeAsync(29_000);
     socket.emitMessage({ type: "event", event: "tick", payload: {} });
     await vi.advanceTimersByTimeAsync(1_499);
-    expect(socket.sent.map((frame) => JSON.parse(frame).method)).toEqual([
-      "connect",
-      "chat.history",
-    ]);
+    const methods = () => socket.sent.map((frame) => JSON.parse(frame).method);
+    expect(methods()).toEqual(["connect", "chat.history"]);
     await vi.advanceTimersByTimeAsync(1);
-    expect(socket.sent.map((frame) => JSON.parse(frame).method)).toEqual([
-      "connect",
-      "chat.history",
-      "chat.history",
-    ]);
+    expect(methods()).toEqual(["connect", "chat.history", "chat.history"]);
     const retry = JSON.parse(socket.sent[2]!);
     socket.emitMessage({ type: "res", id: retry.id, ok: true, payload: { messages: [] } });
     await expect(outcome).resolves.toEqual({ messages: [] });
@@ -304,13 +265,7 @@ describe("shared chat history transient recovery", () => {
 
   it("never retries a timed-out read once all pane owners have changed", async () => {
     vi.useFakeTimers();
-    const request = vi.fn().mockRejectedValue(
-      new GatewayProtocolRequestTimeoutError({
-        method: "chat.history",
-        timeoutMs: 30_000,
-        requestSent: true,
-      }),
-    );
+    const request = rejectedTimeout();
     const client = createTestGatewayClient(request);
     let current = true;
     const outcome = readHistory(client, "retired", () => current).catch((error: unknown) => error);
@@ -326,13 +281,7 @@ describe("shared chat history transient recovery", () => {
     vi.useFakeTimers();
     const request = vi
       .fn()
-      .mockRejectedValueOnce(
-        new GatewayProtocolRequestTimeoutError({
-          method: "chat.history",
-          timeoutMs: 30_000,
-          requestSent: true,
-        }),
-      )
+      .mockRejectedValueOnce(timeout())
       .mockResolvedValueOnce({ messages: [{ role: "assistant", content: "Recovered" }] });
     const client = createTestGatewayClient(request);
     const first = readHistory(client, "shared");

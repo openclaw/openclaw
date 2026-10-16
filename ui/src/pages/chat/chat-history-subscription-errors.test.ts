@@ -11,6 +11,21 @@ import {
 import { makeChatHost } from "./chat-host.test-support.ts";
 
 type Subscription = { key: string; agentId: null };
+const subscriptionTimeout = () =>
+  vi.fn<SessionCapability["subscribeMessages"]>().mockRejectedValue(
+    new GatewayProtocolRequestTimeoutError({
+      method: "sessions.messages.subscribe",
+      timeoutMs: 30_000,
+      requestSent: true,
+    }),
+  );
+function useClock() {
+  vi.useFakeTimers();
+  onTestFinished(() => vi.useRealTimers());
+}
+function expectNoComposerError(state: { lastError: string | null; chatError: string | null }) {
+  expect(state).toMatchObject({ lastError: null, chatError: null });
+}
 
 function createSubscriptionState(options?: {
   previous?: Subscription;
@@ -42,17 +57,8 @@ describe("visible chat message subscription failures", () => {
   it.each(["dispose", "selection", "capability"] as const)(
     "retires a delayed subscription retry on %s without touching drafts or sending requests",
     async (change) => {
-      vi.useFakeTimers();
-      onTestFinished(() => {
-        vi.useRealTimers();
-      });
-      const subscribeMessages = vi.fn<SessionCapability["subscribeMessages"]>().mockRejectedValue(
-        new GatewayProtocolRequestTimeoutError({
-          method: "sessions.messages.subscribe",
-          timeoutMs: 30_000,
-          requestSent: true,
-        }),
-      );
+      useClock();
+      const subscribeMessages = subscriptionTimeout();
       const { state } = createSubscriptionState({ subscribeMessages });
       state.chatMessage = "New unsent draft";
       const pending = syncSelectedSessionMessageSubscription(state);
@@ -70,24 +76,14 @@ describe("visible chat message subscription failures", () => {
       await expect(pending).resolves.toBe(false);
       expect(subscribeMessages).toHaveBeenCalledTimes(1);
       expect(state.chatMessage).toBe("New unsent draft");
-      expect(state.lastError).toBeNull();
-      expect(state.chatError).toBeNull();
+      expectNoComposerError(state);
       expect(vi.getTimerCount()).toBe(0);
     },
   );
 
   it("bounds repeated transient admission failures and retains one recoverable history notice", async () => {
-    vi.useFakeTimers();
-    onTestFinished(() => {
-      vi.useRealTimers();
-    });
-    const subscribeMessages = vi.fn<SessionCapability["subscribeMessages"]>().mockRejectedValue(
-      new GatewayProtocolRequestTimeoutError({
-        method: "sessions.messages.subscribe",
-        timeoutMs: 30_000,
-        requestSent: true,
-      }),
-    );
+    useClock();
+    const subscribeMessages = subscriptionTimeout();
     const { state } = createSubscriptionState({ subscribeMessages });
     const pending = syncSelectedSessionMessageSubscription(state);
     await vi.advanceTimersByTimeAsync(60_000);
@@ -95,8 +91,7 @@ describe("visible chat message subscription failures", () => {
     expect(subscribeMessages.mock.calls.length).toBeGreaterThan(1);
     expect(subscribeMessages.mock.calls.length).toBeLessThan(20);
     expect(getChatHistoryLoadState(state)).toMatchObject({ phase: "failed", retryable: true });
-    expect(state.lastError).toBeNull();
-    expect(state.chatError).toBeNull();
+    expectNoComposerError(state);
     expect(state.sessionsError).toBeNull();
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -120,8 +115,7 @@ describe("visible chat message subscription failures", () => {
       phase: "failed",
       message: "Previous observer release failed",
     });
-    expect(state.lastError).toBeNull();
-    expect(state.chatError).toBeNull();
+    expectNoComposerError(state);
     expect(state.requestUpdate).toHaveBeenCalledOnce();
     state.lastError = "Sending the message failed";
     state.chatError = "Sending the message failed";
@@ -137,70 +131,35 @@ describe("visible chat message subscription failures", () => {
     expect(unsubscribeMessages).toHaveBeenCalledOnce();
   });
 
-  it("never publishes a failed subscription after its pane is disposed", async () => {
-    const pending = createDeferred<Subscription>();
-    const { state } = createSubscriptionState({
-      subscribeMessages: vi
-        .fn<SessionCapability["subscribeMessages"]>()
-        .mockReturnValue(pending.promise),
-    });
+  it.each(["dispose", "reconnect"])(
+    "never publishes a failed subscription after %s",
+    async (change) => {
+      const pending = createDeferred<Subscription>();
+      const { state } = createSubscriptionState({
+        subscribeMessages: vi.fn<SessionCapability["subscribeMessages"]>(() => pending.promise),
+      });
 
-    const sync = syncSelectedSessionMessageSubscription(state);
-    await Promise.resolve();
-    disposeSelectedSessionMessageSubscription(state);
-    pending.reject(new Error("Retired observer unavailable"));
-    await sync;
+      const sync = syncSelectedSessionMessageSubscription(state);
+      await Promise.resolve();
+      if (change === "dispose") {
+        disposeSelectedSessionMessageSubscription(state);
+      } else {
+        state.connectionEpoch += 1;
+      }
+      pending.reject(new Error("Retired observer unavailable"));
+      await sync;
 
-    expect(state.lastError).toBeNull();
-    expect(state.chatError).toBeNull();
-    expect(state.requestUpdate).not.toHaveBeenCalled();
-  });
-
-  it("never publishes a failed subscription from a replaced same-client generation", async () => {
-    const pending = createDeferred<Subscription>();
-    const { state } = createSubscriptionState({
-      subscribeMessages: vi
-        .fn<SessionCapability["subscribeMessages"]>()
-        .mockReturnValue(pending.promise),
-    });
-
-    const sync = syncSelectedSessionMessageSubscription(state);
-    await Promise.resolve();
-    state.connectionEpoch += 1;
-    pending.reject(new Error("Prior connection generation unavailable"));
-    await sync;
-
-    expect(state.lastError).toBeNull();
-    expect(state.chatError).toBeNull();
-    expect(state.requestUpdate).not.toHaveBeenCalled();
-  });
+      expectNoComposerError(state);
+      expect(state.requestUpdate).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("selected agent subscription changes", () => {
   it("clears stale approvals while switching the selected global agent", async () => {
     const previous = { key: "global", agentId: "main", includeApprovals: true as const };
-    let resolveSubscribe!: (subscription: {
-      key: string;
-      agentId: string;
-      includeApprovals: true;
-      approvalReplay: { sessionKey: string; updatedAtMs: number; approvals: []; truncated: false };
-    }) => void;
-    const subscribeMessages = vi.fn(
-      () =>
-        new Promise<{
-          key: string;
-          agentId: string;
-          includeApprovals: true;
-          approvalReplay: {
-            sessionKey: string;
-            updatedAtMs: number;
-            approvals: [];
-            truncated: false;
-          };
-        }>((resolve) => {
-          resolveSubscribe = resolve;
-        }),
-    );
+    const pending = createDeferred<Awaited<ReturnType<SessionCapability["subscribeMessages"]>>>();
+    const subscribeMessages = vi.fn(() => pending.promise);
     const state = {
       ...makeChatHost({ requestHandlers: {}, sessionKey: "global" }),
       assistantAgentId: "research",
@@ -226,7 +185,7 @@ describe("selected agent subscription changes", () => {
     const sync = syncSelectedSessionMessageSubscription(state as never);
     await Promise.resolve();
     const queueWhileReplacementIsPending = [...state.chatSessionApprovalQueue];
-    resolveSubscribe({
+    pending.resolve({
       key: "global",
       agentId: "research",
       includeApprovals: true,

@@ -46,6 +46,22 @@ function createRewindHost(
   return state;
 }
 
+const rewind = (
+  state: ReturnType<typeof createRewindHost>,
+  entryId = "original-user",
+  reads = new ChatAttachmentReadLifecycle(() => {}),
+) => rewindChatHistory(state, entryId, reads);
+function createPeer(source: ReturnType<typeof createRewindHost>, session: string) {
+  return {
+    client: source.client,
+    settings: source.settings,
+    sessionKey: session === "same" ? source.sessionKey : "agent:main:session-b",
+    chatMessage: "",
+    chatQueue: [],
+    selectedChatSessionIncognito: false,
+  };
+}
+
 describe("rewind composer ownership", () => {
   it.each(["accepted", "newer draft"] as const)(
     "retires pending attachment reads only for an accepted replacement: %s",
@@ -60,7 +76,7 @@ describe("rewind composer ownership", () => {
       const originalSignal = reads.readSignal;
       reads.updatePending(originalSignal, 1);
       notifications.length = 0;
-      const pending = rewindChatHistory(state, "original-user", reads);
+      const pending = rewind(state, "original-user", reads);
       if (outcome === "newer draft") {
         state.handleChatDraftChange("newer draft");
       }
@@ -70,12 +86,10 @@ describe("rewind composer ownership", () => {
       expect(reads.pendingReads).toBe(outcome === "accepted" ? 0 : 1);
       expect(notifications).toEqual(outcome === "accepted" ? ["restored prompt"] : []);
       if (outcome === "accepted") {
-        expect(state.chatGoalDraftMode).toBeNull();
-        expect(state.chatReplyTarget).toBeNull();
-        expect(
-          loadChatComposerState(state, state.sessionKey).snapshot?.replyTarget,
-        ).toBeUndefined();
-        expect(loadChatComposerState(state, state.sessionKey).snapshot?.goalMode).toBeUndefined();
+        expect(state).toMatchObject({ chatGoalDraftMode: null, chatReplyTarget: null });
+        const snapshot = loadChatComposerState(state, state.sessionKey).snapshot;
+        expect(snapshot?.replyTarget).toBeUndefined();
+        expect(snapshot?.goalMode).toBeUndefined();
         const replacementSignal = reads.readSignal;
         reads.updatePending(replacementSignal, 1);
         reads.updatePending(originalSignal, -1);
@@ -91,7 +105,7 @@ describe("rewind composer ownership", () => {
     const reads = new ChatAttachmentReadLifecycle(() => {});
     const originalSignal = reads.readSignal;
     reads.updatePending(originalSignal, 1);
-    const pending = rewindChatHistory(state, "original-user", reads);
+    const pending = rewind(state, "original-user", reads);
 
     reads.abortReads();
     const replacementSignal = reads.readSignal;
@@ -110,14 +124,7 @@ describe("rewind composer ownership", () => {
     async (session) => {
       const response = createDeferred<{ editorText: string }>();
       const source = createRewindHost(response.promise);
-      const peer = {
-        client: source.client,
-        settings: source.settings,
-        sessionKey: session === "same" ? source.sessionKey : "agent:main:session-b",
-        chatMessage: "",
-        chatQueue: [],
-        selectedChatSessionIncognito: false,
-      };
+      const peer = createPeer(source, session);
       // A stored revision may exceed the local clock before any edit is allocated here.
       persistChatComposerState(source, source.sessionKey, {
         draft: "",
@@ -126,7 +133,7 @@ describe("rewind composer ownership", () => {
       const reads = new ChatAttachmentReadLifecycle(() => {});
       const signal = reads.readSignal;
       reads.updatePending(signal, 1);
-      const pending = rewindChatHistory(source, "original-user", reads);
+      const pending = rewind(source, "original-user", reads);
       markChatComposerEdit(peer);
       response.resolve({ editorText: "restored prompt" });
       await pending;
@@ -144,22 +151,11 @@ describe("rewind composer ownership", () => {
       vi.useFakeTimers();
       const response = createDeferred<{ editorText: string }>();
       const source = createRewindHost(response.promise);
-      const peer = {
-        client: source.client,
-        settings: source.settings,
-        sessionKey: session === "same" ? source.sessionKey : "agent:main:session-b",
-        chatMessage: "",
-        chatQueue: [],
-        selectedChatSessionIncognito: false,
-      };
+      const peer = createPeer(source, session);
       const persistence = new ChatComposerPersistence(() => peer);
       persistence.start();
       try {
-        const pending = rewindChatHistory(
-          source,
-          "original-user",
-          new ChatAttachmentReadLifecycle(() => {}),
-        );
+        const pending = rewind(source);
         peer.chatMessage = "newer peer draft";
         persistence.schedule();
         if (debounced) {
@@ -185,16 +181,8 @@ describe("rewind composer ownership", () => {
     const newer = createDeferred<{ editorText: string }>();
     const first = createRewindHost(older.promise);
     const second = createRewindHost(newer.promise);
-    const firstPending = rewindChatHistory(
-      first,
-      "earlier-user",
-      new ChatAttachmentReadLifecycle(() => {}),
-    );
-    const secondPending = rewindChatHistory(
-      second,
-      "later-user",
-      new ChatAttachmentReadLifecycle(() => {}),
-    );
+    const firstPending = rewind(first, "earlier-user");
+    const secondPending = rewind(second, "later-user");
     older.resolve({ editorText: "superseded rewind" });
     await firstPending;
     const firstDraft = first.chatMessage;
@@ -221,11 +209,7 @@ describe("rewind composer ownership", () => {
       });
       state.chatMessage = "@Alex keep this draft";
       state.chatMentions = [{ profileId: "alex", start: 0, end: 5 }];
-      const pending = rewindChatHistory(
-        state,
-        "original-user",
-        new ChatAttachmentReadLifecycle(() => {}),
-      );
+      const pending = rewind(state);
       response.resolve({ editorText: "original prompt" });
       await requestedHistory.promise;
       if (edit === "attachments") {
@@ -235,23 +219,18 @@ describe("rewind composer ownership", () => {
       } else {
         state.chatReplyTarget = { messageId: "newer", text: "Newer quote" };
       }
-      const composer = {
-        text: state.chatMessage,
-        mentions: state.chatMentions,
-        attachments: state.chatAttachments,
-        goalMode: state.chatGoalDraftMode,
-        replyTarget: state.chatReplyTarget,
-      };
+      const { chatMessage, chatMentions, chatAttachments, chatGoalDraftMode, chatReplyTarget } =
+        state;
       history.resolve({ messages: [canonical] });
 
       await pending;
 
       expect(state.chatMessages).toEqual([canonical]);
-      expect(state.chatMessage).toBe(composer.text);
-      expect(state.chatMentions).toEqual(composer.mentions);
-      expect(state.chatAttachments).toBe(composer.attachments);
-      expect(state.chatGoalDraftMode).toEqual(composer.goalMode);
-      expect(state.chatReplyTarget).toEqual(composer.replyTarget);
+      expect(state.chatMessage).toBe(chatMessage);
+      expect(state.chatMentions).toEqual(chatMentions);
+      expect(state.chatGoalDraftMode).toEqual(chatGoalDraftMode);
+      expect(state.chatReplyTarget).toEqual(chatReplyTarget);
+      expect(state.chatAttachments).toBe(chatAttachments);
       expect(state.request).toHaveBeenCalledOnce();
     },
   );
@@ -264,16 +243,8 @@ describe("rewind composer ownership", () => {
       rewind: vi.fn().mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise),
     });
     state.chatMessage = "current draft";
-    const first = rewindChatHistory(
-      state,
-      "earlier-user",
-      new ChatAttachmentReadLifecycle(() => {}),
-    );
-    const second = rewindChatHistory(
-      state,
-      "later-user",
-      new ChatAttachmentReadLifecycle(() => {}),
-    );
+    const first = rewind(state, "earlier-user");
+    const second = rewind(state, "later-user");
     older.resolve({ editorText: "superseded rewind" });
     await first;
     expect(state.chatMessage).toBe("current draft");
