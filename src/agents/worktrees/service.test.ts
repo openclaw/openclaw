@@ -97,6 +97,13 @@ async function addRemote(root: string, repo: string): Promise<string> {
   return path.join(root, "remote.git");
 }
 
+const readText = (...parts: string[]) => fs.readFile(path.join(...parts), "utf8");
+const writeFile = (directory: string, file: string, data: Parameters<typeof fs.writeFile>[1]) =>
+  fs.writeFile(path.join(directory, file), data);
+async function expectMissing(operation: Promise<unknown>) {
+  await expect(operation).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 describe("ManagedWorktreeService", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -115,6 +122,13 @@ describe("ManagedWorktreeService", () => {
   let env: NodeJS.ProcessEnv;
   let now: number;
   let service: ManagedWorktreeService;
+
+  function create(
+    name: string,
+    options: Omit<Parameters<ManagedWorktreeService["create"]>[0], "repoRoot" | "name"> = {},
+  ) {
+    return service.create({ repoRoot: repo, name, baseRef: "HEAD", ...options });
+  }
 
   async function materializeDownstreamFixture(
     name: string,
@@ -149,13 +163,7 @@ describe("ManagedWorktreeService", () => {
   });
 
   it("does not remove a worktree owned by another caller", async () => {
-    const created = await service.create({
-      repoRoot: repo,
-      name: "session-owned",
-      baseRef: "HEAD",
-      ownerKind: "session",
-      ownerId: "session-1",
-    });
+    const created = await create("session-owned", { ownerKind: "session", ownerId: "session-1" });
 
     await expect(
       service.removeIfLosslessByPath(created.path, {
@@ -169,7 +177,7 @@ describe("ManagedWorktreeService", () => {
   it("creates a worktree from a remote-only branch ref returned by the picker", async () => {
     await addRemote(root, repo);
     await git(repo, "checkout", "-b", "remote-only");
-    await fs.writeFile(path.join(repo, "remote-only.txt"), "remote\n");
+    await writeFile(repo, "remote-only.txt", "remote\n");
     await git(repo, "add", "remote-only.txt");
     await git(repo, "commit", "-m", "remote only commit");
     await git(repo, "push", "origin", "remote-only");
@@ -180,11 +188,7 @@ describe("ManagedWorktreeService", () => {
     const listed = await service.listRepositoryBranches(repo);
     const remoteRef = listed.branches.find((branch) => branch.kind === "remote")?.name;
     expect(remoteRef).toBe("origin/remote-only");
-    const created = await service.create({
-      repoRoot: repo,
-      name: "from-remote",
-      baseRef: remoteRef,
-    });
+    const created = await create("from-remote", { baseRef: remoteRef });
     expect(await git(created.path, "rev-parse", "HEAD")).toBe(remoteCommit);
     expect(
       await git(created.path, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"),
@@ -193,7 +197,7 @@ describe("ManagedWorktreeService", () => {
 
   it("normalizes dashed refs and revision expressions before creating branches", async () => {
     const initialCommit = await git(repo, "rev-parse", "HEAD");
-    await fs.writeFile(path.join(repo, "history.txt"), "second\n");
+    await writeFile(repo, "history.txt", "second\n");
     await git(repo, "add", "history.txt");
     await git(repo, "commit", "-m", "second commit");
     const secondCommit = await git(repo, "rev-parse", "HEAD");
@@ -204,16 +208,8 @@ describe("ManagedWorktreeService", () => {
     await git(repo, "update-ref", "refs/tags/--force", thirdCommit);
     await git(repo, "reset", "--hard", initialCommit);
 
-    const fromRef = await service.create({
-      repoRoot: repo,
-      name: "dashed-ref",
-      baseRef: "--force",
-    });
-    const fromExpression = await service.create({
-      repoRoot: repo,
-      name: "dashed-expression",
-      baseRef: "--force~1",
-    });
+    const fromRef = await create("dashed-ref", { baseRef: "--force" });
+    const fromExpression = await create("dashed-expression", { baseRef: "--force~1" });
 
     expect(fromRef.baseRef).toBe("--force");
     expect(await git(fromRef.path, "rev-parse", "HEAD")).toBe(thirdCommit);
@@ -223,17 +219,13 @@ describe("ManagedWorktreeService", () => {
 
   it("preserves Git's bare-dash previous-checkout shorthand", async () => {
     await git(repo, "checkout", "-b", "previous");
-    await fs.writeFile(path.join(repo, "previous.txt"), "previous\n");
+    await writeFile(repo, "previous.txt", "previous\n");
     await git(repo, "add", "previous.txt");
     await git(repo, "commit", "-m", "previous checkout commit");
     const previousCommit = await git(repo, "rev-parse", "HEAD");
     await git(repo, "checkout", "main");
 
-    const created = await service.create({
-      repoRoot: repo,
-      name: "previous-checkout",
-      baseRef: "-",
-    });
+    const created = await create("previous-checkout", { baseRef: "-" });
 
     expect(created.baseRef).toBe("-");
     expect(await git(created.path, "rev-parse", "HEAD")).toBe(previousCommit);
@@ -241,12 +233,12 @@ describe("ManagedWorktreeService", () => {
 
   it("rejects ambiguous dashed refs instead of choosing by ref precedence", async () => {
     const initialCommit = await git(repo, "rev-parse", "HEAD");
-    await fs.writeFile(path.join(repo, "tag.txt"), "tag\n");
+    await writeFile(repo, "tag.txt", "tag\n");
     await git(repo, "add", "tag.txt");
     await git(repo, "commit", "-m", "tag candidate");
     const tagCommit = await git(repo, "rev-parse", "HEAD");
     await git(repo, "reset", "--hard", initialCommit);
-    await fs.writeFile(path.join(repo, "branch.txt"), "branch\n");
+    await writeFile(repo, "branch.txt", "branch\n");
     await git(repo, "add", "branch.txt");
     await git(repo, "commit", "-m", "branch candidate");
     const branchCommit = await git(repo, "rev-parse", "HEAD");
@@ -254,62 +246,35 @@ describe("ManagedWorktreeService", () => {
     await git(repo, "update-ref", "refs/heads/--ambiguous", branchCommit);
     await git(repo, "config", "core.warnAmbiguousRefs", "false");
 
-    await expect(
-      service.create({
-        repoRoot: repo,
-        name: "ambiguous-ref",
-        baseRef: "--ambiguous",
-      }),
-    ).rejects.toThrow(InvalidWorktreeBaseRefError);
+    await expect(create("ambiguous-ref", { baseRef: "--ambiguous" })).rejects.toThrow(
+      InvalidWorktreeBaseRefError,
+    );
 
     expect(await git(repo, "branch", "--list", "openclaw/ambiguous-ref")).toBe("");
     expect(await service.list()).toEqual([]);
   });
 
-  it.each(["--orphan"])(
-    "rejects absent dashed base %s without creating worktree state",
-    async (baseRef) => {
-      const before = await git(repo, "worktree", "list", "--porcelain");
-      const name = baseRef.slice(2);
+  it("rejects absent dashed base --orphan without creating worktree state", async () => {
+    const baseRef = "--orphan";
+    const before = await git(repo, "worktree", "list", "--porcelain");
+    const name = baseRef.slice(2);
 
-      await expect(service.create({ repoRoot: repo, name, baseRef })).rejects.toThrow(
-        InvalidWorktreeBaseRefError,
-      );
+    await expect(create(name, { baseRef })).rejects.toThrow(InvalidWorktreeBaseRefError);
 
-      expect(await git(repo, "worktree", "list", "--porcelain")).toBe(before);
-      expect(await git(repo, "branch", "--list", `openclaw/${name}`)).toBe("");
-      expect(await service.list()).toEqual([]);
-      await expect(fs.readdir(path.join(env.OPENCLAW_STATE_DIR!, "worktrees"))).resolves.toEqual(
-        [],
-      );
-    },
-  );
+    expect(await git(repo, "worktree", "list", "--porcelain")).toBe(before);
+    expect(await git(repo, "branch", "--list", `openclaw/${name}`)).toBe("");
+    expect(await service.list()).toEqual([]);
+    await expect(fs.readdir(path.join(env.OPENCLAW_STATE_DIR!, "worktrees"))).resolves.toEqual([]);
+  });
 
   it("rejects name reuse across owners instead of adopting a foreign worktree", async () => {
-    await service.create({
-      repoRoot: repo,
-      name: "shared-name",
-      baseRef: "HEAD",
-      ownerKind: "session",
-      ownerId: "agent:main:dashboard:one",
-    });
+    await create("shared-name", { ownerKind: "session", ownerId: "agent:main:dashboard:one" });
     await expect(
-      service.create({
-        repoRoot: repo,
-        name: "shared-name",
-        baseRef: "HEAD",
-        ownerKind: "session",
-        ownerId: "agent:main:dashboard:two",
-      }),
+      create("shared-name", { ownerKind: "session", ownerId: "agent:main:dashboard:two" }),
     ).rejects.toThrow(/already in use by session/);
-    await expect(
-      service.create({ repoRoot: repo, name: "shared-name", baseRef: "HEAD" }),
-    ).rejects.toThrow(/already in use by session/);
+    await expect(create("shared-name")).rejects.toThrow(/already in use by session/);
     // The rightful owner still reuses its record.
-    const reused = await service.create({
-      repoRoot: repo,
-      name: "shared-name",
-      baseRef: "HEAD",
+    const reused = await create("shared-name", {
       ownerKind: "session",
       ownerId: "agent:main:dashboard:one",
     });
@@ -380,8 +345,8 @@ describe("ManagedWorktreeService", () => {
   );
 
   it("copies included ignored regular files independently, including large literal-tilde paths and hardlinks, without following symlinks", async () => {
-    await fs.writeFile(path.join(repo, ".gitignore"), "~/\nlinked\nlinked-dir/\n");
-    await fs.writeFile(path.join(repo, ".worktreeinclude"), "~/*.txt\nlinked\nlinked-dir/**\n");
+    await writeFile(repo, ".gitignore", "~/\nlinked\nlinked-dir/\n");
+    await writeFile(repo, ".worktreeinclude", "~/*.txt\nlinked\nlinked-dir/**\n");
     await fs.mkdir(path.join(repo, "~"));
     const contents = Buffer.alloc(17 * 1024 * 1024, "x");
     await fs.writeFile(path.join(repo, "~", "keep.txt"), contents);
@@ -393,10 +358,10 @@ describe("ManagedWorktreeService", () => {
     await fs.symlink(outside, path.join(repo, "linked"));
     const outsideDir = path.join(root, "outside-dir");
     await fs.mkdir(outsideDir);
-    await fs.writeFile(path.join(outsideDir, "escape.txt"), "outside\n");
+    await writeFile(outsideDir, "escape.txt", "outside\n");
     await fs.symlink(outsideDir, path.join(repo, "linked-dir"));
 
-    const created = await service.create({ repoRoot: repo, name: "includes", baseRef: "HEAD" });
+    const created = await create("includes");
     const copied = path.join(created.path, "~", "keep.txt");
     expect(Buffer.compare(await fs.readFile(copied), contents)).toBe(0);
     expect((await fs.stat(copied)).mode & 0o777).toBe(0o744);
@@ -409,20 +374,14 @@ describe("ManagedWorktreeService", () => {
     expect(
       Buffer.compare(await fs.readFile(path.join(created.path, "~", "linked.txt")), contents),
     ).toBe(0);
-    await expect(fs.stat(path.join(created.path, "~", "skip.bin"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    await expect(fs.stat(path.join(created.path, "linked"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    await expect(
-      fs.stat(path.join(created.path, "linked-dir", "escape.txt")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissing(fs.stat(path.join(created.path, "~", "skip.bin")));
+    await expectMissing(fs.stat(path.join(created.path, "linked")));
+    await expectMissing(fs.stat(path.join(created.path, "linked-dir", "escape.txt")));
   });
 
   it("rejects an included file replaced by a symlink after inspection", async () => {
-    await fs.writeFile(path.join(repo, ".gitignore"), "settings.local\n");
-    await fs.writeFile(path.join(repo, ".worktreeinclude"), "settings.local\n");
+    await writeFile(repo, ".gitignore", "settings.local\n");
+    await writeFile(repo, ".worktreeinclude", "settings.local\n");
     const source = path.join(repo, "settings.local");
     await fs.writeFile(source, "included bytes\n");
     const outside = path.join(root, "outside.txt");
@@ -439,9 +398,7 @@ describe("ManagedWorktreeService", () => {
       return observed;
     });
 
-    await expect(
-      service.create({ repoRoot: repo, name: "swapped-source", baseRef: "HEAD" }),
-    ).rejects.toThrow();
+    await expect(create("swapped-source")).rejects.toThrow();
 
     expect(replaced).toBe(true);
     expect(listRegistryWorktrees(env)).toEqual([]);
@@ -452,17 +409,17 @@ describe("ManagedWorktreeService", () => {
   });
 
   it("rematerializes a named workboard snapshot with hidden edits and independent provisioned state", async () => {
-    await fs.writeFile(path.join(repo, ".gitignore"), "ignored.txt\npresent.env\ndeleted.env\n");
-    await fs.writeFile(path.join(repo, ".worktreeinclude"), "present.env\ndeleted.env\n");
+    await writeFile(repo, ".gitignore", "ignored.txt\npresent.env\ndeleted.env\n");
+    await writeFile(repo, ".worktreeinclude", "present.env\ndeleted.env\n");
     for (const file of ["assumed.txt", "skipped.txt", "deleted.txt", "tool.sh"]) {
-      await fs.writeFile(path.join(repo, file), "original\n");
+      await writeFile(repo, file, "original\n");
     }
     await git(repo, "add", ".");
     await git(repo, "update-index", "--chmod=+x", "tool.sh");
     await git(repo, "commit", "-m", "snapshot inputs");
     await git(repo, "config", "core.filemode", "false");
     for (const file of ["present.env", "deleted.env"]) {
-      await fs.writeFile(path.join(repo, file), "source value\n");
+      await writeFile(repo, file, "source value\n");
     }
     const request = {
       repoRoot: repo,
@@ -483,7 +440,7 @@ describe("ManagedWorktreeService", () => {
       "ignored.txt",
       "present.env",
     ]) {
-      await fs.writeFile(path.join(created.path, file), `${file} local\n`);
+      await writeFile(created.path, file, `${file} local\n`);
     }
     await fs.chmod(path.join(created.path, "tool.sh"), 0o644);
     if (process.platform !== "win32") {
@@ -498,7 +455,7 @@ describe("ManagedWorktreeService", () => {
     );
     const removed = await service.remove({ id: created.id, reason: "run-end" });
     expect(removed).toMatchObject({ removed: true, snapshotRef: expect.any(String) });
-    await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissing(fs.stat(created.path));
     expect(await getRegistryWorktreeProvisionedState(env, created.id)).toEqual([
       { path: "deleted.env", mode: null, chunks: 0 },
       { path: "present.env", mode, chunks: 1 },
@@ -507,7 +464,7 @@ describe("ManagedWorktreeService", () => {
       /ignored.txt|present.env|deleted.env/,
     );
     expect(await git(repo, "ls-tree", removed.snapshotRef!, "tool.sh")).toMatch(/^100644 /);
-    await fs.writeFile(path.join(repo, "present.env"), "new source value\n");
+    await writeFile(repo, "present.env", "new source value\n");
     now += IDLE_GC_MS + 1;
     const commandSpy = vi.spyOn(commandRunner, "runCommandWithTimeout");
     const restored = await service.create({ ...request, baseRef: created.branch });
@@ -531,13 +488,11 @@ describe("ManagedWorktreeService", () => {
       "untracked.txt",
       "present.env",
     ]) {
-      expect(await fs.readFile(path.join(restored.path, file), "utf8")).toBe(`${file} local\n`);
+      expect(await readText(restored.path, file)).toBe(`${file} local\n`);
     }
     expect((await fs.stat(path.join(restored.path, "present.env"))).mode & 0o7777).toBe(mode);
     for (const file of ["ignored.txt", "deleted.txt", "deleted.env"]) {
-      await expect(fs.stat(path.join(restored.path, file))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectMissing(fs.stat(path.join(restored.path, file)));
     }
     expect(await git(restored.path, "diff", "--cached", "--name-only")).toBe("");
     expect(await git(restored.path, "diff", "--name-only")).toBe(
@@ -549,13 +504,13 @@ describe("ManagedWorktreeService", () => {
   });
 
   it("rejects a snapshot hidden by the shallow clone boundary", async () => {
-    await fs.writeFile(path.join(repo, "README.md"), "second commit\n");
+    await writeFile(repo, "README.md", "second commit\n");
     await git(repo, "commit", "-am", "second");
     const remote = await addRemote(root, repo);
     const clone = path.join(root, "shallow");
     await git(root, "clone", "--depth=1", pathToFileURL(remote).href, clone);
     const created = await materializeDownstreamFixture("shallow-restore", { repoRoot: clone });
-    await fs.writeFile(path.join(created.path, "README.md"), "saved changes\n");
+    await writeFile(created.path, "README.md", "saved changes\n");
     const removed = await service.remove({ id: created.id, reason: "test" });
     const snapshotRef = removed.snapshotRef!;
     const snapshotCommit = await git(clone, "rev-parse", snapshotRef);
@@ -567,7 +522,7 @@ describe("ManagedWorktreeService", () => {
       `Cannot restore snapshot ${snapshotCommit} in ${clone}: shallow clone boundary; run \`git fetch --unshallow\` in ${clone}`,
     );
     expect(getRegistryWorktree(env, created.id)?.snapshotRef).toBe(snapshotRef);
-    await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissing(fs.stat(created.path));
   });
 
   it("refuses to overwrite a branch advanced after removal", async () => {
@@ -580,14 +535,14 @@ describe("ManagedWorktreeService", () => {
     await expect(service.restore({ id: created.id })).rejects.toThrow("Recorded branch moved");
 
     expect(await git(repo, "rev-parse", created.branch)).toBe(branchTip);
-    await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissing(fs.stat(created.path));
   });
 
   it.skipIf(process.platform === "win32")(
     "retains a provisioned file replaced with a symlink",
     async () => {
-      await fs.writeFile(path.join(repo, ".gitignore"), ".env.local\n");
-      await fs.writeFile(path.join(repo, ".worktreeinclude"), ".env.local\n");
+      await writeFile(repo, ".gitignore", ".env.local\n");
+      await writeFile(repo, ".worktreeinclude", ".env.local\n");
       await git(repo, "add", ".gitignore", ".worktreeinclude");
       await git(repo, "commit", "-m", "provisioning");
       const source = path.join(repo, ".env.local");
@@ -612,14 +567,9 @@ describe("ManagedWorktreeService", () => {
       service = new ManagedWorktreeService({ env, now: () => now });
     });
     async function materialize(name: string) {
-      return await materializeManagedWorktreeFixture({
-        env,
-        name,
-        now,
+      return materializeDownstreamFixture(name, {
         ownerKind: "workboard",
         ownerId: `card-${name}`,
-        repoRoot: repo,
-        stateDir,
       });
     }
 
@@ -633,10 +583,7 @@ describe("ManagedWorktreeService", () => {
         { mode: 0o755 },
       );
       await expect(
-        service.create({
-          repoRoot: repo,
-          name: "closed-authority",
-          baseRef: "HEAD",
+        create("closed-authority", {
           commitGuard: () => {
             if (existsSync(closed)) {
               throw new TypeError("authority closed");
@@ -659,15 +606,10 @@ describe("ManagedWorktreeService", () => {
 
       await expect(service.removeIfLossless(created.id)).resolves.toBe(true);
 
-      let contention: unknown;
-      try {
-        await claimWorktreeRemoval(env, {
-          worktreeId: staleRecord.id,
-          token: "late-remover",
-        });
-      } catch (error) {
-        contention = error;
-      }
+      const contention = await claimWorktreeRemoval(env, {
+        worktreeId: staleRecord.id,
+        token: "late-remover",
+      }).catch((error: unknown) => error);
       expect(contention).toBeInstanceOf(WorktreeRemovalContentionError);
       expect(contention).toMatchObject({ kind: "finalized" });
       expect(getRegistryWorktree(env, created.id)).toMatchObject({
@@ -719,20 +661,18 @@ describe("ManagedWorktreeService", () => {
       );
 
       expect(getRegistryWorktree(env, created.id)?.runEndCleanup).toBeUndefined();
-      await fs.writeFile(path.join(restored.path, "untracked.txt"), "retain me\n");
+      await writeFile(restored.path, "untracked.txt", "retain me\n");
       await service.acquire(created.id);
       await expect(service.removeIfLossless(created.id)).resolves.toBe(false);
 
       expect(getRegistryWorktree(env, created.id)).toMatchObject({
         runEndCleanup: { outcome: "retained-dirty", at: now },
       });
-      expect(await fs.readFile(path.join(restored.path, "untracked.txt"), "utf8")).toBe(
-        "retain me\n",
-      );
+      expect(await readText(restored.path, "untracked.txt")).toBe("retain me\n");
     });
 
     it("retains an ignored nested linked repository at run end", async () => {
-      await fs.writeFile(path.join(repo, ".gitignore"), "nested/\n");
+      await writeFile(repo, ".gitignore", "nested/\n");
       await git(repo, "add", ".gitignore");
       await git(repo, "commit", "-m", "ignore nested checkout state");
       await git(repo, "push", "origin", "main");
@@ -832,13 +772,7 @@ describe("ManagedWorktreeService", () => {
       limitsSatisfied: true,
     };
     async function fixture(name: string, repoRoot = repo) {
-      const created = await materializeManagedWorktreeFixture({
-        env,
-        name,
-        now,
-        repoRoot,
-        stateDir,
-      });
+      const created = await materializeDownstreamFixture(name, { repoRoot });
       const identity = await service.resolveRepositoryIdentity(repoRoot);
       const repositoryIdentity = {
         repoRoot: identity.repoRoot,
@@ -889,7 +823,7 @@ describe("ManagedWorktreeService", () => {
 
     it("list preserves a checkout restored after a missing-path observation", async () => {
       const created = await fixture("restored");
-      await fs.writeFile(path.join(created.path, "README.md"), "restored user changes\n");
+      await writeFile(created.path, "README.md", "restored user changes\n");
       const gate = holdPathObservation(created.path);
       const observing = service.list();
       try {
@@ -904,9 +838,7 @@ describe("ManagedWorktreeService", () => {
         gate.resume.resolve();
         const result = await observing;
         expect(getRegistryWorktree(env, created.id)).toEqual(restored);
-        expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe(
-          "restored user changes\n",
-        );
+        expect(await readText(created.path, "README.md")).toBe("restored user changes\n");
         expect(result).toEqual([restored]);
       } finally {
         gate.inspect.resolve();
@@ -928,7 +860,7 @@ describe("ManagedWorktreeService", () => {
           repoFingerprint: staleIdentity.fingerprint,
         },
       });
-      await fs.writeFile(path.join(created.path, "README.md"), "retained user changes\n");
+      await writeFile(created.path, "README.md", "retained user changes\n");
       const temporarilyAbsent = path.join(root, "temporarily-absent");
       await fs.rename(created.path, temporarilyAbsent);
       const gate = holdPathObservation(created.path);
@@ -949,9 +881,7 @@ describe("ManagedWorktreeService", () => {
         gate.resume.resolve();
         const result = await observing;
         expect(getRegistryWorktree(env, created.id)).toEqual(rebound);
-        expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe(
-          "retained user changes\n",
-        );
+        expect(await readText(created.path, "README.md")).toBe("retained user changes\n");
         expect(result).toEqual({
           ...completedGcResult,
           packsRemoved: 0,
