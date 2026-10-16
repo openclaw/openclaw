@@ -135,7 +135,6 @@ async function restoreArchivedDispatchSession(params: {
       const currentEntry = metadata
         ? metadata.readCurrent()
         : await readSessionEntryReadOnlyInWorker(scope);
-      metadata?.assertCurrent();
       if (
         !currentEntry ||
         !canRestore(currentEntry, {

@@ -65,6 +65,7 @@ export type CodexPluginThreadConfig = {
 
 type BuildCodexPluginThreadConfigParams = {
   pluginConfig?: unknown;
+  policy?: ResolvedCodexPluginsPolicy;
   request: CodexPluginRuntimeRequest;
   configCwd?: string;
   threadId?: string;
@@ -85,10 +86,10 @@ export function shouldBuildCodexPluginThreadConfig(pluginConfig?: unknown): bool
 
 /** Fingerprints policy and app-cache identity before runtime inventory is read. */
 export function buildCodexPluginThreadConfigInputFingerprint(params: {
-  pluginConfig?: unknown;
+  policy: ResolvedCodexPluginsPolicy;
   appCacheKey?: string;
 }): string {
-  const policy = resolveCodexPluginsPolicy(params.pluginConfig);
+  const { policy } = params;
   return fingerprintCodexPolicy({
     version: CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION,
     policy: {
@@ -104,7 +105,7 @@ export function buildCodexPluginThreadConfigInputFingerprint(params: {
 
 /** Builds the deny-all app patch used when plugin discovery exceeds its turn budget. */
 export function buildCodexPluginThreadConfigTimeoutFallback(params: {
-  pluginConfig?: unknown;
+  policy: ResolvedCodexPluginsPolicy;
   appCacheKey: string;
   message: string;
 }): CodexPluginThreadConfig {
@@ -122,8 +123,11 @@ export async function buildCodexPluginThreadConfig(
 ): Promise<CodexPluginThreadConfig> {
   const appCache = params.appCache ?? defaultCodexAppInventoryCache;
   const threadAppCacheKey = resolveCodexPluginThreadAppCacheKey(params);
-  let inputFingerprint = buildCodexPluginThreadConfigInputFingerprint(params);
-  const policy = resolveCodexPluginsPolicy(params.pluginConfig);
+  const policy = params.policy ?? resolveCodexPluginsPolicy(params.pluginConfig);
+  const inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
+    policy,
+    appCacheKey: params.appCacheKey,
+  });
   if (!policy.enabled) {
     return finishPluginThreadConfig({
       enabled: false,
@@ -158,7 +162,6 @@ export async function buildCodexPluginThreadConfig(
       targetAppIds: collectCodexPluginOwnedAppIds(inventory),
     });
     inventory = await readInventory();
-    inputFingerprint = buildCodexPluginThreadConfigInputFingerprint(params);
   };
   const activationRequired = inventory.records.some((record) => record.activationRequired);
   const appInventoryMissing = shouldRefreshMissingAppInventory(params, policy, inventory);

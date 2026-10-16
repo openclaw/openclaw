@@ -390,6 +390,18 @@ describe("agent harness host capability", () => {
 
     config.tools.loopDetection.enabled = false;
     skillsSnapshot.skills[0]!.name = "forged";
+    using createTools = vi
+      .spyOn(agentTools, "createOpenClawCodingToolsInternalAsync")
+      .mockResolvedValue([]);
+    await host.capabilities.createToolSurfaceAsync!({
+      skillsSnapshot: { prompt: "remapped", skills: [{ name: "prompt-view" }] },
+    });
+    expect(createTools.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        skillsSnapshot: expect.objectContaining({ skills: [{ name: "prompt-view" }] }),
+        pluginExecutionSkillsSnapshot: expect.objectContaining({ skills: [{ name: "safe" }] }),
+      }),
+    );
     await host.capabilities.runBeforeToolCall({ toolName: "read", params: {} });
 
     expect(mockRunBefore).toHaveBeenLastCalledWith(

@@ -161,12 +161,10 @@ export function verifyPostgresSchema(
   ) {
     throw new Error(`PostgreSQL schema drift detected. ${recovery}`);
   }
-  if (metadata.ddl_hash && metadata.ddl_hash !== hash(ddl)) {
-    throw new Error(`PostgreSQL generated DDL hash mismatch. ${recovery}`);
-  }
-  if (metadata.server_major === major && metadata.fingerprint && metadata.ddl_hash) {
+  if (metadata.server_major === major && metadata.fingerprint && metadata.ddl_hash === hash(ddl)) {
     return;
   }
+  // Fragment regrouping can change DDL bytes without changing the canonical catalog.
   verifyAndRecordPostgresSchema(db, namespace, schema, snapshot);
 }
 

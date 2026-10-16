@@ -103,6 +103,9 @@ does not depend on the browser returning.
 Accepted `sessions_send` agent updates recover from their saved input and original
 delivery ID. Temporary admission, worker capacity, and storage-readiness failures
 get up to three attempts, waiting 5 seconds and then 10 seconds between attempts.
+Recovery preserves the accepted identity when older saved delivery metadata omitted
+an unset lifecycle revision during JSON storage. An identical completed input returns
+its recorded outcome; it does not start another turn. Changed input still conflicts.
 Each attempt checks the original source and destination sessions and current
 communication permission again. Reset, replaced, archived, or permission-denied
 sessions stop automatic delivery. Unknown failures and exhausted retries leave the
@@ -833,6 +836,15 @@ execute in the one-wide background command lane, retaining its slot until the tu
 finishes. Interactive turns use the main lane, so a large recovery backlog cannot
 fill their execution slots. Later interrupted turns keep their durable claims
 while waiting; a long recovered turn delays other automatic continuations.
+
+When a new user message or a retry of an accepted chat turn initiates recovery,
+that recovery uses the main lane for both admission and execution. It does not
+wait behind unrelated background work. Existing recovery owners are not
+preempted, and normal main-lane concurrency limits and per-session ordering
+still apply. Detached queued followups and unattended retries remain in the
+background lane. This changes only in-process scheduling, not stored recovery
+claims, retry budgets, configuration, or upgrade behavior.
+
 Optional startup database maintenance and page-cache warming wait for this
 backlog to drain; runtime timers and cron startup proceed independently. Deferred
 database admissions join the same startup scheduler. Shutdown stops new preparation and

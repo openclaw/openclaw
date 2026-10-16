@@ -4,6 +4,7 @@ import {
   readSessionEntryResetRecallCutoff,
 } from "../../../packages/memory-host-sdk/src/host/session-files.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { prepareAssistantTranscriptText } from "../../shared/chat-message-content.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { readTranscriptExportSnapshotFromDatabase } from "./session-accessor.sqlite-read.js";
 import {
@@ -59,7 +60,8 @@ export async function prepareSessionMemoryEntries(
               try {
                 prepared[index] = runWithSessionTranscriptReadFence(request.admission, () =>
                   readTranscriptExportSnapshotFromDatabase(database, resolved, request.options, {
-                    projectEvent: projectSessionEntryRecord,
+                    projectEvent: (event) =>
+                      projectSessionEntryRecord(event, prepareAssistantTranscriptText),
                     previous:
                       previous?.generation != null && previous.throughSeq !== undefined
                         ? {

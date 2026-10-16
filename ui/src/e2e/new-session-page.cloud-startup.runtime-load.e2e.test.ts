@@ -314,7 +314,7 @@ suite.define(() => {
             await page.locator(".new-session-page__message").fill(separateDraft);
           }
           const configRuntime = controlUiE2eBuiltModuleRequest(
-            "ui/src/pages/config/config-page.ts",
+            "ui/src/pages/config/config-page-state.ts",
             buildRoot,
           );
           await page.route(configRuntime, (route) => route.abort("failed"));

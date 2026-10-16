@@ -260,7 +260,7 @@ def with_screenshot_simulator(template, diagnostics: nil)
   require_idle_screenshot_simulators!
   name = template.fetch("name")
   udid = screenshot_phase(diagnostics, "create", device: name) do
-    sh("xcrun", "simctl", "create", name, template.fetch("deviceTypeIdentifier"), template.fetch("runtime"), log: false).strip
+    sh("xcrun", "simctl", "create", name, template.fetch("deviceTypeIdentifier"), template.fetch("runtime")).strip
   end
   UI.user_error!("simctl create did not return a simulator UUID.") unless udid.match?(/\A[\da-fA-F]{8}(?:-[\da-fA-F]{4}){3}-[\da-fA-F]{12}\z/)
 
@@ -1300,6 +1300,14 @@ def app_store_connect_target_app
   resolve_app_store_connect_app(app_identifier: app_identifier, app_id: app_id)
 end
 
+def selected_app_store_build(version)
+  response = Spaceship::ConnectAPI.get_build(app_store_version_id: version.id)
+  # An editable version can have no selected build; Fastlane cannot parse data: null.
+  return nil if response.body.fetch("data").nil?
+
+  response.to_models.first
+end
+
 def app_store_build_uploads(app_id:, short_version: nil)
   # Build uploads include failed and still-processing attempts before they
   # materialize as TestFlight builds, so they own build-number allocation.
@@ -1340,7 +1348,7 @@ def ios_public_release_notes_baseline(versions)
   latest = public_versions.max_by { |version| Gem::Version.new(version.version_string) }
   matches = public_versions.select { |version| version.version_string == latest.version_string }
   UI.user_error!("Ambiguous public App Store version #{latest.version_string}.") unless matches.length == 1
-  build = latest.get_build
+  build = selected_app_store_build(latest)
   unless build && env_present?(build.id.to_s) && build.version.to_s.match?(/\A[1-9]\d*\z/)
     UI.user_error!("Public App Store version #{latest.version_string} has no identifiable attached build; cannot determine release notes baseline.")
   end
@@ -1643,7 +1651,7 @@ def stage_ios_app_store_release!(short_version:, build_number:, notes:)
   end
   version = preflight_app_store_version!(short_version: short_version)
   UI.user_error!("Missing editable App Store version #{short_version}; restore it before retrying staging.") unless version
-  selected_build = version.get_build
+  selected_build = selected_app_store_build(version)
   if selected_build && selected_build.version.to_i > build_number.to_i
     UI.user_error!("App Store version #{short_version} already selects newer build #{selected_build.version}; refusing to replace it with #{build_number}.")
   end
@@ -1661,7 +1669,7 @@ def stage_ios_app_store_release!(short_version:, build_number:, notes:)
 
   saved_notes = version.get_app_store_version_localizations.select { |localization| localization.locale == "en-US" }
   notes_match = first_version || (saved_notes.length == 1 && saved_notes.first.whats_new == notes)
-  unless version.get_build&.id == build.id && notes_match
+  unless selected_app_store_build(version)&.id == build.id && notes_match
     UI.user_error!("App Store staging readback did not match build #{short_version} (#{build_number}) and saved notes; retry staging without uploading again.")
   end
   !first_version

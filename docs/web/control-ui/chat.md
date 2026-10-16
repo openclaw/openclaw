@@ -900,6 +900,14 @@ HTML widget media keep their existing behavior.
 
 ## Session Details
 
+When a dashboard or another page is the main view, **Chat** in its header toggles
+that session’s existing conversation, not Side chat. The page and chat retain their
+content and drafts. On phones, Chat takes the content area; toggle it off to return
+to the same page. **Layout** remains for tools, docking, and split views.
+
+Open **⋯ → Session details** for context and progress without opening Chat. It works
+with full-screen pages too. Regular desktop chats also retain the **Details** button.
+
 **Details** brings session context and task progress together beside the conversation.
 On wide chat panes it opens automatically as a docked right-hand column, with
 the transcript and composer centered in the remaining space. Docking uses the

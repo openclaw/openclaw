@@ -355,7 +355,7 @@ export function createAcpReplyProjector(params: {
       }
       if (event.tag === "usage_update" && settings.repeatSuppression) {
         const usageTuple =
-          typeof event.used === "number" && typeof event.size === "number"
+          event.used !== undefined && event.size !== undefined
             ? `${event.used}/${event.size}`
             : event.text.trim();
         if (usageTuple === lastUsageTuple) {

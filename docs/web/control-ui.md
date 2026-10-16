@@ -171,7 +171,10 @@ Failed replies show **Try again** at the right of the heading. A compact
 stays visible on touch devices. **Details** appears only when the diagnostic
 contains more than the visible summary. To change models, use the model picker
 in the composer; retrying continues from the existing conversation without
-replaying the original request.
+replaying the original request. Internal updates that return no answer keep their
+failed-run diagnostics without adding a retry notice to an already successful
+conversation. User-requested missing replies and actual provider or storage
+failures still show their failure notice.
 
 The chat header keeps **Share**, **Layout**, and the session menu together.
 **Layout** contains focus, split, swap, panel selection, and dock-position actions,

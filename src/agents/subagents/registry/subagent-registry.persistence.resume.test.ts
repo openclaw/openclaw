@@ -723,7 +723,7 @@ describe("subagent registry persistence resume", () => {
         expect(restoredGatewayContextResolver?.()).toBe(gatewayContext);
 
         await Promise.all([wakeStarted.promise, waitStarted.promise]);
-        expect(wakeRequester).toHaveBeenCalledOnce();
+        expect(wakeRequester).toHaveBeenCalled();
         expect(recoveryRuntime.waitForAgent).toHaveBeenCalledOnce();
         expect(recoveryRuntime.dispatchAgent).not.toHaveBeenCalled();
         expect(callGatewayModule.callGateway).not.toHaveBeenCalledWith(

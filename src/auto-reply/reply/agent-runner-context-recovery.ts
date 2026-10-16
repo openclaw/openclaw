@@ -93,15 +93,15 @@ function resolveHeartbeatBleedHint(params: {
     ref: primaryRef,
   });
   if (
-    typeof runtimeWindow === "number" &&
-    typeof primaryWindow === "number" &&
+    runtimeWindow !== undefined &&
+    primaryWindow !== undefined &&
     runtimeWindow >= primaryWindow
   ) {
     return undefined;
   }
 
   const runtimeLabel =
-    typeof runtimeWindow === "number" && runtimeWindow > 0
+    runtimeWindow !== undefined && runtimeWindow > 0
       ? ` (${formatContextWindowLabel(runtimeWindow)} context)`
       : "";
   return (

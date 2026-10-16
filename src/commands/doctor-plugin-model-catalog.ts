@@ -51,9 +51,9 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
     const agentWarnings = inspected.warnings.map((warning) => shortenHomePath(warning));
     const migrations = inspected.catalogs;
     const repairablePluginIds = loadPersistedPluginModelCatalogsReadOnly(agentDir)
-      .filter(
-        ({ contents }) => repairPluginModelCatalogTransportMetadata(contents).removedModelCount > 0,
-      )
+      .filter(({ contents }) => {
+        return repairPluginModelCatalogTransportMetadata(contents).contents !== contents;
+      })
       .map(({ pluginId }) => pluginId);
     agents.push({ agentDir, migrations, warnings: agentWarnings, repairablePluginIds });
     warnings.push(...agentWarnings);
@@ -78,7 +78,7 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
     for (const agent of agents) {
       for (const pluginId of agent.repairablePluginIds) {
         details.push(
-          `Generated catalog ${pluginId} in ${shortenHomePath(agent.agentDir)} contains model rows without transport API metadata.`,
+          `Generated catalog ${pluginId} in ${shortenHomePath(agent.agentDir)} contains repairable model rows (missing transport API metadata or an incomplete cost).`,
         );
       }
     }
@@ -97,7 +97,7 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
   }
 
   let migrated = 0;
-  const repairs: Array<{ pluginId: string; removedModelCount: number }> = [];
+  const repairs: ReturnType<typeof repairPersistedPluginModelCatalogs> = [];
   for (const agent of agents) {
     // Fix also retires verified orphaned migration recovery rows when no sidecar remains.
     const result = migrateLegacyPluginModelCatalogs({
@@ -140,10 +140,17 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
   if (repairs.length > 0) {
     emitNote(
       repairs
-        .map(
-          ({ pluginId, removedModelCount }) =>
-            `Repaired generated model catalog ${pluginId}: removed ${removedModelCount} model row(s) without transport API metadata.`,
-        )
+        .map(({ pluginId, removedModelCount, completedCostModelCount }) => {
+          const actions = [
+            removedModelCount > 0
+              ? `removed ${removedModelCount} model row(s) without transport API metadata`
+              : undefined,
+            completedCostModelCount > 0
+              ? `completed the cost of ${completedCostModelCount} model row(s)`
+              : undefined,
+          ].filter((action) => action !== undefined);
+          return `Repaired generated model catalog ${pluginId}: ${actions.join("; ")}.`;
+        })
         .join("\n"),
       "Doctor changes",
     );

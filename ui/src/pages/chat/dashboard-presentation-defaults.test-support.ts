@@ -6,7 +6,6 @@ import type { BoardWidgetPageMenu } from "../../components/board/board-widget-ce
 import type { BoardCommandEvent, BoardProvider } from "../../lib/board/provider.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
-import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import {
@@ -16,6 +15,7 @@ import {
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import { createPageState } from "./chat-state-page.ts";
+import { renderPaneHeaderInto } from "./components/chat-pane-header.test-support.ts";
 import { isSidebarSlotVisible, type SidebarLayout } from "./sidebar-layout.ts";
 
 type DashboardPane = TestChatPane & {
@@ -159,7 +159,7 @@ export function createDashboardHarness(
     pane.commitSidebarPanelResize(state.sidebarLayout, column!.id, 620);
   };
   const header = async () => {
-    renderPaneLegacyContent(
+    renderPaneHeaderInto(
       pane.renderPaneHeader(
         createPaneHeaderWorkspaceFixture(state),
         state.sessionsResult?.sessions[0],

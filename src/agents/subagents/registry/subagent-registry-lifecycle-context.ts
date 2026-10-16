@@ -61,6 +61,7 @@ export interface SubagentLifecycleCommonContext {
 }
 
 export interface SubagentLifecycleCompletionContext extends SubagentLifecycleCommonContext {
+  resumeAncestorCleanup(settledEntry: SubagentRunRecord): void;
   readonly progressEndedEntries: WeakSet<object>;
   acquireTerminalCompletionLock(runId: string): Promise<() => void>;
   bindTerminalSessionEffects(entry: SubagentRunRecord, effects?: SubagentSessionEffects): void;
@@ -125,6 +126,10 @@ export interface SubagentLifecycleWakeContext extends SubagentLifecycleCommonCon
   readonly scheduledRequesterSettleWakeTimers: Map<string, ScheduledRequesterSettleWake>;
   readonly scheduledRequesterSettleWakeRuns: Set<object>;
   readonly pendingRequesterSettleWakeRearms: Set<object>;
+  readonly waitingRequesterSettleWakeRuns: WeakMap<
+    object,
+    { rearmGeneration?: number; deadline?: number }
+  >;
   readonly cancelledRequesterSettleWakeRuns: Set<object>;
   readonly pendingRequesterSettleWakeCommits: Map<object, PendingRequesterSettleWakeCommit>;
   resumeAncestorCleanup(settledEntry: SubagentRunRecord): void;

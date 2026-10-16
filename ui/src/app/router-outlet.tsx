@@ -12,7 +12,10 @@ import { ContentPresentation } from "../lib/solid/presentation.ts";
 import type { ApplicationContext } from "./context.ts";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import { LitRouteHost } from "./lit-route-host.tsx";
-import { RouterOutletController, selectRenderedRouteMatch } from "./router-outlet-controller.ts";
+import {
+  createRouterOutletPresentation,
+  selectRenderedRouteMatch,
+} from "./router-outlet-controller.ts";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
@@ -302,11 +305,12 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
     }
     notify();
   };
-  const outlet = new RouterOutletController<
+  const outlet = createRouterOutletPresentation<
     ApplicationRouteMatch["routeId"],
     ApplicationContext,
     NonNullable<ApplicationRouteMatch["module"]>
-  >(invalidate);
+  >(props);
+  let committedSnapshot: ReturnType<typeof outlet.snapshot> | undefined;
   const retainedGate = new McpAppUnmountGate<Presentation | null>({ requestUpdate: invalidate });
   const transientGate = new McpAppUnmountGate<Presentation | null>({ requestUpdate: invalidate });
   let retainedMatch: ApplicationRouteMatch | undefined;
@@ -372,19 +376,19 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
 
   const presentation = createMemo(() => {
     revision();
-    outlet.setInputs({
-      router: props.router,
-      onNotFound: props.onNotFound,
-      notFoundRecoveryReady: props.notFoundRecoveryReady,
-      retryContext: props.retryContext,
-      retryEnabled: props.retryEnabled,
-    });
     const router = props.router;
     if (!router) {
-      return { retained: null, transient: null, presented: false, waiting: false, settled: false };
+      return {
+        retained: null,
+        transient: null,
+        presented: false,
+        waiting: false,
+        settled: false,
+        snapshot: outlet.snapshot(),
+      };
     }
     synchronizeRetentionScope(router);
-    const snapshot = outlet.snapshot;
+    const snapshot = outlet.snapshot();
     const renderedMatch = selectRenderedRouteMatch(snapshot.active, snapshot.pending);
     const ready = renderedMatch?.status === "success" && renderedMatch.error === undefined;
     const retiredSession =
@@ -484,17 +488,23 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
       presented: presentRetained && !retainedGate.retiring && retainedValue?.key === retainedKey,
       waiting: presentRetained && retainedGate.retiring,
       settled: settled && !retainedGate.retiring && !transientGate.retiring,
+      snapshot,
     };
   });
 
   createEffect(presentation, (value) => {
+    committedSnapshot = value.snapshot;
     committedSettled = value.settled;
     committedGeneration = generation;
     notify();
   });
 
   const isSettled = () =>
-    !disposed && host.isConnected && committedGeneration === generation && committedSettled;
+    !disposed &&
+    host.isConnected &&
+    outlet.isCurrent(committedSnapshot) &&
+    committedGeneration === generation &&
+    committedSettled;
   const settlePresentation = async (): Promise<boolean> => {
     while (true) {
       if (disposed || !host.isConnected) {
@@ -505,7 +515,12 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
       if (disposed || !host.isConnected) {
         return false;
       }
-      if (committedGeneration === generation && !retainedGate.retiring && !transientGate.retiring) {
+      if (
+        outlet.isCurrent(committedSnapshot) &&
+        committedGeneration === generation &&
+        !retainedGate.retiring &&
+        !transientGate.retiring
+      ) {
         return isSettled();
       }
       // Async render transactions may need a browser task before they can commit.
@@ -515,10 +530,8 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
     }
   };
 
-  outlet.connect();
   onCleanup(() => {
     disposed = true;
-    outlet.disconnect();
     notify();
   });
 

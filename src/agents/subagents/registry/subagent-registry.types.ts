@@ -145,8 +145,6 @@ export type RequesterSettleWakeState = {
   rearmGeneration?: number;
   /** Reference to the conversation receipt for this presentation, not completion credit. */
   progressOperationId?: string;
-  /** Number of times this batch has been deferred due to unsettled descendants. */
-  deferralCount?: number;
   lastError?: string | null;
   /** Cleanup wanted to retire this row; defer deletion until the outbox resolves. */
   retireAfterSettle?: boolean;
