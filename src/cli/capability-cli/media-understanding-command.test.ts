@@ -1,10 +1,27 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createSafeAudioFixtureBuffer } from "../../media-understanding/runner.test-utils.js";
+import type {
+  MediaUnderstandingProvider,
+  VideoDescriptionRequest,
+} from "../../media-understanding/types.js";
+import { defaultRuntime } from "../../runtime.js";
+
+type CapturedRequest = {
+  provider: string;
+  model?: string;
+  baseUrl?: string;
+  headers?: Record<string, string>;
+  apiKey: string;
+};
 
 const hoisted = vi.hoisted(() => ({
   cfg: {} as OpenClawConfig,
-  calls: [] as Array<{ cfg: OpenClawConfig }>,
+  requests: [] as CapturedRequest[],
 }));
 
 vi.mock("./shared.js", async (importOriginal) => ({
@@ -12,43 +29,96 @@ vi.mock("./shared.js", async (importOriginal) => ({
   resolveLocalCapabilityAgent: vi.fn(async () => ({
     cfg: hoisted.cfg,
     agentId: "main",
-    agentDir: "/tmp/agent",
+    agentDir: path.join(path.sep, "nonexistent", "agent"),
   })),
 }));
 
-vi.mock("../../media-understanding/runtime.js", () => {
-  const run = async (params: { cfg: OpenClawConfig }) => {
-    hoisted.calls.push({ cfg: params.cfg });
-    return { text: "ok", provider: "openai", model: "whisper-1" };
+vi.mock("../../media-understanding/provider-registry.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../media-understanding/provider-registry.js")>();
+  const provider = (id: string): MediaUnderstandingProvider => {
+    const capture = async (req: VideoDescriptionRequest) => {
+      hoisted.requests.push({
+        provider: id,
+        model: req.model,
+        baseUrl: req.baseUrl,
+        headers: req.headers,
+        apiKey: req.apiKey,
+      });
+      return { text: `${id} output`, model: req.model };
+    };
+    return {
+      id,
+      capabilities: ["audio", "video"],
+      transcribeAudio: capture,
+      describeVideo: capture,
+    };
   };
-  return { transcribeAudioFile: vi.fn(run), describeVideoFile: vi.fn(run) };
+  return {
+    ...actual,
+    buildMediaUnderstandingRegistry: () =>
+      new Map(["openai", "groq", "deepgram", "google"].map((id) => [id, provider(id)])),
+  };
 });
-
-vi.mock("../cli-utils.js", () => ({
-  runCommandWithRuntime: vi.fn(async (_runtime: unknown, run: () => Promise<void>) => await run()),
-}));
-
-vi.mock("./output.js", () => ({
-  emitJsonOrText: vi.fn(),
-  formatEnvelopeForText: vi.fn(),
-}));
 
 import { registerMediaUnderstandingCommand } from "./media-understanding-command.js";
 
-async function run(kind: "audio" | "video", argv: string[]): Promise<void> {
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function providerConfig(id: string) {
+  return { baseUrl: `https://${id}.provider.example/v1`, apiKey: `${id}-key`, models: [] };
+}
+
+async function run(kind: "audio" | "video", model?: string) {
+  const root = tempDirs.make("openclaw-infer-media-model-");
+  const file = path.join(root, kind === "audio" ? "tone.wav" : "clip.mp4");
+  await fs.writeFile(file, createSafeAudioFixtureBuffer(4096, 0x52));
   const parent = new Command();
   registerMediaUnderstandingCommand(parent, kind);
-  await parent.parseAsync(argv, { from: "user" });
+  await parent.parseAsync(
+    [
+      kind === "audio" ? "transcribe" : "describe",
+      "--file",
+      file,
+      "--json",
+      ...(model ? ["--model", model] : []),
+    ],
+    { from: "user" },
+  );
+  return vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0];
 }
 
 describe("infer media understanding --model", () => {
   beforeEach(() => {
-    hoisted.calls.length = 0;
+    hoisted.requests.length = 0;
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
     hoisted.cfg = {
+      models: {
+        providers: {
+          openai: providerConfig("openai"),
+          groq: providerConfig("groq"),
+          deepgram: providerConfig("deepgram"),
+          google: providerConfig("google"),
+        },
+      },
       tools: {
         media: {
           models: [
             { provider: "groq", capabilities: ["audio"] },
+            {
+              provider: "deepgram",
+              model: "nova-3",
+              baseUrl: "https://deepgram.proxy.example/v1",
+              headers: { "x-entry": "deepgram-entry" },
+              capabilities: ["audio"],
+            },
+            {
+              provider: "openai",
+              baseUrl: "https://openai.proxy.example/v1",
+              capabilities: ["video"],
+            },
             { provider: "google", capabilities: ["video"] },
           ],
           audio: { preferredModel: "groq/whisper-large-v3-turbo" },
@@ -57,25 +127,65 @@ describe("infer media understanding --model", () => {
     };
   });
 
-  it.each([
-    ["audio", ["transcribe", "--file", "tone.wav", "--model", "openai/whisper-1"], "whisper-1"],
-    ["video", ["describe", "--file", "clip.mp4", "--model", "openai/gpt-5.4"], "gpt-5.4"],
-  ] as const)(
-    "pins %s to the requested provider/model instead of configured entries",
-    async (kind, argv, model) => {
-      await run(kind, [...argv]);
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
-      expect(hoisted.calls).toHaveLength(1);
-      expect(hoisted.calls[0]?.cfg.tools?.media?.models).toEqual([
-        { provider: "openai", model, capabilities: [kind] },
-      ]);
-      expect(hoisted.calls[0]?.cfg.tools?.media?.audio).toEqual(hoisted.cfg.tools?.media?.audio);
-    },
-  );
+  it("routes audio to the requested provider/model instead of the configured entry", async () => {
+    const envelope = await run("audio", "openai/whisper-1");
 
-  it("keeps configured entries when --model is omitted", async () => {
-    await run("audio", ["transcribe", "--file", "tone.wav"]);
+    expect(hoisted.requests).toEqual([
+      {
+        provider: "openai",
+        model: "whisper-1",
+        baseUrl: "https://openai.provider.example/v1",
+        headers: undefined,
+        apiKey: "openai-key",
+      },
+    ]);
+    expect(envelope).toMatchObject({ provider: "openai", model: "whisper-1" });
+  });
 
-    expect(hoisted.calls[0]?.cfg).toBe(hoisted.cfg);
+  it("keeps the matching configured entry transport settings when pinning its model", async () => {
+    await run("audio", "deepgram/nova-3");
+
+    expect(hoisted.requests).toEqual([
+      {
+        provider: "deepgram",
+        model: "nova-3",
+        baseUrl: "https://deepgram.proxy.example/v1",
+        headers: { "x-entry": "deepgram-entry" },
+        apiKey: "deepgram-key",
+      },
+    ]);
+  });
+
+  it("pins video and keeps the provider-wide configured entry settings", async () => {
+    const envelope = await run("video", "openai/gpt-5.4");
+
+    expect(hoisted.requests).toEqual([
+      {
+        provider: "openai",
+        model: "gpt-5.4",
+        baseUrl: "https://openai.proxy.example/v1",
+        headers: undefined,
+        apiKey: "openai-key",
+      },
+    ]);
+    expect(envelope).toMatchObject({ provider: "openai", model: "gpt-5.4" });
+  });
+
+  it("keeps configured routing when --model is omitted", async () => {
+    await run("audio");
+
+    expect(hoisted.requests).toEqual([
+      {
+        provider: "groq",
+        model: "whisper-large-v3-turbo",
+        baseUrl: "https://groq.provider.example/v1",
+        headers: undefined,
+        apiKey: "groq-key",
+      },
+    ]);
   });
 });
