@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { runInNewContext } from "node:vm";
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect } from "vitest";
 import { parse } from "yaml";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -61,6 +62,17 @@ export type WorkflowStep = {
 };
 
 export const readCiWorkflow = () => readWorkflow(".github/workflows/ci.yml");
+
+export function requiredWorkflowStep<T extends readonly { name?: string }[]>(
+  steps: T,
+  name: string,
+): T[number];
+export function requiredWorkflowStep(steps: readonly { name?: string }[], name: string) {
+  return expectDefined(
+    steps.find((step) => step.name === name),
+    name,
+  );
+}
 
 export function evaluateWorkflowExpression(
   expression: unknown,

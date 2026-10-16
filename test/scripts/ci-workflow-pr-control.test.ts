@@ -196,45 +196,50 @@ describe("PR failure reporting", () => {
         '#!/bin/bash\nprintf "%s\\n" "$*" >> "$CALLS_FILE"\nif [[ "$*" == *"${FAIL_MARKER:-first}"* ]]; then exit "$COMPILER_EXIT"; fi\n',
         { mode: 0o755 },
       );
-      for (const [evidence, compilerExit, expectedCalls, groups] of [
-        ["1", "2", 2, 2],
-        ["0", "2", 2, 2],
-        ["1", "1", 2, 2],
-      ] as const) {
-        writeFileSync(calls, "");
-        const run = spawnSync("/bin/bash", ["-c", central.run], {
+      const runCompiler = (script: string, env: Record<string, string>) =>
+        spawnSync("/bin/bash", ["-c", script], {
           cwd: root,
           encoding: "utf8",
-          env: {
-            ...process.env,
-            PATH: `${root}:${process.env.PATH}`,
-            CALLS_FILE: calls,
+          env: { ...process.env, PATH: `${root}:${process.env.PATH}`, CALLS_FILE: calls, ...env },
+        });
+      const checkGroups = (
+        script: string,
+        kind: string,
+        env: Record<string, string>,
+        scenarios: readonly (readonly [string, string])[],
+      ) => {
+        for (const [evidence, compilerExit] of scenarios) {
+          writeFileSync(calls, "");
+          const run = runCompiler(script, {
+            ...env,
             COMPILER_EXIT: compilerExit,
             OPENCLAW_CI_STATIC_EVIDENCE: evidence,
-            NARROW_CHECK_PATHS_JSON: '["src/example.ts"]',
-            TASK: "test-types",
-            CI_CORE_TYPE_GRAPHS_JSON: '["first"]',
-            CI_CORE_TYPE_CONCURRENCY: "1",
-            CI_TYPE_GRAPHS_JSON: '["second"]',
-          },
-        });
-        expect(run.status, run.stderr).toBe(Number(compilerExit));
-        expect(readFileSync(calls, "utf8").trim().split("\n")).toHaveLength(expectedCalls);
-        expect(run.stdout.includes('[ci-static:tsgo:step] {"version":1,"groups":2}')).toBe(
-          groups === 2,
-        );
-      }
-      const run = spawnSync("/bin/bash", ["-c", hosted.run], {
-        cwd: root,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          PATH: `${root}:${process.env.PATH}`,
-          CALLS_FILE: calls,
-          COMPILER_EXIT: "2",
-          OPENCLAW_CI_STATIC_EVIDENCE: "1",
-          CI_TYPE_GRAPHS_JSON: '["first"]',
+          });
+          expect(run.status, run.stderr).toBe(Number(compilerExit));
+          expect(readFileSync(calls, "utf8").trim().split("\n")).toHaveLength(2);
+          expect(run.stdout).toContain(`[ci-static:${kind}:step] {"version":1,"groups":2}`);
+        }
+      };
+      checkGroups(
+        central.run,
+        "tsgo",
+        {
+          NARROW_CHECK_PATHS_JSON: '["src/example.ts"]',
+          TASK: "test-types",
+          CI_CORE_TYPE_GRAPHS_JSON: '["first"]',
+          CI_CORE_TYPE_CONCURRENCY: "1",
+          CI_TYPE_GRAPHS_JSON: '["second"]',
         },
+        [
+          ["1", "2"],
+          ["0", "2"],
+          ["1", "1"],
+        ],
+      );
+      const run = runCompiler(hosted.run, {
+        COMPILER_EXIT: "2",
+        OPENCLAW_CI_STATIC_EVIDENCE: "1",
+        CI_TYPE_GRAPHS_JSON: '["first"]',
       });
       expect(run.status, run.stderr).toBe(2);
       expect(run.stdout).toContain('[ci-static:tsgo:step] {"version":1,"groups":1}');
@@ -245,34 +250,22 @@ describe("PR failure reporting", () => {
       const lintScript = lint.run.replace(/\$\{\{[\s\S]*?\}\}/gu, (expression: string) =>
         String(evaluateWorkflowExpression(expression, { runnerProfile: "github" })),
       );
-      for (const [evidence, compilerExit, expectedCalls, groups] of [
-        ["1", "1", 2, 2],
-        ["0", "1", 2, 2],
-        ["1", "2", 2, 2],
-      ] as const) {
-        writeFileSync(calls, "");
-        const lintRun = spawnSync("/bin/bash", ["-c", lintScript], {
-          cwd: root,
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            PATH: `${root}:${process.env.PATH}`,
-            CALLS_FILE: calls,
-            FAIL_MARKER: "--only=core",
-            COMPILER_EXIT: compilerExit,
-            OPENCLAW_CI_STATIC_EVIDENCE: evidence,
-            CORE_STRIPE: "1",
-            FROZEN_TARGET: "false",
-            RUNNER_PROFILE: "github",
-            RELEASE_GATE: "false",
-          },
-        });
-        expect(lintRun.status, lintRun.stderr).toBe(Number(compilerExit));
-        expect(readFileSync(calls, "utf8").trim().split("\n")).toHaveLength(expectedCalls);
-        expect(lintRun.stdout.includes('[ci-static:oxlint:step] {"version":1,"groups":2}')).toBe(
-          groups === 2,
-        );
-      }
+      checkGroups(
+        lintScript,
+        "oxlint",
+        {
+          FAIL_MARKER: "--only=core",
+          CORE_STRIPE: "1",
+          FROZEN_TARGET: "false",
+          RUNNER_PROFILE: "github",
+          RELEASE_GATE: "false",
+        },
+        [
+          ["1", "1"],
+          ["0", "1"],
+          ["1", "2"],
+        ],
+      );
     },
   );
 
