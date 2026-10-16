@@ -63,6 +63,7 @@ async function runSessionSweep(params: {
   store: WorkboardStore;
   sessions: Array<{
     key: string;
+    title?: string;
     updatedAt?: number;
     status?: "running" | "done" | "failed" | "killed" | "timeout";
     hasActiveRun?: boolean;
@@ -89,7 +90,11 @@ async function runSessionSweep(params: {
                 ? { session: params.sessions.find((session) => session.key === query.key) ?? null }
                 : {
                     sessions: params.sessions
-                      .filter((session) => session.key.includes(String(query.search)))
+                      .filter(
+                        (session) =>
+                          session.key.includes(String(query.search)) ||
+                          session.title?.includes(String(query.search)),
+                      )
                       .slice(0, Number(query.limit)),
                   },
           ),
@@ -830,6 +835,27 @@ describe("Workboard gateway lifecycle sync", () => {
       ),
     ).resolves.toEqual({ sessions: [], complete: false });
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("recovers an exact legacy link from a full page with an unrelated title match", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const sessionKey = "legacy-card";
+    const card = await createLinkedCard(store, { sessionKey });
+
+    await runSessionSweep({
+      store,
+      sessions: [
+        {
+          key: "agent:main:unrelated",
+          title: `Discuss ${sessionKey}`,
+          status: "running",
+          updatedAt: card.updatedAt + 2,
+        },
+        { key: sessionKey, status: "done", updatedAt: card.updatedAt + 1 },
+      ],
+    });
+
+    expect((await store.get(card.id))?.status).toBe("review");
   });
 
   it("treats a full legacy lookup page as possibly ambiguous", async () => {

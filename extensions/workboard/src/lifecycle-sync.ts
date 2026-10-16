@@ -437,14 +437,17 @@ export async function readWorkboardLifecycleSessions(
   if (!isRecord(payload) || !Array.isArray(payload.sessions)) {
     throw new Error("sessions.list returned an invalid lifecycle snapshot");
   }
+  const sessions = payload.sessions.flatMap((value) => {
+    const session = normalizeSession(value);
+    return session ? [session] : [];
+  });
   return {
-    sessions: payload.sessions.flatMap((value) => {
-      const session = normalizeSession(value);
-      return session ? [session] : [];
-    }),
-    // A short page proves the snapshot is complete. Keep full pages conservative
-    // so absent sessions are never inferred as "missing" when the page is truncated.
-    complete: payload.sessions.length < WORKBOARD_SESSION_LOOKUP_LIMIT,
+    sessions,
+    // An exact hit establishes this identity despite unrelated title matches.
+    // Otherwise, only a short page can prove absence or a unique suffix owner.
+    complete:
+      sessions.some((session) => session.key === options.sessionKey) ||
+      payload.sessions.length < WORKBOARD_SESSION_LOOKUP_LIMIT,
   };
 }
 
