@@ -550,6 +550,10 @@ function renderModelControls(
   if (update) {
     update(props);
   } else {
+    if (!container.isConnected) {
+      document.body.append(container);
+      onTestFinished(() => container.remove());
+    }
     const view = mountSolidComponent(ChatModelControls, props, container);
     modelControlsUpdates.set(container, (next) => view.update(next));
   }

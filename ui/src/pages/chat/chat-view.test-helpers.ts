@@ -312,13 +312,17 @@ export function getThinkingSelect(container: Element): HTMLElement {
   return select;
 }
 
-export function getThinkingSlider(container: Element): HTMLInputElement | null {
+function openThinkingPicker(container: Element): void {
   const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__effort-picker");
   if (picker && !picker.open) {
     picker.open = true;
     picker.dispatchEvent(new Event("toggle"));
     flush();
   }
+}
+
+export function getThinkingSlider(container: Element): HTMLInputElement | null {
+  openThinkingPicker(container);
   return container.querySelector<HTMLInputElement>('[data-chat-thinking-slider="true"]');
 }
 
@@ -328,6 +332,7 @@ export function getThinkingSliderValues(container: Element): string[] {
 }
 
 export function getThinkingReasoningValueLabel(container: Element): string {
+  openThinkingPicker(container);
   const preview = container.querySelector(
     "[data-chat-thinking-preview-committed]:not([hidden]), " +
       "[data-chat-thinking-preview-index]:not([hidden])",
