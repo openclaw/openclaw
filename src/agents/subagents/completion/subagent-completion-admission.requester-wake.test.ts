@@ -913,7 +913,10 @@ describe("persisted subagent requester wakes", () => {
       }
       await settle();
       expect(currentCompletionRun(input).delivery).toEqual(before.delivery);
-      expect(currentCompletionRun(input).completion).toEqual(before.completion);
+      expect(currentCompletionRun(input).completion?.resultText).toBeUndefined();
+      expect(loadSubagentRegistryFromSqlite().get(input.subagent.runId)?.completion).toEqual(
+        before.completion,
+      );
       expect(currentCompletionRun(input).suppressCompletionDelivery).toBe(true);
       expect(currentCompletionRun(input).requesterSettleWake).toBeUndefined();
       expect(readCompletionSystemEvents(database)).toEqual([]);

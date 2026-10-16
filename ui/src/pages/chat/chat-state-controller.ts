@@ -1,10 +1,10 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { parseStoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
+import type { SolidController, SolidControllerHost } from "../../lit/solid-controller-host.ts";
 import { releaseDisplacedChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { disposeSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
@@ -53,7 +53,7 @@ function transcriptSources(state: ChatPageHost): readonly unknown[] {
   ];
 }
 
-export class ChatStateController<TState extends ChatPageHost> implements ReactiveController {
+export class ChatStateController<TState extends ChatPageHost> implements SolidController {
   private attachmentReadsValue: ChatAttachmentReadLifecycle;
   readonly composerPersistence: ChatComposerPersistence;
   private stateValue: TState | undefined;
@@ -70,7 +70,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   private backgroundRenderFrame: number | undefined;
 
   constructor(
-    private readonly host: ReactiveControllerHost,
+    private readonly host: SolidControllerHost,
     private readonly onStateChange?: () => void,
     private readonly onQueuedMessageDiscarded?: (item: ChatQueueItem) => void,
   ) {

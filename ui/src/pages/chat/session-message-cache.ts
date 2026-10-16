@@ -27,6 +27,9 @@ export type ChatTranscriptMetadata = Pick<
   GatewaySessionRow,
   | "key"
   | "kind"
+  | "label"
+  | "displayName"
+  | "derivedTitle"
   | "classification"
   | "participants"
   | "expandedParticipants"
@@ -46,6 +49,9 @@ export function projectChatTranscriptMetadata(row: GatewaySessionRow): ChatTrans
   const {
     key,
     kind,
+    label,
+    displayName,
+    derivedTitle,
     classification,
     participants,
     expandedParticipants,
@@ -57,6 +63,9 @@ export function projectChatTranscriptMetadata(row: GatewaySessionRow): ChatTrans
   const metadata = {
     key,
     kind,
+    label,
+    displayName,
+    derivedTitle,
     classification,
     participants,
     expandedParticipants,

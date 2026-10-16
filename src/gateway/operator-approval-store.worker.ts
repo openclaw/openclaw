@@ -128,10 +128,6 @@ export const operatorApprovalOperations = {
     input: Input<typeof transitions.forceDenyOperatorApprovalInDatabase>,
     context,
   ) => transact(input, context, transitions.forceDenyOperatorApprovalInDatabase),
-  "operatorApprovals.expire": (
-    input: Input<typeof transitions.expireDueOperatorApprovalsInDatabase>,
-    context,
-  ) => transact(input, context, transitions.expireDueOperatorApprovalsInDatabase),
   "operatorApprovals.consume": (
     input: Input<typeof transitions.consumeOperatorApprovalAllowOnceInDatabase>,
     context,

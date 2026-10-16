@@ -142,6 +142,9 @@ export async function verifyPreviousManagedGatewayForUpdate(
       ...params,
       expectedVersion: identity?.version ?? undefined,
       gatewayPort: params.service.servicePort,
+      // This untouched incumbent is advisory rollback evidence. Retained-service
+      // certification and post-restart recovery still wait in the shared verifier.
+      waitForStartup: false,
     });
     params.onVerification(verified);
     if (verified && identity?.version) {

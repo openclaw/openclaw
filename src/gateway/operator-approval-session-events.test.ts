@@ -436,7 +436,8 @@ describe("operator approval session events", () => {
     // Use the physical writer independently of the approval API's logical FIFO.
     const writing = stateWorkerStore.runOpenClawStateWorkerOperation(
       writerContext,
-      (scope) => scope.execute({ type: "operatorApprovals.expire", input: { nowMs: 5_000 } }),
+      (scope) =>
+        scope.execute({ type: "operatorApprovals.prepareReplay", input: { nowMs: 5_000 } }),
       {
         createAdmission: createSqliteWorkerWriteAdmission(writerContext.admission.assertCurrent, [
           writerContext.admission.databasePath,

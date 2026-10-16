@@ -157,6 +157,15 @@ Current upstream core lint stripes use the 16-class on automatic first attempts 
 
 RunsOn retains its hosted placement for standalone ratchets and check planning, including qualification dispatches.
 
+Same-repository hybrid PR first attempts run `check-plan` on hosted
+`ubuntu-24.04` using the existing serial compiler discovery mode. The complete
+snapshot remains too large for that runner. This trades compiler execution time
+for avoiding a second Blacksmith assignment before type/lint rows can start;
+the hosted planner counts in the existing admission budget. Forks, other
+backends, retries, push/schedule and manual/release routing keep their existing
+placement and discovery setting. Graph validation, selected rows and all check
+commands are unchanged. See the [measurement and qualification](/ci/routing-costs#compiler-planning-queue).
+
 Healthy eligible main pushes and Windows-selected PRs can additionally offload seven check rows under the [assignment guard](#hybrid-hosted-assignment-guard). Main alone can then offload lint and central test types. Each decision consumes remaining capacity within the same 45-row limit; the original runner remains the fallback. Artifact builds retain the 16-class: their hosted maximum reached 898 seconds before preflight and gate overhead. See the [routing measurements and qualification gaps](/ci/routing-costs).
 
 Native Swift builds/tests, ordinary CI iOS build phases and Periphery scans use Xcode 27 on GitHub-hosted `xcode-27`, the preview macOS 27 image. This toolchain change preserves hosted placement, job counts, worker caps, coverage, and deadlines; it adds no Blacksmith registrations. The Swift source-language minimum remains 6.3. Native compatibility and complete job timings require proof on the new image.
@@ -291,9 +300,8 @@ cancellation. Setup, artifact build and desktop proof consumed 6m31s before the
 browser suite. Capacity changes require complete-job qualification against the
 current preparation and inventory; the hosted routes and all test deadlines stay unchanged.
 
-Current-target Blacksmith real-Gateway shards 1 and 2 have 24- and 25-minute
-job budgets, respectively. Other Blacksmith rows retain 20 minutes, and hosted
-fallbacks retain 40.
+Blacksmith real-Gateway shards have a 30-minute job budget;
+hosted fallbacks retain 40 minutes.
 In [run 38590548763](https://github.com/openclaw/openclaw/actions/runs/38590548763/job/115948443520),
 shard 1 exceeded the 20-minute job limit after 16 of its 17 files completed.
 Setup, build, and desktop transport proof consumed 6m44s before Vitest; the last
@@ -306,7 +314,7 @@ In [run 38546577399](https://github.com/openclaw/openclaw/actions/runs/385465773
 the native second shard spent 3m13s preparing, including a 2m04s build, then
 16m48.92s in Vitest. All 21 files and 48 tests passed, but those phases alone
 exceeded the former 20-minute budget without counting wrapper startup or cleanup.
-The extra five minutes leave completion headroom for cleanup and artifact uploads.
+The extra ten minutes leave completion headroom for cleanup and artifact uploads.
 
 The hosted budget covers setup as well as tests. In [run 34707873095, attempt 2](https://github.com/openclaw/openclaw/actions/runs/34707873095/attempts/2),
 7m42s elapsed before the browser suite began; the 20-minute job limit then
@@ -514,7 +522,9 @@ Compact descriptor counts and predicted maxima vary with the committed measureme
 
 The two package-script input inventories keep small projects together: general unit, Gateway, infrastructure, runtime config, media, and CLI selections are in the first inventory; fast unit, plugin SDK, shared core, and agent support selections are in the second. That alignment removed eight repeated project processes from the earlier two-job plan while preserving all 133 explicit targets. The five-row planner consumes their union and regroups execution by shared project metadata rather than preserving the two input parts as job boundaries. Tooling remains divisible by whole file because its compiler fixtures dominate execution; the extension catch-all retains plugin-owned process boundaries. Windows still proves native path casing and aliases, PATH/shim resolution, spawn and process-tree cleanup, scheduled-task services, SQLite/file-locking and publication behavior, plus shared CLI, package, and runtime-import smoke.
 
-Mac Node coverage uses three disjoint package-script parts on the existing runner labels. The elevation lifecycle suite owns one part; native artifact and packaging proofs own the second; checkout and the remaining platform projects own the third. The aggregate `test:macos:ci` command runs every part, and historical targets without part scripts retain one complete job. Project execution stays serial, tooling stays one file at a time, and the existing CPU-clamped three-case Mac fixture limit and two-case checkout limit are unchanged. Retained native costs place about 152 seconds of test work in the longest part, but setup and runner admission still require native measurement before claiming an eight-minute workflow.
+Mac Node coverage uses two disjoint package-script parts on the existing runner labels. The elevation lifecycle, skills and remaining runtime projects share the first part so their subprocess consumers reuse one prepared worker generation; native artifact, packaging and checkout tooling share the second. All 26 files remain selected exactly once. The aggregate `test:macos:ci` command runs both parts; historical targets with three part scripts retain three jobs, and targets without part scripts retain one complete job. Project execution stays serial, and the existing two-worker, CPU-clamped three-case Mac fixture and two-case checkout limits are unchanged. In hourly run 38823827091, the first two-part allocation spent 247 and 465 seconds in tests, with separate 64- and 90-second compilations of the same worker input graph. Grouping its runtime consumers removes the second compilation and transfers the other runtime projects to the shorter row. The same run spent 137–140 seconds per Node setup, compared with 68–118 seconds in the prior three-row baseline; unchanged tooling files also ran slower, so total job time is not a controlled comparison of partition shape. Native hourly timings establish the resulting wall time.
+
+The OpenClawKit package lane creates one fresh scratch directory for its Talk-disabled build and default-trait test suite. SwiftPM replans and recompiles trait-dependent modules when enabling Talk, while retaining dependency resolution and checkout work within that job. No products are copied from an earlier run. Both the no-ElevenLabs opt-out guard and the complete default-trait suite remain; cleanup runs after success, failure, cancellation, or an unselected suite. In hourly run 38817599758, the second fresh graph repeated 19 dependency operations over 16.9 seconds before compilation. A local compile-only replay using one scratch eliminated those repeated operations and verified all three production modules recompiled with Talk enabled. Hosted elapsed savings come from the next natural hourly.
 
 After recovery, restore the value recorded before switching to the GitHub fallback. For example, restore a previous `hybrid` setting with:
 

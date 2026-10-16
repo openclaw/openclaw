@@ -2,7 +2,6 @@ import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, server, userEvent } from "vitest/browser";
 import type { SessionGoal } from "../../api/types.ts";
-import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import { SolidContentPresentation } from "../../lit/solid-content.tsx";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { mountSolid as mountSolidProps } from "../../test-helpers/solid-render.tsx";

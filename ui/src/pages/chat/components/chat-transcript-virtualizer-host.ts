@@ -1,11 +1,12 @@
 // Per-session virtualizer host: scroll anchoring, measurement, and row sync
 // for one transcript. Owned and swapped by ChatTranscriptController.
 import { Virtualizer } from "@tanstack/virtual-core";
-import { nothing, type ReactiveController, type ReactiveControllerHost } from "lit";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { McpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import { resolveScrollBehavior } from "../../../lib/scroll-behavior.ts";
 import type { PresentationValue } from "../../../lit/presentation-binding.ts";
+import { emptyLegacyContent } from "../../../lit/solid-content.tsx";
+import type { SolidController, SolidControllerHost } from "../../../lit/solid-controller-host.ts";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
 import type { ChatSessionScrollPosition, ChatScrollToEndOptions } from "../scroll.ts";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
@@ -61,12 +62,12 @@ import {
 } from "./chat-transcript-session.ts";
 import { TranscriptViewportRect } from "./chat-transcript-viewport-rect.ts";
 
-export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscriptSession {
+export class ChatSessionVirtualizerHost implements SolidControllerHost, ChatTranscriptSession {
   private readonly renderer = new ChatTranscriptRenderer();
   private readonly offsetState = new TranscriptOffsetState();
   readonly entryAnimations = new ChatMessageEntryAnimations();
   expandedAssistantMessages = new Map<string, AssistantMessageExpansionState>();
-  private readonly controllers = new Set<ReactiveController>();
+  private readonly controllers = new Set<SolidController>();
   private readonly positionRail: PositionRailGutterController;
   private readonly virtualizer: Virtualizer<HTMLDivElement, HTMLElement>;
   private readonly viewportRect: TranscriptViewportRect;
@@ -162,7 +163,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   private readonly mcpAppUnmountGate = new McpAppUnmountGate(this);
 
   constructor(
-    private readonly host: ReactiveControllerHost,
+    private readonly host: SolidControllerHost,
     initialOffset: number | null = null,
     onInitialOffsetSettled?: (position: ChatSessionScrollPosition) => void,
     private readonly callbacks: TranscriptCallbacks = {},
@@ -286,11 +287,11 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
 
   requestUpdate = () => this.host.requestUpdate();
 
-  addController(controller: ReactiveController): void {
+  addController(controller: SolidController): void {
     this.controllers.add(controller);
   }
 
-  removeController(controller: ReactiveController): void {
+  removeController(controller: SolidController): void {
     this.controllers.delete(controller);
   }
 
@@ -428,7 +429,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     renderRow: (row: TranscriptRow<T>) => unknown,
     announcement: TranscriptAnnouncement | null,
     announce: boolean,
-    overlay: unknown = nothing,
+    overlay: unknown = emptyLegacyContent,
     header: TranscriptHeader | null = null,
     presented: PresentationValue = true,
     applicationContext?: ApplicationContext,
@@ -523,10 +524,10 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           initialPositionPending: () => this.initialPositionPending,
           onCommit: () => this.connected && this.didCommit(),
           rows,
-          getContent: (index) => (rows[index] ? renderRow(rows[index]) : nothing),
+          getContent: (index) => (rows[index] ? renderRow(rows[index]) : emptyLegacyContent),
           virtualizer,
           overlay,
-          header: header?.template ?? nothing,
+          header: header?.template ?? emptyLegacyContent,
           scrollElementRef: this.scrollElementRef,
           captureInteractionResize: this.captureInteractionResize,
           measureRowRefFor: (key) => this.rowRefs.forKey(key),

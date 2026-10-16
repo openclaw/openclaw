@@ -259,6 +259,11 @@ status does not bypass the live Gateway's artifact-publication safeguards.
 <ParamField path="--deep" type="boolean">
   Scan system-level services too.
 </ParamField>
+<a id="param-runtime-intent-only"></a>
+
+<ParamField path="--runtime-intent-only" type="boolean">
+  Output only local CLI and service runtime intent as JSON. This inspection reads the daemon-owned local store and native service definition without shared-state diagnostics or RPC, including when the Gateway or PostgreSQL is unavailable. Cannot combine with `--require-rpc`.
+</ParamField>
 <a id="param-require-rpc"></a>
 
 <ParamField path="--require-rpc" type="boolean">

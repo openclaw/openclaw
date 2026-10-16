@@ -89,22 +89,15 @@ export function normalizeConfig({
   provider: string;
   providerConfig: OllamaProviderConfigDraft;
 }): OllamaProviderConfigDraft {
-  if (!providerConfig || typeof providerConfig !== "object") {
-    return providerConfig;
-  }
-
-  const normalizedProviderId = (provider ?? "").trim().toLowerCase();
+  const normalizedProviderId = provider.trim().toLowerCase();
   if (normalizedProviderId !== "ollama") {
     return providerConfig;
   }
 
   return {
     ...providerConfig,
-    baseUrl:
-      typeof providerConfig.baseUrl === "string" && providerConfig.baseUrl.trim()
-        ? providerConfig.baseUrl
-        : OLLAMA_DEFAULT_BASE_URL,
-    models: Array.isArray(providerConfig.models) ? providerConfig.models : [],
+    baseUrl: providerConfig.baseUrl?.trim() ? providerConfig.baseUrl : OLLAMA_DEFAULT_BASE_URL,
+    models: providerConfig.models ?? [],
   };
 }
 

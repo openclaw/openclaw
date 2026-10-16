@@ -76,6 +76,7 @@ async function snapshotCandidateState(): Promise<unknown> {
     case "snapshot":
       return snapshotUpdateCandidateState({
         ...input,
+        includeLocalStoreVersions: input.includeLocalStoreVersions === true,
         onProgress: createUpdateStateInspectionReporter(
           !input.streamProgress,
           input.streamEntryProgress,
@@ -89,6 +90,7 @@ async function snapshotCandidateState(): Promise<unknown> {
     case "versions":
       return readUpdateStateSchemaVersionsInProcess({
         ...input,
+        includeLocalStoreVersions: input.includeLocalStoreVersions === true,
         onProgress: createUpdateStateInspectionReporter(!input.inspectionPlan),
       });
     default:

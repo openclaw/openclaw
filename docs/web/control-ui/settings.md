@@ -181,7 +181,7 @@ In **Appearance → Background**, choose **None**, **Theme artwork**, or **Custo
 
 Custom images belong to your authenticated profile, not the shared conversation. Upload a static JPEG, PNG, or WebP up to 8 MiB and 25 megapixels. The Gateway resizes it to at most 2560 pixels on the longest side, strips metadata, and saves a normalized JPEG of at most 2 MiB. The original file is not retained. You can keep one image; **Replace image** replaces it and **Remove image** deletes it. Choosing None or theme artwork retains the image for later use. Uploading requires profile write access; the Control UI explains when a personal profile or permission is unavailable.
 
-Choose **Faded** to fade artwork into the canvas, or **Full bleed** to keep it across the full canvas. Both protect text contrast using the active palette; the modes change coverage, not readability. Custom-image visibility is bounded even at maximum strength, and Full bleed always retains a theme-colored overlay. Faded is the default when no presentation mode is saved. Both modes keep the composer and user-message bubbles solid and fade the artwork near the top bar. **Image visibility** adjusts decorative strength; moving its slider briefly previews the background in Settings. Source and presentation are independent, so changing or removing an image does not reset the selected mode.
+Choose **Faded** to fade artwork into the canvas, or **Full bleed** to keep it across the full canvas. Both protect text contrast using the active palette; the modes change coverage, not readability. Custom-image visibility is bounded even at maximum strength, and Full bleed always retains a theme-colored overlay. Faded is the default when no presentation mode is saved. Both modes keep the composer and user-message bubbles solid and fade the artwork near the top bar. **Image visibility** adjusts decorative strength; moving its slider briefly previews the background in Settings. Plugin theme artwork keeps its palette-safe strength at or below the default; above it, the slider lifts the artwork toward the same fixed cap custom images stop at, reaching it at 100%. Source and presentation are independent, so changing or removing an image does not reset the selected mode.
 
 A missing image leaves the normal theme-colored canvas. Disabled surfaces do not request the private image. Increased contrast and forced colors suppress decorative imagery; reduced transparency suppresses custom artwork and restores opaque writing surfaces. No external image host is contacted.
 
@@ -565,6 +565,19 @@ app-update controls. Permissions include the access published by the device,
 including limited access to contacts or photos. Precise location is read-only
 on iOS; **Open Settings** opens the system setting. Talk shows the device's
 Voice Wake, Talk mode, Talk button, background Talk, and speakerphone controls.
+
+## Claws (Labs)
+
+Enable **Settings → Labs → Claws** to browse official Claw packages from
+ClawHub on the **Agents** page. Search the catalog, review the files and
+capabilities a Claw will install, then select **Add** to create its agent.
+Add creates an ordinary agent and opens its chat. It does not create a separate
+installed Claw to update or remove. Delete the agent through normal agent
+controls; shared plugins and MCP servers remain installed. See
+[Claws](/cli/claws) for the package contract and local-source CLI commands.
+
+Turning the Labs switch off hides Claw discovery and Add. Existing agents keep
+running.
 
 ## Speech bubbles
 

@@ -6,6 +6,7 @@ import { createMemo, For, Show } from "solid-js";
 import { formatAgentRuntimeLabel } from "../../../../src/shared/agent-runtime-display.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { AgentIdentityResult, GatewaySessionRow } from "../../api/types.ts";
+import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { Icon, type IconName } from "../../components/solid/icon.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import {
@@ -35,7 +36,6 @@ import { CategoryCell } from "./category-cell.tsx";
 import { SessionStatusBadge } from "./session-status.tsx";
 import { categoryDropHandlers } from "./sessions-filters.tsx";
 import type { SessionsProps } from "./view-types.ts";
-import "../../components/agent-row-chip.tsx";
 import "../../components/tooltip.ts";
 import "../../styles/capacity-meter.css";
 
@@ -385,8 +385,8 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
                   ) : undefined}
                 </span>
                 {row().kind === "global" && !row().agentId ? undefined : (
-                  <openclaw-agent-row-chip
-                    prop:agentId={parseAgentSessionKey(row().key)?.agentId ?? row().agentId}
+                  <AgentRowChip
+                    agentId={parseAgentSessionKey(row().key)?.agentId ?? row().agentId}
                   />
                 )}
                 {showDisplayName() ? (

@@ -124,6 +124,19 @@ export async function runGatewayStartupObservers(params: {
             }
           }
         }
+        if (!params.signal.aborted && !params.isClosing?.()) {
+          await measureStartup(params.startupTrace, "sidecars.exec-recovery", async () => {
+            try {
+              const { recoverExecExitNotifications } =
+                await import("../agents/bash-tools.exec-notify.js");
+              await recoverExecExitNotifications(params.config, params.signal);
+            } catch (error) {
+              if (!params.signal.aborted) {
+                params.log.warn(`Exec restart notifications remain pending: ${String(error)}`);
+              }
+            }
+          });
+        }
         const activateSubagentRegistry = await params.loadSubagentRegistryActivation();
         if (!params.signal.aborted && params.isClosing?.() !== true) {
           await activateSubagentRegistry(params.resolveGatewayContext);

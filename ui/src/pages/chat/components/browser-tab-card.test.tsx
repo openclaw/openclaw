@@ -16,7 +16,7 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { renderActivityGroup } from "./chat-message-group.test-support.ts";
-import { renderToolPreview } from "./widget-card.ts";
+import { ToolPreview } from "./widget-card-view.tsx";
 
 const hosts: HTMLElement[] = [];
 const templateUpdates = new Map<HTMLElement, (value: unknown) => void>();
@@ -166,17 +166,17 @@ async function card(
   tab: BrowserTabTarget = { target: "host", profile: "managed", targetId: "tab-1" },
 ) {
   const host = container();
-  renderTemplate(
-    renderToolPreview(
-      { kind: "browser-tab", ...tab, url: "https://example.com/page" },
-      "chat_tool",
-      {
-        browserTabRevision: "one",
-        browserTabLatest: latest,
-      },
+  mountSolid(
+    () => (
+      <ToolPreview
+        preview={{ kind: "browser-tab", ...tab, url: "https://example.com/page" }}
+        surface="chat_tool"
+        options={{ browserTabRevision: "one", browserTabLatest: latest }}
+      />
     ),
-    host,
+    { container: host },
   );
+  flush();
   const element = host.querySelector("openclaw-browser-tab-card")!;
   element.context = context;
   await element.updateComplete;

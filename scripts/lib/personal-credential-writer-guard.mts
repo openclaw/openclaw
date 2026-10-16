@@ -333,7 +333,11 @@ const genericCredentialCallers = new Map<string, readonly string[]>([
   ],
   [
     key(machineState, "deleteConfigMachineState"),
-    [key("src/state/onboarding-recommendations.kernel.ts", "onboardingRecommendations.clear")],
+    [
+      key("src/state/onboarding-recommendations.kernel.ts", "onboardingRecommendations.clear"),
+      // Exclusive migration selects only daemon-runtime-pin rows before retiring their copied source.
+      key("src/infra/state-migrations.daemon-runtime-pins.ts", "migrateDaemonRuntimePins"),
+    ],
   ],
   [
     key(machineState, "importConfigMachineState"),

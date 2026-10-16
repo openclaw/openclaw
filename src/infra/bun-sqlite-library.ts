@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { posix } from "node:path";
-import { fileURLToPath } from "node:url";
 import { getEnvironmentData, isMainThread, setEnvironmentData } from "node:worker_threads";
+import { getEmbeddedStandaloneRuntimeRoot } from "../../cli-invocation.mjs";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { probeSqliteNativeClose } from "./bun-sqlite-close-probe.js";
 import { parseDiagnosticEnvFlags } from "./diagnostic-flags-env.js";
@@ -178,14 +178,10 @@ function createSelector() {
         : { source: "runtime" };
       return selection;
     }
-    const standaloneRootUrl =
-      // SAFETY: Only the standalone bootstrap publishes this optional runtime-root URL.
-      (globalThis as typeof globalThis & { __openclawStandaloneRootUrl?: string })[
-        "__openclawStandaloneRootUrl"
-      ];
+    const standaloneRoot = getEmbeddedStandaloneRuntimeRoot();
     const bundled =
-      override === undefined && standaloneRootUrl !== undefined
-        ? fileURLToPath(new URL("lib/libsqlite3.dylib", standaloneRootUrl))
+      override === undefined && standaloneRoot !== undefined
+        ? posix.join(standaloneRoot, "lib/libsqlite3.dylib")
         : undefined;
     const prefix = process.env.HOMEBREW_PREFIX?.trim();
     const candidates =

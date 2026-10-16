@@ -148,6 +148,12 @@ provider/auth configuration, switch to a reachable provider, or set
 
 ### Custom provider ids
 
+For Azure OpenAI deployments, set the custom provider's `baseUrl` to the
+deployment URL and configure `api-version` in its `headers`. Embedding requests
+to Azure OpenAI and Azure AI Foundry hosts move that header into the URL query;
+an existing non-empty `api-version` query value takes precedence. Other
+OpenAI-compatible hosts keep the configured header unchanged.
+
 `memory.search.provider` can point at a custom `models.providers.<id>` entry for memory-specific provider adapters such as `ollama`, or for OpenAI-compatible model APIs such as `openai-responses` / `openai-completions`. OpenClaw resolves that provider's `api` owner for the embedding adapter while preserving the custom provider id for endpoint, auth, and model-prefix handling. This lets multi-GPU or multi-host setups dedicate memory embeddings to a specific local endpoint:
 
 ```json5

@@ -67,16 +67,24 @@ describe("memory search bootstrap", () => {
         }
         if (index === 1) {
           manager = await getFreshManager(cfg);
+          if (provider !== "none") {
+            expect(manager.status().vector?.index?.state).toBe("complete");
+          }
           await manager.sync({ reason: "cli" });
         }
         const discovered = await manager.search("alpha", { minScore: 0 });
         expect(discovered).toHaveLength(index + 1);
         expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
         if (index === 0) {
+          if (provider !== "none") {
+            expect(manager.status().vector?.index?.state).toBe("complete");
+          }
           expect(manager.status().custom?.automaticRebuildNotice).toMatchObject({
             sequence: initialRepairSequence,
           });
           await manager.close();
+        } else {
+          expect(manager.status().custom?.automaticRebuildNotice).toMatchObject({ sequence: 0 });
         }
       }
 

@@ -339,7 +339,7 @@ export function useSessionMenuEntries(
       case "open-in":
         return openOptions();
       case "icon":
-        appearanceContent ??= runWithOwner(owner, () => appearance.render(true));
+        appearanceContent ??= runWithOwner(owner, () => appearance.render());
         return [content("appearance", appearanceContent)];
       case "group":
         return groupOptions();
@@ -449,31 +449,24 @@ export function useSessionMenuEntries(
           ]
         : []),
       ...(state.involvingMeContext ? involvement() : []),
-      ...(!batch()
+      ...(!batch() && !actions.actionExtraDisabled("snooze")
         ? [
-            ...(!actions.actionExtraDisabled("snooze")
-              ? [
-                  isSessionSnoozed(
-                    { snoozedUntil: state.session.snoozedUntil ?? undefined },
-                    Date.now(),
-                  )
-                    ? item({
-                        kind: "wake",
-                        label: `${t("sessionsView.wakeSession")} · ${formatSessionSnoozeWakeTime(state.session.snoozedUntil!)}`,
-                        icon: "clock",
-                      })
-                    : submenu({
-                        view: "snooze",
-                        label: t("sessionsView.snooze"),
-                        icon: "clock",
-                        disabled: actions.actionDisabled("snooze"),
-                        title: state.actionDisabledReasons.snooze,
-                      }),
-                ]
-              : []),
-            archive(),
+            isSessionSnoozed({ snoozedUntil: state.session.snoozedUntil ?? undefined }, Date.now())
+              ? item({
+                  kind: "wake",
+                  label: `${t("sessionsView.wakeSession")} · ${formatSessionSnoozeWakeTime(state.session.snoozedUntil!)}`,
+                  icon: "clock",
+                })
+              : submenu({
+                  view: "snooze",
+                  label: t("sessionsView.snooze"),
+                  icon: "clock",
+                  disabled: actions.actionDisabled("snooze"),
+                  title: state.actionDisabledReasons.snooze,
+                }),
           ]
         : []),
+      ...(!batch() ? [archive()] : []),
     ];
   }
   const advanced = () => [

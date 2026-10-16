@@ -53,6 +53,7 @@ import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import { createLifecycleHooks, setHookRunnerForTest } from "./cli-runner.hooks.test-support.js";
 import { runPreparedCliAgent as runPreparedCliAgentCore } from "./cli-runner.js";
 import { registerCliReplyCompletionTests } from "./cli-runner.reply-completion.cases.js";
+import { failClosedPluginResumeCases } from "./cli-runner.resume.test-fixtures.js";
 import {
   createManagedRun,
   enqueueSessionEventMock,
@@ -69,7 +70,6 @@ import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import { captureCliRunStartTime, type PreparedCliRunContext } from "./cli-runner/types.js";
 import { persistCliSessionBindingResult } from "./cli-session-store.js";
 import * as cliTranscript from "./command/attempt-execution.helpers.js";
-import { isIntermediateAssistantTranscriptMessage } from "./embedded-agent-runner/message-visibility.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "./harness/hook-history.js";
 import { SessionManager } from "./sessions/session-manager.js";
@@ -345,28 +345,6 @@ async function warmedPluginContext(
     throw error;
   }
 }
-
-const failClosedPluginResumeCases: Array<{
-  name: string;
-  invalidate?: boolean;
-  event?: Record<string, unknown>;
-}> = [
-  { name: "a valid required generation" },
-  {
-    name: "background work",
-    invalidate: true,
-    event: {
-      type: "system",
-      subtype: "background_tasks_changed",
-      tasks: [{ task_id: "task-1", task_type: "local_agent" }],
-    },
-  },
-  {
-    name: "an unknown event",
-    invalidate: true,
-    event: { type: "future_event" },
-  },
-];
 
 function makeManagedRun(overrides: Partial<RunExit> = {}) {
   return createManagedRun({ ...createSuccessfulProcessExit(), ...overrides });
@@ -700,6 +678,9 @@ describe("runCliAgent reliability", () => {
     makeManagedRun,
     admitContext: admitPreparedContext,
     run: runPreparedCliAgent,
+    createSessionFixture,
+    sessionParams,
+    readTranscriptMessages,
   });
 
   it("projects explicit outbound MCP media without retaining echoed image bytes", async () => {
@@ -1232,74 +1213,78 @@ describe("runCliAgent reliability", () => {
     },
   );
 
-  it("returns accepted CLI session spawns when sessions_yield pauses the requester", async () => {
-    const { dir, sessionFile, sessionTarget, storePath } = createSessionFixture();
-    const requesterTurnRunId = "run-cli-yield";
-    const childRunId = "run-cli-child";
-    const childSessionKey = "agent:main:subagent:cli-child";
-    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
-      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
-      completeCapturedToolCall(
-        {
-          captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY,
-          toolName: "sessions_spawn",
-          args: { task: "review" },
-        },
-        {
-          details: {
-            status: "accepted",
-            runId: childRunId,
-            childSessionKey,
-            expectsCompletionMessage: true,
+  it.each(["telegram", "webchat"])(
+    "returns accepted CLI session spawns when sessions_yield pauses the %s requester",
+    async (messageChannel) => {
+      const { dir, sessionFile, sessionTarget, storePath } = createSessionFixture();
+      const requesterTurnRunId = "run-cli-yield";
+      const childRunId = "run-cli-child";
+      const childSessionKey = "agent:main:subagent:cli-child";
+      supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+        completeCapturedToolCall(
+          {
+            captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY,
+            toolName: "sessions_spawn",
+            args: { task: "review" },
+          },
+          {
+            details: {
+              status: "accepted",
+              runId: childRunId,
+              childSessionKey,
+              expectsCompletionMessage: true,
+            },
+          },
+        );
+        const captureHandle = markMcpLoopbackRequestStarted(
+          input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY,
+        );
+        await resolveMcpLoopbackYieldContext(captureHandle)?.onYield("waiting on subagents");
+        markMcpLoopbackRequestFinished(captureHandle);
+        input.onStdout?.(SILENT_REPLY_TOKEN);
+        return makeManagedRun();
+      });
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: requesterTurnRunId,
+      });
+      context.mcpDeliveryCapture = true;
+      Object.assign(context.params, {
+        messageChannel,
+        sessionFile,
+        sessionTarget,
+        storePath,
+        workspaceDir: dir,
+        persistAssistantTranscript: true,
+      });
+
+      const result = await runPreparedCliAgent(context);
+
+      expect(result).toMatchObject({
+        acceptedSessionSpawns: [
+          { runId: childRunId, childSessionKey, expectsCompletionMessage: true },
+        ],
+        meta: {
+          yielded: true,
+          livenessState: "paused",
+          stopReason: "end_turn",
+          completion: {
+            finishReason: "end_turn",
+            stopReason: "end_turn",
+            refusal: false,
           },
         },
-      );
-      const captureHandle = markMcpLoopbackRequestStarted(input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY);
-      await resolveMcpLoopbackYieldContext(captureHandle)?.onYield("waiting on subagents");
-      markMcpLoopbackRequestFinished(captureHandle);
-      input.onStdout?.(SILENT_REPLY_TOKEN);
-      return makeManagedRun();
-    });
-    const context = buildPreparedContext({
-      sessionKey: "agent:main:main",
-      runId: requesterTurnRunId,
-    });
-    context.mcpDeliveryCapture = true;
-    Object.assign(context.params, {
-      sessionFile,
-      sessionTarget,
-      storePath,
-      workspaceDir: dir,
-      persistAssistantTranscript: true,
-    });
-
-    const result = await runPreparedCliAgent(context);
-
-    expect(result).toMatchObject({
-      acceptedSessionSpawns: [
-        { runId: childRunId, childSessionKey, expectsCompletionMessage: true },
-      ],
-      meta: {
-        yielded: true,
-        livenessState: "paused",
-        stopReason: "end_turn",
-        completion: {
-          finishReason: "end_turn",
-          stopReason: "end_turn",
-          refusal: false,
-        },
-      },
-    });
-    const messages = await readTranscriptMessages(sessionTarget);
-    expect(messages).toEqual([
-      expect.objectContaining({
-        role: "assistant",
-        content: [{ type: "text", text: SILENT_REPLY_TOKEN }],
-        idempotencyKey: `cli-assistant:${requesterTurnRunId}`,
-      }),
-    ]);
-    expect(isIntermediateAssistantTranscriptMessage(messages[0])).toBe(true);
-  });
+      });
+      const messages = await readTranscriptMessages(sessionTarget);
+      expect(messages).toMatchObject([
+        { role: "assistant", content: [{ type: "text", text: SILENT_REPLY_TOKEN }] },
+      ]);
+      expect(result.payloads).toBeUndefined();
+      expect(result.meta.terminalReply).toEqual({ disposition: "silent" });
+      expect(result.meta.finalAssistantRawText).toBe(SILENT_REPLY_TOKEN);
+    },
+  );
 
   it("keeps raw assistant output separate from transformed visible CLI output", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: "hello from cli" }));
@@ -1317,6 +1302,10 @@ describe("runCliAgent reliability", () => {
     expect(result.payloads).toEqual([{ text: "goodbye from cli" }]);
     expect(result.meta.finalAssistantVisibleText).toBe("goodbye from cli");
     expect(result.meta.finalAssistantRawText).toBe("hello from cli");
+    expect(result.meta.terminalReply).toEqual({
+      disposition: "visible",
+      text: "goodbye from cli",
+    });
   });
 
   it("does not wait for agent_end hooks before resolving channel-backed CLI runs", async () => {
@@ -1824,22 +1813,34 @@ describe("runCliAgent reliability", () => {
     expect(JSON.stringify(messages)).not.toContain("matched secret prompt");
   });
 
-  it.each(["   ", SILENT_REPLY_TOKEN])(
-    "returns a silent payload for optional CLI output %j",
-    async (text) => {
+  it.each([
+    { text: "   ", expectation: "optional", disposition: "empty" },
+    { text: SILENT_REPLY_TOKEN, expectation: "optional", disposition: "silent" },
+    { text: "   ", expectation: "required", disposition: undefined },
+    { text: "   ", expectation: "result-required", disposition: undefined },
+    { text: SILENT_REPLY_TOKEN, expectation: "result-required", disposition: undefined },
+  ] as const)(
+    "settles $expectation CLI output $text according to its reply obligation",
+    async ({ text, expectation, disposition }) => {
       const hookRunner = createLifecycleHooks(["llm_output"]);
       supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: text }));
 
-      const result = await runPreparedCliAgent(
-        makeClaudePreparedContext({
-          model: "claude-sonnet-4-6",
-          allowEmptyAssistantReplyAsSilent: true,
-        }),
-      );
-
-      expect(result.payloads).toEqual([{ text: SILENT_REPLY_TOKEN }]);
-      expect(result.meta.executionTrace?.fallbackUsed).toBe(false);
-      expect(hookRunner.runLlmOutput).toHaveBeenCalledTimes(text.trim() ? 1 : 0);
+      const context = makeClaudePreparedContext({
+        model: "claude-sonnet-4-6",
+      });
+      context.params.messageChannel = "telegram";
+      context.params.terminalReplyExpectation = expectation;
+      const operation = runPreparedCliAgent(context);
+      if (disposition) {
+        const result = await operation;
+        expect(result.payloads).toBeUndefined();
+        expect(result.meta.terminalReply).toEqual({ disposition });
+        expect(result.meta.executionTrace?.fallbackUsed).toBe(false);
+        expect(hookRunner.runLlmOutput).toHaveBeenCalledOnce();
+      } else {
+        await expect(operation).rejects.toMatchObject({ reason: "empty_response" });
+        expect(hookRunner.runLlmOutput).not.toHaveBeenCalled();
+      }
     },
   );
 

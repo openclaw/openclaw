@@ -515,7 +515,7 @@ final class GatewayProcessManager {
         self.launchAgentReadinessRevision &+= 1
     }
 
-    func startIfNeeded() {
+    func startIfNeeded(appRuntime: BundledRuntime? = nil) {
         guard self.desiredActive, !self.isTerminating, !self.hostingChangeInProgress else { return }
         do {
             try self.loadRetainedServiceForResume()
@@ -565,7 +565,7 @@ final class GatewayProcessManager {
                 return
             }
             if self.gatewayHosting == .app {
-                await self.startAppHostedGateway(startGeneration: startGeneration)
+                await self.startAppHostedGateway(startGeneration: startGeneration, runtime: appRuntime)
             } else {
                 await self.enableLaunchdGateway(startGeneration: startGeneration)
             }
@@ -659,13 +659,20 @@ final class GatewayProcessManager {
                         if self.installation == .external { return }
                         let custody = try await self.retainManagedServiceForResume(
                             expectedServiceAuthority: expectedServiceAuthority)
-                        failure = self.launchAgentDisableGeneration == stopGeneration
-                            ? await GatewayLaunchAgentManager.set(
-                                enabled: false,
-                                port: GatewayEnvironment.gatewayPort(),
-                                expectedServiceAuthority: custody,
-                                checkCurrent: mutationCheck)
-                            : nil
+                        guard self.launchAgentDisableGeneration == stopGeneration else { return }
+                        if custody.migrationPending {
+                            self.appendLog("[gateway] Pin migration pending; runtime preserved. Run openclaw doctor.\n")
+                            failure = await GatewayLaunchAgentManager.runDaemonCommand(
+                                ["stop"], expectedServiceAuthority: custody.authority, checkCurrent: mutationCheck)
+                        } else {
+                            failure = self.launchAgentDisableGeneration == stopGeneration
+                                ? await GatewayLaunchAgentManager.set(
+                                    enabled: false,
+                                    port: GatewayEnvironment.gatewayPort(),
+                                    expectedServiceAuthority: custody.authority,
+                                    checkCurrent: mutationCheck)
+                                : nil
+                        }
                     } else {
                         failure = nil
                     }

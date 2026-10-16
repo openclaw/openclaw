@@ -155,7 +155,16 @@ describe("worker automatic resume", () => {
           environmentId: replacement.ready.environmentId,
           turnClaim: { owner: "local", runId },
         });
-        return { payloads: [{ text: "The resumed workspace is ready." }], meta: { durationMs: 1 } };
+        return {
+          payloads: [{ text: "The resumed workspace is ready." }],
+          meta: {
+            durationMs: 1,
+            terminalReply: {
+              disposition: "visible" as const,
+              text: "The resumed workspace is ready.",
+            },
+          },
+        };
       });
       const pending = admission
         .run(() =>

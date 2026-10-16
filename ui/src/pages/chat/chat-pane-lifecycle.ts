@@ -42,7 +42,6 @@ import { ChatPaneSessionObservation } from "./chat-pane-session-observation.ts";
 import { ChatPaneSessionPanelToggleController } from "./chat-pane-session-panel-toggle.ts";
 import {
   CHAT_COMPOSER_TEXTAREA_SELECTOR,
-  closeChatPaneDetails,
   focusChatComposerFromPrintableKeydown,
 } from "./chat-pane-shared.ts";
 import { resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
@@ -235,24 +234,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     }
 
     focusChatComposerFromPrintableKeydown(this.element, event);
-
-    if (
-      event.defaultPrevented ||
-      event.isComposing ||
-      event.keyCode === 229 ||
-      event.key !== "Escape"
-    ) {
-      return;
-    }
-    if (closeChatPaneDetails(this.element)) {
-      event.preventDefault();
-    }
-  };
-
-  protected readonly handleDocumentPointerdown = (event: PointerEvent) => {
-    if (this.state && closeChatPaneDetails(this.element, event.composedPath())) {
-      this.state.requestUpdate();
-    }
   };
 
   override connectedCallback() {
@@ -280,12 +261,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.addEventListener("focusin", this.handlePaneFocus);
     this.addEventListener("input", this.handlePaneInput);
     document.addEventListener("keydown", this.handleDocumentKeydown, true);
-    document.addEventListener("pointerdown", this.handleDocumentPointerdown, true);
     const chatState = this.chatState;
     chatState.addCleanup(() => publishChatWorkContext(this.context, this));
     chatState.addCleanup(() => {
       document.removeEventListener("keydown", this.handleDocumentKeydown, true);
-      document.removeEventListener("pointerdown", this.handleDocumentPointerdown, true);
       this.removeEventListener("pointerdown", this.handlePaneFocus);
       this.removeEventListener("focusin", this.handlePaneFocus);
       this.removeEventListener("input", this.handlePaneInput);

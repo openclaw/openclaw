@@ -1,5 +1,5 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
-import type { ReactiveControllerHost } from "lit";
+import type { SolidControllerHost } from "../lit/solid-controller-host.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import type { SidebarEmptyGroupsMode } from "./app-sidebar-session-types.ts";
 
@@ -21,7 +21,7 @@ export class SidebarEmptyGroupsController {
   private connectionKey: string | null = null;
 
   constructor(
-    private readonly host: ReactiveControllerHost,
+    private readonly host: SolidControllerHost,
     private readonly getContext: () => PreferenceContext | undefined,
   ) {}
 

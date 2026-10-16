@@ -200,6 +200,8 @@ Graceful shutdown does not flush queued indexing. On the next startup, increment
 catch-up resumes from each source's indexed sequence, including rewrites and
 compaction. A failed full rebuild retains
 its full-retry state; ordinary dirty content does not itself force a rebuild.
+An index built before any content exists remains valid as content arrives;
+restarting does not require a full rebuild just because the index started empty.
 Growing session transcripts retain unchanged indexed chunks and embed only new
 or changed chunks, even when the embedding cache is disabled. An explicit full
 rebuild still replaces the complete index.
@@ -223,8 +225,16 @@ with a 30-second default interval, including when polling is explicitly enabled
 with `CHOKIDAR_USEPOLLING`. A valid `CHOKIDAR_INTERVAL` overrides this default,
 with a 20 ms minimum. Shorter intervals increase background scanning cost,
 especially for large memory trees. Native events
-still trigger prompt, debounced updates. Automatic fallback logs one warning per
-watcher lifetime. A running memory manager exposes each local observation's
+still trigger prompt, debounced updates. Native watchers also perform a full
+recovery scan every five minutes, so a missed native event can take that long to
+be detected. This recovery interval does not change polling cadence. Automatic
+fallback logs one warning per watcher lifetime. Agents in the same process share
+observations of the same admitted root, retaining each agent's file-selection
+rules. More than 128 combined scopes use additional bounded subscriptions. If a
+shared observation fails, its members retry independently for the rest of their
+watcher lifetimes, so one failing scope cannot repeatedly disable healthy peers.
+The last agent to stop observing a root closes its subscription. A running memory
+manager exposes each local observation's
 mode, polling interval, and `pollingFallback` in its status under `custom.watcher`;
 standalone status inspection does not start a watcher. The filesystem
 library does not currently retain the fallback reason or retry native selection;

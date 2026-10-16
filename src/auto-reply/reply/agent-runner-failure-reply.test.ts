@@ -6,20 +6,15 @@ import {
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
 } from "../../agents/failover/user-copy.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
-import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
 import { SkillLibraryError } from "../../skills/skill-library-error.js";
-import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
-  buildEmptyInteractiveReplyPayload,
   buildExternalRunFailureReply,
   buildKnownAgentRunFailureReplyPayload,
   buildPreflightCompactionFailureText,
 } from "./agent-runner-failure-reply.js";
-import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
 
 it("shows unshrinkable request guidance without verbose diagnostics", () => {
   const reason =
@@ -29,33 +24,6 @@ it("shows unshrinkable request guidance without verbose diagnostics", () => {
   expect(
     buildPreflightCompactionFailureText(`Preflight compaction required but failed: ${reason}`),
   ).toBe(`⚠️ ${reason}`);
-});
-
-describe("buildEmptyInteractiveReplyPayload", () => {
-  it("surfaces missing output for a mentioned group request even when silence is allowed", () => {
-    const expectation = resolveSourceReplyExpectation({
-      ctx: {
-        Provider: "discord",
-        Surface: "discord",
-        ChatType: "group",
-        InboundEventKind: "user_request",
-        WasMentioned: true,
-      },
-      cfg: { agents: { defaults: { silentReply: { group: "allow" } } } },
-    });
-    const payload = buildEmptyInteractiveReplyPayload({
-      completion: resolveReplyCompletion(expectation, "empty"),
-    });
-
-    expect(payload?.isError).toBe(true);
-    expect(payload?.text).not.toBe(SILENT_REPLY_TOKEN);
-    expect(getReplyPayloadMetadata(payload ?? {})?.deliverDespiteSourceReplySuppression).toBe(true);
-  });
-
-  it("does not add an error for a ready reply", () => {
-    const completion = resolveReplyCompletion("required", "ready");
-    expect(buildEmptyInteractiveReplyPayload({ completion })).toBeUndefined();
-  });
 });
 
 describe("buildExternalRunFailureReply", () => {

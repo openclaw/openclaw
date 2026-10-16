@@ -1,7 +1,7 @@
 import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
 import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import type { renderForwardedAvatar } from "../chat-avatar.ts";
+import type { ForwardedAvatarOptions } from "../chat-avatar-view.tsx";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import type { renderGroupedMessage } from "./chat-message-bubble.ts";
@@ -24,7 +24,7 @@ export type RenderMessageGroupOptions = Omit<
   | "replyLine"
 > &
   ChatSendStatusActions &
-  Parameters<typeof renderForwardedAvatar>[1] & {
+  ForwardedAvatarOptions & {
     /** A run frame's line, from its final answer; other groups resolve their own. */
     frameReplyLine?: ReplyLine;
     entryRefFor?: (key: string) => ((element?: Element) => void) | undefined;

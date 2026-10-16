@@ -30,12 +30,8 @@ import {
 } from "../account-config.js";
 import { resolveMatrixConfigFieldPath } from "../config-paths.js";
 import type { MatrixStoredCredentials } from "../credentials-state.js";
-import {
-  fetchMatrixWhoamiIdentity,
-  loadMatrixAuthClientDeps,
-  MatrixWhoamiCleanupError,
-  retryMatrixAuthRequest,
-} from "./auth-request.js";
+import { resolveMatrixLocalTimeoutMs } from "../sdk/client-support.js";
+import { fetchMatrixWhoamiIdentity, retryMatrixAuthRequest } from "./auth-request.js";
 import { resolveGlobalMatrixEnvConfig, resolveScopedMatrixEnvConfig } from "./env-auth.js";
 import { repairCurrentTokenStorageMetaDeviceId } from "./storage.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
@@ -470,7 +466,6 @@ export async function resolveMatrixAuth(params?: {
       const whoami = await fetchMatrixWhoamiIdentity({
         homeserver,
         accessToken,
-        userId,
         ssrfPolicy: resolved.ssrfPolicy,
         dispatcherPolicy: resolved.dispatcherPolicy,
       });
@@ -542,29 +537,29 @@ export async function resolveMatrixAuth(params?: {
     );
   }
 
-  // Login with password using the same hardened request path as other Matrix HTTP calls.
-  const { MatrixClient, ensureMatrixSdkLoggingConfigured } = await loadMatrixAuthClientDeps();
-  ensureMatrixSdkLoggingConfigured();
-  const loginClient = new MatrixClient(homeserver, "", {
+  const { MatrixAuthedHttpClient } = await import("../sdk/http-client.js");
+  const loginClient = new MatrixAuthedHttpClient({
+    homeserver,
+    accessToken: "",
     ssrfPolicy: resolved.ssrfPolicy,
     dispatcherPolicy: resolved.dispatcherPolicy,
   });
-  let login: MatrixLoginResponse;
-  try {
-    login = await retryMatrixAuthRequest(
-      "matrix auth login",
-      async () =>
-        (await loginClient.doRequest("POST", "/_matrix/client/v3/login", undefined, {
+  const login = await retryMatrixAuthRequest(
+    "matrix auth login",
+    async () =>
+      (await loginClient.requestJson({
+        method: "POST",
+        endpoint: "/_matrix/client/v3/login",
+        timeoutMs: resolveMatrixLocalTimeoutMs(undefined),
+        body: {
           type: "m.login.password",
           identifier: { type: "m.id.user", user: resolved.userId },
           password,
           device_id: resolved.deviceId,
           initial_device_display_name: resolved.deviceName ?? "OpenClaw Gateway",
-        })) as MatrixLoginResponse,
-    );
-  } finally {
-    await loginClient.stopWithoutPersist();
-  }
+        },
+      })) as MatrixLoginResponse,
+  );
 
   const loginAccessToken = login.access_token?.trim();
   if (!loginAccessToken) {
@@ -613,14 +608,12 @@ export async function backfillMatrixAuthDeviceIdAfterStartup(params: {
     whoami = await fetchMatrixWhoamiIdentity({
       homeserver: params.auth.homeserver,
       accessToken: params.auth.accessToken,
-      userId: params.auth.userId,
       ssrfPolicy: params.auth.ssrfPolicy,
       dispatcherPolicy: params.auth.dispatcherPolicy,
       signal: params.abortSignal,
     });
   } catch (err) {
-    // Cancelled requests yield no device ID; disposal failures remain visible.
-    if (params.abortSignal?.aborted && !(err instanceof MatrixWhoamiCleanupError)) {
+    if (params.abortSignal?.aborted) {
       return undefined;
     }
     throw err;
