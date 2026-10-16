@@ -1,4 +1,3 @@
-// Msteams tests cover messenger plugin behavior.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -6,7 +5,7 @@ import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-run
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { teamsMarkdownDeliveryCases } from "./format.test-fixtures.js";
 const graphUploadMockState = vi.hoisted(() => ({
@@ -79,35 +78,55 @@ const createRecordedSendActivity = (
   };
 };
 
-async function buildActivity(
-  message: Parameters<typeof sendMSTeamsMessages>[0]["messages"][number],
-  conversationRef: StoredConversationReference,
-  tokenProvider?: Parameters<typeof sendMSTeamsMessages>[0]["tokenProvider"],
-  sharePointSiteId?: string,
-  mediaMaxBytes?: number,
-  options?: { feedbackLoopEnabled?: boolean },
-): Promise<Record<string, unknown>> {
-  let captured: Record<string, unknown> | undefined;
+const baseRef: StoredConversationReference = {
+  activityId: "activity123",
+  user: { id: "user123", name: "User" },
+  agent: { id: "bot123", name: "Bot" },
+  conversation: { id: "19:abc@thread.tacv2;messageid=deadbeef" },
+  channelId: "msteams",
+  serviceUrl: "https://smba.trafficmanager.net/amer/",
+};
+
+type SendParams = Parameters<typeof sendMSTeamsMessages>[0];
+function sendMessages(params: Pick<SendParams, "messages"> & Partial<SendParams>) {
+  return sendMSTeamsMessages({
+    replyStyle: "thread",
+    app: createMockApp(),
+    conversationRef: baseRef,
+    ...params,
+  });
+}
+
+let temporaryDirectories: string[] = [];
+async function localFile(name: string, content: string | Buffer) {
+  const directory = await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "msteams-"));
+  temporaryDirectories.push(directory);
+  const filename = path.join(directory, name);
+  await writeFile(filename, content);
+  return filename;
+}
+afterEach(async () => {
+  await Promise.all(
+    temporaryDirectories.map((directory) => rm(directory, { recursive: true, force: true })),
+  );
+  temporaryDirectories = [];
+});
+
+function recordSend() {
+  const texts: string[] = [];
+  const activities: Array<Record<string, unknown>> = [];
+  const conversationIds: string[] = [];
+  const references: unknown[] = [];
+  const send = createRecordedSendActivity(texts);
   const app = createMockApp({
     createFn: async (activity) => {
-      captured = activity as Record<string, unknown>;
-      return { id: "captured" };
+      activities.push(activity as Record<string, unknown>);
+      return send(activity);
     },
+    onClientCreated: (_serviceUrl, id) => conversationIds.push(id),
+    onReference: (reference) => references.push(reference),
   });
-  await sendMSTeamsMessages({
-    replyStyle: "top-level",
-    app,
-    conversationRef,
-    messages: [message],
-    tokenProvider,
-    sharePointSiteId,
-    mediaMaxBytes,
-    feedbackLoopEnabled: options?.feedbackLoopEnabled,
-  });
-  if (!captured) {
-    throw new Error("expected Teams activity to be sent");
-  }
-  return captured;
+  return { app, texts, activities, conversationIds, references };
 }
 
 describe("msteams messenger", () => {
@@ -128,71 +147,15 @@ describe("msteams messenger", () => {
   });
 
   describe("sendMSTeamsMessages", () => {
-    const baseRef: StoredConversationReference = {
-      activityId: "activity123",
-      user: { id: "user123", name: "User" },
-      agent: { id: "bot123", name: "Bot" },
-      conversation: { id: "19:abc@thread.tacv2;messageid=deadbeef" },
-      channelId: "msteams",
-      serviceUrl: "https://smba.trafficmanager.net/amer/",
-    };
-
-    async function sendAndCaptureThreadReference(params: {
-      conversation: StoredConversationReference["conversation"];
-      activityId?: string;
-      threadId?: string;
-    }) {
-      const proactiveSent: string[] = [];
-      let capturedConversationId: string | undefined;
-      const conversationRef: StoredConversationReference = {
-        activityId: params.activityId ?? "activity456",
-        user: { id: "user123", name: "User" },
-        agent: { id: "bot123", name: "Bot" },
-        conversation: params.conversation,
-        channelId: "msteams",
-        serviceUrl: "https://smba.trafficmanager.net/amer/",
-        ...(params.threadId ? { threadId: params.threadId } : {}),
-      };
-
-      await sendMSTeamsMessages({
-        replyStyle: "thread",
-        app: createMockApp({
-          createFn: createRecordedSendActivity(proactiveSent),
-          onClientCreated: (_serviceUrl, conversationId) => {
-            capturedConversationId = conversationId;
-          },
-        }),
-        conversationRef,
-        messages: [{ text: "hello" }],
-      });
-
-      return {
-        proactiveSent,
-        // Reconstruct a reference-like shape from captured conversationId for assertion compat
-        reference: {
-          conversation: capturedConversationId ? { id: capturedConversationId } : undefined,
-          activityId: undefined,
-        },
-      };
-    }
-
     it.each(
       teamsMarkdownDeliveryCases.filter(
         ({ name }) => name === "plain text" || name === "raw table after list-fence outdent",
       ),
     )("sends $name via proactive send context", async ({ source, expected }) => {
-      const texts: string[] = [];
-      let capturedConversationId: string | undefined;
-
-      const ids = await sendMSTeamsMessages({
+      const { app, texts, conversationIds } = recordSend();
+      const ids = await sendMessages({
         replyStyle: "top-level",
-        app: createMockApp({
-          createFn: createRecordedSendActivity(texts),
-          onClientCreated: (_serviceUrl, conversationId) => {
-            capturedConversationId = conversationId;
-          },
-        }),
-        conversationRef: baseRef,
+        app,
         messages: renderReplyPayloadsToMessages([{ text: source }], {
           textChunkLimit: 4000,
           tableMode: "off",
@@ -201,33 +164,24 @@ describe("msteams messenger", () => {
 
       expect(texts).toEqual([expected]);
       expect(ids).toEqual([`id:${expected}`]);
-      expect(capturedConversationId).toBe("19:abc@thread.tacv2");
+      expect(conversationIds).toEqual(["19:abc@thread.tacv2"]);
     });
 
     it("requires SharePoint storage for channel files", async () => {
-      const tmpDir = await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "msteams-storage-"));
-      const localFile = path.join(tmpDir, "note.txt");
-      await writeFile(localFile, "hello");
-
-      try {
-        await expect(
-          sendMSTeamsMessages({
-            replyStyle: "thread",
-            app: createMockApp(),
-            conversationRef: {
-              ...baseRef,
-              conversation: {
-                ...baseRef.conversation,
-                conversationType: "channel",
-              },
+      const filename = await localFile("note.txt", "hello");
+      await expect(
+        sendMessages({
+          conversationRef: {
+            ...baseRef,
+            conversation: {
+              ...baseRef.conversation,
+              conversationType: "channel",
             },
-            messages: [{ text: "one", mediaUrl: localFile }],
-            tokenProvider: { getAccessToken: async () => "token" },
-          }),
-        ).rejects.toThrow("channels.msteams.sharePointSiteId is required");
-      } finally {
-        await rm(tmpDir, { recursive: true, force: true });
-      }
+          },
+          messages: [{ text: "one", mediaUrl: filename }],
+          tokenProvider: { getAccessToken: async () => "token" },
+        }),
+      ).rejects.toThrow("channels.msteams.sharePointSiteId is required");
     });
 
     it("marks local activity preparation failures as never dispatched", async () => {
@@ -235,10 +189,7 @@ describe("msteams messenger", () => {
       const missingPath = path.join(resolvePreferredOpenClawTmpDir(), "missing-msteams-file.txt");
 
       await expect(
-        sendMSTeamsMessages({
-          replyStyle: "thread",
-          app: createMockApp(),
-          conversationRef: baseRef,
+        sendMessages({
           context: { sendActivity },
           messages: [{ mediaUrl: missingPath }],
         }),
@@ -247,45 +198,36 @@ describe("msteams messenger", () => {
     });
 
     it("loads uppercase file URLs before sending personal images", async () => {
-      const tmpDir = await mkdtemp(
-        path.join(resolvePreferredOpenClawTmpDir(), "msteams-file-url-"),
-      );
-      const localFile = path.join(tmpDir, "café image.png");
       const png = Buffer.from(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
         "base64",
       );
-      await writeFile(localFile, png);
+      const filename = await localFile("café image.png", png);
+      const mediaUrl = pathToFileURL(filename).href.replace(/^file:/u, "FILE:");
+      const { app, activities } = recordSend();
+      await sendMessages({
+        replyStyle: "top-level",
+        app,
+        messages: [{ mediaUrl }],
+        conversationRef: {
+          ...baseRef,
+          conversation: { ...baseRef.conversation, conversationType: "personal" },
+        },
+      });
+      const attachment = (activities[0].attachments as Array<Record<string, unknown>>)[0];
 
-      try {
-        const mediaUrl = pathToFileURL(localFile).href.replace(/^file:/u, "FILE:");
-        const activity = await buildActivity(
-          { mediaUrl },
-          {
-            ...baseRef,
-            conversation: { ...baseRef.conversation, conversationType: "personal" },
-          },
-        );
-        const attachment = (activity.attachments as Array<Record<string, unknown>>)[0];
-
-        expect(attachment).toMatchObject({
-          name: "café image.png",
-          contentType: "image/png",
-          contentUrl: `data:image/png;base64,${png.toString("base64")}`,
-        });
-      } finally {
-        await rm(tmpDir, { recursive: true, force: true });
-      }
+      expect(attachment).toMatchObject({
+        name: "café image.png",
+        contentType: "image/png",
+        contentUrl: `data:image/png;base64,${png.toString("base64")}`,
+      });
     });
 
     it("does not claim no dispatch after an earlier batch message was sent", async () => {
       const sendActivity = vi.fn(async () => ({ id: "sent-first" }));
       const missingPath = path.join(resolvePreferredOpenClawTmpDir(), "missing-second-file.txt");
 
-      const error = await sendMSTeamsMessages({
-        replyStyle: "thread",
-        app: createMockApp(),
-        conversationRef: baseRef,
+      const error = await sendMessages({
         context: { sendActivity },
         messages: [{ text: "first" }, { mediaUrl: missingPath }],
       }).catch((cause: unknown) => cause);
@@ -297,9 +239,8 @@ describe("msteams messenger", () => {
 
     it("marks invalid proactive conversation references as never dispatched", async () => {
       await expect(
-        sendMSTeamsMessages({
+        sendMessages({
           replyStyle: "top-level",
-          app: createMockApp(),
           conversationRef: {
             ...baseRef,
             conversation: { id: "" },
@@ -310,73 +251,64 @@ describe("msteams messenger", () => {
     });
 
     it("retries media preparation but reuses it after provider dispatch starts", async () => {
-      const tmpDir = await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "msteams-retry-"));
-      const localFile = path.join(tmpDir, "retry.txt");
-      await writeFile(localFile, "hello");
-
-      try {
-        const attempts: string[] = [];
-        const providerPayloads: string[] = [];
-        const retryEvents: Array<{ nextAttempt: number; delayMs: number }> = [];
-        let uploadAttempts = 0;
-        graphUploadMockState.uploadAndShareSharePoint.mockImplementation(async () => {
-          uploadAttempts += 1;
-          if (uploadAttempts === 1) {
-            throw Object.assign(new Error("transient upload failure"), {
-              statusCode: 429,
-              retryAfterMs: 0,
-            });
-          }
-          return {
-            itemId: "item123",
-            webUrl: "https://sharepoint.example.com/item123",
-            shareUrl: "https://sharepoint.example.com/share/item123",
-            name: "retry.txt",
-          };
-        });
-        graphUploadMockState.getDriveItemProperties.mockResolvedValue({
-          eTag: '"{ITEM-123},1"',
-          webDavUrl: "https://sharepoint.example.com/item123",
+      const filename = await localFile("retry.txt", "hello");
+      const attempts: string[] = [];
+      const providerPayloads: string[] = [];
+      const retryEvents: Array<{ nextAttempt: number; delayMs: number }> = [];
+      let uploadAttempts = 0;
+      graphUploadMockState.uploadAndShareSharePoint.mockImplementation(async () => {
+        uploadAttempts += 1;
+        if (uploadAttempts === 1) {
+          throw Object.assign(new Error("transient upload failure"), {
+            statusCode: 429,
+            retryAfterMs: 0,
+          });
+        }
+        return {
+          itemId: "item123",
+          webUrl: "https://sharepoint.example.com/item123",
+          shareUrl: "https://sharepoint.example.com/share/item123",
           name: "retry.txt",
-        });
-
-        const sendActivity = createRecordedSendActivity(attempts, 429);
-        const ctx = {
-          sendActivity: async (activity: unknown) => {
-            providerPayloads.push(JSON.stringify(activity));
-            return await sendActivity(activity);
-          },
         };
-        const ids = await sendMSTeamsMessages({
-          replyStyle: "thread",
-          app: createMockApp(),
-          conversationRef: {
-            ...baseRef,
-            conversation: {
-              ...baseRef.conversation,
-              conversationType: "channel",
-            },
-          },
-          context: ctx,
-          messages: [{ text: "one", mediaUrl: localFile }],
-          tokenProvider: {
-            getAccessToken: async () => "token",
-          },
-          sharePointSiteId: "site-123",
-          onRetry: (e) => retryEvents.push({ nextAttempt: e.nextAttempt, delayMs: e.delayMs }),
-        });
+      });
+      graphUploadMockState.getDriveItemProperties.mockResolvedValue({
+        eTag: '"{ITEM-123},1"',
+        webDavUrl: "https://sharepoint.example.com/item123",
+        name: "retry.txt",
+      });
 
-        expect(uploadAttempts).toBe(2);
-        expect(attempts).toEqual(["one", "one"]);
-        expect(providerPayloads[1]).toBe(providerPayloads[0]);
-        expect(ids).toEqual(["id:one"]);
-        expect(retryEvents).toEqual([
-          { nextAttempt: 2, delayMs: 0 },
-          { nextAttempt: 3, delayMs: 0 },
-        ]);
-      } finally {
-        await rm(tmpDir, { recursive: true, force: true });
-      }
+      const sendActivity = createRecordedSendActivity(attempts, 429);
+      const ctx = {
+        sendActivity: async (activity: unknown) => {
+          providerPayloads.push(JSON.stringify(activity));
+          return await sendActivity(activity);
+        },
+      };
+      const ids = await sendMessages({
+        conversationRef: {
+          ...baseRef,
+          conversation: {
+            ...baseRef.conversation,
+            conversationType: "channel",
+          },
+        },
+        context: ctx,
+        messages: [{ text: "one", mediaUrl: filename }],
+        tokenProvider: {
+          getAccessToken: async () => "token",
+        },
+        sharePointSiteId: "site-123",
+        onRetry: (e) => retryEvents.push({ nextAttempt: e.nextAttempt, delayMs: e.delayMs }),
+      });
+
+      expect(uploadAttempts).toBe(2);
+      expect(attempts).toEqual(["one", "one"]);
+      expect(providerPayloads[1]).toBe(providerPayloads[0]);
+      expect(ids).toEqual(["id:one"]);
+      expect(retryEvents).toEqual([
+        { nextAttempt: 2, delayMs: 0 },
+        { nextAttempt: 3, delayMs: 0 },
+      ]);
     });
 
     it("does not retry thread sends on client errors (4xx)", async () => {
@@ -387,86 +319,60 @@ describe("msteams messenger", () => {
       };
 
       await expect(
-        sendMSTeamsMessages({
-          replyStyle: "thread",
-          app: createMockApp(),
-          conversationRef: baseRef,
+        sendMessages({
           context: ctx,
           messages: [{ text: "one" }],
         }),
       ).rejects.toMatchObject({ statusCode: 400 });
     });
 
-    it("reconstructs threaded conversation ID without a live channel context", async () => {
-      const { proactiveSent, reference } = await sendAndCaptureThreadReference({
-        conversation: {
-          id: "19:abc@thread.tacv2;messageid=deadbeef",
-          conversationType: "channel",
-        },
-      });
-
-      expect(proactiveSent).toEqual(["hello"]);
-      // Conversation ID should include the thread suffix for channel messages
-      expect(reference.conversation?.id).toBe("19:abc@thread.tacv2;messageid=activity456");
-      expect(reference.activityId).toBeUndefined();
-    });
-
-    it("uses threadId instead of activityId without a live channel context (#58030)", async () => {
-      const { proactiveSent, reference } = await sendAndCaptureThreadReference({
+    it.each([
+      {
+        replyStyle: "thread",
+        activityId: "activity456",
+        id: "19:abc@thread.tacv2;messageid=deadbeef",
+        threadId: undefined,
+        expected: "19:abc@thread.tacv2;messageid=activity456",
+      },
+      {
+        replyStyle: "thread",
         activityId: "current-message-id",
-        conversation: {
-          id: "19:abc@thread.tacv2",
-          conversationType: "channel",
-        },
-        // threadId is the thread root, which differs from activityId (current message)
+        id: "19:abc@thread.tacv2",
         threadId: "thread-root-msg-id",
-      });
-
-      expect(proactiveSent).toEqual(["hello"]);
-      // Should use threadId (thread root), NOT activityId (current message)
-      expect(reference.conversation?.id).toBe("19:abc@thread.tacv2;messageid=thread-root-msg-id");
-      expect(reference.activityId).toBeUndefined();
-    });
-
-    it("does not add thread suffix for top-level replyStyle even with threadId set", async () => {
-      const sent: string[] = [];
-      let capturedConversationId: string | undefined;
-
-      const channelRef: StoredConversationReference = {
-        activityId: "current-msg",
-        user: { id: "user123", name: "User" },
-        agent: { id: "bot123", name: "Bot" },
-        conversation: {
-          id: "19:abc@thread.tacv2",
-          conversationType: "channel",
-        },
-        channelId: "msteams",
-        serviceUrl: "https://smba.trafficmanager.net/amer/",
-        threadId: "thread-root-msg-id",
-      };
-
-      await sendMSTeamsMessages({
+        expected: "19:abc@thread.tacv2;messageid=thread-root-msg-id",
+      },
+      {
         replyStyle: "top-level",
-        app: createMockApp({
-          createFn: createRecordedSendActivity(sent),
-          onClientCreated: (_serviceUrl, conversationId) => {
-            capturedConversationId = conversationId;
+        activityId: "current-msg",
+        id: "19:abc@thread.tacv2",
+        threadId: "thread-root-msg-id",
+        expected: "19:abc@thread.tacv2",
+      },
+    ] as const)(
+      "routes $replyStyle with threadId=$threadId (#58030)",
+      async ({ replyStyle, activityId, id, threadId, expected }) => {
+        const { app, texts, conversationIds } = recordSend();
+        await sendMessages({
+          app,
+          replyStyle,
+          messages: [{ text: "hello" }],
+          conversationRef: {
+            ...baseRef,
+            activityId,
+            threadId,
+            conversation: { id, conversationType: "channel" },
           },
-        }),
-        conversationRef: channelRef,
-        messages: [{ text: "hello" }],
-      });
-
-      expect(sent).toEqual(["hello"]);
-      // Top-level sends should NOT include thread suffix
-      expect(capturedConversationId).toBe("19:abc@thread.tacv2");
-    });
+        });
+        expect(texts).toEqual(["hello"]);
+        expect(conversationIds).toEqual([expected]);
+      },
+    );
 
     it.each(["ETIMEDOUT"])(
       "does not retry top-level sends after ambiguous transport %s",
       async (code) => {
         const attempts: string[] = [];
-        const error = await sendMSTeamsMessages({
+        const error = await sendMessages({
           replyStyle: "top-level",
           app: createMockApp({
             createFn: async (activity) => {
@@ -474,7 +380,6 @@ describe("msteams messenger", () => {
               throw Object.assign(new Error(code), { code });
             },
           }),
-          conversationRef: baseRef,
           messages: [{ text: "hello" }],
         }).catch((cause: unknown) => cause);
 
@@ -485,7 +390,7 @@ describe("msteams messenger", () => {
 
     it("does not replay accepted blocks when a later block has an ambiguous failure", async () => {
       const attempts: string[] = [];
-      const error = await sendMSTeamsMessages({
+      const error = await sendMessages({
         replyStyle: "top-level",
         app: createMockApp({
           createFn: async (activity) => {
@@ -497,7 +402,6 @@ describe("msteams messenger", () => {
             return { id: `id:${text}` };
           },
         }),
-        conversationRef: baseRef,
         messages: [{ text: "first" }, { text: "second" }],
       }).catch((cause: unknown) => cause);
 
@@ -508,13 +412,9 @@ describe("msteams messenger", () => {
   });
 
   describe("buildActivity AI metadata", () => {
-    const baseRef: StoredConversationReference = {
-      activityId: "activity123",
-      user: { id: "user123", name: "User" },
-      agent: { id: "bot123", name: "Bot" },
+    const personalRef: StoredConversationReference = {
+      ...baseRef,
       conversation: { id: "conv123", conversationType: "personal" },
-      channelId: "msteams",
-      serviceUrl: "https://smba.trafficmanager.net/amer/",
     };
 
     it("sends decoded attachment filenames over the Bot Framework HTTP transport", async () => {
@@ -548,10 +448,10 @@ describe("msteams messenger", () => {
           });
           const encodedNames = ["My%20report.pdf", "r%C3%A9sum%C3%A9.pdf", "100%25.png"];
 
-          await sendMSTeamsMessages({
+          await sendMessages({
             replyStyle: "top-level",
             app,
-            conversationRef: baseRef,
+            conversationRef: personalRef,
             messages: encodedNames.map((name) => ({
               mediaUrl: `${baseUrl}/files/${name}`,
             })),
@@ -572,18 +472,15 @@ describe("msteams messenger", () => {
   // on the outbound conversation reference.
   describe("buildConversationReference tenant/aad forwarding (#58774)", () => {
     const storedWithChannelDataTenant: StoredConversationReference = {
+      ...baseRef,
       activityId: "activity-1",
       user: { id: "user123", name: "User", aadObjectId: "aad-user-123" },
-      agent: { id: "bot123", name: "Bot" },
       conversation: {
         id: "19:abc@thread.tacv2",
         conversationType: "channel",
       },
-      // Canonical channelData source captured by message-handler inbound code.
       tenantId: "tenant-abc",
       aadObjectId: "aad-user-123",
-      channelId: "msteams",
-      serviceUrl: "https://smba.trafficmanager.net/amer/",
     };
 
     it("accepts a legacy bot-only imported reference and resolves the agent from bot", () => {
@@ -604,22 +501,17 @@ describe("msteams messenger", () => {
     });
 
     it("propagates tenantId/aadObjectId through sendMSTeamsMessages proactive path", async () => {
-      const sent: string[] = [];
-      const refs: unknown[] = [];
-
-      const ids = await sendMSTeamsMessages({
+      const { app, texts, references } = recordSend();
+      const ids = await sendMessages({
         replyStyle: "top-level",
-        app: createMockApp({
-          createFn: createRecordedSendActivity(sent),
-          onReference: (ref) => refs.push(ref),
-        }),
+        app,
         conversationRef: storedWithChannelDataTenant,
         messages: [{ text: "hello" }],
       });
 
-      expect(sent).toEqual(["hello"]);
+      expect(texts).toEqual(["hello"]);
       expect(ids).toEqual(["id:hello"]);
-      expect(refs).toEqual([
+      expect(references).toEqual([
         expect.objectContaining({
           serviceUrl: "https://smba.trafficmanager.net/amer",
           tenantId: "tenant-abc",

@@ -91,6 +91,29 @@ function successfulGraphRoutes(): GraphRoute[] {
   ];
 }
 
+function revokeAfterRoute(includes: string, revoke: () => void) {
+  return createGraphFetch(
+    ...successfulGraphRoutes().map((route) => ({
+      includes: route.includes,
+      respond: async (init?: RequestInit) => {
+        const response = await route.respond(init);
+        if (route.includes === includes) {
+          revoke();
+        }
+        return response;
+      },
+    })),
+  );
+}
+
+function loopbackFetch(baseUrl: string) {
+  const realFetch = globalThis.fetch.bind(globalThis);
+  return vi.fn<typeof fetch>(async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    return await realFetch(new URL(`${url.pathname}${url.search}`, baseUrl), init);
+  });
+}
+
 function createGraphSendAuthority() {
   let current = true;
   const error = new Error("Teams send authority closed");
@@ -340,15 +363,10 @@ describe("graph upload helpers", () => {
       bodyOnlyErrorResponse(`${"upload-denied ".repeat(4096)}tail-marker`, 413),
     );
 
-    let error: unknown;
-    try {
-      await uploadToSharePoint({
-        filename: "large.txt",
-        fetchFn: fetchFn as unknown as typeof fetch,
-      });
-    } catch (caught) {
-      error = caught;
-    }
+    const error = await uploadToSharePoint({
+      filename: "large.txt",
+      fetchFn: fetchFn as unknown as typeof fetch,
+    }).catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(Error);
     const message = (error as Error).message;
@@ -459,16 +477,6 @@ describe("graph upload request timeouts", () => {
     expect(fetchFn).toHaveBeenCalledTimes(2);
   });
 
-  it("fails closed when per-user member lookup has a transient Graph error", async () => {
-    const fetchFn = createGraphFetch(
-      fixedGraphRoute("/content", DEFAULT_UPLOAD_RESULT),
-      fixedGraphRoute("/members", "temporarily unavailable", 503),
-    );
-
-    await expect(uploadWithPerUserSharing(fetchFn)).rejects.toMatchObject({ statusCode: 503 });
-    expect(fetchFn).toHaveBeenCalledTimes(2);
-  });
-
   it("creates a per-user link when member lookup succeeds", async () => {
     const fetchFn = createGraphFetch(
       fixedGraphRoute("/content", DEFAULT_UPLOAD_RESULT),
@@ -490,16 +498,25 @@ describe("graph upload request timeouts", () => {
     );
   });
 
-  it("fails closed when Graph denies member lookup", async () => {
+  it.each([
+    [503, "temporarily unavailable", { statusCode: 503 }],
+    [
+      403,
+      "forbidden",
+      { statusCode: 403, message: expect.stringContaining("verify Graph chat-member permissions") },
+    ],
+    [200, { value: [] }, "MS Teams chat member lookup returned no recipients"],
+  ] as const)("fails closed for member lookup status=%s", async (status, body, expected) => {
     const fetchFn = createGraphFetch(
       fixedGraphRoute("/content", DEFAULT_UPLOAD_RESULT),
-      fixedGraphRoute("/members", "forbidden", 403),
+      fixedGraphRoute("/members", body, status),
     );
-
-    await expect(uploadWithPerUserSharing(fetchFn)).rejects.toMatchObject({
-      statusCode: 403,
-      message: expect.stringContaining("verify Graph chat-member permissions"),
-    });
+    const rejected = expect(uploadWithPerUserSharing(fetchFn)).rejects;
+    if (typeof expected === "string") {
+      await rejected.toThrow(expected);
+    } else {
+      await rejected.toMatchObject(expected);
+    }
     expect(fetchFn).toHaveBeenCalledTimes(2);
   });
 
@@ -517,18 +534,6 @@ describe("graph upload request timeouts", () => {
     await expect(uploadWithPerUserSharing(fetchFn, tokenProvider403)).rejects.toBe(tokenError);
     expect(tokenProvider403.getAccessToken).toHaveBeenCalledTimes(2);
     expect(fetchFn).toHaveBeenCalledTimes(1);
-  });
-
-  it("fails closed when member lookup returns no recipients", async () => {
-    const fetchFn = createGraphFetch(
-      fixedGraphRoute("/content", DEFAULT_UPLOAD_RESULT),
-      fixedGraphRoute("/members", { value: [] }),
-    );
-
-    await expect(uploadWithPerUserSharing(fetchFn)).rejects.toThrow(
-      "MS Teams chat member lookup returned no recipients",
-    );
-    expect(fetchFn).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -598,18 +603,7 @@ describe("graph upload send authority", () => {
     async ({ completed, requestCount }) => {
       const authority = createGraphSendAuthority();
       const accessTokenProvider = { getAccessToken: vi.fn(async () => "graph-token") };
-      const fetchFn = createGraphFetch(
-        ...successfulGraphRoutes().map((route) => ({
-          includes: route.includes,
-          respond: async (init?: RequestInit) => {
-            const response = await route.respond(init);
-            if (route.includes === completed) {
-              authority.revoke();
-            }
-            return response;
-          },
-        })),
-      );
+      const fetchFn = revokeAfterRoute(completed, authority.revoke);
 
       await expect(
         runPreparation("upload", fetchFn, {
@@ -634,18 +628,7 @@ describe("graph upload send authority", () => {
     "retains the accepted $step response when authority closes before settlement",
     async ({ step, finalRoute, expected }) => {
       const authority = createGraphSendAuthority();
-      const fetchFn = createGraphFetch(
-        ...successfulGraphRoutes().map((route) => ({
-          includes: route.includes,
-          respond: async (init?: RequestInit) => {
-            const response = await route.respond(init);
-            if (route.includes === finalRoute) {
-              authority.revoke();
-            }
-            return response;
-          },
-        })),
-      );
+      const fetchFn = revokeAfterRoute(finalRoute, authority.revoke);
 
       await expect(runPreparation(step, fetchFn, authority.handoff)).resolves.toMatchObject(
         expected,
@@ -703,12 +686,7 @@ describe("graph upload send authority", () => {
           });
         },
         async (baseUrl) => {
-          const realFetch = globalThis.fetch.bind(globalThis);
-          const fetchFn = vi.fn<typeof fetch>(async (input, init) => {
-            const url = new URL(input instanceof Request ? input.url : String(input));
-            // Map only the URL: baseline fetch must retain its native automatic redirects.
-            return await realFetch(new URL(`${url.pathname}${url.search}`, baseUrl), init);
-          });
+          const fetchFn = loopbackFetch(baseUrl);
 
           await expect(runGraphUpload(fetchFn, authority.handoff)).resolves.toMatchObject({
             itemId: DEFAULT_UPLOAD_RESULT.id,
@@ -781,17 +759,7 @@ describe("graph upload response limits", () => {
         writeNext();
       },
       async (baseUrl) => {
-        const realFetch = globalThis.fetch.bind(globalThis);
-        vi.stubGlobal(
-          "fetch",
-          withFetchPreconnect(
-            vi.fn<typeof fetch>(async (input, init) => {
-              const url = new URL(input instanceof Request ? input.url : String(input));
-              const loopback = new URL(`${url.pathname}${url.search}`, baseUrl);
-              return realFetch(loopback, init);
-            }),
-          ),
-        );
+        vi.stubGlobal("fetch", withFetchPreconnect(loopbackFetch(baseUrl)));
 
         await expect(
           uploadToSharePoint({
@@ -807,39 +775,21 @@ describe("graph upload response limits", () => {
 });
 
 describe("buildTeamsFileInfoCard", () => {
-  it("extracts a unique id from quoted etags and lowercases file extensions", () => {
-    expect(
-      buildTeamsFileInfoCard({
-        eTag: '"{ABC-123},42"',
-        name: "Quarterly.Report.PDF",
-        webDavUrl: "https://sharepoint.example.com/file.pdf",
-      }),
-    ).toEqual({
+  it.each([
+    [
+      '"{ABC-123},42"',
+      "Quarterly.Report.PDF",
+      "https://sharepoint.example.com/file.pdf",
+      "ABC-123",
+      "pdf",
+    ],
+    ["plain-etag", "README", "https://sharepoint.example.com/readme", "plain-etag", ""],
+  ])("extracts id and extension from %s / %s", (eTag, name, url, uniqueId, fileType) => {
+    expect(buildTeamsFileInfoCard({ eTag, name, webDavUrl: url })).toEqual({
       contentType: "application/vnd.microsoft.teams.card.file.info",
-      contentUrl: "https://sharepoint.example.com/file.pdf",
-      name: "Quarterly.Report.PDF",
-      content: {
-        uniqueId: "ABC-123",
-        fileType: "pdf",
-      },
-    });
-  });
-
-  it("keeps the raw etag when no version suffix exists and handles extensionless files", () => {
-    expect(
-      buildTeamsFileInfoCard({
-        eTag: "plain-etag",
-        name: "README",
-        webDavUrl: "https://sharepoint.example.com/readme",
-      }),
-    ).toEqual({
-      contentType: "application/vnd.microsoft.teams.card.file.info",
-      contentUrl: "https://sharepoint.example.com/readme",
-      name: "README",
-      content: {
-        uniqueId: "plain-etag",
-        fileType: "",
-      },
+      contentUrl: url,
+      name,
+      content: { uniqueId, fileType },
     });
   });
 });
