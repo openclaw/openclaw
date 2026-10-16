@@ -18,6 +18,51 @@ import {
 
 const suite = createChatFlowE2eSuite();
 
+const sessionA = "agent:main:session-a";
+const bedrockModel = "bedrock/claude-opus-4.5";
+const agentList = <T extends { id: string }>(agent: T) => ({
+  agents: [agent],
+  defaultId: agent.id,
+  mainKey: "main",
+  scope: "agent",
+});
+const sessionRow = <T extends object>(key: string, label: string, updatedAt: number, extra: T) => ({
+  key,
+  kind: "direct",
+  label,
+  updatedAt,
+  ...extra,
+});
+const profileStartup = (
+  agentsList: ReturnType<typeof agentList>,
+  models: typeof basicModels,
+  sessionId: string,
+) => ({
+  agentsList,
+  messages: [],
+  metadata: { models },
+  sessionId,
+  thinkingLevel: null,
+});
+const basicModels = [
+  { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+  { id: "claude-opus-4.5", name: "Claude Opus 4.5", provider: "bedrock" },
+];
+async function openChat(
+  options: Parameters<typeof installMockGateway>[1],
+  sessionKey?: string,
+  contextOptions?: Parameters<typeof newChatPage>[1],
+) {
+  const page = await newChatPage(suite, contextOptions);
+  const gateway = await installMockGateway(page, options);
+  await page.goto(
+    sessionKey
+      ? controlUiSessionUrl(suite.server.baseUrl, sessionKey)
+      : `${suite.server.baseUrl}chat`,
+  );
+  return { page, gateway };
+}
+
 const visible = { state: "visible", timeout: 10_000 } as const;
 const control = (root: Page | Locator, name: string) => root.locator(`[data-chat-${name}="true"]`);
 const option = (root: Page | Locator, model: string) =>
@@ -78,42 +123,39 @@ async function createReasoningProofPage(scope: string) {
 
 suite.define(() => {
   it("patches a selectable Claude CLI context window", async () => {
-    const page = await newChatPage(suite);
-    const sessionKey = "agent:main:session-a";
+    const sessionKey = sessionA;
     const contextWindows = [
       { id: "200k", label: "200K", contextWindow: 200_000 },
       { id: "1m", label: "1M", contextWindow: 1_000_000 },
     ];
-    const session = {
-      key: sessionKey,
+    const session = sessionRow(sessionKey, "Session A", 2, {
       sessionId: "session-a-context-window",
-      kind: "direct",
-      label: "Session A",
       model: "claude-fable-5",
       modelProvider: "claude-cli",
       contextWindow: "1m",
       contextWindowDefault: "1m",
       contextWindows,
-      updatedAt: 2,
-    };
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": chatSessionListResponse([session]),
-      },
-      models: [
-        {
-          id: "claude-fable-5",
-          name: "Claude Fable 5",
-          provider: "claude-cli",
-          contextWindow: 1_000_000,
-          contextWindowDefault: "1m",
-          contextWindows,
-        },
-      ],
-      sessionKey,
     });
+    const { page, gateway } = await openChat(
+      {
+        methodResponses: {
+          "sessions.list": chatSessionListResponse([session]),
+        },
+        models: [
+          {
+            id: "claude-fable-5",
+            name: "Claude Fable 5",
+            provider: "claude-cli",
+            contextWindow: 1_000_000,
+            contextWindowDefault: "1m",
+            contextWindows,
+          },
+        ],
+        sessionKey,
+      },
+      sessionKey,
+    );
 
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
     const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
     const picker = pane.locator(".chat-controls__model-picker");
     await control(picker, "model-select").click();
@@ -142,8 +184,7 @@ suite.define(() => {
   });
 
   it("keeps picker menus in the viewport while preferring the space above", async () => {
-    const page = await newChatPage(suite);
-    const gateway = await installMockGateway(page, {
+    const { page, gateway } = await openChat({
       models: Array.from({ length: 12 }, (_, index) => ({
         id: `model-${index + 1}`,
         name: `Model ${index + 1}`,
@@ -151,7 +192,6 @@ suite.define(() => {
       })),
     });
 
-    await page.goto(`${suite.server.baseUrl}chat`);
     await gateway.waitForRequest("chat.startup");
 
     const controls = page.locator(".chat-composer-model-control");
@@ -189,12 +229,9 @@ suite.define(() => {
   });
 
   it("routes runtime-aware model commands through the server directive path", async () => {
-    const page = await newChatPage(suite);
-    const gateway = await installMockGateway(page, {
+    const { page, gateway } = await openChat({
       sessionKey: "agent:main:main",
     });
-
-    await page.goto(`${suite.server.baseUrl}chat`);
 
     const command = "/model openai/gpt-5.6-luna --runtime codex continue with the selected model";
     await page.locator(".agent-chat__composer-combobox textarea").fill(command);
@@ -209,7 +246,6 @@ suite.define(() => {
   });
 
   it("keeps high-velocity model scrolling inside the picker", async () => {
-    const page = await newChatPage(suite);
     const models = [
       { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
       ...Array.from({ length: 32 }, (_value, index) => ({
@@ -218,12 +254,11 @@ suite.define(() => {
         provider: "openai",
       })),
     ];
-    await installMockGateway(page, {
+    const { page } = await openChat({
       models,
       sessionKey: "agent:main:main",
     });
 
-    await page.goto(`${suite.server.baseUrl}chat`);
     const main = page.getByRole("main");
     await main.locator(".chat-composer-model-control").evaluate((element) => {
       Object.assign((element as HTMLElement).style, {
@@ -255,42 +290,41 @@ suite.define(() => {
   });
 
   it("keeps long model names and metadata inside the picker grid", async () => {
-    const page = await newChatPage(suite, {
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 844, width: 390 },
-    });
-    await installMockGateway(page, {
-      models: [
-        {
-          contextWindow: 1_000_000,
-          id: "long-model",
-          name: "Long model",
-          provider: "openai",
-        },
-      ],
-      sessionKey: "agent:main:main",
-    });
+    const { page } = await openChat(
+      {
+        models: [
+          {
+            contextWindow: 1_000_000,
+            id: "long-model",
+            name: "Long model",
+            provider: "openai",
+          },
+        ],
+        sessionKey: "agent:main:main",
+      },
+      undefined,
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 844, width: 390 },
+      },
+    );
 
-    await page.goto(`${suite.server.baseUrl}chat`);
     const main = page.getByRole("main");
     await control(main, "model-select").click();
     const menu = main.locator(".chat-controls__model-menu");
     await expect.poll(() => menu.isVisible()).toBe(true);
-    await menu
-      .locator(".chat-controls__model-option-name")
-      .first()
-      .evaluate((node) => {
-        node.textContent =
-          "A deliberately very long model name that must ellipsize inside the provider grid";
-      });
-    await menu
-      .locator(".chat-controls__model-option-meta")
-      .first()
-      .evaluate((node) => {
-        node.textContent =
-          "deliberately-long-context-metadata-that-must-never-create-horizontal-scroll";
-      });
+    for (const [part, text] of [
+      ["name", "A deliberately very long model name that must ellipsize inside the provider grid"],
+      ["meta", "deliberately-long-context-metadata-that-must-never-create-horizontal-scroll"],
+    ] as const) {
+      await menu
+        .locator(`.chat-controls__model-option-${part}`)
+        .first()
+        .evaluate((node, value) => {
+          node.textContent = value;
+        }, text);
+    }
 
     const overflow = await menu.evaluate((root) => {
       const selectors = [
@@ -298,22 +332,14 @@ suite.define(() => {
         ".chat-controls__model-option",
         ".chat-controls__provider-model-group",
         ".chat-controls__model-options",
+        ":scope",
       ];
       const containers = selectors.map((selector) => {
-        const element = root.querySelector<HTMLElement>(selector);
+        const element = selector === ":scope" ? root : root.querySelector<HTMLElement>(selector);
         return {
-          clientWidth: element?.clientWidth ?? -1,
           overflow: Math.max(0, (element?.scrollWidth ?? 0) - (element?.clientWidth ?? 0)),
-          scrollWidth: element?.scrollWidth ?? -1,
           selector,
         };
-      });
-      const rootElement = root as HTMLElement;
-      containers.push({
-        clientWidth: rootElement.clientWidth,
-        overflow: Math.max(0, rootElement.scrollWidth - rootElement.clientWidth),
-        scrollWidth: rootElement.scrollWidth,
-        selector: ".chat-controls__model-menu",
       });
       const leafStyles = [
         ".chat-controls__model-option-name",
@@ -329,18 +355,15 @@ suite.define(() => {
       overflow.containers.filter((entry) => entry.overflow > 1),
       JSON.stringify(overflow),
     ).toEqual([]);
-    expect(overflow.leafStyles).toEqual([
-      {
-        overflowX: "hidden",
-        selector: ".chat-controls__model-option-name",
-        textOverflow: "ellipsis",
-      },
-      {
-        overflowX: "hidden",
-        selector: ".chat-controls__model-option-meta",
-        textOverflow: "ellipsis",
-      },
-    ]);
+    expect(overflow.leafStyles).toEqual(
+      [".chat-controls__model-option-name", ".chat-controls__model-option-meta"].map(
+        (selector) => ({
+          overflowX: "hidden",
+          selector,
+          textOverflow: "ellipsis",
+        }),
+      ),
+    );
 
     const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactDirParent
@@ -355,19 +378,16 @@ suite.define(() => {
   });
 
   it("keeps a session model override selected after switching away and back", async () => {
-    const page = await newChatPage(suite);
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": chatSessionListResponse(),
+    const { page, gateway } = await openChat(
+      {
+        methodResponses: {
+          "sessions.list": chatSessionListResponse(),
+        },
+        models: basicModels,
+        sessionKey: sessionA,
       },
-      models: [
-        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
-        { id: "claude-opus-4.5", name: "Claude Opus 4.5", provider: "bedrock" },
-      ],
-      sessionKey: "agent:main:session-a",
-    });
-
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
+      sessionA,
+    );
 
     const main = page.getByRole("main");
     const activePane = main.locator('openclaw-chat-pane[aria-hidden="false"]');
@@ -384,43 +404,31 @@ suite.define(() => {
     await attribute(defaultOption, "aria-selected").toBe("true");
     expect(await defaultOption.getAttribute("data-chat-model-option")).toBe("openai/gpt-5.5");
 
-    await selectModel("bedrock/claude-opus-4.5");
+    await selectModel(bedrockModel);
     const patchRequest = await gateway.waitForRequest("sessions.patch");
     expect(requireRecord(patchRequest.params)).toEqual({
       expectedSessionId: "session:agent:main:session-a",
-      key: "agent:main:session-a",
-      model: "bedrock/claude-opus-4.5",
+      key: sessionA,
+      model: bedrockModel,
     });
-    expect(await modelSelect.getAttribute("data-chat-select-value")).toBe(
-      "bedrock/claude-opus-4.5",
-    );
+    expect(await modelSelect.getAttribute("data-chat-select-value")).toBe(bedrockModel);
 
     await switchSession(page, activePane, "agent:main:session-b", "Session B");
     await modelSelect.waitFor(visible);
     await attribute(defaultOption, "aria-selected").toBe("true");
 
-    await switchSession(page, activePane, "agent:main:session-a", "Session A");
+    await switchSession(page, activePane, sessionA, "Session A");
 
     await modelSelect.waitFor(visible);
-    expect(await modelSelect.getAttribute("data-chat-select-value")).toBe(
-      "bedrock/claude-opus-4.5",
-    );
+    expect(await modelSelect.getAttribute("data-chat-select-value")).toBe(bedrockModel);
   });
 
   it("restores the selected agent model after clearing a session override", async () => {
-    const page = await newChatPage(suite);
-    const agentsList = {
-      agents: [
-        {
-          id: "ops",
-          model: { primary: "anthropic/claude-opus-4-5" },
-          name: "Operations",
-        },
-      ],
-      defaultId: "ops",
-      mainKey: "main",
-      scope: "agent",
-    };
+    const agentsList = agentList({
+      id: "ops",
+      model: { primary: "anthropic/claude-opus-4-5" },
+      name: "Operations",
+    });
     const sessionsList = chatSessionListResponse([
       { key: "agent:ops:session-a", kind: "direct", label: "Operations", updatedAt: Date.now() },
     ]);
@@ -428,25 +436,21 @@ suite.define(() => {
       { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
       { id: "claude-opus-4-5", name: "Claude Opus 4.5", provider: "anthropic" },
     ];
-    const gateway = await installMockGateway(page, {
-      assistantAgentId: "ops",
-      defaultAgentId: "ops",
-      methodResponses: {
-        "agents.list": agentsList,
-        "chat.startup": {
-          agentsList,
-          messages: [],
-          metadata: { models },
-          sessionId: "session:agent:ops:session-a",
-          thinkingLevel: null,
+    const { page, gateway } = await openChat(
+      {
+        assistantAgentId: "ops",
+        defaultAgentId: "ops",
+        methodResponses: {
+          "agents.list": agentsList,
+          "chat.startup": profileStartup(agentsList, models, "session:agent:ops:session-a"),
+          "sessions.list": sessionsList,
         },
-        "sessions.list": sessionsList,
+        models,
+        sessionKey: "agent:ops:session-a",
       },
-      models,
-      sessionKey: "agent:ops:session-a",
-    });
+      "agent:ops:session-a",
+    );
 
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:ops:session-a"));
     const main = page.getByRole("main");
     const modelSelect = control(main, "model-select").first();
     await modelSelect.waitFor(visible);
@@ -491,21 +495,14 @@ suite.define(() => {
     const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].map(
       (id) => ({ id, label: id }),
     );
-    const agentsList = {
-      agents: [
-        {
-          id: "main",
-          model: { primary: "openai/gpt-5.6-sol" },
-          name: "Main",
-          thinkingDefault: "medium",
-          thinkingLevels,
-          thinkingOptions: thinkingLevels.map((level) => level.label),
-        },
-      ],
-      defaultId: "main",
-      mainKey: "main",
-      scope: "agent",
-    };
+    const agentsList = agentList({
+      id: "main",
+      model: { primary: "openai/gpt-5.6-sol" },
+      name: "Main",
+      thinkingDefault: "medium",
+      thinkingLevels,
+      thinkingOptions: thinkingLevels.map((level) => level.label),
+    });
     const sessionsList = {
       count: 2,
       defaults: {
@@ -518,21 +515,13 @@ suite.define(() => {
       },
       path: "",
       sessions: [
-        {
-          key: "agent:main:session-default",
+        sessionRow("agent:main:session-default", "Default Sol", 2, {
           sessionId: "control-ui-profile-default-proof",
-          kind: "direct",
-          label: "Default Sol",
-          updatedAt: 2,
-        },
-        {
-          key: "agent:main:session-explicit",
-          kind: "direct",
-          label: "Explicit Sol",
+        }),
+        sessionRow("agent:main:session-explicit", "Explicit Sol", 1, {
           model: "gpt-5.6-sol",
           modelProvider: "openai",
-          updatedAt: 1,
-        },
+        }),
       ],
       ts: Date.now(),
     };
@@ -542,13 +531,7 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "agents.list": agentsList,
-        "chat.startup": {
-          agentsList,
-          messages: [],
-          metadata: { models },
-          sessionId: "control-ui-profile-default-proof",
-          thinkingLevel: null,
-        },
+        "chat.startup": profileStartup(agentsList, models, "control-ui-profile-default-proof"),
         "sessions.list": sessionsList,
       },
       models,
@@ -568,28 +551,25 @@ suite.define(() => {
     await modelSelect.waitFor(visible);
     expect(await modelSelect.textContent()).toContain("GPT-5.6 Sol");
     expect(await modelSelect.textContent()).not.toContain("@openai:");
-    await modelSelect.click();
-    await expect.poll(() => modelOption.count()).toBe(1);
-    expect(
-      (await main.locator("[data-chat-model-option]").allTextContents()).join(" "),
-    ).not.toContain("@openai:");
-    await effortSelect.click();
-    await attribute(thinkingSlider, "data-chat-thinking-values").toBe(expectedThinkingValues);
-    const defaultThinkingValue = await effortSelect.getAttribute("data-chat-thinking-value");
-    await modelSelect.click();
-    await revealChatModelOption(modelOption);
-    await capture("default-sol", modelPopup, modelOption);
+    const captureProfile = async (name: string) => {
+      await modelSelect.click();
+      await expect.poll(() => modelOption.count()).toBe(1);
+      expect(
+        (await main.locator("[data-chat-model-option]").allTextContents()).join(" "),
+      ).not.toContain("@openai:");
+      await effortSelect.click();
+      await attribute(thinkingSlider, "data-chat-thinking-values").toBe(expectedThinkingValues);
+      const value = await effortSelect.getAttribute("data-chat-thinking-value");
+      await modelSelect.click();
+      await revealChatModelOption(modelOption);
+      await capture(name, modelPopup, modelOption);
+      return value;
+    };
+    const defaultThinkingValue = await captureProfile("default-sol");
 
     await page.keyboard.press("Escape");
     await switchSession(page, activePane, "agent:main:session-explicit", "Explicit Sol");
-    await modelSelect.click();
-    await expect.poll(() => modelOption.count()).toBe(1);
-    await effortSelect.click();
-    await attribute(thinkingSlider, "data-chat-thinking-values").toBe(expectedThinkingValues);
-    expect(await effortSelect.getAttribute("data-chat-thinking-value")).toBe(defaultThinkingValue);
-    await modelSelect.click();
-    await revealChatModelOption(modelOption);
-    await capture("explicit-sol", modelPopup, modelOption);
+    expect(await captureProfile("explicit-sol")).toBe(defaultThinkingValue);
 
     expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
   });
@@ -598,8 +578,8 @@ suite.define(() => {
     {
       label: "model override",
       trigger: '[data-chat-model-select="true"]',
-      option: '[data-chat-model-option="bedrock/claude-opus-4.5"]',
-      patch: { model: "bedrock/claude-opus-4.5" },
+      option: `[data-chat-model-option="${bedrockModel}"]`,
+      patch: { model: bedrockModel },
     },
     {
       label: "Full Access permission",
@@ -608,29 +588,22 @@ suite.define(() => {
       patch: { permissionMode: "full" },
     },
   ])("shows a pending send while a $label update is still pending", async (setting) => {
-    const page = await newChatPage(suite);
-    const gateway = await installMockGateway(page, {
-      deferredMethods: ["sessions.patch"],
-      methodResponses: {
-        "sessions.list": chatSessionListResponse([
-          {
-            key: "agent:main:session-a",
-            kind: "direct",
-            label: "Session A",
-            permissionMode: "workspace",
-            sessionId: "session-a-send-barrier",
-            updatedAt: 2,
-          },
-        ]),
+    const { page, gateway } = await openChat(
+      {
+        deferredMethods: ["sessions.patch"],
+        methodResponses: {
+          "sessions.list": chatSessionListResponse([
+            sessionRow(sessionA, "Session A", 2, {
+              permissionMode: "workspace",
+              sessionId: "session-a-send-barrier",
+            }),
+          ]),
+        },
+        models: basicModels,
+        sessionKey: sessionA,
       },
-      models: [
-        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
-        { id: "claude-opus-4.5", name: "Claude Opus 4.5", provider: "bedrock" },
-      ],
-      sessionKey: "agent:main:session-a",
-    });
-
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
+      sessionA,
+    );
 
     const main = page.getByRole("main");
     await main.locator(setting.trigger).click();
@@ -640,7 +613,7 @@ suite.define(() => {
     await main.locator(setting.option).click();
     const patchRequest = await gateway.waitForRequest("sessions.patch");
     expect(requireRecord(patchRequest.params)).toMatchObject({
-      key: "agent:main:session-a",
+      key: sessionA,
       expectedSessionId: "session-a-send-barrier",
       ...setting.patch,
     });
@@ -658,37 +631,32 @@ suite.define(() => {
     await gateway.resolveDeferred("sessions.patch", {});
     const sendRequest = await gateway.waitForRequest("chat.send");
     const params = requireRecord(sendRequest.params);
-    expect(params.message).toBe(prompt);
-    expect(params.sessionKey).toBe("agent:main:session-a");
+    expect(params).toMatchObject({ message: prompt, sessionKey: sessionA });
   });
 
   it("previews reasoning and provider choices before committing them", async () => {
-    const page = await newChatPage(suite);
-    const sessionKey = "agent:main:session-a";
-    const session = {
-      key: sessionKey,
+    const sessionKey = sessionA;
+    const session = sessionRow(sessionKey, "Session A", 2, {
       sessionId: `session:${sessionKey}`,
-      kind: "direct",
-      label: "Session A",
       model: "gpt-5.6-sol",
       modelProvider: "openai",
       thinkingDefault: "high",
       thinkingLevel: "high",
       thinkingLevels: ["off", "low", "medium", "high", "ultra"].map((id) => ({ id, label: id })),
-      updatedAt: 2,
-    };
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": chatSessionListResponse([session]),
-      },
-      models: [
-        { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
-        { id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic" },
-      ],
-      sessionKey,
     });
-
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+    const { page, gateway } = await openChat(
+      {
+        methodResponses: {
+          "sessions.list": chatSessionListResponse([session]),
+        },
+        models: [
+          { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
+          { id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic" },
+        ],
+        sessionKey,
+      },
+      sessionKey,
+    );
 
     const main = page.getByRole("main");
     const modelPicker = control(main, "model-select").first();

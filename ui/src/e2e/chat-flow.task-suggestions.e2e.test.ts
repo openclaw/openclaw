@@ -20,6 +20,7 @@ const startLabel = "Start in a new session";
 const optionsLabel = "Choose where to start the task";
 const visible = { state: "visible", timeout: 10_000 } as const;
 const findButton = (root: Page | Locator, name: string) => root.getByRole("button", { name });
+const exactText = (root: Page | Locator, text: string) => root.getByText(text, { exact: true });
 const taskCard = (page: Page, id: string) => page.locator(`.task-suggestion[data-task-id="${id}"]`);
 
 function makeSuggestion(
@@ -37,13 +38,8 @@ function makeSuggestion(
   };
 }
 
-const suggestionMethods = [
-  "chat.metadata",
-  "chat.startup",
-  "taskSuggestions.list",
-  "taskSuggestions.accept",
-  "taskSuggestions.dismiss",
-];
+const listMethods = ["chat.metadata", "chat.startup", "taskSuggestions.list"];
+const acceptMethods = [...listMethods, "taskSuggestions.accept"];
 
 function installSuggestions(
   page: Page,
@@ -51,10 +47,25 @@ function installSuggestions(
   options: Parameters<typeof installMockGateway>[1] = {},
 ) {
   return installMockGateway(page, {
-    featureMethods: suggestionMethods,
+    featureMethods: [...acceptMethods, "taskSuggestions.dismiss"],
     ...options,
     methodResponses: { "taskSuggestions.list": { suggestions }, ...options.methodResponses },
   });
+}
+
+async function openSuggestions(
+  suggestions: TaskSuggestion[],
+  options: Parameters<typeof installMockGateway>[1] = {},
+  context?: Parameters<typeof newChatPage>[1],
+) {
+  const page = await newChatPage(suite, context);
+  const gateway = await installSuggestions(page, suggestions, options);
+  await page.goto(
+    options.sessionKey
+      ? controlUiSessionUrl(suite.server.baseUrl, options.sessionKey)
+      : `${suite.server.baseUrl}chat`,
+  );
+  return { page, gateway };
 }
 
 async function expectReadableButton(button: Locator) {
@@ -89,24 +100,10 @@ suite.define(() => {
       colorScheme: mode === "worktree" ? "dark" : "light",
     });
     const suggestion = makeSuggestion({ id: "task_123" });
-    const gateway = await installMockGateway(page, {
+    const gateway = await installSuggestions(page, [suggestion], {
       deferredMethods: ["taskSuggestions.list"],
       featureCapabilities: [GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES],
-      featureMethods: [
-        "chat.metadata",
-        "chat.startup",
-        "taskSuggestions.list",
-        "taskSuggestions.accept",
-        "environments.list",
-      ],
-      methodResponses: {
-        "environments.list": { environments: [], profiles: [{ id: "build" }] },
-        "taskSuggestions.list": { suggestions: [suggestion] },
-        "taskSuggestions.accept": {
-          taskId: "task_123",
-          key: mode === "session" ? "main" : "agent:main:dashboard:suggested",
-        },
-      },
+      featureMethods: [...acceptMethods, "environments.list"],
     });
 
     await page.route("**/control-ui-config.json", (route) =>
@@ -156,13 +153,9 @@ suite.define(() => {
     expect(await findButton(card, "Copy prompt").isEnabled()).toBe(true);
     expect(await gateway.getRequests("environments.list")).toHaveLength(0);
 
-    await page.getByText("Show instructions", { exact: true }).click();
-    await page.getByText("/projects/example", { exact: true }).waitFor(visible);
-    await page
-      .getByText("Delete the stale adapter in src/example.ts and update tests.", {
-        exact: true,
-      })
-      .waitFor(visible);
+    await exactText(page, "Show instructions").click();
+    await exactText(page, suggestion.cwd).waitFor(visible);
+    await exactText(page, suggestion.prompt).waitFor(visible);
     const sourceUrl = page.url();
     const composer = page.locator(".agent-chat__composer-combobox textarea");
     const draft = "Continue the current conversation.";
@@ -192,7 +185,7 @@ suite.define(() => {
       });
       await card.waitFor({ state: "visible" });
       await card.getByRole("alert").filter({ hasText: "Session creation unavailable" }).waitFor();
-      expect(await card.getByText(suggestion.prompt, { exact: true }).isVisible()).toBe(true);
+      expect(await exactText(card, suggestion.prompt).isVisible()).toBe(true);
 
       await gateway.deferNext("taskSuggestions.accept");
       await card.getByRole("button", { name: "Retry", exact: true }).click();
@@ -215,24 +208,9 @@ suite.define(() => {
   });
 
   it("dismisses suggested tasks immediately and restores a rejected dismissal without changing selection", async () => {
-    const page = await newChatPage(suite);
-    const suggestion = makeSuggestion({
-      id: "task_dismiss",
-      prompt: "Delete the stale adapter and update its tests.",
-      tldr: "This follow-up is no longer needed.",
-      createdAt: 2,
-    });
-    const nextSuggestion = {
-      ...suggestion,
-      id: "task_next",
-      title: "Inspect remaining tests",
-      prompt: "Inspect coverage of the remaining adapters.",
-      tldr: "This follow-up remains useful.",
-      createdAt: 1,
-    };
-    const gateway = await installSuggestions(page, [suggestion, nextSuggestion]);
-
-    await page.goto(`${suite.server.baseUrl}chat`);
+    const suggestion = makeSuggestion({ id: "task_dismiss", createdAt: 2 });
+    const nextSuggestion = makeSuggestion({ id: "task_next", createdAt: 1 });
+    const { page, gateway } = await openSuggestions([suggestion, nextSuggestion]);
     const card = taskCard(page, suggestion.id);
     const nextCard = taskCard(page, nextSuggestion.id);
     await card.waitFor(visible);
@@ -257,12 +235,12 @@ suite.define(() => {
     await gateway.resolveDeferred("taskSuggestions.list", {
       suggestions: [suggestion, refreshedSuggestion],
     });
-    await nextCard.getByText(refreshedSuggestion.tldr, { exact: true }).waitFor();
+    await exactText(nextCard, refreshedSuggestion.tldr).waitFor();
     expect(await card.count()).toBe(0);
 
     const failure = "The suggestion could not be dismissed.";
     await gateway.rejectDeferred("taskSuggestions.dismiss", { message: failure });
-    await page.getByText(failure, { exact: true }).first().waitFor();
+    await exactText(page, failure).first().waitFor();
     await expect.poll(() => card.count()).toBe(1);
     expect(await card.isVisible()).toBe(false);
     expect(await nextCard.isVisible()).toBe(true);
@@ -275,9 +253,7 @@ suite.define(() => {
   });
 
   it("clears model-suggested follow-ups while switching sessions", async () => {
-    const page = await newChatPage(suite);
-    const gateway = await installSuggestions(
-      page,
+    const { page, gateway } = await openSuggestions(
       [makeSuggestion({ id: "task_session_a", sessionKey: "agent:main:session-a" })],
       {
         methodResponses: { "sessions.list": chatSessionListResponse() },
@@ -285,7 +261,6 @@ suite.define(() => {
       },
     );
 
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
     const startButton = findButton(page, startLabel);
     await startButton.waitFor(visible);
     await gateway.deferNext("taskSuggestions.list");
@@ -301,12 +276,10 @@ suite.define(() => {
   });
 
   it("keeps copy available when only listing is advertised", async () => {
-    const page = await newChatPage(suite);
-    const gateway = await installSuggestions(page, [makeSuggestion({ id: "task_list_only" })], {
-      featureMethods: ["chat.metadata", "chat.startup", "taskSuggestions.list"],
+    const { page, gateway } = await openSuggestions([makeSuggestion({ id: "task_list_only" })], {
+      featureMethods: listMethods,
     });
 
-    await page.goto(`${suite.server.baseUrl}chat`);
     await gateway.waitForRequest("taskSuggestions.list");
     const card = taskCard(page, "task_list_only");
     await card.waitFor(visible);
@@ -322,11 +295,6 @@ suite.define(() => {
   ])(
     "shows readable follow-up summaries and reachable actions at $width×$height",
     async ({ width, height }) => {
-      const page = await newChatPage(suite, {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height, width },
-      });
       const suggestions = Array.from({ length: 12 }, (_, index) =>
         makeSuggestion({
           id: `task_overflow_${index}`,
@@ -336,24 +304,29 @@ suite.define(() => {
           createdAt: Date.now() + index,
         }),
       );
-      const gateway = await installSuggestions(page, suggestions);
-
-      await page.goto(`${suite.server.baseUrl}chat`);
+      const { page, gateway } = await openSuggestions(
+        suggestions,
+        {},
+        {
+          locale: "en-US",
+          serviceWorkers: "block",
+          viewport: { height, width },
+        },
+      );
       const tray = page.locator(".task-suggestions");
       await tray.waitFor(visible);
       expect(await tray.locator(".task-suggestion:visible").count()).toBe(1);
-      expect(await tray.getByText("1 / 12", { exact: true }).count()).toBe(1);
+      expect(await exactText(tray, "1 / 12").count()).toBe(1);
       await tray.getByRole("button", { name: "Next suggested task" }).click();
-      expect(await tray.getByText("2 / 12", { exact: true }).count()).toBe(1);
+      expect(await exactText(tray, "2 / 12").count()).toBe(1);
       const summary = tray.locator(".task-suggestion:visible .task-suggestion__summary");
 
       expect(
-        await summary.evaluate((element) => element.scrollHeight <= element.clientHeight + 1),
-      ).toBe(true);
-
-      expect(
-        await summary.evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
-      ).toBe(true);
+        await summary.evaluate((element) => ({
+          vertical: element.scrollHeight <= element.clientHeight + 1,
+          horizontal: element.scrollWidth <= element.clientWidth + 1,
+        })),
+      ).toEqual({ vertical: true, horizontal: true });
 
       const verboseSuggestion = { ...suggestions[1]!, tldr: "W".repeat(1_024) };
       suggestions[1] = verboseSuggestion;
@@ -378,21 +351,16 @@ suite.define(() => {
       );
       const summaryScroll = await summary.evaluate((element) => {
         element.scrollTop = element.scrollHeight;
-        return {
-          reachesBottom:
-            element.scrollTop > 0 &&
-            element.scrollTop + element.clientHeight >= element.scrollHeight - 1,
-          scrollTop: element.scrollTop,
-          scrollHeight: element.scrollHeight,
-          clientHeight: element.clientHeight,
-          clientWidth: element.clientWidth,
-        };
+        return (
+          element.scrollTop > 0 &&
+          element.scrollTop + element.clientHeight >= element.scrollHeight - 1
+        );
       });
-      expect(summaryScroll.reachesBottom, JSON.stringify(summaryScroll)).toBe(true);
+      expect(summaryScroll).toBe(true);
 
       const card = tray.locator(".task-suggestion:visible");
-      await card.getByText("Show instructions", { exact: true }).click();
-      const start = card.getByRole("button", { name: "Start in a new session", exact: true });
+      await exactText(card, "Show instructions").click();
+      const start = card.getByRole("button", { name: startLabel, exact: true });
       await expect
         .poll(() =>
           card.evaluate((element) => {
@@ -400,10 +368,8 @@ suite.define(() => {
             const conversation = element
               .closest(".chat-main__conversation")!
               .getBoundingClientRect();
-            const details = element
-              .closest("openclaw-chat-pane")!
-              .querySelector(".chat-details-toggle")!
-              .getBoundingClientRect();
+            const pane = element.closest("openclaw-chat-pane")!;
+            const details = pane.querySelector(".chat-details-toggle")!.getBoundingClientRect();
             const clearOfDetails =
               box.left >= details.right ||
               box.right <= details.left ||
