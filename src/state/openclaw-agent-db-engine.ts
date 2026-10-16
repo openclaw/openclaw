@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { admitStoreSearch } from "../infra/database-engine/adapters.js";
 import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
-import type { SearchSchema } from "../infra/database-engine/contract.js";
+import type { SearchSchema, StoreSchema } from "../infra/database-engine/contract.js";
 import { openEngineStore } from "../infra/database-engine/open.js";
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import {
@@ -13,6 +13,7 @@ import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { VERSION } from "../version.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import { assertAgentDatabaseMaintenanceAuthority } from "./openclaw-agent-db-lease.js";
 import {
   publishAgentSchemaMetadata,
   readExistingAgentSchemaMeta,
@@ -51,13 +52,13 @@ export function admitAgentEngineSearchExtensions(
   );
 }
 
-const agentEngineSchema = {
+export const agentEngineSchema: StoreSchema = {
   id: "agent",
   version: OPENCLAW_AGENT_SCHEMA_VERSION,
   sqlite: "",
   postgres: `${agentPostgresRuntime.sql}\n${agentSearchPostgresRuntime.sql}`,
   search: agentTranscriptSearchSchema,
-  // PostgreSQL agent storage is unshipped; only the current bootstrap is admitted.
+  // Forward steps carry the exact predecessor descriptor for Doctor recovery.
   postgresMigrations: [],
 };
 
@@ -93,8 +94,13 @@ function admitAgentPostgres(
     });
   }
   const metadata = readExistingAgentSchemaMeta(db);
-  assertCurrentAgentSchemaMetadata(metadata, agentId ?? metadata?.agentId ?? "", pathname);
-  if (getPostgresPhysicalFacts(db)?.version !== OPENCLAW_AGENT_SCHEMA_VERSION) {
+  assertCurrentAgentSchemaMetadata(
+    metadata,
+    agentId ?? metadata?.agentId ?? "",
+    pathname,
+    agentEngineSchema.version,
+  );
+  if (getPostgresPhysicalFacts(db)?.version !== agentEngineSchema.version) {
     throw new Error("Agent database has no current PostgreSQL schema admission");
   }
   // Nested worker writes must see the identity anchor's completed native admission.
@@ -118,6 +124,7 @@ export function openAgentEngineStore(
     input: agentEngineInput(),
     existingOnly,
     closeOnFailure,
+    assertMigrationCurrent: assertAgentDatabaseMaintenanceAuthority,
     prepareAnchor: () => {},
     openSqlite: () => {},
     inspectSqlite: () => {

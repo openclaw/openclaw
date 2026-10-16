@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatProvisionError } from "../../scripts/pr-lib/worktree-provision-error.mjs";
 import { GatewayStateOwnerContentionError } from "../../src/infra/gateway-state-owner.js";
 import { markSqliteNativeOpenFailure } from "../../src/infra/sqlite-error-diagnostics.js";
@@ -92,45 +92,26 @@ describe("native PR provisioning diagnostics", () => {
     expect(aggregate.errors).toEqual([leaf, leaf]);
   });
 
-  it("retains held and caller-aborted acquisition outcomes", () => {
-    const held = render(
-      new OpenClawStateLeaseAcquisitionError("lease", {
-        kind: "held",
-        holder: { owner: "fixture-owner", epoch: 7 },
-      }),
-    );
-    expect(held.outcome).toEqual({ kind: "held", holder: { owner: "fixture-owner", epoch: 7 } });
-    expect(held.error.nodes[0].code).toBe("OPENCLAW_STATE_LEASE_HELD");
-    const aborted = render(
-      new OpenClawStateLeaseAcquisitionError("lease", {
-        kind: "aborted",
-        reason: "caller-signal",
-        elapsedMs: 23,
-      }),
-    );
-    expect(aborted.outcome).toEqual({ kind: "aborted", reason: "caller-signal", elapsedMs: 23 });
-    expect(aborted.error.nodes[0].code).toBe("OPENCLAW_STATE_LEASE_ABORTED");
+  it.each([
+    { outcome: { kind: "held", holder: { owner: "fixture-owner", epoch: 7 } }, code: "HELD" },
+    { outcome: { kind: "aborted", reason: "caller-signal", elapsedMs: 23 }, code: "ABORTED" },
+  ] as const)("retains $outcome.kind acquisition outcomes", ({ outcome, code }) => {
+    const out = render(new OpenClawStateLeaseAcquisitionError("lease", outcome));
+    expect(out.outcome).toEqual(outcome);
+    expect(out.error.nodes[0].code).toBe(`OPENCLAW_STATE_LEASE_${code}`);
   });
 
   it("never serializes arbitrary thrown objects, metadata or coercion hooks", () => {
-    let called = 0;
-    const opaque = {
-      secret: "must-not-appear",
-      toString() {
-        called++;
-        throw new Error("coercion");
-      },
-      toJSON() {
-        called++;
-        throw new Error("json");
-      },
-    };
+    const coercion = vi.fn(() => {
+      throw new Error("unsafe coercion");
+    });
+    const opaque = { secret: "must-not-appear", toString: coercion, toJSON: coercion };
     expect(formatProvisionError(opaque)).toBe(unavailable);
     const error = Object.assign(new Error("wrapper", { cause: opaque }), { arbitrary: opaque });
     const text = formatProvisionError(error);
     expect(text).not.toContain("must-not-appear");
     expect(render(error).error.nodes[0].cause).toEqual({ undefined: true });
-    expect(called).toBe(0);
+    expect(coercion).not.toHaveBeenCalled();
   });
 
   it("redacts nested messages, scalar causes, top-level strings and outcome fields", () => {
@@ -143,12 +124,8 @@ describe("native PR provisioning diagnostics", () => {
     expect(text).toContain("***");
     expect(() => JSON.parse(text)).not.toThrow();
     expect(formatProvisionError("Authorization: Bearer " + credential)).not.toContain(credential);
-    const held = render(
-      new OpenClawStateLeaseAcquisitionError("lease", {
-        kind: "held",
-        holder: { owner: "api_key=" + credential, epoch: 7 },
-      }),
-    );
+    const outcome = { kind: "held", holder: { owner: "api_key=" + credential, epoch: 7 } } as const;
+    const held = render(new OpenClawStateLeaseAcquisitionError("lease", outcome));
     expect(held.outcome.holder.owner).not.toContain(credential);
   });
 
@@ -156,13 +133,7 @@ describe("native PR provisioning diagnostics", () => {
     ...["cause", "message", "name", "outcome"].map((field) => ({ field, getter: true })),
     ...["message", "name", "outcome"].map((field) => ({ field, getter: false })),
   ])("safely rejects $field diagnostics (getter=$getter)", ({ field, getter }) => {
-    let calls = 0;
-    const opaque = {
-      toJSON() {
-        calls++;
-        return { secret: "must-not-appear" };
-      },
-    };
+    const toJSON = vi.fn(() => ({ secret: "must-not-appear" }));
     const error = storage(new Error("nested"));
     Object.defineProperty(
       error,
@@ -174,11 +145,12 @@ describe("native PR provisioning diagnostics", () => {
             },
           }
         : {
-            value: field === "outcome" ? { kind: "store-unavailable", reason: opaque } : opaque,
+            value:
+              field === "outcome" ? { kind: "store-unavailable", reason: { toJSON } } : { toJSON },
           },
     );
     expect(formatProvisionError(error)).toBe(unavailable);
-    expect(calls).toBe(0);
+    expect(toJSON).not.toHaveBeenCalled();
   });
 
   it.each([

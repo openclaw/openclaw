@@ -235,7 +235,7 @@ function reclaimSqliteRowsInTransaction(
           undefined,
           new Set(sessionKeys),
         );
-        deleteLifecycleTargetRows(transactionDb, plan.deleteParams.target);
+        deleteLifecycleTargetRows(transactionDb, plan.deleteParams.target, snapshot);
         if (plan.deleteParams.deleteDeliveryArtifacts === true) {
           deleteSessionDeliveryArtifacts(
             transactionDb,

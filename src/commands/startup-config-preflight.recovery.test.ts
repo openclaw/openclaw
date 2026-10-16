@@ -6,7 +6,7 @@ import {
   prepareGatewayRunBootstrap,
   recheckGatewayRunBootstrap,
 } from "../cli/gateway-cli/pre-bootstrap.js";
-import { recordGatewayBootStart } from "../infra/gateway-boot-lifecycle.js";
+import { beginGatewayBootLifecycle } from "../infra/gateway-boot-lifecycle.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as checkpoint from "../infra/startup-migration-checkpoint.js";
 import * as metadataWorker from "../plugins/plugin-metadata-state-worker.js";
@@ -55,7 +55,7 @@ it.each(["current", "webhook-repair"] as const)(
       openOpenClawStateDatabase({ path: path.join(stateDir, "state", "openclaw.sqlite") });
       closeOpenClawStateDatabaseForTest();
       if (source === "webhook-repair") {
-        recordGatewayBootStart(process.env, 1_800_000_000_000);
+        await beginGatewayBootLifecycle(process.env, 1_800_000_000_000);
       }
       await fs.writeFile(configPath, original);
       const runtime = {

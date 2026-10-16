@@ -1,6 +1,7 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createCliJsonlStreamingParser } from "../../agents/cli-output-stream.js";
+import type { AgentEventPayload } from "../../infra/agent-events.js";
 import type { GetReplyOptions } from "../types.js";
 import {
   createAgentTurnExecutionDefaults,
@@ -14,6 +15,42 @@ import type { FallbackRunnerParams } from "./agent-runner-execution.test-support
 
 const state = await setupAgentRunnerExecutionTestState();
 const executeAgentTurn = await getExecuteAgentTurnForTest();
+type CliEvent = [AgentEventPayload["stream"], AgentEventPayload["data"]];
+
+function mockCliEvents(events: CliEvent[], text = "final", emitCommentaryText?: boolean) {
+  state.runCliAgentMock.mockImplementationOnce(
+    async (params: { runId: string; emitCommentaryText?: boolean }) => {
+      if (emitCommentaryText !== undefined) {
+        expect(params.emitCommentaryText).toBe(emitCommentaryText);
+      }
+      const { emitAgentEvent } = await vi.importActual<
+        typeof import("../../infra/agent-events.js")
+      >("../../infra/agent-events.js");
+      for (const [stream, data] of events) {
+        emitAgentEvent({ runId: params.runId, stream, data });
+      }
+      return { payloads: [{ text }], meta: {} };
+    },
+  );
+}
+
+const nextImmediate = () =>
+  new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+
+function toolEvent(phase: string, toolCallId: string, extra: Record<string, unknown>) {
+  return ["tool", { phase, name: "Bash", toolCallId, ...extra }] satisfies CliEvent;
+}
+
+function releaseTypingAfterRun(typing: { resolve: () => void }, run: Promise<unknown>) {
+  const finish = async () => {
+    typing.resolve();
+    await run;
+  };
+  onTestFinished(finish);
+  return finish;
+}
 
 function createCliRun(provider: string, model: string) {
   state.isCliProviderMock.mockReturnValue(true);
@@ -47,40 +84,24 @@ function executeCliTurn(
 describe("executeAgentTurn: CLI progress bridging", () => {
   it("serializes and drains bridged CLI assistant previews before completing (#76869)", async () => {
     const followupRun = createCliRun("claude-cli", "claude-opus-4-6");
-    state.runCliAgentMock.mockImplementationOnce(
-      async (params: { runId: string; emitCommentaryText?: boolean }) => {
-        expect(params.emitCommentaryText).toBe(false);
-        const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
-          "../../infra/agent-events.js",
-        );
-        realAgentEvents.emitAgentEvent({
-          runId: params.runId,
-          stream: "assistant",
-          data: { text: "Hello", delta: "Hello" },
-        });
-        realAgentEvents.emitAgentEvent({
-          runId: params.runId,
-          stream: "assistant",
-          data: { text: "Hello world", delta: " world" },
-        });
-        return { payloads: [{ text: "Hello world" }], meta: {} };
-      },
+    mockCliEvents(
+      [
+        ["assistant", { text: "Hello", delta: "Hello" }],
+        ["assistant", { text: "Hello world", delta: " world" }],
+      ],
+      "Hello world",
+      false,
     );
 
-    let firstPreviewStarted: (() => void) | undefined;
-    let releaseFirstPreview: (() => void) | undefined;
-    const firstPreviewPromise = new Promise<void>((resolve) => {
-      firstPreviewStarted = resolve;
-    });
+    const firstPreview = createDeferred();
+    const releasePreview = createDeferred();
     const previewOrder: string[] = [];
     const onPartialReply = vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>(
       async (payload) => {
         previewOrder.push(payload.text ?? "");
         if (payload.text === "Hello") {
-          firstPreviewStarted?.();
-          await new Promise<void>((resolve) => {
-            releaseFirstPreview = resolve;
-          });
+          firstPreview.resolve();
+          await releasePreview.promise;
           previewOrder.push("Hello released");
         }
       },
@@ -88,13 +109,11 @@ describe("executeAgentTurn: CLI progress bridging", () => {
 
     const runPromise = executeCliTurn(followupRun, { onPartialReply });
 
-    await firstPreviewPromise;
-    await new Promise((resolve) => {
-      setImmediate(resolve);
-    });
+    await firstPreview.promise;
+    await nextImmediate();
     expect(previewOrder).toEqual(["Hello"]);
 
-    releaseFirstPreview?.();
+    releasePreview.resolve();
     await runPromise;
 
     expect(previewOrder).toEqual(["Hello", "Hello released", "Hello world"]);
@@ -102,83 +121,36 @@ describe("executeAgentTurn: CLI progress bridging", () => {
 
   it("bridges CLI tool agent events into onToolStart for live preview", async () => {
     const followupRun = createCliRun("claude-cli", "claude-opus-4-6");
-    state.runCliAgentMock.mockImplementationOnce(
-      async (params: { runId: string; emitCommentaryText?: boolean }) => {
-        expect(params.emitCommentaryText).toBe(false);
-        const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
-          "../../infra/agent-events.js",
-        );
-        realAgentEvents.emitAgentEvent({
-          runId: params.runId,
-          stream: "tool",
-          data: {
-            phase: "start",
-            name: "Bash",
-            toolCallId: "toolu_01ABCD",
-            args: { command: "ls -la" },
-          },
-        });
-        realAgentEvents.emitAgentEvent({
-          runId: params.runId,
-          stream: "tool",
-          data: {
-            phase: "result",
-            name: "Bash",
-            toolCallId: "toolu_01ABCD",
-            isError: false,
-          },
-        });
-        return { payloads: [{ text: "done" }], meta: {} };
-      },
+    mockCliEvents(
+      [
+        toolEvent("start", "toolu_01ABCD", { args: { command: "ls -la" } }),
+        toolEvent("result", "toolu_01ABCD", { isError: false }),
+      ],
+      "done",
+      false,
     );
 
     const onToolStart = vi.fn<NonNullable<GetReplyOptions["onToolStart"]>>(async () => undefined);
 
     await executeCliTurn(followupRun, { onToolStart });
-    await new Promise((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextImmediate();
 
     expect(onToolStart).toHaveBeenCalledTimes(1);
     const call = onToolStart.mock.calls[0]?.[0];
-    expect(call?.name).toBe("Bash");
-    expect(call?.phase).toBe("start");
-    expect(call?.args).toEqual({ command: "ls -la" });
+    expect([call?.name, call?.phase, call?.args]).toEqual(["Bash", "start", { command: "ls -la" }]);
   });
 
   it("starts CLI assistant progress before a later tool while typing is slow", async () => {
     const followupRun = createCliRun("claude-cli", "claude-opus-4-6");
-    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
-      const agentEvents = await import("../../infra/agent-events.js");
-      agentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "assistant",
-        data: { text: "answer before tool", delta: "answer before tool" },
-      });
-      agentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "assistant",
-        data: { text: "answer before tool 2", delta: " 2" },
-      });
-      agentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "tool",
-        data: {
-          phase: "start",
-          name: "Bash",
-          toolCallId: "toolu_order",
-          args: { command: "echo hi" },
-        },
-      });
-      return { payloads: [{ text: "final" }], meta: {} };
-    });
+    mockCliEvents([
+      ["assistant", { text: "answer before tool", delta: "answer before tool" }],
+      ["assistant", { text: "answer before tool 2", delta: " 2" }],
+      toolEvent("start", "toolu_order", { args: { command: "echo hi" } }),
+    ]);
 
-    let releaseTyping: (() => void) | undefined;
-    const typingPending = new Promise<void>((resolve) => {
-      releaseTyping = resolve;
-    });
+    const typing = createDeferred();
     const typingSignals = createMockTypingSignaler();
-    vi.mocked(typingSignals.signalTextDelta).mockReturnValue(typingPending);
+    vi.mocked(typingSignals.signalTextDelta).mockReturnValue(typing.promise);
     const callbackOrder: string[] = [];
     const toolStarted = createDeferred();
     const runPromise = executeCliTurn(
@@ -195,10 +167,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       },
       typingSignals,
     );
-    onTestFinished(async () => {
-      releaseTyping?.();
-      await runPromise;
-    });
+    const finish = releaseTypingAfterRun(typing, runPromise);
 
     try {
       await Promise.race([toolStarted.promise, runPromise]);
@@ -208,49 +177,21 @@ describe("executeAgentTurn: CLI progress bridging", () => {
         "tool",
       ]);
     } finally {
-      releaseTyping?.();
-      await runPromise;
+      await finish();
     }
   });
 
   it("starts CLI tool progress before later assistant text while typing is slow", async () => {
     const followupRun = createCliRun("claude-cli", "claude-opus-4-6");
-    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
-      const agentEvents = await import("../../infra/agent-events.js");
-      agentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "tool",
-        data: {
-          phase: "start",
-          name: "Bash",
-          toolCallId: "toolu_inverse_order",
-          args: { command: "echo hi" },
-        },
-      });
-      agentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "tool",
-        data: {
-          phase: "update",
-          name: "Bash",
-          toolCallId: "toolu_inverse_order",
-          args: { command: "echo hi" },
-        },
-      });
-      agentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "assistant",
-        data: { text: "answer after tool", delta: "answer after tool" },
-      });
-      return { payloads: [{ text: "final" }], meta: {} };
-    });
+    mockCliEvents([
+      toolEvent("start", "toolu_inverse_order", { args: { command: "echo hi" } }),
+      toolEvent("update", "toolu_inverse_order", { args: { command: "echo hi" } }),
+      ["assistant", { text: "answer after tool", delta: "answer after tool" }],
+    ]);
 
-    let releaseTyping: (() => void) | undefined;
-    const typingPending = new Promise<void>((resolve) => {
-      releaseTyping = resolve;
-    });
+    const typing = createDeferred();
     const typingSignals = createMockTypingSignaler();
-    vi.mocked(typingSignals.signalToolStart).mockReturnValue(typingPending);
+    vi.mocked(typingSignals.signalToolStart).mockReturnValue(typing.promise);
     const callbackOrder: string[] = [];
     const partialReplyStarted = createDeferred();
     const runPromise = executeCliTurn(
@@ -267,38 +208,31 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       },
       typingSignals,
     );
-    onTestFinished(async () => {
-      releaseTyping?.();
-      await runPromise;
-    });
+    const finish = releaseTypingAfterRun(typing, runPromise);
 
     try {
       await Promise.race([partialReplyStarted.promise, runPromise]);
       expect(callbackOrder).toEqual(["tool:start", "tool:update", "partial:answer after tool"]);
     } finally {
-      releaseTyping?.();
-      await runPromise;
+      await finish();
     }
   });
 
   it("bridges CLI preambles for progress headlines when commentary is disabled", async () => {
     const followupRun = createCliRun("claude-cli", "claude-opus-4-6");
-    state.runCliAgentMock.mockImplementationOnce(
-      async (params: { runId: string; emitCommentaryText?: boolean }) => {
-        expect(params.emitCommentaryText).toBe(true);
-        const agentEvents = await import("../../infra/agent-events.js");
-        // Inter-tool commentary surfaces as a stream:"item", kind:"preamble" agent event.
-        agentEvents.emitAgentEvent({
-          runId: params.runId,
-          stream: "item",
-          data: {
+    mockCliEvents(
+      [
+        [
+          "item",
+          {
             kind: "preamble",
             itemId: "commentary-1",
             progressText: "Let me check the files.",
           },
-        });
-        return { payloads: [{ text: "done" }], meta: {} };
-      },
+        ],
+      ],
+      "done",
+      true,
     );
 
     const onItemEvent = vi.fn<NonNullable<GetReplyOptions["onItemEvent"]>>(async () => undefined);
@@ -308,65 +242,36 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       commentaryProgressEnabled: false,
       progressPreambleEnabled: true,
     });
-    await new Promise((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextImmediate();
 
     expect(onItemEvent).toHaveBeenCalledTimes(1);
     const call = onItemEvent.mock.calls[0]?.[0];
-    expect(call?.kind).toBe("preamble");
-    expect(call?.progressText).toBe("Let me check the files.");
-    expect(call?.itemId).toBe("commentary-1");
+    expect([call?.kind, call?.progressText, call?.itemId]).toEqual([
+      "preamble",
+      "Let me check the files.",
+      "commentary-1",
+    ]);
   });
 
   it("does not bridge CLI tool deltas when silentExpected is set", async () => {
     const followupRun = createCliRun("claude-cli", "claude-opus-4-6");
-    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
-      const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
-        "../../infra/agent-events.js",
-      );
-      realAgentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "tool",
-        data: {
-          phase: "start",
-          name: "Bash",
-          toolCallId: "toolu_silent",
-          args: { command: "echo silent" },
-        },
-      });
-      return { payloads: [{ text: "final" }], meta: {} };
-    });
+    mockCliEvents([toolEvent("start", "toolu_silent", { args: { command: "echo silent" } })]);
 
     const onToolStart = vi.fn<NonNullable<GetReplyOptions["onToolStart"]>>(async () => undefined);
     followupRun.run.silentExpected = true;
 
     await executeCliTurn(followupRun, { onToolStart });
-    await new Promise((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextImmediate();
 
     expect(onToolStart).not.toHaveBeenCalled();
   });
 
   it("does not bridge CLI assistant deltas when silentExpected is set (#76869)", async () => {
     const followupRun = createCliRun("claude-cli", "claude-opus-4-6");
-    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
-      const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
-        "../../infra/agent-events.js",
-      );
-      realAgentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "assistant",
-        data: { text: "secret heartbeat output", delta: "secret heartbeat output" },
-      });
-      realAgentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "assistant",
-        data: { text: "NO_REPLY do not preview", delta: " do not preview" },
-      });
-      return { payloads: [{ text: "final" }], meta: {} };
-    });
+    mockCliEvents([
+      ["assistant", { text: "secret heartbeat output", delta: "secret heartbeat output" }],
+      ["assistant", { text: "NO_REPLY do not preview", delta: " do not preview" }],
+    ]);
 
     const onPartialReply = vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>(
       async (_payload) => undefined,
@@ -374,36 +279,21 @@ describe("executeAgentTurn: CLI progress bridging", () => {
     followupRun.run.silentExpected = true;
 
     await executeCliTurn(followupRun, { onPartialReply });
-    await new Promise((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextImmediate();
 
     expect(onPartialReply).not.toHaveBeenCalled();
   });
 
   it("bridges CLI thinking agent events into onReasoningStream with the reasoning opt-in gate", async () => {
     const followupRun = createCliRun("claude-cli", "claude-opus-4-7");
-    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
-      const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
-        "../../infra/agent-events.js",
-      );
-      realAgentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "thinking",
-        data: { text: "Thinking", delta: "Thinking", isReasoningSnapshot: true },
-      });
-      realAgentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "thinking",
-        data: { text: "Thinking", delta: "", isReasoningSnapshot: true },
-      });
-      realAgentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "thinking",
-        data: { text: "Thinking about it", delta: " about it", isReasoningSnapshot: true },
-      });
-      return { payloads: [{ text: "Thinking about it" }], meta: {} };
-    });
+    mockCliEvents(
+      [
+        ["thinking", { text: "Thinking", delta: "Thinking", isReasoningSnapshot: true }],
+        ["thinking", { text: "Thinking", delta: "", isReasoningSnapshot: true }],
+        ["thinking", { text: "Thinking about it", delta: " about it", isReasoningSnapshot: true }],
+      ],
+      "Thinking about it",
+    );
 
     const onReasoningStream = vi.fn<NonNullable<GetReplyOptions["onReasoningStream"]>>(
       async (_payload) => undefined,
@@ -428,9 +318,11 @@ describe("executeAgentTurn: CLI progress bridging", () => {
   it("bridges tagged Claude CLI reasoning separately from its visible answer", async () => {
     const followupRun = createCliRun("claude-cli", "claude-opus-4-7");
     state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
-      const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
-        "../../infra/agent-events.js",
-      );
+      const { emitAgentEvent } = await vi.importActual<
+        typeof import("../../infra/agent-events.js")
+      >("../../infra/agent-events.js");
+      const { runId } = params;
+      const text = "<thinking>Private analysis.</thinking>Visible answer.";
       const parser = createCliJsonlStreamingParser({
         backend: {
           command: "local-cli",
@@ -438,18 +330,8 @@ describe("executeAgentTurn: CLI progress bridging", () => {
           jsonlDialect: "claude-stream-json",
         },
         providerId: "claude-cli",
-        onAssistantDelta: (delta) =>
-          realAgentEvents.emitAgentEvent({
-            runId: params.runId,
-            stream: "assistant",
-            data: delta,
-          }),
-        onThinkingDelta: (delta) =>
-          realAgentEvents.emitAgentEvent({
-            runId: params.runId,
-            stream: "thinking",
-            data: delta,
-          }),
+        onAssistantDelta: (data) => emitAgentEvent({ runId, stream: "assistant", data }),
+        onThinkingDelta: (data) => emitAgentEvent({ runId, stream: "thinking", data }),
       });
       parser.push(
         [
@@ -457,16 +339,10 @@ describe("executeAgentTurn: CLI progress bridging", () => {
             type: "stream_event",
             event: {
               type: "content_block_delta",
-              delta: {
-                type: "text_delta",
-                text: "<thinking>Private analysis.</thinking>Visible answer.",
-              },
+              delta: { type: "text_delta", text },
             },
           }),
-          JSON.stringify({
-            type: "result",
-            result: "<thinking>Private analysis.</thinking>Visible answer.",
-          }),
+          JSON.stringify({ type: "result", result: text }),
           "",
         ].join("\n"),
       );
@@ -491,22 +367,13 @@ describe("executeAgentTurn: CLI progress bridging", () => {
 
   it("does not bridge CLI thinking events to onReasoningStream when silentExpected is set", async () => {
     const followupRun = createCliRun("claude-cli", "claude-opus-4-7");
-    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
-      const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
-        "../../infra/agent-events.js",
-      );
-      realAgentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "thinking",
-        data: { text: "heartbeat scratch text", delta: "heartbeat scratch text" },
-      });
-      realAgentEvents.emitAgentEvent({
-        runId: params.runId,
-        stream: "thinking",
-        data: { text: "NO_REPLY do not preview reasoning", delta: " do not preview reasoning" },
-      });
-      return { payloads: [{ text: "final" }], meta: {} };
-    });
+    mockCliEvents([
+      ["thinking", { text: "heartbeat scratch text", delta: "heartbeat scratch text" }],
+      [
+        "thinking",
+        { text: "NO_REPLY do not preview reasoning", delta: " do not preview reasoning" },
+      ],
+    ]);
 
     const onReasoningStream = vi.fn<NonNullable<GetReplyOptions["onReasoningStream"]>>(
       async (_payload) => undefined,
@@ -514,9 +381,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
     followupRun.run.silentExpected = true;
 
     await executeCliTurn(followupRun, { onReasoningStream });
-    await new Promise((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextImmediate();
 
     expect(onReasoningStream).not.toHaveBeenCalled();
   });

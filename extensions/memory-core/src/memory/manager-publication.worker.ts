@@ -37,7 +37,6 @@ import {
   withSqliteDatabaseWriteScope,
   type SqliteWorkerBackend,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
-import { requireMemorySearchDatabase } from "../memory-search-database.js";
 import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
 import { publishMemoryDatabaseTables } from "./manager-db-kernel.js";
 import {
@@ -173,7 +172,7 @@ export function bindSqliteWorkerBackend(
   if (isPostgresSqlConnection(context.database)) {
     return bindPostgresMemoryPublication(context, "kind" in input ? input.stageId : undefined);
   }
-  const db = requireMemorySearchDatabase(context.database);
+  const db = context.database;
   let pragmas = agentConnectionPragmas.get(db);
   if ("kind" in input && !pragmas) {
     pragmas = {
@@ -387,6 +386,9 @@ function createPublicationBackend(
       loadedExtensions.set(db, loaded.extensionPath);
     },
     execute(command) {
+      if (command.type === "database.reset") {
+        throw new Error("Worker memory reset requires PostgreSQL");
+      }
       if (
         command.type === "database.stage.start" ||
         command.type === "database.stage.publish" ||

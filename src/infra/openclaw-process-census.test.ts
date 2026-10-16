@@ -13,6 +13,7 @@ const {
   definitelyDead,
   container,
   darwinCommand,
+  nativeDarwinCensus,
   rosetta,
   windows,
   windowsSid,
@@ -27,6 +28,7 @@ const {
   definitelyDead: vi.fn(),
   container: vi.fn(),
   darwinCommand: vi.fn(),
+  nativeDarwinCensus: vi.fn(),
   rosetta: vi.fn(),
   windows: vi.fn(),
   windowsSid: vi.fn(),
@@ -48,6 +50,10 @@ vi.mock("../shared/pid-alive.js", () => ({ isPidDefinitelyDead: definitelyDead }
 vi.mock("./container-environment.js", () => ({ isContainerEnvironment: container }));
 // mock-isolation: the real detector reads and caches the test host's CPU brand.
 vi.mock("../shared/rosetta-translation.js", () => ({ isRosettaTranslatedProcess: rosetta }));
+// mock-isolation: Enumerate only fixture PIDs, including when Bun selects native libproc.
+vi.mock("../process/supervisor/darwin-bun-process-census.js", () => ({
+  readDarwinBunProcessCensus: nativeDarwinCensus,
+}));
 vi.mock("../process/supervisor/darwin-process-command.js", () => ({
   readDarwinProcessCommand: darwinCommand,
 }));
@@ -92,6 +98,15 @@ beforeEach(() => {
   container.mockReset().mockReturnValue(false);
   census.mockReset();
   darwinCommand.mockReset();
+  nativeDarwinCensus.mockReset().mockImplementation(() =>
+    [...rows].map(([pid, row]) => ({
+      pid,
+      ppid: row.ppid,
+      pgid: self,
+      state: row.state ?? "S",
+      uid: row.uid ?? 1000,
+    })),
+  );
   rosetta.mockReset().mockReturnValue(false);
   windows.mockReset();
   windowsSid.mockReset();
@@ -413,12 +428,13 @@ it.each([
 it("uses native Darwin arguments and explicit foreign system-service facts", () => {
   mockProcessPlatform("darwin");
   const foreignUid = (process.getuid?.() ?? 501) + 1;
+  rows.get(1)!.uid = foreignUid;
   rows.set(peer, { ppid: 1, argv: ["node", "/app with spaces/openclaw.mjs", "status"] });
   census.mockImplementation((command: string) => ({
     status: 0,
     stdout: command.endsWith("lsof")
       ? [...rows].map(([pid, row]) => `p${pid}\0n${row.cwd ?? "/foreign"}\0\n`).join("")
-      : [...rows].map(([pid, row]) => `${pid} ${self} S ${row.ppid} 501`).join("\n"),
+      : [...rows].map(([pid, row]) => `${pid} ${self} S ${row.ppid} ${row.uid ?? 1000}`).join("\n"),
   }));
   darwinCommand.mockImplementation((pid: number) =>
     pid === 1

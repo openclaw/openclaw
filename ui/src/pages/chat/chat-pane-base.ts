@@ -15,7 +15,6 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { chatInputOwnerForContext, type ChatInputRegion } from "../../app/chat-input-owner.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { observeNativeGateway } from "../../app/native-editor-locality.runtime.ts";
 import {
   createQuestionPromptState,
   listQuestionPrompts,
@@ -665,7 +664,6 @@ export abstract class ChatPaneBase extends ControllerHost {
     public context: ApplicationContext,
   ) {
     super();
-    observeNativeGateway(this);
     void new SubscriptionsController(this)
       .watch(
         () => this.resolveBoardProvider(),

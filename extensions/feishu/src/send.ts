@@ -460,7 +460,7 @@ export async function editMessageFeishu(params: {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }
 
-  const hasText = typeof text === "string" && text.trim().length > 0;
+  const hasText = Boolean(text?.trim());
   const hasCard = Boolean(card);
   if (hasText === hasCard) {
     throw new Error("Feishu edit requires exactly one of text or card.");

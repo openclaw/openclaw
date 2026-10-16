@@ -19,6 +19,7 @@ COPY node-version.mjs ./
 COPY node-sqlite.mjs ./
 COPY node-runtime-update.mjs ./
 COPY node-runtime-recovery.mjs ./
+COPY cli-parent-lifetime.mjs ./
 COPY node-runtime-env.mjs ./
 COPY node-compile-cache.mjs ./
 COPY cli-invocation.mjs cli-root-options.mjs gateway-run-argv.mjs gateway-shutdown-budget.mjs ./

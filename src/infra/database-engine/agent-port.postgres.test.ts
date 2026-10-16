@@ -435,6 +435,43 @@ describe.skipIf(!connection)("agent database port", () => {
       ).toEqual([{ enqueue_sequence: "11" }]);
       expect(fs.readFileSync(anchorPath)).toEqual(anchorBytes);
     }
+    await client.query(
+      `SELECT setval('"${namespace}".context_engine_turn_outbox_enqueue_sequence_seq', 3, false)`,
+    );
+    const resetDirectory = path.join(directory, "reset-sequence");
+    const reset = await capturePostgresBackup({
+      sourcePath: anchorPath,
+      directory: resetDirectory,
+      profile: "exact",
+      config,
+      assertCurrent() {},
+    });
+    expect(reset.verification.allocations["context_engine_turn_outbox.enqueue_sequence"]).toEqual({
+      value: "3",
+      called: false,
+    });
+    const resetRestore = await preparePostgresRestore({
+      directory: resetDirectory,
+      anchorPath: path.join(directory, "reset-restored.sqlite"),
+      profile: "exact",
+      config,
+      assertCurrent() {},
+    });
+    namespaces.add(resetRestore.namespace);
+    expect(
+      (
+        await client.query(
+          `SELECT max(enqueue_sequence) AS retained FROM "${resetRestore.namespace}".context_engine_turn_outbox`,
+        )
+      ).rows,
+    ).toEqual([{ retained: "9" }]);
+    expect(
+      (
+        await client.query(
+          `SELECT nextval('"${resetRestore.namespace}".context_engine_turn_outbox_enqueue_sequence_seq')::text AS next`,
+        )
+      ).rows,
+    ).toEqual([{ next: "3" }]);
     const extensionMetadata = (
       await client.query<{ search_extensions: string }>(
         `SELECT search_extensions FROM "${namespace}".openclaw_schema_meta WHERE store = 'agent'`,

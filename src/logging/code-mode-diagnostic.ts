@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import {
+  diagnosticErrorCategory,
+  diagnosticErrorFailureKind,
+} from "../infra/diagnostic-error-metadata.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "./subsystem.js";
 import type { SubsystemLogger } from "./subsystem.js";
 
@@ -23,13 +26,9 @@ export type CodeModeFailureContext = {
   bridgeMethod?: string;
 };
 
-/** Record the producer's cause before guest projection or output budgeting. */
+/** Record failure categories and correlation without message or tool content. */
 export function logCodeModeFailure(error: unknown, context: CodeModeFailureContext): void {
   const cause = error instanceof Error && error.cause instanceof Error ? error.cause : error;
-  const record = isRecord(cause) ? cause : undefined;
-  const name = cause instanceof Error ? cause.name : record?.name;
-  const message = cause instanceof Error ? cause.message : record?.message;
-  const stack = cause instanceof Error ? cause.stack : record?.stack;
   const level =
     context.failurePhase === "guest" ||
     context.failurePhase === "input" ||
@@ -41,10 +40,12 @@ export function logCodeModeFailure(error: unknown, context: CodeModeFailureConte
       : "error";
   failureLog[level]("Code Mode execution failed", {
     ...context,
-    errorName: typeof name === "string" ? name : "Error",
-    errorCode: typeof record?.code === "string" ? record.code : undefined,
-    error: typeof message === "string" ? message : formatErrorMessage(error),
-    stack: typeof stack === "string" ? stack.split("\n").slice(0, 12).join("\n") : undefined,
+    errorCode:
+      extractErrorCode(cause) === "ERR_WORKER_OUT_OF_MEMORY"
+        ? "ERR_WORKER_OUT_OF_MEMORY"
+        : undefined,
+    errorCategory: diagnosticErrorCategory(cause),
+    failureKind: diagnosticErrorFailureKind(cause),
   });
 }
 

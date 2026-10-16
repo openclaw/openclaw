@@ -487,7 +487,7 @@ export async function isWorkspaceSetupCompleted(
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<boolean> {
   const state = (await readCanonicalWorkspaceStateSnapshot(dir, options)).setup;
-  return typeof state.setupCompletedAt === "string" && state.setupCompletedAt.trim().length > 0;
+  return Boolean(state.setupCompletedAt);
 }
 
 export async function resolveWorkspaceBootstrapStatus(

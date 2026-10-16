@@ -5,8 +5,10 @@ import {
   type CodexCatalogPreviewCache,
 } from "../session-catalog-native-projection.js";
 import type { CodexCatalogNativeThread } from "../session-catalog-types.js";
-import { redactCodexAppServerLinePreview } from "./client-line-preview.js";
-import { parseCodexAppServerMessage } from "./client-message-decoder.js";
+import {
+  parseCodexAppServerMessage,
+  type CodexAppServerParseFailure,
+} from "./client-message-decoder.js";
 import {
   codexCatalogResponseRoute,
   type CodexCatalogDecodeRoute,
@@ -27,7 +29,7 @@ export type CodexCatalogDecodeResult = {
   message?: unknown;
   preview?: { rows: CodexCatalogNativeThread[]; states: (boolean | undefined)[] };
   projectionError?: { id: number; error: Error };
-  failures: { value: string; error: unknown; fragmentCount: number }[];
+  failures: CodexAppServerParseFailure[];
 };
 
 /** Each worker invocation parses and projects one complete transport frame. */
@@ -37,10 +39,7 @@ export function decodeCodexCatalogFrame(input: CodexCatalogDecodeInput): CodexCa
     Buffer.from(input.bytes.buffer, input.bytes.byteOffset, input.bytes.byteLength).toString(
       "utf8",
     ),
-    (value, error, fragmentCount) => {
-      // Redact before bounding: cutting a quoted token first loses its closing quote.
-      failures.push({ value: redactCodexAppServerLinePreview(value), error, fragmentCount });
-    },
+    (failure) => failures.push(failure),
   );
   return { ...projectCodexCatalogMessage(parsed, input), failures };
 }

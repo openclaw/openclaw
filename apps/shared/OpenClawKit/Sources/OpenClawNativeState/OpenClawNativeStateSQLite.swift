@@ -610,7 +610,7 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         return keyColumns == table.indexColumns
     }
 
-    private static func secureDirectory(_ url: URL) throws {
+    static func secureDirectory(_ url: URL) throws {
         let fileManager = FileManager.default
         try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
         var attributes: [FileAttributeKey: Any] = [.posixPermissions: 0o700]

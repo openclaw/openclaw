@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { LinkModelConfig, LinkToolsConfig } from "../config/types.tools.js";
+import * as globals from "../globals.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { applyLinkUnderstanding } from "./apply.js";
@@ -96,37 +97,80 @@ describe("runLinkUnderstanding", () => {
   });
 
   it("fetches links through the SSRF guard before passing content to CLI stdin", async () => {
-    const controller = new AbortController();
-    const release = mockGuardedFetch("page body", "https://example.com/final");
-    mockCommand("summarized page");
+    const verbose = vi.spyOn(globals, "shouldLogVerbose").mockReturnValue(true);
+    const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
+    const body = "synthetic private link context https://example.com/page";
+    try {
+      const controller = new AbortController();
+      const release = mockGuardedFetch("page body", "https://example.com/final");
+      mockCommand("summarized page");
 
-    const result = await runLinkUnderstanding({
-      cfg: cfg({ type: "cli", command: "summarize", args: ["--source", "{{LinkUrl}}"] }),
-      ctx: ctx(),
-      signal: controller.signal,
-    });
-
-    expect(result).toEqual(["summarized page"]);
-    expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        auditContext: "link-understanding",
-        mode: "strict",
-        url: "https://example.com/page",
+      const result = await runLinkUnderstanding({
+        cfg: cfg({
+          type: "cli",
+          command: "summarize",
+          args: ["--source", "{{LinkUrl}}", "--context", "{{Body}}"],
+        }),
+        ctx: ctx(body),
         signal: controller.signal,
-      }),
-    );
-    expect(runCommandWithTimeout).toHaveBeenCalledWith(["summarize", "--source"], {
-      env: {
-        OPENCLAW_LINK_FINAL_URL: "https://example.com/final",
-        OPENCLAW_LINK_URL: "https://example.com/page",
-      },
-      input: "page body",
-      signal: controller.signal,
-      killProcessTree: true,
-      timeoutMs: 30000,
-    });
-    expect(release).toHaveBeenCalledOnce();
+      });
+
+      expect(result).toEqual(["summarized page"]);
+      expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
+        expect.objectContaining({
+          auditContext: "link-understanding",
+          mode: "strict",
+          url: "https://example.com/page",
+          signal: controller.signal,
+        }),
+      );
+      expect(runCommandWithTimeout).toHaveBeenCalledWith(
+        ["summarize", "--source", "--context", body],
+        {
+          env: {
+            OPENCLAW_LINK_FINAL_URL: "https://example.com/final",
+            OPENCLAW_LINK_URL: "https://example.com/page",
+          },
+          input: "page body",
+          signal: controller.signal,
+          killProcessTree: true,
+          timeoutMs: 30000,
+        },
+      );
+      expect(release).toHaveBeenCalledOnce();
+      expect(JSON.stringify(log.mock.calls)).not.toContain(body);
+    } finally {
+      log.mockRestore();
+      verbose.mockRestore();
+    }
   });
+
+  it.each(["fetch", "cli"])(
+    "keeps %s failures content-free without changing fallback",
+    async (stage) => {
+      const verbose = vi.spyOn(globals, "shouldLogVerbose").mockReturnValue(true);
+      const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
+      const privateText = "synthetic-private-link-content";
+      try {
+        if (stage === "fetch") {
+          mocks.fetchWithSsrFGuard.mockRejectedValueOnce(new Error(privateText));
+        } else {
+          mockGuardedFetch("fallback page body");
+          mocks.runCommandWithTimeout.mockRejectedValueOnce(new Error(privateText));
+        }
+        const result = await runLinkUnderstanding({
+          cfg: cfg(),
+          ctx: ctx(`https://example.com/${privateText}`),
+        });
+        expect(result).toEqual(stage === "fetch" ? [] : ["fallback page body"]);
+        expect(log).toHaveBeenCalled();
+        expect(JSON.stringify(log.mock.calls)).not.toContain(privateText);
+      } finally {
+        log.mockRestore();
+        verbose.mockRestore();
+      }
+    },
+  );
 
   it.each([
     {

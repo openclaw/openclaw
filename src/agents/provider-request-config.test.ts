@@ -3,10 +3,16 @@ import { describe, expect, it } from "vitest";
 import type { ConfiguredProviderRequest } from "../config/types.provider-request.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
+import {
+  attachProviderAuthAuthority,
+  assertProviderAuthAuthority,
+} from "../plugins/provider-auth-authority.js";
 import { resolveProviderTransportSsrFPolicy } from "./provider-network-policy.js";
 import {
   applyPreparedRuntimeAuthToModel,
   attachModelProviderRequestRouteFacts,
+  attachModelProviderRequestTransport,
+  getModelProviderRequestTransport,
   buildProviderRequestDispatcherPolicy,
   getModelProviderRequestRouteFacts,
   inheritModelProviderRequestRouteFacts,
@@ -102,6 +108,58 @@ describe("provider request config", () => {
       "X-Tenant": "tenant-a",
       "x-api-key": "profile-key",
     });
+  });
+
+  it("keeps exchanged request auth aligned with visible headers and authored network policy", () => {
+    const model = attachModelProviderRequestTransport(
+      {
+        provider: "fixture",
+        api: "openai-responses" as const,
+        baseUrl: "https://fixture.invalid/v1",
+        headers: { "x-api-key": "old-key", "x-tenant": "tenant" },
+      },
+      {
+        headers: { "x-api-key": "old-key" },
+        auth: { mode: "authorization-bearer", token: "old-token" },
+        proxy: { mode: "env-proxy" },
+        tls: { ca: "fixture-ca" },
+        allowPrivateNetwork: false,
+      },
+    );
+    let credentialCurrent = true;
+    const retired = new Error("synthetic credential owner retired");
+    const prepared = applyPreparedRuntimeAuthToModel(
+      model,
+      attachProviderAuthAuthority(
+        {
+          request: {
+            headers: { "x-entitlement": "entitled" },
+            auth: { mode: "header" as const, headerName: "x-session", value: "new-token" },
+          },
+        },
+        () => {
+          if (!credentialCurrent) {
+            throw retired;
+          }
+        },
+      ),
+    );
+    const request = getModelProviderRequestTransport(prepared);
+    expect(request).toMatchObject({
+      auth: { mode: "header", headerName: "x-session", value: "new-token" },
+      proxy: { mode: "env-proxy" },
+      tls: { ca: "fixture-ca" },
+      allowPrivateNetwork: false,
+    });
+    expect(request?.headers).toEqual(prepared.headers);
+    expect(request?.headers).toEqual({
+      "x-tenant": "tenant",
+      "x-entitlement": "entitled",
+      "x-session": "new-token",
+    });
+    assertProviderAuthAuthority(prepared);
+    credentialCurrent = false;
+    expect(() => assertProviderAuthAuthority(prepared)).toThrow(retired);
   });
 
   it("merges discovered, provider, and model headers in precedence order", () => {

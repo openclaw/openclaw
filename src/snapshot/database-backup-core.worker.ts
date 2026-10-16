@@ -1,17 +1,17 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { Client } from "pg";
 import type { PortDescriptor } from "../infra/database-engine/port-descriptor.js";
 import {
-  inspectDatabasePort,
   materializeDatabasePort,
   readDatabasePortAllocations,
 } from "../infra/database-engine/port.worker.js";
 import { sha256File } from "../infra/directory-durability.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { writePostgresExportEnvelope, type PostgresExportEnvelope } from "./export-envelope.js";
+import { fingerprintPostgresGeneration, inspectPostgresGeneration } from "./postgres-generation.js";
 
 type Anchor = Pick<PostgresExportEnvelope["source"], "engine" | "storeId" | "namespace">;
 
@@ -175,26 +175,12 @@ export async function restorePostgresBackup(params: {
   return { namespace };
 }
 
-export async function fingerprintPostgresDatabase(params: {
-  client: Client;
-  descriptor: PortDescriptor;
-  anchor: Anchor;
-}) {
-  const { client, descriptor, anchor } = params;
-  const inspection = await inspectDatabasePort(
-    { engine: "postgres", db: client, namespace: anchor.namespace },
-    descriptor,
-    anchor.storeId,
-  );
-  // PostgreSQL planner order is not a schema or data change.
-  inspection.catalog.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b), "en"));
-  return createHash("sha256")
-    .update(
-      JSON.stringify({
-        ...anchor,
-        version: descriptor.version,
-        ...inspection,
-      }),
-    )
-    .digest("hex");
+export async function fingerprintPostgresDatabase(params: { client: Client; anchor: Anchor }) {
+  const { client, anchor } = params;
+  await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+  try {
+    return fingerprintPostgresGeneration(anchor, await inspectPostgresGeneration(client, anchor));
+  } finally {
+    await client.query("ROLLBACK");
+  }
 }

@@ -703,6 +703,29 @@ memory, so do not add those values together. Other direct workers use native hea
 statistics and leave ArrayBuffer bytes unavailable. Nested workers are outside
 the parent registry's coverage.
 
+The prepared-model catalog worker also reports `workerHeaps[].retainedData`: bounded, size-only
+censuses with fixed structure labels, entry counts, approximate bytes, and
+aggregate generation, provider, and account counts where applicable. They never
+include catalog contents, object keys, provider or account identities, or secrets.
+The census uses the existing worker-memory sampling channel; it does not take a
+heap snapshot. Byte counts estimate owner-held data, not V8 retained size; shared
+objects are counted once within each structure, and structures can overlap.
+`stringBytes` estimates string payload bytes, while `objects` counts traversed
+objects. Coverage includes the named structures, not module runtime or closure roots.
+`truncated: true` means the estimator reached its work bound or skipped opaque
+values (proxies, accessors, or custom instances), so that estimate is partial.
+Only plain records and arrays are traversed; plugin iterators and accessors never run. Native-only fallback samples omit the census until the worker responds.
+`catalog-static` counts retained provider records without reading plugin-owned model arrays.
+`catalog-source` covers shared cached provider payloads, which may already be
+normalized. `catalog-request` rows count pending cache loads and active worker
+tasks separately. Pending loads have zero-byte estimates because their state is
+opaque; active task inputs are measured.
+Read the latest sampled census through the existing diagnostics CLI:
+
+```bash
+openclaw gateway stability --type diagnostic.memory.sample --limit 1 --json
+```
+
 `workerHeapSampledCount` and `workerArrayBuffersSampledCount` show coverage against
 `workerCount`. `workerMemoryCoverage` is `complete`, `partial`, or `unavailable`
 for direct workers. Before the first sample or after a sample expires, missing

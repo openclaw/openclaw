@@ -100,15 +100,6 @@ export async function removeCronRunContinuationSessionIfIdle(
       if (descendants.hasUnsettled(sessionKey)) {
         return;
       }
-      const entry = await readEntry();
-      if (
-        !entry ||
-        entry.sessionId !== original.sessionId ||
-        entry.lifecycleRevision !== original.lifecycleRevision ||
-        !canRemoveCronRunContinuation(entry.cronRunContinuation)
-      ) {
-        return;
-      }
       await deleteSessionEntryLifecycle({
         agentId,
         commitGuard: () => {
@@ -122,10 +113,10 @@ export async function removeCronRunContinuationSessionIfIdle(
         },
         // Exact rows alias the stable cron transcript; the stable row owns archival.
         archiveTranscript: false,
-        expectedEntry: entry,
-        expectedLifecycleRevision: entry.lifecycleRevision,
-        expectedSessionId: entry.sessionId,
-        expectedUpdatedAt: entry.updatedAt,
+        expectedEntry: original,
+        expectedLifecycleRevision: original.lifecycleRevision,
+        expectedSessionId: original.sessionId,
+        expectedUpdatedAt: original.updatedAt,
         requireWriteSuccess: true,
         storePath,
         target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },

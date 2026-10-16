@@ -28,7 +28,7 @@ import {
   authorizeSessionSharingTarget,
   canManageSessionSharing,
   isGatewayAdmin,
-  resolveSessionSharingRole,
+  prepareSessionSharingRole,
   resolveSessionVisibility,
   sharingIdentity,
   type SessionSharingRoleParams,
@@ -114,27 +114,23 @@ export function prepareSessionSharing(
 ) {
   const identity = sharingIdentity(params.client, resolveGatewayOperatorRoleActor(params.client));
   const isCreator = prepareSessionCreatorProfile(identity?.id, prepared?.aliases);
+  const sessionCap = prepared
+    ? prepared.sessionCap
+    : params.cfg && operatorSessionCap(params.client, params.cfg);
+  const cap = { value: sessionCap };
+  const resolveRole = prepareSessionSharingRole(params, cap, isCreator);
   const roleForTarget = (target: SessionSharingTarget, isMember?: boolean) =>
-    resolveSessionSharingRole(
-      {
-        ...params,
-        target,
-        isMember:
-          isMember ?? (prepared && Boolean(identity && prepared.isMember(target, identity.id))),
-      },
-      prepared && { value: prepared.sessionCap },
-      isCreator,
+    resolveRole(
+      target,
+      isMember ?? (prepared && Boolean(identity && prepared.isMember(target, identity.id))),
     );
   return {
     isCreator,
     sessionCap: prepared?.sessionCap,
-    entryFilter: createSessionListEntryFilter(params, isCreator, prepared),
+    entryFilter: createSessionListEntryFilter(params, isCreator, { sessionCap }),
     roleForTarget,
-    authorizeTarget: (target: SessionSharingTarget) =>
-      authorizeSessionSharingTarget(
-        { ...params, target },
-        prepared && { value: prepared.sessionCap, role: roleForTarget(target) },
-      ),
+    authorizeTarget: (target: SessionSharingTarget, role = roleForTarget(target)) =>
+      authorizeSessionSharingTarget({ ...params, target }, { ...cap, role }),
   };
 }
 

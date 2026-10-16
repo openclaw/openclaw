@@ -75,7 +75,7 @@ function readJpegDimensions(buffer: Buffer): { width: number; height: number } |
 }
 
 async function listLinuxVideoDevices(ffmpeg: string): Promise<VideoDevice[]> {
-  const entries = await fs.readdir("/dev").catch(() => []);
+  const entries = await fs.readdir("/dev");
   const deviceNames = entries
     .filter((entry) => /^video\d+$/u.test(entry))
     .toSorted((left, right) => left.localeCompare(right, "en", { numeric: true }));
@@ -95,6 +95,7 @@ async function listLinuxVideoDevices(ffmpeg: string): Promise<VideoDevice[]> {
     if (!/\b(?:Raw|Compressed)\s*:/u.test(`${probe.stdout}\n${probe.stderr}`)) {
       continue;
     }
+    // The sysfs label is cosmetic; a successful capture probe already identified the device.
     const name = await fs
       .readFile(path.join("/sys/class/video4linux", entry, "name"), "utf8")
       .then((value) => value.trim())

@@ -47,6 +47,71 @@ async function mountModel(params: Omit<ModelPickerParams, "label" | "onChange">,
 }
 
 describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout", () => {
+  it("reveals keyboard highlights without untracked reactive reads", async () => {
+    const warning = vi.spyOn(console, "warn");
+    try {
+      const { page, userEvent } = await import("vitest/browser");
+      await page.viewport(1280, 844);
+      const { picker, onChange } = await mountModel(
+        {
+          value: "fixture/model-0",
+          options: Array.from({ length: 30 }, (_, index) => ({
+            value: `fixture/model-${index}`,
+            label: `Model ${index}`,
+          })),
+        },
+        "width:240px;margin:24px",
+      );
+      await page.getByRole("button", { name: "Model: Model 0", exact: true }).click();
+      await userEvent.keyboard("{ArrowUp}");
+      const list = picker.querySelector<HTMLElement>(".picker-select__options")!;
+      const last = picker.querySelector<HTMLElement>('[data-value="fixture/model-29"]')!;
+      await expect.poll(() => last.hasAttribute("data-active")).toBe(true);
+      await expect.poll(() => list.scrollTop).toBeGreaterThan(0);
+      expect(last.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+        list.getBoundingClientRect().bottom + 1,
+      );
+      await userEvent.keyboard("{ArrowDown}{Enter}");
+      expect(onChange).toHaveBeenCalledExactlyOnceWith("fixture/model-0");
+      expect(warning.mock.calls.flat().join(" ")).not.toContain("STRICT_READ_UNTRACKED");
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  it("places submenus after batched writing-direction and placement changes", async () => {
+    const [direction, setDirection] = createSignal<"ltr" | "rtl">("ltr");
+    const [placement, setPlacement] = createSignal<"top" | "bottom">("bottom");
+    const host = mountHost();
+    mountSolid(
+      () => (
+        <div dir={direction()}>
+          <Picker
+            params={{
+              label: "Submenu",
+              value: "one",
+              options: [{ value: "one", label: "One" }],
+              variant: "submenu",
+              placement: placement(),
+              onChange() {},
+            }}
+          />
+        </div>
+      ),
+      { container: host },
+    );
+    const picker = host.querySelector<SelectPicker>("openclaw-select-picker")!;
+    await picker.updateComplete;
+    const menu = picker.querySelector<HTMLElement>(".picker-select__menu")!;
+    expect(menu.dataset.placement).toBe("right-start");
+
+    setDirection("rtl");
+    setPlacement("top");
+    flush();
+    await picker.updateComplete;
+    expect(menu.dataset.placement).toBe("left-start");
+  });
+
   it.each([
     { width: 1280, direction: "ltr" },
     { width: 390, direction: "ltr" },

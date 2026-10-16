@@ -122,6 +122,7 @@ it.each([
   { agentId: "main", changed: "none", blocked: undefined },
   { agentId: "verification", changed: "none", blocked: undefined },
   { agentId: "main", changed: "local", blocked: undefined },
+  { agentId: "main", changed: "client", blocked: undefined },
   { agentId: "main", changed: "shared", blocked: "state-migrated-no-rollback" },
   { agentId: "main", changed: "agent", blocked: "state-migrated-no-rollback" },
   { agentId: "main", changed: "incomplete", blocked: "state-migrated-no-rollback" },
@@ -136,6 +137,12 @@ it.each([
     const schemaVersions = await readUpdateStateSchemaVersions({ stateDir, config: {}, env });
     if (changed === "local") {
       expect((await migrateDaemonRuntimePins(env)).warnings).toEqual([]);
+    }
+    if (changed === "client") {
+      const pathname = path.join(stateDir, "client", "credentials.sqlite");
+      await fs.mkdir(path.dirname(pathname), { recursive: true });
+      using db = new DatabaseSync(pathname);
+      db.exec("PRAGMA user_version = 1; CREATE TABLE synthetic_credentials(value TEXT)");
     }
     const agentPath = path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite");
     expect(

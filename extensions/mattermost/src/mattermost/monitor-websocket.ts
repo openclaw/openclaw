@@ -397,7 +397,9 @@ export function createMattermostConnectOnce(
           });
           try {
             ws.close();
-          } catch {}
+          } catch {
+            // The transport error is already reported; closing a broken socket is best effort.
+          }
         });
       });
     } finally {

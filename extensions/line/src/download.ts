@@ -72,9 +72,7 @@ async function* lineResponseBodyChunks(
     if (!completed) {
       await reader.cancel(signal.aborted ? signal.reason : undefined).catch(() => undefined);
     }
-    try {
-      reader.releaseLock();
-    } catch {}
+    reader.releaseLock();
   }
 }
 

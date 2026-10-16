@@ -112,9 +112,6 @@ export function createGatewayConnectionState(params: {
       if (!projection) {
         return undefined;
       }
-      let projectedAgentRuns: SessionRowProjection["state"]["rowContext"]["projectedAgentRuns"];
-      let registrations: (readonly [string, ChatAbortControllerEntry])[] = [];
-      let projectRun: ReturnType<typeof createVisibleActiveSessionRunProjector> | undefined;
       return (eventScope.prepareSessionProjection ?? prepareSessionEventProjection(projection))(
         event,
         payload,
@@ -139,36 +136,11 @@ export function createGatewayConnectionState(params: {
             return references;
           },
           forgetConnectionAncestors: (client) => ancestorReferences.delete(client),
-          getRunProjector: () => {
-            if (
-              !projectRun ||
-              registrations.length !== chatAbortControllers.size ||
-              // Compare copied fields: registrations can mutate in place between recipients.
-              registrations.some(([runId, previous]) => {
-                const current = chatAbortControllers.get(runId);
-                return (
-                  !current ||
-                  current.sessionKey !== previous.sessionKey ||
-                  current.sessionId !== previous.sessionId ||
-                  current.agentId !== previous.agentId ||
-                  current.projectSessionActive !== previous.projectSessionActive ||
-                  current.controlUiVisible !== previous.controlUiVisible
-                );
-              }) ||
-              projectedAgentRuns !== projection.state.rowContext.projectedAgentRuns
-            ) {
-              registrations = Array.from(chatAbortControllers, ([runId, entry]) => [
-                runId,
-                { ...entry },
-              ]);
-              projectedAgentRuns = projection.state.rowContext.projectedAgentRuns;
-              projectRun = createVisibleActiveSessionRunProjector(
-                { chatAbortControllers: new Map(registrations) },
-                projectedAgentRuns,
-              );
-            }
-            return projectRun;
-          },
+          createRunProjector: () =>
+            createVisibleActiveSessionRunProjector(
+              { chatAbortControllers },
+              projection.state.rowContext.projectedAgentRuns,
+            ),
         },
       );
     },

@@ -54,6 +54,18 @@ export function PickerContent<Option extends PickerOption>(props: {
   const [keyboard, setKeyboard] = createSignal(false);
   const [collapsed, setCollapsed] = createSignal(new Set<string>());
   const direction = () => (getComputedStyle(props.host).direction === "rtl" ? "rtl" : "ltr");
+  const updateAnchor = (
+    placement: PickerParams<Option>["placement"],
+    variant: PickerParams<Option>["variant"],
+  ) =>
+    anchor?.update(
+      trigger,
+      variant === "submenu"
+        ? direction() === "rtl"
+          ? "left-start"
+          : "right-start"
+        : `${placement ?? "bottom"}-start`,
+    );
   const options = createMemo((): readonly Option[] => {
     const { value, options: configuredOptions } = props.params;
     if (
@@ -284,28 +296,18 @@ export function PickerContent<Option extends PickerOption>(props: {
   );
   createEffect(
     () => [props.params.placement, props.params.variant] as const,
-    ([placement, variant]) => {
-      anchor?.update(
-        trigger,
-        variant === "submenu"
-          ? direction() === "rtl"
-            ? "left-start"
-            : "right-start"
-          : `${placement ?? "bottom"}-start`,
-      );
-    },
+    ([placement, variant]) => updateAnchor(placement, variant),
   );
   createEffect(
     () => [opened(), active(), query(), rows()] as const,
-    () => {
-      if (!list) {
-        return;
+    ([isOpen, highlighted]) => {
+      if (list) {
+        const node = optionElements.get(highlighted ?? "");
+        if (isOpen && node) {
+          revealInScrollRegion(list, node);
+        }
+        scrollFade();
       }
-      const node = optionElements.get(active() ?? "");
-      if (overlay.open && node) {
-        revealInScrollRegion(list, node);
-      }
-      scrollFade();
     },
   );
   onSettled(() => {
@@ -313,14 +315,7 @@ export function PickerContent<Option extends PickerOption>(props: {
     overlay.setParent(findOverlayParent(trigger));
     if (!props.params.sheet) {
       anchor = createOverlayAnchor(surface);
-      anchor.update(
-        trigger,
-        props.params.variant === "submenu"
-          ? direction() === "rtl"
-            ? "left-start"
-            : "right-start"
-          : `${props.params.placement ?? "bottom"}-start`,
-      );
+      updateAnchor(props.params.placement, props.params.variant);
     }
     const stop = overlay.subscribe((next) => {
       setOpened(next);

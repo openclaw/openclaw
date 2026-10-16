@@ -26,7 +26,6 @@ import {
 import type { WhatsAppInboundAdmission } from "../../inbound/admission.js";
 import { resolveWhatsAppIngressLifecycle } from "../../inbound/ingress-lifecycle.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
-import { newConnectionId } from "../../reconnect.js";
 import { formatError } from "../../session.js";
 import {
   resolveWhatsAppDirectSystemPrompt,
@@ -312,20 +311,6 @@ export async function processMessage(params: {
       warn: params.replyLogger.warn.bind(params.replyLogger),
     });
   }
-
-  const correlationId = params.msg.event.id ?? newConnectionId();
-  params.replyLogger.info(
-    {
-      connectionId: params.connectionId,
-      correlationId,
-      from: conversationId,
-      to: params.msg.platform.recipientJid,
-      bodyLength: combinedBody.length,
-      mediaType: params.msg.payload.media?.type ?? null,
-      mediaPath: params.msg.payload.media?.path ?? null,
-    },
-    "inbound web message",
-  );
 
   const kindLabel = params.msg.payload.media?.type ? `, ${params.msg.payload.media?.type}` : "";
   whatsappInboundLog.info(

@@ -19,6 +19,7 @@ import { PluginView } from "../plugins/control-ui-view.solid.tsx";
 import { appSidebarProperties, type AppSidebarProps } from "./app-sidebar-base.ts";
 import { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 import { createSessionPullRequestIndicators } from "./app-sidebar-session-pr-indicators.ts";
+import { createSessionAttention } from "./session-attention.ts";
 import { createSessionOwnerFilterQuery } from "./session-owner-filter.ts";
 import { createSidebarScroll } from "./sidebar-context-controller.ts";
 import { createSidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
@@ -57,6 +58,12 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
   const owner = sidebarOwners.get(host) ?? new AppSidebarOwner(catalog, props, context, host);
   owner.navigationCatalog = catalog;
   owner.bindInputs(props, context);
+  owner.attention = createSessionAttention(
+    context,
+    owner.attentionQuestions,
+    host,
+    () => props.navigationVisible,
+  );
   const scroll = createSidebarScroll(owner);
   const projection = projectSource(owner, {
     read: (current) => current,

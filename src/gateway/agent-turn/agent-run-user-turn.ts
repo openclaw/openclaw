@@ -151,6 +151,8 @@ export async function prepareAgentRunUserTurn(params: {
   cfg: OpenClawConfig;
   cfgForAgent?: OpenClawConfig;
   sessionEntry?: SessionEntry;
+  /** Exact creation target carried only by the host-bound fresh-child admission. */
+  freshChildStorePath?: string;
   resolvedSessionKey?: string;
   requestedSessionKeyRaw?: string;
   admittedSessionId: string;
@@ -310,23 +312,32 @@ export async function prepareAgentRunUserTurn(params: {
         input,
         target: async () => {
           params.assertCurrent();
-          const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
-            cfg: params.cfgForAgent ?? params.cfg,
-            key: params.resolvedSessionKey!,
-            agentId: params.activeSessionAgentId,
-            assertActive: params.assertCurrent,
-            excludeInternalEffects: true,
-          });
+          const loaded = params.freshChildStorePath
+            ? {
+                entry: params.sessionEntry,
+                storePath: params.freshChildStorePath,
+                store: undefined,
+              }
+            : await loadGatewaySessionEntryReadOnlyInWorker({
+                cfg: params.cfgForAgent ?? params.cfg,
+                key: params.resolvedSessionKey!,
+                agentId: params.activeSessionAgentId,
+                assertActive: params.assertCurrent,
+                excludeInternalEffects: true,
+              });
           params.assertCurrent();
           const latestEntry = loaded.entry;
           const loadedSessionId = latestEntry?.sessionId?.trim();
-          // Session creation is persisted before this phase. No matching entry
-          // means the admitted lifecycle instance changed and must fail closed.
-          if (!latestEntry || loadedSessionId !== params.admittedSessionId) {
+          // Fresh children carry committed creation facts; their live lease still
+          // authorizes the write. Other callers must resolve their current target.
+          if (
+            !params.freshChildStorePath &&
+            (!latestEntry || loadedSessionId !== params.admittedSessionId)
+          ) {
             return undefined;
           }
           return {
-            sessionId: latestEntry.sessionId,
+            sessionId: params.admittedSessionId,
             expectedSessionId: params.admittedSessionId,
             sessionKey: params.resolvedSessionKey!,
             sessionEntry: latestEntry,
@@ -353,6 +364,14 @@ export async function prepareAgentRunUserTurn(params: {
       if (
         !(await recorder.stageApproved!({
           runId: params.runId,
+          storageTarget: params.freshChildStorePath
+            ? {
+                agentId: params.activeSessionAgentId,
+                sessionId: params.admittedSessionId,
+                sessionKey: params.resolvedSessionKey,
+                storePath: params.freshChildStorePath,
+              }
+            : undefined,
           assertCurrent: () => {
             params.assertCurrent();
             settleWakeReplay?.assertCurrent();

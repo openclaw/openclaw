@@ -85,6 +85,9 @@ The supported PostgreSQL families are:
   agent directories, use the selected engine through the existing agent workers.
   Transcript payloads are stored as plain JSON on PostgreSQL. Transcript text search
   uses the engine's admitted full-text capability and requires `unaccent`.
+  Memory indexing, text/vector/hybrid search, status, forgetting, and derived-index
+  reset use the selected engine. Memory search remains experimental; see the
+  extension requirements and keyword-only mode below.
   Memory text and vector admission are owned by the memory engine. Port and backup
   validate its recorded search extensions against those owner definitions.
   Existing agent stores support bidirectional ports and matched backups, including
@@ -143,6 +146,22 @@ Existing SQLite shared state and agent databases refuse a PostgreSQL selection a
 current-schema shared state, agent databases, Workboard, Logbook, and Team Reports. Upgrade older
 shared state with `openclaw doctor --fix` using a compatible binary before porting.
 Do not remove existing data to switch engines.
+
+### Legacy data and PostgreSQL
+
+Before porting SQLite stores to PostgreSQL, run `openclaw doctor --fix` while
+those stores still use SQLite. The port preflight refuses pending declared
+legacy migrations and names the repairs required before retrying the port.
+This includes native Codex task assignments, Matrix inbound dedupe, and legacy
+memory index sidecars.
+Fresh Matrix account roots without legacy inbound-dedupe rows do not need a
+migration completion receipt before porting.
+
+These migrations are SQLite-only. On PostgreSQL, Doctor records that they are
+not applicable instead of opening the local engine anchor as an application
+database. A legacy memory sidecar found after selecting PostgreSQL stays
+unchanged; normal memory reindexing rebuilds the index from authoritative memory
+sources and may re-embed them. Keep those sources available.
 
 ### Mixed engines (experimental)
 
@@ -237,7 +256,7 @@ existing separate commits, compensation, and lock ordering.
 
 The experimental engine search contract supports native PostgreSQL full text,
 literal trigram contains, and exact cosine search. Agent transcript text search
-uses this contract; agent memory still follows the support matrix above.
+and memory search use this contract.
 It does not enable PostgreSQL for an unported store.
 
 Owning components can register additional search definitions with
@@ -273,20 +292,23 @@ tables, indexes, functions, and text-search configuration.
 
 The existing explicit keyword-only memory setting is `memory.search.provider: "none"`
 (or the corresponding agent-specific override). The engine's keyword-only schema
-requires no pgvector extension and exposes no vector capability. The memory owner's
-PostgreSQL integration is pending; this setting does not yet enable memory indexing. Disabling only the native vector
-index is not a PostgreSQL JavaScript-scan fallback. An embedding-provider failure
+requires no pgvector extension and exposes no vector capability. Memory status
+reports `provider: "none"` and `searchMode: "fts-only"`. Disabling only the native
+vector index is not a PostgreSQL JavaScript-scan fallback. An embedding-provider failure
 does not silently authorize keyword-only PostgreSQL admission.
 
-The memory publication foundation admits its search definitions through the agent
+Memory admits its search definitions through the agent
 database owner. PostgreSQL rebuilds use connection-local temporary staging and
 publish canonical rows and their derived search projections in one writer
 transaction. SQLite retains its existing shadow-file publication. Memory search
-on PostgreSQL remains refused until its search and forget/status lifecycle is
-enabled together; this foundation does not change the support matrix above.
+uses these same admitted projections. Forgetting removes derived text and vector
+data in the source-row transaction; reset clears only derived memory data and
+retains the admitted search schema. Status uses admitted index facts without
+per-request schema probes. PostgreSQL storage diagnostics report memory relation
+sizes; WAL and reusable-file bytes are zero because those are server-owned,
+not local SQLite files.
 
-The internal memory search worker supports the admitted PostgreSQL projections
-for conformance testing. Vector queries filter model aliases, sources, and any
+The public memory search path uses the admitted PostgreSQL projections. Vector queries filter model aliases, sources, and any
 candidate IDs before exact cosine ordering and the result limit. Keyword queries
 use native full-text ranking, or literal contains predicates for the configured
 trigram tokenizer. Only bounded result payloads cross into JavaScript. Hybrid
@@ -294,8 +316,9 @@ merging keeps the existing default weights of 0.7 vector and 0.3 text; PostgreSQ
 text scores remain engine-local and are not calibrated to SQLite BM25. A
 keyword-only store needs no vector extension; requesting semantic search without
 an admitted vector capability raises `DATABASE_SEARCH_CAPABILITY_UNAVAILABLE`.
-This internal entry requires explicit test activation and does not enable public
-PostgreSQL memory search.
+The error names the missing extension and the installation SQL. Install it in
+the selected database, then reopen the store; use `provider: "none"` when only
+keyword search is wanted.
 
 Full text uses a named `simple` plus `unaccent` configuration, a stored generated
 `tsvector`, and GIN. Queries bind literal terms and compile conjunctions,
@@ -549,6 +572,25 @@ PostgreSQL into a fresh owned namespace and publishes its matched anchor; the
 migrated namespace remains available until recovery is confirmed. Changed state
 or uncertain custody prevents automatic restore and retains the captures for
 recovery. An update never silently ports a store or falls back to SQLite.
+
+Recovery generations include the live PostgreSQL catalog, exact rows, and sequence
+allocation state (`last_value` and `is_called`). The installed driver can fingerprint
+a candidate's newer schema without loading that schema's descriptor. Restore uses
+the captured version's descriptor and retains exact allocation state, including a
+sequence deliberately reset below retained row IDs. Maintenance checks the stable
+Gateway lease contract independently of the newer application schema.
+
+Update-run admission reads PostgreSQL through its existing schema connection and
+initializes only the update-history fragment; it does not copy the anchor as SQLite
+state or run candidate schema migrations before managed shutdown.
+
+Candidate Doctor state and agent schema migrations publish their before/after generations through
+the existing maintenance write receipt. PostgreSQL table and sequence locks retain
+native exclusion until the migration transaction commits; only that confirmed
+publication advances the expected generation. Independent writes before migration
+or after publication still prevent automatic rollback. Uncertain commit or custody
+outcomes keep the captures for recovery. SQLite update behavior and the update
+admission protocol are unchanged.
 
 Release packages declare supported engines in the optional
 `openclaw.databaseEngines` array in `package.json`, next to

@@ -1,6 +1,7 @@
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
+import { shouldIgnoreBoundThreadWebhookMessage } from "./message-handler.preflight-helpers.js";
 import * as preflightRuntime from "./message-handler.preflight.js";
-import * as processRuntime from "./message-handler.process.js";
+import { processDiscordMessage } from "./message-handler.process.js";
 
 installDiscordIngressTestRuntime();
 import { ComponentType, MessageReferenceType } from "discord-api-types/v10";
@@ -63,16 +64,15 @@ import {
 } from "./message-handler.preflight.test-helpers.js";
 
 vi.mock("openclaw/plugin-sdk/media-runtime", { spy: true });
+vi.mock("./message-handler.process.js", { spy: true });
 let preflightDiscordMessage: typeof import("./message-handler.preflight.js").preflightDiscordMessage;
-let shouldIgnoreBoundThreadWebhookMessage: typeof import("./message-handler.preflight.js").shouldIgnoreBoundThreadWebhookMessage;
 let defaultThreadBindings: import("./thread-bindings.js").ThreadBindingManager;
 let createNoopThreadBindingManager: typeof import("./thread-bindings.js").createNoopThreadBindingManager;
 let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
 let createDiscordMessageDispatcher: typeof import("./message-dispatcher.js").createDiscordMessageDispatcher;
 
 beforeAll(async () => {
-  ({ preflightDiscordMessage, shouldIgnoreBoundThreadWebhookMessage } =
-    await import("./message-handler.preflight.js"));
+  ({ preflightDiscordMessage } = await import("./message-handler.preflight.js"));
   ({ createThreadBindingManager, createNoopThreadBindingManager } =
     await import("./thread-bindings.js"));
   ({ createDiscordMessageDispatcher } = await import("./message-dispatcher.js"));
@@ -882,9 +882,7 @@ describe("preflightDiscordMessage", () => {
           return result;
         });
       onTestFinished(() => preflightSpy.mockRestore());
-      const processSpy = vi
-        .spyOn(processRuntime, "processDiscordMessage")
-        .mockImplementation(async () => {});
+      const processSpy = vi.mocked(processDiscordMessage).mockImplementation(async () => {});
       onTestFinished(() => processSpy.mockRestore());
       const dispatcher = createDiscordMessageDispatcher({
         ...createPreflightArgs({

@@ -74,7 +74,7 @@ const TOMBSTONE_INSERT_BATCH_SIZE = 128;
 
 /** The caller owns schema admission; preserve the supplied connection and write boundary. */
 export function recordMemorySessionTombstonesInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     agentId: string;
     sessionIds: readonly string[];

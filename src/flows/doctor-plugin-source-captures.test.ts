@@ -29,6 +29,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawnSync: ps,
 }));
+// mock-isolation: Native Darwin census must use the same synthetic PIDs as ps.
 vi.mock("../process/supervisor/darwin-bun-process-census.js", () => ({
   readDarwinBunProcessCensus: nativeCensus,
 }));

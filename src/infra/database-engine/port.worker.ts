@@ -228,9 +228,10 @@ export async function readDatabasePortAllocations(
           qualified(endpoint, table.name),
           identity.column,
         ]);
+        // Matched backups retain resets and uncalled sequences, even below existing row IDs.
         const row = (
           await endpoint.db.query(
-            `SELECT greatest(last_value, coalesce(retained, last_value))::text AS value, is_called OR coalesce(retained >= last_value, false) AS called FROM ${sequence.rows[0].name} CROSS JOIN (SELECT max(${quote(identity.column)}) AS retained FROM ${qualified(endpoint, table.name)}) m`,
+            `SELECT last_value::text AS value, is_called AS called FROM ${sequence.rows[0].name}`,
           )
         ).rows[0];
         result[key] = { value: row.value, called: row.called };
@@ -256,7 +257,7 @@ export async function readDatabasePortAllocations(
   return result;
 }
 
-/** Plain INTEGER PRIMARY KEY allocation follows retained rows on SQLite, not PG sequences. */
+/** SQLite follows retained rows; AUTOINCREMENT also retains a called sequence high-watermark. */
 export function sqlitePortAllocations(
   descriptor: PortDescriptor,
   physical: PortVerification["allocations"],
@@ -265,8 +266,12 @@ export function sqlitePortAllocations(
   const expected = { ...source };
   for (const table of copiedTables(descriptor)) {
     for (const identity of table.identities) {
-      if (!identity.autoIncrement) {
-        const key = `${table.name}.${identity.column}`;
+      const key = `${table.name}.${identity.column}`;
+      if (
+        !identity.autoIncrement ||
+        !source[key]!.called ||
+        BigInt(physical[key]!.value) > BigInt(source[key]!.value)
+      ) {
         expected[key] = physical[key]!;
       }
     }

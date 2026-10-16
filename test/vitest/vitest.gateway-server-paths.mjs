@@ -15,6 +15,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/agent-turn/agent-run-execution-phase.owner.test.ts",
   "src/gateway/agent-turn/agent-run-media.test.ts",
   "src/gateway/agent-turn/agent-run-settle-continuation.native.test.ts",
+  "src/gateway/agent-turn/agent-run-user-turn.native.test.ts",
   "src/gateway/agent-turn/agent-session-preparation.worker.test.ts",
   "src/gateway/approval-fixture.test.ts",
   "src/gateway/auth-token-store-ref.test.ts",

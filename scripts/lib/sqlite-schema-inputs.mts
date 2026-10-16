@@ -6,6 +6,7 @@ import {
   MEMORY_INLINE_RECALL_COLUMNS,
 } from "../../packages/memory-host-sdk/src/host/memory-schema-base.js";
 import { DAEMON_RUNTIME_PIN_SCHEMA_SQL } from "../../src/daemon/runtime-pin-schema.js";
+import { CLIENT_CREDENTIAL_SCHEMA_SQL } from "../../src/infra/client-credential-schema.js";
 import { extractSqliteTableSchema } from "../../src/infra/sqlite-schema-sql.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../src/state/openclaw-agent-db-contract.js";
 import {
@@ -49,6 +50,7 @@ export function listSqliteSchemaInputs(): SqliteSchemaInput[] {
   add("state", "state", OPENCLAW_STATE_SCHEMA_SQL);
   add("agent", "agent", OPENCLAW_AGENT_SCHEMA_SQL);
   add("daemon-runtime-pins-v1", "daemon", DAEMON_RUNTIME_PIN_SCHEMA_SQL);
+  add("client-credentials-v1", "client", CLIENT_CREDENTIAL_SCHEMA_SQL);
 
   for (const includeEmbeddingCache of [false, true]) {
     add(

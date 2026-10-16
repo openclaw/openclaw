@@ -118,9 +118,11 @@ const bootLifecycle = vi.hoisted(() => ({
         recovered: false,
       },
   ),
-  record: vi.fn(
-    (_env?: NodeJS.ProcessEnv, _nowMs?: number, _reason?: string): string | undefined => "boot-id",
-  ),
+  nextBootId: vi.fn((): string | undefined => "boot-id"),
+  begin: vi.fn(async (env?: NodeJS.ProcessEnv, nowMs?: number) => ({
+    id: bootLifecycle.nextBootId(),
+    decision: bootLifecycle.inspect(env, nowMs),
+  })),
   recover: vi.fn(
     async (
       _bootId?: string,
@@ -325,13 +327,10 @@ vi.mock("../../logging/diagnostic-stability-bundle.js", () => ({
 vi.mock("../../infra/gateway-boot-lifecycle.js", () => ({
   GATEWAY_CRASH_LOOP_BREAKER_REASON: "gateway.crash_loop_breaker",
   formatGatewayCrashLoopManualChannelStartHint: () => bootLifecycle.manualChannelStartHint,
-  GATEWAY_CRASH_LOOP_RECOVERED_REASON: "gateway.crash_loop_recovered",
-  inspectGatewayCrashLoopBreaker: (env?: NodeJS.ProcessEnv, nowMs?: number) =>
-    bootLifecycle.inspect(env, nowMs),
+  beginGatewayBootLifecycle: (env?: NodeJS.ProcessEnv, nowMs?: number) =>
+    bootLifecycle.begin(env, nowMs),
   inspectGatewayCrashLoopBreakerAsync: async (env?: NodeJS.ProcessEnv, nowMs?: number) =>
     bootLifecycle.inspect(env, nowMs),
-  recordGatewayBootStart: (env?: NodeJS.ProcessEnv, nowMs?: number, reason?: string) =>
-    bootLifecycle.record(env, nowMs, reason),
   recordGatewayCrashLoopRecovery: (
     bootId?: string,
     env?: NodeJS.ProcessEnv,
@@ -1122,7 +1121,7 @@ describe("gateway run option collisions", () => {
 
   it("refreshes config and crash-loop state for each boot iteration", async () => {
     let firstBootRecovery: GatewayServerOptions["tryRecoverChannelAutostartSuppression"];
-    bootLifecycle.record.mockReturnValueOnce("boot-1").mockReturnValueOnce("boot-2");
+    bootLifecycle.nextBootId.mockReturnValueOnce("boot-1").mockReturnValueOnce("boot-2");
     runGatewayLoop.mockImplementationOnce(async ({ beginBoot, start }: GatewayLoopParams) => {
       await beginBoot?.(1000);
       await start({ startupStartedAt: 1000 });
@@ -1151,10 +1150,7 @@ describe("gateway run option collisions", () => {
 
     expect(bootLifecycle.inspect).toHaveBeenCalledTimes(2);
     expect(bootLifecycle.inspect.mock.calls.map((call) => call[1])).toEqual([1000, 2000]);
-    expect(bootLifecycle.record.mock.calls.map((call) => call[2])).toEqual([
-      "gateway.crash_loop_breaker",
-      "gateway.crash_loop_recovered",
-    ]);
+    expect(bootLifecycle.begin.mock.calls.map((call) => call[1])).toEqual([1000, 2000]);
     expect(writeDiagnosticStabilityBundleForFailureSync).toHaveBeenCalledTimes(1);
     expect(gatewayStartOptions(0).channelAutostartSuppression).toMatchObject({
       reason: "crash-loop-breaker",
@@ -1194,7 +1190,7 @@ describe("gateway run option collisions", () => {
     async ({ supervised, transition, recorded, attempts, cleanupFailure }) => {
       triageAfterFailure.mockClear();
       detectRespawnSupervisor.mockReturnValue(supervised ? "systemd" : null);
-      bootLifecycle.record.mockReturnValueOnce(recorded ? "boot-id" : undefined);
+      bootLifecycle.nextBootId.mockReturnValueOnce(recorded ? "boot-id" : undefined);
       bootLifecycle.decisions.push({
         tripped: transition,
         uncleanBoots: transition ? 3 : 0,
@@ -1305,7 +1301,7 @@ describe("gateway run option collisions", () => {
   });
 
   it("exits 78 and parks launchd for a repairable shared-state schema", async () => {
-    bootLifecycle.record.mockReturnValueOnce(undefined);
+    bootLifecycle.nextBootId.mockReturnValueOnce(undefined);
     runGatewayLoop.mockImplementationOnce(async ({ start, completeBoot }: GatewayLoopParams) => {
       try {
         await start();

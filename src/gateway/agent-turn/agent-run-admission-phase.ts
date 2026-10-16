@@ -108,14 +108,6 @@ export async function prepareAgentRunDispatch(
     });
     return undefined;
   }
-  if (
-    params.abortForLifecycleRotation({
-      sessionKey: params.resolvedSessionKey,
-      agentId: params.activeSessionAgentId,
-    })
-  ) {
-    return undefined;
-  }
   if (params.restoredCronContinuationIdentity && !params.restoredCronContinuation) {
     params.io.emitAcceptance([
       false,
@@ -503,12 +495,10 @@ export async function prepareAgentRunDispatch(
     assertInputAdmissionCurrent?.();
     assertRequesterCurrent?.();
     followupCompletion?.assertCurrent();
-    if (followupSuccessor) {
-      if (!resumedTaskAdopted) {
-        followupSuccessor.assertCurrent();
-      } else if (!followupSuccessor.owner.ownsExecution(params.runId)) {
-        throw new Error("Follow-up input no longer owns its admitted execution.");
-      }
+    if (!resumedTaskAdopted) {
+      followupSuccessor?.assertCurrent();
+    } else if (followupSuccessor && !followupSuccessor.owner.ownsExecution(params.runId)) {
+      throw new Error("Follow-up input no longer owns its admitted execution.");
     }
     if (parentResume && resumedTaskAdopted && !terminal) {
       assertParentSubagentResumeSuccessorCurrent(parentResume, params.runId);
@@ -537,6 +527,7 @@ export async function prepareAgentRunDispatch(
       getAbortStopReason: () => activeRunAbort.entry?.abortStopReason ?? "rpc",
       deferTimeoutCompletion: activeRunAbort.deferTimeoutCompletion,
       admittedSessionId: params.getAdmittedSessionId(),
+      freshChildStorePath: params.freshChild ? lifecycleStorePath : undefined,
       resolvedThreadId,
     });
     if (userTurn.recorder) {

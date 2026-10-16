@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { readAssistantThinkingAppend } from "@openclaw/ai/internal/shared";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { InlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import {
   buildCodeSpanIndex,
@@ -405,9 +404,6 @@ export function createStreamRendering({
           messagingToolSentTextsNormalized,
         ));
     if (isMessagingDuplicate) {
-      log.debug(
-        `Skipping block reply - already sent via messaging tool: ${truncateUtf16Safe(chunk, 50)}...`,
-      );
       if (prefixReplayCandidate) {
         markBlockReplyTextHandled();
       }

@@ -70,11 +70,14 @@ describe("gateway startup trace", () => {
         const recovery = trace.measure("sidecars.subagent-recovery", async () => {
           await step("sidecars.recovery-readers", 100);
           await trace.measure("sidecars.delivery-recovery", async () => {
-            now += 50;
+            await step("sidecars.delivery-discovery", 10);
+            await step("sidecars.delivery-entries", 20);
+            await step("sidecars.delivery-history", 30);
+            await step("sidecars.delivery-replay", 15);
+            await step("sidecars.delivery-replay", 25);
             await step("sidecars.delivery-notices", 200);
             await step("sidecars.delivery-notices", 300);
             await step("sidecars.delivery-retry-wait", 1_000);
-            now += 50;
           });
           await step("sidecars.exec-recovery", 20);
           await step("sidecars.subagent-load", 30);
@@ -93,7 +96,7 @@ describe("gateway startup trace", () => {
         const messages = info.mock.calls.map(([message]) => message);
         const summary = messages.filter((message) => message.includes("readersMs="));
         expect(summary).toEqual([
-          `startup ${enabled === "1" ? "trace" : "phase"}: sidecars.subagent-recovery 1790.0ms total=1790.0ms ${enabled === "1" ? "eventLoopMax=0.0ms " : ""}readersMs=100.0 deliveryMs=1600.0 deliveryNoticesMs=500.0 retryWaitMs=1000.0 execMs=20.0 registryLoadMs=30.0 registryActivationMs=40.0 outcome=${fail ? "failure" : "success"}`,
+          `startup ${enabled === "1" ? "trace" : "phase"}: sidecars.subagent-recovery 1790.0ms total=1790.0ms ${enabled === "1" ? "eventLoopMax=0.0ms " : ""}readersMs=100.0 deliveryMs=1600.0 deliveryDiscoveryMs=10.0 deliveryEntriesMs=20.0 deliveryHistoryMs=30.0 deliveryReplayMs=40.0 deliveryNoticesMs=500.0 retryWaitMs=1000.0 execMs=20.0 registryLoadMs=30.0 registryActivationMs=40.0 outcome=${fail ? "failure" : "success"}`,
         ]);
         if (enabled === "0") {
           expect(messages).toHaveLength(2);
@@ -103,7 +106,7 @@ describe("gateway startup trace", () => {
         info.mockClear();
         await trace.measure("sidecars.subagent-recovery", () => {});
         expect(info.mock.calls.at(-1)?.[0]).toContain(
-          "readersMs=0.0 deliveryMs=0.0 deliveryNoticesMs=0.0 retryWaitMs=0.0 execMs=0.0 registryLoadMs=0.0 registryActivationMs=0.0 outcome=success",
+          "readersMs=0.0 deliveryMs=0.0 deliveryDiscoveryMs=0.0 deliveryEntriesMs=0.0 deliveryHistoryMs=0.0 deliveryReplayMs=0.0 deliveryNoticesMs=0.0 retryWaitMs=0.0 execMs=0.0 registryLoadMs=0.0 registryActivationMs=0.0 outcome=success",
         );
       } finally {
         trace.close();

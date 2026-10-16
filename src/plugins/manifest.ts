@@ -1,6 +1,5 @@
 /** Loads and normalizes OpenClaw plugin manifests, including contracts and config schemas. */
 import path from "node:path";
-import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { validatePluginUiCapabilities } from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
@@ -12,6 +11,7 @@ import { coerceDoctorSessionRouteStateOwners } from "./doctor-session-route-stat
 import * as capabilityNormalizers from "./manifest-capability-normalizers.js";
 import { normalizeManifestCommandAliases } from "./manifest-command-aliases.js";
 import { normalizeConfigGroups } from "./manifest-config-groups.js";
+import { normalizeManifestModelCatalog } from "./manifest-decision-catalog.js";
 import * as modelProviderNormalizers from "./manifest-model-provider-normalizers.js";
 import { normalizeManifestPlatforms } from "./manifest-platforms.js";
 import * as setupNormalizers from "./manifest-setup-normalizers.js";
@@ -250,10 +250,14 @@ export function loadPluginManifest(
         ...(stateMigrations !== undefined ? { stateMigrations } : {}),
       } as PluginManifestDoctorContract)
     : undefined;
-  let modelCatalog: ReturnType<typeof normalizeModelCatalog>;
+  let modelCatalog: ReturnType<typeof normalizeManifestModelCatalog>;
   try {
-    modelCatalog = normalizeModelCatalog(raw.modelCatalog, {
-      ownedProviders: new Set([...providers, ...cliBackends]),
+    modelCatalog = normalizeManifestModelCatalog({
+      modelCatalog: raw.modelCatalog,
+      decisionModels: raw.decisionModels,
+      providers,
+      cliBackends,
+      decisionProviders: contracts?.decisionProviders,
     });
   } catch {
     return cacheResult({
