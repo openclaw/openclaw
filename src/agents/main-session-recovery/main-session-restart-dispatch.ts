@@ -15,7 +15,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import type { AgentRunRequest } from "../../gateway/server-methods/agent-request-types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { CommandLane } from "../../process/lanes.js";
 import { MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL } from "../../sessions/input-provenance.js";
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import { getOwedHarnessCompletionTask } from "../agent-harness-completion-recovery.js";
@@ -449,7 +448,7 @@ async function resumeMainSessionWithinAdmission(
       deliver:
         Boolean(deliveryContext) &&
         params.entry.restartRecoverySourceReplyDeliveryMode !== "message_tool_only",
-      lane: CommandLane.Background,
+      lane: params.recoveryAdmission.lane,
       ...(params.entry.restartRecoverySourceReplyDeliveryMode
         ? { sourceReplyDeliveryMode: params.entry.restartRecoverySourceReplyDeliveryMode }
         : {}),

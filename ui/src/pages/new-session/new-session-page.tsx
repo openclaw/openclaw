@@ -1,4 +1,4 @@
-import { createEffect, createMemo, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, onCleanup, onSettled, Show } from "solid-js";
 import type { SolidRouteProps } from "../../app-route-types.ts";
 import { ImageLightbox } from "../../components/image-lightbox.tsx";
 import { SessionBackgroundView } from "../../components/session-background-view.tsx";
@@ -188,21 +188,17 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
   const page = pageState.read;
   const revision = createMemo(() => ({ value: pageState.revision() }));
   owner.titlePreparation = createNewSessionTitle(() => ({
-    context: page().context,
-    data: page().data,
-    place: page().place,
-    submission: page().submission,
-    dictating: page().dictation.active,
+    context: owner.context,
+    data: owner.data,
+    place: owner.place,
+    submission: owner.submission,
+    dictating: owner.dictation.active,
   }));
   // Both draft presentations share one preparation per revision, not one per binding.
   const options = createMemo(() => page().composerOptions());
-  // Gateway facts must be bound before the first effect adopts draft defaults.
+  // Bind gateway facts before publishing the first reconciled draft snapshot.
   owner.connect();
   onCleanup(() => owner.disconnect());
-  createEffect(revision, () => {
-    owner.synchronize();
-    owner.updated();
-  });
   onSettled(() => {
     const context = owner.context;
     const notify = owner.changed;
@@ -217,7 +213,7 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
           context.config,
         ].map((source) => source.subscribe(notify))
       : [];
-    const document = owner.ownerDocument;
+    const document = host.ownerDocument;
     const window = document.defaultView!;
     const dismiss = installChatComposerPickerDismissal(document);
     const keydown = (event: KeyboardEvent) => focusChatComposerFromPrintableKeydown(host, event);

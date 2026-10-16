@@ -29,6 +29,11 @@ describe("SQLite worker state context across module copies", () => {
     const captured = first.captureSqliteWorkerStateContext(firstContext);
     expect(captured.databaseEngineInput).toBe(input);
     expect(first.captureSqliteWorkerStateContext(captured).databaseEngineInput).toBe(input);
+    const sqlite = first.captureSqliteWorkerStateContext({
+      ...firstContext,
+      databaseEngineInput: undefined,
+    });
+    expect(first.captureSqliteWorkerStateContext(sqlite).databaseEngineInput).toBeUndefined();
   });
 
   it("shares the current actor facts and restores nested scopes", async () => {

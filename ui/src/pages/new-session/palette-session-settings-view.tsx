@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, onSettled } from "solid-js";
+import { createMemo, createSignal, For, onSettled } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/tooltip.ts";
 import { KeyboardShortcut, ShortcutText } from "../../components/solid/kbd.tsx";
@@ -43,7 +43,7 @@ export function PaletteSessionSettingsView(properties: {
     (previous = false) => !properties.options.draft.place.requiredPlacement && previous,
   );
   const [query, setQuery] = createSignal("");
-  const [focusTarget, setFocusTarget] = createSignal<FocusTarget>();
+  let focusTarget: FocusTarget | undefined;
   const focusTargets: Partial<Record<FocusTarget, HTMLElement>> = {};
   let trigger!: HTMLButtonElement;
   let popover!: PopoverHandle;
@@ -51,13 +51,13 @@ export function PaletteSessionSettingsView(properties: {
     setOpen(false);
     setPlaces(false);
     setQuery("");
-    setFocusTarget(undefined);
+    focusTarget = undefined;
   };
   const showPlaces = (value: boolean, pointer = false) => {
     setPlaces(value);
     setQuery("");
     // Pointer entry focuses Back; keyboard entry goes straight to search.
-    setFocusTarget(value ? (pointer ? "back" : "search") : "workspace");
+    focusTarget = value ? (pointer ? "back" : "search") : "workspace";
   };
   const view = createMemo(() => resolvePaletteSessionSettings(properties.options, query()));
   const selectMachine = (
@@ -81,11 +81,6 @@ export function PaletteSessionSettingsView(properties: {
     properties.options.onChange();
     showPlaces(false);
   };
-  createEffect(focusTarget, (target) => {
-    if (target) {
-      focusTargets[target]?.focus({ preventScroll: true });
-    }
-  });
   onSettled(() => properties.registerClose(close));
   const keydown = nativeListener("keydown", (event) => {
     if (event.defaultPrevented || event.isComposing || event.keyCode === 229) {
@@ -136,6 +131,11 @@ export function PaletteSessionSettingsView(properties: {
   });
   const retry = nativeListener("click", () => properties.options.preferences.retry());
   function SettingsPlaces() {
+    onSettled(() => {
+      if (focusTarget) {
+        focusTargets[focusTarget]?.focus({ preventScroll: true });
+      }
+    });
     const back = nativeListener("click", () => showPlaces(false));
     const connect = nativeListener("click", () => properties.options.onConnectMachine());
     return (
@@ -267,6 +267,11 @@ export function PaletteSessionSettingsView(properties: {
   }
 
   function SettingsSummary() {
+    onSettled(() => {
+      if (focusTarget === "workspace") {
+        focusTargets.workspace?.focus({ preventScroll: true });
+      }
+    });
     const place = () => properties.options.draft.place;
     const workspace = nativeListener("click", (event) => showPlaces(true, event.detail > 0));
     const worktree = nativeListener("click", () => {

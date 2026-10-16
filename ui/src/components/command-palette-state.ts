@@ -11,8 +11,6 @@ import { ModelCatalogReader } from "../lib/model-catalog-reader.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { resolveUiSelectedGlobalAgentId } from "../lib/sessions/session-key.ts";
 import { searchVisibleSessionTranscripts } from "../lib/sessions/transcript-search.ts";
-import { SubscriptionsController } from "../lib/subscriptions-controller.ts";
-import type { SolidControllerHost } from "../lit/solid-controller-host.ts";
 import {
   HumanMentionMenu,
   type HumanMentionMenuHost,
@@ -62,18 +60,39 @@ export type CommandPaletteProperties = {
   desktopAvailable: boolean;
   custodianAvailable: boolean;
 };
-export class PaletteController {
-  private get context() {
-    return this.readContext();
+/** Search and draft handoffs keep same-turn reads while Solid owns the presentation. */
+export class CommandPaletteState {
+  private readonly listeners = new Set<() => void>();
+  private publicationPending = false;
+  private connected = false;
+  readonly changed = () => {
+    if (!this.connected || this.publicationPending) {
+      return;
+    }
+    this.publicationPending = true;
+    queueMicrotask(() => {
+      if (this.connected) {
+        this.draft.synchronize();
+        this.draft.settled();
+      }
+      this.publicationPending = false;
+    });
+    for (const listener of this.listeners) {
+      listener();
+    }
+  };
+  subscribe(listener: () => void) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
   }
-  private open = false;
+  open = false;
   private pluginIconUrls: Record<string, string> = {};
   private readonly pluginIcons = new PluginIconController({
     getFetchContext: () => pluginIconFetchContext(this.context!),
     isConnected: () => this.element.isConnected && this.open && this.gateway.connected,
     onUrlsChange: (urls) => {
       this.pluginIconUrls = urls;
-      this.publish();
+      this.changed();
     },
   });
   private initialInput: CommandPaletteOpenInput | undefined;
@@ -84,27 +103,23 @@ export class PaletteController {
   private composing = false;
   private readonly mentionHost: HumanMentionMenuHost = {
     paneId: "command-palette",
-    getDraft: () => this.query,
+    getDraft: () => this.draft.message,
     getMentions: () => this.draft.mentions,
     getTextarea: () => this.inputElement ?? null,
     commitDraft: (value, mentions) => this.draft.setMessage(value, mentions),
   };
-  private readonly requestMentionUpdate = () => {
+  private readonly notifyMentionChange = () => {
     if (this.mentionMenu.open || this.draft.mentions.length > 0) {
       this.clearSessionSearch();
       this.clearCatalogSearch();
     } else {
-      this.scheduleSessionSearch(this.query);
+      this.scheduleSessionSearch(this.draft.message);
     }
-    this.publish();
+    this.changed();
   };
   private presentationScope: ReturnType<typeof gatewayPresentationScope> | undefined;
   private filter: PaletteFilter = "all";
   readonly draft: PaletteSessionDraft;
-
-  private get query(): string {
-    return this.draft.message;
-  }
 
   private searchQuery = "";
   private promptMode = false;
@@ -117,7 +132,6 @@ export class PaletteController {
   private archivedTranscriptsExcluded = 0;
   private sessionSearchIndexing = false;
 
-  private readonly subscriptions: SubscriptionsController;
   private sessionSearchTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private sessionSearchId = 0;
   private catalogLoad?: {
@@ -126,22 +140,22 @@ export class PaletteController {
     promise: Promise<void>;
     loadedAt?: number;
   };
-  private readonly modelReader = new ModelCatalogReader(() => this.publish());
+  private readonly modelReader = new ModelCatalogReader(this.changed);
   private readonly gateway: GatewayPageBinding;
 
   constructor(
     private readonly element: HTMLElement,
     private readonly props: CommandPaletteProperties,
-    private readonly readContext: () => ApplicationContext,
-    legacyHost: SolidControllerHost,
-    private readonly publish: () => void,
+    private readonly context: ApplicationContext,
+    rendered: () => Promise<unknown>,
+    private readonly onDraftInitialized: () => void,
   ) {
     this.draft = new PaletteSessionDraft(
       element,
       () => ({ context: this.context, open: this.open }),
       {
-        changed: publish,
-        updateComplete: () => legacyHost.updateComplete,
+        changed: this.changed,
+        updateComplete: rendered,
         onClose: () => this.closePalette(),
         onMessageChange: (query) => {
           const text = query.trim();
@@ -158,58 +172,47 @@ export class PaletteController {
         },
       },
     );
-    this.subscriptions = new SubscriptionsController(legacyHost);
-    this.gateway = new GatewayPageBinding(this.publish, {
+    this.gateway = new GatewayPageBinding(this.changed, {
       getGateway: () => this.context?.gateway,
-      invalidateRequests: () => {
-        this.clearSessionSearch();
-        this.clearCatalogSearch();
-        this.scheduleSessionSearch(this.query);
-      },
+      invalidateRequests: this.handleAgentSelection,
       onSnapshot: () => this.synchronizePresentationScope(),
-      ensureInitialData: () => this.scheduleSessionSearch(this.query),
+      ensureInitialData: () => this.scheduleSessionSearch(this.draft.message),
     });
-    this.subscriptions.effect(
-      () => this.context?.gateway,
-      (gateway) =>
-        gateway.subscribeEvents((event) => {
-          const invalidation = modelCatalogEventInvalidation(event);
-          // Palette search includes skills even when the model cache remains current.
-          if (
-            this.context?.gateway === gateway &&
-            (event.event === "cron" || event.event === "chat.metadata.changed" || invalidation)
-          ) {
-            if (invalidation === "clear") {
-              this.catalogLoad = undefined;
-              this.catalogItems = [];
-            }
-            if (this.open) {
-              void this.ensureCatalogItems(true);
-            } else {
-              this.clearCatalogSearch();
-            }
-          }
-        }),
-    );
-    this.subscriptions.watchStore(
-      () => this.context?.agentSelection,
-      () => {
-        this.clearSessionSearch();
-        this.clearCatalogSearch();
-        this.scheduleSessionSearch(this.query);
-      },
-    );
   }
 
+  readonly handleGatewayEvent: Parameters<ApplicationContext["gateway"]["subscribeEvents"]>[0] = (
+    event,
+  ) => {
+    const invalidation = modelCatalogEventInvalidation(event);
+    // Palette search includes skills even when the model cache remains current.
+    if (event.event === "cron" || event.event === "chat.metadata.changed" || invalidation) {
+      if (invalidation === "clear") {
+        this.catalogLoad = undefined;
+        this.catalogItems = [];
+      }
+      if (this.open) {
+        void this.ensureCatalogItems(true);
+      } else {
+        this.clearCatalogSearch();
+      }
+    }
+  };
+
+  readonly handleAgentSelection = () => {
+    this.clearSessionSearch();
+    this.clearCatalogSearch();
+    this.scheduleSessionSearch(this.draft.message);
+  };
+
   connect() {
+    this.connected = true;
     this.draft.connect();
     this.gateway.connect();
-    document.addEventListener("keydown", this.handleGlobalKeydown);
-    this.publish();
+    this.changed();
   }
 
   disconnect() {
-    document.removeEventListener("keydown", this.handleGlobalKeydown);
+    this.connected = false;
     this.initialInput = undefined;
     this.takeInitialInput = undefined;
     this.inputElement?.removeEventListener("focus", this.adoptInitialInput);
@@ -231,6 +234,7 @@ export class PaletteController {
     this.open = true;
     this.mentionMenu.close();
     this.draft.open();
+    this.onDraftInitialized();
     this.composing = false;
     this.mentionInput = undefined;
     this.takeInitialInput = typeof input === "function" ? input : undefined;
@@ -238,9 +242,9 @@ export class PaletteController {
       typeof input === "function"
         ? undefined
         : (input ?? {
-            value: this.query,
-            selectionStart: this.query.length,
-            selectionEnd: this.query.length,
+            value: this.draft.message,
+            selectionStart: this.draft.message.length,
+            selectionEnd: this.draft.message.length,
             selectionDirection: "none",
             returnFocus,
           });
@@ -249,8 +253,8 @@ export class PaletteController {
     }
     this.activeId = null;
     this.filter = "all";
-    this.scheduleSessionSearch(this.query);
-    this.publish();
+    this.scheduleSessionSearch(this.draft.message);
+    this.changed();
   }
 
   private synchronizePresentationScope() {
@@ -266,10 +270,6 @@ export class PaletteController {
       this.clearCatalogSearch();
     }
     this.presentationScope = scope;
-  }
-
-  get isOpen(): boolean {
-    return this.open;
   }
 
   readonly togglePalette = () => {
@@ -291,7 +291,7 @@ export class PaletteController {
     this.open = false;
     this.draft.close();
     this.clearSessionSearch();
-    this.publish();
+    this.changed();
   }
 
   private readonly handleInputRef = (
@@ -304,6 +304,8 @@ export class PaletteController {
     this.inputElement?.removeEventListener("focus", this.adoptInitialInput);
     this.inputElement = element instanceof HTMLTextAreaElement ? element : undefined;
     this.inputElement?.addEventListener("focus", this.adoptInitialInput);
+    // The dialog may have focused the field before its committed ref arrived.
+    this.adoptInitialInput();
   };
 
   private readonly adoptInitialInput = () => {
@@ -343,7 +345,7 @@ export class PaletteController {
       input.value.slice(0, input.selectionStart).lastIndexOf("@") === input.mentionTrigger
     ) {
       this.mentionMenu.syncDirectory(this.draft.mentionDirectory);
-      this.mentionMenu.update(element, this.requestMentionUpdate, "trigger");
+      this.mentionMenu.update(element, this.notifyMentionChange, "trigger");
     }
     if (input.imageFiles?.length) {
       this.draft.adoptImageFiles(input.imageFiles, input.submitRequested);
@@ -352,33 +354,13 @@ export class PaletteController {
     }
   };
 
-  updated() {
-    // ModalDialog owns autofocus. Focusing its not-yet-open slotted field here
-    // can retire the loader before the browser has admitted the new modal.
-    this.adoptInitialInput();
-    const iconIds = new Set(
-      this.catalogItems.flatMap((item) =>
-        item.hasPluginIcon && item.pluginId ? [item.pluginId] : [],
-      ),
-    );
-    this.pluginIcons.reconcileKeys(iconIds);
-    for (const element of this.element.querySelectorAll<HTMLElement>(
-      ".cmd-palette__plugin-icon[data-plugin-icon-id]",
-    )) {
-      const pluginId = element.dataset.pluginIconId;
-      if (pluginId && iconIds.has(pluginId)) {
-        this.pluginIcons.load(pluginId);
-      }
-    }
-  }
-
   private invalidateSessionSearch() {
     if (this.sessionSearchTimer !== null) {
       globalThis.clearTimeout(this.sessionSearchTimer);
       this.sessionSearchTimer = null;
     }
     this.sessionSearchId += 1;
-    this.publish();
+    this.changed();
   }
 
   private clearSessionSearch() {
@@ -407,9 +389,7 @@ export class PaletteController {
       this.promptMode ||
       this.mentionMenu.open ||
       this.draft.mentions.length > 0 ||
-      !context ||
       !this.gateway.connected ||
-      !gateway ||
       !client
     ) {
       return Promise.resolve();
@@ -442,13 +422,16 @@ export class PaletteController {
       if (
         this.catalogLoad?.promise === promise &&
         gatewayPresentationScope(gateway) === scope &&
-        this.context?.gateway === gateway &&
-        this.context?.agentSelection === context.agentSelection &&
         gateway.snapshot.client === client
       ) {
         this.catalogItems = items;
+        this.pluginIcons.reconcileKeys(
+          new Set(
+            items.flatMap((item) => (item.hasPluginIcon && item.pluginId ? [item.pluginId] : [])),
+          ),
+        );
         this.catalogLoad = { ...this.catalogLoad, loadedAt: Date.now() };
-        this.publish();
+        this.changed();
       }
     });
     this.catalogLoad = { client, agentId, promise };
@@ -503,10 +486,8 @@ export class PaletteController {
   }
 
   private async searchSessions(search: string) {
-    const context = this.context;
-    const sessions = context?.sessions;
-    const gateway = context?.gateway;
-    const client = gateway?.snapshot.client;
+    const { sessions, gateway } = this.context;
+    const client = gateway.snapshot.client;
     if (!sessions || gateway?.snapshot.phase !== "connected" || !client) {
       this.sessionSearchPending = false;
       return;
@@ -517,9 +498,6 @@ export class PaletteController {
       requestId === this.sessionSearchId &&
       gatewayPresentationScope(gateway) === scope &&
       this.open &&
-      this.context?.sessions === sessions &&
-      this.context?.gateway === gateway &&
-      this.context?.agentSelection === context?.agentSelection &&
       gateway.snapshot.client === client &&
       gateway.snapshot.phase === "connected";
     const transcriptSearch = searchVisibleSessionTranscripts({
@@ -567,13 +545,20 @@ export class PaletteController {
     } finally {
       if (isCurrent()) {
         this.sessionSearchPending = false;
-        this.publish();
+        this.changed();
       }
     }
   }
 
-  private readonly handleGlobalKeydown = (event: KeyboardEvent) => {
-    if (event.defaultPrevented || this.composing || event.isComposing || event.keyCode === 229) {
+  readonly handleGlobalKeydown = (event: Event) => {
+    if (
+      !(event instanceof KeyboardEvent) ||
+      !this.element.isConnected ||
+      event.defaultPrevented ||
+      this.composing ||
+      event.isComposing ||
+      event.keyCode === 229
+    ) {
       return;
     }
     if (isCommandPaletteShortcut(event)) {
@@ -596,12 +581,12 @@ export class PaletteController {
       event?.inputType === "insertFromDrop"
     ) {
       this.mentionMenu.close();
-      this.requestMentionUpdate();
+      this.notifyMentionChange();
       return;
     }
     this.mentionMenu.update(
       input,
-      this.requestMentionUpdate,
+      this.notifyMentionChange,
       !event
         ? "selection"
         : event.inputType === "insertText" && event.data?.includes("@") === true
@@ -616,14 +601,14 @@ export class PaletteController {
     return {
       basePath: this.context?.basePath ?? "",
       open: this.open,
-      query: this.query,
+      query: this.draft.message,
       searchQuery: this.searchQuery,
-      searchDebouncing: this.composing || this.query !== this.searchQuery,
-      onFlushSearch: () => this.scheduleSessionSearch(this.query, true),
+      searchDebouncing: this.composing || this.draft.message !== this.searchQuery,
+      onFlushSearch: () => this.scheduleSessionSearch(this.draft.message, true),
       promptMode: this.promptMode,
       mentionMenu: this.mentionMenu,
       mentionHost: this.mentionHost,
-      requestUpdate: this.requestMentionUpdate,
+      onMentionChange: this.notifyMentionChange,
       composing: this.composing,
       onBeforeInput: (event) => {
         const input = this.inputElement;
@@ -641,19 +626,19 @@ export class PaletteController {
         this.composing = true;
         this.invalidateSessionSearch();
         this.mentionMenu.close();
-        this.publish();
+        this.changed();
       },
       onCompositionEnd: () => {
         this.composing = false;
         this.updateMentionMenu();
-        this.scheduleSessionSearch(this.query);
+        this.scheduleSessionSearch(this.draft.message);
       },
       activeId: this.activeId,
       filter: this.filter,
       onFilterChange: (filter) => {
         this.filter = filter;
         this.activeId = null;
-        this.publish();
+        this.changed();
       },
       agents: this.context?.agents.state.agentsList?.agents ?? [],
       agentIdentity: this.context?.agentIdentity,
@@ -687,20 +672,21 @@ export class PaletteController {
       onQueryChange: (query, event) => {
         this.draft.setMessage(
           query,
-          updateHumanMentions(this.query, query, this.draft.mentions, this.mentionInput),
+          updateHumanMentions(this.draft.message, query, this.draft.mentions, this.mentionInput),
         );
         this.mentionInput = undefined;
         this.updateMentionMenu(event);
       },
       onActiveIdChange: (id) => {
         this.activeId = id;
-        this.publish();
+        this.changed();
       },
       onNavigate: this.props.onNavigate,
       onSelectSession: this.props.onSelectSession,
       onSlashCommand: this.props.onSlashCommand,
       pluginIconUrls: this.pluginIconUrls,
       onPluginIconError: (pluginId) => this.pluginIcons.handleError(pluginId),
+      onPluginIconVisible: (pluginId) => this.pluginIcons.load(pluginId),
       onInputRef: this.handleInputRef,
       draft: this.draft,
     };

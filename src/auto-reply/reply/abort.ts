@@ -33,14 +33,14 @@ export function formatAbortReplyText(
   failedSubagents?: number,
 ): string {
   const failureSuffix =
-    typeof failedSubagents === "number" && failedSubagents > 0
+    failedSubagents !== undefined && failedSubagents > 0
       ? ` Cancellation was incomplete for ${failedSubagents} sub-agent${failedSubagents === 1 ? "" : "s"}. Retry /stop.`
       : "";
   const base =
     rejectionReason === "finalizing"
       ? "Agent reply is already finalizing and can no longer be aborted."
       : "⚙️ Agent was aborted.";
-  if (typeof stoppedSubagents !== "number" || stoppedSubagents <= 0) {
+  if (stoppedSubagents === undefined || stoppedSubagents <= 0) {
     return `${base}${failureSuffix}`;
   }
   const label = stoppedSubagents === 1 ? "sub-agent" : "sub-agents";

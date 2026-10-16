@@ -1,8 +1,13 @@
 import * as cryptoDigest from "@openclaw/normalization-core/node-crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
+import {
+  normalizeTranscriptJsonValue,
+  isOwnedTranscriptPayload,
+} from "../../config/sessions/transcript-json.js";
+import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type { Message, TextContent } from "../../llm/types.js";
-import { withEnv } from "../../test-utils/env.js";
+import { withEnv, withEnvAsync } from "../../test-utils/env.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { log } from "./logger.js";
@@ -25,8 +30,8 @@ describe("prompt cache history fingerprints", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it("keeps a two-turn tool loop append-only with bounded block hashing", () => {
-    withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
+  it("keeps a two-turn tool loop append-only with bounded block hashing", async () => {
+    await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, async () => {
       const sessionId = scopedKey("two-turn-loop");
       const source: AgentMessage[] = [
         { role: "user", content: [{ type: "text", text: "Read the fixture" }], timestamp: 1 },
@@ -44,16 +49,16 @@ describe("prompt cache history fingerprints", () => {
         { sessionId, streamStrategy: "test" },
         observed,
       );
-      const request = () => {
+      const request = async () => {
         const messages = convertToLlm(source);
-        observer.onModelRequest(
+        await observer.onModelRequest(
           { provider: "openai", id: "test-model", api: "openai-responses" },
           { messages },
         );
         observer.onModelUsage({ cacheRead: 8_000 });
         return messages;
       };
-      const first = request();
+      const first = await request();
       source.push(
         makeAgentAssistantMessage({
           content: [{ type: "toolCall", id: "read-1", name: "read", arguments: {} }],
@@ -69,7 +74,7 @@ describe("prompt cache history fingerprints", () => {
           timestamp: 4,
         },
       );
-      const loop = request();
+      const loop = await request();
       source.push(
         makeAgentAssistantMessage({
           content: [{ type: "text", text: "Read complete" }],
@@ -77,7 +82,7 @@ describe("prompt cache history fingerprints", () => {
         }),
         { role: "user", content: "Summarize it", timestamp: 6 },
       );
-      request();
+      await request();
       expect(loop[0]).toBe(first[0]);
       expect(loop[1]).not.toBe(first[1]);
       expect(loop[1]?.content).toBe(first[1]?.content);
@@ -91,6 +96,75 @@ describe("prompt cache history fingerprints", () => {
         expect(observation.changes).toBeNull();
       }
     });
+  });
+
+  it("prepares sealed history off-thread and detects replacement publications", async () => {
+    const publish = (path: string) => {
+      const entry = {
+        message: makeAgentAssistantMessage({
+          content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path } }],
+          timestamp: 1,
+        }),
+      };
+      normalizeTranscriptJsonValue(entry, "entry");
+      return entry.message;
+    };
+    const model = { provider: "openai", id: "test-model", api: "openai-responses" } as const;
+    const observer = createPromptCacheRequestObserver(
+      { sessionId: scopedKey("sealed-history"), streamStrategy: "test" },
+      () => {},
+    );
+    const message = publish("sealed-history-fixture");
+    expect(isOwnedTranscriptPayload(message)).toBe(true);
+    const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
+    const messages: Message[] = [message];
+    await observer.onModelRequest(model, { messages });
+    expect(
+      hashes.mock.calls.some(([text]) => String(text).includes("sealed-history-fixture")),
+    ).toBe(false);
+    messages.push({ role: "user", content: "continue", timestamp: 2 });
+    expect(await observer.onModelRequest(model, { messages })).toMatchObject({
+      prefixUnchanged: true,
+      changes: null,
+    });
+    // Reopening an identical publication must compare by content, not object identity.
+    messages[0] = publish("sealed-history-fixture");
+    expect(await observer.onModelRequest(model, { messages })).toMatchObject({
+      prefixUnchanged: true,
+      changes: null,
+    });
+    messages[0] = publish("replacement");
+    await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, async () => {
+      await expect(observer.onModelRequest(model, { messages })).rejects.toThrow(
+        "changed fields: content[0].arguments",
+      );
+    });
+  });
+
+  it("cancels worker preparation without recording a request or hashing locally", async () => {
+    const controller = new AbortController();
+    const entry = { message: { role: "user" as const, content: "x".repeat(4096), timestamp: 1 } };
+    normalizeTranscriptJsonValue(entry, "entry");
+    const onRequest = vi.fn();
+    const observer = createPromptCacheRequestObserver(
+      { sessionId: scopedKey("cancel-preparation"), streamStrategy: "test" },
+      () => {},
+      onRequest,
+    );
+    vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation((_input, options) => {
+      expect(options.inputBytes).toBeGreaterThanOrEqual(entry.message.content.length * 2);
+      const error = new Error("fixture request canceled");
+      controller.abort(error);
+      return Promise.reject(error);
+    });
+    await expect(
+      observer.onModelRequest(
+        { provider: "openai", id: "test-model", api: "openai-responses" },
+        { messages: [entry.message] },
+        controller.signal,
+      ),
+    ).rejects.toThrow("fixture request canceled");
+    expect(onRequest).not.toHaveBeenCalled();
   });
 
   it("does not rehash an unchanged history prefix when a request appends a message", () => {

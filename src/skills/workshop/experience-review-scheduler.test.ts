@@ -1,6 +1,6 @@
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionTranscriptReadFenceError } from "../../config/sessions/session-transcript-read-fence-error.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import { GatewayDrainingError } from "../../process/gateway-work-admission.js";
@@ -19,6 +19,8 @@ beforeEach(() => {
   log.debug.mockReset();
   log.warn.mockReset();
 });
+
+afterEach(() => vi.restoreAllMocks());
 
 const source = {
   agentId: "main",
@@ -78,6 +80,62 @@ function createHarness() {
 }
 
 describe("skill experience review scheduler", () => {
+  it("backs off all sessions after a TPM rejection without replaying the failed review", async () => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { turn, fireTimers, runReview } = createHarness();
+    runReview.mockRejectedValue(new Error("429 Rate limit reached: tokens per min (TPM)"));
+
+    turn(10);
+    fireTimers();
+    await setImmediate();
+    expect(runReview).toHaveBeenCalledTimes(1);
+    for (const minutes of [15, 30, 60]) {
+      turn(10, { sessionKey: `agent:main:session-${minutes}` });
+      now += minutes * 60_000 - 1;
+      fireTimers();
+      await setImmediate();
+      const before = runReview.mock.calls.length;
+      // The queue cannot bypass a cooldown through another session.
+      expect(before).toBe([15, 30, 60].indexOf(minutes) + 1);
+      now += 1;
+      fireTimers();
+      await setImmediate();
+      expect(runReview).toHaveBeenCalledTimes(before + 1);
+    }
+    now += 60 * 60_000;
+    fireTimers();
+    await setImmediate();
+    expect(runReview).toHaveBeenCalledTimes(4);
+  });
+
+  it("defers queued reviews when a foreground turn hits the shared rate limit", async () => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { turn, fireTimers, runReview } = createHarness();
+    turn(10);
+    turn(1, {
+      sessionKey: "agent:other:interactive",
+      event: { messages: [], success: false, error: "429 Rate limit reached (TPM)" },
+    });
+    fireTimers();
+    await setImmediate();
+    expect(runReview).not.toHaveBeenCalled();
+    now += 15 * 60_000 - 1;
+    turn(1, {
+      sessionKey: "agent:other:interactive",
+      event: { messages: [], success: false, error: "429 Rate limit reached (TPM)" },
+    });
+    now += 1;
+    fireTimers();
+    await setImmediate();
+    expect(runReview).not.toHaveBeenCalled();
+    now += 15 * 60_000;
+    fireTimers();
+    await setImmediate();
+    expect(runReview).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ["Gateway shutdown", new GatewayDrainingError(), "debug"],
     [
