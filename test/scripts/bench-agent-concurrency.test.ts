@@ -68,21 +68,8 @@ function workerStdout(result: WorkerResult): string {
 
 describe("agent concurrency benchmark", () => {
   it("parses bounded options and rejects ambiguous arguments", () => {
-    expect(
-      testing.parseOptions([
-        "--runs",
-        "2",
-        "--warmup",
-        "0",
-        "--fanout",
-        "1,4",
-        "--sweep-rows",
-        "8,16",
-        "--output",
-        "bench.json",
-        "--json",
-      ]),
-    ).toMatchObject({
+    const args = "--runs 2 --warmup 0 --fanout 1,4 --sweep-rows 8,16 --output bench.json --json";
+    expect(testing.parseOptions(args.split(" "))).toMatchObject({
       runs: 2,
       warmup: 0,
       fanout: [1, 4],
@@ -146,16 +133,9 @@ describe("agent concurrency benchmark", () => {
   });
 
   it("reports deterministic parent progress around every worker", () => {
-    const options = testing.parseOptions([
-      "--runs",
-      "3",
-      "--warmup",
-      "0",
-      "--fanout",
-      "2",
-      "--sweep-rows",
-      "4",
-    ]);
+    const options = testing.parseOptions(
+      "--runs 3 --warmup 0 --fanout 2 --sweep-rows 4".split(" "),
+    );
     const progress: string[] = [];
     let now = 0;
     const report = testing.benchmark(options, {
@@ -194,75 +174,39 @@ describe("agent concurrency benchmark", () => {
   it("rejects malformed, duplicate, mismatched, partial, and timed-out worker results", () => {
     const expected = { scenario: "admission" as const, size: 2, runs: 3 };
     const valid = workerResult("admission", 2);
-    expect(
+    const parse = (overrides: Partial<Parameters<typeof testing.parseWorkerProcessResult>[0]>) =>
       testing.parseWorkerProcessResult(
-        { status: 0, stdout: workerStdout(valid), stderr: "" },
+        { status: 0, stdout: workerStdout(valid), stderr: "", ...overrides },
         expected,
-      ),
-    ).toEqual(valid);
+      );
+    expect(parse({})).toEqual(valid);
 
-    expect(() =>
-      testing.parseWorkerProcessResult(
-        { status: 0, stdout: `${WORKER_RESULT_SENTINEL}{\n`, stderr: "" },
-        expected,
-      ),
-    ).toThrow("returned invalid JSON");
-    expect(() =>
-      testing.parseWorkerProcessResult(
-        { status: 0, stdout: `${workerStdout(valid)}${workerStdout(valid)}`, stderr: "" },
-        expected,
-      ),
-    ).toThrow("returned 2 result payloads");
-    expect(() =>
-      testing.parseWorkerProcessResult(
-        { status: 0, stdout: workerStdout(workerResult("admission", 3)), stderr: "" },
-        expected,
-      ),
-    ).toThrow("mismatched identity");
-    expect(() =>
-      testing.parseWorkerProcessResult(
-        {
-          status: 0,
-          stdout: `${WORKER_RESULT_SENTINEL}${JSON.stringify({ ...valid, memory: {} })}\n`,
-          stderr: "",
-        },
-        expected,
-      ),
-    ).toThrow("memory.rssStartBytes");
-    expect(() =>
-      testing.parseWorkerProcessResult(
-        {
-          status: 0,
-          stdout: workerStdout({ ...valid, timingsMs: [1, 2] }),
-          stderr: "",
-        },
-        expected,
-      ),
-    ).toThrow("returned 2 samples; expected 3");
     const missingInvariant = structuredClone(valid);
     delete missingInvariant.invariant.admissionCap;
+    const invalidPayloads = [
+      [`${WORKER_RESULT_SENTINEL}{\n`, "returned invalid JSON"],
+      [`${workerStdout(valid)}${workerStdout(valid)}`, "returned 2 result payloads"],
+      [workerStdout(workerResult("admission", 3)), "mismatched identity"],
+      [
+        `${WORKER_RESULT_SENTINEL}${JSON.stringify({ ...valid, memory: {} })}\n`,
+        "memory.rssStartBytes",
+      ],
+      [workerStdout({ ...valid, timingsMs: [1, 2] }), "returned 2 samples; expected 3"],
+      [workerStdout(missingInvariant), "invariant.admissionCap is missing or invalid"],
+    ] as const;
+    for (const [stdout, error] of invalidPayloads) {
+      expect(() => parse({ stdout })).toThrow(error);
+    }
+    expect(() => parse({ status: 7, stdout: "", stderr: "worker exploded" })).toThrow(
+      "failed (7): worker exploded",
+    );
     expect(() =>
-      testing.parseWorkerProcessResult(
-        { status: 0, stdout: workerStdout(missingInvariant), stderr: "" },
-        expected,
-      ),
-    ).toThrow("invariant.admissionCap is missing or invalid");
-    expect(() =>
-      testing.parseWorkerProcessResult(
-        { status: 7, stdout: "", stderr: "worker exploded" },
-        expected,
-      ),
-    ).toThrow("failed (7): worker exploded");
-    expect(() =>
-      testing.parseWorkerProcessResult(
-        {
-          status: null,
-          stdout: "",
-          stderr: "",
-          error: Object.assign(new Error("spawnSync timed out"), { code: "ETIMEDOUT" }),
-        },
-        expected,
-      ),
+      parse({
+        status: null,
+        stdout: "",
+        stderr: "",
+        error: Object.assign(new Error("spawnSync timed out"), { code: "ETIMEDOUT" }),
+      }),
     ).toThrow("timed out after 300000ms");
   });
 });

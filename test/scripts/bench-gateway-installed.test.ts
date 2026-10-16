@@ -28,6 +28,18 @@ async function readEvents(file: string) {
     .map((line) => JSON.parse(line));
 }
 
+const reportOf = async (target: { output: string }) =>
+  JSON.parse(await fs.readFile(target.output, "utf8"));
+type Events = Awaited<ReturnType<typeof readEvents>>;
+const eventsOf = (events: Events, type: string) => events.filter((event) => event.type === type);
+function expectRequests(events: Events, index: number) {
+  expect(
+    eventsOf(events, "request")
+      .filter((event) => event.index === index)
+      .map((event) => event.method),
+  ).toEqual(["connect", "status", "health"]);
+}
+
 async function fixture(
   mode: "healthy" | "rpc-error" | "established-rpc-error" | "lingering" | "hold-health" = "healthy",
   commit = sourceSha,
@@ -206,6 +218,13 @@ describe("installed Gateway startup benchmark entry", () => {
   it("retains signed profile samples and rejects malformed capture data", async () => {
     const root = tempDirs.make("openclaw-installed-profile-");
     const capture = await prepareInstalledCpuProfile(path.join(root, "result.json"), "fixture.mjs");
+    const phase = (name: string, totalMs: number, monotonicUs: number, performanceMs: number) => ({
+      phase: name,
+      durationMs: 1,
+      totalMs,
+      monotonicUs,
+      performanceMs,
+    });
     const attachment = {
       pid: process.pid,
       parentPid: process.pid,
@@ -218,22 +237,7 @@ describe("installed Gateway startup benchmark entry", () => {
       timeOrigin: 1,
       exitedMonotonicUs: 1_009_900,
       code: 0,
-      phases: [
-        {
-          phase: "first",
-          durationMs: 1,
-          totalMs: 1,
-          monotonicUs: 1_000_200,
-          performanceMs: 101,
-        },
-        {
-          phase: "second",
-          durationMs: 1,
-          totalMs: 2,
-          monotonicUs: 1_000_300,
-          performanceMs: 102,
-        },
-      ],
+      phases: [phase("first", 1, 1_000_200, 101), phase("second", 2, 1_000_300, 102)],
       droppedPhases: 0,
       observerErrors: [],
     };
@@ -304,7 +308,7 @@ describe("installed Gateway startup benchmark entry", () => {
       const result = await runFixture(target, signal, undefined, ["--installed-cpu-diagnostic"]);
       const failed = mode === "established-rpc-error";
       expect(result.status, JSON.stringify(result)).toBe(failed ? 1 : 0);
-      const report = JSON.parse(await fs.readFile(target.output, "utf8"));
+      const report = await reportOf(target);
       expect(report).toMatchObject({
         outcome: failed ? "failed" : "passed",
         measurementMode: "cpu-diagnostic",
@@ -318,14 +322,12 @@ describe("installed Gateway startup benchmark entry", () => {
         "established",
       ]);
       const events = await readEvents(target.events);
-      const starts = events.filter((event) => event.type === "start");
+      const starts = eventsOf(events, "start");
       expect(starts.map((event) => event.index)).toEqual([0, 1]);
       expect(starts.map((event) => event.home)).toEqual([target.stateRoot, target.stateRoot]);
       expect(starts.map((event) => event.execArgv.includes("--cpu-prof"))).toEqual([false, true]);
-      expect(events.filter((event) => event.type === "stop")).toHaveLength(2);
-      expect(
-        events.filter((event) => event.type === "descendant").map((event) => event.listeners),
-      ).toEqual([0, 0]);
+      expect(eventsOf(events, "stop")).toHaveLength(2);
+      expect(eventsOf(events, "descendant").map((event) => event.listeners)).toEqual([0, 0]);
       for (const sample of report.samples) {
         expect(sample).toMatchObject({
           outcome: failed && sample.index === 1 ? "failed" : "passed",
@@ -335,11 +337,7 @@ describe("installed Gateway startup benchmark entry", () => {
             shutdown: { acknowledgment: { accepted: true } },
           },
         });
-        expect(
-          events
-            .filter((event) => event.type === "request" && event.index === sample.index)
-            .map((event) => event.method),
-        ).toEqual(["connect", "status", "health"]);
+        expectRequests(events, sample.index);
       }
       expect(report.samples[0].observations.cpuProfile).toBeUndefined();
       const capture = report.samples[1].observations.cpuProfile;
@@ -406,7 +404,7 @@ describe("installed Gateway startup benchmark entry", () => {
       if (mode === "paired-cpu") {
         expect(result.stderr).toContain("CPU diagnostics require one installed package");
       } else {
-        const report = JSON.parse(await fs.readFile(baseline.output, "utf8"));
+        const report = await reportOf(baseline);
         if (mode === "dependency-integrity") {
           expect(result.stderr).toContain("Installed dependency records differ");
           expect(report.samples).toHaveLength(18);
@@ -431,7 +429,7 @@ describe("installed Gateway startup benchmark entry", () => {
           ? await comparisonFixture()
           : { baseline: await fixture(), candidate: undefined };
       const result = await runFixture(baseline, signal);
-      const report = JSON.parse(await fs.readFile(baseline.output, "utf8"));
+      const report = await reportOf(baseline);
       expect(result.error).toBeUndefined();
       expect(result.status, JSON.stringify({ stderr: result.stderr, report })).toBe(0);
       expect(result.stdout).toContain('"name":"launch"');
@@ -488,13 +486,13 @@ describe("installed Gateway startup benchmark entry", () => {
           ]);
         }
         const events = await readEvents(target.events);
-        const starts = events.filter((event) => event.type === "start");
+        const starts = eventsOf(events, "start");
         expect(starts.map((event) => event.index)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
         expect(new Set(starts.map((event) => event.home))).toEqual(new Set([target.stateRoot]));
-        expect(events.filter((event) => event.type === "stop")).toHaveLength(9);
-        expect(
-          events.filter((event) => event.type === "descendant").map((event) => event.listeners),
-        ).toEqual(Array(9).fill(0));
+        expect(eventsOf(events, "stop")).toHaveLength(9);
+        expect(eventsOf(events, "descendant").map((event) => event.listeners)).toEqual(
+          Array(9).fill(0),
+        );
         expect(starts.every((event) => !event.execArgv.includes("--cpu-prof"))).toBe(true);
         await expect(fs.access(`${target.output}.profiles`)).rejects.toMatchObject({
           code: "ENOENT",
@@ -515,11 +513,7 @@ describe("installed Gateway startup benchmark entry", () => {
           if (!candidate) {
             expect(sample.index).toBe(index);
           }
-          expect(
-            events
-              .filter((event) => event.type === "request" && event.index === index)
-              .map((event) => event.method),
-          ).toEqual(["connect", "status", "health"]);
+          expectRequests(events, index);
         }
       }
     },
@@ -531,7 +525,7 @@ describe("installed Gateway startup benchmark entry", () => {
     const target = await fixture("rpc-error");
     const result = await runFixture(target, signal);
     expect(result.status, result.stderr).toBe(1);
-    const report = JSON.parse(await fs.readFile(target.output, "utf8"));
+    const report = await reportOf(target);
     expect(report.outcome).toBe("failed");
     expect(report.samples.map((sample: { outcome: string }) => sample.outcome)).toEqual([
       "failed",
@@ -600,7 +594,7 @@ describe("installed Gateway startup benchmark entry", () => {
       expect(isProcessAlive(launch.value.pid)).toBe(false);
       expect(isProcessAlive(launch.value.controllerPid)).toBe(false);
     }
-    const report = JSON.parse(await fs.readFile(target.output, "utf8"));
+    const report = await reportOf(target);
     expect(report.outcome).not.toBe("passed");
     expect(report.establishedReadySummary).toBeNull();
     expect(
@@ -613,14 +607,12 @@ describe("installed Gateway startup benchmark entry", () => {
     async ({ signal }) => {
       const target = await fixture("lingering");
       const result = await runFixture(target, signal);
-      const report = JSON.parse(await fs.readFile(target.output, "utf8"));
+      const report = await reportOf(target);
       expect(result.status, JSON.stringify({ result, report })).toBe(1);
       expect(report.outerSettlement.beforeCleanup).toBe("indeterminate");
       expect(report.outcome).toBe("failed");
       expect(report.establishedReadySummary).toBeNull();
-      const lingering = (await readEvents(target.events)).filter(
-        (event) => event.type === "lingering",
-      );
+      const lingering = eventsOf(await readEvents(target.events), "lingering");
       expect(lingering).toHaveLength(9);
       for (const { childPid } of lingering) {
         expect(isProcessAlive(childPid)).toBe(false);

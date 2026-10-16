@@ -1,4 +1,3 @@
-// Bench Cli Startup tests cover bench cli startup script behavior.
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -74,19 +73,24 @@ function runBenchmarkCli(args: string[]) {
 }
 
 function runBenchmarkSample(entry: string, caseId: string, flags: string[] = []) {
-  return runBenchmarkCli([
-    "--entry",
-    entry,
-    "--case",
-    caseId,
-    "--runs",
-    "1",
-    "--warmup",
-    "0",
-    "--json",
-    ...flags,
-  ]);
+  return runBenchmarkCli([...sampleArgs(entry, caseId), ...flags]);
 }
+
+function sampleArgs(entry: string, caseId = "version") {
+  return ["--entry", entry, "--case", caseId, "--runs", "1", "--warmup", "0", "--json"];
+}
+
+function expectCliRejection(args: string[], error: string) {
+  const result = runBenchmarkCli(args);
+  expect(result.status).toBe(1);
+  expect(result.stdout).toBe("");
+  expect(result.stderr.trim()).toBe(error);
+  expect(result.stderr).not.toContain("Node.js");
+  expect(result.stderr).not.toContain("\n    at ");
+}
+
+const failures = (...args: Parameters<typeof suiteResult>) =>
+  testing.collectFailedSamples(suiteResult(...args));
 
 function configFixture(id: string) {
   return testing.buildConfigFixture({ id, name: id, args: [], presets: [] });
@@ -151,22 +155,7 @@ console.log("fixture version");
       );
       const result = spawnSync(
         testNodeExecPath,
-        [
-          ...benchmarkArgs,
-          "--entry",
-          entry,
-          "--case",
-          "version",
-          "--runs",
-          "1",
-          "--warmup",
-          "0",
-          "--timeout-ms",
-          "5000",
-          "--json",
-          "--output",
-          output,
-        ],
+        [...benchmarkArgs, ...sampleArgs(entry), "--timeout-ms", "5000", "--output", output],
         {
           cwd: resolve(__dirname, "../.."),
           env: {
@@ -264,13 +253,7 @@ if (runtime) {
   it("rejects unknown CLI options before running benchmarks", () => {
     expect(() => testing.validateCliArgs(["--wat"])).toThrow("Unknown argument: --wat");
 
-    const result = runBenchmarkCli(["--wat", "--help"]);
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe("Unknown argument: --wat");
-    expect(result.stderr).not.toContain("Node.js");
-    expect(result.stderr).not.toContain("\n    at ");
+    expectCliRejection(["--wat", "--help"], "Unknown argument: --wat");
   });
 
   it("rejects short flag values before running benchmarks", () => {
@@ -279,13 +262,7 @@ if (runtime) {
   });
 
   it("rejects duplicate benchmark cases before running benchmarks", () => {
-    const result = runBenchmarkCli(["--case", "version", "--case", "version"]);
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe('Duplicate --case "version"');
-    expect(result.stderr).not.toContain("Node.js");
-    expect(result.stderr).not.toContain("\n    at ");
+    expectCliRejection(["--case", "version", "--case", "version"], 'Duplicate --case "version"');
   });
 
   it("rejects duplicate single-value controls before running benchmarks", () => {
@@ -363,17 +340,9 @@ try {
 }
 `,
             fileURLToPath(benchmarkUrl),
-            "--entry",
-            entryPath,
-            "--case",
-            "version",
-            "--runs",
-            "1",
-            "--warmup",
-            "0",
+            ...sampleArgs(entryPath),
             "--timeout-ms",
             "100",
-            "--json",
           ],
           {
             cwd: repoRoot,
@@ -419,33 +388,29 @@ try {
 
   it("fails reports with no measured samples", () => {
     expect(
-      testing.collectFailedSamples(
-        suiteResult({
-          samples: [],
-          summary: { durationMs: stats(0), firstOutputMs: null, maxRssMb: null, exitSummary: "" },
-        }),
-      ),
+      failures({
+        samples: [],
+        summary: { durationMs: stats(0), firstOutputMs: null, maxRssMb: null, exitSummary: "" },
+      }),
     ).toEqual(["openclaw.mjs version: no measured samples"]);
   });
 
   it("fails reports with nonzero or signaled CLI samples", () => {
     expect(
-      testing.collectFailedSamples(
-        suiteResult(
-          {
-            id: "gatewayStatusJson",
-            name: "gateway status --json",
-            args: ["gateway", "status", "--json"],
-            samples: [
-              cliSample(),
-              cliSample({ exitCode: 1 }),
-              cliSample({ exitCode: null, signal: "SIGTERM" }),
-              cliSample({ timedOut: true }),
-            ],
-            summary: { exitSummary: "code:0x1, code:1x1, signal:SIGTERMx1" },
-          },
-          "dist/entry.js",
-        ),
+      failures(
+        {
+          id: "gatewayStatusJson",
+          name: "gateway status --json",
+          args: ["gateway", "status", "--json"],
+          samples: [
+            cliSample(),
+            cliSample({ exitCode: 1 }),
+            cliSample({ exitCode: null, signal: "SIGTERM" }),
+            cliSample({ timedOut: true }),
+          ],
+          summary: { exitSummary: "code:0x1, code:1x1, signal:SIGTERMx1" },
+        },
+        "dist/entry.js",
       ),
     ).toEqual([
       "dist/entry.js gatewayStatusJson sample 2: exited with code 1",
@@ -461,74 +426,57 @@ try {
     });
 
     expect(
-      testing.collectFailedSamples(
-        suiteResult(
-          {
-            id: "gatewayHealthJsonWarmState",
-            name: "gateway health --json (warm state)",
-            args: ["gateway", "health", "--json"],
-            warmupSamples: [{ ...passingSample, exitCode: 1 }],
-            samples: [passingSample],
-          },
-          "dist/entry.js",
-        ),
+      failures(
+        {
+          id: "gatewayHealthJsonWarmState",
+          name: "gateway health --json (warm state)",
+          args: ["gateway", "health", "--json"],
+          warmupSamples: [{ ...passingSample, exitCode: 1 }],
+          samples: [passingSample],
+        },
+        "dist/entry.js",
       ),
     ).toEqual(["dist/entry.js gatewayHealthJsonWarmState warmup 1: exited with code 1"]);
   });
 
   it("fails reports with samples that did not report RSS", () => {
     expect(
-      testing.collectFailedSamples(
-        suiteResult({
-          samples: [cliSample({ maxRssMb: null })],
-          summary: { maxRssMb: null },
-        }),
-      ),
+      failures({
+        samples: [cliSample({ maxRssMb: null })],
+        summary: { maxRssMb: null },
+      }),
     ).toEqual(["openclaw.mjs version sample 1: did not report max RSS"]);
   });
 
   it("rejects allowed nonzero exits without their expected clean-state output", () => {
     expect(
-      testing.collectFailedSamples(
-        suiteResult({
-          id: "health",
-          name: "health",
-          args: ["health"],
-          expectedExitCodes: [0, 1],
-          expectedNonzeroOutputIncludes: ["Gateway target:"],
-          samples: [cliSample({ exitCode: 1, stderrTail: "TypeError: crashed before output" })],
-          summary: { exitSummary: "code:1x1" },
-        }),
-      ),
+      failures({
+        id: "health",
+        name: "health",
+        args: ["health"],
+        expectedExitCodes: [0, 1],
+        expectedNonzeroOutputIncludes: ["Gateway target:"],
+        samples: [cliSample({ exitCode: 1, stderrTail: "TypeError: crashed before output" })],
+        summary: { exitSummary: "code:1x1" },
+      }),
     ).toEqual([
       "openclaw.mjs health sample 1: exited with expected code 1 but output did not match expected clean-state markers (Gateway target:)",
     ]);
   });
 
   it("rejects invalid measured run counts", () => {
-    expect(() => testing.parsePositiveInt("0", 5, "--runs")).toThrow(
-      "--runs must be an integer >= 1",
-    );
-    expect(() => testing.parsePositiveInt("2abc", 5, "--runs")).toThrow(
-      "--runs must be an integer >= 1",
-    );
-    expect(() => testing.parsePositiveInt("1.5", 5, "--runs")).toThrow(
-      "--runs must be an integer >= 1",
-    );
-    expect(() => testing.parsePositiveInt("1e3", 5, "--runs")).toThrow(
-      "--runs must be an integer >= 1",
-    );
-    expect(() => testing.parsePositiveInt("0x10", 5, "--runs")).toThrow(
-      "--runs must be an integer >= 1",
-    );
+    for (const value of ["0", "2abc", "1.5", "1e3", "0x10"]) {
+      expect(() => testing.parsePositiveInt(value, 5, "--runs")).toThrow(
+        "--runs must be an integer >= 1",
+      );
+    }
     expect(testing.parsePositiveInt("1", 5)).toBe(1);
     expect(testing.parseNonNegativeInt("0", 1)).toBe(0);
-    expect(() => testing.parseNonNegativeInt("-1", 1, "--warmup")).toThrow(
-      "--warmup must be an integer >= 0",
-    );
-    expect(() => testing.parseNonNegativeInt("0b10", 1, "--warmup")).toThrow(
-      "--warmup must be an integer >= 0",
-    );
+    for (const value of ["-1", "0b10"]) {
+      expect(() => testing.parseNonNegativeInt(value, 1, "--warmup")).toThrow(
+        "--warmup must be an integer >= 0",
+      );
+    }
   });
 
   it("writes a config fixture for config get benchmarks", () => {

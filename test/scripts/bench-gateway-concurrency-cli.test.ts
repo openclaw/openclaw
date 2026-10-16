@@ -21,7 +21,6 @@ type ChildReceipt = {
   exitedBeforeTeardown: boolean;
 };
 type ProcessSnapshot = {
-  pid?: number;
   exitEvent?: { exitCode: number | null; signal: string | null };
   closeEvent?: { exitCode: number | null; signal: string | null };
 };
@@ -30,9 +29,9 @@ type RunReport = {
   gatewayExit?: ChildReceipt;
   gatewayProcess?: ProcessSnapshot;
   history: Array<{ ok: boolean; error: string | null }>;
-  memory: { before: unknown; after: unknown; peakRssMb: number | null };
+  memory: { before: unknown; after: unknown };
   cpuUsage: unknown;
-  pluginMetadataScans?: { count: number; durationMs: unknown; totalDurationMs: number };
+  pluginMetadataScans?: { count: number; totalDurationMs: number };
   probeWarmup: { samples: Array<{ sessionsList: { ok: boolean; error: string | null } }> };
   readyz: Array<{ ok: boolean }>;
   sessionsList: Array<{ ok: boolean }>;
@@ -53,12 +52,19 @@ type Report = {
     mockProviderExit?: ChildReceipt;
     mockProviderProcess?: ProcessSnapshot;
   };
-  summary: { pluginMetadataScanCount: number | null; turnCount: number };
+  summary: { turnCount: number };
 };
 type OwnedChild = { role: "gateway" | "mock"; pid: number; startTime: number | null; root: string };
+const failureMessages = {
+  workload: "agent 1 did not complete",
+  history: "all configured chat.history load probes failed",
+  teardown: "Gateway did not exit cleanly",
+  diagnostic: "Activity-summary diagnostic benchmark failed",
+};
+const memorySample = { heapUsedMb: 4, rssMb: 16 };
 
 async function withBenchmark(
-  scenario: "workload" | "teardown" | "history" | "diagnostic",
+  scenario: keyof typeof failureMessages,
   check: (report: Report) => void,
 ) {
   const root = tempDirs.make("openclaw-concurrency-cli-");
@@ -101,19 +107,11 @@ syncBuiltinESMExports();\n`,
         "scripts/bench-gateway-concurrency.ts",
         "--entry",
         entry,
-        "--concurrency",
-        "1",
+        ..."--concurrency 1 --warmup 0 --cadence-ms 10 --timeout-ms 5000 --json".split(" "),
         "--runs",
         scenario === "workload" ? "3" : "1",
-        "--warmup",
-        "0",
-        "--cadence-ms",
-        "10",
-        "--timeout-ms",
-        "5000",
         "--output",
         output,
-        "--json",
         ...(scenario === "history" ? ["--history-clients", "1", "--history-burst", "1"] : []),
         ...(scenario === "diagnostic" ? ["--activity-summary-diagnostics"] : []),
       ],
@@ -135,26 +133,20 @@ syncBuiltinESMExports();\n`,
     expect(result.stderr.trim().split("\n").at(-1)).toBe(
       "[bench-gateway-concurrency] FAILED (exit 1)",
     );
-    expect(result.stderr).toContain(
-      {
-        workload: "agent 1 did not complete",
-        history: "all configured chat.history load probes failed",
-        teardown: "Gateway did not exit cleanly",
-        diagnostic: "Activity-summary diagnostic benchmark failed",
-      }[scenario],
-    );
+    expect(result.stderr).toContain(failureMessages[scenario]);
     expect(existsSync(output), `failed benchmark did not write JSON:\n${result.stderr}`).toBe(true);
     const report = JSON.parse(readFileSync(output, "utf8")) as Report;
     expect(JSON.parse(result.stdout)).toEqual(report);
-    expect(report.mode).toBe(
-      scenario === "diagnostic" ? "mock-activity-summary-diagnostics" : "mock-streaming-agent",
-    );
-    expect(report.warmupRuns).toEqual([]);
-    expect(report.failedAttempt).toMatchObject({
-      status: "failure",
-      phase: "measured",
-      index: scenario === "workload" ? 2 : 1,
-      cleanup: { rootRemoved: true },
+    expect(report).toMatchObject({
+      mode:
+        scenario === "diagnostic" ? "mock-activity-summary-diagnostics" : "mock-streaming-agent",
+      warmupRuns: [],
+      failedAttempt: {
+        status: "failure",
+        phase: "measured",
+        index: scenario === "workload" ? 2 : 1,
+        cleanup: { rootRemoved: true },
+      },
     });
     expect(children.map((child) => child.role)).toEqual(
       scenario === "workload" ? ["mock", "gateway", "mock", "gateway"] : ["mock", "gateway"],
@@ -227,12 +219,7 @@ describe.skipIf(process.platform === "win32")("gateway concurrency CLI failure e
         expect(errors).toContainEqual({
           phase: scenario === "teardown" ? "diagnostics" : "workload",
           error: expect.stringContaining(
-            {
-              diagnostic: "raw output omitted",
-              workload: "agent 1 did not complete",
-              teardown: "Gateway did not exit cleanly",
-              history: "all configured chat.history load probes failed",
-            }[scenario],
+            scenario === "diagnostic" ? "raw output omitted" : failureMessages[scenario],
           ),
         });
         if (scenario === "diagnostic" || scenario === "workload") {
@@ -261,10 +248,9 @@ describe.skipIf(process.platform === "win32")("gateway concurrency CLI failure e
           const completed = report.runs[0]!;
           expect(completed).not.toHaveProperty("failures");
           expect(completed).not.toHaveProperty("cleanup");
-          expect(completed.freshConnection).toMatchObject({ ok: true });
-          expect(completed.memory).toMatchObject({
-            before: { heapUsedMb: 4, rssMb: 16 },
-            after: { heapUsedMb: 4, rssMb: 16 },
+          expect(completed).toMatchObject({
+            freshConnection: { ok: true },
+            memory: { before: memorySample, after: memorySample },
           });
           expect(completed.pluginMetadataScans).toEqual({
             count: 0,
@@ -273,12 +259,12 @@ describe.skipIf(process.platform === "win32")("gateway concurrency CLI failure e
           });
           expect(report.summary).toMatchObject({ turnCount: 1, pluginMetadataScanCount: 0 });
           expect(partialRun.sessionsList.some((sample) => sample.ok)).toBe(true);
-          expect(partialRun.memory.before).toMatchObject({ heapUsedMb: 4, rssMb: 16 });
+          expect(partialRun.memory.before).toMatchObject(memorySample);
           return;
         }
         expect(report.runs).toEqual([]);
         expect(report.summary.turnCount).toBe(0);
-        expect(partialRun.memory.after).toMatchObject({ heapUsedMb: 4, rssMb: 16 });
+        expect(partialRun.memory.after).toMatchObject(memorySample);
         if (scenario === "teardown") {
           expect(partialRun.turnCount).toBe(1);
           expect(partialRun.freshConnection).toMatchObject({ ok: true });

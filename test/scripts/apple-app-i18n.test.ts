@@ -20,6 +20,13 @@ import {
 } from "../../scripts/native-i18n-inventory.ts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
 
+const readInventory = async () =>
+  parseNativeI18nInventory(await readFile("apps/.i18n/native-source.json", "utf8"));
+const emptyCatalog = { sourceLanguage: "en", strings: {}, version: "1.0" };
+const unit = (value: string, state = "translated") => ({ stringUnit: { state, value } });
+const cameraSource = "Use the camera to scan setup codes.";
+const cameraTranslation = "Utilisez l’appareil photo pour scanner les codes de configuration.";
+
 const probe = vi.hoisted(() => ({
   source: "",
   catalogs: new Map<string, string>(),
@@ -92,14 +99,7 @@ describe("Apple app i18n catalogs", () => {
   });
 
   it("derives shared discovery status coverage into the iOS catalog", async () => {
-    const inventory = parseNativeI18nInventory(
-      await readFile("apps/.i18n/native-source.json", "utf8"),
-    );
-    const build = buildIosCatalog(
-      { sourceLanguage: "en", strings: {}, version: "1.0" },
-      inventory,
-      [],
-    );
+    const build = buildIosCatalog(emptyCatalog, await readInventory(), []);
 
     expect(Object.keys(build.catalog.strings ?? {})).toEqual(
       expect.arrayContaining(["Searching…", "Stopped", "Waiting"]),
@@ -107,9 +107,7 @@ describe("Apple app i18n catalogs", () => {
   });
 
   it("warns only when obsolete Apple keys are the entire catalog drift", async () => {
-    const inventory = parseNativeI18nInventory(
-      await readFile("apps/.i18n/native-source.json", "utf8"),
-    );
+    const inventory = await readInventory();
     const translations = await Promise.all(
       NATIVE_I18N_LOCALES.map(async (locale) =>
         JSON.parse(await readFile(`apps/.i18n/native/${locale}.json`, "utf8")),
@@ -149,7 +147,7 @@ describe("Apple app i18n catalogs", () => {
           strings: {
             ...strings,
             "Retired synthetic %@": {
-              localizations: { en: { stringUnit: { state: "new", value: "" } } },
+              localizations: { en: unit("", "new") },
             },
             "Retired empty title": {},
           },
@@ -217,6 +215,11 @@ describe("Apple app i18n catalogs", () => {
   });
 
   it("routes merged sites by coupled path and kind while preserving shipped translations", () => {
+    const entry = (
+      id: string,
+      source: string,
+      sites: NativeI18nInventoryEntry["sites"],
+    ): NativeI18nInventoryEntry => ({ id, source, surface: "apple", sites });
     const coveredMacosEntries: NativeI18nInventoryEntry[] = [
       { kind: "ui-call-concatenated", source: "Call concatenated" },
       {
@@ -227,41 +230,26 @@ describe("Apple app i18n catalogs", () => {
       { kind: "ui-modifier-concatenated", source: "Modifier concatenated" },
       { kind: "ui-modifier-multiline", source: "Modifier multiline" },
       { kind: "ui-named-argument-concatenated", source: "Named argument concatenated" },
-    ].map(({ kind, source }, index) => ({
-      id: `native.apple.concatenated.${index}`,
-      source,
-      surface: "apple",
-      sites: [{ kind, path: "apps/macos/Sources/OpenClaw/Example.swift" }],
-    }));
+    ].map(({ kind, source }, index) =>
+      entry(`native.apple.concatenated.${index}`, source, [
+        { kind, path: "apps/macos/Sources/OpenClaw/Example.swift" },
+      ]),
+    );
     const inventory: NativeI18nInventoryEntry[] = [
-      {
-        id: "native.apple.connect",
-        source: "Connect now",
-        surface: "apple",
-        sites: [
-          { kind: "ui-call", path: "apps/ios/Sources/Example.swift" },
-          { kind: "ui-call", path: "apps/macos/Sources/OpenClaw/Example.swift" },
-        ],
-      },
-      {
-        id: "native.apple.decoy",
-        source: "Do not catalog",
-        surface: "apple",
-        sites: [
-          { kind: "plist-string", path: "apps/ios/Sources/Info.plist" },
-          { kind: "ui-call", path: "outside/Example.swift" },
-        ],
-      },
+      entry("native.apple.connect", "Connect now", [
+        { kind: "ui-call", path: "apps/ios/Sources/Example.swift" },
+        { kind: "ui-call", path: "apps/macos/Sources/OpenClaw/Example.swift" },
+      ]),
+      entry("native.apple.decoy", "Do not catalog", [
+        { kind: "plist-string", path: "apps/ios/Sources/Info.plist" },
+        { kind: "ui-call", path: "outside/Example.swift" },
+      ]),
       ...coveredMacosEntries,
     ];
     const existing = {
-      sourceLanguage: "en",
+      ...emptyCatalog,
       strings: {
-        "Connect now": {
-          localizations: {
-            de: { stringUnit: { state: "translated", value: "Jetzt verbinden" } },
-          },
-        },
+        "Connect now": { localizations: { de: unit("Jetzt verbinden") } },
       },
     };
     const translations = [
@@ -272,23 +260,21 @@ describe("Apple app i18n catalogs", () => {
       },
     ];
     const ios = buildIosCatalog(existing, inventory, translations);
-    const macos = buildMacosCatalog({ sourceLanguage: "en", strings: {} }, inventory, translations);
+    const macos = buildMacosCatalog(emptyCatalog, inventory, translations);
 
     expect(ios.catalog.strings?.["Connect now"]?.localizations?.de?.stringUnit?.value).toBe(
       "Jetzt verbinden",
     );
-    expect(ios.catalog.strings?.["Connect now"]?.localizations?.fr?.stringUnit).toEqual({
-      state: "translated",
-      value: "Se connecter",
-    });
-    expect(ios.catalog.strings?.["Connect now"]?.localizations?.es?.stringUnit).toEqual({
-      state: "new",
-      value: "Connect now",
-    });
+    expect(ios.catalog.strings?.["Connect now"]?.localizations?.fr?.stringUnit).toEqual(
+      unit("Se connecter").stringUnit,
+    );
+    expect(ios.catalog.strings?.["Connect now"]?.localizations?.es?.stringUnit).toEqual(
+      unit("Connect now", "new").stringUnit,
+    );
     expect(ios.catalog.strings?.["Do not catalog"]).toBeUndefined();
     expect(macos.catalog.strings?.["Connect now"]).toBeDefined();
     expect(Object.keys(macos.catalog.strings ?? {})).toEqual(
-      expect.arrayContaining(coveredMacosEntries.map((entry) => entry.source)),
+      expect.arrayContaining(coveredMacosEntries.map((item) => item.source)),
     );
     expect(macos.catalog.strings?.["Do not catalog"]).toBeUndefined();
     expect(ios.contradictions).toEqual([]);
@@ -320,15 +306,11 @@ describe("Apple app i18n catalogs", () => {
 
   it("refreshes InfoPlist copy from translations for the current source", () => {
     expect(
-      selectInfoPlistTranslation(
-        "Use the camera to scan setup codes.",
-        ["Utilisez l’appareil photo pour scanner les codes de configuration."],
-        {
-          source: "Old camera purpose.",
-          value: "Ancienne description de la caméra.",
-        },
-      ),
-    ).toBe("Utilisez l’appareil photo pour scanner les codes de configuration.");
+      selectInfoPlistTranslation(cameraSource, [cameraTranslation], {
+        source: "Old camera purpose.",
+        value: "Ancienne description de la caméra.",
+      }),
+    ).toBe(cameraTranslation);
     expect(
       selectInfoPlistTranslation("OpenClaw Share", [], {
         source: "OpenClaw Share",
@@ -336,19 +318,15 @@ describe("Apple app i18n catalogs", () => {
       }),
     ).toBe("OpenClaw Partager");
     expect(
-      selectInfoPlistTranslation(
-        "Use the camera to scan setup codes.",
-        ["Use the camera to scan setup codes."],
-        {
-          source: "Use the camera to scan setup codes.",
-          value: "Utilisez l’appareil photo pour scanner les codes de configuration.",
-        },
-      ),
-    ).toBe("Utilisez l’appareil photo pour scanner les codes de configuration.");
+      selectInfoPlistTranslation(cameraSource, [cameraSource], {
+        source: cameraSource,
+        value: cameraTranslation,
+      }),
+    ).toBe(cameraTranslation);
     expect(
       selectInfoPlistTranslation("Use the camera for video calls.", [], {
-        source: "Use the camera to scan setup codes.",
-        value: "Utilisez l’appareil photo pour scanner les codes de configuration.",
+        source: cameraSource,
+        value: cameraTranslation,
       }),
     ).toBe("Use the camera for video calls.");
   });
@@ -358,13 +336,13 @@ describe("Apple app i18n catalogs", () => {
       version: 2,
       locale: "fr",
       translations: {
-        "native.apple.camera": "Utilisez l’appareil photo pour scanner les codes de configuration.",
+        "native.apple.camera": cameraTranslation,
         "native.apple.unrelated": "Traduction pour un autre contexte.",
       },
     };
 
     expect(infoPlistTranslationCandidates(artifact, "native.apple.camera")).toEqual([
-      "Utilisez l’appareil photo pour scanner les codes de configuration.",
+      cameraTranslation,
     ]);
   });
 });
