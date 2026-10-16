@@ -16,6 +16,7 @@ import * as sessionAuthorization from "../session-sharing-authorization-async.js
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { sessionGoalHandlers } from "./sessions-goal.js";
+import { createSessionMutationTestClient } from "./sessions-mutations.owner.test-support.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -30,11 +31,19 @@ function expectFailure(respond: ReturnType<typeof vi.fn>, error: Record<string, 
   expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
 }
 
+function expectGoal(respond: ReturnType<typeof vi.fn>, goal: Partial<SessionGoal>, extra = {}) {
+  expectSuccess(
+    respond,
+    expect.objectContaining({ ...extra, goal: expect.objectContaining(goal) }),
+  );
+}
+
 const resumeChat = vi.hoisted(() => vi.fn());
 vi.mock("./chat-send-handler.js", () => ({ handleSessionGoalResumeChat: resumeChat }));
 
 const sessionKey = "agent:main:goal-controls";
 const sessionId = "goal-controls-session";
+const scope = { agentId: "main", sessionKey };
 const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
 
 function withGoalState(run: () => Promise<void>, prepareProfileCatalog = true) {
@@ -45,57 +54,40 @@ function withGoalState(run: () => Promise<void>, prepareProfileCatalog = true) {
 }
 
 function readGoal() {
-  return loadSessionEntry({ agentId: "main", sessionKey })?.goal;
+  return loadSessionEntry(scope)?.goal;
 }
 
-function initialGoal(): SessionGoal {
-  return {
-    schemaVersion: 1,
-    id: "original-goal",
-    objective: "Finish the release checklist",
-    status: "paused",
-    createdAt: 1,
-    updatedAt: 1,
-    tokenStart: 0,
-    tokensUsed: 0,
-    continuationTurns: 0,
-  };
-}
+const initialGoal = (): SessionGoal => ({
+  schemaVersion: 1,
+  id: "original-goal",
+  objective: "Finish the release checklist",
+  status: "paused",
+  createdAt: 1,
+  updatedAt: 1,
+  tokenStart: 0,
+  tokensUsed: 0,
+  continuationTurns: 0,
+});
 
 async function seedSession(patch: Partial<SessionEntry> = {}) {
-  await upsertSessionEntryCore(
-    { agentId: "main", sessionKey },
-    {
-      sessionId,
-      updatedAt: 1,
-      lifecycleRevision: "goal-controls-lifecycle",
-      goal: initialGoal(),
-      ...patch,
-    },
-  );
+  await upsertSessionEntryCore(scope, {
+    sessionId,
+    updatedAt: 1,
+    lifecycleRevision: "goal-controls-lifecycle",
+    goal: initialGoal(),
+    ...patch,
+  });
 }
 
 function client(scopes = ["operator.write"], profileId?: string): GatewayClient {
-  return {
-    connId: "goal-controls-client",
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      role: "operator",
-      scopes,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-    },
-    ...(profileId
-      ? {
-          authenticatedUserProfile: {
-            profileId,
-            displayName: "Reader",
-            hasAvatar: false,
-            updatedAt: 1,
-          },
-        }
-      : {}),
-  };
+  const requestClient = createSessionMutationTestClient(profileId);
+  requestClient.connId = "goal-controls-client";
+  requestClient.connect.scopes = scopes;
+  delete requestClient.authenticatedUserId;
+  if (requestClient.authenticatedUserProfile) {
+    requestClient.authenticatedUserProfile.displayName = "Reader";
+  }
+  return requestClient;
 }
 
 function operation(action: string, extra: Record<string, unknown> = {}) {
@@ -164,8 +156,8 @@ describe("typed Goal management RPCs", () => {
     { outcome: "success", patch: {}, succeeds: true },
     { outcome: "early return", patch: { sessionId: "replaced-session" }, succeeds: false },
     { outcome: "operation error", patch: { goalId: "replaced-goal" }, succeeds: false },
-  ])("releases directly acquired authorization after $outcome", async ({ patch, succeeds }) => {
-    await withGoalState(async () => {
+  ])("releases directly acquired authorization after $outcome", ({ patch, succeeds }) =>
+    withGoalState(async () => {
       await seedSession();
       const resolve = sessionAuthorization.resolveSessionMutationAuthorizationAsync;
       const release = vi.fn<() => void>();
@@ -179,25 +171,20 @@ describe("typed Goal management RPCs", () => {
           release.mockImplementation(result.authorization.release);
           return { ...result, authorization: { ...result.authorization, release } };
         });
-      try {
-        const respond = await invoke(operation("complete", patch), { direct: true });
-        expect(respond).toHaveBeenCalledWith(
-          succeeds,
-          succeeds
-            ? expect.objectContaining({ goal: expect.objectContaining({ status: "complete" }) })
-            : undefined,
-          succeeds ? undefined : expect.objectContaining({ code: "INVALID_REQUEST" }),
-        );
-        expect(resolved).toHaveBeenCalledOnce();
-        expect(release).toHaveBeenCalledOnce();
-      } finally {
-        release();
+      using _ = { [Symbol.dispose]: release };
+      const respond = await invoke(operation("complete", patch), { direct: true });
+      if (succeeds) {
+        expectGoal(respond, { status: "complete" });
+      } else {
+        expectFailure(respond, { code: "INVALID_REQUEST" });
       }
-    }, false);
-  });
+      expect(resolved).toHaveBeenCalledOnce();
+      expect(release).toHaveBeenCalledOnce();
+    }, false),
+  );
 
-  it("leaves borrowed authorization with its dispatch owner", async () => {
-    await withGoalState(async () => {
+  it("leaves borrowed authorization with its dispatch owner", () =>
+    withGoalState(async () => {
       await seedSession();
       const request = operation("complete");
       const resolved = await sessionAuthorization.resolveSessionMutationAuthorizationAsync({
@@ -210,7 +197,8 @@ describe("typed Goal management RPCs", () => {
         throw new Error("Expected a retained Goal authorization");
       }
       const release = vi.fn(resolved.authorization.release);
-      try {
+      {
+        using _ = { [Symbol.dispose]: release };
         const respond = await invoke(request, {
           direct: true,
           sessionMutationAuthorization: { ...resolved.authorization, release },
@@ -218,29 +206,27 @@ describe("typed Goal management RPCs", () => {
         expectSuccess(respond, expect.any(Object));
         expect(release).not.toHaveBeenCalled();
         expect(() => resolved.authorization?.assertCurrent()).not.toThrow();
-      } finally {
-        release();
       }
       assertNoRetainedSessionSharingReads();
-    }, false);
-  });
+    }, false));
 
-  it("edits literal objectives in the writer without chat rows and rejects a changed retry", async () => {
-    await withGoalState(async () => {
+  it("edits literal objectives in the writer without chat rows and rejects a changed retry", () =>
+    withGoalState(async () => {
       await seedSession();
       const objective = "clear the backlog\n/goal pause is part of the objective";
       const request = operation("edit", { objective });
       const commitGuard = vi.fn();
       const sql = observeHostDataSql();
-      try {
+      {
+        using _ = { [Symbol.dispose]: sql.restore };
         const first = await invoke(request, { commitGuard });
-        expectSuccess(
+        expectGoal(
           first,
-          expect.objectContaining({
+          { objective, status: "paused" },
+          {
             operationId: request.operationId,
             status: "updated",
-            goal: expect.objectContaining({ objective, status: "paused" }),
-          }),
+          },
         );
         const replay = await invoke(request, { commitGuard });
         expectSuccess(replay, { ...first.mock.calls[0]?.[1], replayed: true });
@@ -255,17 +241,14 @@ describe("typed Goal management RPCs", () => {
         expect(sql.queries.filter((query) => /\bsession_goal_operations\b/i.test(query))).toEqual(
           [],
         );
-      } finally {
-        sql.restore();
       }
       expect(readGoal()?.objective).toBe(objective);
-      expect(await loadTranscriptEvents({ agentId: "main", sessionKey, sessionId })).toEqual([]);
+      expect(await loadTranscriptEvents({ ...scope, sessionId })).toEqual([]);
       expect(resumeChat).not.toHaveBeenCalled();
-    });
-  });
+    }));
 
-  it("replays a clear without deleting a replacement Goal", async () => {
-    await withGoalState(async () => {
+  it("replays a clear without deleting a replacement Goal", () =>
+    withGoalState(async () => {
       await seedSession();
       const request = operation("clear");
       const first = await invoke(request, { method: "sessions.goal.clear" });
@@ -275,13 +258,12 @@ describe("typed Goal management RPCs", () => {
       const replay = await invoke(request, { method: "sessions.goal.clear" });
       expectSuccess(replay, { ...first.mock.calls[0]?.[1], replayed: true });
       expect(readGoal()?.id).toBe("replacement-goal");
-    });
-  });
+    }));
 
   it.each(["sessions.goal.update", "sessions.goal.clear"] as const)(
     "%s requires write scope and session participation before mutation or continuation",
-    async (method) => {
-      await withGoalState(async () => {
+    (method) =>
+      withGoalState(async () => {
         const owner = ensureProfileForEmail("goal-owner@example.test");
         const viewer = ensureProfileForEmail("goal-viewer@example.test");
         await seedSession({
@@ -289,43 +271,41 @@ describe("typed Goal management RPCs", () => {
           createdActor: { type: "human", source: "profile", id: owner.id },
         });
         const request = operation(method === "sessions.goal.clear" ? "clear" : "resume");
-        const readOnly = await invoke(request, {
-          method,
-          client: client(["operator.read"], owner.id),
-        });
-        expectFailure(readOnly, {
-          code: "FORBIDDEN",
-          message: "missing scope: operator.write",
-        });
-        const notParticipant = await invoke(request, {
-          method,
-          client: client(["operator.write"], viewer.id),
-        });
-        expectFailure(notParticipant, {
-          details: expect.objectContaining({ code: "SESSION_PARTICIPATION_REQUIRED" }),
-        });
+        for (const [requestClient, error] of [
+          [
+            client(["operator.read"], owner.id),
+            { code: "FORBIDDEN", message: "missing scope: operator.write" },
+          ],
+          [
+            client(["operator.write"], viewer.id),
+            {
+              details: expect.objectContaining({ code: "SESSION_PARTICIPATION_REQUIRED" }),
+            },
+          ],
+        ] as const) {
+          expectFailure(await invoke(request, { method, client: requestClient }), error);
+        }
         expect(readGoal()).toEqual(initialGoal());
         expect(resumeChat).not.toHaveBeenCalled();
-      });
-    },
+      }),
   );
 
   it.each([
     { name: "session generation", patch: { sessionId: "replaced-session" } },
     { name: "Goal identity", patch: { goalId: "replaced-goal" } },
     { name: "agent owner", patch: { agentId: "other" } },
-  ])("rejects stale $name without changing state", async ({ patch }) => {
-    await withGoalState(async () => {
+  ])("rejects stale $name without changing state", ({ patch }) =>
+    withGoalState(async () => {
       await seedSession();
       const result = await invoke(operation("pause", patch));
       expectFailure(result, { code: "INVALID_REQUEST" });
       expect(readGoal()).toEqual(initialGoal());
       expect(resumeChat).not.toHaveBeenCalled();
-    });
-  });
+    }),
+  );
 
-  it("rejects a revoked caller without persisting a Goal change or receipt", async () => {
-    await withGoalState(async () => {
+  it("rejects a revoked caller without persisting a Goal change or receipt", () =>
+    withGoalState(async () => {
       await seedSession();
       let checks = 0;
       const request = operation("complete");
@@ -342,17 +322,11 @@ describe("typed Goal management RPCs", () => {
       expectFailure(result, { message: "caller closed" });
       expect(readGoal()).toEqual(initialGoal());
       const retry = await invoke(request);
-      expectSuccess(
-        retry,
-        expect.objectContaining({
-          goal: expect.objectContaining({ status: "complete" }),
-        }),
-      );
-    });
-  });
+      expectGoal(retry, { status: "complete" });
+    }));
 
-  it("rejects a plugin caller that does not own the session", async () => {
-    await withGoalState(async () => {
+  it("rejects a plugin caller that does not own the session", () =>
+    withGoalState(async () => {
       await seedSession({ pluginOwnerId: "owning-plugin" });
       const pluginClient: GatewayClient = {
         ...client(),
@@ -364,11 +338,10 @@ describe("typed Goal management RPCs", () => {
         message: expect.stringContaining("did not create it"),
       });
       expect(readGoal()).toEqual(initialGoal());
-    });
-  });
+    }));
 
-  it("does not activate a Goal before continuation admission succeeds", async () => {
-    await withGoalState(async () => {
+  it("does not activate a Goal before continuation admission succeeds", () =>
+    withGoalState(async () => {
       await seedSession();
       resumeChat.mockImplementation(async (options: GatewayRequestHandlerOptions) => {
         options.respond(false, undefined, { code: "UNAVAILABLE", message: "session busy" });
@@ -377,7 +350,6 @@ describe("typed Goal management RPCs", () => {
       expectFailure(result, { message: "session busy" });
       expect(resumeChat).toHaveBeenCalledOnce();
       expect(readGoal()).toEqual(initialGoal());
-      expect(await loadTranscriptEvents({ agentId: "main", sessionKey, sessionId })).toEqual([]);
-    });
-  });
+      expect(await loadTranscriptEvents({ ...scope, sessionId })).toEqual([]);
+    }));
 });

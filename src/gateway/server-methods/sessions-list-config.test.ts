@@ -36,6 +36,24 @@ afterEach(() => vi.restoreAllMocks());
 
 const readDatabases = history.withSessionHistoryWorkerDatabases;
 
+function config(defaults: NonNullable<OpenClawConfig["agents"]>["defaults"]): OpenClawConfig {
+  const cfg = { agents: { entries: { main: {} }, defaults }, plugins: { enabled: false } };
+  setRuntimeConfigSnapshot(cfg);
+  return cfg;
+}
+
+function seed(
+  scope: Parameters<typeof replaceSessionEntrySync>[0],
+  patch: Partial<Parameters<typeof replaceSessionEntrySync>[1]>,
+) {
+  replaceSessionEntrySync(scope, {
+    sessionId: scope.sessionKey,
+    updatedAt: 1,
+    visibility: "shared",
+    ...patch,
+  });
+}
+
 function withScopes(cfg: OpenClawConfig, scopes: OperatorScope[]): OpenClawConfig {
   return { ...cfg, gateway: { auth: { identityScopes: { "viewer@example.test": scopes } } } };
 }
@@ -55,15 +73,13 @@ function observeRowFacts(reads: string[], pause?: () => Promise<void>) {
       consume(
         owners.map((owner) => ({
           ...owner,
-          readRowFacts(input) {
+          async readRowFacts(input) {
             reads.push(...input.sessionKeys);
-            const result = owner.readRowFacts(input);
-            return pause
-              ? result.then(async (rows) => {
-                  await pause();
-                  return rows;
-                })
-              : result;
+            const rows = await owner.readRowFacts(input);
+            if (pause) {
+              await pause();
+            }
+            return rows;
           },
         })),
       ),
@@ -71,25 +87,15 @@ function observeRowFacts(reads: string[], pause?: () => Promise<void>) {
   );
 }
 
-it("reuses committed row facts when a changed model catalog updates session lists", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        entries: { main: {} },
-        defaults: { utilityModel: "unit-test/small" },
-      },
-      plugins: { enabled: false },
-    };
-    setRuntimeConfigSnapshot(cfg);
+it("reuses committed row facts when a changed model catalog updates session lists", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = config({ utilityModel: "unit-test/small" });
     const scopes = ["first", "second"].map((name) => ({
       agentId: "main",
       sessionKey: `agent:main:catalog-${name}`,
     }));
     for (const scope of scopes) {
-      replaceSessionEntrySync(scope, {
-        sessionId: scope.sessionKey,
-        updatedAt: 1,
-        visibility: "shared",
+      seed(scope, {
         providerOverride: "unit-test",
         modelOverride: "fixture",
         activitySummary: {
@@ -158,23 +164,15 @@ it("reuses committed row facts when a changed model catalog updates session list
       try {
         catalog = [{ ...catalog[0]!, contextTokens: 16384 }];
         notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
-        const result = await list();
-        expect(result.sessions).toHaveLength(2);
-        for (const row of result.sessions) {
-          expect(row).toMatchObject({
-            contextTokens: 16384,
-            activitySummary: { text: "Ready", state: "current" },
-          });
-        }
-        expect(reads).toEqual([]);
-        expect(
+        const row = { contextTokens: 16384, activitySummary: { text: "Ready", state: "current" } };
+        expect((await list()).sessions).toMatchObject([row, row]);
+        expect([
+          reads,
           shared.mock.calls.filter(([, command]) => command.type === "sessionRows.sharedFacts"),
-        ).toEqual([]);
-        expect(
           hostReads.queries.filter((sql) =>
             /session_nodes|board_tabs|transcript_rewrite_watermarks|acp_sessions/.test(sql),
           ),
-        ).toEqual([]);
+        ]).toEqual([[], [], []]);
       } finally {
         hostReads.restore();
       }
@@ -215,27 +213,17 @@ it("reuses committed row facts when a changed model catalog updates session list
       projection.dispose();
       release();
     }
-  });
-});
+  }));
 
-it("retains session facts on identity-scope changes and refreshes changes that affect the rows", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    let cfg: OpenClawConfig = {
-      agents: {
-        entries: { main: {} },
-        defaults: { model: "unit-test/original" },
-      },
-      plugins: { enabled: false },
-    };
-    setRuntimeConfigSnapshot(cfg);
+it("retains session facts on identity-scope changes and refreshes changes that affect the rows", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    let cfg = config({ model: "unit-test/original" });
     const scope = { agentId: "main", sessionKey: "agent:main:live" };
     for (const name of ["live", "archived"]) {
-      replaceSessionEntrySync(
+      seed(
         { agentId: "main", sessionKey: `agent:main:${name}` },
         {
           sessionId: name,
-          updatedAt: 1,
-          visibility: "shared",
           ...(name === "archived" ? { archivedAt: 1 } : {}),
         },
       );
@@ -284,10 +272,8 @@ it("retains session facts on identity-scope changes and refreshes changes that a
 
       // A policy publication must retain work already queued by a committed session write.
       reads.length = 0;
-      replaceSessionEntrySync(scope, {
+      seed(scope, {
         sessionId: "live",
-        updatedAt: 1,
-        visibility: "shared",
         label: "Changed during reload",
       });
       cfg = withScopes(cfg, ["operator.read"]);
@@ -335,5 +321,4 @@ it("retains session facts on identity-scope changes and refreshes changes that a
       await projection.ensureMaterialized();
       release();
     }
-  });
-});
+  }));
