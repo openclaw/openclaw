@@ -189,7 +189,11 @@ async function collectUpdateCandidateDatabasePaths(input: StateInput) {
   // Include declared retained plugin databases on either physical engine here.
   for (const file of input.additionalPaths ??
     (await discoverBackupDatabasePaths({ ...input, agentRegistry: [] }))) {
-    queueStateDatabaseSpelling(files, input.stateDir, file);
+    // Supplemental realpaths must not add aliases to the legacy versions inventory.
+    // Registry discovery below still preserves every explicitly recorded spelling.
+    if (!files.has(resolveUpdateCandidateStateIdentity(input.stateDir, file))) {
+      queueStateDatabaseSpelling(files, input.stateDir, file);
+    }
   }
   return files;
 }
