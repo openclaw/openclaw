@@ -8,11 +8,11 @@ import { GatewaySessionMessageSubscriptionCoordinator } from "../../../packages/
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   browserVisibility,
-  createRunningNarrationController,
+  createRunningNarration,
   runningRow,
 } from "../test-helpers/app-sidebar-session-narration.ts";
 import {
-  SidebarSessionNarrationController,
+  createSidebarNarration,
   type SidebarNarrationSyncInput,
 } from "./app-sidebar-session-narration.ts";
 
@@ -59,12 +59,12 @@ describe("sidebar narration subscription retries", () => {
       openSessionKey: "",
       agentId: "main",
     };
-    const controller = new SidebarSessionNarrationController(() => undefined);
-    controller.sync(input);
+    const narration = createSidebarNarration();
+    narration.sync(input);
     for (let index = 0; index < 100; index++) {
       await vi.advanceTimersByTimeAsync(0);
       input.rows[0]!.updatedAt = index + 10;
-      controller.sync(input);
+      narration.sync(input);
     }
     await vi.advanceTimersByTimeAsync(0);
     expect(request).toHaveBeenCalledTimes(6);
@@ -73,7 +73,7 @@ describe("sidebar narration subscription retries", () => {
     for (const delay of [250, 500, 1_000, 2_000, 4_000, 8_000, 15_000, 15_000]) {
       const attempts = request.mock.calls.length;
       await vi.advanceTimersByTimeAsync(delay - 1);
-      controller.sync(input);
+      narration.sync(input);
       expect(request).toHaveBeenCalledTimes(attempts);
       await vi.advanceTimersByTimeAsync(1);
       expect(request).toHaveBeenCalledTimes(attempts + 6);
@@ -84,7 +84,7 @@ describe("sidebar narration subscription retries", () => {
       Array.from({ length: 6 }, (_, index) => `agent:main:run-${index + 2}`),
     );
     expect(vi.getTimerCount()).toBe(0);
-    controller.disconnect();
+    narration.disconnect();
     await vi.advanceTimersByTimeAsync(0);
     expect(wireKeys.size).toBe(0);
   });
@@ -103,7 +103,7 @@ describe("sidebar narration subscription retries", () => {
       .mockResolvedValue({ key: "agent:main:run" });
     const coordinator = new GatewaySessionMessageSubscriptionCoordinator({ request });
     const subscribeMessages = vi.fn(coordinator.acquire.bind(coordinator));
-    const { controller } = createRunningNarrationController({
+    const { narration } = createRunningNarration({
       subscribeMessages,
       unsubscribeMessages: (handle) => coordinator.release(handle),
     });
@@ -118,7 +118,7 @@ describe("sidebar narration subscription retries", () => {
       "sessions.messages.subscribe",
     ]);
     expect(vi.getTimerCount()).toBe(0);
-    controller.disconnect();
+    narration.disconnect();
     await vi.advanceTimersByTimeAsync(0);
     expect(request).toHaveBeenCalledTimes(3);
   });
@@ -142,7 +142,7 @@ describe("sidebar narration subscription retries", () => {
           .mockResolvedValue({ key: "agent:main:run", agentId: null }),
         unsubscribeMessages: vi.fn().mockResolvedValue(undefined),
       };
-      const { controller } = createRunningNarrationController(source);
+      const { narration } = createRunningNarration(source);
       await vi.advanceTimersByTimeAsync(0);
       if (clockShift) {
         vi.setSystemTime(Date.now() + clockShift);
@@ -151,7 +151,7 @@ describe("sidebar narration subscription retries", () => {
       expect(source.subscribeMessages).toHaveBeenCalledOnce();
       await vi.advanceTimersByTimeAsync(1);
       expect(source.subscribeMessages).toHaveBeenCalledTimes(2);
-      controller.disconnect();
+      narration.disconnect();
     },
   );
 
@@ -163,7 +163,7 @@ describe("sidebar narration subscription retries", () => {
       unsubscribeMessages: vi.fn().mockResolvedValue(undefined),
     };
     const visibility = browserVisibility();
-    const { controller } = createRunningNarrationController(source);
+    const { narration } = createRunningNarration(source);
     await vi.advanceTimersByTimeAsync(0);
     visibility("visible");
     await vi.advanceTimersByTimeAsync(60_000);
@@ -172,7 +172,7 @@ describe("sidebar narration subscription retries", () => {
     visibility("hidden");
     visibility("visible");
     expect(source.subscribeMessages).toHaveBeenCalledTimes(2);
-    controller.disconnect();
+    narration.disconnect();
   });
 
   it("coalesces an overdue retry with a sync and shares the in-flight attempt", async () => {
@@ -186,7 +186,7 @@ describe("sidebar narration subscription retries", () => {
       unsubscribeMessages: vi.fn().mockResolvedValue(undefined),
     };
     const visibility = browserVisibility();
-    const { controller } = createRunningNarrationController(source);
+    const { narration } = createRunningNarration(source);
     await vi.advanceTimersByTimeAsync(0);
     vi.setSystemTime(Date.now() + 250);
     visibility("visible");
@@ -198,7 +198,7 @@ describe("sidebar narration subscription retries", () => {
     await ready.promise;
     visibility("visible");
     expect(source.subscribeMessages).toHaveBeenCalledTimes(2);
-    controller.disconnect();
+    narration.disconnect();
   });
 
   it.each(["rows", "agent", "source", "connection", "hidden", "disabled", "disconnect"])(
@@ -219,7 +219,7 @@ describe("sidebar narration subscription retries", () => {
           })),
         unsubscribeMessages: vi.fn().mockResolvedValue(undefined),
       };
-      const controller = new SidebarSessionNarrationController(() => undefined);
+      const narration = createSidebarNarration();
       const input: SidebarNarrationSyncInput = {
         enabled: true,
         connected: true,
@@ -229,30 +229,30 @@ describe("sidebar narration subscription retries", () => {
         openSessionKey: "",
         agentId: "main",
       };
-      controller.sync(input);
+      narration.sync(input);
       await vi.advanceTimersByTimeAsync(0);
       expect(vi.getTimerCount()).toBe(1);
       switch (change) {
         case "rows":
-          controller.sync({ ...input, rows: [] });
+          narration.sync({ ...input, rows: [] });
           break;
         case "agent":
-          controller.sync({ ...input, agentId: "research", rows: [runningRow("global")] });
+          narration.sync({ ...input, agentId: "research", rows: [runningRow("global")] });
           break;
         case "source":
-          controller.sync({ ...input, source: { ...source } });
+          narration.sync({ ...input, source: { ...source } });
           break;
         case "connection":
-          controller.sync({ ...input, connected: false });
+          narration.sync({ ...input, connected: false });
           break;
         case "hidden":
           visibility("hidden");
           break;
         case "disabled":
-          controller.sync({ ...input, enabled: false });
+          narration.sync({ ...input, enabled: false });
           break;
         case "disconnect":
-          controller.disconnect();
+          narration.disconnect();
           break;
       }
       late.reject(failure);
@@ -261,7 +261,7 @@ describe("sidebar narration subscription retries", () => {
       const attempts = source.subscribeMessages.mock.calls.length;
       await vi.advanceTimersByTimeAsync(60_000);
       expect(source.subscribeMessages).toHaveBeenCalledTimes(attempts);
-      controller.disconnect();
+      narration.disconnect();
     },
   );
 });

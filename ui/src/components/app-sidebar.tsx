@@ -13,7 +13,7 @@ import {
 } from "solid-js";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
-import { projectSource } from "../lib/reactive/projection.ts";
+import { projectOwner, projectSource } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { PluginView } from "../plugins/control-ui-view.solid.tsx";
 import { appSidebarProperties, type AppSidebarProps } from "./app-sidebar-base.ts";
@@ -74,6 +74,28 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
     },
     { equals: false },
   );
+  const narrationEnabled = createMemo(() => {
+    projection.revision();
+    Object.values(props);
+    return owner.narrationEnabled();
+  });
+  const narration = createMemo(() => {
+    if (!narrationEnabled()) {
+      return null;
+    }
+    const loaded = createMemo(() => owner.loadNarration(), { loadingValue: null });
+    return loaded;
+  });
+  const narrationProjection = createMemo(() => {
+    const source = narration()?.();
+    return source ? projectOwner(source, (current) => current.read()) : null;
+  });
+  owner.readNarration = createParkedProjection(
+    () => narrationProjection()?.read(),
+    () => props.navigationVisible,
+  );
+  const narrationInput = createMemo(() => prepared().narrationSyncInput());
+  onSettled(() => context.gateway.subscribeEvents((event) => owner.narration?.handleEvent(event)));
   const presentationRevision = createParkedProjection(
     () => {
       Object.values(props);
@@ -143,12 +165,16 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
   const content = hostView.renderSidebar(Sessions, scroll);
   createEffect(
     () => {
-      prepared();
+      narration()?.();
+      narrationInput();
       scroll.capture();
     },
     () =>
       untrack(() => {
         owner.commitRender();
+        if (owner.isConnected) {
+          owner.narration?.sync(narrationInput());
+        }
         scroll.restore();
         // The projection owns the display deadline; this mounted view owns its timer.
         const deadline = owner.sessionProjection.subtitleDeadline;
