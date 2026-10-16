@@ -59,22 +59,14 @@ it("still preserves Signal group ids", () => {
 });
 
 it("keeps Matrix room id case in the channel session key (both prod rooms)", () => {
-  expect(
-    buildAgentPeerSessionKey({
-      agentId: "main",
-      channel: "matrix",
-      peerKind: "channel",
-      peerId: ROOM_A,
-    }),
-  ).toBe(`agent:main:matrix:channel:${ROOM_A}`);
-  expect(
-    buildAgentPeerSessionKey({
-      agentId: "ops",
-      channel: "matrix",
-      peerKind: "channel",
-      peerId: ROOM_B,
-    }),
-  ).toBe(`agent:ops:matrix:channel:${ROOM_B}`);
+  for (const [agentId, peerId] of [
+    ["main", ROOM_A],
+    ["ops", ROOM_B],
+  ]) {
+    expect(
+      buildAgentPeerSessionKey({ agentId, channel: "matrix", peerKind: "channel", peerId }),
+    ).toBe(`agent:${agentId}:matrix:channel:${peerId}`);
+  }
 });
 
 describe("normalizeSessionKeyPreservingOpaquePeerIds (store canonicalization)", () => {
@@ -88,23 +80,15 @@ describe("normalizeSessionKeyPreservingOpaquePeerIds (store canonicalization)", 
     );
   });
 
-  it("preserves Matrix tails behind malformed nested ownership wrappers", () => {
-    const key = `Agent:Voice:Agent::Matrix:Channel:${ROOM_A}:Thread:${EVENT}`;
-    const normalized = `agent:voice:agent::matrix:channel:${ROOM_A}:thread:${EVENT}`;
-
-    expect(normalizeSessionKeyPreservingOpaquePeerIds(key)).toBe(normalized);
-    expect(requiresFoldedSessionKeyAliasProof(normalized)).toBe(true);
-    expect(parseRawSessionConversationRef(normalized)).toBeNull();
-  });
-
-  it("preserves Matrix tails after an extra empty nested-wrapper segment", () => {
-    const mixed = `Agent:Voice:Agent:Voice::Matrix:Channel:${ROOM_A}`;
-    const lower = `agent:voice:agent:voice::matrix:channel:${ROOM_A.toLowerCase()}`;
-    const normalized = `agent:voice:agent:voice::matrix:channel:${ROOM_A}`;
-
+  it.each([
+    ["Agent:Voice:Agent:", `:Thread:${EVENT}`],
+    ["Agent:Voice:Agent:Voice:", ""],
+  ])("preserves opaque tails after malformed wrapper %s", (prefix, suffix) => {
+    const mixed = `${prefix}:Matrix:Channel:${ROOM_A}${suffix}`;
+    const normalized = `${prefix.toLowerCase()}:matrix:channel:${ROOM_A}${suffix.replace(":Thread:", ":thread:")}`;
     expect(normalizeSessionKeyPreservingOpaquePeerIds(mixed)).toBe(normalized);
     expect(normalizeSessionKeyPreservingOpaquePeerIds(mixed)).not.toBe(
-      normalizeSessionKeyPreservingOpaquePeerIds(lower),
+      normalizeSessionKeyPreservingOpaquePeerIds(mixed.toLowerCase()),
     );
     expect(requiresFoldedSessionKeyAliasProof(normalized)).toBe(true);
     expect(parseRawSessionConversationRef(normalized)).toBeNull();
@@ -130,21 +114,14 @@ describe("resolveSessionStoreEntry — case-distinct Matrix session safety (code
     expect(deliveryContextFromSession(r.existing)?.to).toBe("room:!MixedRoomAbCdEf:example.org");
   });
 
-  it("does NOT return a case-distinct sibling as `existing` when the exact mixed-case key is absent", () => {
-    const r = resolveEntry(ROOM_LOWER_KEY, entry("room:!mixedroomabcdef:example.org", 999));
-    expect(r.legacyKeys).not.toContain(ROOM_LOWER_KEY);
-    expect(r.existing).toBeUndefined();
-  });
-
-  it("preserves a folded key with no delivery target and does not return it as `existing` (conservative)", () => {
-    const r = resolveEntry(ROOM_LOWER_KEY, { updatedAt: 50 } as unknown as SessionEntry);
-    expect(r.legacyKeys).not.toContain(ROOM_LOWER_KEY);
-    expect(r.existing).toBeUndefined();
-  });
-
-  it("does not return an exact lowercase Matrix key whose delivery target is mixed-case", () => {
-    const r = resolveEntry(ROOM_LOWER_KEY, entry(`room:${ROOM_A}`, 50), ROOM_LOWER_KEY);
-    expect(r).toMatchObject({ legacyKeys: [], existing: undefined });
+  it.each([
+    ["case-distinct room", entry(`room:${ROOM_A.toLowerCase()}`, 999), ROOM_MIXED_KEY],
+    ["missing delivery", { updatedAt: 50 } as unknown as SessionEntry, ROOM_MIXED_KEY],
+    ["mismatched exact key", entry(`room:${ROOM_A}`, 50), ROOM_LOWER_KEY],
+  ] as const)("rejects an unproven alias with %s", (_label, value, sessionKey) => {
+    const resolved = resolveEntry(ROOM_LOWER_KEY, value, sessionKey);
+    expect(resolved.legacyKeys).toEqual([]);
+    expect(resolved.existing).toBeUndefined();
   });
 
   it("still returns + collapses a confirmed lowercased artifact as `existing` when no exact key exists", () => {
