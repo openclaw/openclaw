@@ -345,7 +345,11 @@ describe("config appearance preferences", () => {
     expect(props.setTextScale).toHaveBeenCalledWith(100);
   });
 
-  it("keeps authored visual defaults direct", () => {
+  it.each(["iPhone", "Windows"])("keeps authored defaults editable on %s", (userAgent) => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(userAgent);
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
     const { container, props } = renderAppearance({
       theme: "claw",
       themeOverridden: true,
@@ -362,7 +366,19 @@ describe("config appearance preferences", () => {
 
     expect(normalizedText(themeSection)).toContain("Default: Claw");
     expect(normalizedText(themeSection)).toContain("Default: System");
-    expect(shortcutRow?.textContent).toContain("Default: Enter");
+    expect(shortcutRow.textContent).toContain("Default: Enter");
+    expect(shortcutRow.textContent).toContain(
+      "Desktop only. On mobile, Enter adds a new line; use the Send button to send.",
+    );
+    const shortcut = required(shortcutRow, "select", HTMLSelectElement);
+    expect(shortcut.value).toBe("enter");
+    expect(shortcut.disabled).toBe(false);
+    expect(props.onAppearanceChange).not.toHaveBeenCalled();
+    shortcut.value = "modifier-enter";
+    shortcut.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(props.onAppearanceChange).toHaveBeenCalledExactlyOnceWith({
+      chatSendShortcut: "modifier-enter",
+    });
     findButtonByText(themeSection, "Claw").click();
     themeSection
       .querySelector<HTMLInputElement>('.settings-segmented__input[value="system"]')
@@ -663,29 +679,3 @@ describe("config appearance preferences", () => {
     }
   });
 });
-
-it.each(["iPhone", "Android", "Windows NT 10.0"])(
-  "keeps the desktop send preference editable with its mobile policy explained on %s",
-  (userAgent) => {
-    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(userAgent);
-    onTestFinished(() => {
-      vi.restoreAllMocks();
-    });
-    const { container, props } = renderAppearance({ chatSendShortcut: "modifier-enter" });
-    const row = settingsRow(container, "Send shortcut");
-    expect(row.textContent).toContain("Desktop only.");
-    expect(row.textContent).toContain(
-      "On mobile, Enter adds a new line; use the Send button to send.",
-    );
-    const select = row.querySelector<HTMLSelectElement>("[data-settings-send-shortcut]");
-    expect(select?.value).toBe("modifier-enter");
-    expect(select?.disabled).toBe(false);
-    expect(props.onAppearanceChange).not.toHaveBeenCalled();
-    if (!select) {
-      throw new Error("Missing send shortcut preference");
-    }
-    select.value = "enter";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(props.onAppearanceChange).toHaveBeenCalledExactlyOnceWith({ chatSendShortcut: "enter" });
-  },
-);

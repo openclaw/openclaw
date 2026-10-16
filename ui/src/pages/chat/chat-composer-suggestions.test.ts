@@ -337,7 +337,7 @@ describe("chat composer suggestion accessibility", () => {
   });
 });
 
-it("leaves mobile Return for editing while the slash menu is open", async () => {
+it.each(["A mobile draft", "/res"])("leaves mobile Return for editing %s", async (draft) => {
   vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Android");
   onTestFinished(() => {
     vi.restoreAllMocks();
@@ -347,12 +347,15 @@ it("leaves mobile Return for editing while the slash menu is open", async () => 
   ]);
   const onSend = vi.fn();
   const { container } = createReactiveDraftHarness({ onSend });
-  inputDraftAtEnd(container, "/res");
-  await waitForSolid(() => expect(container.querySelector(".slash-menu-item")).not.toBeNull());
+  inputDraftAtEnd(container, draft);
+  if (draft.startsWith("/")) {
+    await waitForSolid(() => expect(container.querySelector(".slash-menu-item")).not.toBeNull());
+  }
   const textarea = getComposerTextarea(container)!;
-  const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
-  textarea.dispatchEvent(event);
-  expect(event.defaultPrevented).toBe(false);
-  expect(textarea.value).toBe("/res");
-  expect(onSend).not.toHaveBeenCalled();
+  for (const modifiers of [{}, { ctrlKey: true }, { metaKey: true }]) {
+    const event = keydownComposer(container, "Enter", modifiers);
+    expect(event.defaultPrevented).toBe(false);
+    expect(textarea.value).toBe(draft);
+    expect(onSend).not.toHaveBeenCalled();
+  }
 });
