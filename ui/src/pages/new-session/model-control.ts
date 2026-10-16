@@ -17,7 +17,7 @@ import { resolveModelCatalogState } from "../../lib/model-catalog-store.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { requiresChatModelSetup } from "../chat/chat-model-setup.ts";
 import { renderChatModelAccountControl } from "../chat/components/chat-model-account-control.ts";
-import type { renderChatModelControls } from "../chat/components/chat-model-controls.tsx";
+import type { ChatModelControlsProps } from "../chat/components/chat-model-controls.tsx";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
 import { CatalogTargetDiscovery } from "./catalog-target.ts";
 import { resolveHostedEnvironments, resolveHostEnvironmentChoice } from "./hosted-environments.ts";
@@ -626,9 +626,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
         );
   }
 
-  renderProps(
-    options: NewSessionModelRenderOptions,
-  ): Parameters<typeof renderChatModelControls>[0] {
+  renderProps(options: NewSessionModelRenderOptions): ChatModelControlsProps {
     const snapshot = options.context?.gateway.snapshot;
     const sessionKey = `new-session:${normalizeAgentId(options.agentId)}`;
     const sourceResult = options.context?.sessions.state.result ?? null;

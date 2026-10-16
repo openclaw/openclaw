@@ -12,7 +12,7 @@ import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import { PRESENTATION_CHANGED_EVENT, type PresentationValue } from "../../../lib/presentation.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-controller.ts";
-import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { GitHubPublicationAction, GitHubPublicationDetails } from "./chat-github-publication.tsx";
 import { ChatPullRequestChecks } from "./chat-pull-request-checks.tsx";
 import { chatPullRequestId } from "./chat-pull-requests.ts";
@@ -102,7 +102,7 @@ function Checks(props: {
     return current ? t(CHECK_LABEL_KEYS[current.state]) : t("chat.pullRequests.ciMonitoring");
   };
   const [revision, setRevision] = createSignal(0);
-  const parentPresented = useContext(SolidContentPresentation);
+  const parentPresented = useContext(ContentPresentation);
   createEffect(
     () => props.presented,
     (value) => {

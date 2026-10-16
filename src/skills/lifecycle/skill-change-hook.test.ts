@@ -101,7 +101,6 @@ describe("committed skill artifact snapshots", () => {
         if (filePath === targetPath) {
           __setFsSafeTestHooksForTest(undefined);
           vi.spyOn(handle, "read").mockImplementation(read);
-          vi.spyOn(handle, "readFile").mockImplementation(read);
           await fs.link(targetPath, outsidePath);
           linked = true;
         }

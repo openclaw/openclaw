@@ -3027,6 +3027,8 @@ openclaw_e2e_probe_tcp 127.0.0.1 18789 400`,
       repoShell(workDir)`
 export PATH="$TMPDIR/bin:$PATH"
 source "$ROOT_DIR/${OPENCLAW_E2E_INSTANCE_HELPER_PATH}"
+# An unrelated Gateway may be listening on the runner's fixed port.
+openclaw_e2e_probe_http() { return 1; }
 GATEWAY_LOG="$TMPDIR/gateway.log"
 UPDATE_RESTART_MODE=manual
 ${start}
@@ -3038,6 +3040,7 @@ exit "$start_status"
       { encoding: "utf8" },
     );
     expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout).toContain("Gateway exited before becoming ready");
   });
 
   it("scopes candidate setup Doctor markers without creating legacy device identities", () => {

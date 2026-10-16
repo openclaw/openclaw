@@ -7,7 +7,7 @@ import "../../../components/solid/overlay.css";
 import { acquireNativeOverlaySurface } from "../../../lib/native-overlay-occlusion.ts";
 import { PRESENTATION_CHANGED_EVENT, type PresentationValue } from "../../../lib/presentation.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 
 export function ChatPullRequestChecks(props: {
   label: string;
@@ -21,7 +21,7 @@ export function ChatPullRequestChecks(props: {
   let trigger!: HTMLElement;
   let surface!: HTMLElement;
   let mounted = false;
-  const parentPresented = useContext(SolidContentPresentation);
+  const parentPresented = useContext(ContentPresentation);
   const presented = () => {
     const value = props.presented;
     return parentPresented() && (typeof value === "boolean" ? value : value.isPresented());

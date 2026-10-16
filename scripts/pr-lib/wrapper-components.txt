@@ -400,6 +400,11 @@ src/agents/worktrees/template-cache.ts
 src/agents/worktrees/template-registry-async.ts
 src/agents/worktrees/template-registry.ts
 src/agents/worktrees/template-registry.worker.ts
+src/auto-reply/commands-args.ts
+src/auto-reply/commands-registry.data.ts
+src/auto-reply/commands-registry.shared.ts
+src/auto-reply/group-activation.ts
+src/auto-reply/reply/commands-slash-parse.ts
 src/auto-reply/reply/delivery-hints.ts
 src/auto-reply/reply/display-text-sanitize.ts
 src/auto-reply/reply/history-limit.ts
@@ -407,6 +412,7 @@ src/auto-reply/reply/inbound-context-marker.ts
 src/auto-reply/reply/mixed-silent-reply-tokens.ts
 src/auto-reply/reply/strip-inbound-meta.ts
 src/auto-reply/thinking.shared.ts
+src/auto-reply/thinking.ts
 src/auto-reply/tokens.ts
 src/bootstrap/node-compiler-args.ts
 src/channels/bundled-channel-catalog-read.ts
@@ -1498,6 +1504,9 @@ src/plugins/plugin-install-default-choice.ts
 src/plugins/plugin-instance-argument-views.ts
 src/plugins/plugin-instance-background.ts
 src/plugins/legacy-sdk-resource-host.ts
+src/plugins/provider-claude-thinking.ts
+src/plugins/provider-thinking-active.ts
+src/plugins/provider-thinking.ts
 src/plugins/registry-runtime-binding.ts
 src/plugins/plugin-instance-disposal.ts
 src/plugins/plugin-instance-error.ts
@@ -1701,6 +1710,7 @@ src/sessions/session-key-utils.ts
 src/sessions/session-row-changes.ts
 src/sessions/session-state-events.ambient-read.ts
 src/sessions/session-state-events.prune.ts
+src/sessions/session-title-source.ts
 src/sessions/transcript-events.ts
 src/sessions/transcript-terminal-model.ts
 src/sessions/user-turn-transcript-admission.ts
@@ -1715,6 +1725,7 @@ src/shared/detached-async-context.ts
 src/shared/dot-path.ts
 src/shared/effect-authority.ts
 src/shared/env-var-candidates.ts
+src/shared/fast-mode.ts
 src/shared/freebsd-process-identity-native.ts
 src/shared/freebsd-process-identity.ts
 src/shared/gateway-edge-auth-headers.ts
@@ -1742,9 +1753,13 @@ src/shared/store-writer-acquisitions.ts
 src/shared/store-writer-queue.ts
 src/shared/update-outcome.ts
 src/skills/discovery/agent-filter.ts
+src/skills/discovery/chat-command-invocation.ts
 src/skills/discovery/filter.ts
+src/skills/discovery/skill-command-provenance.ts
+src/skills/skill-file-host.ts
 src/skills/skill-library-error.ts
 src/skills/lifecycle/upload-store-error.ts
+src/skills/workspace-skill-read-path.ts
 src/state/agent-creation-claim.ts
 src/state/agent-database-admission-error.ts
 src/state/agent-database-admission.ts

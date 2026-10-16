@@ -4,7 +4,7 @@ import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
-import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { MessageImages, type MessageImagesProps } from "./chat-message-images-solid.tsx";
@@ -88,9 +88,9 @@ function draw(images: ImageBlock[], options: ImageRenderOptions = {}) {
   const [presented, setPresented] = createSignal(true);
   const mounted = mountSolid(
     () => (
-      <SolidContentPresentation value={presented}>
+      <ContentPresentation value={presented}>
         <MessageImages {...current()} />
-      </SolidContentPresentation>
+      </ContentPresentation>
     ),
     { container },
   );
