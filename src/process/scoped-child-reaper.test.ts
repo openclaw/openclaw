@@ -1,5 +1,5 @@
 import { ChildProcess } from "node:child_process";
-import type { ChildExit } from "@openclaw/proc-safe/reaper";
+import type { ChildExit, ChildWaitState } from "@openclaw/proc-safe/reaper";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCommandTerminationController } from "./exec-termination.js";
 import { scheduleAdoptedChildZombieReapAfterExit } from "./scoped-child-reaper.js";
@@ -7,6 +7,8 @@ import { scheduleAdoptedChildZombieReapAfterExit } from "./scoped-child-reaper.j
 const proc = vi.hoisted(() => ({
   entries: vi.fn<() => string[]>(),
   stat: vi.fn<(path: string) => string>(),
+  supported: vi.fn<() => boolean>(),
+  inspect: vi.fn<(pid: number) => ChildWaitState>(),
   wait: vi.fn<(pid: number) => ChildExit | null>(),
   alive: vi.fn<() => boolean>(),
 }));
@@ -14,8 +16,8 @@ const proc = vi.hoisted(() => ({
 vi.mock("node:fs", () => ({ readdirSync: proc.entries, readFileSync: proc.stat }));
 vi.mock("@openclaw/proc-safe/reaper", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/proc-safe/reaper")>()),
-  isSupported: () => true,
-  inspectChildWaitState: (pid: number) => ({ kind: "exited", pid }),
+  isSupported: proc.supported,
+  inspectChildWaitState: proc.inspect,
   reapChild: proc.wait,
 }));
 vi.mock("../infra/windows-install-roots.js", () => ({
@@ -66,6 +68,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
   Object.defineProperty(process, "platform", { value: "linux" });
+  proc.supported.mockReturnValue(true);
+  proc.inspect.mockImplementation((pid) => ({ kind: "exited", pid }));
   proc.wait.mockImplementation((pid) => ({ pid, exitCode: 0, signal: null, signalNumber: null }));
   setProcesses([]);
 });
@@ -77,6 +81,72 @@ afterEach(() => {
 });
 
 describe("adopted process-group cleanup", () => {
+  it.each(["absent", "tracked-root", "unrelated"] as const)(
+    "does not initialize native reaping for a group with only %s processes",
+    (scenario) => {
+      setProcesses(
+        scenario === "absent"
+          ? []
+          : scenario === "tracked-root"
+            ? [{ pid: ROOT, ppid: process.pid, pgid: ROOT, state: "Z" }]
+            : [
+                { pid: 401, ppid: process.pid, pgid: 700, state: "Z" },
+                { pid: 402, ppid: 900, pgid: ROOT, state: "Z" },
+              ],
+      );
+      scheduleAdoptedChildZombieReapAfterExit(trackedRoot(true), true);
+      vi.advanceTimersByTime(50);
+      expect(proc.supported).not.toHaveBeenCalled();
+      expect(proc.inspect).not.toHaveBeenCalled();
+      expect(proc.wait).not.toHaveBeenCalled();
+      if (scenario !== "unrelated") {
+        expect(vi.getTimerCount()).toBe(0);
+      }
+    },
+  );
+
+  it("stops cleanup when an adopted zombie needs unavailable native support", () => {
+    setProcesses([{ pid: 401, ppid: process.pid, pgid: ROOT, state: "Z" }]);
+    proc.supported.mockReturnValue(false);
+    scheduleAdoptedChildZombieReapAfterExit(trackedRoot(true), true);
+    vi.advanceTimersByTime(25);
+    expect(proc.supported).toHaveBeenCalledTimes(1);
+    expect(proc.inspect).not.toHaveBeenCalled();
+    expect(proc.wait).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["supported", "inspect", "wait"] as const)(
+    "retries a transient native %s failure within the existing cleanup budget",
+    (operation) => {
+      setProcesses([{ pid: 401, ppid: process.pid, pgid: ROOT, state: "Z" }]);
+      proc[operation].mockImplementationOnce(() => {
+        throw new Error("native cleanup failed");
+      });
+      expect(() => scheduleAdoptedChildZombieReapAfterExit(trackedRoot(true), true)).not.toThrow();
+      expect(() => vi.advanceTimersByTime(25)).not.toThrow();
+      vi.advanceTimersByTime(25);
+      expect(proc.wait).toHaveLastReturnedWith({
+        pid: 401,
+        exitCode: 0,
+        signal: null,
+        signalNumber: null,
+      });
+      setProcesses([]);
+      vi.advanceTimersByTime(50);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it("does not reap until the fresh native observation confirms an exited child", () => {
+    setProcesses([{ pid: 401, ppid: process.pid, pgid: ROOT, state: "Z" }]);
+    proc.inspect.mockReturnValueOnce({ kind: "running" });
+    scheduleAdoptedChildZombieReapAfterExit(trackedRoot(true), true);
+    vi.advanceTimersByTime(25);
+    expect(proc.wait).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(25);
+    expect(proc.wait.mock.calls).toEqual([[401]]);
+  });
   it("settles a cooperative descendant throughout a longer command grace period", async () => {
     const child = trackedRoot(true);
     vi.spyOn(process, "kill").mockReturnValue(true);
@@ -115,11 +185,15 @@ describe("adopted process-group cleanup", () => {
     scheduleAdoptedChildZombieReapAfterExit(child, true);
     vi.advanceTimersByTime(100);
     expect(proc.wait).not.toHaveBeenCalled();
+    expect(proc.inspect).not.toHaveBeenCalled();
+    expect(proc.supported).not.toHaveBeenCalled();
     expect(proc.entries).not.toHaveBeenCalled();
 
     child.emit("exit", null, "SIGTERM");
     expect(proc.wait).not.toHaveBeenCalled();
     vi.advanceTimersByTime(25);
+    expect(proc.supported).toHaveBeenCalledTimes(1);
+    expect(proc.inspect.mock.calls).toEqual([[401]]);
     expect(proc.wait.mock.calls).toEqual([[401]]);
   });
 
@@ -131,6 +205,8 @@ describe("adopted process-group cleanup", () => {
     ]);
     scheduleAdoptedChildZombieReapAfterExit(child, true);
     vi.advanceTimersByTime(500);
+    expect(proc.supported).not.toHaveBeenCalled();
+    expect(proc.inspect).not.toHaveBeenCalled();
     expect(proc.wait).not.toHaveBeenCalled();
 
     setProcesses([
