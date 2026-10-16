@@ -20,6 +20,9 @@ describe("explicit all-test runtime trials", () => {
   it.each([
     "src/infra/owned-directory-observation.test.ts",
     "src/infra/tailscale-route-owner.worker.test.ts",
+    "src/gateway/session-utils.fs.display-position.test.ts",
+    "src/infra/exec-host.socket.test.ts",
+    "test/helpers/openclaw-test-instance.test.ts",
     "src/state/openclaw-database-preflight.startup-prepared.test.ts",
     "src/state/openclaw-state-ownership.test.ts",
   ])("keeps the blocked native contract in %s on Node", (file) => {
