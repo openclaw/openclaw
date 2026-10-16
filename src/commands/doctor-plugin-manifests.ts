@@ -181,9 +181,8 @@ export async function maybeRepairLegacyPluginManifestContracts(
     onSkippedManifest: (skip) => skipped.push(skip),
   });
 
-  const emitNote = params.note ?? note;
   if (skipped.length > 0) {
-    emitNote(
+    note(
       [
         "Legacy plugin manifests were left unchanged (their bytes are not valid UTF-8):",
         ...skipped.map((skip) => `- ${skip.reason}`),
@@ -195,7 +194,7 @@ export async function maybeRepairLegacyPluginManifestContracts(
     return false;
   }
 
-  emitNote(
+  note(
     [
       "Legacy plugin manifest capability keys detected.",
       ...migrations.flatMap((migration) => migration.changeLines),

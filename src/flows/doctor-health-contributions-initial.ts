@@ -1,5 +1,5 @@
-import type { LegacyPluginManifestSkip } from "../commands/doctor-plugin-manifests.js";
 import { noteBackupDoctorHint } from "../commands/backup-health.js";
+import type { LegacyPluginManifestSkip } from "../commands/doctor-plugin-manifests.js";
 import { isLegacyParentWritableUpdateDoctorPass } from "../commands/doctor/shared/update-phase.js";
 import { copyConfigResolutionFactsThroughRewrite } from "../config/resolution-facts.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";

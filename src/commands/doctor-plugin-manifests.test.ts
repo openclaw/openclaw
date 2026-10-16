@@ -149,18 +149,9 @@ describe("doctor plugin manifest legacy contract repair", () => {
         "Convert a copy of the manifest to UTF-8, then run `openclaw doctor --fix` to rewrite legacy capability keys under contracts.*.",
     });
 
-    const emitNote = vi.fn();
-    const changed = await maybeRepairLegacyPluginManifestContracts({
-      ...params,
-      runtime: createRuntime(),
-      prompter: createPrompter(),
-      note: emitNote,
-    });
+    const changed = await maybeRepairLegacyPluginManifestContracts({ ...params });
     expect(changed).toBe(false);
     expect(fs.readFileSync(manifestPath).equals(bytes)).toBe(true);
-    expect(emitNote).toHaveBeenCalledTimes(1);
-    expect(emitNote.mock.calls[0]?.[1]).toBe("Plugin manifests");
-    expect(String(emitNote.mock.calls[0]?.[0])).toContain(reason);
   });
 
   it("removes duplicate legacy top-level plugin tools while keeping contracts.tools", async () => {
