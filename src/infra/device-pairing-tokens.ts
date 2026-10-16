@@ -41,7 +41,9 @@ export async function verifyDeviceToken(params: {
     input.deviceId,
     (device) => {
       const result = verifyPairedDeviceToken(device, input);
-      if (result.ok) recordDeviceTokenUse(input, baseDir);
+      if (result.ok) {
+        recordDeviceTokenUse(input, baseDir);
+      }
       return result;
     },
     baseDir,
@@ -60,9 +62,13 @@ export async function ensureDeviceToken(params: {
   return readCurrentPairedDevice(
     input.deviceId,
     (device) => {
-      if (isIssuanceCurrent?.() === false) return null;
+      if (isIssuanceCurrent?.() === false) {
+        return null;
+      }
       const reusable = reusablePairedDeviceToken(device, input);
-      if (reusable) return reusable;
+      if (reusable) {
+        return reusable;
+      }
       return executeDevicePairingMutation(
         { type: "devicePairing.ensureToken", input: { ...input, nowMs: Date.now() } },
         {

@@ -39,7 +39,9 @@ export function verifyDeviceTokenInWorker(params: {
 }): DeviceTokenVerification {
   return updatePairedDeviceInTransaction<DeviceTokenVerification>(params.deviceId, (device) => {
     const value = verifyPairedDeviceToken(device, params);
-    if (!value.ok || !device) return { value };
+    if (!value.ok || !device) {
+      return { value };
+    }
     const role = params.role.trim();
     const entry = device.tokens![role]!;
     return {
@@ -84,7 +86,9 @@ export function ensureDeviceTokenInWorker(params: {
       return { value: null };
     }
     const reusable = reusablePairedDeviceToken(device, params);
-    if (reusable) return { value: reusable };
+    if (reusable) {
+      return { value: reusable };
+    }
     const now = params.nowMs;
     const next = createDeviceAuthToken({
       role,
