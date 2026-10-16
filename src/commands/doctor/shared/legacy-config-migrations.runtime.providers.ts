@@ -1,6 +1,6 @@
 import { ensureRecord, type LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
 import { mergeMissing } from "../../../config/merge-missing.js";
-import { isRecord } from "./legacy-config-record-shared.js";
+import { deepCloneForMigrationProbe, isRecord } from "./legacy-config-record-shared.js";
 import {
   migrateLegacyXSearchConfig,
   resolveLegacyXSearchModelTarget,
@@ -191,7 +191,7 @@ function pluginPolicyMigration(
         path: ["plugins"],
         message,
         requireSourceLiteral: true,
-        match: (_value, root) => migrate(structuredClone(root)).length > 0,
+        match: (_value, root) => migrate(deepCloneForMigrationProbe(root)).length > 0,
       },
     ],
     apply: (raw, changes) => {

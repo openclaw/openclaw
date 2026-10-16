@@ -10,6 +10,7 @@ import * as catalog from "./legacy-config-migrations.runtime.models.catalog.js";
 import * as codex from "./legacy-config-migrations.runtime.models.codex.js";
 import * as refs from "./legacy-config-migrations.runtime.models.refs.js";
 import * as vllm from "./legacy-config-migrations.runtime.models.vllm.js";
+import { deepCloneForMigrationProbe } from "./legacy-config-record-shared.js";
 import {
   collectLegacyDefaultModelAllowRefs,
   migrateExplicitDefaultModelAllowPolicy,
@@ -52,7 +53,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS: LegacyConfigMigrationSpec[
           'Legacy implicit primary model selection needs preservation before separating utility models. Run "openclaw doctor --fix"; dynamic catalog IDs need an explicit primary model.',
         // Advice may inspect resolved values; applying the migration still requires authored input.
         match: (_value, root) =>
-          materializeUtilityModelSeparation(structuredClone(root)).changes.length > 0,
+          materializeUtilityModelSeparation(deepCloneForMigrationProbe(root)).changes.length > 0,
       },
     ],
     apply: (raw, changes, context) => {

@@ -1,4 +1,5 @@
 // Shared record helpers for legacy config migration modules.
+import { isPlainObject } from "../../../infra/plain-object.js";
 import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
 import { isRecord } from "../../../utils.js";
 type JsonRecord = Record<string, unknown>;
@@ -51,6 +52,47 @@ export function visitAgentConfigScopes(
     visitor(agents.defaults, "agents.defaults");
   }
   visitAgentEntries(raw, visitor);
+}
+
+// Structured-clone equivalent for JSON-shaped config trees. The built-in
+// structuredClone overflows the call stack on the deep documents the include
+// resolver accepts, so containers are copied through an explicit work stack
+// instead of recursion. Migration probes only read and rewrite plain-object
+// config paths, so sharing non-JSON leaves by reference is fine, and blocked
+// prototype keys stay filtered like the rest of the migration family.
+export function deepCloneForMigrationProbe<T>(value: T): T {
+  if (!isPlainObject(value) && !Array.isArray(value)) {
+    return value;
+  }
+  const root: JsonRecord | unknown[] = Array.isArray(value) ? [] : {};
+  const stack: Array<{ source: JsonRecord; target: JsonRecord | unknown[] }> = [
+    // SAFETY: only containers pass the guard above, and arrays walk as records with numeric keys.
+    { source: value as JsonRecord, target: root },
+  ];
+  while (stack.length > 0) {
+    const frame = stack.pop()!;
+    for (const [key, entry] of Object.entries(frame.source)) {
+      if (isBlockedObjectKey(key)) {
+        continue;
+      }
+      const childIsArray = Array.isArray(entry);
+      const childIsObject = !childIsArray && isPlainObject(entry);
+      // SAFETY: entry comes from a JsonRecord, so non-container children keep
+      // their JSON leaf value and containers are recreated below.
+      const child = childIsObject ? {} : childIsArray ? [] : entry;
+      if (Array.isArray(frame.target)) {
+        frame.target[Number(key)] = child;
+      } else {
+        frame.target[key] = child;
+      }
+      if (childIsObject || childIsArray) {
+        // SAFETY: containers enqueue JSON children; arrays walk as numeric-key records.
+        stack.push({ source: entry as JsonRecord, target: child as JsonRecord | unknown[] });
+      }
+    }
+  }
+  // SAFETY: containers are recreated structurally, so the clone keeps the probe's input type.
+  return root as T;
 }
 
 /** Delete a nested retired config path, with `*` matching record entries. */

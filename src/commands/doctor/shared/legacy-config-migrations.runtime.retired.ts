@@ -18,6 +18,7 @@ import {
 import { LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD } from "./legacy-config-migrations.runtime.retired-memory-qmd.js";
 import { migrateTierEvalTranche } from "./legacy-config-migrations.runtime.tier-eval.js";
 import {
+  deepCloneForMigrationProbe,
   deleteRetiredPath,
   moveLegacyConfigKey,
   visitAgentConfigScopes,
@@ -387,7 +388,7 @@ function probedMigration(
     legacyRules: [
       rule([], message, (_value, root) => {
         const changes: string[] = [];
-        apply(structuredClone(root), changes);
+        apply(deepCloneForMigrationProbe(root), changes);
         return changes.length > 0;
       }),
     ],
@@ -521,7 +522,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
       rule(
         [],
         "Numeric runtime tuning knobs were retired and now use built-in defaults.",
-        (_value, root) => stripRetiredTuningKnobs(structuredClone(root)),
+        (_value, root) => stripRetiredTuningKnobs(deepCloneForMigrationProbe(root)),
       ),
     ],
     apply: stripRetiredTuningKnobs,
