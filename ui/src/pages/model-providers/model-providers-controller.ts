@@ -287,10 +287,12 @@ export function createModelProviders(
     notify();
   }
 
+  // Route results drive the Gateway loading owner while the page stays mounted.
   createEffect(
     () => ({ routeData: inputs.routeData, pending: inputs.loaderPending ?? false }),
     (value) => synchronizeRoute(value.routeData, value.pending),
   );
+  // Dispatch deferred login/catalog requests once their owner admits them.
   createEffect(
     () => ({
       revision: projection.revision(),
@@ -311,6 +313,7 @@ export function createModelProviders(
       }
     },
   );
+  // The catalog cache subscription belongs to the current Gateway client.
   createEffect(
     () => gatewayState.read().snapshot.client,
     (client) => (client ? modelCatalog.subscribeModelCatalogCache(client, notify) : undefined),

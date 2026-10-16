@@ -115,13 +115,20 @@ export function insertRepositoryGitHubPublicationInDatabase(
   assertCurrent();
   ensureRepositoryGitHubPublicationSchema(db);
   checked(row);
-  const inserted = executeSqliteQuerySync(
+  const inserted = executeSqliteQueryTakeFirstSync(
     db,
     query(db)
       .insertInto(table)
       .values(row)
-      .onConflict((conflict) => conflict.doNothing()),
+      .onConflict((conflict) => conflict.doNothing())
+      .returningAll(),
   );
+  if (inserted) {
+    assertCurrent();
+    githubPublicationReceipts.stageRow(db, "repository", inserted);
+    deferSharedGitHubPublicationChanged(db, inserted);
+    return inserted;
+  }
   const stored = executeSqliteQueryTakeFirstSync(
     db,
     query(db)
@@ -166,10 +173,6 @@ export function insertRepositoryGitHubPublicationInDatabase(
   }
   checked(stored);
   assertCurrent();
-  if (inserted.numAffectedRows === 1n) {
-    githubPublicationReceipts.stageRow(db, "repository", stored);
-    deferSharedGitHubPublicationChanged(db, stored);
-  }
   return stored;
 }
 

@@ -9,7 +9,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolvePluginInstallRoots, withPluginInstallRoots } from "./install-root-context.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
-import { acquirePluginRegistryForInspection } from "./loader.js";
+import { loadPluginRegistryHandle } from "./loader.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { createFixture } from "./plugin-generation-artifact.admission.test-support.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
@@ -65,8 +65,10 @@ it("records a native host mismatch while preserving unrelated channel accounts",
     });
     const error = vi.fn();
     try {
-      const inspection = await withPluginCache(cache, () =>
-        acquirePluginRegistryForInspection({
+      // Fault injection belongs to this isolate; exercise the public inline loader.
+      const registry = withPluginCache(cache, () =>
+        loadPluginRegistryHandle({
+          cache: false,
           config: {
             plugins: {
               allow: ["fixture", "healthy"],
@@ -79,33 +81,27 @@ it("records a native host mismatch while preserving unrelated channel accounts",
           logger: { info() {}, warn() {}, error, debug() {} },
         }),
       );
-      try {
-        const reason = `${path.join(fixture.installRoot, "node_modules", "openclaw")} resolves to ${wrongHost}`;
-        expect(inspection.registry.plugins).toContainEqual(
-          expect.objectContaining({
-            id: "fixture",
-            status: "error",
-            error: expect.stringContaining(reason),
-          }),
-        );
-        expect(inspection.registry.diagnostics).toContainEqual(
-          expect.objectContaining({
-            pluginId: "fixture",
-            level: "error",
-            message: expect.stringContaining(reason),
-          }),
-        );
-        expect(error).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
-        expect(inspection.registry.plugins).toContainEqual(
-          expect.objectContaining({ id: "healthy", status: "loaded" }),
-        );
-        const channel = inspection.registry.channels.find(
-          ({ plugin }) => plugin.id === "healthy-chat",
-        );
-        expect(channel?.plugin.config.listAccountIds({})).toEqual(["primary", "secondary"]);
-      } finally {
-        await inspection.release();
-      }
+      const reason = `${path.join(fixture.installRoot, "node_modules", "openclaw")} resolves to ${wrongHost}`;
+      expect(registry.plugins).toContainEqual(
+        expect.objectContaining({
+          id: "fixture",
+          status: "error",
+          error: expect.stringContaining(reason),
+        }),
+      );
+      expect(registry.diagnostics).toContainEqual(
+        expect.objectContaining({
+          pluginId: "fixture",
+          level: "error",
+          message: expect.stringContaining(reason),
+        }),
+      );
+      expect(error).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
+      expect(registry.plugins).toContainEqual(
+        expect.objectContaining({ id: "healthy", status: "loaded" }),
+      );
+      const channel = registry.channels.find(({ plugin }) => plugin.id === "healthy-chat");
+      expect(channel?.plugin.config.listAccountIds({})).toEqual(["primary", "secondary"]);
     } finally {
       fault.mockRestore();
       await retirePluginCache(cache);

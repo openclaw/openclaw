@@ -25,6 +25,7 @@ export type SqliteSchemaFacts = {
 
 export const schemaAdmission: SqliteDatabaseAdmissionKey<SqliteSchemaFacts> = {
   name: "sqlite-schema",
+  lifetime: "process",
   schemaDependent: true,
   read: (value) => {
     // SAFETY: Only the typed SQLite catalog owner publishes this private fact key.
@@ -34,6 +35,7 @@ export const schemaAdmission: SqliteDatabaseAdmissionKey<SqliteSchemaFacts> = {
 
 const textEncodingAdmission: SqliteDatabaseAdmissionKey<string> = {
   name: "sqlite-text-encoding",
+  lifetime: "process",
   read: (value) => (typeof value === "string" ? value : undefined),
 };
 

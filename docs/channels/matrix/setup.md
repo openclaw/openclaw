@@ -16,7 +16,7 @@ Install the Matrix plugin, point it at a homeserver, and choose how invites, all
 openclaw plugins install @openclaw/matrix
 ```
 
-`@openclaw/matrix` installs from npm first, then falls back to its declared ClawHub package only when the npm target is unavailable. Use `npm:` or `clawhub:` to force a source. From a local checkout: `openclaw plugins install ./path/to/local/matrix-plugin`.
+`@openclaw/matrix` installs from ClawHub by default. Use `npm:@openclaw/matrix` to install directly from npm. From a local checkout: `openclaw plugins install ./path/to/local/matrix-plugin`.
 
 `plugins install` registers and enables the plugin; no separate `enable` step is needed. The channel still does nothing until configured below. See [Plugins](/tools/plugin) for general install rules.
 

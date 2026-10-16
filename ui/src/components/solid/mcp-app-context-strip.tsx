@@ -22,9 +22,9 @@ import "../../styles/mcp-app-extensions.css";
 registerMcpAppEnglish();
 
 type McpAppContextStripProps = { sessionKey: string; agentId: string };
-export type McpAppContextStripElement = SolidBridgeElement<McpAppContextStripProps>;
+type McpAppContextStripElement = SolidBridgeElement<McpAppContextStripProps>;
 
-export function McpAppContextStripContent(props: McpAppContextStripProps) {
+function McpAppContextStripContent(props: McpAppContextStripProps) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const [error, setError] = createSignal<string | null>(null);

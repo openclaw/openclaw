@@ -126,6 +126,11 @@ plugin code registered with `api.registerCliBackend(...)`.
 
 Claude CLI startup hook events are consumed in order while initialization completes, so a burst of `SessionStart` hooks does not stall the first turn. Restricted runs continue to disable native hooks.
 
+With `tools.fs.workspaceOnly: true`, agent turns use OpenClaw tools through the
+MCP bridge so file access follows the workspace policy. The backend must support
+bundled MCP and exact tool selection; otherwise OpenClaw refuses to start the
+turn. An agent's `tools.fs.workspaceOnly` setting overrides the global setting.
+
 Claude stream-json backends also emit live line-count progress while `write`,
 `edit`, and `apply_patch` arguments stream. Progress contains only the tool id,
 name, and added/removed line counts, with at most four updates per second per

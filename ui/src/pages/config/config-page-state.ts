@@ -1036,7 +1036,9 @@ export function createConfigPage(
     synchronize();
     invalidate();
   };
+  // Route changes synchronize the config owners, lazy requests, and polling.
   createEffect(route, (next) => updateRoute(next.pageId, next.routeData));
+  // Scroll the requested settings section after its DOM has committed.
   createEffect(revision, () => afterCommit());
   onSettled(() => {
     const subscriptions = sources.flatMap((source) => (source ? [source.subscribe(refresh)] : []));

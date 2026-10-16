@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, untrack } from "solid-js";
+import { createMemo, createSignal, onCleanup } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
@@ -22,11 +22,7 @@ const CLAWD_WAVE_MS = 1400;
 
 export function AboutPage() {
   const context = useApplication();
-  const gateway = projectGateway(untrack(() => context.gateway));
-  createEffect(
-    () => context.gateway,
-    (source) => gateway.replaceSource(source),
-  );
+  const gateway = createMemo(() => projectGateway(context.gateway));
   const [copyState, setCopyState] = createSignal<AboutCommitCopyState>("idle");
   const [clawdWaving, setClawdWaving] = createSignal(false);
   let disposed = false;
@@ -69,7 +65,7 @@ export function AboutPage() {
   }
 
   function gatewayVersion() {
-    const snapshot = gateway.read().snapshot;
+    const snapshot = gateway().read().snapshot;
     return snapshot.phase === "connected" ? snapshot.hello?.server?.version?.trim() || null : null;
   }
 

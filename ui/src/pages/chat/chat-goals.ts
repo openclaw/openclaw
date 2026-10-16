@@ -56,10 +56,26 @@ const rejectedGoalReasons = new Set([
   "expired",
   "operation-conflict",
   "session-rebound",
+  "session-busy",
   "goal-rebound",
   "capacity",
   "invalid",
 ]);
+
+function rejectedGoalReason(error: unknown): string | undefined {
+  const details =
+    error instanceof GatewayRequestError && isRecord(error.details) ? error.details : null;
+  const reason = details?.reason;
+  if (
+    typeof reason === "string" &&
+    ((details?.code === "GOAL_OPERATION_REJECTED" && rejectedGoalReasons.has(reason)) ||
+      // Resume can be rejected by chat pre-admission before a turn is reserved.
+      (reason.startsWith("goal-") && rejectedGoalReasons.has(reason.slice(5))))
+  ) {
+    return reason;
+  }
+  return undefined;
+}
 
 function rejectGoalOperation(host: ChatHost, message: string): false {
   setChatError(host, message, true);
@@ -415,6 +431,7 @@ async function runGoalOperation(
       if (
         !("action" in params && params.action === "resume") ||
         !targetIsCurrent() ||
+        rejectedGoalReason(error) !== undefined ||
         !(
           error instanceof GatewayProtocolRequestTimeoutError ||
           (error instanceof GatewayRequestError && error.code === "UNAVAILABLE")
@@ -478,14 +495,8 @@ async function runGoalOperation(
   } catch (error) {
     // UNAVAILABLE can follow a commit. A definitive rejection may retire the intent,
     // but receipt expiry still requires observing the current Goal before a new decision.
-    const details =
-      error instanceof GatewayRequestError && isRecord(error.details) ? error.details : null;
-    const reason = details?.reason;
-    const rejected =
-      typeof reason === "string" &&
-      ((details?.code === "GOAL_OPERATION_REJECTED" && rejectedGoalReasons.has(reason)) ||
-        // Resume can be rejected by chat pre-admission before a turn is reserved.
-        (reason.startsWith("goal-") && rejectedGoalReasons.has(reason.slice(5))));
+    const reason = rejectedGoalReason(error);
+    const rejected = reason !== undefined;
     if (rejected) {
       const retired = reason === "expired" || reason === "goal-expired" ? "expired" : undefined;
       if (retired) {

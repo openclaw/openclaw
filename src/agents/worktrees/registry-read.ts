@@ -136,7 +136,7 @@ export async function prepareWorktreeRegistryGuard(
   context: OpenClawStateWorkerContext,
   authority: WorktreeWorkerAuthority,
 ): Promise<() => void> {
-  const predicates = structuredClone(authority.predicates ?? []);
+  const predicates = authority.predicates ?? [];
   const assertCaller = authority.assertCurrent;
   const generations = predicates.map((predicate) => ({
     kind: predicate.kind,

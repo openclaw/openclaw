@@ -501,7 +501,14 @@ async function createBackupArchiveInScope(opts: BackupCreateOptions): Promise<Ba
         skippedStateSourcePaths.add(skippedSourcePath);
       }
     }
+    const clientDirectories = new Set(
+      inventory.coreDatabases
+        .filter((database) => database.role === "client" && database.identity)
+        .map((database) => path.dirname(database.sourcePath)),
+    );
+    // Emit private client directories before snapshots create implicit tar parents.
     const requiredSourcePaths = new Set([
+      ...clientDirectories,
       ...sourcePathRemaps.keys(),
       ...result.assets.map((asset) => asset.sourcePath),
     ]);
@@ -561,6 +568,7 @@ async function createBackupArchiveInScope(opts: BackupCreateOptions): Promise<Ba
       tempArchivePath,
       log: opts.log,
       runTar: async (attemptTempArchivePath) => {
+        const visitedClientDirectories = new Set<string>();
         // Keep vanished paths across retries unless a later attempt archives them.
         for (const [sourcePath, reason] of skippedEntries) {
           if (reason === "volatile") {
@@ -578,6 +586,12 @@ async function createBackupArchiveInScope(opts: BackupCreateOptions): Promise<Ba
                 signal,
                 paths: [...requiredSourcePaths],
                 skip: (sourcePath) => {
+                  if (clientDirectories.has(sourcePath)) {
+                    if (visitedClientDirectories.has(sourcePath)) {
+                      return true;
+                    }
+                    visitedClientDirectories.add(sourcePath);
+                  }
                   if (!requiredSourcePaths.has(sourcePath) && inventory.isVolatile(sourcePath)) {
                     skippedEntries.set(sourcePath, "volatile");
                     return true;

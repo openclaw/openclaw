@@ -164,7 +164,7 @@ export function handleCompactionEnd(
     // A failed/aborted/skipped end must keep live assistant usage intact —
     // zeroing it disables the persistent-error compaction trigger exactly in
     // the degraded sessions that need it.
-    if (completed && Array.isArray(messages)) {
+    if (completed) {
       // Marker-free final compaction has no fresh boundary, so stale totals
       // must be cleared before later context counters inspect assistant usage.
       stripStaleAssistantUsageBeforeLatestCompaction(messages, {

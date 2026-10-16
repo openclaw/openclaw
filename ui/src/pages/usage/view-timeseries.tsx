@@ -4,6 +4,7 @@ import { For, Show, createMemo, onCleanup } from "solid-js";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { createMsFormatter, formatTimeMs } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { formatIsoDate } from "./helpers.ts";
 import { formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import { renderUsageRefreshStatus } from "./page-shell.tsx";
@@ -355,13 +356,13 @@ function TimeSeriesChart(props: {
     const handleUp = () => {
       stopDrag = undefined;
       document.body.style.cursor = previousCursor;
-      document.removeEventListener("mousemove", handleMove);
-      document.removeEventListener("mouseup", handleUp);
+      stopMove();
+      stopUp();
     };
 
     stopDrag = handleUp;
-    document.addEventListener("mousemove", handleMove);
-    document.addEventListener("mouseup", handleUp);
+    const stopMove = listen(document, "mousemove", { handleEvent: handleMove });
+    const stopUp = listen(document, "mouseup", handleUp);
   };
   return (
     <div class="session-timeseries-compact">

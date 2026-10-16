@@ -10,6 +10,7 @@ import {
   createOpenClawAgentDatabaseClaim,
   type OpenClawAgentDatabaseClaim,
 } from "./openclaw-agent-db-identity.js";
+import { retainAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
 import { withCommittedOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-companion.js";
 import {
   openOpenClawAgentDatabaseReadOnly,
@@ -28,10 +29,7 @@ import {
   assertCanonicalAgentPersistenceVersion,
   assertSupportedAgentSchemaVersion,
 } from "./openclaw-agent-db-schema-read.js";
-import {
-  borrowOpenClawAgentDatabase,
-  getOpenClawAgentDatabaseIfOpen,
-} from "./openclaw-agent-db.js";
+import { getOpenClawAgentDatabaseIfOpen } from "./openclaw-agent-db.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
@@ -77,11 +75,10 @@ export function retainOpenClawAgentDatabaseReadOnly(
   }
   const opened = findOpenAgentDatabase(options);
   if (opened && !opened.db.isTransaction) {
-    const borrowed = borrowOpenClawAgentDatabase(options);
     return {
       found: true,
       database: opened,
-      claim: createOpenClawAgentDatabaseClaim(opened, borrowed.release),
+      claim: createOpenClawAgentDatabaseClaim(opened, retainAgentDatabase(opened.db)),
     };
   }
   const agentId = normalizeAgentId(options.agentId);

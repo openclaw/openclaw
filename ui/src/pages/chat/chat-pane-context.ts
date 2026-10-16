@@ -149,7 +149,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     });
   }
 
-  override disconnectedCallback() {
+  override dispose() {
     if (this.state) {
       retireChatPairingQr(this.state);
       retireCachedPairingQr(this.state.chatMessagesBySession);
@@ -160,7 +160,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     this.gatewayConnectionLifecycle?.dispose();
     this.gatewayConnectionLifecycle = undefined;
     this.outboxRecoveryReady = false;
-    super.disconnectedCallback();
+    super.dispose();
   }
 
   protected async changeHeaderPlacement(
@@ -187,6 +187,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       // Only the request that still owns the row may clear its progress key.
       if (key !== null || this[property] === row.key) {
         this[property] = key;
+        this.invalidate();
       }
     };
     const params = {
@@ -197,7 +198,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       isCurrent: () => this.ownsHeaderOutcomeScope(scope),
       publishError: (error: unknown) => this.publishHeaderError(error, scope.headerOutcomeOwner),
       reconcileMutation: (agentId?: string | null) => scope.sessions.reconcileMutation(agentId),
-      requestUpdate: () => this.requestUpdate(),
+      requestUpdate: () => this.invalidate(),
     };
     if (mode === "reclaim") {
       const { reclaimChatPanePlacement } = await import("./chat-pane-placement.runtime.ts");
@@ -292,7 +293,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       }
     }
     this.syncSessionSuggestionTarget(
-      stateValue.agentId ?? resolveChatAgentId(state) ?? "main",
+      resolveChatAgentId(state) ?? stateValue.agentId ?? "main",
       selectedSession,
     );
     if (selectedSessionDeleted) {
@@ -690,7 +691,10 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       });
       void refreshChatModelAuthStatus(state).finally(() => state.requestUpdate?.());
       void state.loadAssistantIdentity();
-      void this.refreshSessionSuggestions();
+      this.syncSessionSuggestionTarget(
+        resolveChatAgentId(state) ?? "main",
+        selectedChatSessionRow(state),
+      );
     }
     // Hello precedes recovery readiness. Wake parked outboxes on that publication;
     // the shared admission check still holds any recovered initial turn.

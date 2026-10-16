@@ -26,6 +26,14 @@ const testSuites = new Set([
 ]);
 const reviewed = new Map([
   [
+    "src/infra/client-credential-store.ts",
+    {
+      tier: "T3",
+      evidence:
+        "Preparatory local client owner: production capture imports only its path resolver. Credential operations have no production callers until cutover, which must reclassify their worker/offline entry points.",
+    },
+  ],
+  [
     "src/daemon/runtime-pin-store.ts",
     { tier: "T3", evidence: "CLI service owner / Doctor migration; no Gateway runtime." },
   ],
@@ -42,7 +50,7 @@ const reviewed = new Map([
     {
       priority: 99,
       evidence:
-        "Ordinary sessions.goal mutations use goals-operations.worker.ts; receipt reads use session-transcript.worker.ts. Shared receipt kernels also serve session-accessor.sqlite-transcript-turn.ts's retained native transaction; incognito uses the memory actor. goals-management.ts retains native mutation for opaque SDK or cross-store source authority; do not classify these security-boundary callers as worker-only.",
+        "goals-management.ts dispatches session.goal.mutate to its worker. Receipt kernels also serve session-turn.kernel.ts and sqlite-transcript-turn.ts: session-turn.ts retains native execution for opaque or foreign-store source authority, including Gateway goal chat. These shared receipt operations remain mixed.",
     },
   ],
   [
@@ -169,6 +177,54 @@ const reviewed = new Map([
     },
   ],
   [
+    "src/config/sessions/session-accessor.sqlite-history-projection.ts",
+    {
+      priority: 99,
+      evidence:
+        "The history builder and boundary-shape query also serve deprecated SDK readSessionTranscriptCatalogTitle through the native page reader. Coordinate reads are classified separately; do not exempt the shared builder.",
+    },
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-history.ts",
+    {
+      priority: 99,
+      evidence:
+        "Archive and instance kernels serve transcript/usage workers plus deprecated SDK loadArchivedSessions, loadMemorySessionMetadata and resolveMemorySessionTargets (shipped in v2026.10.4). Retain native compatibility until the SDK owner removes it.",
+    },
+  ],
+  [
+    "src/config/sessions/session-history.ts",
+    {
+      priority: 99,
+      evidence:
+        "Durable instance listings use session-transcript.worker.ts; deprecated memory-session SDK readers retain the native implementation. The async facade's incognito branch reaches withOpenClawAgentDatabaseReadOnly, which returns database-missing before SQL for that sentinel.",
+    },
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-participant-projection.ts",
+    {
+      priority: 99,
+      evidence:
+        "Participant rows serve workers and deprecated resolveMemorySessionTargets, but also generic entry decoding through entry-current-check's native source-authority fallback. This shared kernel is neither worker-only nor deprecated-only.",
+    },
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-pending-inputs.ts",
+    {
+      priority: 99,
+      evidence:
+        "Completion SQL remains reachable through deprecated UserTurnTranscriptRecorder.completeProcessing (shipped in v2026.10.4); bundled completion awaits completeProcessingAsync. Append/read/consume kernels also serve native transcript transactions carrying opaque source authority. Deletion is classified separately.",
+    },
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-reset-window.ts",
+    {
+      priority: 99,
+      evidence:
+        "Boundary/control queries serve workers plus deprecated SessionManager synchronous context reads and readSessionTranscriptCatalogTitle (shipped in v2026.10.4). Worker-only interval, lookup, oversized-message and accounting queries are classified separately.",
+    },
+  ],
+  [
     "src/config/sessions/session-transcript-search.ts",
     {
       priority: 4,
@@ -202,7 +258,11 @@ const reviewed = new Map([
   ],
   [
     "src/config/sessions/session-sharing-store.kernel.ts",
-    { priority: 7, evidence: "Member-row kernel shared by session readers" },
+    {
+      priority: 7,
+      evidence:
+        "Worker readers share listSessionMembersInDatabase with pending-input/source validation. Gateway voice create/relay reaches client-voice-session-write.ts's native-source branch; client-voice-session-source.ts retains foreign-store authority. Membership is an authorization boundary, not worker-only bookkeeping.",
+    },
   ],
   [
     "src/config/sessions/session-reaction-store.kernel.ts",
@@ -248,7 +308,63 @@ const reviewed = new Map([
     {
       priority: 99,
       evidence:
-        "Archive, cold-storage, cleanup and lifecycle workers use this deletion snapshot; offline full-store reset, deprecated SessionManager reload, and native lifecycle/opaque SDK transactions also reach it. These checks prevent deleting changed user data; the shared snapshot is not worker-only.",
+        "Workers and offline reset share this snapshot with SessionManager appendMessage/appendMessageWithTranscriptAnchor -> reloadPersistedTranscriptAfterAppend -> readSessionManagerReload -> inspectTranscriptEventsSync. Those synchronous SDK methods shipped in v2026.10.4. Keep the mixed tier and changed-user-data deletion check.",
+    },
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-branch-rewrite.ts",
+    {
+      priority: 99,
+      evidence:
+        "prepareTranscriptRewriteSync serves session-manager-maintenance.worker.ts and deprecated SessionManager.prepareTranscriptRewrite, exported by plugin-sdk/agent-sessions and shipped in v2026.10.4. The synchronous SDK method remains supported through 2026-12-31; this shared kernel is not worker-only.",
+    },
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-compaction.ts",
+    {
+      priority: 99,
+      evidence:
+        "Gateway sessions.compact uses session-accessor.transcript.ts, which dispatches ordinary trimming to its worker but retains trimTranscriptForManualCompact for nativeSource/hasOpaqueCheck authority. session-mutation-guards.ts preserves opaque requester commit guards; the destructive trim cannot discard that authority contract.",
+    },
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-deletion.ts",
+    {
+      priority: 99,
+      evidence:
+        "The transaction wrapper serves workers/maintenance plus sqlite-transcript-turn.ts's native branch. plugin-sdk/session-transcript-runtime.appendSessionTranscriptMessageByIdentityStrict supplies prepareMessageAfterIdempotencyCheck, which excludes worker execution; that callback contract shipped in v2026.10.4.",
+    },
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-display-position.ts",
+    {
+      priority: 99,
+      evidence:
+        "History workers share this query with plugin-sdk/session-transcript-runtime.readSessionTranscriptCatalogTitle -> readLegacySessionTranscriptCatalogTitle -> readSessionTranscriptHistoryEventPage. The synchronous SDK reader shipped in v2026.10.4 and remains deprecated through 2026-12-31.",
+    },
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-provenance.ts",
+    {
+      priority: 99,
+      evidence:
+        "writeSessionEntry calls prepareSessionEntryWindowRow from workers and retained native initial-entry/transcript persistence. Actor/prepared window facts bypass the query, but released synchronous SessionManager persistence and opaque transcript callbacks still reach the fallback; keep it mixed.",
+    },
+  ],
+  [
+    "src/config/sessions/session-pending-input-store.ts",
+    {
+      priority: 99,
+      evidence:
+        "Only SessionPendingInputReceipt.complete invokes nativeMutation; completeAsync uses the worker. UserTurnTranscriptRecorder.completeProcessing exposes the same synchronous completion contract. Both SDK APIs shipped in v2026.10.4; retain their native transaction until the compatibility cutover.",
+    },
+  ],
+  [
+    "src/config/sessions/targets-discovery.native.ts",
+    {
+      priority: 99,
+      evidence:
+        "Worker topology shares discovery with plugin-sdk/session-transcript-hit.loadCombinedSessionStoreForGateway (shipped in v2026.10.4), through combined-store-gateway.native.ts and lineage.native.ts. resolveExistingAgentSessionStoreTargets also serves session-turn-predicate.ts in retained native transcript turns.",
     },
   ],
   [
@@ -290,6 +406,93 @@ const reviewed = new Map([
 
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
+  [
+    "src/config/sessions/session-accessor.sqlite-read.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "readTranscriptExportSnapshotReadOnlySync",
+          "readTranscriptExportSnapshotFromDatabase",
+        ],
+        evidence:
+          "Transcript hydration, memory-entry export, and reset-recall dispatch run in transcript workers. Main-thread buildSessionEntry supplies a worker snapshot for SQLite; its in-process branch has no SQLite identity. Actor projection also receives a supplied snapshot. Other readers retain native SDK callers.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-history-interval.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "readDisplayableActiveEventById",
+          "readDisplayableActiveEventMetadataById",
+          "countHistoricalDisplayEvents",
+          "readHistoricalDisplayEventRange",
+          "readHistoricalHistoryAnchorPage",
+        ],
+        evidence:
+          "Only history-query's ID/lookup/anchor readers execute this SQL: session-transcript.worker.ts owns the readonly history reader; session-history-read-operation.worker.ts owns the prepared anchor-message callback. Native catalog title calls only the page reader; other imports use pure expression/parser helpers.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-history-projection.ts",
+    [
+      {
+        tier: "W",
+        operations: ["readActiveTranscriptCoordinate"],
+        evidence:
+          "Source pages run in session-history-worker-reader.ts under session-transcript.worker.ts. The other caller, resolveHistoryReadWindowChange, returns before this read without an expected anchor; deprecated catalog title's only native page calls supply no expectedReadWindow.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-reset-window.ts",
+    [
+      {
+        tier: "W",
+        operations: ["resolveClosedResetInterval", "hasUnindexedVisibleMessages"],
+        evidence:
+          "Closed intervals are called only by history-interval's worker-owned ID/anchor readers. Unindexed-message probing is called only by history-query's lookup reader, constructed by the readonly history reader inside session-transcript.worker.ts.",
+      },
+      {
+        tier: "W",
+        operations: ["readVisibleTranscriptStats"],
+        evidence:
+          "Only session-actor-context-stats.worker.ts and session-transcript-accounting.ts call this reader; accounting's sole production caller is the readonly history reader inside session-transcript.worker.ts.",
+      },
+      {
+        tier: "W",
+        operations: ["hasOversizedVisibleMessages"],
+        evidence:
+          "Only the bounded-tail projection's oversizedMessageCheck branch calls this query. Projection consumers run in workers; its native facade is used only by the title worker and Doctor title repair, neither of which supplies oversizedMessageCheck.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-pending-inputs.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["deleteSessionPendingInputs"],
+        evidence:
+          "Only deleteSessionNodeArtifacts calls this deletion, from deleteSessionEntryRows. That entry-deletion owner runs in worker/maintenance lifecycle, reclamation, purge and finalization, or cleanup-utils.ts offline reset; it already has the same reviewed T3 classification.",
+      },
+    ],
+  ],
+  [
+    "src/infra/backup-sqlite-snapshot.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["createBackupSqliteSnapshotPlan.captureSource.capture.transform"],
+        evidence:
+          "commands/backup.ts:55 calls backup-create.ts:314; createVerifiedSqliteSnapshot invokes this transform against its temporary backup image, never the live credential store. Doctor/update backup and developer reliability callers share that offline snapshot owner.",
+      },
+    ],
+  ],
   [
     "src/agents/auth-profiles/authorization-enrollment-runtime.ts",
     [
@@ -522,7 +725,13 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["selectProgressCard", "writePreparedSessionProgressCard.write"],
         evidence:
-          "session-transcript.worker.ts owns card reads; progress-card-store.worker.ts owns writes and their fallback reads. Gateway references are type uses; other writeSessionProgressCard callers are fixtures. clearProgressCardInTransaction remains mixed because native lifecycle reset calls its separate clearer.",
+          "session-transcript.worker.ts owns card reads; progress-card-store.worker.ts owns writes and their fallback reads. Gateway references are type uses; other writeSessionProgressCard callers are fixtures.",
+      },
+      {
+        tier: "T3",
+        operations: ["clearProgressCardInTransaction"],
+        evidence:
+          "Durable single and batched resets run through the agent worker and clear the card in the reset transaction. Native lifecycle and canonical-repair callers require maintenance authority; incognito uses the memory actor. progress-card-store.worker.ts also invokes this clearer for conditional card writes.",
       },
     ],
   ],
@@ -839,6 +1048,13 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
+        operations: ["writePersonalGitHubSecret"],
+        guard: "value === null",
+        evidence:
+          "Only user-github-connections.kernel.ts mergeUserGitHubConnection passes null, through user-profiles-merge.ts in user-profile-writes.worker.ts. Native personal cancel/disconnect pass serialized records and retain the shared upsert path.",
+      },
+      {
+        tier: "W",
         operations: ["listHiddenGitHubSecretsInDatabase"],
         evidence:
           "Only githubSecrets.list in secret-store-github-handoff.worker.ts selects hidden record listings; native SDK compatibility uses exact read/delete operations only.",
@@ -859,6 +1075,12 @@ const reviewedOperations = new Map([
   [
     "src/config/sessions/session-accessor.sqlite-acp-provenance.ts",
     [
+      {
+        tier: "T3",
+        operations: ["prepareLegacyAcpMigrationSourcesForEntryWrite"],
+        evidence:
+          "entry-store.ts is the sole caller. This read requires changed sessionId/lifecycleRevision and a partial provenance snapshot. Native transcript/compaction compatibility preserves identity; reset/replacement/message-cut/fork/recovery use workers. Doctor import/repair retains native partial snapshots. Opaque deletion callbacks now become worker finalizers via session-deletion-worker-participant.ts.",
+      },
       {
         tier: "T3",
         operations: ["readSources", "writeSources"],
@@ -929,6 +1151,13 @@ const reviewedOperations = new Map([
   [
     "src/config/sessions/session-accessor.sqlite-transcript-state.ts",
     [
+      {
+        tier: "W",
+        operations: ["advanceTranscriptMutationAtInTransaction"],
+        guard: "actor?.window",
+        evidence:
+          "Only the actor-window UPDATE is covered. readSessionActorTransactionState returns facts installed by withSessionActorTransactionState, whose only production caller is session-actor.worker.ts. The unbound RETURNING update remains mixed; the raw migration update retains its separate exception.",
+      },
       {
         tier: "T2",
         operations: ["advanceTranscriptMutationAtInTransaction"],
@@ -1022,10 +1251,10 @@ const reviewedOperations = new Map([
           "Only offline full-store reset calls these at session-accessor.sqlite-reset.ts:65,239 via commands/cleanup-utils.ts; other archive operations retain native lifecycle callers",
       },
       {
-        tier: "T1",
+        tier: "W",
         operations: ["hasPendingSessionTranscriptArchives"],
         evidence:
-          "Entry/lifecycle reader workers and replacement-state.ts query pending publication. Replacement-state also serves opaque SDK replacement transactions; keep this shared read mixed.",
+          "Direct callers are session-entry-read.worker.ts, session-lifecycle-projection.worker.ts and session-transcript.worker.ts. replacement-state.ts calls only when checkPendingArchiveRecovery is true; only sqlite-creation.ts sets that flag, and its creation replacement always selects the worker in replacement-projection.ts.",
       },
       {
         tier: "T3",
@@ -1037,10 +1266,10 @@ const reviewedOperations = new Map([
           "Only archive-transaction.ts:24,30 and openclaw-agent-execution-operations.ts:433,445 call prepare/record. Runtime publication dispatches through session-archive-publication.ts to the agent execution worker. The alternate archive-store.ts route passes reclamation-run.ts:68,140: native reclamation requires a worker or explicit schema/agent maintenance custody; !supportsOpenClawAgentDatabaseExecution alone never admits native reclamation.",
       },
       {
-        tier: "T1",
+        tier: "T3",
         operations: ["persistSessionTranscriptArchive"],
         evidence:
-          "Only lifecycle-state.ts deleteMaterializedSessionStatePlans inserts the canonical recovery copy. That lifecycle kernel serves mutation workers plus opaque SDK deletion transactions; retain the shared user-data integrity check and mixed tier.",
+          "Only deleteMaterializedSessionStatePlans calls this: reclamation-run.ts admits native work only in workers/maintenance; projection.ts retains Doctor canonical repair; agent purge receives workerAuthority from agent-lifecycle-registry.ts. Opaque deletion callbacks become worker post-commit finalizers in session-deletion-worker-participant.ts. Archive conflict and final deletion snapshot checks remain intact.",
       },
     ],
   ],
@@ -1071,10 +1300,27 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T3",
+        operations: ["readActiveTranscriptEntryIdentityInSnapshot"],
+        evidence:
+          "Current-turn, anchor, activity and entry-patch reads execute in workers. The native entry-patch branch requires !useWorker; execution-scope permits durable native work only under maintenance/cleanup custody. chat-send-active-leaf.ts calls the relation helper only for incognito, whose database opener rejects before SQLite. No SDK value export; the sibling anchor-facts query remains mixed.",
+      },
+      {
+        tier: "T3",
         operations: ["assertSessionTranscriptContextAnchorInDatabase"],
         guard: "expectedAuthority",
         evidence:
           "Only the expectedAuthority SELECT is covered. model-context.ts:202 forwards it from anchor-read.kernel.ts:215; callers are entry-read, entry-cohort, hydration-read and history-read-operation workers, plus openclaw-agent-execution-operations.ts:185 registered in execution.worker.ts:454. Runtime anchor readers use owned cohorts or transcript-worker readAnchors. Released detached validators accept only version/admission, and withTranscriptContextSnapshot omits expectedAuthority; shared anchor helpers remain mixed.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-transcript-metadata-read.ts",
+    [
+      {
+        tier: "W",
+        operations: ["hasSessionTranscriptMessageInDatabase"],
+        evidence:
+          "Only session-transcript-anchor-read.kernel.ts and session-history-read-operation.worker.ts call this query. The anchor kernel is reached by entry-read, entry-cohort, hydration-read and history-read-operation workers, plus openclaw-agent-execution-operations.ts registered in execution.worker.ts. The sibling header query retains its synchronous SDK callers.",
       },
     ],
   ],
@@ -1095,6 +1341,12 @@ const reviewedOperations = new Map([
   [
     "src/config/sessions/session-accessor.sqlite-transcript-write.ts",
     [
+      {
+        tier: "W",
+        operations: ["runNativeTranscriptWriteLock.replaceEvents"],
+        evidence:
+          "The full replacement method is consumed only by session-transcript-correction.ts runNative, invoked under !isMainThread. Public transcript and Codex mirror SDK callbacks receive projected contexts without replaceEvents; their append/read methods remain mixed. Internal accessor barrels and the private SDK context projector are not public entry points.",
+      },
       {
         tier: "T3",
         operations: ["appendTranscriptEvent", "rewriteTranscriptEventRowsExact"],
@@ -1799,6 +2051,12 @@ const reviewedOperations = new Map([
     "src/config/sessions/session-accessor.sqlite-node-artifacts.ts",
     [
       {
+        tier: "T3",
+        operations: ["clearSessionCollaborationForKey", "readSessionNodeArtifactTables"],
+        evidence:
+          "Collaboration clear runs only when entry-store.ts replaces a canonical sessionId. Those writes use reset/replacement/message-cut/fork/recovery workers or Doctor; native transcript/compaction compatibility preserves identity. Catalog fallback additionally serves repair/copy/delete/fingerprint kernels already classified as maintenance; admitted schema facts bypass it for normal handles.",
+      },
+      {
         tier: "T2",
         operations: ["deleteSessionMembersForRepair", "readSessionNodeArtifactFingerprint"],
         evidence:
@@ -2433,7 +2691,6 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: [
           "expireStagingAndLoadDeliveryQueueEntriesInDatabase",
-          "expireStagingAndLoadDeliveryQueueEntriesInDatabase.read",
           "countFailedDeliveryQueueEntriesInDatabase",
           "inspectDeliveryQueueReceiptInDatabase",
         ],
@@ -2477,6 +2734,12 @@ const reviewedOperations = new Map([
   [
     "src/infra/exec-approvals-sqlite.ts",
     [
+      {
+        tier: "T2",
+        operations: ["assertExecApprovalsMutationAllowed", "writeExecApprovalsConfigRow"],
+        evidence:
+          "Runtime policy writes and mutation guards run in exec-approvals-mutation.worker.ts, exec-approvals-authorization.worker.ts, exec-approvals-retirement.worker.ts and operator-approval-store.transitions.worker.ts via mintMcpToolGrantLocked. Native callers are updateExecApprovalsForMaintenance via exec-approvals-generated-migration.ts (Doctor), and state-migrations.exec-approvals{,-canonical}.ts. The shared synchronous policy reader remains T1.",
+      },
       {
         tier: "W",
         operations: ["deleteExecApprovalsConfigRow"],
@@ -2824,6 +3087,12 @@ const reviewedOperations = new Map([
     "src/state/config-machine-state-write.ts",
     [
       {
+        tier: "T3",
+        operations: ["updateConfigMachineState", "updateConfigMachineStateInDatabase"],
+        evidence:
+          "Native updates serve CLI hook install/update via hooks/install-record-transaction.ts, onboarding via commands/onboard-guided.ts, Doctor auth and retired/config-state migrations. Other updates execute in existing state, node-config, model-catalog, TUI, push-web, telemetry and promotions workers. Shared writeConfigMachineState/upsertConfigMachineState retain their native auth-profile callers.",
+      },
+      {
         tier: "W",
         operations: ["deleteConfigMachineState"],
         evidence:
@@ -2999,6 +3268,12 @@ const reviewedOperations = new Map([
     "src/state/user-profiles-internal.ts",
     [
       {
+        tier: "T3",
+        operations: ["selectProfileDisplayEntries"],
+        evidence:
+          "Profile authority/snapshot reads and catalog publication run in profile/channel/enterprise workers. The native publication caller is user-profiles-owner-migration.ts repairMergedGatewayOwnerProfile via Doctor repair-sequencing.ts; preview-warnings.ts inspects without publishing. Shared selectResolvedUserProfile retains native SDK callers.",
+      },
+      {
         tier: "W",
         operations: [
           "insertUserProfile",
@@ -3089,6 +3364,7 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/config/sessions/session-accessor.sqlite-entry-identity.ts", // Only reaction (agent execution worker), suggestion (sharing/transcript workers), and sharing native (sharing worker; host imports are types) kernels call this reader.
   "extensions/memory-core/src/memory/manager-publication-postgres.ts", // Only manager-publication.worker.ts binds this adapter to the admitted agent execution worker connection.
   "src/infra/database-engine/postgres-vector.ts", // Accepts only an admitted PostgresSqlConnection; the shared executor dispatches through PostgresSyncConnection to postgres-sync/bridge.worker.ts, never native SQLite.
   "src/plugin-state/plugin-state.worker.ts", // Only openclaw-state.worker.ts imports and calls this command dispatcher; its nested callbacks share that worker ownership.
@@ -3117,6 +3393,7 @@ const workerModules = new Set([
   "src/gateway/github-publication-store.worker.ts", // Shared-state publication request, mutation, and read workers only.
   "src/state/user-github-connections.worker.ts", // openclaw-state-worker-registry installs its operation table; host imports are type-only.
   "src/config/sessions/session-accessor.sqlite-worktree-owner.ts", // Only session-entry-read.worker.ts reads the worktree projection after owner-protection's worker cutover.
+  "src/config/sessions/session-accessor.sqlite-transcript-incremental-read.ts", // Anchor-read kernel worker roots; the sqlite-read wrapper's sole value caller is correction.ts runNative under !isMainThread.
   "src/gateway/worker-environments/placement-move-intent.ts", // Move reads and mutations run only in placement lifecycle, turn-claim, and projection workers.
   "src/state/user-background.store.ts", // Background read/write workers; preference validation and profile merge/link/GitHub-sync also run in shared-state workers.
   "src/gateway/worker-environments/local-workspace-store.kernel.ts", // Projection read/write workers and worktree retirement worker only.

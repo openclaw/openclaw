@@ -4,7 +4,7 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import "../../lib/toast-host.ts";
-import { publishSidebarSessionList } from "../../components/session-data-controller-events.ts";
+import { publishSidebarSessionList } from "../../components/session-data-events.ts";
 import {
   pauseSessionPlacementRecovery,
   readSessionPlacementRecovery,

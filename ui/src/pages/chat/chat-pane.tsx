@@ -128,7 +128,7 @@ export const ChatPaneView = defineSolidBridge<ChatPaneProps, PaneMethods>(
           const previous = Reflect.get(runtime, key);
           if (!Object.is(previous, value)) {
             Reflect.set(runtime, key, value);
-            runtime.requestUpdate(key, previous);
+            runtime.invalidate();
           }
         }
       },

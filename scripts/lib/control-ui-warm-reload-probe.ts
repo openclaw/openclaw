@@ -39,9 +39,14 @@ export function warmReloadProbe() {
     }
   });
   // Correlate completion tasks with their actual cache owner in diagnostic traces.
-  // oxlint-disable-next-line typescript/unbound-method
-  const transaction = IDBDatabase.prototype.transaction;
-  IDBDatabase.prototype.transaction = function (...args) {
+  const databasePrototype: {
+    transaction: (
+      this: IDBDatabase,
+      ...args: Parameters<IDBDatabase["transaction"]>
+    ) => ReturnType<IDBDatabase["transaction"]>;
+  } = IDBDatabase.prototype;
+  const transaction = databasePrototype.transaction;
+  IDBDatabase.prototype.transaction = function (this: IDBDatabase, ...args) {
     const result = transaction.apply(this, args);
     const label = `${this.name}:${[...result.objectStoreNames].join(",")}:${result.mode}`;
     result.addEventListener("complete", () => {

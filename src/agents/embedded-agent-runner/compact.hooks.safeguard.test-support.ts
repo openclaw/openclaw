@@ -46,6 +46,7 @@ export function registerCompactionSafeguardTests({
     });
   it.each([
     [undefined, "background"],
+    ["normal", "normal"],
     ["foreground", "foreground"],
   ] as const)(
     "carries pending input and %s urgency into safeguard recovery",

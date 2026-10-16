@@ -140,23 +140,27 @@ export function pruneDeliveryQueueTombstoneAges(db: EngineConnection, now: numbe
     getNodeSqliteKysely<DeliveryQueueDatabase>(db)
       .deleteFrom("delivery_queue_entries")
       .where((eb) =>
-        eb(
-          eb.refTuple("queue_name", "id"),
-          "in",
-          eb
-            .selectFrom(boundedDeliveryReceipts(db).as("policies"))
-            .select(["queue_name", "id"])
-            .where((policy) =>
-              policy("enqueued_at", "<", policy(policy.val(now), "-", policy.ref("max_age_ms"))),
-            )
-            .$asTuple("queue_name", "id"),
-        ),
+        eb.or([
+          eb.and([
+            eb("status", "in", ["completed", "failed"]),
+            eb("recovery_state", "=", "completed_bounded"),
+            eb("retention_id_prefix", "is not", null),
+            eb("enqueued_at", "<", eb(eb.val(now), "-", eb.ref("retention_max_age_ms"))),
+          ]),
+          eb.and([
+            eb("status", "=", "completed"),
+            eb("enqueued_at", "<", now - COMPLETED_TOMBSTONE_RETENTION_MS),
+            eb.or([
+              eb("recovery_state", "is", null),
+              eb("recovery_state", "not in", ["completed_permanent", "completed_bounded"]),
+            ]),
+          ]),
+        ]),
       ),
   );
   if ((result.numAffectedRows ?? 0n) > 0n) {
     publishSqliteDatabaseAdmission(db, failedDeliveryQueueHealthAdmission, undefined);
   }
-  pruneOrdinaryDeliveryReceipts(db, now);
 }
 
 /** CAS-compacts one exact row, or deletes it when no fence is authored. */

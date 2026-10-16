@@ -9,6 +9,7 @@ import {
 import { writeSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import * as sessionStorePaths from "../../../config/sessions/session-store-path.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import {
   bindInProcessSessionRun,
   takeInProcessFreshChildSession,
@@ -252,64 +253,59 @@ it("rejects replaced parent incarnations and never retains a reused child grant"
   });
 });
 
-it.each([false, true])(
-  "preserves pinned parent skills while the parent updates (changed=%s)",
-  async (changed) => {
-    await withOpenClawTestState({ label: "spawn-parent-recheck" }, async () => {
-      const sessionKey = "agent:main:parent";
-      const childSessionKey = "agent:main:subagent:child";
-      const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-      const scope = { storePath, sessionKey };
-      const skillLibrarySelections = [
-        {
-          skillId: "spawn-skill",
-          revision: "revision-one",
-          name: "spawn-skill",
-          ownerProfileId: null,
-        },
-      ];
-      await upsertSessionEntryCore(scope, {
-        sessionId: "parent-first",
-        lifecycleRevision: "first",
-        updatedAt: 1,
-        skillLibrarySelections,
+it("inherits admitted skill pins without overwriting a parent refresh", async () => {
+  await withOpenClawTestState({ label: "spawn-parent-skill-refresh" }, async () => {
+    const sessionKey = "agent:main:parent";
+    const childSessionKey = "agent:main:subagent:child";
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    const scope = { storePath, sessionKey };
+    const skillLibrarySelections = [
+      {
+        skillId: "spawn-skill",
+        revision: "revision-one",
+        name: "spawn-skill",
+        ownerProfileId: null,
+      },
+    ];
+    await upsertSessionEntryCore(scope, {
+      sessionId: "parent-first",
+      lifecycleRevision: "first",
+      updatedAt: 1,
+      skillLibrarySelections,
+    });
+    // The parent's own turn keeps writing its row while the child is prepared.
+    let refreshedParent: SessionEntry | null = null;
+    const prepare = writeParentDuringChildPrepare(childSessionKey, async () => {
+      refreshedParent = await upsertSessionEntryCore(scope, {
+        updatedAt: 2,
+        totalTokens: 10,
+        skillLibrarySelections: [],
       });
-      // The parent's own turn keeps writing its row while the child is prepared.
-      const prepare = writeParentDuringChildPrepare(childSessionKey, () =>
-        upsertSessionEntryCore(scope, {
-          updatedAt: 2,
-          totalTokens: 10,
-          ...(changed ? { skillLibrarySelections: [] } : {}),
+    });
+    try {
+      const result = await createFromParent(
+        lineageSpawnParams(sessionKey, childSessionKey, {
+          expectedParentSessionId: "parent-first",
+          senderIsOwner: true,
         }),
       );
-      try {
-        const result = await createFromParent(
-          lineageSpawnParams(sessionKey, childSessionKey, {
-            expectedParentSessionId: "parent-first",
-            senderIsOwner: true,
-          }),
-        );
-        expect(result).toMatchObject(
-          changed
-            ? { status: "error", error: expect.stringContaining("Parent skill selection changed") }
-            : { status: "ok" },
-        );
-        const child = loadSessionEntry({ storePath, sessionKey: childSessionKey });
-        if (changed) {
-          expect(child).toBeUndefined();
-        } else {
-          expect(child).toMatchObject({
-            spawnedBySessionId: "parent-first",
-            spawnedBySenderIsOwner: true,
-            skillLibrarySelections,
-          });
-        }
-      } finally {
-        prepare.mockRestore();
-      }
-    });
-  },
-);
+      expect(result).toMatchObject({ status: "ok" });
+      const child = loadSessionEntry({ storePath, sessionKey: childSessionKey });
+      expect(child).toMatchObject({
+        spawnedBySessionId: "parent-first",
+        spawnedBySenderIsOwner: true,
+        skillLibrarySelections,
+      });
+      expect(refreshedParent).toMatchObject({
+        totalTokens: 10,
+        skillLibrarySelections: [],
+      });
+      expect(loadSessionEntry(scope)).toEqual(refreshedParent);
+    } finally {
+      prepare.mockRestore();
+    }
+  });
+});
 
 it("spawns from a parent without a stored row, as before lineage receipts", async () => {
   await withOpenClawTestState({ label: "spawn-rowless-parent" }, async () => {

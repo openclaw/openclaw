@@ -12,6 +12,7 @@ import {
   executeOpenClawStateWorker,
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
+import { withSessionUpstreamPublication } from "./session-upstream-links-publication.js";
 import {
   emptyWatchedSessionUpstreamLinksAdmission,
   upsertSessionUpstreamLinkInDatabase,
@@ -128,9 +129,10 @@ export async function upsertSessionUpstreamLinkWithCurrentSource(
     };
     return await runOpenClawStateWorkerOperation(context, (scope) => scope.execute(command), {
       assertCurrent,
-      createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
-        context.admission.databasePath,
-      ]),
+      createAdmission: withSessionUpstreamPublication(
+        createSqliteWorkerWriteAdmission(assertCurrent, [context.admission.databasePath]),
+        context,
+      ),
     });
   } catch (error) {
     if (options.ifAbsent) {
@@ -161,9 +163,10 @@ export async function deleteSessionUpstreamLinkAsync(
       (scope) => scope.execute({ type: "sessionUpstream.delete", input }),
       {
         assertCurrent,
-        createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
-          context.admission.databasePath,
-        ]),
+        createAdmission: withSessionUpstreamPublication(
+          createSqliteWorkerWriteAdmission(assertCurrent, [context.admission.databasePath]),
+          context,
+        ),
       },
     );
   } catch (error) {

@@ -90,6 +90,7 @@ Update instructions at owner; no competing rules here.
 - Proof selection/reuse/gaps: [policy](.agents/skills/openclaw-testing/SKILL.md#select-the-proof); docs-only: docs sanity + `git diff --check`.
 - **Visual changes** need inspected, sanitized before/after screenshots in chat and embedded in PR before merge or completion ([gate](.agents/skills/openclaw-pr-maintainer/references/media.md#screenshot-completion-gate)).
 - Before nontrivial code commit/landing: follow [fresh review](.agents/skills/openclaw-pr-maintainer/SKILL.md#review-and-publish).
+- ClawSweeper reviews each PR automatically once, when it opens or leaves draft. Later pushes get no review until someone comments `@clawsweeper re-review`; post it once branch, body, and proof are current ([review flow](docs/reference/pull-request-review-flow.md#clawsweeper)).
 
 ### Execution gotchas
 

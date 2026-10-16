@@ -62,13 +62,20 @@ describe("database engine selection", () => {
   });
 
   it.each([
-    { families: { agent: { engine: "postgres" } } },
-    { engine: "postgres", families: { state: { engine: "sqlite" } } },
-    { engine: "postgres", families: { logbook: { engine: "sqlite" } } },
-  ] as const)("refuses mixed PostgreSQL agents before runtime selection: %j", (database) => {
-    expect(() => resolveDatabaseFamilyEngines({ database })).toThrow(
-      "DATABASE_AGENT_MIXED_POSTGRES_UNSUPPORTED",
-    );
+    {
+      database: { families: { agent: { engine: "postgres" } } },
+      expected: { state: "sqlite", agent: "postgres", logbook: "sqlite" },
+    },
+    {
+      database: { engine: "postgres", families: { state: { engine: "sqlite" } } },
+      expected: { state: "sqlite", agent: "postgres", logbook: "postgres" },
+    },
+    {
+      database: { engine: "postgres", families: { logbook: { engine: "sqlite" } } },
+      expected: { state: "postgres", agent: "postgres", logbook: "sqlite" },
+    },
+  ] as const)("selects PostgreSQL agents independently: $database", ({ database, expected }) => {
+    expect(resolveDatabaseFamilyEngines({ database })).toMatchObject(expected);
   });
 
   it("allows explicit SQLite agents alongside PostgreSQL families", () => {

@@ -1,6 +1,5 @@
 import type { SystemChangeEntry, SystemChangesListResult } from "@openclaw/gateway-protocol";
-import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
 import "../../components/openclaw-mascot.ts";
 import type { SidebarAttentionElementAttributes } from "../../components/sidebar-attention-element.ts";
 import { channelSnapshotHasActiveChannel } from "../../lib/channels/index.ts";
@@ -9,7 +8,7 @@ import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectChannels } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import "../../styles/custodian.css";
 import { CustodianChangeHistory } from "./custodian-history.tsx";
@@ -19,38 +18,22 @@ import type { CustodianRouteData } from "./route.ts";
 
 type Props = { onboarding: boolean; newAgentIntent: boolean; store: CustodianSessionStore };
 type History = {
+  open: boolean;
   entries: SystemChangeEntry[];
   nextCursor: string | null;
   load: "idle" | "initial" | "more";
   error: string | null;
   loaded: boolean;
 };
-const emptyHistory = (): History => ({
-  entries: [],
-  nextCursor: null,
-  load: "idle",
-  error: null,
-  loaded: false,
-});
-
 function CustodianPageContent(props: Props) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const channels = projectChannels(context.channels);
-  const store = projectSource(
-    untrack(() => props.store),
-    {
-      read: (source) => source,
-      subscribe: (source, notify) => source.subscribe(notify),
-      equality: "revision",
-    },
-  );
+  const store = createMemo(() => projectOwner(props.store, (source) => source));
+  // The provided session owner decides when its Gateway transcript needs refreshing.
   createEffect(
     () => props.store,
-    (source) => {
-      store.replaceSource(source);
-      void source.refreshTranscriptIfIdle();
-    },
+    (source) => void source.refreshTranscriptIfIdle(),
   );
   const historyAvailable = createMemo(() => {
     const snapshot = gateway.read().snapshot;
@@ -60,32 +43,23 @@ function CustodianPageContent(props: Props) {
       isGatewayMethodAdvertised(snapshot, "openclaw.changes.list") === true
     );
   });
-  const [historyOpen, setHistoryOpen] = createSignal(false);
-  const [history, setHistory] = createSignal<History>(emptyHistory());
-  let historyClient: GatewayBrowserClient | null = null;
-  let historyWasAvailable = false;
-  let historyRequestEpoch = 0;
-  let historyBusy = false;
-  let disposed = false;
-  createEffect(
+  const historyConnection = createMemo(
     () => [gateway.read().snapshot.client, historyAvailable()] as const,
-    ([client, available]) => {
-      if (client === historyClient && available === historyWasAvailable) {
-        return;
-      }
-      historyClient = client;
-      historyWasAvailable = available;
-      historyRequestEpoch += 1;
-      historyBusy = false;
-      setHistoryOpen(false);
-      setHistory(emptyHistory());
-    },
+    { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
   );
+  const historyOwner = createMemo(() => ({ connection: historyConnection(), busy: false }));
+  // History drafts reset with the connection; local requests share its synchronous admission state.
+  const [history, setHistory] = createSignal<History>((): History => {
+    historyConnection();
+    return { open: false, entries: [], nextCursor: null, load: "idle", error: null, loaded: false };
+  });
+  let disposed = false;
   onCleanup(() => {
     disposed = true;
   });
+  // Refresh the Gateway channel inventory while onboarding needs its initial snapshot.
   createEffect(
-    () => [props.onboarding, store.read().channelOnboardingNudgeClosed, channels.read()] as const,
+    () => [props.onboarding, store().read().channelOnboardingNudgeClosed, channels.read()] as const,
     ([onboarding, closed, state]) => {
       if (
         onboarding &&
@@ -101,45 +75,44 @@ function CustodianPageContent(props: Props) {
   );
 
   async function loadHistory(reset: boolean) {
-    const client = historyClient;
+    const owner = historyOwner();
+    const client = owner.connection[0];
     const cursor = reset ? undefined : (history().nextCursor ?? undefined);
-    if (!client || !historyAvailable() || historyBusy || (!reset && !cursor)) {
+    if (!client || !owner.connection[1] || owner.busy || (!reset && !cursor)) {
       return;
     }
-    const epoch = ++historyRequestEpoch;
-    historyBusy = true;
+    owner.busy = true;
     setHistory((previous) => ({ ...previous, load: reset ? "initial" : "more", error: null }));
     const isCurrent = () =>
       !disposed &&
-      historyRequestEpoch === epoch &&
+      historyOwner() === owner &&
       context.gateway.snapshot.phase === "connected" &&
       context.gateway.snapshot.client === client &&
       isGatewayMethodAdvertised(context.gateway.snapshot, "openclaw.changes.list") === true;
-    try {
-      const result = await client.request<SystemChangesListResult>("openclaw.changes.list", {
+    const result = await client
+      .request<SystemChangesListResult>("openclaw.changes.list", {
         limit: 50,
         ...(cursor ? { beforeCursor: cursor } : {}),
-      });
-      if (isCurrent()) {
-        setHistory((previous) => ({
-          ...previous,
-          entries: reset ? result.entries : [...previous.entries, ...result.entries],
-          nextCursor: result.nextCursor ?? null,
-        }));
-      }
-    } catch {
-      if (isCurrent()) {
-        setHistory((previous) => ({ ...previous, error: t("custodian.history.requestFailed") }));
-      }
-    } finally {
-      if (isCurrent()) {
-        historyBusy = false;
-        setHistory((previous) => ({ ...previous, load: "idle", loaded: true }));
-      }
+      })
+      .catch(() => null);
+    if (!isCurrent()) {
+      return;
     }
+    owner.busy = false;
+    setHistory((previous) => ({
+      ...previous,
+      load: "idle",
+      loaded: true,
+      ...(result
+        ? {
+            entries: reset ? result.entries : [...previous.entries, ...result.entries],
+            nextCursor: result.nextCursor ?? null,
+          }
+        : { error: t("custodian.history.requestFailed") }),
+    }));
   }
   const channelStatusError = () =>
-    props.onboarding && !store.read().channelOnboardingNudgeClosed && channels.read().connected
+    props.onboarding && !store().read().channelOnboardingNudgeClosed && channels.read().connected
       ? channels.read().channelsError
       : null;
   const showChannelOnboardingNudge = () => {
@@ -147,7 +120,7 @@ function CustodianPageContent(props: Props) {
     const snapshot = state.channelsSnapshot;
     return (
       props.onboarding &&
-      !store.read().channelOnboardingNudgeClosed &&
+      !store().read().channelOnboardingNudgeClosed &&
       state.connected &&
       !state.channelsLoading &&
       channelStatusError() === null &&
@@ -160,7 +133,7 @@ function CustodianPageContent(props: Props) {
     <section
       class={[
         "custodian custodian--page",
-        { "custodian--setup-required": store.read().setupRequired },
+        { "custodian--setup-required": store().read().setupRequired },
       ]}
     >
       <header
@@ -172,7 +145,7 @@ function CustodianPageContent(props: Props) {
         <Show when={!props.onboarding}>
           <div class="custodian__identity">
             <div class="custodian__mark" aria-hidden="true">
-              <openclaw-mascot mood={store.read().sending ? "thinking" : "idle"} prop:size={38} />
+              <openclaw-mascot mood={store().read().sending ? "thinking" : "idle"} prop:size={38} />
             </div>
             <div>
               <h1>{t("custodian.title")}</h1>
@@ -188,11 +161,11 @@ function CustodianPageContent(props: Props) {
             <button
               class="btn btn--ghost custodian__history-toggle"
               type="button"
-              aria-expanded={historyOpen() ? "true" : "false"}
+              aria-expanded={history().open ? "true" : "false"}
               onClick={() => {
-                const open = !historyOpen();
-                setHistoryOpen(open);
-                if (open && !historyBusy) {
+                const open = !history().open;
+                setHistory((previous) => ({ ...previous, open }));
+                if (open && !historyOwner().busy) {
                   void loadHistory(true);
                 }
               }}
@@ -217,7 +190,7 @@ function CustodianPageContent(props: Props) {
         channelOnboardingRetrying={channels.read().channelsLoading}
         onRetryChannelOnboarding={() => void context.channels.refresh(false)}
         historyContent={
-          <Show when={historyOpen() && historyAvailable()}>
+          <Show when={history().open && historyAvailable()}>
             <CustodianChangeHistory
               entries={history().entries}
               error={history().error}

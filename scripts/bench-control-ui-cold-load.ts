@@ -45,6 +45,33 @@ function readRigProbeSnapshot() {
   };
 }
 
+function installWidgetReadiness() {
+  const ready = new Map<string, number>();
+  window.addEventListener("message", (event) => {
+    if (event.data?.method !== "ui/notifications/sandbox-resource-loaded") {
+      return;
+    }
+    for (const [kind, selector] of [
+      ["board", ".board-widget__frame"],
+      ["inline", ".chat-tool-card__preview-frame"],
+    ] as const) {
+      const frames = [...document.querySelectorAll<HTMLIFrameElement>(selector)];
+      const index = frames.findIndex((frame) => frame.contentWindow === event.source);
+      const key = `${kind}:${index}`;
+      if (index >= 0 && !ready.has(key)) {
+        ready.set(key, performance.now());
+      }
+    }
+  });
+  Reflect.set(window, "__readWidgetReadiness", () => ({
+    measurement:
+      "sandbox resource-loaded notification after the widget document load; not a paint timestamp",
+    firstInlineReadyMs: [...ready].find(([key]) => key.startsWith("inline:"))?.[1] ?? null,
+    firstBoardReadyMs: [...ready].find(([key]) => key.startsWith("board:"))?.[1] ?? null,
+    ready: Object.fromEntries(ready),
+  }));
+}
+
 function summarizeResponseTasks(raw: unknown[]) {
   const events = raw.map(prepareColdLoadTraceEvent);
   const tasks: Array<{ pid: number; tid: number; start: number; end: number }> = [];
@@ -183,6 +210,7 @@ const { values } = parseArgs({
     "sidebar-list-churn": { type: "boolean", default: false },
     "sidebar-live-churn": { type: "boolean", default: false },
     "duplicate-boot-reads": { type: "boolean", default: false },
+    "capture-ms": { type: "string", default: "0" },
     "sidebar-row-transfer": { type: "string", default: "full" },
     "bundle-dir": { type: "string" },
     runs: { type: "string", default: "3" },
@@ -221,6 +249,7 @@ if (sidebarView !== "sessions" && sidebarView !== "online") {
 const runs = Number(values.runs);
 const latencyMs = Number(values["latency-ms"]);
 const frameGapMs = Number(values["frame-gap-ms"]);
+const captureMs = Number(values["capture-ms"]);
 if (
   !Number.isInteger(runs) ||
   runs < 1 ||
@@ -228,9 +257,11 @@ if (
   !Number.isFinite(latencyMs) ||
   latencyMs < 0 ||
   !Number.isFinite(frameGapMs) ||
-  frameGapMs < 0
+  frameGapMs < 0 ||
+  !Number.isFinite(captureMs) ||
+  captureMs < 0
 ) {
-  throw new Error("Expected 1–20 runs and nonnegative finite wire delays");
+  throw new Error("Expected 1–20 runs and nonnegative finite wire delays and capture duration");
 }
 if (sidebarRowTransfer === "interleaved" && (runs < 14 || runs % 2 !== 0)) {
   throw new Error("Interleaved sidebar transfer requires an even run count of at least 14");
@@ -349,6 +380,12 @@ try {
     const asset = assets.get(new URL(route.request().url()).pathname);
     return asset ? route.fulfill({ status: 200, ...asset }) : route.fallback();
   });
+  if (values["duplicate-boot-reads"]) {
+    await page.route("**/api/chat/media/outgoing/**", (route) => {
+      const asset = assets.get(new URL(route.request().url()).pathname);
+      return asset ? route.fulfill({ status: 200, ...asset }) : route.fallback();
+    });
+  }
   if (values["sidebar-live-churn"]) {
     await page.route("**/api/users/*/avatar?*", async (route) => {
       const asset = fixture.assets.get(new URL(route.request().url()).pathname);
@@ -387,7 +424,7 @@ try {
   );
   const warmProbes = values["warm-reload"] ? `\n(${warmReloadProbe.toString()})();` : "";
   await page.addInitScript({
-    content: `;(() => { if (window !== window.top) return; const __name = (fn) => fn; ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\n${fixture.sidebarListChurn ? `window.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params)));` : ""}\n${createColdLoadProbeInitScript({ latencyMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
+    content: `;(() => { if (window !== window.top) return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\n${fixture.sidebarListChurn ? `window.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params)));` : ""}\n${createColdLoadProbeInitScript({ latencyMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
   });
   const url = controlUiSessionUrl(server.baseUrl, fixture.selectedSessionKey, "dashboard");
   async function settle() {
@@ -414,6 +451,10 @@ try {
         .frameLocator("iframe")
         .getByText("Team metric 12", { exact: true })
         .waitFor();
+      await page.waitForFunction(() => {
+        const ready = Reflect.get(window, "__readWidgetReadiness")();
+        return ready.firstBoardReadyMs !== null;
+      });
       await page.waitForFunction(
         (eventCount) => {
           const state = Reflect.get(window, "__coldLoad")?.read();
@@ -530,7 +571,13 @@ try {
     }
     await page.reload({ waitUntil: "domcontentloaded" });
     await settle();
-    const metrics = await page.evaluate(() => Reflect.get(window, "__coldLoad").read());
+    if (captureMs) {
+      await page.waitForFunction((duration) => performance.now() >= duration, captureMs);
+    }
+    const metrics = await page.evaluate(() => ({
+      ...Reflect.get(window, "__coldLoad").read(),
+      widgetReadiness: Reflect.get(window, "__readWidgetReadiness")(),
+    }));
     const warmReload = values["warm-reload"]
       ? await page.evaluate(() => Reflect.get(window, "__warmReload").read())
       : undefined;
@@ -930,6 +977,7 @@ try {
         streamingReply: values["streaming-reply"],
         sidebarListChurn: values["sidebar-list-churn"],
         sidebarLiveChurn: fixture.sidebarLiveChurn,
+        duplicateBootReads: values["duplicate-boot-reads"],
         traced: !values.untraced,
         sidebarRowTransfer,
         sidebarComparison: values["sidebar-list-churn"]
@@ -937,6 +985,7 @@ try {
           : undefined,
         latencyMs,
         frameGapMs,
+        captureMs,
         results,
       },
       null,

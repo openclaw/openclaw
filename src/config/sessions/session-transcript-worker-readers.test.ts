@@ -5,6 +5,33 @@ import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { createSessionHistoryWorkerReaders } from "./session-transcript-worker-readers.js";
 import { createSessionHistoryWorkerRequestStub } from "./session-transcript-worker-readers.test-support.js";
 
+const transcriptInput = {
+  target: { sessionId: "synthetic-session" },
+  resolvedScope: { agentId: "main", sessionId: "synthetic-session" },
+  includeEventJson: true,
+};
+const version = (rawSeq: number) => ({
+  generation: "synthetic-generation",
+  rawSeq,
+  updatedAt: 123,
+});
+
+function readFrames(frames: unknown[], eventCount: number, rawSeq = 7, encoding = "utf-8") {
+  const signal = new AbortController().signal;
+  const readers = createSessionHistoryWorkerReaders(
+    createSessionHistoryWorkerRequestStub(async (_prepare, _inputBytes, _signal, onRequest) => {
+      if (!onRequest) {
+        throw new Error("Transcript reader did not provide its chunk receiver");
+      }
+      for (const frame of frames) {
+        await onRequest({ kind: "transcript-hydration-chunk", encoding, frames: [frame] }, signal);
+      }
+      return { kind: "full", version: version(rawSeq), eventCount };
+    }),
+  );
+  return readers.readTranscript(transcriptInput, signal);
+}
+
 it("preserves the direct read request, signal, and projected result", async () => {
   const input = { scope: { agentId: "main", sessionId: "synthetic-session" } };
   const signal = new AbortController().signal;
@@ -112,35 +139,10 @@ it("decodes cross-realm Uint8Array transcript frames", async () => {
   const json = JSON.stringify(event);
   const bytes = Array.from(new TextEncoder().encode(json));
   const data: unknown = runInNewContext("new Uint8Array(bytes)", { bytes });
-  const version = { generation: "synthetic-generation", rawSeq: 7, updatedAt: 123 };
-  const signal = new AbortController().signal;
-  const readers = createSessionHistoryWorkerReaders(
-    createSessionHistoryWorkerRequestStub(async (_prepare, _inputBytes, _signal, onRequest) => {
-      if (!onRequest) {
-        throw new Error("Transcript reader did not provide its chunk receiver");
-      }
-      await onRequest(
-        {
-          kind: "transcript-hydration-chunk",
-          encoding: "utf-8",
-          frames: [{ data, endOfEvent: true, seq: 7 }],
-        },
-        signal,
-      );
-      return { kind: "full", version, eventCount: 1 };
-    }),
-  );
-  const result = readers.readTranscript(
-    {
-      target: { sessionId: "synthetic-session" },
-      resolvedScope: { agentId: "main", sessionId: "synthetic-session" },
-      includeEventJson: true,
-    },
-    signal,
-  );
+  const result = readFrames([{ data, endOfEvent: true, seq: 7 }], 1);
   await expect(result).resolves.toEqual({
     kind: "full",
-    snapshot: { events: [event], eventJson: [json], eventSeqs: [7], version },
+    snapshot: { events: [event], eventJson: [json], eventSeqs: [7], version: version(7) },
   });
 });
 
@@ -152,51 +154,21 @@ it.each(["utf-8", "utf-16le", "utf-16be"])(
     if (encoding === "utf-16be") {
       bytes.swap16();
     }
-    const version = { generation: "synthetic-generation", rawSeq: 9, updatedAt: 123 };
-    const signal = new AbortController().signal;
-    const readers = createSessionHistoryWorkerReaders(
-      createSessionHistoryWorkerRequestStub(async (_prepare, _inputBytes, _signal, onRequest) => {
-        if (!onRequest) {
-          throw new Error("Transcript reader did not provide its chunk receiver");
-        }
-        // One-byte, offset views split UTF-8 code points and UTF-16 code units.
-        for (let offset = 0; offset < bytes.length; offset++) {
-          await onRequest(
-            {
-              kind: "transcript-hydration-chunk",
-              encoding,
-              frames: [{ data: bytes.subarray(offset, offset + 1), endOfEvent: false }],
-            },
-            signal,
-          );
-        }
-        await onRequest(
-          {
-            kind: "transcript-hydration-chunk",
-            encoding,
-            frames: [{ data: new Uint8Array(), endOfEvent: true, seq: 7 }],
-          },
-          signal,
-        );
-        await onRequest(
-          {
-            kind: "transcript-hydration-chunk",
-            encoding,
-            frames: [{ data: bytes, endOfEvent: true, seq: 9 }],
-          },
-          signal,
-        );
-        return { kind: "full", version, eventCount: 2 };
-      }),
-    );
+    // One-byte, offset views split UTF-8 code points and UTF-16 code units.
+    const frames = Array.from({ length: bytes.length }, (_, offset) => ({
+      data: bytes.subarray(offset, offset + 1),
+      endOfEvent: false,
+    }));
     await expect(
-      readers.readTranscript(
-        {
-          target: { sessionId: "synthetic-session" },
-          resolvedScope: { agentId: "main", sessionId: "synthetic-session" },
-          includeEventJson: true,
-        },
-        signal,
+      readFrames(
+        [
+          ...frames,
+          { data: new Uint8Array(), endOfEvent: true, seq: 7 },
+          { data: bytes, endOfEvent: true, seq: 9 },
+        ],
+        2,
+        9,
+        encoding,
       ),
     ).resolves.toEqual({
       kind: "full",
@@ -207,7 +179,7 @@ it.each(["utf-8", "utf-16le", "utf-16be"])(
         ],
         eventJson: [json, json],
         eventSeqs: [7, 9],
-        version,
+        version: version(9),
       },
     });
   },
@@ -219,32 +191,7 @@ it.each([
   { json: "{}", endOfEvent: false, seq: 7, eventCount: 0, error: /incomplete transcript/ },
   { json: "{}", endOfEvent: true, seq: 7, eventCount: 2, error: /incomplete transcript/ },
 ])("rejects unusable transcript data: %j", async ({ json, endOfEvent, seq, eventCount, error }) => {
-  const signal = new AbortController().signal;
-  const readers = createSessionHistoryWorkerReaders(
-    createSessionHistoryWorkerRequestStub(async (_prepare, _inputBytes, _signal, onRequest) => {
-      if (!onRequest) {
-        throw new Error("Transcript reader did not provide its chunk receiver");
-      }
-      await onRequest(
-        {
-          kind: "transcript-hydration-chunk",
-          encoding: "utf-8",
-          frames: [{ data: Buffer.from(json), endOfEvent, seq }],
-        },
-        signal,
-      );
-      return {
-        kind: "full",
-        version: { generation: "synthetic-generation", rawSeq: 7, updatedAt: 123 },
-        eventCount,
-      };
-    }),
-  );
   await expect(
-    readers.readTranscript({
-      target: { sessionId: "synthetic-session" },
-      resolvedScope: { agentId: "main", sessionId: "synthetic-session" },
-      includeEventJson: true,
-    }),
+    readFrames([{ data: Buffer.from(json), endOfEvent, seq }], eventCount),
   ).rejects.toThrow(error);
 });

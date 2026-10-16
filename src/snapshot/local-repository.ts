@@ -283,7 +283,6 @@ class LocalSqliteSnapshotProvider {
       };
       await writeSnapshotManifest(stagingDir, manifest);
       applyPrivateModeSync(path.join(stagingDir, SNAPSHOT_MANIFEST_FILENAME), SNAPSHOT_FILE_MODE);
-      await readSnapshotManifest(stagingDir, snapshotId);
       await syncDirectoryIfSupported(stagingDir);
 
       await assertDirectoryIdentity(trustedRepositoryPath, repositoryIdentity);

@@ -1,5 +1,6 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import {
   SESSION_NAVIGATION_INTENT_EVENT,
   type SessionNavigationIntent,
@@ -36,6 +37,7 @@ export class ChatPageRetainedSessions {
   private preview: (SessionNavigationIntent & { href: string; paneId: string }) | null = null;
   private previewFrame: number | undefined;
   private previewTimer: number | undefined;
+  private stopEvents: (() => void)[] = [];
 
   constructor(
     private readonly host: HTMLElement,
@@ -86,9 +88,11 @@ export class ChatPageRetainedSessions {
   }
 
   connect(): void {
-    this.host.addEventListener(QUEUED_EDIT_RETENTION_CHANGE_EVENT, this.refreshRetention);
-    window.addEventListener("popstate", this.cancelPreview);
-    window.addEventListener(SESSION_NAVIGATION_INTENT_EVENT, this.handleNavigationIntent);
+    this.stopEvents = [
+      listen(this.host, QUEUED_EDIT_RETENTION_CHANGE_EVENT, this.refreshRetention),
+      listen(window, "popstate", this.cancelPreview),
+      listen(window, SESSION_NAVIGATION_INTENT_EVENT, this.handleNavigationIntent),
+    ];
   }
 
   disconnect(): void {
@@ -97,9 +101,7 @@ export class ChatPageRetainedSessions {
     this.sessionsByPane.clear();
     this.unbound.clear();
     this.pendingAtFocus = new WeakSet();
-    this.host.removeEventListener(QUEUED_EDIT_RETENTION_CHANGE_EVENT, this.refreshRetention);
-    window.removeEventListener("popstate", this.cancelPreview);
-    window.removeEventListener(SESSION_NAVIGATION_INTENT_EVENT, this.handleNavigationIntent);
+    this.stopEvents.splice(0).forEach((stop) => stop());
     this.cancelPreview();
   }
 

@@ -120,6 +120,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     deps,
     readSession,
     companionReader,
+    states,
     handleEventSteps,
     canPublish: (state, session) =>
       audienceLifecycle.stateIsCurrent(state) && lifecycle.acceptPublication(state, session),

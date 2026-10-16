@@ -18,7 +18,6 @@ import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { assertExistingOpenClawStateRuntimeSchema } from "./openclaw-state-db-existing-schema.js";
 import { openExistingOpenClawStateWriter } from "./openclaw-state-db-existing-write.js";
-import { openOpenClawStateReadOnlyLocation } from "./openclaw-state-db-read-connection.js";
 import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
@@ -171,48 +170,8 @@ it("checks integrity once before index repair and once after rebuilding the inde
     unlinkSync(`${pathname}.seal`);
     observation.queries.length = 0;
     expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
-    expect(observation.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(1);
-    expect(observation.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(
-      1,
-    );
-    observation.queries.length = 0;
-    expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
     expect(validationStatements(observation.queries)).toEqual([]);
   } finally {
-    observation.restore();
-  }
-});
-
-it("reuses live admission and revalidates after the final handles close without a seal", () => {
-  const env = { OPENCLAW_STATE_DIR: directories.make("state-checkonce-") };
-  const first = openOpenClawStateDatabase({ env });
-  const pathname = first.path;
-  first.db.exec(`CREATE TABLE checkonce_unrelated (id INTEGER PRIMARY KEY, value TEXT);
-    CREATE INDEX checkonce_unrelated_value ON checkonce_unrelated(value)`);
-  // Equal catalog definitions cannot prove that metadata rows survived arbitrary DDL.
-  assertExistingOpenClawStateRuntimeSchema(requireNativeSqliteDatabase(first.db), pathname);
-  const survivingReader = openOpenClawStateReadOnlyLocation(pathname, pathname);
-  closeOpenClawStateDatabaseForTest();
-  const observation = observeSqliteReadSql(StatementSync.prototype);
-  try {
-    const second = openOpenClawStateDatabase({ env });
-    expect(second.db.isOpen).toBe(true);
-    expect(validationStatements(observation.queries)).toEqual([]);
-    survivingReader.close();
-    closeOpenClawStateDatabaseForTest();
-    unlinkSync(`${pathname}.seal`);
-    const reopened = openOpenClawStateDatabase({ env });
-    expect(observation.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(1);
-    expect(observation.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(
-      1,
-    );
-    observation.queries.length = 0;
-    const reader = openOpenClawStateReadOnlyLocation(pathname, pathname);
-    reader.close();
-    expect(reopened.db.isOpen).toBe(true);
-    expect(validationStatements(observation.queries)).toEqual([]);
-  } finally {
-    survivingReader.close();
     observation.restore();
   }
 });

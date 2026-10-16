@@ -1,5 +1,5 @@
 // Render contract between the transcript projection and the per-session
-// virtualizer host owned by ChatTranscriptController.
+// virtualizer host owned by the chat transcript owner.
 import type { JSX } from "@solidjs/web";
 import type { Virtualizer } from "@tanstack/virtual-core";
 import type { ApplicationContext } from "../../../app/context.ts";

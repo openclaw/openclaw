@@ -182,13 +182,13 @@ it.each(["pending", "committed"] as const)(
     const frame = requestAnimationFrame(paint);
     const measure = () => virtualizer.resizeItem(0, 180);
     if (phase === "committed") {
-      const commit = host.commitRender.bind(host);
-      vi.spyOn(host, "commitRender").mockImplementationOnce(() => {
+      const commit = host.chatState.commitRender.bind(host.chatState);
+      vi.spyOn(host.chatState, "commitRender").mockImplementationOnce(() => {
         commit();
         measure();
       });
     }
-    host.requestUpdate();
+    host.invalidate();
     if (phase === "pending") {
       measure();
     }
@@ -229,7 +229,7 @@ it.each([
       const rect = { width: Math.round(width), height: Math.round(height) };
       expect(session["virtualizer"].scrollRect).toEqual(rect);
       await host.updateComplete;
-      const requests = vi.spyOn(host, "requestUpdate");
+      const requests = vi.spyOn(host, "invalidate");
       await settleLayout();
       expect(observed).toEqual([{ width, height }]);
       expect(session["virtualizer"].scrollRect).toEqual(rect);

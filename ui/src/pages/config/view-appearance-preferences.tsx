@@ -1,4 +1,4 @@
-import { createEffect, createMemo, Show, For } from "solid-js";
+import { createMemo, Show, For } from "solid-js";
 import type { ServerUiPrefProvenance } from "../../app/server-prefs.ts";
 import {
   normalizeCatalogOpenTarget,
@@ -100,18 +100,13 @@ function MediaDeviceField(props: { config: ConfigProps; kind: "microphone" | "ca
         : []),
     ];
   });
-  let accessRequested = false;
-  createEffect(
-    () => state(),
-    () => {
-      accessRequested = false;
-    },
-  );
+  let requestedState: ReturnType<typeof state>;
   const requestAccess = () => {
-    if (accessRequested || !state()?.permissionRequired) {
+    const current = state();
+    if (requestedState === current || !current?.permissionRequired) {
       return;
     }
-    accessRequested = true;
+    requestedState = current;
     (props.kind === "microphone"
       ? props.config.onMicrophoneRefresh
       : props.config.onCameraRefresh)?.();
