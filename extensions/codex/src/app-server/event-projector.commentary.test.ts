@@ -770,6 +770,107 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
       expect.objectContaining({ content: [{ type: "thinking", thinking: text }] }),
     );
   });
+
+  it("delivers identical snapshots for a long single-section append stream", async () => {
+    const onReasoningStream = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onReasoningStream,
+    });
+    // A single content section grown one delta at a time is the append case the
+    // incremental path serves: every delivered snapshot must equal a full rebuild.
+    const deltas = Array.from({ length: 64 }, (_, index) => `chunk-${index}|`);
+    for (const delta of deltas) {
+      await projector.handleNotification(
+        forCurrentTurn("item/reasoning/textDelta", {
+          itemId: "reason-append",
+          contentIndex: 0,
+          delta,
+        }),
+      );
+    }
+    expect(onReasoningStream).toHaveBeenCalledTimes(deltas.length);
+    // Each snapshot is the exact prefix accumulated so far, with no stale bytes.
+    deltas.forEach((_, index) => {
+      expect(onReasoningStream.mock.calls[index]).toEqual([
+        { text: deltas.slice(0, index + 1).join(""), isReasoningSnapshot: true },
+      ]);
+    });
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { type: "reasoning", id: "reason-append", summary: [], content: [] },
+      }),
+    );
+    await projector.handleNotification(turnCompleted());
+  });
+
+  it("rebuilds when a delta replaces a section instead of appending to it", async () => {
+    const onReasoningStream = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onReasoningStream,
+    });
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/textDelta", {
+        itemId: "reason-replace",
+        contentIndex: 0,
+        delta: "original first section",
+      }),
+    );
+    // A completed item is authoritative and can replace a section wholesale, so
+    // the next delta must not treat the cached snapshot as a surviving prefix.
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "reasoning",
+          id: "reason-replace",
+          summary: [],
+          content: ["redacted"],
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/textDelta", {
+        itemId: "reason-replace",
+        contentIndex: 0,
+        delta: "+more",
+      }),
+    );
+    expect(onReasoningStream).toHaveBeenLastCalledWith({
+      text: "redacted+more",
+      isReasoningSnapshot: true,
+    });
+    await projector.handleNotification(turnCompleted());
+  });
+
+  it("rebuilds when a delta opens an earlier section after a later one", async () => {
+    const onReasoningStream = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onReasoningStream,
+    });
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/textDelta", {
+        itemId: "reason-outoforder",
+        contentIndex: 1,
+        delta: "Second",
+      }),
+    );
+    // Filling an earlier section changes what precedes the cached suffix, so the
+    // snapshot cannot simply be extended.
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/textDelta", {
+        itemId: "reason-outoforder",
+        contentIndex: 0,
+        delta: "First",
+      }),
+    );
+    expect(onReasoningStream).toHaveBeenLastCalledWith({
+      text: "First\n\nSecond",
+      isReasoningSnapshot: true,
+    });
+    await projector.handleNotification(turnCompleted());
+  });
 });
 
 describe("CodexAppServerEventProjector started text", () => {
