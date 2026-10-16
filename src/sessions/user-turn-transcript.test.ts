@@ -13,6 +13,7 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { rewritePreparedTranscriptMessageAtAnchor } from "../config/sessions/session-message-rewrite.js";
 import { transcriptMessage } from "../config/sessions/transcript-message.test-support.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 // User turn transcript tests cover transcript extraction for user turns.
@@ -27,6 +28,7 @@ import {
   type UserTurnInput,
 } from "./user-turn-transcript.js";
 import {
+  isUserMessage,
   projectRecordedModelPrompt,
   readModelPromptProjection,
 } from "./user-turn-transcript.message.js";
@@ -220,6 +222,29 @@ describe("user turn transcript persistence", () => {
   });
 
   describe("createUserTurnTranscriptRecorder", () => {
+    it("captures the current stored message and reuses a projection written by another recorder", async () => {
+      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+      const input = { text: "original", timestamp: 123, idempotencyKey: "shared-projection" };
+      const first = createUserTurnTranscriptRecorder({ input, target });
+      const second = createUserTurnTranscriptRecorder({ input, target });
+      await first.persistApproved();
+      await second.persistApproved();
+      await rewritePreparedTranscriptMessageAtAnchor(first.getAdmissionReceipt()!, (message) => {
+        if (!isUserMessage(message)) {
+          throw new Error("Expected the persisted user message");
+        }
+        return { ...message, independentMetadata: "preserved" };
+      });
+
+      const captured = await first.captureModelPromptProjection!("enriched", () => {});
+      expect(captured).toMatchObject({ content: "original", independentMetadata: "preserved" });
+      expect(await second.captureModelPromptProjection!("enriched", () => {})).toEqual(captured);
+      await expect(second.captureModelPromptProjection!("changed", () => {})).rejects.toThrow(
+        "cannot be changed",
+      );
+      await expect(readTranscriptMessages(target)).resolves.toEqual([captured]);
+    });
+
     it("freezes the original prompt after initial steering and across reopened recorders", async () => {
       const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
       const input = { text: "original prompt", timestamp: 123, idempotencyKey: "projection:user" };

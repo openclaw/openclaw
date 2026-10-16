@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { InternalSessionEntry } from "../config/sessions.js";
-import type { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import type { applySessionEntryTargetOperation } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { projectSessionEntryPatch } from "../config/sessions/session-entry-patch-operation.js";
+import type { SessionLifecyclePatchEffects } from "../config/sessions/session-run-lifecycle-projection.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { setSessionActivitySummaryState } from "./session-activity-summary-state.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
@@ -13,11 +15,13 @@ const persistence = vi.hoisted(() => ({
 }));
 vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/sessions/session-accessor.js")>()),
-  patchSessionEntryCore: persistence.patch,
-  patchSessionEntryTarget: persistence.patch,
   loadSessionEntryReadOnly: vi.fn(),
   readSessionTranscriptWatermark: vi.fn(),
   appendSessionTranscriptReport: vi.fn(async () => ({ ok: true, value: undefined })),
+}));
+vi.mock("../config/sessions/session-accessor.sqlite-entry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-accessor.sqlite-entry.js")>()),
+  applySessionEntryTargetOperation: persistence.patch,
 }));
 vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
@@ -46,15 +50,24 @@ beforeEach(() => {
   }));
   persistence.patch
     .mockReset()
-    .mockImplementation(async (...args: Parameters<typeof patchSessionEntryCore>) => {
-      const [, update, options] = args;
-      const patch = await update({ ...entry }, { existingEntry: { ...entry } });
-      if (patch) {
+    .mockImplementation(async (...args: Parameters<typeof applySessionEntryTargetOperation>) => {
+      const [, operation, options] = args;
+      let effects: SessionLifecyclePatchEffects | undefined;
+      const next = projectSessionEntryPatch({
+        existing: entry,
+        writeBase: entry,
+        sessionKey: target.sessionKey,
+        operation,
+        onLifecycleProjection: (value) => {
+          effects = value;
+        },
+      });
+      if (next) {
         if (rejectCommit) {
           throw new Error("commit rejected");
         }
-        entry = { ...entry, ...patch };
-        options?.onCommitted?.({ ...entry });
+        entry = next;
+        options?.onCommitted?.({ ...entry }, undefined, effects);
       }
       return { ...entry };
     });
