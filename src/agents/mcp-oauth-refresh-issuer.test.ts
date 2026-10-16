@@ -11,7 +11,6 @@ import { readMcpOAuthStore } from "./mcp-oauth-store.js";
 import { withTempHome as withBaseTempHome } from "./mcp-oauth.test-harness.js";
 import { withMcpOAuthProviderForTest } from "./mcp-oauth.test-support.js";
 
-const SERVER_NAME = "Remote Docs";
 const SERVER_URL = "https://mcp.example.com/mcp";
 const ORIGINAL_METADATA_URL = "https://mcp.example.com/.well-known/oauth-protected-resource";
 const REPLACEMENT_METADATA_URL = "https://metadata.example/pr-metadata";
@@ -20,7 +19,7 @@ const REPLACEMENT_ISSUER = "https://auth-new.example";
 const STORED_ACCESS = "stored-access";
 const STORED_REFRESH = "stored-refresh-secret";
 const STORED_TOKENS = { access_token: STORED_ACCESS, refresh_token: STORED_REFRESH };
-const IDENTITY = operatorMcpOAuthIdentity(SERVER_NAME, SERVER_URL);
+const IDENTITY = operatorMcpOAuthIdentity("Remote Docs", SERVER_URL);
 
 function bodyText(body: BodyInit | null | undefined): string {
   if (typeof body === "string") {
@@ -60,10 +59,7 @@ function createOAuthNetwork(
       });
     }
     if (url.href === new URL(config.challengeMetadataUrl).href) {
-      return Response.json({
-        resource: SERVER_URL,
-        authorization_servers: [config.issuer],
-      });
+      return Response.json({ resource: SERVER_URL, authorization_servers: [config.issuer] });
     }
     if (url.href === `${config.issuer}/.well-known/oauth-authorization-server`) {
       return Response.json({
@@ -124,14 +120,6 @@ async function seedAuthorizedStore(
   });
 }
 
-function buildOAuthFetch(fetchFn: FetchLike) {
-  return withMcpOAuthBearer({
-    fetchFn,
-    authFetchFn: fetchFn,
-    identity: IDENTITY,
-  });
-}
-
 function originalNetwork() {
   return createOAuthNetwork({
     challengeMetadataUrl: ORIGINAL_METADATA_URL,
@@ -140,8 +128,11 @@ function originalNetwork() {
   });
 }
 
-function request(network: ReturnType<typeof createOAuthNetwork>) {
-  return buildOAuthFetch(network.fetchFn)(SERVER_URL, { method: "POST", body: "{}" });
+function request({ fetchFn }: ReturnType<typeof createOAuthNetwork>) {
+  return withMcpOAuthBearer({ fetchFn, authFetchFn: fetchFn, identity: IDENTITY })(SERVER_URL, {
+    method: "POST",
+    body: "{}",
+  });
 }
 
 function readStore() {
@@ -157,18 +148,27 @@ function withTempHome<T>(run: (home: string) => T | Promise<T>, prefix: string) 
 }
 
 describe("MCP OAuth refresh issuer binding", () => {
-  it("does not send the stored refresh token to a different issuer from a challenge", async () => {
-    await withTempHome(async () => {
-      await seedAuthorizedStore("discovery-then-tokens");
-      const network = createOAuthNetwork();
-
-      await expect(request(network)).rejects.toThrow(/requires OAuth authorization/);
-
-      expect(network.tokenRequests).toEqual([]);
-      expect((await readStore()).tokens).toMatchObject(STORED_TOKENS);
-    }, "openclaw-mcp-oauth-issuer-switch-");
-  });
-
+  it.each(["discovery-then-tokens", "tokens-then-discovery"] as const)(
+    "binds issuer provenance and blocks rediscovery to another issuer (%s)",
+    async (order) => {
+      await withTempHome(async () => {
+        await seedAuthorizedStore(order);
+        expect((await readStore()).tokensAuthorizationServerUrl).toBe(
+          order === "tokens-then-discovery" ? undefined : ORIGINAL_ISSUER,
+        );
+        const network = createOAuthNetwork();
+        await expect(request(network)).rejects.toThrow(/requires OAuth authorization/);
+        expect(network.tokenRequests).toEqual([]);
+        expect((await readStore()).tokens).toMatchObject(STORED_TOKENS);
+        expect((await readStore()).tokensAuthorizationServerUrl).toBe(ORIGINAL_ISSUER);
+        if (order === "tokens-then-discovery") {
+          await closeOpenClawStateDatabaseAsync();
+          closeOpenClawStateDatabaseForTest();
+          expect((await readStore()).tokensAuthorizationServerUrl).toBe(ORIGINAL_ISSUER);
+        }
+      }, "openclaw-mcp-oauth-issuer-switch-");
+    },
+  );
   it("still refreshes when a new metadata URL resolves to the original issuer", async () => {
     await withTempHome(async () => {
       await seedAuthorizedStore("discovery-then-tokens");
@@ -292,20 +292,6 @@ describe("MCP OAuth refresh issuer binding", () => {
     }, "openclaw-mcp-oauth-issuer-explicit-login-");
   });
 
-  it("binds legacy stored tokens to the pre-challenge issuer before rediscovery", async () => {
-    await withTempHome(async () => {
-      await seedAuthorizedStore("tokens-then-discovery");
-      expect((await readStore()).tokensAuthorizationServerUrl).toBeUndefined();
-      const network = createOAuthNetwork();
-
-      await expect(request(network)).rejects.toThrow(/requires OAuth authorization/);
-
-      expect(network.tokenRequests).toEqual([]);
-      expect((await readStore()).tokensAuthorizationServerUrl).toBe(ORIGINAL_ISSUER);
-      expect((await readStore()).tokens).toMatchObject(STORED_TOKENS);
-    }, "openclaw-mcp-oauth-issuer-legacy-");
-  });
-
   it("fails closed for a token-only legacy store with no recoverable issuer", async () => {
     await withTempHome(async () => {
       await withMcpOAuthProviderForTest({ identity: IDENTITY }, async (provider) => {
@@ -326,18 +312,5 @@ describe("MCP OAuth refresh issuer binding", () => {
       expect(network.tokenRequests).toEqual([]);
       expect((await readStore()).tokens).toMatchObject({ refresh_token: STORED_REFRESH });
     }, "openclaw-mcp-oauth-issuer-tokenonly-");
-  });
-
-  it("persists bound issuer provenance across a store reload", async () => {
-    await withTempHome(async () => {
-      await seedAuthorizedStore("tokens-then-discovery");
-      const network = createOAuthNetwork();
-
-      await expect(request(network)).rejects.toThrow(/OAuth authorization/);
-
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-      expect((await readStore()).tokensAuthorizationServerUrl).toBe(ORIGINAL_ISSUER);
-    }, "openclaw-mcp-oauth-issuer-reload-");
   });
 });

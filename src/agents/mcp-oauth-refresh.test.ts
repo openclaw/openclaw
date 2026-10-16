@@ -9,13 +9,10 @@ import { withTempHome as withBaseTempHome } from "./mcp-oauth.test-harness.js";
 import { withMcpOAuthProviderForTest } from "./mcp-oauth.test-support.js";
 
 const authMock = vi.hoisted(() => vi.fn());
-const FRESH_ACCESS = "test-token-placeholder";
 const ROTATED_ACCESS = "gateway-token";
 const IDENTITY = operatorMcpOAuthIdentity("Remote Docs", "https://mcp.example.com/mcp");
 
-vi.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({
-  auth: authMock,
-}));
+vi.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({ auth: authMock }));
 
 function withTempHome<T>(run: (home: string) => T | Promise<T>, prefix: string) {
   return withBaseTempHome(run, {
@@ -37,6 +34,24 @@ function saveTokens(tokens: Parameters<OAuthClientProvider["saveTokens"]>[0]) {
   return withProvider((provider) => provider.saveTokens(tokens));
 }
 
+function gateRefresh(saveBeforeGate = false) {
+  const started = createDeferredCore<void>();
+  const gate = createDeferredCore<void>();
+  authMock.mockImplementationOnce(async (provider: OAuthClientProvider) => {
+    const save = () => provider.saveTokens(makeTokens("gateway-token", "secret-token"));
+    if (saveBeforeGate) {
+      await save();
+    }
+    started.resolve();
+    await gate.promise;
+    if (!saveBeforeGate) {
+      await save();
+    }
+    return "AUTHORIZED";
+  });
+  return { started, gate };
+}
+
 describe("MCP OAuth provider", () => {
   beforeEach(() => {
     authMock.mockReset();
@@ -46,7 +61,9 @@ describe("MCP OAuth provider", () => {
     await withTempHome(async () => {
       await saveTokens(makeTokens("test-token-placeholder", "test-auth-token"));
 
-      await expect(resolveMcpOAuthAccessToken({ identity: IDENTITY })).resolves.toBe(FRESH_ACCESS);
+      await expect(resolveMcpOAuthAccessToken({ identity: IDENTITY })).resolves.toBe(
+        "test-token-placeholder",
+      );
       expect(authMock).not.toHaveBeenCalled();
     }, "openclaw-mcp-oauth-fresh-token-");
   });
@@ -125,14 +142,7 @@ describe("MCP OAuth provider", () => {
     await withTempHome(async () => {
       await saveTokens(makeTokens("decoy-token", "test-auth-token", -1));
 
-      const started = createDeferredCore<void>();
-      const gate = createDeferredCore<void>();
-      authMock.mockImplementationOnce(async (refreshProvider) => {
-        started.resolve();
-        await gate.promise;
-        await refreshProvider.saveTokens(makeTokens("gateway-token", "secret-token"));
-        return "AUTHORIZED";
-      });
+      const { started, gate } = gateRefresh();
 
       const first = resolveMcpOAuthAccessToken({ identity: IDENTITY });
       await started.promise;
@@ -148,14 +158,7 @@ describe("MCP OAuth provider", () => {
     await withTempHome(async () => {
       await saveTokens(makeTokens("decoy-token", "test-auth-token"));
 
-      const started = createDeferredCore<void>();
-      const gate = createDeferredCore<void>();
-      authMock.mockImplementationOnce(async (refreshProvider) => {
-        await refreshProvider.saveTokens(makeTokens("gateway-token", "secret-token"));
-        started.resolve();
-        await gate.promise;
-        return "AUTHORIZED";
-      });
+      const { started, gate } = gateRefresh(true);
 
       const first = resolveMcpOAuthAccessToken({
         identity: IDENTITY,
@@ -183,14 +186,7 @@ describe("MCP OAuth provider", () => {
   it("does not let a completed refresh resurrect a concurrent logout", async () => {
     await withTempHome(async () => {
       await saveTokens(makeTokens("decoy-token", "test-auth-token", -1));
-      const started = createDeferredCore<void>();
-      const gate = createDeferredCore<void>();
-      authMock.mockImplementationOnce(async (refreshProvider) => {
-        started.resolve();
-        await gate.promise;
-        await refreshProvider.saveTokens(makeTokens("gateway-token", "secret-token"));
-        return "AUTHORIZED";
-      });
+      const { started, gate } = gateRefresh();
 
       const refresh = resolveMcpOAuthAccessToken({ identity: IDENTITY });
       await started.promise;

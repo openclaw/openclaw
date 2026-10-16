@@ -36,7 +36,6 @@ import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 
 const authMock = vi.hoisted(() => vi.fn());
 const ROTATED_ACCESS = "gateway-token";
-const LEGACY_ACCESS = "example";
 const REMOTE_IDENTITY = operatorMcpOAuthIdentity("Remote Docs", "https://mcp.example.com/mcp");
 const CALENDLY_IDENTITY = operatorMcpOAuthIdentity("Calendly", "https://mcp.calendly.com/");
 const metadataUrl = () => new URL("https://mcp.example.com/.well-known/oauth-protected-resource");
@@ -157,15 +156,11 @@ async function startAuthorizationServer() {
 
 function authorizationCode(authorizationUrl: string): string {
   const code = new URL(authorizationUrl).searchParams.get("code_challenge");
-  if (!code) {
-    throw new Error("authorization URL omitted the PKCE challenge");
-  }
+  assert(code, "authorization URL omitted the PKCE challenge");
   return code;
 }
 
-vi.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({
-  auth: authMock,
-}));
+vi.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({ auth: authMock }));
 
 function withTempHome<T>(run: (home: string) => T | Promise<T>, prefix: string) {
   return withBaseTempHome(run, {
@@ -250,10 +245,7 @@ describe("MCP OAuth provider", () => {
       expect(await readMcpOAuthStore(storeKey)).toMatchObject({
         tokens: { access_token: "decoy-token" },
         tokenExpiresAt: 0,
-        pendingAuthorizationChallenge: {
-          requiresAuthorization: true,
-          scope: "docs.write",
-        },
+        pendingAuthorizationChallenge: { requiresAuthorization: true, scope: "docs.write" },
       });
 
       authMock.mockImplementationOnce(async (loginProvider, options) => {
@@ -396,11 +388,8 @@ describe("MCP OAuth provider", () => {
       seedMcpOAuthStoreForTest(storeKey, legacyStore);
 
       await expect(
-        resolveMcpOAuthAccessToken({
-          identity: REMOTE_IDENTITY,
-          acceptUnknownExpiry: true,
-        }),
-      ).resolves.toBe(LEGACY_ACCESS);
+        resolveMcpOAuthAccessToken({ identity: REMOTE_IDENTITY, acceptUnknownExpiry: true }),
+      ).resolves.toBe("example");
       expect(authMock).not.toHaveBeenCalled();
 
       authMock.mockImplementationOnce(authorize);
@@ -416,10 +405,7 @@ describe("MCP OAuth provider", () => {
     await withTempHome(async () => {
       const resourceMetadataUrl = metadataUrl();
       await withMcpOAuthProviderForTest(
-        {
-          identity: REMOTE_IDENTITY,
-          allowAuthorizationRedirect: true,
-        },
+        { identity: REMOTE_IDENTITY, allowAuthorizationRedirect: true },
         async (provider) => {
           await provider.saveCodeVerifier("existing-verifier");
           expect(await provider.codeVerifier()).toBe("existing-verifier");
@@ -460,10 +446,7 @@ describe("MCP OAuth provider", () => {
       await withProvider(async (provider) => {
         await provider.saveTokens({ access_token: "access", token_type: "Bearer" });
 
-        expect(await provider.tokens()).toEqual({
-          access_token: "access",
-          token_type: "Bearer",
-        });
+        expect(await provider.tokens()).toEqual({ access_token: "access", token_type: "Bearer" });
       });
 
       const databasePath = resolveOpenClawStateSqlitePath();
@@ -585,9 +568,7 @@ describe("MCP OAuth provider", () => {
         },
       };
       const config = resolveMcpTransportConfig("fixture", rawServer);
-      if (config?.kind !== "http") {
-        throw new Error("expected HTTP MCP OAuth config");
-      }
+      assert(config?.kind === "http", "expected HTTP MCP OAuth config");
       const identity = requesterIdentity("fixture", config.url, "sender-a");
       try {
         const first = await startMcpOAuthAuthorization(identity, config, {});

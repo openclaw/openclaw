@@ -1,19 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { collectMcpPaginatedItems } from "./mcp-pagination.js";
 
-const limits = {
-  timeoutMs: 1_000,
-  maxPages: 4,
-  maxItems: 8,
-  maxBytes: 1_024,
-};
-
 type PageOptions = Parameters<typeof collectMcpPaginatedItems<string>>[0];
-function collect(itemLabel: string, options: Pick<PageOptions, "loadPage"> & Partial<PageOptions>) {
+type Options = Pick<PageOptions, "loadPage"> & Partial<PageOptions>;
+function collect(itemLabel: string, options: Options) {
   return collectMcpPaginatedItems({
     label: `MCP ${itemLabel.slice(0, -1)} listing`,
     itemLabel,
-    ...limits,
+    timeoutMs: 1_000,
+    maxPages: 4,
+    maxItems: 8,
+    maxBytes: 1_024,
     ...options,
   });
 }
@@ -49,33 +46,20 @@ describe("collectMcpPaginatedItems", () => {
     ).rejects.toThrow("repeated pagination cursor");
   });
 
-  it("bounds endless pages, retained items, and aggregate serialized bytes", async () => {
-    await expect(
-      collect("tools", {
-        maxPages: 2,
-        loadPage: async ({ cursor }) => ({
-          items: [cursor ?? "first"],
-          nextCursor: `${cursor ?? "cursor"}-next`,
-        }),
-      }),
-    ).rejects.toThrow("exceeded 2 pages");
-
-    await expect(
-      collect("resources", {
-        maxItems: 2,
-        loadPage: async () => ({ items: ["one", "two", "three"] }),
-      }),
-    ).rejects.toThrow("exceeded 2 resources");
-
-    await expect(
-      collect("prompts", {
-        maxBytes: 64,
-        loadPage: async () => ({
-          items: ["prompt"],
-          serializedValue: { prompts: [{ description: "x".repeat(128) }] },
-        }),
-      }),
-    ).rejects.toThrow("exceeded 64 bytes");
+  it.each([
+    ["tools", "maxPages", 2, "exceeded 2 pages"],
+    ["resources", "maxItems", 2, "exceeded 2 resources"],
+    ["prompts", "maxBytes", 64, "exceeded 64 bytes"],
+  ] as const)("bounds %s", async (kind, limit, value, error) => {
+    const loadPage: PageOptions["loadPage"] = async ({ cursor }) => {
+      if (kind === "tools") {
+        return { items: [cursor ?? "first"], nextCursor: `${cursor ?? "cursor"}-next` };
+      }
+      return kind === "resources"
+        ? { items: ["one", "two", "three"] }
+        : { items: ["prompt"], serializedValue: { prompts: [{ description: "x".repeat(128) }] } };
+    };
+    await expect(collect(kind, { [limit]: value, loadPage })).rejects.toThrow(error);
   });
 
   it("keeps the per-request safety budget behind one absolute deadline", async () => {
@@ -188,16 +172,7 @@ describe("collectMcpPaginatedItems", () => {
       signal: controller.signal,
       loadPage: async ({ signal }) =>
         await new Promise<never>((_resolve, reject) => {
-          signal.addEventListener(
-            "abort",
-            () =>
-              reject(
-                signal.reason instanceof Error
-                  ? signal.reason
-                  : new Error("MCP prompt listing aborted"),
-              ),
-            { once: true },
-          );
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
         }),
     });
 
