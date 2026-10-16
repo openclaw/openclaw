@@ -79,6 +79,33 @@ function expectRowCount(db: DatabaseSync, table: string, count: number) {
   expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({ count });
 }
 
+function blockNextEmbedding(harness: ReindexHarness) {
+  const entered = createDeferred<void>();
+  const released = createDeferred<void>();
+  vi.spyOn(fixtureProvider(harness), "embedBatch").mockImplementationOnce(async (inputs) => {
+    entered.resolve();
+    await released.promise;
+    return inputs.map(() => [0, 1, 0]);
+  });
+  return { entered: entered.promise, release: released.resolve };
+}
+
+function interceptPublication(
+  databasePath: string | undefined,
+  intercept: (
+    ...args: Parameters<typeof sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2>
+  ) => ReturnType<typeof sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2>,
+) {
+  const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
+  vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2").mockImplementation((...args) =>
+    args[0].path === databasePath &&
+    args[2].moduleUrl.href === resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication).href
+      ? intercept(...args)
+      : open(...args),
+  );
+  return open;
+}
+
 describe("memory manager reindex recovery", () => {
   let fixtureRoot = "";
   let workspaceDir = "";
@@ -167,12 +194,7 @@ describe("memory manager reindex recovery", () => {
           rememberAcrossConversations: params.sources?.includes("sessions") ?? false,
         },
       },
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-        },
-        entries: { main: {} },
-      },
+      agents: { defaults: { workspace: workspaceDir }, entries: { main: {} } },
     });
   }
 
@@ -184,9 +206,7 @@ describe("memory manager reindex recovery", () => {
       cfg,
       agentId: "main",
     });
-    if (!result.manager) {
-      throw new Error(result.error ?? "manager missing");
-    }
+    assert.ok(result.manager, result.error ?? "manager missing");
     if (!("sync" in result.manager) || typeof result.manager.sync !== "function") {
       throw new Error("manager does not support sync");
     }
@@ -197,8 +217,15 @@ describe("memory manager reindex recovery", () => {
   async function openHarness(
     params: Parameters<typeof createCfg>[0] = { sources: ["memory"], cacheEnabled: true },
   ) {
-    const memoryManager = await openManager(createCfg(params));
-    return { memoryManager, harness: memoryManager as unknown as ReindexHarness };
+    const cfg = createCfg(params);
+    const memoryManager = await openManager(cfg);
+    return { cfg, memoryManager, harness: memoryManager as unknown as ReindexHarness };
+  }
+
+  async function reopenManager(cfg: OpenClawConfig) {
+    await manager?.close();
+    manager = null;
+    return openManager(cfg);
   }
 
   const writeMemory = (filename: string, text: string) =>
@@ -305,9 +332,7 @@ describe("memory manager reindex recovery", () => {
   );
 
   it("waits for the published writer before clearing conflicting dimensions and recovers", async () => {
-    const cfg = createCfg({ sources: ["memory"], cacheEnabled: true });
-    const memoryManager = await openManager(cfg);
-    const harness = memoryManager as unknown as ReindexHarness;
+    const { cfg, memoryManager, harness } = await openHarness();
     const queued = createDeferred<void>();
     let reservation: Awaited<ReturnType<typeof reservePublishedWriter>> | undefined;
     observePublishedReservations(harness.db, () => {
@@ -352,9 +377,7 @@ describe("memory manager reindex recovery", () => {
     expect(harness.db.prepare("SELECT provider FROM memory_embedding_cache").all()).toEqual([
       { provider: "unrelated" },
     ]);
-    await memoryManager.close();
-    manager = null;
-    const reopened = await openManager(cfg);
+    const reopened = await reopenManager(cfg);
     await expect(reopened.sync({ reason: "cli", force: true })).resolves.toBeUndefined();
     expect(
       (reopened as unknown as ReindexHarness).db
@@ -383,49 +406,35 @@ describe("memory manager reindex recovery", () => {
       const cacheDimensions = () =>
         publishedDb.prepare("SELECT hash, dims FROM memory_embedding_cache ORDER BY hash").all();
       const fullCacheRows = () => cacheRows(publishedDb);
-      const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
-      vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2").mockImplementation(
-        async (...args) => {
-          const [options, source, workerInput] = args;
-          if (
-            options.path !== publishedDb.location() ||
-            workerInput.moduleUrl.href !==
-              resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication).href
-          ) {
-            return await open(...args);
-          }
-          const worker =
-            failurePoint === "committed clear reply"
-              ? await open(options, source, {
-                  ...workerInput,
-                  moduleUrl: resolveRuntimeWorkerUrl(memoryPublicationFaultEntrypoint),
-                  input: { kind: "cache-clear-result", publication: workerInput.input },
-                })
-              : await open(...args);
-          const execute = worker.execute.bind(worker);
-          vi.spyOn(worker, "execute").mockImplementation(async (...executeArgs) => {
-            try {
-              if (
-                failurePoint === "publication admission" &&
-                conflictReturned &&
-                !admissionRefused
-              ) {
-                admissionRefused = true;
-                throw admissionError;
-              }
-              const result = await execute(...executeArgs);
-              if (cacheDimensions().some((row) => row.dims === 2)) {
-                cached.resolve();
-              }
-              return result;
-            } catch (error) {
-              clearFailed.resolve(error);
-              throw error;
+      const open = interceptPublication(publishedDb.location(), async (...args) => {
+        const [options, source, workerInput] = args;
+        const worker =
+          failurePoint === "committed clear reply"
+            ? await open(options, source, {
+                ...workerInput,
+                moduleUrl: resolveRuntimeWorkerUrl(memoryPublicationFaultEntrypoint),
+                input: { kind: "cache-clear-result", publication: workerInput.input },
+              })
+            : await open(...args);
+        const execute = worker.execute.bind(worker);
+        vi.spyOn(worker, "execute").mockImplementation(async (...executeArgs) => {
+          try {
+            if (failurePoint === "publication admission" && conflictReturned && !admissionRefused) {
+              admissionRefused = true;
+              throw admissionError;
             }
-          });
-          return worker;
-        },
-      );
+            const result = await execute(...executeArgs);
+            if (cacheDimensions().some((row) => row.dims === 2)) {
+              cached.resolve();
+            }
+            return result;
+          } catch (error) {
+            clearFailed.resolve(error);
+            throw error;
+          }
+        });
+        return worker;
+      });
       await memoryManager.sync({ reason: "baseline", force: true });
       const provider = fixtureProvider(harness);
       const sources = [
@@ -441,9 +450,7 @@ describe("memory manager reindex recovery", () => {
         const source = sources.find(([, text]) =>
           inputs.some((input) => typeof input === "string" && input.includes(text)),
         );
-        if (!source) {
-          throw new Error("Unexpected embedding input in cache-clear fixture");
-        }
+        assert.ok(source, "Unexpected embedding input in cache-clear fixture");
         calls.push(source[0]);
         if (calls.length === 3) {
           allProvidersEntered.resolve();
@@ -484,9 +491,7 @@ describe("memory manager reindex recovery", () => {
         releaseLate.resolve();
         const failure: unknown = await sync.catch((error: unknown) => error);
         expect(failure).toMatchObject({ message: expect.stringContaining(errorMessage) });
-        if (!(failure instanceof Error)) {
-          throw new Error("Expected the original embedding publication failure");
-        }
+        assert.ok(failure instanceof Error, "Expected the original embedding publication failure");
         expect(failure.cause).toBe(clearError);
         expect(fullCacheRows()).toEqual(expectedCache);
         expect(embed).toHaveBeenCalledTimes(3);
@@ -502,9 +507,7 @@ describe("memory manager reindex recovery", () => {
   );
 
   it("refuses generated cache writes after database admission is revoked", async () => {
-    const cfg = createCfg({ sources: ["memory"], cacheEnabled: true });
-    const memoryManager = await openManager(cfg);
-    const harness = memoryManager as unknown as ReindexHarness;
+    const { memoryManager, harness } = await openHarness();
     const publishedDb = harness.db;
     const queued = createDeferred<void>();
     let reservation: Awaited<ReturnType<typeof reservePublishedWriter>> | undefined;
@@ -547,24 +550,16 @@ describe("memory manager reindex recovery", () => {
     await memoryManager.sync({ reason: "baseline", force: true });
     const db = harness.db;
     const databasePath = db.location();
-    if (!databasePath) {
-      throw new Error("Expected the fixture's file-backed memory index");
-    }
+    assert.ok(databasePath, "Expected the fixture's file-backed memory index");
     await writeMemory("alpha.md", "Accepted sync survives close.");
-    const entered = createDeferred<void>();
-    const releaseProvider = createDeferred<void>();
-    vi.spyOn(fixtureProvider(harness), "embedBatch").mockImplementationOnce(async (inputs) => {
-      entered.resolve();
-      await releaseProvider.promise;
-      return inputs.map(() => [0, 1, 0]);
-    });
+    const provider = blockNextEmbedding(harness);
     const sync = memoryManager.sync({ reason: "closing", force: true });
     void sync.catch(() => undefined);
     let reservation: Awaited<ReturnType<typeof reservePublishedWriter>> | undefined;
     let close: Promise<void> | undefined;
     let closed = false;
     try {
-      await Promise.race([entered.promise, sync]);
+      await Promise.race([provider.entered, sync]);
       reservation = await reservePublishedWriter();
       close = memoryManager.close().then(() => {
         closed = true;
@@ -572,7 +567,7 @@ describe("memory manager reindex recovery", () => {
       void close.catch(() => undefined);
       await yieldToEventLoop();
       expect(closed).toBe(false);
-      releaseProvider.resolve();
+      provider.release();
       await yieldToEventLoop();
       expect(closed).toBe(false);
       reservation.release();
@@ -581,7 +576,7 @@ describe("memory manager reindex recovery", () => {
       using reader = new DatabaseSync(databasePath, { readOnly: true });
       expectChunks(reader, "Accepted sync survives close.");
     } finally {
-      releaseProvider.resolve();
+      provider.release();
       reservation?.release();
       await Promise.allSettled([sync, close, reservation?.done]);
     }
@@ -621,17 +616,15 @@ describe("memory manager reindex recovery", () => {
   it.each(["batch-test", "batch-wide-test"] as const)(
     "retains completed %s runtime batches after a late rebuild failure",
     async (provider) => {
-      const cfg = createCfg({
+      await writeMemory("alpha.md", "published alpha");
+      await writeMemory("beta.md", "published beta");
+      const { cfg, memoryManager, harness } = await openHarness({
         provider,
         sources: ["memory"],
         cacheEnabled: true,
         batchEnabled: true,
       });
-      await writeMemory("alpha.md", "published alpha");
-      await writeMemory("beta.md", "published beta");
-      const memoryManager = await openManager(cfg);
       await memoryManager.sync({ reason: "cli", force: true });
-      const harness = memoryManager as unknown as ReindexHarness;
       await writeMemory("alpha.md", "replacement alpha");
       await writeMemory("beta.md", "replacement beta");
       batchEmbeddingCalls = [];
@@ -646,9 +639,7 @@ describe("memory manager reindex recovery", () => {
         expect.arrayContaining(["replacement alpha", "replacement beta"]),
       );
       metadata.mockRestore();
-      await memoryManager.close();
-      manager = null;
-      const reopened = await openManager(cfg);
+      const reopened = await reopenManager(cfg);
       batchEmbeddingCalls = [];
 
       await reopened.sync({ reason: "cli", force: true });
@@ -659,29 +650,21 @@ describe("memory manager reindex recovery", () => {
 
   it("bounds the shadow cache before any entries reach the primary", async () => {
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
     const interceptedPaths: Array<string | undefined> = [];
     // Install before manager startup can retain its canonical publication client.
-    vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2").mockImplementation(
-      async (...args) => {
-        const [options, source, worker] = args;
-        if (
-          options.agentId !== "main" ||
-          options.path !== databasePath ||
-          worker.moduleUrl.href !==
-            resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication).href
-        ) {
-          return await open(...args);
-        }
-        const client = await open(options, source, {
-          ...worker,
-          moduleUrl: resolveRuntimeWorkerUrl(memoryPublicationFaultEntrypoint),
-          input: { kind: "cache-capacity", publication: worker.input, maximum: 2 },
-        });
-        interceptedPaths.push(options.path);
-        return client;
-      },
-    );
+    const open = interceptPublication(databasePath, async (...args) => {
+      const [options, source, worker] = args;
+      if (options.agentId !== "main") {
+        return await open(...args);
+      }
+      const client = await open(options, source, {
+        ...worker,
+        moduleUrl: resolveRuntimeWorkerUrl(memoryPublicationFaultEntrypoint),
+        input: { kind: "cache-capacity", publication: worker.input, maximum: 2 },
+      });
+      interceptedPaths.push(options.path);
+      return client;
+    });
     const { memoryManager, harness } = await openHarness();
     harness.cache.maxEntries = 2;
     for (let i = 0; i < 4; i += 1) {
@@ -829,7 +812,6 @@ describe("memory manager reindex recovery", () => {
     await writeMemory("alpha.md", "published alpha");
     const { memoryManager, harness } = await openHarness();
     await memoryManager.sync({ reason: "cli", force: true });
-    const provider = fixtureProvider(harness);
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     const reset = () =>
       resetMemoryDatabase({
@@ -837,22 +819,16 @@ describe("memory manager reindex recovery", () => {
         dbPath: databasePath,
         workspaceDir,
       });
-    const embeddingGate = createDeferred<void>();
-    const embeddingStarted = createDeferred<void>();
-    vi.spyOn(provider, "embedBatch").mockImplementationOnce(async (inputs) => {
-      embeddingStarted.resolve();
-      await embeddingGate.promise;
-      return inputs.map(() => [0, 1, 0]);
-    });
+    const embedding = blockNextEmbedding(harness);
     await writeMemory("alpha.md", "incremental beta");
     harness.dirty = true;
     const activeSync = memoryManager.sync({ reason: "session-delta" });
     try {
-      await embeddingStarted.promise;
+      await embedding.entered;
       await expect(reset()).rejects.toMatchObject({ code: "SQLITE_BUSY" });
       expectChunks(harness.db, "published alpha");
     } finally {
-      embeddingGate.resolve();
+      embedding.release();
       await activeSync;
     }
 
@@ -898,9 +874,7 @@ describe("memory manager reindex recovery", () => {
     });
     await memoryManager.sync({ reason: "test", force: true });
     const databasePath = harness.db.location();
-    if (!databasePath) {
-      throw new Error("Expected the fixture's file-backed memory index");
-    }
+    assert.ok(databasePath, "Expected the fixture's file-backed memory index");
     {
       // Observe the worker-published schema before injecting an orphan through a fixture writer.
       using writer = new DatabaseSync(databasePath);
