@@ -485,10 +485,12 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
   const nativeMediaKind = extractNativeMediaKind(message);
   const mediaFacts: ChannelInboundMediaInput[] =
     allMedia.length > 0
-      ? allMedia.map((media) => ({
-          ...media,
+      ? allMedia.map(({ path, contentType, fileName }) => ({
+          path,
+          contentType,
+          fileName,
           kind:
-            nativeMediaKind === "document" && media.contentType?.startsWith("image/")
+            nativeMediaKind === "document" && contentType?.startsWith("image/")
               ? "image"
               : nativeMediaKind,
         }))
