@@ -3,7 +3,8 @@ import { afterEach } from "vitest";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
-import { ModelSetupPageBody, type ModelSetupPageProps } from "../model-setup-page.tsx";
+import type { ModelSetupPageProps } from "../model-setup-owner.ts";
+import { ModelSetupPageBody } from "../model-setup-page.tsx";
 
 type MountedPage = { mount: () => void; unmount: () => void };
 export type TestModelSetupPage = HTMLElement &

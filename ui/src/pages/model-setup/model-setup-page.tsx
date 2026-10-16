@@ -1,17 +1,8 @@
 import { createMemo } from "solid-js";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { ModelProviderLoginView } from "../model-providers/login-view.tsx";
-import type { ModelSetupRouteData } from "./first-run-setup.ts";
-import { createModelSetup } from "./model-setup-owner.ts";
+import { createModelSetup, type ModelSetupPageProps } from "./model-setup-owner.ts";
 import { ModelSetupView } from "./view.tsx";
-
-export type ModelSetupPageProps = {
-  routeData?: ModelSetupRouteData;
-  embedded?: boolean;
-  agentLabel?: string;
-  credentialChoices?: readonly string[];
-  onClose?: () => void;
-};
 
 export function ModelSetupPageBody(props: ModelSetupPageProps & { host: HTMLElement }) {
   const setup = createModelSetup(props, useApplication());

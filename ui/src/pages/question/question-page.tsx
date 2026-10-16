@@ -40,10 +40,9 @@ function createQuestionPage(context: ApplicationContext, props: QuestionPageProp
   let heading: HTMLHeadingElement | undefined;
   let questionPanelHadFocus = false;
   const rememberPanelFocus = () => {
-    questionPanelHadFocus = Boolean(
+    questionPanelHadFocus =
       questionPanel?.contains(document.activeElement) ||
-      (questionPanelHadFocus && document.activeElement === document.body),
-    );
+      (questionPanelHadFocus && document.activeElement === document.body);
   };
   let publishQuestions = () => {};
   const questionState = createQuestionPromptState(() => {

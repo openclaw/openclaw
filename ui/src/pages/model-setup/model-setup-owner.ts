@@ -20,9 +20,9 @@ import {
   modelSetupOwnerChanges,
   reconcileModelSetupConnection,
   FirstRunSetup,
+  type ModelSetupRouteData,
 } from "./first-run-setup.ts";
 import { createModelSetupIconLoader } from "./model-setup-icon-loader.tsx";
-import type { ModelSetupPageProps } from "./model-setup-page.tsx";
 import { formatModelSetupError } from "./model-setup-task-result.ts";
 import { createNativeModelSetup } from "./native-model-setup.tsx";
 import {
@@ -43,6 +43,14 @@ import {
 } from "./state.ts";
 import type { ModelSetupViewProps } from "./view.tsx";
 import { ModelSetupWizardRunner, type ModelSetupWizardCompletion } from "./wizard-runner.ts";
+
+export type ModelSetupPageProps = {
+  routeData?: ModelSetupRouteData;
+  embedded?: boolean;
+  agentLabel?: string;
+  credentialChoices?: readonly string[];
+  onClose?: () => void;
+};
 
 export function createModelSetup(
   props: ModelSetupPageProps & { host: HTMLElement },
