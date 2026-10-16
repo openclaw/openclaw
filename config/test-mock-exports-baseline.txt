@@ -9038,7 +9038,6 @@
 ["src/system-agent/setup-inference-error-reporting.test.ts","./setup-inference.js","4d044e100e9c02a23b18c55da4e03ec5c7c590b4a630edee432217b700228ee2",1]
 ["src/system-agent/setup-inference-error-reporting.test.ts","./system-agent.js","2e06f6e57f04a20c915c766fde157e0687ae7246d9007e13792f3d83ec9bcb6a",1]
 ["src/system-agent/setup-inference-turn.test.ts","../agents/runtime-plugins.js","f33c9cc23788f77c9d790be1b53b8006a671bd2772f3ea84b1935963f347cdc5",1]
-["src/system-agent/setup-inference.provider-install-owner.test.ts","../plugins/provider-auth-choice.js","4317d4dbf8564afebef8b46019d84f717457db6a1d4653b2b89b5af9337b6a23",1]
 ["src/system-agent/tui-backend.test.ts","../agents/prepared-model-catalog.js","f97eb654e755515f9f971db6de0d9ef1fadc01282f1e855aa371a2d50b347d20",1]
 ["src/system-agent/tui-backend.test.ts","../plugins/providers.js","25373331c7ce8a9e5e1d66b21d70ce8c425849f7dd03bca51a94f52915aa8047",1]
 ["src/talk/agent-run-control.test.ts","../agents/embedded-agent-runner/active-run-projections.js","d6deddaab90e0eacd10b9db6bfc24b43b530db9d617fc52ba86d2dc1ad343b37",1]
