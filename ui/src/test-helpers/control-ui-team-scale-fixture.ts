@@ -223,16 +223,15 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     { length: counts.transcriptMessages },
     (_, index) => `team-message-${index + 1}`,
   );
-  const messagesPerWidget = Math.floor(counts.transcriptMessages / counts.inlineWidgets);
+  const messagesPerWidget = Math.ceil(counts.transcriptMessages / counts.inlineWidgets);
   const historyMessages = messageIds.map((id, index) => ({
     role:
       options.largeSnapshot && index % 4 === 2 ? "toolResult" : index % 2 ? "assistant" : "user",
     __openclaw: { id, seq: index + 1 },
     ...(options.largeSnapshot
       ? {
-          idempotencyKey: `synthetic-turn-${Math.floor(index / 4)}`,
-          toolCallId: `synthetic-tool-${Math.floor(index / 4)}`,
-          toolName: "read",
+          idempotencyKey: `synthetic-message-${index}`,
+          ...(index % 4 === 2 ? { toolCallId: `synthetic-tool-${index}`, toolName: "read" } : {}),
           openclawResponsesInputReplay: { text: "Synthetic replay metadata. ".repeat(10) },
           usage: { input: 1200, output: 400, totalTokens: 1600 },
         }
@@ -253,7 +252,8 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
           ...(options.largeSnapshot
             ? ["Synthetic transcript detail and tool output. ".repeat(40)]
             : []),
-          ...(index % messagesPerWidget === messagesPerWidget - 1
+          ...(index % messagesPerWidget === messagesPerWidget - 1 ||
+          index === counts.transcriptMessages - 1
             ? [
                 `[embed ref="team-scale-chart-${Math.floor(index / messagesPerWidget) + 1}" title="Team metric ${Math.floor(index / messagesPerWidget) + 1}" height="220" /]`,
               ]
@@ -262,6 +262,16 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       },
     ],
   }));
+  const largeHistory = options.largeSnapshot
+    ? {
+        messages: historyMessages,
+        sessionId: pinnedRows[0]!.sessionId,
+        sessionInfo: pinnedRows[0]!,
+        hasMore: false,
+        totalMessages: counts.transcriptMessages,
+        metadata: { models: [] },
+      }
+    : undefined;
   const catalogs: SessionCatalog[] = ["codex", "claude"].map((id, catalogIndex) => ({
     id,
     label: id === "codex" ? "Codex" : "Claude Code",
@@ -431,16 +441,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
         ? { "session.members.listEvidence": { sessionKey: selectedSessionKey, ...sharingMembers } }
         : {}),
       "question.list": { questions: [] },
-      ...(options.largeSnapshot
-        ? {
-            "chat.history": {
-              messages: historyMessages,
-              sessionId: pinnedRows[0]!.sessionId,
-              hasMore: false,
-              totalMessages: counts.transcriptMessages,
-            },
-          }
-        : {}),
+      ...(largeHistory ? { "chat.startup": largeHistory, "chat.history": largeHistory } : {}),
       ...duplicateReads?.methodResponses,
       "agents.list": agents,
       "agent.identity.get": {
