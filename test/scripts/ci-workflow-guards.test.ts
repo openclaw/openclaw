@@ -6380,6 +6380,10 @@ it.each(["publish", "promote"])(
 
 it("serializes Linux manifests with stable activation and reuses completed Linux builds", () => {
   const linux = parse(readFileSync(".github/workflows/linux-app-release.yml", "utf8"));
+  expect(linux.env.WINDOWS_COMPANION_RELEASE).toBe("false");
+  expect(linux.jobs.validate_release.outputs.windows_build).toContain(
+    "WINDOWS_COMPANION_RELEASE",
+  );
   const finalizers = (
     [
       ["openclaw-release-publish.yml", "finalize_github_release"],
@@ -6404,21 +6408,29 @@ it("serializes Linux manifests with stable activation and reuses completed Linux
       }),
     ).toBe(alreadyPublished !== "true");
   }
-  for (const [alreadyPublished, build, signing, expected] of [
-    ["true", "skipped", "skipped", true],
-    ["false", "success", "success", true],
-    ["false", "success", "failure", false],
-    ["false", "skipped", "skipped", false],
+  for (const [alreadyPublished, windowsBuild, build, signing, expected] of [
+    ["true", "false", "skipped", "skipped", true],
+    ["false", "false", "success", "success", true],
+    ["false", "false", "success", "failure", false],
+    ["false", "false", "skipped", "skipped", false],
+    ["false", "true", "success", "success", true],
+    ["false", "true", "success", "failure", false],
   ]) {
     expect(
       runInNewContext(linux.jobs.publish.if.replace(/^\$\{\{|\}\}$/gu, ""), {
         always: () => true,
         needs: {
           validate_release: {
-            outputs: { already_published: alreadyPublished, desktop_test_bundles: "false" },
+            outputs: {
+              already_published: alreadyPublished,
+              desktop_test_bundles: "false",
+              windows_build: windowsBuild,
+            },
           },
           build_linux: { result: build },
           sign_linux: { result: signing },
+          build_windows: { result: signing },
+          sign_desktop: { result: signing },
         },
       }),
     ).toBe(expected);
@@ -6448,6 +6460,7 @@ it("serializes Linux manifests with stable activation and reuses completed Linux
   expect(publisher.run).toContain("input_args=()");
   expect(publisher.run).toContain('"${input_args[@]}"');
   expect(publisher.run).toContain("--request-run-id");
+  expect(publisher.run).toContain('--windows "$WINDOWS_COMPANION_RELEASE"');
   expect(JSON.stringify(steps)).not.toContain("linux-updater-manifest.mjs publish");
   expect(JSON.stringify(steps)).not.toContain("--clobber");
 });

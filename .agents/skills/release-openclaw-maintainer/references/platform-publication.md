@@ -102,6 +102,15 @@ it to the current latest release. Asset completeness and unfinished channel
 publication are separate: retrying complete public assets verifies and reuses
 their bytes and identities, then completes only the remaining metadata work.
 
+The immutable inventory stays strict for the AppImage, `.deb`, and checksum
+file. A non-Linux companion may be withdrawn by deleting the release asset; a
+companion still present must match its recorded identity and digest.
+
+Windows Tauri companion publication is temporarily disabled by
+`WINDOWS_COMPANION_RELEASE: "false"` in the Linux release workflow. Ordinary
+releases publish only Linux bundles; opt-in desktop-test requests still include
+their Windows test installer. Re-enable the switch only in a reviewed PR.
+
 An authorized Linux publication creates the `linux-stable` control release as
 prerelease/non-latest when absent; ordinary PR validation never initializes it.
 This tooling does not change shipped updater or
