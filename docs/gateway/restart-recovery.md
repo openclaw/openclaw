@@ -828,11 +828,14 @@ interrupted by a restart and to continue from the existing transcript. If a
 final reply had already been produced but not delivered, its text is included
 so the agent can deliver it instead of redoing the work.
 
-Startup recovery prepares one continuation at a time. Automatic continuations
-execute in the one-wide background command lane, retaining its slot until the turn
-finishes. Interactive turns use the main lane, so a large recovery backlog cannot
-fill their execution slots. Later interrupted turns keep their durable claims
-while waiting; a long recovered turn delays other automatic continuations.
+Startup recovery prepares continuations in interruption-time order across session
+stores. Automatic continuations execute in a dedicated restart-recovery command
+lane with up to four turns running at once. Each session still runs one turn at a
+time, and each recovered turn retains its lane slot until it finishes. Interactive
+turns and unrelated background work keep their own execution slots. Later
+interrupted turns retain their durable claims while waiting for recovery capacity.
+Transient startup or store-admission failures use bounded backoff without clearing
+those claims.
 Optional startup database maintenance and page-cache warming wait for this
 backlog to drain; runtime timers and cron startup proceed independently. Deferred
 database admissions join the same startup scheduler. Shutdown stops new preparation and

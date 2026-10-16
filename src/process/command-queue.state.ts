@@ -1,7 +1,16 @@
 // Capacity policy reads this state without importing the queue runtime.
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
-import { CommandLane } from "./lanes.js";
+import { CommandLane, SUBAGENT_LANE_PREFIX, SWARM_LANE_PREFIX } from "./lanes.js";
+
+export function getDefaultLaneConcurrency(lane: string): number {
+  if (lane === "restart-recovery") {
+    return 4;
+  }
+  return lane.startsWith(SUBAGENT_LANE_PREFIX) && !lane.startsWith(SWARM_LANE_PREFIX)
+    ? (getQueueState().lanes.get(CommandLane.Subagent)?.maxConcurrent ?? 1)
+    : 1;
+}
 
 export type CommandLaneTaskMarker = Readonly<{
   lane: string;
@@ -59,6 +68,24 @@ export type LaneState = {
   draining: boolean;
   generation: number;
 };
+
+export function getLaneState(lane: string): LaneState {
+  const queueState = getQueueState();
+  const existing = queueState.lanes.get(lane);
+  if (existing) {
+    return existing;
+  }
+  const created: LaneState = {
+    lane,
+    queue: createLaneQueue(),
+    activeTasks: new Map(),
+    maxConcurrent: getDefaultLaneConcurrency(lane),
+    draining: false,
+    generation: 0,
+  };
+  queueState.lanes.set(lane, created);
+  return created;
+}
 
 export type LaneGroupState = {
   group: string;

@@ -49,7 +49,8 @@ export async function runWithMainSessionRecoveryAdmission<T>(params: {
 
   // Backlog waits precede session ownership, retry charges and Gateway queue deadlines.
   // Exact retries must remain interruptible by reset without holding a session admission.
-  await enqueueCommandInLane(CommandLane.Background, async () => {}, {
+  await enqueueCommandInLane(CommandLane.RestartRecovery, async () => {}, {
+    priority: "background",
     abortSignal: params.signal
       ? AbortSignal.any([params.signal, getGatewayRestartDrainSignal()])
       : getGatewayRestartDrainSignal(),
