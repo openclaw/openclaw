@@ -527,6 +527,13 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
       controlledPage.once("download", (download) => {
         const saveAs = download.saveAs.bind(download);
         const cancel = download.cancel.bind(download);
+        if (typeof download.createReadStream === "function") {
+          const createReadStream = download.createReadStream.bind(download);
+          download.createReadStream = () => {
+            saveStarted.resolve();
+            return createReadStream();
+          };
+        }
         download.saveAs = async (outputPath) => {
           saveStarted.resolve();
           await saveAs(outputPath);

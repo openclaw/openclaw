@@ -1,7 +1,10 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
+import type { Readable } from "node:stream";
 import { sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";
 import type { Download } from "playwright-core";
+import { BROWSER_PROXY_MAX_FILE_BYTES } from "../browser-proxy-envelope.js";
 import type { BrowserDownloadCandidate, BrowserDownloadResult } from "./download-types.js";
 import { writeExternalFileWithinOutputRoot } from "./output-files.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
@@ -18,12 +21,130 @@ type BrowserDownloadPage = {
 export type BrowserDownloadCaptureOptions = {
   beforeSave?: (download: BrowserDownloadCandidate) => Promise<void> | void;
   cancelOnBeforeSaveError?: (error: unknown) => boolean;
+  maxBytes?: number;
   mode?: "passive" | "explicit";
   outputPath?: string;
   outputRoot?: string;
   signal?: AbortSignal;
   timeoutMessage?: string;
 };
+
+function browserDownloadByteBudget(opts: BrowserDownloadCaptureOptions): number {
+  const maxBytes = opts.maxBytes ?? BROWSER_PROXY_MAX_FILE_BYTES;
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
+    throw new Error("Browser download byte budget must be a positive integer");
+  }
+  return maxBytes;
+}
+
+function browserDownloadTooLargeError(maxBytes: number): Error {
+  return new Error(`Browser download exceeds ${maxBytes} bytes`);
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return undefined;
+  }
+  return typeof error.code === "string" ? error.code : undefined;
+}
+
+async function cancelOverBudgetDownload(download: Download): Promise<void> {
+  await download.cancel().catch(() => {});
+  if (typeof download.delete === "function") {
+    await download.delete().catch(() => {});
+  }
+}
+
+async function rejectSavedDownloadOverBudget(
+  tempPath: string,
+  maxBytes: number,
+  download: Download,
+): Promise<void> {
+  let stat: Awaited<ReturnType<typeof fs.stat>>;
+  try {
+    stat = await fs.stat(tempPath);
+  } catch (error) {
+    const code = errorCode(error);
+    // A swapped output directory removes the staging file. Leave that to the
+    // publisher, which rejects the escaped path.
+    if (code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+  if (stat.size <= maxBytes) {
+    return;
+  }
+  await cancelOverBudgetDownload(download);
+  throw browserDownloadTooLargeError(maxBytes);
+}
+
+async function writeEntireChunk(handle: fs.FileHandle, bytes: Buffer): Promise<void> {
+  let offset = 0;
+  while (offset < bytes.length) {
+    const { bytesWritten } = await handle.write(bytes, offset, bytes.length - offset, null);
+    if (bytesWritten <= 0) {
+      throw new Error("Browser download write made no progress");
+    }
+    offset += bytesWritten;
+  }
+}
+
+async function writeDownloadStreamWithinBudget(
+  stream: Readable,
+  tempPath: string,
+  maxBytes: number,
+  download: Download,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  const handle = await fs.open(tempPath, "w");
+  const onAbort = () => {
+    stream.destroy();
+  };
+  signal?.addEventListener("abort", onAbort);
+  let written = 0;
+  try {
+    for await (const chunk of stream) {
+      signal?.throwIfAborted();
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      if (written + bytes.length > maxBytes) {
+        stream.destroy();
+        await cancelOverBudgetDownload(download);
+        throw browserDownloadTooLargeError(maxBytes);
+      }
+      await writeEntireChunk(handle, bytes);
+      written += bytes.length;
+    }
+    signal?.throwIfAborted();
+  } catch (error) {
+    if (signal?.aborted) {
+      signal.throwIfAborted();
+    }
+    throw error;
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+    await handle.close();
+  }
+}
+
+async function writeDownloadWithinBudget(
+  download: Download,
+  tempPath: string,
+  maxBytes: number,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  signal?.throwIfAborted();
+  // Playwright downloads expose a stream after the browser finishes. Doubles
+  // that only implement saveAs still pass through the same budget.
+  if (typeof download.createReadStream === "function") {
+    const stream = await download.createReadStream();
+    await writeDownloadStreamWithinBudget(stream, tempPath, maxBytes, download, signal);
+    return;
+  }
+  await download.saveAs(tempPath);
+  signal?.throwIfAborted();
+  await rejectSavedDownloadOverBudget(tempPath, maxBytes, download);
+}
 
 function buildManagedDownloadPath(rootDir: string, fileName: string): string {
   const id = crypto.randomUUID();
@@ -58,8 +179,12 @@ export async function saveBrowserDownload(
     rootDir: requestedPath ? opts.outputRoot : implicitRoot,
     path: managedPath,
     write: async (tempPath) => {
-      await download.saveAs(tempPath);
-      opts.signal?.throwIfAborted();
+      await writeDownloadWithinBudget(
+        download,
+        tempPath,
+        browserDownloadByteBudget(opts),
+        opts.signal,
+      );
       onReadyToPublish?.();
     },
   }).catch((error: unknown) => {

@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import * as outputFiles from "./output-files.js";
@@ -347,4 +348,115 @@ describe("Playwright download capture cancellation", () => {
       }
     },
   );
+
+  it("publishes a download that stays within its byte budget", async () => {
+    const outputRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-download-budget-ok-"));
+    const outputPath = path.join(outputRoot, "kept.bin");
+    const page = new EventEmitter();
+    const state = { downloadWaiterDepth: 0 };
+    const cancel = vi.fn(async () => {});
+    const deleteDownload = vi.fn(async () => {});
+    const capture = createDownloadCaptureForPage(page, state, 1_000, {
+      mode: "explicit",
+      outputPath,
+      outputRoot,
+      maxBytes: 4,
+    });
+
+    try {
+      page.emit("download", {
+        url: () => "https://example.com/kept.bin",
+        suggestedFilename: () => "kept.bin",
+        createReadStream: async () => Readable.from([Buffer.from("abcd")]),
+        cancel,
+        delete: deleteDownload,
+      });
+
+      await expect(capture.promise).resolves.toMatchObject({ path: outputPath });
+      await expect(fs.readFile(outputPath)).resolves.toEqual(Buffer.from("abcd"));
+      expect(cancel).not.toHaveBeenCalled();
+      expect(deleteDownload).not.toHaveBeenCalled();
+    } finally {
+      await capture.promise.catch(() => {});
+      await fs.rm(outputRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("cancels a streamed download that crosses its byte budget", async () => {
+    const outputRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-download-budget-"));
+    const outputPath = path.join(outputRoot, "oversized.bin");
+    const { write, writeSettled } = observeOutputWriteSettlement(outputFiles);
+    const page = new EventEmitter();
+    const state = { downloadWaiterDepth: 0 };
+    const cancel = vi.fn(async () => {});
+    const deleteDownload = vi.fn(async () => {});
+    const capture = createDownloadCaptureForPage(page, state, 1_000, {
+      mode: "explicit",
+      outputPath,
+      outputRoot,
+      maxBytes: 4,
+    });
+
+    try {
+      page.emit("download", {
+        url: () => "https://example.com/oversized.bin",
+        suggestedFilename: () => "oversized.bin",
+        createReadStream: async () => Readable.from([Buffer.from("abcd"), Buffer.from("e")]),
+        cancel,
+        delete: deleteDownload,
+      });
+
+      await expect(capture.promise).rejects.toThrow("Browser download exceeds 4 bytes");
+      await writeSettled.promise;
+      expect(cancel).toHaveBeenCalled();
+      expect(deleteDownload).toHaveBeenCalled();
+      await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fs.readdir(outputRoot)).toEqual([]);
+    } finally {
+      await capture.promise.catch(() => {});
+      if (write.mock.calls.length > 0) {
+        await writeSettled.promise.catch(() => {});
+      }
+      write.mockRestore();
+      await fs.rm(outputRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a saveAs download that lands over its byte budget", async () => {
+    const outputRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-download-saveas-budget-"));
+    const outputPath = path.join(outputRoot, "copied.bin");
+    const { write, writeSettled } = observeOutputWriteSettlement(outputFiles);
+    const page = new EventEmitter();
+    const state = { downloadWaiterDepth: 0 };
+    const cancel = vi.fn(async () => {});
+    const capture = createDownloadCaptureForPage(page, state, 1_000, {
+      mode: "explicit",
+      outputPath,
+      outputRoot,
+      maxBytes: 4,
+    });
+
+    try {
+      page.emit("download", {
+        url: () => "https://example.com/copied.bin",
+        suggestedFilename: () => "copied.bin",
+        saveAs: async (tempPath: string) => {
+          await fs.writeFile(tempPath, Buffer.from("abcde"));
+        },
+        cancel,
+      });
+
+      await expect(capture.promise).rejects.toThrow("Browser download exceeds 4 bytes");
+      await writeSettled.promise;
+      expect(cancel).toHaveBeenCalled();
+      await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await capture.promise.catch(() => {});
+      if (write.mock.calls.length > 0) {
+        await writeSettled.promise.catch(() => {});
+      }
+      write.mockRestore();
+      await fs.rm(outputRoot, { recursive: true, force: true });
+    }
+  });
 });
