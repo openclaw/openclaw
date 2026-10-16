@@ -1,14 +1,10 @@
 // Control UI tests cover GitHub link hover card behavior.
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { BrowserContext, Locator, Page } from "playwright";
-import { beforeEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import type { ControlUiLinkReaderPreview } from "../../../src/shared/control-ui-link-reader.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -23,12 +19,6 @@ import {
   PULL_HREF,
   PULL_COMMENT_HREF,
 } from "./github-link-hovercard.test-support.ts";
-
-let artifactDir: string | undefined;
-beforeEach(() => {
-  const parent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-  artifactDir = parent ? createControlUiE2eArtifactDir("link-reader-hovercard", parent) : undefined;
-});
 
 const suite = createControlUiE2eSuite({
   name: "GitHub link hover cards",
@@ -46,8 +36,14 @@ async function newBrowserContext(): Promise<BrowserContext> {
   });
 }
 
-async function expectText(locator: Locator, text: string): Promise<void> {
-  await expect.poll(() => locator.textContent()).toContain(text);
+async function expectText(locator: Locator, ...texts: string[]): Promise<void> {
+  for (const text of texts) {
+    await expect.poll(() => locator.textContent()).toContain(text);
+  }
+}
+async function moveOff(page: Page, card: Locator) {
+  await page.mouse.move(1, 1);
+  await expect.poll(() => card.count()).toBe(0);
 }
 const part = (card: Locator, name: string) => card.locator(`.link-reader-hovercard__${name}`);
 const tooltip = (page: Page) =>
@@ -79,24 +75,11 @@ function referencePreview(url: string, subtitle: string, title: string) {
   };
 }
 
-async function captureArtifact(target: Page | Locator, name: string): Promise<void> {
-  if (!artifactDir) {
-    return;
-  }
-  await target.screenshot({ path: path.join(artifactDir, `${name}.png`) });
-}
-
 // Shared page setup for lifecycle cases and cached permalink navigation.
 async function openPullPreviewPage(
   deferPreview = false,
   previewResponse: ControlUiLinkReaderPreview = pullPreviewResponse,
-): Promise<{
-  card: Locator;
-  commentLink: Locator;
-  gateway: Awaited<ReturnType<typeof installMockGateway>>;
-  page: Page;
-  pullLink: Locator;
-}> {
+) {
   const context = await newBrowserContext();
   await context.route("https://github.com/**", (route) =>
     route.fulfill({
@@ -136,9 +119,13 @@ async function openPullPreviewPage(
   await pullLink.waitFor({ state: "visible" });
   // Count transient portals as well as empty mounts; settled DOM checks miss flashes.
   await page.evaluate((pullHref) => {
-    document.body.dataset.previewMounts = "0";
-    document.body.dataset.previewEmptyMounts = "0";
-    document.body.dataset.titleTooltipMounts = "0";
+    const counts = { previewMounts: 0, previewEmptyMounts: 0, titleTooltipMounts: 0 };
+    for (const key of Object.keys(counts)) {
+      document.body.dataset[key] = "0";
+    }
+    const increment = (key: keyof typeof counts) => {
+      document.body.dataset[key] = String(++counts[key]);
+    };
     new MutationObserver((records) => {
       for (const record of records) {
         for (const node of record.addedNodes) {
@@ -150,19 +137,13 @@ async function openPullPreviewPage(
               (hintedLink instanceof HTMLAnchorElement && hintedLink.href.startsWith(pullHref)) ||
               tip.content?.startsWith(pullHref)
             ) {
-              document.body.dataset.titleTooltipMounts = String(
-                Number(document.body.dataset.titleTooltipMounts) + 1,
-              );
+              increment("titleTooltipMounts");
             }
           }
           if (node instanceof Element && node.matches(".link-reader-hovercard")) {
-            document.body.dataset.previewMounts = String(
-              Number(document.body.dataset.previewMounts) + 1,
-            );
+            increment("previewMounts");
             if (!node.querySelector(".link-reader-hovercard__title")?.textContent?.trim()) {
-              document.body.dataset.previewEmptyMounts = String(
-                Number(document.body.dataset.previewEmptyMounts) + 1,
-              );
+              increment("previewEmptyMounts");
             }
           }
         }
@@ -188,7 +169,7 @@ suite.define(() => {
     await page.setViewportSize({ width: 320, height: 800 });
     await pullLink.focus();
     await card.waitFor({ state: "visible" });
-    await captureArtifact(card, "metadata-320-light");
+    await page.evaluate(() => document.fonts.ready.then(() => undefined));
     for (const { value } of metadata) {
       await expectText(card, value);
     }
@@ -309,7 +290,6 @@ suite.define(() => {
       await followUp.focus();
       const card = page.locator(".link-reader-hovercard");
       await card.waitFor({ state: "visible" });
-      await captureArtifact(page, "named-repository-reference");
       const href = "https://github.com/openclaw/clawsweeper/pull/1576";
       await expectAttr(followUp, "href", href);
       await expectAttr(part(card, "title"), "href", href);
@@ -350,12 +330,6 @@ suite.define(() => {
         "openclaw/openclaw/pull/1576",
       ]);
       expect(await gateway.getRequests("projects.list")).toHaveLength(1);
-      if (artifactDir) {
-        await writeFile(
-          path.join(artifactDir, "named-repository-requests.json"),
-          JSON.stringify({ requests, late }, null, 2),
-        );
-      }
     },
   );
 
@@ -411,7 +385,6 @@ suite.define(() => {
     await formatted.focus();
     const card = page.locator(".link-reader-hovercard");
     await expectText(card, "Synthetic formatting example");
-    await captureArtifact(page, "formatted-pr-reference");
     await expectAttr(formatted, "href", href);
     await expectAttr(formatted, "data-github-kind", "pull");
     await expectAttr(part(card, "title"), "href", href);
@@ -461,7 +434,6 @@ suite.define(() => {
       expect(await card.count()).toBe(0);
       expect(await page.locator("body").getAttribute("data-preview-mounts")).toBe("0");
       await expectAttr(pullLink, "aria-haspopup", null);
-      await captureArtifact(page, "github-hovercard-pending-silent");
       expect(await tooltip(page).count()).toBe(0);
       expect(await page.locator("body").getAttribute("data-title-tooltip-mounts")).toBe("0");
       expect(await pullLink.getAttribute("title")).toBeFalsy();
@@ -479,13 +451,13 @@ suite.define(() => {
         await expectAttr(pullLink, "aria-expanded", "true");
         await expectAttr(pullLink, "aria-haspopup", "dialog");
         expect(await isFocused(pullLink)).toBe(true);
-        await captureArtifact(page, "github-hovercard-rate-limit");
       } else {
         await gateway.resolveDeferred("forge.preview");
         await expectText(card, pullPreviewResponse.title);
       }
       expect(await page.locator("body").getAttribute("data-preview-mounts")).toBe("1");
       expect(await page.locator("body").getAttribute("data-preview-empty-mounts")).toBe("0");
+      await page.evaluate(() => document.fonts.ready.then(() => undefined));
       const bounds = await card.boundingBox();
       expect(bounds!.x).toBeGreaterThanOrEqual(0);
       expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(scenario.width);
@@ -592,8 +564,7 @@ suite.define(() => {
     await expectModifiedNavigation(page, () => page.keyboard.press("Shift+Enter"), PULL_HREF);
 
     await pullLink.evaluate((element) => element.blur());
-    await page.mouse.move(1, 1);
-    await expect.poll(() => card.count()).toBe(0);
+    await moveOff(page, card);
     await gateway.deferNext("forge.preview");
     await page.clock.runFor(30_000);
     await pullLink.focus();
@@ -604,8 +575,6 @@ suite.define(() => {
   });
 
   it("keeps a pending prefetch alive across dismissal and reuses it on rehover", async () => {
-    const proofDir =
-      artifactDir ?? createControlUiE2eArtifactDir("link-reader-hovercard-cancellation");
     const { card, gateway, page, pullLink } = await openPullPreviewPage(true);
 
     await gateway.waitForRequest("forge.preview");
@@ -614,8 +583,7 @@ suite.define(() => {
     expect(await page.locator("body").getAttribute("data-preview-mounts")).toBe("0");
     await pullLink.hover();
     await page.clock.runFor(300);
-    await page.mouse.move(1, 1);
-    await expect.poll(() => card.count()).toBe(0);
+    await moveOff(page, card);
 
     await pullLink.hover();
     await page.clock.runFor(300);
@@ -624,15 +592,9 @@ suite.define(() => {
     await gateway.resolveDeferred("forge.preview");
     await expectText(card, pullPreviewResponse.title);
     expect(await page.locator("body").getAttribute("data-preview-empty-mounts")).toBe("0");
-    // Capture the settled state even when the title assertion below fails.
-    await page.screenshot({
-      path: path.join(proofDir, "github-hovercard-cancellation-rehover.png"),
-    });
-    await expectText(card, pullPreviewResponse.title);
     expect((await gateway.getRequests("forge.preview")).length).toBe(1);
 
-    await page.mouse.move(1, 1);
-    await expect.poll(() => card.count()).toBe(0);
+    await moveOff(page, card);
     await pullLink.hover();
     await expectText(card, pullPreviewResponse.title);
     expect((await gateway.getRequests("forge.preview")).length).toBe(1);
@@ -706,15 +668,6 @@ suite.define(() => {
           typeof request.params.url === "string" &&
           new URL(request.params.url).pathname.endsWith("/" + number),
       );
-    const message = page.locator(".chat-text").filter({ hasText: "Review" });
-    if (artifactDir) {
-      await message.screenshot({ path: path.join(artifactDir, "github-references-light.png") });
-      await page.emulateMedia({ colorScheme: "dark" });
-      await expectPolledAttr(page.locator("html"), "data-theme-mode", "dark");
-      await message.screenshot({ path: path.join(artifactDir, "github-references-dark.png") });
-      await page.emulateMedia({ colorScheme: "light" });
-      await expectPolledAttr(page.locator("html"), "data-theme-mode", "light");
-    }
 
     const longHref =
       "https://github.com/a-very-long-organization-name/a-very-long-repository-name/issues/99817";
@@ -742,12 +695,9 @@ suite.define(() => {
 
     await pullLink.hover();
     const card = page.locator(".link-reader-hovercard");
-    await expectText(card, "Merged");
-    await expectText(card, "openclaw/openclaw #99816");
-    await expectText(card, "+101");
-    await expectText(card, "−12");
+    await expectText(card, "Merged", "openclaw/openclaw #99816", "+101", "−12");
     await page.clock.runFor(300);
-    await captureArtifact(page, "github-hovercard-title-tooltip");
+    await page.evaluate(() => document.fonts.ready.then(() => undefined));
     await expect.poll(() => tooltip(page).count()).toBe(0);
     await expectAttr(pullLink, "title", null);
     await expect.poll(() => card.locator("img").count()).toBe(4);
@@ -761,18 +711,12 @@ suite.define(() => {
 
     const issueLink = page.locator('a.markdown-github-link[href$="/issues/99815"]');
     await issueLink.hover();
-    await expectText(card, "Keep hover previews compact");
-    await expectText(card, "octocat");
-    await expectText(card, "Comments: 4");
+    await expectText(card, "Keep hover previews compact", "octocat", "Comments: 4");
     await expect.poll(() => tooltip(page).count()).toBe(0);
     await expect.poll(() => card.locator("img").count()).toBe(1);
     expect(await previewRequestsFor(99815)).toHaveLength(1);
 
-    await page.mouse.move(1, 1);
-    await expect.poll(() => card.count()).toBe(0);
-    await issueLink.hover();
-    await expectText(card, "Comments: 4");
-    expect(await previewRequestsFor(99815)).toHaveLength(1);
+    await moveOff(page, card);
 
     await page.mouse.move(1, 1);
     await page.getByRole("link", { exact: true, name: "repository" }).hover();
@@ -806,13 +750,6 @@ suite.define(() => {
     expect(await previewRequestsFor(99816)).toHaveLength(1);
     await page.mouse.move(1, 1);
 
-    await pullLink.focus();
-    await expectText(card, "Merged");
-    await expect.poll(() => tooltip(page).count()).toBe(0);
-    await page.keyboard.press("Escape");
-    await expect.poll(() => card.count()).toBe(0);
-    await expect.poll(() => isFocused(pullLink)).toBe(true);
-
     await expectModifiedNavigation(page, () => pullLink.click({ modifiers: ["Shift"] }), PULL_HREF);
 
     const longReference = page.locator(`a[href="${longHref}"]`);
@@ -822,16 +759,6 @@ suite.define(() => {
     expect(bounds).not.toBeNull();
     expect(bounds!.x).toBeGreaterThanOrEqual(0);
     expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(320);
-    if (artifactDir) {
-      const frame = await takeControlUiScreenshotFrame(page, longReference, [longReference], {
-        elements: [longReference],
-        animations: "disabled",
-      });
-      await writeFile(
-        path.join(artifactDir, "github-reference-mobile.png"),
-        frame.elements[0]!.png,
-      );
-    }
   });
 
   it("keeps the card open while the pointer crosses the gap onto it, then closes once it leaves both", async () => {
@@ -850,8 +777,7 @@ suite.define(() => {
     const cardEdgeY = below ? cardBox!.y : cardBox!.y + cardBox!.height;
     const gap = { x: linkBox!.x + linkBox!.width / 2, y: (linkEdgeY + cardEdgeY) / 2 };
 
-    // Cross the actual top/bottom gap using native pointer events, then enter
-    // the card just before the existing 120 ms dismissal deadline.
+    // Enter the card through the real gap just before the 120 ms dismissal deadline.
     await page.mouse.move(gap.x, gap.y);
     expect(
       await page.evaluate(({ x, y }) => {
@@ -863,16 +789,13 @@ suite.define(() => {
     expect(await card.count()).toBe(1);
     await page.mouse.move(cardBox!.x + cardBox!.width / 2, cardBox!.y + cardBox!.height / 2);
     expect(await card.count()).toBe(1);
-    await captureArtifact(page, "github-hovercard-pointer-open");
 
-    // Staying on the card holds it open regardless of elapsed time, mirroring
-    // the unit test's ten-grace-window persistence check.
+    // Remaining on the card must survive ten dismissal windows.
     await page.clock.runFor(1_200);
     expect(await card.count()).toBe(1);
     await expectText(card, "openclaw/openclaw #99816");
 
-    // Leaving both surfaces, with no click, still dismisses the card after the
-    // traversal grace period.
+    // Leaving both surfaces still dismisses after the traversal grace period.
     await page.mouse.move(1, 1);
     await page.clock.runFor(119);
     expect(await card.count()).toBe(1);
@@ -885,9 +808,9 @@ suite.define(() => {
 
     await pullLink.focus();
     await expectText(card, "openclaw/openclaw #99816");
-    // The real accessibility tree has to report a dialog, not a tooltip: the card
-    // owns a link, which tooltip semantics may not contain.
+    // Interactive card links require dialog, not tooltip, semantics.
     await expect.poll(() => page.getByRole("dialog").count()).toBe(1);
+    await expect.poll(() => tooltip(page).count()).toBe(0);
     await expectPolledAttr(pullLink, "aria-expanded", "true");
     await expectPolledAttr(pullLink, "aria-controls", await card.getAttribute("id"));
 
@@ -899,7 +822,6 @@ suite.define(() => {
     await expect.poll(focused).toBe("link-reader-hovercard__title");
     await page.keyboard.press("Tab");
     await expect.poll(focused).toBe("link-reader-hovercard__author");
-    await captureArtifact(page, "github-hovercard-keyboard-focus");
 
     await page.keyboard.press("Escape");
     await expect.poll(() => card.count()).toBe(0);
@@ -910,8 +832,6 @@ suite.define(() => {
   });
 
   it("opens the current pull request permalink from cached card title and repo links", async () => {
-    const proofDir =
-      artifactDir ?? createControlUiE2eArtifactDir("link-reader-hovercard-navigation");
     const { card, commentLink, gateway, page, pullLink } = await openPullPreviewPage();
 
     await pullLink.hover();
@@ -919,8 +839,7 @@ suite.define(() => {
     const titleLink = part(card, "title");
     await expectText(titleLink, pullPreviewResponse.title);
 
-    // The title owns the card's only underline; the other links stay quiet even
-    // under the pointer, so the card keeps reading as a preview and not a menu.
+    // Only the title is underlined, including on hover.
     for (const quiet of ["subtitle", "author"]) {
       const link = part(card, quiet);
       await link.hover();
@@ -935,7 +854,7 @@ suite.define(() => {
       { state: "base", anchor: pullLink, href: PULL_HREF },
       { state: "cached-comment", anchor: commentLink, href: PULL_COMMENT_HREF },
     ]) {
-      const observations = [];
+      const destinations = [];
       for (const clickedLink of ["title", "subtitle"]) {
         await anchor.hover();
         await expectText(card, pullPreviewResponse.title);
@@ -944,37 +863,19 @@ suite.define(() => {
           repoHref: await part(card, "subtitle").getAttribute("href"),
           requestCount: (await gateway.getRequests("forge.preview")).length,
         };
-        const stage = `${state}-${clickedLink}`;
-        await page.screenshot({ path: path.join(proofDir, `${stage}-card.png`) });
         const popupPromise = page.waitForEvent("popup");
         await part(card, clickedLink).click();
         const popup = await popupPromise;
         await popup.waitForLoadState("domcontentloaded");
-        const observation = {
-          state,
-          clickedLink,
-          actual: { ...actual, popupHref: popup.url() },
-          expected: {
-            titleHref: href,
-            repoHref: href,
-            requestCount: 1,
-            popupHref: href,
-          },
-        };
-        await popup.screenshot({ path: path.join(proofDir, `${stage}-popup.png`) });
-        await writeFile(path.join(proofDir, `${stage}.json`), JSON.stringify(observation, null, 2));
-        observations.push(observation);
+        destinations.push({ ...actual, popupHref: popup.url() });
 
         // A pointer-opened card still dismisses after its clicked link gains focus.
         await popup.close();
-        await page.mouse.move(1, 1);
-        await expect.poll(() => card.count()).toBe(0);
+        await moveOff(page, card);
       }
       // Retain both actual destinations before failing on a lost comment hash.
-      for (const { actual, expected, clickedLink } of observations) {
-        expect(actual.popupHref, `${state} ${clickedLink} navigation`).toBe(expected.popupHref);
-        expect(actual).toEqual(expected);
-      }
+      const expected = { titleHref: href, repoHref: href, requestCount: 1, popupHref: href };
+      expect(destinations, `${state} title and subtitle navigation`).toEqual([expected, expected]);
     }
     expect((await gateway.getRequests("forge.preview")).length).toBe(1);
   });

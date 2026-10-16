@@ -1,17 +1,12 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
-import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
-  captureUiProofEnabled,
   createNewSessionPageE2eSuite,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
@@ -44,16 +39,8 @@ suite.define(() => {
   it.each(["started", "rejected"] as const)(
     "a session writer preserves a %s first turn until its owned row arrives",
     async (initialRun) => {
-      const viewport = { width: 1280, height: 900 };
-      const context = await suite.newBrowserContext({
-        ...createControlUiE2eContextOptions(),
-        viewport,
-        ...(captureUiProofEnabled
-          ? { recordVideo: { dir: suite.artifactDir, size: viewport } }
-          : {}),
-      });
+      const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
       const page = await context.newPage();
-      const video = page.video();
       const foreign = sharedSession("agent:main:shared-notes", "Shared notes");
       const otherAgentSession = sharedSession("agent:research:other-work", "Research notes");
       const gateway = await installMockGateway(page, {
@@ -80,14 +67,6 @@ suite.define(() => {
           },
         },
       });
-      const capture = async (stage: string, surface: Locator) => {
-        if (captureUiProofEnabled) {
-          await writeFile(
-            path.join(suite.artifactDir, `${initialRun}-${stage}.png`),
-            await takeControlUiViewportScreenshot(page, surface, [surface]),
-          );
-        }
-      };
       const navigate = async (row: Pick<GatewaySessionRow, "displayName" | "key">) => {
         const target = sessionNavigationTarget({
           face: "chat",
@@ -129,7 +108,6 @@ suite.define(() => {
         await newSession.click();
         const draft = page.locator(".new-session-page__message");
         await draft.fill("Help me plan my own work.");
-        await capture("draft", draft);
         await gateway.deferNext("sessions.create");
         await page.getByRole("button", { name: "Start session", exact: true }).click();
         const request = requireRecord((await gateway.waitForRequest("sessions.create")).params);
@@ -164,7 +142,6 @@ suite.define(() => {
         await initialMessage.waitFor();
         expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-        await capture("row-pending", initialMessage);
 
         const own = createControlUiSessionRow(key, "My Guest session", timestamp + 1, {
           sessionId,
@@ -203,7 +180,6 @@ suite.define(() => {
           await expect
             .poll(() => initialMessage.locator(".chat-send-status").textContent())
             .toContain("Not sent");
-          await capture("rejected-turn", initialMessage);
           await pane.getByRole("button", { name: "Retry queued message" }).click();
           expect(requireRecord((await gateway.waitForRequest("chat.send")).params)).toMatchObject({
             sessionKey: key,
@@ -234,7 +210,6 @@ suite.define(() => {
         const contextWindow = pane.locator("[data-chat-context-window-toggle]");
         await expect.poll(() => contextWindow.isVisible()).toBe(true);
         await expect.poll(() => contextWindow.isDisabled()).toBe(true);
-        await capture("safe-controls", pane.locator(".chat-controls__model-menu"));
         await page.keyboard.press("Escape");
         const permission = pane.locator("[data-chat-permission-select]");
         await permission.click();
@@ -275,7 +250,6 @@ suite.define(() => {
         await gateway.emitGatewayEvent("chat", { sessionKey: key, runId, state: "aborted" });
         await navigate(own);
         await expect.poll(() => composer.isEditable()).toBe(true);
-        await capture("stopped", composer);
         await navigate(foreign);
         await expect.poll(() => composer.isDisabled()).toBe(true);
         expect(await model.getAttribute("aria-disabled")).toBe("true");
@@ -291,9 +265,6 @@ suite.define(() => {
         expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
       } finally {
         await suite.closeBrowserContext(context);
-        if (video) {
-          await video.saveAs(path.join(suite.artifactDir, `${initialRun}.webm`));
-        }
       }
     },
   );

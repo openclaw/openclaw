@@ -1,34 +1,20 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Guest session rename publication" });
-const viewport = { width: 1280, height: 900 };
-const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
   it("reconciles an owned label during a run and preserves scoped UI rename identity", async () => {
-    const artifactDir = capture
-      ? createControlUiE2eArtifactDir(
-          "guest-session-rename",
-          path.resolve(".artifacts/ui-visual-proof/guest-session-rename"),
-        )
-      : undefined;
     const context = await suite.newBrowserContext({
       locale: "en-US",
       colorScheme: "dark",
       serviceWorkers: "block",
-      viewport,
-      ...(artifactDir ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
+      viewport: { width: 1280, height: 900 },
     });
     const page = await context.newPage();
-    const video = page.video();
     const now = Date.now();
     const actor = { type: "human", id: "guest-writer", label: "Guest writer" } as const;
     const own = createControlUiSessionRow("agent:main:guest-report", "Project draft", now, {
@@ -52,9 +38,7 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       operatorScopes: ["operator.sessions.write"],
       sessionKey: own.key,
-      mainSessionKey: "agent:main:main",
       sessions: [own, foreign],
-      agentModel: "openai/gpt-5.5",
       models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true }],
       presenceUsers: [
         {
@@ -85,6 +69,7 @@ suite.define(() => {
           (candidate) => candidate.key === state.sessionKey,
         );
         return {
+          url: location.href,
           key: state.sessionKey,
           sessionId: row?.sessionId,
           runId: state.chatRunId,
@@ -106,14 +91,6 @@ suite.define(() => {
       await history.waitFor();
       await stream.waitFor();
       await ownRow.getByRole("img", { name: "Active run", exact: true }).waitFor();
-    };
-    const screenshot = async (name: string) => {
-      if (artifactDir) {
-        await writeFile(
-          path.join(artifactDir, name),
-          await takeControlUiViewportScreenshot(page, pane, [title, ownRow, history, stream]),
-        );
-      }
     };
     const expectPatch = async (label: string, after = 0) => {
       const patch = await gateway.waitForRequest("sessions.patch", { after });
@@ -139,8 +116,6 @@ suite.define(() => {
         workspace: "/workspace/project",
         sharingRole: "owner",
       });
-      const originalUrl = page.url();
-      await screenshot("before-label-publication.png");
 
       // Replay the committed Gateway row, not model/tool execution or a second rename backend.
       const renamed = {
@@ -160,15 +135,11 @@ suite.define(() => {
       });
       await expectName(renamed.label);
       expect(await observe()).toEqual(original);
-      expect(page.url()).toBe(originalUrl);
       expect(await gateway.getRequests("sessions.patch")).toEqual([]);
-      await screenshot("after-label-publication.png");
 
       await page.reload();
       await expectName(renamed.label);
       expect(await observe()).toEqual(original);
-      expect(page.url()).toBe(originalUrl);
-      await screenshot("after-reload.png");
 
       await title.click();
       const headerInput = pane.locator(".chat-pane__session-title-input");
@@ -199,9 +170,6 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.abort")).toEqual([]);
     } finally {
       await suite.closeBrowserContext(context);
-      if (artifactDir && video) {
-        await video.saveAs(path.join(artifactDir, "guest-session-rename.webm"));
-      }
     }
   });
 });
