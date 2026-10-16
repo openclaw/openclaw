@@ -644,7 +644,7 @@ export async function mountSessionCatalogSidebar(client: GatewayBrowserClient) {
   gateway.publish({
     hello: {
       auth: { role: "operator", scopes: ["operator.read"] },
-      features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
+      features: { methods: ["sessions.catalog.list"] },
     } as ApplicationGatewaySnapshot["hello"],
   });
   const { sidebar } = await mountSidebar(

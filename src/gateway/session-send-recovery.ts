@@ -47,6 +47,7 @@ class SessionSendEndpointChangedError extends Error {
     super(
       `${message}: ${JSON.stringify({
         endpoint,
+        reason: "endpoint-replaced",
         sessionKeyHash: sessionKeyHash(expected.sessionKey),
         previousSessionId: expected.sessionId,
         currentSessionId: current.entry?.sessionId ?? null,
@@ -205,7 +206,7 @@ export async function recoverSessionSendDeliveries(
                   storePath: loaded.readSource?.path ?? loaded.storePath,
                   entry: loaded.store[loaded.canonicalKey],
                 };
-                if (!matches(result, endpoint) || result.entry?.archivedAt) {
+                if (!matches(result, endpoint)) {
                   throw new SessionSendEndpointChangedError(side, endpoint, result);
                 }
                 return result;
@@ -225,6 +226,16 @@ export async function recoverSessionSendDeliveries(
                   destination,
                   "Session delivery target does not own this input",
                 );
+              }
+              if (source.entry?.archivedAt || destination.entry?.archivedAt) {
+                // Archive stops work without replacing the transcript. Retain the
+                // cancelled receipt, but do not create a misleading failure notice.
+                if (await discardSessionPendingInput(scope, input.runId, assertCurrent)) {
+                  context.logGateway.debug(
+                    `Session delivery recovery cancelled: ${JSON.stringify({ reason: "endpoint-archived", endpoint: source.entry?.archivedAt ? "source" : "target", sessionKeyHash: sessionKeyHash(sessionKey), inputId: input.id })}`,
+                  );
+                }
+                return;
               }
               const callGateway: AgentToolGatewayRequestCaller = async () => {
                 // Exact endpoint lineage is already loaded above. Recovery cannot
@@ -316,8 +327,7 @@ export async function recoverSessionSendDeliveries(
           displayed
             .map(({ sourceSessionKey, reason, attempts }) => {
               const description = {
-                "endpoint-replaced":
-                  "the source or destination session was reset, archived, or replaced",
+                "endpoint-replaced": "the source or destination session was reset or replaced",
                 "permission-denied": "current session permissions do not allow automatic delivery",
                 "transient-admission": `the Gateway was still unavailable after ${attempts} automatic attempts`,
                 "store-unavailable": "session storage was unavailable",

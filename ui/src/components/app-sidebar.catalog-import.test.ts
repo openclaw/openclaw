@@ -142,7 +142,6 @@ describe("AppSidebar catalog authority", () => {
         );
       const gateway = createGatewayHarness(createTestGatewayClient(request));
       const hello = gatewayHelloForMethods(["sessions.catalog.list"]);
-      hello.features!.events = ["sessions.catalog.changed"];
       gateway.publish({ hello });
       const { sidebar, provider } = await mountSidebar(
         gateway.gateway,
@@ -174,7 +173,7 @@ describe("AppSidebar catalog authority", () => {
           agentId: "main",
           catalog: catalogPage([{ threadId: "stale", name: "Late catalog session" }]).catalogs[0],
         });
-        gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+        document.dispatchEvent(new Event("visibilitychange"));
         if (pendingKind === "error") {
           pending.reject(new Error("Stale catalog failure"));
         } else {

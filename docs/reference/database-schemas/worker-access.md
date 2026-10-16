@@ -4943,6 +4943,9 @@ bound to the captured owner, and shutdown joins accepted work. The existing
 update behavior are unchanged. Drain inspection reads pending and claimed rows in
 one snapshot so a concurrent release cannot hide a lane head between reads.
 Shutdown joins deferred settlement even when it starts before dispatch returns.
+Accepted enqueues, claims, and resubmissions return the mutation's row directly;
+only duplicate enqueues read the retained row. Claims atomically update pending
+rows, and corrupt payloads are tombstoned in that same writer transaction.
 
 Inbound envelope timestamps use the existing session read worker. Bundled channels
 await preparation at their formatting boundary and carry the timestamp through

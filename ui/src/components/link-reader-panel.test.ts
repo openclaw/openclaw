@@ -428,6 +428,15 @@ describe("Plugin link reader panel", () => {
     expect(header.childElementCount).toBe(0);
   });
 
+  it("carries only the current session into a session-scoped detail reader", async () => {
+    const request = vi.fn(async (_method: string, params?: unknown) => requestedItem(params));
+    const panel = await mount(request, { sessionKey: "agent:main:private" });
+    panel.readers = [{ ...reader, linkReader: { ...reader.linkReader, sessionScoped: true } }];
+    open(panel);
+    await expectTitle(panel, "Item 1");
+    expect(request.mock.calls[0]?.[1]).toMatchObject({ sessionKey: "agent:main:private" });
+  });
+
   it("loads only an explicitly selected item and persists layout, not content or history", async () => {
     localStorage.setItem(
       storageKey,

@@ -1,8 +1,8 @@
 import path from "node:path";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { parseUsageCountedSessionIdFromFileName } from "../config/sessions/artifacts.js";
-import { loadCombinedSessionStoreForGatewayCore as loadGatewaySessionStore } from "../config/sessions/combined-store-gateway.js";
 import type { GatewayCombinedSessionStore } from "../config/sessions/combined-store-gateway.js";
+import { loadCombinedSessionStoreForGatewayCore as loadGatewaySessionStore } from "../config/sessions/combined-store-gateway.native.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";

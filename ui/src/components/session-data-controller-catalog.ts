@@ -1,4 +1,3 @@
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   SessionCatalog,
   SessionsCatalogArchiveParams,
@@ -243,24 +242,6 @@ export function updateSessionCatalogData(owner: SessionCatalogDataOwner): void {
   void refreshSessionCatalogsInBackground(owner);
 }
 
-function sessionCatalogChangesAdvertised(owner: SessionCatalogDataOwner): boolean {
-  return (
-    owner.context?.gateway.snapshot.hello?.features?.events?.includes(
-      "sessions.catalog.changed",
-    ) === true
-  );
-}
-
-export function applySessionCatalogChanged(owner: SessionCatalogDataOwner, payload: unknown): void {
-  if (!sessionCatalogChangesAdvertised(owner)) {
-    return;
-  }
-  const agentId = asNullableRecord(payload)?.agentId;
-  if (typeof agentId !== "string" || normalizeAgentId(agentId) === owner.sessionCatalogAgentId) {
-    scheduleSessionCatalogRefresh(owner);
-  }
-}
-
 export function applySessionCatalogHostEvent(
   owner: SessionCatalogDataOwner,
   payload: unknown,
@@ -318,7 +299,6 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
     catalogs: () => owner.sessionCatalogs,
     pageDepths: owner.sessionCatalogPageDepths,
     connected: () => owner.isSessionDataHostConnected,
-    catalogChangedEvents: sessionCatalogChangesAdvertised(owner),
     applyFinal: (catalogs) => {
       owner.sessionCatalogs = owner.sessionCatalogLive.resumeDiscovery(catalogs);
       owner.sessionCatalogRefreshStatus = completePanelRefresh();

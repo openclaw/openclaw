@@ -28,6 +28,31 @@ function fixture(source = "export {};\n") {
 }
 
 describe("Control UI controller guard", () => {
+  it("rejects new host consumers while existing controllers are still being retired", () => {
+    const root = fixture(
+      'import type { SolidController } from "./lib/reactive/solid-controller-host.ts";\nclass OldController {}\n',
+    );
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const target = path.join(root, "ui/src/new.ts");
+    for (const source of [
+      'import type { SolidControllerHost } from "./lib/reactive/solid-controller-host.ts";',
+      'export { useSolidControllerHost } from "./lib/reactive/solid-controller-host.ts";',
+      'const load = () => import("./lib/reactive/solid-controller-host.ts");',
+      "const load = () => import(`./lib/reactive/solid-controller-host.ts`);",
+      'type Host = import("./lib/reactive/solid-controller-host.ts").SolidControllerHost;',
+    ]) {
+      fs.writeFileSync(target, source);
+      expect(main(root, ["--base", "HEAD"]), source).toBe(1);
+    }
+    fs.writeFileSync(target, 'const example = "./lib/reactive/solid-controller-host.ts";\n');
+    fs.writeFileSync(
+      path.join(root, "ui/src/new.test.ts"),
+      'import type { SolidControllerHost } from "./lib/reactive/solid-controller-host.ts";',
+    );
+    expect(main(root, ["--base", "HEAD"])).toBe(0);
+  });
+
   it("allows controller growth until all production controllers are retired", () => {
     const root = fixture("class OldController { hostConnected() {} }\n");
     vi.spyOn(console, "log").mockImplementation(() => {});
