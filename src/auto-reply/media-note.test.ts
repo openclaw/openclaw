@@ -9,6 +9,21 @@ import type { MsgContext } from "./templating.js";
 
 type MediaNoteFixture = MsgContext & MediaFactLegacyProjection;
 
+const voiceAndImage = {
+  MediaPaths: ["/tmp/voice.ogg", "/tmp/image.png"],
+  MediaUrls: ["https://example.com/voice.ogg", "https://example.com/image.png"],
+  MediaTypes: ["audio/ogg", "image/png"],
+};
+const voiceAndImageNote = [
+  "[media attached: 2 files]",
+  "[media attached 1/2: /tmp/voice.ogg (audio/ogg) | https://example.com/voice.ogg]",
+  "[media attached 2/2: /tmp/image.png (image/png) | https://example.com/image.png]",
+].join("\n");
+
+function transcription(attachmentIndex: number, text = "Transcribed audio content") {
+  return { kind: "audio.transcription" as const, attachmentIndex, text, provider: "whisper" };
+}
+
 const buildProjection = (ctx: MediaNoteFixture) => {
   const normalized = { ...ctx, media: ctx.media ?? resolveMediaFacts(ctx) } as Record<
     string,
@@ -86,10 +101,6 @@ describe("buildInboundMediaNote", () => {
       MediaType: "image/png",
       MediaUrl: inboundPath,
     });
-    // Both MediaPath and MediaUrl normalize to the same media://inbound/ URI,
-    // so the duplicate URL suffix is collapsed per #47587. Channels that
-    // surface a genuinely different URL (e.g. a remote handle) still get the
-    // ` | <url>` suffix - see the next test case.
     expect(note).toBe("[media attached: media://inbound/photo---abc123.png (image/png)]");
   });
 
@@ -170,9 +181,7 @@ describe("buildInboundMediaNote", () => {
 
   it("strips audio attachments when transcription succeeded via decisions", () => {
     const note = buildInboundMediaNote({
-      MediaPaths: ["/tmp/voice.ogg", "/tmp/image.png"],
-      MediaUrls: ["https://example.com/voice.ogg", "https://example.com/image.png"],
-      MediaTypes: ["audio/ogg", "image/png"],
+      ...voiceAndImage,
       MediaUnderstandingDecisions: [createSuccessfulAudioMediaDecision()],
     });
     expect(note).toBe(
@@ -182,44 +191,19 @@ describe("buildInboundMediaNote", () => {
 
   it("ignores invalid transcription indices from media understanding outputs", () => {
     const note = buildInboundMediaNote({
-      MediaPaths: ["/tmp/voice.ogg", "/tmp/image.png"],
-      MediaUrls: ["https://example.com/voice.ogg", "https://example.com/image.png"],
-      MediaTypes: ["audio/ogg", "image/png"],
+      ...voiceAndImage,
       MediaUnderstanding: [
-        {
-          kind: "audio.transcription",
-          attachmentIndex: -1,
-          text: "negative index",
-          provider: "whisper",
-        },
-        {
-          kind: "audio.transcription",
-          attachmentIndex: 99,
-          text: "out of range",
-          provider: "whisper",
-        },
-        {
-          kind: "audio.transcription",
-          attachmentIndex: 0.5,
-          text: "fractional index",
-          provider: "whisper",
-        },
+        transcription(-1, "negative index"),
+        transcription(99, "out of range"),
+        transcription(0.5, "fractional index"),
       ],
     });
-    expect(note).toBe(
-      [
-        "[media attached: 2 files]",
-        "[media attached 1/2: /tmp/voice.ogg (audio/ogg) | https://example.com/voice.ogg]",
-        "[media attached 2/2: /tmp/image.png (image/png) | https://example.com/image.png]",
-      ].join("\n"),
-    );
+    expect(note).toBe(voiceAndImageNote);
   });
 
   it("ignores invalid transcription indices from media understanding decisions", () => {
     const note = buildInboundMediaNote({
-      MediaPaths: ["/tmp/voice.ogg", "/tmp/image.png"],
-      MediaUrls: ["https://example.com/voice.ogg", "https://example.com/image.png"],
-      MediaTypes: ["audio/ogg", "image/png"],
+      ...voiceAndImage,
       MediaUnderstandingDecisions: [
         {
           capability: "audio",
@@ -240,13 +224,7 @@ describe("buildInboundMediaNote", () => {
         },
       ],
     });
-    expect(note).toBe(
-      [
-        "[media attached: 2 files]",
-        "[media attached 1/2: /tmp/voice.ogg (audio/ogg) | https://example.com/voice.ogg]",
-        "[media attached 2/2: /tmp/image.png (image/png) | https://example.com/image.png]",
-      ].join("\n"),
-    );
+    expect(note).toBe(voiceAndImageNote);
   });
 
   it("strips audio attachments when Transcript is present", () => {
@@ -273,34 +251,12 @@ describe("buildInboundMediaNote", () => {
     );
   });
 
-  it("strips audio by extension even without mime type", () => {
-    const note = buildInboundMediaNote({
-      MediaPaths: ["/tmp/voice_message.ogg", "/tmp/document.pdf"],
-      MediaUnderstanding: [
-        {
-          kind: "audio.transcription",
-          attachmentIndex: 0,
-          text: "Transcribed audio content",
-          provider: "whisper",
-        },
-      ],
-    });
-    expect(note).toBe("[media attached: /tmp/document.pdf]");
-  });
-
-  it.each([".webm", ".wma", ".alac"])(
+  it.each([".ogg", ".webm", ".wma", ".alac"])(
     "strips transcribed %s audio without an explicit MIME type",
     (extension) => {
       const note = buildInboundMediaNote({
         MediaPaths: [`/tmp/voice${extension}`, "/tmp/document.pdf"],
-        MediaUnderstanding: [
-          {
-            kind: "audio.transcription",
-            attachmentIndex: 0,
-            text: "Transcribed audio content",
-            provider: "whisper",
-          },
-        ],
+        MediaUnderstanding: [transcription(0)],
       });
 
       expect(note).toBe("[media attached: /tmp/document.pdf]");
@@ -323,7 +279,6 @@ describe("buildInboundMediaNote", () => {
   });
 
   it("preserves URL suffix when it differs from the local path (#47587)", () => {
-    // Single attachment: distinct path and URL must both render.
     const single = buildInboundMediaNote({
       MediaPath: "/tmp/a.png",
       MediaType: "image/png",
@@ -331,8 +286,6 @@ describe("buildInboundMediaNote", () => {
     });
     expect(single).toBe("[media attached: /tmp/a.png (image/png) | https://example.com/a.png]");
 
-    // Mixed array: some indices have identical path/url (Telegram local-only),
-    // others carry a real remote URL. Each entry should be deduped independently.
     const mixed = buildInboundMediaNote({
       MediaPaths: ["/tmp/local.png", "/tmp/remote.png"],
       MediaUrls: ["/tmp/local.png   ", "https://example.com/remote.png"],

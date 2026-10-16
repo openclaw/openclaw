@@ -22,6 +22,18 @@ type TestChannelGroupContext = {
   accountId?: string | null;
 };
 
+const normalTurn = { kind: "normal", source: "message", authorized: false } as const;
+const inboundMessage = (overrides: Partial<MsgContext> = {}): MsgContext => ({
+  Provider: "whatsapp",
+  OriginatingChannel: "whatsapp",
+  OriginatingTo: "whatsapp:+1555",
+  MessageSid: "msg-1",
+  ...overrides,
+});
+const mentionConfig = (mentionPatterns: string[]): OpenClawConfig => ({
+  messages: { groupChat: { mentionPatterns } },
+});
+
 function commitInboundForTest(ctx: MsgContext): void {
   const claim = claimInboundDedupe(ctx);
   expect(claim.status).toBe("claimed");
@@ -96,18 +108,16 @@ describe("finalizeInboundContext", () => {
     };
 
     const out = finalizeInboundContext(ctx);
-    expect(out.Body).toBe("a\nb\nc");
-    expect(out.RawBody).toBe("raw\nline");
     // Prefer clean text over legacy envelope-shaped Body when RawBody is present.
-    expect(out.BodyForAgent).toBe("raw\nline");
-    expect(out.BodyForCommands).toBe("raw\nline");
-    expect(out.CommandAuthorized).toBe(false);
-    expect(out.CommandTurn).toMatchObject({
-      kind: "normal",
-      source: "message",
-      authorized: false,
+    expect(out).toMatchObject({
+      Body: "a\nb\nc",
+      RawBody: "raw\nline",
+      BodyForAgent: "raw\nline",
+      BodyForCommands: "raw\nline",
+      CommandAuthorized: false,
+      CommandTurn: normalTurn,
+      ChatType: "channel",
     });
-    expect(out.ChatType).toBe("channel");
     expect(out.ConversationLabel).toContain("Test");
   });
 
@@ -123,15 +133,17 @@ describe("finalizeInboundContext", () => {
       },
     });
 
-    expect(out.CommandTurn).toMatchObject({
-      kind: "text-slash",
-      source: "text",
-      authorized: true,
-      commandName: "status",
-      body: "/status",
+    expect(out).toMatchObject({
+      CommandTurn: {
+        kind: "text-slash",
+        source: "text",
+        authorized: true,
+        commandName: "status",
+        body: "/status",
+      },
+      CommandSource: "text",
+      CommandAuthorized: true,
     });
-    expect(out.CommandSource).toBe("text");
-    expect(out.CommandAuthorized).toBe(true);
   });
 
   it("clears stale legacy command source without dropping normal-turn command auth", () => {
@@ -139,42 +151,30 @@ describe("finalizeInboundContext", () => {
       Body: "hello",
       CommandSource: "native",
       CommandAuthorized: true,
-      CommandTurn: {
-        kind: "normal" as const,
-        source: "message" as const,
-        authorized: false,
-      },
+      CommandTurn: normalTurn,
     });
 
-    expect(out.CommandTurn).toMatchObject({
-      kind: "normal",
-      source: "message",
-      authorized: false,
+    expect(out).toMatchObject({
+      CommandTurn: normalTurn,
+      CommandSource: undefined,
+      CommandAuthorized: true,
     });
-    expect(out.CommandSource).toBeUndefined();
-    expect(out.CommandAuthorized).toBe(true);
   });
 
   it("keeps normal command authorization stable across repeated finalization", () => {
     const out = finalizeInboundContext({
       Body: "please inspect `/tmp/foo`",
       CommandAuthorized: true,
-      CommandTurn: {
-        kind: "normal" as const,
-        source: "message" as const,
-        authorized: false,
-      },
+      CommandTurn: normalTurn,
     });
 
     const refinalized = finalizeInboundContext(out);
 
-    expect(refinalized.CommandTurn).toMatchObject({
-      kind: "normal",
-      source: "message",
-      authorized: false,
+    expect(refinalized).toMatchObject({
+      CommandTurn: normalTurn,
+      CommandSource: undefined,
+      CommandAuthorized: true,
     });
-    expect(refinalized.CommandSource).toBeUndefined();
-    expect(refinalized.CommandAuthorized).toBe(true);
   });
 
   it("normalizes trusted group system prompt newlines without rewriting prompt markers", () => {
@@ -195,9 +195,11 @@ describe("finalizeInboundContext", () => {
     };
 
     const out = finalizeInboundContext(ctx);
-    expect(out.Body).toBe("C:\\Work\\nxxx\\README.md");
-    expect(out.BodyForAgent).toBe("C:\\Work\\nxxx\\README.md");
-    expect(out.BodyForCommands).toBe("C:\\Work\\nxxx\\README.md");
+    expect(out).toMatchObject({
+      Body: "C:\\Work\\nxxx\\README.md",
+      BodyForAgent: "C:\\Work\\nxxx\\README.md",
+      BodyForCommands: "C:\\Work\\nxxx\\README.md",
+    });
   });
 
   it("can force BodyForCommands to follow updated CommandBody", () => {
@@ -215,25 +217,15 @@ describe("finalizeInboundContext", () => {
 });
 
 describe("inbound dedupe", () => {
+  beforeEach(() => resetInboundDedupe());
   it("does not dedupe when the peer changes", () => {
-    resetInboundDedupe();
-    const base: MsgContext = {
-      Provider: "whatsapp",
-      OriginatingChannel: "whatsapp",
-      MessageSid: "msg-1",
-    };
+    const base = inboundMessage();
     commitInboundForTest({ ...base, OriginatingTo: "whatsapp:+1000" });
     expect(claimInboundDedupe({ ...base, OriginatingTo: "whatsapp:+2000" }).status).toBe("claimed");
   });
 
   it("does not dedupe across agent ids", () => {
-    resetInboundDedupe();
-    const base: MsgContext = {
-      Provider: "whatsapp",
-      OriginatingChannel: "whatsapp",
-      OriginatingTo: "whatsapp:+1555",
-      MessageSid: "msg-1",
-    };
+    const base = inboundMessage();
     commitInboundForTest({ ...base, SessionKey: "agent:alpha:main" });
     expect(
       claimInboundDedupe({ ...base, SessionKey: "agent:bravo:whatsapp:direct:+1555" }).status,
@@ -244,13 +236,11 @@ describe("inbound dedupe", () => {
   });
 
   it("dedupes when the same agent sees the same inbound message under different session keys", () => {
-    resetInboundDedupe();
-    const base: MsgContext = {
+    const base = inboundMessage({
       Provider: "telegram",
       OriginatingChannel: "telegram",
       OriginatingTo: "telegram:7463849194",
-      MessageSid: "msg-1",
-    };
+    });
     commitInboundForTest({ ...base, SessionKey: "agent:main:main" });
     expect(
       claimInboundDedupe({ ...base, SessionKey: "agent:main:telegram:direct:7463849194" }),
@@ -261,43 +251,23 @@ describe("inbound dedupe", () => {
 const senderMetaTempDirs = useSessionStoreTempDirs(afterAll, "openclaw-sender-meta-");
 
 describe("initSessionState BodyStripped", () => {
-  it("prefers BodyForAgent over Body for group chats", async () => {
-    const root = senderMetaTempDirs.make();
-    const storePath = path.join(root, "sessions.json");
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
-
+  it.each([
+    {
+      ChatType: "group",
+      Body: "[WhatsApp 123@g.us] ping",
+      SenderId: "222@s.whatsapp.net",
+      SessionKey: "agent:main:whatsapp:group:123@g.us",
+    },
+    { ChatType: "direct", Body: "[WhatsApp +1] ping", SessionKey: "agent:main:whatsapp:dm:+222" },
+  ])("prefers BodyForAgent over Body for $ChatType chats", async (context) => {
     const result = await initSessionState({
       ctx: finalizeInboundContext({
-        Body: "[WhatsApp 123@g.us] ping",
+        ...context,
         BodyForAgent: "ping",
-        ChatType: "group",
         SenderName: "Bob",
         SenderE164: "+222",
-        SenderId: "222@s.whatsapp.net",
-        SessionKey: "agent:main:whatsapp:group:123@g.us",
       }),
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.sessionCtx.BodyStripped).toBe("ping");
-  });
-
-  it("prefers BodyForAgent over Body for direct chats", async () => {
-    const root = senderMetaTempDirs.make();
-    const storePath = path.join(root, "sessions.json");
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
-
-    const result = await initSessionState({
-      ctx: finalizeInboundContext({
-        Body: "[WhatsApp +1] ping",
-        BodyForAgent: "ping",
-        ChatType: "direct",
-        SenderName: "Bob",
-        SenderE164: "+222",
-        SessionKey: "agent:main:whatsapp:dm:+222",
-      }),
-      cfg,
+      cfg: { session: { store: path.join(senderMetaTempDirs.make(), "sessions.json") } },
       commandAuthorized: true,
     });
 
@@ -307,29 +277,19 @@ describe("initSessionState BodyStripped", () => {
 
 describe("mention helpers", () => {
   it("builds regexes and skips invalid or unsafe patterns", () => {
-    const regexes = buildMentionRegexes({
-      messages: {
-        groupChat: { mentionPatterns: ["\\bopenclaw\\b", "(invalid", "(a+)+$"] },
-      },
-    });
+    const regexes = buildMentionRegexes(mentionConfig(["\\bopenclaw\\b", "(invalid", "(a+)+$"]));
     expect(regexes).toHaveLength(1);
     expect(regexes[0]?.test("openclaw")).toBe(true);
   });
 
   it("matches patterns case-insensitively", () => {
-    const regexes = buildMentionRegexes({
-      messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } },
-    });
+    const regexes = buildMentionRegexes(mentionConfig(["\\bopenclaw\\b"]));
     expect(matchesMentionPatterns("OPEN\u200bCLAW: hi", regexes)).toBe(true);
   });
 
   it("lets catch-all mention patterns match empty text", () => {
-    const catchAllRegexes = buildMentionRegexes({
-      messages: { groupChat: { mentionPatterns: [".*"] } },
-    });
-    const specificRegexes = buildMentionRegexes({
-      messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } },
-    });
+    const catchAllRegexes = buildMentionRegexes(mentionConfig([".*"]));
+    const specificRegexes = buildMentionRegexes(mentionConfig(["\\bopenclaw\\b"]));
 
     expect(matchesMentionPatterns("", catchAllRegexes)).toBe(true);
     expect(matchesMentionPatterns("", specificRegexes)).toBe(false);

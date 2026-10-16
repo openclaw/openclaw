@@ -19,26 +19,30 @@ const baseAttempt = {
   reason: "rate_limit" as const,
 };
 
-const activeFallbackState: FallbackNoticeState = {
-  fallbackNotice: {
-    kind: "active",
-    selectedModel: "demo-primary/model-a",
-    activeModel: "demo-fallback/model-b",
-    reason: "rate limit",
-  },
+function noticeState(
+  selectedModel = "demo-primary/model-a",
+  activeModel = "demo-fallback/model-b",
+  reason = "rate limit",
+): FallbackNoticeState {
+  return { fallbackNotice: { kind: "active", selectedModel, activeModel, reason } };
+}
+
+const activeFallbackState = noticeState();
+const cliBackend = {
+  id: "claude-cli",
+  modelProvider: "anthropic",
+  config: { command: "claude" },
+  bundleMcp: false,
 };
+const cliNoticeState = noticeState(
+  "anthropic/claude-opus-4-7",
+  "claude-cli/claude-opus-4-7",
+  "selected model unavailable",
+);
 
 function registerAnthropicCliBackendForTest(): void {
   cliBackendsTesting.setDepsForTest({
-    resolveRuntimeCliBackends: () => [
-      {
-        id: "claude-cli",
-        modelProvider: "anthropic",
-        pluginId: "anthropic",
-        config: { command: "claude" },
-        bundleMcp: false,
-      },
-    ],
+    resolveRuntimeCliBackends: () => [{ ...cliBackend, pluginId: "anthropic" }],
   });
 }
 
@@ -62,14 +66,7 @@ const cliAliasTransition = {
   activeProvider: "claude-cli",
   activeModel: "claude-opus-4-7",
   attempts: [],
-  state: {
-    fallbackNotice: {
-      kind: "active",
-      selectedModel: "anthropic/claude-opus-4-7",
-      activeModel: "claude-cli/claude-opus-4-7",
-      reason: "selected model unavailable",
-    },
-  },
+  state: cliNoticeState,
   cfg: {},
 } satisfies Parameters<typeof resolveFallbackTransition>[0];
 
@@ -78,89 +75,46 @@ describe("fallback-state", () => {
     cliBackendsTesting.resetDepsForTest();
   });
 
-  it.each([
-    {
-      name: "treats fallback as active only when state matches selected and active refs",
-      state: activeFallbackState,
-      expected: { active: true, reason: "rate limit" },
-      expectedSetupLookups: 2,
-    },
-    {
-      name: "does not discover runtime aliases without persisted fallback state",
-      state: undefined,
-      expected: { active: false, reason: undefined },
-      expectedSetupLookups: 0,
-    },
-    {
-      name: "does not treat runtime drift as fallback when persisted state does not match",
-      state: {
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "other-provider/other-model",
-          activeModel: "demo-fallback/model-b",
-          reason: "rate limit",
+  it.each<[string, FallbackNoticeState | undefined, boolean, number, string?, string?]>([
+    ["matching persisted refs", activeFallbackState, true, 2],
+    ["absent persisted state", undefined, false, 0],
+    ["different selected ref", noticeState("other-provider/other-model"), false, 0],
+    ["different active ref", noticeState(undefined, "other-provider/other-model"), false, 0],
+    [
+      "matching CLI runtime alias",
+      cliNoticeState,
+      false,
+      2,
+      "anthropic/claude-opus-4-7",
+      "claude-cli/claude-opus-4-7",
+    ],
+  ])(
+    "resolves %s without unnecessary alias discovery",
+    (_name, state, active, expectedSetupLookups, selectedModelRef, activeModelRef) => {
+      let setupLookups = 0;
+      cliBackendsTesting.setDepsForTest({
+        resolveRuntimeCliBackends: () => [],
+        resolvePluginSetupCliBackend: ({ backend }) => {
+          setupLookups += 1;
+          return backend === "claude-cli"
+            ? {
+                pluginId: "anthropic",
+                backend: cliBackend,
+              }
+            : undefined;
         },
-      } satisfies FallbackNoticeState,
-      expected: { active: false, reason: undefined },
-      expectedSetupLookups: 0,
-    },
-    {
-      name: "does not discover runtime aliases when the recorded active ref differs",
-      state: {
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "demo-primary/model-a",
-          activeModel: "other-provider/other-model",
-          reason: "rate limit",
-        },
-      } satisfies FallbackNoticeState,
-      expected: { active: false, reason: undefined },
-      expectedSetupLookups: 0,
-    },
-    {
-      name: "does not report a matching persisted CLI runtime alias as fallback",
-      selectedModelRef: "anthropic/claude-opus-4-7",
-      activeModelRef: "claude-cli/claude-opus-4-7",
-      state: {
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "anthropic/claude-opus-4-7",
-          activeModel: "claude-cli/claude-opus-4-7",
-          reason: "selected model unavailable",
-        },
-      } satisfies FallbackNoticeState,
-      expected: { active: false, reason: undefined },
-      expectedSetupLookups: 2,
-    },
-  ])("$name", ({ state, expected, expectedSetupLookups, selectedModelRef, activeModelRef }) => {
-    let setupLookups = 0;
-    cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [],
-      resolvePluginSetupCliBackend: ({ backend }) => {
-        setupLookups += 1;
-        return backend === "claude-cli"
-          ? {
-              pluginId: "anthropic",
-              backend: {
-                id: "claude-cli",
-                modelProvider: "anthropic",
-                config: { command: "claude" },
-                bundleMcp: false,
-              },
-            }
-          : undefined;
-      },
-    });
-    const resolved = resolveActiveFallbackState({
-      selectedModelRef: selectedModelRef ?? "demo-primary/model-a",
-      activeModelRef: activeModelRef ?? "demo-fallback/model-b",
-      config: {},
-      state,
-    });
+      });
+      const resolved = resolveActiveFallbackState({
+        selectedModelRef: selectedModelRef ?? "demo-primary/model-a",
+        activeModelRef: activeModelRef ?? "demo-fallback/model-b",
+        config: {},
+        state,
+      });
 
-    expect(resolved).toEqual(expected);
-    expect(setupLookups).toBe(expectedSetupLookups);
-  });
+      expect(resolved).toEqual({ active, reason: active ? "rate limit" : undefined });
+      expect(setupLookups).toBe(expectedSetupLookups);
+    },
+  );
 
   it("preserves provider-local model prefixes through fallback and recovery", () => {
     const refs = {
@@ -177,14 +131,11 @@ describe("fallback-state", () => {
       nextState: { selectedModel: "custom/custom/model", activeModel: "custom/model" },
       attemptSummaries: ["custom/custom/model rate limit"],
     });
-    const state: FallbackNoticeState = {
-      fallbackNotice: {
-        kind: "active",
-        selectedModel: activated.selectedModelRef,
-        activeModel: activated.activeModelRef,
-        reason: activated.reasonSummary,
-      },
-    };
+    const state = noticeState(
+      activated.selectedModelRef,
+      activated.activeModelRef,
+      activated.reasonSummary,
+    );
     expect(resolveDemoFallbackTransition({ ...refs, state })).toMatchObject({
       fallbackTransitioned: false,
       stateChanged: false,
@@ -248,9 +199,11 @@ describe("fallback-state", () => {
       state: activeFallbackState,
     });
 
-    expect(resolved.fallbackTransitioned).toBe(false);
-    expect(resolved.stateChanged).toBe(true);
-    expect(resolved.nextState.reason).toBe("timeout");
+    expect(resolved).toMatchObject({
+      fallbackTransitioned: false,
+      stateChanged: true,
+      nextState: { reason: "timeout" },
+    });
   });
 
   it("does not treat a CLI runtime alias as a model fallback", () => {
@@ -258,11 +211,12 @@ describe("fallback-state", () => {
 
     const resolved = resolveFallbackTransition(cliAliasTransition);
 
-    expect(resolved.fallbackActive).toBe(false);
-    expect(resolved.fallbackCleared).toBe(false);
-    expect(resolved.stateChanged).toBe(true);
-    expect(resolved.nextState.selectedModel).toBeUndefined();
-    expect(resolved.nextState.activeModel).toBeUndefined();
+    expect(resolved).toMatchObject({
+      fallbackActive: false,
+      fallbackCleared: false,
+      stateChanged: true,
+      nextState: { selectedModel: undefined, activeModel: undefined },
+    });
   });
 
   it("does not repeat runtime alias comparison when persisted fallback refs match", () => {
@@ -273,12 +227,7 @@ describe("fallback-state", () => {
         return backend === "claude-cli"
           ? {
               pluginId: "anthropic",
-              backend: {
-                id: "claude-cli",
-                modelProvider: "anthropic",
-                config: { command: "claude" },
-                bundleMcp: false,
-              },
+              backend: cliBackend,
             }
           : undefined;
       },
@@ -303,14 +252,11 @@ describe("fallback-state", () => {
       },
       {
         name: "captured alias-only state",
-        state: {
-          fallbackNotice: {
-            kind: "active",
-            selectedModel: "arcee/trinity-large-preview",
-            activeModel: "arcee/arcee-ai/trinity-large-preview",
-            reason: "selected model unavailable",
-          },
-        } satisfies FallbackNoticeState,
+        state: noticeState(
+          "arcee/trinity-large-preview",
+          "arcee/arcee-ai/trinity-large-preview",
+          "selected model unavailable",
+        ),
         expectedStateChanged: true,
       },
     ])("keeps $name out of fallback state", ({ state, expectedStateChanged }) => {
@@ -394,14 +340,11 @@ describe("fallback-state", () => {
           selectedModelRef: "arcee/trinity-large-preview",
           activeModelRef: activeRef,
           config: {},
-          state: {
-            fallbackNotice: {
-              kind: "active",
-              selectedModel: "arcee/trinity-large-preview",
-              activeModel: activeRef,
-              reason: "selected model unavailable",
-            },
-          },
+          state: noticeState(
+            "arcee/trinity-large-preview",
+            activeRef,
+            "selected model unavailable",
+          ),
         }),
       ).toEqual({ active: true, reason: "selected model unavailable" });
     });
