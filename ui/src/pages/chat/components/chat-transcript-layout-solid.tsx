@@ -11,11 +11,12 @@ import {
   untrack,
 } from "solid-js";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import {
   PRESENTATION_CHANGED_EVENT,
   type PresentationBinding,
 } from "../../../lit/presentation-binding.ts";
-import { LitContent, SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { LitContent } from "../../../lit/solid-content.tsx";
 import type { AfterCommitEffect } from "../render-lifecycle.ts";
 import {
   createSolidRenderLifecycle,
@@ -298,9 +299,9 @@ export class ChatTranscriptRenderer {
           onCleanup(() => element.removeEventListener("click", capture, true));
           const content = () => (
             <TranscriptMediaDisconnect value={this.mediaDisconnect}>
-              <SolidContentPresentation value={active}>
+              <ContentPresentation value={active}>
                 <TranscriptRows snapshot={snapshot()} />
-              </SolidContentPresentation>
+              </ContentPresentation>
             </TranscriptMediaDisconnect>
           );
           // Keep the session root independent while retaining its application capabilities.

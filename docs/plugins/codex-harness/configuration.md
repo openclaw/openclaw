@@ -136,6 +136,15 @@ model catalog. When the model entry has no authored cap, OpenClaw sends no
 override. Sessions pinned to an existing native runtime retain their own
 context settings instead of inheriting the outer agent's model cap.
 
+On ordinary configured model chats, that authored cap also bounds host context
+engine assembly and maintenance. OpenClaw reserves space for the current input,
+instructions, tools, and output before assembling history, and retains the
+successful assembly's budget when recovering accepted turns. A smaller current
+run budget still wins. This is operator policy, not discovery of Codex's usable
+allowance: Codex can apply a smaller native limit or a model-specific reserve.
+Choose the authored limit with enough native headroom. Unconfigured models do
+not inherit another model's cap.
+
 Lossless remains supported as a context engine for assembly, ingestion, and
 maintenance around Codex turns, configured through
 `plugins.slots.contextEngine: "lossless-claw"` and

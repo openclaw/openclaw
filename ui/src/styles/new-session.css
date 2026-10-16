@@ -891,10 +891,8 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   padding: 3px 8px;
 }
 
-/* Reserve the selection column even when empty so labels never move. */
-.new-session-page__environment-option > .session-menu__check {
-  flex: 0 0 20px;
-  width: 20px;
+.new-session-page__unavailable-status ~ .session-menu__check:empty {
+  display: none;
 }
 
 .new-session-page__device-icon {
@@ -1603,7 +1601,7 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   flex: 0 0 20px;
   width: 20px;
   height: 20px;
-  margin-right: -4px;
+  margin-right: -3px;
   padding: 2px;
   border: 0;
   border-radius: 50%;

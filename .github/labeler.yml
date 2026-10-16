@@ -472,6 +472,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/advisor/**"
+"extensions: agent-guidance":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/agent-guidance/**"
 "extensions: active-memory":
   - changed-files:
       - any-glob-to-any-file:

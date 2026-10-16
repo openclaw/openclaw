@@ -257,9 +257,14 @@ suite.define(() => {
               };
             });
           const beforeFocus = await geometry();
-          expect(beforeFocus.avatarWidth).toBe(36);
-          expect(beforeFocus.headerHeight).toBe(48);
-          expect(beforeFocus.rows[0]!.iconLeft).toBeCloseTo(beforeFocus.agentRowLeft, 1);
+          expect(beforeFocus.avatarWidth).toBe(24);
+          expect(beforeFocus.headerHeight).toBe(touch ? 44 : 36);
+          // Agent names share the session-title edge; the avatar centers over the lead icons.
+          expect(beforeFocus.rows[0]!.left).toBeCloseTo(beforeFocus.agentRowLeft, 1);
+          expect(beforeFocus.avatarLeft + beforeFocus.avatarWidth / 2).toBeCloseTo(
+            (beforeFocus.rows[0]!.iconLeft + beforeFocus.rows[0]!.iconRight) / 2,
+            1,
+          );
           expect(beforeFocus.rows[1]!.left - beforeFocus.rows[0]!.left).toBeCloseTo(16, 1);
           expect(beforeFocus.rows[2]!.left - beforeFocus.rows[1]!.left).toBeCloseTo(16, 1);
           for (const row of beforeFocus.rows) {

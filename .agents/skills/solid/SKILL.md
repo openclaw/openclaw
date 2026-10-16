@@ -19,6 +19,7 @@ For new code or a Solid audit, read [idioms](references/idioms.md) and [lessons]
 4. **One implementation per registered tag.** A Solid component must never render a tag that a Lit class still registers. When you port a custom element, delete its Lit class; remaining Lit callers reach the Solid version through `defineSolidBridge`. → [Lit interop](references/lit-interop.md)
 5. **One renderer per DOM region**, and one lifecycle owner per overlay surface. → [overlays](references/overlays.md)
 6. **Derive, don't synchronize.** `createMemo` before `createSignal`; no copies of owner state; no defensive guards for states the owner already excludes. Prefer smaller code than the Lit you replace.
+7. **Replace controller lifecycles at their owner.** Follow the [controller-to-Solid recipe](references/idioms.md#replace-lit-era-controllers), including its worked example. Delete the class and host adapter wiring together; do not wrap a controller in revision signals as the final design.
 
 ## Component skeleton
 

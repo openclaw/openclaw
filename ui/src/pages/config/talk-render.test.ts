@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { t } from "../../i18n/index.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { updatePickers, choosePickerValue } from "../../test-helpers/select-picker.ts";
+import { updatePickers, openPicker, choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { Talk, type TalkRealtimeProviderOption } from "./talk.tsx";
 
@@ -91,7 +91,8 @@ describe("renderTalk", () => {
 
     const picker = container.querySelector<SelectPicker>(
       "openclaw-select-picker.model-picker__select",
-    );
+    )!;
+    await openPicker(picker);
     expect(picker?.querySelector('[role="option"][data-value="gpt-realtime"]')).not.toBeNull();
     if (picker) {
       await choosePickerValue(picker, "gpt-realtime");

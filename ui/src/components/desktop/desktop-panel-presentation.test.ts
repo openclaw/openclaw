@@ -19,6 +19,52 @@ import {
   updatePanel,
 } from "./desktop-panel.test-support.ts";
 
+function mockFullscreen() {
+  let current: Element | null = null;
+  const properties: readonly (readonly [object, string])[] = [
+    [document, "fullscreenElement"],
+    [document, "fullscreenEnabled"],
+    [document, "exitFullscreen"],
+    [Element.prototype, "requestFullscreen"],
+  ];
+  const descriptors = properties.map(([object, property]) => ({
+    object,
+    property,
+    descriptor: Object.getOwnPropertyDescriptor(object, property),
+  }));
+  const change = (element: Element | null) => {
+    current = element;
+    document.dispatchEvent(new Event("fullscreenchange"));
+  };
+  const exit = vi.fn(async () => change(null));
+  const request = vi.fn(async function (this: Element) {
+    change(this);
+  });
+  Object.defineProperties(document, {
+    fullscreenElement: { configurable: true, get: () => current },
+    fullscreenEnabled: { configurable: true, value: true },
+    exitFullscreen: { configurable: true, value: exit },
+  });
+  Object.defineProperty(Element.prototype, "requestFullscreen", {
+    configurable: true,
+    value: request,
+  });
+  return {
+    change,
+    exit,
+    request,
+    restore: () => {
+      for (const { object, property, descriptor } of descriptors) {
+        if (descriptor) {
+          Object.defineProperty(object, property, descriptor);
+        } else {
+          Reflect.deleteProperty(object, property);
+        }
+      }
+    },
+  };
+}
+
 describe("desktop panel presentation lifecycle", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
@@ -28,6 +74,69 @@ describe("desktop panel presentation lifecycle", () => {
     document.body.replaceChildren();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it("preserves the desktop panel and returns focus after native fullscreen exits", async () => {
+    const fullscreen = mockFullscreen();
+    const panel = createPanel();
+    try {
+      updatePanel(panel, { available: true });
+      mountPanel(panel);
+      window.dispatchEvent(new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
+      await panel.updateComplete;
+      const section = panel.renderRoot.querySelector("section.bp");
+      const button = panel.renderRoot.querySelector<HTMLButtonElement>(
+        ".desktop-fullscreen-button",
+      )!;
+      button.click();
+      await waitForSolid(() => expect(button.getAttribute("aria-pressed")).toBe("true"));
+      expect(document.fullscreenElement).toBe(section);
+      expect(panel.renderRoot.querySelector("section.bp")).toBe(section);
+      expect(panel.renderRoot.querySelector("resizable-divider")).toBeNull();
+
+      button.blur();
+      await document.exitFullscreen();
+      await waitForSolid(() => expect(button.getAttribute("aria-pressed")).toBe("false"));
+      expect(document.activeElement).toBe(button);
+      expect(panel.renderRoot.querySelector("resizable-divider")).not.toBeNull();
+
+      fullscreen.change(button);
+      await panel.updateComplete;
+      expect(button.getAttribute("aria-pressed")).toBe("false");
+      unmountPanel(panel);
+      expect(fullscreen.exit).toHaveBeenCalledOnce();
+    } finally {
+      unmountPanel(panel);
+      fullscreen.restore();
+    }
+  });
+
+  it("reports fullscreen failures and exits owned fullscreen when unmounted", async () => {
+    const fullscreen = mockFullscreen();
+    const panel = createPanel();
+    try {
+      updatePanel(panel, { available: true });
+      mountPanel(panel);
+      window.dispatchEvent(new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
+      await panel.updateComplete;
+      const button = panel.renderRoot.querySelector<HTMLButtonElement>(
+        ".desktop-fullscreen-button",
+      )!;
+      fullscreen.request.mockRejectedValueOnce(new Error("Fullscreen permission denied"));
+      button.click();
+      await waitForSolid(() =>
+        expect(panel.renderRoot.textContent).toContain("Fullscreen permission denied"),
+      );
+      button.click();
+      await waitForSolid(() => expect(button.getAttribute("aria-pressed")).toBe("true"));
+      expect(panel.renderRoot.textContent).not.toContain("Fullscreen permission denied");
+      unmountPanel(panel);
+      expect(fullscreen.exit).toHaveBeenCalledOnce();
+      expect(document.fullscreenElement).toBeNull();
+    } finally {
+      unmountPanel(panel);
+      fullscreen.restore();
+    }
   });
 
   it("does not claim fullscreen while its section is unrendered", async () => {

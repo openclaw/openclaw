@@ -30,6 +30,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
+import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
 import { createInitializationContext, createRenderTestChatPane } from "./chat-pane.test-support.ts";
 import { steerQueuedChatMessage } from "./chat-send-actions.ts";
@@ -268,7 +269,9 @@ describe("chat pane composer controls", () => {
       agentDefaultModel: "openai/gpt-5.6-luna",
     });
     const container = document.createElement("div");
-    renderPaneLegacyContent(controls.composerControls, container);
+    mountSolid(() => createComponent(ChatPaneModelControl, controls.composerControls), {
+      container,
+    });
 
     const trigger = container.querySelector<HTMLElement>("[data-chat-model-select]");
     expect(trigger?.textContent).toContain("GPT-5.6 Sol");
@@ -322,12 +325,11 @@ describe("chat pane composer controls", () => {
         agentDefaultPermissionMode: "guarded",
         onModelSetup,
       });
-      renderPaneLegacyContent(controls.composerControls, container);
+      mountSolid(() => createComponent(ChatPaneModelControl, controls.composerControls), {
+        container,
+      });
 
-      expect(container.children).toHaveLength(1);
-      expect(
-        Array.from(container.firstElementChild!.children).map((node) => node.className),
-      ).toEqual(["chat-composer-model-control"]);
+      expect(container.querySelectorAll(".chat-composer-model-control")).toHaveLength(1);
       expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();
       expect(container.querySelector('[data-chat-permission-select="true"]')).toBeNull();
       const catalogMessage = container.querySelector(".chat-controls__model-catalog-state");
@@ -626,12 +628,16 @@ describe("chat pane model controls", () => {
       steerAck.resolve({});
     });
     const container = document.createElement("div");
+    let view: ReturnType<typeof mountSolid> | undefined;
     const draw = () => {
+      view?.unmount();
       const controls = renderControls(state, {
         agentDefaultModel: "example/primary",
         contextWindowAccess: { allowed: true, requiredScope: "operator.write" },
       });
-      renderPaneLegacyContent(controls.composerControls, container);
+      view = mountSolid(() => createComponent(ChatPaneModelControl, controls.composerControls), {
+        container,
+      });
       const trigger = container.querySelector<HTMLElement>("[data-chat-model-select]");
       expect(trigger?.dataset.chatSelectValue).toBe("example/primary");
       expect(trigger?.getAttribute("aria-busy")).toBe("false");

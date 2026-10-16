@@ -351,20 +351,33 @@ describe("backup stream lifecycle", () => {
     Parameters<typeof writeArchiveStreamToFile>[0]["createArchiveStream"]
   >[0];
 
+  function startArchive(label: string, name = "partial.tar.gz") {
+    const archivePath = path.join(tempDirs.make(`openclaw-backup-stream-${label}-`), name);
+    const archiveStream = new PassThrough();
+    let progress: ReportBackupProgress | undefined;
+    const writePromise = writeArchiveStreamToFile({
+      archivePath,
+      createArchiveStream: (report) => {
+        progress = report;
+        return archiveStream;
+      },
+      onPartialArchive: vi.fn(),
+    });
+    return {
+      archivePath,
+      archiveStream,
+      writePromise,
+      reportProgress: (...args: Parameters<ReportBackupProgress>) => progress?.(...args),
+    };
+  }
+
   describe("writeArchiveStreamToFile", () => {
     it("removes the exclusive partial archive when its initial descriptor stat fails", async () => {
-      const tempDir = tempDirs.make("openclaw-backup-stream-fstat-");
-      const archivePath = path.join(tempDir, "partial.tar.gz");
-      const archiveStream = new PassThrough();
       const fstatSpy = vi.spyOn(fsSync, "fstatSync").mockImplementationOnce(() => {
         throw Object.assign(new Error("fstat failed"), { code: "EIO" });
       });
       try {
-        const writePromise = writeArchiveStreamToFile({
-          archivePath,
-          createArchiveStream: () => archiveStream,
-          onPartialArchive: vi.fn(),
-        });
+        const { archivePath, archiveStream, writePromise } = startArchive("fstat");
         archiveStream.end("partial archive");
 
         await expect(writePromise).rejects.toThrow("fstat failed");
@@ -377,14 +390,7 @@ describe("backup stream lifecycle", () => {
     it("aborts and closes a partial archive when the source stops producing data", async () => {
       vi.useFakeTimers();
       try {
-        const tempDir = tempDirs.make("openclaw-backup-stream-timeout-");
-        const archivePath = path.join(tempDir, "partial.tar.gz");
-        const archiveStream = new PassThrough();
-        const writePromise = writeArchiveStreamToFile({
-          archivePath,
-          createArchiveStream: () => archiveStream,
-          onPartialArchive: vi.fn(),
-        });
+        const { archivePath, archiveStream, writePromise } = startArchive("timeout");
         archiveStream.write("partial archive");
 
         const rejection = expect(writePromise).rejects.toThrow(
@@ -402,21 +408,13 @@ describe("backup stream lifecycle", () => {
     it("keeps the archive alive through more than five minutes of one entry's raw bytes", async () => {
       vi.useFakeTimers();
       try {
-        const tempDir = tempDirs.make("openclaw-backup-stream-entry-progress-");
-        const archivePath = path.join(tempDir, "complete.tar.gz");
-        const archiveStream = new PassThrough();
-        let reportProgress: ReportBackupProgress | undefined;
-        const writePromise = writeArchiveStreamToFile({
-          archivePath,
-          createArchiveStream: (progress) => {
-            reportProgress = progress;
-            return archiveStream;
-          },
-          onPartialArchive: vi.fn(),
-        });
+        const { archivePath, archiveStream, writePromise, reportProgress } = startArchive(
+          "entry-progress",
+          "complete.tar.gz",
+        );
         for (let elapsed = 0; elapsed < 360_000; elapsed += 60_000) {
           await vi.advanceTimersByTimeAsync(60_000);
-          reportProgress?.({ phase: "raw", entryPath: "/source/large.pack", bytes: 16 });
+          reportProgress({ phase: "raw", entryPath: "/source/large.pack", bytes: 16 });
         }
         archiveStream.end("archive after one large entry");
 
@@ -439,19 +437,9 @@ describe("backup stream lifecycle", () => {
       async ({ entryPath, expectedPath }) => {
         vi.useFakeTimers();
         try {
-          const tempDir = tempDirs.make("openclaw-backup-stream-entry-timeout-");
-          const archivePath = path.join(tempDir, "partial.tar.gz");
-          const archiveStream = new PassThrough();
-          let reportProgress: ReportBackupProgress | undefined;
-          const writePromise = writeArchiveStreamToFile({
-            archivePath,
-            createArchiveStream: (progress) => {
-              reportProgress = progress;
-              return archiveStream;
-            },
-            onPartialArchive: vi.fn(),
-          });
-          reportProgress?.({ phase: "raw", entryPath, bytes: 16 });
+          const { archivePath, archiveStream, writePromise, reportProgress } =
+            startArchive("entry-timeout");
+          reportProgress({ phase: "raw", entryPath, bytes: 16 });
           archiveStream.write("partial archive");
 
           const rejection = expect(writePromise).rejects.toThrow(

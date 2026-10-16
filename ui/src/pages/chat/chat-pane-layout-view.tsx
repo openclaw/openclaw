@@ -4,31 +4,14 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { PresentationValue } from "../../lit/presentation-binding.ts";
 import { LitContent } from "../../lit/solid-content.tsx";
-import type { ElementProperties } from "../../types/solid-elements.d.ts";
 import { usePanePresentation } from "./chat-pane-embedded-view.tsx";
 import { PaneDetails, PaneSubagentStop, type PaneDetailsProps } from "./chat-pane-header-view.tsx";
-import type { ChatPageHost } from "./chat-state-host.ts";
 import { renderChatTopbarNotices } from "./chat-view-notices.tsx";
 import { ChatView, type ChatProps } from "./chat-view.tsx";
 import { PaneHeaderView, type ChatPaneHeaderPresentation } from "./components/chat-pane-header.tsx";
 
 export function PaneBootLayout() {
   return <main class="app-shell app-shell--booting" aria-busy="true" />;
-}
-
-export function PaneOutboxRecovery(props: {
-  state: ChatPageHost;
-  identity: string;
-  onRestored: () => void;
-}) {
-  return (
-    <openclaw-chat-outbox-recovery
-      prop:host={props.state}
-      prop:messages={props.state.chatMessages}
-      prop:identity={props.identity}
-      onOutbox-restored={() => props.onRestored()}
-    />
-  );
 }
 
 export function PaneSubagentHeader(props: {
@@ -90,22 +73,4 @@ export function PaneSubagentContent(props: { content: unknown; overlays: unknown
       <LitContent value={[props.content, props.overlays]} />
     </section>
   );
-}
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-chat-outbox-recovery": HTMLAttributes<
-        HTMLElementTagNameMap["openclaw-chat-outbox-recovery"]
-      > &
-        ElementProperties<
-          Pick<
-            HTMLElementTagNameMap["openclaw-chat-outbox-recovery"],
-            "host" | "identity" | "messages"
-          >
-        > & {
-          "onOutbox-restored"?: () => void;
-        };
-    }
-  }
 }
