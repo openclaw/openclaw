@@ -13,6 +13,7 @@ import {
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -34,6 +35,29 @@ import {
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 const { createSessionStoreDir, openClient } = setupPersistentSessionCreateTestHarness();
+
+type CreatedSession = { key: string; sessionId: string; entry: SessionEntry; runStarted?: boolean };
+
+function createSession(
+  params: Record<string, unknown>,
+  options?: Parameters<typeof directSessionReq<CreatedSession>>[2],
+) {
+  return directSessionReq<CreatedSession>(
+    "sessions.create",
+    { agentId: "main", ...params },
+    options,
+  );
+}
+
+async function seedMain(sessionId: string, options?: Parameters<typeof sessionStoreEntry>[1]) {
+  const store = await createSessionStoreDir();
+  await writeSessionStore({ entries: { main: sessionStoreEntry(sessionId, options) } });
+  return store;
+}
+
+function readEntry(storePath: string, sessionKey = "agent:main:main") {
+  return loadSessionEntry({ agentId: "main", sessionKey, storePath });
+}
 
 test.for([
   { model: "openai/gpt-5.6-sol" },
@@ -154,9 +178,8 @@ test("sessions.create registers a category only after the session commit succeed
   const category = "Deferred category";
   let validations = 0;
 
-  const failed = await directSessionReq(
-    "sessions.create",
-    { agentId: "main", category, key: "agent:main:dashboard:failed-category-create" },
+  const failed = await createSession(
+    { category, key: "agent:main:dashboard:failed-category-create" },
     {
       context: {
         validateAgentRuntimeApprovalAuthority: () => ++validations < 3,
@@ -178,10 +201,8 @@ test("sessions.create registers a category only after the session commit succeed
   expect(readSessionGroupCatalog().groups.map((group) => group.name)).not.toContain(category);
 
   const broadcastToConnIds = vi.fn();
-  const created = await directSessionReq(
-    "sessions.create",
+  const created = await createSession(
     {
-      agentId: "main",
       category: `  ${category}  `,
       key: "agent:main:dashboard:successful-category-create",
     },
@@ -207,16 +228,9 @@ test("concurrent sessions.create requests adopt one canonical keyed session", as
   const key = "agent:main:dashboard:concurrent-keyed-session";
 
   const sql = observeHostDataSql();
-  let created: Awaited<ReturnType<typeof directSessionReq<{ key: string; sessionId: string }>>>[];
+  let created: Awaited<ReturnType<typeof createSession>>[];
   try {
-    created = await Promise.all(
-      Array.from({ length: 4 }, () =>
-        directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
-          agentId: "main",
-          key,
-        }),
-      ),
-    );
+    created = await Promise.all(Array.from({ length: 4 }, () => createSession({ key })));
     expect(sql.queries.filter((query) => /\bfrom\s+"?session_nodes\b/i.test(query))).toEqual([]);
   } finally {
     sql.restore();
@@ -272,16 +286,10 @@ test("createGatewaySession forwards its commit guard into main-session reset", a
 test("sessions.create preserves keyed draft adoption idempotency", async () => {
   await createSessionStoreDir();
   const key = "agent:main:dashboard:idempotent-draft";
-  const first = await directSessionReq<{
-    sessionId: string;
-    entry: { visibility?: string };
-  }>("sessions.create", { agentId: "main", key, visibility: "draft" });
+  const first = await createSession({ key, visibility: "draft" });
 
   expect(first.ok).toBe(true);
-  const retried = await directSessionReq<{
-    sessionId: string;
-    entry: { visibility?: string };
-  }>("sessions.create", { agentId: "main", key, visibility: "draft" });
+  const retried = await createSession({ key, visibility: "draft" });
   expect(retried).toMatchObject({
     ok: true,
     payload: {
@@ -291,10 +299,7 @@ test("sessions.create preserves keyed draft adoption idempotency", async () => {
   });
 
   testState.sessionConfig = { sharing: { drafts: false } };
-  const retriedAfterPolicyChange = await directSessionReq<{
-    sessionId: string;
-    entry: { visibility?: string };
-  }>("sessions.create", { agentId: "main", key, visibility: "draft" });
+  const retriedAfterPolicyChange = await createSession({ key, visibility: "draft" });
   expect(retriedAfterPolicyChange).toMatchObject({
     ok: true,
     payload: {
@@ -303,11 +308,7 @@ test("sessions.create preserves keyed draft adoption idempotency", async () => {
     },
   });
 
-  const mismatch = await directSessionReq("sessions.create", {
-    agentId: "main",
-    key,
-    visibility: "shared",
-  });
+  const mismatch = await createSession({ key, visibility: "shared" });
   expect(mismatch).toMatchObject({
     ok: false,
     error: {
@@ -349,13 +350,8 @@ test("sessions.create persists explicit tool overrides before the first turn", a
   const client = { client: { connect: { scopes: ["operator.admin"] } } as never };
 
   try {
-    const created = await directSessionReq<{
-      entry?: { toolOverrides?: unknown };
-      runStarted?: boolean;
-    }>(
-      "sessions.create",
+    const created = await createSession(
       {
-        agentId: "main",
         key: sessionKey,
         parentSessionKey,
         message: "run with the selected capabilities",
@@ -373,16 +369,11 @@ test("sessions.create persists explicit tool overrides before the first turn", a
       normalized,
     );
 
-    const retried = await directSessionReq(
-      "sessions.create",
-      { agentId: "main", key: sessionKey, toolOverrides: requested },
-      client,
-    );
+    const retried = await createSession({ key: sessionKey, toolOverrides: requested }, client);
     expect(retried.ok).toBe(true);
 
-    const mismatch = await directSessionReq(
-      "sessions.create",
-      { agentId: "main", key: sessionKey, toolOverrides: { skills: { release: true } } },
+    const mismatch = await createSession(
+      { key: sessionKey, toolOverrides: { skills: { release: true } } },
       client,
     );
     expect(mismatch).toMatchObject({
@@ -399,15 +390,10 @@ test("sessions.create persists explicit tool overrides before the first turn", a
 
 test("sessions.create reset-in-place clears a prior node binding for Gateway execution", async () => {
   testState.sessionConfig = { dmScope: "main" };
-  await createSessionStoreDir();
-  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-node-parent") } });
+  await seedMain("sess-node-parent");
 
-  const nodeSession = await directSessionReq<{
-    entry: { execHost?: string; execNode?: string; execCwd?: string; spawnedCwd?: string };
-  }>(
-    "sessions.create",
+  const nodeSession = await createSession(
     {
-      agentId: "main",
       parentSessionKey: "main",
       emitCommandHooks: true,
       execNode: "macbook",
@@ -423,11 +409,8 @@ test("sessions.create reset-in-place clears a prior node binding for Gateway exe
   });
   expect(nodeSession.payload?.entry.spawnedCwd).toBeUndefined();
 
-  const gatewaySession = await directSessionReq<{
-    entry: { execHost?: string; execNode?: string; execCwd?: string };
-  }>(
-    "sessions.create",
-    { agentId: "main", parentSessionKey: "main", emitCommandHooks: true },
+  const gatewaySession = await createSession(
+    { parentSessionKey: "main", emitCommandHooks: true },
     { client: { connect: { scopes: ["operator.write"] } } as never },
   );
   expect(gatewaySession.ok).toBe(true);
@@ -438,16 +421,11 @@ test("sessions.create reset-in-place clears a prior node binding for Gateway exe
 
 test("sessions.create reset-in-place applies Fast Mode only for admin callers", async () => {
   testState.sessionConfig = { dmScope: "main" };
-  const { storePath } = await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-fast-reset", {
-        fastMode: false,
-        createdVia: "channel",
-        createdActor: { type: "human", source: "channel", id: "telegram:42" },
-        createdAt: 1234,
-      }),
-    },
+  const { storePath } = await seedMain("sess-fast-reset", {
+    fastMode: false,
+    createdVia: "channel",
+    createdActor: { type: "human", source: "channel", id: "telegram:42" },
+    createdAt: 1234,
   });
   const params = {
     agentId: "main",
@@ -456,27 +434,21 @@ test("sessions.create reset-in-place applies Fast Mode only for admin callers", 
     fastMode: true,
   };
 
-  const denied = await directSessionReq("sessions.create", params, {
+  const denied = await createSession(params, {
     client: { connect: { scopes: ["operator.write"] } } as never,
   });
   expect(denied).toMatchObject({
     ok: false,
     error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
   });
-  expect(
-    loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main", storePath }),
-  ).toMatchObject({ sessionId: "sess-fast-reset", fastMode: false });
+  expect(readEntry(storePath)).toMatchObject({ sessionId: "sess-fast-reset", fastMode: false });
 
-  const changed = await directSessionReq<{ entry: { fastMode?: boolean } }>(
-    "sessions.create",
-    params,
-    { client: { connect: { scopes: ["operator.admin"] } } as never },
-  );
+  const changed = await createSession(params, {
+    client: { connect: { scopes: ["operator.admin"] } } as never,
+  });
   expect(changed.ok, JSON.stringify(changed.error)).toBe(true);
   expect(changed.payload?.entry.fastMode).toBe(true);
-  expect(
-    loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main", storePath }),
-  ).toMatchObject({
+  expect(readEntry(storePath)).toMatchObject({
     fastMode: true,
     createdVia: "channel",
     createdActor: { type: "human", source: "channel", id: "telegram:42" },
@@ -486,11 +458,8 @@ test("sessions.create reset-in-place applies Fast Mode only for admin callers", 
 
 test("sessions.create rechecks Fast Mode before interrupting reset work", async () => {
   testState.sessionConfig = { dmScope: "main" };
-  const { storePath } = await createSessionStoreDir();
   const key = "agent:main:main";
-  await writeSessionStore({
-    entries: { main: sessionStoreEntry("sess-fast-race", { fastMode: false }) },
-  });
+  const { storePath } = await seedMain("sess-fast-race", { fastMode: false });
   let interrupted = false;
   let releaseAdmission = () => {};
   const admission = await beginSessionWorkAdmission({
@@ -509,7 +478,7 @@ test("sessions.create rechecks Fast Mode before interrupting reset work", async 
       return;
     }
     replaced = true;
-    const current = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+    const current = readEntry(storePath, key);
     if (!current) {
       throw new Error("expected current main session");
     }
@@ -539,7 +508,7 @@ test("sessions.create rechecks Fast Mode before interrupting reset work", async 
       error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
     });
     expect(interrupted).toBe(false);
-    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+    expect(readEntry(storePath, key)).toMatchObject({
       sessionId: "sess-fast-race",
       fastMode: true,
     });
@@ -625,14 +594,9 @@ test("sessions.create rejects a Fast Mode change completed by draining work befo
 });
 
 test("sessions.reset preserves the recorded permission boundary", async () => {
-  await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-permission-reset", {
-        permissionMode: "guarded",
-        sessionRoot: "/workspace/project",
-      }),
-    },
+  await seedMain("sess-permission-reset", {
+    permissionMode: "guarded",
+    sessionRoot: "/workspace/project",
   });
 
   const reset = await directSessionReq<{
@@ -648,11 +612,9 @@ test("sessions.reset preserves the recorded permission boundary", async () => {
 
 test("sessions.create does not apply create-time visibility to an in-place reset", async () => {
   testState.sessionConfig = { dmScope: "main" };
-  await createSessionStoreDir();
-  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-existing-main") } });
+  await seedMain("sess-existing-main");
 
-  const reset = await directSessionReq("sessions.create", {
-    agentId: "main",
+  const reset = await createSession({
     parentSessionKey: "main",
     emitCommandHooks: true,
     visibility: "draft",

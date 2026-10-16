@@ -37,6 +37,44 @@ import {
 } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
+type Client = Awaited<ReturnType<typeof connectGatewayClient>>;
+
+function send(
+  client: Client,
+  method: "chat.send" | "agent",
+  sessionKey: string,
+  message: string,
+  params: Record<string, unknown> = {},
+) {
+  return client.request<{ runId: string; status: string }>(method, {
+    sessionKey,
+    message,
+    deliver: false,
+    idempotencyKey: randomUUID(),
+    ...params,
+  });
+}
+
+function waitForRun(client: Client, runId: string) {
+  return client.request<{ status: string }>(
+    "agent.wait",
+    { runId, timeoutMs: 30_000 },
+    { timeoutMs: 35_000 },
+  );
+}
+
+// Attempt every cleanup even if an earlier owner fails to close.
+async function cleanupAll(...actions: Array<() => Promise<unknown>>) {
+  const [first, ...rest] = actions;
+  if (first) {
+    try {
+      await first();
+    } finally {
+      await cleanupAll(...rest);
+    }
+  }
+}
+
 function holdSessionAuthorization(sessionKey: string) {
   const authorizationCaptured = createDeferredCore();
   const resumeAuthorization = createDeferredCore();
@@ -221,23 +259,27 @@ it(
           },
         },
       } satisfies OpenClawConfig;
+      const connection = {
+        clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+        origin: "https://control.example.com",
+        tlsFingerprint: new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256,
+        scopes: ["operator.read", "operator.write"],
+      };
+      const edgeHeaders = (user: string, forwardedFor: string) => ({
+        "x-forwarded-for": forwardedFor,
+        "x-forwarded-proto": "https",
+        "x-forwarded-user": user,
+      });
       const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
       gateway = await startGatewayWithClient({
+        ...connection,
         cfg,
         configPath: state.configPath,
         portClaim,
-        clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
         auth: cfg.gateway.auth,
-        edgeAuthHeaders: {
-          "x-forwarded-for": "203.0.113.50",
-          "x-forwarded-proto": "https",
-          "x-forwarded-user": proxyUser,
-        },
-        origin: "https://control.example.com",
+        edgeAuthHeaders: edgeHeaders(proxyUser, "203.0.113.50"),
         secure: true,
-        tlsFingerprint: new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256,
-        scopes: ["operator.read", "operator.write"],
       });
       await gateway.server.startupSettled;
       // Keep both fixture agents resident while alternating owners; the runtime retains one idle executor.
@@ -245,17 +287,9 @@ it(
         agentExecutions.push(captureOpenClawAgentDatabaseExecution({ agentId, env: state.env }));
       }
       administrator = await connectGatewayClient({
+        ...connection,
         url: `wss://127.0.0.1:${gateway.port}`,
-        clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-        edgeAuthHeaders: {
-          "x-forwarded-for": "203.0.113.51",
-          "x-forwarded-proto": "https",
-          "x-forwarded-user": proxyAdministrator,
-        },
-        origin: "https://control.example.com",
-        tlsFingerprint: new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256,
-        scopes: ["operator.read", "operator.write"],
+        edgeAuthHeaders: edgeHeaders(proxyAdministrator, "203.0.113.51"),
         deviceIdentity: loadOrCreateDeviceIdentity({
           path: state.statePath("test-device-identities", "administrator.sqlite"),
         }),
@@ -275,21 +309,9 @@ it(
       await addSessionMember(scope, { identityId: memberProfileId, addedBy: owner.id });
 
       const allowedMessage = "Persist and dispatch this authorized member turn.";
-      const accepted = await gateway.client.request<{ runId: string; status: string }>(
-        "chat.send",
-        {
-          sessionKey,
-          message: allowedMessage,
-          deliver: false,
-          idempotencyKey: randomUUID(),
-        },
-      );
+      const accepted = await send(gateway.client, "chat.send", sessionKey, allowedMessage);
       expect(accepted.status).toBe("started");
-      const acceptedTerminal = await gateway.client.request<{ status: string }>(
-        "agent.wait",
-        { runId: accepted.runId, timeoutMs: 30_000 },
-        { timeoutMs: 35_000 },
-      );
+      const acceptedTerminal = await waitForRun(gateway.client, accepted.runId);
       const acceptedDiagnostic = redactSensitiveText(JSON.stringify(acceptedTerminal), {
         mode: "tools",
       }).slice(0, 4_000);
@@ -305,12 +327,12 @@ it(
       for (const change of ["membership revoked", "session replaced"] as const) {
         await addSessionMember(scope, { identityId: memberProfileId, addedBy: owner.id });
         const heldRead = holdSessionAuthorization(sessionKey);
-        const denied = gateway.client.request("chat.send", {
+        const denied = send(
+          gateway.client,
+          "chat.send",
           sessionKey,
-          message: "This in-flight revoked member turn must have no effects.",
-          deliver: false,
-          idempotencyKey: randomUUID(),
-        });
+          "This in-flight revoked member turn must have no effects.",
+        );
         try {
           await Promise.race([
             heldRead.entered,
@@ -349,12 +371,12 @@ it(
       }
       await removeSessionMember(scope, memberProfileId);
       await expect(
-        gateway.client.request("chat.send", {
+        send(
+          gateway.client,
+          "chat.send",
           sessionKey,
-          message: "This later revoked member turn must also have no effects.",
-          deliver: false,
-          idempotencyKey: randomUUID(),
-        }),
+          "This later revoked member turn must also have no effects.",
+        ),
       ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
       expect(await loadTranscriptEvents(scope)).toEqual(transcriptBeforeDeniedTurn);
       expect(requests).toHaveLength(1);
@@ -411,23 +433,12 @@ it(
                     ]
                   : undefined;
               const requestOffset = requests.length;
-              const started = await gateway.client.request<{ runId: string; status: string }>(
-                method,
-                {
-                  sessionKey: "global",
-                  agentId,
-                  message,
-                  deliver: false,
-                  idempotencyKey: randomUUID(),
-                  attachments,
-                },
-              );
+              const started = await send(gateway.client, method, "global", message, {
+                agentId,
+                attachments,
+              });
               expect(started.status).toBe(method === "chat.send" ? "started" : "accepted");
-              const terminal = await gateway.client.request<{ status: string }>(
-                "agent.wait",
-                { runId: started.runId, timeoutMs: 30_000 },
-                { timeoutMs: 35_000 },
-              );
+              const terminal = await waitForRun(gateway.client, started.runId);
               const terminalDiagnostic =
                 terminal.status === "ok"
                   ? undefined
@@ -538,12 +549,12 @@ it(
       const beforeProfileReplacement = await loadTranscriptEvents(profileScope);
       const beforeProfileRequests = requests.length;
       const profileRead = holdSessionAuthorization(profileScope.sessionKey);
-      const replaced = gateway.client.request("chat.send", {
-        sessionKey: profileScope.sessionKey,
-        message: "This replaced caller must not reach the transcript or provider.",
-        deliver: false,
-        idempotencyKey: randomUUID(),
-      });
+      const replaced = send(
+        gateway.client,
+        "chat.send",
+        profileScope.sessionKey,
+        "This replaced caller must not reach the transcript or provider.",
+      );
       try {
         await Promise.race([
           profileRead.entered,
@@ -575,17 +586,9 @@ it(
       // Keep both execution sources alive. Retiring either captured canonical
       // identity revokes authority; merging another profile into the sender does not.
       backingClient = await connectGatewayClient({
+        ...connection,
         url: `wss://127.0.0.1:${gateway.port}`,
-        clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-        edgeAuthHeaders: {
-          "x-forwarded-for": "203.0.113.52",
-          "x-forwarded-proto": "https",
-          "x-forwarded-user": proxyBacking,
-        },
-        origin: "https://control.example.com",
-        tlsFingerprint: new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256,
-        scopes: ["operator.read", "operator.write"],
+        edgeAuthHeaders: edgeHeaders(proxyBacking, "203.0.113.52"),
         deviceIdentity: loadOrCreateDeviceIdentity({
           path: state.statePath("test-device-identities", "backing.sqlite"),
         }),
@@ -602,18 +605,14 @@ it(
       const steeringHold = holdProviderResponse(steeringMessage);
       const requestOffset = requests.length;
       providerReply = "Accepted profile input completed.";
-      const backing = await backingClient.request<{ runId: string; status: string }>("chat.send", {
-        sessionKey: profileScope.sessionKey,
-        message: backingMessage,
-        deliver: false,
-        idempotencyKey: randomUUID(),
-      });
-      expect(backing.status).toBe("started");
-      const backingTerminal = administrator.request<{ status: string }>(
-        "agent.wait",
-        { runId: backing.runId, timeoutMs: 30_000 },
-        { timeoutMs: 35_000 },
+      const backing = await send(
+        backingClient,
+        "chat.send",
+        profileScope.sessionKey,
+        backingMessage,
       );
+      expect(backing.status).toBe("started");
+      const backingTerminal = waitForRun(administrator, backing.runId);
       await Promise.race([
         backingHold.entered.promise,
         backingTerminal.then((result) => {
@@ -622,15 +621,12 @@ it(
           );
         }),
       ]);
-      const steering = await gateway.client.request<{ runId: string; status: string }>(
+      const steering = await send(
+        gateway.client,
         "chat.send",
-        {
-          sessionKey: profileScope.sessionKey,
-          message: steeringMessage,
-          queueMode: "steer",
-          deliver: false,
-          idempotencyKey: randomUUID(),
-        },
+        profileScope.sessionKey,
+        steeringMessage,
+        { queueMode: "steer" },
       );
       expect(steering.status).toBe("started");
       expect(requests).toHaveLength(requestOffset + 1);
@@ -652,11 +648,7 @@ it(
       ).resolves.toMatchObject({
         profile: { id: replacement.id },
       });
-      const steeringTerminal = administrator.request<{ status: string }>(
-        "agent.wait",
-        { runId: steering.runId, timeoutMs: 30_000 },
-        { timeoutMs: 35_000 },
-      );
+      const steeringTerminal = waitForRun(administrator, steering.runId);
       backingHold.resume.resolve();
       await Promise.race([
         steeringHold.entered.promise,
@@ -695,37 +687,27 @@ it(
       for (const hold of providerHolds) {
         hold.resume.resolve();
       }
-      try {
-        try {
-          try {
-            if (backingClient) {
-              await disconnectGatewayClient(backingClient);
-            }
-          } finally {
-            if (administrator) {
-              await disconnectGatewayClient(administrator);
-            }
+      await cleanupAll(
+        async () => backingClient && disconnectGatewayClient(backingClient),
+        async () => administrator && disconnectGatewayClient(administrator),
+        async () => {
+          const activeGateway = gateway;
+          if (activeGateway) {
+            await cleanupAll(
+              () => disconnectGatewayClient(activeGateway.client),
+              () => Promise.all(agentExecutions.map((execution) => execution.release())),
+              () => activeGateway.server.close({ reason: "membership authority proof complete" }),
+            );
           }
-        } finally {
-          if (gateway) {
-            try {
-              await disconnectGatewayClient(gateway.client);
-            } finally {
-              try {
-                await Promise.all(agentExecutions.map((execution) => execution.release()));
-              } finally {
-                await gateway.server.close({ reason: "membership authority proof complete" });
-              }
-            }
-          }
-        }
-      } finally {
-        providerServer.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          providerServer.close(() => resolve());
-        });
-        await state.cleanup();
-      }
+        },
+        async () => {
+          providerServer.closeAllConnections();
+          await new Promise<void>((resolve) => {
+            providerServer.close(() => resolve());
+          });
+          await state.cleanup();
+        },
+      );
     }
   },
 );

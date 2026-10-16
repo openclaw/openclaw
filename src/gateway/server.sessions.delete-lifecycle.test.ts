@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import type { SessionsDeleteParams } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
@@ -45,18 +46,7 @@ const {
   resetConfiguredGlobalAgentSessionStore,
 } = setupGatewaySessionsTestHarness();
 
-type SessionDeleteRequest = {
-  key: string;
-  agentId?: string;
-  archivedOnly?: boolean;
-  deleteTranscript?: boolean;
-  emitLifecycleHooks?: boolean;
-  expectedSessionId?: string;
-  expectedLifecycleRevision?: string;
-  expectedSessionUpdatedAt?: number;
-};
-
-async function expectSessionDeleteSucceeds(request: SessionDeleteRequest) {
+async function expectSessionDeleteSucceeds(request: SessionsDeleteParams) {
   const deleted = await directSessionReq<{ ok: true; deleted: boolean }>(
     "sessions.delete",
     request,
@@ -66,7 +56,7 @@ async function expectSessionDeleteSucceeds(request: SessionDeleteRequest) {
   return deleted;
 }
 
-async function expectSessionDeleteChanged(request: SessionDeleteRequest) {
+async function expectSessionDeleteChanged(request: SessionsDeleteParams) {
   const deleted = await directSessionReq("sessions.delete", request);
   expect(deleted.ok).toBe(false);
   expect(deleted.error?.message).toBe(`Session ${request.key} changed before deletion. Retry.`);
@@ -74,6 +64,37 @@ async function expectSessionDeleteChanged(request: SessionDeleteRequest) {
     reason: "session-changed",
   });
   return deleted;
+}
+
+async function seedSession(
+  sessionKey: string,
+  sessionId: string,
+  options?: Parameters<typeof sessionStoreEntry>[1],
+) {
+  const store = await createSessionStoreDir();
+  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId, options) } });
+  return store;
+}
+
+async function createIncognitoFixture(
+  sessionKey: string,
+  sessionId: string,
+  options: Partial<SessionEntry> = {},
+) {
+  await createSessionStoreDir();
+  const location = {
+    agentId: "main",
+    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+  };
+  const scope = { agentId: "main", storePath: location.path, sessionKey };
+  const entry = {
+    sessionId,
+    lifecycleRevision: "initial",
+    updatedAt: 1,
+    incognito: true,
+    ...options,
+  };
+  return { location, scope, entry };
 }
 
 test("sessions.delete protects the sole explicit agent's global session before cleanup", async () => {
@@ -270,17 +291,12 @@ test("sessions.delete removes a locked plugin-owned session from its persisted a
 test.each(["session id", "updated at"] as const)(
   "sessions.delete rechecks expected %s before interrupting replacement work",
   async (guard) => {
-    const { storePath } = await createSessionStoreDir();
     const sessionKey = "agent:main:subagent:worker";
     const originalSessionId = "sess-original";
     const replacementSessionId = guard === "session id" ? "sess-replacement" : originalSessionId;
-    await writeSessionStore({
-      entries: {
-        [sessionKey]: sessionStoreEntry(originalSessionId, {
-          updatedAt: 1,
-          lifecycleRevision: "same-lifecycle",
-        }),
-      },
+    const { storePath } = await seedSession(sessionKey, originalSessionId, {
+      updatedAt: 1,
+      lifecycleRevision: "same-lifecycle",
     });
     let replacementInterrupted = false;
     const replacementAdmission = await beginSessionWorkAdmission({
@@ -291,7 +307,7 @@ test.each(["session id", "updated at"] as const)(
         replacementInterrupted = true;
       },
     });
-    let releaseBlockingMutation = () => {};
+    const releaseBlockingMutation = createDeferred();
     const { promise: blockingMutationStarted, resolve: markBlockingMutationStarted } =
       createDeferred();
     const blockingMutation = runExclusiveSessionLifecycleMutation("delete", {
@@ -299,9 +315,7 @@ test.each(["session id", "updated at"] as const)(
       identities: [sessionKey],
       run: async () => {
         markBlockingMutationStarted();
-        await new Promise<void>((release) => {
-          releaseBlockingMutation = release;
-        });
+        await releaseBlockingMutation.promise;
       },
     });
     await blockingMutationStarted;
@@ -320,7 +334,7 @@ test.each(["session id", "updated at"] as const)(
         }),
       },
     });
-    releaseBlockingMutation();
+    releaseBlockingMutation.resolve();
 
     try {
       const [deleted] = await Promise.all([deletion, blockingMutation]);
@@ -334,8 +348,7 @@ test.each(["session id", "updated at"] as const)(
 
 test("sessions.delete rejects a same-key successor created during cleanup without a caller identity guard", async () => {
   const sessionKey = "agent:main:cleanup-successor";
-  const { storePath } = await createSessionStoreDir();
-  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry("original-session") } });
+  const { storePath } = await seedSession(sessionKey, "original-session");
   bundleMcpRuntimeMocks.disposeSessionMcpRuntime.mockImplementationOnce(async () => {
     replaceSessionEntrySync({ sessionKey, storePath }, sessionStoreEntry("successor-session"));
   });
@@ -348,20 +361,12 @@ test("sessions.delete serializes a patch behind asynchronous runtime cleanup", a
   const sessionKey = "agent:main:subagent:worker";
   const sessionId = "sess-subagent";
   const updatedAt = 1_737_600_000_000;
-  const { storePath } = await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      [sessionKey]: sessionStoreEntry(sessionId, { updatedAt }),
-    },
-  });
-  let releaseRuntimeCleanup = () => {};
-  const runtimeCleanupStarted = new Promise<void>((resolve) => {
-    bundleMcpRuntimeMocks.disposeSessionMcpRuntime.mockImplementationOnce(async () => {
-      resolve();
-      await new Promise<void>((release) => {
-        releaseRuntimeCleanup = release;
-      });
-    });
+  const { storePath } = await seedSession(sessionKey, sessionId, { updatedAt });
+  const releaseRuntimeCleanup = createDeferred();
+  const runtimeCleanupStarted = createDeferred();
+  bundleMcpRuntimeMocks.disposeSessionMcpRuntime.mockImplementationOnce(async () => {
+    runtimeCleanupStarted.resolve();
+    await releaseRuntimeCleanup.promise;
   });
 
   const deletion = directSessionReq("sessions.delete", {
@@ -369,7 +374,7 @@ test("sessions.delete serializes a patch behind asynchronous runtime cleanup", a
     expectedSessionId: sessionId,
     expectedSessionUpdatedAt: updatedAt,
   });
-  await runtimeCleanupStarted;
+  await runtimeCleanupStarted.promise;
   let patchSettled = false;
   const { promise: patchPreflight, resolve: markPatchPreflight } = createDeferred();
   const prepareTargets = patchPreparation.prepareSessionPatchTargets;
@@ -391,7 +396,7 @@ test("sessions.delete serializes a patch behind asynchronous runtime cleanup", a
   try {
     await patchPreflight;
     expect(patchSettled).toBe(false);
-    releaseRuntimeCleanup();
+    releaseRuntimeCleanup.resolve();
 
     const [deleted, patched] = await Promise.all([deletion, patch]);
     expect(deleted.ok).toBe(true);
@@ -399,30 +404,22 @@ test("sessions.delete serializes a patch behind asynchronous runtime cleanup", a
     expect(patched.error?.message).toBe(`Session ${sessionKey} changed before patch. Retry.`);
     expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
   } finally {
-    releaseRuntimeCleanup();
+    releaseRuntimeCleanup.resolve();
     await Promise.allSettled([deletion, patch]);
     preflight.mockRestore();
   }
 });
 
 test("sessions.delete keeps lifecycle admission blocked through session unbinding", async () => {
-  const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:subagent:worker";
   const sessionId = "sess-subagent";
-  await writeSessionStore({
-    entries: {
-      [sessionKey]: sessionStoreEntry(sessionId),
-    },
-  });
-  let releaseUnbind = () => {};
-  const unbindStarted = new Promise<void>((resolve) => {
-    threadBindingMocks.unbindThreadBindingsBySessionKey.mockImplementationOnce(async () => {
-      resolve();
-      await new Promise<void>((release) => {
-        releaseUnbind = release;
-      });
-      return [];
-    });
+  const { storePath } = await seedSession(sessionKey, sessionId);
+  const releaseUnbind = createDeferred();
+  const unbindStarted = createDeferred();
+  threadBindingMocks.unbindThreadBindingsBySessionKey.mockImplementationOnce(async () => {
+    unbindStarted.resolve();
+    await releaseUnbind.promise;
+    return [];
   });
 
   let workerDraining = false;
@@ -441,7 +438,7 @@ test("sessions.delete keeps lifecycle admission blocked through session unbindin
     { key: sessionKey },
     { context: { workerEnvironmentService } },
   );
-  await unbindStarted;
+  await unbindStarted.promise;
   let replacementAdmitted = false;
   const replacement = beginSessionWorkAdmission({
     scope: storePath,
@@ -458,7 +455,7 @@ test("sessions.delete keeps lifecycle admission blocked through session unbindin
   await Promise.resolve();
   expect(replacementAdmitted).toBe(false);
 
-  releaseUnbind();
+  releaseUnbind.resolve();
   const [deleted, replacementAdmission] = await Promise.all([deletion, replacement]);
   try {
     expect(deleted.ok).toBe(true);
@@ -662,21 +659,15 @@ test("sessions.delete returns unavailable when active run does not stop", async 
 });
 
 test("sessions.delete refreshes memory metadata changed by cleanup without an ambient actor", async () => {
-  await createSessionStoreDir();
-  const location = {
-    agentId: "main",
-    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-  };
   const sessionKey = "agent:main:dashboard:incognito-delete-composition";
-  const scope = { agentId: "main", storePath: location.path, sessionKey };
-  const entry = {
-    sessionId: "delete-composition",
-    lifecycleRevision: "initial",
-    updatedAt: 1,
-    incognito: true,
-    modelSelectionLocked: true,
-    pluginOwnerId: "synthetic-plugin",
-  } satisfies SessionEntry;
+  const { location, scope, entry } = await createIncognitoFixture(
+    sessionKey,
+    "delete-composition",
+    {
+      modelSelectionLocked: true,
+      pluginOwnerId: "synthetic-plugin",
+    },
+  );
   try {
     await replaceSessionEntry(scope, entry);
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockImplementationOnce(async () => {
@@ -696,19 +687,8 @@ test("sessions.delete refreshes memory metadata changed by cleanup without an am
 });
 
 test("reset deletion settles when its caller releases a memory actor during the before-delete hook", async () => {
-  await createSessionStoreDir();
   const sessionKey = "agent:main:dashboard:incognito-reset-composition";
-  const location = {
-    agentId: "main",
-    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-  };
-  const scope = { agentId: "main", storePath: location.path, sessionKey };
-  const entry = {
-    sessionId: "reset-composition",
-    lifecycleRevision: "initial",
-    updatedAt: 1,
-    incognito: true,
-  } satisfies SessionEntry;
+  const { location, scope, entry } = await createIncognitoFixture(sessionKey, "reset-composition");
   await replaceSessionEntry(scope, entry);
   const borrowed = await acquireSessionActorStorage(scope, {
     lifetime: { assertCurrent() {}, assertReadable() {} },

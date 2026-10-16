@@ -1,7 +1,3 @@
-/**
- * Gateway sessions.list changed-state tests.
- */
-
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, test, vi } from "vitest";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
@@ -167,6 +163,18 @@ async function invokeSessionsPatch(params: Record<string, unknown>) {
   return invokeSessionMutation({ method: "sessions.patch", params });
 }
 
+async function expectManagementPatch(
+  params: Record<string, unknown>,
+  expected: Record<string, unknown>,
+) {
+  const result = await invokeSessionsPatch({ key: "discord:group:dev", ...params });
+  return expectChangedBroadcast(result.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    ...expected,
+  });
+}
+
 async function writeMainSessionStore(options?: SessionStoreEntryOptions) {
   await createSessionStoreDir();
   await writeSessionStore({
@@ -279,14 +287,16 @@ test("sessions.list uses persisted usage and selected model fields", async () =>
     (session) => session.key === "agent:main:dashboard:child",
   );
   expect(parent?.childSessions).toEqual(["agent:main:dashboard:child"]);
-  expect(child?.parentSessionKey).toBe("agent:main:main");
-  expect(child?.totalTokens).toBe(3_000);
-  expect(child?.totalTokensFresh).toBe(true);
+  expect(child).toMatchObject({
+    parentSessionKey: "agent:main:main",
+    totalTokens: 3_000,
+    totalTokensFresh: true,
+    estimatedCostUsd: 0.0042,
+    modelProvider: "anthropic",
+    model: "test-model-without-catalog-context",
+    modelSelectionLocked: true,
+  });
   expect(child?.contextTokens).toBeUndefined();
-  expect(child?.estimatedCostUsd).toBe(0.0042);
-  expect(child?.modelProvider).toBe("anthropic");
-  expect(child?.model).toBe("test-model-without-catalog-context");
-  expect(child?.modelSelectionLocked).toBe(true);
 
   const gallery = await rpcReq<{ sessions: Array<Record<string, unknown>> }>(ws, "sessions.list", {
     rowMode: "dashboard",
@@ -531,69 +541,52 @@ test("sessions.changed mutation events include session management metadata", asy
     },
   });
 
-  const archived = await invokeSessionsPatch({
-    key: "discord:group:dev",
-    expectedSessionId: "sess-dev",
-    archived: true,
-  });
-  expectChangedBroadcast(archived.broadcastToConnIds, {
-    sessionKey: "agent:main:discord:group:dev",
-    reason: "patch",
-    archived: true,
-    archivedAt: expect.any(Number),
-    pinned: false,
-    pinnedAt: null,
-    unread: false,
-    lastReadAt: 20,
-    lastActivityAt: 5,
-  });
+  await expectManagementPatch(
+    { expectedSessionId: "sess-dev", archived: true },
+    {
+      archived: true,
+      archivedAt: expect.any(Number),
+      pinned: false,
+      pinnedAt: null,
+      unread: false,
+      lastReadAt: 20,
+      lastActivityAt: 5,
+    },
+  );
 
-  const restored = await invokeSessionsPatch({
-    key: "discord:group:dev",
-    expectedSessionId: "sess-dev",
-    archived: false,
-  });
-  expectChangedBroadcast(restored.broadcastToConnIds, {
-    sessionKey: "agent:main:discord:group:dev",
-    reason: "patch",
-    archived: false,
-    archivedAt: null,
-  });
+  await expectManagementPatch(
+    { expectedSessionId: "sess-dev", archived: false },
+    {
+      archived: false,
+      archivedAt: null,
+    },
+  );
 
-  const pinned = await invokeSessionsPatch({
-    key: "discord:group:dev",
-    pinned: true,
-  });
-  expectChangedBroadcast(pinned.broadcastToConnIds, {
-    sessionKey: "agent:main:discord:group:dev",
-    reason: "patch",
-    pinned: true,
-    pinnedAt: expect.any(Number),
-  });
+  await expectManagementPatch(
+    { pinned: true },
+    {
+      pinned: true,
+      pinnedAt: expect.any(Number),
+    },
+  );
 
-  const unpinned = await invokeSessionsPatch({
-    key: "discord:group:dev",
-    pinned: false,
-  });
-  expectChangedBroadcast(unpinned.broadcastToConnIds, {
-    sessionKey: "agent:main:discord:group:dev",
-    reason: "patch",
-    pinned: false,
-    pinnedAt: null,
-  });
+  await expectManagementPatch(
+    { pinned: false },
+    {
+      pinned: false,
+      pinnedAt: null,
+    },
+  );
 
-  const unread = await invokeSessionsPatch({
-    key: "discord:group:dev",
-    unread: true,
-  });
-  const unreadPayload = expectChangedBroadcast(unread.broadcastToConnIds, {
-    sessionKey: "agent:main:discord:group:dev",
-    reason: "patch",
-    unread: true,
-    lastReadAt: 20,
-    markedUnreadAt: expect.any(Number),
-    lastActivityAt: 5,
-  });
+  const unreadPayload = await expectManagementPatch(
+    { unread: true },
+    {
+      unread: true,
+      lastReadAt: 20,
+      markedUnreadAt: expect.any(Number),
+      lastActivityAt: 5,
+    },
+  );
 
   const marker = expectDefined(
     unreadPayload.markedUnreadAt as number | undefined,
@@ -612,43 +605,33 @@ test("sessions.changed mutation events include session management metadata", asy
     marker,
   );
 
-  const read = await invokeSessionsPatch({
-    key: "discord:group:dev",
-    unread: false,
-    expectedMarkedUnreadAt: marker,
-  });
-  expectChangedBroadcast(read.broadcastToConnIds, {
-    sessionKey: "agent:main:discord:group:dev",
-    reason: "patch",
-    unread: false,
-    lastReadAt: expect.any(Number),
-    markedUnreadAt: null,
-    lastActivityAt: 5,
-  });
+  await expectManagementPatch(
+    { unread: false, expectedMarkedUnreadAt: marker },
+    {
+      unread: false,
+      lastReadAt: expect.any(Number),
+      markedUnreadAt: null,
+      lastActivityAt: 5,
+    },
+  );
 
-  const remarked = await invokeSessionsPatch({
-    key: "discord:group:dev",
-    unread: true,
-  });
-  expectChangedBroadcast(remarked.broadcastToConnIds, {
-    sessionKey: "agent:main:discord:group:dev",
-    reason: "patch",
-    unread: true,
-    markedUnreadAt: expect.any(Number),
-  });
+  await expectManagementPatch(
+    { unread: true },
+    {
+      unread: true,
+      markedUnreadAt: expect.any(Number),
+    },
+  );
 
-  const legacyRead = await invokeSessionsPatch({
-    key: "discord:group:dev",
-    unread: false,
-  });
-  expectChangedBroadcast(legacyRead.broadcastToConnIds, {
-    sessionKey: "agent:main:discord:group:dev",
-    reason: "patch",
-    unread: false,
-    lastReadAt: expect.any(Number),
-    markedUnreadAt: null,
-    lastActivityAt: 5,
-  });
+  await expectManagementPatch(
+    { unread: false },
+    {
+      unread: false,
+      lastReadAt: expect.any(Number),
+      markedUnreadAt: null,
+      lastActivityAt: 5,
+    },
+  );
 });
 
 test("sessions.patch scopes selected global mutations and events to the requested agent", async () => {

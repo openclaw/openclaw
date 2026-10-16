@@ -18,7 +18,6 @@ import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js"
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { readLoggingConfig } from "../logging/config.js";
 import { applyLoggingConfig } from "../logging/logger.js";
-import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { runOutsideStoreWriterContext } from "../shared/store-writer-queue.js";
@@ -39,104 +38,6 @@ const turnBoundary = vi.hoisted(() => ({
   afterPrepare: undefined as (() => void) | undefined,
   afterCommit: undefined as (() => void) | undefined,
 }));
-const chatDiagnostics = vi.hoisted(() => ({
-  current: undefined as
-    | {
-        started: number;
-        requests: number;
-        scopes: number;
-        acknowledgements: number;
-        dropped: number;
-        events: Array<{
-          request: number;
-          scope?: number;
-          event: string;
-          phase?: string;
-          elapsedMs: number;
-        }>;
-      }
-    | undefined,
-}));
-vi.mock("./server-methods/chat-send-diagnostics.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./server-methods/chat-send-diagnostics.js")>();
-  return {
-    ...actual,
-    startChatSendDiagnostics: (...args: Parameters<typeof actual.startChatSendDiagnostics>) => {
-      const real = actual.startChatSendDiagnostics(...args);
-      const recorder = chatDiagnostics.current;
-      if (!recorder) {
-        return real;
-      }
-      const request = ++recorder.requests;
-      const phases = new Set([
-        "authority",
-        "admission",
-        "preparation",
-        "attachments",
-        "replyContext",
-        "authoring",
-        "persist",
-        "runAdmission",
-        "replyInitialization",
-        "snapshot",
-        "worktree",
-        "effects",
-        "response",
-        "dispatch",
-      ]);
-      const record = (event: string, scope?: number, phase?: string) => {
-        if (recorder !== chatDiagnostics.current) {
-          return;
-        }
-        if (recorder.events.length === 64) {
-          recorder.events.shift();
-          recorder.dropped += 1;
-        }
-        recorder.events.push({
-          request,
-          scope,
-          event,
-          phase: phase === undefined ? undefined : phases.has(phase) ? phase : "detail",
-          elapsedMs: Math.round(performance.now() - recorder.started),
-        });
-      };
-      record("start");
-      return {
-        ...real,
-        // observeSpan keeps its original closure; this records only the public
-        // request/scope calls and never substitutes their ownership or timing.
-        scope: (...scopeArgs: Parameters<typeof real.scope>) => {
-          const owned = real.scope(...scopeArgs);
-          if (!owned) {
-            return owned;
-          }
-          const scope = ++recorder.scopes;
-          record("scope", scope, scopeArgs[0]);
-          return {
-            ...owned,
-            mark: (...markArgs: Parameters<typeof owned.mark>) => {
-              record("mark", scope, markArgs[0]);
-              return owned.mark(...markArgs);
-            },
-            finish: () => {
-              record("finish", scope);
-              return owned.finish();
-            },
-            [Symbol.dispose]: () => {
-              record("dispose", scope);
-              return owned[Symbol.dispose]();
-            },
-          };
-        },
-        acknowledge: (...ackArgs: Parameters<typeof real.acknowledge>) => {
-          recorder.acknowledgements += 1;
-          record("acknowledge");
-          return real.acknowledge(...ackArgs);
-        },
-      };
-    },
-  };
-});
 vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../state/openclaw-agent-execution.js")>();
   return {
@@ -198,12 +99,31 @@ const { createSessionStoreDir, openClient } = setupSessionCreateTestHarness(asyn
 });
 
 afterEach(() => {
-  chatDiagnostics.current = undefined;
   turnBoundary.committing = false;
   turnBoundary.afterPrepare = undefined;
   turnBoundary.afterCommit = undefined;
   vi.restoreAllMocks();
 });
+
+function releaseDispatches() {
+  for (const [turn] of dispatch.start.mock.calls) {
+    turn.replyAdmissionTicket?.release();
+    turn.admission.cleanupAdmittedRun();
+    clearAgentRunContext(turn.session.clientRunId, turn.admission.lifecycleGeneration);
+  }
+}
+
+async function drainDispatches(storePath: string, identities: string[]) {
+  const released = getSessionWorkAdmissionRelease({ scope: storePath, identities });
+  releaseDispatches();
+  await released;
+}
+
+async function matchingTranscript(scope: Parameters<typeof loadTranscriptEvents>[0], text: string) {
+  return (await loadTranscriptEvents(scope)).filter((event) =>
+    JSON.stringify(event).includes(text),
+  );
+}
 
 test("persists and dispatches concurrent Gateway inputs while participant writes queue", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -264,26 +184,16 @@ test("persists and dispatches concurrent Gateway inputs while participant writes
         sessionId: expectDefined(response.payload?.sessionId, "created session ID"),
         storePath,
       };
-      expect(
-        (await loadTranscriptEvents(scope)).filter((event) =>
-          JSON.stringify(event).includes(input.message),
-        ),
-      ).toHaveLength(1);
+      expect(await matchingTranscript(scope, input.message)).toHaveLength(1);
     }
     expect(intervenedInputs).toEqual(new Set(inputs.map((input) => input.key)));
     expect(dispatch.start).toHaveBeenCalledTimes(inputs.length);
   } finally {
     await Promise.all(competingWrites);
-    const released = getSessionWorkAdmissionRelease({
-      scope: storePath,
-      identities: inputs.map((input) => input.key),
-    });
-    for (const [turn] of dispatch.start.mock.calls) {
-      turn.replyAdmissionTicket?.release();
-      turn.admission.cleanupAdmittedRun();
-      clearAgentRunContext(turn.session.clientRunId, turn.admission.lifecycleGeneration);
-    }
-    await released;
+    await drainDispatches(
+      storePath,
+      inputs.map((input) => input.key),
+    );
     ws.close();
   }
 });
@@ -442,23 +352,13 @@ test.for([
         restartRecoveryDeliveryRunId: runId,
         restartRecoveryDeliverySourceRunId: runId,
       });
-      expect(
-        (await loadTranscriptEvents(scope)).filter((event) =>
-          JSON.stringify(event).includes(message),
-        ),
-      ).toHaveLength(1);
+      expect(await matchingTranscript(scope, message)).toHaveLength(1);
       expect(dispatch.start).toHaveBeenCalledOnce();
     } finally {
       turnBoundary.afterPrepare = undefined;
       refuse.mockRestore();
       intercept.mockRestore();
-      const released = getSessionWorkAdmissionRelease({ scope: storePath, identities: [key] });
-      for (const [turn] of dispatch.start.mock.calls) {
-        turn.replyAdmissionTicket?.release();
-        turn.admission.cleanupAdmittedRun();
-        clearAgentRunContext(turn.session.clientRunId, turn.admission.lifecycleGeneration);
-      }
-      await released;
+      await drainDispatches(storePath, [key]);
       ws.close();
     }
   },
@@ -538,13 +438,7 @@ test.for(["lost-worker-response", "restart-before-ack"] as const)(
       });
       const scope = { ...target, sessionId: before.sessionId };
       expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
-      const released = getSessionWorkAdmissionRelease({ scope: storePath, identities: [key] });
-      for (const [turn] of dispatch.start.mock.calls) {
-        turn.replyAdmissionTicket?.release();
-        turn.admission.cleanupAdmittedRun();
-        clearAgentRunContext(turn.session.clientRunId, turn.admission.lifecycleGeneration);
-      }
-      await released;
+      await drainDispatches(storePath, [key]);
       const cfg = getRuntimeConfig();
       await markStartupOrphanedMainSessionsForRecovery({ cfg });
       const recover = () =>
@@ -579,11 +473,7 @@ test.for(["lost-worker-response", "restart-before-ack"] as const)(
       const recovered = await recover();
       expect(recovered).toMatchObject({ settled: 1, failed: 0 });
       expect(agentCommandMock).toHaveBeenCalledOnce();
-      expect(
-        (await loadTranscriptEvents(scope)).filter((event) =>
-          JSON.stringify(event).includes(message),
-        ),
-      ).toHaveLength(1);
+      expect(await matchingTranscript(scope, message)).toHaveLength(1);
       const retry = await rpcReq<{ status: string }>(ws, "chat.send", {
         sessionKey: key,
         message,
@@ -592,20 +482,12 @@ test.for(["lost-worker-response", "restart-before-ack"] as const)(
       expect(retry.ok, JSON.stringify(retry)).toBe(true);
       expect(retry.payload?.status).toBe("ok");
       expect(agentCommandMock).toHaveBeenCalledOnce();
-      expect(
-        (await loadTranscriptEvents(scope)).filter((event) =>
-          JSON.stringify(event).includes(message),
-        ),
-      ).toHaveLength(1);
+      expect(await matchingTranscript(scope, message)).toHaveLength(1);
     } finally {
       turnBoundary.afterCommit = undefined;
       stop();
       intercept.mockRestore();
-      for (const [turn] of dispatch.start.mock.calls) {
-        turn.replyAdmissionTicket?.release();
-        turn.admission.cleanupAdmittedRun();
-        clearAgentRunContext(turn.session.clientRunId, turn.admission.lifecycleGeneration);
-      }
+      releaseDispatches();
       ws.close();
     }
   },
@@ -662,23 +544,13 @@ test("retries idle chat input after its atomic commit is refused", async () => {
       restartRecoveryDeliverySourceRunId: runId,
     });
     expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
-    expect(
-      (await loadTranscriptEvents(scope)).filter((event) =>
-        JSON.stringify(event).includes(message),
-      ),
-    ).toMatchObject([
+    expect(await matchingTranscript(scope, message)).toMatchObject([
       { message: { role: "user", content: message, idempotencyKey: `${runId}:user` } },
     ]);
     expect(dispatch.start).toHaveBeenCalledOnce();
   } finally {
     refuse.mockRestore();
-    const released = getSessionWorkAdmissionRelease({ scope: storePath, identities: [key] });
-    for (const [turn] of dispatch.start.mock.calls) {
-      turn.replyAdmissionTicket?.release();
-      turn.admission.cleanupAdmittedRun();
-      clearAgentRunContext(turn.session.clientRunId, turn.admission.lifecycleGeneration);
-    }
-    await released;
+    await drainDispatches(storePath, [key]);
     ws.close();
   }
 });
@@ -721,13 +593,7 @@ test("dispatches the original bytes of a committed initial input", async () => {
     expect(JSON.stringify(history.payload?.messages)).toContain("initial-secret");
     expect(JSON.stringify(history.payload?.messages)).toContain(JSON.stringify(persisted.content));
   } finally {
-    const released = getSessionWorkAdmissionRelease({ scope: storePath, identities: [key] });
-    for (const [turn] of dispatch.start.mock.calls) {
-      turn.replyAdmissionTicket?.release();
-      turn.admission.cleanupAdmittedRun();
-      clearAgentRunContext(turn.session.clientRunId, turn.admission.lifecycleGeneration);
-    }
-    await released;
+    await drainDispatches(storePath, [key]);
     applyLoggingConfig(previousLogging);
     ws.close();
   }
@@ -788,35 +654,11 @@ test.for([
       expect(before.pendingWorktree !== undefined).toBe(worktree);
       const followup = "Also retain this queued follow-up.";
       if (worktree) {
-        const recorder = {
-          started: performance.now(),
-          requests: 0,
-          scopes: 0,
-          acknowledgements: 0,
-          dropped: 0,
-          events: [],
-        };
-        chatDiagnostics.current = recorder;
         const sent = await rpcReq(ws, "chat.send", {
           sessionKey: key,
           message: followup,
           idempotencyKey: `followup-${id}`,
-        })
-          .catch((error: unknown) => {
-            process.stderr.write(
-              `[chat-send-phase] ${JSON.stringify({
-                ...recorder,
-                started: undefined,
-                elapsedMs: Math.round(performance.now() - recorder.started),
-                dispatches: dispatch.start.mock.calls.length,
-                activeRoots: getActiveGatewayRootWorkCount({ excludeCurrent: true }),
-              })}\n`,
-            );
-            throw error;
-          })
-          .finally(() => {
-            chatDiagnostics.current = undefined;
-          });
+        });
         expect(sent.ok, JSON.stringify(sent)).toBe(true);
         const pending = await rpcReq<{ pendingInputs: { items: unknown[] } }>(ws, "chat.history", {
           sessionKey: key,
@@ -824,13 +666,7 @@ test.for([
         expect(JSON.stringify(pending.payload?.pendingInputs.items)).toContain(followup);
       }
       // Drop process-only dispatches; do not run their terminal/error persistence.
-      const released = getSessionWorkAdmissionRelease({ scope: storePath, identities: [key] });
-      for (const [turn] of dispatch.start.mock.calls) {
-        turn.replyAdmissionTicket?.release();
-        turn.admission.cleanupAdmittedRun();
-        clearAgentRunContext(turn.session.clientRunId, turn.admission.lifecycleGeneration);
-      }
-      await released;
+      await drainDispatches(storePath, [key]);
       const cfg = getRuntimeConfig();
       await markStartupOrphanedMainSessionsForRecovery({ cfg });
       const recovery = await recoverRestartAbortedMainSessions({
@@ -867,12 +703,7 @@ test.for([
         expect(JSON.stringify(history.payload?.messages)).not.toContain(followup);
       }
     } finally {
-      chatDiagnostics.current = undefined;
-      for (const [turn] of dispatch.start.mock.calls) {
-        turn.replyAdmissionTicket?.release();
-        turn.admission.cleanupAdmittedRun();
-        clearAgentRunContext(turn.session.clientRunId, turn.admission.lifecycleGeneration);
-      }
+      releaseDispatches();
       ws.close();
       const owned = await managedWorktrees.findLiveByOwner("session", key);
       if (owned) {
