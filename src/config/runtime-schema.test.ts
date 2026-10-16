@@ -11,6 +11,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import type { ConfigJsonSchemaObject } from "./schema.shared.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import type { PluginEntryConfig } from "./types.plugins.js";
 
@@ -35,14 +36,12 @@ function objectSchema(properties: Record<string, unknown>, additionalProperties 
   return { type: "object", properties, additionalProperties };
 }
 
-vi.mock("./config.js", () => {
-  return {
-    getRuntimeConfig: () => mockLoadConfig(),
-    loadConfig: () => mockLoadConfig(),
-    readConfigFileSnapshot: (...args: Parameters<typeof mockReadConfigFileSnapshot>) =>
-      mockReadConfigFileSnapshot(...args),
-  };
-});
+vi.mock("./config.js", () => ({
+  getRuntimeConfig: () => mockLoadConfig(),
+  loadConfig: () => mockLoadConfig(),
+  readConfigFileSnapshot: (...args: Parameters<typeof mockReadConfigFileSnapshot>) =>
+    mockReadConfigFileSnapshot(...args),
+}));
 
 vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistryCore: (...args: unknown[]) => mockLoadPluginManifestRegistry(...args),
@@ -71,59 +70,50 @@ vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal)
     mockGetCurrentPluginMetadataSnapshot(...args),
 }));
 
-function makeSnapshot(params: { valid: boolean; config?: OpenClawConfig }): ConfigFileSnapshot {
+function makeSnapshot(valid: boolean, config: OpenClawConfig = {}): ConfigFileSnapshot {
   return {
     path: "/tmp/openclaw.json",
     exists: true,
     raw: "{}",
-    parsed: params.config ?? {},
-    resolved: params.config ?? {},
-    sourceConfig: params.config ?? {},
-    valid: params.valid,
-    config: params.config ?? {},
-    runtimeConfig: params.config ?? {},
-    issues: params.valid ? [] : [{ path: "gateway", message: "invalid" }],
+    parsed: config,
+    resolved: config,
+    sourceConfig: config,
+    valid,
+    config,
+    runtimeConfig: config,
+    issues: valid ? [] : [{ path: "gateway", message: "invalid" }],
     warnings: [],
     legacyIssues: [],
   };
 }
 
+function channelPlugin(id: string, origin: PluginOrigin, field?: string) {
+  return {
+    id,
+    origin,
+    channels: [id],
+    ...(field
+      ? {
+          channelConfigs: {
+            [id]: { schema: { type: "object", properties: { [field]: { type: "string" } } } },
+          },
+        }
+      : {}),
+  };
+}
 function makeManifestRegistry() {
   return {
     diagnostics: [],
     plugins: [
       {
         id: "demo",
-        name: "Demo",
-        description: "Demo plugin",
         origin: "bundled",
         channels: [],
-        configUiHints: {},
-        configSchema: {
-          type: "object",
-          properties: {
-            mode: { type: "string" },
-          },
-        },
+        configSchema: { type: "object", properties: { mode: { type: "string" } } },
       },
-      ...[
-        { id: "telegram", label: "Telegram", origin: "bundled", field: "botToken" },
-        { id: "slack", label: "Slack", origin: "bundled", field: "botToken" },
-        { id: "matrix", label: "Matrix", origin: "workspace", field: "homeserver" },
-      ].map(({ id, label, origin, field }) => ({
-        id,
-        name: label,
-        description: `${label} plugin`,
-        origin,
-        channels: [id],
-        channelCatalogMeta: { id, label, blurb: `${label} channel` },
-        channelConfigs: {
-          [id]: {
-            schema: { type: "object", properties: { [field]: { type: "string" } } },
-            uiHints: {},
-          },
-        },
-      })),
+      channelPlugin("telegram", "bundled", "botToken"),
+      channelPlugin("slack", "bundled", "botToken"),
+      channelPlugin("matrix", "workspace", "homeserver"),
     ],
   };
 }
@@ -138,44 +128,28 @@ const heartbeatVisibility = {
   additionalProperties: false,
 };
 function externalChannel(schema: Record<string, unknown>) {
-  return {
-    diagnostics: [],
-    plugins: [
-      {
-        id: "external-chat",
-        origin: "workspace",
-        channels: ["external-chat"],
-        channelConfigs: { "external-chat": { schema } },
-      },
-    ],
+  const plugin = {
+    ...channelPlugin("external-chat", "workspace"),
+    channelConfigs: { "external-chat": { schema } },
   };
+  return { diagnostics: [], plugins: [plugin] };
 }
 function channelProperties(result: Awaited<ReturnType<typeof readBestEffortRuntimeConfigSchema>>) {
-  const schema = result.schema as { properties?: Record<string, unknown> };
-  const channels = schema.properties?.channels as { properties?: Record<string, unknown> };
-  return channels.properties;
+  const schema: ConfigJsonSchemaObject = result.schema;
+  return schema.properties?.channels?.properties;
 }
 
 async function readSchemaNodes(prepared?: Parameters<typeof readBestEffortRuntimeConfigSchema>[0]) {
   const result = await readBestEffortRuntimeConfigSchema(prepared);
-  const schema = result.schema as { properties?: Record<string, unknown> };
-  const channelsNode = schema.properties?.channels as Record<string, unknown> | undefined;
-  const channelProps = channelsNode?.properties as Record<string, unknown> | undefined;
-  const pluginsNode = schema.properties?.plugins as Record<string, unknown> | undefined;
-  const pluginProps = pluginsNode?.properties as Record<string, unknown> | undefined;
-  const entriesNode = pluginProps?.entries as Record<string, unknown> | undefined;
-  const entryProps = entriesNode?.properties as Record<string, unknown> | undefined;
-  return { channelProps, entryProps };
+  const schema: ConfigJsonSchemaObject = result.schema;
+  return {
+    channelProps: channelProperties(result),
+    entryProps: schema.properties?.plugins?.properties?.entries?.properties,
+  };
 }
 
-function getManifestRegistryLoadArg(index = 0): Record<string, unknown> | undefined {
-  const arg = mockLoadPluginManifestRegistry.mock.calls[index]?.[0];
-  return arg && typeof arg === "object" ? (arg as Record<string, unknown>) : undefined;
-}
-
-function getCurrentMetadataSnapshotArg(index = 0): Record<string, unknown> | undefined {
-  const arg = mockGetCurrentPluginMetadataSnapshot.mock.calls[index]?.[0];
-  return arg && typeof arg === "object" ? (arg as Record<string, unknown>) : undefined;
+function firstArg(mock: { mock: { calls: unknown[][] } }): unknown {
+  return mock.mock.calls[0]?.[0];
 }
 
 beforeAll(async () => {
@@ -186,9 +160,7 @@ beforeAll(async () => {
   } = await import("./runtime-schema.js"));
 });
 
-afterEach(() => {
-  resetPluginRuntimeStateForTest();
-});
+afterEach(() => resetPluginRuntimeStateForTest());
 
 describe("readBestEffortRuntimeConfigSchema", () => {
   beforeEach(() => {
@@ -199,16 +171,8 @@ describe("readBestEffortRuntimeConfigSchema", () => {
   });
 
   it("builds from prepared config and metadata without another config or registry read", async () => {
-    mockReadConfigFileSnapshot.mockResolvedValue(
-      makeSnapshot({
-        valid: true,
-        config: pluginConfig("fallback-only"),
-      }),
-    );
-    const snapshot = makeSnapshot({
-      valid: true,
-      config: pluginConfig("prepared-demo"),
-    });
+    mockReadConfigFileSnapshot.mockResolvedValue(makeSnapshot(true, pluginConfig("fallback-only")));
+    const snapshot = makeSnapshot(true, pluginConfig("prepared-demo"));
     const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
       plugins: [
         {
@@ -220,7 +184,6 @@ describe("readBestEffortRuntimeConfigSchema", () => {
     });
 
     const result = await readBestEffortRuntimeConfigSchema({ snapshot, pluginMetadataSnapshot });
-
     expect(result.schema).toHaveProperty(
       "properties.plugins.properties.entries.properties.prepared-demo.properties.config.properties.mode",
       expect.objectContaining({ type: "string" }),
@@ -233,33 +196,33 @@ describe("readBestEffortRuntimeConfigSchema", () => {
 
   it("resolves missing metadata from the prepared config without rereading its source", async () => {
     mockReadConfigFileSnapshot.mockResolvedValue(
-      makeSnapshot({
-        valid: true,
-        config: { ...explicitMainRoster(), gateway: { mode: "local" } },
+      makeSnapshot(true, {
+        ...explicitMainRoster(),
+        gateway: { mode: "local" },
       }),
     );
     const config = pluginConfig("prepared-only");
 
     const { channelProps, entryProps } = await readSchemaNodes({
-      snapshot: makeSnapshot({ valid: true, config }),
+      snapshot: makeSnapshot(true, config),
     });
 
     expect(channelProps).toHaveProperty("matrix");
     expect(entryProps).toHaveProperty("demo");
     expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
     expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(1);
-    expect(getManifestRegistryLoadArg()?.config).toEqual(config);
+    expect(firstArg(mockLoadPluginManifestRegistry)).toHaveProperty("config", config);
   });
 
   it("falls back to bundled channel metadata when config is invalid", async () => {
-    mockReadConfigFileSnapshot.mockResolvedValueOnce(makeSnapshot({ valid: false }));
+    mockReadConfigFileSnapshot.mockResolvedValueOnce(makeSnapshot(false));
 
     const { channelProps, entryProps } = await readSchemaNodes();
 
     expect(mockReadConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
     expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(1);
-    const loadArg = getManifestRegistryLoadArg();
-    expect(loadArg?.config).toEqual({
+    const loadArg = firstArg(mockLoadPluginManifestRegistry);
+    expect(loadArg).toHaveProperty("config", {
       ...explicitMainRoster(),
       plugins: { enabled: true },
     });
@@ -393,11 +356,7 @@ describe("loadGatewayRuntimeConfigSchema", () => {
             proofchat: {
               label: id,
               ...(id === "plus" ? { preferOver: ["core"] } : {}),
-              schema: {
-                type: "object",
-                properties: { [id]: { type: "string" } },
-                additionalProperties: false,
-              },
+              schema: objectSchema({ [id]: { type: "string" } }),
               uiHints: { [id]: { sensitive: true } },
             },
           },
@@ -446,22 +405,15 @@ describe("loadGatewayRuntimeConfigSchema", () => {
         $defs: { Account: {} },
         anyOf: [
           { type: "object", additionalProperties: true },
-          {
-            type: "object",
-            properties: {
-              accounts: {
-                type: "object",
-                additionalProperties: { $ref: "#/$defs/Account" },
-              },
-            },
-            additionalProperties: false,
-          },
+          objectSchema({
+            accounts: { type: "object", additionalProperties: { $ref: "#/$defs/Account" } },
+          }),
         ],
       }),
     );
 
     const result = loadGatewayRuntimeConfigSchema();
-    const projected = channelProperties(result)?.["external-chat"] as Record<string, unknown>;
+    const projected = channelProperties(result)?.["external-chat"];
     expect(projected).toMatchObject({
       properties: { heartbeatVisibility },
       anyOf: [
@@ -477,7 +429,7 @@ describe("loadGatewayRuntimeConfigSchema", () => {
         },
       ],
     });
-    expect(projected.$defs).toEqual({ Account: {} });
+    expect(projected?.$defs).toEqual({ Account: {} });
   });
 
   it("reuses the current gateway plugin metadata snapshot for config schema requests", () => {
@@ -485,30 +437,8 @@ describe("loadGatewayRuntimeConfigSchema", () => {
       manifestRegistry: {
         diagnostics: [],
         plugins: [
-          {
-            id: "telegram",
-            name: "Telegram",
-            description: "Telegram plugin",
-            origin: "bundled",
-            channels: ["telegram"],
-          },
-          {
-            id: "matrix",
-            name: "Matrix",
-            description: "Matrix plugin",
-            origin: "workspace",
-            channels: ["matrix"],
-            channelConfigs: {
-              matrix: {
-                schema: {
-                  type: "object",
-                  properties: {
-                    homeserver: { type: "string" },
-                  },
-                },
-              },
-            },
-          },
+          channelPlugin("telegram", "bundled"),
+          channelPlugin("matrix", "workspace", "homeserver"),
         ],
       },
     });
@@ -517,11 +447,10 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     const channelProps = channelProperties(result);
 
     expect(mockGetCurrentPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
-    const metadataArg = getCurrentMetadataSnapshotArg();
-    expect(metadataArg?.config).toEqual({
-      ...explicitMainRoster(),
-      plugins: { entries: { demo: { enabled: true } } },
-    });
+    expect(firstArg(mockGetCurrentPluginMetadataSnapshot)).toHaveProperty(
+      "config",
+      pluginConfig("demo"),
+    );
     expect(mockLoadPluginManifestRegistry).not.toHaveBeenCalled();
     expect(channelProps).toHaveProperty("telegram");
     expect(JSON.stringify(channelProps?.telegram)).toContain("botToken");

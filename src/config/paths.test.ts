@@ -57,18 +57,10 @@ describe("default state directory", () => {
 
 describe("default install identity", () => {
   it("accepts default paths and equivalent explicit overrides", () => {
-    const home = "/home/test";
-    const stateDir = path.join(home, ".openclaw");
-    const configPath = path.join(stateDir, "openclaw.json");
-
-    expect(isDefaultInstallIdentity({ HOME: home }, () => home)).toBe(true);
-    expect(allowsProcessHomeSessionScan({ HOME: home }, () => home)).toBe(true);
-    expect(
-      isDefaultInstallIdentity(
-        { HOME: home, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
-        () => home,
-      ),
-    ).toBe(true);
+    expect(installIdentity({ HOME: accountHome })).toBe(true);
+    expect(allowsProcessHomeSessionScan({ HOME: accountHome }, () => accountHome)).toBe(true);
+    const { OPENCLAW_PROFILE: _profile, ...env } = profileEnv(accountHome, "default");
+    expect(installIdentity(env)).toBe(true);
   });
 
   it("ignores legacy config discovery for the default profile", async () => {
@@ -89,16 +81,11 @@ describe("default install identity", () => {
   });
 
   it("rejects non-default state or config paths", () => {
-    const home = "/home/test";
-
+    expect(installIdentity({ HOME: accountHome, OPENCLAW_STATE_DIR: "/tmp/copied-state" })).toBe(
+      false,
+    );
     expect(
-      isDefaultInstallIdentity({ HOME: home, OPENCLAW_STATE_DIR: "/tmp/copied-state" }, () => home),
-    ).toBe(false);
-    expect(
-      isDefaultInstallIdentity(
-        { HOME: home, OPENCLAW_CONFIG_PATH: "/tmp/copied-openclaw.json" },
-        () => home,
-      ),
+      installIdentity({ HOME: accountHome, OPENCLAW_CONFIG_PATH: "/tmp/copied-openclaw.json" }),
     ).toBe(false);
   });
 
@@ -212,27 +199,13 @@ describe("default install identity", () => {
 });
 
 describe("oauth paths", () => {
-  it("prefers OPENCLAW_OAUTH_DIR over OPENCLAW_STATE_DIR", () => {
-    const env = {
-      OPENCLAW_OAUTH_DIR: "/custom/oauth",
-      OPENCLAW_STATE_DIR: "/custom/state",
-    };
-
-    expect(resolveOAuthDir(env, "/custom/state")).toBe(path.resolve("/custom/oauth"));
-    expect(resolveLegacyOAuthPath(env)).toBe(
-      path.join(path.resolve("/custom/oauth"), "oauth.json"),
-    );
-  });
-
-  it("derives oauth path from OPENCLAW_STATE_DIR when unset", () => {
-    const env = {
-      OPENCLAW_STATE_DIR: "/custom/state",
-    };
-
-    expect(resolveOAuthDir(env, "/custom/state")).toBe(path.join("/custom/state", "credentials"));
-    expect(resolveLegacyOAuthPath(env)).toBe(
-      path.join("/custom/state", "credentials", "oauth.json"),
-    );
+  it.each([
+    { override: "/custom/oauth", expected: path.resolve("/custom/oauth") },
+    { override: undefined, expected: path.join("/custom/state", "credentials") },
+  ])("resolves OAuth directory override=$override", ({ override, expected }) => {
+    const env = { OPENCLAW_STATE_DIR: "/custom/state", OPENCLAW_OAUTH_DIR: override };
+    expect(resolveOAuthDir(env, "/custom/state")).toBe(expected);
+    expect(resolveLegacyOAuthPath(env)).toBe(path.join(expected, "oauth.json"));
   });
 });
 
@@ -257,18 +230,11 @@ describe("gateway port resolution", () => {
   });
 
   it("falls back to config when env ports exceed TCP bounds", () => {
-    expect(
-      resolveGatewayPort({ gateway: { port: 19003 } }, { OPENCLAW_GATEWAY_PORT: "65536" }),
-    ).toBe(19003);
-    expect(
-      resolveGatewayPort(
-        { gateway: { port: 19004 } },
-        { OPENCLAW_GATEWAY_PORT: "127.0.0.1:65536" },
-      ),
-    ).toBe(19004);
-    expect(
-      resolveGatewayPort({ gateway: { port: 19005 } }, { OPENCLAW_GATEWAY_PORT: "[::1]:65536" }),
-    ).toBe(19005);
+    for (const value of ["65536", "127.0.0.1:65536", "[::1]:65536"]) {
+      expect(
+        resolveGatewayPort({ gateway: { port: 19003 } }, { OPENCLAW_GATEWAY_PORT: value }),
+      ).toBe(19003);
+    }
   });
 
   it("falls back when malformed IPv6 inputs do not provide an explicit port", () => {

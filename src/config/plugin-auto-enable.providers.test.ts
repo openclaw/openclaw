@@ -35,19 +35,38 @@ afterAll(() => {
 });
 
 describe("applyPluginAutoEnable providers", () => {
-  it("activates a selected decision contract owner", () => {
-    const result = autoEnable(
+  it.each<[string, OpenClawConfig, ManifestPlugin["contracts"], string]>([
+    [
+      "decision-plugin",
+      { agents: { defaults: { decisionModel: "judge/fast" } } },
+      { decisionProviders: ["judge"] },
+      "judge decision provider selected",
+    ],
+    [
+      "qa-lab",
+      { cloudWorkers: { profiles: { development: { provider: " STATIC-SSH " } } } },
+      { workerProviders: ["static-ssh"] },
+      "static-ssh worker provider selected",
+    ],
+    [
+      "storage-fixture",
       {
-        agents: { defaults: { decisionModel: "judge/fast" } },
-        plugins: { allow: ["telegram"] },
+        storage: {
+          locations: { archive: { ...storage.locations.archive, provider: " ARCHIVE-OBJECTS " } },
+        },
       },
-      [provider("decision-plugin", { decisionProviders: ["judge"] }, "bundled")],
-    );
-    expect(result.config.plugins?.entries?.["decision-plugin"]?.enabled).toBe(true);
-    expect(result.config.plugins?.allow).toEqual(["telegram", "decision-plugin"]);
-    expect(result.autoEnabledReasons).toEqual({
-      "decision-plugin": ["judge decision provider selected"],
+      { storageProviders: ["archive-objects"] },
+      "archive-objects storage provider selected",
+    ],
+  ])("activates the selected bundled contract owner %s", (id, config, contracts, reason) => {
+    const result = autoEnable({ ...config, plugins: { allow: ["telegram"] } }, [
+      provider(id, contracts, "bundled"),
+    ]);
+    expect(result.config.plugins).toMatchObject({
+      allow: ["telegram", id],
+      entries: { [id]: { enabled: true } },
     });
+    expect(result.autoEnabledReasons).toEqual({ [id]: [reason] });
   });
 
   const googleProviderCases: Array<{ name: string; config: OpenClawConfig }> = [
@@ -93,46 +112,6 @@ describe("applyPluginAutoEnable providers", () => {
     expect(result.config.plugins?.entries?.brave?.enabled).toBe(true);
     expect(result.config.plugins?.allow).toEqual(["telegram", "brave"]);
     expect(result.changes).toContain("brave web search provider selected, enabled automatically.");
-  });
-
-  it("auto-enables a bundled worker provider selected by a cloud worker profile", () => {
-    const result = autoEnable(
-      {
-        cloudWorkers: {
-          profiles: {
-            development: {
-              provider: " STATIC-SSH ",
-              settings: { host: "worker.example.test" },
-            },
-          },
-        },
-        plugins: { allow: ["telegram"] },
-      },
-      [provider("qa-lab", { workerProviders: ["static-ssh"] }, "bundled")],
-    );
-
-    expect(result.config.plugins?.entries?.["qa-lab"]?.enabled).toBe(true);
-    expect(result.config.plugins?.allow).toEqual(["telegram", "qa-lab"]);
-    expect(result.autoEnabledReasons).toEqual({
-      "qa-lab": ["static-ssh worker provider selected"],
-    });
-  });
-
-  it("auto-enables the bundled owner selected by a storage location", () => {
-    const result = autoEnable(
-      {
-        storage: {
-          locations: { archive: { ...storage.locations.archive, provider: " ARCHIVE-OBJECTS " } },
-        },
-        plugins: { allow: ["telegram"] },
-      },
-      [provider("storage-fixture", { storageProviders: ["archive-objects"] }, "bundled")],
-    );
-    expect(result.config.plugins?.entries?.["storage-fixture"]?.enabled).toBe(true);
-    expect(result.config.plugins?.allow).toEqual(["telegram", "storage-fixture"]);
-    expect(result.autoEnabledReasons).toEqual({
-      "storage-fixture": ["archive-objects storage provider selected"],
-    });
   });
 
   it.each([

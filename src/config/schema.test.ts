@@ -2,12 +2,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it } from "vitest";
 import { buildConfigSchemaCore, lookupConfigSchema } from "./schema.js";
+import { asSchemaObject } from "./schema.shared.js";
 import { validateConfigObjectRaw } from "./validation.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const mcpConfig = (server: Record<string, unknown>) => ({ mcp: { servers: { docs: server } } });
 const mcpUrl = "https://mcp.example.com/mcp";
+const reviewerTools = (reviewer: Record<string, unknown>) => ({ exec: { reviewer } });
 const tupleSchema = {
   schema: {
     type: "object",
@@ -42,13 +44,7 @@ describe("config schema", () => {
       ],
     };
     heartbeatChannelInput = {
-      channels: [
-        {
-          id: "imessage",
-          label: "iMessage",
-          configSchema: { type: "object" },
-        },
-      ],
+      channels: [{ id: "imessage", label: "iMessage", configSchema: { type: "object" } }],
     };
     cachedMergeInput = {
       plugins: [
@@ -70,17 +66,11 @@ describe("config schema", () => {
 
   it("accepts node-host MCP servers with the shared MCP server schema", () => {
     const result = OpenClawSchema.safeParse({
-      nodeHost: {
-        mcp: {
-          servers: {
-            local: {
-              command: "node",
-              args: ["server.mjs"],
-              toolFilter: { include: ["read_*"] },
-            },
-          },
-        },
-      },
+      nodeHost: mcpConfig({
+        command: "node",
+        args: ["server.mjs"],
+        toolFilter: { include: ["read_*"] },
+      }),
     });
     expect(result.success).toBe(true);
     const invalid = OpenClawSchema.safeParse({
@@ -277,9 +267,7 @@ describe("config schema", () => {
       lookupConfigSchema(schema, "channels.defaults.botLoopProtection.maxEventsPerWindow")?.schema,
     ).toMatchObject({ type: "integer" });
     expect(lookupConfigSchema(schema, "channels.modelByChannel.matrix.room")?.schema).toMatchObject(
-      {
-        type: "string",
-      },
+      { type: "string" },
     );
   });
 
@@ -302,9 +290,8 @@ describe("config schema", () => {
 
     const first = lookupConfigSchema(res, "plugins.entries.plugin-0.config.value");
     const last = lookupConfigSchema(res, "plugins.entries.plugin-39.config");
-    expect(first?.schema?.type).toBe("string");
-    expect(last?.schema?.type).toBe("object");
-    expect(last?.schema?.additionalProperties).toBe(true);
+    expect(first?.schema).toMatchObject({ type: "string" });
+    expect(last?.schema).toMatchObject({ type: "object", additionalProperties: true });
     expect(last?.schema?.description).toContain("omitted");
   });
 
@@ -324,10 +311,7 @@ describe("config schema", () => {
     const first = buildConfigSchemaCore(cachedMergeInput);
     const plugin = expectDefined(cachedMergeInput.plugins?.[0], "cached plugin metadata");
     const channel = expectDefined(cachedMergeInput.channels?.[0], "cached channel metadata");
-    const second = buildConfigSchemaCore({
-      plugins: [{ ...plugin }],
-      channels: [{ ...channel }],
-    });
+    const second = buildConfigSchemaCore({ plugins: [{ ...plugin }], channels: [{ ...channel }] });
     expect(second).toBe(first);
   });
 
@@ -368,50 +352,29 @@ describe("config schema", () => {
   });
 
   it("accepts exec reviewer model config in global and agent scopes", () => {
-    const tools = ToolsSchema.parse({
-      exec: {
-        reviewer: {
-          model: {
-            primary: "openrouter/anthropic/claude-sonnet-4-6",
-          },
-          thinking: "low",
-          fastMode: true,
-          timeoutMs: 15_000,
-        },
-      },
-    });
-    expect(tools?.exec?.reviewer?.thinking).toBe("low");
-    expect(tools?.exec?.reviewer?.fastMode).toBe(true);
-    expect(tools?.exec?.reviewer?.model).toEqual({
+    const reviewer = ToolsSchema.parse(
+      reviewerTools({
+        model: { primary: "openrouter/anthropic/claude-sonnet-4-6" },
+        thinking: "low",
+        fastMode: true,
+        timeoutMs: 15_000,
+      }),
+    )?.exec?.reviewer;
+    expect(reviewer).toMatchObject({ thinking: "low", fastMode: true });
+    expect(reviewer?.model).toEqual({
       primary: "openrouter/anthropic/claude-sonnet-4-6",
     });
 
-    const config = OpenClawSchema.parse({
-      agents: {
-        entries: {
-          main: {
-            tools: {
-              exec: {
-                reviewer: {
-                  model: "openai/gpt-5.5",
-                  thinking: "high",
-                  fastMode: false,
-                },
-              },
-            },
-          },
-        },
-      },
+    const tools = reviewerTools({ model: "openai/gpt-5.5", thinking: "high", fastMode: false });
+    const config = OpenClawSchema.parse({ agents: { entries: { main: { tools } } } });
+    expect(config.agents?.entries?.main?.tools?.exec?.reviewer).toMatchObject({
+      model: "openai/gpt-5.5",
+      thinking: "high",
+      fastMode: false,
     });
-    expect(config.agents?.entries?.main?.tools?.exec?.reviewer?.model).toBe("openai/gpt-5.5");
-    expect(config.agents?.entries?.main?.tools?.exec?.reviewer?.thinking).toBe("high");
-    expect(config.agents?.entries?.main?.tools?.exec?.reviewer?.fastMode).toBe(false);
-    expect(ToolsSchema.safeParse({ exec: { reviewer: { fastMode: "priority" } } }).success).toBe(
-      false,
-    );
-    expect(ToolsSchema.safeParse({ exec: { reviewer: { thinking: "turbo" } } }).success).toBe(
-      false,
-    );
+    for (const invalid of [{ fastMode: "priority" }, { thinking: "turbo" }]) {
+      expect(ToolsSchema.safeParse(reviewerTools(invalid)).success).toBe(false);
+    }
   });
 
   it.each([
@@ -467,29 +430,17 @@ describe("config schema", () => {
     });
 
     expect(lookup?.reloadKind).toBe("restart");
-    expect(lookup?.children.find((child) => child.path === "gateway.port")?.reloadKind).toBe(
-      "restart",
-    );
-    expect(lookup?.children.find((child) => child.path === "gateway.auth")?.reloadKind).toBe(
-      "restart",
-    );
+    for (const path of ["gateway.port", "gateway.auth"]) {
+      expect(lookup?.children.find((child) => child.path === path)?.reloadKind).toBe("restart");
+    }
   });
 
   it("keeps scoped record entry schemas for form editing", () => {
     const lookup = lookupConfigSchema(baseSchema, "agents.entries");
     expect(lookup?.schema).toHaveProperty("additionalProperties");
-    const schema = lookup?.schema as
-      | {
-          additionalProperties?: {
-            properties?: Record<
-              string,
-              { anyOf?: Array<{ properties?: Record<string, unknown> }> }
-            >;
-          };
-        }
-      | undefined;
-    expect(schema?.additionalProperties?.properties).toHaveProperty("runtime");
-    const runtimeVariants = schema?.additionalProperties?.properties?.runtime?.anyOf ?? [];
+    const entry = asSchemaObject(lookup?.schema?.additionalProperties);
+    expect(entry?.properties).toHaveProperty("runtime");
+    const runtimeVariants = entry?.properties?.runtime?.anyOf ?? [];
     expect(runtimeVariants.length).toBeGreaterThan(0);
     expect(runtimeVariants.some((variant) => variant.properties?.type)).toBe(true);
   });
@@ -511,24 +462,12 @@ describe("config schema", () => {
   });
 
   it("rejects overly deep lookup paths", () => {
-    const buildNestedObjectSchema = (
-      segments: string[],
-    ): { type: string; properties?: Record<string, unknown> } => {
-      const [head, ...rest] = segments;
-      if (!head) {
-        return { type: "string" };
-      }
-      return {
-        type: "object",
-        properties: {
-          [head]: buildNestedObjectSchema(rest),
-        },
-      };
-    };
-
     const deepPathSegments = Array.from({ length: 33 }, (_, index) => `a${index}`);
     const deepSchema = {
-      schema: buildNestedObjectSchema(deepPathSegments),
+      schema: deepPathSegments.reduceRight<Record<string, unknown>>(
+        (node, key) => ({ type: "object", properties: { [key]: node } }),
+        { type: "string" },
+      ),
       uiHints: {},
       version: "test",
       generatedAt: "test",
