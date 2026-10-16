@@ -91,9 +91,9 @@ export function windowsFixture() {
     );
   }
   prepare();
-  const ops: typeof windowsNativePlatform = {
+  const ops = {
     identity: vi.fn(async () => identity),
-    assertPath: vi.fn(async () => {}),
+    assertPath: vi.fn<typeof windowsNativePlatform.assertPath>(async () => {}),
     readFile: vi.fn(async (file, maxBytes) => {
       const bytes = files.get(file);
       if (!bytes) {
@@ -111,7 +111,7 @@ export function windowsFixture() {
       WINDOWS_MANIFEST,
     ]),
     realpath: vi.fn(async (p) => p),
-  };
+  } satisfies typeof windowsNativePlatform;
   const request: WindowsManagementRequest = {
     v: 1,
     action: "inspect",
