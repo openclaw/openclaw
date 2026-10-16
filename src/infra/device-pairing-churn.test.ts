@@ -34,16 +34,15 @@ async function makeDevicePairingDir(): Promise<string> {
   return await suiteRootTracker.make("case");
 }
 
-async function approveInitialPairing(baseDir: string, scopes: string[]) {
-  const request = await requestDevicePairing(
-    {
-      deviceId: DEVICE_ID,
-      publicKey: PUBLIC_KEY,
-      role: "operator",
-      scopes,
-    },
+function requestOperator(baseDir: string, scopes: string[]) {
+  return requestDevicePairing(
+    { deviceId: DEVICE_ID, publicKey: PUBLIC_KEY, role: "operator", scopes },
     baseDir,
   );
+}
+
+async function approveInitialPairing(baseDir: string, scopes: string[]) {
+  const request = await requestOperator(baseDir, scopes);
   await approveDevicePairing(request.request.requestId, { callerScopes: scopes }, baseDir);
   return request;
 }
@@ -67,30 +66,14 @@ describe("device pairing requestId churn", () => {
     expect(pairedAfterDevices?.approvedScopes).toEqual(["operator.pairing"]);
     expect(readOperatorTokenScopes(pairedAfterDevices)).toEqual(["operator.pairing"]);
 
-    const readRepair = await requestDevicePairing(
-      {
-        deviceId: DEVICE_ID,
-        publicKey: PUBLIC_KEY,
-        role: "operator",
-        scopes: ["operator.read"],
-      },
-      baseDir,
-    );
+    const readRepair = await requestOperator(baseDir, ["operator.read"]);
     expect(readRepair.request.isRepair).toBe(true);
     expect(readRepair.request.scopes).toEqual(["operator.read"]);
     expect((await listDevicePairing(baseDir)).pending).toHaveLength(1);
 
     // `openclaw devices approve <requestId>` reconnects with the caller scopes
     // needed by the gateway. That reconnect supersedes the earlier repair request.
-    const approveReconnect = await requestDevicePairing(
-      {
-        deviceId: DEVICE_ID,
-        publicKey: PUBLIC_KEY,
-        role: "operator",
-        scopes: ["operator.pairing", "operator.read"],
-      },
-      baseDir,
-    );
+    const approveReconnect = await requestOperator(baseDir, ["operator.pairing", "operator.read"]);
 
     expect(approveReconnect.created).toBe(true);
     expect(approveReconnect.request.requestId).not.toBe(readRepair.request.requestId);
@@ -125,39 +108,19 @@ describe("device pairing requestId churn", () => {
 
     // A TUI connect files a broad scope-upgrade request the owner sees in
     // `devices list`.
-    const broad = await requestDevicePairing(
-      {
-        deviceId: DEVICE_ID,
-        publicKey: PUBLIC_KEY,
-        role: "operator",
-        scopes: ["operator.admin", "operator.pairing", "operator.read", "operator.write"],
-      },
-      baseDir,
-    );
+    const scopes = ["operator.admin", "operator.pairing", "operator.read", "operator.write"];
+    const broad = await requestOperator(baseDir, [...scopes]);
     expect(broad.created).toBe(true);
 
     // `openclaw devices approve <id>` reconnects as a CLI probe that only needs
     // `operator.pairing`. That subset re-request must not mint a new id, or the
     // id the owner copied would fail to approve with "unknown requestId".
-    const subsetReconnect = await requestDevicePairing(
-      {
-        deviceId: DEVICE_ID,
-        publicKey: PUBLIC_KEY,
-        role: "operator",
-        scopes: ["operator.pairing"],
-      },
-      baseDir,
-    );
+    const subsetReconnect = await requestOperator(baseDir, ["operator.pairing"]);
 
     expect(subsetReconnect.created).toBe(false);
     expect(subsetReconnect.request.requestId).toBe(broad.request.requestId);
     // The broader pending scopes the owner already saw are preserved.
-    expectScopesToContain(subsetReconnect.request.scopes, [
-      "operator.admin",
-      "operator.pairing",
-      "operator.read",
-      "operator.write",
-    ]);
+    expectScopesToContain(subsetReconnect.request.scopes, scopes);
 
     const pairingList = await listDevicePairing(baseDir);
     expect(pairingList.pending).toHaveLength(1);
@@ -175,25 +138,9 @@ describe("device pairing requestId churn", () => {
   test("keeps the requestId when operator.admin covers a pairing reconnect", async () => {
     const baseDir = await makeDevicePairingDir();
 
-    const adminRequest = await requestDevicePairing(
-      {
-        deviceId: DEVICE_ID,
-        publicKey: PUBLIC_KEY,
-        role: "operator",
-        scopes: ["operator.admin"],
-      },
-      baseDir,
-    );
+    const adminRequest = await requestOperator(baseDir, ["operator.admin"]);
 
-    const pairingReconnect = await requestDevicePairing(
-      {
-        deviceId: DEVICE_ID,
-        publicKey: PUBLIC_KEY,
-        role: "operator",
-        scopes: ["operator.pairing"],
-      },
-      baseDir,
-    );
+    const pairingReconnect = await requestOperator(baseDir, ["operator.pairing"]);
 
     expect(pairingReconnect.created).toBe(false);
     expect(pairingReconnect.request.requestId).toBe(adminRequest.request.requestId);
@@ -209,15 +156,7 @@ describe("device pairing requestId churn", () => {
     expect(pairedAfterCron?.approvedScopes).toEqual(["operator.read"]);
     expect(readOperatorTokenScopes(pairedAfterCron)).toEqual(["operator.read"]);
 
-    const pairingRepair = await requestDevicePairing(
-      {
-        deviceId: DEVICE_ID,
-        publicKey: PUBLIC_KEY,
-        role: "operator",
-        scopes: ["operator.pairing"],
-      },
-      baseDir,
-    );
+    const pairingRepair = await requestOperator(baseDir, ["operator.pairing"]);
 
     const pairingApproved = await approveDevicePairing(
       pairingRepair.request.requestId,
@@ -236,15 +175,7 @@ describe("device pairing requestId churn", () => {
       normalizeDeviceAuthScopes(["operator.read", "operator.pairing"]),
     );
 
-    const adminRepair = await requestDevicePairing(
-      {
-        deviceId: DEVICE_ID,
-        publicKey: PUBLIC_KEY,
-        role: "operator",
-        scopes: ["operator.admin"],
-      },
-      baseDir,
-    );
+    const adminRepair = await requestOperator(baseDir, ["operator.admin"]);
 
     const adminApproved = await approveDevicePairing(
       adminRepair.request.requestId,

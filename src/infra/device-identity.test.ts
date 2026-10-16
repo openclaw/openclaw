@@ -3,17 +3,16 @@ import { spawn, type ChildProcess } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { withTempDir } from "../test-utils/temp-dir.js";
+import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { normalizeLegacyDeviceIdentity } from "./device-identity-legacy.js";
 import {
   generateStoredDeviceIdentity,
   insertStoredDeviceIdentityIfAbsent,
   readStoredDeviceIdentityReadOnly,
-  type DeviceIdentityStoreOptions,
 } from "./device-identity-store.js";
 import {
   deriveDeviceIdFromPublicKey,
@@ -32,31 +31,30 @@ const SWIFT_RAW_DEVICE_ID = "56475aa75463474c0285df5dbf2bcab73da651358839e9b7748
 const SWIFT_RAW_PUBLIC_KEY = "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=";
 const SWIFT_RAW_PRIVATE_KEY = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="; // pragma: allowlist secret
 const MISMATCHED_SWIFT_RAW_PRIVATE_KEY = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="; // pragma: allowlist secret
+const swiftIdentity = {
+  deviceId: SWIFT_RAW_DEVICE_ID,
+  publicKey: SWIFT_RAW_PUBLIC_KEY,
+  privateKey: SWIFT_RAW_PRIVATE_KEY,
+  createdAtMs: 1_700_000_000_000,
+};
+const tempDirs = createTrackedTempDirs();
 
-afterEach(() => {
+afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
+  await tempDirs.cleanup();
 });
 
-function storeOptions(rootDir: string, identityKey?: string): DeviceIdentityStoreOptions {
+function storeOptions(rootDir: string) {
   return {
     env: { ...process.env, OPENCLAW_STATE_DIR: rootDir },
     path: path.join(rootDir, "state", "openclaw.sqlite"),
-    ...(identityKey ? { identityKey } : {}),
   };
 }
 
 function writeRetiredIdentity(filePath: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(
-    filePath,
-    `${JSON.stringify({
-      deviceId: SWIFT_RAW_DEVICE_ID,
-      publicKey: SWIFT_RAW_PUBLIC_KEY,
-      privateKey: SWIFT_RAW_PRIVATE_KEY,
-      createdAtMs: 1_700_000_000_000,
-    })}\n`,
-  );
+  fs.writeFileSync(filePath, `${JSON.stringify(swiftIdentity)}\n`);
 }
 
 function waitForChild(child: ChildProcess): Promise<DeviceIdentity> {
@@ -81,10 +79,34 @@ function waitForChild(child: ChildProcess): Promise<DeviceIdentity> {
   });
 }
 
-async function runConcurrentIdentityLoads(
+function spawnIdentityWorker(
+  moduleUrl: URL,
+  workerSource: string,
   rootDir: string,
-  readOnly = false,
-): Promise<DeviceIdentity[]> {
+  env: NodeJS.ProcessEnv,
+  ipc = false,
+) {
+  return spawn(
+    process.execPath,
+    [
+      ...resolveRuntimeWorkerArgv(moduleUrl).slice(0, -1),
+      "--input-type=module",
+      "-e",
+      workerSource,
+    ],
+    {
+      env: {
+        ...process.env,
+        OPENCLAW_IDENTITY_DATABASE_PATH: path.join(rootDir, "state", "openclaw.sqlite"),
+        OPENCLAW_IDENTITY_STATE_DIR: rootDir,
+        ...env,
+      },
+      stdio: ipc ? ["ignore", "pipe", "pipe", "ipc"] : ["ignore", "pipe", "pipe"],
+    },
+  );
+}
+
+async function runConcurrentIdentityLoads(rootDir: string): Promise<DeviceIdentity[]> {
   const moduleUrl = resolveRuntimeWorkerUrl(storageProcessTestEntrypoints.deviceIdentity);
   const workerSource = `
     const { loadOrCreateDeviceIdentity, loadDeviceIdentityIfPresent } = await import(process.env.OPENCLAW_IDENTITY_MODULE);
@@ -105,25 +127,13 @@ async function runConcurrentIdentityLoads(
     });
     process.send("ready");
   `;
-  const workers = Array.from({ length: readOnly ? 20 : 2 }, () => {
-    const child = spawn(
-      process.execPath,
-      [
-        ...resolveRuntimeWorkerArgv(moduleUrl).slice(0, -1),
-        "--input-type=module",
-        "-e",
-        workerSource,
-      ],
-      {
-        env: {
-          ...process.env,
-          OPENCLAW_IDENTITY_DATABASE_PATH: path.join(rootDir, "state", "openclaw.sqlite"),
-          OPENCLAW_IDENTITY_MODULE: moduleUrl.href,
-          OPENCLAW_IDENTITY_READ_ONLY: readOnly ? "1" : "0",
-          OPENCLAW_IDENTITY_STATE_DIR: rootDir,
-        },
-        stdio: ["ignore", "pipe", "pipe", "ipc"],
-      },
+  const workers = Array.from({ length: 20 }, () => {
+    const child = spawnIdentityWorker(
+      moduleUrl,
+      workerSource,
+      rootDir,
+      { OPENCLAW_IDENTITY_MODULE: moduleUrl.href, OPENCLAW_IDENTITY_READ_ONLY: "1" },
+      true,
     );
     const outcome = waitForChild(child);
     const ready = new Promise<void>((resolve, reject) => {
@@ -155,7 +165,6 @@ async function startPausedBootstrapCreator(rootDir: string): Promise<{
   outcome: Promise<DeviceIdentity>;
   child: ChildProcess;
 }> {
-  const databasePath = path.join(rootDir, "state", "openclaw.sqlite");
   const readyPath = path.join(rootDir, "bootstrap-ready");
   const committedPath = path.join(rootDir, "bootstrap-committed");
   const continuePath = path.join(rootDir, "bootstrap-continue");
@@ -186,27 +195,12 @@ async function startPausedBootstrapCreator(rootDir: string): Promise<{
       privateKeyPem: stored.privateKeyPem,
     }));
   `;
-  const child = spawn(
-    process.execPath,
-    [
-      ...resolveRuntimeWorkerArgv(storeModuleUrl).slice(0, -1),
-      "--input-type=module",
-      "-e",
-      workerSource,
-    ],
-    {
-      env: {
-        ...process.env,
-        OPENCLAW_IDENTITY_COMMITTED_PATH: committedPath,
-        OPENCLAW_IDENTITY_CONTINUE_PATH: continuePath,
-        OPENCLAW_IDENTITY_DATABASE_PATH: databasePath,
-        OPENCLAW_IDENTITY_READY_PATH: readyPath,
-        OPENCLAW_IDENTITY_STATE_DIR: rootDir,
-        OPENCLAW_IDENTITY_STORE_MODULE: storeModuleUrl.href,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
+  const child = spawnIdentityWorker(storeModuleUrl, workerSource, rootDir, {
+    OPENCLAW_IDENTITY_COMMITTED_PATH: committedPath,
+    OPENCLAW_IDENTITY_CONTINUE_PATH: continuePath,
+    OPENCLAW_IDENTITY_READY_PATH: readyPath,
+    OPENCLAW_IDENTITY_STORE_MODULE: storeModuleUrl.href,
+  });
   const outcome = waitForChild(child);
   const deadline = Date.now() + 15_000;
   while (!fs.existsSync(readyPath)) {
@@ -236,31 +230,31 @@ function waitForFileSync(filePath: string): void {
 }
 
 describe("device identity SQLite store", () => {
+  let rootDir: string;
+  let options: ReturnType<typeof storeOptions>;
+  beforeEach(async () => {
+    rootDir = await tempDirs.make("openclaw-device-identity-");
+    options = storeOptions(rootDir);
+  });
   it("reads a missing database without creating identity state or coordinator locks", async () => {
-    await withTempDir("openclaw-device-identity-readonly-", async (rootDir) => {
-      const options = storeOptions(rootDir);
-      const entries = fs.readdirSync(rootDir);
+    const entries = fs.readdirSync(rootDir);
 
-      expect(loadDeviceIdentityIfPresent(options)).toBeNull();
-      expect(fs.existsSync(options.path!)).toBe(false);
-      expect(fs.existsSync(path.dirname(options.path!))).toBe(false);
-      expect(fs.readdirSync(rootDir)).toEqual(entries);
-    });
+    expect(loadDeviceIdentityIfPresent(options)).toBeNull();
+    expect(fs.existsSync(options.path!)).toBe(false);
+    expect(fs.existsSync(path.dirname(options.path!))).toBe(false);
+    expect(fs.readdirSync(rootDir)).toEqual(entries);
   });
 
   it("reads an existing identity without changing canonical SQLite artifacts", async () => {
-    await withTempDir("openclaw-device-identity-artifact-preserving-", async (rootDir) => {
-      const options = storeOptions(rootDir);
-      const created = loadOrCreateDeviceIdentity(options);
-      closeOpenClawStateDatabaseForTest();
-      const databaseDirectory = path.dirname(options.path!);
-      const artifactsBeforeRead = fs.readdirSync(databaseDirectory).toSorted();
+    const created = loadOrCreateDeviceIdentity(options);
+    closeOpenClawStateDatabaseForTest();
+    const databaseDirectory = path.dirname(options.path!);
+    const artifactsBeforeRead = fs.readdirSync(databaseDirectory).toSorted();
 
-      expect(withArtifactPreservingStateReads(() => loadDeviceIdentityIfPresent(options))).toEqual(
-        created,
-      );
-      expect(fs.readdirSync(databaseDirectory).toSorted()).toEqual(artifactsBeforeRead);
-    });
+    expect(withArtifactPreservingStateReads(() => loadDeviceIdentityIfPresent(options))).toEqual(
+      created,
+    );
+    expect(fs.readdirSync(databaseDirectory).toSorted()).toEqual(artifactsBeforeRead);
   });
 
   it("creates and reuses the primary identity in SQLite", async () => {
@@ -277,79 +271,63 @@ describe("device identity SQLite store", () => {
   });
 
   it("keeps empty-bootstrap classification on the pre-commit read snapshot", async () => {
-    await withTempDir("openclaw-device-identity-bootstrap-read-", async (rootDir) => {
-      const creator = await startPausedBootstrapCreator(rootDir);
-      try {
-        const sqlite = await import("node:sqlite");
-        // oxlint-disable-next-line typescript/unbound-method -- called below with the intercepted database receiver.
-        const prepare = sqlite.DatabaseSync.prototype.prepare;
-        let committedDuringRead = false;
-        vi.spyOn(sqlite.DatabaseSync.prototype, "prepare").mockImplementation(function (
-          this: InstanceType<typeof sqlite.DatabaseSync>,
-          sql,
-        ) {
-          try {
-            return prepare.call(this, sql);
-          } catch (error) {
-            if (!committedDuringRead && /device_identities/iu.test(sql)) {
-              committedDuringRead = true;
-              fs.writeFileSync(creator.continuePath, "continue");
-              waitForFileSync(creator.committedPath);
-            }
-            throw error;
+    const creator = await startPausedBootstrapCreator(rootDir);
+    try {
+      const sqlite = await import("node:sqlite");
+      // oxlint-disable-next-line typescript/unbound-method -- called below with the intercepted database receiver.
+      const prepare = sqlite.DatabaseSync.prototype.prepare;
+      let committedDuringRead = false;
+      vi.spyOn(sqlite.DatabaseSync.prototype, "prepare").mockImplementation(function (
+        this: InstanceType<typeof sqlite.DatabaseSync>,
+        sql,
+      ) {
+        try {
+          return prepare.call(this, sql);
+        } catch (error) {
+          if (!committedDuringRead && /device_identities/iu.test(sql)) {
+            committedDuringRead = true;
+            fs.writeFileSync(creator.continuePath, "continue");
+            waitForFileSync(creator.committedPath);
           }
-        });
-
-        expect(
-          withArtifactPreservingStateReads(() =>
-            loadDeviceIdentityIfPresent(storeOptions(rootDir)),
-          ),
-        ).toBeNull();
-        expect(committedDuringRead).toBe(true);
-
-        const committed = await creator.outcome;
-        expect(loadDeviceIdentityIfPresent(storeOptions(rootDir))).toEqual(committed);
-      } finally {
-        if (creator.child.exitCode === null && creator.child.signalCode === null) {
-          fs.writeFileSync(creator.continuePath, "continue");
-          creator.child.kill();
+          throw error;
         }
-        await Promise.allSettled([creator.outcome]);
+      });
+
+      expect(
+        withArtifactPreservingStateReads(() => loadDeviceIdentityIfPresent(storeOptions(rootDir))),
+      ).toBeNull();
+      expect(committedDuringRead).toBe(true);
+
+      const committed = await creator.outcome;
+      expect(loadDeviceIdentityIfPresent(storeOptions(rootDir))).toEqual(committed);
+    } finally {
+      if (creator.child.exitCode === null && creator.child.signalCode === null) {
+        fs.writeFileSync(creator.continuePath, "continue");
+        creator.child.kill();
       }
-    });
+      await Promise.allSettled([creator.outcome]);
+    }
   }, 30_000);
 
   it("does not classify a partial schema as an identity bootstrap miss", async () => {
-    await withTempDir("openclaw-device-identity-partial-schema-", async (rootDir) => {
-      const options = storeOptions(rootDir);
-      fs.mkdirSync(path.dirname(options.path!), { recursive: true });
-      const sqlite = await import("node:sqlite");
-      const database = new sqlite.DatabaseSync(options.path!);
-      database.exec("CREATE TABLE unrelated_state (id INTEGER PRIMARY KEY) STRICT;");
-      database.close();
+    fs.mkdirSync(path.dirname(options.path!), { recursive: true });
+    const sqlite = await import("node:sqlite");
+    const database = new sqlite.DatabaseSync(options.path!);
+    database.exec("CREATE TABLE unrelated_state (id INTEGER PRIMARY KEY) STRICT;");
+    database.close();
 
-      expect(() => loadDeviceIdentityIfPresent(options)).toThrow(
-        /no such table: device_identities/,
-      );
-    });
+    expect(() => loadDeviceIdentityIfPresent(options)).toThrow(/no such table: device_identities/);
   });
 
   it("adopts a Swift-created version-zero identity database and completes the shared schema", async () => {
-    await withTempDir("openclaw-device-identity-swift-db-", async (rootDir) => {
-      const options = storeOptions(rootDir);
-      const expected = normalizeLegacyDeviceIdentity({
-        deviceId: SWIFT_RAW_DEVICE_ID,
-        publicKey: SWIFT_RAW_PUBLIC_KEY,
-        privateKey: SWIFT_RAW_PRIVATE_KEY,
-        createdAtMs: 1_700_000_000_000,
-      });
-      if (!expected) {
-        throw new Error("Swift identity fixture must normalize");
-      }
-      fs.mkdirSync(path.dirname(options.path!), { recursive: true });
-      const sqlite = await import("node:sqlite");
-      const database = new sqlite.DatabaseSync(options.path!);
-      database.exec(`
+    const expected = normalizeLegacyDeviceIdentity(swiftIdentity);
+    if (!expected) {
+      throw new Error("Swift identity fixture must normalize");
+    }
+    fs.mkdirSync(path.dirname(options.path!), { recursive: true });
+    const sqlite = await import("node:sqlite");
+    const database = new sqlite.DatabaseSync(options.path!);
+    database.exec(`
         CREATE TABLE device_identities (
           identity_key TEXT NOT NULL PRIMARY KEY,
           device_id TEXT NOT NULL,
@@ -361,142 +339,119 @@ describe("device identity SQLite store", () => {
         CREATE INDEX idx_device_identities_device
           ON device_identities(device_id, updated_at_ms DESC);
       `);
-      database
-        .prepare(`
+    database
+      .prepare(`
           INSERT INTO device_identities (
             identity_key, device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms
           ) VALUES (?, ?, ?, ?, ?, ?)
         `)
-        .run(
-          "primary",
-          expected.deviceId,
-          expected.publicKeyPem,
-          expected.privateKeyPem,
-          expected.createdAtMs,
-          expected.createdAtMs,
-        );
-      database.close();
+      .run(
+        "primary",
+        expected.deviceId,
+        expected.publicKeyPem,
+        expected.privateKeyPem,
+        expected.createdAtMs,
+        expected.createdAtMs,
+      );
+    database.close();
 
-      expect(loadOrCreateDeviceIdentity(options)).toEqual({
-        deviceId: expected.deviceId,
-        publicKeyPem: expected.publicKeyPem,
-        privateKeyPem: expected.privateKeyPem,
-      });
-      closeOpenClawStateDatabaseForTest();
-      const verified = new sqlite.DatabaseSync(options.path!, { readOnly: true });
-      expect(verified.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-      });
-      expect(
-        verified
-          .prepare("SELECT role, schema_version FROM schema_meta WHERE meta_key = 'primary'")
-          .get(),
-      ).toEqual({ role: "global", schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
-      verified.close();
+    expect(loadOrCreateDeviceIdentity(options)).toEqual({
+      deviceId: expected.deviceId,
+      publicKeyPem: expected.publicKeyPem,
+      privateKeyPem: expected.privateKeyPem,
     });
+    closeOpenClawStateDatabaseForTest();
+    const verified = new sqlite.DatabaseSync(options.path!, { readOnly: true });
+    expect(verified.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+    });
+    expect(
+      verified
+        .prepare("SELECT role, schema_version FROM schema_meta WHERE meta_key = 'primary'")
+        .get(),
+    ).toEqual({ role: "global", schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
+    verified.close();
   });
 
   it("keeps canonical SQLite authoritative when retired device.json reappears", async () => {
-    await withTempDir("openclaw-device-identity-canonical-", async (rootDir) => {
-      const options = storeOptions(rootDir);
-      const canonical = loadOrCreateDeviceIdentity(options);
-      expect(canonical.deviceId).not.toBe(SWIFT_RAW_DEVICE_ID);
-      closeOpenClawStateDatabaseForTest();
+    const canonical = loadOrCreateDeviceIdentity(options);
+    expect(canonical.deviceId).not.toBe(SWIFT_RAW_DEVICE_ID);
+    closeOpenClawStateDatabaseForTest();
 
-      const legacyPath = path.join(rootDir, "identity", "device.json");
-      writeRetiredIdentity(legacyPath);
+    const legacyPath = path.join(rootDir, "identity", "device.json");
+    writeRetiredIdentity(legacyPath);
 
-      expect(loadDeviceIdentityIfPresent(options)).toEqual(canonical);
-      expect(loadOrCreateDeviceIdentity(options)).toEqual(canonical);
-      expect(fs.existsSync(legacyPath)).toBe(true);
-    });
+    expect(loadDeviceIdentityIfPresent(options)).toEqual(canonical);
+    expect(loadOrCreateDeviceIdentity(options)).toEqual(canonical);
+    expect(fs.existsSync(legacyPath)).toBe(true);
   });
 
   it("loads existing identities concurrently without requiring subprocess capacity", async () => {
-    await withTempDir("openclaw-device-identity-readers-", async (rootDir) => {
-      const options = storeOptions(rootDir);
-      const identity = loadOrCreateDeviceIdentity(options);
-      closeOpenClawStateDatabaseForTest();
-      const { DatabaseSync } = await import("node:sqlite");
-      const writer = new DatabaseSync(options.path!);
-      writer.exec("BEGIN IMMEDIATE");
-      try {
-        const identities = await runConcurrentIdentityLoads(rootDir, true);
-        expect(identities).toHaveLength(20);
-        for (const loaded of identities) {
-          expect(loaded).toEqual(identity);
-        }
-      } finally {
-        writer.exec("ROLLBACK");
-        writer.close();
+    const identity = loadOrCreateDeviceIdentity(options);
+    closeOpenClawStateDatabaseForTest();
+    const { DatabaseSync } = await import("node:sqlite");
+    const writer = new DatabaseSync(options.path!);
+    writer.exec("BEGIN IMMEDIATE");
+    try {
+      const identities = await runConcurrentIdentityLoads(rootDir);
+      expect(identities).toHaveLength(20);
+      for (const loaded of identities) {
+        expect(loaded).toEqual(identity);
       }
-    });
+    } finally {
+      writer.exec("ROLLBACK");
+      writer.close();
+    }
   });
 
   it("rechecks pending native import before publishing a generated identity", async () => {
-    await withTempDir("openclaw-device-identity-pending-import-", async (rootDir) => {
-      const options = storeOptions(rootDir);
-      expect(loadDeviceIdentityIfPresent(options)).toBeNull();
-      const candidate = generateStoredDeviceIdentity();
-      const claimPath = path.join(rootDir, "identity", "device.json.native-importing");
-      writeRetiredIdentity(claimPath);
-      const claim = fs.readFileSync(claimPath);
+    expect(loadDeviceIdentityIfPresent(options)).toBeNull();
+    const candidate = generateStoredDeviceIdentity();
+    const claimPath = path.join(rootDir, "identity", "device.json.native-importing");
+    writeRetiredIdentity(claimPath);
+    const claim = fs.readFileSync(claimPath);
 
-      expect(() => insertStoredDeviceIdentityIfAbsent(candidate, options)).toThrow("doctor --fix");
-      expect(readStoredDeviceIdentityReadOnly(options)).toBeNull();
-      expect(fs.readFileSync(claimPath)).toEqual(claim);
-    });
+    expect(() => insertStoredDeviceIdentityIfAbsent(candidate, options)).toThrow("doctor --fix");
+    expect(readStoredDeviceIdentityReadOnly(options)).toBeNull();
+    expect(fs.readFileSync(claimPath)).toEqual(claim);
   });
 
   it("fails closed for a corrupt persisted row", async () => {
-    await withTempDir("openclaw-device-identity-corrupt-", async (rootDir) => {
-      const options = storeOptions(rootDir);
-      loadOrCreateDeviceIdentity(options);
-      closeOpenClawStateDatabaseForTest();
+    loadOrCreateDeviceIdentity(options);
+    closeOpenClawStateDatabaseForTest();
 
-      const sqlite = await import("node:sqlite");
-      const database = new sqlite.DatabaseSync(options.path!);
-      database
-        .prepare("UPDATE device_identities SET device_id = ? WHERE identity_key = ?")
-        .run("corrupt-device-id", "primary");
-      database.close();
+    const sqlite = await import("node:sqlite");
+    const database = new sqlite.DatabaseSync(options.path!);
+    database
+      .prepare("UPDATE device_identities SET device_id = ? WHERE identity_key = ?")
+      .run("corrupt-device-id", "primary");
+    database.close();
 
-      expect(() => loadDeviceIdentityIfPresent(options)).toThrow(
-        /invalid persisted device identity/,
-      );
-      expect(() => loadOrCreateDeviceIdentity(options)).toThrow(
-        /invalid persisted device identity/,
-      );
-    });
+    expect(() => loadDeviceIdentityIfPresent(options)).toThrow(/invalid persisted device identity/);
+    expect(() => loadOrCreateDeviceIdentity(options)).toThrow(/invalid persisted device identity/);
   });
 
   it.each(["device.json", "device.json.doctor-importing", "device.json.native-importing"])(
     "blocks SQLite access while legacy %s may exist",
     async (legacyName) => {
-      await withTempDir("openclaw-device-identity-legacy-", async (rootDir) => {
-        const options = storeOptions(rootDir);
-        const legacyPath = path.join(rootDir, "identity", legacyName);
-        fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
-        fs.writeFileSync(legacyPath, "{}\n");
-
-        expect(() => loadDeviceIdentityIfPresent(options)).toThrow(/doctor --fix/);
-        expect(() => loadOrCreateDeviceIdentity(options)).toThrow(/doctor --fix/);
-        expect(fs.existsSync(options.path!)).toBe(false);
-      });
-    },
-  );
-
-  it.each([
-    ["canonical", (rootDir: string) => path.join(rootDir, "state", "openclaw.sqlite")],
-    ["arbitrary", (rootDir: string) => path.join(rootDir, "identity-state.sqlite")],
-  ])("derives the legacy root from an explicit %s database path", async (_label, dbPath) => {
-    await withTempDir("openclaw-device-identity-explicit-path-", async (rootDir) => {
-      const legacyPath = path.join(rootDir, "identity", "device.json");
+      const legacyPath = path.join(rootDir, "identity", legacyName);
       fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
       fs.writeFileSync(legacyPath, "{}\n");
 
-      expect(() => loadOrCreateDeviceIdentity({ path: dbPath(rootDir) })).toThrow(/doctor --fix/);
-    });
+      expect(() => loadDeviceIdentityIfPresent(options)).toThrow(/doctor --fix/);
+      expect(() => loadOrCreateDeviceIdentity(options)).toThrow(/doctor --fix/);
+      expect(fs.existsSync(options.path!)).toBe(false);
+    },
+  );
+  it.each([
+    ["canonical", (directory: string) => path.join(directory, "state", "openclaw.sqlite")],
+    ["arbitrary", (directory: string) => path.join(directory, "identity-state.sqlite")],
+  ])("derives the legacy root from an explicit %s database path", async (_label, dbPath) => {
+    const legacyPath = path.join(rootDir, "identity", "device.json");
+    fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
+    fs.writeFileSync(legacyPath, "{}\n");
+
+    expect(() => loadOrCreateDeviceIdentity({ path: dbPath(rootDir) })).toThrow(/doctor --fix/);
   });
 });
 
@@ -542,10 +497,8 @@ describe("legacy device identity normalization", () => {
   it("rejects mismatched or malformed legacy key material", () => {
     expect(
       normalizeLegacyDeviceIdentity({
-        deviceId: SWIFT_RAW_DEVICE_ID,
-        publicKey: SWIFT_RAW_PUBLIC_KEY,
+        ...swiftIdentity,
         privateKey: MISMATCHED_SWIFT_RAW_PRIVATE_KEY,
-        createdAtMs: 1_700_000_000_000,
       }),
     ).toBeNull();
     expect(
