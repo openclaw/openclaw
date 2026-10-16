@@ -57,10 +57,8 @@ function resolvedAuthority(
 
 async function authority(overrides: TurnOverrides = {}, computerAvailable = false) {
   const input = turn(overrides);
-  const { policy, capabilityProfile, exec, execUnavailable } = await resolvedAuthority(
-    overrides,
-    computerAvailable,
-  );
+  const resolved = await resolvedAuthority(input, computerAvailable);
+  const { policy, capabilityProfile, exec, execUnavailable } = resolved;
   const tools: AnyAgentTool[] = createWorkerPlacementTools({
     ...placement,
     policy,
@@ -80,27 +78,25 @@ async function authority(overrides: TurnOverrides = {}, computerAvailable = fals
       execute: async () => ({ content: [], details: {} }),
     });
   }
-  return applyEmbeddedAttemptToolsAllow(
-    createOpenClawCodingToolsInternal(
-      {
-        ...input,
-        cronCreatorAuthorityUnavailableReason: undefined,
-        conversationCapabilityProfile: capabilityProfile,
-        wrapBeforeToolCallHook: false,
-        toolConstructionPlan: {
-          includeBaseCodingTools: false,
-          includeShellTools: false,
-          includeChannelTools: false,
-          includeOpenClawTools: false,
-          includePluginTools: false,
-        },
+  const codingTools = createOpenClawCodingToolsInternal(
+    {
+      ...input,
+      cronCreatorAuthorityUnavailableReason: undefined,
+      conversationCapabilityProfile: capabilityProfile,
+      wrapBeforeToolCallHook: false,
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: false,
+        includePluginTools: false,
       },
-      undefined,
-      undefined,
-      { tools, policy },
-    ),
-    input.toolsAllow,
-  ).map((tool) => tool.name);
+    },
+    undefined,
+    undefined,
+    { tools, policy },
+  );
+  return applyEmbeddedAttemptToolsAllow(codingTools, input.toolsAllow).map((tool) => tool.name);
 }
 
 afterEach(() => {
@@ -228,64 +224,39 @@ describe("resolveWorkerToolAuthority", () => {
   );
 
   it.each([
-    [
-      "configured deny",
-      { config: { tools: { exec: { security: "deny", ask: "off" } } } },
-      { security: "deny", ask: "off" },
-      false,
-    ],
-    [
-      "configured allowlist",
-      { config: { tools: { exec: { mode: "allowlist" } } } },
-      { security: "allowlist", ask: "off" },
-      false,
-    ],
-    [
-      "session deny",
-      { execSession: { permissionMode: "read-only" } },
-      { host: "gateway", security: "deny", ask: "off" },
-      true,
-    ],
-    [
-      "session approval",
-      { execSession: { permissionMode: "guarded" } },
-      { host: "gateway", security: "allowlist", ask: "on-miss" },
-      true,
-    ],
-    [
-      "session node binding",
-      { execSession: { ...sessionNode, execCwd: " /remote/session/workspace " } },
-      { host: "node", security: "full", ask: "off", node: "session-node" },
-      true,
-    ],
-  ] satisfies Array<
-    [string, TurnOverrides, Partial<Awaited<ReturnType<typeof resolvedAuthority>>["exec"]>, boolean]
-  >)("preserves effective exec authority for %s", async (_name, overrides, expected, exact) => {
-    const { exec } = await resolvedAuthority({
-      config: { tools: { exec: { host: "gateway", mode: "full" } } },
-      toolsAllow: ["exec", "process"],
-      ...overrides,
-    });
-    expect(exec).toEqual(exact ? { ...expected, safeBins: [] } : expect.objectContaining(expected));
+    ["deny", { security: "deny", ask: "off" }],
+    ["allowlist", { mode: "allowlist" }],
+  ] as const)("preserves effective exec authority for configured %s", async (security, exec) => {
+    expect(
+      await resolvedAuthority({ config: { tools: { exec } }, toolsAllow: ["exec", "process"] }),
+    ).toMatchObject({ exec: { security, ask: "off" } });
   });
 
   it.each([
-    {
-      name: "resolved node differs from the session binding",
-      execOverrides: { host: "node" as const, node: "other-node" },
-      expectedHost: "node",
+    ["deny", { permissionMode: "read-only" }, { security: "deny", ask: "off" }],
+    ["approval", { permissionMode: "guarded" }, { security: "allowlist", ask: "on-miss" }],
+    [
+      "node binding",
+      { ...sessionNode, execCwd: " /remote/session/workspace " },
+      { host: "node", node: "session-node", security: "full", ask: "off" },
+    ],
+  ] as const)(
+    "preserves effective exec authority for session %s",
+    async (_name, execSession, expected) => {
+      const { exec } = await resolvedAuthority({
+        config: { tools: { exec: { host: "gateway", mode: "full" } } },
+        toolsAllow: ["exec", "process"],
+        execSession,
+      });
+      expect(exec).toEqual({ host: "gateway", safeBins: [], ...expected });
     },
-    {
-      name: "resolved host is not node",
-      execOverrides: { host: "gateway" as const },
-      expectedHost: "gateway",
-    },
-  ])("omits the session node cwd when $name", async ({ execOverrides, expectedHost }) => {
-    const { exec } = await resolvedAuthority({
-      execSession: sessionNode,
-      execOverrides,
-    });
+  );
 
+  it.each([
+    ["node binding differs", { host: "node", node: "other-node" }, "node"],
+    ["host is not node", { host: "gateway" }, "gateway"],
+  ] as const)("omits the session node cwd when %s", async (_name, execOverrides, expectedHost) => {
+    const { exec } = await resolvedAuthority({ execSession: sessionNode, execOverrides });
     expect(exec?.host).toBe(expectedHost);
     expect(exec).not.toHaveProperty("nodeCwd");
   });

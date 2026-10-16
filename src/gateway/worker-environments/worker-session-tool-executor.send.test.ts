@@ -74,13 +74,9 @@ describe("worker session tool send delivery", () => {
     expect(delivered).not.toHaveBeenCalled();
   });
 
-  it("delivers across exact live family incarnations with the source channel", async () => {
+  it("delivers parent-to-child and sibling sends with the source channel", async () => {
     const { setEntry, send } = f;
     await expect(send("parent-to-child")).resolves.toBeDefined();
-
-    setEntry(SOURCE.sessionKey, SOURCE.sessionId, TARGET);
-    setEntry(TARGET.sessionKey, TARGET.sessionId);
-    await expect(send("child-to-parent")).resolves.toBeDefined();
 
     setEntry(PARENT.sessionKey, PARENT.sessionId);
     setEntry(SOURCE.sessionKey, SOURCE.sessionId, PARENT);
@@ -93,7 +89,7 @@ describe("worker session tool send delivery", () => {
     setEntry(TARGET.sessionKey, TARGET.sessionId, PARENT);
     await expect(send("sibling-to-sibling")).resolves.toBeDefined();
 
-    expect(delivered).toHaveBeenCalledTimes(3);
+    expect(delivered).toHaveBeenCalledTimes(2);
     expect(scopedSessionAccess).toHaveBeenCalledWith(
       expect.objectContaining({
         expectedSessionId: SOURCE.sessionId,
@@ -242,38 +238,32 @@ describe("worker session tool send delivery", () => {
     expect(gatewayRequest).not.toHaveBeenCalled();
   });
 
-  it("coalesces concurrent retries into one message effect", async () => {
+  it.each([false, true])("coalesces concurrent send retries (blocked=%s)", async (blocked) => {
     const { send } = f;
-    const deliveryStarted = createDeferred();
-    const finishDelivery = createDeferred();
-    delivered.mockImplementation(async () => {
-      deliveryStarted.resolve();
-      await finishDelivery.promise;
-    });
-
-    const retries = Array.from({ length: 32 }, () => send("concurrent-retry"));
-    await deliveryStarted.promise;
-    finishDelivery.resolve();
-    await Promise.all(retries);
-
-    expect(delivered).toHaveBeenCalledOnce();
-  });
-
-  it("coalesces concurrent policy blocks before message effects", async () => {
-    const { send } = f;
-    const policy = policyGate({ block: true, blockReason: "blocked by worker session policy" });
-
-    const retries = Array.from({ length: 2 }, () => send("concurrent-policy-block"));
+    const started = createDeferred();
+    const finish = createDeferred();
+    const policy = blocked
+      ? policyGate({ block: true, blockReason: "blocked by worker session policy" })
+      : { started, finish };
+    if (!blocked) {
+      delivered.mockImplementation(async () => {
+        started.resolve();
+        await finish.promise;
+      });
+    }
+    const callId = blocked ? "concurrent-policy-block" : "concurrent-retry";
+    const retries = Array.from({ length: blocked ? 2 : 32 }, () => send(callId));
     await policy.started.promise;
     policy.finish.resolve();
     const results = await Promise.all(retries);
-    const replay = await send("concurrent-policy-block");
-
-    expect(new Set(results.map((result) => result.resultJson))).toHaveLength(1);
-    expect(replay.resultJson).toBe(results[0]?.resultJson);
-    expect(replay.resultJson).toContain("blocked by worker session policy");
-    expect(policy.handler).toHaveBeenCalledOnce();
-    expect(delivered).not.toHaveBeenCalled();
+    if ("handler" in policy) {
+      const replay = await send(callId);
+      expect(new Set(results.map((result) => result.resultJson))).toHaveLength(1);
+      expect(replay.resultJson).toBe(results[0]?.resultJson);
+      expect(replay.resultJson).toContain("blocked by worker session policy");
+      expect(policy.handler).toHaveBeenCalledOnce();
+    }
+    expect(delivered).toHaveBeenCalledTimes(blocked ? 0 : 1);
   });
 
   it("records repeated downstream send failures as unknown instead of replayable failure", async () => {

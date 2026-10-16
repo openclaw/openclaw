@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
-import { ZERO_USAGE_FIXTURE } from "../../agents/test-helpers/usage-fixtures.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-transfer-client.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -20,7 +19,6 @@ import {
   MANIFEST_REF,
   OWNER_EPOCH,
   SESSION_ID,
-  SESSION_KEY,
   attachedEnvironment,
   acknowledgeCompletedWorkerTurn,
   cleanupWorkerTurnLauncherTest,
@@ -64,15 +62,10 @@ it.each(["worker-turn", "remote-exec"] as const)(
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==",
       "base64",
     );
-    const media = await Promise.all(
-      [
-        { bytes: pdf, contentType: "application/pdf", name: "report.pdf" },
-        { bytes: image, contentType: "image/png", name: "photo.png" },
-      ].map(async ({ bytes, contentType, name }) => ({
-        path: (await saveMediaBuffer(bytes, contentType, "inbound", bytes.length, name)).path,
-        contentType,
-      })),
-    );
+    const media = await Promise.all([
+      saveMediaBuffer(pdf, "application/pdf", "inbound", pdf.length, "report.pdf"),
+      saveMediaBuffer(image, "image/png", "inbound", image.length, "photo.png"),
+    ]);
     const recorder = createUserTurnTranscriptRecorder({
       message: buildPersistedUserTurnMessage({ text: "Read both attachments", media }),
       target: { ...sessionTarget, sessionEntry: { sessionId: SESSION_ID, updatedAt: 1 } },
@@ -85,10 +78,12 @@ it.each(["worker-turn", "remote-exec"] as const)(
       userTurnTranscriptRecorder: recorder,
     };
     const originalFiles = new Map<string, Buffer>();
-    const userFiles = [
-      "openclaw-inbound-project/report.txt",
-      "openclaw-inbound-12345678-1234-4234-8234-123456789ab-/report.txt",
-    ];
+    const outputFiles = {
+      "remote-edits.txt": "worker edit",
+      "report.txt": "Read both attachments",
+      "openclaw-inbound-project/report.txt": "user project output",
+      "openclaw-inbound-12345678-1234-4234-8234-123456789ab-/report.txt": "user project output",
+    };
     let workerManifestPaths: string[] = [];
     let acceptedManifestPaths: string[] = [];
     const verifyFiles = async (prompt: string) => {
@@ -109,11 +104,9 @@ it.each(["worker-turn", "remote-exec"] as const)(
       expect(files).toHaveLength(2);
       expect(files).toEqual(expect.arrayContaining([pdf, image]));
       expect(await readFile(path.join(remote, "remote-edits.txt"), "utf8")).toBe("preserve me");
-      await writeFile(path.join(remote, "remote-edits.txt"), "worker edit");
-      await writeFile(path.join(remote, "report.txt"), "Read both attachments");
-      for (const file of userFiles) {
-        await mkdir(path.dirname(path.join(remote, file)));
-        await writeFile(path.join(remote, file), "user project output");
+      for (const [file, content] of Object.entries(outputFiles)) {
+        await mkdir(path.dirname(path.join(remote, file)), { recursive: true });
+        await writeFile(path.join(remote, file), content);
       }
     };
     const tunnel = createWorkerTurnTunnel({
@@ -181,12 +174,7 @@ it.each(["worker-turn", "remote-exec"] as const)(
         request.onDispatchReady?.();
         const session = await openSessionManager();
         const transcriptLeafId = await session.appendMessageAsync(
-          makeAgentAssistantMessage({
-            content: [{ type: "text", text: "Read both" }],
-            model: "gpt-5.6-luna",
-            usage: { ...ZERO_USAGE_FIXTURE, input: 1, output: 1, totalTokens: 2 },
-            timestamp: Date.now(),
-          }),
+          makeAgentAssistantMessage({ content: [{ type: "text", text: "Read both" }] }),
         );
         return await acknowledgeCompletedWorkerTurn(request.turnClaim, transcriptLeafId);
       }),
@@ -204,14 +192,13 @@ it.each(["worker-turn", "remote-exec"] as const)(
           path.join(remoteHome, ".openclaw-worker", "manifests", `${manifestRef.slice(7)}.json`),
           "utf8",
         );
-        const current = parseWorkerWorkspaceManifest(raw, manifestRef);
         const result = await applyStagedWorkerWorkspace({
           root: local,
           stagingRoot: remote,
           baseManifestRef: MANIFEST_REF,
           currentManifestRef: manifestRef,
           base: base.manifest,
-          current,
+          current: parseWorkerWorkspaceManifest(raw, manifestRef),
           acceptance: { kind: "reconcile" },
           journal: request.source.journal,
         });
@@ -237,14 +224,10 @@ it.each(["worker-turn", "remote-exec"] as const)(
         startTunnel: async () => tunnel,
       },
     });
-    await provider.executeTurn(
-      { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: input.runId },
-      input,
-      async () => {
-        await verifyFiles(input.prompt);
-        return { meta: { durationMs: 1 } };
-      },
-    );
+    await provider.executeTurn({ ...sessionTarget, runId: input.runId }, input, async () => {
+      await verifyFiles(input.prompt);
+      return { meta: { durationMs: 1 } };
+    });
     await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
     if (executionMode === "remote-exec") {
       const commands = vi.mocked(tunnel.runWorkspaceCommand).mock.calls;
@@ -256,20 +239,12 @@ it.each(["worker-turn", "remote-exec"] as const)(
     expect(tunnel.reconcileWorkspace).toHaveBeenCalledOnce();
     const retainedFiles =
       executionMode === "worker-turn" ? [...originalFiles.keys()].map(relative) : [];
-    const expectedFiles = [
-      "remote-edits.txt",
-      "report.txt",
-      ...userFiles,
-      ...retainedFiles,
-    ].toSorted();
-    const expectedPaths = [
-      ...new Set(
-        expectedFiles.flatMap((file) => {
-          const segments = file.split("/");
-          return segments.map((_segment, index) => segments.slice(0, index + 1).join("/"));
-        }),
-      ),
-    ].toSorted();
+    const expectedFiles = [...Object.keys(outputFiles), ...retainedFiles].toSorted();
+    const ancestors = (file: string) => {
+      const segments = file.split("/");
+      return segments.map((_segment, index) => segments.slice(0, index + 1).join("/"));
+    };
+    const expectedPaths = [...new Set(expectedFiles.flatMap(ancestors))].toSorted();
     expect(workerManifestPaths).toEqual(expectedPaths);
     expect(acceptedManifestPaths).toEqual(expectedFiles);
     expect(
@@ -277,10 +252,8 @@ it.each(["worker-turn", "remote-exec"] as const)(
         .map((entry) => entry.split(path.sep).join("/"))
         .toSorted(),
     ).toEqual(expectedPaths);
-    expect(await readFile(path.join(local, "remote-edits.txt"), "utf8")).toBe("worker edit");
-    expect(await readFile(path.join(local, "report.txt"), "utf8")).toBe("Read both attachments");
-    for (const file of userFiles) {
-      expect(await readFile(path.join(local, file), "utf8")).toBe("user project output");
+    for (const [file, content] of Object.entries(outputFiles)) {
+      expect(await readFile(path.join(local, file), "utf8")).toBe(content);
     }
     for (const [file, bytes] of originalFiles) {
       expect(await readFile(file)).toEqual(bytes);

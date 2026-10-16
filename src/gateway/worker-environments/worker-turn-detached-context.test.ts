@@ -22,23 +22,20 @@ import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js"
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import { createCoordinatorTestService } from "./placement-dispatch-coordinator.test-support.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
-import { WorkerRunnerUnavailableError, type WorkerTurnTunnelHandle } from "./tunnel-contract.js";
+import { WorkerRunnerUnavailableError } from "./tunnel-contract.js";
 import { releaseClaimIfOwned } from "./worker-turn-admission.js";
 import {
-  ENVIRONMENT_ID,
-  OWNER_EPOCH,
   SESSION_ID,
   SESSION_KEY,
   attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
+  createWorkerTurnTunnel,
   credential,
   database,
   dispatchInitialWorkerPlacement,
-  measureLaunchTurn,
-  readLaunchToolNames,
   placements,
-  readWorkerTurnTranscriptStorageRows,
+  readWorkerTurnTranscriptStorageRows as readRows,
   root,
   seedActivePlacement,
   sessionTarget,
@@ -111,16 +108,11 @@ async function launchProbe(
   const unexpected = async (): Promise<never> => {
     throw new Error("unexpected virtual transport operation");
   };
-  const tunnel: WorkerTurnTunnelHandle = {
-    environmentId: ENVIRONMENT_ID,
-    ownerEpoch: OWNER_EPOCH,
+  const tunnel = createWorkerTurnTunnel({
     runWorkspaceCommand: unexpected,
     syncWorkspace: unexpected,
     quiesceWorkspace: unexpected,
     reconcileWorkspace: unexpected,
-    stop: async () => {},
-    measureLaunchTurn,
-    readLaunchToolNames,
     launchTurn: async ({ plan }) => {
       launch = {
         baseLeafId: plan.assignment.transcript.baseLeafId,
@@ -129,7 +121,7 @@ async function launchProbe(
       // Never call onDispatchReady: no remote turn or credential delivery occurs.
       throw deliberateStop;
     },
-  };
+  });
   const environments: WorkerTurnEnvironmentService = {
     ...unusedEnvironments(),
     get: () => attachedEnvironment(),
@@ -177,7 +169,7 @@ async function launchProbe(
   if (launch) {
     expect(outcome.kind === "rejected" && outcome.error).toBe(deliberateStop);
   }
-  return { launch, credentialCalls, tunnelCalls, outcome, deliberateStop };
+  return { launch, credentialCalls, tunnelCalls, outcome };
 }
 
 function expectNoLaunch(result: Awaited<ReturnType<typeof launchProbe>>) {
@@ -190,12 +182,9 @@ async function withAsyncReadHook<T>(
   phase: "before" | "after" = "after",
 ) {
   const original = SessionManager.openModelContextAsync.bind(SessionManager);
-  const descriptor = Object.getOwnPropertyDescriptor(SessionManager, "openModelContextAsync")!;
-  let calls = 0;
-  Object.defineProperty(SessionManager, "openModelContextAsync", {
-    ...descriptor,
-    value: async (...args: Parameters<typeof original>) => {
-      calls++;
+  const read = vi
+    .spyOn(SessionManager, "openModelContextAsync")
+    .mockImplementation(async (...args) => {
       if (phase === "before") {
         await hook();
       }
@@ -204,12 +193,11 @@ async function withAsyncReadHook<T>(
         await hook();
       }
       return result;
-    },
-  });
+    });
   try {
-    return { result: await run(), calls };
+    return { result: await run(), calls: read.mock.calls.length };
   } finally {
-    Object.defineProperty(SessionManager, "openModelContextAsync", descriptor);
+    read.mockRestore();
   }
 }
 
@@ -313,7 +301,6 @@ describe("worker detached model-context branch parity", () => {
           "before",
         );
         expect(result.launch).toEqual({ baseLeafId: currentId, history: priorAtModelBoundary });
-        expect(result.outcome).toEqual({ kind: "rejected", error: result.deliberateStop });
         if (sideAppend) {
           const after = SessionManager.open(sessionTarget);
           expect([after.getLeafId(), after.getAppendParentId()]).toEqual([currentId, sideId]);
@@ -330,7 +317,7 @@ describe("worker detached model-context branch parity", () => {
       if (state === "in-flight") {
         seedPrevious();
       } else {
-        expect(readWorkerTurnTranscriptStorageRows()).toEqual([]);
+        expect(readRows()).toEqual([]);
       }
       const inputRecorder = recorder();
       expect(inputRecorder.hasPersisted()).toBe(false);
@@ -367,11 +354,11 @@ describe("worker detached model-context branch parity", () => {
         throw new Error("expected the canonical user admission");
       }
       const writer = SessionManager.open(sessionTarget);
-      const originalRows = readWorkerTurnTranscriptStorageRows();
-      let appendedRows: ReturnType<typeof readWorkerTurnTranscriptStorageRows> | undefined;
+      const originalRows = readRows();
+      let appendedRows: ReturnType<typeof readRows> | undefined;
       const appendLaterActivity = async () => {
         writer.appendMessage(assistant("later activity"));
-        appendedRows = readWorkerTurnTranscriptStorageRows();
+        appendedRows = readRows();
       };
       const snapshot =
         appendAt === "after-snapshot"
@@ -394,7 +381,7 @@ describe("worker detached model-context branch parity", () => {
         });
         expect(appendedRows).toBeDefined();
         expect(appendedRows?.slice(0, originalRows.length)).toEqual(originalRows);
-        expect(readWorkerTurnTranscriptStorageRows()).toEqual(appendedRows);
+        expect(readRows()).toEqual(appendedRows);
       } finally {
         snapshot?.();
       }
@@ -405,7 +392,7 @@ describe("worker detached model-context branch parity", () => {
     "joins committed runtime persistence with %s authority without replaying its input",
     async (change) => {
       const { manager } = seedPrevious();
-      const beforeRows = readWorkerTurnTranscriptStorageRows();
+      const beforeRows = readRows();
       const inputRecorder = recorder();
       const abort = new AbortController();
       const message = buildPersistedUserTurnMessage({
@@ -434,12 +421,11 @@ describe("worker detached model-context branch parity", () => {
         abortSignal: abort.signal,
       });
       try {
-        expect(
-          await Promise.race([
-            waiting.promise.then(() => "joining"),
-            pending.then(() => "finished"),
-          ]),
-        ).toBe("joining");
+        await awaitGateBeforeSettlement(
+          waiting.promise,
+          pending,
+          "turn completed before joining runtime persistence",
+        );
         if (change === "cancel") {
           abort.abort(new Error("cancel while runtime persistence settles"));
         }
@@ -461,9 +447,7 @@ describe("worker detached model-context branch parity", () => {
           ...prior,
           { role: "user", text: "current request" },
         ]);
-        expect(readWorkerTurnTranscriptStorageRows().slice(0, beforeRows.length)).toEqual(
-          beforeRows,
-        );
+        expect(readRows().slice(0, beforeRows.length)).toEqual(beforeRows);
       } finally {
         finishPersistence.resolve();
         await pending;
@@ -477,7 +461,7 @@ describe("worker detached model-context branch parity", () => {
     seedPrevious();
     const inputRecorder = recorder();
     inputRecorder.markRuntimePersisted(buildPersistedUserTurnMessage({ text: "current request" }));
-    const beforeRows = readWorkerTurnTranscriptStorageRows();
+    const beforeRows = readRows();
     const result = await launchProbe("recorder-admission-missing", {
       userTurnTranscriptRecorder: inputRecorder,
     });
@@ -486,7 +470,7 @@ describe("worker detached model-context branch parity", () => {
       kind: "rejected",
       error: { message: "Cloud worker turn has no readable canonical user admission" },
     });
-    expect(readWorkerTurnTranscriptStorageRows()).toEqual(beforeRows);
+    expect(readRows()).toEqual(beforeRows);
   });
 
   it("retains the initial-setup writer fence across the asynchronous context read", async ({

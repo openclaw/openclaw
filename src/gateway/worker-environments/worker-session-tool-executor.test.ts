@@ -182,18 +182,23 @@ describe("worker session tool topology", () => {
     await expect(pending).rejects.toThrow(/source worker run ended|worker turn authority changed/);
   });
 
-  it.each(["active", "run-ended", "operator-revoked"] as const)(
+  it.each([
+    ["active", null],
+    ["run-ended", /source worker run ended|agent tool caller authority is no longer/],
+    ["operator-revoked", /operator.*(revoked|no longer active)/],
+  ] as const)(
     "reads presence as the original operator only while its authority is live (%s)",
-    async (authorityState) => {
+    async (authorityState, error) => {
       const { placements, sourceClaim } = f;
       await placements.authorizeWorkerTurnTools(sourceClaim, ["presence"]);
       const entered = createDeferred();
       const release = createDeferred();
       const snapshot = { status: "ok", people: [{ name: "Ada" }] };
+      const query = { action: "person", person: "me", include: ["devices"] };
       gatewayRequest.mockImplementationOnce(async (request) => {
         expect(request).toMatchObject({
           method: "presence.query",
-          params: { action: "person", person: "me", include: ["devices"] },
+          params: query,
         });
         expect(request.params).not.toHaveProperty("toolCallId");
         expect(getGatewayToolCallerIdentity()?.operatorAuthority).toMatchObject({
@@ -204,14 +209,8 @@ describe("worker session tool topology", () => {
         await release.promise;
         return snapshot;
       });
-      const tool = (await getFixture().createTools()).find(
-        (candidate) => candidate.name === "presence",
-      )!;
-      const pending = tool.execute("presence-read", {
-        action: "person",
-        person: "me",
-        include: ["devices"],
-      });
+      const tool = (await f.createTools()).find(({ name }) => name === "presence")!;
+      const pending = tool.execute("presence-read", structuredClone(query));
       await entered.promise;
       if (authorityState === "run-ended") {
         getFixture().closeSourceRun();
@@ -219,12 +218,8 @@ describe("worker session tool topology", () => {
         getFixture().revokeOperatorAuthority();
       }
       release.resolve();
-      if (authorityState === "run-ended") {
-        await expect(pending).rejects.toThrow(
-          /source worker run ended|agent tool caller authority is no longer/,
-        );
-      } else if (authorityState === "operator-revoked") {
-        await expect(pending).rejects.toThrow(/operator.*(revoked|no longer active)/);
+      if (error) {
+        await expect(pending).rejects.toThrow(error);
       } else {
         expect((await pending).details).toEqual(snapshot);
         await placements.authorizeWorkerTurnTools(sourceClaim, []);
@@ -413,15 +408,12 @@ describe("worker session tool topology", () => {
       finishCreate.resolve();
       const results = await Promise.all(retries);
       expect(new Set(results.map((result) => result.resultJson))).toHaveLength(1);
-      expect(dispatchChild).toHaveBeenCalledOnce();
-      expect(gatewayRequest).toHaveBeenCalledOnce();
       const first = results[0]!;
       const replay = await spawn("spawn-cloud-child", "run in the nested cloud session");
 
       expect(spawnState.childSessionKey).toMatch(/^agent:main:dashboard:cloud-[a-f0-9]{32}$/u);
       expect(spawnState.order).toEqual(["create", "dispatch", "send"]);
-      expect(gatewayCreate).toHaveBeenCalledOnce();
-      expect(gatewayCreate).toHaveBeenCalledWith(
+      expect(gatewayCreate).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           creation: expect.objectContaining({
             actor: { type: "agent", id: SOURCE.agentId },
@@ -438,7 +430,7 @@ describe("worker session tool topology", () => {
         }),
       );
       expect(gatewayCreate.mock.calls[0]?.[0]?.creation?.sandbox).toBeUndefined();
-      expect(dispatchChild).toHaveBeenCalledWith(
+      expect(dispatchChild).toHaveBeenCalledExactlyOnceWith(
         {
           sessionId: CHILD.sessionId,
           sessionKey: spawnState.childSessionKey,
@@ -453,7 +445,7 @@ describe("worker session tool topology", () => {
         undefined,
         expect.any(Function),
       );
-      expect(gatewayRequest).toHaveBeenLastCalledWith(
+      expect(gatewayRequest).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           agentRunTracking: "native_subagent",
           method: "agent",
