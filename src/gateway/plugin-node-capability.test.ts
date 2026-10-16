@@ -210,6 +210,24 @@ describe("plugin node capability helpers", () => {
     expect(normalized.rewrittenUrl).toBeUndefined();
   });
 
+  test("rejects scoped urls whose inner path starts with an empty segment", () => {
+    // A leading "//" after the capability (literal, extra-slash, or a backslash
+    // the pathname setter normalizes to "/") makes the rewritten URL parse as a
+    // protocol-relative authority, so req.url re-parsing would drop the first
+    // path segment while the raw scoped path keeps it. Reject rather than let
+    // the scoped-URL consumers disagree on the canonical path.
+    for (const rawUrl of [
+      "/__openclaw__/cap/token//__openclaw__/canvas/file.txt",
+      "/__openclaw__/cap/token///__openclaw__/canvas/file.txt",
+      "/__openclaw__/cap/token/\\__openclaw__/canvas/file.txt",
+    ]) {
+      const normalized = normalizePluginNodeCapabilityScopedUrl(rawUrl);
+      expect(normalized.scopedPath).toBe(true);
+      expect(normalized.malformedScopedPath).toBe(true);
+      expect(normalized.rewrittenUrl).toBeUndefined();
+    }
+  });
+
   test("marks malformed request targets without throwing", () => {
     for (const rawUrl of ["//", "///", "//${jndi:ldap://example}.action"]) {
       const normalized = normalizePluginNodeCapabilityScopedUrl(rawUrl);
