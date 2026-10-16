@@ -128,15 +128,7 @@ describe("QA gateway fixture error composition", () => {
         let socket: Socket | undefined;
         let peer: Duplex | undefined;
         let serverJoined = false;
-        let removal: Promise<void> | undefined;
-        const remove = fs.rm.bind(fs);
-        vi.spyOn(fs, "rm").mockImplementation((target, options) => {
-          const operation = remove(target, options);
-          if (target === workspaceRoot) {
-            removal = operation;
-          }
-          return operation;
-        });
+        const remove = vi.spyOn(fs, "rm");
         vi.doMock(
           "../e2e/qa-lab/runtime/paired-node-worker-wire-fixture.js",
           async (importOriginal) => {
@@ -228,7 +220,7 @@ describe("QA gateway fixture error composition", () => {
           // Import/publication failure also ends readiness; neither guarantees a writer existed.
           await Promise.race([cleanupStarted.promise, operation]);
           signal.throwIfAborted();
-          await removal;
+          expect(remove.mock.calls.some(([target]) => target === workspaceRoot)).toBe(false);
           expect(serverJoined).toBe(false);
           await expect(fs.stat(workspaceRoot)).resolves.toBeDefined();
         } finally {
