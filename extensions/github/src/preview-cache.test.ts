@@ -89,7 +89,7 @@ describe("GitHub preview decoration cache", () => {
           avatarStarted.resolve();
           const signal = init?.signal;
           return new Promise<Response>((resolve, reject) => {
-            const onAbort = () => reject(signal?.reason);
+            const onAbort = () => reject(new DOMException("Aborted", "AbortError"));
             signal?.addEventListener("abort", onAbort, { once: true });
             void avatar.promise.then((response) => {
               signal?.removeEventListener("abort", onAbort);
