@@ -11,7 +11,7 @@ export type ChatPage = ChatPageHost & {
   readonly sessionSplitAvailable: boolean;
 };
 
-export const ChatPageView = defineSolidBridge<ChatPageProps>(
+defineSolidBridge<ChatPageProps>(
   "openclaw-chat-page",
   (props, host) => {
     const application = untrack(() => props.context ?? useApplication());

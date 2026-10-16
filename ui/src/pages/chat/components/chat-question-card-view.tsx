@@ -1,4 +1,4 @@
-import { createEffect, lazy, Loading, onCleanup } from "solid-js";
+import { createEffect, createMemo, lazy, Loading, onCleanup } from "solid-js";
 import {
   isOptionalElementDefined,
   createLazyCustomElementRequests,
@@ -38,24 +38,23 @@ export const ChatQuestionCard = defineSolidBridge<CardProps>(
     onCleanup(() => {
       loader.requestWhileActive(questionPanelElement, false);
     });
-    const loaded = () => {
-      loadState.revision();
-      return isOptionalElementDefined(questionPanelElement);
-    };
-    const failure = () => {
+    const view = createMemo(() => {
       const value = loadState.read();
-      return value?.status === "error" ? value : undefined;
-    };
+      return {
+        loaded: isOptionalElementDefined(questionPanelElement),
+        failure: value?.status === "error" ? value : undefined,
+      };
+    });
     return (
       <>
         {props.props && (
           <Loading fallback={<LoadingState />}>
-            {loaded() ? (
+            {view().loaded ? (
               <QuestionPanel props={props.props} />
-            ) : failure() ? (
+            ) : view().failure ? (
               <LazyViewError
-                error={failure()?.error}
-                stale={failure()?.stale}
+                error={view().failure?.error}
+                stale={view().failure?.stale}
                 subtitle={questionPanelElement.label}
                 onRetry={() => loader.retry()}
               />

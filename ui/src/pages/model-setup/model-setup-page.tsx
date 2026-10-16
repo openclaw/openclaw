@@ -11,7 +11,7 @@ export function ModelSetupPageBody(props: ModelSetupPageProps & { host: HTMLElem
     <ModelSetupView
       {...current()}
       revision={setup.revision}
-      login={<ModelProviderLoginView controller={setup.login} revision={setup.revision} />}
+      login={<ModelProviderLoginView controller={setup.login} />}
     />
   );
 }

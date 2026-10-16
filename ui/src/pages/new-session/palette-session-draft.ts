@@ -214,7 +214,7 @@ export class PaletteSessionDraft {
           isConnected: this.element.isConnected,
         }),
         {
-          requestUpdate: this.callbacks.changed,
+          changed: this.callbacks.changed,
           updateComplete: this.callbacks.updateComplete,
           onMessageChange: (message) => this.callbacks.onMessageChange?.(message),
           querySelector: (selector) => this.element.querySelector(selector),
@@ -240,7 +240,7 @@ export class PaletteSessionDraft {
     this.coldSubmit = undefined;
     this.draft.place.resetDraft();
     this.draft.submission.resetDraft();
-    this.draft.place.setAgentsHydrated(this.draft.agentsReady());
+    this.draft.place.agentsHydrated = this.draft.agentsReady();
     this.preferences.begin();
     this.draft.place.adoptAgentDefaults();
     this.callbacks.changed();
@@ -393,7 +393,7 @@ export class PaletteSessionDraft {
     const agentId = preference?.agentId ?? defaultAgent;
     this.data = { ...this.data, agentId, requestedAgentId: agentId };
     this.draft.place.resetDraft();
-    this.draft.place.setAgentsHydrated(this.draft.agentsReady());
+    this.draft.place.agentsHydrated = this.draft.agentsReady();
     this.draft.place.adoptAgentDefaults();
     this.draft.place.restorePreferenceSelections();
   }

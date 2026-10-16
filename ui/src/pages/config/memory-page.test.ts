@@ -786,3 +786,115 @@ describe("MemorySettingsPage dreaming support", () => {
     },
   );
 });
+
+describe("plugin-owned Dreaming settings entrypoint", () => {
+  it.each([
+    { configOwner: "custom-memory", catalog: "unavailable" },
+    { configOwner: "memory-core", catalog: "same-ID override" },
+  ])(
+    "keeps the complete presentation available for $configOwner with an unknown schema and $catalog catalog",
+    async ({ configOwner, catalog }) => {
+      const schema = deferred<unknown>();
+      const patchForm = vi.fn();
+      const { element, runtimeConfig } = createPage({
+        configObject: {
+          plugins: {
+            slots: { memory: configOwner },
+            entries: {
+              [configOwner]: {
+                config: { dreaming: { phases: { light: { limit: 0, enabled: false } } } },
+              },
+            },
+          },
+        },
+        listCatalog: () =>
+          catalog === "unavailable"
+            ? Promise.reject(new Error("catalog unavailable"))
+            : Promise.resolve({
+                plugins: [{ ...engine("memory-core", true, "Local Memory"), origin: "local" }],
+              }),
+        lookupSchemaPath: () => schema.promise,
+        patchForm,
+      });
+      mountMemoryPage(element);
+      try {
+        const frequency = element.querySelector<HTMLInputElement>(
+          'input[aria-label="Dreaming frequency"]',
+        );
+        expect(frequency).not.toBeNull();
+        expect(element.textContent).toContain(configOwner);
+        expect(element.textContent).toContain("REM phase");
+        const limit = element.querySelector<HTMLInputElement>('input[aria-label="Limit"]');
+        expect(limit?.value).toBe("0");
+        expect(patchForm).not.toHaveBeenCalled();
+        if (!frequency) {
+          throw new Error("Missing Dreaming frequency");
+        }
+        frequency.value = "0 4 * * *";
+        frequency.dispatchEvent(new Event("change"));
+        expect(patchForm).toHaveBeenLastCalledWith(
+          ["plugins", "entries", configOwner, "config", "dreaming", "frequency"],
+          "0 4 * * *",
+        );
+        frequency.value = "";
+        frequency.dispatchEvent(new Event("change"));
+        expect(runtimeConfig.removeFormValue).toHaveBeenCalledWith([
+          "plugins",
+          "entries",
+          configOwner,
+          "config",
+          "dreaming",
+          "frequency",
+        ]);
+        schema.resolve({ schema: { type: "object", additionalProperties: false }, children: [] });
+        await waitForSolid(() =>
+          expect(element.textContent).toContain("Not available for this engine"),
+        );
+        expect(element.querySelector('input[aria-label="Dreaming frequency"]')).toBeNull();
+      } finally {
+        schema.resolve({ type: "object" });
+        element.remove();
+      }
+    },
+  );
+
+  it.each(["owner", "disconnect", "read-only", "unmount"])(
+    "rejects an already mounted edit after %s changes",
+    async (change) => {
+      const patchForm = vi.fn();
+      const { element, runtimeConfig, setPhase, setScopes } = createPage({
+        configObject: {},
+        patchForm,
+      });
+      mountMemoryPage(element);
+      try {
+        await waitForSolid(() =>
+          expect(element.querySelector('input[aria-label="Dreaming frequency"]')).not.toBeNull(),
+        );
+        const input = element.querySelector<HTMLInputElement>(
+          'input[aria-label="Dreaming frequency"]',
+        );
+        if (!input) {
+          throw new Error("Missing Dreaming frequency");
+        }
+        if (change === "owner") {
+          runtimeConfig.state.configForm = { plugins: { slots: { memory: "custom-memory" } } };
+        } else if (change === "disconnect") {
+          setPhase("disconnected");
+        } else if (change === "read-only") {
+          setScopes(["operator.read"]);
+        } else {
+          element.remove();
+        }
+        input.value = "0 5 * * *";
+        input.dispatchEvent(new Event("change"));
+        expect(patchForm).not.toHaveBeenCalled();
+        expect(runtimeConfig.removeFormValue).not.toHaveBeenCalled();
+      } finally {
+        if (element.isConnected) {
+          element.remove();
+        }
+      }
+    },
+  );
+});

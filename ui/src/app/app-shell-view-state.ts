@@ -50,9 +50,8 @@ export interface ShellViewHost extends ShellLazyOverlayHost {
   readonly desktopNavigationExpanded: boolean;
   readonly execApprovalElement: OptionalCustomElement;
   readonly onboardingMemoryImportElement: OptionalCustomElement;
-  readonly nativeHistoryState: NativeHistoryState;
+  readonly nativeHistoryState: () => NativeHistoryState;
   readonly navDrawerOpen: boolean;
-  navResizing: boolean;
   readonly shellLayout: ShellLayoutOwner;
   readonly navigationSidebar: HTMLElement;
   readonly onboardingMode: boolean;

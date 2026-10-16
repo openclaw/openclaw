@@ -104,7 +104,7 @@ function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
       if (current.mode === "closed") {
         cancel();
         setError(null);
-        return;
+        return undefined;
       }
       document.addEventListener("keydown", keydown, true);
       if (current.key !== previous?.key && !current.loaded) {

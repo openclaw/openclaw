@@ -1,4 +1,4 @@
-import { createMemo, createRenderEffect, createSignal, For, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { registerMcpEnglish } from "../i18n/locales/en-mcp.ts";
 import { resolveEditableSnapshotConfig } from "../lib/config/config-state-model.ts";
@@ -30,7 +30,7 @@ import {
   SettingsSection,
   SettingsStatus,
 } from "./solid/settings-ui.tsx";
-import { WizardLogin, WizardLoginController } from "./wizard-login-controller.tsx";
+import { createWizardLogin, WizardLogin } from "./wizard-login-controller.tsx";
 
 registerMcpEnglish();
 
@@ -73,29 +73,26 @@ export function McpServersCard(props: McpServersCardProps) {
     return state;
   };
   let active = true;
-  const login = new WizardLoginController(
-    { requestUpdate: invalidate },
-    {
-      getClient: () => context.gateway.snapshot.client ?? null,
-      getAgentId: () => null,
-      onClose: () => login.reset(),
-      requestFailedMessage: () => t("mcpServers.signInFailed"),
-      sessionExpiredMessage: () => t("mcpServers.signInExpired"),
-    },
-  );
+  const login = createWizardLogin({
+    getClient: () => context.gateway.snapshot.client ?? null,
+    getAgentId: () => null,
+    onClose: () => login.reset(),
+    requestFailedMessage: () => t("mcpServers.signInFailed"),
+    sessionExpiredMessage: () => t("mcpServers.signInExpired"),
+  });
   void context.runtimeConfig.ensureLoaded().catch((error: unknown) => {
     state.message = { kind: "error", text: formatUiError(error) };
     invalidate();
   });
   const hello = createMemo(() => gateway.read().snapshot.hello);
-  createRenderEffect(hello, () => {
+  // A new transport retires the previous sign-in before another interaction can start one.
+  createEffect(hello, () => {
     login.reset();
   });
   const stopSelection = context.agentSelection.subscribe(() => login.reset());
   onCleanup(() => {
     active = false;
     stopSelection();
-    login.reset();
   });
 
   const mutationBlockedReason = (): string | null => {
@@ -110,7 +107,7 @@ export function McpServersCard(props: McpServersCardProps) {
   };
   const canMutate = () => {
     revision();
-    return mutationBlockedReason() === null && login.runner.state.phase === "idle";
+    return mutationBlockedReason() === null && login.state().phase === "idle";
   };
   const signIn = (server: McpServerSummary) => {
     if (
@@ -357,7 +354,6 @@ export function McpServersCard(props: McpServersCardProps) {
       </div>
       <WizardLogin
         controller={login}
-        revision={revision}
         options={{ doneMessage: t("mcpServers.authenticationSaved") }}
       />
     </openclaw-mcp-servers-card>

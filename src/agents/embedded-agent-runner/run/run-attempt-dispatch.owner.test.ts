@@ -63,6 +63,21 @@ vi.mock("../../runtime-plan/build.js", () => ({
 
 afterEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
 
+function backend(id: string, workdir: string, runtimeId = id) {
+  return {
+    id,
+    runtimeId,
+    runtimeLabel: "Synthetic sandbox",
+    workdir,
+    buildExecSpec: async () => {
+      throw new Error("unexpected exec");
+    },
+    runShellCommand: async () => {
+      throw new Error("unexpected shell");
+    },
+  };
+}
+
 it.each(["settled", "failed", "revoked", "unsandboxed"] as const)(
   "settles attribution before a writable sandbox setup (%s)",
   async (outcome) => {
@@ -84,18 +99,7 @@ it.each(["settled", "failed", "revoked", "unsandboxed"] as const)(
       const setupFile = path.join(state.workspaceDir, "setup.txt");
       const factory = vi.fn(async () => {
         await fs.writeFile(setupFile, "sandbox setup");
-        return {
-          id: "baseline-fixture",
-          runtimeId: "baseline-fixture",
-          runtimeLabel: "Baseline fixture",
-          workdir: "/workspace",
-          buildExecSpec: async () => {
-            throw new Error("unexpected exec");
-          },
-          runShellCommand: async () => {
-            throw new Error("unexpected shell");
-          },
-        };
+        return backend("baseline-fixture", "/workspace");
       });
       const restoreBackend = registerSandboxBackend("baseline-fixture", factory);
       const admission = prepareSystemAgentRunAdmission(config, "baseline", "main", "test");
@@ -149,10 +153,10 @@ it.each(["settled", "failed", "revoked", "unsandboxed"] as const)(
 );
 
 type DispatchCase = {
-  agentId: string;
+  agentId?: string;
   sandboxSessionKey?: string;
-  remoteSkills: boolean;
-  skillCatalog: "host" | "sandbox" | "none";
+  remoteSkills?: boolean;
+  skillCatalog?: "host" | "sandbox" | "none";
   oneShotCliRun?: boolean;
   managedWorkspace?: boolean;
   realManagedWorkspace?: boolean;
@@ -164,72 +168,19 @@ type DispatchCase = {
 };
 
 const dispatchCases: DispatchCase[] = [
-  {
-    agentId: "main",
-    sandboxSessionKey: undefined,
-    remoteSkills: false,
-    skillCatalog: "none",
-    cancelTrajectory: true,
-  },
+  { agentId: "main", cancelTrajectory: true },
   ...(["settled", "failed", "revoked"] as const).map((diffBaseline) => ({
-    agentId: "work",
     sandboxSessionKey: "global",
-    remoteSkills: false,
-    skillCatalog: "none" as const,
     diffBaseline,
   })),
-  {
-    agentId: "main",
-    sandboxSessionKey: undefined,
-    remoteSkills: false,
-    skillCatalog: "host" as const,
-    oneShotCliRun: undefined,
-    configuredContextEngine: true,
-  },
-  {
-    agentId: "work",
-    sandboxSessionKey: "global",
-    remoteSkills: false,
-    skillCatalog: "sandbox" as const,
-    oneShotCliRun: true,
-  },
-  {
-    agentId: "work",
-    sandboxSessionKey: "agent:main:policy",
-    remoteSkills: false,
-    skillCatalog: "none" as const,
-    oneShotCliRun: false,
-  },
-  {
-    agentId: "work",
-    sandboxSessionKey: undefined,
-    remoteSkills: false,
-    skillCatalog: "none" as const,
-    oneShotCliRun: false,
-    managedWorkspace: true,
-  },
-  {
-    agentId: "work",
-    sandboxSessionKey: undefined,
-    remoteSkills: false,
-    skillCatalog: "none" as const,
-    oneShotCliRun: false,
-    managedWorkspace: true,
-    realManagedWorkspace: true,
-  },
-  {
-    agentId: "main",
-    sandboxSessionKey: undefined,
-    remoteSkills: true,
-    skillCatalog: "none" as const,
-    oneShotCliRun: false,
-    retirePlacement: true,
-  },
+  { agentId: "main", skillCatalog: "host", configuredContextEngine: true },
+  { sandboxSessionKey: "global", skillCatalog: "sandbox", oneShotCliRun: true },
+  { sandboxSessionKey: "agent:main:policy", oneShotCliRun: false },
+  { oneShotCliRun: false, managedWorkspace: true },
+  { oneShotCliRun: false, managedWorkspace: true, realManagedWorkspace: true },
+  { agentId: "main", remoteSkills: true, oneShotCliRun: false, retirePlacement: true },
   ...(["allowed", "outside"] as const).map((hostMedia) => ({
-    agentId: "work",
-    sandboxSessionKey: undefined,
     remoteSkills: true,
-    skillCatalog: "none" as const,
     oneShotCliRun: false,
     managedWorkspace: true,
     realManagedWorkspace: true,
@@ -240,10 +191,10 @@ const dispatchCases: DispatchCase[] = [
 it.each(dispatchCases)(
   "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, $skillCatalog skills, remote skills $remoteSkills, one-shot $oneShotCliRun, real managed workspace $realManagedWorkspace, host media $hostMedia, retired placement $retirePlacement, baseline $diffBaseline, cancelled trajectory $cancelTrajectory",
   async ({
-    agentId,
+    agentId = "work",
     sandboxSessionKey,
-    remoteSkills,
-    skillCatalog,
+    remoteSkills = false,
+    skillCatalog = "none",
     oneShotCliRun,
     managedWorkspace,
     realManagedWorkspace,
@@ -361,18 +312,7 @@ it.each(dispatchCases)(
         if (realManagedWorkspace) {
           throw new Error("LOCAL_DOCKER_UNAVAILABLE");
         }
-        return {
-          id: "owner-fixture",
-          runtimeId: scopeKey,
-          runtimeLabel: "Synthetic sandbox",
-          workdir: "/workspace",
-          buildExecSpec: async () => {
-            throw new Error("unexpected exec");
-          },
-          runShellCommand: async () => {
-            throw new Error("unexpected shell command");
-          },
-        };
+        return backend("owner-fixture", "/workspace", scopeKey);
       });
       const restoreSandbox = registerSandboxBackend(
         realManagedWorkspace ? "docker" : "owner-fixture",
@@ -606,13 +546,7 @@ it.each(dispatchCases)(
         : null;
       if (imagePath && remoteSandbox) {
         remoteSandbox.backend = {
-          id: "remote-fixture",
-          runtimeId: "remote-fixture",
-          runtimeLabel: "Remote fixture",
-          workdir: "/native/guest",
-          buildExecSpec: async () => {
-            throw new Error("unexpected remote process");
-          },
+          ...backend("remote-fixture", "/native/guest"),
           runShellCommand: remoteBridgeCommand,
         };
         remoteSandbox.fsBridge = createSandboxFsBridge({
