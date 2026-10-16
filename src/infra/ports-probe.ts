@@ -3,6 +3,7 @@ import { isErrno, toErrorObject } from "./errors.js";
 import type { PortUsageStatus } from "./ports-types.js";
 
 const PORT_PROBE_HOSTS = ["127.0.0.1", "0.0.0.0", "::1", "::"];
+const DEFAULT_TCP_PROBE_TIMEOUT_MS = 250;
 export const LOOPBACK_PORT_PROBE_HOSTS = ["127.0.0.1"] as const;
 
 type ListenOnPortParams = {
@@ -68,8 +69,12 @@ export async function probeTcpListener(
   port: number,
   host: string,
   signal?: AbortSignal,
+  timeoutMs = DEFAULT_TCP_PROBE_TIMEOUT_MS,
 ): Promise<PortUsageStatus> {
   signal?.throwIfAborted();
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return "unknown";
+  }
   return await new Promise<PortUsageStatus>((resolve) => {
     const socket = net.connect({ host, port });
     let result: PortUsageStatus = "unknown";
@@ -83,7 +88,7 @@ export async function probeTcpListener(
       result = isErrno(error) && error.code === "ECONNREFUSED" ? "free" : "unknown";
       destroy();
     });
-    socket.setTimeout(250, destroy);
+    socket.setTimeout(timeoutMs, destroy);
     // Closing, not just requesting destruction, releases the probe's I/O and timer.
     socket.once("close", () => {
       signal?.removeEventListener("abort", destroy);
@@ -105,12 +110,24 @@ async function probePortOnHost(
   port: number,
   host: string,
   signal?: AbortSignal,
+  probeDeadlineMs?: number,
+  remainingHosts = 1,
 ): Promise<PortUsageStatus | "skip"> {
   try {
     await tryListenOnPort({ port, host, exclusive: true, ...(signal ? { signal } : {}) });
     // A successful scoped bind can coexist with a wildcard listener on macOS.
     // Confirm the endpoint before declaring it free, even without lsof or ss.
-    const confirmed = await probeTcpListener(port, host, signal);
+    const timeoutMs =
+      probeDeadlineMs === undefined
+        ? undefined
+        : Math.floor((probeDeadlineMs - Date.now()) / remainingHosts);
+    if (timeoutMs !== undefined && timeoutMs <= 0) {
+      return "unknown";
+    }
+    const confirmed =
+      timeoutMs === undefined
+        ? await probeTcpListener(port, host, signal)
+        : await probeTcpListener(port, host, signal, timeoutMs);
     // With IPv6 disabled on Linux, `::` still binds but its confirming connect targets the
     // missing `::1` and cannot be answered. The successful wildcard bind is then conclusive.
     if (confirmed === "unknown" && host === "::" && (await isIpv6LoopbackUnavailable(signal))) {
@@ -134,11 +151,22 @@ export async function probePortUsage(
   port: number,
   probeHosts: readonly string[] = PORT_PROBE_HOSTS,
   signal?: AbortSignal,
+  probeDeadlineMs?: number,
 ): Promise<PortUsageStatus> {
   signal?.throwIfAborted();
   let sawUnknown = false;
-  for (const host of probeHosts) {
-    const result = await probePortOnHost(port, host, signal);
+  for (const [index, host] of probeHosts.entries()) {
+    if (probeDeadlineMs !== undefined && Date.now() >= probeDeadlineMs) {
+      sawUnknown = true;
+      break;
+    }
+    const result = await probePortOnHost(
+      port,
+      host,
+      signal,
+      probeDeadlineMs,
+      probeHosts.length - index,
+    );
     signal?.throwIfAborted();
     if (result === "busy") {
       return "busy";

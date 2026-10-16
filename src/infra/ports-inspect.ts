@@ -465,6 +465,8 @@ async function readWindowsNetstatEntries<T extends PortListener>(
 export async function inspectPortUsage(
   port: number,
   options?: { probeHosts?: readonly string[]; signal?: AbortSignal },
+  /** Absolute wall-clock deadline shared across required host probes. */
+  probeDeadlineMs?: number,
 ): Promise<PortUsage> {
   const signal = options?.signal;
   signal?.throwIfAborted();
@@ -475,7 +477,7 @@ export async function inspectPortUsage(
   if (process.platform !== "win32") {
     await enrichUnixListenerProcessInfo(result.entries, signal);
   }
-  return buildPortUsage(port, result, options?.probeHosts, signal);
+  return buildPortUsage(port, result, options?.probeHosts, signal, probeDeadlineMs);
 }
 
 async function buildPortUsage(
@@ -483,14 +485,19 @@ async function buildPortUsage(
   result: SocketReadResult<PortListener>,
   probeHosts?: readonly string[],
   signal?: AbortSignal,
+  probeDeadlineMs?: number,
 ): Promise<PortUsage> {
   signal?.throwIfAborted();
   let listeners = result.entries;
+  const probe = (hosts?: readonly string[]) =>
+    probeDeadlineMs === undefined
+      ? probePortUsage(port, hosts, signal)
+      : probePortUsage(port, hosts, signal, probeDeadlineMs);
   const status: PortUsageStatus = probeHosts
-    ? await probePortUsage(port, probeHosts, signal)
+    ? await probe(probeHosts)
     : listeners.length > 0
       ? "busy"
-      : await probePortUsage(port, undefined, signal);
+      : await probe(undefined);
   signal?.throwIfAborted();
   if (status !== "busy") {
     listeners = [];

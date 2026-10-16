@@ -3,7 +3,7 @@ import { describe, expect, it, vi, type TestContext } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { isErrno } from "./errors.js";
-import { probePortUsage, tryListenOnPort } from "./ports-probe.js";
+import { probePortUsage, probeTcpListener, tryListenOnPort } from "./ports-probe.js";
 
 async function withListeningServer(
   skip: TestContext["skip"],
@@ -133,6 +133,48 @@ describe("tryListenOnPort", () => {
 });
 
 describe("probePortUsage", () => {
+  it("uses the remaining probe budget for a delayed connection refusal", async () => {
+    vi.useFakeTimers();
+    const connect = vi.spyOn(net, "connect").mockImplementation(() => {
+      const socket = new net.Socket();
+      const timers: ReturnType<typeof setTimeout>[] = [];
+      socket.setTimeout = ((timeout: number, callback?: () => void) => {
+        timers.push(setTimeout(() => callback?.(), timeout));
+        return socket;
+      }) as net.Socket["setTimeout"];
+      socket.destroy = (() => {
+        for (const timer of timers) {
+          clearTimeout(timer);
+        }
+        queueMicrotask(() => socket.emit("close"));
+        return socket;
+      }) as net.Socket["destroy"];
+      timers.push(
+        setTimeout(
+          () =>
+            socket.emit(
+              "error",
+              Object.assign(new Error("connection refused"), { code: "ECONNREFUSED" }),
+            ),
+          400,
+        ),
+      );
+      return socket;
+    });
+    try {
+      const defaultProbe = probeTcpListener(18789, "127.0.0.1");
+      await vi.advanceTimersByTimeAsync(250);
+      await expect(defaultProbe).resolves.toBe("unknown");
+
+      const extendedProbe = probeTcpListener(18789, "127.0.0.1", undefined, 1_000);
+      await vi.advanceTimersByTimeAsync(400);
+      await expect(extendedProbe).resolves.toBe("free");
+    } finally {
+      connect.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it.for(["127.0.0.1", "127.0.0.2"])(
     "reports a listener on %s as busy and respects the requested interface",
     async (host, { skip }) => {

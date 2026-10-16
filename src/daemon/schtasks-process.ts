@@ -8,7 +8,7 @@ import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budge
 import { captureStalledGatewayStartup } from "../infra/gateway-startup-owner.js";
 import { tryAcquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
-import type { PortListener } from "../infra/ports-types.js";
+import type { PortListener, PortUsageStatus } from "../infra/ports-types.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
@@ -718,12 +718,24 @@ export async function waitForGatewayPortRelease(
   probeHosts: readonly string[],
 ): Promise<boolean> {
   const deadline = Date.now() + 5_000;
+  const inspectionOptions = probeHosts.length > 0 ? { probeHosts } : undefined;
+  let lastStatus: PortUsageStatus = "unknown";
   while (Date.now() < deadline) {
-    const diagnostics = await inspectPortUsage(port, { probeHosts }).catch(() => null);
-    if (diagnostics?.status === "free") {
+    const diagnostics = await inspectPortUsage(port, inspectionOptions, deadline).catch(() => null);
+    lastStatus = diagnostics?.status ?? "unknown";
+    if (lastStatus === "free") {
       return true;
     }
-    await sleep(250);
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      break;
+    }
+    await sleep(Math.min(250, remainingMs));
+  }
+  if (lastStatus === "unknown") {
+    throw new Error(
+      `gateway port ${port} could not be confirmed free because the required probe remained inconclusive within the five-second settlement window. Run "openclaw gateway status --deep" to diagnose.`,
+    );
   }
   return false;
 }

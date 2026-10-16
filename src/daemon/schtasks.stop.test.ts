@@ -11,6 +11,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { waitForGatewayPortRelease } from "./schtasks-process.js";
 import {
   GATEWAY_OWNER,
   GATEWAY_PORT,
@@ -121,6 +122,15 @@ function prepareDoctorAdmission(env: GatewayFixture["env"]) {
 }
 
 describe("Scheduled Task stop/restart cleanup", () => {
+  it("keeps inconclusive gateway port settlement distinct from a busy port", async () => {
+    inspectPortUsageMock.mockResolvedValue({ ...freePortUsage(), status: "unknown" });
+
+    await expect(waitForGatewayPortRelease(GATEWAY_PORT, ["127.0.0.1"])).rejects.toThrow(
+      "could not be confirmed free",
+    );
+    expect(inspectPortUsageMock).toHaveBeenCalled();
+  });
+
   it("restores an ownerless task in state 4 while revalidating Doctor's state admission", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
       const admission = prepareDoctorAdmission(env);
