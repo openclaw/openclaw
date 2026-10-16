@@ -5,33 +5,20 @@ import { generateExportHtmlVendorAssets } from "../../../scripts/runtime-postbui
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { buildCommandTextFromArgs, findCommandByNativeName } from "../commands-registry.js";
 import { buildExportSessionReply } from "./commands-export-session.js";
-import type { HandleCommandsParams } from "./commands-types.js";
+import { commandFixture } from "./commands-handler-fixture.test-support.js";
 
 const hoisted = await vi.hoisted(async () => {
   const { createExportCommandSessionMocks } = await import("./commands-export-test-mocks.js");
   const promptBundle = {
     systemPrompt: "system prompt",
     tools: [],
-    skillsPrompt: "",
-    bootstrapFiles: [],
-    injectedFiles: [],
-    sandboxRuntime: { sandboxed: false, mode: "off" },
   };
   return {
     ...createExportCommandSessionMocks(vi),
     promptBundle,
     resolveCommandsSystemPromptBundleMock: vi.fn(async () => promptBundle),
-    writeSessionExportFileMock: vi.fn(
-      async (_params: {
-        workspaceDir: string;
-        requestedPath?: string;
-        defaultFileName: string;
-        contents: string;
-      }) => ({
-        absolutePath: "/tmp/workspace/openclaw-session.html",
-        displayPath: "openclaw-session.html",
-      }),
-    ),
+    writeSessionExportFileMock:
+      vi.fn<typeof import("./commands-export-session-file.js").writeSessionExportFile>(),
     migrateSessionEntriesMock: vi.fn((_entries: unknown[]) => undefined),
     readAcpSessionMetaForEntryAsyncMock: vi.fn<
       (params: { sessionKey: string; entry?: { sessionId?: string } }) => Promise<unknown>
@@ -85,25 +72,6 @@ vi.mock("../../agents/sessions/session-manager.js", async (importOriginal) => {
   };
 });
 
-vi.mock("node:fs", async () => {
-  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-  const mockedFs = {
-    ...actual,
-    readFileSync: vi.fn((filePath: string) => {
-      for (const [suffix, contents] of hoisted.exportHtmlTemplateContents) {
-        if (filePath.endsWith(suffix)) {
-          return contents;
-        }
-      }
-      return actual.readFileSync(filePath, "utf8");
-    }),
-  };
-  return {
-    ...mockedFs,
-    default: mockedFs,
-  };
-});
-
 vi.mock("node:fs/promises", async () => {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
   const mockedFsPromises = {
@@ -123,40 +91,8 @@ vi.mock("node:fs/promises", async () => {
   };
 });
 
-function makeParams(): HandleCommandsParams {
-  return {
-    cfg: {},
-    ctx: {
-      SessionKey: "agent:main:slash-session",
-    },
-    command: {
-      commandBodyNormalized: "/export-session",
-      isAuthorizedSender: true,
-      senderIsOwner: true,
-      senderId: "sender-1",
-      channel: "quietchat",
-      surface: "quietchat",
-      ownerList: [],
-      rawBodyNormalized: "/export-session",
-    },
-    sessionEntry: {
-      sessionId: "session-1",
-      updatedAt: 1,
-    },
-    sessionKey: "agent:target:session",
-    agentId: "target",
-    workspaceDir: "/tmp/workspace",
-    directives: {},
-    elevated: { enabled: true, allowed: true, failures: [] },
-    defaultGroupActivation: () => "mention",
-    resolvedVerboseLevel: "off",
-    resolvedReasoningLevel: "off",
-    resolveDefaultThinkingLevel: async () => undefined,
-    provider: "openai",
-    model: "gpt-5.4",
-    contextTokens: 0,
-    isGroup: false,
-  } as unknown as HandleCommandsParams;
+function makeParams() {
+  return commandFixture("/export-session", { ctx: { SessionKey: "agent:main:slash-session" } });
 }
 
 function writtenHtml(): string {
@@ -357,80 +293,65 @@ describe("buildExportSessionReply", () => {
     );
   });
 
-  it("warns when the session only contains user messages (backend-delegated transcript)", async () => {
-    hoisted.loadSessionStoreMock.mockReturnValue({
-      "agent:target:session": {
-        sessionId: "session-1",
-        updatedAt: 1,
-        cliSessionBindings: {
-          "claude-cli": { sessionId: "backend-session-1" },
+  it.each(["cli", "stored-acp", "unreadable-acp", "assistant"] as const)(
+    "handles backend transcript warnings for %s sessions",
+    async (kind) => {
+      hoisted.loadSessionStoreMock.mockReturnValue({
+        "agent:target:session": {
+          sessionId: "session-1",
+          updatedAt: 1,
+          ...(kind === "cli"
+            ? { cliSessionBindings: { "claude-cli": { sessionId: "backend-session-1" } } }
+            : {}),
+          ...(kind === "assistant" ? { acp: acpMetadata } : {}),
         },
-      },
-    });
-    hoisted.sessionTranscriptEvents = [
-      messageEntry("entry-1", { role: "user", content: "hello" }, 0),
-      messageEntry("entry-2", { role: "user", content: "world" }, 1),
-    ];
-
-    const reply = await buildExportSessionReply(makeParams());
-
-    expect(reply.text).toContain("backend runtime");
-    expect(reply.text).toContain("not included in this export");
-    const data = sessionDataFromHtml(writtenHtml());
-    expect(typeof data.warning).toBe("string");
-    expect(data.warning).toContain("backend runtime");
-  });
-
-  it("warns when persisted ACP metadata is stored outside the session entry", async () => {
-    hoisted.readAcpSessionMetaForEntryAsyncMock.mockResolvedValue(acpMetadata);
-    hoisted.sessionTranscriptEvents = userTranscript();
-
-    const reply = await buildExportSessionReply(makeParams());
-
-    expect(hoisted.readAcpSessionMetaForEntryAsyncMock).toHaveBeenCalledWith({
-      cfg: {},
-      sessionKey: "agent:target:session",
-      entry: {
-        sessionId: "session-1",
-        updatedAt: 1,
-      },
-    });
-    expect(reply.text).toContain("backend runtime");
-    expect(sessionDataFromHtml(writtenHtml()).warning).toContain("backend runtime");
-  });
-
-  it("continues exporting when persisted ACP metadata cannot be read", async () => {
-    hoisted.readAcpSessionMetaForEntryAsyncMock.mockImplementation(async () => {
-      throw new Error("state database unavailable");
-    });
-    hoisted.sessionTranscriptEvents = userTranscript();
-
-    const reply = await buildExportSessionReply(makeParams());
-
-    expect(reply.text).toContain("Session exported");
-    expect(reply.text).not.toContain("backend runtime");
-    expect(sessionDataFromHtml(writtenHtml()).warning).toBeUndefined();
-  });
-
-  it("does not warn when the transcript includes assistant messages", async () => {
-    hoisted.loadSessionStoreMock.mockReturnValue({
-      "agent:target:session": {
-        sessionId: "session-1",
-        updatedAt: 1,
-        acp: acpMetadata,
-      },
-    });
-    hoisted.sessionTranscriptEvents = [
-      messageEntry("entry-1", { role: "user", content: "hello" }, 0),
-      messageEntry("entry-2", { role: "assistant", content: "hi" }, 1),
-    ];
-
-    const reply = await buildExportSessionReply(makeParams());
-
-    expect(reply.text).not.toContain("backend runtime");
-    expect(reply.text).not.toContain("not included in this export");
-    expect(sessionDataFromHtml(writtenHtml()).warning).toBeUndefined();
-  });
+      });
+      if (kind === "stored-acp") {
+        hoisted.readAcpSessionMetaForEntryAsyncMock.mockResolvedValue(acpMetadata);
+      } else if (kind === "unreadable-acp") {
+        hoisted.readAcpSessionMetaForEntryAsyncMock.mockRejectedValueOnce(
+          new Error("state database unavailable"),
+        );
+      }
+      hoisted.sessionTranscriptEvents = userTranscript();
+      if (kind === "cli" || kind === "assistant") {
+        hoisted.sessionTranscriptEvents.push(
+          messageEntry(
+            "entry-2",
+            {
+              role: kind === "cli" ? "user" : "assistant",
+              content: kind === "cli" ? "world" : "hi",
+            },
+            1,
+          ),
+        );
+      }
+      const reply = await buildExportSessionReply(makeParams());
+      const warning = sessionDataFromHtml(writtenHtml()).warning;
+      if (kind === "cli" || kind === "stored-acp") {
+        expect(reply.text).toContain("backend runtime");
+        expect(warning).toContain("backend runtime");
+        if (kind === "cli") {
+          expect(reply.text).toContain("not included in this export");
+          expect(typeof warning).toBe("string");
+        } else {
+          expect(hoisted.readAcpSessionMetaForEntryAsyncMock).toHaveBeenCalledWith({
+            cfg: {},
+            sessionKey: "agent:target:session",
+            entry: { sessionId: "session-1", updatedAt: 1 },
+          });
+        }
+      } else {
+        expect(reply.text).not.toContain("backend runtime");
+        expect(warning).toBeUndefined();
+        if (kind === "unreadable-acp") {
+          expect(reply.text).toContain("Session exported");
+        } else {
+          expect(reply.text).not.toContain("not included in this export");
+        }
+      }
+    },
+  );
 });
 
 await import("./commands-export-session-file.test-support.js");

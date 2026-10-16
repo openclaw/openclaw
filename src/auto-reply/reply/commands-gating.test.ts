@@ -6,9 +6,9 @@ import type { MsgContext } from "../templating.js";
 import { handleBashChatCommand } from "./bash-command.js";
 import { requireGatewayClientScope } from "./command-gates.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
+import { commandFixture } from "./commands-handler-fixture.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import type { ConfigSnapshotMock } from "./commands.test-harness.js";
-import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() =>
   vi.fn(async () => ({ valid: true, parsed: {} })),
@@ -97,17 +97,6 @@ vi.mock("../../config/config.js", () => {
     });
     const afterWrite = params.afterWrite ?? { mode: "auto" };
     await replaceConfigFileMock({ nextConfig: transformed.nextConfig, afterWrite });
-    return {
-      path: snapshot.path ?? "/tmp/openclaw.json",
-      previousHash,
-      persistedHash: "persisted-hash",
-      snapshot,
-      nextConfig: transformed.nextConfig,
-      result: transformed.result,
-      attempts: 1,
-      afterWrite,
-      followUp: { action: "none" },
-    };
   };
   return {
     readConfigFileSnapshot: readConfigFileSnapshotMock,
@@ -157,46 +146,36 @@ vi.mock("./config-write-authorization.js", () => ({
 }));
 
 function buildParams(commandBody: string, cfg: OpenClawConfig): HandleCommandsParams {
-  const ctx = {
-    Body: commandBody,
-    CommandBody: commandBody,
-    CommandSource: "text",
-    CommandAuthorized: true,
-    Provider: "whatsapp",
-    Surface: "whatsapp",
-    SessionKey: "agent:main:main",
-  } as MsgContext;
-
-  return {
-    ctx,
-    cfg,
-    command: {
+  return commandFixture(
+    commandBody.trim(),
+    {
+      cfg,
+      ctx: {
+        Body: commandBody,
+        CommandBody: commandBody,
+        CommandSource: "text",
+        CommandAuthorized: true,
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+        SessionKey: "agent:main:main",
+      },
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      workspaceDir: "/tmp",
+      provider: "whatsapp",
+      model: "test-model",
+      sessionEntry: undefined,
+    },
+    {
       surface: "whatsapp",
       channel: "whatsapp",
       channelId: "whatsapp",
-      ownerList: [],
       senderIsOwner: false,
-      isAuthorizedSender: true,
       senderId: "user-1",
-      rawBodyNormalized: commandBody.trim(),
-      commandBodyNormalized: commandBody.trim(),
       from: "user-1",
       to: "bot-1",
     },
-    directives: parseInlineSessionDirectives(""),
-    elevated: { enabled: true, allowed: true, failures: [] },
-    sessionKey: "agent:main:main",
-    agentId: "main",
-    workspaceDir: "/tmp",
-    defaultGroupActivation: () => "mention",
-    resolvedVerboseLevel: "off",
-    resolvedReasoningLevel: "off",
-    resolveDefaultThinkingLevel: async () => undefined,
-    provider: "whatsapp",
-    model: "test-model",
-    contextTokens: 0,
-    isGroup: false,
-  };
+  );
 }
 
 function ownerParams(commandBody: string): HandleCommandsParams {
@@ -236,38 +215,26 @@ describe("command gating", () => {
     getConfigOverridesMock.mockReturnValue({});
   });
 
-  it("blocks disabled bash", async () => {
+  it.each([
+    [false, true, "bash is disabled"],
+    [true, false, "elevated is not available"],
+  ] as const)("blocks bash (enabled=%s, elevated=%s)", async (bash, allowed, expected) => {
     const result = await handleBashChatCommand({
       ctx: {
         Body: "/bash echo hi",
         CommandBody: "/bash echo hi",
         SessionKey: "agent:main:main",
       } as MsgContext,
-      cfg: { commands: { bash: false } } as OpenClawConfig,
-      sessionKey: "agent:main:main",
-      isGroup: false,
-      elevated: { enabled: true, allowed: true, failures: [] },
-    });
-    expect(result.text).toContain("bash is disabled");
-  });
-
-  it("blocks bash when elevated access is unavailable", async () => {
-    const result = await handleBashChatCommand({
-      ctx: {
-        Body: "/bash echo hi",
-        CommandBody: "/bash echo hi",
-        SessionKey: "agent:main:main",
-      } as MsgContext,
-      cfg: { commands: { bash: true } } as OpenClawConfig,
+      cfg: { commands: { bash } },
       sessionKey: "agent:main:main",
       isGroup: false,
       elevated: {
         enabled: true,
-        allowed: false,
-        failures: [{ gate: "allowFrom", key: "tools.elevated.allowFrom.whatsapp" }],
+        allowed,
+        failures: allowed ? [] : [{ gate: "allowFrom", key: "tools.elevated.allowFrom.whatsapp" }],
       },
     });
-    expect(result.text).toContain("elevated is not available");
+    expect(result.text).toContain(expected);
   });
 
   it("blocks a stale owner snapshot before reading or writing config", async () => {
@@ -282,43 +249,26 @@ describe("command gating", () => {
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });
 
-  it("blocks disabled config", async () => {
-    const params = buildParams("/config show", {
+  it.each([
+    ["config", handleConfigCommand],
+    ["debug", handleDebugCommand],
+  ] as const)("blocks disabled %s", async (name, handler) => {
+    const params = buildParams(`/${name} show`, {
       commands: { config: false, debug: false, text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
-    params.command.senderIsOwner = true;
-    const result = await handleConfigCommand(params, true);
-    expect(result?.reply?.text).toContain("/config is disabled");
-  });
-
-  it("blocks disabled debug", async () => {
-    const params = buildParams("/debug show", {
-      commands: { config: false, debug: false, text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
-    params.command.senderIsOwner = true;
-    const result = await handleDebugCommand(params, true);
-    expect(result?.reply?.text).toContain("/debug is disabled");
-  });
-
-  it("blocks authorized non-owners from /config show and /debug show", async () => {
-    const configParams = buildParams("/config show", {
-      commands: { config: true, text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
-    const configResult = await handleConfigCommand(configParams, true);
-    expect(configResult).toEqual({
-      shouldContinue: false,
-      reply: { text: expect.stringContaining("commands.ownerAllowFrom") },
     });
+    params.command.senderIsOwner = true;
+    const result = await handler(params, true);
+    expect(result?.reply?.text).toContain(`/${name} is disabled`);
+  });
 
-    const debugParams = buildParams("/debug show", {
-      commands: { debug: true, text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
-    const debugResult = await handleDebugCommand(debugParams, true);
-    expect(debugResult).toEqual({
+  it.each([
+    ["config", handleConfigCommand],
+    ["debug", handleDebugCommand],
+  ] as const)("blocks authorized non-owners from /%s show", async (name, handler) => {
+    const params = ownerParams(`/${name} show`);
+    params.command.senderIsOwner = false;
+    expect(await handler(params, true)).toEqual({
       shouldContinue: false,
       reply: { text: expect.stringContaining("commands.ownerAllowFrom") },
     });
@@ -447,23 +397,6 @@ describe("command gating", () => {
     expect(output).not.toContain("OPENCLAW_CONFIG_SHOW_CANARY_TOKEN_65623");
   });
 
-  it("redacts secret-shaped values from /config set acknowledgements", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({
-      valid: true,
-      parsed: { gateway: { auth: { mode: "token" } } },
-    });
-    const params = ownerParams(
-      '/config set gateway.auth.token="OPENCLAW_CONFIG_SET_CANARY_TOKEN_65623"',
-    );
-
-    const result = await handleConfigCommand(params, true);
-    const output = result?.reply?.text ?? "";
-
-    expect(output).toContain("Config updated: gateway.auth.token=");
-    expect(output).toContain(REDACTED_SENTINEL);
-    expect(output).not.toContain("OPENCLAW_CONFIG_SET_CANARY_TOKEN_65623");
-  });
-
   it("redacts secret-shaped fields from /debug show replies", async () => {
     getConfigOverridesMock.mockReturnValueOnce({
       gateway: {
@@ -492,17 +425,22 @@ describe("command gating", () => {
     expect(output).not.toContain("OPENCLAW_DEBUG_SHOW_CANARY_BOT_TOKEN_65623");
   });
 
-  it("redacts secret-shaped values from /debug set acknowledgements", async () => {
-    const params = ownerParams(
-      '/debug set gateway.auth.token="OPENCLAW_DEBUG_SET_CANARY_TOKEN_65623"',
-    );
-
-    const result = await handleDebugCommand(params, true);
+  it.each([
+    ["config", handleConfigCommand, "Config updated"],
+    ["debug", handleDebugCommand, "Debug override set"],
+  ] as const)("redacts /%s set acknowledgements", async (name, handler, label) => {
+    if (name === "config") {
+      readConfigFileSnapshotMock.mockResolvedValue({
+        valid: true,
+        parsed: { gateway: { auth: { mode: "token" } } },
+      });
+    }
+    const secret = `OPENCLAW_${name.toUpperCase()}_SET_CANARY_TOKEN_65623`;
+    const result = await handler(ownerParams(`/${name} set gateway.auth.token="${secret}"`), true);
     const output = result?.reply?.text ?? "";
-
-    expect(output).toContain("Debug override set: gateway.auth.token=");
+    expect(output).toContain(`${label}: gateway.auth.token=`);
     expect(output).toContain(REDACTED_SENTINEL);
-    expect(output).not.toContain("OPENCLAW_DEBUG_SET_CANARY_TOKEN_65623");
+    expect(output).not.toContain(secret);
   });
 
   it("blocks disallowed /config set writes", async () => {
