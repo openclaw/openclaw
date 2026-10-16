@@ -2,6 +2,8 @@ import { mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises"
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
+import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import { ZERO_USAGE_FIXTURE } from "../../agents/test-helpers/usage-fixtures.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-transfer-client.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
@@ -12,7 +14,6 @@ import {
 import { parseNodeWorkerWorkspaceExecInput } from "../../worker/node-workspace-protocol.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
-import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import {
   ENVIRONMENT_ID,
@@ -21,6 +22,7 @@ import {
   SESSION_ID,
   SESSION_KEY,
   attachedEnvironment,
+  acknowledgeCompletedWorkerTurn,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   credential,
@@ -47,9 +49,10 @@ describe("current attachments in an active remote placement", () => {
   it.each(["worker-turn", "remote-exec"] as const)(
     "keeps later image and PDF originals readable with %s retention",
     async (executionMode) => {
-      const remote = path.join(await realpath(root), "remote");
-      const local = path.join(await realpath(root), "local");
-      const remoteHome = path.join(await realpath(root), "remote-home");
+      const physicalRoot = await realpath(root);
+      const remote = path.join(physicalRoot, "remote");
+      const local = path.join(physicalRoot, "local");
+      const remoteHome = path.join(physicalRoot, "remote-home");
       await Promise.all([mkdir(remote), mkdir(local), mkdir(remoteHome)]);
       for (const directory of [remote, local]) {
         await writeFile(path.join(directory, "remote-edits.txt"), "preserve me");
@@ -62,24 +65,15 @@ describe("current attachments in an active remote placement", () => {
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==",
         "base64",
       );
-      const savedPdf = await saveMediaBuffer(
-        pdf,
-        "application/pdf",
-        "inbound",
-        pdf.length,
-        "report.pdf",
+      const media = await Promise.all(
+        [
+          { bytes: pdf, contentType: "application/pdf", name: "report.pdf" },
+          { bytes: image, contentType: "image/png", name: "photo.png" },
+        ].map(async ({ bytes, contentType, name }) => ({
+          path: (await saveMediaBuffer(bytes, contentType, "inbound", bytes.length, name)).path,
+          contentType,
+        })),
       );
-      const savedImage = await saveMediaBuffer(
-        image,
-        "image/png",
-        "inbound",
-        image.length,
-        "photo.png",
-      );
-      const media = [
-        { path: savedPdf.path, contentType: "application/pdf" },
-        { path: savedImage.path, contentType: "image/png" },
-      ];
       const recorder = createUserTurnTranscriptRecorder({
         message: buildPersistedUserTurnMessage({ text: "Read both attachments", media }),
         target: { ...sessionTarget, sessionEntry: { sessionId: SESSION_ID, updatedAt: 1 } },
@@ -203,40 +197,15 @@ describe("current attachments in an active remote placement", () => {
             request.onDispatchReady?.();
             const transcriptLeafId = await (
               await openSessionManager()
-            ).appendMessageAsync({
-              role: "assistant",
-              content: [{ type: "text", text: "Read both" }],
-              api: "openai-responses",
-              provider: "openai",
-              model: "gpt-5.6-luna",
-              usage: {
-                input: 1,
-                output: 1,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 2,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-              },
-              stopReason: "stop",
-              timestamp: Date.now(),
-            });
-            await createWorkerSessionPlacementGate(placements).updateAckCursors({
-              claim: request.turnClaim,
-              transcriptSeq: 2,
-              liveSeq: 1,
-            });
-            return {
-              stdout: JSON.stringify({
-                status: "completed",
-                transcriptLeafId,
-                transcriptNextSeq: 3,
+            ).appendMessageAsync(
+              makeAgentAssistantMessage({
+                content: [{ type: "text", text: "Read both" }],
+                model: "gpt-5.6-luna",
+                usage: { ...ZERO_USAGE_FIXTURE, input: 1, output: 1, totalTokens: 2 },
+                timestamp: Date.now(),
               }),
-              stderr: "",
-              code: 0,
-              signal: null,
-              killed: false,
-              termination: "exit",
-            };
+            );
+            return await acknowledgeCompletedWorkerTurn(request.turnClaim, transcriptLeafId);
           },
         ),
         quiesceWorkspace: vi.fn(async () => ({

@@ -34,7 +34,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import {
   bindWorkerTurnOwner,
   bindWorkerTurnCapabilities,
@@ -367,10 +367,7 @@ async function createWorkerSessionToolTestFixture(
     async (request: { method: string; params: Record<string, unknown> }) => {
       spawnState.order.push("create");
       spawnState.childSessionKey = String(request.params.key);
-      setEntry(spawnState.childSessionKey, CHILD.sessionId, {
-        sessionKey: SOURCE.sessionKey,
-        sessionId: SOURCE.sessionId,
-      });
+      setEntry(spawnState.childSessionKey, CHILD.sessionId, SOURCE);
       return { ok: true, key: spawnState.childSessionKey, sessionId: CHILD.sessionId };
     },
   );
@@ -406,37 +403,17 @@ async function createWorkerSessionToolTestFixture(
     },
     environments: {
       get: (environmentId: string) => {
-        if (environmentId === SOURCE.environmentId) {
-          return {
-            state: "attached",
-            ownerEpoch: SOURCE.ownerEpoch,
-            attachedSessionIds: [SOURCE.sessionId],
-            providerId: "fake",
-            profileId: "cloud-profile",
-            profileSnapshot: { install: "bundle", settings: { region: "source" } },
-          };
-        }
-        if (environmentId === CHILD.environmentId) {
-          return {
-            state: "attached",
-            ownerEpoch: CHILD.ownerEpoch,
-            attachedSessionIds: [CHILD.sessionId],
-            providerId: "fake",
-            profileId: "cloud-profile",
-            profileSnapshot: { install: "bundle", settings: { region: "source" } },
-          };
-        }
-        if (environmentId === GRANDCHILD.environmentId) {
-          return {
-            state: "attached",
-            ownerEpoch: GRANDCHILD.ownerEpoch,
-            attachedSessionIds: [GRANDCHILD.sessionId],
-            providerId: "fake",
-            profileId: "cloud-profile",
-            profileSnapshot: { install: "bundle", settings: { region: "source" } },
-          };
-        }
-        return undefined;
+        const owner = [SOURCE, CHILD, GRANDCHILD].find((s) => s.environmentId === environmentId);
+        return owner
+          ? {
+              state: "attached",
+              ownerEpoch: owner.ownerEpoch,
+              attachedSessionIds: [owner.sessionId],
+              providerId: "fake",
+              profileId: "cloud-profile",
+              profileSnapshot: { install: "bundle", settings: { region: "source" } },
+            }
+          : undefined;
       },
     } as never,
   };
@@ -503,42 +480,11 @@ async function createWorkerSessionToolTestFixture(
     sessionId: string;
     sessionKey: string;
   }): Promise<void> {
-    let placement = await placements.startDispatch(session);
-    placement = await placements.transition({
-      sessionId: session.sessionId,
-      from: "requested",
-      to: "provisioning",
-      expectedGeneration: placement.generation,
-      patch: { environmentId: session.environmentId },
-    });
-    placement = await placements.transition({
-      sessionId: session.sessionId,
-      from: "provisioning",
-      to: "syncing",
-      expectedGeneration: placement.generation,
-      patch: { workerBundleHash: "a".repeat(64) },
-    });
-    placement = await placements.transition({
-      sessionId: session.sessionId,
-      from: "syncing",
-      to: "starting",
-      expectedGeneration: placement.generation,
-      patch: {
-        workspaceBaseManifestRef: `manifest-${session.sessionId}`,
-        remoteWorkspaceDir: `/workspace/${session.sessionId}`,
-      },
-    });
-    seedAttachedPlacementEnvironment(database, {
+    await advancePlacementFixtureToActive(placements, database, session, {
       environmentId: session.environmentId,
-      sessionId: session.sessionId,
       ownerEpoch: session.ownerEpoch,
-    });
-    await placements.transition({
-      sessionId: session.sessionId,
-      from: "starting",
-      to: "active",
-      expectedGeneration: placement.generation,
-      patch: { activeOwnerEpoch: session.ownerEpoch },
+      workspaceBaseManifestRef: `manifest-${session.sessionId}`,
+      remoteWorkspaceDir: `/workspace/${session.sessionId}`,
     });
   }
 

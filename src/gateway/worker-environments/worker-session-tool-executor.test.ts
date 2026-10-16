@@ -54,32 +54,26 @@ describe("worker session tool topology", () => {
   const getFixture = installWorkerSessionToolTestFixture(fixtureMocks, {
     operatorProfileId: "profile-worker-requester",
   });
-  let placements: ReturnType<typeof getFixture>["placements"];
-  let identity: ReturnType<typeof getFixture>["identity"];
-  let execute: ReturnType<typeof getFixture>["execute"];
-  let sourceClaim: ReturnType<typeof getFixture>["sourceClaim"];
-  let delegatedAuthorities: ReturnType<typeof getFixture>["delegatedAuthorities"];
-  let spawnState: ReturnType<typeof getFixture>["spawnState"];
-  let activate: ReturnType<typeof getFixture>["activate"];
-  let setEntry: ReturnType<typeof getFixture>["setEntry"];
-  let spawn: ReturnType<typeof getFixture>["spawn"];
+  let f: ReturnType<typeof getFixture>;
 
   beforeEach(() => {
     resetGlobalHookRunner();
-    ({
-      placements,
-      identity,
-      execute,
-      sourceClaim,
-      delegatedAuthorities,
-      spawnState,
-      activate,
-      setEntry,
-      spawn,
-    } = getFixture());
+    f = getFixture();
   });
 
   afterEach(() => resetGlobalHookRunner());
+
+  async function workshop(execute: AnyAgentTool["execute"]) {
+    return (
+      await f.createTools({
+        name: "skill_workshop",
+        label: "Workshop",
+        description: "Library",
+        parameters: SkillLibraryWorkshopSchema,
+        execute,
+      })
+    ).find((tool) => tool.name === "skill_workshop")!;
+  }
 
   it.each([
     {
@@ -107,6 +101,7 @@ describe("worker session tool topology", () => {
   ])(
     "captures $name publication for a new worker child",
     async ({ allow, deny, promptAllow, expected }) => {
+      const { setEntry, identity, spawn, placements, sourceClaim } = f;
       setEntry(SOURCE.sessionKey, SOURCE.sessionId);
       const config = { tools: { allow, deny } };
       const inheritedPublicationToolRef: { current?: AnyAgentTool } = {};
@@ -155,6 +150,7 @@ describe("worker session tool topology", () => {
   );
 
   it("rejects tool publication when the source run closes during preparation", async () => {
+    const { identity } = f;
     const started = createDeferred();
     const prepared = createDeferred<AnyAgentTool[]>();
     const runtime = getFixture().createToolRuntime({
@@ -173,6 +169,7 @@ describe("worker session tool topology", () => {
   it.each(["active", "run-ended", "operator-revoked"] as const)(
     "reads presence as the original operator only while its authority is live (%s)",
     async (authorityState) => {
+      const { setEntry, placements, sourceClaim } = f;
       setEntry(SOURCE.sessionKey, SOURCE.sessionId);
       await placements.authorizeWorkerTurnTools(sourceClaim, ["presence"]);
       const entered = createDeferred();
@@ -247,6 +244,7 @@ describe("worker session tool topology", () => {
   it.each(["deny", "invalid rewrite"] as const)(
     "blocks a worker spawn before child effects and replays the policy decision (%s)",
     async (decision) => {
+      const { setEntry, spawn } = f;
       setEntry(SOURCE.sessionKey, SOURCE.sessionId);
       const receipts: DecisionReceiptV1[] = [];
       const clearReceipts = configureRuntimeActionDecisionSink((receipt) => {
@@ -306,6 +304,7 @@ describe("worker session tool topology", () => {
   );
 
   it("retains Workshop replay, update, call-cap, and live-authority behavior in the generic surface", async () => {
+    const { setEntry, placements, sourceClaim } = f;
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
     await placements.authorizeWorkerTurnTools(sourceClaim, ["skill_workshop"]);
     const update = vi.fn();
@@ -324,14 +323,7 @@ describe("worker session tool topology", () => {
         return result;
       },
     );
-    const tools = await getFixture().createTools({
-      name: "skill_workshop",
-      label: "Workshop",
-      description: "Library",
-      parameters: SkillLibraryWorkshopSchema,
-      execute: executeWorkshop,
-    });
-    const tool = tools.find((candidate) => candidate.name === "skill_workshop")!;
+    const tool = await workshop(executeWorkshop);
     const first = await tool.execute("call-0", { action: "list" }, undefined, update);
     expect(await tool.execute("call-0", { action: "list" })).toEqual(first);
     expect(executeWorkshop).toHaveBeenCalledOnce();
@@ -353,6 +345,7 @@ describe("worker session tool topology", () => {
   it.each(["policy", "result"] as const)(
     "revalidates tool grants after awaited %s work",
     async (revokedAt) => {
+      const { setEntry, placements, sourceClaim } = f;
       setEntry(SOURCE.sessionKey, SOURCE.sessionId);
       await placements.authorizeWorkerTurnTools(sourceClaim, ["skill_workshop"]);
       if (revokedAt === "policy") {
@@ -374,15 +367,7 @@ describe("worker session tool topology", () => {
         await placements.authorizeWorkerTurnTools(sourceClaim, []);
         return { content: [], details: {} };
       });
-      const tool = (
-        await getFixture().createTools({
-          name: "skill_workshop",
-          label: "Workshop",
-          description: "Library",
-          parameters: SkillLibraryWorkshopSchema,
-          execute: executeWorkshop,
-        })
-      ).find((candidate) => candidate.name === "skill_workshop")!;
+      const tool = await workshop(executeWorkshop);
       await expect(tool.execute("revoked-call", { action: "list" })).rejects.toThrow(
         "tool authority changed",
       );
@@ -397,6 +382,7 @@ describe("worker session tool topology", () => {
   ] as const)(
     "coalesces cloud spawns with inherited identity, permissions, and $name policy",
     async ({ required, permissionMode }) => {
+      const { setEntry, spawn, placements, sourceClaim, spawnState } = f;
       setEntry(SOURCE.sessionKey, SOURCE.sessionId);
       const creator = { type: "human", id: "profile-worker-creator" } as const;
       Object.assign(sessionEntries.get(SOURCE.sessionKey)!, {
@@ -536,6 +522,7 @@ describe("worker session tool topology", () => {
   it.each(["create", "dispatch", "send"] as const)(
     "recovers a lost child %s response without repeating committed effects",
     async (stage) => {
+      const { setEntry, spawn, placements, spawnState, activate } = f;
       setEntry(SOURCE.sessionKey, SOURCE.sessionId);
       const sendKeys: string[] = [];
       if (stage === "create") {
@@ -543,10 +530,7 @@ describe("worker session tool topology", () => {
           async (request: { method: string; params: Record<string, unknown> }) => {
             spawnState.order.push("create");
             spawnState.childSessionKey = String(request.params.key);
-            setEntry(spawnState.childSessionKey, CHILD.sessionId, {
-              sessionKey: SOURCE.sessionKey,
-              sessionId: SOURCE.sessionId,
-            });
+            setEntry(spawnState.childSessionKey, CHILD.sessionId, SOURCE);
             throw new Error("session creation response was lost");
           },
         );
@@ -588,52 +572,74 @@ describe("worker session tool topology", () => {
   );
 
   it("spawns a grandchild from the child cloud turn and communicates across both levels", async () => {
+    const {
+      setEntry,
+      spawn,
+      placements,
+      spawnState,
+      activate,
+      identity,
+      execute,
+      delegatedAuthorities,
+    } = f;
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
     await spawn("spawn-child-for-nesting");
     const spawnedChildKey = spawnState.childSessionKey!;
-    const childClaim = await placements.claimTurn({
-      sessionId: CHILD.sessionId,
-      agentId: CHILD.agentId,
-      sessionKey: spawnedChildKey,
-      claimId: "child-claim",
-      runId: "child-run",
-      owner: {
-        kind: "worker",
-        environmentId: CHILD.environmentId,
-        ownerEpoch: CHILD.ownerEpoch,
-      },
-    });
-    await placements.authorizeWorkerTurnTools(childClaim, ["sessions_spawn", "sessions_send"]);
-    const childExecutionIdentityToken = {
-      ...PARENT_EXECUTION_IDENTITY_TOKEN,
-      contextId: "child-context",
-      executionId: "child-execution",
-      runId: childClaim.runId,
-      createdAt: 2,
-    } satisfies ExecutionIdentityAdmissionToken;
-    const childOperationalRun = createOperationalRunInstanceRef(childClaim.runId);
-    delegatedAuthorities.push(claimAgentRunDelegatedAuthority(childOperationalRun));
-    await bindWorkerTurnOwner(
-      placements,
-      childClaim,
-      childExecutionIdentityToken,
-      childOperationalRun,
-      {
-        agentId: CHILD.agentId,
-        sessionId: CHILD.sessionId,
-        sessionKey: spawnedChildKey,
-        storePath: path.join(getFixture().root, "sessions.json"),
-      },
-      () => {},
+    async function admitDescendant(
+      owner: typeof CHILD,
+      sessionKey: string,
+      name: string,
+      createdAt: number,
+      tools: string[],
+    ) {
+      const claim = await placements.claimTurn({
+        sessionId: owner.sessionId,
+        agentId: owner.agentId,
+        sessionKey,
+        claimId: `${name}-claim`,
+        runId: `${name}-run`,
+        owner: { kind: "worker", environmentId: owner.environmentId, ownerEpoch: owner.ownerEpoch },
+      });
+      await placements.authorizeWorkerTurnTools(claim, tools);
+      const token = {
+        ...PARENT_EXECUTION_IDENTITY_TOKEN,
+        contextId: `${name}-context`,
+        executionId: `${name}-execution`,
+        runId: claim.runId,
+        createdAt,
+      } satisfies ExecutionIdentityAdmissionToken;
+      const operationalRun = createOperationalRunInstanceRef(claim.runId);
+      delegatedAuthorities.push(claimAgentRunDelegatedAuthority(operationalRun));
+      await bindWorkerTurnOwner(
+        placements,
+        claim,
+        token,
+        operationalRun,
+        {
+          agentId: owner.agentId,
+          sessionId: owner.sessionId,
+          sessionKey,
+          storePath: path.join(f.root, "sessions.json"),
+        },
+        () => {},
+      );
+      const connection: WorkerConnectionIdentity = {
+        ...identity,
+        environmentId: owner.environmentId,
+        sessionId: owner.sessionId,
+        runId: claim.runId,
+        turnClaim: claim,
+        ownerEpoch: owner.ownerEpoch,
+      };
+      return { connection, token };
+    }
+    const { connection: childIdentity, token: childExecutionIdentityToken } = await admitDescendant(
+      CHILD,
+      spawnedChildKey,
+      "child",
+      2,
+      ["sessions_spawn", "sessions_send"],
     );
-    const childIdentity: WorkerConnectionIdentity = {
-      ...identity,
-      environmentId: CHILD.environmentId,
-      sessionId: CHILD.sessionId,
-      runId: childClaim.runId,
-      turnClaim: childClaim,
-      ownerEpoch: CHILD.ownerEpoch,
-    };
     getFixture().createToolRuntime({ identity: childIdentity });
     let spawnedGrandchildKey: string | undefined;
     gatewayCreate.mockImplementation(
@@ -688,49 +694,15 @@ describe("worker session tool topology", () => {
       },
     });
     expect(JSON.parse(childSend.resultJson)).toMatchObject({ details: { status: "ok" } });
-    const grandchildClaim = await placements.claimTurn({
-      sessionId: GRANDCHILD.sessionId,
-      agentId: GRANDCHILD.agentId,
-      sessionKey: spawnedGrandchildKey!,
-      claimId: "grandchild-claim",
-      runId: "grandchild-run",
-      owner: {
-        kind: "worker",
-        environmentId: GRANDCHILD.environmentId,
-        ownerEpoch: GRANDCHILD.ownerEpoch,
-      },
-    });
-    await placements.authorizeWorkerTurnTools(grandchildClaim, ["sessions_send"]);
-    const grandchildOperationalRun = createOperationalRunInstanceRef(grandchildClaim.runId);
-    delegatedAuthorities.push(claimAgentRunDelegatedAuthority(grandchildOperationalRun));
-    await bindWorkerTurnOwner(
-      placements,
-      grandchildClaim,
-      {
-        ...PARENT_EXECUTION_IDENTITY_TOKEN,
-        contextId: "grandchild-context",
-        executionId: "grandchild-execution",
-        runId: grandchildClaim.runId,
-        createdAt: 3,
-      },
-      grandchildOperationalRun,
-      {
-        agentId: GRANDCHILD.agentId,
-        sessionId: GRANDCHILD.sessionId,
-        sessionKey: spawnedGrandchildKey!,
-        storePath: path.join(getFixture().root, "sessions.json"),
-      },
-      () => {},
+    const { connection: grandchildIdentity } = await admitDescendant(
+      GRANDCHILD,
+      spawnedGrandchildKey!,
+      "grandchild",
+      3,
+      ["sessions_send"],
     );
     const grandchildSend = await execute({
-      identity: {
-        ...identity,
-        environmentId: GRANDCHILD.environmentId,
-        sessionId: GRANDCHILD.sessionId,
-        runId: grandchildClaim.runId,
-        turnClaim: grandchildClaim,
-        ownerEpoch: GRANDCHILD.ownerEpoch,
-      },
+      identity: grandchildIdentity,
       toolName: "sessions_send",
       request: {
         toolCallId: "grandchild-to-child",
@@ -748,6 +720,7 @@ describe("worker session tool topology", () => {
   });
 
   it("records an unprovable post-create incarnation as unknown and releases the claim", async () => {
+    const { setEntry, spawn, placements, sourceClaim, spawnState } = f;
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
     gatewayCreate.mockImplementationOnce(
       async (request: { method: string; params: Record<string, unknown> }) => {

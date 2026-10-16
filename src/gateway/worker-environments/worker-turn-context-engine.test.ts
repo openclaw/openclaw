@@ -46,27 +46,8 @@ describe("worker context engine", () => {
   it.each(["direct", "outer"] as const)(
     "runs the selected context engine through worker preparation and %s-owned settlement",
     async (owner) => {
-      let phase = "seed";
-      let reported = false;
       const events: string[] = [];
-      const settlements = {
-        launch: false,
-        reconcile: false,
-        afterTurn: false,
-        execute: false,
-        runEnd: false,
-      };
-      const report = () => {
-        if (reported) {
-          return;
-        }
-        reported = true;
-        console.error(
-          "worker-context-engine-phase",
-          JSON.stringify({ owner, phase, settlements, events }),
-        );
-      };
-      onTestFailed(report);
+      onTestFailed(() => console.error("worker-context-engine", { owner, events }));
       await seedActivePlacement();
       const input = turn(`context-engine-${owner}`);
       const acceptedFile = path.join(input.workspaceDir, "accepted-project.txt");
@@ -74,7 +55,6 @@ describe("worker context engine", () => {
       await writeFile(acceptedFile, "previous Gateway content");
       const engineId = `worker-context-${owner}`;
       const config = { ...input.config, plugins: { slots: { contextEngine: engineId } } };
-      phase = "initial transcript";
       const previous = await openSessionManager();
       await previous.appendMessageAsync(
         makeAgentUserMessage({ content: "Unassembled history", timestamp: 1 }),
@@ -92,13 +72,11 @@ describe("worker context engine", () => {
         [];
       const fences: Array<ReturnType<typeof resolveSessionTranscriptReadFence>> = [];
       const bootstrap = vi.fn<NonNullable<ContextEngine["bootstrap"]>>(async () => {
-        phase = "bootstrap";
         events.push("bootstrap");
         fences.push(resolveSessionTranscriptReadFence(sessionTarget));
         return { bootstrapped: true };
       });
       const assemble = vi.fn<ContextEngine["assemble"]>(async () => {
-        phase = "assemble";
         events.push("assemble");
         fences.push(resolveSessionTranscriptReadFence(sessionTarget));
         return {
@@ -108,7 +86,6 @@ describe("worker context engine", () => {
         };
       });
       const afterTurn = vi.fn<NonNullable<ContextEngine["afterTurn"]>>(async (params) => {
-        phase = "after-turn read";
         events.push("after-turn");
         const cwd = params.runtimeContext?.cwd;
         assert(cwd);
@@ -119,9 +96,7 @@ describe("worker context engine", () => {
           content,
           claimLive: placements.validateWorkspaceResultClaim(claim),
         });
-        phase = "after-turn write";
         await writeFile(path.join(cwd, "engine-follow-up.txt"), content);
-        settlements.afterTurn = true;
       });
       const dispose = vi.fn(async () => {
         events.push("dispose");
@@ -152,7 +127,6 @@ describe("worker context engine", () => {
         compact,
         dispose,
       };
-      phase = "prepared runtime";
       await using runtime = await acquireAgentRunPreparedModelRuntime({
         config,
         agentId: input.agentId,
@@ -164,7 +138,6 @@ describe("worker context engine", () => {
       expect(registerContextEngineInRegistry(registry, engineId, () => engine, "core")).toEqual({
         ok: true,
       });
-      phase = "logical-turn lease";
       const lease =
         owner === "outer"
           ? await withPluginRuntimeGenerationScope(runtime.snapshot, () =>
@@ -182,7 +155,6 @@ describe("worker context engine", () => {
         | Awaited<ReturnType<SessionManager["appendMessageWithTranscriptAnchorAsync"]>>
         | undefined;
       const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async (request) => {
-        phase = "launch transcript";
         events.push("launch");
         claim = request.turnClaim;
         request.onDispatchReady?.();
@@ -193,24 +165,17 @@ describe("worker context engine", () => {
             timestamp: 3,
           }),
         );
-        phase = "launch acknowledgement";
-        const result = await acknowledgeCompletedWorkerTurn(request.turnClaim, terminal.entryId);
-        settlements.launch = true;
-        return result;
+        return await acknowledgeCompletedWorkerTurn(request.turnClaim, terminal.entryId);
       });
       const tunnel = createWorkerTurnTunnel({
         launchTurn,
         reconcileWorkspace: vi.fn(async (request) => {
-          phase = "workspace reconcile";
           events.push("reconcile");
           await writeFile(acceptedFile, "accepted node content");
-          const result = { ...(await reconcileUnchangedLocalWorkspace(request)), changed: true };
-          settlements.reconcile = true;
-          return result;
+          return { ...(await reconcileUnchangedLocalWorkspace(request)), changed: true };
         }),
       });
       const published = vi.fn(async () => {
-        phase = "workspace publication";
         events.push("publish");
       });
       const provider = createWorkerSessionTurnPlacementProvider({
@@ -225,7 +190,6 @@ describe("worker context engine", () => {
         },
       });
       try {
-        phase = "execute turn";
         const result = await provider.executeTurn(
           { ...sessionTarget, runId: input.runId },
           {
@@ -241,17 +205,13 @@ describe("worker context engine", () => {
           },
           vi.fn(),
         );
-        settlements.execute = true;
         expect(result.payloads).toEqual([{ text: "Fresh worker answer" }]);
         assert(claim);
         expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
         if (lease) {
           expect(candidate).toHaveBeenCalledOnce();
         }
-        phase = "run settlement";
         await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
-        settlements.runEnd = true;
-        phase = "result assertions";
         expect(published).toHaveBeenCalledExactlyOnceWith(claim);
         expect(placements.validateWorkspaceResultClaim(claim)).toBe(false);
         expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
@@ -292,17 +252,7 @@ describe("worker context engine", () => {
               }),
             }),
           );
-          phase = "outer lease disposal";
           await lease.dispose();
-          expect(events).toEqual([
-            "bootstrap",
-            "assemble",
-            "launch",
-            "candidate",
-            "reconcile",
-            "publish",
-            "dispose",
-          ]);
           await expect(readFile(followUpFile, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
         } else {
           expect(afterTurn).toHaveBeenCalledOnce();
@@ -328,19 +278,19 @@ describe("worker context engine", () => {
             { cwd: input.workspaceDir, content: "accepted node content", claimLive: true },
           ]);
           await expect(readFile(followUpFile, "utf8")).resolves.toBe("accepted node content");
-          expect(events).toEqual([
-            "bootstrap",
-            "assemble",
-            "launch",
-            "reconcile",
-            "publish",
-            "after-turn",
-            "dispose",
-          ]);
         }
+        expect(events).toEqual([
+          "bootstrap",
+          "assemble",
+          "launch",
+          ...(lease ? ["candidate"] : []),
+          "reconcile",
+          "publish",
+          ...(lease ? [] : ["after-turn"]),
+          "dispose",
+        ]);
         expect(dispose).toHaveBeenCalledOnce();
       } finally {
-        phase = "lease cleanup";
         await lease?.dispose();
         registry.contextEngines.delete(engineId);
         input.preparedRunAdmission.close();
