@@ -81,6 +81,7 @@ async function git(repo: string, ...args: string[]) {
 
 const readText = (...parts: string[]) => fs.readFile(path.join(...parts), "utf8");
 const readJson = async (...parts: string[]) => JSON.parse(await readText(...parts));
+const writeJson = (file: string, value: unknown) => fs.writeFile(file, JSON.stringify(value));
 const expectMissing = (file: string) =>
   expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
 
@@ -112,6 +113,18 @@ const expectCustody = (env: NodeJS.ProcessEnv) =>
   expect(acquireGatewayLock({ env, allowInTests: true, timeoutMs: 0 })).rejects.toThrow(
     "state ownership",
   );
+
+async function expectSuccessor(env: NodeJS.ProcessEnv, port?: number) {
+  await expectMissing(resolveGatewayLockPaths(env).ownerLockPath);
+  const successor = await acquireGatewayLock({ env, port, allowInTests: true, timeoutMs: 0 });
+  expect(successor).not.toBeNull();
+  if (port) {
+    expect(await readActiveGatewayLockIdentity({ env, requireInspection: true })).toMatchObject({
+      pid: process.pid,
+    });
+  }
+  await successor?.release();
+}
 
 function stubHome(env: NodeJS.ProcessEnv, root: string, includeState = false) {
   for (const key of ["HOME", "USERPROFILE"]) {
@@ -146,6 +159,7 @@ describe("same-root local mutation routing", () => {
     acquireGatewayLock({ env, port: claim.port, allowInTests: true, timeoutMs: 0 });
   const run = (args: string[]) => runCliProcessChild({ nodeArgs: [...entrypoint, ...args], env });
   const observation = () => readJson(root, "control", "sql-observation.json");
+  const worktreePath = () => expect.stringContaining(path.join(root, "gateway-worktrees"));
 
   beforeAll(async () => {
     root = roots.make("openclaw-local-owner-online-");
@@ -181,12 +195,9 @@ describe("same-root local mutation routing", () => {
       repoSelector = `${path.join(entry, "link")}/../repo`;
     }
     claim = await acquireTestPortBlock({ offsets: [0] });
-    await fs.writeFile(
-      env.OPENCLAW_CONFIG_PATH!,
-      JSON.stringify({
-        gateway: { mode: "local", port: claim.port, auth: { mode: "token", token } },
-      }),
-    );
+    await writeJson(env.OPENCLAW_CONFIG_PATH!, {
+      gateway: { mode: "local", port: claim.port, auth: { mode: "token", token } },
+    });
     stubHome(env, root, true);
     const cfg = { worktreeRoot: path.join(root, "gateway-worktrees"), worktreeAcceleration: false };
     service = new ManagedWorktreeService({ env, getConfig: () => cfg });
@@ -316,19 +327,15 @@ describe("same-root local mutation routing", () => {
       repoSelector,
     );
     const record: ManagedWorktreeRecord = cliPayload(result);
-    expect({
-      repoRoot: record.repoRoot,
-      sourceBranch: await git(repo, "branch", "--list", "openclaw/routed"),
-      ...(decoyRepo
-        ? { decoyBranch: await git(decoyRepo, "branch", "--list", "openclaw/routed") }
-        : {}),
-    }).toEqual({
+    expect(record).toMatchObject({
       repoRoot: repo,
-      sourceBranch: "+ openclaw/routed",
-      ...(decoyRepo ? { decoyBranch: "" } : {}),
+      path: worktreePath(),
+      ownerKind: "manual",
     });
-    expect(record.path).toContain(path.join(root, "gateway-worktrees"));
-    expect(record.ownerKind).toBe("manual");
+    expect(await git(repo, "branch", "--list", "openclaw/routed")).toBe("+ openclaw/routed");
+    if (decoyRepo) {
+      expect(await git(decoyRepo, "branch", "--list", "openclaw/routed")).toBe("");
+    }
     if (process.platform !== "win32") {
       expect(await readText(record.path, "setup-proof.txt")).toBe("owner setup complete\n");
     }
@@ -376,28 +383,20 @@ describe("same-root local mutation routing", () => {
       );
       expect(records).toHaveLength(scenario === "lost-reply" ? 1 : 0);
       if (records[0]) {
-        expect(records[0].path).toContain(path.join(root, "gateway-worktrees"));
+        expect(records[0].path).toEqual(worktreePath());
       }
       expect(await git(repo, "branch", "--list", `openclaw/${scenario}`)).toBe(
         scenario === "lost-reply" ? "+ openclaw/lost-reply" : "",
       );
       if (scenario === "lost-reply") {
-        for (const output of [result.stderr, result.stdout]) {
-          expect(output).not.toMatch(/fixture-(?:user|pass|secret)/u);
-        }
+        expect(result.stderr + result.stdout).not.toMatch(/fixture-(?:user|pass|secret)/u);
       }
     },
   );
 
-  const operations = [
-    { kind: "exact-remove", method: "worktrees.remove", scenario: "live" },
-    { kind: "exact-remove", method: "worktrees.remove", scenario: "offline" },
-    { kind: "gc-partial", method: "worktrees.gc", scenario: "live" },
-  ] as const;
-  type Operation = (typeof operations)[number];
   let sequence = 0;
 
-  async function prepareOperation(kind: Operation["kind"]) {
+  async function prepareOperation(kind: "exact-remove" | "gc-partial") {
     const name = `mutation-${++sequence}`;
     const record = await materializeManagedWorktreeFixture({
       env,
@@ -419,16 +418,15 @@ describe("same-root local mutation routing", () => {
       const index = await fs.readFile(
         path.resolve(record.path, await git(record.path, "rev-parse", "--git-path", "index")),
       );
-      const exactState = {
+      const filename = path.join(root, `${name}.json`);
+      await writeJson(filename, {
         ownerKind: record.ownerKind,
         createdAt: record.createdAt,
         lastActiveAt: record.lastActiveAt,
         head,
         branchHead: head,
         indexSha256: createHash("sha256").update(index).digest("hex"),
-      };
-      const filename = path.join(root, `${name}.json`);
-      await fs.writeFile(filename, JSON.stringify(exactState));
+      });
       return {
         args: ["worktrees", "remove", record.id, "--exact-state", filename, "--json"],
         cleanup: async () => {},
@@ -441,7 +439,7 @@ describe("same-root local mutation routing", () => {
             removed: true,
             recoveryRetainedUntil: expect.any(Number),
           });
-          await expect(fs.stat(record.path)).rejects.toMatchObject({ code: "ENOENT" });
+          await expectMissing(record.path);
         },
       };
     }
@@ -468,17 +466,21 @@ describe("same-root local mutation routing", () => {
           expect(payload).toMatchObject({
             outcome: "partial",
             removed: expect.arrayContaining([record.id]),
+            issues: expect.arrayContaining([
+              expect.objectContaining({ id: broken.id, outcome: "failed" }),
+            ]),
           });
-          await expect(fs.stat(record.path)).rejects.toMatchObject({ code: "ENOENT" });
-          expect(payload?.issues).toEqual(
-            expect.arrayContaining([expect.objectContaining({ id: broken.id, outcome: "failed" })]),
-          );
+          await expectMissing(record.path);
         }
       },
     };
   }
 
-  it.each(operations)(
+  it.each([
+    { kind: "exact-remove", method: "worktrees.remove", scenario: "live" },
+    { kind: "exact-remove", method: "worktrees.remove", scenario: "offline" },
+    { kind: "gc-partial", method: "worktrees.gc", scenario: "live" },
+  ] as const)(
     "$kind: $scenario preserves the operation contract and custody",
     async ({ kind, method, scenario }) => {
       const prepared = await prepareOperation(kind);
@@ -495,7 +497,7 @@ describe("same-root local mutation routing", () => {
           expect(owner).not.toBeNull();
         }
         const observed = await observation();
-        expect(result.code, result.stderr).toBe(0);
+        let payload = cliPayload(result);
         expect(methods.slice(before)).toEqual(scenario === "live" ? [method] : []);
         if (scenario === "offline") {
           expect(observed.missingCustody).toBe(0);
@@ -505,7 +507,6 @@ describe("same-root local mutation routing", () => {
         } else {
           expect(observed.worktreeSql).toBe(0);
         }
-        let payload = JSON.parse(result.stdout);
         if (kind === "gc-partial") {
           expect(payload).toMatchObject({
             jobId: expect.any(String),
@@ -515,8 +516,10 @@ describe("same-root local mutation routing", () => {
           });
           await prepared.verify(false);
           await maintenanceClock.advanceBy(0);
-          const progress = await run(["worktrees", "gc", "--job", payload.jobId, "--json"]);
-          const completed = cliPayload(progress, 1);
+          const completed = cliPayload(
+            await run(["worktrees", "gc", "--job", payload.jobId, "--json"]),
+            1,
+          );
           expect(methods.slice(before)).toEqual([method, method]);
           expect(completed).toMatchObject({
             jobId: payload.jobId,
@@ -542,15 +545,7 @@ describe("same-root local mutation routing", () => {
     ["sandbox recreate", ["sandbox", "recreate", "--all", "--force"]],
     [
       "migration import",
-      [
-        "migrate",
-        "apply",
-        "synthetic-missing-provider",
-        "--yes",
-        "--no-backup",
-        "--force",
-        "--json",
-      ],
+      "migrate apply synthetic-missing-provider --yes --no-backup --force --json".split(" "),
     ],
     ["exec-policy preset", ["exec-policy", "preset", "deny-all"]],
   ])(
@@ -571,15 +566,19 @@ describe("same-root local mutation routing", () => {
 describe("offline local mutation custody", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
   afterEach(() => vi.unstubAllEnvs());
+  async function fixture(prefix: string) {
+    const root = roots.make(`openclaw-local-owner-${prefix}-`);
+    const env = environment(root);
+    stubHome(env, root);
+    const repo = await initializeRepository(root);
+    await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, "{}\n");
+    return { root, env, repo };
+  }
 
   it.skipIf(process.platform === "win32")(
     "retains offline CLI custody through its POSIX setup hook while Gateway startup races",
     async () => {
-      const root = roots.make("openclaw-local-owner-offline-");
-      const env = environment(root);
-      stubHome(env, root);
-      const repo = await initializeRepository(root);
-      await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, "{}\n");
+      const { env, repo } = await fixture("offline");
       const setupReady = createDeferred<Socket>();
       const reservation = await reserveTestPortListener({
         offsets: [0],
@@ -621,10 +620,7 @@ socket.on("data", () => {
         expect(await readText(record.path, "README.md")).toBe("base\n");
         expect(await readText(record.path, "setup-proof.txt")).toBe("local setup complete\n");
         expect(record.path).toContain(path.join(env.OPENCLAW_STATE_DIR!, "worktrees"));
-        await expectMissing(resolveGatewayLockPaths(env).ownerLockPath);
-        const successor = await acquireGatewayLock({ env, allowInTests: true, timeoutMs: 0 });
-        expect(successor).not.toBeNull();
-        await successor?.release();
+        await expectSuccessor(env);
       } finally {
         setupSocket?.destroy();
         await reservation.releaseListener();
@@ -636,11 +632,7 @@ socket.on("data", () => {
   it.each(process.platform === "win32" ? [false] : [false, true])(
     "holds Gateway startup through accepted work and database close; signal=%s",
     async (interrupt) => {
-      const root = roots.make("openclaw-local-owner-settlement-");
-      const env = environment(root);
-      stubHome(env, root);
-      const repo = await initializeRepository(root);
-      await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, "{}\n");
+      const { root, env, repo } = await fixture("settlement");
       const pending = createDeferred();
       const interrupted = createDeferred();
       const result = await runCliProcessChild({
@@ -675,22 +667,9 @@ socket.on("data", () => {
         },
       });
       expect(result.code, result.stderr).toBe(interrupt ? 143 : 0);
-      expect(JSON.parse(await readText(root, "settlement.json"))).toEqual({
-        databaseOpen: false,
-      });
+      expect(await readJson(root, "settlement.json")).toEqual({ databaseOpen: false });
       expect(await git(repo, "branch", "--list", "openclaw/settled")).toBe("+ openclaw/settled");
-      await expectMissing(resolveGatewayLockPaths(env).ownerLockPath);
-      const successor = await acquireGatewayLock({
-        env,
-        port: 18789,
-        allowInTests: true,
-        timeoutMs: 0,
-      });
-      expect(successor).not.toBeNull();
-      expect(await readActiveGatewayLockIdentity({ env, requireInspection: true })).toMatchObject({
-        pid: process.pid,
-      });
-      await successor?.release();
+      await expectSuccessor(env, 18789);
     },
   );
 });

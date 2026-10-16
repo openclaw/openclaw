@@ -43,49 +43,42 @@ try {
       items: [],
     };
     let applyCompleted = false;
-    let failure: unknown;
-    try {
-      await runMigrationApply({
-        runtime: {
-          log() {},
-          error() {},
-          exit(code) {
-            throw new Error(`unexpected exit ${code}`);
-          },
+    const failure = await runMigrationApply({
+      runtime: {
+        log() {},
+        error() {},
+        exit(code) {
+          throw new Error(`unexpected exit ${code}`);
         },
-        opts: { json: true, noBackup: true, configOverride: {} },
-        providerId: "fixture",
-        provider: {
-          id: "fixture",
-          label: "Fixture",
-          plan: async () => plan,
-          apply: async () => {
-            retainCommandProcessCleanup(Promise.resolve("uncertain"));
-            return plan;
-          },
+      },
+      opts: { json: true, noBackup: true, configOverride: {} },
+      providerId: "fixture",
+      provider: {
+        id: "fixture",
+        label: "Fixture",
+        plan: async () => plan,
+        apply: async () => {
+          retainCommandProcessCleanup(Promise.resolve("uncertain"));
+          return plan;
         },
-        onApplyCompleted: () => {
-          applyCompleted = true;
-        },
-      });
-    } catch (error) {
-      failure = error;
-    }
+      },
+      onApplyCompleted: () => {
+        applyCompleted = true;
+      },
+    }).catch((error: unknown) => error);
     let laterMutationRan = false;
-    let laterRefused = false;
-    try {
-      await runWithLocalStateOwner({
-        method: "migrate.apply",
-        params: {},
-        target: "later mutation",
-        onForeignOwner: "refuse",
-        runLocal: async () => {
-          laterMutationRan = true;
-        },
-      });
-    } catch {
-      laterRefused = true;
-    }
+    const laterRefused = await runWithLocalStateOwner({
+      method: "migrate.apply",
+      params: {},
+      target: "later mutation",
+      onForeignOwner: "refuse",
+      runLocal: async () => {
+        laterMutationRan = true;
+      },
+    }).then(
+      () => false,
+      () => true,
+    );
     const owner = readLockPayloadSync(resolveGatewayLockPaths(process.env).ownerLockPath);
     writeJson({
       applyCompleted,
@@ -112,8 +105,7 @@ try {
         }
         signal.addEventListener("abort", () => process.stdout.write("interrupted\n"));
         database = openOpenClawStateDatabase({ env });
-        // This accepted continuation performs real Git/worker-backed registry work
-        // after the command returns; root custody must cover it and native close.
+        // Accepted work outlives the command; custody must cover it and native close.
         void scope.run(async () => {
           process.stdout.write(`pending:${scope.ownsSchemaMaintenance}\n`);
           await once(process.stdin, "data");
@@ -194,45 +186,40 @@ try {
     });
     const { withConsoleLogsRoutedToStderrForJson } = await import("./json-output-mode.js");
     const { runCliWithExitFinalization } = await import("./one-shot-exit.js");
+    const runCommand = async () => {
+      if (process.argv[2] === "config-unset-route") {
+        const { tryRouteCli } = await import("./route.js");
+        const routed = await tryRouteCli([
+          ...process.argv.slice(0, 2),
+          "config",
+          "unset",
+          ...process.argv.slice(3),
+        ]);
+        if (!routed) {
+          throw new Error("Config unset route was not selected");
+        }
+      } else if (process.argv[2] === "ownership-claim-direct") {
+        const { claimOpenClawStateOwnership } =
+          await import("../state/openclaw-state-ownership-operations.js");
+        writeJson({ ownership: claimOpenClawStateOwnership("supervisor") });
+      } else {
+        const program = new Command().name("openclaw").exitOverride();
+        registerWorktreesCli(program);
+        const command = process.argv[2]!;
+        const register = await registrations[command]?.();
+        if (["agents", "setup", "onboard", "config"].includes(command)) {
+          const { registerPreActionHooks } = await import("./program/preaction.js");
+          registerPreActionHooks(program, "test");
+        }
+        register?.(program);
+        await program.parseAsync(process.argv.slice(2), { from: "user" });
+      }
+    };
     await runCliWithExitFinalization({
       run: () =>
-        withConsoleLogsRoutedToStderrForJson(
-          process.argv,
-          async () => {
-            if (process.argv[2] === "config-unset-route") {
-              const { tryRouteCli } = await import("./route.js");
-              const routed = await tryRouteCli([
-                process.argv[0]!,
-                process.argv[1]!,
-                "config",
-                "unset",
-                ...process.argv.slice(3),
-              ]);
-              if (!routed) {
-                throw new Error("Config unset route was not selected");
-              }
-              return;
-            }
-            if (process.argv[2] === "ownership-claim-direct") {
-              const { claimOpenClawStateOwnership } =
-                await import("../state/openclaw-state-ownership-operations.js");
-              const ownership = claimOpenClawStateOwnership("supervisor");
-              writeJson({ ownership });
-              return;
-            }
-            const program = new Command().name("openclaw").exitOverride();
-            registerWorktreesCli(program);
-            const command = process.argv[2]!;
-            const register = await registrations[command]?.();
-            if (["agents", "setup", "onboard", "config"].includes(command)) {
-              const { registerPreActionHooks } = await import("./program/preaction.js");
-              registerPreActionHooks(program, "test");
-            }
-            register?.(program);
-            await program.parseAsync(process.argv.slice(2), { from: "user" });
-          },
-          { retainRoutingUntilProcessExit: true },
-        ),
+        withConsoleLogsRoutedToStderrForJson(process.argv, runCommand, {
+          retainRoutingUntilProcessExit: true,
+        }),
       onError: (error) => {
         throw error;
       },

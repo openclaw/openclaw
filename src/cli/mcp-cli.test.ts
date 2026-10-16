@@ -41,6 +41,21 @@ async function readJson(...args: string[]) {
 }
 const readServer = (name = "docs") => readJson("show", name);
 const logOutput = () => mockLog.mock.calls.map(([line]) => String(line)).join("\n");
+type Catalog = Awaited<ReturnType<SessionMcpRuntime["getCatalog"]>>;
+const catalog = (servers: Catalog["servers"], tools: Catalog["tools"] = []): Catalog => ({
+  version: 1,
+  generatedAt: Date.now(),
+  servers,
+  tools,
+  diagnostics: [],
+});
+const finalizedProbe = () =>
+  runCliWithExitFinalization({
+    run: () => mcp("probe", "--json"),
+    onError: (error) => {
+      throw error;
+    },
+  });
 
 async function writeExecutable(file: string) {
   await fs.mkdir(path.dirname(file), { recursive: true });
@@ -173,13 +188,9 @@ it.each([
           createOnly: true,
         })
       ).ok;
-      return {
-        version: 1,
-        generatedAt: Date.now(),
-        tools: [],
-        diagnostics: [],
-        servers: { docs: { serverName: "docs", launchSummary: "node winner.mjs", toolCount: 0 } },
-      };
+      return catalog({
+        docs: { serverName: "docs", launchSummary: "node winner.mjs", toolCount: 0 },
+      });
     });
   });
   setCreateSessionMcpRuntimeOverride(probe);
@@ -579,22 +590,11 @@ it("reports omitted enabled servers while accepting omitted disabled servers", a
   > = {};
   await writeMcpServers({ incomplete: { command: "node" } });
   setCreateSessionMcpRuntimeOverride((params) =>
-    probeRuntime(params, "cli-probe-test", async () => ({
-      version: 1,
-      generatedAt: Date.now(),
-      servers: catalogServers,
-      tools: [],
-      diagnostics: [],
-    })),
+    probeRuntime(params, "cli-probe-test", async () => catalog(catalogServers)),
   );
 
   mockError.mockClear();
-  await runCliWithExitFinalization({
-    run: () => mcp("probe", "--json"),
-    onError: (error) => {
-      throw error;
-    },
-  });
+  await finalizedProbe();
 
   expect(JSON.parse(lastLogLine())).toMatchObject({ servers: {}, diagnostics: [] });
   expect(lastErrorLine()).toBe(`MCP check did not connect to "incomplete" in ${configPath}.`);
@@ -612,12 +612,7 @@ it("reports omitted enabled servers while accepting omitted disabled servers", a
   mockError.mockClear();
   mockLog.mockClear();
 
-  await runCliWithExitFinalization({
-    run: () => mcp("probe", "--json"),
-    onError: (error) => {
-      throw error;
-    },
-  });
+  await finalizedProbe();
 
   expect(JSON.parse(lastLogLine())).toMatchObject({
     servers: { healthy: { tools: 1 } },
@@ -636,29 +631,28 @@ it("reports omitted enabled servers while accepting omitted disabled servers", a
 it("warns when auto-approved Codex MCP tools have no safety annotations", async () => {
   await setServer({ command: process.execPath }, "memory");
   setCreateSessionMcpRuntimeOverride((params) =>
-    probeRuntime(params, "cli-probe-approval-hint", async () => ({
-      version: 1,
-      generatedAt: Date.now(),
-      servers: {
-        memory: {
-          serverName: "memory",
-          launchSummary: process.execPath,
-          toolCount: 1,
-          codexApprovalMode: "auto",
-        },
-      },
-      tools: [
+    probeRuntime(params, "cli-probe-approval-hint", async () =>
+      catalog(
         {
-          serverName: "memory",
-          safeServerName: "memory",
-          toolName: "create_entities",
-          inputSchema: { type: "object" },
-          fallbackDescription: "Create entities",
-          codexAnnotations: {},
+          memory: {
+            serverName: "memory",
+            launchSummary: process.execPath,
+            toolCount: 1,
+            codexApprovalMode: "auto",
+          },
         },
-      ],
-      diagnostics: [],
-    })),
+        [
+          {
+            serverName: "memory",
+            safeServerName: "memory",
+            toolName: "create_entities",
+            inputSchema: { type: "object" },
+            fallbackDescription: "Create entities",
+            codexAnnotations: {},
+          },
+        ],
+      ),
+    ),
   );
 
   mockLog.mockClear();

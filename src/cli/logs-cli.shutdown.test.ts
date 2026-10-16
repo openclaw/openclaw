@@ -53,11 +53,11 @@ vi.mock("./gateway-rpc.js", async (importOriginal) => ({
 }));
 
 let delayStarted = createDeferred<{ ms: number; signal?: AbortSignal }>();
-let stdout: string[];
-let stderr: string[];
-let stopCommands: Array<() => void>;
-let finishIo: Array<() => void>;
-let commands: Array<Promise<unknown>>;
+const stdout: string[] = [];
+const stderr: string[] = [];
+const stopCommands: Array<() => void> = [];
+const finishIo: Array<() => void> = [];
+const commands: Array<Promise<unknown>> = [];
 
 async function expectCancelled(code: number) {
   expect(defaultRuntime.exit).not.toHaveBeenCalled();
@@ -71,11 +71,9 @@ beforeEach(() => {
   mocks.readConfig.mockReturnValue({});
   mocks.readService.mockResolvedValue({ status: "stopped" });
   delayStarted = createDeferred();
-  stdout = [];
-  stderr = [];
-  stopCommands = [];
-  finishIo = [];
-  commands = [];
+  for (const list of [stdout, stderr, stopCommands, finishIo, commands]) {
+    list.length = 0;
+  }
   for (const [stream, output] of [
     [process.stdout, stdout],
     [process.stderr, stderr],

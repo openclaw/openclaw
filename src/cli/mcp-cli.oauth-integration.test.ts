@@ -36,6 +36,12 @@ function sendJson(response: ServerResponse, body: unknown, status = 200): void {
   response.writeHead(status, { "Content-Type": "application/json" });
   response.end(JSON.stringify(body));
 }
+const oauthTokens = (access_token: string, refresh_token?: string) => ({
+  access_token,
+  refresh_token,
+  token_type: "Bearer",
+  expires_in: 3600,
+});
 const oauthServer = (url: string, oauth?: object) => ({
   url,
   transport: "streamable-http",
@@ -48,12 +54,7 @@ async function startOAuthFixture() {
   let codeChallenge: string | undefined;
   let tokenRedirectUri: string | undefined;
   let tokenVerifier: string | undefined;
-  const mcpRequests: Array<{
-    contentLength: string | undefined;
-    transferEncoding: string | undefined;
-    authorization: string | undefined;
-    body: string;
-  }> = [];
+  const mcpRequests: Array<Pick<IncomingMessage, "headers"> & { body: string }> = [];
   const handleRequest = async (request: IncomingMessage, response: ServerResponse) => {
     const url = new URL(request.url ?? "/", issuer);
     if (url.pathname.startsWith("/.well-known/oauth-protected-resource")) {
@@ -80,11 +81,7 @@ async function startOAuthFixture() {
       });
       return sendJson(
         response,
-        {
-          ...metadata,
-          redirect_uris: redirectUris,
-          client_id: "fixture-client",
-        },
+        { ...metadata, redirect_uris: redirectUris, client_id: "fixture-client" },
         201,
       );
     }
@@ -98,9 +95,7 @@ async function startOAuthFixture() {
       const callback = new URL(redirectUri);
       callback.searchParams.set("code", "fixture-code");
       callback.searchParams.set("state", state);
-      response.writeHead(302, { Location: callback.toString() });
-      response.end();
-      return;
+      return response.writeHead(302, { Location: callback.toString() }).end();
     }
     if (url.pathname === "/token" && request.method === "POST") {
       const form = new URLSearchParams(await readBody(request));
@@ -108,11 +103,7 @@ async function startOAuthFixture() {
         if (form.get("refresh_token") !== "fixture-refresh-token") {
           return sendJson(response, { error: "invalid_grant" }, 400);
         }
-        return sendJson(response, {
-          access_token: "fixture-refreshed-access-token",
-          token_type: "Bearer",
-          expires_in: 3600,
-        });
+        return sendJson(response, oauthTokens("fixture-refreshed-access-token"));
       }
       tokenRedirectUri = form.get("redirect_uri") ?? undefined;
       tokenVerifier = form.get("code_verifier") ?? undefined;
@@ -122,64 +113,39 @@ async function startOAuthFixture() {
       if (form.get("code") !== "fixture-code" || challenge !== codeChallenge) {
         return sendJson(response, { error: "invalid_grant" }, 400);
       }
-      return sendJson(response, {
-        access_token: "fixture-access-token",
-        refresh_token: "fixture-refresh-token",
-        token_type: "Bearer",
-        expires_in: 3600,
-      });
+      return sendJson(response, oauthTokens("fixture-access-token", "fixture-refresh-token"));
     }
     if (url.pathname === "/mcp" && request.method === "POST") {
       const body = await readBody(request);
-      mcpRequests.push({
-        contentLength: request.headers["content-length"],
-        transferEncoding: request.headers["transfer-encoding"],
-        authorization: request.headers.authorization,
-        body,
-      });
+      mcpRequests.push({ headers: request.headers, body });
       if (request.headers["content-length"] === undefined) {
-        response.writeHead(411, { "Content-Type": "text/plain" });
-        response.end("Content-Length required");
-        return;
+        return response
+          .writeHead(411, { "Content-Type": "text/plain" })
+          .end("Content-Length required");
       }
       if (mcpRequests.length === 1) {
-        response.writeHead(401, {
-          "Content-Type": "text/plain",
-          "WWW-Authenticate": 'Bearer scope="docs.read"',
-        });
-        response.end("expired token");
-        return;
+        return response
+          .writeHead(401, {
+            "Content-Type": "text/plain",
+            "WWW-Authenticate": 'Bearer scope="docs.read"',
+          })
+          .end("expired token");
       }
       const message = JSON.parse(body) as { id?: number; method?: string };
+      const reply = (result: unknown) =>
+        sendJson(response, { jsonrpc: "2.0", id: message.id, result });
       if (message.method === "initialize") {
-        return sendJson(response, {
-          jsonrpc: "2.0",
-          id: message.id,
-          result: {
-            protocolVersion: "2025-06-18",
-            capabilities: { tools: {} },
-            serverInfo: { name: "fixture", version: "1.0.0" },
-          },
+        return reply({
+          protocolVersion: "2025-06-18",
+          capabilities: { tools: {} },
+          serverInfo: { name: "fixture", version: "1.0.0" },
         });
       }
       if (message.method === "notifications/initialized") {
-        response.writeHead(202, { "Content-Length": "0" });
-        response.end();
-        return;
+        return response.writeHead(202, { "Content-Length": "0" }).end();
       }
       if (message.method === "tools/list") {
-        return sendJson(response, {
-          jsonrpc: "2.0",
-          id: message.id,
-          result: {
-            tools: [
-              {
-                name: "read_page",
-                inputSchema: { type: "object" },
-              },
-            ],
-          },
-        });
+        return reply({ tools: [{ name: "read_page", inputSchema: { type: "object" } }] });
       }
     }
     response.writeHead(404).end();
@@ -278,9 +244,7 @@ it("clears requester credentials when the same URL changes to shared OAuth", asy
     await expect(readMcpOAuthCredentialsStatus(requester)).resolves.toEqual({
       state: "unauthenticated",
     });
-    await expect(readMcpOAuthCredentialsStatus(operator)).resolves.toEqual({
-      state: "authorized",
-    });
+    await expect(readMcpOAuthCredentialsStatus(operator)).resolves.toEqual({ state: "authorized" });
     expect(await readMcpOAuthPendingAuthorization("requester-state")).toBeUndefined();
   });
 });
@@ -289,12 +253,9 @@ it("logs in and probes through the CLI with a portless loopback registration", a
   await withTempHome(`openclaw-mcp-login-${randomUUID()}-`, async () => {
     const fixture = await startOAuthFixture();
     try {
+      const identity = operatorMcpOAuthIdentity("fixture", `${fixture.issuer}/mcp`);
       const expectAuth = (state: string) =>
-        expect(
-          readMcpOAuthCredentialsStatus(
-            operatorMcpOAuthIdentity("fixture", `${fixture.issuer}/mcp`),
-          ),
-        ).resolves.toMatchObject({ state });
+        expect(readMcpOAuthCredentialsStatus(identity)).resolves.toMatchObject({ state });
       const callbackPort = await getFreePort();
       const redirectUrl = `http://127.0.0.1:${callbackPort}/oauth/callback`;
       const logs: string[] = [];
@@ -318,8 +279,10 @@ it("logs in and probes through the CLI with a portless loopback registration", a
       });
       const [browserResponse] = await Promise.all([browser, run("login", "fixture")]);
       expect(logs.some((line) => line.includes("Waiting for the browser"))).toBe(true);
-      expect(browserResponse.status).toBe(200);
-      expect(browserResponse.body).toContain("Authorization received");
+      expect(browserResponse).toEqual({
+        status: 200,
+        body: expect.stringContaining("Authorization received"),
+      });
 
       await expectAuth("authorized");
       expect(fixture.exchange()).toMatchObject({
@@ -340,11 +303,11 @@ it("logs in and probes through the CLI with a portless loopback registration", a
       ]);
       expect(requests[0]?.body).toBe(requests[1]?.body);
       for (const request of requests) {
-        expect(request.contentLength).toBe(String(Buffer.byteLength(request.body)));
-        expect(request.transferEncoding).toBeUndefined();
+        expect(request.headers["content-length"]).toBe(String(Buffer.byteLength(request.body)));
+        expect(request.headers["transfer-encoding"]).toBeUndefined();
       }
-      expect(requests[0]?.authorization).toBe("Bearer fixture-access-token");
-      expect(requests.slice(1).map((request) => request.authorization)).toEqual(
+      expect(requests[0]?.headers.authorization).toBe("Bearer fixture-access-token");
+      expect(requests.slice(1).map((request) => request.headers.authorization)).toEqual(
         Array(3).fill("Bearer fixture-refreshed-access-token"),
       );
       // A live owner must keep this CLI from refreshing or clearing its credentials.
