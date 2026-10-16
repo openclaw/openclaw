@@ -237,6 +237,10 @@ describe("printCronList", () => {
 
     printCronList([malformedJob], runtime);
     expectLogsToInclude(logs, "malformed-job");
+
+    // The sibling writer must tolerate the same row instead of dereferencing state (#173631).
+    printCronShow(malformedJob, runtime);
+    expectLogsToInclude(logs, "malformed-job");
   });
 
   it.each([

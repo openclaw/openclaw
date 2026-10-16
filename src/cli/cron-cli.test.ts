@@ -455,6 +455,48 @@ describe("cron cli", () => {
     expect(defaultRuntime.log).toHaveBeenCalledWith("diagnostic: exec stderr tail");
   });
 
+  it("renders a cron show row whose state and payload are missing", async () => {
+    resetGatewayMock();
+    const malformed = {
+      id: "malformed-job",
+      name: "Malformed Job",
+      enabled: true,
+      schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
+    } as unknown as CronJob;
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.list") {
+        return cronPage([malformed], 0, 1);
+      }
+      return undefined;
+    });
+
+    // Real entry point: the CLI command must render the row, not throw.
+    await buildProgram().parseAsync(["cron", "show", "malformed-job"], { from: "user" });
+
+    expect(defaultRuntime.log).toHaveBeenCalledWith("id: malformed-job");
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+  });
+
+  it("keeps the ambiguous cron show name error when a matching row has no schedule", async () => {
+    resetGatewayMock();
+    const malformed = {
+      id: "broken",
+      name: "Duplicate",
+      enabled: true,
+    } as unknown as CronJob;
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.list") {
+        return cronPage([malformed, createCronJob("second", "Duplicate")], 0, 2);
+      }
+      return undefined;
+    });
+
+    await expect(
+      buildProgram().parseAsync(["cron", "show", "Duplicate"], { from: "user" }),
+    ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+    expectRuntimeErrorContaining("Multiple automations match this name.");
+  });
+
   it("creates a configured agent job from a positional cron schedule and prompt", async () => {
     const params = await add(
       "0 2 * * *",
