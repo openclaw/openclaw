@@ -2219,6 +2219,7 @@
                       "providers/github-copilot",
                       "providers/gmi",
                       "providers/google",
+                      "providers/google-vertex",
                       "providers/groq",
                       "providers/huggingface",
                       "providers/longcat",
