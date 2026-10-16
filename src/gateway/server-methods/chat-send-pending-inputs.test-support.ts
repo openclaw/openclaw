@@ -6,7 +6,6 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
-import { getRuntimeConfig } from "../../config/config.js";
 import {
   appendTranscriptMessage,
   loadTranscriptEventsSync,
@@ -36,10 +35,11 @@ import type { GatewayClient, RespondFn } from "./types.js";
 export function setClientProfile(
   client: GatewayClient,
   profile: { id: string; updatedAt: number },
+  displayName: string | null = null,
 ) {
   client.authenticatedUserProfile = {
     profileId: profile.id,
-    displayName: null,
+    displayName,
     hasAvatar: false,
     updatedAt: profile.updatedAt,
   };
@@ -201,8 +201,6 @@ export function useBrowserFollowupFixture() {
     });
     // The process-local placement fallback would retain the previous case's deleted home.
     const context = createDirectChatContext({
-      getRuntimeConfig,
-      chatQueuedTurns: new Map(),
       workerSessionPlacementService: createWorkerSessionPlacementStore(),
     });
     const client: GatewayClient = {
@@ -228,16 +226,11 @@ export function useBrowserFollowupFixture() {
         signal?: AbortSignal;
         sessionMutationCommitGuard?: () => void;
       },
-      requestParams = params,
+      p = params,
     ) => {
       const request = {
-        req: {
-          type: "req",
-          id: requestParams.idempotencyKey,
-          method: "chat.send",
-          params: requestParams,
-        },
-        params: requestParams,
+        req: { type: "req", id: p.idempotencyKey, method: "chat.send", params: p },
+        params: p,
         client,
         context,
         respond,
@@ -268,6 +261,16 @@ export function useBrowserFollowupFixture() {
       activeRun?.complete();
       await completion;
     };
+    const cleanup = async () => {
+      await finishDispatch();
+      dispatchInboundMessageMock.mockReset();
+      if (memoryIncognito) {
+        memorySessionActorOwners.closeSession(
+          { agentId: scope.agentId, path: scope.storePath },
+          scope.sessionKey,
+        );
+      }
+    };
     return {
       scope,
       context,
@@ -281,16 +284,8 @@ export function useBrowserFollowupFixture() {
       send,
       dispatchedRecorder: dispatchedRecorder.promise,
       finishDispatch,
-      cleanup: async () => {
-        await finishDispatch();
-        dispatchInboundMessageMock.mockReset();
-        if (memoryIncognito) {
-          memorySessionActorOwners.closeSession(
-            { agentId: scope.agentId, path: scope.storePath },
-            scope.sessionKey,
-          );
-        }
-      },
+      cleanup,
+      [Symbol.asyncDispose]: cleanup,
     };
   };
 }

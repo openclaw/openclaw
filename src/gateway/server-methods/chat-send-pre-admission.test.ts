@@ -129,15 +129,30 @@ function submittedMessage(params: RetryParams) {
   };
 }
 
+function expectFailure(respond: RetryParams["respond"], fields: Record<string, unknown>) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(fields));
+}
+
 function expectConflict(respond: RetryParams["respond"]) {
-  expect(respond).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({
-      code: "INVALID_REQUEST",
-      details: { reason: "chat-request-conflict" },
-    }),
-  );
+  expectFailure(respond, {
+    code: "INVALID_REQUEST",
+    details: { reason: "chat-request-conflict" },
+  });
+}
+
+async function retry(params: RetryParams) {
+  return respondChatSendRetry(params, await prepareChatSendRetryComparison(params));
+}
+
+async function expectRetryConflict(params: RetryParams) {
+  expect(await retry(params)).toBe(true);
+  expectConflict(params.respond);
+}
+
+async function realRecovery() {
+  return (
+    await vi.importActual<typeof import("./chat-restart-recovery.js")>("./chat-restart-recovery.js")
+  ).resolveDurableChatClaim;
 }
 
 beforeEach(() => {
@@ -302,7 +317,7 @@ describe("chat send retry identity", () => {
       } else if (state === "queued") {
         params.context.chatQueuedTurns.set(clientRunId, controller);
       }
-      expect(respondChatSendRetry(params, await prepareChatSendRetryComparison(params))).toBe(true);
+      expect(await retry(params)).toBe(true);
       expect(params.respond).toHaveBeenCalledWith(
         true,
         expect.objectContaining({
@@ -316,8 +331,7 @@ describe("chat send retry identity", () => {
       params.respond.mockClear();
       params.request.requestIdentity = "changed-carol-selection";
       params.request.mentions = [{ profileId: "carol", start: 3, end: 7 }];
-      expect(respondChatSendRetry(params, await prepareChatSendRetryComparison(params))).toBe(true);
-      expectConflict(params.respond);
+      await expectRetryConflict(params);
       expect(readSessionSubmittedInput).not.toHaveBeenCalled();
     },
   );
@@ -329,7 +343,7 @@ describe("chat send retry identity", () => {
       ok: true,
       requestIdentity: params.request.requestIdentity,
     });
-    expect(respondChatSendRetry(params, await prepareChatSendRetryComparison(params))).toBe(false);
+    expect(await retry(params)).toBe(false);
     expect(params.respond).not.toHaveBeenCalled();
 
     setGatewayDedupeEntry({
@@ -338,8 +352,7 @@ describe("chat send retry identity", () => {
       entry: { ts: 200, ok: true, payload: { runId: params.session.clientRunId, status: "ok" } },
     });
     params.request.requestIdentity = "changed-after-terminal";
-    expect(respondChatSendRetry(params, await prepareChatSendRetryComparison(params))).toBe(true);
-    expectConflict(params.respond);
+    await expectRetryConflict(params);
   });
 
   it("transfers the pending input identity when an abort precedes active registration", async () => {
@@ -363,8 +376,7 @@ describe("chat send retry identity", () => {
       endedAt: 200,
     });
     params.request.requestIdentity = "changed-after-abort";
-    expect(respondChatSendRetry(params, await prepareChatSendRetryComparison(params))).toBe(true);
-    expectConflict(params.respond);
+    await expectRetryConflict(params);
     expect(params.context.dedupe.has(params.session.pendingChatSendKey)).toBe(false);
   });
 
@@ -388,68 +400,47 @@ describe("chat send retry identity", () => {
     },
   );
 
-  it.each(["mentions", "work context"] as const)(
-    "keeps a missing %s retry unverifiable without RAM fingerprints",
-    async (annotation) => {
-      const params = retryFixture(`unkeyed-${annotation}`);
-      params.request.requestIdentity = undefined;
-      if (annotation === "work context") {
-        params.request.mentions = undefined;
-        params.request.workContext = {
-          snapshot: { page: "chat" },
-          text: params.request.rawMessage,
-        };
-      }
-      cacheSuccess(params, 100);
-      vi.mocked(readSessionSubmittedInput).mockResolvedValue(undefined);
-      expect(respondChatSendRetry(params, await prepareChatSendRetryComparison(params))).toBe(true);
-      expectConflict(params.respond);
-      expect(readSessionSubmittedInput).toHaveBeenCalledOnce();
-    },
-  );
-
-  it("rejects a keyed plain-text retry after the device identity changes", async () => {
-    const params = retryFixture("rotated-device-identity");
-    params.request.mentions = undefined;
-    params.request.requestIdentity = "rotated-device-fingerprint";
-    params.session.entry = {
-      sessionId: "mention-session",
-      updatedAt: 100,
-      restartRecoveryTerminalRunIds: [params.session.clientRunId],
-    };
-    vi.mocked(readSessionSubmittedInput).mockResolvedValue({
-      role: "user",
-      timestamp: 100,
-      content: params.request.rawMessage,
-      __openclaw: { chatRequestIdentity: "original-device-fingerprint" },
-    });
-    expect(respondChatSendRetry(params, await prepareChatSendRetryComparison(params))).toBe(true);
-    expectConflict(params.respond);
-  });
-
-  it.each(["unchanged", "removed", "replaced"] as const)(
+  it.each(["unchanged", "removed", "replaced", "uncached removal", "rotated device"] as const)(
     "compares %s selections to the original source after RAM identity expires",
     async (selection) => {
       const params = retryFixture(`source-${selection}`);
-      const original = submittedMessage(params);
-      vi.mocked(readSessionSubmittedInput).mockResolvedValue(original);
-      cacheSuccess(params, 200);
+      const terminal = selection === "uncached removal" || selection === "rotated device";
+      if (terminal) {
+        params.session.entry!.restartRecoveryTerminalRunIds = [params.session.clientRunId];
+      } else {
+        cacheSuccess(params, 200);
+      }
+      vi.mocked(readSessionSubmittedInput).mockResolvedValue({
+        ...submittedMessage(params),
+        ...(selection === "rotated device"
+          ? { __openclaw: { chatRequestIdentity: "original-device-fingerprint" } }
+          : {}),
+      });
       params.request.mentions =
-        selection === "removed"
+        selection === "removed" || terminal
           ? undefined
           : selection === "replaced"
             ? [{ profileId: "carol", start: 3, end: 7 }]
             : params.request.mentions;
-      expect(respondChatSendRetry(params, await prepareChatSendRetryComparison(params))).toBe(true);
-      if (selection === "unchanged") {
-        expect(params.respond).toHaveBeenCalledWith(
-          true,
-          { runId: params.session.clientRunId, status: "ok" },
-          undefined,
-          { cached: true },
-        );
+      if (selection === "rotated device") {
+        params.request.requestIdentity = "rotated-device-fingerprint";
+      }
+      if (selection === "uncached removal") {
+        expect(
+          resolveChatSendRequestConflict(params, await prepareChatSendRetryComparison(params)),
+        ).toMatchObject({ details: { reason: "chat-request-conflict" } });
       } else {
-        expectConflict(params.respond);
+        expect(await retry(params)).toBe(true);
+        if (selection === "unchanged") {
+          expect(params.respond).toHaveBeenCalledWith(
+            true,
+            { runId: params.session.clientRunId, status: "ok" },
+            undefined,
+            { cached: true },
+          );
+        } else {
+          expectConflict(params.respond);
+        }
       }
       expect(readSessionSubmittedInput).toHaveBeenCalledWith(
         {
@@ -463,10 +454,18 @@ describe("chat send retry identity", () => {
     },
   );
 
-  it.each(["missing", "redacted"] as const)(
-    "does not acknowledge an unverifiable %s mention source",
+  it.each(["missing", "work context", "redacted"] as const)(
+    "does not acknowledge an unverifiable %s source without RAM fingerprints",
     async (source) => {
       const params = retryFixture(`unverifiable-${source}`);
+      params.request.requestIdentity = undefined;
+      if (source === "work context") {
+        params.request.mentions = undefined;
+        params.request.workContext = {
+          snapshot: { page: "chat" },
+          text: params.request.rawMessage,
+        };
+      }
       cacheSuccess(params, 200);
       if (source === "redacted") {
         vi.mocked(readSessionSubmittedInput).mockResolvedValue({
@@ -475,35 +474,15 @@ describe("chat send retry identity", () => {
           content: "[REDACTED]",
         });
       }
-      expect(respondChatSendRetry(params, await prepareChatSendRetryComparison(params))).toBe(true);
-      expectConflict(params.respond);
+      await expectRetryConflict(params);
+      expect(readSessionSubmittedInput).toHaveBeenCalledOnce();
       if (source === "missing") {
-        expect(params.respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            message: expect.stringContaining("Check the conversation history"),
-          }),
-        );
+        expectFailure(params.respond, {
+          message: expect.stringContaining("Check the conversation history"),
+        });
       }
     },
   );
-
-  it("rejects annotation removal from a terminal tombstone after the entire RAM cache is gone", async () => {
-    const params = retryFixture("terminal-source-without-cache");
-    params.session.entry = {
-      sessionId: "mention-session",
-      updatedAt: 100,
-      restartRecoveryTerminalRunIds: [params.session.clientRunId],
-    };
-    vi.mocked(readSessionSubmittedInput).mockResolvedValue(submittedMessage(params));
-    params.request.mentions = undefined;
-    expect(
-      resolveChatSendRequestConflict(params, await prepareChatSendRetryComparison(params)),
-    ).toMatchObject({
-      details: { reason: "chat-request-conflict" },
-    });
-  });
 
   it("refuses stale projection evidence before replaying a cached response", async () => {
     const { params } = preAdmissionFixture("stale-submitted-source");
@@ -512,11 +491,7 @@ describe("chat send retry identity", () => {
       new SessionTranscriptProjectionUnavailableError(params.session.entry!.sessionId),
     );
     expect(await runChatSendPreAdmission(params)).toBe(false);
-    expect(params.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
-    );
+    expectFailure(params.respond, { code: "UNAVAILABLE", retryable: true });
   });
 
   it("rejects a competing identity published while submitted comparison yields", async () => {
@@ -535,10 +510,7 @@ describe("chat send retry identity", () => {
     "consumes new-input policy in one current read when recovery needs no work (%s)",
     async (outcome) => {
       const { params } = preAdmissionFixture(`prepared-new-input-${outcome}`);
-      const actualRecovery = await vi.importActual<typeof import("./chat-restart-recovery.js")>(
-        "./chat-restart-recovery.js",
-      );
-      vi.mocked(resolveDurableChatClaim).mockImplementation(actualRecovery.resolveDurableChatClaim);
+      vi.mocked(resolveDurableChatClaim).mockImplementation(await realRecovery());
       if (outcome === "archived") {
         params.session.entry!.archivedAt = 100;
       }
@@ -567,11 +539,7 @@ describe("chat send retry identity", () => {
       if (outcome === "ready") {
         expect(params.respond).not.toHaveBeenCalled();
       } else {
-        expect(params.respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: "INVALID_REQUEST" }),
-        );
+        expectFailure(params.respond, { code: "INVALID_REQUEST" });
       }
     },
   );
@@ -594,12 +562,7 @@ describe("chat send retry identity", () => {
     await entered.promise;
     expect(resolveDurableChatClaim).toHaveBeenCalledOnce();
     expect(authorityReads).toBe(1);
-    fixture.context.dedupe.set(`chat:${session.clientRunId}`, {
-      ts: 200,
-      ok: true,
-      requestIdentity: "competing-input",
-      payload: { runId: session.clientRunId, status: "ok" },
-    });
+    cacheSuccess(params, 200, "competing-input");
     deferred.resolve({ kind: "continue", entry: session.entry });
     expect(await pending).toBe(false);
     expectConflict(fixture.respond);
@@ -652,16 +615,14 @@ describe("chat send retry identity", () => {
           }
         };
         params.assertCurrent();
-        const actualRecovery = await vi.importActual<typeof import("./chat-restart-recovery.js")>(
-          "./chat-restart-recovery.js",
-        );
+        const recover = await realRecovery();
         const entered = createDeferred();
         const release = createDeferred();
         let recoveryCompleted = false;
         vi.mocked(resolveDurableChatClaim).mockImplementationOnce(async (request) => {
           entered.resolve();
           await release.promise;
-          const result = await actualRecovery.resolveDurableChatClaim(request);
+          const result = await recover(request);
           recoveryCompleted = true;
           return result;
         });
@@ -697,11 +658,11 @@ describe("chat send retry identity", () => {
           expect(fixture.context.chatAbortControllers.size).toBe(0);
           expect(fixture.context.chatQueuedTurns?.size ?? 0).toBe(0);
           expect(client).not.toHaveProperty("invalidated", true);
-          if (outcome === "unchanged") {
-            expect(settled).toEqual({ value: true, error: undefined });
-          } else {
-            expect(settled).toEqual({ value: undefined, error: mismatch });
-          }
+          expect(settled).toEqual(
+            outcome === "unchanged"
+              ? { value: true, error: undefined }
+              : { value: undefined, error: mismatch },
+          );
           expect(fixture.respond).not.toHaveBeenCalled();
         } finally {
           release.resolve();

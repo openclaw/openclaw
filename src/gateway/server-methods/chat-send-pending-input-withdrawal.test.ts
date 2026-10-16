@@ -25,7 +25,10 @@ import { abortQueuedChatTurnById } from "../chat-queued-turns.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import { readChatPendingInputs } from "./chat-pending-inputs.js";
-import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
+import {
+  setClientProfile,
+  useBrowserFollowupFixture,
+} from "./chat-send-pending-inputs.test-support.js";
 import { createActiveRun } from "./chat.abort.test-helpers.js";
 import * as sessionChangeEvent from "./session-change-event.js";
 import type { RespondFn } from "./types.js";
@@ -89,52 +92,43 @@ async function discardInput(
 
 describe("queued chat input withdrawal", () => {
   it("keeps refused browser input revoked after its session access returns", async () => {
-    const fixture = await createBrowserFollowupFixture({
+    await using fixture = await createBrowserFollowupFixture({
       preserveContent: true,
       persistDuringDispatch: true,
     });
-    try {
-      const profile = ensureProfileForEmail("restored-custody@example.test");
-      fixture.client.authenticatedUserProfile = {
-        profileId: profile.id,
-        displayName: null,
-        hasAvatar: false,
-        updatedAt: profile.updatedAt,
-      };
-      fixture.client.connect.scopes = ["operator.read", "operator.write"];
-      const ack = await fixture.send(undefined, { expectedProfileId: profile.id });
-      const recorder = await fixture.dispatchedRecorder;
-      const check = () =>
-        recorder.withPendingInputCurrent
-          ? recorder.withPendingInputCurrent(() => {})
-          : Promise.resolve().then(() => recorder.withPendingInput?.(() => {}));
-      await patchSessionEntryCore(fixture.scope, () => ({ visibility: "draft" }));
-      await expect(check()).rejects.toMatchObject({
-        message: "Message injection authority is no longer current",
-        cause: expect.objectContaining({
-          message: expect.stringContaining("session is draft for this connection"),
+    const profile = ensureProfileForEmail("restored-custody@example.test");
+    setClientProfile(fixture.client, profile);
+    fixture.client.connect.scopes = ["operator.read", "operator.write"];
+    const ack = await fixture.send(undefined, { expectedProfileId: profile.id });
+    const recorder = await fixture.dispatchedRecorder;
+    const check = () =>
+      recorder.withPendingInputCurrent
+        ? recorder.withPendingInputCurrent(() => {})
+        : Promise.resolve().then(() => recorder.withPendingInput?.(() => {}));
+    await patchSessionEntryCore(fixture.scope, () => ({ visibility: "draft" }));
+    await expect(check()).rejects.toMatchObject({
+      message: "Message injection authority is no longer current",
+      cause: expect.objectContaining({
+        message: expect.stringContaining("session is draft for this connection"),
+      }),
+    });
+    await patchSessionEntryCore(fixture.scope, () => ({ visibility: "shared" }));
+    await expect(check()).rejects.toThrow("Message injection authority is no longer current");
+    await fixture.finishDispatch();
+    expect(ack).toHaveBeenCalledOnce();
+    expect(ack.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
+    expect(recorder.getAdmissionReceipt()).toBeUndefined();
+    expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
+      total: 1,
+      items: [{ state: "interrupted" }],
+    });
+    expect(loadTranscriptEventsSync(fixture.scope)).not.toContainEqual(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          idempotencyKey: `${fixture.params.idempotencyKey}:user`,
         }),
-      });
-      await patchSessionEntryCore(fixture.scope, () => ({ visibility: "shared" }));
-      await expect(check()).rejects.toThrow("Message injection authority is no longer current");
-      await fixture.finishDispatch();
-      expect(ack).toHaveBeenCalledOnce();
-      expect(ack.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
-      expect(recorder.getAdmissionReceipt()).toBeUndefined();
-      expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
-        total: 1,
-        items: [{ state: "interrupted" }],
-      });
-      expect(loadTranscriptEventsSync(fixture.scope)).not.toContainEqual(
-        expect.objectContaining({
-          message: expect.objectContaining({
-            idempotencyKey: `${fixture.params.idempotencyKey}:user`,
-          }),
-        }),
-      );
-    } finally {
-      await fixture.cleanup();
-    }
+      }),
+    );
   });
 
   it.each([
@@ -147,7 +141,7 @@ describe("queued chat input withdrawal", () => {
   ] as const)(
     "settles $target input ($stopReason, discard: $discardPendingInput) without losing recovery",
     async ({ target, stopReason, reason, discardPendingInput }) => {
-      const fixture = await createBrowserFollowupFixture();
+      await using fixture = await createBrowserFollowupFixture();
       let dispatchCompletion: Promise<void> | undefined;
       try {
         await fixture.send();
@@ -254,7 +248,6 @@ describe("queued chat input withdrawal", () => {
         }
       } finally {
         clearFollowupQueue(fixture.scope.sessionKey);
-        await fixture.cleanup();
       }
     },
   );
@@ -262,7 +255,7 @@ describe("queued chat input withdrawal", () => {
   it.each(["admitted", "consumed", "queued-consumed"] as const)(
     "does not stop an input that cannot be removed ($0)",
     async (target) => {
-      const fixture = await createBrowserFollowupFixture();
+      await using fixture = await createBrowserFollowupFixture();
       try {
         await fixture.send();
         const recorder = await fixture.dispatchedRecorder;
@@ -287,7 +280,6 @@ describe("queued chat input withdrawal", () => {
         expect(loadTranscriptEventsSync(fixture.scope)).toEqual(transcript);
       } finally {
         clearFollowupQueue(fixture.scope.sessionKey);
-        await fixture.cleanup();
       }
     },
   );
@@ -295,7 +287,7 @@ describe("queued chat input withdrawal", () => {
   it.each(["retry", "resume", "retired", "revoked"] as const)(
     "keeps refused removal available for $0 and fences adoption through withdrawal commit",
     async (afterRefusal) => {
-      const fixture = await createBrowserFollowupFixture();
+      await using fixture = await createBrowserFollowupFixture();
       let unsubscribe: (() => void) | undefined;
       const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
       const refusal = vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission");
@@ -431,7 +423,6 @@ describe("queued chat input withdrawal", () => {
           );
         }
         clearFollowupQueue(fixture.scope.sessionKey);
-        await fixture.cleanup();
       }
     },
   );

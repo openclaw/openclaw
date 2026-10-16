@@ -1,6 +1,10 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import * as replyAdmission from "../../auto-reply/reply/reply-admission-ticket.js";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
@@ -14,7 +18,10 @@ import {
   installGatewayTestHooks,
 } from "../test-helpers.js";
 import { handleTrustedInternalChatSend } from "./chat-send-handler.js";
-import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
+import {
+  setClientProfile,
+  useBrowserFollowupFixture,
+} from "./chat-send-pending-inputs.test-support.js";
 import type { RespondFn } from "./types.js";
 
 installGatewayTestHooks();
@@ -64,12 +71,11 @@ it.for([false, true])(
     );
     try {
       await withinTest(
-        Promise.race([
+        awaitGateBeforeSettlement(
           registrationEntered.promise,
-          sending.then(() => {
-            throw new Error("chat.send returned before awaiting run registration");
-          }),
-        ]),
+          sending,
+          "chat.send returned before awaiting run registration",
+        ),
         signal,
       );
       expect(respond).not.toHaveBeenCalled();
@@ -105,12 +111,7 @@ it.for([false, true])(
     const fixture = await createFixture({ active: false });
     fixture.params.idempotencyKey = `ordered-first-${retry}`;
     const profile = ensureProfileForEmail("ordered-preparation@example.test");
-    fixture.client.authenticatedUserProfile = {
-      profileId: profile.id,
-      displayName: "Ordering fixture",
-      hasAvatar: false,
-      updatedAt: profile.updatedAt,
-    };
+    setClientProfile(fixture.client, profile, "Ordering fixture");
     // Keep the handler, reply dispatcher, admission FIFO, and transcript stores real.
     dispatchInboundMessageMock.mockReset();
     let retried = false;
