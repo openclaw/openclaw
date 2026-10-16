@@ -56,6 +56,12 @@ it("exposes the current navigation face through the real pane host without a gat
 it("applies a route draft and its focus cue to an already mounted native pane", async () => {
   installTranscriptDomMocks();
   onTestFinished(resetTranscriptTestDom);
+  const intervals = vi.spyOn(globalThis, "setInterval");
+  const clearInterval = vi.spyOn(globalThis, "clearInterval");
+  onTestFinished(() => {
+    intervals.mockRestore();
+    clearInterval.mockRestore();
+  });
   const renderProbe = vi.fn<(host: object, phase: "invalidate" | "commit") => void>();
   vi.stubGlobal("openclawRenderLifecycleTestHook", renderProbe);
   onTestFinished(() => {
@@ -67,6 +73,7 @@ it("applies a route draft and its focus cue to an already mounted native pane", 
   ]);
   const [draft, setDraft] = createSignal<string | undefined>(undefined);
   const [focusComposer, setFocusComposer] = createSignal(false);
+  const [presented, setPresented] = createSignal(true);
   const container = document.body.appendChild(createApplicationContextProvider(fixture.context));
   onTestFinished(() => container.remove());
   const view = mountSolid(
@@ -78,6 +85,7 @@ it("applies a route draft and its focus cue to an already mounted native pane", 
           active
           draft={draft()}
           focusComposer={focusComposer()}
+          presented={presented()}
         />
       </ApplicationProvider>
     ),
@@ -114,7 +122,22 @@ it("applies a route draft and its focus cue to an already mounted native pane", 
   expect(textarea.closest(".agent-chat__input")?.classList).toContain(
     "agent-chat__input--prefill-attention",
   );
+  const poll = intervals.mock.calls.findIndex(([, delay]) => delay === 60_000);
+  expect(poll).toBeGreaterThanOrEqual(0);
+  setPresented(false);
+  await waitForSolid(() =>
+    expect(clearInterval).toHaveBeenCalledWith(intervals.mock.results[poll]?.value),
+  );
+  const priorIntervals = intervals.mock.calls.length;
+  setPresented(true);
+  await pane.updateComplete;
+  const resumedPoll = intervals.mock.calls.findIndex(
+    ([, delay], index) => index >= priorIntervals && delay === 60_000,
+  );
+  expect(resumedPoll).toBeGreaterThanOrEqual(priorIntervals);
+  expect(view.container.querySelector(".agent-chat__composer-combobox textarea")).toBe(textarea);
   view.unmount();
+  expect(clearInterval).toHaveBeenCalledWith(intervals.mock.results[resumedPoll]?.value);
 });
 
 it("opens provider findings through the mounted pane's first rendered frame", async () => {

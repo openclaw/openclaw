@@ -25,7 +25,6 @@ import type { PresencePayload } from "../../app/user-profile.ts";
 import type { MarkdownRenderOptions } from "../../components/markdown-render-options.ts";
 import type { SessionPanelToggleSlot } from "../../components/session-panel-toggle-buffer.ts";
 import { SessionProgressCardController } from "../../components/session-progress-card-controller.ts";
-import { i18n } from "../../i18n/lib/translate.ts";
 import type {
   BoardCommandEvent,
   BoardProvider,
@@ -33,7 +32,6 @@ import type {
 } from "../../lib/board/provider.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import { PRESENTATION_CHANGED_EVENT } from "../../lib/presentation.ts";
-import { PollController } from "../../lib/reactive/poll-controller.ts";
 import type { GitHubPublicationBinding } from "../../lib/sessions/session-capability.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -153,6 +151,7 @@ export abstract class ChatPaneBase extends ControllerHost {
   private readonly handleVisibilityChange = () => {
     // Progress watches follow visibility before the parked view resumes.
     this.progressCard.hostUpdate();
+    this.requestUpdate();
     if (document.visibilityState !== "hidden") {
       return;
     }
@@ -205,14 +204,6 @@ export abstract class ChatPaneBase extends ControllerHost {
     paneRoot?.dispatchEvent(new Event(CHAT_PANE_LIFECYCLE_CHANGED_EVENT));
   }
 
-  // Relative labels still need a minute tick; external PR state is server-pushed.
-  readonly minutePoll = new PollController(
-    this,
-    60_000,
-    () => this.requestUpdate(),
-    true,
-    "visible",
-  );
   @viewState()
   mcpAppLaunch?: import("../../components/mcp-app-launch.ts").McpAppOpenDetail;
   @viewState() paneId = "single";
@@ -672,7 +663,6 @@ export abstract class ChatPaneBase extends ControllerHost {
     super();
     observeNativeGateway(this);
     void new SubscriptionsController(this)
-      .watchStore(() => i18n)
       .effect(() => this.ownerDocument, installChatComposerPickerDismissal)
       .watchStore(
         () => this.context && chatInputOwnerForContext(this.context),

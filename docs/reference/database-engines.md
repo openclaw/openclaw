@@ -257,6 +257,13 @@ PostgreSQL integration is pending; this setting does not yet enable memory index
 index is not a PostgreSQL JavaScript-scan fallback. An embedding-provider failure
 does not silently authorize keyword-only PostgreSQL admission.
 
+The memory publication foundation admits its search definitions through the agent
+database owner. PostgreSQL rebuilds use connection-local temporary staging and
+publish canonical rows and their derived search projections in one writer
+transaction. SQLite retains its existing shadow-file publication. Memory search
+on PostgreSQL remains refused until its search and forget/status lifecycle is
+enabled together; this foundation does not change the support matrix above.
+
 Full text uses a named `simple` plus `unaccent` configuration, a stored generated
 `tsvector`, and GIN. Queries bind literal terms and compile conjunctions,
 disjunctions, adjacent phrases, and final-lexeme prefixes. User text is never

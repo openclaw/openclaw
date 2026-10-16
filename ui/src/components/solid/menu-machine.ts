@@ -334,14 +334,14 @@ export function useMenuMachine(
       }
     };
   });
+  // Keep Zag's imperative highlight within the currently enabled catalog.
   createEffect(
-    () => [options.items?.(), read().highlightedValue, options.value?.()] as const,
-    ([items, _highlighted, selected]) => {
+    () => [options.items?.(), read(), options.value?.()] as const,
+    ([items, api, selected]) => {
       if (!items) {
         return;
       }
       const enabled = items.filter((item) => !item.disabled);
-      const api = untrack(read);
       if (!enabled.some((item) => item.value === api.highlightedValue)) {
         const next =
           enabled.find((item) => item.value === selected)?.value ?? enabled[0]?.value ?? null;

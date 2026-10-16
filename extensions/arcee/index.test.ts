@@ -4,7 +4,11 @@ import {
   registerSingleProviderPlugin,
   resolveProviderPluginChoice,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { resolveAuthProfileOrder, type AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
+import {
+  applyProviderAuthConfigPatch,
+  resolveAuthProfileOrder,
+  type AuthProfileStore,
+} from "openclaw/plugin-sdk/provider-auth";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ModelDefinitionConfig, OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
@@ -112,7 +116,7 @@ describe("arcee provider plugin", () => {
           ),
         },
       };
-      const cfg: OpenClawConfig = result.configPatch ?? {};
+      const cfg = applyProviderAuthConfigPatch({}, result.configPatch, result);
       const order = resolveAuthProfileOrder({ cfg, store, provider: "arcee" });
       expect(order).toContain(profileId);
       expect(order).toContain(`${route.credentialProvider}:other`);

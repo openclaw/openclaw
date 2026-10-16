@@ -991,6 +991,8 @@ const postgresConformancePaths = [
   "src/infra/kysely-sync*.ts",
   "src/infra/sqlite-transaction.ts",
   "extensions/workboard/**",
+  "extensions/memory-core/src/memory/**",
+  "extensions/memory-core/src/memory-session-tombstones.ts",
   "src/config/zod-schema.database.ts",
   "scripts/test-database-conformance*.mjs",
 ];

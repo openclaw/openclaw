@@ -75,6 +75,13 @@ function findSites(file: string, source: ts.SourceFile): DialectSite[] {
     ) {
       return;
     }
+    // This PostgreSQL-only worker owns a connection-local spool, not SQLite temp-schema debt.
+    if (
+      match.construct === "temp-schema" &&
+      file === "extensions/memory-core/src/memory/manager-publication-postgres.ts"
+    ) {
+      return;
+    }
     const { line, character } = source.getLineAndCharacterOfPosition(position);
     sites.push({
       ...match,

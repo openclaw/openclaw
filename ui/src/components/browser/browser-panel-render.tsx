@@ -1,6 +1,6 @@
 import { createMemo, untrack } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
-import { Match, onSettled, Switch } from "solid-js";
+import { Match, onCleanup, onSettled, Switch } from "solid-js";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -323,6 +323,11 @@ function NativeViewport(props: ControllerProps) {
 }
 
 function ViewportContent(props: ControllerProps) {
+  // Input queues belong to this viewport’s synchronous browser owner.
+  const input = untrack(() => props.controller.input);
+  onCleanup(() => {
+    input.elements = {};
+  });
   return (
     <Switch>
       <Match
@@ -370,13 +375,14 @@ function ViewportContent(props: ControllerProps) {
         />
       </Match>
       <Match when={Boolean(props.controller.view)}>
-        <div class="bp-stage">
+        <div class="bp-stage" ref={(element) => (input.elements.stage = element)}>
           <img
             class="bp-shot"
             src={props.controller.view!.dataUrl}
             alt={props.controller.view?.metrics?.title || ""}
           />
           <canvas
+            ref={(element) => (input.elements.overlay = element)}
             class={[
               "bp-overlay",
               {
@@ -393,6 +399,7 @@ function ViewportContent(props: ControllerProps) {
           />
           {props.controller.mode === "interact" ? (
             <textarea
+              ref={(element) => (input.elements.input = element)}
               class="bp-overlay bp-input"
               aria-label={t("browser.inputLabel")}
               autocomplete="off"

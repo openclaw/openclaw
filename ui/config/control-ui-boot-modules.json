@@ -2340,7 +2340,6 @@
   "ui/src/lib/presence-connections.ts",
   "ui/src/lib/presenter.ts",
   "ui/src/lib/reactive/application-native.ts",
-  "ui/src/lib/reactive/poll-controller.ts",
   "ui/src/lib/session-pr-automation-spec.ts",
   "ui/src/lib/session-pr-automation.ts",
   "ui/src/lib/session-progress-cards.ts",

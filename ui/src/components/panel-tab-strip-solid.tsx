@@ -1,6 +1,15 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import type { Accessor } from "solid-js";
-import { For, Show, createEffect, createMemo, flush, onSettled, untrack } from "solid-js";
+import {
+  For,
+  Show,
+  createEffect,
+  createMemo,
+  createSignal,
+  flush,
+  onSettled,
+  untrack,
+} from "solid-js";
 import { createTabsController } from "../lib/tabs-controller.ts";
 import type { PanelTabStripTab } from "./panel-tab-strip-types.ts";
 import { Icon } from "./solid/icon.tsx";
@@ -37,18 +46,6 @@ export type PanelTabStripProps<T extends SolidPanelTabStripTab> = {
 
 const PANEL_TAB_DRAG_TYPE = "application/x-openclaw-panel-tab";
 const keyboardCloseActivations = new WeakSet<Element>();
-
-function clearDropTargets(element: Element): void {
-  element
-    .closest(".tabstrip")
-    ?.querySelectorAll(".is-drop-before, .is-drop-after")
-    .forEach((target) => target.classList.remove("is-drop-before", "is-drop-after"));
-}
-
-function finishDrag(element: Element): void {
-  clearDropTargets(element);
-  element.closest(".tabstrip")?.removeAttribute("data-dragged-panel-tab");
-}
 
 function activeElementFor(element: Element): Element | null {
   const root = element.getRootNode();
@@ -116,6 +113,11 @@ function NewControl<T extends SolidPanelTabStripTab>(props: {
 
 function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps<T>) {
   let group!: HTMLDivElement;
+  const [dropPreview, setDropPreview] = createSignal<[id: string, placement: "before" | "after"]>();
+  const finishDrag = () => {
+    setDropPreview(undefined);
+    group.removeAttribute("data-dragged-panel-tab");
+  };
   let controller: ReturnType<typeof createTabsController> | undefined;
   let scheduleMeasurement = () => {};
   const controlsFor = (tab: T) =>
@@ -142,7 +144,6 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
     }));
     const styles = bindShadowStyles(group, [tabsStyles]);
     let disposed = false;
-    const scroller = group;
     let resizeObserver: ResizeObserver | undefined;
     let observed = new Set<Element>();
     let frame: number | undefined;
@@ -157,7 +158,7 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
         }
         const children = [...group.children];
         const labels = [...group.querySelectorAll<HTMLElement>(".tabstrip-tab__label")];
-        const nextObserved = new Set<Element>([scroller, ...children, ...labels]);
+        const nextObserved = new Set<Element>([group, ...children, ...labels]);
         for (const target of observed) {
           if (!nextObserved.has(target)) {
             resizeObserver?.unobserve(target);
@@ -175,7 +176,7 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
           overflowing: label.scrollWidth > label.clientWidth + 1,
         }));
         const rects = children.map((child) => child.getBoundingClientRect());
-        const viewport = scroller.getBoundingClientRect();
+        const viewport = group.getBoundingClientRect();
         // Physical rects handle both directions without scrollLeft normalization.
         const left = rects.some((rect) => viewport.left - rect.left > 8);
         const right = rects.some((rect) => rect.right - viewport.right > 8);
@@ -192,11 +193,10 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
     // Label text can overflow without changing its observed width.
     const mutationObserver = new MutationObserver(schedule);
     mutationObserver.observe(group, { childList: true, characterData: true, subtree: true });
-    scroller.addEventListener("scroll", schedule, { passive: true });
     if (typeof ResizeObserver === "function") {
       resizeObserver = new ResizeObserver(schedule);
-      resizeObserver.observe(scroller);
-      observed.add(scroller);
+      resizeObserver.observe(group);
+      observed.add(group);
     }
     schedule();
     return () => {
@@ -206,7 +206,6 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
       styles.dispose();
       mutationObserver.disconnect();
       resizeObserver?.disconnect();
-      scroller.removeEventListener("scroll", schedule);
       if (frame !== undefined) {
         cancelAnimationFrame(frame);
       }
@@ -279,12 +278,14 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
         }}
         class="oc-tabs tabstrip"
         role="tablist"
+        onScroll={() => scheduleMeasurement()}
       >
         <For each={props.tabs} keyed={(tab) => tab.id}>
           {(tab, index) => {
             const selected = () => tab().id === props.activeId;
             const reorderId = () => tab().reorderId ?? tab().id;
             const draggable = () => Boolean(props.onReorder) && tab().draggable !== false;
+            const preview = () => dropPreview()?.[0] === reorderId() && dropPreview()?.[1];
             const handleDrag = (event: DragEvent) => {
               const target = event.currentTarget;
               if (!props.onReorder || !event.dataTransfer || !(target instanceof Element)) {
@@ -292,7 +293,7 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
               }
               const dropping = event.type === "drop";
               const sourceId =
-                target.closest<HTMLElement>(".tabstrip")?.dataset.draggedPanelTab ||
+                group.dataset.draggedPanelTab ||
                 (dropping ? event.dataTransfer.getData(PANEL_TAB_DRAG_TYPE) : "");
               if (!sourceId || sourceId === reorderId()) {
                 return;
@@ -300,12 +301,11 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
               event.preventDefault();
               if (dropping) {
                 const placement = dropPlacement(event, target);
-                finishDrag(target);
+                finishDrag();
                 props.onReorder(sourceId, reorderId(), placement);
               } else {
                 event.dataTransfer.dropEffect = "move";
-                clearDropTargets(target);
-                target.classList.add(`is-drop-${dropPlacement(event, target)}`);
+                setDropPreview([reorderId(), dropPlacement(event, target)]);
               }
             };
             const content = () => (
@@ -330,7 +330,14 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
                   type="button"
                   role="tab"
                   id={tab().domId}
-                  class={["oc-tab", "tabstrip-tab", tab().className]}
+                  class={[
+                    "oc-tab tabstrip-tab",
+                    tab().className,
+                    {
+                      "is-drop-before": preview() === "before",
+                      "is-drop-after": preview() === "after",
+                    },
+                  ]}
                   data-tab-value={tab().id}
                   aria-controls={controlsFor(tab())}
                   aria-selected={selected() ? "true" : "false"}
@@ -349,12 +356,7 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
                     }
                     event.dataTransfer.effectAllowed = "move";
                     event.dataTransfer.setData(PANEL_TAB_DRAG_TYPE, reorderId());
-                    if (event.currentTarget instanceof Element) {
-                      const currentGroup = event.currentTarget.closest<HTMLElement>(".tabstrip");
-                      if (currentGroup) {
-                        currentGroup.dataset.draggedPanelTab = reorderId();
-                      }
-                    }
+                    group.dataset.draggedPanelTab = reorderId();
                   }}
                   onDragOver={handleDrag}
                   onDragLeave={(event: DragEvent) => {
@@ -365,15 +367,12 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
                         event.currentTarget.contains(event.relatedTarget)
                       )
                     ) {
-                      event.currentTarget.classList.remove("is-drop-before", "is-drop-after");
+                      const id = reorderId();
+                      setDropPreview((current) => (current?.[0] === id ? undefined : current));
                     }
                   }}
                   onDrop={handleDrag}
-                  onDragEnd={(event: DragEvent) => {
-                    if (event.currentTarget instanceof Element) {
-                      finishDrag(event.currentTarget);
-                    }
-                  }}
+                  onDragEnd={finishDrag}
                 >
                   <Show when={tab().labelTooltip} fallback={content()}>
                     <openclaw-tooltip
