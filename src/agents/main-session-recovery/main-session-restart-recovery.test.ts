@@ -113,7 +113,6 @@ import { SessionManager } from "../sessions/session-manager.js";
 import {
   createAssistantToolCallMessage,
   createSessionEntry,
-  createSessionStore,
   createSubagentRunRecord,
   type SessionEntryFixture,
   expectRecord,
@@ -146,6 +145,8 @@ import { recoverStore } from "./main-session-restart-recovery-store.js";
 import {
   codeModeCheckpointMessage,
   codeModeWaitCallMessage,
+  textContent,
+  toolCall,
   makeAssistantTextMessage,
   makeMessageDeliveryTranscript,
   makeMessageToolCall,
@@ -239,6 +240,8 @@ const {
   makeSessionsDir,
   writeStorePath,
   writeStore,
+  writeMainSession,
+  makeMainSessionFixture,
   transcriptFixture,
   writeTranscript,
   writeCompletedToolTranscript,
@@ -300,28 +303,6 @@ function activeRestartRun(
   };
 }
 
-function mainSessionStore(
-  overrides: SessionEntryFixture = {},
-  sessionKey = "agent:main:main",
-): Record<string, SessionEntry> {
-  return createSessionStore(mainSessionEntry(overrides), sessionKey);
-}
-
-async function makeMainSessionFixture(
-  overrides: SessionEntryFixture & { agentId?: string; sessionKey?: string } = {},
-) {
-  const { agentId = "main", sessionKey = "agent:main:main", ...entry } = overrides;
-  const sessionsDir = await makeSessionsDir(agentId);
-  await writeMainSession({ sessionsDir, sessionKey, ...entry });
-  const storePath = path.join(sessionsDir, "sessions.json");
-  return {
-    sessionsDir,
-    storePath,
-    sessionKey,
-    readEntry: () => loadSessionEntry({ sessionKey, storePath }),
-  };
-}
-
 function deliveredReceiptEntry(
   toolCallId = "message-call-1",
   sourceRunId = "discord-message-1",
@@ -355,14 +336,6 @@ function makeControlUiRecoveryFixture(overrides: SessionEntryFixture = {}) {
     restartRecoverySourceIngress: "control-ui",
     ...overrides,
   });
-}
-
-async function writeMainSession({
-  sessionsDir,
-  sessionKey = "agent:main:main",
-  ...entry
-}: SessionEntryFixture & { sessionsDir: string; sessionKey?: string }): Promise<void> {
-  await writeStore(sessionsDir, mainSessionStore(entry, sessionKey));
 }
 
 async function writePreparedMainSessionTranscript(
@@ -496,7 +469,7 @@ describe("main-session-restart-recovery", () => {
         );
         for (const { entry } of owned) {
           await writeTranscript(sessionsDir, entry.sessionId, [
-            { role: "user", content: "finish the interrupted task" },
+            makeUserMessage("finish the interrupted task"),
           ]);
         }
       }
@@ -957,7 +930,7 @@ describe("main-session-restart-recovery", () => {
         await expect(
           markStartupOrphanedMainSessionsForRecovery({ cfg, stateDir: tmpDir }),
         ).resolves.toEqual({ marked: 0, skipped: 1 });
-        expect(sessionAccessor.loadSessionEntry(target)?.abortedLastRun).toBe(false);
+        expect(sessionAccessor.loadSessionEntry(target)?.abortedLastRun).toBe(true);
         expect(sessionAccessor.loadSessionEntry(target)?.mainRestartRecovery).toBeUndefined();
         expect(child.requesterSettleWake?.rearmGeneration).toBe(1);
         expect(callGateway).not.toHaveBeenCalled();
@@ -1259,7 +1232,7 @@ describe("main-session-restart-recovery", () => {
 
     const store = readStore(path.join(sessionsDir, "sessions.json"));
     expect(result).toEqual({ marked: 0, skipped: 0 });
-    expect(store["agent:main:main"]?.status).toBe("done");
+    expect(store["agent:main:main"]?.status).toBeUndefined();
     expect(store["agent:main:main"]?.restartRecoveryRuns).toBeUndefined();
   });
 
@@ -1295,7 +1268,7 @@ describe("main-session-restart-recovery", () => {
   it("re-marks an in-flight recovered turn and resumes it once after another restart", async () => {
     const { sessionsDir, sessionKey, readEntry } = await makeMainSessionFixture();
     await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "finish the interrupted task" },
+      makeUserMessage("finish the interrupted task"),
     ]);
     await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
     const recoveryRunId = String(gatewayParams().idempotencyKey);
@@ -1376,7 +1349,7 @@ describe("main-session-restart-recovery", () => {
       [sessionKey]: runningSessionEntry("main-session"),
     });
     await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "finish the interrupted long-running turn" },
+      makeUserMessage("finish the interrupted long-running turn"),
     ]);
 
     await expect(
@@ -1442,7 +1415,7 @@ describe("main-session-restart-recovery", () => {
         [sessionKey]: runningSessionEntry("main-session"),
       });
       await writeTranscript(sessionsDir, "main-session", [
-        { role: "user", content: "finish the admitted work after the restart" },
+        makeUserMessage("finish the admitted work after the restart"),
       ]);
 
       const rootAdmission = tryBeginGatewayRootWorkAdmission();
@@ -1461,7 +1434,7 @@ describe("main-session-restart-recovery", () => {
           runWithGatewayIndependentRootWorkAdmission(async () => undefined),
         ).rejects.toBeInstanceOf(GatewayDrainingError);
         await writeTranscript(sessionsDir, "main-session", [
-          makeToolResultMessage([{ type: "text", text: "Gateway restart admission is closed." }], {
+          makeToolResultMessage(textContent("Gateway restart admission is closed."), {
             toolName: "sessions_spawn",
             isError: true,
           }),
@@ -2283,7 +2256,7 @@ describe("main-session-restart-recovery", () => {
 
   it("resumes stale approval-pending exec tool results with restart-safe tools", async () => {
     const sessionsDir = await writePreparedMainSessionTranscript([
-      { role: "user", content: "run a command that needs approval" },
+      makeUserMessage("run a command that needs approval"),
       { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
       makeToolResultMessage("Approval required (id stale, full stale-approval-id).", {
         details: {
@@ -2330,9 +2303,9 @@ describe("main-session-restart-recovery", () => {
       },
     });
     await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "calculate the answer" },
+      makeUserMessage("calculate the answer"),
       { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "calc" }] },
-      { role: "toolResult", content: "42" },
+      makeToolResultMessage("42"),
     ]);
 
     await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 }, {});
@@ -2464,7 +2437,7 @@ describe("main-session-restart-recovery", () => {
     expect(callGateway).not.toHaveBeenCalled();
     expect(sendRecoveryNotice).not.toHaveBeenCalled();
     const entry = readEntry();
-    expect(entry?.status).toBe("done");
+    expect(entry?.status).toBeUndefined();
     expect(entry?.pendingFinalDelivery).toBeUndefined();
     expect(entry?.pendingDeliveryNotice).toMatchObject({
       intentId,
@@ -2526,14 +2499,9 @@ describe("main-session-restart-recovery", () => {
   it("retains restart safety when the first restart follows pending final persistence", async () => {
     const sessionsDir = await writePreparedMainSessionTranscript(
       [
-        { role: "user", content: "do the thing" },
+        makeUserMessage("do the thing"),
         makeToolResultMessage(
-          [
-            {
-              type: "text",
-              text: JSON.stringify({ status: "completed", value: "done", replaySafe: true }),
-            },
-          ],
+          textContent(JSON.stringify({ status: "completed", value: "done", replaySafe: true })),
           { toolName: "exec" },
         ),
         makeAssistantTextMessage("Safe work finished."),
@@ -2572,9 +2540,9 @@ describe("main-session-restart-recovery", () => {
       }),
     });
     await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "calculate the answer" },
+      makeUserMessage("calculate the answer"),
       { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "calc" }] },
-      { role: "toolResult", content: "42" },
+      makeToolResultMessage("42"),
     ]);
 
     await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
@@ -2623,16 +2591,16 @@ describe("main-session-restart-recovery", () => {
       },
     });
     await writeTranscript(sessionsDir, "active-key-session", [
-      { role: "user", content: "new run owns this key" },
-      { role: "toolResult", content: "done" },
+      makeUserMessage("new run owns this key"),
+      makeToolResultMessage("done"),
     ]);
     await writeTranscript(sessionsDir, "active-id-session", [
-      { role: "user", content: "new run owns this id" },
-      { role: "toolResult", content: "done" },
+      makeUserMessage("new run owns this id"),
+      makeToolResultMessage("done"),
     ]);
     await writeTranscript(sessionsDir, "recoverable-session", [
-      { role: "user", content: "recover this one" },
-      { role: "toolResult", content: "done" },
+      makeUserMessage("recover this one"),
+      makeToolResultMessage("done"),
     ]);
 
     const result = await recoverRestartAbortedMainSessions({
@@ -2658,8 +2626,8 @@ describe("main-session-restart-recovery", () => {
       },
     });
     await writeTranscript(sessionsDir, "stale-session", [
-      { role: "user", content: "recover the stale duplicate" },
-      { role: "toolResult", content: "done" },
+      makeUserMessage("recover the stale duplicate"),
+      makeToolResultMessage("done"),
     ]);
 
     const result = await recoverRestartAbortedMainSessions({
@@ -2731,8 +2699,8 @@ describe("main-session-restart-recovery", () => {
       },
     });
     await writeTranscript(sessionsDir, "control-session", [
-      { role: "user", content: "resume the control session" },
-      { role: "toolResult", content: "done" },
+      makeUserMessage("resume the control session"),
+      makeToolResultMessage("done"),
     ]);
 
     const createHandle = (runId: string): EmbeddedAgentQueueHandle => ({
@@ -2858,8 +2826,8 @@ describe("main-session-restart-recovery", () => {
       },
     });
     await writeTranscript(defaultSessionsDir, "default-main-session", [
-      { role: "user", content: "continue default" },
-      { role: "toolResult", content: "default result" },
+      makeUserMessage("continue default"),
+      makeToolResultMessage("default result"),
     ]);
 
     const customStorePath = path.join(tmpDir, "custom-startup-duplicate", "sessions.json");
@@ -2871,8 +2839,8 @@ describe("main-session-restart-recovery", () => {
       },
     });
     await writeTranscript(path.dirname(customStorePath), "custom-main-session", [
-      { role: "user", content: "continue custom" },
-      { role: "toolResult", content: "custom result" },
+      makeUserMessage("continue custom"),
+      makeToolResultMessage("custom result"),
     ]);
 
     const recovery = scheduleRestartAbortedMainSessionRecovery({
@@ -2896,8 +2864,8 @@ describe("main-session-restart-recovery", () => {
     const storePath = path.join(sessionsDir, "sessions.json");
     await writeMainSession({ sessionsDir, abortedLastRun: undefined });
     await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "resume the interrupted main session" },
-      { role: "toolResult", content: "main result" },
+      makeUserMessage("resume the interrupted main session"),
+      makeToolResultMessage("main result"),
     ]);
 
     const lateSessionsDir = path.join(tmpDir, "agents", "late", "sessions");
@@ -2923,8 +2891,8 @@ describe("main-session-restart-recovery", () => {
             },
           });
           await writeTranscript(lateSessionsDir, "late-session", [
-            { role: "user", content: "resume the restored session" },
-            { role: "toolResult", content: "late result" },
+            makeUserMessage("resume the restored session"),
+            makeToolResultMessage("late result"),
           ]);
         }
         return result;
@@ -3025,8 +2993,8 @@ describe("main-session-restart-recovery", () => {
       },
     });
     await writeTranscript(sessionsDir, "pre-start-session", [
-      { role: "user", content: "resume the interrupted work" },
-      { role: "toolResult", content: "done" },
+      makeUserMessage("resume the interrupted work"),
+      makeToolResultMessage("done"),
     ]);
 
     const recovery = scheduleRestartAbortedMainSessionRecovery({
@@ -3045,8 +3013,8 @@ describe("main-session-restart-recovery", () => {
       },
     });
     await writeTranscript(sessionsDir, "post-start-session", [
-      { role: "user", content: "new work from this gateway" },
-      { role: "toolResult", content: "done" },
+      makeUserMessage("new work from this gateway"),
+      makeToolResultMessage("done"),
     ]);
 
     releaseStartup.resolve();
@@ -3070,8 +3038,8 @@ describe("main-session-restart-recovery", () => {
     const releaseStartup = createDeferred();
     await writeMainSession({ sessionsDir, sessionKey: "agent:work:main" });
     await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "resume after config reload" },
-      { role: "toolResult", content: "done" },
+      makeUserMessage("resume after config reload"),
+      makeToolResultMessage("done"),
     ]);
     let currentConfig = {
       agents: { entries: { main: {} } },
@@ -3300,8 +3268,8 @@ describe("main-session-restart-recovery", () => {
           },
         });
         await writeTranscript(sessionsDir, `${agentId}-session`, [
-          { role: "user", content: "finish the interrupted work" },
-          { role: "toolResult", content: "ready" },
+          makeUserMessage("finish the interrupted work"),
+          makeToolResultMessage("ready"),
         ]);
       }
       const apply = sessionAccessor.applySessionEntryReplacements;
@@ -3376,7 +3344,7 @@ describe("main-session-restart-recovery", () => {
     });
     for (const sessionId of ["busy-session", "healthy-session"]) {
       await writeTranscript(sessionsDir, sessionId, [
-        { role: "user", content: "finish the interrupted task" },
+        makeUserMessage("finish the interrupted task"),
       ]);
     }
     const recoveryStore = await import("./main-session-recovery-store.js");
@@ -3439,7 +3407,7 @@ describe("main-session-restart-recovery", () => {
   it("retries startup capacity failures without dropping or charging interruption marks", async () => {
     const { sessionsDir, storePath, sessionKey, readEntry } = await makeMainSessionFixture();
     await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "finish the interrupted task" },
+      makeUserMessage("finish the interrupted task"),
     ]);
     const cycleId = readEntry()?.mainRestartRecovery?.cycleId;
     const firstPreparation = createDeferred();
@@ -3551,8 +3519,8 @@ describe("main-session-restart-recovery", () => {
         },
       });
       await writeTranscript(sessionsDir, "late-startup-session", [
-        { role: "user", content: "this row appeared after startup marking" },
-        { role: "toolResult", content: "done" },
+        makeUserMessage("this row appeared after startup marking"),
+        makeToolResultMessage("done"),
       ]);
 
       await vi.advanceTimersByTimeAsync(4_999);
@@ -3599,12 +3567,8 @@ describe("main-session-restart-recovery", () => {
         restartRecoveryDeliverySourceRunId: "source-other",
       },
     });
-    await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "recover only me" },
-    ]);
-    await writeTranscript(sessionsDir, "other-session", [
-      { role: "user", content: "leave me pending" },
-    ]);
+    await writeTranscript(sessionsDir, "main-session", [makeUserMessage("recover only me")]);
+    await writeTranscript(sessionsDir, "other-session", [makeUserMessage("leave me pending")]);
 
     const result = await retryRestartAbortedMainSessionRecovery({
       cfg: {},
@@ -3708,9 +3672,7 @@ describe("main-session-restart-recovery", () => {
         chargedAttempts: 3,
       },
     });
-    await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "continue this turn" },
-    ]);
+    await writeTranscript(sessionsDir, "main-session", [makeUserMessage("continue this turn")]);
     const appendAssistantMessageToSessionTranscript =
       transcriptMocks.appendAssistantMessageToSessionTranscript.getMockImplementation();
     if (!appendAssistantMessageToSessionTranscript) {
@@ -3763,9 +3725,7 @@ describe("main-session-restart-recovery", () => {
         chargedAttempts: 3,
       },
     });
-    await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "continue this turn" },
-    ]);
+    await writeTranscript(sessionsDir, "main-session", [makeUserMessage("continue this turn")]);
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockResolvedValueOnce({
       ok: false,
       code: "session-rebound",
@@ -3836,7 +3796,7 @@ describe("main-session-restart-recovery", () => {
       },
     });
     await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "recover only with delivery authority" },
+      makeUserMessage("recover only with delivery authority"),
     ]);
 
     await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 1 });
@@ -3870,7 +3830,7 @@ describe("main-session-restart-recovery", () => {
       restartRecoverySourceReplyDeliveryMode: "message_tool_only",
     });
     await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "do not inherit a fallback route" },
+      makeUserMessage("do not inherit a fallback route"),
     ]);
 
     await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 1 });
@@ -3884,12 +3844,7 @@ describe("main-session-restart-recovery", () => {
     expect(events.at(-1)).toMatchObject({
       message: {
         role: "assistant",
-        content: [
-          {
-            type: "text",
-            text: expect.stringContaining("use Resume to continue in this session"),
-          },
-        ],
+        content: textContent(expect.stringContaining("use Resume to continue in this session")),
       },
     });
     expect(readEntry()).toMatchObject({
@@ -3993,7 +3948,7 @@ describe("main-session-restart-recovery", () => {
         restartRecoveryDeliverySourceRunId: "source-main",
       });
       await writeTranscript(sessionsDir, "main-session", [
-        { role: "user", content: "recover after a stalled accepted dispatch" },
+        makeUserMessage("recover after a stalled accepted dispatch"),
       ]);
       const scheduleSpy = vi
         .spyOn(recoveryOwnerRelease, "scheduleMainSessionRecoveryPendingTarget")
@@ -4107,7 +4062,7 @@ describe("main-session-restart-recovery", () => {
         restartRecoveryDeliverySourceRunId: "source-main",
       },
     });
-    await writeTranscript(sessionsDir, sessionId, [{ role: "user", content: "recover me" }]);
+    await writeTranscript(sessionsDir, sessionId, [makeUserMessage("recover me")]);
     const dispatchEntered = createDeferred();
     const releaseDispatch = createDeferred();
     vi.mocked(callGateway).mockImplementationOnce(async () => {
@@ -4172,7 +4127,7 @@ describe("main-session-restart-recovery", () => {
       },
     });
     await writeTranscript(sessionsDir, "replacement-session", [
-      { role: "user", content: "replacement turn" },
+      makeUserMessage("replacement turn"),
     ]);
 
     const result = await retryRestartAbortedMainSessionRecovery({
@@ -4211,7 +4166,7 @@ describe("main-session-restart-recovery", () => {
       },
     });
     await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "do the thing", idempotencyKey: "discord-message-1" },
+      makeUserMessage("do the thing", { idempotencyKey: "discord-message-1" }),
       makeMessageToolCall(),
       makeAssistantTextMessage("delivered answer", {
         stopReason: "stop",
@@ -4222,7 +4177,7 @@ describe("main-session-restart-recovery", () => {
           toolCallId: "message-call-1",
         },
       }),
-      makeToolResultMessage([{ type: "text", text: "sent" }], {
+      makeToolResultMessage(textContent("sent"), {
         toolCallId: "message-call-1",
         toolName: "message",
       }),
@@ -4330,13 +4285,8 @@ describe("main-session-restart-recovery", () => {
       messages: [
         makeUserMessage("do the thing", { idempotencyKey: "discord-message-1" }),
         createAssistantToolCallMessage([
-          {
-            type: "toolCall",
-            id: "message-call-1",
-            name: "message",
-            arguments: { action: "send", message: "current answer" },
-          },
-          { type: "toolCall", id: "pending-write", name: "write", arguments: {} },
+          toolCall("message-call-1", "message", { action: "send", message: "current answer" }),
+          toolCall("pending-write", "write", {}),
         ]),
         makeMessageToolResult("message-call-1"),
       ],
@@ -4346,7 +4296,7 @@ describe("main-session-restart-recovery", () => {
       sourceTurnId: "discord-message-1",
       messages: [
         ...makeMessageDeliveryTranscript(),
-        makeToolResultMessage([{ type: "text", text: "transport reported failure" }], {
+        makeToolResultMessage(textContent("transport reported failure"), {
           toolCallId: "message-call-1",
           toolName: "message",
           isError: true,
@@ -4384,7 +4334,7 @@ describe("main-session-restart-recovery", () => {
       restartRecoveryBeforeAgentReplyState: "handled-silent",
     });
     await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "quiet", idempotencyKey: "control-ui-run:user" },
+      makeUserMessage("quiet", { idempotencyKey: "control-ui-run:user" }),
     ]);
 
     await expectRecovery({ started: 0, settled: 1, failed: 0, skipped: 0 });
@@ -4416,7 +4366,7 @@ describe("main-session-restart-recovery", () => {
       restartRecoveryDeliveryContext: discordDeliveryContext,
     });
     await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "do the thing" },
+      makeUserMessage("do the thing"),
       makeAssistantTextMessage("not this turn's terminal answer", {
         stopReason: "stop",
         openclawDeliveryMirror: {
@@ -4439,7 +4389,7 @@ describe("main-session-restart-recovery", () => {
 
   it("reconciles a provider error carrying a non-restart abort code", async () => {
     await writePreparedMainSessionTranscript([
-      { role: "user", content: "do the thing" },
+      makeUserMessage("do the thing"),
       makeAssistantTextMessage("", {
         stopReason: "error",
         errorMessage: "This operation was aborted",
@@ -4463,7 +4413,7 @@ describe("main-session-restart-recovery", () => {
     {
       name: "resumes a pre-upgrade errored tail without an abort code",
       messages: [
-        { role: "user", content: "do the thing" },
+        makeUserMessage("do the thing"),
         {
           role: "assistant",
           content: [],
@@ -4475,7 +4425,7 @@ describe("main-session-restart-recovery", () => {
     {
       name: "reads a provider-native Code Mode wait input",
       messages: [
-        { role: "user", content: "do the thing" },
+        makeUserMessage("do the thing"),
         codeModeCheckpointMessage("exec"),
         createAssistantToolCallMessage([
           {
@@ -4492,7 +4442,7 @@ describe("main-session-restart-recovery", () => {
     {
       name: "withholds Code Mode tools for an unsafe direct waiting checkpoint",
       messages: [
-        { role: "user", content: "do the thing" },
+        makeUserMessage("do the thing"),
         codeModeCheckpointMessage("exec", {
           status: "waiting",
           runId: "cm_interrupted",
@@ -4505,18 +4455,15 @@ describe("main-session-restart-recovery", () => {
     {
       name: "keeps restart safety after a failed Code Mode result",
       messages: [
-        { role: "user", content: "do the thing" },
+        makeUserMessage("do the thing"),
         makeToolResultMessage(
-          [
-            {
-              type: "text",
-              text: JSON.stringify({
-                status: "failed",
-                replaySafe: true,
-                error: "safe failure",
-              }),
-            },
-          ],
+          textContent(
+            JSON.stringify({
+              status: "failed",
+              replaySafe: true,
+              error: "safe failure",
+            }),
+          ),
           { toolName: "wait" },
         ),
       ],
@@ -4525,15 +4472,13 @@ describe("main-session-restart-recovery", () => {
     {
       name: "keeps replay safety outside the recent transcript window under full access",
       messages: [
-        { role: "user", content: "do the thing" },
+        makeUserMessage("do the thing"),
         codeModeCheckpointMessage(),
-        {
-          role: "user",
-          content: "Continue after restart",
+        makeUserMessage("Continue after restart", {
           provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
-        },
+        }),
         ...Array.from({ length: 24 }, (_, index) =>
-          makeToolResultMessage([{ type: "text", text: `read result ${index}` }], {
+          makeToolResultMessage(textContent(`read result ${index}`), {
             toolName: "read",
           }),
         ),
@@ -4544,10 +4489,10 @@ describe("main-session-restart-recovery", () => {
     {
       name: "resumes an in-flight safe tool call across a repeated restart",
       messages: [
-        { role: "user", content: "do the thing" },
+        makeUserMessage("do the thing"),
         createAssistantToolCallMessage([
           { type: "thinking", thinking: "I need one more read." },
-          { type: "toolCall", id: "call-read-2", name: "read", arguments: { path: "README.md" } },
+          toolCall("call-read-2", "read", { path: "README.md" }),
         ]),
       ],
       entry: { restartRecoveryForceSafeTools: true },
@@ -4556,7 +4501,7 @@ describe("main-session-restart-recovery", () => {
     {
       name: "retains replay safety after a provider error under full access",
       messages: [
-        { role: "user", content: "do the thing" },
+        makeUserMessage("do the thing"),
         codeModeCheckpointMessage(),
         makeAssistantTextMessage("Provider failed.", { stopReason: "error" }),
       ],
@@ -4566,7 +4511,7 @@ describe("main-session-restart-recovery", () => {
     {
       name: "ends prior replay restrictions at a new full-access user turn",
       messages: [
-        { role: "user", content: "the earlier request" },
+        makeUserMessage("the earlier request"),
         codeModeCheckpointMessage(),
         {
           role: "user",
@@ -4575,7 +4520,7 @@ describe("main-session-restart-recovery", () => {
             "[System] Your previous turn was interrupted by a gateway restart while OpenClaw was waiting on tool/model work. Continue from the existing transcript and finish the interrupted response.",
         },
         makeAssistantTextMessage("Finished that recovery."),
-        { role: "user", content: "a later request" },
+        makeUserMessage("a later request"),
         makeAssistantTextMessage("Finished the later request."),
       ],
       entry: { permissionMode: "full", restartRecoveryForceSafeTools: true },
@@ -4584,16 +4529,11 @@ describe("main-session-restart-recovery", () => {
     {
       name: "resumes safely without replaying visible assistant text beside a Code Mode wait",
       messages: [
-        { role: "user", content: "do the thing" },
+        makeUserMessage("do the thing"),
         codeModeCheckpointMessage("exec"),
         createAssistantToolCallMessage([
           { type: "text", text: "I already sent this part." },
-          {
-            type: "toolCall",
-            id: "call-wait-1",
-            name: "wait",
-            arguments: { runId: "cm_interrupted" },
-          },
+          toolCall("call-wait-1", "wait", { runId: "cm_interrupted" }),
         ]),
       ],
       safeTools: "required",
@@ -4602,7 +4542,7 @@ describe("main-session-restart-recovery", () => {
     {
       name: "keeps partial provider-abort output under replay-safe recovery",
       messages: [
-        { role: "user", content: "do the thing" },
+        makeUserMessage("do the thing"),
         codeModeCheckpointMessage("exec"),
         codeModeWaitCallMessage(),
         makeAssistantTextMessage("partial answer", {
@@ -4616,7 +4556,7 @@ describe("main-session-restart-recovery", () => {
     {
       name: "resumes a partial streamed answer interrupted by a restart",
       messages: [
-        { role: "user", content: "do the thing" },
+        makeUserMessage("do the thing"),
         makeAssistantTextMessage("Here is the first half of the answer", {
           stopReason: "aborted",
           errorMessage: "This operation was aborted",
@@ -4627,10 +4567,8 @@ describe("main-session-restart-recovery", () => {
     {
       name: "reports an interrupted native tool outcome as unknown",
       messages: [
-        { role: "user", content: "run the command" },
-        createAssistantToolCallMessage([
-          { type: "toolCall", id: "call-bash-1", name: "bash", arguments: { command: "true" } },
-        ]),
+        makeUserMessage("run the command"),
+        createAssistantToolCallMessage([toolCall("call-bash-1", "bash", { command: "true" })]),
         makeToolResultMessage("aborted", {
           toolName: "bash",
           toolCallId: "call-bash-1",
@@ -4650,12 +4588,12 @@ describe("main-session-restart-recovery", () => {
     {
       name: "keeps a dangling side-effecting call in an aborted tail restricted",
       messages: [
-        { role: "user", content: "do the thing" },
+        makeUserMessage("do the thing"),
         {
           role: "assistant",
           content: [
             { type: "text", text: "Kicking that off." },
-            { type: "toolCall", id: "call-bash-1", name: "bash", arguments: { command: "true" } },
+            toolCall("call-bash-1", "bash", { command: "true" }),
           ],
           stopReason: "aborted",
           errorMessage: "This operation was aborted",
@@ -4666,10 +4604,10 @@ describe("main-session-restart-recovery", () => {
     {
       name: "resumes an interrupted replay-safe tool call without restricting tools",
       messages: [
-        { role: "user", content: "do the thing" },
+        makeUserMessage("do the thing"),
         createAssistantToolCallMessage([
           { type: "text", text: "Let me look that up." },
-          { type: "toolCall", id: "call-read-1", name: "read", arguments: { path: "README.md" } },
+          toolCall("call-read-1", "read", { path: "README.md" }),
         ]),
       ],
       safeTools: "unrestricted",
@@ -4677,10 +4615,10 @@ describe("main-session-restart-recovery", () => {
     {
       name: "resumes through the shutdown error persisted for an interrupted Code Mode wait",
       messages: [
-        { role: "user", content: "do the thing" },
+        makeUserMessage("do the thing"),
         codeModeCheckpointMessage(),
         codeModeWaitCallMessage(),
-        makeToolResultMessage([{ type: "text", text: "Error: The operation was aborted." }], {
+        makeToolResultMessage(textContent("Error: The operation was aborted."), {
           toolName: "wait",
           toolCallId: "call-wait-1",
           details: {
@@ -4708,20 +4646,17 @@ describe("main-session-restart-recovery", () => {
     {
       name: "resumes through the current Code Mode abort persisted for an interrupted wait",
       messages: [
-        { role: "user", content: "do the thing" },
+        makeUserMessage("do the thing"),
         codeModeCheckpointMessage(),
         codeModeWaitCallMessage(),
         makeToolResultMessage(
-          [
-            {
-              type: "text",
-              text: JSON.stringify({
-                status: "failed",
-                code: "aborted",
-                error: "code mode execution aborted",
-              }),
-            },
-          ],
+          textContent(
+            JSON.stringify({
+              status: "failed",
+              code: "aborted",
+              error: "code mode execution aborted",
+            }),
+          ),
           {
             toolName: "wait",
             toolCallId: "call-wait-1",
@@ -4748,21 +4683,11 @@ describe("main-session-restart-recovery", () => {
     {
       name: "resumes a mixed Code Mode wait and side-effecting tool tail safely",
       messages: [
-        { role: "user", content: "do the thing" },
+        makeUserMessage("do the thing"),
         codeModeCheckpointMessage("exec"),
         createAssistantToolCallMessage([
-          {
-            type: "toolCall",
-            id: "call-wait-1",
-            name: "wait",
-            arguments: { runId: "cm_interrupted" },
-          },
-          {
-            type: "toolCall",
-            id: "call-write-1",
-            name: "write",
-            arguments: { path: "result.txt", content: "done" },
-          },
+          toolCall("call-wait-1", "wait", { runId: "cm_interrupted" }),
+          toolCall("call-write-1", "write", { path: "result.txt", content: "done" }),
         ]),
       ],
       safeTools: "required",
@@ -4797,17 +4722,12 @@ describe("main-session-restart-recovery", () => {
     {
       label: "a replay-safe checkpoint earlier in the interrupted turn",
       messages: [
-        { role: "user", content: "do the thing" },
+        makeUserMessage("do the thing"),
         codeModeCheckpointMessage("exec"),
         createAssistantToolCallMessage([
-          {
-            type: "toolCall",
-            id: "call-read-current",
-            name: "read",
-            arguments: { path: "README.md" },
-          },
+          toolCall("call-read-current", "read", { path: "README.md" }),
         ]),
-        makeToolResultMessage([{ type: "text", text: "current read result" }], {
+        makeToolResultMessage(textContent("current read result"), {
           toolName: "read",
           toolCallId: "call-read-current",
         }),
@@ -4817,18 +4737,13 @@ describe("main-session-restart-recovery", () => {
     {
       label: "a replay-safe checkpoint from an earlier user turn",
       messages: [
-        { role: "user", content: "finish the earlier turn" },
+        makeUserMessage("finish the earlier turn"),
         codeModeCheckpointMessage("exec"),
-        { role: "user", content: "start the current turn" },
+        makeUserMessage("start the current turn"),
         createAssistantToolCallMessage([
-          {
-            type: "toolCall",
-            id: "call-read-current",
-            name: "read",
-            arguments: { path: "README.md" },
-          },
+          toolCall("call-read-current", "read", { path: "README.md" }),
         ]),
-        makeToolResultMessage([{ type: "text", text: "current read result" }], {
+        makeToolResultMessage(textContent("current read result"), {
           toolName: "read",
           toolCallId: "call-read-current",
         }),
@@ -4857,15 +4772,10 @@ describe("main-session-restart-recovery", () => {
     async ({ mode, permissionMode, restricted }) => {
       const sessionsDir = await writePreparedMainSessionTranscript(
         [
-          { role: "user", content: "do the thing" },
+          makeUserMessage("do the thing"),
           createAssistantToolCallMessage([
             { type: "text", text: "Running the check now." },
-            {
-              type: "toolCall",
-              id: "call-exec-1",
-              name: "exec",
-              arguments: { code: "await shell({command: 'true'})" },
-            },
+            toolCall("call-exec-1", "exec", { code: "await shell({command: 'true'})" }),
           ]),
         ],
         { permissionMode, restartRecoveryForceSafeTools: true },
@@ -4903,14 +4813,14 @@ describe("main-session-restart-recovery", () => {
     },
   ])("does not restore Code Mode tools for $label", async ({ toolCallIds }) => {
     await writePreparedMainSessionTranscript([
-      { role: "user", content: "do the thing" },
+      makeUserMessage("do the thing"),
       codeModeCheckpointMessage(),
       codeModeWaitCallMessage(),
       ...toolCallIds.map((toolCallId) => ({
         role: "toolResult",
         toolName: "wait",
         ...(toolCallId ? { toolCallId } : {}),
-        content: [{ type: "text", text: "Error: The operation was aborted." }],
+        content: textContent("Error: The operation was aborted."),
         details: {
           status: "failed",
           error: "Error: The operation was aborted.",
@@ -4946,7 +4856,7 @@ describe("main-session-restart-recovery", () => {
     },
   ])("resumes a Code Mode wait safely after a $label", async ({ checkpoint }) => {
     await writePreparedMainSessionTranscript([
-      { role: "user", content: "do the thing" },
+      makeUserMessage("do the thing"),
       codeModeCheckpointMessage("wait", checkpoint),
       codeModeWaitCallMessage(),
     ]);

@@ -47,6 +47,11 @@ import {
   mainSessionRecoveryLog,
 } from "./main-session-restart-recovery-shared.js";
 import {
+  makeUserMessage,
+  textContent,
+  makeToolResultMessage,
+} from "./main-session-restart-recovery-transcript.test-support.js";
+import {
   markStartupOrphanedMainSessionsForRecovery,
   recoverRestartAbortedMainSessions as recoverRestartAbortedMainSessionsBase,
   scheduleRestartAbortedMainSessionRecovery as scheduleRestartAbortedMainSessionRecoveryBase,
@@ -130,7 +135,7 @@ describe("main-session startup recovery", () => {
         }),
       });
       await writeTranscript(sessionsDir, "main-session", [
-        { role: "user", content: "Continue the interrupted child results." },
+        makeUserMessage("Continue the interrupted child results."),
       ]);
       const target = { agentId: "main", storePath, sessionKey, sessionId: "main-session" };
       const originalTranscript = await loadTranscriptEvents(target);
@@ -213,14 +218,11 @@ describe("main-session startup recovery", () => {
           message: {
             role: "assistant",
             idempotencyKey: `main-session-restart-recovery:${sourceRunId}:interrupted`,
-            content: [
-              {
-                type: "text",
-                text: expect.stringContaining(
-                  "Saved reply (delivery unconfirmed):\nSaved work from the interrupted turn.",
-                ),
-              },
-            ],
+            content: textContent(
+              expect.stringContaining(
+                "Saved reply (delivery unconfirmed):\nSaved work from the interrupted turn.",
+              ),
+            ),
           },
         });
 
@@ -301,9 +303,7 @@ describe("main-session startup recovery", () => {
         startedAt: 1,
       }),
     });
-    await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "Finish the review." },
-    ]);
+    await writeTranscript(sessionsDir, "main-session", [makeUserMessage("Finish the review.")]);
     const cfg = { session: { store: storePath } };
     setRuntimeConfigSnapshot(cfg);
     gatewayWorkAdmission.markGatewayRestartDraining();
@@ -435,9 +435,7 @@ describe("main-session startup recovery", () => {
     };
     await writeStore(sessionsDir, entries);
     for (const sessionId of ["main-session", "flag-only", "status-only"]) {
-      await writeTranscript(sessionsDir, sessionId, [
-        { role: "user", content: "finish this turn" },
-      ]);
+      await writeTranscript(sessionsDir, sessionId, [makeUserMessage("finish this turn")]);
     }
     const before = readStore(storePath);
     const claim = claimAgentRunContext(
@@ -596,15 +594,15 @@ describe("main-session startup recovery", () => {
       },
     });
     await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "run the tool" },
-      { role: "toolResult", content: "done" },
+      makeUserMessage("run the tool"),
+      makeToolResultMessage("done"),
     ]);
     await writeTranscript(sessionsDir, "already-marked-session", [
-      { role: "user", content: "already interrupted" },
-      { role: "toolResult", content: "done" },
+      makeUserMessage("already interrupted"),
+      makeToolResultMessage("done"),
     ]);
     await writeTranscript(sessionsDir, archived.sessionId, [
-      { role: "user", content: "do not recover while archived" },
+      makeUserMessage("do not recover while archived"),
     ]);
     const storePath = path.join(sessionsDir, "sessions.json");
     const before = readStore(storePath);
@@ -750,8 +748,8 @@ describe("main-session startup recovery", () => {
           }),
         );
         for (const message of [
-          { role: "user", content: "resume after database admission" },
-          { role: "toolResult", content: "main result" },
+          makeUserMessage("resume after database admission"),
+          makeToolResultMessage("main result"),
         ]) {
           await appendTranscriptMessage(
             { agentId: logicalOwner, sessionKey, sessionId: "main-session", storePath },
