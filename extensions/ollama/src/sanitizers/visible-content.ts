@@ -5,6 +5,7 @@ import {
 import type { OllamaVisibleContentSanitizer } from "./visible-content-contract.js";
 
 const noopVisibleContentSanitizer: OllamaVisibleContentSanitizer = {
+  preservesStreamText: true,
   resolveStreamText(params) {
     return { kind: "visible", text: params.text };
   },
