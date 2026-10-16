@@ -1,0 +1,10 @@
+{
+  "id": "deep-research",
+  "name": "Deep Research",
+  "description": "Bounded research with source-backed findings and explicit gaps.",
+  "categories": ["agent-orchestration"],
+  "activation": { "onStartup": false },
+  "contracts": { "tools": ["deep_research"] },
+  "toolMetadata": { "deep_research": { "optional": true } },
+  "configSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+}

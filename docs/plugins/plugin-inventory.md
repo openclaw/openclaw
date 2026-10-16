@@ -94,6 +94,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[cua-computer](/plugins/reference/cua-computer)** (`@openclaw/cua-computer`) - included in OpenClaw. Experimental CUA Driver computer control for macOS, Windows, and Linux node hosts.
 
+- **[deep-research](/plugins/reference/deep-research)** (`@openclaw/deep-research`) - included in OpenClaw. Bounded research with source-backed findings and explicit gaps.
+
 - **[deepgram](/plugins/reference/deepgram)** (`@openclaw/deepgram-provider`) - included in OpenClaw. Deepgram audio transcription with Nova and Flux models, plus realtime speech recognition.
 
 - **[device-pair](/plugins/reference/device-pair)** (`openclaw`) - included in OpenClaw. Generate setup codes and approve device pairing requests.
