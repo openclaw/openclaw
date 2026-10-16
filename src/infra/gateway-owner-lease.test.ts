@@ -720,7 +720,9 @@ describe("Gateway owner lease", () => {
       );
       expect(Number(heartbeat?.heartbeat_at)).toBeGreaterThan(Number(heartbeat?.created_at));
 
-      expect(repairOpenClawStateDatabaseSchema({ env }).warnings).toEqual([]);
+      expect(repairOpenClawStateDatabaseSchema({ env, integrityCheck: "full" }).warnings).toEqual(
+        [],
+      );
       const held = cached ? openOpenClawStateDatabase({ env }) : undefined;
       if (!cached) {
         await closeOpenClawStateDatabaseAsync();
