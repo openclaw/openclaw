@@ -316,7 +316,10 @@ export class DesktopPanelController extends SolidPanelController {
 
   private disconnectConnection(retainViewer = false): void {
     this.audio.close();
-    this.pictureInPicture.close();
+    // Native close can precede Solid mounting; each Solid owner handles its disposal.
+    if (this.isConnected) {
+      this.pictureInPicture.close();
+    }
     this.operationId += 1;
     this.pendingConnection = null;
     this.connection.begin(retainViewer);
@@ -324,7 +327,6 @@ export class DesktopPanelController extends SolidPanelController {
     if (!retainViewer) {
       this.sessionSource.invalidate();
       this.loading = false;
-      // Disposal invalidates launch work through the Solid owner without publishing feedback.
       if (this.isConnected) {
         this.launcher.clear();
       }
@@ -681,7 +683,6 @@ export class DesktopPanelController extends SolidPanelController {
             if ((this.state === "inventory-error" && this.documentMode) || !this.environmentId) {
               if (this.sourceSelection !== "picker") {
                 this.sourceSelection = "pending";
-                this.invalidate();
               }
               this.state = "picker";
               this.invalidate();
