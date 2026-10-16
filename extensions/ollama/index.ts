@@ -74,8 +74,8 @@ import {
   toDynamicOllamaModel,
 } from "./src/provider-models.js";
 import {
+  buildAppGuidedOllamaModel,
   findAvailableOllamaModelName,
-  OLLAMA_APP_GUIDED_MIN_CONTEXT_TOKENS,
   orderPreferredOllamaModelIds,
 } from "./src/setup-model-selection.js";
 import {
@@ -237,35 +237,17 @@ async function discoverAppGuidedOllamaModel(
       candidateId,
       requestOptions,
     );
-    const contextWindow = showInfo.contextWindow ?? configuredCloudModel?.contextWindow;
-    const supportsTools =
-      showInfo.capabilities?.includes("tools") ?? configuredCloudModel?.compat?.supportsTools;
-    const supportsCompletion =
-      showInfo.capabilities?.includes("completion") ?? Boolean(configuredCloudModel);
-    if (
-      !supportsTools ||
-      !supportsCompletion ||
-      contextWindow === undefined ||
-      contextWindow < OLLAMA_APP_GUIDED_MIN_CONTEXT_TOKENS
-    ) {
-      continue;
-    }
-    const definition =
-      configuredCloudModel ??
-      buildOllamaModelDefinition(candidateId, contextWindow, showInfo.capabilities, {
-        ...showInfo,
-        remote: isHostedOllamaCloud(connection.baseUrl),
-      });
-    model = capLocalOllamaModelContext(
-      {
-        ...definition,
-        thinkingLevelMap: definition.thinkingLevelMap ?? showInfo.thinkingLevelMap,
-        contextWindow,
-        compat: { ...definition.compat, supportsTools: true },
+    model = buildAppGuidedOllamaModel({
+      baseUrl: connection.baseUrl,
+      model: installedModels.find((candidate) => candidate.name === candidateId) ?? {
+        name: candidateId,
       },
-      connection.baseUrl,
-    );
-    break;
+      showInfo,
+      configuredCloudModel,
+    });
+    if (model) {
+      break;
+    }
   }
   if (!model) {
     return null;
