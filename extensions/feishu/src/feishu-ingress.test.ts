@@ -27,17 +27,11 @@ import type { ResolvedFeishuAccount } from "./types.js";
 type FeishuIngressQueue = NonNullable<Parameters<typeof createFeishuDurableIngress>[0]["queue"]>;
 type FeishuIngressPayload = Parameters<FeishuIngressQueue["enqueue"]>[1];
 
-function messageEnvelope(params: {
-  eventId: string;
-  messageId?: string;
-  chatId?: string;
-  createTime?: string;
-  text?: string;
-}) {
+function messageEnvelope(eventId: string) {
   return {
     schema: "2.0",
     header: {
-      event_id: params.eventId,
+      event_id: eventId,
       event_type: "im.message.receive_v1",
       create_time: "1710000000000",
     },
@@ -47,19 +41,15 @@ function messageEnvelope(params: {
         sender_type: "user",
       },
       message: {
-        message_id: params.messageId ?? "om-message",
-        chat_id: params.chatId ?? "oc-chat",
+        message_id: "om-message",
+        chat_id: "oc-chat",
         chat_type: "p2p",
         message_type: "text",
-        content: JSON.stringify({ text: params.text ?? "hello" }),
-        create_time: params.createTime ?? "1710000000000",
+        content: JSON.stringify({ text: "hello" }),
+        create_time: "1710000000000",
       },
     },
   };
-}
-
-function flattenEnvelope(envelope: ReturnType<typeof messageEnvelope>) {
-  return { ...envelope.header, ...envelope.event };
 }
 
 function createLifecycle() {
@@ -77,6 +67,18 @@ function createLifecycle() {
     onAbandoned: calls.abandoned,
   };
   return { calls, lifecycle };
+}
+
+function createReplayClaim(key: string, commit: () => Promise<boolean> = async () => true) {
+  return { keys: [key], commit: vi.fn(commit), release: vi.fn() };
+}
+
+async function deliver(
+  ingress: ReturnType<typeof createTestIngress>,
+  envelope: ReturnType<typeof messageEnvelope>,
+) {
+  await ingress.invoke(envelope, { needCheck: false });
+  await ingress.waitForIdle();
 }
 
 function createDispatcher(
@@ -233,13 +235,12 @@ describe("Feishu durable ingress", () => {
 
       await withWebhook(ingress, async (url) => {
         let responseSettled = false;
-        const responsePromise = postWebhook(
-          url,
-          messageEnvelope({ eventId: "evt-append-gate" }),
-        ).then((response) => {
-          responseSettled = true;
-          return response;
-        });
+        const responsePromise = postWebhook(url, messageEnvelope("evt-append-gate")).then(
+          (response) => {
+            responseSettled = true;
+            return response;
+          },
+        );
         try {
           await vi.waitFor(() => expect(enqueue).toHaveBeenCalledTimes(1));
           expect(responseSettled).toBe(false);
@@ -251,7 +252,6 @@ describe("Feishu durable ingress", () => {
         expect(response.status).toBe(200);
         expect(response.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
       });
-      await ingress.stop();
     });
   });
 
@@ -265,33 +265,29 @@ describe("Feishu durable ingress", () => {
       const ingress = startIngress({ queue: failingQueue, dispatcher: createDispatcher(dispatch) });
 
       await withWebhook(ingress, async (url) => {
-        const response = await postWebhook(url, messageEnvelope({ eventId: "evt-append-fail" }));
+        const response = await postWebhook(url, messageEnvelope("evt-append-fail"));
         expect(response.status).toBe(500);
         expect(response.headers.get("x-openclaw-delivery-accepted")).toBeNull();
       });
 
       expect(enqueue).toHaveBeenCalledTimes(3);
       expect(dispatch).not.toHaveBeenCalled();
-      await ingress.stop();
     });
   });
 
   it("retains completion so one event_id dispatches only once", async () => {
     await withQueue(async (queue, startIngress) => {
       const dispatch = vi.fn(async (data: ReturnType<typeof messageEnvelope>) => {
-        await ingress.resolveLifecycle(flattenEnvelope(data))?.onAdopted();
+        await ingress.resolveLifecycle({ ...data.header, ...data.event })?.onAdopted();
       });
       const ingress = startIngress({ queue, dispatcher: createDispatcher(dispatch) });
       ingress.start();
-      const envelope = messageEnvelope({ eventId: "evt-completed" });
+      const envelope = messageEnvelope("evt-completed");
 
-      await ingress.invoke(envelope, { needCheck: false });
-      await ingress.waitForIdle();
-      await ingress.invoke(envelope, { needCheck: false });
-      await ingress.waitForIdle();
+      await deliver(ingress, envelope);
+      await deliver(ingress, envelope);
 
       expect(dispatch).toHaveBeenCalledTimes(1);
-      await ingress.stop();
     });
   });
 
@@ -302,18 +298,15 @@ describe("Feishu durable ingress", () => {
       });
       const ingress = startIngress({ queue, dispatcher: createDispatcher(dispatch) });
       ingress.start();
-      const envelope = messageEnvelope({ eventId: "evt-auth-failure" });
-
-      await ingress.invoke(envelope, { needCheck: false });
-      await ingress.waitForIdle();
+      await deliver(ingress, messageEnvelope("evt-auth-failure"));
 
       expect(dispatch).toHaveBeenCalledTimes(1);
-      const duplicate = await queue.enqueue("evt-auth-failure", {} as FeishuIngressPayload);
-      expect(duplicate.kind).toBe("failed");
-      if (duplicate.kind === "failed") {
-        expect(duplicate.record.reason).toBe("authentication-failed");
-      }
-      await ingress.stop();
+      await expect(
+        queue.enqueue("evt-auth-failure", {} as FeishuIngressPayload),
+      ).resolves.toMatchObject({
+        kind: "failed",
+        record: { reason: "authentication-failed" },
+      });
     });
   });
 
@@ -322,19 +315,19 @@ describe("Feishu durable ingress", () => {
       const dispatch = vi.fn(async () => undefined);
       const ingress = startIngress({ queue, dispatcher: createDispatcher(dispatch) });
       ingress.start();
-      const envelope = messageEnvelope({ eventId: "evt-missing-chat" });
+      const envelope = messageEnvelope("evt-missing-chat");
       delete (envelope.event.message as { chat_id?: string }).chat_id;
 
       await expect(ingress.invoke(envelope, { needCheck: false })).resolves.toBeUndefined();
       await ingress.waitForIdle();
 
       expect(dispatch).not.toHaveBeenCalled();
-      const duplicate = await queue.enqueue("evt-missing-chat", {} as FeishuIngressPayload);
-      expect(duplicate.kind).toBe("failed");
-      if (duplicate.kind === "failed") {
-        expect(duplicate.record.reason).toBe("invalid-event");
-      }
-      await ingress.stop();
+      await expect(
+        queue.enqueue("evt-missing-chat", {} as FeishuIngressPayload),
+      ).resolves.toMatchObject({
+        kind: "failed",
+        record: { reason: "invalid-event" },
+      });
     });
   });
 
@@ -345,16 +338,12 @@ describe("Feishu durable ingress", () => {
       });
       const ingress = startIngress({ queue, dispatcher: createDispatcher(dispatch) });
       ingress.start();
-      const envelope = messageEnvelope({ eventId: "evt-downstream-syntax" });
-
-      await ingress.invoke(envelope, { needCheck: false });
-      await ingress.waitForIdle();
+      await deliver(ingress, messageEnvelope("evt-downstream-syntax"));
 
       expect(dispatch).toHaveBeenCalledTimes(1);
       await expect(
         queue.enqueue("evt-downstream-syntax", {} as FeishuIngressPayload),
       ).resolves.toMatchObject({ kind: "pending", duplicate: true });
-      await ingress.stop();
     });
   });
 
@@ -401,13 +390,9 @@ describe("Feishu durable ingress", () => {
   it("does not reopen adopted transport claims when a logical guard commit fails", async () => {
     const transport = createLifecycle();
     const onReplayCommitError = vi.fn();
-    const replayClaim = {
-      keys: ["failing-adoption"] as const,
-      commit: vi.fn(async () => {
-        throw new Error("dedupe persistence failed");
-      }),
-      release: vi.fn(),
-    };
+    const replayClaim = createReplayClaim("failing-adoption", async () => {
+      throw new Error("dedupe persistence failed");
+    });
     const { lifecycle } = buildFeishuFlushIngressLifecycle(
       [{ lifecycle: transport.lifecycle, replayClaim }],
       { onReplayCommitError },
@@ -427,11 +412,7 @@ describe("Feishu durable ingress", () => {
     transport.lifecycle.onAdopted = vi.fn(async () => {
       throw new Error("queue completion failed");
     });
-    const replayClaim = {
-      keys: ["transport-adoption-failure"] as const,
-      commit: vi.fn(async () => true),
-      release: vi.fn(),
-    };
+    const replayClaim = createReplayClaim("transport-adoption-failure");
     const { lifecycle } = buildFeishuFlushIngressLifecycle([
       { lifecycle: transport.lifecycle, replayClaim },
     ]);
@@ -450,11 +431,7 @@ describe("Feishu durable ingress", () => {
       finishAbandonment = resolve;
     });
     transport.lifecycle.onAbandoned = vi.fn(async () => await abandonmentGate);
-    const replayClaim = {
-      keys: ["concurrent-terminal-state"] as const,
-      commit: vi.fn(async () => true),
-      release: vi.fn(),
-    };
+    const replayClaim = createReplayClaim("concurrent-terminal-state");
     const { lifecycle } = buildFeishuFlushIngressLifecycle([
       { lifecycle: transport.lifecycle, replayClaim },
     ]);

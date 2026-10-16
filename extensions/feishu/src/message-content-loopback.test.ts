@@ -12,6 +12,11 @@ import { getMessageFeishu } from "./send.js";
 
 const { mockLogVerbose } = vi.hoisted(() => ({ mockLogVerbose: vi.fn() }));
 const requireRecord = createRequireRecord("record", "expected-label-capitalized");
+const chatId = "oc_feishu_content_107947";
+const appId = "cli_feishu_content_107947";
+const authorization = "Bearer tat-feishu-content-107947";
+const messagePath = "/open-apis/im/v1/messages";
+const textBody = (text: string) => ({ content: JSON.stringify({ text }) });
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
@@ -69,31 +74,30 @@ describe("Feishu message content over the real Lark SDK", () => {
           response.writeHead(status, { "content-type": "application/json" });
           response.end(JSON.stringify(payload));
         };
+        const sendItems = (items: object[]) =>
+          sendJson(200, { code: 0, msg: "ok", data: { items } });
 
         if (url.pathname === "/open-apis/auth/v3/tenant_access_token/internal") {
           if (
             request.method !== "POST" ||
-            body.app_id !== "cli_feishu_content_107947" ||
+            body.app_id !== appId ||
             body.app_secret !== "loopback-placeholder"
           ) {
-            sendJson(401, { code: 99991663, msg: "invalid loopback application" });
-            return;
+            return sendJson(401, { code: 99991663, msg: "invalid loopback application" });
           }
-          sendJson(200, {
+          return sendJson(200, {
             code: 0,
             msg: "ok",
             tenant_access_token: "tat-feishu-content-107947",
             expire: 7200,
           });
-          return;
         }
 
-        if (record.authorization !== "Bearer tat-feishu-content-107947") {
-          sendJson(401, { code: 99991663, msg: "missing authenticated message request" });
-          return;
+        if (record.authorization !== authorization) {
+          return sendJson(401, { code: 99991663, msg: "missing authenticated message request" });
         }
         if (url.pathname.startsWith("/open-apis/contact/v3/users/")) {
-          sendJson(200, {
+          return sendJson(200, {
             code: 0,
             data: {
               user: {
@@ -103,104 +107,81 @@ describe("Feishu message content over the real Lark SDK", () => {
               },
             },
           });
-          return;
         }
 
         if (request.method === "POST" && body.msg_type === "sticker") {
           if (url.pathname === "/open-apis/im/v1/messages/om_withdrawn_sticker/reply") {
-            sendJson(200, { code: 230011, msg: "The message was withdrawn." });
-            return;
+            return sendJson(200, { code: 230011, msg: "The message was withdrawn." });
           }
-          const isCreate = url.pathname === "/open-apis/im/v1/messages";
+          const isCreate = url.pathname === messagePath;
           const isReply = url.pathname === "/open-apis/im/v1/messages/om_received_sticker/reply";
           if ((isCreate && url.searchParams.get("receive_id_type") === "chat_id") || isReply) {
-            sendJson(200, {
+            return sendJson(200, {
               code: 0,
               data: { message_id: isCreate ? "om_sticker_sent" : "om_sticker_reply" },
             });
-            return;
           }
         }
 
         if (request.method !== "GET" || record.cardMessageContentType !== "user_card_content") {
-          sendJson(400, { code: 400, msg: "unexpected loopback request" });
-          return;
+          return sendJson(400, { code: 400, msg: "unexpected loopback request" });
         }
 
         const messageId = url.pathname.match(/^\/open-apis\/im\/v1\/messages\/([^/]+)$/)?.[1];
         if (!messageId) {
-          sendJson(404, { code: 404, msg: "unexpected loopback message route" });
-          return;
+          return sendJson(404, { code: 404, msg: "unexpected loopback message route" });
         }
 
         if (messageId === "om_loopback_vendor_error") {
-          sendJson(200, { code: 230001, msg: "message not found" });
-          return;
+          return sendJson(200, { code: 230001, msg: "message not found" });
         }
 
         if (messageId === "om_loopback_merge_forward") {
-          sendJson(200, {
-            code: 0,
-            msg: "ok",
-            data: {
-              items: [
-                {
-                  message_id: messageId,
-                  chat_id: "oc_feishu_content_107947",
-                  chat_type: "group",
-                  msg_type: "merge_forward",
-                  body: { content: JSON.stringify({ text: "Merged and Forwarded Message" }) },
-                },
-                {
-                  message_id: "om_loopback_merge_child",
-                  upper_message_id: messageId,
-                  msg_type: "text",
-                  body: { content: JSON.stringify({ text: "forwarded context" }) },
-                  create_time: "1710000000000",
-                  sender: { id: "ou_loopback_merge_child_sender", id_type: "open_id" },
-                },
-                {
-                  message_id: "om_loopback_second_child",
-                  upper_message_id: messageId,
-                  msg_type: "text",
-                  body: { content: JSON.stringify({ text: "second context" }) },
-                  create_time: "1710000001000",
-                  sender: { id: "ou_loopback_unknown", id_type: "open_id" },
-                },
-              ],
-            },
+          const child = (message_id: string, text: string, create_time: string, id: string) => ({
+            message_id,
+            upper_message_id: messageId,
+            msg_type: "text",
+            body: textBody(text),
+            create_time,
+            sender: { id, id_type: "open_id" },
           });
-          return;
+          return sendItems([
+            {
+              message_id: messageId,
+              chat_id: chatId,
+              chat_type: "group",
+              msg_type: "merge_forward",
+              body: textBody("Merged and Forwarded Message"),
+            },
+            child(
+              "om_loopback_merge_child",
+              "forwarded context",
+              "1710000000000",
+              "ou_loopback_merge_child_sender",
+            ),
+            child(
+              "om_loopback_second_child",
+              "second context",
+              "1710000001000",
+              "ou_loopback_unknown",
+            ),
+          ]);
         }
 
         const malformed = sensitiveContentByMessageId.get(messageId);
         const message = malformed
           ? { msg_type: malformed.type, body: { content: malformed.content } }
           : messageId === "om_loopback_valid_text"
-            ? { msg_type: "text", body: { content: JSON.stringify({ text: "safe message" }) } }
+            ? { msg_type: "text", body: textBody("safe message") }
             : messageId === "om_loopback_empty_text"
               ? { msg_type: "text", body: { content: "" } }
               : undefined;
 
         if (!message) {
-          sendJson(404, { code: 404, msg: "unknown loopback message" });
-          return;
+          return sendJson(404, { code: 404, msg: "unknown loopback message" });
         }
 
-        sendJson(200, {
-          code: 0,
-          msg: "ok",
-          data: {
-            items: [
-              {
-                message_id: messageId,
-                chat_id: "oc_feishu_content_107947",
-                chat_type: "group",
-                ...message,
-              },
-            ],
-          },
-        });
+        sendItems([{ message_id: messageId, chat_id: chatId, chat_type: "group", ...message }]);
       })().catch((error: unknown) => {
         response.writeHead(500, { "content-type": "application/json" });
         response.end(JSON.stringify({ error: String(error) }));
@@ -237,16 +218,22 @@ describe("Feishu message content over the real Lark SDK", () => {
         channels: {
           feishu: {
             enabled: true,
-            appId: "cli_feishu_content_107947",
+            appId,
             appSecret: "loopback-placeholder", // pragma: allowlist secret
             domain: "feishu",
             actions: { sticker: true },
             stickerSets: {
-              cli_feishu_content_107947: { file_sticker_received: ["赞👍"] },
+              [appId]: { file_sticker_received: ["赞👍"] },
             },
           },
         },
       } as ClawdbotConfig;
+      const readMessage = (messageId: string, expected: object, config = cfg) =>
+        expect(getMessageFeishu({ cfg: config, messageId })).resolves.toMatchObject(expected);
+      const mergedContent = (sender: string) =>
+        "[Merged and Forwarded Messages]\n" +
+        `- [2024-03-09T16:00:00.000Z] ${sender}: forwarded context\n` +
+        "- [2024-03-09T16:00:01.000Z] ou_loopback_unknown: second context";
 
       for (const [messageId, malformed] of sensitiveContentByMessageId) {
         let exposedParserError: unknown;
@@ -258,9 +245,9 @@ describe("Feishu message content over the real Lark SDK", () => {
         expect(exposedParserError).toBeInstanceOf(SyntaxError);
         expect((exposedParserError as Error).message).toContain(malformed.content);
 
-        await expect(getMessageFeishu({ cfg, messageId })).resolves.toMatchObject({
+        await readMessage(messageId, {
           messageId,
-          chatId: "oc_feishu_content_107947",
+          chatId,
           contentType: malformed.type,
           content: malformed.content,
         });
@@ -269,46 +256,31 @@ describe("Feishu message content over the real Lark SDK", () => {
         );
       }
 
-      await expect(
-        getMessageFeishu({ cfg, messageId: "om_loopback_valid_text" }),
-      ).resolves.toMatchObject({
+      await readMessage("om_loopback_valid_text", {
         messageId: "om_loopback_valid_text",
         contentType: "text",
         content: "safe message",
       });
 
-      await expect(
-        getMessageFeishu({ cfg, messageId: "om_loopback_empty_text" }),
-      ).resolves.toMatchObject({
+      await readMessage("om_loopback_empty_text", {
         messageId: "om_loopback_empty_text",
         contentType: "text",
         content: "",
       });
 
-      await expect(
-        getMessageFeishu({ cfg, messageId: "om_loopback_merge_forward" }),
-      ).resolves.toMatchObject({
+      await readMessage("om_loopback_merge_forward", {
         messageId: "om_loopback_merge_forward",
         contentType: "merge_forward",
-        content:
-          "[Merged and Forwarded Messages]\n" +
-          "- [2024-03-09T16:00:00.000Z] Alice: forwarded context\n" +
-          "- [2024-03-09T16:00:01.000Z] ou_loopback_unknown: second context",
+        content: mergedContent("Alice"),
       });
-      await expect(
-        getMessageFeishu({
-          cfg: {
-            ...cfg,
-            channels: { feishu: { ...cfg.channels?.feishu, resolveSenderNames: false } },
-          },
-          messageId: "om_loopback_merge_forward",
-        }),
-      ).resolves.toMatchObject({
-        content:
-          "[Merged and Forwarded Messages]\n" +
-          "- [2024-03-09T16:00:00.000Z] ou_loopback_merge_child_sender: forwarded context\n" +
-          "- [2024-03-09T16:00:01.000Z] ou_loopback_unknown: second context",
-      });
+      await readMessage(
+        "om_loopback_merge_forward",
+        { content: mergedContent("ou_loopback_merge_child_sender") },
+        {
+          ...cfg,
+          channels: { feishu: { ...cfg.channels?.feishu, resolveSenderNames: false } },
+        },
+      );
 
       await expect(
         getMessageFeishu({ cfg, messageId: "om_loopback_vendor_error" }),
@@ -325,7 +297,7 @@ describe("Feishu message content over the real Lark SDK", () => {
         {
           method: "POST",
           path: "/open-apis/auth/v3/tenant_access_token/internal",
-          appId: "cli_feishu_content_107947",
+          appId,
         },
       ]);
       const messageReads = requests.filter(
@@ -334,7 +306,7 @@ describe("Feishu message content over the real Lark SDK", () => {
       expect(messageReads).toHaveLength(8);
       for (const request of messageReads) {
         expect(request).toMatchObject({
-          authorization: "Bearer tat-feishu-content-107947",
+          authorization,
           cardMessageContentType: "user_card_content",
         });
       }
@@ -377,7 +349,7 @@ describe("Feishu message content over the real Lark SDK", () => {
           accountId: "default",
           params: {
             ...sticker,
-            to: "chat:oc_feishu_content_107947",
+            to: `chat:${chatId}`,
             ...(replyInThread ? { threadId: "om_received_sticker" } : {}),
           },
         });
@@ -386,39 +358,36 @@ describe("Feishu message content over the real Lark SDK", () => {
           receipt: { parts: [expect.objectContaining({ kind: "media" })] },
         });
       }
+      const stickerRequest = {
+        method: "POST",
+        authorization,
+        messageType: "sticker",
+        content: JSON.stringify({ file_key: "file_sticker_received" }),
+      };
       expect(requests.filter((request) => request.messageType === "sticker")).toEqual([
         {
-          method: "POST",
-          path: "/open-apis/im/v1/messages",
-          authorization: "Bearer tat-feishu-content-107947",
-          messageType: "sticker",
-          content: JSON.stringify({ file_key: "file_sticker_received" }),
-          receiveId: "oc_feishu_content_107947",
+          ...stickerRequest,
+          path: messagePath,
+          receiveId: chatId,
         },
         {
-          method: "POST",
+          ...stickerRequest,
           path: "/open-apis/im/v1/messages/om_received_sticker/reply",
-          authorization: "Bearer tat-feishu-content-107947",
-          messageType: "sticker",
-          content: JSON.stringify({ file_key: "file_sticker_received" }),
           replyInThread: true,
         },
       ]);
-      const createsBeforeWithdrawnReply = requests.filter(
-        (request) => request.path === "/open-apis/im/v1/messages",
-      ).length;
+      const creates = () => requests.filter((request) => request.path === messagePath);
+      const createsBeforeWithdrawnReply = creates().length;
       await expect(
         sendStickerFeishu({
           cfg,
-          to: "chat:oc_feishu_content_107947",
+          to: `chat:${chatId}`,
           fileKey: "file_sticker_received",
           replyToMessageId: "om_withdrawn_sticker",
           replyInThread: true,
         }),
       ).rejects.toThrow("cannot safely fall back to a top-level send");
-      expect(
-        requests.filter((request) => request.path === "/open-apis/im/v1/messages"),
-      ).toHaveLength(createsBeforeWithdrawnReply);
+      expect(creates()).toHaveLength(createsBeforeWithdrawnReply);
     } finally {
       Lark.defaultHttpInstance.interceptors.request.eject(loopbackInterceptor);
       await new Promise<void>((resolve, reject) => {
