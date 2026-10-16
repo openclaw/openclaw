@@ -7,7 +7,10 @@ import {
 } from "../test-helpers/modal-dialog.ts";
 import { installPopoverPolyfill } from "../test-helpers/popover.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import { showSessionGroupDefaultsDialog } from "./session-group-defaults-dialog.tsx";
+import {
+  type SessionGroupDefaults,
+  showSessionGroupDefaultsDialog,
+} from "./session-group-defaults-dialog.tsx";
 
 let fixture: ReturnType<typeof createModalDialogTestFixture>;
 let restorePopover: () => void;
@@ -202,7 +205,10 @@ it("gates saving synchronously and lets a failed save retry the restored worktre
     resolveSave = resolve;
   });
   const submit = fixture.mockRequest(
-    vi.fn().mockReturnValueOnce(pendingSave).mockResolvedValue(null),
+    vi
+      .fn<(defaults: SessionGroupDefaults) => Promise<string | null>>()
+      .mockReturnValueOnce(pendingSave)
+      .mockResolvedValue(null),
   );
   const completed = fixture.track(
     showSessionGroupDefaultsDialog({
