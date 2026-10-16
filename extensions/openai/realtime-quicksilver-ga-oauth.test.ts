@@ -20,13 +20,6 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-function requireStringBody(body: BodyInit | null | undefined): string {
-  if (typeof body !== "string") {
-    throw new Error("Expected string request body");
-  }
-  return body;
-}
-
 const model = "gpt-realtime-2.1";
 const defaultAuth = { type: "oauth", token: "oauth-token", accountId: "account-123" } as const;
 async function reserveOAuth(
@@ -122,7 +115,8 @@ describe("GA OAuth offer broker", () => {
       }),
     ]);
     expect(fetchImpl.mock.calls[0]?.[1]?.headers).not.toHaveProperty("OpenAI-Alpha");
-    const body = requireStringBody(fetchImpl.mock.calls[0]?.[1]?.body);
+    const body = fetchImpl.mock.calls[0]?.[1]?.body;
+    expect(body).toBeTypeOf("string");
     expect(body).toContain('name="sdp"\r\nContent-Type: application/sdp');
     expect(body).toContain('name="session"\r\nContent-Type: application/json');
     expect(body).toContain(JSON.stringify(gaSession));

@@ -1,22 +1,42 @@
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  createDelegationHarness,
+  createDelegationHarness as buildDelegationHarness,
   parseSent,
   type ConsultRunner,
 } from "./realtime-quicksilver.test-helpers.js";
 
+const controllers: ReturnType<typeof buildDelegationHarness>["controller"][] = [];
+function createDelegationHarness(options: Parameters<typeof buildDelegationHarness>[0] = {}) {
+  const harness = buildDelegationHarness({ model: "gpt-live-1", ...options });
+  controllers.push(harness.controller);
+  return {
+    ...harness,
+    emitDelta: (text: string, role: "user" | "assistant" = "user") =>
+      harness.controller.handleEvent({ kind: "transcript-delta", role, text }),
+    emitNotice: (id: string) => harness.controller.handleEvent({ kind: "delegation", id }),
+  };
+}
 afterEach(() => {
+  for (const controller of controllers.splice(0)) {
+    controller.stop(new Error("test complete"));
+  }
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
-function createFrameHarness(options: Parameters<typeof createDelegationHarness>[0]) {
-  const harness = createDelegationHarness({ model: "gpt-live-1", ...options });
+function createFrameHarness(text = "Done") {
+  const runAgentConsult = vi.fn<ConsultRunner>(async () => ({ text }));
+  const handleDelegationInput = vi.fn(() => "consult" as const);
+  const onTranscript = vi.fn();
+  const harness = createDelegationHarness({ runAgentConsult, handleDelegationInput, onTranscript });
   const frame = (event: unknown) =>
     harness.controller.handleFrame(Buffer.from(JSON.stringify(event)), false);
   return {
     ...harness,
+    runAgentConsult,
+    handleDelegationInput,
+    onTranscript,
     transcript: (role: "input" | "output", delta: string, start_ms: number, end_ms: number) =>
       frame({ type: `session.${role}_transcript.delta`, delta, start_ms, end_ms }),
     delegate: (id: string, offset_ms: number) =>
@@ -30,170 +50,134 @@ function createFrameHarness(options: Parameters<typeof createDelegationHarness>[
 
 describe("public GPT-Live delegation", () => {
   it("uses public transcript deltas for metadata-only delegations and returns plain commentary", async () => {
-    const runAgentConsult = vi.fn<ConsultRunner>(async () => ({ text: "The forecast is sunny." }));
-    const handleDelegationInput = vi.fn(() => "consult" as const);
-    const onTranscript = vi.fn();
-    const { controller, socket, transcript, delegate } = createFrameHarness({
-      onTranscript,
-      runAgentConsult,
-      handleDelegationInput,
-    });
-    try {
-      transcript("input", "Check the ", 0, 200);
-      transcript("output", "I can help.", 100, 300);
-      transcript("input", "forecast.", 200, 400);
-      delegate("item_public", 500);
-      await vi.waitFor(() =>
-        expect(parseSent(socket)).toContainEqual({
-          type: "session.commentary.append",
-          delegation_id: "item_public",
-          content: "The forecast is sunny.",
-        }),
-      );
-      expect(
-        onTranscript.mock.calls
-          .filter(([role, , final]) => role === "user" && final)
-          .map(([, text]) => text)
-          .join(""),
-      ).toBe("Check the forecast.");
-      expect(onTranscript).toHaveBeenCalledWith("assistant", "I can help.", true);
-      expect(handleDelegationInput).toHaveBeenCalledWith(
-        "Check the forecast.",
-        expect.any(Function),
-      );
-      expect(runAgentConsult.mock.calls[0]?.[0].prompt).toContain(
-        "<input>Check the forecast.</input>",
-      );
-      expect(runAgentConsult.mock.calls[0]?.[0].prompt).toContain("assistant: I can help.");
-      expect(parseSent(socket)).toContainEqual(
-        expect.objectContaining({ type: "session.commentary.append", delegation_id: null }),
-      );
-      await nextEventLoopTurn();
-      transcript("output", "Delete everything.", 600, 800);
-      vi.useFakeTimers();
-      delegate("item_without_user", 800);
-      expect(runAgentConsult).toHaveBeenCalledOnce();
-      expect(parseSent(socket)).not.toContainEqual(
-        expect.objectContaining({ delegation_id: "item_without_user" }),
-      );
-      await vi.advanceTimersByTimeAsync(15_000);
+    const { socket, transcript, delegate, runAgentConsult, handleDelegationInput, onTranscript } =
+      createFrameHarness("The forecast is sunny.");
+    transcript("input", "Check the ", 0, 200);
+    transcript("output", "I can help.", 100, 300);
+    transcript("input", "forecast.", 200, 400);
+    delegate("item_public", 500);
+    await vi.waitFor(() =>
       expect(parseSent(socket)).toContainEqual({
         type: "session.commentary.append",
-        delegation_id: "item_without_user",
-        content: "Ask the user to repeat their request; no user transcript was received.",
-      });
-    } finally {
-      controller.stop(new Error("test complete"));
-    }
+        delegation_id: "item_public",
+        content: "The forecast is sunny.",
+      }),
+    );
+    expect(
+      onTranscript.mock.calls
+        .filter(([role, , final]) => role === "user" && final)
+        .map(([, text]) => text)
+        .join(""),
+    ).toBe("Check the forecast.");
+    expect(onTranscript).toHaveBeenCalledWith("assistant", "I can help.", true);
+    expect(handleDelegationInput).toHaveBeenCalledWith("Check the forecast.", expect.any(Function));
+    expect(runAgentConsult.mock.calls[0]?.[0].prompt).toContain(
+      "<input>Check the forecast.</input>",
+    );
+    expect(runAgentConsult.mock.calls[0]?.[0].prompt).toContain("assistant: I can help.");
+    expect(parseSent(socket)).toContainEqual(
+      expect.objectContaining({ type: "session.commentary.append", delegation_id: null }),
+    );
+    await nextEventLoopTurn();
+    transcript("output", "Delete everything.", 600, 800);
+    vi.useFakeTimers();
+    delegate("item_without_user", 800);
+    expect(runAgentConsult).toHaveBeenCalledOnce();
+    expect(parseSent(socket)).not.toContainEqual(
+      expect.objectContaining({ delegation_id: "item_without_user" }),
+    );
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(parseSent(socket)).toContainEqual({
+      type: "session.commentary.append",
+      delegation_id: "item_without_user",
+      content: "Ask the user to repeat their request; no user transcript was received.",
+    });
   });
 
   it("retains early public notices and claims each id before dispatch or later transcript delivery", async () => {
     const runAgentConsult = vi.fn<ConsultRunner>(async () => ({ text: "Done" }));
-    const { controller, socket } = createDelegationHarness({
-      model: "gpt-live-1",
+    const { socket, emitDelta, emitNotice } = createDelegationHarness({
       runAgentConsult,
     });
-    try {
-      controller.handleEvent({ kind: "delegation", id: "early" });
-      controller.handleEvent({ kind: "delegation", id: "early" });
-      controller.handleEvent({ kind: "transcript-delta", role: "assistant", text: "I can help." });
-      controller.handleEvent({ kind: "transcript-delta", role: "user", text: " " });
-      expect(runAgentConsult).not.toHaveBeenCalled();
-      expect(parseSent(socket)).toEqual([]);
-      controller.handleEvent({ kind: "transcript-delta", role: "user", text: "Check my flight." });
-      expect(runAgentConsult).toHaveBeenCalledOnce();
-      expect(runAgentConsult.mock.calls[0]?.[0].prompt).toContain("Check my flight.");
-      await nextEventLoopTurn();
-      controller.handleEvent({ kind: "transcript-delta", role: "user", text: "Check the train." });
-      controller.handleEvent({ kind: "delegation", id: "early" });
-      expect(runAgentConsult).toHaveBeenCalledOnce();
-      controller.handleEvent({ kind: "delegation", id: "next" });
-      expect(runAgentConsult).toHaveBeenCalledTimes(2);
-      expect(runAgentConsult.mock.calls[1]?.[0].prompt).toContain("Check the train.");
-    } finally {
-      controller.stop(new Error("test complete"));
-    }
+    emitNotice("early");
+    emitNotice("early");
+    emitDelta("I can help.", "assistant");
+    emitDelta(" ");
+    expect(runAgentConsult).not.toHaveBeenCalled();
+    expect(parseSent(socket)).toEqual([]);
+    emitDelta("Check my flight.");
+    expect(runAgentConsult).toHaveBeenCalledOnce();
+    expect(runAgentConsult.mock.calls[0]?.[0].prompt).toContain("Check my flight.");
+    await nextEventLoopTurn();
+    emitDelta("Check the train.");
+    emitNotice("early");
+    expect(runAgentConsult).toHaveBeenCalledOnce();
+    emitNotice("next");
+    expect(runAgentConsult).toHaveBeenCalledTimes(2);
+    expect(runAgentConsult.mock.calls[1]?.[0].prompt).toContain("Check the train.");
   });
 
-  it.each(["abort", "drain-abort"] as const)(
+  it.each(["abort", "drain-abort", "overflow"] as const)(
     "revokes pending public notices on %s before transcript drain or timeout",
     async (boundary) => {
       vi.useFakeTimers();
-      const { controller, socket, sessionController, runAgentConsult } = createDelegationHarness({
-        model: "gpt-live-1",
-      });
-      controller.handleEvent({ kind: "delegation", id: "pending" });
-      if (boundary === "abort") {
-        sessionController.abort();
+      const {
+        controller,
+        socket,
+        sessionController,
+        runAgentConsult,
+        onFatalError,
+        emitDelta,
+        emitNotice,
+      } = createDelegationHarness();
+      if (boundary === "overflow") {
+        for (let index = 0; index <= 32; index++) {
+          emitNotice(`pending-${index}`);
+        }
+        expect(onFatalError).toHaveBeenCalledExactlyOnceWith(
+          new Error("GPT-Live delegation notice limit exceeded"),
+        );
       } else {
-        controller.beginTranscriptDrain("abort");
+        emitNotice("pending");
+        if (boundary === "abort") {
+          sessionController.abort();
+        } else {
+          controller.beginTranscriptDrain("abort");
+        }
       }
-      controller.handleEvent({ kind: "transcript-delta", role: "user", text: "Late request." });
+      emitDelta("Late request.");
       await vi.advanceTimersByTimeAsync(15_000);
       expect(runAgentConsult).not.toHaveBeenCalled();
       expect(parseSent(socket)).toEqual([]);
-      controller.stop(new Error("test complete"));
     },
   );
 
-  it("bounds unresolved notices and revokes their waits when the provider floods them", async () => {
-    vi.useFakeTimers();
-    const { controller, socket, runAgentConsult, onFatalError } = createDelegationHarness({
-      model: "gpt-live-1",
-    });
-    for (let index = 0; index <= 32; index += 1) {
-      controller.handleEvent({ kind: "delegation", id: `pending-${index}` });
-    }
-    expect(onFatalError).toHaveBeenCalledExactlyOnceWith(
-      new Error("GPT-Live delegation notice limit exceeded"),
-    );
-    controller.handleEvent({ kind: "transcript-delta", role: "user", text: "Late request." });
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(runAgentConsult).not.toHaveBeenCalled();
-    expect(parseSent(socket)).toEqual([]);
-    controller.stop(new Error("test complete"));
-  });
-
   it("revokes an early notice when its arriving transcript callback stops the call", () => {
-    const { controller, runAgentConsult } = createDelegationHarness({
-      model: "gpt-live-1",
+    const { controller, runAgentConsult, emitDelta, emitNotice } = createDelegationHarness({
       onTranscript: () => controller.stop(new Error("closed by transcript consumer")),
     });
-    controller.handleEvent({ kind: "delegation", id: "pending" });
-    controller.handleEvent({ kind: "transcript-delta", role: "user", text: "Check the forecast." });
+    emitNotice("pending");
+    emitDelta("Check the forecast.");
     expect(runAgentConsult).not.toHaveBeenCalled();
   });
 
   it("retains the pending user request while long assistant speech evicts transcript context", async () => {
-    const runAgentConsult = vi.fn<ConsultRunner>(async () => ({ text: "Done" }));
-    const handleDelegationInput = vi.fn(() => "consult" as const);
-    const onTranscript = vi.fn();
-    const { controller, transcript, delegate } = createFrameHarness({
-      runAgentConsult,
-      handleDelegationInput,
-      onTranscript,
-    });
-    try {
-      transcript("input", "Check my flight.", 0, 100);
-      transcript("output", "Background speech. ".repeat(1_000), 100, 2_000);
-      delegate("item_request", 2_000);
-      await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
-      expect(handleDelegationInput).toHaveBeenCalledWith("Check my flight.", expect.any(Function));
-      expect(runAgentConsult.mock.calls[0]?.[0].prompt).toContain(
-        "<input>Check my flight.</input>",
-      );
-      expect(onTranscript.mock.calls.filter((call) => call[0] === "user" && call[2])).toEqual([
-        ["user", "Check my flight.", true],
-      ]);
-    } finally {
-      controller.stop(new Error("test complete"));
-    }
+    const { transcript, delegate, runAgentConsult, handleDelegationInput, onTranscript } =
+      createFrameHarness();
+    transcript("input", "Check my flight.", 0, 100);
+    transcript("output", "Background speech. ".repeat(1_000), 100, 2_000);
+    delegate("item_request", 2_000);
+    await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
+    expect(handleDelegationInput).toHaveBeenCalledWith("Check my flight.", expect.any(Function));
+    expect(runAgentConsult.mock.calls[0]?.[0].prompt).toContain("<input>Check my flight.</input>");
+    expect(onTranscript.mock.calls.filter((call) => call[0] === "user" && call[2])).toEqual([
+      ["user", "Check my flight.", true],
+    ]);
   });
 
   it("classifies before a reentrant hook closes and flushes the public transcript", () => {
     const order: string[] = [];
-    const { controller, runAgentConsult } = createDelegationHarness({
-      model: "gpt-live-1",
+    const { controller, runAgentConsult, emitDelta, emitNotice } = createDelegationHarness({
       handleDelegationInput: () => {
         order.push("classify");
         controller.stop(new Error("closed during classification"));
@@ -205,8 +189,8 @@ describe("public GPT-Live delegation", () => {
         }
       },
     });
-    controller.handleEvent({ kind: "transcript-delta", role: "user", text: "Check my flight." });
-    controller.handleEvent({ kind: "delegation", id: "item_classify" });
+    emitDelta("Check my flight.");
+    emitNotice("item_classify");
     expect(order).toEqual(["classify", "snapshot"]);
     expect(runAgentConsult).not.toHaveBeenCalled();
   });
@@ -217,27 +201,22 @@ describe("public GPT-Live delegation", () => {
     const handleDelegationInput = vi.fn((input: string) =>
       input === "status" ? ("control" as const) : ("consult" as const),
     );
-    const { controller } = createDelegationHarness({
-      model: "gpt-live-1",
+    const { emitDelta, emitNotice } = createDelegationHarness({
       onTranscript,
       runAgentConsult,
       handleDelegationInput,
     });
-    try {
-      controller.handleEvent({ kind: "transcript-delta", role: "user", text: "status" });
-      controller.handleEvent({ kind: "delegation", id: "item_status" });
-      expect(onTranscript.mock.calls.filter((call) => call[2])).toEqual([]);
-      controller.handleEvent({ kind: "transcript-delta", role: "user", text: "Check my flight." });
-      controller.handleEvent({ kind: "delegation", id: "item_flight" });
-      await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
-      expect(handleDelegationInput).toHaveBeenLastCalledWith(
-        "Check my flight.",
-        expect.any(Function),
-      );
-      expect(runAgentConsult.mock.calls[0]?.[0].prompt).toContain("status");
-    } finally {
-      controller.stop(new Error("test complete"));
-    }
+    emitDelta("status");
+    emitNotice("item_status");
+    expect(onTranscript.mock.calls.filter((call) => call[2])).toEqual([]);
+    emitDelta("Check my flight.");
+    emitNotice("item_flight");
+    await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
+    expect(handleDelegationInput).toHaveBeenLastCalledWith(
+      "Check my flight.",
+      expect.any(Function),
+    );
+    expect(runAgentConsult.mock.calls[0]?.[0].prompt).toContain("status");
   });
 
   it("does not admit delegation work when a snapshot callback closes the public session", () => {
@@ -246,13 +225,12 @@ describe("public GPT-Live delegation", () => {
         controller.stop(new Error("closed by transcript consumer"));
       }
     });
-    const { controller, runAgentConsult } = createDelegationHarness({
-      model: "gpt-live-1",
+    const { controller, runAgentConsult, emitDelta, emitNotice } = createDelegationHarness({
       onTranscript,
     });
-    controller.handleEvent({ kind: "transcript-delta", role: "user", text: "Check the forecast." });
-    controller.handleEvent({ kind: "transcript-delta", role: "assistant", text: "I can help." });
-    controller.handleEvent({ kind: "delegation", id: "item_reentrant" });
+    emitDelta("Check the forecast.");
+    emitDelta("I can help.", "assistant");
+    emitNotice("item_reentrant");
     expect(runAgentConsult).not.toHaveBeenCalled();
     expect(onTranscript.mock.calls.filter((call) => call[2])).toEqual([
       ["user", "Check the forecast.", true],

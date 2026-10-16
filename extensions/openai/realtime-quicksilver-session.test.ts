@@ -21,21 +21,18 @@ function makeBroker(params?: Parameters<typeof createBroker>[0]) {
   return harness;
 }
 afterEach(async () => {
-  for (const broker of brokers.splice(0)) {
-    await broker.cleanup();
+  try {
+    for (const broker of brokers.splice(0)) {
+      await broker.cleanup();
+    }
+  } finally {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
   }
-  vi.restoreAllMocks();
 });
 
 function requestTarget(url: string | URL | Request): string {
   return typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
-}
-
-function requireStringBody(body: BodyInit | null | undefined): string {
-  if (typeof body !== "string") {
-    throw new Error("Expected string request body");
-  }
-  return body;
 }
 
 const AUDIO_ONLY_SDP = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
@@ -123,10 +120,7 @@ async function reserveLiveSession(
 
 describe("GPT-Live offer broker", () => {
   it("waits for the GA sideband before returning an audio-only SDP answer and hangs up once", async () => {
-    let releaseSideband!: () => void;
-    const sidebandReady = new Promise<void>((resolve) => {
-      releaseSideband = resolve;
-    });
+    const { promise: sidebandReady, resolve: releaseSideband } = Promise.withResolvers<void>();
     const bridge = makeBridge({ connect: vi.fn(async () => await sidebandReady) });
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const target = requestTarget(url);
@@ -134,7 +128,8 @@ describe("GPT-Live offer broker", () => {
         return new Response(null, { status: 204 });
       }
       expect(target).toBe("https://api.openai.com/v1/realtime/calls");
-      const form = requireStringBody(init?.body);
+      const form = init?.body;
+      expect(form).toBeTypeOf("string");
       expect(form).toContain("m=audio 9 UDP/TLS/RTP/SAVPF 111");
       expect(form).not.toContain("m=application");
       return new Response("v=ga-answer\r\n", {
@@ -158,7 +153,7 @@ describe("GPT-Live offer broker", () => {
       const handling = realtime.handler(
         createRequest({
           token: reservation.clientSecret,
-          body: "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n",
+          body: AUDIO_ONLY_SDP,
         }),
         response.res,
       );
@@ -179,22 +174,15 @@ describe("GPT-Live offer broker", () => {
         ),
       );
 
+      const hangups = () =>
+        fetchMock.mock.calls.filter(([url]) => requestTarget(url).endsWith("/rtc_gateway/hangup"));
       terminateSideband?.();
-      await vi.waitFor(() =>
-        expect(
-          fetchMock.mock.calls.filter(([url]) =>
-            requestTarget(url).endsWith("/rtc_gateway/hangup"),
-          ),
-        ).toHaveLength(1),
-      );
+      await vi.waitFor(() => expect(hangups()).toHaveLength(1));
       await realtime.broker.cancelBrowserSession(reservation);
       expect(bridge.close).toHaveBeenCalledOnce();
-      expect(
-        fetchMock.mock.calls.filter(([url]) => requestTarget(url).endsWith("/rtc_gateway/hangup")),
-      ).toHaveLength(1);
+      expect(hangups()).toHaveLength(1);
     } finally {
       releaseSideband();
-      await realtime.cleanup();
     }
   });
 
@@ -290,37 +278,29 @@ describe("GPT-Live offer broker", () => {
     const { realtime, sockets } = makeBroker({
       socketFactory: (attempt) => (attempt < 1 ? new ErrorOnCloseSocket() : new FakeSocket("open")),
     });
-    try {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const reservation = await reserveLiveSession(realtime);
-      const response = createResponseHarness();
-      const handling = realtime.handler(
-        createRequest({ token: reservation.clientSecret }),
-        response.res,
-      );
-      await vi.advanceTimersByTimeAsync(0);
-      expect(sockets).toHaveLength(1);
-      expect(sockets[0]?.readyState).toBe(0);
-      await vi.advanceTimersByTimeAsync(14_999);
-      expect(sockets[0]?.closed).toBe(false);
-      expect(response.end).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(sockets[0]?.closed).toBe(true);
-      expect(sockets).toHaveLength(1);
-      await vi.advanceTimersByTimeAsync(200);
-      await handling;
-      await vi.advanceTimersByTimeAsync(0);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const reservation = await reserveLiveSession(realtime);
+    const response = createResponseHarness();
+    const handling = realtime.handler(
+      createRequest({ token: reservation.clientSecret }),
+      response.res,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sockets).toHaveLength(1);
+    expect(sockets[0]?.readyState).toBe(0);
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(sockets[0]?.closed).toBe(false);
+    expect(response.end).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sockets[0]?.closed).toBe(true);
+    expect(sockets).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(200);
+    await handling;
+    await vi.advanceTimersByTimeAsync(0);
 
-      expect(response.res.statusCode).toBe(200);
-      expect(response.readBody()).toBe("v=answer\r\n");
-      expect(sockets[0]?.listenerCount("error")).toBeGreaterThan(0);
-    } finally {
-      try {
-        await realtime.cleanup();
-      } finally {
-        vi.useRealTimers();
-      }
-    }
+    expect(response.res.statusCode).toBe(200);
+    expect(response.readBody()).toBe("v=answer\r\n");
+    expect(sockets[0]?.listenerCount("error")).toBeGreaterThan(0);
   });
 
   it("retries transient sideband startup failures", async () => {
@@ -422,59 +402,33 @@ describe("GPT-Live offer broker", () => {
     emitSideband(socket, { type: "error", message: "recoverable turn failure" });
     expect(socket.closed).toBe(false);
     emitSideband(socket, { type: "error", error: { code: "invalid_token" } });
-    expect(socket.closed).toBe(true);
-    expect(socket.closeCode).toBe(1000);
+    expect(socket).toMatchObject({ closed: true, closeCode: 1000 });
     expect(logger.warn).toHaveBeenCalledTimes(2);
   });
 
-  it("uses a relative single-use offer route and enforces CORS", async () => {
+  it.each([
+    { origin: "https://control.example", host: undefined, allowed: true },
+    { origin: "http://192.168.1.24:18789", host: "192.168.1.24:18789", allowed: true },
+    { origin: "https://untrusted.example", host: "192.168.1.24:18789", allowed: false },
+  ])("enforces CORS for $origin on preflight and POST", async ({ origin, host, allowed }) => {
     const { realtime } = makeBroker();
-    const accepted = createResponseHarness();
-    await realtime.handler(createPreflightRequest("https://control.example"), accepted.res);
-    expect(accepted.res.statusCode).toBe(204);
-    expect(accepted.setHeader).toHaveBeenCalledWith(
-      "Access-Control-Allow-Origin",
-      "https://control.example",
-    );
-    expect(accepted.setHeader).toHaveBeenCalledWith("Access-Control-Allow-Private-Network", "true");
+    const preflight = createResponseHarness();
+    await realtime.handler(createPreflightRequest(origin, host), preflight.res);
+    expect(preflight.res.statusCode).toBe(allowed ? 204 : 403);
+    const response = await post(realtime, { token: "invalid", origin, host });
+    expect(response.res.statusCode).toBe(allowed ? 401 : 403);
+    if (allowed) {
+      expect(preflight.setHeader).toHaveBeenCalledWith("Access-Control-Allow-Origin", origin);
+      expect(preflight.setHeader).toHaveBeenCalledWith(
+        "Access-Control-Allow-Private-Network",
+        "true",
+      );
+      expect(response.setHeader).toHaveBeenCalledWith("Access-Control-Allow-Origin", origin);
+    }
+  });
 
-    const privateOrigin = "http://192.168.1.24:18789";
-    const privatePreflight = createResponseHarness();
-    await realtime.handler(
-      createPreflightRequest(privateOrigin, "192.168.1.24:18789"),
-      privatePreflight.res,
-    );
-    expect(privatePreflight.res.statusCode).toBe(204);
-    expect(privatePreflight.setHeader).toHaveBeenCalledWith(
-      "Access-Control-Allow-Origin",
-      privateOrigin,
-    );
-
-    const privatePost = await post(realtime, {
-      token: "invalid",
-      origin: privateOrigin,
-      host: "192.168.1.24:18789",
-    });
-    expect(privatePost.res.statusCode).toBe(401);
-    expect(privatePost.setHeader).toHaveBeenCalledWith(
-      "Access-Control-Allow-Origin",
-      privateOrigin,
-    );
-
-    const rejected = createResponseHarness();
-    await realtime.handler(
-      createPreflightRequest("https://untrusted.example", "192.168.1.24:18789"),
-      rejected.res,
-    );
-    expect(rejected.res.statusCode).toBe(403);
-
-    const rejectedPost = await post(realtime, {
-      token: "invalid",
-      origin: "https://untrusted.example",
-      host: "192.168.1.24:18789",
-    });
-    expect(rejectedPost.res.statusCode).toBe(403);
-
+  it("uses a relative single-use offer route and normalizes voice", async () => {
+    const { realtime } = makeBroker();
     const reservation = await reserveLiveSession(realtime, { voice: "invalid" });
     expect(reservation).toMatchObject({
       offerUrl: OPENAI_QUICKSILVER_OFFER_PATH,
@@ -488,7 +442,6 @@ describe("GPT-Live offer broker", () => {
     });
     expect(first.res.statusCode).toBe(200);
     expect(first.readBody()).toBe("v=answer\r\n");
-
     const replay = await post(realtime, { token: reservation.clientSecret });
     expect(replay.res.statusCode).toBe(401);
   });
@@ -518,25 +471,19 @@ describe("GPT-Live offer broker", () => {
       const onClose = vi.fn(() => {
         throw new Error("close callback failed");
       });
-      try {
-        const reservation = await reserveGaSession(realtime, vi.fn(), {
-          bindBridge: vi.fn(),
-          onClose,
-        });
+      const reservation = await reserveGaSession(realtime, vi.fn(), {
+        bindBridge: vi.fn(),
+        onClose,
+      });
 
-        const expiryError = await vi.advanceTimersByTimeAsync(60_000).then(
-          () => undefined,
-          (error: unknown) => error,
-        );
-        expect.soft(expiryError).toBeUndefined();
-        expect(onClose).toHaveBeenCalledOnce();
-        expect(onClose).toHaveBeenCalledWith("completed");
-        const expired = await post(realtime, { token: reservation.clientSecret });
-        expect(expired.res.statusCode).toBe(401);
-      } finally {
-        await realtime.cleanup();
-        vi.useRealTimers();
-      }
+      const expiryError = await vi.advanceTimersByTimeAsync(60_000).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect.soft(expiryError).toBeUndefined();
+      expect(onClose).toHaveBeenCalledExactlyOnceWith("completed");
+      const expired = await post(realtime, { token: reservation.clientSecret });
+      expect(expired.res.statusCode).toBe(401);
     },
   );
 
