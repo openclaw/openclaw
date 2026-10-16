@@ -261,7 +261,7 @@ export class DraftPlaceBrowser {
   }
 
   get browserNodeId(): string {
-    return this.browserOpenValue ? this.browserNodeIdValue : "";
+    return this.browserNodeIdValue;
   }
 
   get browserProjectPath(): string | null {
@@ -440,7 +440,6 @@ export class DraftPlaceBrowser {
   }
 
   private openBrowser(nodeId: string, path?: string) {
-    this.browser.reset();
     this.browserOpenValue = true;
     this.browserNodeIdValue = nodeId;
     this.browserProjectPathValue = null;
