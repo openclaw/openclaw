@@ -25,7 +25,7 @@ import { ChatTranscriptController } from "./components/chat-transcript-controlle
 type ChatModelControlsProps = Parameters<typeof ChatModelControls>[0];
 const modelControlsUpdates = new WeakMap<HTMLElement, (props: ChatModelControlsProps) => void>();
 
-export function renderChatModelControls(props: ChatModelControlsProps, container: HTMLElement) {
+export function renderChatModelControls(props: ChatModelControlsProps, container: HTMLDivElement) {
   const update = modelControlsUpdates.get(container);
   if (update) {
     update(props);
