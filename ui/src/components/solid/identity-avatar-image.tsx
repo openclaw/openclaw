@@ -97,22 +97,15 @@ function bindIdentityAvatarImage(input: Accessor<IdentityAvatarImageProps>) {
       active = false;
     };
   });
-  onCleanup(() => {
-    image.removeEventListener("load", load);
-    image.removeEventListener("error", error);
-    release?.();
-  });
-  return (element: HTMLImageElement) => {
-    image = element;
-    image.addEventListener("load", load);
-    image.addEventListener("error", error);
-  };
+  onCleanup(() => release?.());
+  return { ref: (element: HTMLImageElement) => (image = element), onLoad: load, onError: error };
 }
 
 export function IdentityAvatarImage(props: IdentityAvatarImageProps) {
+  const binding = bindIdentityAvatarImage(() => props);
   return (
     <img
-      ref={bindIdentityAvatarImage(() => props)}
+      {...binding}
       class={props.class}
       alt={props.alt ?? ""}
       aria-hidden={props.ariaHidden ? "true" : undefined}
