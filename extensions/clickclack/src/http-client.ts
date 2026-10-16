@@ -11,24 +11,11 @@ import type {
   ClickClackEvent,
   ClickClackMessage,
   ClickClackMessageProvenance,
+  ClickClackUpload,
   ClickClackUser,
   ClickClackWorkspace,
 } from "./types.js";
 import { WebSocket } from "./ws-runtime.js";
-
-type ClickClackUpload = {
-  id: string;
-  workspace_id: string;
-  owner_id: string;
-  nonce?: string;
-  filename: string;
-  content_type: string;
-  byte_size: number;
-  width: number;
-  height: number;
-  duration_ms: number;
-  created_at: string;
-};
 
 /**
  * Serializes optional provenance into the wire fields. Unknown JSON fields
@@ -91,6 +78,8 @@ const CLICKCLACK_INBOUND_JSON_LIMIT_BYTES = 16 * 1024 * 1024;
 // never upgrades, pinning the monitor reconnect loop.
 const CLICKCLACK_WEBSOCKET_HANDSHAKE_TIMEOUT_MS = 30_000;
 const CLICKCLACK_EPHEMERAL_REQUEST_TIMEOUT_MS = 15_000;
+// Bounds headers and error bodies. Successful media reads use the media owner's idle deadline.
+const CLICKCLACK_UPLOAD_REQUEST_TIMEOUT_MS = 30_000;
 const CLICKCLACK_MESSAGE_PAGE_LIMIT = 200;
 const CLICKCLACK_DISCUSSION_ROOT_PAGE_LIMIT = 8;
 const CLICKCLACK_DISCUSSION_THREAD_REQUEST_LIMIT = 24;
@@ -469,6 +458,58 @@ export function createClickClackClient(options: ClientOptions) {
         method: "POST",
         body: form,
       });
+    },
+    consumeUpload: async <T>(
+      uploadId: string,
+      consume: (response: Response) => Promise<T>,
+      signal?: AbortSignal,
+    ): Promise<T> => {
+      const controller = new AbortController();
+      const abort = () => controller.abort(signal?.reason);
+      if (signal?.aborted) {
+        abort();
+      } else {
+        signal?.addEventListener("abort", abort, { once: true });
+      }
+      const timeout = setTimeout(() => controller.abort(), CLICKCLACK_UPLOAD_REQUEST_TIMEOUT_MS);
+      try {
+        const uploadHeaders = new Headers(headers);
+        uploadHeaders.set("Accept", "*/*");
+        if (correlationId) {
+          uploadHeaders.set(CLICKCLACK_CORRELATION_ID_HEADER, correlationId);
+        }
+        const response = await captureEffectAuthority().initiate(() => {
+          controller.signal.throwIfAborted();
+          options.beforeRequest?.();
+          return fetcher(`${baseUrl}/api/uploads/${encodeURIComponent(uploadId)}`, {
+            headers: uploadHeaders,
+            redirect: "error",
+            signal: controller.signal,
+          });
+        });
+        if (!response.ok) {
+          let detail: string;
+          try {
+            detail = await readResponseTextLimited(response, CLICKCLACK_ERROR_BODY_LIMIT_BYTES);
+          } catch {
+            // The status is authoritative even if its optional detail times out.
+            // Preserve caller cancellation instead of turning it into a remote rejection.
+            signal?.throwIfAborted();
+            detail = "upload error details unavailable";
+          }
+          throw new ClickClackHttpError(
+            response.status,
+            redactToolPayloadText(detail),
+            new Headers(response.headers),
+          );
+        }
+        clearTimeout(timeout);
+        return await consume(response);
+      } finally {
+        clearTimeout(timeout);
+        signal?.removeEventListener("abort", abort);
+        controller.abort();
+      }
     },
     findUploadByNonce: async (params: {
       workspaceId: string;
