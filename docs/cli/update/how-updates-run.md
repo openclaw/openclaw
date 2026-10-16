@@ -1119,12 +1119,23 @@ Gateway holder.
 
 If another OpenClaw process that is not a Gateway holds state ownership when
 updater-run Doctor enters maintenance (for example a CLI or plugin command, an
-embedded agent run, or another Doctor), Doctor waits for it with the same
-11-minute allowance, with or without delegated Doctor authority. It prints which
-process and database it is waiting on, repeats progress every 30 seconds, and
-continues once ownership is released. The wait holds no OpenClaw lock, so the
-other process can finish. With the slowest measured update Doctor (258 s on 1 CPU
-with 10 MB/s disk), the wait stays well inside the 30-minute update step timeout.
+embedded agent run, or another Doctor), Doctor waits for it, with or without
+delegated Doctor authority. It prints which process and database it is waiting
+on and how long it will wait, repeats progress every 30 seconds, and continues
+once ownership is released. The wait holds no OpenClaw lock, so the other process
+can finish.
+
+The wait must leave Doctor time to finish inside the update step timeout.
+Installed updaters start that timeout when they launch Doctor but don't pass it on,
+so Doctor assumes the default 30 minutes from its own start (automatic updates
+allow 45 minutes). It reserves twice the
+time this update's migration rehearsal (`candidate-doctor` in the update run) took,
+and at least 10 minutes (about twice the slowest measured update Doctor, 258 s on
+1 CPU with 10 MB/s disk), and waits only until the rest is used. By default that
+is up to 20 minutes, less the time Doctor already spent. All of Doctor's waits for
+other processes draw from this one deadline, so an earlier wait shortens later
+ones. An update started with a shorter `--timeout` can still time out while
+Doctor waits.
 If the holder is still running afterward, maintenance stops with the holder's PID
 and the usual deferred-maintenance warning: let that process finish or stop it,
 then run `openclaw update repair`. A holder whose role was not recorded is treated

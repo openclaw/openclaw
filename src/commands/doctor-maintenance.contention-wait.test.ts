@@ -5,12 +5,12 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayLockRole } from "../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
+import { createUpdateRun, recordUpdateRunStep } from "../infra/update-run-ledger.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseForTest,
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "../state/openclaw-state-db.js";
-import { DOCTOR_MAINTENANCE_CONTENTION_WAIT_MS } from "./doctor-maintenance-foreground.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -21,6 +21,9 @@ afterEach(() => {
   vi.unstubAllEnvs();
   closeOpenClawStateDatabaseForTest();
 });
+
+// With no recorded rehearsal, waits end 30 min after Doctor started, less the 10 min floor.
+const FALLBACK_DEADLINE_MS = 1_200_000;
 
 function holdState(role: GatewayLockRole, update: boolean, pid = process.ppid) {
   const stateDir = dirs.make("doctor-contention-wait-");
@@ -45,9 +48,22 @@ function holdState(role: GatewayLockRole, update: boolean, pid = process.ppid) {
   return { databasePath, holder, before: fs.readFileSync(databasePath) };
 }
 
-function startDoctor() {
+/** The published driver recorded this update's rehearsal Doctor before activation. */
+function recordRehearsalDoctor(durationMs: number) {
+  const { runId } = createUpdateRun({ trigger: "cli" });
+  recordUpdateRunStep(runId, {
+    step: "candidate-doctor",
+    status: "completed",
+    startedAtMs: 1_000,
+    endedAtMs: 1_000 + durationMs,
+  });
+  closeOpenClawStateDatabaseForTest();
+}
+
+/** `startMs` is how long this Doctor process ran before entering maintenance. */
+function startDoctor(startMs = 0) {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-  const clock = { ms: 0 };
+  const clock = { ms: startMs };
   vi.spyOn(performance, "now").mockImplementation(() => clock.ms);
   const firstLog = createDeferredCore();
   const log = vi.fn((..._args: unknown[]) => firstLog.resolve());
@@ -82,22 +98,22 @@ it("waits for a transient OpenClaw command to release state before update Doctor
   try {
     await doctor.firstWait;
     expect(doctor.log).toHaveBeenCalledWith(
-      `Waiting up to 660 s for the OpenClaw agent-embedded process ${process.ppid} to release ${databasePath} before Doctor maintenance. Let it finish, or stop it to continue sooner.`,
+      `Waiting up to 1200 s for the OpenClaw agent-embedded process ${process.ppid} to release ${databasePath} before Doctor maintenance. Let it finish, or stop it to continue sooner.`,
     );
     await doctor.advanceTo(45_000);
     expect(doctor.log).toHaveBeenCalledWith(
-      `Still waiting for the OpenClaw agent-embedded process ${process.ppid} to release ${databasePath} (45 s of 660 s).`,
+      `Still waiting for the OpenClaw agent-embedded process ${process.ppid} to release ${databasePath} (45 s of 1200 s).`,
     );
     // Waiting holds no lock and writes nothing; the holder can finish and release.
-    await doctor.advanceTo(DOCTOR_MAINTENANCE_CONTENTION_WAIT_MS - 1_000);
+    await doctor.advanceTo(FALLBACK_DEADLINE_MS - 1_000);
     expect(doctor.isSettled()).toBe(false);
     expect(fs.readFileSync(databasePath)).toEqual(before);
     holder.release();
-    await doctor.advanceTo(DOCTOR_MAINTENANCE_CONTENTION_WAIT_MS - 500);
+    await doctor.advanceTo(FALLBACK_DEADLINE_MS - 500);
     const completed = await doctor.result;
     expect(completed).toHaveProperty("maintenance");
     expect(doctor.log).toHaveBeenCalledWith(
-      "State ownership released after 660 s; continuing Doctor maintenance.",
+      "State ownership released after 1200 s; continuing Doctor maintenance.",
     );
     await ("maintenance" in completed ? completed.maintenance?.finish({}) : undefined);
   } finally {
@@ -105,15 +121,16 @@ it("waits for a transient OpenClaw command to release state before update Doctor
   }
 });
 
-it("fails update Doctor admission after the wait budget, naming the holder and next step", async () => {
+it("fails update Doctor admission at the wait deadline, naming the holder and next step", async () => {
   const { holder } = holdState("agent-embedded", true);
-  const doctor = startDoctor();
+  // Time Doctor spent before maintenance comes out of the same step allowance.
+  const doctor = startDoctor(100_000);
   try {
     await doctor.firstWait;
-    expect(doctor.log).toHaveBeenCalledWith(expect.stringContaining("Waiting up to 660 s"));
-    await doctor.advanceTo(DOCTOR_MAINTENANCE_CONTENTION_WAIT_MS - 1);
+    expect(doctor.log).toHaveBeenCalledWith(expect.stringContaining("Waiting up to 1100 s"));
+    await doctor.advanceTo(FALLBACK_DEADLINE_MS - 1);
     expect(doctor.isSettled()).toBe(false);
-    await doctor.advanceTo(DOCTOR_MAINTENANCE_CONTENTION_WAIT_MS);
+    await doctor.advanceTo(FALLBACK_DEADLINE_MS);
     const completed = await doctor.result;
     const error = "error" in completed ? completed.error : undefined;
     expect(error).toBeInstanceOf(DoctorMaintenanceRefusalError);
@@ -125,10 +142,29 @@ it("fails update Doctor admission after the wait budget, naming the holder and n
     const message = (error as Error).message;
     expect(message).toContain("Doctor could not enter maintenance.");
     expect(message).toContain(
-      `Doctor waited 660 s for the OpenClaw agent-embedded process ${process.ppid} to finish;`,
+      `Doctor waited 1100 s for the OpenClaw agent-embedded process ${process.ppid} to finish;`,
     );
     expect(message).toContain(`The holder ${process.ppid} is alive on this host, stop it first.`);
     expect(message).toContain("then run openclaw doctor --fix from an independent shell.");
+  } finally {
+    holder.release();
+  }
+});
+
+it("keeps twice this update's rehearsal Doctor time for Doctor's own work", async () => {
+  const { holder } = holdState("agent-embedded", true);
+  // A slow host: 30 min less 2 x 400 s leaves 1000 s for waiting.
+  recordRehearsalDoctor(400_000);
+  const doctor = startDoctor();
+  try {
+    await doctor.firstWait;
+    expect(doctor.log).toHaveBeenCalledWith(expect.stringContaining("Waiting up to 1000 s"));
+    await doctor.advanceTo(999_999);
+    expect(doctor.isSettled()).toBe(false);
+    await doctor.advanceTo(1_000_000);
+    expect(await doctor.result).toMatchObject({
+      error: expect.objectContaining({ message: expect.stringContaining("Doctor waited 1000 s") }),
+    });
   } finally {
     holder.release();
   }
