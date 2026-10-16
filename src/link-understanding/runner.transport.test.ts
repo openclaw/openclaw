@@ -9,7 +9,7 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
-import { withinTest } from "../../test/helpers/promise.js";
+import { withinTest, withTestTimeout } from "../../test/helpers/promise.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore as deferred } from "../shared/deferred.js";
@@ -65,22 +65,6 @@ vi.mock("../process/exec.js", async () => {
     ),
   };
 });
-
-async function within<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
-}
 
 async function withServer(handler: RequestListener, run: (base: string) => Promise<void>) {
   const sockets = new Set<Socket>();
@@ -149,9 +133,13 @@ it("cancels a non-OK response body before releasing its guarded transport", asyn
         ctx: { Body: `see ${base}/error` },
       });
 
-      const result = await within(resultPromise, 1000, "link understanding did not finish");
+      const result = await withTestTimeout(
+        resultPromise,
+        1000,
+        "link understanding did not finish",
+      );
       expect(result).toEqual([]);
-      await within(requestSocketClosed.promise, 1000, "loopback socket stayed open");
+      await withTestTimeout(requestSocketClosed.promise, 1000, "loopback socket stayed open");
 
       expect(mocks.bodyCancel).toHaveBeenCalledOnce();
       expect(mocks.releaseAfterCancel).toHaveBeenCalledWith(true);
