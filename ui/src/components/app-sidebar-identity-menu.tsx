@@ -4,7 +4,6 @@ import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import { nativeGatewaysCapability } from "../app/native-gateways.runtime.ts";
-import { webKitHostWindow } from "../app/native-webkit-bridge.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import type { PresenceViewer } from "../lib/presence-users.ts";
@@ -220,7 +219,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
         disabled: !params.canPairDevice,
         title: params.canPairDevice ? undefined : t("devices.pairing.adminRequired"),
       }),
-      ...(!webKitHostWindow()?.webkit?.messageHandlers?.openclawGateways
+      ...(!document.documentElement.classList.contains("openclaw-native-macos")
         ? [renderSidebarMenuAction("command:apps", t("agentChip.getApps"), "layoutGrid")]
         : []),
       renderSidebarMenuAction("command:debug-overlay", t("debug.overlay.title"), "activity", {

@@ -56,6 +56,11 @@ suite.define(() => {
       { viewport: { width: 1280, height: 900 }, colorScheme: "dark", locale: "en-US" },
       async ({ page }) => {
         await page.addInitScript((initial) => {
+          document.addEventListener(
+            "DOMContentLoaded",
+            () => document.documentElement.classList.add("openclaw-native-macos"),
+            { once: true },
+          );
           const actions: unknown[] = [];
           Object.assign(window, {
             __OPENCLAW_NATIVE_GATEWAYS__: initial,

@@ -12,10 +12,14 @@ import {
 import "./app-sidebar.tsx";
 
 setupSidebarTest();
-afterEach(clearNativeGatewayTestState);
+afterEach(() => {
+  clearNativeGatewayTestState();
+  document.documentElement.classList.remove("openclaw-native-macos");
+});
 
 describe("AppSidebar native Gateway menu", () => {
   it("lists native gateways and dispatches switching, window, primary, and settings actions", async () => {
+    document.documentElement.classList.add("openclaw-native-macos");
     const postMessage = setNativeGatewayTestState("remote")!;
     const capability = nativeGatewaysCapability()!;
     const snapshot = {
