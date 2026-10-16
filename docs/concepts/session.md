@@ -302,9 +302,12 @@ An interrupted parent continues independently of later child completions, and a
 retry of the same notice joins that recovery instead of starting the turn again.
 Parents still waiting after yielding to children remain owned by their child batch.
 Startup waits for subagent Gateway bindings and completion authority restoration
-before attempting to resume these parent turns. Historical child records without
-the original authorization evidence still need a fresh authenticated continuation;
-another restart cannot recreate that evidence.
+before attempting to resume these parent turns. If the original completion cohort
+or its operator authority cannot be restored, recovery records one terminal
+interruption in the transcript and settles the old input. Later startup passes
+and restarts skip it. The session remains available for a fresh authenticated
+message; recovery never substitutes system authority. Temporary startup, binding,
+or access-policy availability failures keep their recovery claims and retry.
 
 If a delegated turn's sender authority cannot be reconstructed, automatic recovery
 stops with a recorded reason and a visible notice in the transcript or original
