@@ -19,17 +19,17 @@ import {
   pluginLifecycleGatewayMock,
   loadPluginManifestRegistryMock,
   loadPluginMetadataSnapshotMock,
-  pluginCliConfigMock,
+  pluginCliConfigMock as configMock,
   replaceConfigFileMock,
-  refreshPluginRegistryMock,
+  refreshPluginRegistryMock as refreshRegistry,
   resetPluginsCliTestState,
   runtimeErrors,
-  pluginsCliRuntimeLogs,
+  pluginsCliRuntimeLogs as logs,
   promptYesNoMock,
   runPluginsCommand,
   setInstalledPluginIndexInstallRecords,
   configWriteMock,
-  writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
+  writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock as writeInstallRecords,
 } from "./plugins-cli-test-helpers.js";
 import { createCliTtyMock } from "./test-runtime-capture.js";
 
@@ -47,6 +47,16 @@ vi.mock("../plugins/official-external-plugin-catalog.js", async (importOriginal)
 }));
 
 const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
+
+function expectNoCalls(...mocks: unknown[]) {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+}
+
+function runPluginCli(...args: string[]) {
+  return runPluginsCommand(["plugins", ...args]);
+}
 
 describe("plugins cli policy mutations", () => {
   let readInstallRecords: (typeof import("../plugins/installed-plugin-index-record-reader.js"))["loadInstalledPluginIndexInstallRecordsSync"];
@@ -132,7 +142,7 @@ describe("plugins cli policy mutations", () => {
   }
 
   function mockCurrentConfig(initial: OpenClawConfig = {}) {
-    pluginCliConfigMock.mockImplementation(
+    configMock.mockImplementation(
       () => replaceConfigFileMock.mock.calls.at(-1)?.[0].sourceConfig ?? initial,
     );
   }
@@ -162,12 +172,7 @@ describe("plugins cli policy mutations", () => {
           return { plugin: { id }, runtime: { generation: 2 } };
         });
       }
-      await runPluginsCommand([
-        "plugins",
-        command,
-        ...ids,
-        ...(acceptCapabilities ? ["--accept-capabilities"] : []),
-      ]);
+      await runPluginCli(command, ...ids, ...(acceptCapabilities ? ["--accept-capabilities"] : []));
       expect(pluginLifecycleGatewayMock.mock.calls.map((call) => call.slice(0, 2))).toEqual(
         ids.map((id) => [
           "plugins.setEnabled",
@@ -179,31 +184,26 @@ describe("plugins cli policy mutations", () => {
         ]),
       );
       expect(resolvePluginLifecycleGatewayMock).toHaveBeenCalledTimes(ids.length);
-      expect(configWriteMock).not.toHaveBeenCalled();
-      expect(enablePluginInConfigMock).not.toHaveBeenCalled();
+      expectNoCalls(configWriteMock, enablePluginInConfigMock);
     },
   );
 
   it.each([
     { mode: undefined, json: false, acceptCapabilities: true, ids: ["alpha"], wait: true },
-    {
-      mode: undefined,
-      json: false,
-      acceptCapabilities: true,
-      ids: ["alpha"],
-      restartRequired: true,
-    },
-    {
-      mode: "OPENCLAW_CONFIG_READONLY",
-      json: false,
-      acceptCapabilities: true,
-      ids: ["alpha", "beta"],
-    },
+    { ids: ["alpha"], restartRequired: true },
+    { mode: "OPENCLAW_CONFIG_READONLY", ids: ["alpha", "beta"] },
     { mode: undefined, json: true, acceptCapabilities: false, ids: ["alpha", "beta"] },
     { mode: undefined, json: true, acceptCapabilities: true, ids: ["alpha", "beta"] },
   ])(
     "reloads CLI-selected $ids in one generation (mode=$mode, json=$json, accept=$acceptCapabilities)",
-    async ({ mode, json, acceptCapabilities, ids, restartRequired = false, wait = false }) => {
+    async ({
+      mode,
+      json = false,
+      acceptCapabilities = true,
+      ids,
+      restartRequired = false,
+      wait = false,
+    }) => {
       resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
       const receipt = {
         ok: true,
@@ -239,15 +239,14 @@ describe("plugins cli policy mutations", () => {
       try {
         tty.set(true);
         await withEnvAsync(mode ? { [mode]: "1" } : {}, async () => {
-          const reload = runPluginsCommand([
-            "plugins",
+          const reload = runPluginCli(
             "reload",
             ...ids,
             "alpha",
             ...(json ? ["--json"] : []),
             ...(wait ? ["--wait"] : []),
             ...(acceptCapabilities ? ["--accept-capabilities"] : []),
-          ]);
+          );
           if (json && !acceptCapabilities) {
             await expect(reload).rejects.toBe(consentRequired);
           } else {
@@ -265,17 +264,17 @@ describe("plugins cli policy mutations", () => {
       expect(promptYesNoMock).not.toHaveBeenCalled();
       if (json) {
         if (acceptCapabilities) {
-          expect(JSON.parse(pluginsCliRuntimeLogs.join("\n"))).toEqual(receipt);
+          expect(JSON.parse(logs.join("\n"))).toEqual(receipt);
         } else {
-          expect(pluginsCliRuntimeLogs).toEqual([]);
+          expect(logs).toEqual([]);
         }
       } else {
         for (const id of ids) {
-          expect(pluginsCliRuntimeLogs).toContain(
+          expect(logs).toContain(
             `${id}: Selected entry: /plugins/${id}/dist/index.js. Rebuild compiled output after source edits.`,
           );
         }
-        expect(pluginsCliRuntimeLogs).toContain(
+        expect(logs).toContain(
           restartRequired
             ? 'Reloaded registrations for plugin "alpha" (generation 2). Gateway restart required to load edited code.'
             : ids.length === 1
@@ -289,11 +288,10 @@ describe("plugins cli policy mutations", () => {
 
   it("refuses offline reload without modifying config or dispatching a mutation", async () => {
     resolvePluginLifecycleGatewayMock.mockResolvedValue(null);
-    await expect(runPluginsCommand(["plugins", "reload", "alpha"])).rejects.toThrow(
+    await expect(runPluginCli("reload", "alpha")).rejects.toThrow(
       "The Gateway is not running. Start it before reloading a plugin.",
     );
-    expect(pluginLifecycleGatewayMock).not.toHaveBeenCalled();
-    expect(configWriteMock).not.toHaveBeenCalled();
+    expectNoCalls(pluginLifecycleGatewayMock, configWriteMock);
   });
 
   it("applies enable in order using the previously committed config", async () => {
@@ -302,17 +300,17 @@ describe("plugins cli policy mutations", () => {
     });
     mockPluginRegistry(["alpha", "beta"]);
 
-    await runPluginsCommand(["plugins", "enable", "beta", "alpha"]);
+    await runPluginCli("enable", "beta", "alpha");
 
     expect(configWriteMock.mock.calls).toEqual([
       [{ plugins: { entries: { alpha: { enabled: false }, beta: { enabled: true } } } }],
       [{ plugins: { entries: { alpha: { enabled: true }, beta: { enabled: true } } } }],
     ]);
-    expect(refreshPluginRegistryMock).toHaveBeenNthCalledWith(
+    expect(refreshRegistry).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ policyPluginIds: ["beta"] }),
     );
-    expect(refreshPluginRegistryMock).toHaveBeenNthCalledWith(
+    expect(refreshRegistry).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ policyPluginIds: ["alpha"] }),
     );
@@ -320,24 +318,22 @@ describe("plugins cli policy mutations", () => {
 
   it("toggles mixed-case manifest ids using their canonical policy key", async () => {
     mockCurrentConfig({
-      plugins: {
-        entries: { "MiXeD-demo": { enabled: true, config: { label: "keep" } } },
-      },
+      plugins: { entries: { "MiXeD-demo": { enabled: true, config: { label: "keep" } } } },
     });
     mockPluginRegistry(["MiXeD-demo"]);
 
-    await runPluginsCommand(["plugins", "disable", "MiXeD-demo"]);
-    await runPluginsCommand(["plugins", "enable", "mixed-demo"]);
+    await runPluginCli("disable", "MiXeD-demo");
+    await runPluginCli("enable", "mixed-demo");
 
     expect(configWriteMock.mock.calls).toEqual([
       [{ plugins: { entries: { "mixed-demo": { enabled: false, config: { label: "keep" } } } } }],
       [{ plugins: { entries: { "mixed-demo": { enabled: true, config: { label: "keep" } } } } }],
     ]);
-    expect(refreshPluginRegistryMock).toHaveBeenNthCalledWith(
+    expect(refreshRegistry).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ policyPluginIds: ["mixed-demo"] }),
     );
-    expect(refreshPluginRegistryMock).toHaveBeenNthCalledWith(
+    expect(refreshRegistry).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ policyPluginIds: ["mixed-demo"] }),
     );
@@ -359,9 +355,7 @@ describe("plugins cli policy mutations", () => {
       });
       mockPluginRegistry(failure === "missing" ? ["alpha", "gamma"] : ["alpha", "beta", "gamma"]);
 
-      await expect(
-        runPluginsCommand(["plugins", "enable", "alpha", "beta", "gamma"]),
-      ).rejects.toThrow("__exit__:1");
+      await expect(runPluginCli("enable", "alpha", "beta", "gamma")).rejects.toThrow("__exit__:1");
 
       expect(configWriteMock).toHaveBeenCalledOnce();
       expect(requireFirstWrittenConfig().plugins?.entries).toEqual({
@@ -369,7 +363,7 @@ describe("plugins cli policy mutations", () => {
         beta: { enabled: false },
         gamma: { enabled: false },
       });
-      expect(refreshPluginRegistryMock).toHaveBeenCalledExactlyOnceWith(
+      expect(refreshRegistry).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ policyPluginIds: ["alpha"] }),
       );
       expect(runtimeErrors.at(-1)).toContain(
@@ -392,9 +386,7 @@ describe("plugins cli policy mutations", () => {
       });
       expect(readInstallRecords().alpha?.installPath).toBe(rootDir);
       mockPluginRegistry(["alpha", "beta", "gamma"]);
-      await expect(
-        runPluginsCommand(["plugins", "enable", "beta", "alpha", "gamma"]),
-      ).rejects.toThrow("__exit__:1");
+      await expect(runPluginCli("enable", "beta", "alpha", "gamma")).rejects.toThrow("__exit__:1");
 
       expect(runtimeErrors.at(-1)).toContain("--accept-capabilities");
       expect(configWriteMock).toHaveBeenCalledOnce();
@@ -402,15 +394,13 @@ describe("plugins cli policy mutations", () => {
         alpha: { enabled: false },
         beta: { enabled: true },
       });
-      expect(writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock).not.toHaveBeenCalled();
+      expect(writeInstallRecords).not.toHaveBeenCalled();
     });
   });
 
   it("refuses plugin enablement in Nix mode before config mutation", async () => {
     process.env.OPENCLAW_NIX_MODE = "1";
-    await expect(runPluginsCommand(["plugins", "enable", "alpha"])).rejects.toThrow(
-      "OPENCLAW_NIX_MODE=1",
-    );
+    await expect(runPluginCli("enable", "alpha")).rejects.toThrow("OPENCLAW_NIX_MODE=1");
 
     expect(configWriteMock).not.toHaveBeenCalled();
   });

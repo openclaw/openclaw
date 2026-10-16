@@ -16,10 +16,10 @@ import {
   buildAllPluginInspectReportsMock,
   buildPluginDiagnosticsReportMock,
   buildPluginInspectReportMock,
-  buildPluginRegistrySnapshotReportMock,
+  buildPluginRegistrySnapshotReportMock as registryReport,
   buildPluginSnapshotReportMock,
   loadPluginMetadataSnapshotMock,
-  pluginCliConfigMock,
+  pluginCliConfigMock as configMock,
   pluginsCliRuntimeLogs as logs,
   resetPluginsCliTestState,
   retirePluginDiagnosticsMock,
@@ -28,9 +28,7 @@ import {
   setInstalledPluginIndexInstallRecords,
 } from "./plugins-cli-test-helpers.js";
 
-const workshopMocks = vi.hoisted(() => ({
-  detectToolPolicyDiagnostic: vi.fn(),
-}));
+const workshopMocks = vi.hoisted(() => ({ detectToolPolicyDiagnostic: vi.fn() }));
 
 vi.mock("../skills/workshop/tool-policy-diagnostic.js", () => ({
   detectSkillWorkshopToolPolicyDiagnostic: workshopMocks.detectToolPolicyDiagnostic,
@@ -92,6 +90,16 @@ function mockInspection(
   return report;
 }
 
+function expectNoCalls(...mocks: unknown[]) {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+}
+
+function plugins(...args: string[]) {
+  return runPluginsCommand(["plugins", ...args]);
+}
+
 describe("plugins cli inspect", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
@@ -108,7 +116,7 @@ describe("plugins cli inspect", () => {
     const report = { plugins: [plugin], diagnostics: [] };
     buildPluginSnapshotReportMock.mockReturnValue(report);
     buildPluginInspectReportMock.mockReturnValue(createInspectReport({ plugin }));
-    buildPluginRegistrySnapshotReportMock.mockReturnValue({
+    registryReport.mockReturnValue({
       ...report,
       workspaceDir: "/workspace",
       registrySource: "persisted",
@@ -123,7 +131,7 @@ describe("plugins cli inspect", () => {
     await withEnvAsync({ OPENCLAW_HOME: homeDir }, async () => {
       for (const args of commands) {
         logs.length = 0;
-        await runPluginsCommand(["plugins", ...args]);
+        await plugins(...args);
         const text = stripVTControlCharacters(logs.join("\n"));
         expect(/^\s*source: (.+)$/im.exec(text)?.[1]).toBe(
           path.join(testCase.expectedRoot, "p", "index.js"),
@@ -134,7 +142,7 @@ describe("plugins cli inspect", () => {
         ["inspect", plugin.id, "--json"],
       ]) {
         logs.length = 0;
-        await runPluginsCommand(["plugins", ...args]);
+        await plugins(...args);
         const output = JSON.parse(logs.at(-1) ?? "null");
         expect((args[0] === "list" ? output.plugins[0] : output.plugin).source).toBe(source);
       }
@@ -166,13 +174,7 @@ describe("plugins cli inspect", () => {
         released = true;
         return output;
       });
-      const command = runPluginsCommand([
-        "plugins",
-        "inspect",
-        all ? "--all" : plugin.id,
-        "--runtime",
-        "--json",
-      ]);
+      const command = plugins("inspect", all ? "--all" : plugin.id, "--runtime", "--json");
       try {
         await started.promise;
         expect(logs).toEqual([]);
@@ -192,9 +194,9 @@ describe("plugins cli inspect", () => {
     const plugin = createPluginRecord({ id: "owned-inspect" });
     mockInspection(plugin);
     buildPluginInspectReportMock.mockReturnValue(null);
-    await expect(
-      runPluginsCommand(["plugins", "inspect", plugin.id, "--runtime", "--json"]),
-    ).rejects.toThrow("__exit__:1");
+    await expect(plugins("inspect", plugin.id, "--runtime", "--json")).rejects.toThrow(
+      "__exit__:1",
+    );
     expect(withDiagnostics).toHaveBeenCalledOnce();
     expect(logs).toHaveLength(1);
     expect(JSON.parse(logs[0]!)).toMatchObject({
@@ -206,9 +208,9 @@ describe("plugins cli inspect", () => {
   it.each([{ selection: ["--all", "extra"] }, { selection: [] }])(
     "rejects invalid runtime selection before acquisition: $selection",
     async ({ selection }) => {
-      await expect(
-        runPluginsCommand(["plugins", "inspect", ...selection, "--runtime", "--json"]),
-      ).rejects.toThrow("__exit__:1");
+      await expect(plugins("inspect", ...selection, "--runtime", "--json")).rejects.toThrow(
+        "__exit__:1",
+      );
       expect(withDiagnostics).not.toHaveBeenCalled();
     },
   );
@@ -217,9 +219,9 @@ describe("plugins cli inspect", () => {
     buildAllPluginInspectReportsMock.mockReturnValue([]);
     retirePluginDiagnosticsMock.mockRejectedValue(new Error("diagnostics cleanup failed"));
 
-    await expect(
-      runPluginsCommand(["plugins", "inspect", "--all", "--runtime", "--json"]),
-    ).rejects.toThrow("diagnostics cleanup failed");
+    await expect(plugins("inspect", "--all", "--runtime", "--json")).rejects.toThrow(
+      "diagnostics cleanup failed",
+    );
 
     expect(logs).toEqual([]);
   });
@@ -263,8 +265,7 @@ describe("plugins cli inspect", () => {
         const command = runPluginsCommand(args);
         if (selection === "missing") {
           await expect(command).rejects.toThrow("__exit__:1");
-          expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
-          expect(withDiagnostics).not.toHaveBeenCalled();
+          expectNoCalls(buildPluginDiagnosticsReportMock, withDiagnostics);
           expect(runtimeErrors.at(-1)).toContain("Plugin not found: missing-plugin");
         } else {
           await command;
@@ -321,18 +322,13 @@ describe("plugins cli inspect", () => {
         { name: "remote", hasStdioTransport: false },
         { name: "broken", hasStdioTransport: false, unsupported: true },
       ],
-      policy: {
-        allowConversationAccess: true,
-        allowedModels: [],
-        hasAllowedModelsConfig: false,
-      },
+      policy: { allowConversationAccess: true, allowedModels: [], hasAllowedModelsConfig: false },
     });
     buildPluginInspectReportMock.mockReturnValue(inspectReport);
 
-    await runPluginsCommand(["plugins", "inspect", pluginId]);
+    await plugins("inspect", pluginId);
 
-    expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
-    expect(withDiagnostics).not.toHaveBeenCalled();
+    expectNoCalls(buildPluginDiagnosticsReportMock, withDiagnostics);
     const output = logs.join("\n");
     expect(output).toContain("Policy");
     expect(output).toContain("allowConversationAccess: true");
@@ -350,7 +346,7 @@ describe("plugins cli inspect", () => {
     expect(output).not.toContain("remote (unsupported transport)");
     expect(output).toContain("broken (unsupported transport)");
 
-    await runPluginsCommand(["plugins", "inspect", pluginId, "--json"]);
+    await plugins("inspect", pluginId, "--json");
     expect(JSON.parse(logs.at(-1) ?? "null")).toMatchObject({
       services: ["mem0-background"],
       gatewayDiscoveryServices: ["mem0-discovery", "mem0-discovery-secondary"],
@@ -375,7 +371,7 @@ describe("plugins cli inspect", () => {
       buildPluginSnapshotReportMock.mockReturnValue({ plugins: [plugin], diagnostics: [] });
       buildPluginInspectReportMock.mockReturnValue({ ...inspectReport, plugin });
 
-      await runPluginsCommand(["plugins", "inspect", id]);
+      await plugins("inspect", id);
 
       const inspectOutput = logs.at(-1) ?? "";
       expect(inspectOutput).toContain(`Status: ${status}`);
@@ -383,7 +379,7 @@ describe("plugins cli inspect", () => {
       expect(inspectOutput).not.toContain(`${label === "Reason" ? "Error" : "Reason"}: ${detail}`);
 
       if (status === "disabled") {
-        await runPluginsCommand(["plugins", "inspect", id, "--json"]);
+        await plugins("inspect", id, "--json");
         expect(JSON.parse(logs.at(-1) ?? "null").plugin).toMatchObject({
           status: "disabled",
           error: detail,
@@ -412,7 +408,7 @@ describe("plugins cli inspect", () => {
     );
 
     for (const selector of ["openclaw-mem0", "Mem0"]) {
-      await runPluginsCommand(["plugins", "inspect", selector, "--runtime"]);
+      await plugins("inspect", selector, "--runtime");
       expect(withDiagnostics).toHaveBeenLastCalledWith(
         expect.objectContaining({
           config: {},
@@ -431,7 +427,7 @@ describe("plugins cli inspect", () => {
       tools: { profile: "messaging" },
       agents: { ownership: "explicit", entries: { main: {}, venus: {} } },
     };
-    pluginCliConfigMock.mockReturnValue(config);
+    configMock.mockReturnValue(config);
     workshopMocks.detectToolPolicyDiagnostic.mockImplementation(
       ({ agentId }: { agentId: string }) => ({
         agentId,
@@ -443,9 +439,7 @@ describe("plugins cli inspect", () => {
     );
     buildPluginSnapshotReportMock.mockReturnValue({ plugins: [], diagnostics: [] });
 
-    await expect(runPluginsCommand(["plugins", "inspect", "skill-workshop"])).rejects.toThrow(
-      "__exit__:1",
-    );
+    await expect(plugins("inspect", "skill-workshop")).rejects.toThrow("__exit__:1");
 
     const output = runtimeErrors.at(-1);
     expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledWith({
@@ -530,7 +524,7 @@ describe("plugins cli Doctor output", () => {
       );
 
       await withEnvAsync({ OPENCLAW_HOME: homeDir }, async () => {
-        await runPluginsCommand(["plugins", "doctor", "--json"]);
+        await plugins("doctor", "--json");
       });
 
       expect(process.exitCode).toBe(1);
@@ -567,7 +561,7 @@ describe("plugins cli Doctor output", () => {
 
       logs.length = 0;
       await withEnvAsync({ OPENCLAW_HOME: homeDir }, async () => {
-        await runPluginsCommand(["plugins", "doctor"]);
+        await plugins("doctor");
       });
       const human = logs.join("\n");
       expect(human).toContain(`  active: ${displayedSourceDir}/plugins/broken/index.ts (config)`);
