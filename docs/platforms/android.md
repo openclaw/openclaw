@@ -52,6 +52,7 @@ Expanded session catalogs refresh every two minutes while the sidebar is visible
 and the app is in the foreground. Active catalogs refresh immediately when you
 return to the sidebar or reconnect. Polling pauses when all catalogs are collapsed
 after initial discovery; expanding the first catalog resumes it immediately.
+Failed requests and source errors retry every 30 seconds while polling is active.
 
 Use the **pencil beside Pages** to open Agents, Automations, Usage, Skills,
 Skill Workshop, Dreaming, Terminal, or Desktop (when available). Pin the pages
