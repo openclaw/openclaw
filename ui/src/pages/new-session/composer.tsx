@@ -10,6 +10,7 @@ import {
 } from "../../components/lobster-pet-contract.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { isMobileBrowserPlatform } from "../../lib/browser-platform.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import {
@@ -147,6 +148,11 @@ function prepareNewSessionComposer(options: NewSessionComposerOptions) {
     commitDraft: options.onInput,
   };
   const handleComposerKeydown = (event: KeyboardEvent) => {
+    if (event.key === "Enter" && isMobileBrowserPlatform()) {
+      // Leave native editing and IME behavior intact; no ancestor may submit this key.
+      event.stopPropagation();
+      return;
+    }
     if (
       options.dictationActive ||
       options.submitting ||
@@ -538,7 +544,8 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
               readonly={props.options.dictationActive}
               placeholder={placeholder()}
               aria-label={frame().messagePlaceholder}
-              aria-keyshortcuts={frame().keyShortcuts}
+              enterkeyhint="enter"
+              aria-keyshortcuts={isMobileBrowserPlatform() ? undefined : frame().keyShortcuts}
               aria-autocomplete="list"
               aria-controls={frame().menuVisible ? frame().menuListboxId : undefined}
               aria-haspopup={frame().menuVisible ? "listbox" : undefined}

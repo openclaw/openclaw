@@ -69,6 +69,24 @@ function type(input: HTMLTextAreaElement, value: string) {
 }
 
 describe("cold command palette input custody", () => {
+  it("never queues a mobile session submit while the palette loads", () => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue("iPhone");
+    const { state, input } = mountLoader();
+    type(input, "Keep this mobile prompt");
+    for (const modifiers of [{}, { ctrlKey: true }, { metaKey: true }]) {
+      const event = new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+        ...modifiers,
+      });
+      input.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+      expect(state.submitRequested()).toBe(false);
+    }
+    expect(state.captureHandoff()()).toMatchObject({ value: "Keep this mobile prompt" });
+  });
+
   it("retains its live field and selection while the shell refreshes and locks a queued submit", () => {
     const { state, input } = mountLoader();
     type(input, "Keep this selection");

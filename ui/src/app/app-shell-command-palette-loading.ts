@@ -9,6 +9,7 @@ import {
   type CommandPaletteOpenInput,
 } from "../components/command-palette-contract.ts";
 import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
+import { isMobileBrowserPlatform } from "../lib/browser-platform.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
@@ -358,6 +359,10 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
       }
     },
     handleKeydown(event: KeyboardEvent): void {
+      if (event.key === "Enter" && isMobileBrowserPlatform()) {
+        event.stopPropagation();
+        return;
+      }
       if (composing || event.isComposing || event.keyCode === 229) {
         event.stopPropagation();
         return;

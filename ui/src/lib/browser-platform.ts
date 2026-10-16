@@ -6,3 +6,12 @@ export function isIosBrowserPlatform(): boolean {
     (nav.platform === "MacIntel" && nav.maxTouchPoints > 1)
   );
 }
+
+/**
+ * Mobile composers keep Return for editing, including tablets with hardware keyboards.
+ * Android browsers masking as Linux desktops are indistinguishable from touch PCs;
+ * do not use touch or viewport heuristics that would change desktop shortcuts.
+ */
+export function isMobileBrowserPlatform(): boolean {
+  return isIosBrowserPlatform() || /Android/u.test(globalThis.navigator.userAgent);
+}

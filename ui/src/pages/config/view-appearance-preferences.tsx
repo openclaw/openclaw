@@ -265,6 +265,8 @@ export function ChatPreferencesSection(props: ConfigProps) {
           setting={"send-shortcut"}
           description={
             <>
+              {t("chat.sendShortcutHint")}
+              <br />
               {sendShortcutDefaultDescription} {sendShortcutProvenance()}
             </>
           }

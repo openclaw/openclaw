@@ -402,35 +402,54 @@ describe("new-session composer keyboard submission", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { label: "Enter", requiresModifier: false, ctrlKey: false, metaKey: false },
-    { label: "Ctrl+Enter in Enter mode", requiresModifier: false, ctrlKey: true, metaKey: false },
-    { label: "Meta+Enter in Enter mode", requiresModifier: false, ctrlKey: false, metaKey: true },
-    { label: "Ctrl+Enter in modifier mode", requiresModifier: true, ctrlKey: true, metaKey: false },
-    { label: "Meta+Enter in modifier mode", requiresModifier: true, ctrlKey: false, metaKey: true },
-  ])("submits once with $label when starting a session is enabled", (testCase) => {
-    const onSubmit = vi.fn();
-    const onBackgroundSubmit = vi.fn();
-    const { composer } = renderComposer({
-      canSubmit: true,
-      onSubmit,
-      onBackgroundSubmit,
-      requiresModifier: testCase.requiresModifier,
+  describe.each([false, true])("submission keys on mobile=%s", (mobile) => {
+    beforeEach(() => {
+      vi.spyOn(navigator, "userAgent", "get").mockReturnValue(mobile ? "Android" : "Windows");
     });
-    const textarea = composerTextarea(composer);
-    const event = new KeyboardEvent("keydown", {
-      bubbles: true,
-      cancelable: true,
-      ctrlKey: testCase.ctrlKey,
-      key: "Enter",
-      metaKey: testCase.metaKey,
+    it.each([
+      { label: "Enter", requiresModifier: false, ctrlKey: false, metaKey: false },
+      { label: "Ctrl+Enter in Enter mode", requiresModifier: false, ctrlKey: true, metaKey: false },
+      { label: "Meta+Enter in Enter mode", requiresModifier: false, ctrlKey: false, metaKey: true },
+      {
+        label: "Ctrl+Enter in modifier mode",
+        requiresModifier: true,
+        ctrlKey: true,
+        metaKey: false,
+      },
+      {
+        label: "Meta+Enter in modifier mode",
+        requiresModifier: true,
+        ctrlKey: false,
+        metaKey: true,
+      },
+    ])("handles $label when starting a session is enabled", (testCase) => {
+      const onSubmit = vi.fn();
+      const onBackgroundSubmit = vi.fn();
+      const { composer } = renderComposer({
+        canSubmit: true,
+        onSubmit,
+        onBackgroundSubmit,
+        requiresModifier: testCase.requiresModifier,
+      });
+      const textarea = composerTextarea(composer);
+      const event = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        ctrlKey: testCase.ctrlKey,
+        key: "Enter",
+        metaKey: testCase.metaKey,
+      });
+
+      textarea.dispatchEvent(event);
+
+      expect(event.defaultPrevented).toBe(!mobile);
+      expect(onSubmit).toHaveBeenCalledTimes(mobile ? 0 : 1);
+      expect(onBackgroundSubmit).not.toHaveBeenCalled();
+      if (mobile) {
+        composer.querySelector<HTMLButtonElement>(".new-session-page__start-submit")!.click();
+        expect(onSubmit).toHaveBeenCalledOnce();
+      }
     });
-
-    textarea.dispatchEvent(event);
-
-    expect(event.defaultPrevented).toBe(true);
-    expect(onSubmit).toHaveBeenCalledOnce();
-    expect(onBackgroundSubmit).not.toHaveBeenCalled();
   });
 
   it("keeps an IME confirmation Enter from starting a session", () => {

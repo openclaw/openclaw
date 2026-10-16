@@ -303,7 +303,8 @@ describe("renderChatComposer controls", () => {
     expect(onQueueSteer.mock.calls).toEqual([["queued-1"], ["waiting-idle-1"]]);
   });
 
-  it.each([false])("steers empty Enter only on a new press (repeat=%s)", (repeat) => {
+  it.each([false, true])("steers empty Enter only on desktop (mobile=%s)", (mobile) => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(mobile ? "Android" : "Windows");
     const onQueueSteer = vi.fn();
     const onSend = vi.fn();
     const { container } = renderComposer({
@@ -325,10 +326,10 @@ describe("renderChatComposer controls", () => {
         },
       ],
     });
-    const event = pressComposerEnter(container, { repeat });
+    const event = pressComposerEnter(container);
 
-    expect(event.defaultPrevented).toBe(true);
-    expect(onQueueSteer.mock.calls).toEqual(repeat ? [] : [["pending-unscoped"]]);
+    expect(event.defaultPrevented).toBe(!mobile);
+    expect(onQueueSteer.mock.calls).toEqual(mobile ? [] : [["pending-unscoped"]]);
     expect(onSend).not.toHaveBeenCalled();
   });
 

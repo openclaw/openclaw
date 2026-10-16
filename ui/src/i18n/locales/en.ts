@@ -3236,6 +3236,8 @@ export const en: TranslationMap & {
       commentary: "Keep commentary",
     },
     sendShortcut: "Send shortcut",
+    sendShortcutHint:
+      "Desktop only. On mobile, Enter adds a new line; use the Send button to send.",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
     followUpMode: "Follow-ups while the agent is working",

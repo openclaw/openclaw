@@ -318,7 +318,8 @@ describe("chat composer queue reordering", () => {
     expect(onQueueRemove).toHaveBeenCalledWith("c");
   });
 
-  it("routes inline draft changes, submit, cancel, and keyboard shortcuts", () => {
+  it.each([false, true])("routes queue editing on mobile=%s", (mobile) => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(mobile ? "Android" : "Windows");
     const onQueueEditChange = vi.fn();
     const onQueueEditSubmit = vi.fn();
     const onQueueEditCancel = vi.fn();
@@ -356,8 +357,14 @@ describe("chat composer queue reordering", () => {
       new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true }),
     );
     expect(onQueueEditSubmit).not.toHaveBeenCalled();
-    editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    expect(onQueueEditSubmit).toHaveBeenCalledOnce();
+    const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    editor.dispatchEvent(enter);
+    expect(enter.defaultPrevented).toBe(!mobile);
+    expect(onQueueEditSubmit).toHaveBeenCalledTimes(mobile ? 0 : 1);
+    if (mobile) {
+      container.querySelector<HTMLButtonElement>(".chat-queue__edit-submit")!.click();
+      expect(onQueueEditSubmit).toHaveBeenCalledOnce();
+    }
   });
 
   it("leaves queue editor shortcuts to IME confirmation until keyup", () => {

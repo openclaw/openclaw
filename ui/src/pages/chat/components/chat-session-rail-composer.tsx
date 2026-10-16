@@ -1,6 +1,7 @@
 import { createEffect, onCleanup } from "solid-js";
 import type { ChatSendShortcut } from "../../../app/settings.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { isMobileBrowserPlatform } from "../../../lib/browser-platform.ts";
 import {
   clearCompositionEnd,
   isComposingKeyboardEvent,
@@ -48,6 +49,11 @@ export function SessionRailComposer(props: {
   );
   onCleanup(() => disconnectTextareaOverflowObserver(textarea));
   const keydown = (event: KeyboardEvent) => {
+    if (event.key === "Enter" && isMobileBrowserPlatform()) {
+      // Leave native editing and IME behavior intact; no ancestor may submit this key.
+      event.stopPropagation();
+      return;
+    }
     if (isComposingKeyboardEvent(event)) {
       return;
     }
@@ -79,8 +85,13 @@ export function SessionRailComposer(props: {
             maxlength="400"
             autocomplete="off"
             aria-label={t("chat.rail.askLabel")}
+            enterkeyhint="enter"
             aria-keyshortcuts={
-              props.sendShortcut === "enter" ? "Enter" : "Control+Enter Meta+Enter"
+              isMobileBrowserPlatform()
+                ? undefined
+                : props.sendShortcut === "enter"
+                  ? "Enter"
+                  : "Control+Enter Meta+Enter"
             }
             placeholder={t("chat.rail.askPlaceholder")}
             disabled={!props.connected}
