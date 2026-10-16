@@ -56,6 +56,7 @@ export async function runQaParityReportCommand(opts: {
       throw new Error("--runtime-axis requires --summary.");
     }
     const summaryPath = path.resolve(repoRoot, opts.summary);
+    // SAFETY: report inputs are completed suite artifacts with the producer-owned parity shape.
     const summary = (await readCompletedQaSuiteSummaryFile(summaryPath)) as QaParitySuiteSummary;
     const reportPayload = buildQaRuntimeParityReport({ summary });
     await writeQaCliReport(
@@ -98,10 +99,10 @@ export async function runQaParityReportCommand(opts: {
   const baselineSummaryPath = path.resolve(repoRoot, opts.baselineSummary);
   const candidateSummary = (await readCompletedQaSuiteSummaryFile(
     candidateSummaryPath,
-  )) as QaParitySuiteSummary;
+  )) as QaParitySuiteSummary; // SAFETY: completed suite producers own this report shape.
   const baselineSummary = (await readCompletedQaSuiteSummaryFile(
     baselineSummaryPath,
-  )) as QaParitySuiteSummary;
+  )) as QaParitySuiteSummary; // SAFETY: completed suite producers own this report shape.
 
   const comparison = buildQaAgenticParityComparison({
     candidateLabel: opts.candidateLabel?.trim() || QA_FRONTIER_PARITY_CANDIDATE_LABEL,
@@ -138,7 +139,7 @@ export async function runQaCoverageReportCommand(opts: {
     const summary = opts.summary?.trim()
       ? ((await readCompletedQaSuiteSummaryFile(
           path.resolve(repoRoot, opts.summary),
-        )) as QaParitySuiteSummary)
+        )) as QaParitySuiteSummary) // SAFETY: completed suite producers own this report shape.
       : undefined;
     const report = buildQaToolCoverageReport({ scenarios, summary });
     body = opts.json

@@ -8949,7 +8949,15 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(releaseChecksWorkflow).toContain(
       'codex_plugin_spec="npm:@openclaw/codex@${BASH_REMATCH[1]}"',
     );
-    expect(releaseChecksWorkflow.match(/run: pnpm build qaRuntime/gu)).toHaveLength(6);
+    expect(releaseChecksWorkflow.match(/run: pnpm build qaRuntime/gu)).toHaveLength(5);
+    const parityReportJob = workflowJob(
+      RELEASE_CHECKS_WORKFLOW,
+      "qa_lab_parity_report_release_checks",
+    );
+    expect(parityReportJob.steps?.some((step) => step.run?.includes("pnpm build"))).toBe(false);
+    expect(workflowStep(parityReportJob, "Generate parity report").run).toContain(
+      "pnpm openclaw qa parity-report",
+    );
     expect(releaseChecksWorkflow).not.toContain(
       "node --import tsx scripts/build-all.mts qaRuntime",
     );
