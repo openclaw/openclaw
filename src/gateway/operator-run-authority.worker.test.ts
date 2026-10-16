@@ -4,14 +4,19 @@ import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { classifySqliteMutation } from "../infra/sqlite-schema-mutation.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { ensureSkillLibrarySchema } from "../skills/library/store.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import * as profileReader from "../state/user-profile-list.js";
 import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
-import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
@@ -29,6 +34,59 @@ import {
   createContext,
   createOperatorClient,
 } from "./server-plugin-in-process-dispatch.test-support.js";
+
+it("prepares a warm skill library without DDL after the tool caller's initiating request closes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const profile = ensureProfileForEmail("warm-library@example.test");
+    const database = openOpenClawStateDatabase();
+    database.db.exec(getOpenClawStateFeatureSchemaSql("skill_library_entries"));
+    const client = createOperatorClient({ profileId: profile.id, scopes: ["operator.write"] });
+    const context = createContext();
+    const request = expectDefined(
+      await captureGatewayOperatorRunAuthority({ client, context }),
+      "request authority",
+    );
+    const releaseTool = expectDefined(request.authority.retain, "tool retention")();
+    client.internal = { operatorRunAuthority: request.authority };
+    context.getGatewayMethodRegistry = () =>
+      createGatewayMethodRegistry([
+        {
+          name: "libraryProof.prepare",
+          scope: "operator.write",
+          profileAccess: "independent",
+          owner: { kind: "core", area: "skills" },
+          handler: ({ respond }: GatewayRequestHandlerOptions) => {
+            ensureSkillLibrarySchema({ database }, () => request.authority.assertCurrent());
+            respond(true, { profileId: request.authority.profileId });
+          },
+        },
+      ]);
+    const schemaMutations: string[] = [];
+    const observation = observeHostDataSql((sql, db) => {
+      if (db === database.db && classifySqliteMutation(sql, "batch").mainSchemaChange) {
+        schemaMutations.push(sql);
+      }
+    });
+    try {
+      request.release();
+      await withPluginRuntimeGatewayRequestScope(
+        { client, context, isWebchatConnect: () => false },
+        () =>
+          dispatchGatewayMethodInProcess(
+            "libraryProof.prepare",
+            {},
+            { disableSyntheticClient: true, requireScopedClient: true },
+          ),
+      ).then((result) => expect(result).toEqual({ profileId: profile.id }));
+      request.authority.assertCurrent();
+      expect(schemaMutations).toEqual([]);
+    } finally {
+      observation.restore();
+      releaseTool();
+      request.release();
+    }
+  });
+});
 
 it("preserves the live operator source through principal capture without trusting copied labels", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -141,53 +199,33 @@ it.each(["capture", "operator tool"])(
             await captureGatewayOperatorRunAuthority({ client, context }),
             "operator authority",
           );
+          const { authority } = retained;
           try {
-            retained.authority.assertCurrent();
-            expect(
-              retained.authority.modelPolicy?.allows({ provider: "fixture", model: "a" }),
-            ).toBe(true);
+            authority.assertCurrent();
+            expect(authority.modelPolicy?.allows({ provider: "fixture", model: "a" })).toBe(true);
             cfg = {
               ...cfg,
               agents: { defaults: { model: { primary: "fixture/b", fallbacks: ["fixture/a"] } } },
             };
             publishOperatorRoleConfigChange(context);
-            expect(retained.authority.modelPolicy?.models).toEqual([
+            expect(authority.modelPolicy?.models).toEqual([
               { provider: "fixture", model: "b" },
               { provider: "fixture", model: "a" },
             ]);
-            const roles = expectDefined(cfg.gateway?.roles, "configured roles");
-            cfg = {
-              ...cfg,
-              gateway: {
-                ...cfg.gateway,
-                roles: {
-                  ...roles,
-                  definitions: {
-                    ...roles.definitions,
-                    reader: {
-                      ...expectDefined(roles.definitions.reader, "reader role"),
-                      modelPolicy: { allow: ["fixture/b", "fixture/c"] },
-                    },
-                  },
-                },
-              },
+            cfg = structuredClone(cfg);
+            expectDefined(cfg.gateway?.roles?.definitions.reader, "reader role").modelPolicy = {
+              allow: ["fixture/b", "fixture/c"],
             };
             publishOperatorRoleConfigChange(context);
-            expect(retained.authority.signal?.aborted).toBe(false);
-            expect(
-              retained.authority.modelPolicy?.allows({ provider: "fixture", model: "a" }),
-            ).toBe(false);
-            expect(
-              retained.authority.modelPolicy?.allows({ provider: "fixture", model: "b" }),
-            ).toBe(true);
-            expect(
-              retained.authority.modelPolicy?.allows({ provider: "fixture", model: "c" }),
-            ).toBe(false);
-            const release = expectDefined(retained.authority.retain, "operator retention")();
+            expect(authority.signal?.aborted).toBe(false);
+            expect(authority.modelPolicy?.allows({ provider: "fixture", model: "a" })).toBe(false);
+            expect(authority.modelPolicy?.allows({ provider: "fixture", model: "b" })).toBe(true);
+            expect(authority.modelPolicy?.allows({ provider: "fixture", model: "c" })).toBe(false);
+            const release = expectDefined(authority.retain, "operator retention")();
             retained.release();
-            retained.authority.assertCurrent();
+            authority.assertCurrent();
             release();
-            expect(retained.authority.assertCurrent).toThrow("no longer active");
+            expect(authority.assertCurrent).toThrow("no longer active");
           } finally {
             retained.release();
           }
@@ -240,6 +278,7 @@ it.each([
   "profile",
   "role",
   "role restored",
+  "policy downgraded",
   "policy restored",
   "unrelated policy",
   "target alias",
@@ -312,7 +351,9 @@ it.each([
               revocation !== "model policy narrowed",
             );
             expect(authority.modelPolicy?.allows({ provider: "fixture", model: "b" })).toBe(true);
-            expect(authority.modelPolicy?.allows({ provider: "fixture", model: "c" })).toBe(false);
+            expect(authority.modelPolicy?.allows({ provider: "fixture", model: "c" })).toBe(
+              revocation !== "model policy restored",
+            );
           }
           sideEffect();
         } finally {
@@ -320,6 +361,7 @@ it.each([
         }
       });
       const allowed =
+        revocation === "policy restored" ||
         revocation === "unrelated policy" ||
         revocation === "target alias" ||
         revocation.startsWith("model policy");
@@ -368,7 +410,11 @@ it.each([
         } else {
           currentConfig = structuredClone(cfg);
           const roles = expectDefined(currentConfig.gateway?.roles, "configured roles");
-          roles.definitions[revocation === "policy restored" ? "reader" : "denied"] = {
+          roles.definitions[
+            revocation === "policy restored" || revocation === "policy downgraded"
+              ? "reader"
+              : "denied"
+          ] = {
             agents: [],
             scopes: [],
             sessions: { others: "none" },

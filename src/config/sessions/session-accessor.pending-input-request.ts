@@ -1,20 +1,18 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
-import { MAX_PAYLOAD_BYTES } from "../../gateway/server-constants.js";
+import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { SessionPendingInputRow } from "./session-accessor.sqlite-pending-inputs.js";
-import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
+import { sanitizeTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 
 function resolvePendingInputRequestHash(
   message: Record<string, unknown>,
   requestFingerprint?: string,
 ): string {
-  return requestFingerprint
-    ? `request:${requestFingerprint}`
-    : createHash("sha256").update(stableStringify(message)).digest("hex");
+  return requestFingerprint ? `request:${requestFingerprint}` : sha256Hex(stableStringify(message));
 }
 
 function preparePendingInputMessage(
@@ -133,10 +131,8 @@ export function resolveCommittedPendingInputRequestHash(
   if (!prepared) {
     return undefined;
   }
-  const { timestamp: _preparedTimestamp, ...stablePrepared } = redactTranscriptMessageForStorage(
-    prepared,
-    { config: options.config },
-  );
+  const { timestamp: _preparedTimestamp, ...stablePrepared } =
+    sanitizeTranscriptMessageForStorage(prepared);
   const { timestamp: _committedTimestamp, ...stableCommitted } = committedMessage;
   if (stableStringify(stablePrepared) !== stableStringify(stableCommitted)) {
     throw new Error("Input completion retry conflicts with the committed input");

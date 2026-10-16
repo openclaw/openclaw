@@ -8,7 +8,6 @@ import type {
   OfficialExternalPluginCatalogManifest,
   OfficialExternalPluginCatalogInstallCandidate,
   OfficialExternalPluginCatalogFeed,
-  OfficialExternalPluginCatalogFeedSigningKey,
   OfficialExternalPluginCatalogFeedVerification,
   OfficialExternalPluginCatalogProfileConfig,
 } from "./official-external-plugin-catalog.types.js";
@@ -31,9 +30,6 @@ const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_ID = "clawhub-official";
 const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_SOURCE_REF = "public-clawhub";
 
 const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_NPM_SOURCE_REF = "public-npm";
-
-const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEYS: readonly OfficialExternalPluginCatalogFeedSigningKey[] =
-  [];
 
 export const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_PROFILE_CONFIG: OfficialExternalPluginCatalogProfileConfig =
   {
@@ -143,13 +139,6 @@ export function resolveOfficialExternalPluginCatalogProfileConfig(
 ): Required<OfficialExternalPluginCatalogProfileConfig> {
   const configuredDefaultFeed =
     config?.feeds?.[DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE];
-  const bundledVerification =
-    DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEYS.length > 0
-      ? {
-          mode: "signed" as const,
-          keys: DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEYS,
-        }
-      : undefined;
   const defaultFeed = DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_PROFILE_CONFIG.feeds?.[
     DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE
   ] ?? {
@@ -161,7 +150,6 @@ export function resolveOfficialExternalPluginCatalogProfileConfig(
       ...config?.feeds,
       [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE]: {
         ...defaultFeed,
-        ...(bundledVerification ? { verification: bundledVerification } : {}),
         ...configuredDefaultFeed,
       },
     },
@@ -263,15 +251,7 @@ export function resolveOfficialExternalPluginCatalogEntryKey(
   if (pluginId) {
     return `${normalizeOptionalString(entry.kind) ?? "plugin"}:${pluginId}`;
   }
-  const name = normalizeOptionalString(entry.name);
-  if (name) {
-    return name;
-  }
-  const id = normalizeOptionalString(entry.id);
-  if (id) {
-    return `${normalizeOptionalString(entry.kind) ?? normalizeOptionalString(entry.type) ?? "plugin"}:${id}`;
-  }
-  return undefined;
+  return normalizeOptionalString(entry.name);
 }
 
 export function getOfficialExternalPluginCatalogManifest(
@@ -296,10 +276,8 @@ export function resolveOfficialExternalPluginId(
 const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_HOSTNAME_ALLOWLIST = ["clawhub.ai"];
 
 function resolveHostedCatalogFeedUrl(raw: string): URL {
-  let parsed: URL;
-  try {
-    parsed = new URL(raw.trim());
-  } catch {
+  const parsed = URL.parse(raw.trim());
+  if (!parsed) {
     throw new Error("hosted catalog feed URL is invalid");
   }
   if (parsed.protocol !== "https:") {
@@ -380,28 +358,20 @@ export function shouldRequireManifestInstallSourceRef(params: {
   feedProfile?: string;
   catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
 }): boolean {
-  const feedUrl = normalizeOptionalString(params.feedUrl);
-  if (feedUrl) {
-    try {
-      return (
-        resolveHostedCatalogFeedUrl(feedUrl).href !==
-        resolveHostedCatalogFeedUrl(DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL).href
-      );
-    } catch {
+  let feedUrl = normalizeOptionalString(params.feedUrl);
+  if (!feedUrl) {
+    const profileName =
+      normalizeOptionalString(params.feedProfile) ??
+      DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE;
+    if (profileName !== DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE) {
       return true;
     }
+    const profileConfig = resolveOfficialExternalPluginCatalogProfileConfig(params.catalogConfig);
+    feedUrl = normalizeOptionalString(profileConfig.feeds[profileName]?.url);
   }
-  const profileName =
-    normalizeOptionalString(params.feedProfile) ??
-    DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE;
-  if (profileName !== DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE) {
-    return true;
-  }
-  const profileConfig = resolveOfficialExternalPluginCatalogProfileConfig(params.catalogConfig);
-  const profileUrl = normalizeOptionalString(profileConfig.feeds[profileName]?.url);
   try {
     return (
-      resolveHostedCatalogFeedUrl(profileUrl ?? DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL)
+      resolveHostedCatalogFeedUrl(feedUrl ?? DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL)
         .href !==
       resolveHostedCatalogFeedUrl(DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL).href
     );

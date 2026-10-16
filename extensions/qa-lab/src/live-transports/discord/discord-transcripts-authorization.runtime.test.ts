@@ -6,7 +6,7 @@ const { requestDiscordMock } = vi.hoisted(() => ({ requestDiscordMock: vi.fn() }
 
 vi.mock("@openclaw/discord/api.js", () => ({ requestDiscord: requestDiscordMock }));
 
-import { discordQaScenarioSupport } from "./discord-live.runtime.js";
+import * as testing from "./discord-live.runtime.js";
 import {
   discordQaTranscriptsVoiceAuthorizationScenario,
   runDiscordTranscriptsVoiceAuthorizationScenario,
@@ -53,7 +53,6 @@ describe("Discord transcript authorization scenario runner", () => {
     }
     const configureTranscriptVoiceAccess = vi.fn(async () => {});
     const environment = createEnvironment(outputDir);
-    const testing = discordQaScenarioSupport.testing;
     const send = vi
       .spyOn(testing, "sendChannelMessage")
       .mockResolvedValueOnce({
@@ -161,7 +160,6 @@ describe("Discord transcript authorization scenario runner", () => {
     const outputDir = tempDirs.make("discord-transcript-auth-unconfirmed-");
     const environment = createEnvironment(outputDir);
     const run = discordQaTranscriptsVoiceAuthorizationScenario.buildRun("323456789012345678");
-    const testing = discordQaScenarioSupport.testing;
     vi.spyOn(testing, "getCurrentDiscordVoiceState").mockRejectedValue(
       new Error("REST unavailable"),
     );

@@ -1,4 +1,3 @@
-// Resolves git commit metadata for build/runtime diagnostics.
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,7 +5,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isMissingPathError } from "./errors.js";
 import { readGitHead, readGitMetadataPrefix } from "./git-root.js";
-import { pruneMapToMaxSize } from "./map-size.js";
+import { LruCache } from "./lru-cache.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 
 const formatCommit = (value?: string | null) => {
@@ -24,8 +23,8 @@ export function gitCommitPrefixesMatch(left: string, right: string): boolean {
   );
 }
 
-const cachedGitCommitBySearchDir = new Map<string, string | null>();
 const GIT_COMMIT_CACHE_LIMIT = 256;
+const cachedGitCommitBySearchDir = new LruCache<string | null>(GIT_COMMIT_CACHE_LIMIT);
 declare const WORKER_DEPLOY_BUILD: boolean;
 
 type CommitMetadataReaders = {
@@ -50,7 +49,6 @@ const resolveCommitSearchDir = (options: { cwd?: string; moduleUrl?: string }) =
 
 const cacheGitCommit = (searchDir: string, commit: string | null) => {
   cachedGitCommitBySearchDir.set(searchDir, commit);
-  pruneMapToMaxSize(cachedGitCommitBySearchDir, GIT_COMMIT_CACHE_LIMIT);
   return commit;
 };
 const resolveGitLookupDepth = (searchDir: string, packageRoot: string | null) => {
@@ -158,12 +156,8 @@ export const resolveCommitHash = (
     return normalized;
   }
   const searchDir = resolveCommitSearchDir(options);
-  if (cachedGitCommitBySearchDir.has(searchDir)) {
-    const cached = cachedGitCommitBySearchDir.get(searchDir) ?? null;
-    // Git discovery reads multiple files; keep active directories ahead of cold entries when
-    // the shared insertion-order pruning helper enforces the bound.
-    cachedGitCommitBySearchDir.delete(searchDir);
-    cachedGitCommitBySearchDir.set(searchDir, cached);
+  const cached = cachedGitCommitBySearchDir.get(searchDir);
+  if (cached !== undefined) {
     return cached;
   }
   const packageRoot = resolveOpenClawPackageRootSync({

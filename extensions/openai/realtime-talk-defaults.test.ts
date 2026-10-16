@@ -1,4 +1,4 @@
-import { resolveConfiguredRealtimeVoiceProvider } from "openclaw/plugin-sdk/realtime-voice";
+import { resolveConfiguredRealtimeVoiceProviderAsync } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openAIRealtimeHost } from "./realtime-host.js";
 import { buildOpenAIRealtimeVoiceProvider as createProvider } from "./realtime-voice-provider-factory.js";
@@ -14,6 +14,7 @@ function buildOpenAIRealtimeVoiceProvider(options?: Parameters<typeof createProv
     {
       ...openAIRealtimeHost,
       isProviderAuthProfileConfigured: isProviderAuthProfileConfiguredMock,
+      isProviderAuthProfileConfiguredAsync: isProviderAuthProfileConfiguredMock,
       resolveProviderAuthProfileApiKey: resolveProviderAuthProfileApiKeyMock,
     },
     options,
@@ -34,9 +35,9 @@ describe("OpenAI Talk account defaults", () => {
   it.each([
     { name: "existing", config: { voice: "cedar", interruptResponseOnInputAudio: false } },
     { name: "explicit Live", config: { model: "gpt-live-1", voice: "marin" } },
-  ])("preserves provider defaults for $name Discord relay configuration", ({ config }) => {
+  ])("preserves provider defaults for $name Discord relay configuration", async ({ config }) => {
     const provider = buildOpenAIRealtimeVoiceProvider();
-    const resolved = resolveConfiguredRealtimeVoiceProvider({
+    const resolved = await resolveConfiguredRealtimeVoiceProviderAsync({
       providers: [provider],
       configuredProviderId: provider.id,
       providerConfigs: { openai: { apiKey: "test-api-key-platform", ...config } },
@@ -75,7 +76,7 @@ describe("OpenAI Talk account defaults", () => {
     "starts audio-only browser Talk with the $account default and matching auth",
     async ({ apiProfile, oauth, configuredKey, model }) => {
       const cfg = {
-        agents: { list: [{ id: "voice-agent", agentDir: "/tmp/openclaw-voice-agent" }] },
+        agents: { entries: { "voice-agent": { agentDir: "/tmp/openclaw-voice-agent" } } },
       };
       const oauthToken = createTestJwt({
         "https://api.openai.com/auth": { chatgpt_account_id: "account-123" },
@@ -99,7 +100,7 @@ describe("OpenAI Talk account defaults", () => {
       const provider = buildOpenAIRealtimeVoiceProvider({
         quicksilverBrowserSessionBroker: broker,
       });
-      const { providerConfig } = resolveConfiguredRealtimeVoiceProvider({
+      const { providerConfig } = await resolveConfiguredRealtimeVoiceProviderAsync({
         cfg,
         agentId: "voice-agent",
         surface: "browser-session",
@@ -110,11 +111,13 @@ describe("OpenAI Talk account defaults", () => {
 
       expect(providerConfig.model).toBe(model);
       expect(
-        readInternalRealtimeVoiceProviderApi(provider).resolveBrowserSessionCapabilities({
-          cfg,
-          agentId: "voice-agent",
-          providerConfig,
-        }),
+        await readInternalRealtimeVoiceProviderApi(provider).resolveBrowserSessionCapabilitiesAsync(
+          {
+            cfg,
+            agentId: "voice-agent",
+            providerConfig,
+          },
+        ),
       ).toMatchObject({ handlesAgentConsult: true, supportsToolCalls: false });
       const request = {
         cfg,
@@ -153,15 +156,17 @@ describe("OpenAI Talk account defaults", () => {
       rawConfig: { azureDeployment: "voice-deployment" },
       model: "gpt-realtime-2.1",
     },
-  ])("preserves $name when resolving Talk defaults", ({ context, rawConfig, model }) => {
+  ])("preserves $name when resolving Talk defaults", async ({ context, rawConfig, model }) => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     expect(
-      provider.resolveConfig?.({
-        cfg: {},
-        rawConfig: { apiKey: "test-api-key-platform", ...rawConfig },
-        surface: "gateway-relay",
-        ...context,
-      })?.model,
+      (
+        await provider.resolveConfigAsync?.({
+          cfg: {},
+          rawConfig: { apiKey: "test-api-key-platform", ...rawConfig },
+          surface: "gateway-relay",
+          ...context,
+        })
+      )?.model,
     ).toBe(model);
   });
 });

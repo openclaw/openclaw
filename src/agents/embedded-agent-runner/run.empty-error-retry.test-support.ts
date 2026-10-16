@@ -1,6 +1,5 @@
 // Full-entry coverage for retrying empty errored assistant turns.
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import {
   resolveSqliteScope,
@@ -31,6 +30,7 @@ import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
+let sessionAccess: typeof import("../../config/sessions/session-accessor.js");
 
 type AssistantContent = NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>["content"];
 
@@ -78,12 +78,15 @@ function successAttempt(provider: string, model: string): EmbeddedRunAttemptResu
 describe("runEmbeddedAgent silent-error retry", () => {
   beforeAll(async () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
+    sessionAccess = await import("../../config/sessions/session-accessor.js");
   });
 
   beforeEach(async () => {
     resetSharedRunIntegrationHarnessMocks();
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     state = await createOpenClawTestState({ label: "run.empty-error-retry" });
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot({});
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
     mockedClassifyFailoverReason.mockReturnValue(null);
   });
@@ -109,6 +112,37 @@ describe("runEmbeddedAgent silent-error retry", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.payloads).toBeUndefined();
   });
+
+  it.each([false, true])(
+    "surfaces a local transcript conflict without provider classification or retry (preflight recovered: %s)",
+    async (recovered) => {
+      const { SqliteTranscriptMutationConflictError } =
+        await import("../../config/sessions/session-mutation-conflict-error.js");
+      const error = new SqliteTranscriptMutationConflictError("conflicting-session");
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+        makeAttemptResult({
+          ...emptyErrorAttempt("anthropic", "claude-opus-4-8"),
+          terminal: { kind: "failed", source: "prompt", error },
+          ...(recovered
+            ? { preflightRecovery: { handled: true, source: "mid-turn", route: "compact_only" } }
+            : {}),
+        }),
+      );
+
+      await expect(
+        runEmbeddedAgent({
+          ...createOverflowRunParams(state),
+          provider: "anthropic",
+          model: "claude-opus-4-8",
+          runId: "run-transcript-conflict",
+        }),
+      ).rejects.toBe(error);
+
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+      expect(mockedClassifyFailoverReason).not.toHaveBeenCalled();
+      expect(mockedClassifyAssistantFailoverReason).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not intercept concrete non-transient failover errors", async () => {
     mockedClassifyFailoverReason.mockReturnValue("model_not_found");
@@ -138,7 +172,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
   });
 
-  it("caps retries at MAX_EMPTY_ERROR_RETRIES and surfaces incomplete-turn error", async () => {
+  it("records a private incomplete-turn failure after exhausting retries", async () => {
     // 1 initial + 3 retries = 4 attempts, all returning empty-error.
     for (let i = 0; i < 4; i += 1) {
       mockedRunEmbeddedAttempt.mockResolvedValueOnce(emptyErrorAttempt("ollama", "glm-5.1:cloud"));
@@ -152,7 +186,12 @@ describe("runEmbeddedAgent silent-error retry", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(4);
-    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads).toBeUndefined();
+    expect(result.meta.error).toMatchObject({
+      kind: "incomplete_turn",
+      message: "No answer was returned. Ask again if you still need one.",
+      fallbackSafe: true,
+    });
   });
 
   it("does not mark incomplete turns fallback-safe after a terminal heartbeat response", async () => {
@@ -289,9 +328,9 @@ describe("runEmbeddedAgent silent-error retry", () => {
         expect(error).toBeInstanceOf(Error);
         expect(hasRecordedModelFallbackStop(error)).toBe(true);
         expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
-        expect(loadSessionEntry({ ...scope, readConsistency: "latest" })?.providerReview).toEqual(
-          accepted ? undefined : review,
-        );
+        expect(
+          sessionAccess.loadSessionEntry({ ...scope, readConsistency: "latest" })?.providerReview,
+        ).toEqual(accepted ? undefined : review);
         if (failure === "abort") {
           expect(resolveAgentRunErrorLifecycleFields(error, undefined)).toMatchObject({
             aborted: true,
@@ -309,7 +348,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
       useOpenAIPlatformAuthFixture();
       const params = createOverflowRunParams(state);
       const scope = { agentId: params.agentId, sessionKey: params.sessionKey };
-      await replaceSessionEntry(scope, { sessionId: params.sessionId, updatedAt: 1 });
+      await sessionAccess.replaceSessionEntry(scope, { sessionId: params.sessionId, updatedAt: 1 });
       const review = {
         explanation: "Review the pending operation.",
         continuation: { message: "/literal confirmation" },
@@ -351,7 +390,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
       });
       expect(result.meta.agentMeta?.providerRefusal?.review).toEqual(review);
       expect(
-        loadSessionEntry({ ...scope, readConsistency: "latest" })?.providerReview,
+        sessionAccess.loadSessionEntry({ ...scope, readConsistency: "latest" })?.providerReview,
       ).toMatchObject({
         sessionId: params.sessionId,
         runId: "run-misalignment",

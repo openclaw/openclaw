@@ -20,7 +20,6 @@ type StreamState = {
   activeTargetId: string | null;
   view: BrowserPanelView | null;
   tabs: BrowserPanelTab[];
-  urlDraft: string;
   loading: boolean;
 };
 
@@ -31,9 +30,9 @@ interface BrowserPanelStreamHost extends StreamState {
     BrowserPanelOperationOwnership,
     "epoch" | "route" | "isLive" | "hasPendingCapture" | "capturedTabs" | "forgetNavigation"
   >;
-  readonly urlDraftEditing: boolean;
   readonly observedViewportSize: { width: number; height: number } | null;
   setState<Key extends keyof StreamState>(key: Key, value: StreamState[Key]): void;
+  syncUrlDraft(url: string): void;
   clearUnavailableView(): boolean;
   refreshView(targetId: string): Promise<void>;
   refreshAll(): Promise<void>;
@@ -120,20 +119,18 @@ export class BrowserPanelStream {
     }
     this.close(false);
     const dimensions = this.dimensions();
-    let settle!: Attempt["settle"];
-    const firstFrame = new Promise<boolean>((resolve) => {
-      const timeout = setTimeout(() => {
-        if (this.current(attempt)) {
-          this.recover(attempt);
-        } else if (this.attempt === attempt) {
-          this.close(false);
-        }
-      }, DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
-      settle = (received) => {
-        clearTimeout(timeout);
-        resolve(received);
-      };
-    });
+    const { promise: firstFrame, resolve } = Promise.withResolvers<boolean>();
+    const timeout = setTimeout(() => {
+      if (this.current(attempt)) {
+        this.recover(attempt);
+      } else if (this.attempt === attempt) {
+        this.close(false);
+      }
+    }, DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
+    const settle = (received: boolean) => {
+      clearTimeout(timeout);
+      resolve(received);
+    };
     const attempt: Attempt = {
       targetId,
       client,
@@ -277,9 +274,7 @@ export class BrowserPanelStream {
           : tab,
       ),
     );
-    if (!this.host.urlDraftEditing) {
-      this.host.setState("urlDraft", metadata.url);
-    }
+    this.host.syncUrlDraft(metadata.url);
   }
 
   flushPendingFrame(): void {
@@ -348,9 +343,7 @@ export class BrowserPanelStream {
             : {}),
         });
         this.host.operations.forgetNavigation(attempt.client, attempt.targetId);
-        if (!this.host.urlDraftEditing) {
-          this.host.setState("urlDraft", frame.url);
-        }
+        this.host.syncUrlDraft(frame.url);
         if (!attempt.presented) {
           attempt.presented = true;
           this.host.setState("loading", false);

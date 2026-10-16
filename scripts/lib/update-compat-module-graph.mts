@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
 import type { NativeTypeScriptParser } from "./native-typescript.mts";
-import { buildUpdateConfigRuntimeAlias } from "./update-config-runtime-compat.mts";
+import { isUpdateConfigRuntimeAlias } from "./update-config-runtime-compat.mts";
 
 export type UpdateCompatibilityOrigin = { module: string; symbol: string };
 
@@ -183,8 +183,8 @@ export class ModuleGraph {
         // Only the complete generated read contract proves delegation. Unknown wrappers
         // must still fail provenance tracing; never execute a release to discover exports.
         if (
-          source ===
-          buildUpdateConfigRuntimeAlias(
+          isUpdateConfigRuntimeAlias(
+            source,
             delegatedTarget,
             this.parser.parseSourceFile(targetFile, targetSource),
           )

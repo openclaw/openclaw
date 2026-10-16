@@ -4,14 +4,26 @@ import type { UnsettledRequesterChild } from "../subagents/registry/subagent-reg
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readToolStringParam } from "./common.js";
 
-const NO_PENDING_CHILD_COMPLETION_ERROR =
-  'No pending child completion is owned by this turn. If the assigned work is complete, return its result normally. An unfinished subagent waiting for an incoming continuation must explicitly set waitFor: "message".';
+const NO_PENDING_CHILD_COMPLETION_MESSAGE =
+  'No pending child completion is owned by this turn. This call did not pause the turn or schedule a continuation. Continue unfinished work; return its final result when complete. For background tools, follow their result\'s continuation instructions. An unfinished subagent waiting for an incoming continuation must explicitly set waitFor: "message".';
 
-export type SessionsYieldClaimResult =
+/**
+ * A harness runtime's yield claim: true when this turn owns a pending completion,
+ * or the children an earlier turn left pending that will resume the session.
+ */
+export type SessionsYieldRuntimeClaim =
   | boolean
-  | { error: string }
   | { pendingChildren: readonly UnsettledRequesterChild[] };
-export type SessionsYieldIntent = { waitFor?: "message" };
+export type SessionsYieldClaimResult =
+  | SessionsYieldRuntimeClaim
+  | { messageWaitRegistered: boolean }
+  | { error: string };
+export type SessionsYieldIntent = { waitFor?: "message"; acknowledgment?: string };
+export type SessionsYieldCallback = (
+  message: string,
+  acknowledgment?: string,
+  messageWaitRegistered?: boolean,
+) => Promise<void> | void;
 
 function describePendingChild(child: UnsettledRequesterChild): string {
   const name = child.label ? `${child.label} (${child.childSessionKey})` : child.childSessionKey;
@@ -40,7 +52,7 @@ function formatPendingChildrenMessage(children: readonly UnsettledRequesterChild
   }
   if (paused.length > 0) {
     parts.push(
-      `${describeChildCount(paused.length)} spawned by an earlier turn of this session ${paused.length === 1 ? "is" : "are"} paused by ${paused.length === 1 ? "its" : "their"} own sessions_yield and will not complete until an incoming continuation arrives: ${paused.map(describePendingChild).join("; ")}. Send that continuation with sessions_send if this session owns it; otherwise the work stays waiting.`,
+      `${describeChildCount(paused.length)} spawned by an earlier turn of this session ${paused.length === 1 ? "is" : "are"} paused by ${paused.length === 1 ? "its" : "their"} own sessions_yield and will not complete until an incoming continuation arrives: ${paused.map(describePendingChild).join("; ")}. An authorized caller can send that continuation with sessions_send; owning a child does not grant that tool. Otherwise the work stays waiting.`,
     );
   }
   parts.push("This turn owns no new claim, so no yield is needed: end this turn normally.");
@@ -51,7 +63,7 @@ const SessionsYieldToolSchema = Type.Object({
   waitFor: Type.Optional(
     Type.Literal("message", {
       description:
-        "Explicitly pause an unfinished subagent until an incoming continuation message. Does not schedule a message or submit the final result.",
+        "Explicitly pause an unfinished subagent until an incoming continuation message; its requester is notified once. Does not schedule a message or submit the final result.",
     }),
   ),
   message: Type.Optional(
@@ -59,7 +71,8 @@ const SessionsYieldToolSchema = Type.Object({
   ),
   acknowledgment: Type.Optional(
     Type.String({
-      description: "Optional waiting reply for an otherwise-silent interactive parent turn.",
+      description:
+        "Optional waiting reply for an otherwise-silent interactive parent turn; with waitFor, the pause notice for the requester.",
     }),
   ),
 });
@@ -69,7 +82,7 @@ export function createSessionsYieldTool(opts?: {
   claimYield?: (
     intent?: SessionsYieldIntent,
   ) => SessionsYieldClaimResult | Promise<SessionsYieldClaimResult>;
-  onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
+  onYield?: SessionsYieldCallback;
 }): AnyAgentTool {
   return {
     label: "Yield",
@@ -77,8 +90,11 @@ export function createSessionsYieldTool(opts?: {
     // Turn-lifecycle contract: spawn flows instruct the model to yield, so the
     // tool must stay visible even when tool search compacts the catalog.
     catalogMode: "direct-only",
+    // A yield waits, so it must pause an async-tool response: the next request then
+    // delivers this response's async results ahead of the yield result.
+    async: false,
     description:
-      'End this turn for pending child completion events; this is not a final-result submission. Return completed work normally. An unfinished subagent waiting for an incoming continuation must set waitFor:"message". Collector runs require explicit collection instead. acknowledgment can send a waiting reply for an otherwise-silent interactive parent.',
+      'End this turn for pending child completion events; this is not a final-result submission. For background tools, follow their result\'s continuation instructions. Return completed work normally. An unfinished subagent waiting for an incoming continuation must set waitFor:"message". Collector runs require explicit collection instead. acknowledgment can send a waiting reply for an otherwise-silent interactive parent.',
     parameters: SessionsYieldToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -98,10 +114,12 @@ export function createSessionsYieldTool(opts?: {
         return jsonResult({
           status: "deferred",
           message:
-            "Earlier async tool results are still being delivered. Finish this response to receive them, then yield again only if external work still requires waiting.",
+            "Earlier async tool results from this response arrive with this result. Use them, then yield again only if external work still requires waiting.",
         });
       }
-      const claim = await opts.claimYield?.(waitFor ? { waitFor } : undefined);
+      const claim = await opts.claimYield?.(
+        waitFor ? { waitFor, ...(acknowledgment ? { acknowledgment } : {}) } : undefined,
+      );
       if (typeof claim === "object" && "pendingChildren" in claim) {
         // Not an error: the session already waits for these children through
         // durable registry state, so the model only needs to end the turn.
@@ -111,14 +129,25 @@ export function createSessionsYieldTool(opts?: {
           pendingChildren: claim.pendingChildren,
         });
       }
-      if (claim !== true) {
+      if (typeof claim === "object" && "error" in claim) {
+        return jsonResult({ status: "error", error: claim.error });
+      }
+      if (claim !== true && typeof claim !== "object") {
+        // Advisory, not a failure: the model keeps the turn and nothing the user asked for failed.
         return jsonResult({
-          status: "error",
-          error: typeof claim === "object" ? claim.error : NO_PENDING_CHILD_COMPLETION_ERROR,
+          status: "nothing_pending",
+          message:
+            waitFor === "message"
+              ? "No pending completion or eligible active native task is owned by this turn. This call did not pause the turn or schedule a continuation. Continue unfinished work; return its final result when complete."
+              : NO_PENDING_CHILD_COMPLETION_MESSAGE,
         });
       }
       // The runtime owns the actual pause/end-turn behavior; this tool records intent.
-      await opts.onYield(message, acknowledgment);
+      await opts.onYield(
+        message,
+        acknowledgment,
+        typeof claim === "object" ? claim.messageWaitRegistered : undefined,
+      );
       return jsonResult({
         status: "yielded",
         ...(acknowledgment ? { acknowledgment } : {}),

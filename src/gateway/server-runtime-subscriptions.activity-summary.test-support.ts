@@ -1,18 +1,31 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
+import { createGatewayBroadcaster } from "./server-broadcast.js";
+import { makeClient } from "./server-broadcast.test-helpers.js";
+import { GatewayConnectionWork } from "./server-connection-work.js";
+import type { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
+import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { ActivitySummaryTarget } from "./session-activity-summary-state.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
+import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
-type Start = (projection: SessionRowProjection) => {
-  params: { broadcast: GatewayBroadcastFn };
+type Start = (
+  projection: SessionRowProjection,
+  signal?: AbortSignal,
+) => {
+  params: Pick<
+    Parameters<typeof startGatewayEventSubscriptions>[0],
+    "broadcast" | "scheduler" | "sessionEventSubscribers"
+  >;
   unsubs: { agentUnsub: () => Promise<void> };
 };
 
@@ -20,6 +33,82 @@ export function registerActivitySummaryPublicationTests(
   start: Start,
   getOnChanged: () => ((target: ActivitySummaryTarget & { storePath: string }) => void) | undefined,
 ): void {
+  it("delivers a coalesced recap after producer closure and joins it during shutdown", async () => {
+    vi.useFakeTimers();
+    const target = { key: "agent:main:recap", agentId: "main", storePath: "/recap/agent.sqlite" };
+    const entry = { sessionId: "recap", lifecycleRevision: "original", updatedAt: 1 };
+    const projection = createSessionRowProjectionFixture({
+      cfg: { agents: { entries: { main: {} } } },
+      store: { [target.key]: entry },
+      storePath: target.storePath,
+    });
+    const producer = new AsyncWorkScope();
+    const connectionWork = new GatewayConnectionWork();
+    const { params, unsubs } = start(projection, connectionWork.signal);
+    const subscribed = makeClient("activity", "operator", ["operator.read"]);
+    const other = makeClient("unsubscribed", "operator", ["operator.read"]);
+    params.sessionEventSubscribers.subscribe(subscribed.client.connId);
+    const broadcaster = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([subscribed.client, other.client]),
+      canReceiveSessionEvent: (client) =>
+        params.sessionEventSubscribers.getAll().has(client.connId),
+    });
+    vi.mocked(params.broadcast).mockImplementation(broadcaster.broadcast);
+    const entered = createDeferred();
+    const release = createDeferred();
+    const prepare = projection.withPreparedExactRows.bind(projection);
+    vi.spyOn(projection, "withPreparedExactRows").mockImplementation(async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return prepare(...args);
+    });
+    let closing: Promise<void> | undefined;
+    try {
+      const onChanged = getOnChanged()!;
+      producer.run(() => onChanged(target));
+      await entered.promise;
+      projection.setEntry(target.key, { ...entry, label: "latest recap row" });
+      producer.run(() => onChanged(target));
+      await producer.drain();
+      // server-lifecycle closes scheduler admission before connection work;
+      // server-close then joins subscriptions before sockets and projection.
+      params.scheduler.beginClose();
+      connectionWork.beginClose();
+      let closed = false;
+      closing = unsubs.agentUnsub().then(() => {
+        closed = true;
+      });
+      onChanged(target);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(closed).toBe(false);
+      expect(subscribed.socket.send).not.toHaveBeenCalled();
+      release.resolve();
+      await vi.runAllTimersAsync();
+      await closing;
+      expect(subscribed.socket.send).toHaveBeenCalledOnce();
+      expect(JSON.parse(subscribed.socket.send.mock.calls[0]![0])).toMatchObject({
+        event: "sessions.changed",
+        payload: {
+          reason: "activity-summary",
+          session: { key: target.key, sessionId: entry.sessionId, label: "latest recap row" },
+        },
+      });
+      onChanged(target);
+      await vi.runAllTimersAsync();
+      expect(subscribed.socket.send).toHaveBeenCalledOnce();
+      expect(other.socket.send).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await vi.runAllTimersAsync();
+      await (closing ?? unsubs.agentUnsub());
+      await params.scheduler.stop();
+      await connectionWork.drain();
+      projection.dispose();
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
+
   it("publishes a prepared recap while the real projection retains an unrelated dirty row", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = { agents: { entries: { main: {} } } };
@@ -52,6 +141,7 @@ export function registerActivitySummaryPublicationTests(
       const entered = createDeferred();
       const release = createDeferred();
       let unsubs: ReturnType<Start>["unsubs"] | undefined;
+      let sql: ReturnType<typeof observeHostDataSql> | undefined;
       try {
         const started = start(projection);
         const { params } = started;
@@ -84,6 +174,7 @@ export function registerActivitySummaryPublicationTests(
           throw new Error("missing activity-summary publication callback");
         }
         vi.useFakeTimers();
+        sql = observeHostDataSql();
         onChanged(target);
         await vi.advanceTimersByTimeAsync(0);
         expect(params.broadcast).toHaveBeenCalledExactlyOnceWith(
@@ -92,10 +183,17 @@ export function registerActivitySummaryPublicationTests(
             reason: "activity-summary",
             session: expect.objectContaining({ key: target.key, sessionId: "recap" }),
           }),
-          { sessionKeys: [target.key], agentId: target.agentId, dropIfSlow: true },
+          {
+            sessionKeys: [target.key],
+            agentId: target.agentId,
+            dropIfSlow: true,
+            prepareSessionProjection: expect.any(Function),
+          },
         );
         expect(projection.needsMaterialization).toBe(true);
+        expect(sql.queries).toEqual([]);
       } finally {
+        sql?.restore();
         vi.useRealTimers();
         release.resolve();
         try {

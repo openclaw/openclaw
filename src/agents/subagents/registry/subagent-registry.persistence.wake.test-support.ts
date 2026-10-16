@@ -1,14 +1,15 @@
 import { expect, it, vi } from "vitest";
+import type { ChatAbortControllerEntry } from "../../../gateway/chat-abort.types.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import type { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
+import {
+  loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryToSqlite,
+} from "./subagent-registry-state.fixture.test-support.js";
 import {
   createDeliveredWake,
   observeSubagentRequesterWake,
 } from "./subagent-registry.persistence.test-support.js";
-import {
-  loadSubagentRegistryFromSqlite,
-  saveSubagentRegistryToSqlite,
-} from "./subagent-registry.store.sqlite.js";
 
 type WakeParams = Parameters<typeof maybeWakeRequesterAfterAllChildrenSettled>[0];
 
@@ -33,8 +34,14 @@ export function registerStaleRequesterWakeBatchTests({
       const oldDone = createDeferredCore<boolean>();
       let oldParams: WakeParams | undefined;
       let siblingGatewayOpen = true;
-      const anchorGateway = { resolveGatewayContext: () => anchorGateway as never };
-      const nextGateway = { resolveGatewayContext: () => nextGateway as never };
+      const anchorGateway = {
+        chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
+        resolveGatewayContext: () => anchorGateway as never,
+      };
+      const nextGateway = {
+        chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
+        resolveGatewayContext: () => nextGateway as never,
+      };
       vi.useFakeTimers();
       try {
         await withRegistryState(async () => {
@@ -57,14 +64,14 @@ export function registerStaleRequesterWakeBatchTests({
               "maybeWakeRequesterAfterAllChildrenSettled",
             ).mockImplementation(wakeRequester);
             saveSubagentRegistryToSqlite(new Map(batch.map((entry) => [entry.runId, entry])));
-            mod.initSubagentRegistry();
+            await mod.initSubagentRegistry();
             const anchor = mod.getSubagentRunByRunId("run-batch-anchor")!;
             const sibling = mod.getSubagentRunByRunId("run-batch-sibling")!;
             bindGatewayContextResolver(anchor, () => anchorGateway as never);
             bindGatewayContextResolver(sibling, () =>
               siblingGatewayOpen ? (anchorGateway as never) : undefined,
             );
-            mod.activateSubagentRegistry(() => anchorGateway as never);
+            await mod.activateSubagentRegistry(() => anchorGateway as never);
             await waitForCalls(1);
             expect(wakeRequester).toHaveBeenCalledOnce();
             expect(oldParams?.settledEntry).toBe(anchor);
@@ -72,7 +79,7 @@ export function registerStaleRequesterWakeBatchTests({
             siblingGatewayOpen = false;
             const beforeActivation = settlement.startsWith("closed-");
             if (!beforeActivation) {
-              mod.activateSubagentRegistry(() => nextGateway as never);
+              await mod.activateSubagentRegistry(() => nextGateway as never);
             }
             const replacement = mod.getSubagentRunByRunId(sibling.runId)!;
             expect(mod.getSubagentRunByRunId(anchor.runId)).toBe(anchor);
@@ -81,32 +88,41 @@ export function registerStaleRequesterWakeBatchTests({
               structuredClone(entry.requesterSettleWake),
             );
             if (settlement.endsWith("transition")) {
-              await oldParams!.transitionBatch([anchor, sibling], {
-                ...expected[0]!,
-                attemptCount: 99,
-              });
+              await oldParams!.transitionBatch(
+                [anchor, sibling],
+                { ...expected[0]!, attemptCount: 99 },
+                () => {},
+              );
             } else if (settlement === "rejection") {
               oldDone.reject(new Error("old mixed-owner dispatch failed"));
               await vi.advanceTimersByTimeAsync(0);
             } else {
               await oldParams!.completeBatch([anchor, sibling], 1);
             }
-            expect([anchor, replacement].map((entry) => entry.requesterSettleWake)).toEqual(
-              expected,
-            );
-            expect(readPersistedRun(sibling.runId)?.requesterSettleWake).toEqual(expected[1]);
+            expect(
+              [anchor, replacement].map(
+                (entry) => mod.getSubagentRunByRunId(entry.runId)?.requesterSettleWake,
+              ),
+            ).toEqual(expected);
+            expect(
+              [anchor, replacement].map(
+                (entry) => readPersistedRun(entry.runId)?.requesterSettleWake,
+              ),
+            ).toEqual(expected);
             if (settlement === "completion" || settlement === "closed-empty") {
               oldDone.resolve(false);
               await settleOwnedWork();
               if (beforeActivation) {
-                mod.activateSubagentRegistry(() => nextGateway as never);
+                await mod.activateSubagentRegistry(() => nextGateway as never);
                 await settleOwnedWork();
               }
               // The old no-wake decision must not clear only the surviving member
               // when a deferred commit crosses its first retry deadline.
               await vi.advanceTimersByTimeAsync(30_000);
               await settleOwnedWork();
-              expect(anchor.requesterSettleWake).toEqual(expected[0]);
+              expect(mod.getSubagentRunByRunId(anchor.runId)?.requesterSettleWake).toEqual(
+                expected[0],
+              );
               expect(readPersistedRun(anchor.runId)?.requesterSettleWake).toEqual(expected[0]);
 
               await mod.testing.runSweeperTickForTests();
@@ -117,7 +133,7 @@ export function registerStaleRequesterWakeBatchTests({
               expect(freshParams).toBeDefined();
               expect(freshParams).not.toBe(oldParams);
               await freshParams!.completeBatch([anchor], 1);
-              expect(anchor.requesterSettleWake).toBeUndefined();
+              expect(mod.getSubagentRunByRunId(anchor.runId)?.requesterSettleWake).toBeUndefined();
               expect(readPersistedRun(anchor.runId)?.requesterSettleWake).toBeUndefined();
               expect(readPersistedRun(sibling.runId)?.requesterSettleWake).toEqual(expected[1]);
             }

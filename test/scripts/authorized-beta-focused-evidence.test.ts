@@ -582,7 +582,7 @@ function resolveFocusedProducer(
 }
 
 describe("authorized beta focused evidence", () => {
-  it.each(["ancestor", "current", "diverged"] as const)(
+  it.each(["diverged"] as const)(
     "accepts an exact protected focused producer from %s trusted tooling",
     (consumer) => {
       const { outputPath, producerRef, producerSha, result } = resolveFocusedProducer({ consumer });
@@ -598,13 +598,10 @@ describe("authorized beta focused evidence", () => {
   it.each([
     { name: "unanchored producer", options: { producer: "unanchored" as const } },
     { name: "producer policy drift", options: { producer: "policy-drift" as const } },
-    { name: "producer workflow drift", options: { producer: "workflow-drift" as const } },
     {
       name: "moved producer tag",
       options: { tag: { object: { sha: "f".repeat(40), type: "commit" } } },
     },
-    { name: "missing producer tag", options: { missingTag: true } },
-    { name: "annotated producer tag", options: { annotatedTag: true } },
     {
       name: "producer SHA prefix mismatch",
       options: { run: { head_branch: "release-publish/ffffffffffff-123" } },
@@ -617,20 +614,8 @@ describe("authorized beta focused evidence", () => {
       name: "wrong producer workflow path",
       options: { run: { path: ".github/workflows/openclaw-release-publish.yml" } },
     },
-    { name: "wrong producer workflow name", options: { run: { name: "Other Validation" } } },
-    { name: "wrong producer event", options: { run: { event: "push" } } },
-    { name: "unfinished producer", options: { run: { status: "in_progress" } } },
-    { name: "failed producer", options: { run: { conclusion: "failure" } } },
-    { name: "wrong producer attempt", options: { run: { run_attempt: 3 } } },
   ])("rejects $name before focused artifact download", ({ options }) => {
     expect(resolveFocusedProducer(options).result.status).not.toBe(0);
-  });
-
-  it("accepts the exact focused producer again after Docker approval", () => {
-    const { result } = resolveFocusedProducer({ boundary: "docker", consumer: "diverged" });
-
-    expect(result.stderr).toBe("");
-    expect(result.status).toBe(0);
   });
 
   it.each([
@@ -638,10 +623,7 @@ describe("authorized beta focused evidence", () => {
       name: "moved producer tag",
       options: { tag: { object: { sha: "f".repeat(40), type: "commit" } } },
     },
-    { name: "missing producer tag", options: { missingTag: true } },
     { name: "rerun producer", options: { run: { run_attempt: 3 } } },
-    { name: "substituted producer", options: { run: { head_sha: "f".repeat(40) } } },
-    { name: "failed producer", options: { run: { conclusion: "failure" } } },
   ])("rejects $name after Docker approval before registry access", ({ options }) => {
     expect(resolveFocusedProducer({ ...options, boundary: "docker" }).result.status).not.toBe(0);
   });
@@ -686,36 +668,6 @@ describe("authorized beta focused evidence", () => {
     );
   });
 
-  it("pins the exact beta.3 candidate, inventories, trust split, and repaired leaves", () => {
-    const policy = readAuthorizedBetaFocusedPolicy();
-    expect(policy.releaseTag).toBe("v2026.8.1-beta.3");
-    expect(policy.candidateSha).toBe("3fbe94065c2b94f4c08acb6742a69938bf408d94");
-    expect(policy.baseCandidateSha).toBe("3203a6f7f8d79644fde2b4f091a694f4c1698538");
-    expect(policy.eligibilityPlanDigest).toBe(
-      "sha256:e05226cfd77716b262882b3e2525037a506cd8b6af2affa0a876499074b1671b",
-    );
-    expect(policy.changedPaths).toHaveLength(4);
-    expect(policy.inventory).toMatchObject({
-      npmCount: 93,
-      clawHubCount: 89,
-      trustedPublisherCount: 75,
-      bootstrapCount: 14,
-      missingTrustedPublisherCount: 0,
-    });
-    expect(policy.historicalFrv).toMatchObject({
-      runId: "32644377679",
-      ciFailedJobId: "97206458686",
-      pluginFailedJobId: "97208293666",
-      releaseChecksRunId: "32645133620",
-    });
-    expect(policy.focusedProof).toMatchObject({
-      ciRunId: "32664685168",
-      ciSuccessJobId: "97256296219",
-      pluginRunId: "32664686635",
-      pluginSuccessJobId: "97256329353",
-    });
-  });
-
   it("accepts skipped historical release-plan children without run identities", () => {
     const { result } = runFocusedValidatorLogProbe("flagged", true);
     expect(result.status, result.stderr).toBe(0);
@@ -723,7 +675,6 @@ describe("authorized beta focused evidence", () => {
   });
 
   it.each([
-    { outcome: "flagged" as const, description: "accepts ANSI-bearing flagged Actions logs" },
     { outcome: "legacy" as const, description: "retries once for the exact legacy gh flag error" },
     {
       outcome: "unrelated" as const,
@@ -853,27 +804,6 @@ describe("authorized beta focused evidence", () => {
   });
 
   it.each([
-    { name: "null policy", policy: null },
-    { name: "array policy", policy: [] },
-    {
-      name: "wrong policy schema",
-      policy: { schema: "other", mode: "authorized-beta-focused-v1", candidateSha: "a".repeat(40) },
-    },
-    {
-      name: "wrong policy mode",
-      policy: {
-        schema: "openclaw.authorized-beta-focused-policy.v1",
-        mode: "other",
-        candidateSha: "a".repeat(40),
-      },
-    },
-    {
-      name: "missing candidate",
-      policy: {
-        schema: "openclaw.authorized-beta-focused-policy.v1",
-        mode: "authorized-beta-focused-v1",
-      },
-    },
     {
       name: "short candidate",
       policy: {

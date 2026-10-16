@@ -1,4 +1,3 @@
-// Defines auth profile configuration types.
 import type { z } from "zod";
 import type { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
 

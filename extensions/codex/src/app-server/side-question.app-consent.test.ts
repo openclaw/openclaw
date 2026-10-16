@@ -1,5 +1,9 @@
 import "./side-question.test-support.js";
-import { describe, expect, it } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const {
   createFakeClient,
@@ -10,10 +14,32 @@ const {
   useSideQuestionTestSetup,
 } = await import("./side-question.test-support.js");
 
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(() => clearRuntimeConfigSnapshot());
+
 describe("Codex side-question app consent", () => {
   useSideQuestionTestSetup();
 
-  it("preserves native app consent in yolo mode when apps are bound", async () => {
+  it.each([
+    {
+      name: "yolo mode",
+      appServer: { mode: "yolo" as const },
+      expectedApprovalPolicy: {
+        granular: {
+          mcp_elicitations: true,
+          rules: false,
+          sandbox_approval: false,
+          request_permissions: false,
+          skill_approval: false,
+        },
+      },
+    },
+    {
+      name: "on-request policy",
+      appServer: { approvalPolicy: "on-request" as const },
+      expectedApprovalPolicy: "on-request",
+    },
+  ])("preserves native app consent with $name when apps are bound", async (testCase) => {
     const client = createFakeClient();
     const baseRequest = client.request.getMockImplementation()!;
     client.request.mockImplementation(async (method, params) => {
@@ -42,21 +68,13 @@ describe("Codex side-question app consent", () => {
 
     await expect(
       runCodexAppServerSideQuestion(sideParams(), {
-        pluginConfig: { appServer: { mode: "yolo" } },
+        pluginConfig: { appServer: testCase.appServer },
       }),
     ).resolves.toEqual({ text: "Side answer." });
 
     const fork = client.request.mock.calls.find(([method]) => method === "thread/fork")?.[1];
     expect(fork).toMatchObject({
-      approvalPolicy: {
-        granular: {
-          mcp_elicitations: true,
-          rules: false,
-          sandbox_approval: false,
-          request_permissions: false,
-          skill_approval: false,
-        },
-      },
+      approvalPolicy: testCase.expectedApprovalPolicy,
     });
   });
 });

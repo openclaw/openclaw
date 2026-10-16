@@ -1,4 +1,3 @@
-// Raft channel plugin wires the wake bridge into the canonical channel runtime.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { detectBinary } from "openclaw/plugin-sdk/setup-tools";

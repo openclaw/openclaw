@@ -68,6 +68,7 @@ export function summarizeWorkerEnvironment(
       providerId: record.providerId,
       ...(record.leaseId ? { leaseId: record.leaseId } : {}),
       state: record.state,
+      ...(record.startStatus ? { startStatus: record.startStatus } : {}),
       ...(options.includePreparedDetails && record.destroyRequestedAtMs !== null
         ? { destroyRequestedAtMs: record.destroyRequestedAtMs }
         : {}),

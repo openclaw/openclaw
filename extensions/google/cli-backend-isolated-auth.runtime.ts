@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parse as parseDotEnv } from "dotenv";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   asOptionalRecord,
   isRecord,
@@ -137,12 +138,7 @@ export async function readGeminiCliJsonObject(
     }
     return { ...parsed };
   } catch (error) {
-    if (
-      error &&
-      typeof error === "object" &&
-      "code" in error &&
-      (error as { code?: unknown }).code === "ENOENT"
-    ) {
+    if (extractErrorCode(error) === "ENOENT") {
       return {};
     }
     throw error;
@@ -215,12 +211,7 @@ async function readGeminiCliAmbientAuthEnv(
         : {}),
     };
   } catch (error) {
-    if (
-      error &&
-      typeof error === "object" &&
-      "code" in error &&
-      (error as { code?: unknown }).code === "ENOENT"
-    ) {
+    if (extractErrorCode(error) === "ENOENT") {
       return undefined;
     }
     throw error;

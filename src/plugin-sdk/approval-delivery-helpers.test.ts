@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createApproverRestrictedNativeApprovalAdapter,
   createApproverRestrictedNativeApprovalCapability,
+  createApproverRestrictedNativeApprovalCapabilityAsync,
   createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes,
   createChannelApprovalCapability,
   splitChannelApprovalCapability,
@@ -59,6 +60,22 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
       authorized: false,
       reason: "❌ You are not authorized to approve plugin requests on Discord.",
     });
+
+    expect(
+      authorizeActorAction({
+        cfg: {},
+        accountId: "work",
+        senderId: "plugin-owner",
+        action: "approve",
+        approvalKind: "plugin",
+        request: {
+          id: "exec-request",
+          request: { command: "pwd" },
+          createdAtMs: 0,
+          expiresAtMs: 10_000,
+        },
+      }),
+    ).toMatchObject({ authorized: false });
   });
 
   it("reports approval availability and DM routing from the relevant delivery surface", () => {
@@ -459,6 +476,28 @@ describe("createChannelApprovalCapability", () => {
       nativeRuntime,
       render,
       native,
+    });
+  });
+});
+
+describe("createApproverRestrictedNativeApprovalCapabilityAsync", () => {
+  it("awaits channel actor authorization before allowing an approval action", async () => {
+    const capability = createApproverRestrictedNativeApprovalCapabilityAsync({
+      channel: "example",
+      channelLabel: "Example",
+      listAccountIds: () => ["default"],
+      hasApprovers: () => true,
+      isExecAuthorizedSender: async ({ senderId }) => senderId === "owner",
+      isNativeDeliveryEnabled: async () => true,
+      resolveNativeDeliveryMode: () => "dm",
+    });
+    const input = { cfg: {}, action: "approve", approvalKind: "exec" } as const;
+    expect(await capability.authorizeActorActionAsync?.({ ...input, senderId: "other" })).toEqual({
+      authorized: false,
+      reason: "❌ You are not authorized to approve exec requests on Example.",
+    });
+    expect(await capability.authorizeActorActionAsync?.({ ...input, senderId: "owner" })).toEqual({
+      authorized: true,
     });
   });
 });

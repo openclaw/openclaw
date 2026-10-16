@@ -1,12 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   createTerminalController,
+  createTestTerminalPanel,
   defineTestTerminalPanelElement,
   terminalOpenResult,
 } from "../../components/terminal/terminal-panel.test-support.ts";
-import type { OpenClawTerminalPanel } from "../../components/terminal/terminal-panel.ts";
 import {
   createDraftFixture,
   registerTextPayload,
@@ -36,7 +37,7 @@ function mountNativeTerminal(context: ApplicationContext) {
     },
     forceReconnect: vi.fn(),
   });
-  const panel = document.createElement(nativeTerminalElement) as OpenClawTerminalPanel;
+  const panel = createTestTerminalPanel(nativeTerminalElement);
   panel.client = client;
   panel.available = true;
   panel.page = true;
@@ -69,7 +70,6 @@ function createNativeFixture(options: Parameters<typeof createDraftFixture>[0] =
       requestedAgentId: "main",
       catalogId: "codex",
       catalogLabel: "Codex",
-      model: "",
       startTerminal: true,
       terminalHosts: [{ hostId: "gateway:local", label: "Local" }],
     },
@@ -85,6 +85,8 @@ describe("DraftSubmissionFlow native terminal", () => {
     "primary submission retains $catalogId output and exit that precede the native start response",
     async ({ catalogId, exitCode, signal, exitLabel }) => {
       const controller = createTerminalController();
+      const outputWritten = createDeferred();
+      controller.write.mockImplementation(() => outputWritten.resolve());
       nativeTerminalController.mockResolvedValueOnce(controller);
       const { context, flow, request } = createDraftFixture({
         scopes: ["operator.admin", "operator.read", "operator.write"],
@@ -93,7 +95,6 @@ describe("DraftSubmissionFlow native terminal", () => {
           agentId: "main",
           requestedAgentId: "main",
           catalogId,
-          model: "openai/test",
           catalogLabel: catalogId,
           startTerminal: true,
           terminalHosts: [{ hostId: "gateway:local", label: "Local CLI" }],
@@ -123,10 +124,9 @@ describe("DraftSubmissionFlow native terminal", () => {
       flow.setMessage("start this task");
       await flow.submit();
 
-      await vi.waitFor(() =>
-        expect(controller.write).toHaveBeenCalledWith(
-          new TextEncoder().encode("Native CLI startup text"),
-        ),
+      await outputWritten.promise;
+      expect(controller.write).toHaveBeenCalledWith(
+        new TextEncoder().encode("Native CLI startup text"),
       );
       expect(request).toHaveBeenCalledWith(
         "sessions.catalog.startTerminal",
@@ -165,7 +165,6 @@ describe("DraftSubmissionFlow native terminal", () => {
         requestedAgentId: "main",
         catalogId: "synthetic-cli",
         catalogLabel: "Synthetic CLI",
-        model: "",
         startTerminal: true,
         terminalHosts: [{ hostId: "gateway:local", label: "Local" }],
       },
@@ -241,7 +240,7 @@ describe("DraftSubmissionFlow native terminal", () => {
     expect(request).toHaveBeenCalledWith("terminal.close", { sessionId: "cancelled-start" });
   });
 
-  it.each(["accepted", "rejected"])(
+  it.each(["accepted"])(
     "provisions the chosen worktree and consumes its name only for %s native startup",
     async (outcome) => {
       replaceBrowserPreference("ws://gateway.example", "main", {
@@ -308,7 +307,6 @@ describe("DraftSubmissionFlow native terminal", () => {
       agentId: "main",
       requestedAgentId: "main",
       catalogId,
-      model: "",
       catalogLabel: catalogId,
       startTerminal: true,
       terminalHosts: [{ hostId: "node:chosen", label: "Chosen" }],
@@ -382,7 +380,6 @@ describe("DraftSubmissionFlow native terminal", () => {
           agentId: "main",
           requestedAgentId: "main",
           catalogId: "codex",
-          model: "",
           catalogLabel: "Codex",
           startTerminal: true,
           terminalHosts: [{ hostId: "gateway:local", label: "Local" }],

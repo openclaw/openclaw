@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { createServer, type Server, type Socket } from "node:net";
-import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveImapConfig, type ImapAccountConfig } from "./config.js";
@@ -17,6 +18,7 @@ class ScriptedImapServer {
   connectionCount = 0;
   rejectAuthentication = false;
   fetchGate: Promise<void> | undefined;
+  fetchedBodies = 0;
   private readonly server: Server;
 
   constructor(private readonly supportsIdle = true) {
@@ -101,13 +103,24 @@ class ScriptedImapServer {
           idleTag = tag;
           socket.write("+ idling\r\n");
         } else if (upper === "UID" && subcommand?.toUpperCase() === "FETCH") {
-          const minimum = Number(line.split(" ")[3]?.split(":")[0]);
+          const lastUid = this.messages.at(-1)?.uid ?? 0;
+          const ranges = (line.split(" ")[3] ?? "").split(",").map((range) => {
+            const bounds = range
+              .split(":")
+              .map((bound) => (bound === "*" ? lastUid : Number(bound)));
+            return [Math.min(...bounds), Math.max(...bounds)] as const;
+          });
           // Snapshot the response at command time: a held response must not absorb
           // messages appended while the fetch is in flight.
-          const selected = this.messages.filter((entry) => entry.uid >= minimum);
-          const matches = selected.length ? selected : this.messages.slice(-1);
+          const matches = this.messages.filter((entry) =>
+            ranges.some(([minimum, maximum]) => entry.uid >= minimum && entry.uid <= maximum),
+          );
           const respond = () => {
             for (const mail of matches) {
+              const wantsBody = line.includes("BODY");
+              if (wantsBody && mail.uid > 1) {
+                this.fetchedBodies++;
+              }
               const date = new Date()
                 .toUTCString()
                 .slice(5)
@@ -115,7 +128,9 @@ class ScriptedImapServer {
                 .replace(/ /u, "-")
                 .replace(" GMT", " +0000");
               socket.write(
-                `* ${mail.uid} FETCH (UID ${mail.uid} INTERNALDATE "${date}" RFC822.SIZE ${Buffer.byteLength(mail.raw)} BODY[]<0> {${Buffer.byteLength(mail.raw)}}\r\n${mail.raw})\r\n`,
+                wantsBody
+                  ? `* ${mail.uid} FETCH (UID ${mail.uid} INTERNALDATE "${date}" RFC822.SIZE ${Buffer.byteLength(mail.raw)} BODY[]<0> {${Buffer.byteLength(mail.raw)}}\r\n${mail.raw})\r\n`
+                  : `* ${mail.uid} FETCH (UID ${mail.uid})\r\n`,
               );
             }
             socket.write(`${tag} OK FETCH completed\r\n`);
@@ -185,7 +200,8 @@ async function startWatcher(
     withTimeout(waitForAccountCursor("inbox", { uidValidity, lastSeenUid }), timeoutMs, {
       message: `IMAP inbox cursor did not reach UIDVALIDITY ${uidValidity}, UID ${lastSeenUid}`,
     });
-  const context: OpenClawPluginServiceContext = {
+  const context: OpenClawPluginServiceContextV2 = {
+    scheduler: createTestPluginServiceScheduler(),
     config: {},
     stateDir: "/unused-imap-test-state",
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -213,6 +229,56 @@ async function startWatcher(
 }
 
 describe("IMAP watcher protocol boundary", () => {
+  it("bounds retained backlog bodies while dispatching every UID in order", async () => {
+    const { server, dispatchHookAgentTurn, waitForCursor } = await startWatcher();
+    const dispatched: number[] = [];
+    let peakHeldBodies = 0;
+    dispatchHookAgentTurn.mockImplementation(async ({ sessionKey }) => {
+      peakHeldBodies = Math.max(peakHeldBodies, server.fetchedBodies - dispatched.length);
+      dispatched.push(Number(sessionKey.split(":").at(-1)));
+      return { ok: true, runId: "mail-run" };
+    });
+    for (let uid = 2; uid <= 61; uid++) {
+      server.append(`From: trusted@example.com\r\nSubject: Backlog ${uid}\r\n\r\nMessage ${uid}`);
+    }
+    await waitForCursor(61);
+    expect(dispatched).toEqual(Array.from({ length: 60 }, (_, index) => index + 2));
+    expect(peakHeldBodies).toBeLessThanOrEqual(20);
+  });
+
+  it("resumes a failed middle batch before later UIDs and skips disallowed senders", async () => {
+    const { server, state, dispatchHookAgentTurn, waitForCursor } = await startWatcher({
+      account: { watch: { mode: "auto", pollSeconds: 0.02 } },
+    });
+    const admitted: number[] = [];
+    let failed = false;
+    dispatchHookAgentTurn.mockImplementation(async ({ sessionKey }) => {
+      const uid = Number(sessionKey.split(":").at(-1));
+      if (uid === 25 && !failed) {
+        failed = true;
+        expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 24 });
+        return { ok: false, reason: "Injected mid-sweep rejection" };
+      }
+      admitted.push(uid);
+      return { ok: true, runId: "mail-run" };
+    });
+    for (let uid = 2; uid <= 61; uid++) {
+      const sender = uid === 30 ? "blocked@evil.example" : "trusted@example.com";
+      server.append(`From: ${sender}\r\nSubject: Retry ${uid}\r\n\r\nMessage ${uid}`);
+    }
+    await waitForCursor(61, 10_000);
+    const expected = Array.from({ length: 60 }, (_, index) => index + 2).filter(
+      (uid) => uid !== 30,
+    );
+    expect(admitted).toEqual(expected);
+    const attempts = dispatchHookAgentTurn.mock.calls.map(([params]) =>
+      Number(params.sessionKey.split(":").at(-1)),
+    );
+    expect(attempts).toEqual(expected.flatMap((uid) => (uid === 25 ? [uid, uid] : [uid])));
+    expect(await state.skips.lookup("inbox:sender-not-allowed")).toEqual({ count: 1 });
+    expect(await state.skips.lookup("inbox:duplicate-uid")).toBeUndefined();
+  }, 15_000);
+
   it.each([
     ["unverified", "none", "", "strength=unverified", "text/plain"],
     [

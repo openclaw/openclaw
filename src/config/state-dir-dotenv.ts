@@ -9,7 +9,7 @@ import {
   normalizeEnvVarKey,
 } from "../infra/host-env-security.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { collectConfigServiceEnvVars } from "./config-env-vars.js";
+import { collectConfigRuntimeEnvVars } from "./config-env-vars.js";
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "./future-version-guard.js";
 import { resolveStateDir } from "./paths.js";
 import type { OpenClawConfig } from "./types.js";
@@ -138,7 +138,7 @@ export function collectDurableServiceEnvVarSources(params: {
   const stateDirDotEnvEnvironment = readStateDirDotEnvFromStateDir(
     resolveStateDir(params.env),
   ).entries;
-  const configEnvironment = collectConfigServiceEnvVars(params.config);
+  const configEnvironment = collectConfigRuntimeEnvVars(params.config);
   return {
     stateDirDotEnvEnvironment,
     configEnvironment,

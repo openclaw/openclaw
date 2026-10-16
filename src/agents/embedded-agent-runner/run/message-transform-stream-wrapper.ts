@@ -15,7 +15,6 @@ type ProviderContextMaterializer = (input: {
   signal?: AbortSignal;
 }) => Promise<ProviderContext>;
 
-/** Wraps a stream function with a conditional message-list transform. */
 export function wrapStreamFnWithMessageTransform(
   streamFn: StreamFn,
   transform: MessageTransform,

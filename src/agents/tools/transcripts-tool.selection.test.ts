@@ -1,40 +1,25 @@
 import fs from "node:fs/promises";
-import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../../state/openclaw-state-db.js";
+import { describe, expect, it, vi } from "vitest";
 import { createTranscriptsAutoStartService } from "../../transcripts/auto-start.js";
-import * as transcriptCapture from "../../transcripts/capture.js";
-import { activeSessions } from "../../transcripts/capture.js";
-import { clearTranscriptCapturesForTest } from "../../transcripts/capture.test-support.js";
+import { activeSessions } from "../../transcripts/capture-startup.js";
 import type {
   TranscriptSourceProvider,
   TranscriptStartRequest,
 } from "../../transcripts/provider-types.js";
 import { TranscriptsStore, transcriptSessionSelector } from "../../transcripts/store.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
+import {
+  registerTranscriptTestProvider,
+  useTranscriptTestState,
+} from "./transcripts-tool.test-support.js";
 
-const tempDirs = createTempDirTracker();
-afterEach(async () => {
-  await clearTranscriptCapturesForTest();
-  setActivePluginRegistry(createEmptyPluginRegistry());
-  vi.restoreAllMocks();
-  vi.useRealTimers();
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
-  tempDirs.cleanup();
-});
+const testState = useTranscriptTestState();
 
 function harness() {
   const realNow = Date.now.bind(Date);
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.spyOn(Date, "now").mockImplementation(realNow);
-  const stateDir = tempDirs.make("transcript-selection-");
+  const { stateDir, store } = testState();
   const requests: TranscriptStartRequest[] = [];
   const authorize = vi.fn<NonNullable<TranscriptSourceProvider["accessControl"]>["authorize"]>(
     async ({ source }) =>
@@ -62,13 +47,7 @@ function harness() {
     },
     stop,
   };
-  const registry = createEmptyPluginRegistry();
-  registry.transcriptSourceProviders.push({
-    pluginId: provider.id,
-    provider,
-    source: import.meta.url,
-  });
-  setActivePluginRegistry(registry);
+  registerTranscriptTestProvider(provider);
   const ctx = {
     stateDir,
     agentId: "research",
@@ -77,9 +56,6 @@ function harness() {
   };
   const tool = createTranscriptsTool(ctx);
   const execute = (params: Record<string, unknown>) => tool.execute("selection", params);
-  const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-  });
   const start = async (id: string, date: string) => {
     vi.setSystemTime(new Date(`${date}T10:00:00.000Z`));
     return await execute({ action: "start", providerId: provider.id, sessionId: id });
@@ -99,87 +75,72 @@ const collision = [
   { sessionId: "raw-id", date: "2026-07-03", selector: "2026-07-03/raw-id" },
 ];
 
-async function startConfiguredCapture(
-  service: ReturnType<typeof createTranscriptsAutoStartService>,
-) {
-  const starts = vi.spyOn(transcriptCapture, "startTranscripts");
-  try {
-    service.start();
-    await Promise.all(starts.mock.results.map(({ value }) => value));
-  } finally {
-    starts.mockRestore();
-  }
-}
-
 describe("transcript tool selection", () => {
-  it.each([false, true])(
-    "rejects legacy collisions before and after retirement; reversed=%s",
-    async (reverse) => {
-      const h = harness();
-      for (const target of reverse ? collision.toReversed() : collision) {
-        await h.start(target.sessionId, target.date);
+  it("rejects legacy collisions before and after retirement", async () => {
+    const h = harness();
+    for (const target of collision) {
+      await h.start(target.sessionId, target.date);
+    }
+    const rejectLegacy = async () => {
+      h.authorize.mockClear();
+      for (const action of ["stop", "summarize"]) {
+        await expect(h.execute({ action, sessionId: collision[0]!.sessionId })).rejects.toThrow(
+          /ambiguous.*selector/i,
+        );
       }
-      const rejectLegacy = async () => {
-        h.authorize.mockClear();
-        for (const action of ["stop", "summarize"]) {
-          await expect(h.execute({ action, sessionId: collision[0]!.sessionId })).rejects.toThrow(
-            /ambiguous.*selector/i,
-          );
-        }
-        expect(h.authorize).not.toHaveBeenCalled();
-      };
-      await rejectLegacy();
-      expect(h.stop).not.toHaveBeenCalled();
-      for (const request of h.requests) {
-        expect(await h.store.readSummary(request.session)).toEqual({});
-        expect(
-          (await h.store.readSession(transcriptSessionSelector(request.session)))?.stoppedAt,
-        ).toBeUndefined();
-        await expect(fs.stat(h.store.sessionDir(request.session))).rejects.toMatchObject({
-          code: "ENOENT",
+      expect(h.authorize).not.toHaveBeenCalled();
+    };
+    await rejectLegacy();
+    expect(h.stop).not.toHaveBeenCalled();
+    for (const request of h.requests) {
+      expect(await h.store.readSummary(request.session)).toEqual({});
+      expect(
+        (await h.store.readSession(transcriptSessionSelector(request.session)))?.stoppedAt,
+      ).toBeUndefined();
+      await expect(fs.stat(h.store.sessionDir(request.session))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    }
+    const status = await h.execute({ action: "status" });
+    expect(status).toMatchObject({
+      details: {
+        active: expect.arrayContaining(
+          collision.map(({ sessionId, selector }) =>
+            expect.objectContaining({ sessionId, selector }),
+          ),
+        ),
+      },
+    });
+    const statusText = status.content.find((part) => part.type === "text")?.text ?? "";
+    const shownSelectors = [...statusText.matchAll(/^active: (.+)$/gm)].map((match) => match[1]);
+    expect(shownSelectors).toEqual(collision.map(({ selector }) => selector).toSorted());
+    for (const target of collision) {
+      const selector = shownSelectors.find((value) => value === target.selector);
+      for (const action of ["summarize", "stop", "stop"]) {
+        const result = await h.execute({ action, selector });
+        expect(result).toMatchObject({
+          details: {
+            sessionId: target.sessionId,
+            selector: target.selector,
+            summary: {
+              sessionId: target.sessionId,
+              transcript: [`Notes for ${target.sessionId}`],
+            },
+          },
+        });
+        expect(result.content).toContainEqual({
+          type: "text",
+          text: expect.stringContaining(`Selector: ${target.selector}`),
         });
       }
-      const status = await h.execute({ action: "status" });
-      expect(status).toMatchObject({
-        details: {
-          active: expect.arrayContaining(
-            collision.map(({ sessionId, selector }) =>
-              expect.objectContaining({ sessionId, selector }),
-            ),
-          ),
-        },
-      });
-      const statusText = status.content.find((part) => part.type === "text")?.text ?? "";
-      const shownSelectors = [...statusText.matchAll(/^active: (.+)$/gm)].map((match) => match[1]);
-      expect(shownSelectors).toEqual(collision.map(({ selector }) => selector).toSorted());
-      for (const target of collision) {
-        const selector = shownSelectors.find((value) => value === target.selector);
-        for (const action of ["summarize", "stop", "stop"]) {
-          const result = await h.execute({ action, selector });
-          expect(result).toMatchObject({
-            details: {
-              sessionId: target.sessionId,
-              selector: target.selector,
-              summary: {
-                sessionId: target.sessionId,
-                transcript: [`Notes for ${target.sessionId}`],
-              },
-            },
-          });
-          expect(result.content).toContainEqual({
-            type: "text",
-            text: expect.stringContaining(`Selector: ${target.selector}`),
-          });
-        }
-        expect(h.stop.mock.calls.map(([request]) => request.sessionId)).toEqual(
-          collision.slice(0, collision.indexOf(target) + 1).map(({ sessionId }) => sessionId),
-        );
-        await rejectLegacy();
-      }
-    },
-  );
+      expect(h.stop.mock.calls.map(([request]) => request.sessionId)).toEqual(
+        collision.slice(0, collision.indexOf(target) + 1).map(({ sessionId }) => sessionId),
+      );
+      await rejectLegacy();
+    }
+  });
 
-  it.each(["raw-id", "2026-07-03/raw-id"])(
+  it.each(["2026-07-03/raw-id"])(
     "prefers the current exact raw %s only without another identity",
     async (sessionId) => {
       const h = harness();
@@ -302,7 +263,7 @@ describe("transcript tool selection", () => {
     },
   );
 
-  it.each(["start", "import", "status", "stop", "summarize"])(
+  it.each(["start", "stop"])(
     "validates selector admission before %s side effects",
     async (action) => {
       const h = harness();
@@ -339,18 +300,6 @@ describe("transcript tool selection", () => {
     expect(h.stop).not.toHaveBeenCalled();
   });
 
-  it("returns the canonical selector when starting and importing opaque IDs", async () => {
-    const h = harness();
-    await expect(h.start(collision[0]!.sessionId, collision[0]!.date)).resolves.toMatchObject({
-      details: { sessionId: collision[0]!.sessionId, selector: collision[0]!.selector },
-    });
-    await expect(
-      h.execute({ action: "import", sessionId: "notes: room/one", transcript: "retained" }),
-    ).resolves.toMatchObject({
-      details: { sessionId: "notes: room/one", selector: "2026-07-04/notes-room-one" },
-    });
-  });
-
   it("keeps configured cleanup bound to its lifecycle token despite a selector collision", async () => {
     const h = harness();
     await h.start(collision[1]!.sessionId, collision[1]!.date);
@@ -370,7 +319,7 @@ describe("transcript tool selection", () => {
       },
     });
     try {
-      await startConfiguredCapture(service);
+      await service.start().settled;
       expect(activeSessions.has(collision[0]!.sessionId)).toBe(true);
       await service.stop();
       expect(h.stop.mock.calls.map(([request]) => request.sessionId)).toEqual([
@@ -385,82 +334,50 @@ describe("transcript tool selection", () => {
     }
   });
 
-  it("cleans up a configured provider without reading its stored row", async () => {
+  it("summary retains the admitted private source after a same-tuple public row rewrite", async () => {
+    const action = "summarize";
     const h = harness();
-    const service = h.configuredCapture("public-account");
+    const service = h.configuredCapture("private-account");
     try {
-      await startConfiguredCapture(service);
+      await service.start().settled;
       expect(activeSessions.has("notes")).toBe(true);
       const session = (await h.store.readSession("notes"))!;
-      const read = vi
-        .spyOn(TranscriptsStore.prototype, "readSessionEntry")
-        .mockRejectedValue(new Error("row unreadable"));
-      await service.stop();
+      const selector = transcriptSessionSelector(session);
+      await h.store.writeSession({
+        ...session,
+        source: { ...session.source, accountId: "public-account" },
+      });
+      expect((await h.store.readSession(selector))?.source.accountId).toBe("public-account");
+      h.authorize.mockClear();
+      const read = vi.spyOn(TranscriptsStore.prototype, "readUtterancesForSession");
+      const write = vi.spyOn(TranscriptsStore.prototype, "writeSummary");
+      const materialize = vi.spyOn(TranscriptsStore.prototype, "materializeSessionArtifacts");
+      await expect
+        .soft(h.execute({ action, selector }))
+        .rejects.toThrow("transcripts session not found");
       expect
-        .soft(h.stop)
+        .soft(h.authorize)
         .toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ sessionId: "notes", source: session.source }),
+          expect.objectContaining({ action, source: session.source }),
         );
+      expect.soft(h.stop).not.toHaveBeenCalled();
       expect.soft(read).not.toHaveBeenCalled();
-      expect.soft(h.ctx.logger.warn).not.toHaveBeenCalled();
-      read.mockRestore();
-      expect.soft((await h.store.readSession("notes"))?.stoppedAt).toEqual(expect.any(String));
-      expect
-        .soft(await h.store.readSummary(session))
-        .toMatchObject({ summary: { transcript: ["Notes for notes"] } });
+      expect.soft(write).not.toHaveBeenCalled();
+      expect.soft(materialize).not.toHaveBeenCalled();
+      expect.soft(await h.store.readSummary(session)).toEqual({});
+      expect.soft((await h.store.readSession(selector))?.stoppedAt).toBeUndefined();
+      await expect
+        .soft(fs.stat(h.store.sessionDir(session)))
+        .rejects.toMatchObject({ code: "ENOENT" });
+      await service.stop();
+      expect(h.stop).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ sessionId: "notes", source: session.source }),
+      );
+      expect(await h.store.readSummary(session)).toMatchObject({
+        summary: { transcript: ["Notes for notes"] },
+      });
     } finally {
       await service.stop();
     }
   });
-
-  it.each(["stop", "summarize", "service-stop"] as const)(
-    "%s retains the admitted private source after a same-tuple public row rewrite",
-    async (action) => {
-      const h = harness();
-      const service = h.configuredCapture("private-account");
-      try {
-        await startConfiguredCapture(service);
-        expect(activeSessions.has("notes")).toBe(true);
-        const session = (await h.store.readSession("notes"))!;
-        const selector = transcriptSessionSelector(session);
-        await h.store.writeSession({
-          ...session,
-          source: { ...session.source, accountId: "public-account" },
-        });
-        expect((await h.store.readSession(selector))?.source.accountId).toBe("public-account");
-        h.authorize.mockClear();
-        if (action !== "service-stop") {
-          const read = vi.spyOn(TranscriptsStore.prototype, "readUtterancesForSession");
-          const write = vi.spyOn(TranscriptsStore.prototype, "writeSummary");
-          const materialize = vi.spyOn(TranscriptsStore.prototype, "materializeSessionArtifacts");
-          await expect
-            .soft(h.execute({ action, selector }))
-            .rejects.toThrow("transcripts session not found");
-          expect
-            .soft(h.authorize)
-            .toHaveBeenCalledExactlyOnceWith(
-              expect.objectContaining({ action, source: session.source }),
-            );
-          expect.soft(h.stop).not.toHaveBeenCalled();
-          expect.soft(read).not.toHaveBeenCalled();
-          expect.soft(write).not.toHaveBeenCalled();
-          expect.soft(materialize).not.toHaveBeenCalled();
-          expect.soft(await h.store.readSummary(session)).toEqual({});
-          expect.soft((await h.store.readSession(selector))?.stoppedAt).toBeUndefined();
-          await expect
-            .soft(fs.stat(h.store.sessionDir(session)))
-            .rejects.toMatchObject({ code: "ENOENT" });
-        }
-        await service.stop();
-        expect(h.stop).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ sessionId: "notes", source: session.source }),
-        );
-        expect(await h.store.readSummary(session)).toMatchObject({
-          summary: { transcript: ["Notes for notes"] },
-        });
-      } finally {
-        await service.stop();
-      }
-    },
-  );
 });

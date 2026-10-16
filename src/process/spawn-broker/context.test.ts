@@ -14,7 +14,7 @@ import { spawnBrokerContextEntrypoints } from "./context-runtime.test-support.js
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+const skipBrokerTests = process.platform === "win32";
 
 describe.skipIf(skipBrokerTests)("Gateway spawn transport initialization", () => {
   it.each(["exit", "timeout"] as const)(
@@ -58,8 +58,9 @@ describe.skipIf(skipBrokerTests)("Gateway spawn transport initialization", () =>
       }
     `;
       const source = `
-      import {readFileSync} from 'node:fs';
+      import {readFileSync,watch} from 'node:fs';
       import {registerHooks} from 'node:module';
+      import {mock} from 'node:test';
       const state = {parents:[],brokers:[],errors:[]};
       globalThis[Symbol.for(${JSON.stringify(stateKey)})] = state;
       Object.defineProperty(process,'platform',{value:'linux'});
@@ -72,12 +73,51 @@ describe.skipIf(skipBrokerTests)("Gateway spawn transport initialization", () =>
         return nextResolve(specifier,context);
       }});
       process.env.NODE_OPTIONS = ${JSON.stringify(`--import=${pathToFileURL(preload).href}`)};
+      const realMonotonic = process.hrtime.bigint.bind(process.hrtime);
+      let startupClockOffset = 0n;
+      // The broker captures its clock at import; advance it with the startup timer below.
+      const monotonic = ${failure === "timeout"}
+        ? mock.method(process.hrtime, 'bigint', () => realMonotonic() + startupClockOffset)
+        : undefined;
       const {startGatewayServer} = await import(${JSON.stringify(serverUrl.href)});
-      for (let count=0;count<2;count++) {
-        const server = await startGatewayServer();
-        await server.close();
+      // Load cleanup's native promise timers before faking the startup clock.
+      await import(${JSON.stringify(contextUrl)});
+      let attemptWatcher;
+      try {
+        const attempted = ${failure === "timeout"} ? new Promise((resolve,reject) => {
+          const observe = () => {
+            try {
+              if (readFileSync(${JSON.stringify(marker)},'utf8').trim()) resolve();
+            } catch (error) {
+              if (error.code !== 'ENOENT') reject(error);
+            }
+          };
+          attemptWatcher = watch(${JSON.stringify(directory)}, (_event, filename) => {
+            if (filename === 'attempts') observe();
+          });
+          attemptWatcher.on('error', reject);
+          observe();
+        }) : undefined;
+        if (attempted) mock.timers.enable({apis:['Date','setTimeout'],now:Date.now()});
+        for (let count=0;count<2;count++) {
+          const starting = startGatewayServer();
+          if (attempted && count === 0) {
+            await Promise.race([attempted, starting.then(() => {
+              throw new Error('Gateway started before the broker readiness deadline');
+            })]);
+            attemptWatcher.close();
+            startupClockOffset += 15_000_000_000n;
+            mock.timers.tick(15_000);
+          }
+          const server = await starting;
+          await server.close();
+        }
+        console.log(JSON.stringify({...state,hostPid:process.pid,attempts:readFileSync(${JSON.stringify(marker)},'utf8').trim().split('\\n').length}));
+      } finally {
+        attemptWatcher?.close();
+        mock.timers.reset();
+        monotonic?.mock.restore();
       }
-      console.log(JSON.stringify({...state,hostPid:process.pid,attempts:readFileSync(${JSON.stringify(marker)},'utf8').trim().split('\\n').length}));
     `;
       const node = resolveTestNodeExecPath();
       const result = spawnSync(

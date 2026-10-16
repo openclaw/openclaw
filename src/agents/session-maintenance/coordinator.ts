@@ -206,9 +206,7 @@ export async function beginForegroundSessionMaintenance(sessionKey?: string): Pr
     recordPhase(key, owner, "foreground_preemption_requested");
     owner.controller.abort(createAbortError("Session maintenance yielded to a foreground turn"));
   }
-  await Promise.all(
-    existing.filter((owner) => owner.running || owner.preemptible).map((owner) => owner.done),
-  );
+  await Promise.all(existing.map((owner) => owner.done));
   return release;
 }
 

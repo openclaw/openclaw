@@ -251,8 +251,46 @@ it("captures quiesced code without admitting calls and refuses capture after dis
   expect((restored.loadModule(entry) as FixtureModule).late()).toBe("original late import");
 });
 
+it("shares bundled TypeScript code without captures and warns when edited code needs a restart", () => {
+  const root = temp.make("bundled-source-identity-");
+  const captures = temp.make("bundled-source-captures-");
+  const entry = path.join(root, "index.ts");
+  const writeEntry = (value: number) =>
+    fs.writeFileSync(
+      entry,
+      `import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/plugin-entry";
+       export const value: number = ${value};
+       export const schema = emptyPluginConfigSchema().jsonSchema;`,
+    );
+  const load = () => {
+    const instance = new PluginInstance("bundled-source");
+    instances.push(instance);
+    const value = withPluginSourceCaptureDirectory(captures, () => {
+      bindPluginInstanceModuleLoader({
+        instance,
+        origin: "bundled",
+        source: entry,
+        rootDir: root,
+      });
+      return instance.loadModule(entry);
+    });
+    expect(instance.sourceDigest).toBeUndefined();
+    expect(fs.readdirSync(captures)).toEqual([]);
+    expect(value).toMatchObject({ value: 1, schema: { type: "object" } });
+    return instance;
+  };
+
+  writeEntry(1);
+  expect(getSharedPluginCodeReloadWarning(load())).toBeUndefined();
+  resetPluginCache();
+  writeEntry(2);
+  expect(getSharedPluginCodeReloadWarning(load())).toBe(
+    "Bundled plugin code remains loaded. Restart the Gateway to load edited code.",
+  );
+});
+
 it.each(["cjs", "mjs"])(
-  "reuses compiled bundled %s code while giving recovery fresh callback authority",
+  "reuses bundled %s code while giving recovery fresh callback authority",
   async (extension) => {
     const root = temp.make("bundled-recovery-identity-");
     const entry = path.join(root, `index.${extension}`);
@@ -261,10 +299,10 @@ it.each(["cjs", "mjs"])(
       `let registrations = 0;
        ${extension === "mjs" ? "export const register =" : "exports.register ="} () => {
          const registration = ++registrations;
-         return { read: () => registration };
+         return () => registration;
        };`,
     );
-    type BundledModule = { register(): { read(): number } };
+    type BundledModule = { register(): () => number };
     const previous = new PluginInstance("bundled-recovery");
     instances.push(previous);
     bindPluginInstanceModuleLoader({
@@ -274,7 +312,7 @@ it.each(["cjs", "mjs"])(
       rootDir: root,
     });
     const oldCallback = (previous.loadModule(entry) as BundledModule).register();
-    expect(oldCallback.read()).toBe(1);
+    expect(oldCallback()).toBe(1);
     expect(getSharedPluginCodeReloadWarning(previous)).toBeUndefined();
     const recovery = previous.captureModuleLoaderRecovery();
     await previous.dispose();
@@ -285,10 +323,10 @@ it.each(["cjs", "mjs"])(
     recovery.bind(restored);
     recovery.dispose();
     const restoredCallback = (restored.loadModule(entry) as BundledModule).register();
-    expect(restoredCallback.read()).toBe(2);
+    expect(restoredCallback()).toBe(2);
     expect(getSharedPluginCodeReloadWarning(restored)).toBeUndefined();
-    expect(() => oldCallback.read()).toThrow(/reloaded or disabled/);
-    expect(restoredCallback.read()).toBe(2);
+    expect(oldCallback).toThrow(/reloaded or disabled/);
+    expect(restoredCallback()).toBe(2);
 
     const secondRecovery = restored.captureModuleLoaderRecovery();
     await restored.dispose();
@@ -296,7 +334,7 @@ it.each(["cjs", "mjs"])(
     instances.push(final);
     secondRecovery.bind(final);
     secondRecovery.dispose();
-    expect((final.loadModule(entry) as BundledModule).register().read()).toBe(3);
-    expect(() => restoredCallback.read()).toThrow(/reloaded or disabled/);
+    expect((final.loadModule(entry) as BundledModule).register()()).toBe(3);
+    expect(restoredCallback).toThrow(/reloaded or disabled/);
   },
 );

@@ -49,7 +49,8 @@ const session = vi.hoisted(() => ({
 
 vi.mock("./pw-session.js", () => session);
 
-const pw = await import("./pw-tools-core.interactions.js");
+const pw = await import("./pw-tools-core.interactions.actions.js");
+const { waitForViaPlaywright } = await import("./pw-tools-core.interactions.content.js");
 
 const target = { cdpUrl: "http://127.0.0.1:18792", targetId: "tab-1" };
 const strict = { ...target, ssrfPolicy: { allowPrivateNetwork: false } };
@@ -82,6 +83,10 @@ function startHover(ctrl?: AbortController) {
 }
 
 function install(page: Record<string, unknown>, locator: Record<string, unknown> = {}): void {
+  const mainFrame = {};
+  page.mainFrame ??= vi.fn(() => mainFrame);
+  page.on ??= vi.fn();
+  page.off ??= vi.fn();
   pageState.page = page;
   pageState.locator = locator;
 }
@@ -172,7 +177,7 @@ describe("pw-tools-core browser SSRF guards", () => {
         }),
         waitForFunction,
       });
-      await pw.waitForViaPlaywright({ ...proxied, timeMs: 1, fn });
+      await waitForViaPlaywright({ ...proxied, timeMs: 1, fn });
       expect(waitForFunction).toHaveBeenCalledOnce();
       expect(waitForFunction).toHaveBeenCalledWith(
         expect.any(Function),
@@ -210,7 +215,7 @@ describe("pw-tools-core browser SSRF guards", () => {
     );
 
     await expect(
-      pw.waitForViaPlaywright({
+      waitForViaPlaywright({
         ...strict,
         fn: "() => document.cookie",
       }),
@@ -226,16 +231,16 @@ describe("pw-tools-core browser SSRF guards", () => {
     });
     session.isBrowserObservedDialogBlockedError.mockReturnValueOnce(true);
     const waitForFunction = vi.fn(async () => {});
-    pageState.page = {
+    install({
       url: vi.fn(() => "https://example.com"),
       waitForTimeout: vi.fn(async () => {
         ctrl.abort(dialogError);
       }),
       waitForFunction,
-    };
+    });
 
     await expect(
-      pw.waitForViaPlaywright({
+      waitForViaPlaywright({
         ...strict,
         timeMs: 1,
         fn: "() => true",
@@ -260,7 +265,7 @@ describe("pw-tools-core browser SSRF guards", () => {
     });
 
     await expect(
-      pw.waitForViaPlaywright({
+      waitForViaPlaywright({
         ...strict,
         fn: "() => true",
         signal: ctrl.signal,
@@ -542,13 +547,13 @@ describe("pw-tools-core browser SSRF guards", () => {
   it("disconnects a pending page evaluation on caller cancellation", async () => {
     const ctrl = new AbortController();
     const entered = Promise.withResolvers<void>();
-    pageState.page = {
+    install({
       url: () => "https://example.com/current",
       evaluate: () => {
         entered.resolve();
         return new Promise(() => {});
       },
-    };
+    });
     const task = pw.evaluateViaPlaywright({
       ...strict,
       fn: "() => 1",
@@ -567,13 +572,13 @@ describe("pw-tools-core browser SSRF guards", () => {
     const ctrl = new AbortController();
     const entered = Promise.withResolvers<void>();
     const evaluation = Promise.withResolvers<boolean>();
-    pageState.page = {
+    install({
       url: () => "https://example.com/current",
       evaluate: () => {
         entered.resolve();
         return evaluation.promise;
       },
-    };
+    });
     const task = pw.evaluateViaPlaywright({
       ...target,
       fn: "() => alert('x')",

@@ -1,7 +1,3 @@
-/**
- * Browser screenshot normalization helpers that bound screenshots for media
- * transport and model input.
- */
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   buildImageResizeSideGrid,
@@ -14,7 +10,6 @@ import {
 export const DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE = 2000;
 export const DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES = 5 * 1024 * 1024;
 
-/** Downscales/re-encodes screenshots to fit Browser plugin byte and dimension caps. */
 export async function normalizeBrowserScreenshot(
   buffer: Buffer,
   opts?: {
@@ -59,9 +54,7 @@ export async function normalizeBrowserScreenshot(
         throw err;
       }
 
-      if (smallestSize === undefined || out.byteLength < smallestSize) {
-        smallestSize = out.byteLength;
-      }
+      smallestSize = Math.min(smallestSize ?? Infinity, out.byteLength);
 
       if (out.byteLength <= maxBytes) {
         return { buffer: out, contentType: "image/jpeg", sourceDimensions: meta };

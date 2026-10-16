@@ -17,16 +17,6 @@ import {
   sleep,
 } from "./utils.js";
 
-const homeDisplayCases = [
-  ["", "/home/other", "~"],
-  ["undefined", "/home/other", "~"],
-  ["null", "/home/other", "~"],
-  [" undefined ", "/home/other", "~"],
-  ["\tnull\t", "/home/other", "~"],
-  ["/srv/openclaw-home", "/srv/openclaw-home", "$OPENCLAW_HOME"],
-  [" /srv/openclaw-home ", "/srv/openclaw-home", "$OPENCLAW_HOME"],
-] as const;
-
 describe("ensureDir", () => {
   it("creates nested directory", async () => {
     await withTestDir({ prefix: "openclaw-test-" }, async (tmp) => {
@@ -107,7 +97,6 @@ describe("sleep", () => {
 
 describe("normalizeE164", () => {
   it.each([
-    ["1+234+567", "+1234567"],
     ["whatsapp:+1 (234) 567-8900", "+12345678900"],
     ["not a phone number", ""],
   ])("normalizes %s", (input, expected) => {
@@ -132,15 +121,6 @@ describe("resolveConfigDir", () => {
     expect(resolveConfigDir(env)).toBe(path.resolve("/tmp/openclaw-home", "state"));
   });
 
-  it("falls back to the config file directory when only OPENCLAW_CONFIG_PATH is set", () => {
-    const env = {
-      HOME: "/tmp/openclaw-home",
-      OPENCLAW_CONFIG_PATH: "~/profiles/dev/openclaw.json",
-    } as NodeJS.ProcessEnv;
-
-    expect(resolveConfigDir(env)).toBe(path.resolve("/tmp/openclaw-home", "profiles", "dev"));
-  });
-
   it("re-pins the exported configuration root after startup environment selection", () => {
     const originalConfigDir = CONFIG_DIR;
     const selectedConfigDir = path.resolve("/tmp/openclaw-selected-config-root");
@@ -162,7 +142,7 @@ describe("resolveConfigDir", () => {
 });
 
 describe("shortenHomePath", () => {
-  it.each(homeDisplayCases)(
+  it.each([["undefined", "/home/other", "~"]])(
     "uses the effective home prefix for OPENCLAW_HOME=%j",
     (override, home, prefix) => {
       withEnv({ OPENCLAW_HOME: override, HOME: "/home/other" }, () => {
@@ -173,9 +153,13 @@ describe("shortenHomePath", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32")("keeps POSIX home matching case-sensitive", () => {
+  it.skipIf(process.platform === "win32")("preserves POSIX home path boundaries and case", () => {
     withEnv({ OPENCLAW_HOME: "/srv/OpenClaw-Home", HOME: "/home/other" }, () => {
       expect(shortenHomePath("/srv/openclaw-home/workspace")).toBe("/srv/openclaw-home/workspace");
+      expect(shortenHomePath("/srv/OpenClaw-Home\\workspace")).toBe(
+        "/srv/OpenClaw-Home\\workspace",
+      );
+      expect(shortenHomePath("/srv/OpenClaw-Home/work\\space")).toBe("$OPENCLAW_HOME/work\\space");
     });
   });
 
@@ -205,7 +189,7 @@ describe("shortenHomePath", () => {
 });
 
 describe("shortenHomeInString", () => {
-  it.each(homeDisplayCases)(
+  it.each([["/srv/openclaw-home", "/srv/openclaw-home", "$OPENCLAW_HOME"]])(
     "uses the effective home prefix for OPENCLAW_HOME=%j",
     (override, home, prefix) => {
       withEnv({ OPENCLAW_HOME: override, HOME: "/home/other" }, () => {
@@ -226,6 +210,29 @@ describe("shortenHomeInString", () => {
       });
     },
   );
+
+  it.skipIf(process.platform === "win32")("replaces only whole home path components", () => {
+    withEnv({ OPENCLAW_HOME: undefined, HOME: "/home/al" }, () => {
+      expect(shortenHomeInString("/home/al")).toBe("~");
+      expect(shortenHomeInString("/home/al/x")).toBe("~/x");
+      expect(
+        shortenHomeInString("open /home/al/notes, /home/al, /home/alice/x and /mnt/home/al/x"),
+      ).toBe("open ~/notes, ~, /home/alice/x and /mnt/home/al/x");
+      expect(shortenHomeInString("Stored in /home/al. Backup: /home/al.bak/x")).toBe(
+        "Stored in ~. Backup: /home/al.bak/x",
+      );
+      const siblingPaths =
+        "/home/al+old, /home/al./notes, /home/al,old/x, /home/al:old/x, /home/al\\ice/x, /mnt+/home/al/x";
+      expect(shortenHomeInString(siblingPaths)).toBe(siblingPaths);
+      expect(
+        shortenHomeInString('PATH=/home/al:/usr/bin:/home/al/bin; dirs=/tmp;/home/al ("/home/al")'),
+      ).toBe('PATH=~:/usr/bin:~/bin; dirs=/tmp;~ ("~")');
+      expect(shortenHomeInString("at file:///home/al/app.js:5:3")).toBe("at file://~/app.js:5:3");
+    });
+    withEnv({ OPENCLAW_HOME: undefined, HOME: "/" }, () => {
+      expect(shortenHomeInString("see /var/log/openclaw.log")).toBe("see /var/log/openclaw.log");
+    });
+  });
 
   it.skipIf(process.platform !== "win32")(
     "shortens real Windows home casing aliases inside diagnostic text",

@@ -3,7 +3,7 @@
 
 import { DEFAULT_GATEWAY_PORT } from "../config/paths.js";
 import type { GatewayServiceLoadState } from "../daemon/service-types.js";
-import { loadNodeHostConfigReadOnly } from "../node-host/config.js";
+import { loadNodeHostConfig } from "../node-host/config.js";
 
 type NodeOnlyServiceLike = {
   installed: boolean | null;
@@ -52,7 +52,7 @@ export async function resolveNodeOnlyGatewayInfo(params: {
     return null;
   }
 
-  const gatewayTarget = resolveNodeGatewayTarget((await loadNodeHostConfigReadOnly())?.gateway);
+  const gatewayTarget = resolveNodeGatewayTarget((await loadNodeHostConfig())?.gateway);
   return {
     gatewayTarget,
     gatewayValue: `node → ${gatewayTarget} · no local gateway`,

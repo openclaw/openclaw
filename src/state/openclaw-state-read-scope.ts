@@ -84,12 +84,11 @@ export async function runRetainedReadScope<T>(
   scope: RetainedReadScope,
   operation: () => Promise<T>,
 ): Promise<T> {
-  let outcome: { value: T } | { error: unknown };
+  let result!: T;
   const errors: unknown[] = [];
   try {
-    outcome = { value: await operation() };
+    result = await operation();
   } catch (error) {
-    outcome = { error };
     errors.push(error);
   }
   try {
@@ -98,10 +97,7 @@ export async function runRetainedReadScope<T>(
     errors.push(error);
   }
   throwSqliteLifecycleErrors(errors, "Shared-state read scope and cleanup failed");
-  if ("error" in outcome) {
-    throw outcome.error;
-  }
-  return outcome.value;
+  return result;
 }
 
 /** Leave synchronous admission before native cleanup can reenter a reader. */

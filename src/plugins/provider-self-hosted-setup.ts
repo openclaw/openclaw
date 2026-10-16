@@ -8,7 +8,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
-import { upsertAuthProfileWithLock } from "../agents/auth-profiles/upsert-with-lock.js";
+import { upsertAuthProfileWithLockOrThrow } from "../agents/auth-profiles/upsert-with-lock.js";
 import { CUSTOM_LOCAL_AUTH_MARKER, isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { parseConfiguredModelVisibilityEntries } from "../agents/model-selection-shared.js";
 import {
@@ -189,17 +189,6 @@ export async function discoverOpenAICompatibleSelfHostedProvider<
   };
 }
 
-function buildMissingNonInteractiveModelIdMessage(params: {
-  authChoice: string;
-  providerLabel: string;
-  modelPlaceholder: string;
-}): string {
-  return [
-    `Missing --custom-model-id for --auth-choice ${params.authChoice}.`,
-    `Pass the ${params.providerLabel} model id to use, for example ${params.modelPlaceholder}.`,
-  ].join("\n");
-}
-
 function isProviderOwnedSyntheticAuthMarker(
   providerId: string,
   resolved: ProviderNonInteractiveApiKeyResult,
@@ -236,11 +225,8 @@ export async function configureOpenAICompatibleSelfHostedProviderNonInteractive(
   const modelId = normalizeOptionalSecretInput(params.ctx.opts.customModelId);
   if (!modelId) {
     params.ctx.runtime.error(
-      buildMissingNonInteractiveModelIdMessage({
-        authChoice: params.ctx.authChoice,
-        providerLabel: params.providerLabel,
-        modelPlaceholder: params.modelPlaceholder,
-      }),
+      `Missing --custom-model-id for --auth-choice ${params.ctx.authChoice}.\n` +
+        `Pass the ${params.providerLabel} model id to use, for example ${params.modelPlaceholder}.`,
     );
     params.ctx.runtime.exit(1);
     return null;
@@ -276,7 +262,7 @@ export async function configureOpenAICompatibleSelfHostedProviderNonInteractive(
     if (!credential) {
       return null;
     }
-    await upsertAuthProfileWithLock({
+    await upsertAuthProfileWithLockOrThrow({
       profileId: configured.profileId,
       credential,
       agentDir: params.ctx.agentDir,

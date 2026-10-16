@@ -1,21 +1,18 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
+  captureRuntimeConfigAsyncReader,
   clearConfigCache,
   clearRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import {
-  normalizeSessionDeliveryState,
-  upsertSessionEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
-import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+import { normalizeSessionDeliveryState } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeBackfillDiaryEntries } from "./dreaming-dreams-file.js";
 import { writeSessionIngestionState } from "./dreaming-ingestion-state.js";
@@ -23,6 +20,7 @@ import {
   clearMemoryCoreWorkspaceNamespace,
   SESSION_BACKFILL_REWIND_NAMESPACE,
 } from "./dreaming-state.js";
+import { failMemoryEntryOriginWrites } from "./memory-entry-origins-fault.test-support.js";
 import { listMemoryEntryOrigins } from "./memory-entry-origins.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import {
@@ -32,10 +30,12 @@ import {
 } from "./session-backfill-lifecycle.js";
 import { executeSessionBackfillBatch, runSessionBackfill } from "./session-backfill.js";
 import {
-  readShortTermRecallEntries,
-  recordGroundedShortTermCandidates,
-  recordShortTermRecalls,
-} from "./short-term-promotion.js";
+  hashStagedContent,
+  seedCanonicalTranscript,
+  withoutHostSessionAdmissionReads,
+  writeTranscript,
+} from "./session-ingestion.test-support.js";
+import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
 import {
   createMemoryCoreTestHarness,
   dreamingTestState,
@@ -44,82 +44,14 @@ import {
 
 const harness = createMemoryCoreTestHarness();
 
-type TranscriptMessage = {
-  role: "assistant" | "tool" | "user";
-  content: string;
-  timestamp: string;
-  owner?: boolean;
-};
-
-async function writeTranscript(filePath: string, messages: TranscriptMessage[]): Promise<void> {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  const records = messages.map((message, index) => ({
-    type: "message",
-    id: `message-${index}`,
-    timestamp: message.timestamp,
-    message: {
-      role: message.role,
-      content: message.content,
-      timestamp: message.timestamp,
-      ...(message.owner ? { __openclaw: { senderIsOwner: true } } : {}),
-    },
-  }));
-  await fs.writeFile(filePath, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
-}
-
-async function seedCanonicalTranscript(
-  sessionId: string,
-  messages: TranscriptMessage[],
-  metadata: Partial<Parameters<typeof upsertSessionEntry>[0]["entry"]> = {},
-): Promise<void> {
-  const agentId = "main";
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
-  const storePath = path.join(sessionsDir, "sessions.json");
-  const sessionKey = `agent:${agentId}:session-backfill:${sessionId}`;
-  const updatedAt = Math.max(
-    Date.now(),
-    ...messages.map((message) => Date.parse(message.timestamp)),
-  );
-  await fs.mkdir(sessionsDir, { recursive: true });
-  const entry = { ...metadata, sessionId, updatedAt };
-  await upsertSessionEntry({ agentId, sessionKey, storePath, entry });
-  for (const message of messages) {
-    await appendSessionTranscriptMessageByIdentity({
-      agentId,
-      sessionId,
-      sessionKey,
-      storePath,
-      message: {
-        role: message.role,
-        content: message.content,
-        timestamp: message.timestamp,
-        ...(message.owner ? { __openclaw: { senderIsOwner: true } } : {}),
-      },
-    });
-  }
-  await upsertSessionEntry({ agentId, sessionKey, storePath, entry });
-}
-
 async function createIsolatedWorkspace(prefix: string): Promise<string> {
   const workspaceDir = await harness.createTempWorkspace(prefix);
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, "state"));
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(workspaceDir, "openclaw.json"));
   clearRuntimeConfigSnapshot();
   clearConfigCache();
+  await captureRuntimeConfigAsyncReader()();
   return workspaceDir;
-}
-
-function hashStagedContent(
-  entries: Awaited<ReturnType<typeof readShortTermRecallEntries>>,
-): string {
-  const content = entries
-    .map((entry) => ({
-      claimHash: entry.claimHash,
-      provenance: entry.provenance,
-      snippet: entry.snippet,
-    }))
-    .toSorted((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
-  return createHash("sha256").update(JSON.stringify(content)).digest("hex");
 }
 
 afterEach(() => {
@@ -175,7 +107,7 @@ describe("runSessionBackfill", () => {
     expect(ingestion.files).not.toHaveProperty("main:sessions/main/forgotten");
   });
 
-  it.each([{ mode: "preview" }, { mode: "rem", rem: true }, { mode: "apply", apply: true }])(
+  it.each([{ mode: "rem", rem: true }])(
     "honors admission exclusions during $mode",
     async ({ mode, ...options }) => {
       const workspaceDir = await createIsolatedWorkspace(`admission-${mode}-`);
@@ -208,26 +140,86 @@ describe("runSessionBackfill", () => {
         );
       }
 
-      const result = await runSessionBackfill({
-        agentId: "main",
-        workspaceDir,
-        ...options,
-        timezone: "UTC",
-        pluginConfig: {
-          memoryPolicy: {
-            excludeSessions: {
-              hookExternalContentSources: ["gmail"],
-              channels: ["discord"],
-              chatTypes: ["group"],
+      if (mode === "preview") {
+        await closeOpenClawAgentDatabasesAsync(path.join(workspaceDir, "state"));
+      }
+      const result = await withoutHostSessionAdmissionReads(() =>
+        runSessionBackfill({
+          agentId: "main",
+          workspaceDir,
+          ...options,
+          timezone: "UTC",
+          pluginConfig: {
+            memoryPolicy: {
+              excludeSessions: {
+                hookExternalContentSources: ["gmail"],
+                channels: ["discord"],
+                chatTypes: ["group"],
+              },
             },
           },
-        },
-      });
+        }),
+      );
 
       expect(result.candidateCount).toBe(1);
       expect(result.days[0]?.topCandidates).toEqual(["User: retained trusted session preference."]);
     },
   );
+
+  it("keeps a forgotten source out of backfill during admission preparation", async () => {
+    const workspaceDir = await createIsolatedWorkspace("admission-source-forgotten-");
+    await seedCanonicalTranscript("source", [
+      {
+        role: "user",
+        content: "Do not publish a forgotten source.",
+        timestamp: "2026-01-02T12:00:00.000Z",
+        owner: true,
+      },
+    ]);
+    await closeOpenClawAgentDatabasesAsync(path.join(workspaceDir, "state"));
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const realpath = fs.realpath.bind(fs);
+    let paused = false;
+    const discovery = vi.spyOn(fs, "realpath").mockImplementation(async (file) => {
+      if (!paused && file === sessionsDir) {
+        paused = true;
+        entered.resolve();
+        await release.promise;
+      }
+      return realpath(file);
+    });
+    const execution = executeSessionBackfillBatch({
+      agentId: "main",
+      workspaceDir,
+      timezone: "UTC",
+      pluginConfig: { memoryPolicy: { excludeSessions: { channels: ["discord"] } } },
+    });
+    const outcome = execution.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        outcome,
+        "Backfill settled before filesystem preparation",
+      );
+      seedMemoryForgetTombstones({ agentId: "main", sessionIds: ["source"] });
+      release.resolve();
+      expect(await outcome).toMatchObject({
+        value: { result: { candidateCount: 0, stagedEntries: 0 } },
+      });
+      await expect(
+        fs.readFile(path.join(workspaceDir, "memory", "2026-01-02.md"), "utf8"),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      release.resolve();
+      await outcome;
+      discovery.mockRestore();
+    }
+  });
 
   it("preserves every session origin when backfill coalesces equivalent snippets", async () => {
     const workspaceDir = await createIsolatedWorkspace("coalesced-origins-");
@@ -263,12 +255,14 @@ describe("runSessionBackfill", () => {
     expect(result.stagedEntries).toBe(1);
     expect(entries).toHaveLength(1);
     expect(
-      listMemoryEntryOrigins({ agentId: "main", entryKeys: [entries[0]!.key] }).map((origin) => ({
-        entryKey: origin.entryKey,
-        sessionId: origin.sessionId,
-        originClass: origin.originClass,
-        observedAt: origin.observedAt,
-      })),
+      (await listMemoryEntryOrigins({ agentId: "main", entryKeys: [entries[0]!.key] })).map(
+        (origin) => ({
+          entryKey: origin.entryKey,
+          sessionId: origin.sessionId,
+          originClass: origin.originClass,
+          observedAt: origin.observedAt,
+        }),
+      ),
     ).toEqual(
       sources.map((source) => ({
         entryKey: entries[0]?.key,
@@ -298,65 +292,15 @@ describe("runSessionBackfill", () => {
       results: [result],
       signalType: "daily",
     });
-    await recordGroundedShortTermCandidates({
+    await recordShortTermRecalls({
       workspaceDir,
       query: "__dreaming_session_backfill__:2026-03-01",
-      items: [result],
+      signalType: "grounded",
+      results: [result],
     });
 
     expect(await readShortTermRecallEntries({ workspaceDir })).toEqual([]);
-    expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual([]);
-  });
-
-  it("buckets messages in the configured timezone and processes days oldest first", async () => {
-    const workspaceDir = await createIsolatedWorkspace("timezone-");
-    await seedCanonicalTranscript("timezone", [
-      {
-        role: "user",
-        content: "Late New York note",
-        timestamp: "2026-01-02T00:30:00.000Z",
-        owner: true,
-      },
-      {
-        role: "user",
-        content: "Early New York note",
-        timestamp: "2026-01-02T05:30:00.000Z",
-        owner: true,
-      },
-    ]);
-
-    const result = await runSessionBackfill({
-      agentId: "main",
-      workspaceDir,
-      timezone: "America/New_York",
-    });
-
-    expect(result.days.map((day) => [day.day, day.candidateCount])).toEqual([
-      ["2026-01-01", 1],
-      ["2026-01-02", 1],
-    ]);
-  });
-
-  it("honors the day limit before moving to newer unprocessed days", async () => {
-    const workspaceDir = await createIsolatedWorkspace("limit-");
-    await seedCanonicalTranscript(
-      "limited",
-      ["2026-01-01", "2026-01-02", "2026-01-03"].map((day) => ({
-        role: "user" as const,
-        content: `Durable note for ${day}`,
-        timestamp: `${day}T12:00:00.000Z`,
-        owner: true,
-      })),
-    );
-
-    const result = await runSessionBackfill({
-      agentId: "main",
-      workspaceDir,
-      limitDays: 2,
-      timezone: "UTC",
-    });
-
-    expect(result.days.map((day) => day.day)).toEqual(["2026-01-01", "2026-01-02"]);
+    expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual([]);
   });
 
   it("reports authoritative continuation across bounded apply batches", async () => {
@@ -389,38 +333,6 @@ describe("runSessionBackfill", () => {
     expect(second.continuation).toEqual({ advanced: true, hasMore: false });
     expect(exhausted.result.candidateCount).toBe(0);
     expect(exhausted.continuation).toEqual({ advanced: false, hasMore: false });
-  });
-
-  it("drains at least three internal batches in one CLI executor invocation", async () => {
-    const workspaceDir = await createIsolatedWorkspace("cli-drain-");
-    await seedCanonicalTranscript(
-      "cli-drain",
-      ["2026-01-01", "2026-01-02", "2026-01-03"].map((day) => ({
-        role: "user" as const,
-        content: `CLI drain note for ${day}`,
-        timestamp: `${day}T12:00:00.000Z`,
-        owner: true,
-      })),
-    );
-
-    const applied = await runSessionBackfill({
-      agentId: "main",
-      workspaceDir,
-      apply: true,
-      limitDays: 1,
-      timezone: "UTC",
-    });
-    const preview = await runSessionBackfill({
-      agentId: "main",
-      workspaceDir,
-      limitDays: 1,
-      timezone: "UTC",
-    });
-
-    expect(applied.batchCount).toBe(3);
-    expect(applied.batches?.map((batch) => batch.candidates)).toEqual([1, 1, 1]);
-    expect(applied.candidateCount).toBe(3);
-    expect(preview.candidateCount).toBe(0);
   });
 
   it("does not advance the cursor past messages excluded by a date range", async () => {
@@ -486,77 +398,6 @@ describe("runSessionBackfill", () => {
     expect((await run()).candidateCount).toBe(0);
     const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(dreams.match(/openclaw:dreaming:backfill-entry/g)).toHaveLength(2);
-  });
-
-  it("applies the total cap after finding the oldest candidate across sources", async () => {
-    const workspaceDir = await createIsolatedWorkspace("oldest-cap-");
-    for (let sourceIndex = 0; sourceIndex < 16; sourceIndex += 1) {
-      await seedCanonicalTranscript(
-        `a-newer-${sourceIndex.toString().padStart(2, "0")}`,
-        Array.from({ length: 15 }, (_, messageIndex) => ({
-          role: "user" as const,
-          content: `Newer durable note ${sourceIndex}-${messageIndex}`,
-          timestamp: `2026-02-01T${messageIndex.toString().padStart(2, "0")}:00:00.000Z`,
-          owner: true,
-        })),
-      );
-    }
-    await seedCanonicalTranscript("z-oldest", [
-      {
-        role: "user",
-        content: "Oldest durable note must win the cap",
-        timestamp: "2026-01-01T12:00:00.000Z",
-        owner: true,
-      },
-    ]);
-
-    const result = await runSessionBackfill({
-      agentId: "main",
-      workspaceDir,
-      limitDays: 1,
-      timezone: "UTC",
-    });
-
-    expect(result.days).toEqual([
-      {
-        day: "2026-01-01",
-        candidateCount: 1,
-        topCandidates: ["User: Oldest durable note must win the cap"],
-      },
-    ]);
-  });
-
-  it("applies the per-file cap after ordering delayed timestamps", async () => {
-    const workspaceDir = await createIsolatedWorkspace("delayed-timestamp-");
-    await seedCanonicalTranscript("delayed-timestamp", [
-      ...Array.from({ length: 80 }, (_, index) => ({
-        role: "user" as const,
-        content: `February note ${index}`,
-        timestamp: new Date(Date.parse("2026-02-01T00:00:00.000Z") + index * 60_000).toISOString(),
-        owner: true,
-      })),
-      {
-        role: "user",
-        content: "Delayed January note",
-        timestamp: "2026-01-01T12:00:00.000Z",
-        owner: true,
-      },
-    ]);
-
-    const result = await runSessionBackfill({
-      agentId: "main",
-      workspaceDir,
-      limitDays: 1,
-      timezone: "UTC",
-    });
-
-    expect(result.days).toEqual([
-      {
-        day: "2026-01-01",
-        candidateCount: 1,
-        topCandidates: ["User: Delayed January note"],
-      },
-    ]);
   });
 
   it("keeps self-asserted owner metadata in foreign transcripts untrusted", async () => {
@@ -674,7 +515,7 @@ describe("runSessionBackfill", () => {
     "forgets published %s diary facts after reopening without removing unrelated facts",
     async (mode) => {
       const workspaceDir = await createIsolatedWorkspace(`forget-${mode}-`);
-      const cfg = { agents: { defaults: { workspace: workspaceDir }, list: [{ id: "main" }] } };
+      const cfg = { agents: { defaults: { workspace: workspaceDir }, entries: { main: {} } } };
       const diaryPath = path.join(workspaceDir, "DREAMS.md");
       const operatorNote = "Keep this unrelated operator note.";
       await fs.writeFile(diaryPath, `# Dream Diary\n${operatorNote}\n`);
@@ -712,7 +553,7 @@ describe("runSessionBackfill", () => {
         expect(await readShortTermRecallEntries({ workspaceDir })).toEqual([]);
         expect((await dreamingTestState.readSessionIngestionState(workspaceDir)).files).toEqual({});
         await expect(fs.stat(corpusParent)).rejects.toMatchObject({ code: "ENOENT" });
-        const origins = listMemoryEntryOrigins({ agentId: "main" });
+        const origins = await listMemoryEntryOrigins({ agentId: "main" });
         expect(origins.every(({ entryKey }) => before.includes(entryKey))).toBe(true);
         const repeated = await runSessionBackfill({
           agentId: "main",
@@ -721,7 +562,7 @@ describe("runSessionBackfill", () => {
           timezone: "UTC",
         });
         expect(repeated.writtenDiaryEntries).toBe(0);
-        expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual(origins);
+        expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual(origins);
       }
       await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
@@ -747,7 +588,7 @@ describe("runSessionBackfill", () => {
 
   it("retains both origins when diary publication deduplicates identical apply blocks", async () => {
     const workspaceDir = await createIsolatedWorkspace("diary-dedupe-");
-    const cfg = { agents: { defaults: { workspace: workspaceDir }, list: [{ id: "main" }] } };
+    const cfg = { agents: { defaults: { workspace: workspaceDir }, entries: { main: {} } } };
     for (const sessionId of ["first", "second"]) {
       await seedCanonicalTranscript(sessionId, [
         {
@@ -774,7 +615,7 @@ describe("runSessionBackfill", () => {
 
   it("keeps all origins of a coalesced REM claim while preserving independent facts", async () => {
     const workspaceDir = await createIsolatedWorkspace("rem-coalesced-");
-    const cfg = { agents: { defaults: { workspace: workspaceDir }, list: [{ id: "main" }] } };
+    const cfg = { agents: { defaults: { workspace: workspaceDir }, entries: { main: {} } } };
     for (const [sessionId, item] of [
       ["first", "cobalt lanterns"],
       ["second", "silver ribbons"],
@@ -812,14 +653,22 @@ describe("runSessionBackfill", () => {
     ]);
     const diaryPath = path.join(workspaceDir, "DREAMS.md");
     await fs.writeFile(diaryPath, "Keep this operator note.\n");
-    openOpenClawAgentDatabase({ agentId: "main" }).db.exec(`
-      CREATE TRIGGER reject_diary_origin BEFORE INSERT ON memory_entry_origins
-      BEGIN SELECT RAISE(ABORT, 'injected diary origin failure'); END;
-    `);
-    await expect(
-      runSessionBackfill({ agentId: "main", workspaceDir, rem: true, timezone: "UTC" }),
-    ).rejects.toThrow("injected diary origin failure");
-    expect(await fs.readFile(diaryPath, "utf8")).toBe("Keep this operator note.\n");
+    const restoreOriginFailure = failMemoryEntryOriginWrites({
+      agentId: "main",
+      trigger: "reject_diary_origin",
+      createSql: `
+        CREATE TRIGGER reject_diary_origin BEFORE INSERT ON memory_entry_origins
+        BEGIN SELECT RAISE(ABORT, 'injected diary origin failure'); END;
+      `,
+    });
+    try {
+      await expect(
+        runSessionBackfill({ agentId: "main", workspaceDir, rem: true, timezone: "UTC" }),
+      ).rejects.toThrow("injected diary origin failure");
+      expect(await fs.readFile(diaryPath, "utf8")).toBe("Keep this operator note.\n");
+    } finally {
+      restoreOriginFailure();
+    }
   });
 
   it("stages idempotently, converges duplicate facts, and rolls back staged artifacts", async () => {

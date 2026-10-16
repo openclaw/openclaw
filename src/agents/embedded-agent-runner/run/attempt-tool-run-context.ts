@@ -50,9 +50,12 @@ export function buildEmbeddedAttemptToolRunContext(
   params: AttemptToolRunFacts & {
     model?: Pick<EmbeddedRunAttemptParams["model"], "provider" | "id">;
     thinkLevel?: ThinkLevel;
+    thinkingExplicit?: boolean;
     trigger?: EmbeddedRunTrigger;
+    continuesConversation?: boolean;
     jobId?: string;
     memoryFlushWritePath?: string;
+    memoryFlushTools?: RunEmbeddedAgentParams["memoryFlushTools"];
     toolsAllow?: string[];
     forceMessageTool?: boolean;
     swarmCollector?: boolean;
@@ -102,13 +105,16 @@ export function buildEmbeddedAttemptToolRunContext(
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     requesterThinkingLevel: params.thinkLevel,
+    requesterThinkingExplicit: params.thinkingExplicit,
     // modelId may still be a configured alias; children need the prepared identity.
     requesterModel: params.model
       ? { provider: params.model.provider, model: params.model.id }
       : undefined,
     trigger: params.trigger,
+    continuesConversation: params.continuesConversation,
     jobId: params.jobId,
     memoryFlushWritePath: params.memoryFlushWritePath,
+    memoryFlushTools: params.memoryFlushTools,
     swarmCollector: params.swarmCollector,
     swarmOutputSchema: params.swarmOutputSchema,
     currentInboundAudio,

@@ -1,10 +1,16 @@
 import fs from "node:fs";
 import { sha256Hex } from "./crypto-digest.js";
+import { hashFileDescriptorSync } from "./file-descriptor.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import {
   readStableSqliteFileGeneration,
-  serializeSqliteFileGeneration,
+  sameSqliteFileGeneration,
 } from "./sqlite-file-generation.js";
+import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
+import { prepareSqliteReadOnlyLocationSyncInProcess } from "./sqlite-readonly-location.js";
+import { truncateSqliteWal } from "./sqlite-wal-checkpoint.js";
+import { readDatabaseIdentityBirthtime } from "./sqlite-worker-identity.js";
 
 export type UpdateDatabaseGenerations = Record<string, string | null>;
 export type UpdateDatabaseWriteReceipt = {
@@ -12,6 +18,26 @@ export type UpdateDatabaseWriteReceipt = {
   fromGenerations?: UpdateDatabaseGenerations;
   generations: UpdateDatabaseGenerations;
 };
+
+function readCommittedContent(pathname: string): string {
+  // Checkpoint only a private copy: opening the source would compete with the
+  // restore owner's native exclusion. SQLite owns WAL/journal interpretation.
+  const prepared = prepareSqliteReadOnlyLocationSyncInProcess(pathname);
+  return runWithSqliteCleanup({ release: prepared.cleanup }, "Database generation snapshot", () => {
+    const database = openNodeSqliteDatabase(prepared.location);
+    runWithSqliteCleanup(
+      { release: () => database.close() },
+      "Database generation checkpoint",
+      () => truncateSqliteWal(database, prepared.location),
+    );
+    const descriptor = fs.openSync(prepared.location, "r");
+    return runWithSqliteCleanup(
+      { release: () => fs.closeSync(descriptor) },
+      "Database generation digest",
+      () => hashFileDescriptorSync(descriptor).sha256,
+    );
+  });
+}
 
 function readWalIndexHeader(pathname: string): Buffer | null {
   const file = `${pathname}-shm`;
@@ -36,10 +62,7 @@ function readWalIndexHeader(pathname: string): Buffer | null {
     if (
       !before.isFile() ||
       !current.isFile() ||
-      before.dev !== after.dev ||
-      before.ino !== after.ino ||
-      before.dev !== current.dev ||
-      before.ino !== current.ino ||
+      [after, current].some((stat) => before.dev !== stat.dev || before.ino !== stat.ino) ||
       first !== 48 ||
       second !== 48 ||
       !header.subarray(0, 48).equals(header.subarray(48, 96))
@@ -52,12 +75,13 @@ function readWalIndexHeader(pathname: string): Buffer | null {
   }
 }
 
-/** Run only in an isolated process or after all source handles drain: raw close
+/** Run only in an isolated process, after all source handles drain, or under a
+ * schema-maintenance owner before live reads are admitted: raw close
  * can release this process's SQLite locks. Inspect only the supplied inventory. */
 export function readUpdateDatabaseGenerations(paths: readonly string[]): UpdateDatabaseGenerations {
   return Object.fromEntries(
     paths.map((pathname) => {
-      const entry = fs.lstatSync(pathname, { throwIfNoEntry: false });
+      const entry = fs.lstatSync(pathname, { bigint: true, throwIfNoEntry: false });
       if (!entry) {
         if (
           ["-wal", "-journal"].some((suffix) =>
@@ -73,26 +97,57 @@ export function readUpdateDatabaseGenerations(paths: readonly string[]): UpdateD
       }
       const before = readWalIndexHeader(pathname);
       const generation = readStableSqliteFileGeneration(pathname);
+      const content = readCommittedContent(pathname);
+      const current = readStableSqliteFileGeneration(pathname);
       const after = readWalIndexHeader(pathname);
       if (
+        !sameSqliteFileGeneration(generation, current) ||
         (before === null ? after !== null : !after?.equals(before)) ||
         (generation.wal && generation.wal.size > 0n && after?.[12] !== 1)
       ) {
         throw new Error(`SQLite WAL commit publication could not be verified: ${pathname}`);
       }
-      // Native exclusion may create an empty WAL without a write. It contains
-      // no commit; retain every other physical fingerprint and publication header.
-      const writeGeneration =
-        generation.wal?.size === 0n ? { ...generation, wal: undefined } : generation;
+      // Checkpoints preserve iChange and the last committed frame checksum,
+      // including TRUNCATE, which resets frame count and salts. Rebuilding the
+      // WAL index does not: the first native open of a family with no holder
+      // recovers -shm and resets iChange. Callers that must compare generations
+      // across a capture acquire sources without opening them natively.
+      // A reversed write leaving identical bytes and write evidence is
+      // indistinguishable from no write; restoring loses no later data.
       return [
         pathname,
         sha256Hex(
           JSON.stringify([
-            serializeSqliteFileGeneration(writeGeneration),
-            after?.toString("hex") ?? null,
+            generation.database.dev.toString(),
+            generation.database.ino.toString(),
+            readDatabaseIdentityBirthtime(entry),
+            content,
+            after?.subarray(8, 12).toString("hex") ?? null,
+            after?.subarray(24, 32).toString("hex") ?? null,
           ]),
         ),
       ];
     }),
   );
+}
+
+export async function readUpdatePhysicalDatabaseGenerations(paths: readonly string[]) {
+  const result = readUpdateDatabaseGenerations(paths);
+  const { readBackupEngine, fingerprintPostgresBackup } =
+    await import("../snapshot/database-backup.js");
+  const postgres = paths.filter(
+    (pathname) => result[pathname] !== null && readBackupEngine(pathname).engine === "postgres",
+  );
+  if (postgres.length) {
+    const { createConfigIO } = await import("../config/io.js");
+    const { config } = await createConfigIO({
+      observe: false,
+      pluginValidation: "core-only",
+      shellEnvFallback: "defer",
+    }).readConfigFileSnapshot();
+    for (const pathname of postgres) {
+      result[pathname] = await fingerprintPostgresBackup(pathname, config);
+    }
+  }
+  return result;
 }

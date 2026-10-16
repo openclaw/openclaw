@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { SessionCatalogHost } from "../../../packages/gateway-protocol/src/index.js";
 import {
   areDiagnosticsEnabledForProcess,
@@ -15,6 +15,7 @@ import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import type { SessionCatalogListTiming } from "./session-catalog-list-admission.js";
 
 const catalogLog = createSubsystemLogger("gateway/session-catalog");
+const mappedProviders = new WeakSet<SessionCatalogProvider>();
 
 type CatalogWaitPhase = "projection_initial" | "provider" | "coalesced" | "projection_final";
 type CatalogSyncPhase = "planning" | "delivery";
@@ -94,6 +95,17 @@ export function startSessionCatalogListDiagnostics(
   }
   const id = provider.id;
   const providerId = typeof id === "string" && id.length <= 256 ? id : undefined;
+  if (providerId && !mappedProviders.has(provider) && catalogLog.isEnabled("debug")) {
+    try {
+      catalogLog.debug("session catalog provider identity", {
+        providerId,
+        providerIdHash: sha256Hex(providerId),
+      });
+      mappedProviders.add(provider);
+    } catch {
+      // A diagnostic sink cannot prevent provider enumeration.
+    }
+  }
   const trace = getActiveDiagnosticTraceContext();
   const startedAt = performance.now();
   const timing: SessionCatalogListTiming = {};
@@ -118,9 +130,7 @@ export function startSessionCatalogListDiagnostics(
             pid: process.pid,
             threadId,
             isMainThread,
-            ...(providerId === undefined
-              ? {}
-              : { providerIdHash: createHash("sha256").update(providerId).digest("hex") }),
+            ...(providerId === undefined ? {} : { providerIdHash: sha256Hex(providerId) }),
             elapsedMs: Math.round(elapsedMs),
             admitted: timing.admittedAt !== undefined,
             providerInvoked: providerStartedAt !== undefined,

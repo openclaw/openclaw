@@ -22,6 +22,7 @@ export type GatewayStatusSnapshot = Pick<
 export function resolveGatewayStatus(
   snapshot: GatewayStatusSnapshot,
   refreshRequired = false,
+  historyRecovering = false,
 ): GatewayStatus | null {
   if (refreshRequired || snapshot.phase === "reload-required") {
     return "reload-required";
@@ -39,7 +40,7 @@ export function resolveGatewayStatus(
     return snapshot.phase;
   }
   if (snapshot.phase === "connected") {
-    return snapshot.client?.recoveryScopeReady === false ? "restoring" : null;
+    return snapshot.client?.recoveryScopeReady === false || historyRecovering ? "restoring" : null;
   }
   if (snapshot.offlineStable) {
     return snapshot.phase === "reconnecting" ? "reconnecting" : "offline";

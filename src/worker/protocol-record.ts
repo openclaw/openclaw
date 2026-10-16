@@ -1,6 +1,21 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 
+export function decodeWorkerRequest(
+  raw: string | null | undefined,
+  maxBytes: number,
+  label: string,
+): unknown {
+  if (!raw || Buffer.byteLength(raw, "utf8") > maxBytes) {
+    throw new Error(`INVALID_REQUEST: invalid ${label} request`);
+  }
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error(`INVALID_REQUEST: malformed ${label} request`);
+  }
+}
+
 export const workerProtocolIdentifier = (label: string, maxChars = 256) =>
   z.custom<string>(
     (value) =>
@@ -22,11 +37,10 @@ export function hasExactOwnKeys(
   required: readonly string[],
   optional: readonly string[] = [],
 ): boolean {
-  const allowed = new Set([...required, ...optional]);
   return (
     required.every((key) => Object.hasOwn(value, key)) &&
     optional.every((key) => Object.hasOwn(value, key) || !Reflect.has(value, key)) &&
-    Object.keys(value).every((key) => allowed.has(key))
+    Object.keys(value).every((key) => required.includes(key) || optional.includes(key))
   );
 }
 

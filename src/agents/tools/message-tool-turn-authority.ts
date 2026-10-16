@@ -1,12 +1,17 @@
 import { isFencedProviderReadAction } from "../../channels/plugins/message-action-dispatch.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  resolveCurrentPromptReaction,
   resolveMessageActionTurnAuthorization,
   resolveMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 
-/** Keep discovery and execution bound to the same private turn identity. */
+/** Resolve execution authority from the private turn identity. */
 export function createMessageToolTurnAuthority(params: {
   token?: string;
   agentId?: string;
@@ -34,36 +39,48 @@ export function createMessageToolTurnAuthority(params: {
     channels.push(requester.channel);
   }
   return {
-    captureCaller: (signal: AbortSignal | undefined, capture: () => (() => void) | undefined) => {
+    captureCaller: (
+      signal: AbortSignal | undefined,
+      capture: () => SessionSourceAssertion | undefined,
+    ) => {
       if (signal?.aborted) {
         throw createAbortError("Message send aborted");
       }
       const assertCurrent = capture();
       assertCurrent?.();
-      return () => {
-        assertCurrent?.();
+      return composeSessionSourceAssertion([assertCurrent], (assertSource) => {
+        assertSource();
         if (signal?.aborted) {
           throw createAbortError("Message action aborted");
         }
-      };
+      });
     },
     beginInvocation: (action: string) => {
       const authorization = resolve();
       const isRead = isFencedProviderReadAction(action);
       const dashboardRead = authorization?.assertDashboardReadCurrent;
+      const currentPromptReaction = lookup && resolveCurrentPromptReaction(lookup);
       const admitScheduled = authorization?.scheduled && params.admitScheduledInvocation;
       if (authorization?.scheduled && !admitScheduled) {
         throw new Error("Scheduled message invocation requires current tool policy admission.");
       }
       return {
         authorization,
+        currentPromptReaction,
         config: admitScheduled ? admitScheduled() : params.getConfig(),
-        hasChannelTurnContext: Boolean(authorization && !authorization.scheduled && !dashboardRead),
+        hasChannelTurnContext: Boolean(
+          authorization &&
+          !authorization.scheduled &&
+          !authorization.deliveryAttempt &&
+          !dashboardRead &&
+          !currentPromptReaction,
+        ),
         gatewayTurnCapability: dashboardRead && !isRead ? undefined : token,
         scheduledRead: isRead ? authorization?.scheduled : undefined,
         assertDashboardReadCurrent: isRead ? dashboardRead : undefined,
       };
     },
+    isScheduledRun: Boolean(scheduled),
     scheduledAccountScope:
       policy?.mode === "account" && (origin?.kind === "local" || channels.length > 0)
         ? {

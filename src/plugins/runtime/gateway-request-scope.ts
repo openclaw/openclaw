@@ -3,6 +3,8 @@ import type {
   GatewayContextResolver,
   GatewayRequestContext,
 } from "../../gateway/server-methods/types.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { withAgentDatabasePreparationContext } from "../../state/agent-database-preparation-context.js";
 import {
   getPluginExecutionFrame,
   pluginInstanceInvocation,
@@ -10,6 +12,7 @@ import {
 } from "../plugin-instance-invocation.js";
 import type { PluginInstanceInvocation } from "../plugin-instance-invocation.types.js";
 import type { PluginOrigin } from "../plugin-origin.types.js";
+import { mapPluginReturnPromise, resolvePluginReturnPromise } from "../plugin-return-value.js";
 import type { DeclaredProviderOwnerIndex } from "../provider-owner-index.js";
 import type { PluginRegistry } from "../registry-types.js";
 import { getPluginRegistryState } from "../runtime-state.js";
@@ -45,15 +48,99 @@ function runWithPluginGatewayScope<T>(
     runtime?.gatewayScope === gatewayScope && runtime.invocation === invocation
       ? runtime
       : new PluginRuntimeExecutionFrame(
-          { ...current, invocation },
+          // Reuse prepared frame facts; the mutable Gateway view remains call-local.
+          current ?? {},
           gatewayScope,
           runtime?.generationRegistry,
+          invocation,
         ),
     run,
   );
 }
 
 const isNotWebchatConnect = () => false;
+
+// Settled reactions may outlive the call; capture only its emptied custody holder.
+function settleRegistryScope(completion: Promise<unknown>, held: PluginRegistry[]) {
+  return mapPluginReturnPromise(
+    completion,
+    (value) => {
+      held.length = 0;
+      return value;
+    },
+    (error) => {
+      held.length = 0;
+      throw error;
+    },
+  ).value;
+}
+
+export const ExpiredPluginRegistryScopeError = resolveGlobalSingleton(
+  Symbol.for("openclaw.expiredPluginRegistryScopeError"),
+  () =>
+    class extends Error {
+      constructor() {
+        super("Plugin registry scope is no longer available");
+      }
+    },
+);
+
+// Native resources inherit these views; the registry's lifecycle owner keeps the graph alive.
+function bindBorrowedRegistry(
+  scope: PluginRuntimeGatewayRequestScope,
+  registry: PluginRegistry | undefined,
+  initiallyExpired = false,
+): void {
+  let expired = initiallyExpired;
+  let reference = registry && new WeakRef(registry);
+  Object.defineProperty(scope, "pluginRegistry", {
+    enumerable: true,
+    configurable: true,
+    get() {
+      const current = reference?.deref();
+      if (expired || (reference && !current)) {
+        throw new ExpiredPluginRegistryScopeError();
+      }
+      return current;
+    },
+    set(next: PluginRegistry | undefined) {
+      reference = next && new WeakRef(next);
+      expired = false;
+    },
+  });
+}
+
+function copyGatewayScope(
+  current: PluginRuntimeGatewayRequestScope | undefined,
+  inheritRegistry = true,
+): PluginRuntimeGatewayRequestScope {
+  const scoped: PluginRuntimeGatewayRequestScope = { isWebchatConnect: isNotWebchatConnect };
+  if (!current) {
+    return scoped;
+  }
+  // Copy enumerable values like spread, but do not read a registry that the caller replaces.
+  for (const key of Reflect.ownKeys(current)) {
+    if (key !== "pluginRegistry" && Object.getOwnPropertyDescriptor(current, key)?.enumerable) {
+      Object.defineProperty(scoped, key, {
+        value: Reflect.get(current, key),
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+    }
+  }
+  if (inheritRegistry && Object.getOwnPropertyDescriptor(current, "pluginRegistry")?.enumerable) {
+    try {
+      bindBorrowedRegistry(scoped, current.pluginRegistry);
+    } catch (error) {
+      if (!(error instanceof ExpiredPluginRegistryScopeError)) {
+        throw error;
+      }
+      bindBorrowedRegistry(scoped, undefined, true);
+    }
+  }
+  return scoped;
+}
 
 /** Carry only closure-bound node authorities into a nested request scope. */
 export function getPluginRuntimeGatewayNodeAuthorities() {
@@ -84,13 +171,14 @@ export function withPluginRuntimeGatewayContextResolver<T>(
   // that happened to exist when its timer was armed.
   const current =
     options?.inheritRequestScope === false ? undefined : getPluginRuntimeGatewayRequestScope();
-  const scoped: PluginRuntimeGatewayRequestScope = {
-    ...current,
-    isWebchatConnect: current?.isWebchatConnect ?? isNotWebchatConnect,
-    resolveGatewayContext,
-  };
+  const scoped = copyGatewayScope(current);
+  scoped.isWebchatConnect = current?.isWebchatConnect ?? isNotWebchatConnect;
+  scoped.resolveGatewayContext = resolveGatewayContext;
   delete scoped.context;
-  return runWithPluginGatewayScope(scoped, run);
+  return withAgentDatabasePreparationContext(
+    () => resolveGatewayContext?.()?.agentDatabaseStartup,
+    () => runWithPluginGatewayScope(scoped, run),
+  );
 }
 
 /** Runs work against an owned registry handle while preserving any gateway request facts. */
@@ -105,7 +193,12 @@ export function withPluginRuntimeRegistryScope<T>(
   const current = getPluginRuntimeGatewayRequestScope();
   return runWithPluginGatewayScope(
     createRegistryScope(registry, current, declaredProviderOwners),
-    run,
+    () => {
+      const value = run();
+      const completion = resolvePluginReturnPromise(value);
+      // SAFETY: Awaiting the callback preserves its value and rejection reason.
+      return completion ? (settleRegistryScope(completion, [registry]) as T) : value;
+    },
   );
 }
 
@@ -114,16 +207,25 @@ export function createRegistryScope(
   current: PluginRuntimeGatewayRequestScope | undefined,
   declaredProviderOwners?: DeclaredProviderOwnerIndex,
 ): PluginRuntimeGatewayRequestScope {
-  return {
-    isWebchatConnect: isNotWebchatConnect,
-    ...current,
-    pluginRegistry: registry,
-    declaredProviderOwners:
-      declaredProviderOwners ??
-      // Nested calls keep this prepared registry's facts, never a different registry's index.
-      (current?.pluginRegistry === registry ? current.declaredProviderOwners : undefined) ??
-      getPluginRuntimeLoadContextState(registry)?.declaredProviderOwners,
-  };
+  const scoped = copyGatewayScope(current, false);
+  let inheritedOwners: DeclaredProviderOwnerIndex | undefined;
+  if (declaredProviderOwners === undefined && current) {
+    try {
+      if (current.pluginRegistry === registry) {
+        inheritedOwners = current.declaredProviderOwners;
+      }
+    } catch (error) {
+      if (!(error instanceof ExpiredPluginRegistryScopeError)) {
+        throw error;
+      }
+    }
+  }
+  bindBorrowedRegistry(scoped, registry);
+  scoped.declaredProviderOwners =
+    declaredProviderOwners ??
+    inheritedOwners ??
+    getPluginRuntimeLoadContextState(registry)?.declaredProviderOwners;
+  return scoped;
 }
 
 function applyPluginScope(
@@ -161,9 +263,7 @@ export function withPluginRuntimePluginScope<T>(
   // Instance calls combine registry and identity without adding a second async frame.
   const scoped: PluginRuntimeGatewayRequestScope = registry
     ? createRegistryScope(registry, current)
-    : current
-      ? { ...current }
-      : { isWebchatConnect: isNotWebchatConnect };
+    : copyGatewayScope(current);
   applyPluginScope(scoped, scope);
   return runWithPluginGatewayScope(scoped, run, invocation);
 }
@@ -175,10 +275,10 @@ export function runOutsidePluginRuntimeRegistryScope<T>(run: () => T): T {
     return run();
   }
   // Registry selection and its declared provider index belong to the same generation.
-  return runWithPluginGatewayScope(
-    { ...current, pluginRegistry: undefined, declaredProviderOwners: undefined },
-    run,
-  );
+  const scoped = copyGatewayScope(current, false);
+  scoped.pluginRegistry = undefined;
+  scoped.declaredProviderOwners = undefined;
+  return runWithPluginGatewayScope(scoped, run);
 }
 
 export function getPluginRuntimeGatewayRequestScope():

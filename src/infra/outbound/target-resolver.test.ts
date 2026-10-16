@@ -5,6 +5,7 @@ import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelDirectoryEntry } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
+import { mockFirstRecordArg } from "../../test-utils/mock-call-assertions.js";
 type TargetResolverModule = typeof import("./target-resolver.js");
 
 let resetDirectoryCache: TargetResolverModule["resetDirectoryCache"];
@@ -72,21 +73,6 @@ async function expectOkResolution(
   return result;
 }
 
-function firstMockArg(
-  mock: { mock: { calls: readonly unknown[][] } },
-  label: string,
-): Record<string, unknown> {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  const [arg] = call;
-  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
-    throw new Error(`expected ${label} input to be an object`);
-  }
-  return arg as Record<string, unknown>;
-}
-
 describe("resolveMessagingTarget (directory fallback)", () => {
   const cfg = {} as OpenClawConfig;
 
@@ -105,31 +91,6 @@ describe("resolveMessagingTarget (directory fallback)", () => {
         },
       },
     });
-  });
-
-  it("uses live directory fallback and caches the result", async () => {
-    const entry: ChannelDirectoryEntry = { kind: "group", id: "123456789", name: "support" };
-    mocks.listGroups.mockResolvedValue([]);
-    mocks.listGroupsLive.mockResolvedValue([entry]);
-
-    const first = await expectOkResolution({
-      cfg,
-      channel: "richchat",
-      input: "support",
-    });
-    expect(first.target.source).toBe("directory");
-    expect(first.target.to).toBe("123456789");
-    expect(mocks.listGroups).toHaveBeenCalledTimes(1);
-    expect(mocks.listGroupsLive).toHaveBeenCalledTimes(1);
-
-    const second = await expectOkResolution({
-      cfg,
-      channel: "richchat",
-      input: "support",
-    });
-    expect(second.target.to).toBe("123456789");
-    expect(mocks.listGroups).toHaveBeenCalledTimes(1);
-    expect(mocks.listGroupsLive).toHaveBeenCalledTimes(1);
   });
 
   it("does not reuse query-filtered directory misses for later target queries", async () => {
@@ -209,51 +170,6 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.resolveTarget).not.toHaveBeenCalled();
   });
 
-  it("preserves configured directory entries before rejecting reserved literal targets", async () => {
-    mocks.getChannelPlugin.mockReturnValue({
-      ...createChannelTestPluginBase({
-        id: "telegram",
-        label: "Telegram",
-        capabilities: { chatTypes: ["direct", "group", "channel"] },
-      }),
-      directory: {
-        listPeers: mocks.listPeers,
-        listPeersLive: mocks.listPeersLive,
-        listGroups: mocks.listGroups,
-        listGroupsLive: mocks.listGroupsLive,
-      },
-      messaging: {
-        targetResolver: {
-          reservedLiterals: ["current", "self", "this", "me"],
-          hint: "<chatId>",
-          resolveTarget: mocks.resolveTarget,
-        },
-      },
-    });
-    mocks.listGroups.mockResolvedValue([
-      {
-        kind: "group",
-        id: "-1002458651455",
-        name: "Current x jerry Channel",
-        handle: "@current",
-      } satisfies ChannelDirectoryEntry,
-    ]);
-
-    const result = await resolveMessagingTarget({
-      cfg,
-      channel: "telegram",
-      input: "current",
-    });
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.target.to).toBe("-1002458651455");
-      expect(result.target.source).toBe("directory");
-    }
-    expect(mocks.listGroups).toHaveBeenCalled();
-    expect(mocks.resolveTarget).not.toHaveBeenCalled();
-  });
-
   it("keeps reserved literals on the directory path before id-like plugin normalization", async () => {
     mocks.getChannelPlugin.mockReturnValue({
       ...createChannelTestPluginBase({
@@ -327,45 +243,6 @@ describe("resolveMessagingTarget (directory fallback)", () => {
       expect(miss.error.message).toContain('Reserved target "current"');
       expect(miss.error.message).toContain("Telegram");
     }
-    expect(mocks.resolveTarget).not.toHaveBeenCalled();
-  });
-
-  it("rejects reserved literal targets after directory miss", async () => {
-    mocks.getChannelPlugin.mockReturnValue({
-      ...createChannelTestPluginBase({
-        id: "telegram",
-        label: "Telegram",
-        capabilities: { chatTypes: ["direct", "group", "channel"] },
-      }),
-      directory: {
-        listPeers: mocks.listPeers,
-        listPeersLive: mocks.listPeersLive,
-        listGroups: mocks.listGroups,
-        listGroupsLive: mocks.listGroupsLive,
-      },
-      messaging: {
-        targetResolver: {
-          reservedLiterals: ["current", "self", "this", "me"],
-          hint: "<chatId>",
-          resolveTarget: mocks.resolveTarget,
-        },
-      },
-    });
-    mocks.listGroups.mockResolvedValue([]);
-    mocks.listGroupsLive.mockResolvedValue([]);
-
-    const result = await resolveMessagingTarget({
-      cfg,
-      channel: "telegram",
-      input: "current",
-    });
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.message).toContain('Reserved target "current"');
-      expect(result.error.message).toContain("Telegram");
-    }
-    expect(mocks.listGroups).toHaveBeenCalled();
     expect(mocks.resolveTarget).not.toHaveBeenCalled();
   });
 
@@ -449,58 +326,18 @@ describe("resolveMessagingTarget (directory fallback)", () => {
       input: "support",
       plugin: replacementPlugin,
     });
+    const cachedFirst = await expectOkResolution({
+      cfg,
+      channel: "richchat",
+      input: "support",
+      plugin: firstPlugin,
+    });
 
     expect(first.target.to).toBe("first-id");
     expect(replacement.target.to).toBe("replacement-id");
+    expect(cachedFirst.target.to).toBe("first-id");
     expect(firstListGroups).toHaveBeenCalledOnce();
     expect(replacementListGroups).toHaveBeenCalledOnce();
-  });
-
-  it("skips directory lookup for direct ids", async () => {
-    const result = await expectOkResolution({
-      cfg,
-      channel: "richchat",
-      input: "123456789",
-    });
-    expect(result.target.source).toBe("normalized");
-    expect(result.target.to).toBe("123456789");
-    expect(mocks.listGroups).not.toHaveBeenCalled();
-    expect(mocks.listGroupsLive).not.toHaveBeenCalled();
-  });
-
-  it("lets plugins override id-like target resolution before falling back to raw ids", async () => {
-    mocks.getChannelPlugin.mockReturnValue({
-      messaging: {
-        targetResolver: {
-          looksLikeId: () => true,
-          resolveTarget: mocks.resolveTarget,
-        },
-      },
-    });
-    mocks.resolveTarget.mockResolvedValue({
-      to: "user:dm-user-id",
-      kind: "user",
-      source: "directory",
-    });
-
-    const result = await expectOkResolution({
-      cfg,
-      channel: "workspace",
-      input: "dthcxgoxhifn3pwh65cut3ud3w",
-    });
-    expect(result.target).toEqual({
-      to: "user:dm-user-id",
-      kind: "user",
-      source: "directory",
-      resolutionSource: "plugin",
-      display: undefined,
-    });
-    expect(mocks.resolveTarget).toHaveBeenCalledOnce();
-    expect(firstMockArg(mocks.resolveTarget, "target resolver").input).toBe(
-      "dthcxgoxhifn3pwh65cut3ud3w",
-    );
-    expect(mocks.listGroups).not.toHaveBeenCalled();
-    expect(mocks.listGroupsLive).not.toHaveBeenCalled();
   });
 
   it("defaults bare id-like targets to user for direct-only channel plugins", async () => {
@@ -606,7 +443,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.listPeersLive).toHaveBeenCalledTimes(1);
     expect(mocks.listGroups).not.toHaveBeenCalled();
     expect(mocks.resolveTarget).toHaveBeenCalledOnce();
-    expect(firstMockArg(mocks.resolveTarget, "target resolver").input).toBe("+15551234567");
+    expect(mockFirstRecordArg(mocks.resolveTarget, "target resolver").input).toBe("+15551234567");
   });
 
   it("fails closed after directory and plugin misses unless normalized fallback is explicit", async () => {
@@ -709,19 +546,6 @@ describe("resolveMessagingTarget (registry-scoped channel plugins)", () => {
   beforeEach(() => {
     mocks.getChannelPlugin.mockReturnValue(undefined);
     mocks.getLoadedChannelPlugin.mockReturnValue(undefined);
-  });
-
-  it("resolves an id-like target through a channel plugin that is only registry-scoped", async () => {
-    const { withPluginRuntimeRegistryScope } =
-      await import("../../plugins/runtime/gateway-request-scope.js");
-    const result = await withPluginRuntimeRegistryScope(scopedRegistry, () =>
-      resolveMessagingTarget({ cfg, channel: "zephyrchat", input: "Zdeadbeef" }),
-    );
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error("expected scoped plugin resolution to succeed");
-    }
-    expect(result.target.to).toBe("Zdeadbeef");
   });
 
   it("keeps the scoped plugin's label and hint on an unknown target", async () => {

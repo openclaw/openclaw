@@ -1,6 +1,8 @@
 // Gateway service lifecycle runners, including unmanaged-process fallbacks and restart health checks.
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
 import { resolveGatewayServiceProbeHosts } from "../../daemon/gateway-service-probe-hosts.js";
+import { stopStalledGatewayStartup } from "../../daemon/schtasks-process.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import {
   assertGatewayServiceUpdateCurrent,
@@ -23,6 +25,7 @@ import {
   formatGatewayPidList,
   signalVerifiedGatewayPidSync,
 } from "../../infra/gateway-processes.js";
+import { captureStalledGatewayStartup } from "../../infra/gateway-startup-owner.js";
 import {
   assertGatewayServiceMutationAllowed,
   formatExternalSupervisorActionRequired,
@@ -34,6 +37,7 @@ import { resolveGatewayRestartDrainTimeoutMs } from "../../infra/restart-budget.
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createNullWriter } from "../../shared/null-writer.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   isTerminalInteractive,
@@ -56,7 +60,7 @@ import {
   resolveGatewayRestartIntentOptions,
 } from "./lifecycle-safe-restart.js";
 import { signalGatewayRestart } from "./lifecycle-unmanaged.js";
-import { createDaemonActionContext, createNullWriter } from "./response.js";
+import { createDaemonActionContext } from "./response.js";
 import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
   DEFAULT_RESTART_HEALTH_DELAY_MS,
@@ -72,11 +76,9 @@ import { verifyGatewayStartReadiness } from "./start-health.js";
 import { repairLoadedGatewayServiceForStart } from "./start-repair.js";
 import type { DaemonLifecycleOptions } from "./types.js";
 
-const WINDOWS_POST_RESTART_HEALTH_TIMEOUT_MS = 180_000;
-
 function postRestartHealthAttempts(): number {
   return process.platform === "win32"
-    ? Math.ceil(WINDOWS_POST_RESTART_HEALTH_TIMEOUT_MS / DEFAULT_RESTART_HEALTH_DELAY_MS)
+    ? Math.ceil(resolveGatewayStartupTiming().deadlineMs / DEFAULT_RESTART_HEALTH_DELAY_MS)
     : DEFAULT_RESTART_HEALTH_ATTEMPTS;
 }
 
@@ -97,25 +99,16 @@ async function handleSystemScopeSystemdGateway(
     return null;
   }
   const stdout = createNullWriter();
-  if (action === "stop") {
-    await stopSystemdService({
-      stdout,
-      env: process.env,
-      onMutation: createGatewayLifecycleMutationAudit({ action: "stop" }),
-    });
-    return {
-      result: "stopped",
-      message: `Gateway stopped via system-scope systemd unit ${installed.unitName}.`,
-    };
-  }
-  await restartSystemdService({
+  const runAction = action === "stop" ? stopSystemdService : restartSystemdService;
+  await runAction({
     stdout,
     env: process.env,
-    onMutation: createGatewayLifecycleMutationAudit({ action: "restart" }),
+    onMutation: createGatewayLifecycleMutationAudit({ action }),
   });
+  const result = action === "stop" ? "stopped" : "restarted";
   return {
-    result: "restarted",
-    message: `Gateway restarted via system-scope systemd unit ${installed.unitName}.`,
+    result,
+    message: `Gateway ${result} via system-scope systemd unit ${installed.unitName}.`,
   };
 }
 
@@ -132,6 +125,21 @@ async function stopGatewayWithoutServiceManager(
     serviceContext?.env ?? process.env,
     serviceContext?.command ?? null,
   );
+  const stalled = captureStalledGatewayStartup(env);
+  if (stalled) {
+    await stopStalledGatewayStartup(stalled, assertGatewayServiceUpdateCurrent);
+    appendGatewayLifecycleAudit({
+      action: "stop",
+      source: "cli",
+      mode: "sigterm",
+      pid: stalled.pid,
+      env,
+    });
+    return {
+      result: "stopped" as const,
+      message: `Stopped stalled Gateway startup pid ${stalled.pid}.`,
+    };
+  }
   const listenerPids = findVerifiedGatewayListenerPidsOnPortSync(port, { env });
   // Listener discovery needs lsof, which minimal containers omit. The gateway
   // lock already names the verified owner of this port, so signal it instead of
@@ -367,7 +375,7 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
 
 /** Restart the Gateway service or a verified unmanaged listener, then prove health. */
 export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promise<boolean> {
-  const preserveDefinition = Boolean(opts.preserveDefinition);
+  let preserveDefinition = Boolean(opts.preserveDefinition);
   if (preserveDefinition) {
     assertGatewayServiceMutationAllowed("restart the gateway");
     if (opts.safe) {
@@ -519,7 +527,18 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       }
       return null;
     },
-    postRestartCheck: async ({ warnings, fail, stdout, warn, activationAccepted: accepted }) => {
+    postRestartCheck: async ({
+      warnings,
+      fail,
+      stdout,
+      warn,
+      activationAccepted: accepted,
+      preserveDefinition: preserved,
+    }) => {
+      if (preserved) {
+        preserveDefinition = true;
+        managedRestartPort = managedRestartContext.port;
+      }
       let activationAccepted = accepted;
       const reportHealthFailure = (statusLines: string[], diagnostics: string[]) => {
         if (jsonOutput) {
@@ -572,6 +591,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           port: managedRestartPort,
           attempts: restartHealthAttempts,
           delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
+          ...(process.platform === "win32" ? { timeoutMs: restartWaitMs } : {}),
           env: managedRestartContext.env,
           ...(managedRestartContext.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1"
             ? { requirePluginHealth: false }

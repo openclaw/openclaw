@@ -40,9 +40,16 @@ describe("sessions_send steering custody", () => {
   });
   afterEach(drainSessionToolsFixture);
 
-  it.each(["end", "abort", "replaced run end"] as const)(
-    "releases custody on receiver %s when the backend never reports settlement",
-    async (ending) => {
+  it.each([
+    ["end", false],
+    ["abort", false],
+    ["replaced run end", false],
+    ["sender completed", true],
+    ["source revoked", true],
+    ["receiver cancelled", true],
+  ] as const)(
+    "settles accepted steering custody after %s (backend settlement: %s)",
+    async (outcome, reportSettlement) => {
       await withParticipantSessionToolsFixture(async ({ cfg, turn, bob }) => {
         expect(await turn.steer(bob)).toMatchObject({ status: "accepted" });
         await withDelayedSessionToolsSteering(
@@ -51,10 +58,13 @@ describe("sessions_send steering custody", () => {
             const result = await createSessionsSendTool({
               config: cfg,
               agentSessionKey: REQUESTER,
+              ...(reportSettlement ? { idempotencyKey: "participant-delayed-steer" } : {}),
             }).execute("participant-steer", {
               sessionKey: PARTICIPANT_SHARED,
               user: bob.profileId,
-              message: "Accepted guidance whose backend omits settlement",
+              message: reportSettlement
+                ? "Bob's accepted steering survives the sending turn"
+                : "Accepted guidance whose backend omits settlement",
               mode: "steer",
               timeoutSeconds: 0,
             });
@@ -64,77 +74,54 @@ describe("sessions_send steering custody", () => {
             });
             expect(receiver.pendingCount()).toBe(1);
             turn.complete();
-            await setImmediate();
-            const releases = turn.releaseCounts.get(bob.profileId) ?? 0;
-            if (ending === "abort") {
-              expect(receiver.abort()).toBe(true);
-            } else {
-              if (ending === "replaced run end") {
-                receiver.replace();
+            if (!reportSettlement) {
+              await setImmediate();
+              const releases = turn.releaseCounts.get(bob.profileId) ?? 0;
+              if (outcome === "abort") {
+                expect(receiver.abort()).toBe(true);
+              } else {
+                if (outcome === "replaced run end") {
+                  receiver.replace();
+                }
+                receiver.end();
               }
-              receiver.end();
+              // Join the already-resolved custody continuation, without a timed wait or polling.
+              await setImmediate();
+              expect(turn.releaseCounts.get(bob.profileId)).toBeGreaterThan(releases);
+              return;
             }
-            // Join the already-resolved custody continuation, without a timed wait or polling.
-            await setImmediate();
-            expect(turn.releaseCounts.get(bob.profileId)).toBeGreaterThan(releases);
+            if (outcome === "source revoked") {
+              turn.revoke(bob.profileId);
+              await expect(receiver.commit()).rejects.toThrow(/authority|access|revoked/i);
+            } else if (outcome === "receiver cancelled") {
+              await receiver.cancel();
+              expect(receiver.pendingCount()).toBe(0);
+            } else {
+              await receiver.commit();
+              expect(receiver.pendingCount()).toBe(0);
+            }
+            const messages = (
+              await loadTranscriptEvents({
+                agentId: "main",
+                sessionKey: PARTICIPANT_SHARED,
+                sessionId: "participant-shared-id",
+              })
+            )
+              .map(readTranscriptEventMessage)
+              .filter((message) => message?.idempotencyKey === "participant-delayed-steer:user");
+            expect(messages).toHaveLength(outcome === "sender completed" ? 1 : 0);
+            if (outcome === "sender completed") {
+              expect(messages[0]).toMatchObject({
+                role: "user",
+                content: expect.stringContaining(
+                  "Bob's accepted steering survives the sending turn",
+                ),
+                provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+              });
+            }
           },
-          { reportSettlement: false },
+          { reportSettlement },
         );
-      });
-    },
-  );
-
-  it.each(["sender completed", "source revoked", "receiver cancelled"] as const)(
-    "settles accepted sessions_send steering after %s",
-    async (outcome) => {
-      await withParticipantSessionToolsFixture(async ({ cfg, turn, bob }) => {
-        expect(await turn.steer(bob)).toMatchObject({ status: "accepted" });
-        await withDelayedSessionToolsSteering(cfg, async (receiver) => {
-          const result = await createSessionsSendTool({
-            config: cfg,
-            agentSessionKey: REQUESTER,
-            idempotencyKey: "participant-delayed-steer",
-          }).execute("participant-steer", {
-            sessionKey: PARTICIPANT_SHARED,
-            user: bob.profileId,
-            message: "Bob's accepted steering survives the sending turn",
-            mode: "steer",
-            timeoutSeconds: 0,
-          });
-          expect(result.details).toMatchObject({
-            status: "accepted",
-            targetDisposition: "steered",
-          });
-          expect(receiver.pendingCount()).toBe(1);
-          turn.complete();
-          if (outcome === "source revoked") {
-            turn.revoke(bob.profileId);
-            await expect(receiver.commit()).rejects.toThrow(/authority|access|revoked/i);
-          } else if (outcome === "receiver cancelled") {
-            await receiver.cancel();
-            expect(receiver.pendingCount()).toBe(0);
-          } else {
-            await receiver.commit();
-            expect(receiver.pendingCount()).toBe(0);
-          }
-          const messages = (
-            await loadTranscriptEvents({
-              agentId: "main",
-              sessionKey: PARTICIPANT_SHARED,
-              sessionId: "participant-shared-id",
-            })
-          )
-            .map(readTranscriptEventMessage)
-            .filter((message) => message?.idempotencyKey === "participant-delayed-steer:user");
-          expect(messages).toHaveLength(outcome === "sender completed" ? 1 : 0);
-          if (outcome === "sender completed") {
-            expect(messages[0]).toMatchObject({
-              role: "user",
-              content: expect.stringContaining("Bob's accepted steering survives the sending turn"),
-              provenance: { kind: "inter_session", sourceTool: "sessions_send" },
-            });
-          }
-        });
       });
     },
   );

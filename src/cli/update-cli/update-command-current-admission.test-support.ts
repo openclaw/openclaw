@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import path from "node:path";
 import { expect, it, vi, type Mock } from "vitest";
+import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
 
 type CurrentAdmissionFixture = {
   prepareCurrentPackage: (prefix: string) => Promise<string>;
@@ -33,6 +34,7 @@ export function registerAlreadyCurrentAdmissionTests(f: CurrentAdmissionFixture)
   it.each([undefined])(
     "refuses pending service recovery acquired before already-current activation (timeout=%s)",
     async (timeout) => {
+      stubNodeRuntime();
       const updateExecutor = await import("./update-command-executor.js");
       const { resolvePackageActivationAnchor } =
         await import("../../infra/package-update-activation-journal.js");
@@ -106,6 +108,10 @@ export function registerAlreadyCurrentAdmissionTests(f: CurrentAdmissionFixture)
   it.each(["unavailable plugin", "changed service owner"])(
     "handles %s before already-current convergence",
     async (failure) => {
+      if (failure === "changed service owner") {
+        // Already-current ownership refresh belongs to systemd policy maintenance.
+        vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      }
       const root = await f.prepareCurrentPackage("openclaw-update");
       f.mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
       if (failure === "unavailable plugin") {

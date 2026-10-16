@@ -14,7 +14,7 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { onTestFinished } from "vitest";
-import { VoiceCallConfigSchema } from "./config.js";
+import { normalizeVoiceCallConfig } from "./config.js";
 import { CallManager } from "./manager.js";
 import type { CallManagerContext } from "./manager/context.js";
 import { persistCallRecord } from "./manager/store.js";
@@ -160,7 +160,7 @@ export async function createManagerHarness(
   provider: FakeProvider;
   storePath: string;
 }> {
-  const config = VoiceCallConfigSchema.parse({
+  const config = normalizeVoiceCallConfig({
     enabled: true,
     provider: "plivo",
     fromNumber: "+15550000000",
@@ -197,13 +197,6 @@ export async function writeCallsToStore(
   }
 }
 
-export function writeLegacyCallsJsonl(storePath: string, calls: Record<string, unknown>[]): void {
-  fs.mkdirSync(storePath, { recursive: true });
-  const logPath = path.join(storePath, "calls.jsonl");
-  const lines = calls.map((c) => JSON.stringify(c)).join("\n") + "\n";
-  fs.writeFileSync(logPath, lines);
-}
-
 export function makePersistedCall(
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
@@ -212,6 +205,7 @@ export function makePersistedCall(
     providerCallId: `prov-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     provider: "plivo",
     direction: "outbound",
+    agentId: "main",
     state: "answered",
     from: "+15550000000",
     to: "+15550000001",
@@ -287,9 +281,9 @@ export function createEventManagerHarness() {
       activeCalls: new Map(),
       providerCallIdMap: new Map(),
       processedEventIds: new Set(),
-      rejectedProviderCallIds: new Map(),
+      rejectedProviderCallIds: new Set(),
       provider: null,
-      config: VoiceCallConfigSchema.parse({
+      config: normalizeVoiceCallConfig({
         enabled: true,
         provider: "plivo",
         fromNumber: "+15550000000",
@@ -332,7 +326,7 @@ export function createEventManagerHarness() {
   }
 
   function createInboundDisabledConfig() {
-    return VoiceCallConfigSchema.parse({
+    return normalizeVoiceCallConfig({
       enabled: true,
       provider: "plivo",
       fromNumber: "+15550000000",

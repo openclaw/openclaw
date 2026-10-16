@@ -1,4 +1,3 @@
-// Defines metadata for bundled plugins that are installed externally.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 

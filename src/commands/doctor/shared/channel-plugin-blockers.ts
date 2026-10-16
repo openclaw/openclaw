@@ -1,4 +1,3 @@
-// Doctor warnings for configured channels blocked by disabled channel plugins.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { listExplicitlyDisabledChannelIdsForConfig } from "../../../channels/config-presence.js";
@@ -238,32 +237,38 @@ function resolveConfiguredChannelOwnerState(params: {
   effectiveConfig: OpenClawConfig;
   effectivePluginsConfig: ReturnType<typeof normalizePluginsConfig>;
 }): ChannelOwnerState {
-  const bundledChannelConfigured =
-    params.plugin.origin === "bundled" &&
-    hasExplicitChannelConfig({
-      config: params.sourceConfig,
-      channelId: params.channelId,
-    });
-  const sourceAllowlistBypass =
-    bundledChannelConfigured ||
-    (params.plugin.origin === "workspace" &&
-      params.sourcePluginsConfig.slots.contextEngine === params.plugin.id);
-  const sourceBaseBlock = resolveManifestOwnerBasePolicyBlock({
-    plugin: params.plugin,
-    normalizedConfig: params.sourcePluginsConfig,
-    allowRestrictiveAllowlistBypass: sourceAllowlistBypass,
-  });
+  const resolveBase = (
+    config: OpenClawConfig,
+    normalizedConfig: ReturnType<typeof normalizePluginsConfig>,
+  ) => {
+    const bundledChannelConfigured =
+      params.plugin.origin === "bundled" &&
+      hasExplicitChannelConfig({ config, channelId: params.channelId });
+    const workspaceSlot =
+      params.plugin.origin === "workspace" &&
+      normalizedConfig.slots.contextEngine === params.plugin.id;
+    return {
+      bundledChannelConfigured,
+      workspaceSlot,
+      block: resolveManifestOwnerBasePolicyBlock({
+        plugin: params.plugin,
+        normalizedConfig,
+        allowRestrictiveAllowlistBypass: bundledChannelConfigured || workspaceSlot,
+      }),
+    };
+  };
+  const source = resolveBase(params.sourceConfig, params.sourcePluginsConfig);
+  const sourceBaseBlock = source.block;
   const sourceExternalTrusted =
     params.plugin.origin === "bundled" ||
     hasExplicitManifestOwnerTrust({
       plugin: params.plugin,
       normalizedConfig: params.sourcePluginsConfig,
     }) ||
-    (params.plugin.origin === "workspace" &&
-      params.sourcePluginsConfig.slots.contextEngine === params.plugin.id);
+    source.workspaceSlot;
   const sourceBundledActivated =
     params.plugin.origin === "bundled" &&
-    (bundledChannelConfigured ||
+    (source.bundledChannelConfigured ||
       isActivatedManifestOwner({
         plugin: params.plugin,
         normalizedConfig: params.sourcePluginsConfig,
@@ -274,25 +279,11 @@ function resolveConfiguredChannelOwnerState(params: {
     !isPluginEnabledByDefaultForPlatform(params.plugin) &&
     params.sourcePluginsConfig.entries[params.plugin.id]?.enabled !== true;
 
-  const effectiveBundledChannelConfigured =
-    params.plugin.origin === "bundled" &&
-    hasExplicitChannelConfig({
-      config: params.effectiveConfig,
-      channelId: params.channelId,
-    });
-  const effectiveAllowlistBypass =
-    effectiveBundledChannelConfigured ||
-    (params.plugin.origin === "workspace" &&
-      params.effectivePluginsConfig.slots.contextEngine === params.plugin.id);
-  const effectiveBaseBlock = resolveManifestOwnerBasePolicyBlock({
-    plugin: params.plugin,
-    normalizedConfig: params.effectivePluginsConfig,
-    allowRestrictiveAllowlistBypass: effectiveAllowlistBypass,
-  });
+  const effective = resolveBase(params.effectiveConfig, params.effectivePluginsConfig);
   const available =
-    effectiveBaseBlock === null &&
+    effective.block === null &&
     sourceExternalTrusted &&
-    (effectiveBundledChannelConfigured ||
+    (effective.bundledChannelConfigured ||
       isActivatedManifestOwner({
         plugin: params.plugin,
         normalizedConfig: params.effectivePluginsConfig,
@@ -321,19 +312,13 @@ function resolveConfiguredChannelOwnerState(params: {
 function mapManifestOwnerBlockerReason(
   reason: ManifestOwnerBasePolicyBlockReason | null,
 ): ChannelPluginBlockerHit["reason"] | undefined {
-  if (reason === "plugins-disabled") {
-    return "plugins disabled";
-  }
-  if (reason === "plugin-disabled") {
-    return "disabled in config";
-  }
-  if (reason === "blocked-by-denylist") {
-    return "blocked by denylist";
-  }
-  if (reason === "not-in-allowlist") {
-    return "not in allowlist";
-  }
-  return undefined;
+  const reasons = {
+    "plugins-disabled": "plugins disabled",
+    "plugin-disabled": "disabled in config",
+    "blocked-by-denylist": "blocked by denylist",
+    "not-in-allowlist": "not in allowlist",
+  } as const;
+  return reason === null ? undefined : reasons[reason];
 }
 
 function formatReason(hit: ChannelPluginBlockerHit): string {
@@ -355,10 +340,7 @@ function formatReason(hit: ChannelPluginBlockerHit): string {
   if (hit.reason === "not enabled and not in allowlist") {
     return `plugin "${sanitizeForLog(hit.pluginId)}" is not enabled and is omitted from plugins.allow. Add plugins.entries.${sanitizeForLog(hit.pluginId)}.enabled=true and include "${sanitizeForLog(hit.pluginId)}" in plugins.allow.`;
   }
-  if (hit.reason === "not in allowlist") {
-    return `plugin "${sanitizeForLog(hit.pluginId)}" is installed but omitted from plugins.allow. Include "${sanitizeForLog(hit.pluginId)}" in plugins.allow.`;
-  }
-  return `plugin "${sanitizeForLog(hit.pluginId)}" is not loadable (${sanitizeForLog(hit.reason)}).`;
+  return `plugin "${sanitizeForLog(hit.pluginId)}" is installed but omitted from plugins.allow. Include "${sanitizeForLog(hit.pluginId)}" in plugins.allow.`;
 }
 
 function formatChannelPluginBlocker(hit: ChannelPluginBlockerHit): string {

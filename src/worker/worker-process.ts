@@ -1,7 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { enableConsoleCapture, routeLogsToStderr } from "../logging/console.js";
 import { signalProcessTree } from "../process/kill-tree.js";
-import { bindInheritedProcessLineageFds } from "../process/supervisor/inherited-process-lineage.js";
+import {
+  bindInheritedNativeProcessOwner,
+  bindInheritedProcessLineageFds,
+} from "../process/supervisor/inherited-process-lineage.js";
+import { isOwnedProcessGroupGone } from "../process/supervisor/service-child-group-ownership.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import {
@@ -13,16 +17,32 @@ import { runWorkerCommand, type WorkerCommandLifetime } from "./worker-command.r
 
 const WORKER_START_MESSAGE_TYPE = "openclaw-worker-start-v1";
 
-function parseWorkerStartMessage(value: unknown): { lineageFds?: readonly number[] } | undefined {
+function parseWorkerStartMessage(
+  value: unknown,
+): { lineageFds?: readonly number[]; nativeProcessOwner?: string } | undefined {
   if (
     !isRecord(value) ||
-    !hasExactOwnKeys(value, ["type"], ["lineageFds"]) ||
+    !hasExactOwnKeys(value, ["type"], ["lineageFds", "nativeProcessOwner"]) ||
     value.type !== WORKER_START_MESSAGE_TYPE
   ) {
     return undefined;
   }
+  const nativeProcessOwner = value.nativeProcessOwner;
+  if (nativeProcessOwner !== undefined) {
+    if (typeof nativeProcessOwner !== "string") {
+      return undefined;
+    }
+    try {
+      const url = new URL(nativeProcessOwner);
+      if (url.protocol !== "file:" || url.host || url.search || url.hash) {
+        return undefined;
+      }
+    } catch {
+      return undefined;
+    }
+  }
   if (!Object.hasOwn(value, "lineageFds")) {
-    return {};
+    return nativeProcessOwner === undefined ? {} : undefined;
   }
   const fds = value.lineageFds;
   if (
@@ -35,7 +55,7 @@ function parseWorkerStartMessage(value: unknown): { lineageFds?: readonly number
   ) {
     return undefined;
   }
-  return { lineageFds: fds };
+  return { lineageFds: fds, ...(nativeProcessOwner === undefined ? {} : { nativeProcessOwner }) };
 }
 
 function createWorkerIpcLifetime(): WorkerCommandLifetime {
@@ -47,6 +67,7 @@ function createWorkerIpcLifetime(): WorkerCommandLifetime {
   let started = false;
   let settled = false;
   let releaseLineage: (() => void) | undefined;
+  let releaseNativeOwner: (() => void) | undefined;
   const startResult = createDeferredCore<boolean>();
   const rejectOrAbort = (error: Error) => {
     if (!settled) {
@@ -67,6 +88,9 @@ function createWorkerIpcLifetime(): WorkerCommandLifetime {
     }
     if (start.lineageFds) {
       releaseLineage = bindInheritedProcessLineageFds(start.lineageFds);
+    }
+    if (start.nativeProcessOwner) {
+      releaseNativeOwner = bindInheritedNativeProcessOwner(start.nativeProcessOwner);
     }
     started = true;
     settled = true;
@@ -106,7 +130,14 @@ function createWorkerIpcLifetime(): WorkerCommandLifetime {
     },
     terminateOwnedTree: () => {
       // Anchored applications share their owner's group; direct workers may lead their own.
-      signalProcessTree(process.pid, "SIGKILL");
+      if (process.platform !== "darwin") {
+        // Linux reads its group from procfs and keeps PID signaling where group signals are denied.
+        signalProcessTree(process.pid, "SIGKILL");
+        return;
+      }
+      // Exec relays start parent-loss cleanup only after this process dies, so decide by
+      // syscall: Darwin's ps census can stall past their cleanup budget.
+      process.kill(isOwnedProcessGroupGone(process.pid) ? process.pid : -process.pid, "SIGKILL");
     },
     dispose: () => {
       if (disposed) {
@@ -114,6 +145,7 @@ function createWorkerIpcLifetime(): WorkerCommandLifetime {
       }
       disposed = true;
       releaseLineage?.();
+      releaseNativeOwner?.();
       process.off("message", onMessage);
       process.off("disconnect", onDisconnect);
       if (process.connected) {
@@ -137,6 +169,8 @@ export async function runWorkerProcess(
     browserRuntime?: WorkerBrowserRuntime;
   } = {},
 ): Promise<void> {
+  const { initializeSqliteRuntimeCapabilities } = await import("../infra/bun-sqlite-library.js");
+  await initializeSqliteRuntimeCapabilities();
   // Stdout belongs to the worker result; diagnostics stay on stderr through process shutdown.
   routeLogsToStderr();
   enableConsoleCapture();

@@ -2,15 +2,13 @@ import {
   downloadGeneratedVideoAsset,
   resolveGeneratedMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-generation-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
-  assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   pollProviderOperationJson,
-  postJsonRequest,
-  readProviderJsonObjectResponse,
+  postJsonResponse,
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
@@ -89,11 +87,8 @@ function readOutputUrls(data: Record<string, unknown>): string[] {
 }
 
 function remoteImageUrl(value: string): string {
-  if (!URL.canParse(value)) {
-    throw new Error("Kie AI image-to-video requires a remote http(s) image URL or a local buffer.");
-  }
-  const url = new URL(value);
-  if (url.protocol !== "https:" && url.protocol !== "http:") {
+  const url = URL.parse(value);
+  if (!url || (url.protocol !== "https:" && url.protocol !== "http:")) {
     throw new Error("Kie AI image-to-video requires a remote http(s) image URL or a local buffer.");
   }
   return url.href;
@@ -130,7 +125,7 @@ export function buildKieVideoGenerationProvider(): VideoGenerationProvider {
     defaultModel: DEFAULT_KIE_VIDEO_MODEL,
     defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
     models,
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "kie", ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "kie", ...ctx }),
     capabilities: kieVideoCapabilities(findKieVideoFamily(DEFAULT_KIE_VIDEO_MODEL)),
     catalogByModel: Object.fromEntries(
       models.map((model) => {
@@ -182,23 +177,21 @@ export function buildKieVideoGenerationProvider(): VideoGenerationProvider {
         transport: "http",
       });
       const post = async (url: string, body: Record<string, unknown>, policy: typeof http) => {
-        const { response, release } = await postJsonRequest({
-          url,
-          body,
-          headers: policy.headers,
-          timeoutMs: timeoutMs(),
-          fetchFn: fetch,
-          allowPrivateNetwork: policy.allowPrivateNetwork,
-          dispatcherPolicy: policy.dispatcherPolicy,
-        });
-        try {
-          await assertOkOrThrowHttpError(response, "Kie AI request failed");
-          return readKieData(
-            await readProviderJsonObjectResponse(response, "Kie AI response", { timeoutMs }),
-          );
-        } finally {
-          await release();
-        }
+        return readKieData(
+          await postJsonResponse({
+            url,
+            body,
+            headers: policy.headers,
+            timeoutMs: timeoutMs(),
+            fetchFn: fetch,
+            allowPrivateNetwork: policy.allowPrivateNetwork,
+            dispatcherPolicy: policy.dispatcherPolicy,
+            errorLabel: "Kie AI request failed",
+            responseLabel: "Kie AI response",
+            readOptions: { timeoutMs },
+            objectResponse: true,
+          }),
+        );
       };
       if (image && imageField) {
         let url = imageUrl;

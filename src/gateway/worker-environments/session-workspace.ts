@@ -12,10 +12,14 @@ import type {
 /** Durable session workspace ownership is independent of its current worker placement. */
 export type WorkerSessionWorkspace =
   | { kind: "local"; path: string }
+  | { kind: "device-folder"; deviceId: string; path: string }
   | { kind: "repository"; repository: SessionRepositoryWorkspaceRecord };
 
 /** Repository roots contain result artifacts only; never use them as execution cwd. */
 export function sessionWorkspaceRoot(workspace: WorkerSessionWorkspace): string {
+  if (workspace.kind === "device-folder") {
+    throw new Error("A device folder has no Gateway workspace root");
+  }
   return workspace.kind === "local"
     ? workspace.path
     : getSessionRepositoryWorkspaceStore().artifactPath(workspace.repository.workspaceId);
@@ -26,10 +30,16 @@ export function createWorkerWorkspaceReconcileRequest(params: {
   remoteWorkspaceDir: string;
   baseManifestRef: string;
   journal: WorkerLocalWorkspaceReconcileRequest["journal"];
-  stagedResult: WorkerLocalWorkspaceReconcileRequest["stagedResult"];
+  stagedResult: {
+    ref: string;
+    record(ref: string, workspaceId?: string): void | Promise<void>;
+  };
   assertCurrent: () => void;
 }): WorkerWorkspaceReconcileRequest {
   const { workspace, remoteWorkspaceDir, baseManifestRef, journal, stagedResult } = params;
+  if (workspace.kind === "device-folder") {
+    throw new Error("Device folders are authoritative on the device and cannot be reconciled");
+  }
   if (workspace.kind === "local") {
     return {
       source: {
@@ -71,8 +81,9 @@ export function createWorkerWorkspaceReconcileRequest(params: {
             params.assertCurrent();
             // The immutable ref is discoverable if the process stops between
             // checkpoint acceptance and recording its pending-result pointer.
-            stagedResult.record(prepared.checkpointRef);
-            journal.commit(payload.currentManifestRef);
+            await stagedResult.record(prepared.checkpointRef, workspace.repository.workspaceId);
+            params.assertCurrent();
+            await journal.commit(payload.currentManifestRef);
             return accepted;
           },
         };
@@ -85,7 +96,7 @@ export async function recoverSessionWorkspaceCheckpoint(params: {
   workspace: Extract<WorkerSessionWorkspace, { kind: "repository" }>;
   checkpointRef: string;
   assertCurrent: () => void;
-  onAccepted: (manifestRef: string) => void;
+  onAccepted: (manifestRef: string) => Promise<void>;
 }): Promise<void> {
   const accepted = await recoverSessionRepositoryCheckpoint({
     workspaceId: params.workspace.repository.workspaceId,
@@ -96,5 +107,5 @@ export async function recoverSessionWorkspaceCheckpoint(params: {
   if (!accepted.manifestHash) {
     throw new Error("Repository checkpoint has no accepted manifest");
   }
-  params.onAccepted(accepted.manifestHash);
+  await params.onAccepted(accepted.manifestHash);
 }

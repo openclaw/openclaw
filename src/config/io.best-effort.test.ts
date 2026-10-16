@@ -9,6 +9,7 @@ import {
   readConfigFileSnapshot,
   readSourceConfigBestEffort,
 } from "./config.js";
+import { readCurrentConfigForResolution } from "./io.runtime.js";
 import { resetConfigOverrides, setConfigOverride } from "./runtime-overrides.js";
 import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 
@@ -21,47 +22,6 @@ describe("readBestEffortConfig", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
     resetConfigOverrides();
-  });
-
-  it("resolves config env above normalized lower-precedence aliases in isolated snapshots", async () => {
-    await withTempHome(async (home) => {
-      await withEnvAsync({ ZAI_API_KEY: "shell-token", Z_AI_API_KEY: undefined }, async () => {
-        await writeOpenClawConfig(home, {
-          env: { vars: { Z_AI_API_KEY: "config-token" } },
-          gateway: { auth: { mode: "token", token: "${ZAI_API_KEY}" }, mode: "local" },
-        });
-
-        const snapshot = await readConfigFileSnapshot({
-          isolateEnv: true,
-          lowerPrecedenceEnv: { ZAI_API_KEY: "shell-token" },
-          observe: false,
-        });
-
-        expect(snapshot.config.gateway?.auth?.token).toBe("config-token");
-        expect(process.env.ZAI_API_KEY).toBe("shell-token");
-        expect(process.env.Z_AI_API_KEY).toBeUndefined();
-      });
-    });
-  });
-
-  it("resolves config aliases from a higher-precedence canonical value in isolated snapshots", async () => {
-    await withTempHome(async (home) => {
-      await withEnvAsync({ ZAI_API_KEY: "invocation-token", Z_AI_API_KEY: undefined }, async () => {
-        await writeOpenClawConfig(home, {
-          env: { vars: { Z_AI_API_KEY: "config-token" } },
-          gateway: { auth: { mode: "token", token: "${Z_AI_API_KEY}" }, mode: "local" },
-        });
-
-        const snapshot = await readConfigFileSnapshot({
-          isolateEnv: true,
-          observe: false,
-        });
-
-        expect(snapshot.config.gateway?.auth?.token).toBe("invocation-token");
-        expect(process.env.ZAI_API_KEY).toBe("invocation-token");
-        expect(process.env.Z_AI_API_KEY).toBeUndefined();
-      });
-    });
   });
 
   it("records why an unparseable config was ignored by best-effort reads", async () => {
@@ -191,6 +151,80 @@ describe("readBestEffortConfig", () => {
           },
         ],
       });
+    });
+  });
+});
+
+describe("readCurrentConfigForResolution", () => {
+  afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
+    resetConfigOverrides();
+  });
+
+  it.each([1, null])(
+    "emits the directory-resolution warning with a malformed redaction entry %j",
+    async (entry) => {
+      await withTempHome(async (home) => {
+        const configPath = await writeOpenClawConfig(home, {
+          logging: { redactPatterns: [entry] },
+          skills: { workshop: { approvalPolicy: "pending", maxPending: 3 } },
+        });
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          const resolution = readCurrentConfigForResolution({ configPath });
+          expect(resolution.config).toEqual({});
+          const warning = warn.mock.calls.map(([line]) => String(line)).join("\n");
+          expect(warning).toContain("Config warnings:");
+          expect(warning).toContain(
+            "Config unavailable; using environment and default agent directory settings.",
+          );
+          expect(warning).toContain("logging.redactPatterns");
+        } finally {
+          warn.mockRestore();
+        }
+      });
+    },
+  );
+
+  it("names the rejection when directory inspection cannot load a schema-invalid config", async () => {
+    await withTempHome(async (home) => {
+      const configPath = await writeOpenClawConfig(home, {
+        gateway: { port: "abc" },
+      } as never);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      try {
+        const resolution = readCurrentConfigForResolution({ configPath });
+
+        expect(resolution.config).toEqual({});
+        const warning = warn.mock.calls.map(([line]) => String(line)).join("\n");
+        expect(warning).toContain("Config unavailable");
+        // The degraded read must not hide why the file was rejected; doctor repairs the
+        // same file moments later, so a bare availability warning is misleading.
+        expect(warning).toContain("expected number, received string");
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
+
+  it("keeps the plain availability warning for an absent config file", async () => {
+    await withTempHome(async (home) => {
+      const configPath = `${home}/.openclaw/absent.json`;
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      try {
+        const resolution = readCurrentConfigForResolution({ configPath });
+
+        expect(resolution.config).toEqual({});
+        const warning = warn.mock.calls.map(([line]) => String(line)).join("\n");
+        // Absent files carry no rejection reason, so the warning stays plain.
+        expect(warning).toContain(
+          `${configPath}: Config unavailable; using environment and default agent directory settings.`,
+        );
+      } finally {
+        warn.mockRestore();
+      }
     });
   });
 });

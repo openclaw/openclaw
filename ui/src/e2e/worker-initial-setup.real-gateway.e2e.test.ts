@@ -2,16 +2,17 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { SKILL_RESOURCE_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/skill-resources.js";
-import { WORKER_SKILL_WORKSHOP_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { installSessionPlacementAdmissionProvider } from "../../../src/agents/session-placement-admission.js";
 import { SessionManager } from "../../../src/agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../../src/agents/test-helpers/agent-message-fixtures.js";
 import { createSessionsSendTool } from "../../../src/agents/tools/sessions-send-tool.js";
+import { setRuntimeConfigSnapshot } from "../../../src/config/runtime-snapshot.js";
 import {
   listSessionPendingInputs,
   upsertSessionEntryCore,
 } from "../../../src/config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../../src/config/sessions/session-store-path.js";
+import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import { coordinateWorkerPlacementDispatch } from "../../../src/gateway/worker-environments/placement-dispatch-coordinator.js";
 import { createCoordinatorTestService } from "../../../src/gateway/worker-environments/placement-dispatch-coordinator.test-support.js";
@@ -36,7 +37,7 @@ import { createDeferredCore } from "../../../src/shared/deferred.js";
 import { openOpenClawStateDatabase } from "../../../src/state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.js";
 import { getFreePort } from "../../../src/test-utils/ports.js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -71,7 +72,7 @@ suite.define(() => {
     try {
       const workspace = state.path("workspace");
       await mkdir(workspace, { recursive: true });
-      await state.writeConfig({
+      const config: OpenClawConfig = {
         plugins: { enabled: false },
         tools: { sessions: { visibility: "all" } },
         agents: {
@@ -107,8 +108,10 @@ suite.define(() => {
           controlUi: { allowedOrigins: [new URL(suite.server.baseUrl).origin], enabled: false },
           port,
         },
-      });
+      };
+      await state.writeConfig(config);
       state.applyEnv();
+      setRuntimeConfigSnapshot(config);
       const scope = {
         agentId: "main",
         sessionKey,
@@ -174,7 +177,7 @@ suite.define(() => {
               timestamp: Date.now(),
             }),
           );
-          createWorkerSessionPlacementGate(placements).updateAckCursors({
+          await createWorkerSessionPlacementGate(placements).updateAckCursors({
             claim: request.turnClaim,
             transcriptSeq: launched.length * 2,
             liveSeq: launched.length,
@@ -199,7 +202,7 @@ suite.define(() => {
           if (request.source.kind !== "local") {
             throw new Error("expected local fixture source");
           }
-          request.source.journal.commit(MANIFEST_REF);
+          await request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,
@@ -226,7 +229,6 @@ suite.define(() => {
                   protocolFeatures: [
                     ...environment.bootstrapReceipt!.protocolFeatures,
                     SKILL_RESOURCE_PROTOCOL_FEATURE,
-                    WORKER_SKILL_WORKSHOP_FEATURE,
                   ],
                 },
               };
@@ -275,11 +277,13 @@ suite.define(() => {
             await composer.fill("Browser input held for setup");
             await page.getByRole("button", { name: "Send message", exact: true }).click();
             await expect
-              .poll(() => listSessionPendingInputs(scope).items.length, { timeout: 15000 })
+              .poll(async () => (await listSessionPendingInputs(scope)).items.length, {
+                timeout: 15000,
+              })
               .toBe(1);
             expect(launched).toEqual([]);
             await expect.poll(() => setupWaiters.length, { timeout: 30000 }).toBe(1);
-            expect(listSessionPendingInputs(scope).items).toHaveLength(1);
+            expect((await listSessionPendingInputs(scope)).items).toHaveLength(1);
             await page.getByText("Received · waiting for worker setup", { exact: true }).waitFor();
             await page.screenshot({
               path: path.join(suite.artifactDir, "01-held-during-setup.png"),
@@ -287,21 +291,6 @@ suite.define(() => {
             const tool = createSessionsSendTool({
               agentSessionKey: "agent:main:main",
               expectedTargetSessionId: sessionId,
-              callGateway: async (request) =>
-                await page.evaluate(
-                  async ({ method, params }) => {
-                    const app = document.querySelector("openclaw-app") as HTMLElement & {
-                      runtime: {
-                        context: { gateway: { snapshot: { client: GatewayBrowserClient } } };
-                      };
-                    };
-                    return await app.runtime.context.gateway.snapshot.client.request(
-                      method,
-                      params,
-                    );
-                  },
-                  { method: request.method, params: request.params },
-                ),
             });
             const sent = await tool.execute("setup-send", {
               sessionKey,
@@ -309,16 +298,39 @@ suite.define(() => {
               timeoutSeconds: 0,
             });
             expect(sent.details).toMatchObject({ status: "accepted", targetDisposition: "queued" });
-            await expect.poll(() => listSessionPendingInputs(scope).items.length).toBe(2);
+            await expect
+              .poll(async () => (await listSessionPendingInputs(scope)).items.length)
+              .toBe(2);
             expect(launched).toEqual([]);
-            expect(
-              listSessionPendingInputs(scope).items.every((input) => input.state === "queued"),
-            ).toBe(true);
+            const heldInputs = (await listSessionPendingInputs(scope)).items;
+            expect(heldInputs.every((input) => input.state === "queued")).toBe(true);
             release.resolve();
             await dispatchOperation;
-            await expect.poll(() => launched.length, { timeout: 30_000 }).toBe(2);
+            const outcomes = await evaluateControlUiContext(
+              page,
+              async (context, runIds) => {
+                const client = context.gateway.snapshot.client!;
+                return await Promise.all(
+                  runIds.map((runId) =>
+                    client.request(
+                      "agent.wait",
+                      { runId, timeoutMs: 30_000 },
+                      { timeoutMs: 30_000 },
+                    ),
+                  ),
+                );
+              },
+              heldInputs.map((input) => input.runId),
+            );
+            for (const outcome of outcomes) {
+              expect(outcome).toMatchObject({ status: "ok" });
+            }
+            expect(launched).toHaveLength(2);
             expect(new Set(launched).size).toBe(2);
-            await expect.poll(() => listSessionPendingInputs(scope).items.length).toBe(0);
+            expect(new Set(launched)).toEqual(new Set(heldInputs.map((input) => input.runId)));
+            await expect
+              .poll(async () => (await listSessionPendingInputs(scope)).items.length)
+              .toBe(0);
             await page
               .getByRole("paragraph")
               .filter({ hasText: /^Worker reply 2$/ })

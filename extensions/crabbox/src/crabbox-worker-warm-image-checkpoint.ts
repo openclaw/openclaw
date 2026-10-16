@@ -17,6 +17,7 @@ const CHECKPOINT_ID_PATTERN = /^chk_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 
 export class CrabboxCheckpointCreateError extends Error {
   private readonly notSubmitted?: { provider: string; leaseId: string };
+  private readonly unsupported?: { message: string };
 
   static wasNotSubmitted(error: unknown, context: { provider: string; id: string }): boolean {
     return (
@@ -24,6 +25,15 @@ export class CrabboxCheckpointCreateError extends Error {
       error.notSubmitted?.provider === context.provider &&
       error.notSubmitted.leaseId === context.id
     );
+  }
+
+  static unsupportedCapture(
+    error: unknown,
+    context: { provider: string; id: string },
+  ): { message: string } | undefined {
+    return error instanceof CrabboxCheckpointCreateError && this.wasNotSubmitted(error, context)
+      ? error.unsupported
+      : undefined;
   }
 
   constructor(result: SpawnResult) {
@@ -56,6 +66,20 @@ export class CrabboxCheckpointCreateError extends Error {
         CHECKPOINT_ID_PATTERN.test(record.checkpointId)
       ) {
         this.notSubmitted = { provider: record.provider, leaseId: record.leaseId };
+      } else if (
+        Object.keys(record).length === 7 &&
+        record.schema === "crabbox.checkpoint.create.failure.v1" &&
+        record.outcome === "not_submitted" &&
+        record.reason === "native_unsupported" &&
+        record.localReservation === "none" &&
+        typeof record.provider === "string" &&
+        typeof record.leaseId === "string" &&
+        typeof record.message === "string" &&
+        record.message.length > 0 &&
+        record.message.length <= 1024
+      ) {
+        this.notSubmitted = { provider: record.provider, leaseId: record.leaseId };
+        this.unsupported = { message: record.message };
       }
     } catch {
       // Old, malformed, or incomplete failure output retains capture uncertainty.
@@ -74,7 +98,7 @@ function parseCheckpointJson(stdout: string, action: string): Record<string, unk
 export function parseCreatedCheckpoint(
   stdout: string,
   leaseId: string,
-): Pick<WarmImageRecord, "checkpointId" | "kind" | "state"> {
+): Pick<WarmImageRecord, "checkpointId" | "kind" | "state"> & { captureEstablished: boolean } {
   const record = parseCheckpointJson(stdout, "create");
   const checkpointId = nonEmptyString(record.id);
   const kind = nonEmptyString(record.kind);
@@ -88,9 +112,14 @@ export function parseCreatedCheckpoint(
   ) {
     throw new Error("Crabbox checkpoint create returned an invalid native checkpoint");
   }
-  // This parser consumes only successful `checkpoint create --wait` results.
-  // Crabbox owns readiness; provider-native state names are not a portable readiness signal.
-  return { checkpointId, kind, state: "available" };
+  return {
+    checkpointId,
+    kind,
+    captureEstablished: record.captureEstablished === true,
+    state: ["available", "ready", "succeeded", "completed"].includes(nativeState.toLowerCase())
+      ? "available"
+      : "pending",
+  };
 }
 
 export function parseForkedCheckpoint(

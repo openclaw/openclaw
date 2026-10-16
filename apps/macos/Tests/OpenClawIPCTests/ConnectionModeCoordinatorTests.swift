@@ -3,8 +3,21 @@ import Testing
 @testable import OpenClaw
 @testable import OpenClawKit
 
+@Suite(.testWaitLimit)
 @MainActor
 struct ConnectionModeCoordinatorTests {
+    @Test func `connection setup preserves chat opened during launch`() async {
+        let tests = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        // Compile the real owner against headless service doubles so this ordering
+        // regression does not need windows, live services, or operator state.
+        let result = await ShellExecutor.runDetailed(
+            command: ["/bin/bash", tests.appendingPathComponent("Fixtures/ConnectionModeCoordinator/run.sh").path],
+            cwd: nil,
+            env: ProcessInfo.processInfo.environment,
+            timeout: 60)
+        #expect(result.success, "\(result.stdout)\n\(result.stderr)\n\(result.errorMessage ?? "")")
+    }
+
     @Test(arguments: [
         (AppState.ConnectionMode.unconfigured, AppState.ConnectionMode.local),
         (AppState.ConnectionMode.remote, AppState.ConnectionMode.local),
@@ -60,10 +73,9 @@ struct ConnectionModeCoordinatorTests {
             if listener.isRunning { listener.terminate() }
             listener.waitUntilExit()
         }
-        let startupDeadline = ContinuousClock.now.advanced(by: .seconds(5))
-        while !FileManager.default.fileExists(atPath: ready.path), ContinuousClock.now < startupDeadline {
+        try await TestWait.state("listener port file") {
             try #require(listener.isRunning)
-            try await Task.sleep(for: .milliseconds(20))
+            return FileManager.default.fileExists(atPath: ready.path)
         }
         let port = try #require(Int(String(contentsOf: ready, encoding: .utf8)))
         let config = root.appendingPathComponent("openclaw.json")
@@ -141,10 +153,9 @@ struct ConnectionModeCoordinatorTests {
                     await finish()
                     return
                 }
-                let cleanupDeadline = ContinuousClock.now.advanced(by: .seconds(5))
-                while try store.records().contains(sentinel), ContinuousClock.now < cleanupDeadline {
+                try await TestWait.state("connection cleanup ledger") {
                     try #require(listener.isRunning)
-                    try await Task.sleep(for: .milliseconds(20))
+                    return try !store.records().contains(sentinel)
                 }
                 try #require(!store.records().contains(sentinel), "Connection cleanup did not reach its ledger")
                 // The retired sweep continued after its ledger read: lsof had a five-second

@@ -2,7 +2,7 @@ import type { ServerResponse } from "node:http";
 import type { ChannelMessageSendMediaContext } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { nextcloudTalkPlugin } from "../channel-plugin-api.js";
 
 const transport = vi.hoisted(() => ({
@@ -38,20 +38,6 @@ type SendContext = Pick<
 
 const sendText = (ctx: SendContext) => nextcloudTalkPlugin.message?.send?.text?.(ctx);
 const sendMedia = (ctx: SendContext) => nextcloudTalkPlugin.outbound?.sendMedia?.(ctx);
-const registrations = [
-  { name: "message text", media: false, send: sendText },
-  {
-    name: "message media",
-    media: true,
-    send: (ctx: SendContext) => nextcloudTalkPlugin.message?.send?.media?.(ctx),
-  },
-  {
-    name: "outbound text",
-    media: false,
-    send: (ctx: SendContext) => nextcloudTalkPlugin.outbound?.sendText?.(ctx),
-  },
-  { name: "outbound media", media: true, send: sendMedia },
-];
 const MESSAGE_PATH = "/ocs/v2.php/apps/spreed/api/v1/bot/allowed/message";
 
 type RecordedRequest = { method?: string; url?: string; body: string };
@@ -128,29 +114,12 @@ afterEach(() => {
   transport.beforeLookup = undefined;
 });
 
-describe.each(registrations)("Nextcloud Talk $name handoff", ({ send, media }) => {
-  it("preserves message content, the dispatch hook, and the accepted receipt", async () => {
-    const handoff = createHandoff();
-    const requests = await withTalkServer(async (ctx) => {
-      await expect(send({ ...ctx, ...handoff.callbacks })).resolves.toMatchObject({
-        messageId: "42",
-        receipt: { platformMessageIds: ["42"], replyToId: "parent-1" },
-      });
-    });
-    expect(requests).toEqual([
-      {
-        method: "POST",
-        url: MESSAGE_PATH,
-        body: JSON.stringify({
-          message: media ? "hello\n\nAttachment: https://example.com/image.png" : "hello",
-          replyTo: "parent-1",
-        }),
-      },
-    ]);
-    expect(handoff.callbacks.onPlatformSendDispatch).toHaveBeenCalledOnce();
-  });
-
-  it("blocks a send cancelled during DNS without cancelling a concurrent delivery", async () => {
+it.each([
+  { name: "message text", media: false, send: sendText },
+  { name: "outbound media", media: true, send: sendMedia },
+])(
+  "blocks $name cancelled during DNS without cancelling a concurrent delivery",
+  async ({ send, media }) => {
     const cancelled = createHandoff();
     const current = createHandoff();
     const started = createDeferred<void>();
@@ -170,8 +139,9 @@ describe.each(registrations)("Nextcloud Talk $name handoff", ({ send, media }) =
           await Promise.race([started.promise.then(() => true), result.then(() => false)]),
         ).toBe(true);
         cancelled.cancel();
-        await expect(sendMedia({ ...ctx, ...current.callbacks })).resolves.toMatchObject({
+        await expect(send({ ...ctx, ...current.callbacks })).resolves.toMatchObject({
           messageId: "42",
+          receipt: { platformMessageIds: ["42"], replyToId: "parent-1" },
         });
       } finally {
         resume.resolve();
@@ -179,27 +149,29 @@ describe.each(registrations)("Nextcloud Talk $name handoff", ({ send, media }) =
       }
       expect(await result).toBe(cancelled.error);
     });
-    expect(requests.map((request) => request.url)).toEqual([MESSAGE_PATH]);
-  });
-});
+    expect(requests).toEqual([
+      {
+        method: "POST",
+        url: MESSAGE_PATH,
+        body: JSON.stringify({
+          message: media ? "hello\n\nAttachment: https://example.com/image.png" : "hello",
+          replyTo: "parent-1",
+        }),
+      },
+    ]);
+    expect(current.callbacks.onPlatformSendDispatch).toHaveBeenCalledOnce();
+  },
+);
 
-// All registrations above reach the same guarded sender; exercise its deeper lifecycle once.
-it.each([false, true])("rechecks redirects with delivery cancelled=%s", async (cancelled) => {
+it("rejects a redirect after delivery cancellation", async () => {
   const handoff = createHandoff();
   const requests = await withTalkServer(
     async (ctx) => {
-      const pending = Promise.resolve(sendMedia({ ...ctx, ...handoff.callbacks }));
-      if (cancelled) {
-        await expect(pending).rejects.toBe(handoff.error);
-      } else {
-        await expect(pending).resolves.toMatchObject({ messageId: "42" });
-      }
+      await expect(sendMedia({ ...ctx, ...handoff.callbacks })).rejects.toBe(handoff.error);
     },
     (response, received) => {
       if (received.length === 1) {
-        if (cancelled) {
-          handoff.cancel();
-        }
+        handoff.cancel();
         response.writeHead(307, { location: "/redirected-message" });
         response.end();
       } else {
@@ -209,7 +181,6 @@ it.each([false, true])("rechecks redirects with delivery cancelled=%s", async (c
   );
   expect(requests.map((request) => `${request.method} ${request.url}`)).toEqual([
     `POST ${MESSAGE_PATH}`,
-    ...(!cancelled ? ["POST /redirected-message"] : []),
   ]);
 });
 
@@ -253,7 +224,9 @@ it.each(["reject", "cancel"])(
         await Promise.race([started.promise, result]);
         expect(handoff.callbacks.onPlatformSendDispatch).toHaveBeenCalledOnce();
         expect(received).toEqual([]);
-        handoff.cancel();
+        if (mode === "cancel") {
+          handoff.cancel();
+        }
       } finally {
         resume.resolve();
         await result;

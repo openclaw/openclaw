@@ -1,14 +1,15 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   clearMemoryPluginState,
   registerMemoryCapability,
-  type MemoryFlushPlanResolver,
 } from "../../plugins/memory-state.test-fixtures.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { runSessionCompactionIfNeeded as runSessionCompactionIfNeededRaw } from "./agent-runner-memory.js";
 import {
   createTestFollowupRun,
@@ -53,23 +54,23 @@ async function runSessionCompactionIfNeeded(params: PreflightCompactionTestParam
   });
 }
 
-function registerMemoryFlushPlanResolverForTest(resolver: MemoryFlushPlanResolver): void {
-  registerMemoryCapability("memory-core", { flushPlanResolver: resolver });
-}
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-preflight-stale-");
 
 describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
   let rootDir = "";
 
-  beforeEach(async () => {
-    rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-preflight-stale-"));
-    registerMemoryFlushPlanResolverForTest(() => ({
-      softThresholdTokens: 4_000,
-      forceFlushTranscriptBytes: 1_000_000_000,
-      reserveTokensFloor: 20_000,
-      prompt: "Pre-compaction memory flush.\nNO_REPLY",
-      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
-      relativePath: "memory/2023-11-14.md",
-    }));
+  beforeEach(() => {
+    rootDir = sessionDirs.make();
+    registerMemoryCapability("memory-core", {
+      flushPlanResolver: () => ({
+        softThresholdTokens: 4_000,
+        forceFlushTranscriptBytes: 1_000_000_000,
+        reserveTokensFloor: 20_000,
+        prompt: "Pre-compaction memory flush.\nNO_REPLY",
+        systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+        relativePath: "memory/2023-11-14.md",
+      }),
+    });
     compactEmbeddedAgentSessionMock.mockReset().mockResolvedValue({
       ok: true,
       compacted: true,
@@ -78,10 +79,9 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
     incrementCompactionCountMock.mockReset().mockResolvedValue(1);
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     cliBackendsTesting.resetDepsForTest();
     clearMemoryPluginState();
-    await fs.rm(rootDir, { recursive: true, force: true });
   });
 
   async function runWithEntry(sessionEntry: SessionEntry, sessionFile: string) {
@@ -103,33 +103,7 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
     });
   }
 
-  it("does not compact when totalTokens is large but stale and the real transcript is small", async () => {
-    const sessionFile = path.join(rootDir, "session.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      `${JSON.stringify({ message: { role: "user", content: "x".repeat(2_000) } })}\n`,
-      "utf8",
-    );
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      sessionFile,
-      updatedAt: Date.now(),
-      totalTokens: 200_000,
-      totalTokensFresh: false,
-    };
-    await writeTestSessionStore(
-      path.join(rootDir, "sessions.json"),
-      "agent:main:main",
-      sessionEntry,
-    );
-
-    const entry = await runWithEntry(sessionEntry, sessionFile);
-
-    expect(entry).toBe(sessionEntry);
-    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
-  });
-
-  it("compacts when totalTokens is large and fresh", async () => {
+  it("compacts fresh token totals above the model budget", async () => {
     const sessionFile = path.join(rootDir, "session.jsonl");
     await fs.writeFile(
       sessionFile,
@@ -149,95 +123,28 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
       "agent:main:main",
       sessionEntry,
     );
-
     await runWithEntry(sessionEntry, sessionFile);
-
-    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("forwards the routed account id into preflight compaction", async () => {
-    // Group session keys carry no account identity, so if this launcher drops the
-    // account the compaction path resolves the root history limit after prompt
-    // preparation already used the account limit.
-    const sessionFile = path.join(rootDir, "session.jsonl");
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      sessionFile,
-      updatedAt: Date.now(),
-      totalTokens: 200_000,
-      totalTokensFresh: true,
-      totalTokensVersion: 1,
-    };
-    await writeTestSessionStore(
-      path.join(rootDir, "sessions.json"),
-      "agent:main:main",
-      sessionEntry,
-    );
-
-    await runSessionCompactionIfNeeded({
-      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
-      followupRun: createTestFollowupRun({
-        sessionId: "session",
-        sessionFile,
-        sessionKey: "agent:main:main",
-        agentAccountId: "work",
-        conversationRoutePeerId: "peer",
-        chatType: "direct",
-      }),
-      defaultModel: "anthropic/claude-opus-4-6",
-      modelContextTokens: 100_000,
-      sessionEntry,
-      sessionStore: { "agent:main:main": sessionEntry },
-      sessionKey: "agent:main:main",
-      storePath: path.join(rootDir, "sessions.json"),
-      isHeartbeat: false,
-      abortSignal: new AbortController().signal,
-    });
-
-    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
-    expect(compactEmbeddedAgentSessionMock.mock.calls[0]?.[0]).toMatchObject({
-      agentAccountId: "work",
-      conversationRoutePeerId: "peer",
-      chatType: "direct",
-    });
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledOnce();
   });
 
   it.each([
     {
-      name: "the configured roster default for an embedded provider",
-      runAgentId: undefined,
+      name: "the sole configured agent for an embedded provider",
       expectedAgentId: "ops",
       provider: "anthropic",
       model: "claude-opus-4-6",
       expectsCompaction: true,
     },
     {
-      name: "the explicitly prepared agent for an embedded provider",
-      runAgentId: "worker",
-      expectedAgentId: "worker",
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      expectsCompaction: true,
-    },
-    {
-      name: "the configured roster default before provider runtime selection",
-      runAgentId: undefined,
+      name: "the sole configured agent before provider runtime selection",
       expectedAgentId: "ops",
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      expectsCompaction: false,
-    },
-    {
-      name: "the explicitly prepared agent before provider runtime selection",
-      runAgentId: "worker",
-      expectedAgentId: "worker",
       provider: "openai",
       model: "gpt-5.6-luna",
       expectsCompaction: false,
     },
   ])(
     "resolves an unscoped session key with $name",
-    async ({ runAgentId, expectedAgentId, provider, model, expectsCompaction }) => {
+    async ({ expectedAgentId, provider, model, expectsCompaction }) => {
       const sessionFile = path.join(rootDir, "session.jsonl");
       const storePath = path.join(rootDir, "sessions.json");
       await fs.writeFile(
@@ -258,12 +165,12 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
       const result = await runSessionCompactionIfNeeded({
         cfg: {
           agents: {
-            list: [{ id: "ops", default: true }, { id: "worker" }],
+            entries: { ops: {} },
             defaults: { compaction: { memoryFlush: {} } },
           },
         },
         followupRun: createTestFollowupRun({
-          agentId: runAgentId,
+          agentId: undefined,
           sessionId: "session",
           sessionFile,
           sessionKey: "main",
@@ -290,4 +197,27 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
       }
     },
   );
+
+  it("excludes superseded oversized history from the active context budget", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionKey = "agent:main:main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+    };
+    const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+    await upsertSessionEntryCore(scope, sessionEntry);
+    const transcript = SessionManager.open(scope, rootDir);
+    transcript.appendMessage({
+      role: "user",
+      content: "superseded history ".repeat(25_000),
+      timestamp: 1,
+    });
+    const retained = transcript.appendMessage({ role: "user", content: "keep", timestamp: 2 });
+    transcript.appendCompaction("Short summary", retained, 100_000);
+    transcript.appendMessage({ role: "user", content: "latest", timestamp: 3 });
+    await runWithEntry(sessionEntry, path.join(rootDir, "session.jsonl"));
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+  });
 });

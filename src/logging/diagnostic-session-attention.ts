@@ -31,8 +31,9 @@ export function isRepeatedModelRequestStalled(
   const now = Date.now();
   return (
     activity.hasActiveEmbeddedRun === true &&
-    (activity.repeatedRequestNoProgressAgeMs ?? 0) >=
-      Math.max(abortThresholdMs, activity.activeModelCallRequestTimeoutMs ?? 0) &&
+    (activity.repeatedRequestNoProgressAgeMs ?? 0) >= abortThresholdMs &&
+    (activity.activeModelCallRecoveryDeadlineAtMs === undefined ||
+      now >= activity.activeModelCallRecoveryDeadlineAtMs) &&
     (activity.activeRetryWaitDeadlineAtMs === undefined ||
       now >= activity.activeRetryWaitDeadlineAtMs) &&
     (activity.activeToolRecoveryDeadlineAtMs === undefined ||
@@ -106,6 +107,12 @@ export function classifySessionAttention(params: {
       (params.activity.activeToolAgeMs ?? 0) > params.staleMs &&
       lastProgressAgeMs > params.staleMs
     ) {
+      if (
+        params.activity.activeToolDeadlineAtMs !== undefined &&
+        Date.now() < params.activity.activeToolDeadlineAtMs
+      ) {
+        return longRunning("tool_execution_wait");
+      }
       return stalled("blocked_tool_call", "blocked_tool_call");
     }
     if (

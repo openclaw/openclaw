@@ -134,14 +134,11 @@ export async function resolveIMessageRemoteHost(params: {
       detectedRemoteHosts.set(key, ambiguousSshWrapper);
       throwAmbiguousSshWrapper();
     }
-    const normalized = normalizeScpRemoteHost(detected);
-    if (detected && !normalized) {
-      logVerbose("imessage: ignoring unsafe auto-detected remoteHost from cliPath");
-    } else if (normalized) {
-      logVerbose(`imessage: detected remoteHost=${normalized} from cliPath`);
+    if (detected) {
+      logVerbose(`imessage: detected remoteHost=${detected} from cliPath`);
     }
-    detectedRemoteHosts.set(key, normalized ?? null);
-    return normalized;
+    detectedRemoteHosts.set(key, detected ?? null);
+    return detected;
   })().finally(() => remoteHostLookups.delete(key));
   remoteHostLookups.set(key, lookup);
   return await lookup;

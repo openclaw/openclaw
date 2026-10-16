@@ -10,7 +10,8 @@ import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { authorizeOperatorScopesForMethod, CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
@@ -50,14 +51,14 @@ const roleCases: Array<{
   { surface: "write-default", role: "empty", scopes: [], defaultScopes: [], declaredRead: [] },
   { surface: "trusted-operator", role: "empty", scopes: [], defaultScopes: [], declaredRead: [] },
   {
-    surface: "write-default",
+    surface: "trusted-operator",
     role: "reader",
     scopes: ["operator.read"],
     defaultScopes: ["operator.read"],
     declaredRead: ["operator.read"],
   },
   {
-    surface: "trusted-operator",
+    surface: "write-default",
     role: "reader",
     scopes: ["operator.read"],
     defaultScopes: ["operator.read"],

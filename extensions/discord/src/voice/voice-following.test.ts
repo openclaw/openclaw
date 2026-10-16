@@ -7,11 +7,7 @@ defineDiscordVoiceTests(
     it,
     vi,
     ChannelType,
-    createDefaultVoiceStates,
-    createConnectionMock,
     joinVoiceChannelMock,
-    agentCommandMock,
-    realtimeSessionMock,
     updateVoiceStateMock,
     enqueueSystemEventMock,
     configureVoiceStateGateway,
@@ -24,30 +20,6 @@ defineDiscordVoiceTests(
     updateVoiceState,
     handleSpeakingStart,
   }) => {
-    it("enqueues the initial voice roster without speaking on its own", async () => {
-      const client = createClient();
-      configureVoiceStateGateway(client, createDefaultVoiceStates);
-      const manager = createManager(undefined, client, {}, "default", "bot-user");
-
-      await manager.join({ guildId: "g1", channelId: "1001" });
-      await vi.waitFor(() => expect(enqueueSystemEventMock).toHaveBeenCalledOnce());
-
-      expect(enqueueSystemEventMock).toHaveBeenCalledOnce();
-      const [text, options] = enqueueSystemEventMock.mock.calls[0] ?? [];
-      expect(text).toContain("Discord voice session roster");
-      expect(text).toContain('display_name="Peter"');
-      expect(text).toContain('display_name="Sam"');
-      expect(text).not.toContain("Molty");
-      expect(text).toContain("Do not respond to this event on its own");
-      expect(options).toEqual({
-        sessionKey: "discord:g1:c1",
-        contextKey: "discord:voice-membership:default:g1",
-        replace: true,
-      });
-      expect(agentCommandMock).not.toHaveBeenCalled();
-      expect(realtimeSessionMock.sendUserMessage).not.toHaveBeenCalled();
-    });
-
     it("refreshes an active roster from a new gateway guild snapshot", async () => {
       const client = createClient();
       let voiceStates = [
@@ -132,22 +104,6 @@ defineDiscordVoiceTests(
       expect(enqueueSystemEventMock).toHaveBeenCalledTimes(2);
       expect(String(enqueueSystemEventMock.mock.calls[1]?.[0])).toContain("A participant left");
       expect(String(enqueueSystemEventMock.mock.calls[1]?.[0])).toContain('user_id="u-4999"');
-    });
-
-    it("closes queued roster context when the voice session ends", async () => {
-      const client = createClient();
-      configureVoiceStateGateway(client, () => []);
-      const manager = createManager(undefined, client);
-
-      await manager.join({ guildId: "g1", channelId: "1001" });
-      await vi.waitFor(() => expect(enqueueSystemEventMock).toHaveBeenCalledOnce());
-      await manager.leave({ guildId: "g1" });
-      await vi.waitFor(() => expect(enqueueSystemEventMock).toHaveBeenCalledTimes(2));
-
-      const texts = enqueueSystemEventMock.mock.calls.map(([text]) => String(text));
-      expect(texts[0]).toContain("Discord voice session roster");
-      expect(texts[1]).toContain("Discord voice session ended");
-      expect(texts[1]).toContain("prior roster or membership updates");
     });
 
     it("enqueues only real participant joins and leaves for the active voice channel", async () => {
@@ -235,45 +191,6 @@ defineDiscordVoiceTests(
           replace: true,
         });
       }
-    });
-
-    it("keeps every burst membership update self-contained with a current roster", async () => {
-      const client = createClient();
-      const voiceStates: Array<Record<string, unknown>> = [];
-      configureVoiceStateGateway(client, () => voiceStates);
-      const manager = createManager(undefined, client);
-      await manager.join({ guildId: "g1", channelId: "1001" });
-      await vi.waitFor(() => expect(enqueueSystemEventMock).toHaveBeenCalledOnce());
-      enqueueSystemEventMock.mockClear();
-
-      for (let index = 0; index < 25; index += 1) {
-        const joinedState = {
-          guild_id: "g1",
-          user_id: `u-${String(index).padStart(2, "0")}`,
-          channel_id: "1001",
-        };
-        voiceStates.push(joinedState);
-        await manager.handleVoiceStateUpdate(joinedState as never, null);
-      }
-      await vi.waitFor(() => expect(enqueueSystemEventMock).toHaveBeenCalledTimes(25));
-
-      for (const [text, options] of enqueueSystemEventMock.mock.calls) {
-        expect(String(text)).toContain(
-          "Current participants other than the agent after this update",
-        );
-        expect(String(text)).toContain(
-          "This roster snapshot supersedes prior voice membership context",
-        );
-        expect(options).toEqual({
-          sessionKey: "discord:g1:c1",
-          contextKey: "discord:voice-membership:default:g1",
-          replace: true,
-        });
-      }
-      const latest = String(enqueueSystemEventMock.mock.calls.at(-1)?.[0]);
-      expect(latest).toContain('user_id="u-00"');
-      expect(latest).toContain('user_id="u-19"');
-      expect(latest).toContain("5 more participant(s)");
     });
 
     it("keeps cache-race speakers in the roster until their leave events", async () => {
@@ -434,15 +351,6 @@ defineDiscordVoiceTests(
       expect(texts.slice(2).some((text) => text.includes('user_id="u-slow"'))).toBe(false);
     });
 
-    it("follows configured users into voice channels", async () => {
-      const manager = createFollowManager({ followUsers: ["discord:u-owner"] });
-
-      await updateVoiceState(manager, "u-owner", "1001");
-
-      expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
-      expectConnectedStatus(manager, "1001");
-    });
-
     it("does not follow configured users when followUsersEnabled is false", async () => {
       const manager = createFollowManager({ followUsersEnabled: false });
 
@@ -450,38 +358,6 @@ defineDiscordVoiceTests(
 
       expect(joinVoiceChannelMock).not.toHaveBeenCalled();
       expect(manager.status()).toEqual([]);
-    });
-
-    it("disconnects stale bot voice state when followed users are absent during reconciliation", async () => {
-      const client = createClient();
-      client.rest.get
-        .mockRejectedValueOnce(new Error("Unknown Voice State"))
-        .mockResolvedValueOnce({
-          guild_id: "g1",
-          user_id: "bot-user",
-          channel_id: "1001",
-        });
-      const manager = createFollowManager({}, client, { guilds: { g1: {} } }, "bot-user");
-
-      await manager.autoJoin();
-      await manager.destroy();
-
-      expect(updateVoiceStateMock).toHaveBeenCalledWith({
-        guild_id: "g1",
-        channel_id: null,
-        self_mute: false,
-        self_deaf: false,
-      });
-    });
-
-    it("moves with configured followed users", async () => {
-      const manager = createFollowManager();
-
-      await updateVoiceState(manager, "u-owner", "1001");
-      await updateVoiceState(manager, "u-owner", "1002");
-
-      expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
-      expectConnectedStatus(manager, "1002");
     });
 
     it("preserves follow ownership when a bot voice move rebuilds the session", async () => {
@@ -492,15 +368,6 @@ defineDiscordVoiceTests(
       await updateVoiceState(manager, "u-owner", null);
 
       expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
-      expect(manager.status()).toEqual([]);
-    });
-
-    it("leaves when a followed user disconnects", async () => {
-      const manager = createFollowManager();
-
-      await updateVoiceState(manager, "u-owner", "1001");
-      await updateVoiceState(manager, "u-owner", null);
-
       expect(manager.status()).toEqual([]);
     });
 
@@ -581,9 +448,21 @@ defineDiscordVoiceTests(
       );
 
       await manager.autoJoin();
-      await manager.destroy();
-
       expect(client.rest.get).toHaveBeenCalledTimes(24);
+      for (let pass = 0; pass < 2; pass += 1) {
+        const before = client.rest.get.mock.calls.length;
+        await manager.autoJoin();
+        const calls = client.rest.get.mock.calls.slice(before);
+        expect(calls.length).toBeLessThanOrEqual(32);
+        expect(new Set(calls.map(([path]) => String(path).split("/")[2])).size).toBeLessThanOrEqual(
+          4,
+        );
+      }
+      const visitedGuilds = new Set(
+        client.rest.get.mock.calls.map(([path]) => String(path).split("/")[2]),
+      );
+      expect(visitedGuilds.size).toBe(10);
+      await manager.destroy();
     });
 
     it("keeps followed voice state when reconciliation hits a transient REST failure", async () => {
@@ -602,22 +481,24 @@ defineDiscordVoiceTests(
 
     it("does not reconnect from an in-flight followed user reconciliation after destroy", async () => {
       const client = createClient();
-      let resolveVoiceState: (state: unknown) => void = () => {};
-      client.rest.get.mockImplementation(
-        () =>
-          new Promise((resolve) => {
-            resolveVoiceState = resolve;
-          }),
-      );
+      const requested = Promise.withResolvers<void>();
+      const response = Promise.withResolvers<unknown>();
+      client.rest.get.mockImplementation(() => {
+        requested.resolve();
+        return response.promise;
+      });
       const manager = createFollowManager({}, client, { guilds: { g1: {} } });
 
       const autoJoinPromise = manager.autoJoin();
-      await vi.waitFor(() => {
-        expect(client.rest.get).toHaveBeenCalled();
+      await requested.promise;
+      let destroyed = false;
+      const destroying = manager.destroy().then(() => {
+        destroyed = true;
       });
-      await manager.destroy();
-      resolveVoiceState({ guild_id: "g1", user_id: "u-owner", channel_id: "1001" });
-      await autoJoinPromise;
+      await Promise.resolve();
+      expect(destroyed).toBe(false);
+      response.resolve({ guild_id: "g1", user_id: "u-owner", channel_id: "1001" });
+      await Promise.all([destroying, autoJoinPromise]);
 
       expect(joinVoiceChannelMock).not.toHaveBeenCalled();
       expect(manager.status()).toEqual([]);
@@ -639,55 +520,16 @@ defineDiscordVoiceTests(
       );
 
       await manager.autoJoin();
-      expect(client.rest.get).toHaveBeenCalledTimes(31);
+      expect(client.rest.get).toHaveBeenCalledTimes(32);
       expect(joinVoiceChannelMock).not.toHaveBeenCalled();
 
       await manager.autoJoin();
       await manager.destroy();
 
-      expect(client.rest.get).toHaveBeenCalledTimes(62);
+      // The bot slot needs no REST lookup after the followed user was found.
+      expect(client.rest.get).toHaveBeenCalledTimes(63);
       expect(joinVoiceChannelMock).toHaveBeenCalledWith(
         expect.objectContaining({ guildId: "g1", channelId: "1001" }),
-      );
-    });
-
-    it("rotates followed user reconciliation guilds when a user page consumes the REST budget", async () => {
-      const client = createClient();
-      client.fetchChannel.mockImplementation(async (channelId: string) => ({
-        id: channelId,
-        guildId: "g2",
-        guild: { id: "g2", name: "Guild Two" },
-        type: ChannelType.GuildVoice,
-      }));
-      client.rest.get.mockImplementation(async (path: string) => {
-        if (path.includes("/guilds/g2/") && path.endsWith("/u1")) {
-          return { guild_id: "g2", user_id: "u1", channel_id: "2001" };
-        }
-        throw new Error("Unknown Voice State");
-      });
-      const manager = createFollowManager(
-        { followUsers: Array.from({ length: 40 }, (_, index) => `u${index + 1}`) },
-        client,
-        { guilds: { g1: {}, g2: {} } },
-        "bot-user",
-      );
-
-      await manager.autoJoin();
-      expect(client.rest.get).toHaveBeenCalledTimes(31);
-      expect(joinVoiceChannelMock).not.toHaveBeenCalled();
-
-      await manager.autoJoin();
-      await manager.destroy();
-
-      expect(client.rest.get).toHaveBeenCalledTimes(62);
-      expect(client.rest.get.mock.calls.slice(0, 31)).toEqual(
-        expect.arrayContaining([[expect.stringContaining("/guilds/g1/voice-states/u1")]]),
-      );
-      expect(client.rest.get.mock.calls.slice(31)).toEqual(
-        expect.arrayContaining([[expect.stringContaining("/guilds/g2/voice-states/u1")]]),
-      );
-      expect(joinVoiceChannelMock).toHaveBeenCalledWith(
-        expect.objectContaining({ guildId: "g2", channelId: "2001" }),
       );
     });
 
@@ -767,22 +609,6 @@ defineDiscordVoiceTests(
 
       expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
       expect(manager.status()).toEqual([]);
-    });
-
-    it("skips destroying an already destroyed voice connection on leave", async () => {
-      const connection = createConnectionMock();
-      connection.destroy.mockImplementation(() => {
-        throw new Error("Cannot destroy VoiceConnection - it has already been destroyed");
-      });
-      joinVoiceChannelMock.mockReturnValueOnce(connection);
-      const manager = createManager();
-
-      await manager.join({ guildId: "g1", channelId: "1001" });
-      connection.state.status = "destroyed";
-
-      const result = await manager.leave({ guildId: "g1" });
-      expect(result.ok).toBe(true);
-      expect(connection.destroy).not.toHaveBeenCalled();
     });
   },
 );

@@ -54,32 +54,29 @@ function isTrustedPlaintextWebSocketHost(hostname: string): boolean {
 }
 
 function isSecureWebSocketUrl(rawUrl: string, options?: { allowPrivateWs?: boolean }): boolean {
-  try {
-    const url = new URL(rawUrl);
-    const protocol =
-      url.protocol === "https:" ? "wss:" : url.protocol === "http:" ? "ws:" : url.protocol;
-    if (protocol === "wss:") {
-      return true;
-    }
-    if (protocol !== "ws:") {
-      return false;
-    }
-    if (isGatewayLoopbackHost(url.hostname) || isTrustedPlaintextWebSocketHost(url.hostname)) {
-      return true;
-    }
-    if (options?.allowPrivateWs === true) {
-      const hostForIpCheck =
-        url.hostname.startsWith("[") && url.hostname.endsWith("]")
-          ? url.hostname.slice(1, -1)
-          : url.hostname;
-      return (
-        isPrivateOrLoopbackHost(url.hostname) || parseGatewayIpAddress(hostForIpCheck) === undefined
-      );
-    }
-    return false;
-  } catch {
+  const url = URL.parse(rawUrl);
+  if (!url) {
     return false;
   }
+  const protocol =
+    url.protocol === "https:" ? "wss:" : url.protocol === "http:" ? "ws:" : url.protocol;
+  if (protocol === "wss:") {
+    return true;
+  }
+  if (protocol !== "ws:") {
+    return false;
+  }
+  if (isTrustedPlaintextWebSocketHost(url.hostname)) {
+    return true;
+  }
+  if (options?.allowPrivateWs === true) {
+    const hostForIpCheck =
+      url.hostname.startsWith("[") && url.hostname.endsWith("]")
+        ? url.hostname.slice(1, -1)
+        : url.hostname;
+    return parseGatewayIpAddress(hostForIpCheck) === undefined;
+  }
+  return false;
 }
 
 export class GatewayWebSocketTransportConfigurationError extends Error {}
@@ -104,12 +101,7 @@ export function resolveGatewayWebSocketTransport(
   }
   const allowPrivateWs = (params.env ?? process.env).OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1";
   if (!isSecureWebSocketUrl(params.url, { allowPrivateWs })) {
-    let displayHost = params.url;
-    try {
-      displayHost = new URL(params.url).hostname || params.url;
-    } catch {
-      // Use the raw URL when syntax is malformed.
-    }
+    const displayHost = URL.parse(params.url)?.hostname || params.url;
     throw new GatewayWebSocketTransportConfigurationError(
       `SECURITY ERROR: Cannot connect to "${displayHost}" over plaintext ws://. ` +
         "Both credentials and chat data would be exposed to network interception. " +

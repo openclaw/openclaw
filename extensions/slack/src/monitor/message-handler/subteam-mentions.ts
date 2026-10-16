@@ -20,12 +20,10 @@ export function normalizeSlackId(value: unknown): string | undefined {
   return normalizeOptionalString(value)?.toUpperCase();
 }
 
-function extractSlackSubteamMentionIds(text?: string | null): string[] {
-  if (!text) {
-    return [];
-  }
+export function collectSlackMentionIds(text: string | null | undefined, regex: RegExp): string[] {
   const ids = new Set<string>();
-  for (const match of text.matchAll(SUBTEAM_MENTION_RE)) {
+  regex.lastIndex = 0;
+  for (const match of (text ?? "").matchAll(regex)) {
     const id = normalizeSlackId(match[1]);
     if (id) {
       ids.add(id);
@@ -104,7 +102,7 @@ export async function isSlackSubteamMentionForBot(params: {
   if (!botUserId) {
     return false;
   }
-  const subteamIds = extractSlackSubteamMentionIds(params.text);
+  const subteamIds = collectSlackMentionIds(params.text, SUBTEAM_MENTION_RE);
   if (subteamIds.length === 0) {
     return false;
   }

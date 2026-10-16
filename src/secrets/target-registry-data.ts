@@ -9,6 +9,11 @@ import { PROVIDER_REQUEST_SECRET_FIELD_GROUPS } from "./provider-request-secret-
 import { parseDotPath } from "./shared.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
+type PluginConfigTargetScope = {
+  pluginIds: readonly string[];
+  includeChannelContracts?: boolean;
+};
+
 const SECRET_INPUT_SHAPE = "secret_input"; // pragma: allowlist secret
 const SIBLING_REF_SHAPE = "sibling_ref"; // pragma: allowlist secret
 
@@ -16,8 +21,6 @@ const WEB_PROVIDER_SECRET_CONFIGS = [
   { contract: "webSearchProviders", configPath: "webSearch.apiKey" },
   { contract: "webFetchProviders", configPath: "webFetch.apiKey" },
 ] as const;
-
-type WebProviderSecretConfig = (typeof WEB_PROVIDER_SECRET_CONFIGS)[number];
 
 function createOpenClawConfigSecretTargetEntry(
   pathPattern: string,
@@ -57,20 +60,6 @@ function createPluginOpenClawConfigSecretTargetEntry(
   return createOpenClawConfigSecretTargetEntry(pathPattern, { pathPatternSegments });
 }
 
-function hasSensitiveConfigHint(
-  plugin: PluginManifestRecord,
-  configPath: WebProviderSecretConfig["configPath"],
-): boolean {
-  return plugin.configUiHints?.[configPath]?.sensitive === true;
-}
-
-function hasWebProviderContract(
-  plugin: PluginManifestRecord,
-  contract: WebProviderSecretConfig["contract"],
-): boolean {
-  return (plugin.contracts?.[contract]?.length ?? 0) > 0;
-}
-
 function listPluginWebProviderSecretTargetRegistryEntries(
   plugins: readonly PluginManifestRecord[],
 ): SecretTargetRegistryEntry[] {
@@ -78,8 +67,8 @@ function listPluginWebProviderSecretTargetRegistryEntries(
   for (const record of plugins) {
     for (const config of WEB_PROVIDER_SECRET_CONFIGS) {
       if (
-        hasWebProviderContract(record, config.contract) &&
-        hasSensitiveConfigHint(record, config.configPath)
+        (record.contracts?.[config.contract]?.length ?? 0) > 0 &&
+        record.configUiHints?.[config.configPath]?.sensitive === true
       ) {
         entries.push(createPluginOpenClawConfigSecretTargetEntry(record.id, config.configPath));
       }
@@ -129,41 +118,43 @@ function listChannelSecretTargetRegistryEntries(
 }
 
 const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
-  {
-    id: "auth-profiles.api_key.key",
-    targetType: "auth-profiles.api_key.key",
+  ...(
+    [
+      ["api_key", "key"],
+      ["token", "token"],
+    ] as const
+  ).map(([authProfileType, field]): SecretTargetRegistryEntry => ({
+    id: `auth-profiles.${authProfileType}.${field}`,
+    targetType: `auth-profiles.${authProfileType}.${field}`,
     configFile: "auth-profile-store",
-    pathPattern: "profiles.*.key",
-    refPathPattern: "profiles.*.keyRef",
+    pathPattern: `profiles.*.${field}`,
+    refPathPattern: `profiles.*.${field}Ref`,
     secretShape: SIBLING_REF_SHAPE,
     expectedResolvedValue: "string",
     includeInPlan: true,
     includeInConfigure: true,
     includeInAudit: true,
-    authProfileType: "api_key",
-  },
-  {
-    id: "auth-profiles.token.token",
-    targetType: "auth-profiles.token.token",
-    configFile: "auth-profile-store",
-    pathPattern: "profiles.*.token",
-    refPathPattern: "profiles.*.tokenRef",
-    secretShape: SIBLING_REF_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-    authProfileType: "token",
-  },
+    authProfileType,
+  })),
   ...[
     "memory.search.remote.apiKey",
     "agents.entries.*.memory.search.remote.apiKey",
     "cron.webhookToken",
+    "database.postgres.connection",
     "gateway.auth.token",
     "gateway.auth.password",
     "gateway.remote.password",
     "gateway.remote.token",
   ].map((pathPattern) => createOpenClawConfigSecretTargetEntry(pathPattern)),
+  // Header strings support authored env references, but not structured SecretRef config writes.
+  ...["memory.search.remote.headers.*", "agents.entries.*.memory.search.remote.headers.*"].map(
+    (pathPattern): SecretTargetRegistryEntry =>
+      Object.assign(createOpenClawConfigSecretTargetEntry(pathPattern), {
+        includeInPlan: false,
+        includeInConfigure: false,
+        includeInAudit: false,
+      }),
+  ),
   ...["tts", "agents.entries.*.tts"].flatMap((prefix) =>
     ["providers.*", "personas.*.providers.*"].map((providerPath): SecretTargetRegistryEntry => {
       const path = `${prefix}.${providerPath}.apiKey`;
@@ -212,27 +203,66 @@ function loadSecretTargetRegistryFromPluginMetadata(params: {
   env: NodeJS.ProcessEnv;
   preferPersisted?: boolean;
   throwOnLoadError?: boolean;
+  pluginConfig?: PluginConfigTargetScope;
+  configuredOnly?: boolean;
 }): SecretTargetRegistryEntry[] {
   const plugins = resolvePluginMetadataSnapshot({
     ...(params.config !== undefined ? { config: params.config } : {}),
     env: params.env,
     allowWorkspaceScopedCurrent: true,
+    ...(params.pluginConfig?.pluginIds ? { pluginIds: params.pluginConfig.pluginIds } : {}),
     ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
   }).plugins;
-  return buildSecretTargetRegistryFromPlugins(plugins, params);
+  return buildSecretTargetRegistryFromPlugins(plugins, {
+    throwOnLoadError: params.throwOnLoadError,
+    pluginConfig: params.pluginConfig,
+    ...(params.configuredOnly ? { config: params.config ?? {} } : {}),
+  });
 }
 
 /** Builds secret targets from one exact manifest-registry plugin set. */
 export function buildSecretTargetRegistryFromPlugins(
   plugins: readonly PluginManifestRecord[],
-  options?: { throwOnLoadError?: boolean },
+  options?: {
+    throwOnLoadError?: boolean;
+    /** Selected owners' manifest targets, optionally including their channel contracts. */
+    pluginConfig?: PluginConfigTargetScope;
+    /** Restrict discovery to subtrees present in this config, including disabled owners. */
+    config?: OpenClawConfig;
+  },
 ): SecretTargetRegistryEntry[] {
-  const channelPlugins = plugins.filter(
+  const pluginConfigIds = options?.pluginConfig?.pluginIds
+    ? new Set(options.pluginConfig.pluginIds)
+    : options?.config
+      ? new Set(Object.keys(options.config.plugins?.entries ?? {}))
+      : null;
+  const configPlugins = pluginConfigIds
+    ? plugins.filter((record) => pluginConfigIds.has(record.id))
+    : plugins;
+  const channelIds = options?.config ? new Set(Object.keys(options.config.channels ?? {})) : null;
+  const channelPlugins = (
+    options?.pluginConfig
+      ? options.pluginConfig.includeChannelContracts
+        ? configPlugins
+        : []
+      : plugins
+  ).filter(
     (record) =>
-      record.channels.length > 0 ||
-      Object.keys(record.channelConfigs ?? {}).length > 0 ||
-      Boolean(record.channelCatalogMeta?.id) ||
-      Boolean(record.packageChannel?.id),
+      (!channelIds ||
+        // Shipped channel contracts may also declare their own plugin config secrets.
+        pluginConfigIds?.has(record.id) ||
+        (channelIds.size > 0 &&
+          // External contracts can have multiple owners and cover more than one channel.
+          // Only bundled contracts have a complete, channel-local artifact lookup.
+          (record.origin !== "bundled" ||
+            record.channels.some((id) => channelIds.has(id)) ||
+            Object.keys(record.channelConfigs ?? {}).some((id) => channelIds.has(id)) ||
+            channelIds.has(record.channelCatalogMeta?.id ?? "") ||
+            channelIds.has(record.packageChannel?.id ?? "")))) &&
+      (record.channels.length > 0 ||
+        Object.keys(record.channelConfigs ?? {}).length > 0 ||
+        Boolean(record.channelCatalogMeta?.id) ||
+        Boolean(record.packageChannel?.id)),
   );
   // Installed/workspace plugins own secret targets exactly like bundled ones
   // (#104320: the Exa split moved web providers out of bundled origin and their
@@ -241,11 +271,14 @@ export function buildSecretTargetRegistryFromPlugins(
   // secretInput paths — so a non-bundled origin cannot widen target paths
   // beyond its own declared contracts.
   const entries = [
-    ...CORE_SECRET_TARGET_REGISTRY,
-    ...listPluginWebProviderSecretTargetRegistryEntries(plugins),
-    ...listPluginConfigSecretTargetRegistryEntries(plugins),
+    ...(options?.pluginConfig ? [] : CORE_SECRET_TARGET_REGISTRY),
+    ...listPluginWebProviderSecretTargetRegistryEntries(configPlugins),
+    ...listPluginConfigSecretTargetRegistryEntries(configPlugins),
     ...listChannelSecretTargetRegistryEntries(channelPlugins, options?.throwOnLoadError),
-    ...listOfficialExternalChannelSecretTargetRegistryEntries(),
+    // Catalog fallbacks are constructed under channels, never plugin config.
+    ...(options?.pluginConfig || channelIds?.size === 0
+      ? []
+      : listOfficialExternalChannelSecretTargetRegistryEntries()),
   ];
   const seen = new Set<string>();
   return entries.filter((entry) => {
@@ -258,18 +291,18 @@ export function buildSecretTargetRegistryFromPlugins(
   });
 }
 
-/** Returns only core-owned secret target registry entries. */
 /** Returns static core secret target registry entries without plugin-derived targets. */
 export function getCoreSecretTargetRegistry(): SecretTargetRegistryEntry[] {
   return CORE_SECRET_TARGET_REGISTRY;
 }
 
-/** Returns the process-cached registry including bundled plugin/channel metadata. */
-/** Returns core plus plugin/channel secret target registry entries for the current metadata view. */
+/** Returns the full registry, configured subtrees, or selected plugin owners' targets. */
 export function getSecretTargetRegistry(params?: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   sourceTree?: boolean;
+  pluginConfig?: PluginConfigTargetScope;
+  configuredOnly?: boolean;
 }): SecretTargetRegistryEntry[] {
   if (params?.sourceTree) {
     // Docs generation needs the source plugin tree, never a process-cached or persisted snapshot.
@@ -282,18 +315,17 @@ export function getSecretTargetRegistry(params?: {
       throwOnLoadError: true,
     });
   }
-  if (params?.config) {
+  if (params?.config || params?.pluginConfig) {
     // Config-scoped plugin roots and policy are not process-stable. Compile these registries per
     // request so one config cannot poison discovery for a later config in the same process.
     return loadSecretTargetRegistryFromPluginMetadata({
       config: params.config,
       env: params.env ?? process.env,
+      pluginConfig: params.pluginConfig,
+      configuredOnly: params.configuredOnly,
     });
   }
-  if (cachedSecretTargetRegistry) {
-    return cachedSecretTargetRegistry;
-  }
-  cachedSecretTargetRegistry = loadSecretTargetRegistryFromPluginMetadata({
+  cachedSecretTargetRegistry ??= loadSecretTargetRegistryFromPluginMetadata({
     env: process.env,
   });
   return cachedSecretTargetRegistry;

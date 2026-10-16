@@ -16,7 +16,6 @@ import {
   type GoogleMeetConferenceRecord,
   type GoogleMeetParticipant,
   type GoogleMeetParticipantSession,
-  type GoogleMeetPreflightReport,
   type GoogleMeetSmartNotesListResult,
   type GoogleMeetSpace,
 } from "./meet-api.js";
@@ -29,35 +28,29 @@ function getParticipantDisplayName(participant: GoogleMeetParticipant): string |
   );
 }
 
-function getDocsDestinationDocumentId(
-  destination: Record<string, unknown> | undefined,
-): string | undefined {
-  return (
+async function attachDocumentText<T extends { docsDestination?: Record<string, unknown> }>(
+  accessToken: string,
+  resource: T,
+): Promise<T & { documentText?: string; documentTextError?: string }> {
+  const destination = resource.docsDestination;
+  const documentId =
     extractGoogleDriveDocumentId(destination?.document) ??
     extractGoogleDriveDocumentId(destination?.documentId) ??
-    extractGoogleDriveDocumentId(destination?.file)
-  );
-}
-
-async function attachDocumentText<T extends { docsDestination?: Record<string, unknown> }>(params: {
-  accessToken: string;
-  resource: T;
-}): Promise<T & { documentText?: string; documentTextError?: string }> {
-  const documentId = getDocsDestinationDocumentId(params.resource.docsDestination);
+    extractGoogleDriveDocumentId(destination?.file);
   if (!documentId) {
-    return params.resource;
+    return resource;
   }
   try {
     return {
-      ...params.resource,
+      ...resource,
       documentText: await exportGoogleDriveDocumentText({
-        accessToken: params.accessToken,
+        accessToken,
         documentId,
       }),
     };
   } catch (error) {
     return {
-      ...params.resource,
+      ...resource,
       documentTextError: formatErrorMessage(error),
     };
   }
@@ -203,15 +196,12 @@ function mergeAttendanceRows(
   return [...grouped.values()].map((row) => decorateAttendanceRow(row, conferenceRecord, params));
 }
 
-export async function fetchGoogleMeetArtifacts(params: {
-  accessToken: string;
-  meeting?: string;
-  conferenceRecord?: string;
-  pageSize?: number;
-  includeTranscriptEntries?: boolean;
-  allConferenceRecords?: boolean;
-  includeDocumentBodies?: boolean;
-}): Promise<GoogleMeetArtifactsResult> {
+export async function fetchGoogleMeetArtifacts(
+  params: Parameters<typeof resolveConferenceRecordQuery>[0] & {
+    includeTranscriptEntries?: boolean;
+    includeDocumentBodies?: boolean;
+  },
+): Promise<GoogleMeetArtifactsResult> {
   const resolved = await resolveConferenceRecordQuery(params);
   const artifacts = await Promise.all(
     resolved.conferenceRecords.map(async (conferenceRecord) => {
@@ -257,22 +247,14 @@ export async function fetchGoogleMeetArtifacts(params: {
       const transcriptsWithText =
         params.includeDocumentBodies === true
           ? await Promise.all(
-              transcripts.map((transcript) =>
-                attachDocumentText({
-                  accessToken: params.accessToken,
-                  resource: transcript,
-                }),
-              ),
+              transcripts.map((transcript) => attachDocumentText(params.accessToken, transcript)),
             )
           : transcripts;
       const smartNotesWithText =
         params.includeDocumentBodies === true
           ? await Promise.all(
               smartNotesResult.smartNotes.map((smartNote) =>
-                attachDocumentText({
-                  accessToken: params.accessToken,
-                  resource: smartNote,
-                }),
+                attachDocumentText(params.accessToken, smartNote),
               ),
             )
           : smartNotesResult.smartNotes;
@@ -297,16 +279,10 @@ export async function fetchGoogleMeetArtifacts(params: {
   };
 }
 
-export async function fetchGoogleMeetAttendance(params: {
-  accessToken: string;
-  meeting?: string;
-  conferenceRecord?: string;
-  pageSize?: number;
-  allConferenceRecords?: boolean;
-  mergeDuplicateParticipants?: boolean;
-  lateAfterMinutes?: number;
-  earlyBeforeMinutes?: number;
-}): Promise<GoogleMeetAttendanceResult> {
+export async function fetchGoogleMeetAttendance(
+  params: Parameters<typeof resolveConferenceRecordQuery>[0] &
+    Parameters<typeof mergeAttendanceRows>[2],
+): Promise<GoogleMeetAttendanceResult> {
   const resolved = await resolveConferenceRecordQuery(params);
   const nestedRows = await Promise.all(
     resolved.conferenceRecords.map(async (conferenceRecord) => {
@@ -346,7 +322,7 @@ export function buildGoogleMeetPreflightReport(params: {
   space: GoogleMeetSpace;
   previewAcknowledged: boolean;
   tokenSource: "cached-access-token" | "refresh-token";
-}): GoogleMeetPreflightReport {
+}) {
   const blockers: string[] = [];
   if (!params.previewAcknowledged) {
     blockers.push(

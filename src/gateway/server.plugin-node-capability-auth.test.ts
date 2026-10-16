@@ -4,8 +4,12 @@ import { connect, createServer, type Socket } from "node:net";
 import os from "node:os";
 import { join as joinPath } from "node:path";
 import type { Duplex } from "node:stream";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
@@ -17,7 +21,8 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import { DESKTOP_OBSERVE_PATH, mintDesktopObserverToken } from "./desktop/observe-bridge.js";
 import { PLUGIN_NODE_CAPABILITY_PATH_PREFIX } from "./plugin-node-capability.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
-import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
+import { attachGatewayUpgradeHandler } from "./server-http-upgrades.js";
+import { createGatewayHttpServer } from "./server-http.js";
 import { authorizePluginNodeCapabilityRequest } from "./server/plugin-node-capability-auth.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -31,6 +36,8 @@ const A2UI_PATH = "/__openclaw__/a2ui";
 const CANVAS_HOST_PATH = "/__openclaw__/canvas";
 const CANVAS_WS_PATH = "/__openclaw__/test/ws";
 const CANVAS_CAPABILITY_PATH_PREFIX = PLUGIN_NODE_CAPABILITY_PATH_PREFIX;
+
+afterEach(() => clearRuntimeConfigSnapshot());
 
 type CanvasHostHandler = {
   rootDir: string;
@@ -523,6 +530,7 @@ describe("gateway plugin node capability auth", () => {
   }, 60_000);
 
   test("revalidates a node capability after awaited bearer auth", async () => {
+    setRuntimeConfigSnapshot({});
     const capability = "active-node";
     const rateLimiter = createGatewayAuthRateLimiter(
       {
@@ -559,6 +567,7 @@ describe("gateway plugin node capability auth", () => {
   });
 
   test("does not let node capability fallback bypass missing proxy attribution", async () => {
+    setRuntimeConfigSnapshot({});
     await withCanvasGatewayHarness({
       resolvedAuth: tokenResolvedAuth,
       handleHttpRequest: allowCanvasHostHttp,
@@ -585,6 +594,7 @@ describe("gateway plugin node capability auth", () => {
   }, 60_000);
 
   test("rejects malformed raw HTTP request targets without disrupting gateway", async () => {
+    setRuntimeConfigSnapshot({});
     await withCanvasGatewayHarness({
       resolvedAuth: tokenResolvedAuth,
       handleHttpRequest: allowCanvasHostHttp,
@@ -595,6 +605,7 @@ describe("gateway plugin node capability auth", () => {
   }, 60_000);
 
   test("rejects malformed raw WebSocket upgrade targets without disrupting gateway", async () => {
+    setRuntimeConfigSnapshot({});
     await withCanvasGatewayHarness({
       resolvedAuth: tokenResolvedAuth,
       handleHttpRequest: allowCanvasHostHttp,
@@ -614,6 +625,7 @@ describe("gateway plugin node capability auth", () => {
   }, 60_000);
 
   test("re-resolves canvas bearer auth on each upgrade after shared auth rotation", async () => {
+    setRuntimeConfigSnapshot({});
     let currentAuth = tokenResolvedAuth;
 
     await withCanvasGatewayHarness({
@@ -716,6 +728,7 @@ describe("gateway plugin node capability auth", () => {
   }, 60_000);
 
   test("routes one-shot worker desktop tokens through the real gateway upgrade path", async () => {
+    setRuntimeConfigSnapshot({});
     const root = await fs.mkdtemp(joinPath(await fs.realpath(os.tmpdir()), "ocwd-"));
     const localSocketPath = joinPath(root, "desktop.sock");
     const rfbBytes = Buffer.from("RFB 003.008\n");

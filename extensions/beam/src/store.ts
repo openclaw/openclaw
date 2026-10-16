@@ -1,14 +1,14 @@
-import type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginServiceV2 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { BeamStoredSession, BeamUpload } from "./types.js";
 import { BEAM_MAX_SESSIONS, BEAM_RETENTION_MS } from "./types.js";
 
-export type BeamSessionSummary = Readonly<
+type BeamSessionSummary = Readonly<
   Pick<BeamStoredSession, "beamId" | "title" | "source" | "completed" | "createdAt" | "receivedAt">
 >;
 
 export type BeamStore = {
-  catalogService: OpenClawPluginService;
+  catalogService: OpenClawPluginServiceV2;
   upload: (
     upload: BeamUpload,
     receipt: {
@@ -59,42 +59,33 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
     overflowPolicy: "evict-oldest",
     defaultTtlMs: BEAM_RETENTION_MS,
   });
-  let revision = 0;
   let inventory: Array<{ value: BeamSessionSummary; expiresAt?: number }> | undefined;
   let refreshing: Promise<void> | undefined;
-  let interval: ReturnType<typeof setInterval> | undefined;
-  let stopped = false;
+  let lifetime: AbortSignal | undefined;
   const invalidate = () => {
-    revision++;
     inventory = undefined;
   };
   const refresh = (): Promise<void> => {
-    if (stopped) {
+    if (lifetime?.aborted) {
       return Promise.reject(new Error("Beam catalog inventory is stopped"));
     }
     refreshing ??= (async () => {
-      for (;;) {
-        const observedRevision = revision;
-        const entries = await store.entries();
-        if (stopped) {
-          return;
-        }
-        if (observedRevision !== revision) {
-          continue;
-        }
-        inventory = entries.map(({ value, expiresAt }) => ({
-          value: {
-            beamId: value.beamId,
-            title: value.title,
-            source: value.source,
-            completed: value.completed,
-            createdAt: value.createdAt,
-            receivedAt: value.receivedAt,
-          },
-          expiresAt,
-        }));
+      const entries = await store.entries();
+      if (lifetime?.aborted) {
         return;
       }
+      // A refresh overtaken by an upload may show old metadata until the next poll.
+      inventory = entries.map(({ value, expiresAt }) => ({
+        value: {
+          beamId: value.beamId,
+          title: value.title,
+          source: value.source,
+          completed: value.completed,
+          createdAt: value.createdAt,
+          receivedAt: value.receivedAt,
+        },
+        expiresAt,
+      }));
     })().finally(() => {
       refreshing = undefined;
     });
@@ -103,24 +94,19 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
   return {
     catalogService: {
       id: "beam-catalog",
+      apiVersion: 2,
       async start(ctx) {
-        stopped = false;
+        lifetime = ctx.scheduler.signal;
         const update = () =>
           refresh().catch((error: unknown) => {
             invalidate();
             ctx.logger.warn(`beam catalog inventory refresh failed: ${String(error)}`);
           });
-        // Other processes can update SQLite without this instance's mutation revision.
-        interval = setInterval(() => void update(), 30_000);
-        interval.unref?.();
+        // Refresh metadata periodically; local uploads and deletes also invalidate it.
+        ctx.scheduler.schedule({ id: "inventory", delayMs: 30_000, everyMs: 30_000, run: update });
         await update();
       },
       async stop() {
-        stopped = true;
-        if (interval) {
-          clearInterval(interval);
-          interval = undefined;
-        }
         invalidate();
         await refreshing?.catch(() => {});
       },
@@ -130,7 +116,7 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
         throw new Error("Beam uploads require plugin-state observe and compareAndApply support");
       }
       const snapshot = {
-        ...structuredClone(upload),
+        ...upload,
         // An anonymous replacement must not inherit a previous publisher's identity.
         ...(uploaderProfileId ? { uploaderProfileId } : {}),
         receivedAt,

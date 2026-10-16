@@ -43,20 +43,20 @@ export async function prepareSubagentSessionContext(params: {
   if (params.contextMode === "isolated") {
     return { status: "ok", mode: "isolated" };
   }
-  const childTarget = await resolveGatewaySessionStoreTargetInWorker({
-    cfg: params.cfg,
-    key: params.childSessionKey,
-    agentId: params.targetAgentId,
-    assertActive: params.assertActive,
-  });
-  const parentTarget = await resolveGatewaySessionStoreTargetInWorker({
-    cfg: params.cfg,
-    key: params.requesterInternalKey,
-    agentId: params.requesterAgentId,
-    assertActive: params.assertActive,
-  });
-
   try {
+    const childTarget = await resolveGatewaySessionStoreTargetInWorker({
+      cfg: params.cfg,
+      key: params.childSessionKey,
+      agentId: params.targetAgentId,
+      assertActive: params.assertActive,
+    });
+    const parentTarget = await resolveGatewaySessionStoreTargetInWorker({
+      cfg: params.cfg,
+      key: params.requesterInternalKey,
+      agentId: params.requesterAgentId,
+      assertActive: params.assertActive,
+    });
+
     if (params.targetAgentId !== params.requesterAgentId) {
       throw new Error(
         'context="fork" currently requires the same target agent as the requester; use context="isolated" for cross-agent spawns.',
@@ -71,7 +71,6 @@ export async function prepareSubagentSessionContext(params: {
       parentStoreKeys: parentTarget.storeKeys,
       sessionKey: childTarget.canonicalKey,
       sessionStoreKeys: childTarget.storeKeys,
-      fallbackEntry: { sessionId: "", updatedAt: Date.now() },
       agentId: params.requesterAgentId,
     });
     if (forkedResult.status === "missing-parent") {
@@ -139,8 +138,9 @@ export async function prepareContextEngineSubagentSpawn(params: {
       }
     })());
   try {
-    ensureContextEnginesInitialized();
-    engine = await resolveContextEngine(params.cfg);
+    engine = await resolveContextEngine(params.cfg, {
+      initialize: ensureContextEnginesInitialized,
+    });
     // Resolution may outlive the caller. Returned preparation must still reach
     // the pipeline rollback owner before its next authority check.
     params.assertActive?.();

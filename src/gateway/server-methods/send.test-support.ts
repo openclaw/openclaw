@@ -131,8 +131,59 @@ export function createMessageMethodTestDriver(getHandlers: () => GatewayRequestH
     return { respond };
   }
 
+  async function runTelegramTerminalAction(params: {
+    sessionId: string;
+    idempotencyKey: string;
+    sourceTurnId: string;
+    toolCallId: string;
+    message: string;
+    sessionKey?: string;
+    sourceReplySessionKey?: string;
+    sourceReplyFinal?: boolean;
+    context?: GatewayRequestContext;
+  }) {
+    const sessionKey = params.sessionKey ?? "agent:main:telegram:direct:chat-123";
+    return runMessageActionRequest(
+      {
+        channel: "telegram",
+        action: "send",
+        params: {
+          to: "chat-123",
+          message: params.message,
+        },
+        sessionKey,
+        sessionId: params.sessionId,
+        agentId: "main",
+        idempotencyKey: params.idempotencyKey,
+      },
+      {
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey,
+            messageActionContext: {
+              expiresAtMs: Date.now() + 60_000,
+              sessionId: params.sessionId,
+              sourceReplySessionKey: params.sourceReplySessionKey,
+              sourceReplyFinal: params.sourceReplyFinal ?? true,
+              sourceReplyToolCallId: params.toolCallId,
+              toolContext: {
+                currentChannelProvider: "telegram",
+                currentChannelId: "chat-123",
+                currentSourceTurnId: params.sourceTurnId,
+              },
+            },
+          },
+        },
+      },
+      params.context,
+    );
+  }
+
   return {
     invokeGatewayMessageMethod,
+    runTelegramTerminalAction,
     runSend,
     runSendWithClient,
     runPoll,

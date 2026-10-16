@@ -1951,6 +1951,14 @@
           "id": "vercel-ai-gateway",
           "label": "Vercel AI Gateway"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "vercel-ai-gateway",
+            "hosts": [
+              "ai-gateway.vercel.sh"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "vercel-ai-gateway",

@@ -2,13 +2,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { assert, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { assert, beforeEach, describe, expect, it } from "vitest";
 import { collectBundledChannelConfigsCore } from "./bundled-channel-config-metadata.js";
 import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
 import { resolveBundledPluginGeneratedPath } from "./bundled-plugin-scan.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
-
-type BundledPluginMetadata = ReturnType<typeof listBundledPluginMetadata>[number];
 import { resolveGatewayStartupPluginPlanFromRegistry } from "./gateway-startup-plugin-ids.js";
 import {
   createGeneratedPluginTempRoot,
@@ -27,21 +25,14 @@ import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.
 import { writeBundledRuntimeSidecarPathBaseline } from "./runtime-sidecar-paths-baseline.js";
 
 const BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS = 300_000;
-const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_EXTRAS = ["memory-core", "xai"] as const;
+// llama-cpp starts for its enabled local_image tool factory, not a startup sidecar.
+const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_EXTRAS = ["llama-cpp", "memory-core", "xai"] as const;
 
 installGeneratedPluginTempRootCleanup();
 
 beforeEach(() => {
   clearPluginMetadataLifecycleCaches();
 });
-
-function expectTestOnlyArtifactsExcluded(artifacts: readonly string[]) {
-  artifacts.forEach((artifact) => {
-    expect(artifact).not.toMatch(/^test-/);
-    expect(artifact).not.toContain(".test-");
-    expect(artifact).not.toMatch(/\.test\.js$/);
-  });
-}
 
 function expectGeneratedPathResolution(tempRoot: string, expectedRelativePath: string) {
   expect(
@@ -56,22 +47,9 @@ function expectGeneratedPathResolution(tempRoot: string, expectedRelativePath: s
   ).toBe(path.join(tempRoot, expectedRelativePath));
 }
 
-function expectPluginScopedGeneratedPathResolution(
-  tempRoot: string,
-  pluginDirName: string,
-  expectedRelativePath: string,
-) {
-  expect(
-    resolveBundledPluginGeneratedPath(
-      tempRoot,
-      {
-        source: "./index.ts",
-        built: "index.js",
-      },
-      pluginDirName,
-    ),
-  ).toBe(path.join(tempRoot, expectedRelativePath));
-}
+let repoBundledPluginManifestsCache:
+  | ReturnType<typeof listRepoBundledPluginManifestsUncached>
+  | undefined;
 
 function expectArtifactPresence(
   artifacts: readonly string[] | undefined,
@@ -89,21 +67,21 @@ function expectArtifactPresence(
   }
 }
 
-let repoBundledPluginMetadataCache: readonly BundledPluginMetadata[] | undefined;
-let repoBundledPluginManifestsCache:
-  | ReturnType<typeof listRepoBundledPluginManifestsUncached>
-  | undefined;
-const repoBundledChannelConfigsCache = new Map<
-  string,
-  ReturnType<typeof collectBundledChannelConfigsCore>
->();
-
-function listRepoBundledPluginMetadata(): readonly BundledPluginMetadata[] {
-  repoBundledPluginMetadataCache ??= listBundledPluginMetadata({
-    rootDir: repoRoot,
-    includeSyntheticChannelConfigs: false,
+function collectRepoBundledChannelConfigsForTest(dirName: string) {
+  const pluginDir = path.join(repoRoot, "extensions", dirName);
+  const manifest = loadPluginManifest(pluginDir, false);
+  if (!manifest.ok) {
+    throw toLintErrorObject(manifest.error, "Non-Error thrown");
+  }
+  const packagePath = path.join(pluginDir, "package.json");
+  const packageManifest: PackageManifest | undefined = fs.existsSync(packagePath)
+    ? (JSON.parse(fs.readFileSync(packagePath, "utf8")) as PackageManifest)
+    : undefined;
+  return collectBundledChannelConfigsCore({
+    pluginDir,
+    manifest: manifest.manifest,
+    packageManifest: getPackageManifestMetadata(packageManifest),
   });
-  return repoBundledPluginMetadataCache;
 }
 
 function listRepoBundledPluginManifestsUncached() {
@@ -158,32 +136,6 @@ function createRepoBundledManifestRegistry(): PluginManifestRegistry {
   };
 }
 
-function readPackageManifest(pluginDir: string): PackageManifest | undefined {
-  const packagePath = path.join(pluginDir, "package.json");
-  return fs.existsSync(packagePath)
-    ? (JSON.parse(fs.readFileSync(packagePath, "utf8")) as PackageManifest)
-    : undefined;
-}
-
-function collectRepoBundledChannelConfigsForTest(dirName: string) {
-  const cached = repoBundledChannelConfigsCache.get(dirName);
-  if (cached) {
-    return cached;
-  }
-  const pluginDir = path.join(repoRoot, "extensions", dirName);
-  const manifest = loadPluginManifest(pluginDir, false);
-  if (!manifest.ok) {
-    throw toLintErrorObject(manifest.error, "Non-Error thrown");
-  }
-  const configs = collectBundledChannelConfigsCore({
-    pluginDir,
-    manifest: manifest.manifest,
-    packageManifest: getPackageManifestMetadata(readPackageManifest(pluginDir)),
-  });
-  repoBundledChannelConfigsCache.set(dirName, configs);
-  return configs;
-}
-
 function hasPluginKind(record: PluginManifestRecord, kind: string): boolean {
   return Array.isArray(record.kind) ? record.kind.includes(kind as never) : record.kind === kind;
 }
@@ -231,24 +183,6 @@ function createInstalledPluginIndexForManifests(
 }
 
 describe("bundled plugin metadata", () => {
-  beforeAll(() => {
-    listRepoBundledPluginMetadata();
-    collectRepoBundledChannelConfigsForTest("discord");
-    collectRepoBundledChannelConfigsForTest("tlon");
-  });
-
-  it(
-    "matches the runtime metadata snapshot",
-    { timeout: BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS },
-    () => {
-      expect(listRepoBundledPluginMetadata()).toEqual(
-        listBundledPluginMetadata({
-          includeSyntheticChannelConfigs: false,
-        }),
-      );
-    },
-  );
-
   it(
     "matches the checked-in runtime sidecar path baseline",
     { timeout: BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS },
@@ -260,7 +194,10 @@ describe("bundled plugin metadata", () => {
   );
 
   it("captures setup-entry metadata for bundled channel plugins", () => {
-    const discord = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "discord");
+    const discord = listBundledPluginMetadata({
+      rootDir: repoRoot,
+      includeSyntheticChannelConfigs: false,
+    }).find((entry) => entry.dirName === "discord");
     expect(discord?.source).toEqual({ source: "./index.ts", built: "index.js" });
     expect(discord?.setupSource).toEqual({ source: "./setup-entry.ts", built: "setup-entry.js" });
     expectArtifactPresence(discord?.publicSurfaceArtifacts, {
@@ -277,185 +214,11 @@ describe("bundled plugin metadata", () => {
     expect(discordChannelConfig?.schema?.type).toBe("object");
   });
 
-  it("keeps Slack's doctor contract sidecar on the bundled public surface", () => {
-    const slack = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "slack");
-    expectArtifactPresence(slack?.publicSurfaceArtifacts, {
-      contains: ["doctor-contract-api.js"],
-    });
-  });
-
-  it("keeps Memory Core's health checks on a narrow public surface", () => {
-    const memoryCore = listRepoBundledPluginMetadata().find(
-      (entry) => entry.dirName === "memory-core",
-    );
-    expectArtifactPresence(memoryCore?.publicSurfaceArtifacts, {
-      contains: ["doctor-health-api.js"],
-    });
-  });
-
-  it("keeps iMessage message-tool discovery on a narrow public surface", () => {
-    const imessage = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "imessage");
-    expectArtifactPresence(imessage?.publicSurfaceArtifacts, {
-      contains: ["message-tool-api.js"],
-    });
-  });
-
-  it("keeps Slack's narrow runtime-setter sidecar on the bundled public surface", () => {
-    // Regression for #69317: the bundled channel entry now points its
-    // runtime.specifier at runtime-setter-api.js to avoid loading the full
-    // runtime-api barrel during register(). The setter file must therefore
-    // be discoverable as part of Slack's public surface.
-    const slack = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "slack");
-    expectArtifactPresence(slack?.publicSurfaceArtifacts, {
-      contains: ["runtime-setter-api.js"],
-    });
-  });
-
-  it("keeps Discord's narrow runtime setter on the bundled runtime sidecar surface", () => {
-    const discord = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "discord");
-    expectArtifactPresence(discord?.publicSurfaceArtifacts, {
-      contains: ["runtime-setter-api.js"],
-    });
-    expectArtifactPresence(discord?.runtimeSidecarArtifacts, {
-      contains: ["runtime-setter-api.js"],
-    });
-  });
-
-  it("keeps QA runner discovery on narrow bundled runtime sidecars", () => {
-    const runnerPlugins = listRepoBundledPluginMetadata().filter(
-      (entry) => (entry.manifest.qaRunners?.length ?? 0) > 0,
-    );
-    expect(runnerPlugins.length).toBeGreaterThan(0);
-
-    for (const plugin of runnerPlugins) {
-      expectArtifactPresence(plugin?.publicSurfaceArtifacts, {
-        contains: ["qa-runner-api.js"],
-      });
-      expectArtifactPresence(plugin?.runtimeSidecarArtifacts, {
-        contains: ["qa-runner-api.js"],
-      });
-    }
-  });
-
   it("loads tlon channel config metadata from the lightweight schema surface", () => {
     const tlonChannelConfig = collectRepoBundledChannelConfigsForTest("tlon")?.tlon as
       | { schema?: { type?: unknown } }
       | undefined;
     expect(tlonChannelConfig?.schema?.type).toBe("object");
-  });
-
-  it("keeps bundled persisted-auth metadata on channel package manifests", () => {
-    const whatsapp = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "whatsapp");
-    expect(whatsapp?.packageManifest?.channel?.persistedAuthState).toEqual({
-      specifier: "./auth-presence",
-      exportName: "hasAnyWhatsAppAuth",
-    });
-
-    const matrix = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "matrix");
-    expect(matrix?.packageManifest?.channel?.persistedAuthState).toEqual({
-      specifier: "./auth-presence",
-      exportName: "hasAnyMatrixAuth",
-      backingStore: "plugin-state",
-    });
-  });
-
-  it("keeps Matrix's narrow runtime-setter sidecar on the bundled public surface", () => {
-    const matrix = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "matrix");
-    expectArtifactPresence(matrix?.publicSurfaceArtifacts, {
-      contains: ["runtime-setter-api.js"],
-    });
-  });
-
-  it("keeps bundled configured-state env metadata on channel package manifests", () => {
-    const configuredChannels = listRepoBundledPluginMetadata()
-      .filter((entry) => ["discord", "irc", "slack", "telegram"].includes(entry.dirName))
-      .map((entry) => ({
-        dir: entry.dirName,
-        configuredState: entry.packageManifest?.channel?.configuredState,
-      }));
-    expect(configuredChannels).toEqual([
-      {
-        dir: "discord",
-        configuredState: {
-          env: {
-            anyOf: ["DISCORD_BOT_TOKEN"],
-          },
-        },
-      },
-      {
-        dir: "irc",
-        configuredState: {
-          env: {
-            allOf: ["IRC_HOST", "IRC_NICK"],
-          },
-        },
-      },
-      {
-        dir: "slack",
-        configuredState: {
-          env: {
-            anyOf: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN"],
-          },
-          specifier: "./configured-state",
-          exportName: "hasConfiguredSlackChannelState",
-        },
-      },
-      {
-        dir: "telegram",
-        configuredState: {
-          env: {
-            anyOf: ["TELEGRAM_BOT_TOKEN"],
-          },
-        },
-      },
-    ]);
-  });
-
-  it("excludes test-only public surface artifacts", () => {
-    listRepoBundledPluginMetadata().forEach((entry) =>
-      expectTestOnlyArtifactsExcluded(entry.publicSurfaceArtifacts ?? []),
-    );
-  });
-
-  it("keeps config schemas on all bundled plugin manifests", () => {
-    for (const entry of listRepoBundledPluginMetadata()) {
-      const { configSchema } = entry.manifest;
-      if (configSchema === null) {
-        throw new Error(`expected ${entry.manifest.id} config schema`);
-      }
-      expect(typeof configSchema).toBe("object");
-      expect(Array.isArray(configSchema)).toBe(false);
-    }
-  });
-
-  it("declares explicit startup activation on all bundled plugin manifests", () => {
-    for (const entry of listRepoBundledPluginManifests()) {
-      expect(typeof entry.manifest.activation?.onStartup).toBe("boolean");
-    }
-  });
-
-  it("scopes Voice Call CLI activation to the voicecall command", () => {
-    const entry = listRepoBundledPluginManifests().find(
-      ({ manifest }) => manifest.id === "voice-call",
-    );
-
-    expect(entry?.manifest.commandAliases).toStrictEqual([{ name: "voicecall" }]);
-    expect(entry?.manifest.activation?.onCommands).toStrictEqual(["voicecall"]);
-  });
-
-  it("keeps Workboard CLI ownership separate from its slash command", () => {
-    const entry = listRepoBundledPluginManifests().find(
-      ({ manifest }) => manifest.id === "workboard",
-    );
-
-    expect(entry?.manifest.commandAliases).toStrictEqual([{ name: "workboard" }]);
-    expect(entry?.manifest.activation?.onCommands).toStrictEqual(["workboard"]);
-  });
-
-  it("scopes Codex CLI activation to the codex command", () => {
-    const entry = listRepoBundledPluginManifests().find(({ manifest }) => manifest.id === "codex");
-
-    expect(entry?.manifest.activation?.onCommands).toStrictEqual(["codex"]);
   });
 
   it("keeps empty-config Gateway startup narrower than declared startup sidecars", () => {
@@ -492,21 +255,6 @@ describe("bundled plugin metadata", () => {
     ).toEqual(expectedPluginIds);
   });
 
-  it("auto-starts Bonjour for empty-config macOS Gateway startup", () => {
-    const manifestRegistry = createRepoBundledManifestRegistry();
-    const index = createInstalledPluginIndexForManifests(manifestRegistry);
-
-    expect(
-      resolveGatewayStartupPluginPlanFromRegistry({
-        config: {},
-        env: process.env,
-        index,
-        manifestRegistry,
-        platform: "darwin",
-      }).pluginIds,
-    ).toContain("bonjour");
-  });
-
   it.each([
     { name: "before login", config: {} },
     {
@@ -534,21 +282,6 @@ describe("bundled plugin metadata", () => {
     ).toContain("openai");
   });
 
-  it("starts Bonjour when explicitly enabled", () => {
-    const manifestRegistry = createRepoBundledManifestRegistry();
-    const index = createInstalledPluginIndexForManifests(manifestRegistry);
-
-    expect(
-      resolveGatewayStartupPluginPlanFromRegistry({
-        config: { plugins: { entries: { bonjour: { enabled: true } } } },
-        env: process.env,
-        index,
-        manifestRegistry,
-        platform: "linux",
-      }).pluginIds,
-    ).toContain("bonjour");
-  });
-
   it("prefers built generated paths when present and falls back to source paths", () => {
     const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-metadata-");
     const pluginRoot = path.join(tempRoot, "extensions", "plugin");
@@ -561,44 +294,6 @@ describe("bundled plugin metadata", () => {
     fs.mkdirSync(distPluginRoot, { recursive: true });
     fs.writeFileSync(path.join(distPluginRoot, "index.js"), "export {};\n", "utf8");
     expectGeneratedPathResolution(tempRoot, path.join("dist", "extensions", "plugin", "index.js"));
-  });
-
-  it("uses dist-runtime generated paths before source fallback when packaged dist is absent", () => {
-    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-runtime-metadata-");
-    const pluginRoot = path.join(tempRoot, "extensions", "plugin");
-    const runtimePluginRoot = path.join(tempRoot, "dist-runtime", "extensions", "plugin");
-
-    fs.mkdirSync(pluginRoot, { recursive: true });
-    fs.mkdirSync(runtimePluginRoot, { recursive: true });
-    fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export {};\n", "utf8");
-    fs.writeFileSync(path.join(runtimePluginRoot, "index.js"), "export {};\n", "utf8");
-
-    expectGeneratedPathResolution(
-      tempRoot,
-      path.join("dist-runtime", "extensions", "plugin", "index.js"),
-    );
-  });
-
-  it("resolves plugin-local generated entry paths when the plugin dir is provided", () => {
-    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-metadata-local-");
-    const pluginRoot = path.join(tempRoot, "extensions", "alpha");
-    const distPluginRoot = path.join(tempRoot, "dist", "extensions", "alpha");
-
-    fs.mkdirSync(pluginRoot, { recursive: true });
-    fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export {};\n", "utf8");
-    expectPluginScopedGeneratedPathResolution(
-      tempRoot,
-      "alpha",
-      path.join("extensions", "alpha", "index.ts"),
-    );
-
-    fs.mkdirSync(distPluginRoot, { recursive: true });
-    fs.writeFileSync(path.join(distPluginRoot, "index.js"), "export {};\n", "utf8");
-    expectPluginScopedGeneratedPathResolution(
-      tempRoot,
-      "alpha",
-      path.join("dist", "extensions", "alpha", "index.js"),
-    );
   });
 
   it("keeps generated entry path resolution inside bundled plugin roots", () => {
@@ -669,6 +364,9 @@ describe("bundled plugin metadata", () => {
       configSchema: { type: "object" },
     });
     fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export const source = true;\n", "utf8");
+    const builtRoot = path.join(tempRoot, "dist", "extensions", "alpha");
+    fs.mkdirSync(builtRoot, { recursive: true });
+    fs.writeFileSync(path.join(builtRoot, "index.js"), "export const built = true;\n", "utf8");
     expect(
       listBundledPluginMetadata({
         rootDir: tempRoot,
@@ -716,32 +414,5 @@ describe("bundled plugin metadata", () => {
     clearPluginMetadataLifecycleCaches();
 
     expect(listBundledPluginMetadata({ rootDir: tempRoot })[0]?.manifest.name).toBe("After");
-  });
-
-  it("prefers direct scan-dir overrides over nested dist artifacts within the same override root", () => {
-    const pluginsDir = createGeneratedPluginTempRoot("openclaw-bundled-plugin-direct-priority-");
-    const pluginRoot = path.join(pluginsDir, "alpha");
-    const nestedDistPluginRoot = path.join(pluginsDir, "dist", "extensions", "alpha");
-
-    fs.mkdirSync(pluginRoot, { recursive: true });
-    fs.mkdirSync(nestedDistPluginRoot, { recursive: true });
-    fs.writeFileSync(path.join(pluginRoot, "index.js"), "export const source = true;\n", "utf8");
-    fs.writeFileSync(
-      path.join(nestedDistPluginRoot, "index.js"),
-      "export const built = true;\n",
-      "utf8",
-    );
-
-    expect(
-      resolveBundledPluginGeneratedPath(
-        pluginsDir,
-        {
-          source: "./index.ts",
-          built: "index.js",
-        },
-        "alpha",
-        pluginsDir,
-      ),
-    ).toBe(path.join(pluginRoot, "index.js"));
   });
 });

@@ -52,7 +52,7 @@ export function describeWhatsAppMessageActions(params: {
     return null;
   }
   const gate = createActionGate(params.cfg.channels.whatsapp.actions);
-  const actions = new Set<ChannelMessageActionName>();
+  const actions: ChannelMessageActionName[] = [];
   const canReact =
     params.accountId != null
       ? Boolean(
@@ -63,11 +63,11 @@ export function describeWhatsAppMessageActions(params: {
         )
       : hasAnyWhatsAppAccountWithAgentReactionsEnabled(params.cfg);
   if (canReact) {
-    actions.add("react");
+    actions.push("react");
   }
   if (gate("polls")) {
-    actions.add("poll");
+    actions.push("poll");
   }
-  actions.add("upload-file");
-  return { actions: Array.from(actions) };
+  actions.push("upload-file");
+  return { actions };
 }

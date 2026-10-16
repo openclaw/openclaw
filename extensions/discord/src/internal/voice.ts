@@ -8,12 +8,10 @@ import type { GatewayPluginContract, VoicePluginContract } from "./plugin-contra
 
 export class VoicePlugin extends Plugin implements VoicePluginContract {
   readonly id = "voice";
-  protected client?: Client;
   readonly adapters = new Map<string, DiscordGatewayAdapterLibraryMethods>();
   private gatewayPlugin?: GatewayPluginContract;
 
   override registerClient(client: Client): void {
-    this.client = client;
     this.gatewayPlugin = client.getPlugin("gateway");
     if (!this.gatewayPlugin) {
       throw new Error("Discord voice cannot be used without a gateway connection.");

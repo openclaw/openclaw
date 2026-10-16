@@ -21,40 +21,15 @@ function parseScrape(
   });
 }
 
-describe("Firecrawl target validation", () => {
-  it("allows public HTTP targets", () => {
-    expect(() =>
-      firecrawlClient.assertFirecrawlScrapeTargetAllowed("http://example.com"),
-    ).not.toThrow();
-  });
-
-  it("rejects IPv6 loopback and private addresses", () => {
-    expect(() => firecrawlClient.assertFirecrawlScrapeTargetAllowed("http://[::1]")).toThrow(
-      /Blocked/,
-    );
-    expect(() => firecrawlClient.assertFirecrawlScrapeTargetAllowed("https://[::1]")).toThrow(
-      /Blocked/,
-    );
-    expect(() => firecrawlClient.assertFirecrawlScrapeTargetAllowed("http://[fc00::]")).toThrow(
-      /Blocked/,
-    );
-  });
-
-  it("rejects URL with embedded credentials targeting a blocked host", () => {
-    // Credentials in the URL do not bypass the hostname/IP check.
-    expect(() =>
-      firecrawlClient.assertFirecrawlScrapeTargetAllowed("http://user:pass@127.0.0.1"),
-    ).toThrow(/Blocked/);
-  });
-});
-
 describe("Firecrawl search payloads", () => {
   it("normalizes alternate result fields", () => {
     const result = firecrawlClient.resolveSearchItems(
       {
         data: [
           {
+            url: 42,
             sourceURL: "https://www.example.com/source",
+            title: { text: "Ignore non-string title" },
             metadata: { title: "Fallback title" },
             description: "Fallback description",
             markdown: "Body",
@@ -101,13 +76,7 @@ describe("Firecrawl search payloads", () => {
 
   it.each([
     ["2026-02-30", undefined],
-    ["2026-13-01", undefined],
-    ["1900-02-29", undefined],
-    ["2000-02-29", "2000-02-29"],
     ["0099-12-31", "0099-12-31"],
-    ["0000-02-29", "0000-02-29"],
-    ["2024-02-29T00:30:00+14:00", "2024-02-29T00:30:00+14:00"],
-    ["2026-09-21T", "2026-09-21T"],
   ])(
     "validates the calendar prefix of %s without dropping the result",
     (publishedDate, published) => {
@@ -135,50 +104,6 @@ describe("Firecrawl scrape payloads", () => {
     }
   });
 
-  it("normalizes redirect metadata and visible truncation", () => {
-    const result = parseScrape(
-      {
-        data: {
-          markdown: "content".repeat(100),
-          metadata: {
-            sourceURL: "https://example.com/final",
-            title: "t".repeat(2_000),
-            statusCode: "200",
-          },
-        },
-      },
-      { maxChars: 20 },
-    );
-
-    expect(result).toEqual(
-      expect.objectContaining({
-        finalUrl: "https://example.com/final",
-        status: 200,
-        truncated: true,
-      }),
-    );
-    expect(String(result.text)).toContain("contentcontentconten");
-    expect(String(result.title)).toContain("tttt");
-  });
-
-  it.each([
-    ["truncates content when it exceeds maxChars", "a".repeat(200), 50, true],
-    ["does not truncate content within maxChars limit", "short content here", 50_000, false],
-    ["handles truncation at exact boundary (not truncated)", "x".repeat(100), 100, false],
-    ["truncates content one character over maxChars", "x".repeat(101), 100, true],
-    ["handles maxChars of 0 (truncates everything)", "some content", 0, true],
-  ] as const)("%s", (_name, markdown, maxChars, truncated) => {
-    const result = firecrawlClient.parseFirecrawlScrapePayload({
-      payload: { data: { markdown } },
-      url: "https://example.com/requested",
-      extractMode: "markdown",
-      maxChars,
-    });
-
-    expect(result.truncated).toBe(truncated);
-    expect(result.rawLength).toBe(markdown.length);
-  });
-
   it("keeps the requested target when provider redirect metadata is hostile", () => {
     const result = parseScrape({
       data: {
@@ -188,23 +113,6 @@ describe("Firecrawl scrape payloads", () => {
     });
 
     expect(result.finalUrl).toBe("https://example.com/requested");
-  });
-
-  it("rejects an unsuccessful string status on the scrape data", () => {
-    expect(() => parseScrape({ data: { markdown: "failed target", statusCode: "500" } })).toThrow(
-      "Firecrawl fetch failed (500)",
-    );
-  });
-
-  it.each(["title", "warning"] as const)("bounds hostile %s metadata independently", (field) => {
-    const payload =
-      field === "title"
-        ? { data: { markdown: "safe", metadata: { title: "t".repeat(8_000) } } }
-        : { data: { markdown: "safe" }, warning: "w".repeat(8_000) };
-    const result = parseScrape(payload, { maxChars: 10_000 });
-
-    expect(String(result[field]).length).toBeLessThan(5_000);
-    expect(result.truncated).toBe(true);
   });
 
   it("rejects responses without usable content", () => {

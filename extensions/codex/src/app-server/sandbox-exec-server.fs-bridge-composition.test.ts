@@ -221,6 +221,45 @@ describe("sandbox exec-server fs RPC through real bridges", () => {
         await expect(fs.readFile(path.join(dirTarget, "child.txt"), "utf8")).resolves.toBe(
           "dir-copy",
         );
+        const namesSource = path.join(mountDir, "names-source");
+        const namesDestination = path.join(mountDir, "names-copy");
+        const fileName = "tab\tand\nnewline.txt";
+        const directoryName = "sub\tline\nfolder";
+        const nestedName = "nested\tline\nfile.txt";
+        await fs.mkdir(path.join(namesSource, directoryName), { recursive: true });
+        await fs.writeFile(path.join(namesSource, fileName), "top-level bytes");
+        await fs.writeFile(path.join(namesSource, directoryName, nestedName), "nested bytes");
+
+        const listing = (await rpc(socket, "fs/readDirectory", {
+          path: "file:///workspace/names-source",
+          sandbox: workspacePolicy,
+        })) as { entries: Array<{ fileName: string; isDirectory: boolean; isFile: boolean }> };
+        expect.soft(listing.entries).toHaveLength(2);
+        expect.soft(listing.entries).toEqual(
+          expect.arrayContaining([
+            { fileName, isDirectory: false, isFile: true },
+            { fileName: directoryName, isDirectory: true, isFile: false },
+          ]),
+        );
+
+        await expect(
+          rpc(socket, "fs/copy", {
+            sourcePath: "file:///workspace/names-source",
+            destinationPath: "file:///workspace/names-copy",
+            recursive: true,
+            sandbox: workspacePolicy,
+          }),
+        ).resolves.toEqual({});
+        expect((await fs.readdir(namesDestination)).toSorted()).toEqual(
+          [directoryName, fileName].toSorted(),
+        );
+        await expect(fs.readFile(path.join(namesDestination, fileName), "utf8")).resolves.toBe(
+          "top-level bytes",
+        );
+        expect(await fs.readdir(path.join(namesDestination, directoryName))).toEqual([nestedName]);
+        await expect(
+          fs.readFile(path.join(namesDestination, directoryName, nestedName), "utf8"),
+        ).resolves.toBe("nested bytes");
         socket.close();
       } finally {
         await fs.rm(stateDir, { recursive: true, force: true });

@@ -1,4 +1,3 @@
-// Resolves runtime group-policy settings for channels and sessions.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createDedupeCache } from "../infra/dedupe.js";
 import type { GroupPolicy } from "./types.base.js";

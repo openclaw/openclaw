@@ -2,19 +2,15 @@
 import crypto from "node:crypto";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+import type { Cookie } from "playwright-core";
 
 export type SystemBrowser = "chrome" | "brave" | "edge" | "chromium";
 
-export type PlaywrightCookie = {
-  name: string;
-  value: string;
-  domain: string;
-  path: string;
-  expires?: number;
-  httpOnly: boolean;
-  secure: boolean;
-  sameSite?: "Strict" | "Lax" | "None";
-};
+export type PlaywrightCookie = Pick<
+  Cookie,
+  "name" | "value" | "domain" | "path" | "httpOnly" | "secure"
+> &
+  Partial<Pick<Cookie, "expires" | "sameSite">>;
 
 type ChromeCookieRow = {
   host_key: string;
@@ -140,7 +136,6 @@ function chromeFiletimeToUnixSeconds(value: number | bigint): number | undefined
   return seconds > 0 && seconds <= 9_999_999_999 ? seconds : undefined;
 }
 
-/** Map Chrome SameSite storage values to Playwright's cookie contract. */
 function mapChromeSameSite(
   value: number | bigint,
   secure: boolean,

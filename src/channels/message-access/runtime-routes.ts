@@ -4,7 +4,7 @@ import type {
   ResolveChannelMessageIngressParams,
   ResolvedChannelMessageIngress,
 } from "./runtime-types.js";
-import type { AccessGraphGate, RouteGateFacts } from "./types.js";
+import type { RouteGateFacts } from "./types.js";
 
 function routeDescriptors(
   route: ResolveChannelMessageIngressParams["route"],
@@ -15,10 +15,6 @@ function routeDescriptors(
   return [route].flat();
 }
 
-/**
- * Collect optional route descriptors while dropping false, null, and undefined
- * entries.
- */
 export function channelIngressRoutes(
   ...routes: Array<ChannelIngressRouteDescriptor | false | null | undefined>
 ): ChannelIngressRouteDescriptor[] {
@@ -71,19 +67,6 @@ export function routeFactsFromDescriptors(
   });
 }
 
-function routeDescriptorForGate(params: {
-  descriptors: readonly ChannelIngressRouteDescriptor[];
-  gate: AccessGraphGate;
-}): ChannelIngressRouteDescriptor | undefined {
-  const senderSuffix = ":sender";
-  const baseGateId = params.gate.id.endsWith(senderSuffix)
-    ? params.gate.id.slice(0, -senderSuffix.length)
-    : params.gate.id;
-  return params.descriptors.find(
-    (descriptor) => descriptor.id === params.gate.id || descriptor.id === baseGateId,
-  );
-}
-
 export function projectRouteAccess(params: {
   ingress: ResolvedChannelMessageIngress["ingress"];
   route: ResolveChannelMessageIngressParams["route"];
@@ -93,7 +76,13 @@ export function projectRouteAccess(params: {
     (entry) => entry.phase === "route" && entry.effect === "block-dispatch",
   );
   if (routeBlock) {
-    const descriptor = routeDescriptorForGate({ descriptors, gate: routeBlock });
+    const senderSuffix = ":sender";
+    const baseGateId = routeBlock.id.endsWith(senderSuffix)
+      ? routeBlock.id.slice(0, -senderSuffix.length)
+      : routeBlock.id;
+    const descriptor = descriptors.find(
+      (entry) => entry.id === routeBlock.id || entry.id === baseGateId,
+    );
     return {
       allowed: routeBlock.allowed,
       reasonCode: routeBlock.reasonCode,

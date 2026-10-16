@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, expect, it } from "vitest";
 import {
-  isStaticEvidencePath,
   parseStaticDiagnostics,
   parseStaticFailureReport,
 } from "../../scripts/lib/ci-static-check-evidence.mjs";
@@ -96,45 +95,43 @@ function completeStaticLog(
 }
 
 describe("static CI diagnostic evidence", () => {
-  it("reads real multiline compiler failures for recovery while refusing incomplete gate evidence", () => {
-    const log = stepLog(
+  it.each([
+    [
+      "multiline error",
       `${realTypeDiagnostic}\n[tsgo:state-logging] failed (exit 2) in 47.4s\n[tsgo:agents-tools] passed in 52.4s\n[tsgo:core:test] FAILED (exit 2)`,
-    );
-    expect(parseStaticFailureReport(log, "tsgo")).toEqual([realTypeSignature]);
-    expect(parseStaticFailureReport(log, "tsgo", true)).toEqual([]);
-  });
-
-  it("preserves every diagnostic, including a second distinct error in the same source file", () => {
-    const diagnostic =
-      "src/acp/control-plane/manager.preactive-cancellation.test.ts(20,7): error TS2367: This comparison appears to be unintentional because the types 'queued' and 'running' have no overlap.\n" +
-      "src/acp/control-plane/manager.preactive-cancellation.test.ts(30,9): error TS2554: Expected 3 arguments, but got 2.";
-    expect(parseStaticDiagnostics(diagnostic, "tsgo")).toEqual([
-      {
-        kind: "tsgo",
-        file: "src/acp/control-plane/manager.preactive-cancellation.test.ts",
-        test: "(20,7) TS2367: This comparison appears to be unintentional because the types 'queued' and 'running' have no overlap.",
-      },
-      {
-        kind: "tsgo",
-        file: "src/acp/control-plane/manager.preactive-cancellation.test.ts",
-        test: "(30,9) TS2554: Expected 3 arguments, but got 2.",
-      },
-    ]);
-  });
+      [realTypeSignature],
+    ],
+    [
+      "distinct errors in one file",
+      "src/owner.ts(20,7): error TS2367: Types have no overlap.\nsrc/owner.ts(30,9): error TS2554: Expected 3 arguments, but got 2.",
+      [
+        { kind: "tsgo", file: "src/owner.ts", test: "(20,7) TS2367: Types have no overlap." },
+        {
+          kind: "tsgo",
+          file: "src/owner.ts",
+          test: "(30,9) TS2554: Expected 3 arguments, but got 2.",
+        },
+      ],
+    ],
+  ])(
+    "reads legacy %s for recovery but refuses incomplete gate evidence",
+    (_name, output, expected) => {
+      expect(parseStaticFailureReport(stepLog(output), "tsgo")).toEqual(expected);
+      expect(parseStaticFailureReport(stepLog(output), "tsgo", true)).toEqual([]);
+    },
+  );
 
   it.each([
-    ["global diagnostic", "error TS5058: The specified path does not exist."],
-    ["infrastructure failure", "FATAL ERROR: Reached heap limit"],
-    ["unknown output", "compiler crashed unexpectedly"],
-    ["outside repository", "/tmp/fixture.ts(1,1): error TS2345: Invalid value."],
-  ])("rejects %s even beside a recognized compiler diagnostic", (_name, extra) => {
-    expect(parseStaticFailureReport(stepLog(`${realTypeDiagnostic}\n${extra}`), "tsgo")).toEqual(
-      [],
-    );
-  });
-
-  it.each([0, 1, 137, 143])("does not mistake compiler exit %i for diagnostic exit 2", (code) => {
-    expect(parseStaticFailureReport(stepLog(realTypeDiagnostic, code), "tsgo")).toEqual([]);
+    ["global diagnostic", "error TS5058: The specified path does not exist.", 2],
+    ["outside repository", "/tmp/fixture.ts(1,1): error TS2345: Invalid value.", 2],
+    ["non-runtime source", "scripts/tool.mts(1,1): error TS2345: Invalid value.", 2],
+    ["traversal", "src/../scripts/tool.ts(1,1): error TS2345: Invalid value.", 2],
+    ["non-source extension", "src/file.json(1,1): error TS2345: Invalid value.", 2],
+    ["wrong exit", "", 1],
+  ] as const)("rejects %s beside a recognized compiler diagnostic", (_name, extra, code) => {
+    expect(
+      parseStaticFailureReport(stepLog(`${realTypeDiagnostic}\n${extra}`, code), "tsgo"),
+    ).toEqual([]);
   });
 
   it("matches the canonical oxlint owner rendering only when all report counts agree", () => {
@@ -166,26 +163,16 @@ describe("static CI diagnostic evidence", () => {
     }
   });
 
-  it("admits complete graph evidence only after every selected compiler has joined", () => {
-    expect(parseStaticFailureReport(completeStaticLog(), "tsgo", true)).toEqual([
-      realTypeSignature,
-    ]);
-    expect(parseStaticFailureReport(completeStaticLog(), "tsgo")).toEqual([realTypeSignature]);
-    expect(parseStaticFailureReport(completeStaticLog("oxlint"), "oxlint", true)).toEqual([
-      lintSignature,
-    ]);
-  });
-
-  it("accepts the native compiler display only when its diagnostics are captured in the completed graph", () => {
-    const log = completeStaticLog().replace(
-      "##[endgroup]",
-      `##[endgroup]\n${realTypeDiagnostic}\n[tsgo:state-logging] failed (exit 2) in 47.4s`,
-    );
-    expect(parseStaticFailureReport(log, "tsgo", true)).toEqual([realTypeSignature]);
-    expect(
-      parseStaticFailureReport(log.replace("in 47.4s", "in 47.4s; worker killed"), "tsgo", true),
-    ).toEqual([]);
-  });
+  it.each(["tsgo", "oxlint"] as const)(
+    "accepts %s diagnostics only after the entire graph joins",
+    (kind) => {
+      const output = kind === "tsgo" ? realTypeDiagnostic : "";
+      const log = completeStaticLog(kind).replace("##[endgroup]", `##[endgroup]\n${output}`);
+      const expected = [kind === "tsgo" ? realTypeSignature : lintSignature];
+      expect(parseStaticFailureReport(log, kind, true)).toEqual(expected);
+      expect(parseStaticFailureReport(log, kind)).toEqual(expected);
+    },
+  );
 
   it("normalizes native lint JSON to the same signatures as its flat rendering", () => {
     const warning = { ...lintDiagnostic, severity: "warning", code: "eslint(max-lines)" };
@@ -195,6 +182,12 @@ describe("static CI diagnostic evidence", () => {
       number_of_warnings: 1,
     };
     expect(parseStaticDiagnostics(JSON.stringify(report), "oxlint")).toEqual([lintSignature]);
+    expect(
+      parseStaticDiagnostics(
+        "ui/src/page.ts:1:0: warning: Too many lines. (eslint(max-lines))\n  Split this file.\nFound 1 warning and 0 errors.",
+        "oxlint",
+      ),
+    ).toEqual([]);
     expect(parseStaticDiagnostics(JSON.stringify({ diagnostics: [warning] }), "oxlint")).toEqual(
       [],
     );
@@ -209,21 +202,16 @@ describe("static CI diagnostic evidence", () => {
     }
   });
 
-  it("accounts for flat lint warnings without turning them into blocking signatures", () => {
-    expect(
-      parseStaticDiagnostics(
-        "ui/src/page.ts:1:0: warning: Too many lines. (eslint(max-lines))\n  Split this file.\nFound 1 warning and 0 errors.",
-        "oxlint",
-      ),
-    ).toEqual([]);
-  });
-
   it.each(["tsgo", "oxlint"] as const)(
     "rejects unaccounted %s step output and malformed historical main evidence",
     (kind) => {
       const log = completeStaticLog(kind);
       for (const invalid of [
         log.replace("##[endgroup]", "##[endgroup]\nError: setup worker crashed"),
+        log.replace(
+          "##[endgroup]",
+          "##[endgroup]\n[tsgo:state-logging] failed (exit 2) in 47.4s; worker killed",
+        ),
         log.replace(`[ci-static:${kind}:step]`, `[ci-static:${kind}:unknown]`),
         log.replace('"completed":2', '"completed":1'),
         log.replace('"groups":1', '"groups":2'),
@@ -271,17 +259,4 @@ describe("static CI diagnostic evidence", () => {
       expect(parseStaticFailureReport(completeStaticLog("tsgo", change), "tsgo", true)).toEqual([]);
     },
   );
-
-  it.each([
-    ["src/owner/file.ts", true],
-    ["extensions/plugin/browser/index.mjs", true],
-    ["packages/example/src/types.d.ts", true],
-    ["ui/src/page.tsx", true],
-    ["scripts/tool.mts", false],
-    ["src/../scripts/tool.ts", false],
-    ["/src/file.ts", false],
-    ["src/file.json", false],
-  ])("validates the source ownership boundary for %s", (file, expected) => {
-    expect(isStaticEvidencePath(file)).toBe(expected);
-  });
 });

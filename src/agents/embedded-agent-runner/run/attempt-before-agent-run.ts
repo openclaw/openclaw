@@ -1,9 +1,12 @@
-import { resolveBlockMessage } from "../../../plugins/hook-decision-types.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
+import {
+  buildAgentRunBlockedUserMessage,
+  runBeforeAgentRunGate,
+} from "../../harness/before-agent-run.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
-import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
+import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { log } from "../logger.js";
 import { sessionMessagesContainIdempotencyKey } from "./pre-persisted-user-turn.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -11,17 +14,10 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 type HookRunner = NonNullable<ReturnType<typeof getGlobalHookRunner>>;
 type BeforeAgentRunHookRunner = Pick<HookRunner, "hasHooks" | "runBeforeAgentRun">;
 type HookContext = Parameters<HookRunner["runBeforeAgentRun"]>[1];
-type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
-type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
 type BeforeAgentRunSession = {
   messages: AgentMessage[];
   agent: { state: { messages: AgentMessage[] } };
-};
-
-type BeforeAgentRunBlockOutcome = {
-  blockedBy: string;
-  promptError: Error;
 };
 
 export async function runEmbeddedAttemptBeforeAgentRun(input: {
@@ -34,41 +30,37 @@ export async function runEmbeddedAttemptBeforeAgentRun(input: {
   hookMessages: AgentMessage[];
   hookRunner: BeforeAgentRunHookRunner | null;
   modelPrompt: string;
-  sessionManager: AttemptSessionManager;
+  sessionManager: ReturnType<typeof guardSessionManager>;
   systemPrompt: string;
-  withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
-}): Promise<BeforeAgentRunBlockOutcome | undefined> {
-  if (!input.hookRunner?.hasHooks("before_agent_run")) {
+  withOwnedTranscriptWrite: <T>(operation: () => Promise<T> | T) => Promise<T>;
+}) {
+  const block = await runBeforeAgentRunGate(
+    input.hookRunner,
+    {
+      prompt: input.modelPrompt,
+      systemPrompt: input.systemPrompt,
+      messages: input.hookMessages,
+      channelId: input.hookContext.channelId,
+      accountId: input.attempt.agentAccountId,
+      senderId: input.attempt.senderId ?? undefined,
+      senderIsOwner: input.attempt.senderIsOwner,
+    },
+    input.hookContext,
+  );
+  if (!block) {
     return undefined;
   }
-
-  const persistBlockedBeforeAgentRun = async (block: {
-    message: string;
-    pluginId: string;
-  }): Promise<void> => {
-    const idempotencyKey = `hook-block:before_agent_run:user:${input.attempt.runId}`;
-    if (sessionMessagesContainIdempotencyKey(input.activeSession.messages, idempotencyKey)) {
-      return;
-    }
-    const nowMs = Date.now();
-    const redactedUserMessage = {
-      role: "user" as const,
-      content: [{ type: "text" as const, text: block.message }],
-      timestamp: nowMs,
-      idempotencyKey,
-      __openclaw: {
-        beforeAgentRunBlocked: {
-          blockedBy: block.pluginId,
-          blockedAt: nowMs,
-        },
-      },
-    };
+  const redactedUserMessage = buildAgentRunBlockedUserMessage(input.attempt.runId, block);
+  if (
+    !sessionMessagesContainIdempotencyKey(
+      input.activeSession.messages,
+      redactedUserMessage.idempotencyKey,
+    )
+  ) {
     try {
       await input.withOwnedTranscriptWrite(() =>
-        withSessionManagerWrite(input.sessionManager, () => {
-          input.sessionManager.appendMessage(
-            redactedUserMessage as Parameters<typeof input.sessionManager.appendMessage>[0],
-          );
+        withSessionManagerAppend(input.sessionManager, async () => {
+          await input.sessionManager.appendMessageAsync(redactedUserMessage);
           input.sessionManager.flushPendingPersistence();
         }),
       );
@@ -78,45 +70,10 @@ export async function runEmbeddedAttemptBeforeAgentRun(input: {
     } catch (err) {
       log.warn(
         `before_agent_run block: failed to persist redacted user message: ${
-          (err as Error)?.message ?? String(err)
+          err instanceof Error ? err.message : String(err)
         }`,
       );
     }
-  };
-
-  let beforeRunResult: Awaited<ReturnType<HookRunner["runBeforeAgentRun"]>> | undefined;
-  try {
-    beforeRunResult = await input.hookRunner.runBeforeAgentRun(
-      {
-        prompt: input.modelPrompt,
-        systemPrompt: input.systemPrompt,
-        /** Gives hooks an isolated message snapshot they cannot mutate in-session. */
-        messages: input.hookMessages.map((message) => structuredClone(message)),
-        channelId: input.hookContext.channelId,
-        accountId: input.attempt.agentAccountId ?? undefined,
-        senderId: input.attempt.senderId ?? undefined,
-        senderIsOwner: input.attempt.senderIsOwner ?? undefined,
-      },
-      input.hookContext,
-    );
-  } catch {
-    log.warn("before_agent_run hook failed; blocking request");
-    const blockedBy = "before_agent_run";
-    const message = resolveBlockMessage(
-      { outcome: "block", reason: "before_agent_run hook failed" },
-      { blockedBy },
-    );
-    await persistBlockedBeforeAgentRun({ message, pluginId: blockedBy });
-    return { blockedBy, promptError: new Error(message) };
   }
-
-  const beforeRunDecision = beforeRunResult?.decision;
-  if (beforeRunDecision?.outcome !== "block") {
-    return undefined;
-  }
-  const blockedBy = beforeRunResult?.pluginId ?? "unknown";
-  const message = resolveBlockMessage(beforeRunDecision, { blockedBy });
-  log.warn(`before_agent_run hook blocked by ${blockedBy}`);
-  await persistBlockedBeforeAgentRun({ message, pluginId: blockedBy });
-  return { blockedBy, promptError: new Error(message) };
+  return { blockedBy: block.blockedBy, promptError: new Error(block.message) };
 }

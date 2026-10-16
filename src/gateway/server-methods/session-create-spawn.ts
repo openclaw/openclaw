@@ -1,8 +1,86 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  ErrorCodes,
+  errorShape,
+  type SessionsCreateParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import { reportCreatedVisibleWorkSession } from "../../auto-reply/reply/visible-work-sessions.js";
+import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { createGatewaySession } from "../session-create-service.js";
-import type { TrustedSessionCreation } from "./session-creation-provenance.js";
+import type { CreatedGatewaySession } from "../session-create-service.types.js";
+import type { TrustedSessionCreation } from "../session-creation-provenance.js";
 import type { GatewayClient } from "./types.js";
+
+export async function reportCreatedVisibleSpawn(
+  cfg: OpenClawConfig,
+  creation: TrustedSessionCreation,
+  session: CreatedGatewaySession,
+  publicRead: boolean,
+): Promise<void> {
+  const parentSessionKey = session.entry.parentSessionKey;
+  if (
+    creation.via !== "spawn" ||
+    creation.requesterSessionKey !== parentSessionKey ||
+    !parentSessionKey ||
+    session.entry.visibility === "draft" ||
+    session.entry.incognito
+  ) {
+    return;
+  }
+  const url = resolveControlUiSessionUrl(cfg, {
+    sessionKey: session.key,
+    fallbackAgentId: session.agentId,
+  });
+  await reportCreatedVisibleWorkSession({
+    requesterSessionKey: parentSessionKey,
+    sessionKey: session.key,
+    ...(url
+      ? {
+          visibleSession: {
+            url,
+            ...(publicRead ? { publicRead: true } : {}),
+            ...(session.entry.label ? { label: session.entry.label } : {}),
+          },
+        }
+      : {}),
+  });
+}
+
+export function validateSessionCreateSpawnRequest(
+  creation: TrustedSessionCreation,
+  params: Pick<
+    SessionsCreateParams,
+    "parentSessionKey" | "fork" | "forkFrom" | "incognito" | "visibility"
+  >,
+) {
+  const parent = normalizeOptionalString(params.parentSessionKey);
+  const requester =
+    creation.via === "spawn" ? normalizeOptionalString(creation.requesterSessionKey) : undefined;
+  if (creation.inheritedToolPolicy && parent !== requester) {
+    return errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      "spawn parent must match the trusted agent caller",
+    );
+  }
+  if (
+    creation.childSessionPublication &&
+    (creation.via !== "spawn" ||
+      requester !== parent ||
+      creation.childSessionPublication.requesterSessionKey !== parent ||
+      params.fork === true ||
+      params.forkFrom !== undefined ||
+      params.incognito === true ||
+      params.visibility === "draft")
+  ) {
+    return errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      "Public ingress requires a fresh isolated, non-private child.",
+    );
+  }
+  return undefined;
+}
 
 export function resolveSessionCreateSpawnContext(params: {
   client: GatewayClient | null;

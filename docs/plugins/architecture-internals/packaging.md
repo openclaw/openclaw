@@ -24,10 +24,10 @@ barrel when authoring new plugins. Core subpaths:
 | `openclaw/plugin-sdk/channel-core` | Channel entry/build helpers                  |
 | `openclaw/plugin-sdk/core`         | Generic shared helpers and umbrella contract |
 
-Channel plugins pick from a family of narrow seams — `channel-setup`,
+Channel plugins pick from a family of narrow interfaces — `channel-setup`,
 `setup-runtime`, `setup-tools`, `channel-pairing`,
 `channel-contract`, `channel-feedback`, `channel-inbound`, `channel-outbound`,
-`command-auth`, `secret-input`, `webhook-ingress`,
+`command-auth-native`, `secret-input`, `webhook-ingress`,
 `channel-targets`, and `channel-actions`. Approval behavior should consolidate
 on one `approvalCapability` contract rather than mixing across unrelated
 plugin fields. See [Channel plugins](/plugins/sdk-channel-plugins).
@@ -37,15 +37,14 @@ Runtime and config helpers live under matching focused `*-runtime` subpaths
 `text-utility-runtime`, `runtime-store`, `system-event-runtime`, `heartbeat-runtime`,
 `channel-activity-runtime`, etc.). Prefer `config-contracts`,
 `plugin-config-runtime`, `runtime-config-snapshot`, and `config-mutation`
-instead of the broad `config-runtime` compatibility barrel.
+instead of the removed broad `config-runtime` compatibility barrel.
 
 <Info>
-`openclaw/plugin-sdk/channel-lifecycle`, small channel helper facades,
-`openclaw/plugin-sdk/config-runtime`, and `openclaw/plugin-sdk/infra-runtime`
-are deprecated compatibility shims for older plugins. New code should import
-narrower generic primitives instead. The compatibility registry records a
-`removeAfter` date of 2026-10-01 for the `config-runtime`, `infra-runtime`,
-and `channel-lifecycle` subpaths.
+`openclaw/plugin-sdk/channel-lifecycle`, `channel-message`,
+`channel-reply-pipeline`, `config-runtime`, and `infra-runtime` were removed
+with explicit SDK-owner approval on September 30, 2026. Migrate to the
+[focused public contracts](/plugins/sdk-migration/how-to-migrate) before
+upgrading; replacement paths do not export every legacy helper or named type.
 </Info>
 
 Repo-internal entry points (per bundled plugin package root):
@@ -120,7 +119,7 @@ Core uses that surface when it needs to promote a legacy single-account channel
 config into `channels.<id>.accounts.*` without loading the full plugin entry.
 Matrix is the current bundled example: it moves only auth/bootstrap keys into a
 named promoted account when named accounts already exist, and it can preserve a
-configured non-canonical default-account key instead of always creating
+configured custom default-account key instead of always creating
 `accounts.default`.
 
 Those setup patch adapters keep bundled contract-surface discovery lazy. Import
@@ -208,8 +207,8 @@ toward pinned, integrity-checked installs without breaking existing plugins.
 When an official package is renamed, the catalog entry may declare
 `legacyNpmPackageNames` with the former package names. Trusted update rewrites
 matching npm records to the current `npmSpec`, and migrates a catalog lookup
-alias such as a channel id to the canonical plugin id. Duplicate alias+canonical
-records drop only when the canonical install is also trusted official.
+alias such as a channel id to the primary plugin id. Duplicate records for an alias and primary ID
+are dropped only when the primary install is also trusted official.
 `legacyPluginIds` remains the contract for plugin-id cutovers that are not lookup
 aliases.
 When onboarding installs from a local catalog path, it records a managed plugin

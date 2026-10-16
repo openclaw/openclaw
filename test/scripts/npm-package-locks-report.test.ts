@@ -280,118 +280,104 @@ describe("npm package-lock release report", () => {
     expect(`${JSON.stringify(report.packages[0]!.lock, null, 2)}\n`).toBe(lockBytes);
   });
 
-  it.each([
-    { carrier: "node_modules/npm", metadata: { ...dependency, integrity: undefined } },
-    { carrier: "node_modules/npm", metadata: { ...dependency, resolved: undefined } },
-    { carrier: "node_modules/npm", metadata: { ...dependency, dev: true } },
-    { carrier: "node_modules/npm", metadata: { ...dependency, link: true } },
-    { carrier: "node_modules/npm", metadata: { ...dependency, resolved: "file:npm.tgz" } },
-    { carrier: "node_modules/npm", metadata: undefined },
-    { carrier: "node_modules/npm/node_modules/foo", metadata: undefined },
-    { carrier: "node_modules/npm/node_modules/foo", metadata: { version: "1.0.0" } },
-  ])("rejects an unverifiable bundled carrier: %j", async ({ carrier, metadata }) => {
-    vi.mocked(generateNpmPackageLocks).mockImplementation(async ({ packageDirs }) =>
-      packageDirs.map((dir) => {
-        const lock = bundledLockFor(dir);
+  it.each<{
+    label: string;
+    bundled?: boolean;
+    change: (lock: ReturnType<typeof bundledLockFor>) => void;
+    error: string | RegExp;
+  }>([
+    ...[
+      { carrier: "node_modules/npm", metadata: { ...dependency, integrity: undefined } },
+      { carrier: "node_modules/npm", metadata: { ...dependency, resolved: undefined } },
+      { carrier: "node_modules/npm", metadata: { ...dependency, dev: true } },
+      { carrier: "node_modules/npm", metadata: { ...dependency, link: true } },
+      { carrier: "node_modules/npm", metadata: { ...dependency, resolved: "file:npm.tgz" } },
+      { carrier: "node_modules/npm", metadata: undefined },
+      { carrier: "node_modules/npm/node_modules/foo", metadata: undefined },
+      { carrier: "node_modules/npm/node_modules/foo", metadata: { version: "1.0.0" } },
+    ].map(({ carrier, metadata }) => ({
+      label: `unverifiable carrier ${carrier}: ${JSON.stringify(metadata)}`,
+      bundled: true,
+      change: (lock: ReturnType<typeof bundledLockFor>) => {
         if (metadata) {
           lock.packages[carrier] = metadata;
         } else {
           delete lock.packages[carrier];
         }
-        return JSON.stringify(lock);
-      }),
-    );
-    await expect(generateNpmPackageLocksReport({ rootDir: fixture() })).rejects.toThrow(
-      `.: bundled npm lock entry node_modules/npm/node_modules/foo/node_modules/bar has unverifiable carrier ${carrier}`,
-    );
-  });
-
-  it("rejects a top-level bundled entry without a carrier", async () => {
-    vi.mocked(generateNpmPackageLocks).mockImplementation(async ({ packageDirs }) =>
-      packageDirs.map((dir) => {
-        const lock = lockFor(dir);
-        Object.assign(lock.packages, {
-          "node_modules/fixture": { version: "1.0.0", inBundle: true },
-        });
-        return JSON.stringify(lock);
-      }),
-    );
-    await expect(generateNpmPackageLocksReport({ rootDir: fixture() })).rejects.toThrow(
-      ".: bundled npm lock entry node_modules/fixture has unverifiable carrier <root>",
-    );
-  });
-
-  it.each([
-    { dev: true },
-    { link: true },
-    { resolved: "file:local.tgz" },
-    { version: undefined },
-    { version: "" },
-    { version: 1 },
-  ])("rejects unsupported bundled entries even with a verified carrier: %j", async (invalid) => {
-    vi.mocked(generateNpmPackageLocks).mockImplementation(async ({ packageDirs }) =>
-      packageDirs.map((dir) => {
-        const lock = bundledLockFor(dir);
+      },
+      error: `.: bundled npm lock entry node_modules/npm/node_modules/foo/node_modules/bar has unverifiable carrier ${carrier}`,
+    })),
+    {
+      label: "top-level bundle without a carrier",
+      change: (lock) => {
+        lock.packages["node_modules/fixture"] = { version: "1.0.0", inBundle: true };
+      },
+      error: ".: bundled npm lock entry node_modules/fixture has unverifiable carrier <root>",
+    },
+    ...[
+      { dev: true },
+      { link: true },
+      { resolved: "file:local.tgz" },
+      { version: undefined },
+      { version: "" },
+      { version: 1 },
+    ].map((invalid) => ({
+      label: `unsupported bundled entry: ${JSON.stringify(invalid)}`,
+      bundled: true,
+      change: (lock: ReturnType<typeof bundledLockFor>) => {
         Object.assign(
           lock.packages["node_modules/npm/node_modules/foo/node_modules/bar"]!,
           invalid,
         );
-        return JSON.stringify(lock);
-      }),
-    );
-    await expect(generateNpmPackageLocksReport({ rootDir: fixture() })).rejects.toThrow(
-      ".: unsupported npm lock entry node_modules/npm/node_modules/foo/node_modules/bar",
-    );
-  });
-
-  it.each([
-    { dev: true },
-    { link: true },
+      },
+      error: ".: unsupported npm lock entry node_modules/npm/node_modules/foo/node_modules/bar",
+    })),
     ...[
-      "file:local.tgz",
-      "workspace:*",
-      "git+https://example.com/repo",
-      "git:repo",
-      "ssh:repo",
-      "https://github.com/org/repo",
-    ].map((resolved) => ({ resolved })),
-    { resolved: "" },
-    { resolved: undefined },
-    { integrity: "" },
-    { integrity: undefined },
-    { inBundle: "true", integrity: undefined },
-  ])("rejects nonportable or incomplete lock entries: %j", async (invalid) => {
-    vi.mocked(generateNpmPackageLocks).mockImplementation(async ({ packageDirs }) =>
-      packageDirs.map((dir) => {
-        const lock = lockFor(dir);
-        Object.assign(lock.packages["node_modules/fixture"], invalid);
-        return JSON.stringify(lock);
-      }),
-    );
-    await expect(generateNpmPackageLocksReport({ rootDir: fixture() })).rejects.toThrow(
-      ".: unsupported npm lock entry node_modules/fixture",
-    );
-  });
-
-  it.each(["name", "version", "lockfileVersion", "rootName", "rootVersion", "rootDev"])(
-    "rejects mismatched lock identity or root metadata: %s",
-    async (field) => {
-      vi.mocked(generateNpmPackageLocks).mockImplementation(async ({ packageDirs }) =>
-        packageDirs.map((dir) => {
-          const lock = lockFor(dir);
+      { dev: true },
+      { link: true },
+      { resolved: "file:local.tgz" },
+      { resolved: "workspace:*" },
+      { resolved: "git+https://example.com/repo" },
+      { resolved: "git:repo" },
+      { resolved: "ssh:repo" },
+      { resolved: "https://github.com/org/repo" },
+      { resolved: "" },
+      { resolved: undefined },
+      { integrity: "" },
+      { integrity: undefined },
+      { inBundle: "true", integrity: undefined },
+    ].map((invalid) => ({
+      label: `nonportable or incomplete entry: ${JSON.stringify(invalid)}`,
+      change: (lock: ReturnType<typeof bundledLockFor>) => {
+        Object.assign(lock.packages["node_modules/fixture"]!, invalid);
+      },
+      error: ".: unsupported npm lock entry node_modules/fixture",
+    })),
+    ...["name", "version", "lockfileVersion", "rootName", "rootVersion", "rootDev"].map(
+      (field) => ({
+        label: `mismatched identity or root metadata: ${field}`,
+        change: (lock: ReturnType<typeof bundledLockFor>) => {
           if (field === "rootName") {
-            lock.packages[""].name = "wrong";
+            lock.packages[""]!.name = "wrong";
           } else if (field === "rootVersion") {
-            lock.packages[""].version = "wrong";
+            lock.packages[""]!.version = "wrong";
           } else if (field === "rootDev") {
-            Object.assign(lock.packages[""], { dev: true });
+            Object.assign(lock.packages[""]!, { dev: true });
           } else {
             Object.assign(lock, { [field]: "wrong" });
           }
-          return JSON.stringify(lock);
-        }),
-      );
-      await expect(generateNpmPackageLocksReport({ rootDir: fixture() })).rejects.toThrow(/\.:/u);
-    },
-  );
+        },
+        error: /\.:/u,
+      }),
+    ),
+  ])("rejects $label", async ({ bundled, change, error }) => {
+    vi.mocked(generateNpmPackageLocks).mockImplementation(async ({ packageDirs }) =>
+      packageDirs.map((dir) => {
+        const lock = bundled ? bundledLockFor(dir) : lockFor(dir);
+        change(lock);
+        return JSON.stringify(lock);
+      }),
+    );
+    await expect(generateNpmPackageLocksReport({ rootDir: fixture() })).rejects.toThrow(error);
+  });
 });

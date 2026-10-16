@@ -1,7 +1,6 @@
 /** Shared cron operation invariants used across lifecycle, CRUD, and manual runs. */
 import { clearCronJobActive, type CronActiveJobMarker } from "../active-jobs.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
-import { cronStreamScheduleKey } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
 import { markServiceCronJobActive } from "./run-receipts.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
@@ -57,17 +56,4 @@ export function resolveCurrentDefaultAgentId(state: CronServiceState): string | 
   return state.deps.resolveDefaultAgentId
     ? state.deps.resolveDefaultAgentId()
     : state.deps.defaultAgentId;
-}
-
-/** Returns whether a stream event still belongs to the job's current logical source. */
-export function ownsStreamSource(
-  job: CronJob,
-  streamScheduleKey: string,
-  streamSourceIdentity: string,
-): boolean {
-  return (
-    job.schedule.kind === "stream" &&
-    cronStreamScheduleKey(job.schedule) === streamScheduleKey &&
-    job.state.streamSourceIdentity === streamSourceIdentity
-  );
 }

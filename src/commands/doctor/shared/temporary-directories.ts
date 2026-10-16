@@ -4,7 +4,10 @@ import { resolveRequiredHomeDir } from "../../../infra/home-dir.js";
 import { resolveEnvironmentValue } from "../../../infra/process-env.js";
 
 /** Service scratch can outlive the shell environment that originally selected it. */
-export async function inspectDoctorTemporaryDirectories(env: NodeJS.ProcessEnv): Promise<{
+export async function inspectDoctorTemporaryDirectories(
+  env: NodeJS.ProcessEnv,
+  options?: { inspectService?: boolean },
+): Promise<{
   directories: string[];
   warnings: string[];
 }> {
@@ -19,6 +22,9 @@ export async function inspectDoctorTemporaryDirectories(env: NodeJS.ProcessEnv):
     ),
   );
   const warnings: string[] = [];
+  if (options?.inspectService === false) {
+    return { directories, warnings };
+  }
   try {
     const { resolveGatewayService } = await import("../../../daemon/service.js");
     const command = await resolveGatewayService().readCommand(env, {

@@ -1,5 +1,5 @@
-import { afterEach, expect, test, vi } from "vitest";
-import { setRuntimeConfigSnapshot } from "../../config/config.js";
+import { afterEach, expect, onTestFinished, test, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore as resolveStorePath } from "../../config/sessions.js";
 import {
   patchSessionEntryCore,
@@ -12,7 +12,9 @@ import { addSessionMember } from "../../config/sessions/session-sharing-store.na
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { observeSessionRowBackfill } from "../session-row-backfill.test-support.js";
 import { rolePolicyConfig } from "../session-sharing.test-utils.js";
 import {
@@ -106,18 +108,19 @@ test.each([
       session: { scope: "global" },
       agents: {
         entries: {
-          main: { default: true, model: { primary: "openai/gpt-5.4" } },
+          main: { model: { primary: "openai/gpt-5.4" } },
           research: { model: { primary: "openai/gpt-5.5" } },
         },
       },
     };
+    setRuntimeConfigSnapshot(cfg);
     const storePath = resolveStorePath(undefined, { agentId: "research" });
     const sessionId = `aggregate-${sessionKey}`;
     await replaceSessionEntry(
       { agentId: "research", sessionKey, storePath },
       {
         sessionId,
-        updatedAt: 42,
+        updatedAt: Date.now(),
         displayName: "Research transcript title",
         visibility: "draft",
         createdActor: { type: "human", source: "profile", id: ownerId },
@@ -183,32 +186,6 @@ test.each([
 );
 
 test("a hidden-foreign role cannot discover sessions through search, batch previews, or exact resolve", async () => {
-  const ownerId = ensureProfileForEmail("role-viewer@example.com").id;
-  const foreignKey = "agent:main:foreign-role-read";
-  const ownKey = "agent:main:own-role-read";
-  const storePath = resolveStorePath(undefined, { agentId: "main" });
-  for (const [sessionKey, actorId] of [
-    [foreignKey, "foreign-owner@example.com"],
-    [ownKey, ownerId],
-  ] as const) {
-    const sessionId = `session-${sessionKey.split(":").at(-1)}`;
-    await replaceSessionEntry(
-      { agentId: "main", sessionKey, storePath },
-      {
-        sessionId,
-        updatedAt: 42,
-        createdActor: { type: "human", source: "profile", id: actorId },
-        visibility: "shared",
-      },
-    );
-    await seedLinearSessionTranscript({
-      agentId: "main",
-      contents: ["hidden role search needle"],
-      sessionId,
-      sessionKey,
-      storePath,
-    });
-  }
   const cfg: OpenClawConfig = {
     gateway: {
       roles: {
@@ -223,8 +200,38 @@ test("a hidden-foreign role cannot discover sessions through search, batch previ
       },
     },
   };
+  setRuntimeConfigSnapshot(cfg);
+  const ownerId = ensureProfileForEmail("role-viewer@example.com").id;
+  const foreignKey = "agent:main:foreign-role-read";
+  const ownKey = "agent:main:own-role-read";
+  const storePath = resolveStorePath(undefined, { agentId: "main" });
+  for (const [sessionKey, actorId] of [
+    [foreignKey, "foreign-owner@example.com"],
+    [ownKey, ownerId],
+  ] as const) {
+    const sessionId = `session-${sessionKey.split(":").at(-1)}`;
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionId,
+        // Post-write age-retention maintenance archives expired rows out of default lists.
+        updatedAt: Date.now(),
+        createdActor: { type: "human", source: "profile", id: actorId },
+        visibility: "shared",
+      },
+    );
+    await seedLinearSessionTranscript({
+      agentId: "main",
+      contents: ["hidden role search needle"],
+      sessionId,
+      sessionKey,
+      storePath,
+    });
+  }
   const client = identifiedClient(ownerId);
   const options = { client, context: { getRuntimeConfig: () => cfg } };
+  const profiles = await prepareUserProfileCatalog();
+  onTestFinished(profiles.release);
 
   const searched = await directSessionReq<{ results: Array<{ sessionKey: string }> }>(
     "sessions.search",
@@ -260,30 +267,6 @@ test("a hidden-foreign role cannot discover sessions through search, batch previ
 test.each(["research", "ops"] as const)(
   "searches an explicit global row using its selected owner for %s visibility",
   async (viewer) => {
-    const profiles = {
-      ops: ensureProfileForEmail("search-ops@example.test").id,
-      research: ensureProfileForEmail("search-research@example.test").id,
-    };
-    for (const agentId of ["ops", "research"] as const) {
-      const storePath = resolveStorePath(undefined, { agentId });
-      const sessionId = `global-search-${agentId}`;
-      await replaceSessionEntry(
-        { agentId, sessionKey: "global", storePath },
-        {
-          sessionId,
-          updatedAt: 42,
-          createdActor: { type: "human", source: "profile", id: profiles[agentId] },
-          visibility: "shared",
-        },
-      );
-      await seedLinearSessionTranscript({
-        agentId,
-        sessionKey: "global",
-        sessionId,
-        storePath,
-        contents: ["global owner search needle"],
-      });
-    }
     const cfg: OpenClawConfig = {
       session: { scope: "global" },
       agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
@@ -296,6 +279,33 @@ test.each(["research", "ops"] as const)(
         },
       },
     };
+    setRuntimeConfigSnapshot(cfg);
+    const profiles = {
+      ops: ensureProfileForEmail("search-ops@example.test").id,
+      research: ensureProfileForEmail("search-research@example.test").id,
+    };
+    for (const agentId of ["ops", "research"] as const) {
+      const storePath = resolveStorePath(undefined, { agentId });
+      const sessionId = `global-search-${agentId}`;
+      await replaceSessionEntry(
+        { agentId, sessionKey: "global", storePath },
+        {
+          sessionId,
+          updatedAt: Date.now(),
+          createdActor: { type: "human", source: "profile", id: profiles[agentId] },
+          visibility: "shared",
+        },
+      );
+      await seedLinearSessionTranscript({
+        agentId,
+        sessionKey: "global",
+        sessionId,
+        storePath,
+        contents: ["global owner search needle"],
+      });
+    }
+    const catalog = await prepareUserProfileCatalog();
+    onTestFinished(catalog.release);
     const searched = await directSessionReq<{ results: Array<{ sessionKey: string }> }>(
       "sessions.search",
       { query: "global owner search needle", sessionKeys: ["global"], agentId: "research" },
@@ -312,6 +322,7 @@ test.each(["research", "ops"] as const)(
 );
 
 test("sessions.describe preserves caller roles and sessions.get hides foreign drafts", async () => {
+  setRuntimeConfigSnapshot({});
   const sessionKey = "agent:main:foreign-draft-describe";
   const sessionId = "session-foreign-draft-describe";
   const profileId = (name: string) => ensureProfileForEmail(`${name}@example.com`).id;
@@ -322,7 +333,7 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
     { agentId: "main", sessionKey, storePath },
     {
       sessionId,
-      updatedAt: 42,
+      updatedAt: Date.now(),
       createdActor: { type: "human", source: "profile", id: ownerId },
       visibility: "draft",
     },
@@ -516,7 +527,7 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
       { agentId: "main", sessionKey, storePath },
       {
         sessionId,
-        updatedAt: 42,
+        updatedAt: Date.now(),
         createdActor: { type: "human", source: "profile", id: ownerId },
         visibility: "shared",
       },

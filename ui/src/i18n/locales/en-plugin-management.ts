@@ -18,6 +18,12 @@ const enPluginManagement = {
     pluginHelpValue: "Current value: {value}",
   },
   pluginsPage: {
+    compatibilityDeprecatedDated:
+      "Uses OpenClaw APIs that retire on {date}. It keeps working until then; check for a plugin update.",
+    compatibilityDeprecatedUndated:
+      "Uses older OpenClaw APIs. It keeps working for now; check for a plugin update.",
+    compatibilityDetails: "Details",
+    compatibilityApis: "APIs to update",
     installProgress: {
       title: "Installation progress",
       stopped: "Installation stopped",
@@ -315,12 +321,22 @@ const enPluginManagement = {
     detailSdkVersion: "Plugin SDK",
     detailSourceCommit: "Source commit",
     detailSourcePath: "Source path",
-    detailMcpServers: "MCP servers",
+    detailMcpServer: "MCP Server",
+    detailMcpServers: "MCP Servers",
+    mcpDetails: {
+      endpoint: "Endpoint",
+      endpointRedacted: "Withheld because the endpoint may contain private connection details.",
+      transport: "Transport",
+      authentication: "Authentication",
+      scope: "Requested permissions",
+      unavailable: "Connection details are not included in this plugin’s catalog metadata.",
+      auth: { oauth: "OAuth", "api-key": "API key", none: "None" },
+    },
     detailTabs: {
       readme: "README",
       skills: "Skills",
       configuration: "Configuration",
-      mcpServers: "MCP servers",
+      mcpServers: "MCP Servers",
       commands: "Commands",
       hooks: "Hooks",
       lspServers: "LSP servers",

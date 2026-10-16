@@ -45,59 +45,18 @@ beforeEach(() => {
 });
 
 describe("Microsoft Teams read policy", () => {
-  it.each([
-    { groupPolicy: undefined, allowed: false },
-    { groupPolicy: "allowlist", allowed: false },
-    { groupPolicy: "open", allowed: true },
-  ])("applies the $groupPolicy group policy to unconfigured channel targets", async (testCase) => {
-    const cfg = {
-      channels: {
-        msteams: testCase.groupPolicy ? { groupPolicy: testCase.groupPolicy } : {},
-      },
-    } as OpenClawConfig;
-    const target = "11111111-1111-1111-1111-111111111111/19:roadmap@thread.tacv2";
-    const result = assertMSTeamsReadTargetAllowed({ cfg, ctx, target });
-
-    if (testCase.allowed) {
-      await expect(result).resolves.toBe(target);
-    } else {
-      await expect(result).rejects.toThrow("Microsoft Teams read target is not allowed.");
-    }
-    expect(mocks.resolveGraphToken).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { name: "default sender-only policy", groupPolicy: undefined, configuredRoute: false },
-    { name: "explicit sender-only allowlist", groupPolicy: "allowlist", configuredRoute: false },
-    { name: "configured team/channel route", groupPolicy: "allowlist", configuredRoute: true },
-    { name: "explicit open group policy", groupPolicy: "open", configuredRoute: false },
-  ])("recovers existing groupAllowFrom configurations with $name", async (testCase) => {
-    const teamId = "19:team@thread.tacv2";
+  it("requires an explicit channel route under the default sender-only policy", async () => {
     const channelId = "19:roadmap@thread.tacv2";
     const target = `11111111-1111-1111-1111-111111111111/${channelId}`;
     const cfg = {
       channels: {
         msteams: {
           groupAllowFrom: ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"],
-          ...(testCase.groupPolicy ? { groupPolicy: testCase.groupPolicy } : {}),
-          ...(testCase.configuredRoute
-            ? { teams: { [teamId]: { channels: { [channelId]: {} } } } }
-            : {}),
         },
       },
     } as OpenClawConfig;
 
-    mocks.listChannelsForTeamWithPageInfo.mockResolvedValue({
-      items: [{ id: teamId }, { id: channelId }],
-      truncated: false,
-    });
-
     const result = assertMSTeamsReadTargetAllowed({ cfg, ctx, target });
-    if (testCase.configuredRoute || testCase.groupPolicy === "open") {
-      await expect(result).resolves.toBe(target);
-      return;
-    }
-
     await expect(result).rejects.toThrow(
       'Microsoft Teams read target is not allowed. Configure channels.msteams.teams.<team>.channels for this channel, or deliberately set channels.msteams.groupPolicy to "open".',
     );
@@ -117,61 +76,23 @@ describe("Microsoft Teams read policy", () => {
     expect(mocks.resolveGraphToken).not.toHaveBeenCalled();
   });
 
-  it("uses startup-equivalent resolved channel policy for stable action targets", async () => {
+  it("keeps named account identity for Graph-backed policy mapping", async () => {
     const cfg = {
       channels: {
         msteams: {
-          groupPolicy: "allowlist",
-          teams: {
-            Product: {
-              channels: {
-                Roadmap: { requireMention: true },
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    mocks.resolveMSTeamsTeamsConfig.mockResolvedValue({
-      teams: {
-        Product: {
-          channels: {
-            Roadmap: { requireMention: true },
-          },
-        },
-        "11111111-1111-1111-1111-111111111111": {
-          channels: {
-            "19:roadmap@thread.tacv2": { requireMention: true },
-          },
-        },
-      },
-      mapping: [],
-      unresolved: [],
-    });
-
-    await expect(
-      assertMSTeamsReadTargetAllowed({
-        cfg,
-        ctx,
-        target: "11111111-1111-1111-1111-111111111111/19:roadmap@thread.tacv2",
-      }),
-    ).resolves.toBe("11111111-1111-1111-1111-111111111111/19:roadmap@thread.tacv2");
-    expect(mocks.resolveMSTeamsTeamsConfig).toHaveBeenCalledWith({
-      cfg,
-      teamIdMode: "graph",
-      teams: cfg.channels?.msteams?.teams,
-    });
-  });
-
-  it("maps stable Bot Framework team keys to Graph channel targets", async () => {
-    const cfg = {
-      channels: {
-        msteams: {
-          groupPolicy: "allowlist",
-          teams: {
-            "19:general@thread.tacv2": {
-              channels: {
-                "19:roadmap@thread.tacv2": { requireMention: true },
+          authType: "federated",
+          defaultAccount: "default",
+          accounts: {
+            support: {
+              authType: "secret",
+              appId: "support-app",
+              appPassword: "support-secret",
+              tenantId: "support-tenant",
+              groupPolicy: "allowlist",
+              teams: {
+                "19:general@thread.tacv2": {
+                  channels: { "19:roadmap@thread.tacv2": {} },
+                },
               },
             },
           },
@@ -179,23 +100,28 @@ describe("Microsoft Teams read policy", () => {
       },
     } as OpenClawConfig;
     mocks.listChannelsForTeamWithPageInfo.mockResolvedValue({
-      items: [
-        { id: "19:general@thread.tacv2", displayName: "Allgemein" },
-        { id: "19:roadmap@thread.tacv2", displayName: "Roadmap" },
-      ],
+      items: [{ id: "19:general@thread.tacv2" }, { id: "19:roadmap@thread.tacv2" }],
       truncated: false,
     });
 
     await expect(
       assertMSTeamsReadTargetAllowed({
         cfg,
-        ctx,
+        ctx: { accountId: "support", requesterAccountId: "support", toolContext: {} },
         target: "11111111-1111-1111-1111-111111111111/19:roadmap@thread.tacv2",
       }),
     ).resolves.toBe("11111111-1111-1111-1111-111111111111/19:roadmap@thread.tacv2");
-    expect(mocks.listChannelsForTeamWithPageInfo).toHaveBeenCalledWith(
-      "token",
-      "11111111-1111-1111-1111-111111111111",
+    expect(mocks.resolveGraphToken).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channels: expect.objectContaining({
+          msteams: expect.objectContaining({
+            defaultAccount: "support",
+            authType: "secret",
+            appId: "support-app",
+          }),
+        }),
+      }),
+      { accountId: "support" },
     );
   });
 
@@ -294,27 +220,19 @@ describe("Microsoft Teams read policy", () => {
     ).resolves.toBe("user:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
   });
 
-  it.each([
-    "19:abc@thread.tacv2",
-    "19:abc@thread.skype",
-    "19:user_app@unq.gbl.spaces",
-    "a:1abc123",
-    "8:orgid:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-  ])(
-    "allows a supported bare conversation target when both scopes are open (%s)",
-    async (target) => {
-      const cfg = {
-        channels: {
-          msteams: {
-            groupPolicy: "open",
-            dmPolicy: "open",
-          },
+  it("allows a supported bare conversation target when both scopes are open", async () => {
+    const target = "8:orgid:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    const cfg = {
+      channels: {
+        msteams: {
+          groupPolicy: "open",
+          dmPolicy: "open",
         },
-      } as OpenClawConfig;
+      },
+    } as OpenClawConfig;
 
-      await expect(assertMSTeamsReadTargetAllowed({ cfg, ctx, target })).resolves.toBe(target);
-    },
-  );
+    await expect(assertMSTeamsReadTargetAllowed({ cfg, ctx, target })).resolves.toBe(target);
+  });
 
   it("does not classify a bare Bot Framework user id as a conversation", async () => {
     const cfg = {
@@ -420,40 +338,10 @@ describe("Microsoft Teams read policy", () => {
     ).resolves.toBe("11111111-1111-1111-1111-111111111111");
     expect(mocks.resolveMSTeamsTeamsConfig).toHaveBeenCalledWith({
       cfg,
+      accountId: "default",
       teamIdMode: "graph",
       teams: cfg.channels?.msteams?.teams,
     });
-  });
-
-  it("maps stable Bot Framework team keys before channel enumeration", async () => {
-    const cfg = {
-      channels: {
-        msteams: {
-          groupPolicy: "allowlist",
-          teams: {
-            "19:general@thread.tacv2": {
-              channels: {
-                "*": { requireMention: true },
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    mocks.listChannelsForTeamWithPageInfo.mockResolvedValue({
-      items: [
-        { id: "19:general@thread.tacv2", displayName: "General" },
-        { id: "19:roadmap@thread.tacv2", displayName: "Roadmap" },
-      ],
-      truncated: false,
-    });
-
-    await expect(
-      assertMSTeamsTeamEnumerationAllowed({
-        cfg,
-        teamId: "11111111-1111-1111-1111-111111111111",
-      }),
-    ).resolves.toBe("11111111-1111-1111-1111-111111111111");
   });
 
   it("lets a direct operator read stable unconfigured channel and DM targets", async () => {

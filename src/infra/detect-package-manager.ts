@@ -1,4 +1,3 @@
-// Detects the package manager used by a project directory.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -106,13 +105,11 @@ export async function detectPackageManager(root: string): Promise<DetectedPackag
   if (resolveBunGlobalInstallOwner(root)) {
     return "bun";
   }
-  if (hasNpmShrinkwrap) {
-    if (pm === "pnpm" && (hasPnpmLock || (await isPnpmOwnedPackageRoot(root)))) {
-      return "pnpm";
-    }
-    if (pm === "bun" && hasBunLock) {
-      return "bun";
-    }
+  if (
+    hasNpmShrinkwrap &&
+    !(pm === "pnpm" && (hasPnpmLock || (await isPnpmOwnedPackageRoot(root)))) &&
+    !(pm === "bun" && hasBunLock)
+  ) {
     return "npm";
   }
 

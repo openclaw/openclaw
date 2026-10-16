@@ -146,18 +146,8 @@ export function readCompletedFileMutationDelta(
   let removed = 0;
   let hasCompleteEdit = false;
   for (const edit of readEdits(args)) {
-    const oldText =
-      typeof edit.oldText === "string"
-        ? edit.oldText
-        : typeof edit.old_string === "string"
-          ? edit.old_string
-          : undefined;
-    const newText =
-      typeof edit.newText === "string"
-        ? edit.newText
-        : typeof edit.new_string === "string"
-          ? edit.new_string
-          : undefined;
+    const oldText = readStringField(edit, "oldText") ?? readStringField(edit, "old_string");
+    const newText = readStringField(edit, "newText") ?? readStringField(edit, "new_string");
     if (oldText === undefined || newText === undefined) {
       continue;
     }

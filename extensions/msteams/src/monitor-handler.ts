@@ -1,4 +1,5 @@
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import { serializeMSTeamsAdaptiveCardActionValue } from "./adaptive-card-submit.js";
 import { maybeHandleMSTeamsApprovalCardSubmit } from "./approval-card-submit.js";
 import { formatUnknownError } from "./errors.js";
@@ -11,23 +12,24 @@ import type { MSTeamsIngressDispatchResult, MSTeamsIngressLifecycle } from "./ms
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 import { buildGroupWelcomeText, buildWelcomeCard } from "./welcome-card.js";
 
-async function isInvokeAuthorized(params: {
+export async function isMSTeamsInvokeAuthorized(params: {
   context: Pick<MSTeamsTurnContext, "activity">;
   deps: MSTeamsMessageHandlerDeps;
-  deniedLogs: {
-    dm: string;
-    channel: string;
-    group: string;
-  };
-  includeInvokeName?: boolean;
+  invokeKind: "feedback" | "signin" | "card action";
 }): Promise<boolean> {
-  const { context, deps, deniedLogs, includeInvokeName = false } = params;
+  const { context, deps, invokeKind } = params;
+  const cfg = deps.readConfig?.() ?? deps.cfg;
+  const account = resolveMSTeamsAccountConfig(cfg, deps.accountId);
+  if (account.enabled === false || (account.appId && account.appId !== deps.appId)) {
+    return false;
+  }
   const resolved = await resolveMSTeamsSenderAccess({
-    cfg: deps.cfg,
+    cfg,
+    accountId: deps.accountId,
     activity: context.activity,
   });
   const { msteamsCfg, isDirectMessage, conversationId, senderId } = resolved;
-  const maybeInvokeName = includeInvokeName ? { name: context.activity.name } : undefined;
+  const maybeInvokeName = invokeKind === "feedback" ? undefined : { name: context.activity.name };
 
   if (resolved.hasConflictingConversationScope) {
     deps.log.info("dropping invoke (conflicting conversation scope)", {
@@ -42,7 +44,7 @@ async function isInvokeAuthorized(params: {
   }
 
   if (isDirectMessage && resolved.senderAccess.decision !== "allow") {
-    deps.log.debug?.(deniedLogs.dm, {
+    deps.log.debug?.(`dropping ${invokeKind} invoke (dm sender not allowlisted)`, {
       sender: senderId,
       conversationId,
       ...maybeInvokeName,
@@ -55,7 +57,7 @@ async function isInvokeAuthorized(params: {
     resolved.channelGate.allowlistConfigured &&
     !resolved.channelGate.allowed
   ) {
-    deps.log.debug?.(deniedLogs.channel, {
+    deps.log.debug?.(`dropping ${invokeKind} invoke (not in team/channel allowlist)`, {
       conversationId,
       teamKey: resolved.channelGate.teamKey ?? "none",
       channelKey: resolved.channelGate.channelKey ?? "none",
@@ -65,7 +67,7 @@ async function isInvokeAuthorized(params: {
   }
 
   if (!isDirectMessage && !resolved.senderAccess.allowed) {
-    deps.log.debug?.(deniedLogs.group, {
+    deps.log.debug?.(`dropping ${invokeKind} invoke (group sender not allowlisted)`, {
       sender: senderId,
       conversationId,
       ...maybeInvokeName,
@@ -76,53 +78,6 @@ async function isInvokeAuthorized(params: {
   return true;
 }
 
-export async function isFeedbackInvokeAuthorized(
-  context: MSTeamsTurnContext,
-  deps: MSTeamsMessageHandlerDeps,
-): Promise<boolean> {
-  return isInvokeAuthorized({
-    context,
-    deps,
-    deniedLogs: {
-      dm: "dropping feedback invoke (dm sender not allowlisted)",
-      channel: "dropping feedback invoke (not in team/channel allowlist)",
-      group: "dropping feedback invoke (group sender not allowlisted)",
-    },
-  });
-}
-
-export async function isSigninInvokeAuthorized(
-  context: Pick<MSTeamsTurnContext, "activity">,
-  deps: MSTeamsMessageHandlerDeps,
-): Promise<boolean> {
-  return isInvokeAuthorized({
-    context,
-    deps,
-    deniedLogs: {
-      dm: "dropping signin invoke (dm sender not allowlisted)",
-      channel: "dropping signin invoke (not in team/channel allowlist)",
-      group: "dropping signin invoke (group sender not allowlisted)",
-    },
-    includeInvokeName: true,
-  });
-}
-
-export async function isCardActionInvokeAuthorized(
-  context: MSTeamsTurnContext,
-  deps: MSTeamsMessageHandlerDeps,
-): Promise<boolean> {
-  return isInvokeAuthorized({
-    context,
-    deps,
-    deniedLogs: {
-      dm: "dropping card action invoke (dm sender not allowlisted)",
-      channel: "dropping card action invoke (not in team/channel allowlist)",
-      group: "dropping card action invoke (group sender not allowlisted)",
-    },
-    includeInvokeName: true,
-  });
-}
-
 export function createMSTeamsActivityHandler(deps: MSTeamsMessageHandlerDeps) {
   const handleTeamsMessage = createMSTeamsMessageHandler(deps);
   const handleReaction = createMSTeamsReactionHandler(deps);
@@ -130,11 +85,12 @@ export function createMSTeamsActivityHandler(deps: MSTeamsMessageHandlerDeps) {
   const handleMembersAdded = async (ctx: MSTeamsTurnContext) => {
     const membersAdded = ctx.activity?.membersAdded ?? [];
     const botId = ctx.activity?.recipient?.id;
-    const msteamsCfg = deps.cfg.channels?.msteams;
+    const msteamsCfg = deps.cfg.channels?.msteams
+      ? resolveMSTeamsAccountConfig(deps.cfg, deps.accountId)
+      : undefined;
 
     for (const member of membersAdded) {
       if (member.id === botId) {
-        // Bot was added to a conversation — send welcome card if configured.
         const conversationType =
           normalizeOptionalLowercaseString(ctx.activity?.conversation?.conversationType) ??
           "personal";

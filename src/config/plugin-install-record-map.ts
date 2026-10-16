@@ -3,7 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PluginInstallRecord } from "./types.plugins.js";
 import { StrictPluginInstallRecordSchema } from "./zod-schema.installs.js";
 
-export const PluginInstallRecordSchema = StrictPluginInstallRecordSchema.passthrough();
+const PluginInstallRecordSchema = StrictPluginInstallRecordSchema.passthrough();
 
 const NORMALIZED_STRING_FIELDS = [
   "spec",

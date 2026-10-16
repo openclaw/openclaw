@@ -28,25 +28,31 @@ function readAppVersion(databasePath: string) {
   }
 }
 
+async function fixture() {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("worker-existing-schema-") };
+  const { db, path: databasePath } = openOpenClawStateDatabase({ env });
+  db.prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'").run(
+    "synthetic-installed-runtime",
+  );
+  await closeOpenClawStateDatabaseAsync();
+  return { env, databasePath };
+}
+
+function read(context: ReturnType<typeof captureOpenClawStateWorkerContext>) {
+  return executeOpenClawStateWorker(context, {
+    type: "plugins.conversationBindingApprovals.read",
+    input: undefined,
+  });
+}
+
 describe("existing-schema shared-state workers", () => {
   it("preserves installed release metadata through managed and ordinary worker opens", async () => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("worker-existing-schema-") };
-    const database = openOpenClawStateDatabase({ env });
-    const databasePath = database.path;
-    database.db
-      .prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'")
-      .run("synthetic-installed-runtime");
-    await closeOpenClawStateDatabaseAsync();
+    const { env, databasePath } = await fixture();
 
     await withExistingOpenClawStateSchema({ path: databasePath }, async () => {
       const captured = captureOpenClawStateWorkerContext({ path: databasePath, env });
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        expect(
-          await executeOpenClawStateWorker(captured, {
-            type: "plugins.conversationBindingApprovals.read",
-            input: undefined,
-          }),
-        ).toEqual([]);
+        expect(await read(captured)).toEqual([]);
         expect(readAppVersion(databasePath)).toBe("synthetic-installed-runtime");
       }
     });
@@ -61,45 +67,22 @@ describe("existing-schema shared-state workers", () => {
         ordinary,
       ),
     ).rejects.toThrow("schema policy changed");
-    expect(
-      await executeOpenClawStateWorker(ordinary, {
-        type: "plugins.conversationBindingApprovals.read",
-        input: undefined,
-      }),
-    ).toEqual([]);
+    expect(await read(ordinary)).toEqual([]);
     expect(readAppVersion(databasePath)).toBe("synthetic-installed-runtime");
   });
 
   it("admits queued checks only while their captured existing-schema scope remains active", async () => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("worker-expired-schema-") };
-    const database = openOpenClawStateDatabase({ env });
-    const databasePath = database.path;
-    database.db
-      .prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'")
-      .run("synthetic-installed-runtime");
-    await closeOpenClawStateDatabaseAsync();
+    const { env, databasePath } = await fixture();
     const outsideScope = AsyncLocalStorage.snapshot();
     const captured = await withExistingOpenClawStateSchema({ path: databasePath }, async () => {
       const context = captureOpenClawStateWorkerContext({ env });
       expect(() => outsideScope(context.admission.assertCurrent)).not.toThrow();
-      expect(
-        await outsideScope(() =>
-          executeOpenClawStateWorker(context, {
-            type: "plugins.conversationBindingApprovals.read",
-            input: undefined,
-          }),
-        ),
-      ).toEqual([]);
+      expect(await outsideScope(() => read(context))).toEqual([]);
       expect(readAppVersion(databasePath)).toBe("synthetic-installed-runtime");
       return context;
     });
 
-    await expect(
-      executeOpenClawStateWorker(captured, {
-        type: "plugins.conversationBindingApprovals.read",
-        input: undefined,
-      }),
-    ).rejects.toThrow("schema admission has ended");
+    await expect(read(captured)).rejects.toThrow("schema admission has ended");
     expect(readAppVersion(databasePath)).toBe("synthetic-installed-runtime");
   });
 });

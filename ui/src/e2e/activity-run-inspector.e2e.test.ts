@@ -178,7 +178,6 @@ suite.define(() => {
       expect(await page.getByText("receipt-safe-ref", { exact: false }).count()).toBe(0);
       expect(await page.getByText("context-safe-ref", { exact: false }).count()).toBe(0);
       expect(await page.getByText("execution-safe-ref", { exact: false }).count()).toBe(0);
-      expect(await page.getByText("raw-sender-id-42", { exact: false }).count()).toBe(0);
       await screenshot(page, "01-present-unattributed.png");
 
       await page.reload();

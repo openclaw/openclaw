@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readDockerE2eJsonArtifact } from "./lib/docker-e2e-json-artifacts.mts";
+import { groupBy } from "./lib/group-by.mts";
 
 const DEFAULT_WORKFLOW = "openclaw-live-and-e2e-checks-reusable.yml";
 
@@ -43,24 +44,13 @@ function parseArgs(argv: string[]) {
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
+    const key = (["repo", "dir", "workflow", "ref"] as const).find(
+      (option) => arg === `--${option}` || arg?.startsWith(`--${option}=`),
+    );
     if (arg === "--help" || arg === "-h") {
       options.help = true;
-    } else if (arg === "--repo") {
-      options.repo = argv[(index += 1)] ?? "";
-    } else if (arg?.startsWith("--repo=")) {
-      options.repo = arg.slice("--repo=".length);
-    } else if (arg === "--dir") {
-      options.dir = argv[(index += 1)] ?? "";
-    } else if (arg?.startsWith("--dir=")) {
-      options.dir = arg.slice("--dir=".length);
-    } else if (arg === "--workflow") {
-      options.workflow = argv[(index += 1)] ?? "";
-    } else if (arg?.startsWith("--workflow=")) {
-      options.workflow = arg.slice("--workflow=".length);
-    } else if (arg === "--ref") {
-      options.ref = argv[(index += 1)] ?? "";
-    } else if (arg?.startsWith("--ref=")) {
-      options.ref = arg.slice("--ref=".length);
+    } else if (key) {
+      options[key] = arg === `--${key}` ? (argv[(index += 1)] ?? "") : arg.slice(key.length + 3);
     } else if (!options.input) {
       options.input = arg;
     } else {
@@ -201,24 +191,6 @@ function discardMismatchedPreparedImages(entry: FailedEntry, explicitRef: string
     ),
   );
   return { ...entry, reuseInputs };
-}
-
-function reuseInputsKey(inputs: ReuseInputs | undefined): string {
-  return JSON.stringify(REUSE_INPUT_KEYS.map((key) => inputs?.[key] || ""));
-}
-
-function groupByReuseInputs(entries: FailedEntry[]): FailedEntry[][] {
-  const groups = new Map<string, FailedEntry[]>();
-  for (const entry of entries) {
-    const key = reuseInputsKey(entry.reuseInputs);
-    const group = groups.get(key);
-    if (group) {
-      group.push(entry);
-    } else {
-      groups.set(key, [entry]);
-    }
-  }
-  return [...groups.values()];
 }
 
 function ghWorkflowCommand(
@@ -490,7 +462,11 @@ function printEntries(
   console.log(`Failed Docker E2E entries: ${entries.map((entry) => entry.lane).join(", ")}`);
   if (workflowEntries.length > 0) {
     console.log("");
-    const workflowGroups = groupByReuseInputs(workflowEntries);
+    const workflowGroups = [
+      ...groupBy(workflowEntries, (entry) =>
+        JSON.stringify(REUSE_INPUT_KEYS.map((key) => entry.reuseInputs[key] || "")),
+      ).values(),
+    ];
     if (workflowGroups.length === 1) {
       console.log("Combined GitHub rerun:");
       console.log(

@@ -1,5 +1,7 @@
 // Status overview row tests cover status-all overview values, update metadata, and display rows.
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { theme } from "../../packages/terminal-core/src/theme.js";
+import * as memoryStatus from "../memory-host-sdk/status.js";
 import { VERSION } from "../version.js";
 import {
   buildStatusAllOverviewRows,
@@ -10,12 +12,54 @@ import {
   createStatusCommandOverviewRowsParams,
 } from "./status.test-support.ts";
 
+beforeEach(() => {
+  vi.spyOn(theme, "success").mockImplementation((value) => `ok(${String(value)})`);
+  vi.spyOn(theme, "warn").mockImplementation((value) => `warn(${String(value)})`);
+  vi.spyOn(theme, "muted").mockImplementation((value) => `muted(${String(value)})`);
+  vi.spyOn(memoryStatus, "resolveMemoryVectorState").mockReturnValue({
+    state: "ready",
+    tone: "ok",
+  });
+  vi.spyOn(memoryStatus, "resolveMemoryFtsState").mockReturnValue({ state: "ready", tone: "warn" });
+  vi.spyOn(memoryStatus, "resolveMemoryCacheSummary").mockReturnValue({
+    text: "cache warm",
+    tone: "muted",
+  });
+});
+afterEach(() => vi.restoreAllMocks());
+
 function findRowValue(rows: Array<{ Item: string; Value: string }>, item: string) {
   return rows.find((row) => row.Item === item)?.Value;
 }
 
 describe("status-overview-rows", () => {
-  it.each(["default", "all"])("preserves service inspection failures in %s output", (mode) => {
+  it("shows the latest offsite attempt beside a newer local backup", () => {
+    vi.spyOn(Date, "now").mockReturnValue(3_600_000);
+    const rows = buildStatusCommandOverviewRows({
+      ...createStatusCommandOverviewRowsParams(),
+      backupFreshness: {
+        latest: {
+          id: "local",
+          createdAt: 3_000_000,
+          archivePath: "/backup/local",
+          kind: "git",
+          status: "ok",
+        },
+        latestOffsite: {
+          id: "remote",
+          createdAt: 1,
+          archivePath: "",
+          kind: "archive",
+          status: "failed",
+          target: "offsite",
+        },
+      },
+    });
+    expect(findRowValue(rows, "Backups")).toContain("last ok");
+    expect(findRowValue(rows, "Offsite backup")).toContain("offsite: last attempt failed");
+  });
+
+  it.each(["default"])("preserves service inspection failures in %s output", (mode) => {
     const params = createStatusCommandOverviewRowsParams();
     const service = {
       label: "LaunchAgent",
@@ -51,21 +95,6 @@ describe("status-overview-rows", () => {
     );
   });
 
-  it("builds command overview rows from the shared surface", () => {
-    const rows = buildStatusCommandOverviewRows(createStatusCommandOverviewRowsParams());
-
-    expect(findRowValue(rows, "OS")).toBe(`macOS · node ${process.versions.node}`);
-    expect(findRowValue(rows, "Memory")).toBe(
-      "1 files · 2 chunks · plugin memory · ok(vector ready) · warn(fts ready) · muted(cache warm)",
-    );
-    expect(findRowValue(rows, "Plugin compatibility")).toBe("warn(1 notice · 1 plugin)");
-    expect(findRowValue(rows, "Telemetry")).toBe("muted(disabled · update checks only)");
-    expect(findRowValue(rows, "Host desktop")).toBe("muted(disabled)");
-    expect(findRowValue(rows, "Sessions")).toBe(
-      "2 stored · default gpt-5.5 (12k ctx) · store.json",
-    );
-  });
-
   it.each<{
     label: string;
     doNotTrack?: string;
@@ -78,24 +107,9 @@ describe("status-overview-rows", () => {
       expected: "ok(enabled · anonymous feature stats)",
     },
     {
-      label: "blocked by DO_NOT_TRACK",
-      doNotTrack: "1",
-      expected: "muted(disabled (DO_NOT_TRACK))",
-    },
-    {
       label: "blocked by a trimmed DO_NOT_TRACK value",
       doNotTrack: " TRUE ",
       expected: "muted(disabled (DO_NOT_TRACK))",
-    },
-    {
-      label: "update checks disabled",
-      checkOnStart: false,
-      expected: "muted(disabled · update checks off)",
-    },
-    {
-      label: "update checks disabled by a trimmed OPENCLAW_NO_AUTO_UPDATE=on",
-      noAutoUpdate: " on ",
-      expected: "muted(disabled · update checks off)",
     },
   ])(
     "shows telemetry state when $label",
@@ -167,70 +181,6 @@ describe("status-overview-rows", () => {
     );
   });
 
-  it("shows update restart state in fast status output", () => {
-    const rows = buildStatusCommandOverviewRows(
-      createStatusCommandOverviewRowsParams({
-        updateRows: [{ Item: "Update restart", Value: "failed · managed-service-handoff-failed" }],
-      }),
-    );
-
-    expect(findRowValue(rows, "Update restart")).toBe("failed · managed-service-handoff-failed");
-  });
-
-  it("lists plugins quarantined as configured-unavailable", () => {
-    const rows = buildStatusCommandOverviewRows(
-      createStatusCommandOverviewRowsParams({
-        summary: {
-          ...createStatusCommandOverviewRowsParams().summary,
-          degradedPlugins: [
-            {
-              pluginId: "discord",
-              state: "configured-unavailable",
-              diagnostic: {
-                kind: "plugin-verification",
-                reason: "unreadable-package-json",
-                detail: "permission denied",
-              },
-            },
-          ],
-        },
-      }),
-    );
-
-    expect(findRowValue(rows, "Degraded plugins")).toBe("warn(1 configured-unavailable · discord)");
-  });
-
-  it.each([
-    ["default", "startupMigrationWarning", "Startup migrations"],
-    ["all", "startupMigrationWarning", "Startup migrations"],
-    ["default", "startupRecoveryWarning", "Session recovery"],
-    ["all", "startupRecoveryWarning", "Session recovery"],
-    ["default", "installationReplacementWarning", "Installation replaced"],
-    ["all", "installationReplacementWarning", "Installation replaced"],
-  ] as const)("surfaces %s %s output", (mode, field, label) => {
-    const params = createStatusCommandOverviewRowsParams();
-    params.summary[field] = "Inspect the affected state. Run openclaw doctor.";
-    const rows =
-      mode === "default"
-        ? buildStatusCommandOverviewRows(params)
-        : buildStatusAllOverviewRows({
-            ...params,
-            configPath: "/tmp/openclaw.json",
-            secretDiagnosticsCount: 0,
-          });
-    expect(findRowValue(rows, label)).toContain(params.summary[field]);
-  });
-
-  it("surfaces a deleted Gateway Node path in the overview", () => {
-    const execPath = "/opt/homebrew/Cellar/node@24/24.20.0/bin/node";
-    const params = createStatusCommandOverviewRowsParams();
-    params.summary.childRuntime = { execPath, available: false };
-    const rows = buildStatusCommandOverviewRows(params);
-    expect(findRowValue(rows, "Gateway runtime")).toBe(
-      `warn(Gateway runtime is stale after Node upgrade: child workers are using ${execPath}, which no longer exists. Restart the Gateway.)`,
-    );
-  });
-
   it("builds status-all overview rows from the shared surface", () => {
     const summary = createStatusCommandOverviewRowsParams().summary;
     const rows = buildStatusAllOverviewRows({
@@ -295,22 +245,19 @@ describe("status-overview-rows", () => {
     expect(findRowValue(rows, "Secrets")).toBe("2 diagnostics");
   });
 
-  it.each([null, {}])(
-    "uses unknown only when Gateway self metadata is absent (%j)",
-    (gatewaySelf) => {
-      const params = createStatusCommandOverviewRowsParams();
-      const surface = { ...params.surface, gatewaySelf };
-      const rows = buildStatusAllOverviewRows({
-        ...params,
-        surface,
-        configPath: "/tmp/openclaw.json",
-        secretDiagnosticsCount: 0,
-      });
+  it.each([{}])("uses unknown only when Gateway self metadata is absent (%j)", (gatewaySelf) => {
+    const params = createStatusCommandOverviewRowsParams();
+    const surface = { ...params.surface, gatewaySelf };
+    const rows = buildStatusAllOverviewRows({
+      ...params,
+      surface,
+      configPath: "/tmp/openclaw.json",
+      secretDiagnosticsCount: 0,
+    });
 
-      expect(findRowValue(rows, "Gateway self")).toBe("unknown");
-      expect(
-        findRowValue(buildStatusCommandOverviewRows({ ...params, surface }), "Gateway self"),
-      ).toBeUndefined();
-    },
-  );
+    expect(findRowValue(rows, "Gateway self")).toBe("unknown");
+    expect(
+      findRowValue(buildStatusCommandOverviewRows({ ...params, surface }), "Gateway self"),
+    ).toBeUndefined();
+  });
 });

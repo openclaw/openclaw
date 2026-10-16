@@ -1,5 +1,6 @@
 import { asNonNegativeFiniteNumber as readChatSendTimingNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { pruneMapToMaxSize } from "../../../../src/infra/map-size.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { visibleSessionMatches, type SessionScopeHost } from "../../lib/sessions/index.ts";
 import { readChatQueueForScope } from "./chat-queue.ts";
@@ -25,12 +26,16 @@ type ChatSendTimingPhase =
 
 type ChatSendTimingHost = SessionScopeHost & {
   sessionKey: string;
-  chatStream: string | null;
   chatQueue: ChatQueueItem[];
   chatSendTimingsByRun?: Map<string, ChatSendTimingEntry>;
   eventLogBuffer?: unknown[];
   renderLifecycle?: RenderLifecycle;
 };
+
+type ChatSendTimingItem = Pick<
+  ChatQueueItem,
+  "sendRunId" | "sessionKey" | "agentId" | "sendAttempts" | "sendState" | "sendSubmittedAtMs"
+>;
 
 const CHAT_SEND_SERVER_TIMING_PHASES = [
   "dispatch-started",
@@ -42,13 +47,11 @@ const CHAT_SEND_SERVER_TIMING_PHASES = [
 ] as const;
 type ChatSendServerTimingPhase = (typeof CHAT_SEND_SERVER_TIMING_PHASES)[number];
 const CHAT_SEND_SLOW_FIRST_ASSISTANT_MS = 1_500;
+const CHAT_SEND_TIMING_LIMIT = 40;
 
 export function recordChatSendTiming(
   host: ChatSendTimingHost,
-  item: Pick<
-    ChatQueueItem,
-    "sendRunId" | "sessionKey" | "agentId" | "sendAttempts" | "sendState" | "sendSubmittedAtMs"
-  >,
+  item: ChatSendTimingItem,
   phase: ChatSendTimingPhase,
   startedAtMs = item.sendSubmittedAtMs,
   extra: Record<string, unknown> = {},
@@ -69,7 +72,7 @@ export function recordChatSendTiming(
       sendState: item.sendState,
       ...extra,
     },
-    { console: false, maxBufferedEventsForType: 40 },
+    { maxBufferedEventsForType: 40 },
   );
 }
 
@@ -124,38 +127,34 @@ export function recordChatSendServerTiming(host: ChatSendTimingHost, payload: un
       ...identity,
       ...(slow ? { slow: true } : {}),
     },
-    { console: slow, warn: slow, maxBufferedEventsForType: 40 },
+    { warn: slow, maxBufferedEventsForType: 40 },
   );
 }
 
 export function registerChatSendTiming(
   host: ChatSendTimingHost,
-  item: Pick<
-    ChatQueueItem,
-    "sendRunId" | "sessionKey" | "agentId" | "sendAttempts" | "sendState" | "sendSubmittedAtMs"
-  >,
+  item: ChatSendTimingItem,
   runId: string,
   requestStartedAtMs: number,
 ) {
-  (host.chatSendTimingsByRun ??= new Map()).set(runId, {
+  const entries = (host.chatSendTimingsByRun ??= new Map());
+  entries.set(runId, {
     runId,
     sessionKey: item.sessionKey,
     agentId: item.agentId,
     sendAttempts: item.sendAttempts ?? 0,
     sendState: item.sendState,
     submittedAtMs: item.sendSubmittedAtMs ?? requestStartedAtMs,
-    requestStartedAtMs,
   });
+  // Historical timing correlation is best effort, like the bounded diagnostic log.
+  pruneMapToMaxSize(entries, CHAT_SEND_TIMING_LIMIT);
 }
 
 export function updateChatSendAckTiming(
   host: ChatSendTimingHost,
   requestedRunId: string,
   ack: ChatSendAck,
-  item: Pick<
-    ChatQueueItem,
-    "sessionKey" | "agentId" | "sendAttempts" | "sendState" | "sendSubmittedAtMs"
-  >,
+  item: ChatSendTimingItem,
   requestStartedAtMs: number,
 ) {
   const entries = (host.chatSendTimingsByRun ??= new Map());
@@ -166,18 +165,17 @@ export function updateChatSendAckTiming(
       sendAttempts: item.sendAttempts ?? 0,
       sendState: item.sendState,
       submittedAtMs,
-      requestStartedAtMs,
     }),
     runId: ack.runId,
     sessionKey: existing?.sessionKey ?? item.sessionKey,
     agentId: existing?.agentId ?? item.agentId,
-    ackAtMs: controlUiNowMs(),
     ackStatus: ack.status,
   };
   if (ack.runId !== requestedRunId) {
     entries.delete(requestedRunId);
   }
   entries.set(ack.runId, next);
+  pruneMapToMaxSize(entries, CHAT_SEND_TIMING_LIMIT);
 }
 
 export function chatSendAckServerTimingEventFields(ack: ChatSendAck): Record<string, number> {

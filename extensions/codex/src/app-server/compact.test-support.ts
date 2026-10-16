@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { runWithAsyncWorkResources } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { expect, vi } from "vitest";
 import {
   ensureCodexAppServerClientRuntime,
@@ -20,6 +24,7 @@ import {
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
 import type { CodexAppServerClientFactory } from "./shared-client.js";
+import { createClientHarness } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 let codexAppServerClientFactoryForTest: CodexAppServerClientFactory | undefined;
@@ -37,6 +42,7 @@ export function beginCompactionTestCleanup() {
   if (compactionTestCleanup) {
     throw new Error("Previous compaction test cleanup has not finished");
   }
+  setRuntimeConfigSnapshot({});
   const cleanup = {
     controller: new AbortController(),
     pending: new Set<Promise<unknown>>(),
@@ -62,6 +68,7 @@ export function beginCompactionTestCleanup() {
         client.close();
       }
       compactionTestCleanup = undefined;
+      clearRuntimeConfigSnapshot();
     }
     if (!failed && unfinished) {
       throw new Error("Test left compaction calls unsettled");
@@ -89,6 +96,7 @@ export function compactCodexSessionWithTestHost(
   params: CompactTestParams,
   options: Parameters<typeof maybeCompactCodexAppServerSessionImpl>[1],
 ) {
+  setRuntimeConfigSnapshot(params.config ?? {});
   const cleanup = compactionTestCleanup;
   if (!cleanup) {
     return runCompactionWithTestHost(params, options);
@@ -322,7 +330,7 @@ export function createFakeCodexCompactionClient(
 ): {
   client: CodexAppServerClient;
   request: ReturnType<typeof vi.fn<CodexAppServerClient["request"]>>;
-  close: ReturnType<typeof vi.fn>;
+  close: ReturnType<typeof vi.fn<CodexAppServerClient["close"]>>;
   closeAndWait: ReturnType<typeof vi.fn<CodexAppServerClient["closeAndWait"]>>;
   emit: (notification: CodexServerNotification) => void;
   completeCompaction: () => void;
@@ -500,7 +508,10 @@ export function createFakeCodexCompactionClient(
       return {};
     },
   );
+  const { client } = createClientHarness();
+  const closeTransport = client.close.bind(client);
   const close = vi.fn(() => {
+    closeTransport();
     for (const handler of closeHandlers) {
       handler();
     }
@@ -548,7 +559,7 @@ export function createFakeCodexCompactionClient(
       return () => handlers.delete(handler);
     },
   );
-  const client = {
+  Object.assign(client, {
     request,
     getInstanceId: vi.fn(() => "fake-compaction-client"),
     getTransportPid: () => undefined,
@@ -560,7 +571,7 @@ export function createFakeCodexCompactionClient(
       closeHandlers.add(handler);
       return () => closeHandlers.delete(handler);
     }),
-  } as unknown as CodexAppServerClient;
+  });
   ensureCodexAppServerClientRuntime(client, { agentDir: tempDir });
   addNotificationHandler.mockClear();
   if (retainedThreadId) {
@@ -579,4 +590,19 @@ export function createFakeCodexCompactionClient(
     emit,
     completeCompaction,
   };
+}
+
+export const compactUnboundedRequestOptions = {
+  assertCurrent: expect.any(Function),
+  withCurrent: expect.any(Function),
+  signal: expect.any(AbortSignal),
+};
+export const compactStartRequestOptions = { timeoutMs: 60_000, ...compactUnboundedRequestOptions };
+
+export function expectCompactStartRequest(
+  request: ReturnType<typeof createFakeCodexCompactionClient>["request"],
+  threadId: string,
+  options: typeof compactStartRequestOptions | typeof compactUnboundedRequestOptions,
+): void {
+  expect(request).toHaveBeenCalledWith("thread/compact/start", { threadId }, options);
 }

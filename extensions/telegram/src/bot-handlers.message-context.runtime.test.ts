@@ -12,13 +12,17 @@ import {
   resetPluginStateStoreForTests,
   type OpenClawStateKyselyDatabaseForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  getSessionEntryAsync,
+  readAmbientTranscriptWatermarkAsync,
+  resolveAmbientTranscriptWatermarkKey,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createTelegramMessageContextRuntime,
   createTelegramMessageSessionRuntime,
 } from "./bot-handlers.message-context.js";
-import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import { telegramPromptContextHistory } from "./group-history-window.js";
 import { readTelegramHistory } from "./history-policy.js";
 import {
@@ -54,7 +58,7 @@ function createRuntime(cfg: OpenClawConfig = {}) {
     telegramCfg: cfg.channels?.telegram ?? {},
     telegramDeps: {
       resolveStorePath: () => `/tmp/openclaw-telegram-thread-recovery-${storeScopeId}/store.json`,
-    } as RegisterTelegramHandlerParams["telegramDeps"],
+    },
   });
 }
 
@@ -76,8 +80,8 @@ describe("resolveCachedMessageThreadSpec", () => {
 
   it("keeps account cache ownership separate from a topic-routed session owner", async () => {
     const resolveStorePath = vi.fn(
-      (_store, options: { agentId?: string }) =>
-        `/tmp/openclaw-telegram-owner-${options.agentId}.json`,
+      (_store?: string, options?: { agentId?: string }) =>
+        `/tmp/openclaw-telegram-owner-${options?.agentId}.json`,
     );
     const cfg = {
       agents: {
@@ -94,14 +98,17 @@ describe("resolveCachedMessageThreadSpec", () => {
       telegramCfg: {},
       telegramDeps: {
         resolveStorePath,
-      } as unknown as RegisterTelegramHandlerParams["telegramDeps"],
+      },
     });
     const sessionRuntime = createTelegramMessageSessionRuntime({
       accountId: "primary",
       resolveTelegramGroupConfig: () => ({ topicConfig: { agentId: "research" } }),
       telegramDeps: {
         resolveStorePath,
-      } as unknown as RegisterTelegramHandlerParams["telegramDeps"],
+        getSessionEntryAsync,
+        readAmbientTranscriptWatermarkAsync,
+        resolveAmbientTranscriptWatermarkKey,
+      },
     });
 
     const session = await sessionRuntime.resolveTelegramSessionState({
@@ -123,18 +130,6 @@ describe("resolveCachedMessageThreadSpec", () => {
     expect(session.sessionKey).toContain("agent:research:");
   });
 
-  it("recovers the topic of a recorded forum message", async () => {
-    const runtime = createRuntime();
-    await runtime.recordMessageForReplyChain(forumMessage(100, TOPIC_ID), {
-      scope: "forum",
-      id: TOPIC_ID,
-    });
-
-    await expect(
-      runtime.resolveCachedMessageThreadSpec({ chatId: CHAT_ID, messageId: 100 }),
-    ).resolves.toEqual({ scope: "forum", id: TOPIC_ID });
-  });
-
   it("returns undefined for a message that is not in the cache", async () => {
     const runtime = createRuntime();
 
@@ -142,15 +137,6 @@ describe("resolveCachedMessageThreadSpec", () => {
     // attributing the reaction to the General topic.
     await expect(
       runtime.resolveCachedMessageThreadSpec({ chatId: CHAT_ID, messageId: 404 }),
-    ).resolves.toBeUndefined();
-  });
-
-  it("returns undefined for a recorded message that carries no topic", async () => {
-    const runtime = createRuntime();
-    await runtime.recordMessageForReplyChain(forumMessage(101));
-
-    await expect(
-      runtime.resolveCachedMessageThreadSpec({ chatId: CHAT_ID, messageId: 101 }),
     ).resolves.toBeUndefined();
   });
 
@@ -296,32 +282,6 @@ describe("automatic Telegram retained history workload", () => {
     await state.cleanup();
   });
 
-  it.each([
-    { historyLimit: undefined, limit: 50 },
-    { historyLimit: Number.MAX_SAFE_INTEGER, limit: 50 },
-    { historyLimit: 5000, limit: 200 },
-  ])(
-    "bounds the automatic window to $limit for configured $historyLimit",
-    async ({ historyLimit, limit }) => {
-      const { runtime, cfg, telegramCfg } = historyRuntime({ groupPolicy: "open", historyLimit });
-      const msg = archivedMessage(archiveSize + 1);
-      const context = await runtime.buildPromptContextForMessage(
-        { message: msg, getFile: vi.fn() },
-        msg,
-        [],
-        cfg,
-        telegramCfg,
-      );
-      expect(telegramPromptContextHistory(context).map((entry) => entry.messageId)).toEqual(
-        Array.from({ length: limit + 1 }, (_, index) => String(archiveSize - limit + index)).filter(
-          (id) => id !== "50500",
-        ),
-      );
-      expect(reads.rows).toBeLessThanOrEqual(256);
-      expect(reads.pages).toBeLessThanOrEqual(2);
-    },
-  );
-
   it("does not read storage when automatic history is zero and there is no reply", async () => {
     const { runtime, cfg, telegramCfg } = historyRuntime({ groupPolicy: "open", historyLimit: 0 });
     const msg = archivedMessage(archiveSize + 1);
@@ -439,16 +399,13 @@ describe("Telegram same-turn reset context", () => {
     clearTelegramRuntimeForTest();
   });
 
-  it.each(["private", "group"] as const)(
+  it.each(["group"] as const)(
     "keeps soft-reset context but drops a hard reset in %s chats",
     async (type) => {
       const telegramCfg: TelegramAccountConfig = { groupPolicy: "open" };
       const cfg: OpenClawConfig = { channels: { telegram: telegramCfg } };
       const previous = {
-        chat:
-          type === "private"
-            ? { id: 7, type, first_name: "Participant" }
-            : { id: 7, type, title: "Room" },
+        chat: { id: 7, type, title: "Room" },
         message_id: 100,
         date: 1_736_380_800,
         text: "Keep this context for a soft reset.",

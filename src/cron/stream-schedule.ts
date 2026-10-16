@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import type { CronPayload, CronSchedule } from "./types.js";
 
@@ -11,9 +10,20 @@ const CRON_STREAM_TRUNCATED_MARKER = "[truncated]";
 
 export type CronStreamSchedule = Extract<CronSchedule, { kind: "stream" }>;
 
-/** Opaque identity for one logical stream source across child-process restarts. */
-export function createCronStreamSourceIdentity(): string {
-  return randomUUID();
+/** A committed identity is a result fact; later writes still require the normal source checks. */
+export class CronStreamSourceRetirementError extends Error {
+  constructor(
+    readonly retirement: {
+      jobId: string;
+      scheduleKey: string;
+      previousIdentity: string;
+      identity: string;
+    },
+    cause: unknown,
+  ) {
+    super("Cron stream source retirement committed before the operation failed", { cause });
+    this.name = "CronStreamSourceRetirementError";
+  }
 }
 
 function clampInteger(

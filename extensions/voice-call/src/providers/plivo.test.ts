@@ -1,5 +1,15 @@
 // Voice Call tests cover plivo plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
+  fetchWithSsrFGuardMock: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+}));
+
 import { PlivoProvider } from "./plivo.js";
 
 const PROVIDER_CONFIG = { authId: "MA000000000000000000", authToken: "test-token" };
@@ -73,26 +83,11 @@ function requireResponseBody(body: string | undefined): string {
 }
 
 describe("PlivoProvider", () => {
-  it("parses answer callback into call.answered and returns keep-alive XML", () => {
-    const provider = new PlivoProvider(PROVIDER_CONFIG);
-
-    const result = provider.parseWebhookEvent({
-      headers: { host: "example.com" },
-      rawBody:
-        "CallUUID=call-uuid&CallStatus=in-progress&Direction=outbound&From=%2B15550000000&To=%2B15550000001&Event=StartApp",
-      url: "https://example.com/voice/webhook?provider=plivo&flow=answer&callId=internal-call-id",
-      method: "POST",
-      query: { provider: "plivo", flow: "answer", callId: "internal-call-id" },
-    });
-
-    expect(result.events).toHaveLength(1);
-    const event = requireEvent(result.events[0], "expected Plivo answer event");
-    expect(event.type).toBe("call.answered");
-    expect(event.callId).toBe("internal-call-id");
-    expect(event.providerCallId).toBe("call-uuid");
-    const responseBody = requireResponseBody(result.providerResponseBody);
-    expect(responseBody).toContain("<Wait");
-    expect(responseBody).toContain('length="300"');
+  beforeEach(() => {
+    fetchWithSsrFGuardMock.mockReset().mockImplementation(async () => ({
+      response: new Response("{}"),
+      release: async () => {},
+    }));
   });
 
   it("uses verified request key when provided", () => {
@@ -120,13 +115,6 @@ describe("PlivoProvider", () => {
     const provider = new PlivoProvider(PROVIDER_CONFIG, {
       publicUrl: "https://voice.openclaw.ai/voice/webhook?provider=plivo",
     });
-    const apiRequest = vi.fn(async (_params: unknown) => ({}));
-    (
-      provider as unknown as {
-        apiRequest: (params: unknown) => Promise<unknown>;
-      }
-    ).apiRequest = apiRequest;
-
     provider.parseWebhookEvent({
       headers: { host: "attacker.example" },
       rawBody:
@@ -142,13 +130,17 @@ describe("PlivoProvider", () => {
       text: "How can I help?",
     });
 
-    expect(apiRequest).toHaveBeenCalledWith(
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        method: "POST",
-        endpoint: "/Call/call-uuid/",
-        body: expect.objectContaining({
-          aleg_url:
-            "https://voice.openclaw.ai/voice/webhook?provider=plivo&flow=xml-speak&callId=internal-call-id",
+        url: `https://api.plivo.com/v1/Account/${PROVIDER_CONFIG.authId}/Call/call-uuid/`,
+        init: expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            legs: "aleg",
+            aleg_url:
+              "https://voice.openclaw.ai/voice/webhook?provider=plivo&flow=xml-speak&callId=internal-call-id",
+            aleg_method: "POST",
+          }),
         }),
       }),
     );
@@ -156,12 +148,6 @@ describe("PlivoProvider", () => {
 
   it("renders an auto-response as the prompt for the next speech input", async () => {
     const provider = new PlivoProvider(PROVIDER_CONFIG);
-    const apiRequest = vi.fn(async (_params: unknown) => ({}));
-    (
-      provider as unknown as {
-        apiRequest: (params: unknown) => Promise<unknown>;
-      }
-    ).apiRequest = apiRequest;
     (
       provider as unknown as {
         callIdToWebhookUrl: Map<string, string>;
@@ -176,12 +162,12 @@ describe("PlivoProvider", () => {
       listenAfterPlayback: true,
     });
 
-    expect(apiRequest).toHaveBeenCalledWith(
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        method: "POST",
-        endpoint: "/Call/call-uuid/",
-        body: expect.objectContaining({
-          aleg_url: expect.stringContaining("flow=xml-speak"),
+        url: `https://api.plivo.com/v1/Account/${PROVIDER_CONFIG.authId}/Call/call-uuid/`,
+        init: expect.objectContaining({
+          method: "POST",
+          body: expect.stringContaining("flow=xml-speak"),
         }),
       }),
     );
@@ -273,12 +259,6 @@ describe("PlivoProvider", () => {
     const requestUuid = "request-hangup";
     const callUuid = "call-hangup";
     seedPlivoPrivateCallState({ provider, callId, requestUuid, callUuid });
-    const apiRequest = vi.fn(async (_params: unknown) => ({}));
-    (
-      provider as unknown as {
-        apiRequest: (params: unknown) => Promise<unknown>;
-      }
-    ).apiRequest = apiRequest;
     const input = {
       callId,
       providerCallId: requestUuid,
@@ -287,9 +267,13 @@ describe("PlivoProvider", () => {
 
     await provider.hangupCall(input);
     expectPlivoPrivateCallStateReleased({ provider, callId, requestUuid, callUuid });
+    fetchWithSsrFGuardMock.mockImplementation(async () => ({
+      response: new Response("", { status: 404 }),
+      release: async () => {},
+    }));
     await provider.hangupCall(input);
     expectPlivoPrivateCallStateReleased({ provider, callId, requestUuid, callUuid });
-    expect(apiRequest).toHaveBeenCalledTimes(3);
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(3);
   });
 
   it("retains call state when explicit hangup fails so it can retry", async () => {
@@ -298,15 +282,7 @@ describe("PlivoProvider", () => {
     const requestUuid = "request-hangup-retry";
     const callUuid = "call-hangup-retry";
     seedPlivoPrivateCallState({ provider, callId, requestUuid, callUuid });
-    const apiRequest = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("temporary Plivo failure"))
-      .mockResolvedValue({});
-    (
-      provider as unknown as {
-        apiRequest: (params: unknown) => Promise<unknown>;
-      }
-    ).apiRequest = apiRequest;
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("temporary Plivo failure"));
     const input = {
       callId,
       providerCallId: requestUuid,
@@ -318,15 +294,14 @@ describe("PlivoProvider", () => {
 
     await provider.hangupCall(input);
     expectPlivoPrivateCallStateReleased({ provider, callId, requestUuid, callUuid });
-    expect(apiRequest).toHaveBeenNthCalledWith(1, {
-      method: "DELETE",
-      endpoint: `/Call/${callUuid}/`,
-      allowNotFound: true,
-    });
-    expect(apiRequest).toHaveBeenNthCalledWith(2, {
-      method: "DELETE",
-      endpoint: `/Call/${callUuid}/`,
-      allowNotFound: true,
-    });
+    for (const call of [1, 2]) {
+      expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+        call,
+        expect.objectContaining({
+          url: `https://api.plivo.com/v1/Account/${PROVIDER_CONFIG.authId}/Call/${callUuid}/`,
+          init: expect.objectContaining({ method: "DELETE" }),
+        }),
+      );
+    }
   });
 });

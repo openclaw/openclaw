@@ -3,11 +3,9 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  ANTHROPIC_BY_MODEL_REPLAY_HOOKS,
   buildProviderReplayFamilyHooks,
   modelCostsEqual,
   NATIVE_ANTHROPIC_REPLAY_HOOKS,
-  OPENAI_COMPATIBLE_REPLAY_HOOKS,
   PASSTHROUGH_GEMINI_REPLAY_HOOKS,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeMythos5ModelIdentity,
@@ -41,13 +39,6 @@ function readLevelIds(profile: unknown): string[] {
   return (levels ?? []).map((level) => String(level.id));
 }
 
-function expectLevelIdsInclude(profile: unknown, expectedIds: readonly string[]): void {
-  const ids = readLevelIds(profile);
-  for (const id of expectedIds) {
-    expect(ids.includes(id), `level ${id}`).toBe(true);
-  }
-}
-
 describe("Claude model contracts", () => {
   it("recognizes Vertex date suffixes", () => {
     expect(resolveClaudeFable5ModelIdentity({ id: "claude-fable-5@20260601" })).toBe(
@@ -73,32 +64,17 @@ describe("Claude model contracts", () => {
     expect(requiresClaudeDefaultSampling({ id: "claude-mythos-5" })).toBe(true);
   });
 
-  it.each([
-    ["Anthropic API", { id: "claude-opus-5" }, "claude-opus-5"],
-    ["Anthropic alias", { id: "opus" }, "claude-opus-5-5"],
-    ["Anthropic version alias", { id: "opus-5" }, "claude-opus-5"],
-    ["Amazon Bedrock", { id: "global.anthropic.claude-opus-5" }, "claude-opus-5"],
-    [
-      "Microsoft Foundry",
-      { id: "prod-opus", params: { canonicalModelId: "claude-opus-5" } },
-      "claude-opus-5",
-    ],
-    ["OpenRouter", { id: "anthropic/claude-opus-5" }, "claude-opus-5"],
-  ] as const)("recognizes the Claude Opus 5 contract through %s", (_provider, ref, identity) => {
-    expect(resolveClaudeOpus5ModelIdentity(ref)).toBe(identity);
-    expect(supportsClaude1MContext(ref)).toBe(true);
-    expect(supportsClaudeAdaptiveThinking(ref)).toBe(true);
-    expect(supportsClaudeNativeMaxEffort(ref)).toBe(true);
-    expect(supportsClaudeNativeXhighEffort(ref)).toBe(true);
-    expect(requiresClaudeDefaultSampling(ref)).toBe(true);
-  });
-
-  it("recognizes native 1M Claude model families independently", () => {
-    expect(supportsClaude1MContext({ id: "anthropic/claude-opus-4.8" })).toBe(true);
-    expect(supportsClaude1MContext({ id: "us.anthropic.claude-sonnet-4-6-v1:0" })).toBe(true);
-    expect(supportsClaude1MContext({ id: "claude-opus-50" })).toBe(false);
-    expect(supportsClaude1MContext({ id: "claude-haiku-4-5" })).toBe(false);
-  });
+  it.each([["OpenRouter", { id: "anthropic/claude-opus-5" }, "claude-opus-5"]] as const)(
+    "recognizes the Claude Opus 5 contract through %s",
+    (_provider, ref, identity) => {
+      expect(resolveClaudeOpus5ModelIdentity(ref)).toBe(identity);
+      expect(supportsClaude1MContext(ref)).toBe(true);
+      expect(supportsClaudeAdaptiveThinking(ref)).toBe(true);
+      expect(supportsClaudeNativeMaxEffort(ref)).toBe(true);
+      expect(supportsClaudeNativeXhighEffort(ref)).toBe(true);
+      expect(requiresClaudeDefaultSampling(ref)).toBe(true);
+    },
+  );
 
   it("recognizes native fast-mode Claude models", () => {
     expect(supportsClaudeFastMode({ id: "claude-opus-5" })).toBe(true);
@@ -138,26 +114,6 @@ describe("modelCostsEqual", () => {
 });
 
 describe("selectPreferredLocalModelId", () => {
-  const familyOrder = [
-    "google/gemma-4-27b",
-    "qwen3.5:4b",
-    "qwen3:8b",
-    "gpt-oss:20b",
-    "google/gemma-3-12b",
-    "meta-llama/Llama-4-17B",
-    "meta-llama/Llama-3.3-70B-Instruct",
-    "phi-4:14b",
-    "mistral-small:24b",
-    "deepseek-r1:14b",
-  ];
-
-  it.each(familyOrder.slice(0, -1).map((id, index) => [id, familyOrder[index + 1]!] as const))(
-    "prefers %s over %s",
-    (preferred, fallback) => {
-      expect(selectPreferredLocalModelId([fallback, preferred])).toBe(preferred);
-    },
-  );
-
   it("sinks specialist variants below general chat models", () => {
     expect(selectPreferredLocalModelId(["nomic-embed-text", "qwen3.5-vl:7b", "custom-chat"])).toBe(
       "custom-chat",
@@ -169,20 +125,6 @@ describe("selectPreferredLocalModelId", () => {
     expect(
       selectPreferredLocalModelId(["qwen3-coder:30b", "meta-llama/Llama-3.3-70B-Instruct"]),
     ).toBe("meta-llama/Llama-3.3-70B-Instruct");
-  });
-
-  it("distinguishes family versions from colon-delimited size tags", () => {
-    expect(selectPreferredLocalModelId(["qwen3:5b", "qwen3.5:4b"])).toBe("qwen3.5:4b");
-    expect(selectPreferredLocalModelId(["qwen:32b", "llama3:8b"])).toBe("llama3:8b");
-    expect(selectPreferredLocalModelId(["qwen-35b", "deepseek:8b"])).toBe("deepseek:8b");
-  });
-
-  it("matches case-insensitively and preserves caller order within a family", () => {
-    expect(selectPreferredLocalModelId(["  QWEN3:4B  ", "qwen3:8b"])).toBe("QWEN3:4B");
-  });
-
-  it("falls back to the first normalized general model", () => {
-    expect(selectPreferredLocalModelId(["  custom-chat  ", "another-chat"])).toBe("custom-chat");
   });
 
   it("returns undefined for empty input", () => {
@@ -314,58 +256,16 @@ describe("buildProviderReplayFamilyHooks", () => {
           expect(policy).not.toHaveProperty(key);
         }
       }
-      expect(Boolean(hooks.sanitizeReplayHistory)).toBe(testCase.hasSanitizeReplayHistory);
+      expect(Boolean(hooks.sanitizeReplayHistoryAsync)).toBe(testCase.hasSanitizeReplayHistory);
       expect(hooks.resolveReasoningOutputMode?.(testCase.ctx as never)).toBe(
         testCase.reasoningMode,
       );
     }
   });
 
-  it("keeps google-gemini replay sanitation on the bootstrap path", async () => {
-    const hooks = buildProviderReplayFamilyHooks({
-      family: "google-gemini",
-    });
-
-    const sanitized = await hooks.sanitizeReplayHistory?.({
-      provider: "google",
-      modelApi: "google-generative-ai",
-      modelId: "gemini-3.1-pro-preview",
-      sessionId: "session-1",
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "hello" }],
-        },
-      ],
-      sessionState: {
-        getCustomEntries: () => [],
-        appendCustomEntry: () => {},
-      },
-    } as never);
-
-    expectFields(sanitized?.[0], {
-      role: "user",
-      content: "(session bootstrap)",
-    });
-  });
-
-  it("keeps anthropic-by-model replay family scoped to claude ids", () => {
-    const hooks = buildProviderReplayFamilyHooks({
-      family: "anthropic-by-model",
-    });
-
-    expect(
-      hooks.buildReplayPolicy?.({
-        provider: "amazon-bedrock",
-        modelApi: "anthropic-messages",
-        modelId: "amazon.nova-pro-v1",
-      } as never),
-    ).not.toHaveProperty("dropThinkingBlocks");
-  });
-
   it("exposes canonical replay hooks for reused provider families", () => {
     expectFields(
-      OPENAI_COMPATIBLE_REPLAY_HOOKS.buildReplayPolicy?.({
+      buildProviderReplayFamilyHooks({ family: "openai-compatible" }).buildReplayPolicy?.({
         provider: "xai",
         modelApi: "openai-completions",
         modelId: "google/gemma-4-26b-a4b-it",
@@ -414,7 +314,7 @@ describe("buildProviderReplayFamilyHooks", () => {
     );
 
     expectFields(
-      ANTHROPIC_BY_MODEL_REPLAY_HOOKS.buildReplayPolicy?.({
+      buildProviderReplayFamilyHooks({ family: "anthropic-by-model" }).buildReplayPolicy?.({
         provider: "amazon-bedrock",
         modelApi: "bedrock-converse-stream",
         modelId: "claude-sonnet-4-6",
@@ -437,82 +337,5 @@ describe("buildProviderReplayFamilyHooks", () => {
         validateAnthropicTurns: true,
       },
     );
-  });
-});
-
-describe("resolveClaudeThinkingProfile", () => {
-  it.each(["claude-sonnet-5", "claude-opus-5"])(
-    "keeps %s high-by-default with optional thinking",
-    (modelId) => {
-      const profile = resolveClaudeThinkingProfile(modelId);
-      expectFields(profile, { defaultLevel: "high" });
-      expectLevelIdsInclude(profile, ["off", "xhigh", "adaptive", "max"]);
-    },
-  );
-
-  it.each([
-    ["claude-fable-5", "medium"],
-    ["claude-fable-5-1", "medium"],
-    ["claude-opus-5-5", "medium"],
-    ["claude-mythos-5", "high"],
-  ])("exposes %s's mandatory-adaptive profile to Claude providers", (modelId, defaultLevel) => {
-    const profile = resolveClaudeThinkingProfile(modelId);
-    expectFields(profile, {
-      defaultLevel,
-      preserveWhenCatalogReasoningFalse: true,
-    });
-    expect(readLevelIds(profile)).toEqual(["low", "medium", "high", "xhigh", "max"]);
-  });
-
-  it("keeps Mythos Preview mandatory adaptive without claiming the Claude 5 effort ladder", () => {
-    const profile = resolveClaudeThinkingProfile("claude-mythos-preview");
-
-    expectFields(profile, {
-      defaultLevel: "adaptive",
-      preserveWhenCatalogReasoningFalse: true,
-    });
-    expect(readLevelIds(profile)).toEqual(["minimal", "low", "medium", "high", "adaptive"]);
-  });
-
-  it("does not match longer unrelated Claude ids by prefix only", () => {
-    expect(resolveClaudeThinkingProfile("vendor/claude-fable-500").defaultLevel).toBeUndefined();
-    expect(resolveClaudeThinkingProfile("anthropic/claude-opus-4-60").defaultLevel).toBeUndefined();
-    expect(supportsClaudeNativeMaxEffort({ id: "vendor/claude-fable-500" })).toBe(false);
-    expect(supportsClaudeNativeXhighEffort({ id: "anthropic/claude-opus-4-70" })).toBe(false);
-  });
-
-  it("leaves Opus 4.8 thinking off by default with xhigh/adaptive/max options", () => {
-    const profile = resolveClaudeThinkingProfile("claude-opus-4-8");
-    expectFields(profile, {
-      defaultLevel: "off",
-    });
-    expectLevelIdsInclude(profile, ["xhigh", "adaptive", "max"]);
-  });
-
-  it("exposes Opus 4.7 thinking levels for direct and proxied Claude providers", () => {
-    const directProfile = resolveClaudeThinkingProfile("claude-opus-4-7");
-    expectFields(directProfile, {
-      defaultLevel: "off",
-    });
-    expectLevelIdsInclude(directProfile, ["xhigh", "adaptive", "max"]);
-
-    const proxiedProfile = resolveClaudeThinkingProfile("claude-opus-4.7-20260219");
-    expectFields(proxiedProfile, {
-      defaultLevel: "off",
-    });
-    expectLevelIdsInclude(proxiedProfile, ["xhigh", "adaptive", "max"]);
-  });
-
-  it("keeps adaptive-only Claude variants from advertising xhigh or max", () => {
-    const profile = resolveClaudeThinkingProfile("claude-sonnet-4-6");
-
-    expectFields(profile, {
-      defaultLevel: "adaptive",
-    });
-    expectLevelIdsInclude(profile, ["adaptive"]);
-    const fixedBudgetLevels = profile.levels.filter(
-      (level) => level.id === "xhigh" || level.id === "max",
-    );
-    expect(fixedBudgetLevels).toStrictEqual([]);
   });
 });

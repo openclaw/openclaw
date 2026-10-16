@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import * as logger from "../logger.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
@@ -17,6 +18,8 @@ vi.mock("../infra/shell-env.js", async () => {
 });
 
 const fileTools = ["write", "read", "edit", "apply_patch"] as const;
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(() => clearRuntimeConfigSnapshot());
 function args(name: (typeof fileTools)[number], target: string) {
   if (name === "apply_patch") {
     return {
@@ -95,27 +98,30 @@ describe("session permission filesystem tools", () => {
   });
 
   describe.runIf(process.platform !== "win32")("trusted workspace aliases", () => {
-    it.each(fileTools)("allows %s within the canonical root", async (name) => {
-      await aliasedWorkspace(async ({ root, alias }) => {
-        const target = path.join(root, "proof.txt");
-        await fs.writeFile(target, "original\n");
-        const operation = tool(name, {
-          workspaceDir: alias,
-          cwd: path.join(alias, "packages/app"),
-          sessionPermissionPolicy: { root, mode: "guarded" },
+    it.each(["write", "read", "edit"] as const)(
+      "allows %s within the canonical root",
+      async (name) => {
+        await aliasedWorkspace(async ({ root, alias }) => {
+          const target = path.join(root, "proof.txt");
+          await fs.writeFile(target, "original\n");
+          const operation = tool(name, {
+            workspaceDir: alias,
+            cwd: path.join(alias, "packages/app"),
+            sessionPermissionPolicy: { root, mode: "guarded" },
+          });
+          const result = await operation.execute(
+            "alias",
+            args(name, name === "read" ? path.join(alias, "proof.txt") : "../../proof.txt"),
+          );
+          if (name === "read") {
+            expect(getTextContent(result)).toBe("original\n");
+          }
+          await expect(fs.readFile(target, "utf8")).resolves.toBe(
+            name === "read" ? "original\n" : "changed\n",
+          );
         });
-        const result = await operation.execute(
-          "alias",
-          args(name, name === "read" ? path.join(alias, "proof.txt") : "../../proof.txt"),
-        );
-        if (name === "read") {
-          expect(getTextContent(result)).toBe("original\n");
-        }
-        await expect(fs.readFile(target, "utf8")).resolves.toBe(
-          name === "read" ? "original\n" : "changed\n",
-        );
-      });
-    });
+      },
+    );
 
     it("allows read-only alias reads while excluding mutations and outside files", async () => {
       await aliasedWorkspace(async ({ root, alias, outside }) => {

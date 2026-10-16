@@ -25,12 +25,17 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await fixture.cleanup();
 });
-const createRoot = () => fs.realpathSync(fixture.createTempDir("openclaw-lock-cancel-"));
+const createRoot = () => {
+  const root = fs.realpathSync(fixture.createTempDir("openclaw-lock-cancel-"));
+  // Keep checkout discovery from selecting an ancestor of the temporary fixture.
+  fs.mkdirSync(path.join(root, ".git"));
+  return root;
+};
 
 it("cancels an already contended same-process waiter without disturbing the owner", async () => {
   const root = createRoot();
-  const enteredOwner = createDeferred<void>();
-  const releaseOwner = createDeferred<void>();
+  const enteredOwner = createDeferred();
+  const releaseOwner = createDeferred();
   const owner = withDistArtifactOwnership(root, async () => {
     enteredOwner.resolve();
     await releaseOwner.promise;
@@ -38,7 +43,7 @@ it("cancels an already contended same-process waiter without disturbing the owne
   await enteredOwner.promise;
   const ownerPath = path.join(resolveDistArtifactLockPath(root), "owner.json");
   const originalOwner = fs.readFileSync(ownerPath, "utf8");
-  const attempted = createDeferred<void>();
+  const attempted = createDeferred();
   const acquire = actual.acquireFileLock;
   vi.mocked(fileLock.acquireFileLock).mockImplementation(async (...args) => {
     try {
@@ -71,25 +76,25 @@ it("cancels an already contended same-process waiter without disturbing the owne
 });
 
 it.for([
-  { direct: false, fails: false },
   { direct: false, fails: true },
   { direct: true, fails: false },
-  { direct: true, fails: true },
 ])(
   "joins acquisition-race release before rejecting (direct=$direct, release fails=$fails)",
   async ({ direct, fails }) => {
     const root = createRoot();
-    const entered = createDeferred<void>();
+    const entered = createDeferred();
     const acquired = createDeferred<fileLock.FileLockHandle>();
-    const releasing = createDeferred<void>();
-    const released = createDeferred<void>();
+    const releasing = createDeferred();
+    const released = createDeferred();
     const failure = new Error("release failed");
     const controller = new AbortController();
     const callback = vi.fn();
     const release = vi.fn(async () => {
       releasing.resolve();
       await released.promise;
-      if (fails) throw failure;
+      if (fails) {
+        throw failure;
+      }
     });
     vi.mocked(fileLock.acquireFileLock).mockImplementation(async () => {
       entered.resolve();

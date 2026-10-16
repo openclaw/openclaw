@@ -1,11 +1,15 @@
 /** Resolves bundled document extractor providers from enabled manifest contracts. */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEnabledBundledManifestContractPlugins } from "./bundled-manifest-contract-plugins.js";
 import { normalizePluginsConfig } from "./config-state.js";
-import { loadBundledDocumentExtractorEntriesFromDir } from "./document-extractor-public-artifacts.js";
-import type { PluginDocumentExtractorEntry } from "./document-extractor-types.js";
+import type {
+  DocumentExtractorPlugin,
+  PluginDocumentExtractorEntry,
+} from "./document-extractor-types.js";
 import { sortPluginEntriesForAutoDetect } from "./plugin-entry-order.js";
 import { createPluginIdScopeSet } from "./plugin-scope.js";
+import { loadBundledPublicArtifactEntries } from "./public-artifact-factories.js";
 
 /** Returns enabled document extractors in deterministic auto-detect order. */
 export function resolvePluginDocumentExtractors(params?: {
@@ -32,11 +36,22 @@ export function resolvePluginDocumentExtractors(params?: {
   })) {
     let loaded: PluginDocumentExtractorEntry[] | null;
     try {
-      loaded = loadBundledDocumentExtractorEntriesFromDir({
+      loaded = loadBundledPublicArtifactEntries({
         dirName: plugin.id,
         pluginId: plugin.id,
         env: params?.env,
         owner: plugin,
+        artifactCandidates: ["document-extractor.js", "document-extractor-api.js"],
+        suffix: "DocumentExtractor",
+        isArtifact: (value): value is DocumentExtractorPlugin =>
+          isRecord(value) &&
+          typeof value.id === "string" &&
+          typeof value.label === "string" &&
+          Array.isArray(value.mimeTypes) &&
+          value.mimeTypes.every((mimeType) => typeof mimeType === "string" && mimeType.trim()) &&
+          (value.autoDetectOrder === undefined || typeof value.autoDetectOrder === "number") &&
+          typeof value.extract === "function",
+        partialFailureLabel: "document extractors",
       });
     } catch (error) {
       loadErrors.push(error);

@@ -1,12 +1,12 @@
 import { withConsoleLogsRoutedToStderrForJson } from "../cli/json-output-mode.js";
-import { exitCliAfterOutput, runCliWithExitFinalization } from "../cli/one-shot-exit.js";
+import { runCliWithExitFinalization } from "../cli/one-shot-exit.js";
 import { withCliCommandCleanup, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
 import { closeCliResources, runCliDisposer } from "../cli/runtime-cleanup.js";
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { enableConsoleCapture } from "../logging/console.js";
 import { defaultRuntime } from "../runtime.js";
-import { DoctorLintCliOptionsSchema } from "./doctor-lint-options.js";
+import { DoctorLintWorkerInputSchema } from "./doctor-lint-options.js";
 
 async function runDoctorLintWorker(): Promise<void> {
   if (!resolveUpdateRehearsalRoot(process.env)) {
@@ -22,8 +22,10 @@ async function runDoctorLintWorker(): Promise<void> {
     }
     chunks.push(buffer);
   }
-  const opts = DoctorLintCliOptionsSchema.parse(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-  if (opts.json !== true) {
+  const { options, commandStartedAtMs } = DoctorLintWorkerInputSchema.parse(
+    JSON.parse(Buffer.concat(chunks).toString("utf8")),
+  );
+  if (options.json !== true) {
     throw new Error("Doctor lint worker requires JSON output.");
   }
   enableConsoleCapture();
@@ -32,7 +34,7 @@ async function runDoctorLintWorker(): Promise<void> {
       let exitCode: number;
       try {
         const { runDoctorLintCliInProcess } = await import("./doctor-lint-runner.js");
-        exitCode = await runDoctorLintCliInProcess(defaultRuntime, opts, true);
+        exitCode = await runDoctorLintCliInProcess(defaultRuntime, options, { commandStartedAtMs });
       } finally {
         await closeCliResources(cleanup);
         const resources = cleanup?.pluginResources;
@@ -40,7 +42,9 @@ async function runDoctorLintWorker(): Promise<void> {
           await runCliDisposer("plugin-registration-resources", () => resources.release());
         }
       }
-      exitCliAfterOutput(defaultRuntime, exitCode);
+      // Let Node drain closing native handles; forced exit can crash Windows libuv.
+      // The supervisor owns the bounded fallback if disposal keeps this worker alive.
+      process.exitCode = exitCode;
     }),
   );
 }

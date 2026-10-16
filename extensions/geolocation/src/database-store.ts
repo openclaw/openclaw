@@ -23,11 +23,8 @@ const MAX_COMPRESSED_BYTES = 256 * 1024 * 1024;
 const MAX_DATABASE_BYTES = 512 * 1024 * 1024;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
 
-/** The database's own record contract; re-exported so callers need one import. */
-export type GeolocationCityRecord = CityResponse;
-
 export type GeolocationDatabase = {
-  lookup: (ip: string) => GeolocationCityRecord | null;
+  lookup: (ip: string) => CityResponse | null;
 };
 
 type StoreDeps = {

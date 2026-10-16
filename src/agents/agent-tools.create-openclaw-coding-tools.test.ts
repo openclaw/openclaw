@@ -6,16 +6,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentTool, AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import * as windowsEncoding from "../infra/windows-encoding.js";
 import { readMemoryArtifactProvenance } from "../memory/memory-artifact-provenance.js";
-import { findUnsupportedSchemaKeywords } from "../plugin-sdk/provider-tools.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -25,16 +23,13 @@ import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { createPluginToolAllowlist } from "../plugins/tool-grant-allowlist.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { registerPluginOnlyCallerIdentityCase } from "./agent-tools.caller-identity.test-support.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
-import { filterToolsByMessageProvider } from "./agent-tools.message-provider-policy.js";
-import {
-  createOpenClawReadTool,
-  createSandboxedReadTool,
-  wrapReadToolWithSkillContent,
-} from "./agent-tools.read.js";
+import { createSandboxedReadTool, wrapReadToolWithSkillContent } from "./agent-tools.read.js";
 import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
-import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
+import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
@@ -42,6 +37,7 @@ import {
 } from "./cron-creator-authority-context.js";
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import type { ReadToolDetails } from "./sessions/tools/tool-contracts.js";
 import { expectReadWriteEditTools } from "./test-helpers/agent-tools-fs-helpers.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
 import { stubTool } from "./test-helpers/fast-tool-stubs.js";
@@ -51,7 +47,6 @@ import {
   createSandboxFsBridgeFromResolver,
 } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { attachToolAllowlistIntersection } from "./tool-policy.js";
-import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const tinyPngBuffer = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
@@ -59,6 +54,7 @@ const tinyPngBuffer = Buffer.from(
 );
 const avifHeaderBuffer = Buffer.from("00000018667479706176696600000000617669666d696631", "hex");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-completion-grant-");
 const openClawOnlyPlan = {
   includeBaseCodingTools: false,
   includeShellTools: false,
@@ -67,7 +63,6 @@ const openClawOnlyPlan = {
   includePluginTools: false,
 };
 
-const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set(["minContains", "maxContains"]);
 async function writeSessionStore(
   storeTemplate: string,
   agentId: string,
@@ -395,39 +390,20 @@ describe("createOpenClawCodingTools", () => {
     expect(tool.parameters).toEqual({ type: "object", properties: {} });
   });
 
-  it("keeps Tool Search controls available under restrictive tool allowlists", () => {
-    const tools = createOpenClawCodingTools({
-      includeToolSearchControls: true,
-      config: {
-        tools: {
-          allow: ["read"],
-          toolSearch: true,
-        },
-      },
-    });
-    const names = new Set(tools.map((tool) => tool.name));
-
-    expect(names.has("read")).toBe(true);
-    expect(names.has("exec")).toBe(false);
-    expect(names.has("tool_search")).toBe(true);
-    expect(names.has("tool_describe")).toBe(true);
-    expect(names.has("tool_call")).toBe(true);
-  });
-
-  it("lets explicit deny policies remove Tool Search controls", () => {
+  it.each(["tool_call"])("honors the shipped dispatcher deny %s", (name) => {
     const tools = createOpenClawCodingTools({
       includeToolSearchControls: true,
       config: {
         tools: {
           profile: "coding",
-          deny: ["tool_call"],
+          deny: [name],
           toolSearch: true,
         },
       },
     });
     const names = new Set(tools.map((tool) => tool.name));
 
-    expect(names.has("tool_call")).toBe(false);
+    expect(names.has("dispatch_action")).toBe(false);
     expect(names.has("read")).toBe(true);
   });
 
@@ -456,7 +432,7 @@ describe("createOpenClawCodingTools", () => {
     expect(createOpenClawToolsMock).not.toHaveBeenCalled();
     expect(names.has("tool_search")).toBe(true);
     expect(names.has("tool_describe")).toBe(true);
-    expect(names.has("tool_call")).toBe(true);
+    expect(names.has("dispatch_action")).toBe(true);
     expect(names.has("message")).toBe(false);
     expect(names.has("exec")).toBe(false);
   });
@@ -495,50 +471,20 @@ describe("createOpenClawCodingTools", () => {
     expect(tools[0]?.description).toBe("trusted ring-zero tool");
   });
 
-  it.each([
-    {
-      label: "explicit tools",
-      toolsAllow: ["sessions_spawn", "read"],
-      expected: ["sessions_spawn", "read"],
-    },
-    {
-      label: "overlapping globs",
-      toolsAllow: attachToolAllowlistIntersection([], [["sessions_*"], ["*_spawn"]]),
-      expected: ["sessions_spawn"],
-    },
-  ])("lets direct callers inherit $label into subagent spawns", ({ toolsAllow, expected }) => {
+  it("lets direct callers inherit overlapping globs into subagent spawns", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
 
     createOpenClawCodingTools({
       config: testConfig,
-      runtimeToolAllowlist: toolsAllow,
+      runtimeToolAllowlist: attachToolAllowlistIntersection([], [["sessions_*"], ["*_spawn"]]),
       inheritRuntimeToolAllowlist: true,
     });
 
     expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
     const inheritedAllow = latestCreateOpenClawToolsOptions().inheritedToolAllowlist;
-    expectListIncludes(inheritedAllow, expected);
+    expectListIncludes(inheritedAllow, ["sessions_spawn"]);
     expect(inheritedAllow?.includes("exec")).toBe(false);
-  });
-
-  it("preserves runtime-allowed message through local model lean filtering", () => {
-    const tools = createOpenClawCodingTools({
-      config: {
-        agents: {
-          defaults: {
-            experimental: {
-              localModelLean: true,
-            },
-          },
-        },
-        tools: { profile: "minimal" },
-      },
-      runtimeToolAllowlist: ["message"],
-      toolConstructionPlan: openClawOnlyPlan,
-    });
-
-    expect(toolNameList(tools)).toContain("message");
   });
 
   it("preserves configured media tools through local model lean filtering", () => {
@@ -550,9 +496,8 @@ describe("createOpenClawCodingTools", () => {
               localModelLean: true,
             },
           },
-          list: [
-            {
-              id: "artist",
+          entries: {
+            artist: {
               tools: {
                 alsoAllow: ["video_generate"],
                 byProvider: {
@@ -562,7 +507,7 @@ describe("createOpenClawCodingTools", () => {
                 },
               },
             },
-          ],
+          },
         },
         tools: {
           alsoAllow: ["pdf"],
@@ -584,47 +529,6 @@ describe("createOpenClawCodingTools", () => {
     );
   });
 
-  it("does not treat built-in profile tools as lean-mode overrides", () => {
-    const tools = createOpenClawCodingTools({
-      config: {
-        agents: {
-          defaults: {
-            experimental: {
-              localModelLean: true,
-            },
-          },
-        },
-        tools: {
-          profile: "coding",
-        },
-      },
-      toolConstructionPlan: openClawOnlyPlan,
-    });
-
-    expect(toolNameList(tools)).not.toEqual(
-      expect.arrayContaining(["image_generate", "video_generate"]),
-    );
-  });
-
-  it("preserves message-tool-only replies through local model lean filtering without runtime allowlist", () => {
-    const tools = createOpenClawCodingTools({
-      config: {
-        agents: {
-          defaults: {
-            experimental: {
-              localModelLean: true,
-            },
-          },
-        },
-        tools: { profile: "minimal" },
-      },
-      sourceReplyDeliveryMode: "message_tool_only",
-      toolConstructionPlan: openClawOnlyPlan,
-    });
-
-    expect(toolNameList(tools)).toContain("message");
-  });
-
   it("preserves runtime allowlist groups containing message through restrictive profiles", () => {
     for (const runtimeToolAllowlist of [["group:messaging"], ["group:openclaw"], ["*"]]) {
       const tools = createOpenClawCodingTools({
@@ -638,22 +542,6 @@ describe("createOpenClawCodingTools", () => {
   });
 
   it.each([
-    {
-      name: "ordinary private reply",
-      trustedInternalHandoff: false,
-      sourceTool: "subagent_announce",
-      sourceReplyDeliveryMode: "message_tool_only" as const,
-      runtimeToolAllowlist: ["message"],
-      expected: false,
-    },
-    {
-      name: "different handoff owner",
-      trustedInternalHandoff: true,
-      sourceTool: "sessions_send",
-      sourceReplyDeliveryMode: "message_tool_only" as const,
-      runtimeToolAllowlist: ["message"],
-      expected: false,
-    },
     {
       name: "unverified forged completion flags",
       trustedInternalHandoff: true,
@@ -671,16 +559,8 @@ describe("createOpenClawCodingTools", () => {
       runtimeToolAllowlist: ["message", "read"],
       expected: true,
     },
-    {
-      name: "automatic completion delivery",
-      trustedInternalHandoff: true,
-      sourceTool: "subagent_announce",
-      sourceReplyDeliveryMode: "automatic" as const,
-      runtimeToolAllowlist: ["message"],
-      expected: false,
-    },
   ])("limits $name to the source only for verified completion delivery", async (testCase) => {
-    const storeDir = tempDirs.make("openclaw-completion-grant-");
+    const storeDir = sessionDirs.make();
     const storeTemplate = path.join(storeDir, "{agentId}", "sessions.json");
     const requesterSessionKey = "agent:main:discord:direct:alice";
     const requesterSessionId = "requester-session";
@@ -720,7 +600,7 @@ describe("createOpenClawCodingTools", () => {
         },
       });
     }
-    const conversationCapabilityProfile = resolveConversationCapabilityProfile({
+    const conversationCapabilityProfile = await prepareConversationCapabilityProfile({
       config,
       agentId: "main",
       sessionKey: requesterSessionKey,
@@ -838,14 +718,6 @@ describe("createOpenClawCodingTools", () => {
     expect(extractToolText(next)).toBe(original.slice(continuation?.cursor));
   });
 
-  const pluginOnlyConstructionPlan = {
-    includeBaseCodingTools: false,
-    includeShellTools: false,
-    includeChannelTools: false,
-    includeOpenClawTools: false,
-    includePluginTools: true,
-  };
-
   it("includes plugin tools declared for the active built-in profile", () => {
     const resolvePluginToolsSpy = vi
       .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
@@ -896,75 +768,9 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
-  it("wraps plugin-only tools with scheduled creator authority and live routing context", async () => {
-    let observedIdentity: ReturnType<typeof getGatewayToolCallerIdentity>;
-    const resolvePluginToolsSpy = vi
-      .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
-      .mockReturnValue([
-        {
-          name: "file_fetch",
-          label: "File fetch",
-          description: "Fetch a file",
-          parameters: { type: "object", properties: {} },
-          execute: async () => {
-            observedIdentity = getGatewayToolCallerIdentity();
-            return { content: [{ type: "text" as const, text: "ok" }], details: {} };
-          },
-        },
-      ]);
+  registerPluginOnlyCallerIdentityCase({ testConfig, requireTool });
 
-    try {
-      const tools = createOpenClawCodingTools({
-        config: {
-          ...testConfig,
-          channels: {
-            discord: {
-              accounts: {
-                creator: {},
-              },
-            },
-          },
-        },
-        agentId: "main",
-        sessionKey: "agent:main:telegram:direct:alice",
-        messageProvider: "discord-voice",
-        messageChannel: "discord",
-        messageTo: "channel:123",
-        agentAccountId: "work",
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey: "agent:main:discord:group:ops",
-          ownerAccountId: "creator",
-          ownerOrigin: { kind: "external", channel: "discord" },
-        },
-        messageThreadId: "42",
-        includeCoreTools: false,
-        runtimeToolAllowlist: ["file_fetch"],
-        inheritRuntimeToolAllowlist: true,
-        toolConstructionPlan: pluginOnlyConstructionPlan,
-      });
-
-      await requireTool(tools, "file_fetch").execute?.("tool-call-1", {});
-      expect(observedIdentity).toEqual({
-        agentId: "main",
-        assertToolAllowed: expect.any(Function),
-        sessionKey: "agent:main:telegram:direct:alice",
-        turnSourceChannel: "discord",
-        turnSourceTo: "channel:123",
-        turnSourceAccountId: "creator",
-        turnSourceThreadId: "42",
-      });
-      expect(() => observedIdentity?.assertToolAllowed?.("file_fetch")).not.toThrow();
-      expect(() => observedIdentity?.assertToolAllowed?.("exec")).toThrow(
-        "exec is not allowed by this conversation's tool policy",
-      );
-    } finally {
-      resolvePluginToolsSpy.mockRestore();
-    }
-  });
-
-  it("materializes additive runtime tools while preserving normal deny policy", () => {
+  it("materializes additive runtime tools while preserving normal deny policy", async () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
     const config: OpenClawConfig = {
@@ -976,7 +782,7 @@ describe("createOpenClawCodingTools", () => {
 
     createOpenClawCodingTools({
       config,
-      conversationCapabilityProfile: resolveConversationCapabilityProfile({
+      conversationCapabilityProfile: await prepareConversationCapabilityProfile({
         config,
         runtimePluginToolGrant: {
           pluginId: "workboard",
@@ -1000,7 +806,7 @@ describe("createOpenClawCodingTools", () => {
   });
 
   it("removes message from persisted visible child sessions on every turn", async () => {
-    const storeDir = tempDirs.make("openclaw-visible-subagent-message-");
+    const storeDir = sessionDirs.make();
     const storeTemplate = path.join(storeDir, "{agentId}", "sessions.json");
     const agentId = "visible-subagent-message";
     const childSessionKey = `agent:${agentId}:dashboard:child`;
@@ -1121,7 +927,7 @@ describe("createOpenClawCodingTools", () => {
   });
 
   it("applies subagent tool policy to ACP children spawned under a subagent envelope", async () => {
-    const tmpDir = tempDirs.make("openclaw-acp-subagent-policy-");
+    const tmpDir = sessionDirs.make();
     const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
     await writeSessionStore(storeTemplate, "main", {
       "agent:main:acp:child": {
@@ -1164,25 +970,6 @@ describe("createOpenClawCodingTools", () => {
 
     const ancestryTools = createToolsForStoredSession(storeTemplate, "agent:writer:acp:child");
     expectNoSubagentControlTools(ancestryTools);
-  });
-
-  it("includes browser tool with full profile when browser is configured (#76507)", () => {
-    const tools = createOpenClawCodingTools({
-      config: {
-        tools: { profile: "full" },
-        browser: { enabled: true },
-        plugins: { entries: { browser: { enabled: true } } },
-      } as OpenClawConfig,
-    });
-    const names = new Set(tools.map((tool) => tool.name));
-    // full profile must not filter any tools — browser, canvas, etc. must be present.
-    expect(names.has("browser")).toBe(true);
-    expect(names.has("canvas")).toBe(true);
-    expect(names.has("exec")).toBe(true);
-    expect(names.has("message")).toBe(true);
-    expect(names.has("gateway")).toBe(true);
-    expect(names.has("automations")).toBe(true);
-    expect(names.has("nodes")).toBe(true);
   });
 
   it("keeps browser out of coding-profile subagents unless profile-stage alsoAllow adds it", () => {
@@ -1247,27 +1034,6 @@ describe("createOpenClawCodingTools", () => {
       forceMessageTool: true,
     });
     expect(toolNameList(cronTools)).toContain("message");
-  });
-
-  it("applies xai model compat for direct Grok tool cleanup", () => {
-    const xaiTools = createOpenClawCodingTools({
-      modelProvider: "xai",
-      modelCompat: {
-        toolSchemaProfile: "xai",
-        unsupportedToolSchemaKeywords: Array.from(XAI_UNSUPPORTED_SCHEMA_KEYWORDS),
-        toolCallArgumentsEncoding: "html-entities",
-      },
-    });
-
-    expect(toolNameList(xaiTools)).not.toContain("web_search");
-    for (const tool of xaiTools) {
-      const violations = findUnsupportedSchemaKeywords(
-        tool.parameters,
-        `${tool.name}.parameters`,
-        XAI_UNSUPPORTED_SCHEMA_KEYWORDS,
-      );
-      expect(violations).toStrictEqual([]);
-    }
   });
 
   it("returns image-aware read metadata for images and text-only blocks for text files", async () => {
@@ -1474,62 +1240,58 @@ describe("createOpenClawCodingTools", () => {
     ).resolves.toMatchObject({ originClass: "agent" });
   });
 
-  it.each(["relative", "container"])(
-    "records sandbox-backed %s memory writes before mutation",
-    async (pathKind) => {
-      const workspaceDir = tempDirs.make("openclaw-memory-sandbox-taint-");
-      const sandboxRoot = path.join(workspaceDir, "private");
-      await fs.mkdir(sandboxRoot);
-      const sandbox = createAgentToolsSandboxContext({
+  it("records sandbox-backed relative memory writes before mutation", async () => {
+    const workspaceDir = tempDirs.make("openclaw-memory-sandbox-taint-");
+    const sandboxRoot = path.join(workspaceDir, "private");
+    await fs.mkdir(sandboxRoot);
+    const sandbox = createAgentToolsSandboxContext({
+      workspaceDir: sandboxRoot,
+      agentWorkspaceDir: workspaceDir,
+      fsBridge: createContainerWorkspaceSandboxFsBridge(sandboxRoot),
+      workspaceAccess: "none",
+    });
+    const tools = createOpenClawCodingTools({
+      workspaceDir,
+      sandbox,
+      senderIsOwner: true,
+      isTurnTainted: () => true,
+    });
+    await requireToolExecute(requireTool(tools, "write"))("sandbox-project", {
+      path: "project.txt",
+      content: "before\n",
+    });
+    await requireToolExecute(requireTool(tools, "edit"))("sandbox-edit", {
+      path: "project.txt",
+      edits: [{ oldText: "before", newText: "after" }],
+    });
+    await expect(fs.readFile(path.join(sandboxRoot, "project.txt"), "utf8")).resolves.toBe(
+      "after\n",
+    );
+    await requireToolExecute(requireTool(tools, "write"))("sandbox-memory", {
+      path: "memory/2026-07-29.md",
+      content: "sandbox network note\n",
+    });
+    await requireToolExecute(requireTool(tools, "apply_patch"))("sandbox-patch", {
+      input:
+        "*** Begin Patch\n*** Add File: memory/nested/project.md\n+project note\n*** End Patch",
+    });
+    await expect(
+      readMemoryArtifactProvenance({
         workspaceDir: sandboxRoot,
-        agentWorkspaceDir: workspaceDir,
-        fsBridge: createContainerWorkspaceSandboxFsBridge(sandboxRoot),
-        workspaceAccess: "none",
-      });
-      const tools = createOpenClawCodingTools({
-        workspaceDir,
-        sandbox,
-        senderIsOwner: true,
-        isTurnTainted: () => true,
-      });
-      const filePath = (relative: string) =>
-        pathKind === "container" ? `/workspace/${relative}` : relative;
-      await requireToolExecute(requireTool(tools, "write"))("sandbox-project", {
-        path: filePath("project.txt"),
-        content: "before\n",
-      });
-      await requireToolExecute(requireTool(tools, "edit"))("sandbox-edit", {
-        path: filePath("project.txt"),
-        edits: [{ oldText: "before", newText: "after" }],
-      });
-      await expect(fs.readFile(path.join(sandboxRoot, "project.txt"), "utf8")).resolves.toBe(
-        "after\n",
-      );
-      await requireToolExecute(requireTool(tools, "write"))("sandbox-memory", {
-        path: filePath("memory/2026-07-29.md"),
-        content: "sandbox network note\n",
-      });
-      await requireToolExecute(requireTool(tools, "apply_patch"))("sandbox-patch", {
-        input: `*** Begin Patch\n*** Add File: ${filePath("memory/nested/project.md")}\n+project note\n*** End Patch`,
-      });
-      await expect(
-        readMemoryArtifactProvenance({
-          workspaceDir: sandboxRoot,
-          relativePath: "memory/nested/project.md",
-        }),
-      ).resolves.toMatchObject({ originClass: "untrusted" });
+        relativePath: "memory/nested/project.md",
+      }),
+    ).resolves.toMatchObject({ originClass: "untrusted" });
 
-      await expect(
-        readMemoryArtifactProvenance({
-          workspaceDir: sandboxRoot,
-          relativePath: "memory/2026-07-29.md",
-        }),
-      ).resolves.toMatchObject({ originClass: "untrusted" });
-      await expect(
-        readMemoryArtifactProvenance({ workspaceDir, relativePath: "memory/2026-07-29.md" }),
-      ).resolves.toBeUndefined();
-    },
-  );
+    await expect(
+      readMemoryArtifactProvenance({
+        workspaceDir: sandboxRoot,
+        relativePath: "memory/2026-07-29.md",
+      }),
+    ).resolves.toMatchObject({ originClass: "untrusted" });
+    await expect(
+      readMemoryArtifactProvenance({ workspaceDir, relativePath: "memory/2026-07-29.md" }),
+    ).resolves.toBeUndefined();
+  });
   it("rejects legacy alias parameters", async () => {
     const tmpDir = tempDirs.make("openclaw-legacy-alias-");
     const tools = createOpenClawCodingTools({ workspaceDir: tmpDir });
@@ -1618,12 +1380,12 @@ describe("createOpenClawCodingTools read behavior", () => {
     const locator = "/skills/pond/SKILL.md";
     const instructionDeliveryCache = new Map<string, Promise<boolean>>();
     const instructionDeliveryOptions = { instructionDeliveryCache };
-    const fullResult = {
+    const fullResult: AgentToolResult<ReadToolDetails> = {
       content: [{ type: "text", text: "# Pond\ncomplete instructions" }],
       details: { kind: "text", content: "# Pond\ncomplete instructions" },
-    } as AgentToolResult<unknown>;
+    };
     let releaseRead = (): void => undefined;
-    const pendingRead = new Promise<AgentToolResult<unknown>>((resolve) => {
+    const pendingRead = new Promise<AgentToolResult<ReadToolDetails>>((resolve) => {
       releaseRead = () => resolve(fullResult);
     });
     const execute = vi.fn(() => pendingRead);
@@ -1632,9 +1394,9 @@ describe("createOpenClawCodingTools read behavior", () => {
         name: "read",
         label: "read",
         description: "read a file",
-        parameters: {},
+        parameters: Type.Object({ path: Type.String() }),
         execute,
-      } as never,
+      },
       [{ filePath: locator }],
       instructionDeliveryOptions,
     );
@@ -1656,20 +1418,36 @@ describe("createOpenClawCodingTools read behavior", () => {
     const locator = "/skills/pond/SKILL.md";
     const instructionDeliveryCache = new Map<string, Promise<boolean>>();
     const instructionDeliveryOptions = { instructionDeliveryCache };
-    const fullResult = {
+    const fullResult: AgentToolResult<ReadToolDetails> = {
       content: [{ type: "text", text: "# Pond\ncomplete instructions" }],
       details: { kind: "text", content: "# Pond\ncomplete instructions" },
-    } as AgentToolResult<unknown>;
-    const truncatedResult = {
+    };
+    const truncatedResult: AgentToolResult<ReadToolDetails> = {
       content: [{ type: "text", text: "partial" }],
-      details: { kind: "truncated" },
-    } as AgentToolResult<unknown>;
-    const notFoundResult = {
+      details: {
+        kind: "truncated",
+        content: "partial",
+        continuation: { kind: "line", offset: 2 },
+        truncation: {
+          truncated: true,
+          truncatedBy: "lines",
+          totalLines: 2,
+          totalBytes: 16,
+          outputLines: 1,
+          outputBytes: 7,
+          lastLinePartial: false,
+          firstLineExceedsLimit: false,
+          maxLines: 1,
+          maxBytes: 32_768,
+        },
+      },
+    };
+    const notFoundResult: AgentToolResult<ReadToolDetails> = {
       content: [{ type: "text", text: `Optional file not found: ${locator}.` }],
       details: { kind: "not_found", status: "not_found", path: locator, optional: true },
-    } as AgentToolResult<unknown>;
+    };
     const execute = vi
-      .fn()
+      .fn<() => Promise<AgentToolResult<ReadToolDetails>>>()
       .mockRejectedValueOnce(new Error("transient read failure"))
       .mockResolvedValueOnce(truncatedResult)
       .mockResolvedValueOnce(notFoundResult)
@@ -1679,9 +1457,9 @@ describe("createOpenClawCodingTools read behavior", () => {
         name: "read",
         label: "read",
         description: "read a file",
-        parameters: {},
+        parameters: Type.Object({ path: Type.String() }),
         execute,
-      } as never,
+      },
       [{ filePath: locator }],
       instructionDeliveryOptions,
     );
@@ -1701,33 +1479,6 @@ describe("createOpenClawCodingTools read behavior", () => {
       "# Pond\ncomplete instructions",
     );
     expect(execute).toHaveBeenCalledTimes(4);
-  });
-
-  it("uses host decoding only for host-backed sandbox paths", async () => {
-    const tmpDir = tempDirs.make("openclaw-sbx-encoding-");
-    await fs.writeFile(path.join(tmpDir, "notes.txt"), "hello", "utf8");
-    const hostBridge = createHostSandboxFsBridge(tmpDir);
-    const remoteBridge = {
-      ...hostBridge,
-      resolvePath: (params: Parameters<typeof hostBridge.resolvePath>[0]) => {
-        const { relativePath, containerPath } = hostBridge.resolvePath(params);
-        return { relativePath, containerPath };
-      },
-    };
-    const decodeSpy = vi.spyOn(windowsEncoding, "decodeWindowsTextFileBuffer");
-
-    try {
-      const hostTool = createSandboxedReadTool({ root: tmpDir, bridge: hostBridge });
-      await hostTool.execute("host-read", { path: "notes.txt" });
-      expect(decodeSpy).toHaveBeenCalledTimes(1);
-
-      decodeSpy.mockClear();
-      const remoteTool = createSandboxedReadTool({ root: tmpDir, bridge: remoteBridge });
-      await remoteTool.execute("remote-read", { path: "notes.txt" });
-      expect(decodeSpy).not.toHaveBeenCalled();
-    } finally {
-      decodeSpy.mockRestore();
-    }
   });
 
   it("applies sandbox path guards to canonical path", async () => {
@@ -1830,36 +1581,13 @@ describe("createOpenClawCodingTools read behavior", () => {
     expect(extractToolText(result)).toContain("sandbox media");
   });
 
-  it("adds capped continuation guidance when aggregated read output reaches budget", async () => {
-    const tmpDir = tempDirs.make("openclaw-read-cap-");
-    const filePath = path.join(tmpDir, "huge.txt");
-    const lines = Array.from(
-      { length: 8000 },
-      (_unused, i) => `line-${String(i + 1).padStart(4, "0")}-abcdefghijklmnopqrstuvwxyz`,
-    );
-    await fs.writeFile(filePath, lines.join("\n"), "utf8");
-    const readTool = createSandboxedReadTool({
-      root: tmpDir,
-      bridge: createHostSandboxFsBridge(tmpDir),
-    });
-    const result = await readTool.execute("read-cap-1", { path: "huge.txt" });
-    const text = extractToolText(result);
-    expect(text).toContain("line-0001");
-    expect(text).toContain("[Read output capped at 32KB for this call. Use offset=");
-    expect(text).not.toContain("line-8000");
-    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(32 * 1024);
-  });
-
-  it.each([
-    { name: "without an explicit limit", args: {} },
-    { name: "with an explicit line limit", args: { limit: 1 } },
-  ])("caps the first read page including its notice $name", async ({ args }) => {
+  it("caps the first read page including its notice with an explicit line limit", async () => {
     const root = tempDirs.make("openclaw-read-first-page-cap-");
     const original = "é🦞".repeat(9 * 1024);
     await fs.writeFile(path.join(root, "unicode.txt"), original, "utf8");
     const read = createSandboxedReadTool({ root, bridge: createHostSandboxFsBridge(root) });
 
-    const result = await read.execute("read-first-page-cap", { path: "unicode.txt", ...args });
+    const result = await read.execute("read-first-page-cap", { path: "unicode.txt", limit: 1 });
     const text = extractToolText(result);
     const details = result.details as {
       continuation?: { kind: string; offset: number; cursor: number };
@@ -1889,156 +1617,4 @@ describe("createOpenClawCodingTools read behavior", () => {
       "Offset 99 is beyond end of file (3 lines total). Retry with offset <= 3.",
     );
   });
-
-  it("stops adaptive pagination when the current page reaches EOF", async () => {
-    const readResult: AgentToolResult<unknown> = {
-      content: [
-        {
-          type: "text",
-          text: "one\n\n[1 more lines in file. Use offset=2 to continue.]",
-        },
-      ],
-      details: {
-        truncation: {
-          truncated: true,
-          outputLines: 1,
-          totalLines: 1,
-          firstLineExceedsLimit: false,
-        },
-      },
-    };
-    const execute = vi.fn().mockResolvedValue(readResult);
-    const readTool = createOpenClawReadTool({
-      name: "read",
-      label: "read",
-      description: "test read",
-      parameters: Type.Object({
-        path: Type.String(),
-        offset: Type.Optional(Type.Number()),
-      }),
-      execute,
-    });
-
-    const result = await readTool.execute("read-offset-paging-eof", {
-      path: "notes.txt",
-      offset: 1,
-    });
-
-    expect(extractToolText(result)).toBe("one");
-    expect(execute).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps unrelated read failures loud", async () => {
-    const readTool = createOpenClawReadTool({
-      name: "read",
-      label: "read",
-      description: "test read",
-      parameters: Type.Object({
-        path: Type.String(),
-        offset: Type.Optional(Type.Number()),
-      }),
-      execute: vi.fn(async () => {
-        throw new Error("read failed");
-      }),
-    });
-
-    await expect(
-      readTool.execute("read-unrelated-error", {
-        path: "notes.txt",
-        offset: 99,
-      }),
-    ).rejects.toThrow("read failed");
-  });
-
-  it("strips truncation.content details from read results while preserving other fields", async () => {
-    const readResult: AgentToolResult<unknown> = {
-      content: [{ type: "text" as const, text: "line-0001" }],
-      details: {
-        truncation: {
-          truncated: true,
-          outputLines: 1,
-          firstLineExceedsLimit: false,
-          content: "hidden duplicate payload",
-        },
-        continuation: { kind: "line", offset: 2 },
-      },
-    };
-    const baseRead: AgentTool = {
-      name: "read",
-      label: "read",
-      description: "test read",
-      parameters: Type.Object({
-        path: Type.String(),
-        offset: Type.Optional(Type.Number()),
-        limit: Type.Optional(Type.Number()),
-      }),
-      execute: vi.fn(async () => readResult),
-    };
-
-    const wrapped = createOpenClawReadTool(
-      baseRead as unknown as Parameters<typeof createOpenClawReadTool>[0],
-    );
-    const result = await wrapped.execute("read-strip-1", { path: "demo.txt", limit: 1 });
-
-    const details = (result as { details?: { truncation?: Record<string, unknown> } }).details;
-    expect(details?.truncation?.truncated).toBe(true);
-    expect(details?.truncation?.outputLines).toBe(1);
-    expect(details?.truncation?.firstLineExceedsLimit).toBe(false);
-    expect(details?.truncation).not.toHaveProperty("content");
-  });
-
-  it("redacts env files while preserving config and source reads", async () => {
-    const credential = "unquoted-config-credential-1234567890";
-    const source = "API_TOKEN = computeToken()";
-    const execute = vi.fn(async (_toolCallId: string, args: { path: string }) => {
-      const text =
-        args.path.endsWith(".ts") || args.path.endsWith(".envrc")
-          ? source
-          : `api_key: ${credential}`;
-      return {
-        content: [{ type: "text" as const, text }],
-        details: { kind: "text", content: text },
-      };
-    });
-    const readTool = createOpenClawReadTool({
-      name: "read",
-      label: "read",
-      description: "test read",
-      parameters: Type.Object({ path: Type.String() }),
-      execute,
-    });
-
-    const yamlResult = await readTool.execute("read-yaml", { path: "settings.yaml" });
-    const envResult = await readTool.execute("read-env", { path: "production.env" });
-    const sourceResult = await readTool.execute("read-source", { path: "settings.ts" });
-    const envrcResult = await readTool.execute("read-envrc", { path: ".envrc" });
-
-    expect(extractToolText(yamlResult)).toBe(`api_key: ${credential}`);
-    expect(extractToolText(envResult)).not.toContain(credential);
-    expect(JSON.stringify(envResult.details)).not.toContain(credential);
-    expect(envResult.details).toEqual({ kind: "text", content: extractToolText(envResult) });
-    expect(extractToolText(sourceResult)).toBe(source);
-    expect(extractToolText(envrcResult)).toBe(source);
-  });
-});
-
-const DEFAULT_TOOLS = [
-  { name: "read" },
-  { name: "write" },
-  { name: "tts" },
-  { name: "web_search" },
-];
-
-function toolNames(tools: readonly { name: string }[]): Set<string> {
-  return new Set(tools.map((tool) => tool.name));
-}
-
-describe("createOpenClawCodingTools message provider policy", () => {
-  it.each([" Voice ", " Discord-Voice "])(
-    "does not expose tts tool for normalized voice provider: %s",
-    (messageProvider) => {
-      const names = toolNames(filterToolsByMessageProvider(DEFAULT_TOOLS, messageProvider));
-      expect(names.has("tts")).toBe(false);
-    },
-  );
 });

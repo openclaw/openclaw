@@ -1,3 +1,4 @@
+import { selectLocalWorkspaceCanonicalPaths } from "./local-workspace-inventory.js";
 import type {
   WorkerLocalWorkspaceReconcileRequest,
   WorkerWorkspaceReconcileResult,
@@ -24,7 +25,7 @@ export async function prepareLocalWorkspaceReconciliation(params: {
   metrics: WorkspaceReconcileMetrics;
 }) {
   const { request, hashMemo, metrics } = params;
-  const pending = request.journal.load();
+  const pending = await request.journal.load();
   if (pending) {
     await recoverWorkerWorkspaceReconciliation({
       root: request.localPath,
@@ -32,7 +33,7 @@ export async function prepareLocalWorkspaceReconciliation(params: {
       assertCurrent: request.assertCurrent,
     });
     request.assertCurrent?.();
-    request.journal.abort();
+    await request.journal.abort();
   }
   pruneWorkspaceHashMemo(hashMemo);
   const runLocal = <T>(operation: () => Promise<T>): Promise<T> =>
@@ -53,6 +54,13 @@ export async function prepareLocalWorkspaceReconciliation(params: {
     manifestRef: () => string;
     verifyStable: () => Promise<void>;
   }): Promise<WorkerWorkspaceReconcileResult> => {
+    const additionalPaths = snapshot.current.baseCommit
+      ? await selectLocalWorkspaceCanonicalPaths({
+          root: request.localPath,
+          admittedPaths: "[]",
+          assertCurrent: () => request.assertCurrent?.(),
+        })
+      : undefined;
     const inspected =
       snapshot.currentManifestRef === request.baseManifestRef
         ? await runLocal(() =>
@@ -61,12 +69,11 @@ export async function prepareLocalWorkspaceReconciliation(params: {
               expectedManifestRef: request.baseManifestRef,
               base: snapshot.base,
               current: snapshot.current,
+              additionalPaths,
             }),
           )
         : undefined;
     const unchanged = inspected?.conflictPaths.length === 0 ? inspected : undefined;
-    // Exact matches stage only the accepted base; finalization fences both sides of renewal
-    // before accepting it. Changed results must also fence their inbound bytes before staging.
     if (!unchanged) {
       await snapshot.verifyStable();
     }
@@ -79,6 +86,7 @@ export async function prepareLocalWorkspaceReconciliation(params: {
         currentManifestRaw: snapshot.currentRaw,
         publishAcceptedManifest: snapshot.publishAcceptedManifest,
         unchanged,
+        additionalPaths,
       }),
     );
     const { acceptUnchangedStagedResult } = staged;

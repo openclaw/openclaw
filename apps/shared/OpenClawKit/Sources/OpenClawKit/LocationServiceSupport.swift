@@ -2,17 +2,12 @@ import CoreLocation
 import Foundation
 
 @MainActor
-public protocol LocationServiceCommon: AnyObject, CLLocationManagerDelegate {
+public protocol ConcurrentLocationServiceCommon: AnyObject, CLLocationManagerDelegate, Sendable {
     var locationManager: CLLocationManager { get }
-    var locationRequestContinuation: CheckedContinuation<CLLocation, Error>? { get set }
-}
-
-@MainActor
-public protocol ConcurrentLocationServiceCommon: LocationServiceCommon, Sendable {
     var locationRequestContinuations: [UUID: CheckedContinuation<CLLocation, Error>] { get set }
 }
 
-extension LocationServiceCommon {
+extension ConcurrentLocationServiceCommon {
     public func configureLocationManager() {
         self.locationManager.delegate = self
         self.locationManager.desiredAccuracy = kCLLocationAccuracyBest
@@ -25,15 +20,11 @@ extension LocationServiceCommon {
     public func accuracyAuthorization() -> CLAccuracyAuthorization {
         self.locationManager.accuracyAuthorization
     }
-}
 
-extension ConcurrentLocationServiceCommon {
     public func completeLocationRequests(with result: Result<CLLocation, Error>) {
-        let continuations = Array(self.locationRequestContinuations.values) + [self.locationRequestContinuation]
-            .compactMap(\.self)
-        // Drain both stores before resuming so a later result cannot complete any waiter twice.
+        let continuations = self.locationRequestContinuations.values
+        // Drain before resuming so a later result cannot complete any waiter twice.
         self.locationRequestContinuations.removeAll()
-        self.locationRequestContinuation = nil
         for continuation in continuations {
             continuation.resume(with: result)
         }
@@ -45,8 +36,14 @@ extension ConcurrentLocationServiceCommon {
         let requestID = UUID()
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()
-            return try await LocationServiceSupport.requestLocation(manager: self.locationManager) { continuation in
+            let manager = self.locationManager
+            return try await withCheckedThrowingContinuation { continuation in
+                guard !Task.isCancelled else {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
                 self.locationRequestContinuations[requestID] = continuation
+                manager.requestLocation()
             }
         } onCancel: {
             Task { @MainActor [weak self] in
@@ -55,30 +52,11 @@ extension ConcurrentLocationServiceCommon {
                 else {
                     return
                 }
-                if self.locationRequestContinuations.isEmpty,
-                   self.locationRequestContinuation == nil
-                {
+                if self.locationRequestContinuations.isEmpty {
                     self.locationManager.stopUpdatingLocation()
                 }
                 continuation.resume(throwing: CancellationError())
             }
-        }
-    }
-}
-
-enum LocationServiceSupport {
-    @MainActor
-    static func requestLocation(
-        manager: CLLocationManager,
-        setContinuation: @escaping (CheckedContinuation<CLLocation, Error>) -> Void) async throws -> CLLocation
-    {
-        try await withCheckedThrowingContinuation { continuation in
-            guard !Task.isCancelled else {
-                continuation.resume(throwing: CancellationError())
-                return
-            }
-            setContinuation(continuation)
-            manager.requestLocation()
         }
     }
 }

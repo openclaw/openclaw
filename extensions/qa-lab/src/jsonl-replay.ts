@@ -8,6 +8,7 @@ import {
   type RuntimeParityResult,
   type RuntimeParityScenarioExecution,
 } from "./runtime-parity.js";
+import { extractQaContentText } from "./runtime-transcript.js";
 
 export type JsonlReplayInput = {
   directory: string;
@@ -51,53 +52,13 @@ type JsonlReplayMarkdownReport = {
   transcripts: JsonlReplayResult["transcripts"];
 };
 
-function readReplayMessage(record: Record<string, unknown>): Record<string, unknown> | undefined {
-  if (isRecord(record.message)) {
-    return record.message;
-  }
-  return normalizeOptionalString(record.role) ? record : undefined;
-}
-
-function readRole(message: Record<string, unknown>) {
-  return normalizeOptionalString(message.role)?.toLowerCase();
-}
-
-function isTextLikeContentBlock(block: Record<string, unknown>) {
-  const type = normalizeOptionalString(block.type)?.toLowerCase();
-  return (
-    !type ||
-    type === "text" ||
-    type === "input_text" ||
-    type === "message" ||
-    type === "output_text" ||
-    type === "user_text"
-  );
-}
-
 function extractTextContent(content: unknown): string {
-  if (typeof content === "string") {
-    return content.trim();
-  }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  const parts: string[] = [];
-  for (const block of content) {
-    if (typeof block === "string") {
-      if (block.trim()) {
-        parts.push(block.trim());
-      }
-      continue;
-    }
-    if (!isRecord(block) || !isTextLikeContentBlock(block)) {
-      continue;
-    }
-    const text = normalizeOptionalString(block.text) ?? normalizeOptionalString(block.content);
-    if (text) {
-      parts.push(text);
-    }
-  }
-  return parts.join("\n").trim();
+  return extractQaContentText(content, (block) => {
+    const type = normalizeOptionalString(block.type)?.toLowerCase();
+    return !type || ["text", "input_text", "message", "output_text", "user_text"].includes(type)
+      ? (normalizeOptionalString(block.text) ?? normalizeOptionalString(block.content))
+      : undefined;
+  });
 }
 
 function extractJsonlReplayUserTurns(transcriptBytes: string): JsonlReplayTurn[] {
@@ -110,7 +71,7 @@ function extractJsonlReplayUserTurns(transcriptBytes: string): JsonlReplayTurn[]
     }
     let parsed: unknown;
     try {
-      parsed = JSON.parse(trimmed) as unknown;
+      parsed = JSON.parse(trimmed);
     } catch {
       continue;
     }
@@ -118,8 +79,8 @@ function extractJsonlReplayUserTurns(transcriptBytes: string): JsonlReplayTurn[]
       continue;
     }
     acceptedLines.push(trimmed);
-    const message = readReplayMessage(parsed);
-    if (!message || readRole(message) !== "user") {
+    const message = isRecord(parsed.message) ? parsed.message : parsed;
+    if (normalizeOptionalString(message.role)?.toLowerCase() !== "user") {
       continue;
     }
     const userText = extractTextContent(message.content);

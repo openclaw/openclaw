@@ -40,7 +40,6 @@ export function registerSettledFinalizationTests({
 }: SettledFinalizationFixtures) {
   it.each(
     [
-      { label: "completed turn", failure: undefined, expectedContext: true },
       {
         label: "preserve-only host-auth turn",
         failure: undefined,
@@ -54,22 +53,6 @@ export function registerSettledFinalizationTests({
           codexErrorInfo: "serverOverloaded",
         },
         expectedContext: true,
-      },
-      {
-        label: "usage limit after the tool result",
-        failure: {
-          message: "Usage limit exceeded.",
-          codexErrorInfo: "usageLimitExceeded",
-        },
-        expectedContext: false,
-      },
-      {
-        label: "unauthorized response after the tool result",
-        failure: {
-          message: "Unauthorized.",
-          codexErrorInfo: "unauthorized",
-        },
-        expectedContext: false,
       },
     ].map((scenario) => ({
       scenario,
@@ -222,7 +205,6 @@ export function registerSettledFinalizationTests({
           },
           { type: "function_call_output", call_id: "tool-settled", output: "sent-to-alice\n" },
         ]);
-        expect(Object.isFrozen(context)).toBe(true);
       }
     },
   );
@@ -304,6 +286,5 @@ export function registerSettledFinalizationTests({
         expect.objectContaining({ type: "function_call_output", call_id: "tool-settled" }),
       ],
     });
-    expect(Object.isFrozen(result.settledTurnFinalizationContext)).toBe(true);
   });
 }

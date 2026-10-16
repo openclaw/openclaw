@@ -5,14 +5,15 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
-  isProcessAlive,
-  waitForChildClose,
-  waitForDead,
-  waitForPidFile,
-} from "../helpers/process-wait.js";
-import { createDeferred, withTestTimeout } from "../helpers/promise.js";
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
+import { withinTest } from "../helpers/promise.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 import { createPreparedVitestCliFixture } from "./run-vitest-bounded-fixture.test-support.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
@@ -31,11 +32,132 @@ const entrypoints = [
 const preparedCli = createPreparedVitestCliFixture(
   repoRoot,
   entrypoints.map(({ script }) => script),
+  { prepareWorkerArtifacts: true },
 );
-beforeAll(() => preparedCli.prepare());
-afterAll(() => preparedCli.cleanup());
+let fixtureReceipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  await preparedCli.prepare();
+  fixtureReceipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await fixtureReceipts.close();
+  await preparedCli.cleanup();
+});
+
+const packageScripts = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"))
+  .scripts as Record<string, string>;
+const loaderEntries = [
+  {
+    name: "JavaScript launcher",
+    args: [path.join(repoRoot, "scripts/run-vitest.mjs")],
+    failedTrailers: ["[test] FAILED (exit 2)"],
+  },
+  ...[
+    "test",
+    "test:changed",
+    "test:changed:max",
+    "test:max",
+    "test:serial",
+    "test:perf:imports",
+    "test:perf:imports:changed",
+    "test:watch",
+  ].map((name) => ({
+    name,
+    args: packageScripts[name]!.split(" ").slice(1),
+    failedTrailers: ["[test] FAILED (exit 2)"],
+  })),
+  {
+    name: "test:extensions:batch",
+    args: packageScripts["test:extensions:batch"]!.split(" ").slice(1),
+    failedTrailers: [],
+  },
+];
 
 describe("Vitest CLI final outcome ownership", () => {
+  it.for(
+    ["missing", "broken"].flatMap((failure) =>
+      loaderEntries.map(({ name, args, failedTrailers }) => ({
+        name,
+        args,
+        failedTrailers,
+        failure,
+      })),
+    ),
+  )(
+    "classifies $failure loader initialization at $name",
+    async ({ failure, args, failedTrailers }, { signal, onTestFinished }) => {
+      const lifetime = createFixtureLifetime();
+      onTestFinished(() => lifetime.cleanup());
+      await lifetime.run(async () => {
+        const root = lifetime.createTempDir("oc-vt-loader-failure-");
+        const preload = path.join(root, "preload.mjs");
+        const loaderFailure =
+          failure === "missing"
+            ? 'throw Object.assign(new Error("owned missing loader dependency"), {code: "ERR_MODULE_NOT_FOUND"});'
+            : `return {format: "module", shortCircuit: true, source: ${JSON.stringify('throw new Error("owned broken loader dependency");')}};`;
+        fs.writeFileSync(
+          preload,
+          `import {registerHooks} from "node:module";
+registerHooks({load(url, context, nextLoad) {
+  if (url.endsWith("/scripts/tsx.mjs")) {
+    ${loaderFailure}
+  }
+  return nextLoad(url, context);
+}});`,
+        );
+        const result = await lifetime.track(
+          runNodeScript(
+            [...args, "--help"],
+            testRunnerFixtureEnv({ NODE_OPTIONS: `--import=${preload}` }),
+            10_000,
+            { signal, requireProcessTreeExit: process.platform !== "win32" },
+          ),
+        );
+        expect(result.error, result.stderr).toBeUndefined();
+        expect(result.status, result.stderr).toBe(2);
+        expect(result.stderr).toContain(`owned ${failure} loader dependency`);
+        expect(result.stderr.match(/^\[.*\] FAILED \(exit \d+\)$/gmu) ?? []).toEqual(
+          failedTrailers,
+        );
+      });
+    },
+  );
+
+  it.for([0, 1, 2])(
+    "preserves settled implementation exit %s through the JavaScript CLI",
+    async (code, { signal, onTestFinished }) => {
+      const lifetime = createFixtureLifetime();
+      onTestFinished(() => lifetime.cleanup());
+      await lifetime.run(async () => {
+        const root = lifetime.createTempDir("oc-vt-exit-propagation-");
+        const preload = path.join(root, "preload.mjs");
+        fs.writeFileSync(
+          preload,
+          `import { registerHooks } from "node:module";
+registerHooks({ load(url, context, nextLoad) {
+  if (url.endsWith("/scripts/run-vitest-child.mts")) {
+    return { format: "module", shortCircuit: true, source: "process.exitCode = ${code};" };
+  }
+  return nextLoad(url, context);
+}});`,
+        );
+        const result = await lifetime.track(
+          runNodeScript(
+            [path.join(preparedCli.root, "scripts/run-vitest.mjs")],
+            { ...preparedCli.env(testRunnerFixtureEnv()), NODE_OPTIONS: `--import=${preload}` },
+            10_000,
+            { signal, requireProcessTreeExit: process.platform !== "win32" },
+          ),
+        );
+        expect(result.error, result.stderr).toBeUndefined();
+        expect(result.status, result.stderr).toBe(code);
+        expect(result.stderr.match(/^\[test\] FAILED \(exit \d+\)$/gmu) ?? []).toEqual(
+          code ? [`[test] FAILED (exit ${code})`] : [],
+        );
+      });
+    },
+  );
+
   it.for(
     entrypoints.flatMap((entry) =>
       (entry.script.startsWith("test-projects-")
@@ -78,7 +200,7 @@ it("trailer fixture", async () => {
         // Both fixture configs use the same real Vitest test and cleanup boundary.
         const config = `import fs from "node:fs";
 import os from "node:os";
-import { getVitestWorkerDescriptor } from ${JSON.stringify(path.join(repoRoot, "scripts/lib/vitest-worker-bootstrap.mts"))};
+import { getVitestWorkerDescriptor } from ${JSON.stringify(path.join(repoRoot, "scripts/lib/vitest-worker-descriptor.mts"))};
 fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({
   pid: process.pid, namespace: os.tmpdir(), generation: getVitestWorkerDescriptor()?.directory,
 }));
@@ -98,7 +220,7 @@ export default { test: { include: [${JSON.stringify(target)}], maxWorkers: 1 } }
             args.push("--openclaw-trailer-repro");
           }
         }
-        const env = { ...process.env };
+        const env = testRunnerFixtureEnv();
         for (const key of Object.keys(env)) {
           if (key.startsWith("VITEST") || key.startsWith("OPENCLAW_")) {
             delete env[key];
@@ -214,6 +336,8 @@ cp.spawn = (bin, args, options) => {
   }
   return spawn(bin, args, options);
 };
+const existsSync = fs.existsSync;
+fs.existsSync = file => file === ${JSON.stringify(metadataPath)} || existsSync(file);
 const readFileSync = fs.readFileSync;
 fs.readFileSync = (file, ...args) => {
   if (file === ${JSON.stringify(metadataPath)}) {
@@ -224,7 +348,7 @@ fs.readFileSync = (file, ...args) => {
 syncBuiltinESMExports();
 `,
       );
-      const env = { ...process.env };
+      const env = testRunnerFixtureEnv();
       for (const key of Object.keys(env)) {
         if (key.startsWith("VITEST") || key.startsWith("OPENCLAW_")) {
           delete env[key];
@@ -249,16 +373,16 @@ syncBuiltinESMExports();
       );
       expect(result.error, result.stderr).toBeUndefined();
       expect(result.signal, result.stderr).toBeNull();
-      expect(result.status, result.stderr).toBe(1);
+      expect(result.status, result.stderr).toBe(2);
       expect(result.stderr).toContain("fixture runtime identity inspected");
       expect(result.stderr).not.toContain("fixture reader or UI build admitted");
     },
   );
 
-  it.each(["success", "runtime-failure", "ai-failure", "prebuilt", "skip", "custom", "cancel"])(
+  it.for(["success", "runtime-failure", "ai-failure", "prebuilt", "skip", "custom", "cancel"])(
     "prepares the direct E2E reader generation once: %s",
     { timeout: 60_000 },
-    async (outcome) => {
+    async (outcome, { signal }) => {
       const root = tempDirs.make("oc-vt-preparation-");
       const receiptsPath = path.join(root, "events.jsonl");
       const pidPath = path.join(root, "builder.pid");
@@ -272,6 +396,7 @@ syncBuiltinESMExports();
       fs.writeFileSync(
         executable,
         `import fs from "node:fs";
+${fixtureReceiptClientSource(fixtureReceipts.endpoint)}
 const kind = process.argv[2];
 const record = (event) => fs.appendFileSync(${JSON.stringify(receiptsPath)}, JSON.stringify({
   kind, event, pid: process.pid, shard: process.argv[3],
@@ -281,6 +406,7 @@ const record = (event) => fs.appendFileSync(${JSON.stringify(receiptsPath)}, JSO
 record("start");
 if (kind === "runtime" && ${JSON.stringify(outcome)} === "cancel") {
   fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+  sendReceipt(${JSON.stringify(pidPath)}, "ready");
   setInterval(() => {}, 1000);
 } else {
   const failed = ${JSON.stringify(outcome)} === kind + "-failure";
@@ -318,7 +444,7 @@ cp.spawn = (bin, args, options) => {
 syncBuiltinESMExports();
 `,
       );
-      const env = { ...process.env };
+      const env = testRunnerFixtureEnv();
       for (const key of Object.keys(env)) {
         if (key.startsWith("VITEST") || key.startsWith("OPENCLAW_")) {
           delete env[key];
@@ -342,7 +468,11 @@ syncBuiltinESMExports();
             ? path.join(root, "custom.config.ts")
             : "test/vitest/vitest.e2e.config.ts",
         ],
-        { cwd: repoRoot, env: { ...env, CI: "1" }, stdio: ["ignore", "pipe", "pipe"] },
+        {
+          cwd: repoRoot,
+          env: preparedCli.env({ ...env, CI: "1" }),
+          stdio: ["ignore", "pipe", "pipe"],
+        },
       );
       let output = "";
       child.stdout.on("data", (chunk) => {
@@ -351,17 +481,35 @@ syncBuiltinESMExports();
       child.stderr.on("data", (chunk) => {
         output += chunk;
       });
-      const closed = waitForChildClose(child, 15_000).catch((error: unknown) => error);
-      const stopped = createDeferred();
-      child.once("close", () => stopped.resolve());
+      const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+        (resolve, reject) => {
+          child.once("error", reject);
+          child.once("close", (code, childSignal) => resolve({ code, signal: childSignal }));
+        },
+      );
       let builderPid: number | undefined;
       try {
         if (outcome === "cancel") {
-          builderPid = await waitForPidFile(pidPath, 5_000);
+          // A receipt can trail CLI settlement; the complete PID was written before it.
+          await withinTest(
+            Promise.race([
+              fixtureReceipts.waitFor(pidPath, "ready"),
+              closed.then(() => {
+                if (!fs.existsSync(pidPath) || !fs.readFileSync(pidPath, "utf8").trim()) {
+                  throw new Error(`timeout waiting for pid in ${pidPath}`);
+                }
+              }),
+            ]),
+            signal,
+          );
+          builderPid = Number.parseInt(fs.readFileSync(pidPath, "utf8"), 10);
           child.kill("SIGTERM");
         }
         const failed = outcome.endsWith("-failure") || outcome === "cancel";
-        expect(await closed, output).toEqual({ code: failed ? 1 : 0, signal: null });
+        expect(await withinTest(closed, signal), output).toEqual({
+          code: failed ? 2 : 0,
+          signal: null,
+        });
         const events = fs
           .readFileSync(receiptsPath, "utf8")
           .trim()
@@ -400,15 +548,19 @@ syncBuiltinESMExports();
           expect(reader.skip).toBe(outcome === "skip" ? "1" : "");
         }
         for (const workerPid of new Set(events.map(({ pid }) => pid))) {
-          await waitForDead(workerPid, 5_000);
+          // CLI completion follows managed builder and reader child/group joins.
+          expect(isProcessAlive(workerPid)).toBe(false);
         }
       } finally {
         if (child.exitCode === null && child.signalCode === null) {
           child.kill("SIGTERM");
         }
-        await withTestTimeout(stopped.promise, 5_000, "E2E preparation CLI cleanup");
+        await closed;
+        builderPid ??= fs.existsSync(pidPath)
+          ? Number.parseInt(fs.readFileSync(pidPath, "utf8"), 10)
+          : undefined;
         if (builderPid) {
-          await waitForDead(builderPid, 5_000);
+          expect(isProcessAlive(builderPid)).toBe(false);
         }
       }
     },
@@ -448,7 +600,7 @@ it("case ${index}", () => {
 });`,
         );
       }
-      const env = { ...process.env };
+      const env = testRunnerFixtureEnv();
       for (const key of Object.keys(env)) {
         if (key.startsWith("VITEST") || key.startsWith("OPENCLAW_")) {
           delete env[key];

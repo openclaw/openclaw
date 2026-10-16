@@ -35,27 +35,6 @@ describe("agent workspace context preparation", () => {
     );
   });
 
-  it("keeps a remapped root USER.md under users/arbitrary shared", async () => {
-    const nestedWorkspace = path.join(workspaceDir, "users", "arbitrary");
-    const projectedWorkspace = path.join(workspaceDir, "sandbox", "users", "arbitrary");
-    vi.spyOn(bootstrapRuntime, "resolveBootstrapFilesForRun").mockResolvedValue([
-      bootstrapFile("USER.md", "Shared preferences.", path.join(nestedWorkspace, "USER.md")),
-    ]);
-    const context = await prepareAgentWorkspaceContext({
-      workspaceDir: nestedWorkspace,
-      scope: "full",
-      projectPath: (filePath) =>
-        path.join(projectedWorkspace, path.relative(nestedWorkspace, filePath)),
-    });
-    expect(context.personaFiles).toEqual([
-      { path: path.join(projectedWorkspace, "USER.md"), content: "Shared preferences." },
-    ]);
-    expect(context.personaInstructions).toContain("Shared preferences.");
-    expect(context.personaInstructions).toContain(
-      "Internalize and follow them accordingly.\n\n<AGENT_SOUL>",
-    );
-  });
-
   it("prepares ordered personal instructions for the current profile in a remapped workspace", async () => {
     const personalFiles = (profile?: string, root = workspaceDir) =>
       profile
@@ -85,6 +64,13 @@ describe("agent workspace context preparation", () => {
         projectPath: (filePath) =>
           path.join(projectedWorkspace, path.relative(workspaceDir, filePath)),
       });
+      const shared = context.sharedPersonaInstructions ?? "";
+      expect(shared).toContain("Shared preferences.");
+      expect(shared).toContain("Agent identity.");
+      expect(shared).toContain("Agent voice.");
+      expect(shared).not.toContain("alice preferences.");
+      expect(shared).not.toContain("bob preferences.");
+      expect(shared).not.toContain("belongs to this session");
       const turn = context.personaInstructions ?? "";
       expect(turn).toContain("<AGENT_SOUL>");
       expect(turn).toContain("</AGENT_SOUL>");

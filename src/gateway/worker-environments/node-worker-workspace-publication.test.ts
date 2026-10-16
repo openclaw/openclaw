@@ -5,7 +5,7 @@ import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.j
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-transfer-client.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
-import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
@@ -72,14 +72,14 @@ it.each([
       throw new Error("Repository fixture has no base commit");
     }
     const database = openOpenClawStateDatabase({ path: path.join(root, "openclaw.sqlite") });
-    const store = createSessionRepositoryWorkspaceStore({ database });
-    const created = store.create({
+    const store = createSessionRepositoryWorkspaceStore({ path: database.path });
+    const created = await store.create({
       agentId: "main",
       sessionKey: "agent:main:publication",
       url: "https://github.com/example/project.git",
       assertCurrent: () => {},
     });
-    const repository = store.bindBase({
+    const repository = await store.bindBase({
       workspaceId: created.workspaceId,
       expectedRevision: created.revision,
       baseCommit: base.manifest.baseCommit,
@@ -231,7 +231,7 @@ it.each([
         ...payload,
         store,
         workspaceId: repository.workspaceId,
-        expectedRevision: store.get(repository.workspaceId)!.revision,
+        expectedRevision: (await store.get(repository.workspaceId))!.revision,
         assertCurrent: () => {},
       });
       if (cleanupFailure) {
@@ -260,7 +260,7 @@ it.each([
         expect(result.changed).toBe(true);
         await result.verifyLocalStable();
         await result.publishStagedResult?.();
-        expect(store.get(repository.workspaceId)?.manifestHash).toBe(result.manifestRef);
+        expect((await store.get(repository.workspaceId))?.manifestHash).toBe(result.manifestRef);
       } finally {
         await result.discardPreparedStagedResult?.();
       }
@@ -292,7 +292,7 @@ it.each([
         } else {
           await expect(first).rejects.toThrow("payload did not match its staged result");
         }
-        expect(store.get(repository.workspaceId)?.checkpointRef).toBeNull();
+        expect((await store.get(repository.workspaceId))?.checkpointRef).toBeNull();
         expect(await candidates(), "failed handoff must not strand prepared checkpoint refs").toBe(
           "",
         );
@@ -319,7 +319,7 @@ it.each([
       await uploadOutcome;
       await service.closeAll();
       await server.close();
-      closeOpenClawStateDatabaseByPath(database.path);
+      await closeOpenClawStateDatabaseByPathAsync(database.path);
     }
     await expect(fs.stat(temporaryRoot)).rejects.toMatchObject({ code: "ENOENT" });
   },

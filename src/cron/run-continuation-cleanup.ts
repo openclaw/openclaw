@@ -1,6 +1,6 @@
 /** Removes an idle exact-run continuation through the session lifecycle owner. */
 import { hasPendingGeneratedMediaTaskForSessionKey } from "../agents/media-generation-activity.js";
-import { hasDescendantRunAwaitingSettle } from "../agents/subagents/registry/subagent-registry-read.js";
+import { assertSubagentReadContext } from "../agents/subagents/registry/subagent-registry-read-cache.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
@@ -16,6 +16,7 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import { prepareCronDescendantDeletion } from "./isolated-agent/run-subagent-registry.runtime.js";
 
 function canRemoveCronRunContinuation(marker: SessionEntry["cronRunContinuation"]): boolean {
   if (!marker || marker.basePersisted !== true) {
@@ -47,7 +48,7 @@ export async function removeCronRunContinuationSessionIfIdle(
     return;
   }
   const context = queueContext ?? captureOpenClawStateWorkerContext();
-  const assertCurrent = () => context.admission.assertCurrent();
+  const assertCurrent = () => assertSubagentReadContext(context);
   const agentId = resolveAgentIdFromSessionKey(sessionKey);
   const storePath = resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
     agentId,
@@ -74,7 +75,7 @@ export async function removeCronRunContinuationSessionIfIdle(
   if (!original || !canRemoveCronRunContinuation(original.cronRunContinuation)) {
     return;
   }
-  await runExclusiveSessionLifecycleMutation({
+  await runExclusiveSessionLifecycleMutation("cron-cleanup", {
     scope: storePath,
     identities: [sessionKey, original.sessionId],
     run: async () => {
@@ -83,7 +84,6 @@ export async function removeCronRunContinuationSessionIfIdle(
       }
       const pendingSessionDeliveries = await loadPendingSessionDeliveries(context);
       if (
-        hasDescendantRunAwaitingSettle(sessionKey) ||
         hasPendingGeneratedMediaTaskForSessionKey(sessionKey) ||
         pendingSessionDeliveries.some(
           (entry) =>
@@ -93,6 +93,11 @@ export async function removeCronRunContinuationSessionIfIdle(
             entry.acknowledgedAt === undefined,
         )
       ) {
+        return;
+      }
+      const descendants = await prepareCronDescendantDeletion([sessionKey]);
+      assertCurrent();
+      if (descendants.hasUnsettled(sessionKey)) {
         return;
       }
       const entry = await readEntry();
@@ -109,7 +114,7 @@ export async function removeCronRunContinuationSessionIfIdle(
         commitGuard: () => {
           assertCurrent();
           if (
-            hasDescendantRunAwaitingSettle(sessionKey) ||
+            descendants.hasUnsettled(sessionKey) ||
             hasPendingGeneratedMediaTaskForSessionKey(sessionKey)
           ) {
             throw new Error("cron run continuation still has unsettled background work");

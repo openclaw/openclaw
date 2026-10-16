@@ -9,9 +9,6 @@ import type {
 type SetupTextInputParams = Parameters<NonNullable<ChannelSetupWizardTextInput["currentValue"]>>[0];
 type SetupStatusParams = Parameters<NonNullable<ChannelSetupWizardStatus["resolveStatusLines"]>>[0];
 
-/**
- * Creates setup status resolvers for channels backed by a required local binary.
- */
 export function createDetectedBinaryStatus(params: {
   channelLabel: string;
   binaryLabel: string;
@@ -64,9 +61,6 @@ export function createDetectedBinaryStatus(params: {
   };
 }
 
-/**
- * Creates a setup text input that records or reuses a CLI path.
- */
 export function createCliPathTextInput(params: {
   inputKey: ChannelSetupWizardTextInput["inputKey"];
   message: string;

@@ -1,17 +1,9 @@
-// Resolves trusted system binaries from platform-managed directories.
 import fs from "node:fs";
 import path from "node:path";
 import { pruneMapToMaxSize } from "./map-size.js";
 import { getWindowsInstallRoots, getWindowsProgramFilesRoots } from "./windows-install-roots.js";
 
-/**
- * Trust level for system binary resolution.
- * - "strict": Only fixed OS-managed directories. Use for security-critical
- *   binaries like openssl where a compromised binary has high impact.
- * - "standard": Strict dirs plus common local-admin/package-manager
- *   directories appended after system dirs. Use for tool binaries like
- *   ffmpeg that are rarely available via the OS itself.
- */
+/** Standard trust appends local-admin/package-manager paths after strict system paths. */
 type SystemBinTrust = "strict" | "standard";
 
 // Unix directories where OS-managed or system-installed binaries live.
@@ -19,15 +11,9 @@ type SystemBinTrust = "strict" | "standard";
 // attacker-planted binaries cannot shadow legitimate system executables.
 const UNIX_BASE_TRUSTED_DIRS = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"] as const;
 
-// Package-manager directories appended in "standard" trust on macOS.
-// These come after strict dirs so OS binaries always take priority.
-// Could be acceptable for tooling binaries like ffmpeg but NOT for
-// security-critical ones like openssl — callers needing higher
-// assurance should stick with "strict".
 const DARWIN_STANDARD_DIRS = ["/opt/homebrew/bin", "/usr/local/bin"] as const;
 const LINUX_STANDARD_DIRS = ["/usr/local/bin"] as const;
 
-// Windows extensions to probe when searching for executables.
 const WIN_PATHEXT = [".exe", ".cmd", ".bat", ".com"] as const;
 const WINDOWS_PROGRAM_FILES_TOOL_DIR_PREFIXES = ["ImageMagick-", "GraphicsMagick-"] as const;
 const WINDOWS_PROGRAM_FILES_TOOL_DIRS = ["ImageMagick", "GraphicsMagick"] as const;
@@ -98,15 +84,6 @@ function buildWindowsStandardDirs(): readonly string[] {
   return dirs;
 }
 
-/**
- * Build the trusted-dir list for Unix (macOS, Linux, etc.), extending
- * UNIX_BASE_TRUSTED_DIRS with platform/environment-specific paths.
- *
- * Strict: only fixed OS-managed directories.
- *
- * Standard: strict dirs plus platform package-manager directories appended
- * after, so OS binaries always take priority.
- */
 function buildUnixTrustedDirs(trust: SystemBinTrust): readonly string[] {
   const dirs: string[] = [...UNIX_BASE_TRUSTED_DIRS];
   const platform = process.platform;
@@ -119,9 +96,6 @@ function buildUnixTrustedDirs(trust: SystemBinTrust): readonly string[] {
     dirs.push("/snap/bin");
   }
 
-  // "standard" trust widens the search for non-security-critical tools in
-  // common local-admin/package-manager directories, while keeping strict dirs
-  // first so OS binaries always take priority.
   if (trust === "standard") {
     if (platform === "darwin") {
       dirs.push(...DARWIN_STANDARD_DIRS);
@@ -133,24 +107,15 @@ function buildUnixTrustedDirs(trust: SystemBinTrust): readonly string[] {
   return dirs;
 }
 
-let trustedDirsStrict: readonly string[] | null = null;
-let trustedDirsStandard: readonly string[] | null = null;
+const trustedDirs: Partial<Record<SystemBinTrust, readonly string[]>> = {};
 
 function getTrustedDirs(trust: SystemBinTrust): readonly string[] {
-  if (process.platform === "win32") {
-    trustedDirsStrict ??= buildWindowsTrustedDirs();
-    if (trust === "standard") {
-      trustedDirsStandard ??= [...trustedDirsStrict, ...buildWindowsStandardDirs()];
-      return trustedDirsStandard;
-    }
-    return trustedDirsStrict;
-  }
-  if (trust === "standard") {
-    trustedDirsStandard ??= buildUnixTrustedDirs("standard");
-    return trustedDirsStandard;
-  }
-  trustedDirsStrict ??= buildUnixTrustedDirs("strict");
-  return trustedDirsStrict;
+  return (trustedDirs[trust] ??=
+    process.platform !== "win32"
+      ? buildUnixTrustedDirs(trust)
+      : trust === "strict"
+        ? buildWindowsTrustedDirs()
+        : [...getTrustedDirs("strict"), ...buildWindowsStandardDirs()]);
 }
 
 /**

@@ -1,4 +1,3 @@
-// Normalizes model input config into provider and model references.
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
   normalizeGooglePreviewModelId,

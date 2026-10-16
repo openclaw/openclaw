@@ -52,15 +52,11 @@ async function saturatedHome() {
 }
 
 async function visibleSearch(
-  mode: "inline" | "stepped",
   control: CodexSessionCatalogControl,
   excludedThreadIds: ReadonlySet<string>,
   cursor?: string,
 ) {
   const params = { control, limit: 1, searchTerm: "Wanted", excludedThreadIds, cursor };
-  if (mode === "inline") {
-    return await listVisiblePage(params);
-  }
   const operation = new CodexCatalogVisiblePage(params);
   for (;;) {
     const step = await operation.next();
@@ -72,109 +68,99 @@ async function visibleSearch(
 }
 
 describe("overflow catalog request budgets", () => {
-  it.each(["inline", "stepped"] as const)(
-    "shares 20 native reads across title search and %s exclusion filling",
-    async (mode) => {
-      const { control } = await saturatedHome();
-      const positions: number[] = [];
-      let visibleAt = 0;
-      commandRpcMocks.codexControlRequest.mockImplementation(async (_plugin, method, params) => {
-        expect(method).toBe("thread/list");
-        expect(params.useStateDbOnly).toBe(true);
-        const position = params.cursor
-          ? Number(params.cursor.slice("native-after:".length)) + 1
-          : 1;
-        positions.push(position);
-        const wanted = position % 20 === 0 || position === visibleAt;
-        return {
-          data: [
-            idleThread({
-              id: `fallback-${position}`,
-              name: wanted ? "Wanted investigation" : "Other investigation",
-              source: "cli",
-              originator: "codex_cli_rs",
-              preview: `Please inspect fallback task ${position} and verify the result.`,
-            }),
-          ],
-          nextCursor: `native-after:${position}`,
-        };
-      });
-      const excluded = new Set(
-        Array.from({ length: 20 }, (_, index) => `fallback-${(index + 1) * 20}`),
-      );
+  it("shares 20 native reads across title search and stepped exclusion filling", async () => {
+    const { control } = await saturatedHome();
+    const positions: number[] = [];
+    let visibleAt = 0;
+    commandRpcMocks.codexControlRequest.mockImplementation(async (_plugin, method, params) => {
+      expect(method).toBe("thread/list");
+      expect(params.useStateDbOnly).toBe(true);
+      const position = params.cursor ? Number(params.cursor.slice("native-after:".length)) + 1 : 1;
+      positions.push(position);
+      const wanted = position % 20 === 0 || position === visibleAt;
+      return {
+        data: [
+          idleThread({
+            id: `fallback-${position}`,
+            name: wanted ? "Wanted investigation" : "Other investigation",
+            source: "cli",
+            originator: "codex_cli_rs",
+            preview: `Please inspect fallback task ${position} and verify the result.`,
+          }),
+        ],
+        nextCursor: `native-after:${position}`,
+      };
+    });
+    const excluded = new Set(
+      Array.from({ length: 20 }, (_, index) => `fallback-${(index + 1) * 20}`),
+    );
 
-      const first = await visibleSearch(mode, control, excluded);
+    const first = await visibleSearch(control, excluded);
 
-      expect(positions.length).toBeLessThanOrEqual(20);
-      expect(first.sessions).toEqual([]);
-      expect(first.nextCursor).toEqual(expect.any(String));
-      expect(first.nextCursor).not.toBe("native-after:20");
-      expect(positions).toEqual(Array.from({ length: 20 }, (_, index) => index + 1));
+    expect(positions.length).toBeLessThanOrEqual(20);
+    expect(first.sessions).toEqual([]);
+    expect(first.nextCursor).toEqual(expect.any(String));
+    expect(first.nextCursor).not.toBe("native-after:20");
+    expect(positions).toEqual(Array.from({ length: 20 }, (_, index) => index + 1));
 
-      visibleAt = 21;
-      const second = await visibleSearch(mode, control, excluded, first.nextCursor);
+    visibleAt = 21;
+    const second = await visibleSearch(control, excluded, first.nextCursor);
 
-      expect(second.sessions.map((session) => session.threadId)).toEqual(["fallback-21"]);
-      expect(positions).toEqual(Array.from({ length: 21 }, (_, index) => index + 1));
-    },
-  );
+    expect(second.sessions.map((session) => session.threadId)).toEqual(["fallback-21"]);
+    expect(positions).toEqual(Array.from({ length: 21 }, (_, index) => index + 1));
+  });
 
-  it.each(["control", "visible"] as const)(
-    "backs off the complete %s fallback request when a later native page fails",
-    async (mode) => {
-      const fixture = await saturatedHome();
-      const failure = new Error("second fallback page failed");
-      let recovered = false;
-      commandRpcMocks.codexControlRequest.mockImplementation(async (_plugin, method, params) => {
-        expect(method).toBe("thread/list");
-        expect(params.useStateDbOnly).toBe(true);
-        if (params.cursor === "page-two") {
-          if (!recovered) {
-            throw failure;
-          }
-          return { data: [idleThread({ id: "match", source: "cli", name: "Wanted" })] };
+  it("backs off the complete visible fallback request when a later native page fails", async () => {
+    const fixture = await saturatedHome();
+    const failure = new Error("second fallback page failed");
+    let recovered = false;
+    commandRpcMocks.codexControlRequest.mockImplementation(async (_plugin, method, params) => {
+      expect(method).toBe("thread/list");
+      expect(params.useStateDbOnly).toBe(true);
+      if (params.cursor === "page-two") {
+        if (!recovered) {
+          throw failure;
         }
-        return {
-          data: [
-            idleThread({
-              id: "head",
-              source: "cli",
-              name: mode === "visible" ? "Wanted" : "Other",
-            }),
-          ],
-          nextCursor: "page-two",
-        };
+        return { data: [idleThread({ id: "match", source: "cli", name: "Wanted" })] };
+      }
+      return {
+        data: [
+          idleThread({
+            id: "head",
+            source: "cli",
+            name: "Wanted",
+          }),
+        ],
+        nextCursor: "page-two",
+      };
+    });
+    const search = () =>
+      listVisiblePage({
+        control: fixture.control,
+        limit: 1,
+        searchTerm: "Wanted",
+        excludedThreadIds: new Set(["head"]),
       });
-      const search = () =>
-        mode === "control"
-          ? fixture.control.listPage({ limit: 1, searchTerm: "Wanted" })
-          : listVisiblePage({
-              control: fixture.control,
-              limit: 1,
-              searchTerm: "Wanted",
-              excludedThreadIds: new Set(["head"]),
-            });
 
-      await expect(search()).rejects.toBe(failure);
-      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
-      await expect(search()).rejects.toBe(failure);
-      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(4);
-      await expect(search()).rejects.toBe(failure);
-      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(4);
+    await expect(search()).rejects.toBe(failure);
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
+    await expect(search()).rejects.toBe(failure);
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(4);
+    await expect(search()).rejects.toBe(failure);
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(4);
 
-      fixture.advance(5_000);
-      await expect(search()).rejects.toBe(failure);
-      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(6);
-      fixture.advance(9_999);
-      await expect(search()).rejects.toBe(failure);
-      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(6);
+    fixture.advance(5_000);
+    await expect(search()).rejects.toBe(failure);
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(6);
+    fixture.advance(9_999);
+    await expect(search()).rejects.toBe(failure);
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(6);
 
-      fixture.advance(1);
-      recovered = true;
-      expect((await search()).sessions.map((session) => session.threadId)).toEqual(["match"]);
-      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(8);
-    },
-  );
+    fixture.advance(1);
+    recovered = true;
+    expect((await search()).sessions.map((session) => session.threadId)).toEqual(["match"]);
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(8);
+  });
 });
 
 it.each(["read count", "deadline"] as const)(

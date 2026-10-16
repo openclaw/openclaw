@@ -6,9 +6,9 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   stream,
+  adjustMaxTokensForThinking,
   type Model,
   type SimpleStreamOptions,
-  type ThinkingLevel,
 } from "openclaw/plugin-sdk/llm";
 import {
   requiresClaudeDefaultSampling,
@@ -48,12 +48,6 @@ function isClaudeMythosPreviewModel(model: Model): boolean {
           .replace(/[\s_.:]+/g, "-"),
       ),
     );
-}
-
-function requiresClaudeMythosAdaptiveThinking(model: Model): boolean {
-  return (
-    resolveClaudeMythos5ModelIdentity(model) !== undefined || isClaudeMythosPreviewModel(model)
-  );
 }
 
 function resolveMantleReasoning(
@@ -121,30 +115,6 @@ function buildMantleAnthropicBaseOptions(
   });
 }
 
-function adjustMaxTokensForThinking(
-  baseMaxTokens: number,
-  modelMaxTokens: number,
-  reasoningLevel: ThinkingLevel,
-  customBudgets?: SimpleStreamOptions["thinkingBudgets"],
-): { maxTokens: number; thinkingBudget: number } {
-  const defaultBudgets = {
-    minimal: 1024,
-    low: 2048,
-    medium: 8192,
-    high: 16384,
-    xhigh: 16384,
-    max: 16384,
-  } as const;
-  const budgets = { ...defaultBudgets, ...customBudgets };
-  const minOutputTokens = 1024;
-  let thinkingBudget = budgets[reasoningLevel];
-  const maxTokens = Math.min(baseMaxTokens + thinkingBudget, modelMaxTokens);
-  if (maxTokens <= thinkingBudget) {
-    thinkingBudget = Math.max(0, maxTokens - minOutputTokens);
-  }
-  return { maxTokens, thinkingBudget };
-}
-
 /** Create the Mantle Anthropic Messages stream function. */
 export function createMantleAnthropicStreamFn(deps?: {
   createClient?: (options: AnthropicOptions) => Anthropic;
@@ -169,9 +139,6 @@ export function createMantleAnthropicStreamFn(deps?: {
       fetch: buildGuardedModelFetch(model),
     });
     const base = buildMantleAnthropicBaseOptions(model, options, apiKey);
-    // Plugin package deps can give this plugin a distinct physical SDK copy.
-    // The client API is the same, but the SDK class private field makes types nominal.
-    const streamClient = client as unknown as Anthropic;
     const reasoning = resolveMantleReasoning(model, options);
     const opus5 = resolveClaudeOpus5ModelIdentity(model) !== undefined;
     const sonnet5 = resolveClaudeSonnet5ModelIdentity(model) !== undefined;
@@ -179,7 +146,7 @@ export function createMantleAnthropicStreamFn(deps?: {
     if (!reasoning || reasoning === "off") {
       return streamFn(model as Model<"anthropic-messages">, context, {
         ...base,
-        client: streamClient,
+        client,
         thinkingEnabled: false,
       });
     }
@@ -187,23 +154,27 @@ export function createMantleAnthropicStreamFn(deps?: {
     if (opus5 || sonnet5 || mythos5) {
       return streamFn(model as Model<"anthropic-messages">, context, {
         ...base,
-        client: streamClient,
+        client,
         thinkingEnabled: true,
         effort: opus5 || sonnet5 ? mapModernClaudeEffort(reasoning) : reasoning,
       });
     }
 
-    const adjusted = adjustMaxTokensForThinking(
-      base.maxTokens || 0,
-      model.maxTokens,
-      reasoning,
-      options?.thinkingBudgets,
-    );
-    const adaptiveThinking = requiresClaudeMythosAdaptiveThinking(model);
+    const thinkingBudgets = {
+      max: 16384,
+      xhigh: 16384,
+      ...options?.thinkingBudgets,
+    };
+    const adjusted = adjustMaxTokensForThinking(base.maxTokens || 0, model.maxTokens, reasoning, {
+      ...thinkingBudgets,
+      // Mantle's xhigh budget is independent of a custom high budget.
+      ...(reasoning === "xhigh" ? { high: thinkingBudgets.xhigh } : {}),
+    });
+    const adaptiveThinking = isClaudeMythosPreviewModel(model);
     const thinkingEnabled = adaptiveThinking || adjusted.thinkingBudget >= 1024;
     return streamFn(model as Model<"anthropic-messages">, context, {
       ...base,
-      client: streamClient,
+      client,
       maxTokens: adjusted.maxTokens,
       thinkingEnabled,
       ...(adaptiveThinking

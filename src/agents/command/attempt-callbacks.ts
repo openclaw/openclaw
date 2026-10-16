@@ -9,6 +9,13 @@ export type AgentAttemptLifecycleState = {
   lifecycleEnded: boolean;
 };
 
+export function resetAgentAttemptLifecycle(state: AgentAttemptLifecycleState): void {
+  state.lifecycleError = undefined;
+  state.lifecycleErrorObservation = undefined;
+  state.lifecycleFinishing = false;
+  state.lifecycleEnded = false;
+}
+
 type AgentAttemptLifecycleEvent = {
   stream: string;
   data?: Record<string, unknown>;
@@ -44,10 +51,7 @@ export function createAgentAttemptLifecycleCallbacks(
       if (evt.data.phase === "start") {
         // A same-candidate retry replaces deferred terminal state from the
         // preceding attempt; retaining it would abort a recovered run.
-        state.lifecycleError = undefined;
-        state.lifecycleErrorObservation = undefined;
-        state.lifecycleFinishing = false;
-        state.lifecycleEnded = false;
+        resetAgentAttemptLifecycle(state);
         return onRuntimeTurnStarted?.();
       }
       if (typeof evt.data.error === "string" && evt.data.error.trim()) {

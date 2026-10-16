@@ -1,11 +1,11 @@
 /* @vitest-environment jsdom */
-import type { ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   registerControlUiReloadGuard,
   canReloadControlUiDocument,
 } from "../../app/document-reload-guard.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
 import { createInitializationContext } from "./chat-pane.test-support.ts";
@@ -14,16 +14,14 @@ import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
-import {
-  beginQueuedMessageEdit,
-  QUEUED_MESSAGE_EDIT_CONFLICT_ERROR,
-} from "./queued-message-edit.ts";
+import { QUEUED_MESSAGE_EDIT_CONFLICT_ERROR } from "./queued-message-edit.ts";
 
 const recovery = vi.hoisted(() => ({
   review: vi.fn<() => Promise<boolean>>(),
   toast: vi.fn<(options: { onAction?: () => void; message: string }) => boolean>(() => true),
 }));
-vi.mock("./components/private-composer-recovery-dialog.ts", () => ({
+vi.mock("./components/private-composer-recovery-dialog.tsx", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./components/private-composer-recovery-dialog.tsx")>()),
   reviewPrivateComposerDraft: recovery.review,
 }));
 vi.mock("../../lib/toast.ts", () => ({ showToast: recovery.toast }));
@@ -38,13 +36,23 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function createControllerHost(): ReactiveControllerHost {
-  return {
+function createControllerFixture(withClient = false) {
+  const controller = new ChatStateController<ChatPageHost>({
     addController: () => undefined,
     removeController: () => undefined,
     requestUpdate: () => undefined,
     updateComplete: Promise.resolve(true),
-  };
+  });
+  controller.hostConnected();
+  const state = createPageState(createInitializationContext(), controller.createRenderLifecycle(), {
+    dispatchEvent: () => true,
+    querySelector: () => null,
+  });
+  if (withClient) {
+    state.client = createTestGatewayClient(async () => ({}));
+  }
+  controller.attach(state);
+  return { controller, state };
 }
 
 describe("queued edit page callbacks", () => {
@@ -65,17 +73,7 @@ describe("queued edit page callbacks", () => {
   ] as const)(
     "clears only resolved edit feedback when opening a queued editor (%s, %s)",
     (lastError, chatError, expectedLastError, expectedChatError) => {
-      const controller = new ChatStateController<ChatPageHost>(createControllerHost());
-      controller.hostConnected();
-      const state = createPageState(
-        createInitializationContext(),
-        controller.createRenderLifecycle(),
-        {
-          dispatchEvent: () => true,
-          querySelector: () => null,
-        },
-      );
-      controller.attach(state);
+      const { controller, state } = createControllerFixture(true);
       try {
         const queued = enqueueChatMessage(state, "queued original")!;
         state.chatMessage = "separate composer draft";
@@ -86,49 +84,21 @@ describe("queued edit page callbacks", () => {
 
         expect(state.chatQueuedEdit?.draftText).toBe("queued original");
         expect(state.chatMessage).toBe("separate composer draft");
+        state.chatMessage = "";
+        expect(canReloadControlUiDocument()).toBe(false);
         expect(state.lastError).toBe(expectedLastError);
         expect(state.chatError).toBe(expectedChatError);
       } finally {
         controller.hostDisconnected();
       }
+      expect(canReloadControlUiDocument()).toBe(true);
     },
   );
 
-  it("releases a queued correction reload hold when its pane is disposed", () => {
-    const controller = new ChatStateController<ChatPageHost>(createControllerHost());
-    controller.hostConnected();
-    const state = createPageState(
-      createInitializationContext(),
-      controller.createRenderLifecycle(),
-      {
-        dispatchEvent: () => true,
-        querySelector: () => null,
-      },
-    );
-    controller.attach(state);
-    try {
-      const queued = enqueueChatMessage(state, "queued original")!;
-      expect(beginQueuedMessageEdit(state, queued.id)).toBe("started");
-      expect(canReloadControlUiDocument()).toBe(false);
-    } finally {
-      controller.hostDisconnected();
-    }
-    expect(canReloadControlUiDocument()).toBe(true);
-  });
   it.each(["later edit", "another reload guard", "confirmed discard", "private fallback"] as const)(
     "keeps private-draft discard scoped during %s",
     async (scenario) => {
-      const controller = new ChatStateController<ChatPageHost>(createControllerHost());
-      controller.hostConnected();
-      const state = createPageState(
-        createInitializationContext(),
-        controller.createRenderLifecycle(),
-        {
-          dispatchEvent: () => true,
-          querySelector: () => null,
-        },
-      );
-      controller.attach(state);
+      const { controller, state } = createControllerFixture();
       state.sessionKey = "agent:main:dashboard:incognito-private-review";
       state.chatMessage = "captured private text";
       if (scenario === "private fallback") {

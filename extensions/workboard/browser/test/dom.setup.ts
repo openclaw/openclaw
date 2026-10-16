@@ -2,12 +2,15 @@ import { afterEach, beforeEach, vi } from "vitest";
 import { installDomComponents } from "./dom-host.ts";
 import { workboardTestHost } from "./host.setup.ts";
 
-const hasNativeHidePopover = typeof HTMLElement.prototype.hidePopover === "function";
+const missingPopoverMethods = (["showPopover", "hidePopover"] as const).filter(
+  (method) => typeof HTMLElement.prototype[method] !== "function",
+);
 beforeEach(() => {
   // The unit DOM has no top layer. Browser coverage owns native dismissal behavior.
-  if (!hasNativeHidePopover) {
-    Object.defineProperty(HTMLElement.prototype, "hidePopover", {
+  for (const method of missingPopoverMethods) {
+    Object.defineProperty(HTMLElement.prototype, method, {
       configurable: true,
+      writable: true,
       value: vi.fn(),
     });
   }
@@ -16,7 +19,7 @@ beforeEach(() => {
 
 afterEach(() => {
   document.body.replaceChildren();
-  if (!hasNativeHidePopover) {
-    Reflect.deleteProperty(HTMLElement.prototype, "hidePopover");
+  for (const method of missingPopoverMethods) {
+    Reflect.deleteProperty(HTMLElement.prototype, method);
   }
 });

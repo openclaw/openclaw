@@ -8,7 +8,7 @@ extension OpenClawChatViewModel {
     {
         let byID = Dictionary((activity ?? []).map { ($0.messageId, $0.items) }, uniquingKeysWith: { _, next in next })
         let decoded = raw.compactMap { item in
-            (try? ChatPayloadDecoding.decode(item, as: OpenClawChatMessage.self))
+            (try? GatewayPayloadDecoding.decode(item, as: OpenClawChatMessage.self))
                 .map { Self.stripInboundMetadata(from: $0) }
         }
         return Self.dedupeMessages(decoded.map { message in
@@ -36,15 +36,18 @@ extension OpenClawChatViewModel {
     static func messageContentFingerprint(for message: OpenClawChatMessage) -> String {
         message.content.map { item in
             let type = (item.type ?? "text").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let text = (item.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let id = (item.id ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let name = (item.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let fileName = (item.fileName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let artifactId = (item.artifactId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let url = (item.url ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let openUrl = (item.openUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let mimeType = (item.mimeType ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return [type, text, id, name, fileName, artifactId, url, openUrl, mimeType]
+            return [
+                type,
+                item.text,
+                item.id,
+                item.name,
+                item.fileName,
+                item.artifactId,
+                item.url,
+                item.openUrl,
+                item.mimeType,
+            ]
+                .map { ($0 ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
                 .joined(separator: "\\u{001F}")
         }.joined(separator: "\\u{001E}")
     }
@@ -52,11 +55,9 @@ extension OpenClawChatViewModel {
     static func finalMessageContentFingerprint(for message: OpenClawChatMessage) -> String {
         message.content.map { item in
             let type = (item.type ?? "text").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let text = (item.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let artifactId = (item.artifactId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let url = (item.url ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let openUrl = (item.openUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return [type, text, artifactId, url, openUrl].joined(separator: "\\u{001F}")
+            return [type, item.text, item.artifactId, item.url, item.openUrl]
+                .map { ($0 ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
+                .joined(separator: "\\u{001F}")
         }.joined(separator: "\\u{001E}")
     }
 
@@ -515,7 +516,7 @@ extension OpenClawChatViewModel {
     {
         guard !previous.isEmpty, !incoming.isEmpty else { return incoming }
 
-        var previousMessagesByKey: [String: [OpenClawChatMessage]] = [:]
+        var previousMessagesByKey: [String: ArraySlice<OpenClawChatMessage>] = [:]
         for message in previous {
             guard let key = Self.messageIdentityKey(for: message) else { continue }
             previousMessagesByKey[key, default: []].append(message)
@@ -523,16 +524,9 @@ extension OpenClawChatViewModel {
 
         return incoming.map { message in
             guard let key = Self.messageIdentityKey(for: message),
-                  var matches = previousMessagesByKey[key],
-                  let existing = matches.first
+                  let existing = previousMessagesByKey[key]?.popFirst()
             else {
                 return message
-            }
-            matches.removeFirst()
-            if matches.isEmpty {
-                previousMessagesByKey.removeValue(forKey: key)
-            } else {
-                previousMessagesByKey[key] = matches
             }
             guard existing.id != message.id else { return message }
             return Self.adoptingCanonicalMessage(message, over: existing)
@@ -641,6 +635,39 @@ extension OpenClawChatViewModel {
         return Self.dedupeMessages(reconciled)
     }
 
+    /// Retained local rows keep their place after their nearest surviving predecessor, or before their nearest
+    /// surviving successor when no predecessor survives. A row with neither is newer than every history row and
+    /// goes to the end. Appending them moved unpersisted voice consult answers below every later turn.
+    static func insertingRetainedMessages(
+        _ retainedIDs: Set<UUID>,
+        from previous: [OpenClawChatMessage],
+        into reconciled: [OpenClawChatMessage]) -> [OpenClawChatMessage]
+    {
+        var result = reconciled
+        let reconciledIDs = Set(reconciled.map(\.id))
+        var present = reconciledIDs
+        var anchor: UUID?
+        for (offset, message) in previous.enumerated() {
+            if present.contains(message.id) {
+                anchor = message.id
+            } else if retainedIDs.contains(message.id) {
+                let index = if let anchor, let position = result.firstIndex(where: { $0.id == anchor }) {
+                    result.index(after: position)
+                } else if let successor = previous[(offset + 1)...].first(where: { reconciledIDs.contains($0.id) }),
+                          let position = result.firstIndex(where: { $0.id == successor.id })
+                {
+                    position
+                } else {
+                    result.endIndex
+                }
+                result.insert(message, at: index)
+                present.insert(message.id)
+                anchor = message.id
+            }
+        }
+        return result
+    }
+
     static func dedupeMessages(_ messages: [OpenClawChatMessage]) -> [OpenClawChatMessage] {
         var seen = Set<String>()
         return messages.filter { message in
@@ -739,6 +766,14 @@ extension OpenClawChatViewModel {
         } else {
             Self.reconcileMessageIDs(previous: self.messages, incoming: incoming)
         }
+        // A retained row that precedes a retained provisional answer keeps its place before it. A lagging
+        // snapshot can lack both a submitted question and its answer, and appending only one reverses them.
+        // Keep the existing tail placement for retained rows after the last answer.
+        let lastAnswerIndex = self.messages.lastIndex { unmatchedProvisionalFinalIDs.contains($0.id) }
+        let placedRetainedIDs = lastAnswerIndex.map { index in
+            Set(self.messages[...index].map(\.id)).intersection(retainedMessageIDs)
+        } ?? []
+        nextMessages = Self.insertingRetainedMessages(placedRetainedIDs, from: self.messages, into: nextMessages)
         let reconciledMessageIDs = Set(nextMessages.map(\.id))
         nextMessages.append(contentsOf: self.messages.filter { message in
             retainedMessageIDs.contains(message.id) && !reconciledMessageIDs.contains(message.id)
@@ -786,6 +821,7 @@ extension OpenClawChatViewModel {
         // is written through so the next cold open pre-paints current rows.
         self.hasAppliedLiveHistory = true
         self.isShowingCachedTranscript = false
+        self.syncSessionReactions()
         // An empty post-send refresh is incomplete by contract: reconciliation
         // preserves the visible transcript, so preserve its last canonical cache too.
         if !preservingOptimisticLocalMessages || !incoming.isEmpty {

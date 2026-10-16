@@ -1,4 +1,3 @@
-// Message command registration: core send/read/manage actions plus channel-specific admin helpers.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -17,7 +16,6 @@ import { registerMessageSendCommand } from "./message/register.send.js";
 import { registerMessageThreadCommands } from "./message/register.thread.js";
 import { applyParentDefaultHelpAction } from "./parent-default-help.js";
 
-/** Register the `message` command group with shared channel option helpers. */
 export function registerMessageCommands(program: Command, ctx: ProgramContext) {
   const message = program
     .command("message")

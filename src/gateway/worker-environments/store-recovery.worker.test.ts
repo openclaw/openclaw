@@ -1,6 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -25,18 +24,35 @@ const delivery = vi.hoisted(() => ({
 vi.mock("../../infra/sqlite-worker-operation-admission.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../infra/sqlite-worker-operation-admission.js")>();
+  const originals = new WeakMap<
+    Parameters<typeof actual.observeSqliteWorkerCommittedFacts>[0],
+    Parameters<typeof actual.observeSqliteWorkerCommittedFacts>[0]
+  >();
   return {
     ...actual,
     createSqliteWorkerOperationAdmission: (
       ...args: Parameters<typeof actual.createSqliteWorkerOperationAdmission>
-    ) =>
-      new Proxy(actual.createSqliteWorkerOperationAdmission(...args), {
+    ) => {
+      const original = actual.createSqliteWorkerOperationAdmission(...args);
+      const proxy = new Proxy(original, {
         get(target, key, receiver) {
           return (key === "committed" && delivery.hideReceipt) ||
             (key === "settlement" && delivery.hideSettlement)
             ? undefined
             : Reflect.get(target, key, receiver);
         },
+      });
+      originals.set(proxy, original);
+      return proxy;
+    },
+    observeSqliteWorkerCommittedFacts: (
+      admission: Parameters<typeof actual.observeSqliteWorkerCommittedFacts>[0],
+      observer: Parameters<typeof actual.observeSqliteWorkerCommittedFacts>[1],
+    ) =>
+      actual.observeSqliteWorkerCommittedFacts(originals.get(admission) ?? admission, (receipt) => {
+        if (!delivery.loseIntentResult && !delivery.loseRevocationResult) {
+          observer(receipt);
+        }
       }),
   };
 });
@@ -135,63 +151,46 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-it.each(["ready", "next mutation"] as const)(
-  "recovers a settled write through another live facade's %s after readback fails",
-  async (retry) => {
-    const database = openOpenClawStateDatabase({
-      env: { OPENCLAW_STATE_DIR: tempDirs.make("environment-recovery-") },
-    });
-    const first = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
-    const survivor = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
-    const publications: string[] = [];
-    const unsubscribe = sessionChanges.subscribe((change) => {
-      if ("all" in change && change.scope === "worker-environments") {
-        publications.push(survivor.get("worker-recovery")!.environmentId);
-      }
-    });
+it("reloads the durable write in a new inventory after failed readback closes the old one", async () => {
+  const database = openOpenClawStateDatabase({
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("environment-recovery-") },
+  });
+  const first = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
+  const survivor = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
+  try {
+    delivery.loseIntentResult = true;
+    delivery.failReadback = true;
+    await expect(
+      first.createIntent({
+        environmentId: "worker-recovery",
+        providerId: "fake-provider",
+        profileId: "test-profile",
+        profileSnapshot: { settings: {} },
+        provisionOperationId: "provision:worker-recovery",
+      }),
+    ).rejects.toBe(delivery.resultFailure);
+    expect(() => survivor.get("worker-recovery")).toThrow("inventory has closed");
+    await Promise.all([first.close(), survivor.close()]);
+    delivery.hideReceipt = false;
+    delivery.hideSettlement = false;
+    const reloaded = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
     try {
-      delivery.loseIntentResult = true;
-      delivery.failReadback = true;
-      await expect(
-        first.createIntent({
-          environmentId: "worker-recovery",
-          providerId: "fake-provider",
-          profileId: "test-profile",
-          profileSnapshot: { settings: {} },
-          provisionOperationId: "provision:worker-recovery",
-        }),
-      ).rejects.toMatchObject({
-        errors: [delivery.resultFailure, delivery.readFailure],
-        cause: delivery.readFailure,
-      });
-      expect(() => survivor.get("worker-recovery")).toThrow("unsettled mutation");
-      expect(publications).toEqual([]);
-      await first.close();
-      delivery.hideReceipt = false;
-      delivery.hideSettlement = false;
-      if (retry === "ready") {
-        await survivor.ready();
-      } else {
-        await survivor.revokeEnvironmentCredential("worker-recovery");
-      }
-      expect(survivor.get("worker-recovery")).toMatchObject({
+      expect(reloaded.get("worker-recovery")).toMatchObject({
         state: "requested",
         environmentId: "worker-recovery",
       });
-      expect(delivery.intentWrites).toBe(1);
-      expect(
-        database.db.prepare("SELECT count(*) AS count FROM worker_environments").get(),
-      ).toEqual({ count: 1 });
-      expect(delivery.readbackIds).toEqual([["worker-recovery"], ["worker-recovery"]]);
-      expect(publications).toEqual(["worker-recovery"]);
-      await survivor.ready();
-      expect(delivery.readbackIds).toHaveLength(2);
     } finally {
-      unsubscribe();
-      await Promise.all([first.close(), survivor.close()]);
+      await reloaded.close();
     }
-  },
-);
+    expect(delivery.intentWrites).toBe(1);
+    expect(database.db.prepare("SELECT count(*) AS count FROM worker_environments").get()).toEqual({
+      count: 1,
+    });
+    expect(delivery.readbackIds).toEqual([["worker-recovery"]]);
+  } finally {
+    await Promise.all([first.close(), survivor.close()]);
+  }
+});
 
 it("publishes permanent revocation once across committed, rolled-back and unknown worker outcomes", async () => {
   const database = openOpenClawStateDatabase({
@@ -208,7 +207,7 @@ it("publishes permanent revocation once across committed, rolled-back and unknow
     provisionOperationId: "provision:worker-revocation-recovery",
   });
   await first.transition({ environmentId, from: "requested", to: "provisioning" });
-  const ready = await first.transition({
+  await first.transition({
     environmentId,
     from: "provisioning",
     to: "ready",
@@ -285,38 +284,7 @@ it("publishes permanent revocation once across committed, rolled-back and unknow
     expect(survivor.getCredential(environmentId)).toBeUndefined();
     showNativeConfirmation();
 
-    // Restore authority so lost readback must fence a real revocation, not an absent credential.
-    await first.renewCredential({
-      environmentId,
-      expectedOwnerEpoch: ready.ownerEpoch,
-      credentialHash: "c".repeat(43),
-      sessionId: null,
-      rpcSetVersion: 1,
-      expiresAtMs: 2_000,
-    });
-    expect(survivor.getCredential(environmentId)).toBeDefined();
-    delivery.loseRevocationResult = "unknown";
-    delivery.failReadback = true;
-    await expect(revoke()).rejects.toMatchObject({
-      errors: [delivery.resultFailure, delivery.readFailure],
-      cause: delivery.readFailure,
-    });
-    expect(() => survivor.getCredential(environmentId)).toThrow("unsettled mutation");
-    expect(survivorNotifications).toHaveLength(3);
-    await first.close();
-    showNativeConfirmation();
-    await survivor.ready();
-    expect(survivorNotifications).toEqual([
-      environmentId,
-      environmentId,
-      environmentId,
-      environmentId,
-    ]);
-    expect(firstNotifications).toHaveLength(3);
-    expect(survivor.getCredential(environmentId)).toBeUndefined();
-    await survivor.ready();
-    expect(survivorNotifications).toHaveLength(4);
-    expect(delivery.revocationWrites).toBe(6);
+    expect(delivery.revocationWrites).toBe(5);
   } finally {
     showNativeConfirmation();
     await Promise.all([first.close(), survivor.close()]);

@@ -30,14 +30,12 @@ import {
 import { sliceMarkdownIR, sliceMarkdownIRRanges } from "./ir-slice.js";
 import { computeNextMappedBlockStarts, sourceBlockNewlineCount } from "./ir-source-spacing.js";
 import {
-  clampAnnotationSpans,
-  clampLinkSpans,
-  clampStyleSpans,
   copyMarkdownLinkSpan,
   createMarkdownLinkSpan,
   createStyleSpan,
-  mergeAnnotationSpans,
-  mergeStyleSpans,
+  sliceAnnotationSpans,
+  sliceLinkSpans,
+  sliceStyleSpans,
   type MarkdownAnnotationSpan,
   type MarkdownLinkSpan,
   type MarkdownStyle,
@@ -511,7 +509,7 @@ function injectSpoilersIntoInline(tokens: MarkdownToken[]): MarkdownToken[] {
   const usableDelims = totalDelims - (totalDelims % 2);
 
   const result: MarkdownToken[] = [];
-  const state = { spoilerOpen: false };
+  let spoilerOpen = false;
   let consumedDelims = 0;
 
   for (const token of tokens) {
@@ -530,9 +528,7 @@ function injectSpoilersIntoInline(tokens: MarkdownToken[]): MarkdownToken[] {
     while (index < content.length) {
       const next = content.indexOf("||", index);
       if (next === -1) {
-        if (index < content.length) {
-          result.push(createTextToken(token, content.slice(index)));
-        }
+        result.push(createTextToken(token, content.slice(index)));
         break;
       }
       if (consumedDelims >= usableDelims) {
@@ -543,9 +539,9 @@ function injectSpoilersIntoInline(tokens: MarkdownToken[]): MarkdownToken[] {
         result.push(createTextToken(token, content.slice(index, next)));
       }
       consumedDelims += 1;
-      state.spoilerOpen = !state.spoilerOpen;
+      spoilerOpen = !spoilerOpen;
       result.push({
-        type: state.spoilerOpen ? "spoiler_open" : "spoiler_close",
+        type: spoilerOpen ? "spoiler_open" : "spoiler_close",
       });
       index = next + 2;
     }
@@ -583,21 +579,14 @@ function openStyle(state: RenderState, style: MarkdownStyle) {
   target.openStyles.push({ style, start: target.text.length });
 }
 
-function closeStyle(
-  state: RenderState,
-  style: MarkdownStyle,
-  options?: { trimTrailingParagraphSeparator?: boolean },
-) {
+function closeStyle(state: RenderState, style: MarkdownStyle, rangeEnd?: number) {
   const target = resolveRenderTarget(state);
   for (let i = target.openStyles.length - 1; i >= 0; i -= 1) {
     const open = target.openStyles.at(i);
     if (open?.style === style) {
       const start = open.start;
       target.openStyles.splice(i, 1);
-      const end =
-        options?.trimTrailingParagraphSeparator && target.text.endsWith("\n\n")
-          ? target.text.length - 2
-          : target.text.length;
+      const end = rangeEnd ?? target.text.length;
       if (end > start) {
         target.styles.push({ start, end, style });
       }
@@ -741,11 +730,6 @@ function renderInlineCode(state: RenderState, content: string) {
   target.styles.push({ start, end: start + content.length, style: "code" });
 }
 
-function resolveFenceLanguage(info: string | undefined): string | undefined {
-  const language = info?.trim().split(/\s+/, 1)[0]?.trim();
-  return language || undefined;
-}
-
 function renderCodeBlock(
   state: RenderState,
   content: string,
@@ -755,13 +739,13 @@ function renderCodeBlock(
   sourceMap?: [number, number] | null,
   codeClosed?: boolean,
 ) {
-  let code = content ?? "";
+  let code = content;
   if (!code.endsWith("\n")) {
     code = `${code}\n`;
   }
   const target = resolveRenderTarget(state);
   const start = target.text.length;
-  const language = resolveFenceLanguage(info);
+  const language = info?.trim().split(/\s+/, 1)[0] || undefined;
   target.text += code;
   target.styles.push(
     createStyleSpan({
@@ -863,31 +847,15 @@ function appendCell(state: RenderState, cell: MarkdownTableCell) {
   if (!cell.text) {
     return;
   }
-  const start = state.text.length;
-  appendHtmlTags(state, cell, start);
-  state.text += cell.text;
-  for (const span of cell.styles) {
-    state.styles.push({
-      start: start + span.start,
-      end: start + span.end,
-      style: span.style,
-    });
-  }
-  for (const link of cell.links) {
-    state.links.push(
-      copyMarkdownLinkSpan(link, {
-        start: start + link.start,
-        end: start + link.end,
-      }),
-    );
-  }
-  for (const annotation of cell.annotations ?? []) {
-    state.annotations.push({
-      ...annotation,
-      start: start + annotation.start,
-      end: start + annotation.end,
-    });
-  }
+  appendMarkdownIR(
+    state,
+    copyHtmlTags(cell, {
+      text: cell.text,
+      styles: cell.styles.map(({ start, end, style }) => ({ start, end, style })),
+      links: cell.links.map((link) => copyMarkdownLinkSpan(link)),
+      annotations: cell.annotations?.map((annotation) => ({ ...annotation })),
+    }),
+  );
 }
 
 function collectTableBlock(
@@ -929,6 +897,8 @@ function renderTable(state: RenderState) {
   const rows = table.rows.map((row) => row.map(trimCell));
   if (state.tableMode === "block") {
     collectTableBlock(state, table, headers, rows);
+    // Reserve a coordinate so later siblings cannot share this table's container boundary.
+    state.text += "\n";
     return;
   }
   if (state.tableMode === "bullets") {
@@ -1082,12 +1052,13 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         openStyle(state, "blockquote");
         break;
       case "blockquote_close": {
-        closeStyle(state, "blockquote", { trimTrailingParagraphSeparator: true });
         const blockquote = state.blockquoteStack.pop();
         const end = Math.max(
           blockquote?.start ?? 0,
           state.text.endsWith("\n\n") ? state.text.length - 2 : state.text.length,
+          (state.collectedTables.at(-1)?.placeholderOffset ?? -1) + 1,
         );
+        closeStyle(state, "blockquote", end);
         if (blockquote) {
           state.blocks.push({ kind: "blockquote", ...blockquote, end });
         }
@@ -1399,7 +1370,7 @@ export function markdownToIRWithMeta(
   renderTokens(tokens as MarkdownToken[], state);
   closeRemainingStyles(state);
 
-  // Preserve trailing whitespace inside code; trim generated trailing separators.
+  // Keep code whitespace and native-table coordinates; trim generated separators.
   const trimmedText = state.text.trimEnd();
   const trimmedLength = trimmedText.length;
   let codeEnd = 0;
@@ -1409,10 +1380,14 @@ export function markdownToIRWithMeta(
     }
     codeEnd = Math.max(codeEnd, span.end);
   }
-  const finalLength = Math.max(trimmedLength, codeEnd);
+  const finalLength = Math.max(
+    trimmedLength,
+    codeEnd,
+    (state.collectedTables.at(-1)?.placeholderOffset ?? -1) + 1,
+  );
   const finalText =
     finalLength === state.text.length ? state.text : state.text.slice(0, finalLength);
-  const annotations = mergeAnnotationSpans(clampAnnotationSpans(state.annotations, finalLength));
+  const annotations = sliceAnnotationSpans(state.annotations, 0, finalLength);
   const listItems = state.listItems.flatMap((item) => {
     const listMarker = item.listMarker
       ? sliceListMarker(item.listMarker, 0, finalLength)
@@ -1454,8 +1429,8 @@ export function markdownToIRWithMeta(
 
   const ir: MarkdownIR = {
     text: finalText,
-    styles: mergeStyleSpans(clampStyleSpans(state.styles, finalLength)),
-    links: clampLinkSpans(state.links, finalLength),
+    styles: sliceStyleSpans(state.styles, 0, finalLength),
+    links: sliceLinkSpans(state.links, 0, finalLength),
     ...(annotations.length > 0 ? { annotations } : {}),
     ...(listItems.length > 0 ? { listItems } : {}),
   };

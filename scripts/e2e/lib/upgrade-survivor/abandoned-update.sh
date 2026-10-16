@@ -1,5 +1,21 @@
 #!/usr/bin/env bash
 
+record_abandoned_update_repair() {
+  local prefix="$1" repair_json="$2" repair_err="$3" status_prefix="$4"
+  local helper="scripts/e2e/lib/upgrade-survivor/abandoned-update.mjs"
+  node "$helper" service "$SYSTEMCTL_SHIM_PID_FILE" "$SYSTEMCTL_SHIM_LOG" \
+    "$ARTIFACT_ROOT/$prefix-service-before.json"
+  local repair_status=0 status_status=0
+  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update repair --yes --json \
+    >"$repair_json" 2>"$repair_err" || repair_status=$?
+  printf '%s\n' "$repair_status" >"$ARTIFACT_ROOT/$prefix.exit"
+  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update status --json \
+    >"$ARTIFACT_ROOT/$status_prefix.json" 2>"$ARTIFACT_ROOT/$status_prefix.err" || status_status=$?
+  printf '%s\n' "$status_status" >"$ARTIFACT_ROOT/$status_prefix.exit"
+  node "$helper" service "$SYSTEMCTL_SHIM_PID_FILE" "$SYSTEMCTL_SHIM_LOG" \
+    "$ARTIFACT_ROOT/$prefix-service-after.json"
+}
+
 # Uses the published updater and the survivor's real Gateway/systemd fixture.
 run_abandoned_update_survivor() {
   if { [ "$baseline_version" != "2026.9.4" ] && [ "$baseline_version" != "2026.9.3" ]; } || [ "$UPDATE_RESTART_MODE" != "auto-auth" ]; then
@@ -20,8 +36,11 @@ run_abandoned_update_survivor() {
   phase package-identities node "$helper" packages "$CANDIDATE_SPEC" "$(package_root)" "$ARTIFACT_ROOT"
   phase prepare-update-restart-probe prepare_update_restart_probe
   # The shipped ledger table is first-use-only, so let its own CLI create it.
-  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update --dry-run --yes --no-restart \
-    --tag "$(candidate_update_spec)" --json >"$ARTIFACT_ROOT/baseline-preview.json" 2>"$ARTIFACT_ROOT/baseline-preview.err"
+  local preview_args=(update --dry-run --yes --no-restart --tag "$(candidate_update_spec)" --json)
+  if candidate_requires_stable_channel "$candidate_version"; then
+    preview_args+=(--channel stable)
+  fi
+  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw "${preview_args[@]}" >"$ARTIFACT_ROOT/baseline-preview.json" 2>"$ARTIFACT_ROOT/baseline-preview.err"
   phase update-candidate update_candidate
   phase assert-candidate-build node "$helper" installed "$(package_root)" "$ARTIFACT_ROOT"
   if [ "$update_repair_required" != "0" ]; then
@@ -36,37 +55,16 @@ run_abandoned_update_survivor() {
   # Seed repair's legacy input after that separate shipped-parent upgrade completes.
   phase seed-abandoned-run node "$helper" seed "$OPENCLAW_STATE_DIR" "$ARTIFACT_ROOT"
   phase assert-no-automatic-recovery node "$helper" preserved "$OPENCLAW_STATE_DIR" "$ARTIFACT_ROOT"
-  node "$helper" service "$SYSTEMCTL_SHIM_PID_FILE" "$SYSTEMCTL_SHIM_LOG" \
-    "$ARTIFACT_ROOT/repair-service-before.json"
-
-  local repair_status=0 status_status=0
-  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update repair --yes --json \
-    >"$REPAIR_JSON" 2>"$ARTIFACT_ROOT/repair.err" || repair_status=$?
-  printf '%s\n' "$repair_status" >"$ARTIFACT_ROOT/repair.exit"
-  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update status --json \
-    >"$ARTIFACT_ROOT/update-status.json" 2>"$ARTIFACT_ROOT/update-status.err" || status_status=$?
-  printf '%s\n' "$status_status" >"$ARTIFACT_ROOT/update-status.exit"
-  node "$helper" service "$SYSTEMCTL_SHIM_PID_FILE" "$SYSTEMCTL_SHIM_LOG" \
-    "$ARTIFACT_ROOT/repair-service-after.json"
+  record_abandoned_update_repair repair "$REPAIR_JSON" "$ARTIFACT_ROOT/repair.err" update-status
   # Save both outcomes before assertions so the same fixture retains the origin/main refusal.
   phase assert-ledger-recovery node "$helper" recovered "$OPENCLAW_STATE_DIR" "$ARTIFACT_ROOT"
   phase repaired-gateway-probes check_gateway_probes
   phase repaired-gateway-status check_gateway_status
 
   phase seed-post-core-run node "$helper" seed-post-core "$OPENCLAW_STATE_DIR" "$ARTIFACT_ROOT"
-  node "$helper" service "$SYSTEMCTL_SHIM_PID_FILE" "$SYSTEMCTL_SHIM_LOG" \
-    "$ARTIFACT_ROOT/full-repair-service-before.json"
-  repair_status=0
-  status_status=0
   # Keep the full-repair outcome in the diagnostic owner's retained filenames.
-  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update repair --yes --json \
-    >"$ARTIFACT_ROOT/recovery-update.json" 2>"$ARTIFACT_ROOT/recovery-update.err" || repair_status=$?
-  printf '%s\n' "$repair_status" >"$ARTIFACT_ROOT/full-repair.exit"
-  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update status --json \
-    >"$ARTIFACT_ROOT/full-repair-status.json" 2>"$ARTIFACT_ROOT/full-repair-status.err" || status_status=$?
-  printf '%s\n' "$status_status" >"$ARTIFACT_ROOT/full-repair-status.exit"
-  node "$helper" service "$SYSTEMCTL_SHIM_PID_FILE" "$SYSTEMCTL_SHIM_LOG" \
-    "$ARTIFACT_ROOT/full-repair-service-after.json"
+  record_abandoned_update_repair full-repair "$ARTIFACT_ROOT/recovery-update.json" \
+    "$ARTIFACT_ROOT/recovery-update.err" full-repair-status
   phase assert-post-core-recovery node "$helper" recovered-post-core "$OPENCLAW_STATE_DIR" "$ARTIFACT_ROOT"
   phase restored-gateway-probes check_gateway_probes
   phase restored-gateway-status check_gateway_status
@@ -75,7 +73,7 @@ run_abandoned_update_survivor() {
   deadline_hook="$(node "$helper" deadline-hook "$(package_root)" "$ARTIFACT_ROOT")"
   node "$helper" service "$SYSTEMCTL_SHIM_PID_FILE" "$SYSTEMCTL_SHIM_LOG" \
     "$ARTIFACT_ROOT/deadline-service-before.json"
-  repair_status=0
+  local repair_status=0
   NODE_OPTIONS="${NODE_OPTIONS:-} --import $deadline_hook" \
     openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update repair --yes --json --channel stable --timeout 15 \
     >"$ARTIFACT_ROOT/deadline-repair.json" 2>"$ARTIFACT_ROOT/deadline-repair.err" || repair_status=$?

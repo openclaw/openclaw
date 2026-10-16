@@ -1,8 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { resolveConfigPath } from "../../config/paths.js";
+import { resolveConfigPath, resolveStateDir } from "../../config/paths.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
+import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
+import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
+import { redactSupportString } from "../../logging/diagnostic-support-redaction.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
+import { resolveDebugProxySettings } from "../../proxy-capture/env.js";
+import { defaultRuntime } from "../../runtime.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { createUpdateProgress } from "./progress.js";
@@ -14,25 +21,27 @@ import {
 import { withPrivateStagedPackageInstall } from "./update-command-artifact.js";
 import {
   applyUpdateCandidateAdmission,
-  assertUpdateAdmissionConfigUnchanged,
+  createUpdateCandidateAdmissionReport,
   inspectStagedUpdateCandidateAdmission,
 } from "./update-command-candidate-admission.js";
+import { readUpdateChannelConfig } from "./update-command-config.js";
 import type { UpdateCommandExecutorOptions } from "./update-command-executor-options.js";
-import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import {
+  captureUpdateCommandExecutorAuthority,
+  withUpdateCommandExecutor,
+} from "./update-command-executor.js";
 import {
   acquireLegacyUpdateInitializationFence,
   confirmFreshUpdateDowngrade,
   initializeUpdateStateFromTarget,
   withUpdateInitializationCleanup,
   type InitializedUpdate,
+  type UpdateTargetSelection,
 } from "./update-command-initialization.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
+import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
 import { UnreportedUpdateAdmissionOutcome } from "./update-command-result.js";
-import {
-  assertUpdatePackageActivationAdmission,
-  recordUpdateCommandTarget,
-  type prepareUpdateCommand,
-} from "./update-command-run.js";
+import { recordUpdateCommandTarget, type prepareUpdateCommand } from "./update-command-run.js";
 import { preflightUpdateCommandSchemas, previewUpdateCommand } from "./update-command-schema.js";
 import {
   resolveUpdateTargetEnv,
@@ -54,11 +63,13 @@ export async function initializeAndRunUpdate(
   invocationCwd: string | undefined,
   env: NodeJS.ProcessEnv,
   runInitialized: (initialization: InitializedUpdate) => Promise<void>,
+  policy: { needsInitialization: boolean; captureOriginal: boolean },
   executorOptions?: UpdateCommandExecutorOptions,
 ): Promise<void> {
   const targetEnv = resolveUpdateTargetEnv({ baseEnv: env, nodeRunner: process.execPath });
   const runId = env.OPENCLAW_UPDATE_RUN_ID?.trim() || randomUUID();
   let handleFailure: Awaited<ReturnType<typeof prepareUpdateCommandFailureTriage>> | undefined;
+  let disposePresentation: (() => void) | undefined;
   try {
     await withUpdateCommandTerminalResult(
       (registerRun) =>
@@ -66,46 +77,178 @@ export async function initializeAndRunUpdate(
           withUpdateCommandExecutor(
             runId,
             async (executor) => {
-              const target = await withOwnedManagedUpdateEnv(targetEnv, () =>
-                resolveUpdateCommandTarget(
-                  opts,
-                  recoveryState,
-                  invocationCwd,
-                  prepared,
-                  executor,
-                  prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
-                ),
+              const selection: UpdateTargetSelection | undefined = await withOwnedManagedUpdateEnv(
+                targetEnv,
+                () =>
+                  resolveUpdateCommandTarget(
+                    opts,
+                    recoveryState,
+                    invocationCwd,
+                    prepared,
+                    executor,
+                    prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+                  ),
+              ).then(
+                (target) => (target ? { target } : undefined),
+                (error: unknown) => {
+                  if (
+                    policy.needsInitialization ||
+                    hasCommandProcessCleanupError(error) ||
+                    !(error instanceof UnreportedUpdateAdmissionOutcome)
+                  ) {
+                    throw error;
+                  }
+                  return { refusal: error };
+                },
               );
-              if (!target) {
+              if (!selection) {
                 return;
               }
-              const packageAdmission = { serviceRoot: target.managedServiceRoot };
+              const selectedTarget = selection.target;
+              const candidateAdmissionEnabled =
+                selectedTarget?.updateInstallKind === "package" &&
+                usesCandidateUpdateAdmission(opts, prepared.installKind);
+              // Candidate execution stays in the selected profile; only installed union checks
+              // can need a separate caller projection.
+              const callerLegacyConfigPlan =
+                selectedTarget &&
+                !selectedTarget.managedServiceRootRedirect &&
+                !candidateAdmissionEnabled &&
+                opts.channel &&
+                resolveConfigPath(env) !== resolveConfigPath()
+                  ? (await readUpdateChannelConfig(true)).legacyConfigPlan
+                  : undefined;
+              const { root, serviceRoot } = selection.refusal
+                ? selection.refusal.report
+                : { root: selection.target.root, serviceRoot: selection.target.managedServiceRoot };
+              const packageAdmission = { serviceRoot, dryRun: opts.dryRun };
+              const originalCaptureWarnings: string[] = [];
               const initialization: InitializedUpdate = {
+                ...selection,
                 env,
                 runId,
                 executor,
-                registerRun: async (run) => {
+                callerLegacyConfigPlan,
+                registerRun: async (run, dispose) => {
                   registerRun(run);
-                  if (target.inspectionWarning) {
+                  disposePresentation = dispose;
+                  const recordCompletedStep = (step: string, detail: string) =>
                     recordUpdateCommandTarget(run, {
-                      step: {
-                        step: "warning:installation-inspection",
-                        status: "completed",
-                        detail: target.inspectionWarning,
-                      },
+                      step: { step, status: "completed", detail },
                     });
+                  for (const result of selectedTarget?.preflightSteps ?? []) {
+                    for (const step of updateRunStepsFromResultStep(result)) {
+                      recordUpdateCommandTarget(run, { step });
+                    }
+                  }
+                  if (selectedTarget?.inspectionWarning) {
+                    recordCompletedStep(
+                      "warning:installation-inspection",
+                      selectedTarget.inspectionWarning,
+                    );
+                  }
+                  if (initialization.originalRecoveryCapture) {
+                    recordCompletedStep(
+                      "original-state-capture",
+                      `Original state retained for manual recovery at ${initialization.originalRecoveryCapture.directory}.`,
+                    );
+                  }
+                  for (const [index, detail] of originalCaptureWarnings.entries()) {
+                    recordCompletedStep(`warning:original-state-capture:${index + 1}`, detail);
                   }
                   handleFailure = await prepareUpdateCommandFailureTriage(
                     { ...opts, invocationCwd, run },
                     recoveryState.triageTarget,
                   );
                 },
-                target,
                 databasePath: resolvePathViaExistingAncestorSync(
                   resolveOpenClawStateSqlitePath(env),
                 ),
                 configPath: resolvePathViaExistingAncestorSync(resolveConfigPath(env)),
               };
+              let originalCaptureAttempted = false;
+              const captureOriginal = async () => {
+                if (!policy.captureOriginal || originalCaptureAttempted) {
+                  return;
+                }
+                if (selectedTarget?.downgradeRisk && !initialization.downgradeConfirmed) {
+                  await confirmFreshUpdateDowngrade({
+                    target: selectedTarget,
+                    opts,
+                    controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
+                  });
+                  initialization.downgradeConfirmed = true;
+                }
+                const fence = await executor.enter(root, {
+                  preflight: true,
+                  ...packageAdmission,
+                });
+                const authority = captureUpdateCommandExecutorAuthority(fence, runId);
+                const assertCurrent = () => {
+                  fence.assertCurrent();
+                  assertUpdatePackageActivationAdmission(root, packageAdmission);
+                };
+                const warn = (message: string) => {
+                  const detail = redactSupportString(
+                    message,
+                    { env, stateDir: resolveStateDir(env) },
+                    { maxLength: 1000 },
+                  );
+                  originalCaptureWarnings.push(detail);
+                  defaultRuntime.error(`Warning: ${detail}`);
+                };
+                originalCaptureAttempted = true;
+                try {
+                  const { captureUpdateRecoveryBaseline } =
+                    await import("../../infra/update-recovery-baseline-capture.js");
+                  assertCurrent();
+                  const driver = readUpdateRunDriver();
+                  if (!driver) {
+                    throw new Error("The original update process identity is unavailable.");
+                  }
+                  const captured = await captureUpdateRecoveryBaseline({
+                    runId,
+                    installRoot: authority.installKey,
+                    env,
+                    drivers: [driver],
+                    assertCurrent,
+                    nodeRunner: selectedTarget?.packageUpdateNodeRunner,
+                    timeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+                  });
+                  assertCurrent();
+                  initialization.originalRecoveryCapture = captured.ref;
+                  for (const message of [
+                    ...captured.warnings.map((warning) => warning.message),
+                    ...captured.diagnostics.databaseWarnings,
+                  ].slice(0, 32)) {
+                    warn(message);
+                  }
+                } catch (error) {
+                  assertCurrent();
+                  if (hasCommandProcessCleanupError(error)) {
+                    throw error;
+                  }
+                  // Capture is best effort. Lead with continuation guidance because the
+                  // warning is length-bounded and the nested cause can be long.
+                  warn(
+                    `Original state capture is unavailable; the update continues without it. A running Gateway or another active writer changing state during capture is expected to cause this. Database rollback uses the pre-migration snapshots taken after the Gateway stops. A completed update does not need to be restarted because of this warning. Cause: ${formatErrorMessage(error)}`,
+                  );
+                }
+                assertCurrent();
+                if (resolveDebugProxySettings(env).enabled) {
+                  warn(
+                    "Debug HTTP capture is disabled in this updater process. Doctor may enable capture in its own process after schema readiness is confirmed.",
+                  );
+                }
+              };
+              const runCapturedInitialization = async () => {
+                await captureOriginal();
+                await runInitialized(initialization);
+              };
+              if (initialization.refusal) {
+                return await runCapturedInitialization();
+              }
+              const target = initialization.target;
               if (opts.dryRun) {
                 return await previewUpdateCommand({
                   target,
@@ -119,9 +262,6 @@ export async function initializeAndRunUpdate(
               const artifact =
                 target.updateInstallKind === "package" &&
                 !canResolveRegistryVersionForPackageTarget(target.packageInstallSpec ?? target.tag);
-              const candidateAdmissionEnabled =
-                usesCandidateUpdateAdmission(opts, prepared.installKind) &&
-                target.updateInstallKind === "package";
               const stageParams = (presentation: ReturnType<typeof createUpdateProgress>) => ({
                 reapplyLocalOverrides: opts.reapplyLocalOverrides,
                 root: target.root,
@@ -180,19 +320,9 @@ export async function initializeAndRunUpdate(
                           if (!(error instanceof UpdatePreMutationError)) {
                             throw error;
                           }
-                          throw new UnreportedUpdateAdmissionOutcome({
-                            root: target.root,
-                            mode: target.mode,
-                            installKind: target.updateInstallKind,
-                            opts,
-                            controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
-                            reason: error.reason,
-                            message: error.message,
-                            nextAction: error.nextAction,
-                            failureFacts: error.failureFacts,
-                            stepResult: error.stepResult,
-                            recoverySteps: error.recoverySteps,
-                          });
+                          throw new UnreportedUpdateAdmissionOutcome(
+                            createUpdateCandidateAdmissionReport({ target, opts, prepared }, error),
+                          );
                         }
                       },
                     }
@@ -201,7 +331,7 @@ export async function initializeAndRunUpdate(
               const runSelectedTarget = async () => {
                 assertUpdatePackageActivationAdmission(target.root, packageAdmission);
                 if (target.updateInstallKind !== "package") {
-                  return await runInitialized(initialization);
+                  return await runCapturedInitialization();
                 }
                 const metadata = await resolveFreshUpdateMetadata(target);
                 if (!metadata) {
@@ -209,38 +339,25 @@ export async function initializeAndRunUpdate(
                 }
                 const { version: targetVersion, schemaVersions: schemas } = metadata;
                 if (schemas.state >= OPENCLAW_STATE_SCHEMA_VERSION && !artifact) {
-                  return await runInitialized(initialization);
+                  return await runCapturedInitialization();
                 }
                 const timeoutMs = prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
-                const selectedStoredChannel = target.storedChannel;
                 const candidateAdmissionChecks =
                   initialization.candidateAdmission?.verdict?.verdict === "admit"
                     ? initialization.candidateAdmission.verdict.facts.checks.map(
                         (check) => check.name,
                       )
                     : undefined;
-                const checkSchemas = async (phase?: "before" | "after") => {
-                  const { readUpdateChannelConfig } = await import("./update-command-config.js");
+                const checkSchemas = async () => {
                   const config = await withOwnedManagedUpdateEnv(env, () =>
                     readUpdateChannelConfig(Boolean(opts.channel), {
                       tolerateReadFailure: candidateAdmissionChecks?.includes("config"),
                     }),
                   );
-                  if (candidateAdmissionChecks?.includes("config") && phase !== "after") {
-                    assertUpdateAdmissionConfigUnchanged(
-                      target.configSnapshot,
-                      config.configSnapshot,
-                    );
-                  }
-                  if (!opts.channel && config.storedChannel !== selectedStoredChannel) {
-                    await target.refuseUpdate(
-                      "update-channel-changed",
-                      "Stored update channel changed after target selection. Rerun the update, or specify --channel explicitly.",
-                    );
-                  }
                   Object.assign(target, config);
                   return await preflightUpdateCommandSchemas({
                     ...target,
+                    callerLegacyConfigPlan,
                     shouldRestart: prepared.shouldRestart,
                     updateStepTimeoutMs: timeoutMs,
                     invocationCwd,
@@ -262,6 +379,7 @@ export async function initializeAndRunUpdate(
                   controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
                 });
                 initialization.downgradeConfirmed = true;
+                await captureOriginal();
                 const runtime = await preparePackageUpdateRuntime({
                   ...target,
                   managedService: schemaPreflight.service,
@@ -280,7 +398,7 @@ export async function initializeAndRunUpdate(
                 }
                 target.packageUpdateNodeRunner = runtime.value.nodeRunner;
                 if (schemas.state >= OPENCLAW_STATE_SCHEMA_VERSION) {
-                  return await runInitialized(initialization);
+                  return await runCapturedInitialization();
                 }
                 const fence = await executor.enter(target.root, {
                   preflight: true,
@@ -323,7 +441,7 @@ export async function initializeAndRunUpdate(
                           invocationCwd,
                           progress: presentation.progress,
                           assertCurrent,
-                          checkSchemas: async (phase) => void (await checkSchemas(phase)),
+                          checkSchemas: async () => void (await checkSchemas()),
                         });
                       } finally {
                         presentation.dispose();
@@ -333,12 +451,15 @@ export async function initializeAndRunUpdate(
                       () => (legacyFence ? legacyFence.run(initialize) : initialize()),
                       () => legacyFence?.release(),
                     );
-                    await runInitialized(initialization);
+                    await runCapturedInitialization();
                   },
                   () => initializationStage?.close(),
                 );
               };
               const runWithSelectedProfile = async () => {
+                if (!policy.needsInitialization) {
+                  return await runCapturedInitialization();
+                }
                 if (artifact) {
                   const { runFreshUpdateArtifact } = await import("./update-command-artifact.js");
                   return await runFreshUpdateArtifact(
@@ -384,5 +505,8 @@ export async function initializeAndRunUpdate(
     // The admitted run's prepared handler outlives both staged cleanup and the
     // executor, so no failure is reported while either mutation owner remains live.
     await handleFailure(error);
+  } finally {
+    // Terminal publication must flush the last committed phases before observation ends.
+    disposePresentation?.();
   }
 }

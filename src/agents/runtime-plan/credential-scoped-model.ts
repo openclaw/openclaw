@@ -7,19 +7,12 @@ import {
   resolveProviderModelMaterializationAuthMode,
   type ProviderModelRouteMaterializationAuthMode,
 } from "../provider-model-route-auth.js";
-import { materializePreparedRuntimeModel } from "./materialize-model.js";
+import { materializePreparedRuntimeModel, type RuntimeRouteModel } from "./materialize-model.js";
 import {
   agentRuntimeAuthPlanMatchesTarget,
   type PreparedAgentRuntimeAuthAttempt,
 } from "./prepare-auth.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";
-
-type RuntimeRouteModel = {
-  provider?: string;
-  id?: string;
-  api?: string | null;
-  baseUrl?: string;
-};
 
 type RuntimeModelAuthSelection =
   | { authProfileId: string }
@@ -184,11 +177,7 @@ export function createPreparedRuntimeModelMaterializer<Model extends RuntimeRout
   providerOwnsDynamicModelRefresh?: boolean;
   /** Optional generation-owned memo; omit to keep run-local caching only. */
   generationRouteModelMemo?: Map<string, Promise<Model>>;
-  resolveModel(request: {
-    config: OpenClawConfig;
-    authProfileId?: string;
-    authProfileMode?: ProviderModelRouteMaterializationAuthMode;
-  }): Promise<{ model?: Model | null; error?: string }>;
+  resolveModel: Parameters<typeof materializePreparedRuntimeModel<Model>>[0]["resolveModel"];
 }) {
   const materializedRouteModels = new WeakMap<AgentRuntimeAuthPlan, Promise<Model>>();
   const materializeUncached = async (

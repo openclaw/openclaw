@@ -106,7 +106,7 @@ describe("maybeRepairGatewayDaemon restart health", () => {
     vi.restoreAllMocks();
   });
 
-  async function runAutoRepair() {
+  async function runAutoRepair(healthOk = false) {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     await maybeRepairGatewayDaemon({
       cfg: { gateway: {} },
@@ -114,10 +114,31 @@ describe("maybeRepairGatewayDaemon restart health", () => {
       prompter: createDoctorPrompter({ runtime, options: { repair: true } }),
       options: { deep: false, repair: true },
       gatewayDetailsMessage: "details",
-      healthOk: false,
+      healthOk,
     });
     return runtime;
   }
+
+  it.each([false, true])(
+    "reports a masked unit without trying installation or restart (healthy=%s)",
+    async (healthy) => {
+      const message =
+        "Service is masked. Run systemctl --user unmask openclaw-gateway.service, then retry.";
+      service.isLoaded.mockResolvedValue(false);
+      service.readRuntime.mockResolvedValue({
+        status: healthy ? "running" : "stopped",
+        detail: message,
+        systemd: { startRefusal: { reason: "masked", message } },
+      });
+
+      await runAutoRepair(healthy);
+
+      expect(note).toHaveBeenCalledWith(message, "Gateway");
+      expect(note).not.toHaveBeenCalledWith("Gateway service not installed.", "Gateway");
+      expect(service.install).not.toHaveBeenCalled();
+      expect(service.restart).not.toHaveBeenCalled();
+    },
+  );
 
   it("returns on the first probe when the restarted Gateway is healthy", async () => {
     const startedAt = performance.now();

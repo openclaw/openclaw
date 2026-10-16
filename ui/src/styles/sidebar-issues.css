@@ -66,11 +66,6 @@
   color: var(--muted);
 }
 
-.sidebar-issues-panel__heading-icon svg {
-  width: 16px;
-  height: 16px;
-}
-
 .sidebar-issues-panel__header-actions {
   display: flex;
   align-items: center;
@@ -119,34 +114,25 @@
 }
 
 .sidebar-issues-panel__tabs {
-  display: block;
+  display: flex;
   flex: none;
-  overflow: hidden;
+  overflow-x: auto;
   background: var(--secondary);
-}
-
-.sidebar-issues-panel__tabs::part(tabs) {
   box-sizing: border-box;
   flex-shrink: 0;
-  width: max-content;
-  min-width: 100%;
+  width: 100%;
   padding-inline: 8px;
 }
 
-.shell--mobile-nav .sidebar-issues-panel__tabs::part(tabs) {
+.shell--mobile-nav .sidebar-issues-panel__tabs {
   gap: 0;
   padding-inline: 0;
 }
 
-.sidebar-issues-panel__tabs wa-tab.hub-tab {
-  /* Keep labels and counts whole; Web Awesome scrolls the row when they no longer fit. */
+.sidebar-issues-panel__tabs .hub-tab {
   flex: 1 0 auto;
-}
-
-.sidebar-issues-panel__tabs wa-tab.hub-tab::part(base) {
   /* Popover tabs are tap targets (mobile sheet); keep a taller hit area than
      the page-hub sub tabs. */
-  width: 100%;
   justify-content: center;
   padding-block: 8px 11px;
 }
@@ -307,15 +293,16 @@ footer.sidebar-issues-panel__mentions-note {
 }
 
 .sidebar-issues-panel__summary:hover,
-.sidebar-issues-panel__details[open] > .sidebar-issues-panel__summary {
-  background: var(--bg-hover);
-}
-
+.sidebar-issues-panel__details[open] > .sidebar-issues-panel__summary,
 .sidebar-issues-panel__details[open] {
   background: var(--bg-hover);
 }
 
-.sidebar-issues-panel__summary:focus-visible {
+.sidebar-issues-panel__summary:focus-visible,
+.sidebar-issues-panel__action:focus-visible,
+.sidebar-issues-panel__navigation-link:focus-visible,
+.sidebar-issues-panel__dismiss:focus-visible,
+.sidebar-approval-row__open-session:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -367,11 +354,6 @@ footer.sidebar-issues-panel__mentions-note {
   color: var(--text);
 }
 
-.sidebar-issues-panel__action:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .sidebar-issues-panel__icon {
   display: inline-grid;
   width: 28px;
@@ -382,6 +364,7 @@ footer.sidebar-issues-panel__mentions-note {
   color: color-mix(in srgb, var(--muted) 72%, transparent);
 }
 
+.sidebar-issues-panel__heading-icon svg,
 .sidebar-issues-panel__icon svg,
 .sidebar-issues-panel__chevron svg {
   width: 16px;
@@ -449,8 +432,6 @@ footer.sidebar-issues-panel__mentions-note {
 
 .sidebar-issues-panel__navigation-link:focus-visible {
   border-radius: var(--radius-sm);
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .sidebar-issues-panel__entity {
@@ -505,11 +486,6 @@ footer.sidebar-issues-panel__mentions-note {
   }
 }
 
-.sidebar-issues-panel__dismiss:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .sidebar-issues-panel__chevron {
   display: inline-flex;
   flex: none;
@@ -538,15 +514,19 @@ footer.sidebar-issues-panel__mentions-note {
   gap: 8px;
 }
 
-.sidebar-update-card__compact-reason {
+.sidebar-update-card__compact-reason,
+.sidebar-mention-row__excerpt {
   display: -webkit-box;
   overflow: hidden;
-  margin: 0;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
   line-height: 1.4;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.sidebar-update-card__compact-reason {
+  margin: 0;
 }
 
 .sidebar-update-card__compact-actions {
@@ -584,14 +564,7 @@ footer.sidebar-issues-panel__mentions-note {
 }
 
 .sidebar-mention-row__excerpt {
-  display: -webkit-box;
-  overflow: hidden;
   margin: 6px 0 0;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.4;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
   overflow-wrap: anywhere;
 }
 
@@ -740,11 +713,6 @@ footer.sidebar-issues-panel__mentions-note {
 .sidebar-approval-row__open-session:hover {
   background: var(--bg-hover);
   color: var(--text);
-}
-
-.sidebar-approval-row__open-session:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .sidebar-approval-row__open-session svg {

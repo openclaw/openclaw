@@ -7,10 +7,6 @@ import { classifyRateLimitWindow } from "../failover/retry-evidence.js";
 import { AgentSessionExtensions } from "./agent-session-extensions.js";
 
 export abstract class AgentSessionExecution extends AgentSessionExtensions {
-  // =========================================================================
-  // Auto-Retry
-  // =========================================================================
-
   /**
    * Check if an error is retryable (overloaded, rate limit, server errors).
    * Context overflow errors are NOT retryable (handled by compaction instead).
@@ -20,7 +16,6 @@ export abstract class AgentSessionExecution extends AgentSessionExtensions {
       return false;
     }
 
-    // Context overflow is handled by compaction, not retry
     const contextWindow = this.model?.contextWindow ?? 0;
     if (isContextOverflow(message, contextWindow)) {
       return false;
@@ -63,14 +58,6 @@ export abstract class AgentSessionExecution extends AgentSessionExtensions {
       errorMessage: message.errorMessage || "Unknown error",
     });
 
-    // Async tool results can settle after the error. Keep them and the durable transcript.
-    const messages = this.agent.state.messages;
-    const failedIndex = messages.findLastIndex((candidate) => candidate === message);
-    if (failedIndex >= 0) {
-      this.agent.state.messages = messages.toSpliced(failedIndex, 1);
-    }
-
-    // Wait with exponential backoff (abortable)
     this.retryAbortController = new AbortController();
     try {
       await sleep(delayMs, this.retryAbortController.signal);
@@ -92,9 +79,7 @@ export abstract class AgentSessionExecution extends AgentSessionExtensions {
     return true;
   }
 
-  /**
-   * Cancel in-progress retry.
-   */
+  /** Cancel an in-progress retry. */
   abortRetry(): void {
     this.retryAbortController?.abort();
   }

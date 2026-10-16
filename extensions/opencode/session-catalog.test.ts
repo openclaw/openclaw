@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import type { SessionTranscriptWriteLockContext } from "openclaw/plugin-sdk/session-transcript-runtime";
+import type { SessionTranscriptWriteContext } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -99,9 +99,9 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal)
     await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-runtime")>();
   return {
     ...actual,
-    withSessionTranscriptWriteLock: async (
+    withSessionTranscriptWrite: async (
       _params: unknown,
-      run: (context: Pick<SessionTranscriptWriteLockContext, "appendMessage">) => Promise<void>,
+      run: (context: Pick<SessionTranscriptWriteContext, "appendMessage">) => Promise<void>,
     ) => {
       await run({
         appendMessage: async ({ message, idempotencyLookup }) => {
@@ -232,9 +232,8 @@ const readPairedNode = (
   params: Omit<CatalogReadParams, "hostId" | "threadId"> = {},
 ) => provider.read({ ...pairedNodeLocator, ...params });
 
-const readTestTranscript = (
-  params: Omit<Parameters<typeof readLocalOpenCodeTranscriptPage>[0], "threadId"> = {},
-) => readLocalOpenCodeTranscriptPage({ threadId: "ses_test", ...params });
+const readTestTranscript = (params: Record<string, unknown> = {}) =>
+  readLocalOpenCodeTranscriptPage({ threadId: "ses_test", ...params });
 
 async function expectRejects(promise: Promise<unknown>, message: string) {
   await expect(promise).rejects.toThrow(message);
@@ -426,17 +425,8 @@ if (args[0] === "--pure" && args[1] === "db" && args.includes("--format") && arg
   process.exitCode = 2;
 }
 `;
-  // Flush and close the executable before exec: a still-open write handle makes
-  // the immediately following spawn fail with ETXTBSY under parallel CI shards.
-  const executableHandle = await fs.open(executable, "w");
-  try {
-    await executableHandle.writeFile(script);
-    await executableHandle.sync();
-  } finally {
-    await executableHandle.close();
-  }
+  await fs.writeFile(`${executable}.js`, script);
   if (process.platform === "win32") {
-    await fs.writeFile(path.join(directory, "opencode.js"), script);
     // This exact direct-forwarder shape is parsed into a Node entrypoint;
     // the batch wrapper itself is never executed through cmd.exe.
     await fs.writeFile(
@@ -444,7 +434,9 @@ if (args[0] === "--pure" && args[1] === "db" && args.includes("--format") && arg
       '@echo off\r\n"%~dp0\\opencode.js" %*\r\n',
     );
   } else {
-    await fs.chmod(executable, 0o755);
+    // A concurrent fork can retain the generated payload's write FD after close.
+    // Execute an immutable inode and let Node read the payload as ordinary data.
+    await fs.symlink(new URL("./test-fixtures/opencode-command.sh", import.meta.url), executable);
   }
   process.env.PATH = `${directory}${path.delimiter}${originalPath ?? ""}`;
   process.env.CATALOG_UNRELATED_ENV = "present";
@@ -645,36 +637,29 @@ describe("OpenCode session catalog", () => {
     });
   });
 
-  itWithCli(
-    "memoizes the CLI database query across cadence and invalidates by config identity",
-    async () => {
-      await installFakeOpenCode();
-      let now = 1_000;
-      const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
-      const configIdentity = {};
-      try {
-        await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity });
-        await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity });
-        expect(processRuntimeMocks.runCommandBuffered).toHaveBeenCalledTimes(2);
+  itWithCli("memoizes the CLI database query until explicit refresh or expiry", async () => {
+    await installFakeOpenCode();
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      await listLocalOpenCodeSessionPage({ limit: 20 });
+      await listLocalOpenCodeSessionPage({ limit: 20 });
+      expect(processRuntimeMocks.runCommandBuffered).toHaveBeenCalledTimes(2);
 
-        now += 31_999;
-        await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity });
-        expect(processRuntimeMocks.runCommandBuffered).toHaveBeenCalledTimes(2);
+      now += 31_999;
+      await listLocalOpenCodeSessionPage({ limit: 20 });
+      expect(processRuntimeMocks.runCommandBuffered).toHaveBeenCalledTimes(2);
 
-        await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity, forceRefresh: true });
-        expect(processRuntimeMocks.runCommandBuffered).toHaveBeenCalledTimes(3);
+      await listLocalOpenCodeSessionPage({ limit: 20 }, { forceRefresh: true });
+      expect(processRuntimeMocks.runCommandBuffered).toHaveBeenCalledTimes(3);
 
-        await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity: {} });
-        expect(processRuntimeMocks.runCommandBuffered).toHaveBeenCalledTimes(4);
-
-        now += 32_001;
-        await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity });
-        expect(processRuntimeMocks.runCommandBuffered).toHaveBeenCalledTimes(6);
-      } finally {
-        nowSpy.mockRestore();
-      }
-    },
-  );
+      now += 32_001;
+      await listLocalOpenCodeSessionPage({ limit: 20 });
+      expect(processRuntimeMocks.runCommandBuffered).toHaveBeenCalledTimes(5);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
 
   itWithCli("hides and rejects Continue when ACP cannot resume OpenCode", async () => {
     await installFakeOpenCode();

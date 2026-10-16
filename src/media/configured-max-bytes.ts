@@ -1,4 +1,3 @@
-// Configured media size helpers resolve maximum byte limits by media kind.
 import { maxBytesForKind, type MediaKind } from "@openclaw/media-core/constants";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -7,6 +6,8 @@ import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { MEDIA_MAX_BYTES } from "./store.js";
 
 const MB = 1024 * 1024;
+/** Native local audio/video displayed by webchat is streamed, independently of channel caps. */
+export const WEBCHAT_LOCAL_MEDIA_MAX_BYTES = 4 * 1024 * MB;
 const TELEGRAM_DEFAULT_MEDIA_MAX_MB = 100;
 type GeneratedMediaKind = Extract<MediaKind, "audio" | "image" | "video">;
 

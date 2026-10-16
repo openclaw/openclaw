@@ -4,6 +4,7 @@ import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import {
   baseDeliveryParams,
   createDeps,
+  createQuickReply,
   LINE_TEST_CFG,
 } from "./auto-reply-delivery.test-helpers.js";
 import { createRuntime } from "./channel.sendPayload.test-support.js";
@@ -33,8 +34,9 @@ const lineData = {
 const fallbackText = "First: A (One)\nB (Two)";
 
 function createOutboundRuntime() {
+  const buildTemplate = buildTemplateMessageFromPayload;
   const { runtime, mocks } = createRuntime();
-  mocks.buildTemplateMessageFromPayload.mockImplementation(buildTemplateMessageFromPayload);
+  mocks.buildTemplateMessageFromPayload.mockImplementation(buildTemplate);
   mocks.resolveTextChunkLimit.mockReturnValue(5000);
   const { pushMessageLine, pushMessagesLine, pushTemplateMessage } = mocks;
 
@@ -110,7 +112,7 @@ describe("LINE carousel fallback delivery", () => {
         {
           type: "text",
           text: fallbackText,
-          quickReply: { items: ["Continue"] },
+          quickReply: createQuickReply("Continue"),
           quoteToken: "q-carousel-quick",
         },
       ],
@@ -171,7 +173,7 @@ describe("LINE carousel fallback delivery", () => {
     expect(pushTemplateMessage).not.toHaveBeenCalled();
     expect(pushMessagesLine).toHaveBeenCalledWith(
       "line:user:1",
-      [{ type: "text", text: fallbackText, quickReply: { items: ["Continue"] } }],
+      [{ type: "text", text: fallbackText, quickReply: createQuickReply("Continue") }],
       expect.any(Object),
     );
   });

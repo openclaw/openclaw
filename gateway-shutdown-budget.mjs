@@ -8,12 +8,12 @@ export const GATEWAY_SHUTDOWN_TIMEOUT_MS =
 export const GATEWAY_SERVICE_STOP_TIMEOUT_MS =
   GATEWAY_SHUTDOWN_TIMEOUT_MS + GATEWAY_SUPERVISOR_EXIT_MARGIN_MS;
 
-export const LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS = 20;
+export const LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS = GATEWAY_SERVICE_STOP_TIMEOUT_MS / 1_000;
 
 // Keep a positive shutdown budget when a supervisor's deadline is under 20s.
 const GATEWAY_SUPERVISOR_EXIT_MARGIN_SHARE = 0.25;
 
-// Preserve the template's 5s drain where possible. Under 20s, trade some cleanup
+// Preserve a legacy job's 5s drain where possible. Under 20s, trade some cleanup
 // reserve for drain; on very short jobs, split the remaining budget in half.
 // Inspection time is debited before this allocation, so a slow probe can also
 // reduce the drain. The measured upgrade tradeoff is documented in restart-recovery.
@@ -38,20 +38,10 @@ export const resolveShutdownReserveMs = (shutdownTimeoutMs) => {
 };
 
 // Escalation graces the Node recovery launcher applies to a stopping child. Kept
-// here rather than in the launcher so the serving Gateway can derive the deadline
-// its parent enforces from the same numbers the parent armed it from.
+// here rather than in the launcher so both use the same escalation policy.
 const RESPAWN_SIGNAL_EXIT_GRACE_MS = 1_000;
 export const RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS = 1_000;
-export const RESPAWN_SIGNAL_HARD_EXIT_GRACE_MS = 1_000;
-
-// A launcher inside OpenClaw's LaunchAgent gets its template deadline; otherwise
-// it uses the generic service stop policy. Its child inherits these markers.
-const resolveRespawnServiceStopTimeoutMs = (env, platform) => {
-  const launchdService = env.OPENCLAW_LAUNCHD_LABEL?.trim();
-  return platform === "darwin" && launchdService && env.XPC_SERVICE_NAME === launchdService
-    ? LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS * 1_000
-    : GATEWAY_SERVICE_STOP_TIMEOUT_MS;
-};
+const RESPAWN_SIGNAL_HARD_EXIT_GRACE_MS = 1_000;
 
 // Every runRespawnedChild call site stamps one of these. The compile-cache
 // marker is also used by a different respawner, but that one refuses foreground
@@ -66,13 +56,12 @@ const RESPAWN_LAUNCHER_MARKER_ENV_VARS = [
 export const isRespawnedByLauncher = (env) =>
   RESPAWN_LAUNCHER_MARKER_ENV_VARS.some((name) => env[name] === "1");
 
-// Shared with the serving Gateway: derive the parent's reap deadline from the
-// same graces, including on the first update while the old launcher is still live.
-export const resolveLauncherStopTimeoutMs = ({ env, platform, foreground }) => {
-  const serviceStopTimeoutMs = resolveRespawnServiceStopTimeoutMs(env, platform);
+// New launchers use the shared service policy. A serving Gateway separately
+// retains the shorter deadline of an unidentified, already-running old launcher.
+export const resolveLauncherStopTimeoutMs = ({ platform, foreground }) => {
   const signalExitGraceMs =
     platform !== "win32" && foreground
-      ? serviceStopTimeoutMs -
+      ? GATEWAY_SERVICE_STOP_TIMEOUT_MS -
         RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS -
         RESPAWN_SIGNAL_HARD_EXIT_GRACE_MS
       : RESPAWN_SIGNAL_EXIT_GRACE_MS;

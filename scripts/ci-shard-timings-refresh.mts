@@ -34,6 +34,7 @@ const jobSchema = z.object({
   started_at: z.string().nullable(),
   completed_at: z.string().nullable(),
   labels: z.array(z.string()),
+  steps: z.array(z.object({ name: z.string() })),
 });
 const groupSchema = z.object({
   shard_name: z.string().min(1),
@@ -156,8 +157,9 @@ function main() {
         if (
           job.status !== "completed" ||
           job.conclusion !== "success" ||
-          !job.name.startsWith("checks-node-") ||
+          !job.steps.some((step) => step.name === "Run Node test shard") ||
           job.name.startsWith("checks-node-compact-") ||
+          job.name.startsWith("checks-node-release-packed-") ||
           !job.labels.includes("ubuntu-24.04") ||
           job.labels.some(
             (label) =>

@@ -111,6 +111,7 @@ async function prepareCronJobUpdateForGateway(
       creatorToolAllowlist: resolvedAuthority.tools,
       currentJob: existingRecord,
       creatorAuthorityComplete: true,
+      creatorHoldsRuntimeAuthority: resolvedAuthority.holdsRuntimeAuthority,
     });
   }
   if (finalPlan.kind !== "ready") {

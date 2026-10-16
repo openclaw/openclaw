@@ -24,17 +24,12 @@ function readWeights(value: unknown, length: number): number[] {
 }
 
 function uniqueId(value: unknown, used: Set<string>, next: () => string): string {
-  const candidate = typeof value === "string" ? value.trim() : "";
-  if (candidate && !used.has(candidate)) {
-    used.add(candidate);
-    return candidate;
+  let candidate = typeof value === "string" ? value.trim() : "";
+  while (!candidate || used.has(candidate)) {
+    candidate = next();
   }
-  let generated = next();
-  while (used.has(generated)) {
-    generated = next();
-  }
-  used.add(generated);
-  return generated;
+  used.add(candidate);
+  return candidate;
 }
 
 export function normalizeChatSplitLayout(value: unknown): ChatSplitLayout | undefined {

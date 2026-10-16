@@ -1,10 +1,6 @@
-// Openai tests cover realtime session secret creation behavior.
 import { describe, expect, it, vi } from "vitest";
 import { openAIRealtimeHost } from "./realtime-host.js";
-import {
-  createOpenAIRealtimeClientSecret,
-  createOpenAIRealtimeTranscriptionClientSecret,
-} from "./realtime-provider-shared.js";
+import { createOpenAIRealtimeClientSecret } from "./realtime-provider-shared.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -101,7 +97,7 @@ describe("createOpenAIRealtimeClientSecret", () => {
     );
 
     await expect(
-      createOpenAIRealtimeTranscriptionClientSecret(
+      createOpenAIRealtimeClientSecret(
         {
           authToken: "sk-test",
           auditContext: "test",
@@ -109,6 +105,7 @@ describe("createOpenAIRealtimeClientSecret", () => {
           authRejectedMessage: "Update the transcription API key",
         },
         openAIRealtimeHost,
+        "OpenAI Realtime transcription",
       ),
     ).rejects.toThrow("Update the transcription API key");
   });

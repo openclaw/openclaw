@@ -3,6 +3,7 @@ import {
   formatRuntimeCacheCount as formatOptionalCount,
 } from "./agentic-parity-cache-usage.js";
 import type { QaParitySuiteSummary } from "./agentic-parity-report.js";
+import { pushQaReportListSection } from "./report.js";
 import type { RuntimeId } from "./runtime-id.js";
 import type { RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
 import { normalizeRuntimePair, resolveRuntimeParityUsagePolicy } from "./runtime-parity.js";
@@ -44,13 +45,9 @@ function percentile(values: readonly number[], p: number): number {
   if (values.length === 0) {
     return 0;
   }
-  const sorted = [...values].toSorted((left, right) => left - right);
+  const sorted = values.toSorted((left, right) => left - right);
   const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
   return sorted[index] ?? 0;
-}
-
-function isLiveProviderMode(providerMode: string | undefined) {
-  return providerMode?.startsWith("live-") === true;
 }
 
 function formatPercent(value: number) {
@@ -278,7 +275,7 @@ export function buildTokenEfficiencyReport(params: {
   const providerMode = params.summary.run?.providerMode;
   const runtimePair = normalizeRuntimePair(params.summary.run?.runtimePair);
   const thresholdPercent = params.thresholdPercent ?? DEFAULT_THRESHOLD_PERCENT;
-  const liveUsage = isLiveProviderMode(providerMode);
+  const liveUsage = providerMode?.startsWith("live-") === true;
   const usageSource: TokenEfficiencyRow["usageSource"] = liveUsage ? "live-usage" : "mock-estimate";
   const parityResults = params.summary.scenarios
     .map((scenario) => scenario.runtimeParity)
@@ -416,26 +413,18 @@ export function renderTokenEfficiencyMarkdownReport(report: TokenEfficiencyRepor
   }
 
   if (report.notApplicableScenarios.length > 0) {
-    lines.push("## Usage Not Applicable", "");
-    for (const scenario of report.notApplicableScenarios) {
-      lines.push(`- ${scenario.scenarioId}: ${scenario.reason}`);
-    }
-    lines.push("");
+    pushQaReportListSection(
+      lines,
+      "Usage Not Applicable",
+      report.notApplicableScenarios.map((scenario) => `${scenario.scenarioId}: ${scenario.reason}`),
+    );
   }
 
   if (report.failures.length > 0) {
-    lines.push("## Gate Failures", "");
-    for (const failure of report.failures) {
-      lines.push(`- ${failure}`);
-    }
-    lines.push("");
+    pushQaReportListSection(lines, "Gate Failures", report.failures);
   }
 
-  lines.push("## Notes", "");
-  for (const note of report.notes) {
-    lines.push(`- ${note}`);
-  }
-  lines.push("");
+  pushQaReportListSection(lines, "Notes", report.notes);
 
   return lines.join("\n");
 }

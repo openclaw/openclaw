@@ -1,5 +1,4 @@
-// Normalizes tool result content for chat transcript rendering.
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 const TOOL_USE_ID_FIELDS = [
@@ -9,10 +8,8 @@ const TOOL_USE_ID_FIELDS = [
   "tool_use_id",
   "toolUseId",
 ] as const;
-type ToolUseIdField = (typeof TOOL_USE_ID_FIELDS)[number];
-
 /** Provider-agnostic chat content block shape used before SDK-specific narrowing. */
-export type ToolContentBlock = Record<string, unknown> & Partial<Record<ToolUseIdField, unknown>>;
+export type ToolContentBlock = Record<string, unknown>;
 
 function normalizeToolContentType(value: unknown): string {
   return typeof value === "string" ? value.toLowerCase() : "";
@@ -70,10 +67,7 @@ function hasToolErrorStatus(value: unknown): boolean {
 }
 
 export function isToolErrorOutput(outputText: string | undefined): boolean {
-  if (!outputText) {
-    return false;
-  }
-  const trimmed = outputText.trim();
+  const trimmed = outputText?.trim();
   if (!trimmed) {
     return false;
   }
@@ -86,16 +80,10 @@ export function isToolErrorOutput(outputText: string | undefined): boolean {
   if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
     return false;
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
+  const obj = safeParseJsonRecord(trimmed);
+  if (!obj) {
     return false;
   }
-  if (!isRecord(parsed)) {
-    return false;
-  }
-  const obj = parsed;
   const explicitErrorFlag = readToolErrorFlag(obj);
   if (explicitErrorFlag !== undefined) {
     return explicitErrorFlag;

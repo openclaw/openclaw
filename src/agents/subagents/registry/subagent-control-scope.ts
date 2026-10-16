@@ -1,5 +1,12 @@
-/** Controller identity, authorization, and controlled-run read scope. */
+import { resolveSubagentLabel } from "../../../auto-reply/reply/subagents-utils.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
+import {
+  execRequestMatches,
+  type ExecRequestIdentity,
+  type ExecRequestOwner,
+} from "../../../infra/exec-request-context.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership.js";
 import {
   isSubagentSessionKey,
@@ -13,51 +20,124 @@ import {
   resolveMainSessionAlias,
 } from "../../tools/sessions-helpers.js";
 import { resolveStoredSubagentCapabilities } from "../spawn/subagent-capabilities.js";
-import type { SessionCapabilityStore } from "../spawn/subagent-session-store.js";
+import type { SessionCapabilityLookup } from "../spawn/subagent-session-store.js";
+import {
+  matchesSubagentChildSessionOwner,
+  resolveSubagentChildAgentId,
+} from "./subagent-child-owner-match.js";
+import type { ResolvedSubagentController } from "./subagent-control.types.js";
+import {
+  readSubagentExecRequestController,
+  type SubagentRequestSessionOrigin,
+} from "./subagent-exec-request-ownership.js";
 import { observeSubagentExecution } from "./subagent-execution-observation.js";
 import { captureSubagentListReadContext, type SubagentListReadContext } from "./subagent-list.js";
-import { getSubagentRunsForRequesterSession, subagentRuns } from "./subagent-registry-memory.js";
-import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
+import {
+  getCurrentSubagentRunOwner,
+  getSubagentRunsForRequesterSession,
+  subagentRuns,
+} from "./subagent-registry-memory.js";
+import {
+  buildSubagentRunReadIndexFromRuns,
+  listRunsForControllerFromRuns,
+  type SubagentRunReadIndex,
+} from "./subagent-registry-queries.js";
 import {
   getLatestLiveSubagentRunByChildSessionKey,
-  listSubagentRunsForController,
   listSubagentRunsForRequester,
 } from "./subagent-registry-read.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import {
-  getSubagentSessionListRunsSnapshotForRead,
+  getSubagentControlRunsSnapshotForRead,
   withSubagentRunReadSnapshot,
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isRequesterSettleWakeForRun } from "./subagent-requester-settle-identity.js";
+import {
+  isSameSubagentRun,
+  isSameSubagentRunOwner,
+  getSubagentRunRuntimeKey,
+  latestSubagentRun,
+} from "./subagent-run-generation.js";
 
-/** Recent-run default window used by subagent control UI/tools. */
 export const DEFAULT_RECENT_MINUTES = 30;
-/** Maximum recent-run window accepted by subagent control UI/tools. */
 export const MAX_RECENT_MINUTES = 24 * 60;
 
-/** Controller identity and capability scope resolved from the caller session. */
-export type ResolvedSubagentController = {
-  controllerSessionKey: string;
-  controllerAgentId?: string;
-  callerSessionKey: string;
-  callerIsSubagent: boolean;
-  controlScope: "children" | "none";
-};
+/** Lifecycle cleanup owns both the requester and its separately scoped controller. */
+export async function prepareSessionSubagentKillSelection(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId: string;
+  assertCurrent?: () => void;
+}) {
+  const controller = { controllerSessionKey: params.sessionKey, controllerAgentId: params.agentId };
+  const ownsRoot = (entry: SubagentRunRecord) =>
+    !ensureSubagentControllerOwnsRun({ cfg: params.cfg, controller, entry }) ||
+    (entry.requesterSessionKey === params.sessionKey &&
+      resolveSubagentRequesterAgentId(params.cfg, entry) === params.agentId);
+  const runs = new Map(
+    [
+      ...listSubagentRunsForRequester(params.sessionKey, { requesterAgentId: params.agentId }),
+      ...listRunsForControllerFromRuns(subagentRuns, params.sessionKey, params.agentId),
+    ].map((entry) => [entry.runId, entry]),
+  );
+  const preparationErrors: string[] = [];
+  for (const entry of runs.values()) {
+    if (
+      entry.execution.status !== "terminal" ||
+      entry.execution.suppressSessionEffects !== true ||
+      entry.pauseReason === "sessions_yield" ||
+      !ownsRoot(entry)
+    ) {
+      continue;
+    }
+    // The old task owns only its notice, never the replacement child's work.
+    const assertCurrent = () => {
+      params.assertCurrent?.();
+      const current = getCurrentSubagentRunOwner(subagentRuns, entry);
+      if (
+        !current ||
+        !ownsRoot(current) ||
+        current.execution.status !== "terminal" ||
+        current.execution.suppressSessionEffects !== true ||
+        current.pauseReason === "sessions_yield"
+      ) {
+        throw new Error("Subagent completion changed during session cleanup; retry.");
+      }
+    };
+    try {
+      const { cancelSubagentRequesterSettleWake } = await import("./subagent-registry.js");
+      assertCurrent();
+      await cancelSubagentRequesterSettleWake(entry, assertCurrent);
+    } catch (error) {
+      if (hasSqliteWorkerOutcomeUnknown(error)) {
+        throw error;
+      }
+      preparationErrors.push(`${resolveSubagentLabel(entry)}: ${formatErrorMessage(error)}`);
+    }
+    runs.delete(entry.runId);
+  }
+  return {
+    cfg: params.cfg,
+    assertCurrent: params.assertCurrent,
+    runs: runs.values(),
+    // Ordinary controller mutations retain their narrower authority. Only an admitted
+    // lifecycle boundary can retire work whose completion belongs to this session.
+    ownsRoot,
+    suppressTaskDelivery: true,
+    preparationErrors,
+  };
+}
 
 /** Resolve caller routing before preparing its persisted capability facts. */
 export function resolveSubagentControllerIdentity(params: {
   cfg: OpenClawConfig;
   agentSessionKey?: string;
   agentId?: string;
-}): Omit<ResolvedSubagentController, "controlScope"> {
-  const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
+}): Omit<ResolvedSubagentController, "controlScope"> & { controllerAgentId: string } {
+  const { alias } = resolveMainSessionAlias(params.cfg);
   const callerRaw = params.agentSessionKey?.trim() || alias;
-  const callerSessionKey = resolveInternalSessionKey({
-    key: callerRaw,
-    alias,
-    mainKey,
-  });
+  const callerSessionKey = resolveInternalSessionKey({ key: callerRaw, alias });
   const controllerAgentId = resolveSessionAgentId({
     config: params.cfg,
     sessionKey: callerSessionKey,
@@ -71,13 +151,12 @@ export function resolveSubagentControllerIdentity(params: {
   };
 }
 
-/** Resolves which subagent runs the caller is allowed to control. */
 export function resolveSubagentController(params: {
   cfg: OpenClawConfig;
   agentSessionKey?: string;
   agentId?: string;
-  capabilityStore?: SessionCapabilityStore;
-}): ResolvedSubagentController {
+  capabilityStore?: SessionCapabilityLookup;
+}): ResolvedSubagentController & { controllerAgentId: string } {
   const identity = resolveSubagentControllerIdentity(params);
   if (!identity.callerIsSubagent) {
     return { ...identity, controlScope: "children" };
@@ -93,14 +172,16 @@ export function resolveSubagentController(params: {
   };
 }
 
-export function listControlledSubagentRunsForTurn(
+function listControlledSubagentRunsForTurn(
+  cfg: OpenClawConfig,
   controller: Pick<ResolvedSubagentController, "controllerSessionKey" | "controllerAgentId">,
   requesterTurnRunId?: string,
 ): SubagentRunRecord[] {
-  const controlledRuns = listSubagentRunsForController(
+  // Cancellation owns only current resident runs; acquire their dispatch holds before yielding.
+  const controlledRuns = listRunsForControllerFromRuns(
+    subagentRuns,
     controller.controllerSessionKey,
-    controller.controllerAgentId,
-  );
+  ).filter((entry) => !ensureSubagentControllerOwnsRun({ cfg, controller, entry }));
   if (requesterTurnRunId === undefined) {
     return controlledRuns;
   }
@@ -109,7 +190,16 @@ export function listControlledSubagentRunsForTurn(
   });
   const runsById = new Map(
     requesterRuns
-      .filter((entry) => getLatestLiveSubagentRunByChildSessionKey(entry.childSessionKey) === entry)
+      .filter((entry) =>
+        isSameSubagentRun(
+          getLatestLiveSubagentRunByChildSessionKey(
+            entry.childSessionKey,
+            undefined,
+            entry.childAgentId,
+          ),
+          entry,
+        ),
+      )
       .map((entry) => [entry.runId, entry]),
   );
   return controlledRuns.filter(
@@ -123,6 +213,144 @@ export function listControlledSubagentRunsForTurn(
         runsById,
       }),
   );
+}
+
+export type ExecRequestSubagentSelection = {
+  runs: SubagentRunRecord[];
+  ownsRoot: (entry: SubagentRunRecord) => boolean;
+  selectPublishedRoot?: (entry: SubagentRunRecord) => boolean;
+  sessionGeneration?: SubagentRequestSessionOrigin["target"];
+  /** Resolve exact authority after the existing kill scope holds its candidates. */
+  prepare?: () => Promise<void>;
+};
+
+/** Freeze native owners before cancellation yields; routed IDs never grant control. */
+export function captureExecRequestSubagentSelection(params: {
+  cfg: OpenClawConfig;
+  controller: ResolvedSubagentController;
+  requesterTurnRunId?: string;
+  owners: readonly ExecRequestOwner[];
+  acceptsRequest?: (identity: Readonly<ExecRequestIdentity>) => boolean;
+  sessionOrigin?: SubagentRequestSessionOrigin;
+  /** Logical candidates reserve dispatch only; preparation replaces them before effects. */
+  candidateOrigin?: {
+    target: Pick<SubagentRequestSessionOrigin["target"], "sessionKey" | "agentId">;
+    acceptsRequest: SubagentRequestSessionOrigin["acceptsRequest"];
+  };
+}): ExecRequestSubagentSelection {
+  const owners = new Set(params.owners);
+  const origin =
+    params.requesterTurnRunId === undefined
+      ? (params.sessionOrigin ?? params.candidateOrigin)
+      : undefined;
+  if (
+    origin &&
+    (origin.target.sessionKey !== params.controller.controllerSessionKey ||
+      origin.target.agentId !== params.controller.controllerAgentId)
+  ) {
+    throw new Error("Native Stop origin does not match its admitted controller.");
+  }
+  const acceptsOrigin = (owner: ExecRequestOwner) =>
+    Boolean(
+      origin && execRequestMatches(owner, origin.target) && origin.acceptsRequest(owner.identity),
+    );
+  const turnIds = params.requesterTurnRunId
+    ? [
+        ...new Set([
+          params.requesterTurnRunId,
+          ...params.owners.flatMap((owner) => [...owner.turnRunIds]),
+        ]),
+      ]
+    : [undefined];
+  type ControllerIdentity = Pick<
+    ResolvedSubagentController,
+    "controllerSessionKey" | "controllerAgentId"
+  >;
+  const selected = new Map<
+    object,
+    {
+      entry: SubagentRunRecord;
+      controller: ControllerIdentity;
+      requestOwners?: ReadonlySet<ExecRequestOwner>;
+    }
+  >();
+  const capture = (
+    entry: SubagentRunRecord,
+    controller: ControllerIdentity,
+    requestOwners?: ReadonlySet<ExecRequestOwner>,
+  ) => {
+    const key = getSubagentRunRuntimeKey(entry);
+    const existing = selected.get(key);
+    if (existing) {
+      if (params.acceptsRequest && requestOwners) {
+        // Refine the same captured run with its exact request owners before cancellation.
+        existing.requestOwners = requestOwners;
+      }
+      return false;
+    }
+    selected.set(key, { entry, controller, requestOwners });
+    return true;
+  };
+  const selectPublishedRoot = (entry: SubagentRunRecord) => {
+    const controller = readSubagentExecRequestController(
+      entry,
+      (owner) => owners.has(owner) && (params.acceptsRequest?.(owner.identity) ?? true),
+    );
+    return controller !== undefined && capture(entry, controller, owners);
+  };
+  let selectedByOrigin = false;
+  for (const runId of turnIds) {
+    for (const entry of listControlledSubagentRunsForTurn(params.cfg, params.controller, runId)) {
+      capture(entry, params.controller);
+    }
+  }
+  if (owners.size > 0 || origin) {
+    for (const entry of subagentRuns.values()) {
+      const controller = readSubagentExecRequestController(entry, (owner) => owners.has(owner));
+      if (controller) {
+        capture(entry, controller, owners);
+      } else if (origin) {
+        const originOwners = new Set<ExecRequestOwner>();
+        const originController = readSubagentExecRequestController(entry, (owner) => {
+          if (!acceptsOrigin(owner)) {
+            return false;
+          }
+          originOwners.add(owner);
+          return true;
+        });
+        if (originController) {
+          selectedByOrigin = capture(entry, originController, originOwners) || selectedByOrigin;
+        }
+      }
+    }
+  }
+  return {
+    runs: [...selected.values()].map(({ entry }) => entry),
+    // Late publication must prove the captured request object, never a new session match.
+    selectPublishedRoot: owners.size > 0 ? selectPublishedRoot : undefined,
+    sessionGeneration: selectedByOrigin ? params.sessionOrigin?.target : undefined,
+    ownsRoot(entry) {
+      const captured = selected.get(getSubagentRunRuntimeKey(entry));
+      return Boolean(
+        captured &&
+        isSameSubagentRunOwner(entry, captured.entry) &&
+        // Accepted native settlement retains the published binding. Live caller
+        // and origin-generation checks belong to cancellationControl's fresh effects.
+        (!captured.requestOwners ||
+          readSubagentExecRequestController(
+            entry,
+            (owner) =>
+              captured.requestOwners?.has(owner) === true &&
+              (params.acceptsRequest?.(owner.identity) ?? true),
+          )) &&
+        !ensureSubagentControllerOwnsRun({
+          cfg: params.cfg,
+          controller: captured.controller,
+          entry,
+        }),
+      );
+    },
+  };
 }
 
 function resolveRunRequesterAgentId(
@@ -165,6 +393,24 @@ export type ControlledSubagentRunsReadContext = {
   getExecutionObservation(entry: SubagentRunRecord): ReturnType<typeof observeSubagentExecution>;
 };
 
+function selectControlledSubagentRunFacts(
+  index: SubagentRunReadIndex<SubagentRunReadRecord>,
+  sessionKey: string,
+  agentId: string,
+  cfg?: OpenClawConfig,
+): SubagentRunReadRecord[] {
+  return [...index.runsByChildSessionKey.values()].flatMap((runs) =>
+    runs.filter(
+      (entry) =>
+        isSubagentRunVisibleToSession(entry, sessionKey, agentId, cfg) &&
+        (resolveSubagentChildAgentId(entry) === undefined ||
+          latestSubagentRun(runs, (candidate) =>
+            matchesSubagentChildSessionOwner(candidate, entry.childSessionKey, entry.childAgentId),
+          ) === entry),
+    ),
+  );
+}
+
 /** Builds one stable snapshot for controlled-run listing and descendant status reads. */
 export async function buildControlledSubagentRunsReadContext(
   controllerSessionKey: string,
@@ -190,11 +436,9 @@ export async function buildControlledSubagentRunsReadContext(
   const select = (snapshot: Map<string, SubagentRunReadRecord>) => {
     const index = buildSubagentRunReadIndexFromRuns({
       runs: snapshot,
-      inMemoryRuns: subagentRuns.values(),
+      inMemoryRuns: [...snapshot.keys()].flatMap((id) => subagentRuns.get(id) ?? []),
     });
-    const visible = [...index.latestRunsByChildSessionKey.values()].filter((entry) =>
-      isSubagentRunVisibleToSession(entry, key, agentId, cfg),
-    );
+    const visible = selectControlledSubagentRunFacts(index, key, agentId, cfg);
     return {
       index,
       runIds: visible.map((entry) => entry.runId),
@@ -203,17 +447,25 @@ export async function buildControlledSubagentRunsReadContext(
         .map((entry) => entry.childSessionKey),
     };
   };
-  return withSubagentRunReadSnapshot(subagentRuns, select, (selection, snapshot) => {
-    const visibleIds = new Set(selection.runIds);
-    const runs = [...snapshot.values()].filter((entry) => visibleIds.has(entry.runId));
-    const list = captureSubagentListReadContext(runs, selection.index, snapshot, recentMinutes);
-    return {
-      runs: list.view.latest,
-      list,
-      getExecutionObservation: (entry: SubagentRunRecord) =>
-        observeSubagentExecution(entry, getSubagentRunsForRequesterSession(entry.childSessionKey)),
-    };
-  });
+  return withSubagentRunReadSnapshot(
+    subagentRuns,
+    select,
+    (selection, snapshot) => {
+      const visibleIds = new Set(selection.runIds);
+      const runs = [...snapshot.values()].filter((entry) => visibleIds.has(entry.runId));
+      const list = captureSubagentListReadContext(runs, selection.index, snapshot, recentMinutes);
+      return {
+        runs: list.view.latest,
+        list,
+        getExecutionObservation: (entry: SubagentRunRecord) =>
+          observeSubagentExecution(
+            entry,
+            getSubagentRunsForRequesterSession(entry.childSessionKey),
+          ),
+      };
+    },
+    { sessionKeys: [key], descendants: true },
+  );
 }
 
 /** Cancellation consumes current ownership facts without hydrating retained result payloads. */
@@ -226,11 +478,9 @@ export function listControlledSubagentRunFacts(
     return [];
   }
   const index = buildSubagentRunReadIndexFromRuns({
-    runs: getSubagentSessionListRunsSnapshotForRead(subagentRuns),
+    runs: getSubagentControlRunsSnapshotForRead(controllerSessionKey),
   });
-  return [...index.latestRunsByChildSessionKey.values()].filter((entry) =>
-    isSubagentRunVisibleToSession(entry, controllerSessionKey, controllerAgentId, cfg),
-  );
+  return selectControlledSubagentRunFacts(index, controllerSessionKey, controllerAgentId, cfg);
 }
 
 export function ensureSubagentControllerOwnsRun(params: {
@@ -262,42 +512,15 @@ export function ensureSubagentControllerOwnsRun(params: {
 export function getLatestOwnedSubagentRun(
   childSessionKey: string,
   agentId: string | undefined,
-  cfg: OpenClawConfig,
+  _cfg: OpenClawConfig,
 ): SubagentRunRecord | undefined {
-  // Agent-scoped child keys already carry their sole owner; any newer generation fences
-  // the old row. Bare per-agent keys need the explicit owner to avoid cross-agent shadowing.
-  const ownerFilter = parseAgentSessionKey(childSessionKey) ? undefined : agentId;
-  return (
-    getLatestLiveSubagentRunByChildSessionKey(
-      childSessionKey,
-      ownerFilter
-        ? (candidate) => resolveRunRequesterAgentId(candidate, cfg) === ownerFilter
-        : undefined,
-    ) ?? undefined
-  );
+  const key = childSessionKey.trim();
+  return getLatestLiveSubagentRunByChildSessionKey(key, undefined, agentId) ?? undefined;
 }
 
-export function isCurrentSubagentRun(entry: SubagentRunRecord, cfg?: OpenClawConfig): boolean {
-  if (!cfg) {
-    return getLatestLiveSubagentRunByChildSessionKey(entry.childSessionKey) === entry;
-  }
-  return (
-    getLatestOwnedSubagentRun(
-      entry.childSessionKey,
-      resolveRunRequesterAgentId(entry, cfg),
-      cfg,
-    ) === entry
-  );
-}
-
-export function isSameSubagentRunGeneration(
-  live: SubagentRunRecord,
-  snapshot: SubagentRunRecord,
-): boolean {
-  return (
-    live.childSessionKey === snapshot.childSessionKey &&
-    live.runId === snapshot.runId &&
-    live.generation === snapshot.generation &&
-    live.createdAt === snapshot.createdAt
+export function isCurrentSubagentRun(entry: SubagentRunRecord, cfg: OpenClawConfig): boolean {
+  return isSameSubagentRunOwner(
+    getLatestOwnedSubagentRun(entry.childSessionKey, resolveSubagentChildAgentId(entry), cfg),
+    entry,
   );
 }

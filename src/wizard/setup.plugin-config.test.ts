@@ -4,11 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { PluginConfigUiHint } from "../plugins/types.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import type { WizardMultiSelectParams, WizardPrompter } from "./prompts.js";
-import {
-  discoverConfigurablePlugins,
-  discoverUnconfiguredPlugins,
-  setupPluginConfig,
-} from "./setup.plugin-config.js";
+import { setupPluginConfig } from "./setup.plugin-config.js";
 
 const loadPluginManifestRegistryCore = vi.fn();
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
@@ -50,39 +46,58 @@ function manifest(hints: Record<string, PluginConfigUiHint>, schema?: Record<str
 }
 
 describe("plugin configuration discovery", () => {
-  it("returns sorted plugins with only their non-advanced fields", () => {
-    const result = discoverConfigurablePlugins({
-      manifestPlugins: [
+  it("offers sorted plugins and prompts only for their non-advanced fields", async () => {
+    loadPluginManifestRegistryCore.mockReturnValue({
+      plugins: [
         makeManifestPlugin("zeta", { mode: { label: "Mode" }, gpu: { advanced: true } }),
         makeManifestPlugin("bare"),
         makeManifestPlugin("advanced", { gpu: { advanced: true } }),
         makeManifestPlugin("alpha", { endpoint: { label: "Endpoint" } }),
       ],
     });
-    expect(result.map(({ id, uiHints }) => ({ id, fields: Object.keys(uiHints) }))).toEqual([
-      { id: "alpha", fields: ["endpoint"] },
-      { id: "zeta", fields: ["mode"] },
+    const prompts = prompter({
+      multiselect: async ({ options }) => {
+        expect(options.map(({ value }) => value)).toEqual(["__skip__", "alpha", "zeta"]);
+        return options.filter(({ value }) => value !== "__skip__").map(({ value }) => value);
+      },
+    });
+    const result = await setupPluginConfig({ config: {}, prompter: prompts });
+    expect(vi.mocked(prompts.text).mock.calls.map(([params]) => params.message)).toEqual([
+      "Endpoint",
+      "Mode",
     ]);
+    expect(result.plugins?.entries).toEqual({
+      alpha: { config: { endpoint: "configured" } },
+      zeta: { config: { mode: "configured" } },
+    });
   });
 
-  it("finds missing and empty fields while recognizing configured nested paths", () => {
-    const result = discoverUnconfiguredPlugins({
-      manifestPlugins: [
+  it("offers missing and empty fields while recognizing configured nested paths", async () => {
+    loadPluginManifestRegistryCore.mockReturnValue({
+      plugins: [
         makeManifestPlugin("partial", { mode: {}, gateway: {} }),
         makeManifestPlugin("empty", { endpoint: {} }),
         makeManifestPlugin("nested", { "webSearch.mode": {} }),
       ],
-      config: {
-        plugins: {
-          entries: {
-            partial: { config: { mode: "mirror" } },
-            empty: { config: { endpoint: "" } },
-            nested: { config: { webSearch: { mode: "llm-context" } } },
-          },
+    });
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          partial: { config: { mode: "mirror" } },
+          empty: { config: { endpoint: "" } },
+          nested: { config: { webSearch: { mode: "llm-context" } } },
         },
       },
+    };
+    let offeredPlugins: unknown[] = [];
+    const prompts = prompter({
+      multiselect: async ({ options }) => {
+        offeredPlugins = options.map(({ value }) => value);
+        return [];
+      },
     });
-    expect(result.map(({ id }) => id)).toEqual(["empty", "partial"]);
+    expect(await setupPluginConfig({ config, prompter: prompts })).toBe(config);
+    expect(offeredPlugins).toEqual(["__skip__", "empty", "partial"]);
   });
 });
 

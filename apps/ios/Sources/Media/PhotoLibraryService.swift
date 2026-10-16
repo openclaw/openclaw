@@ -39,17 +39,12 @@ final class PhotoLibraryService: PhotosServicing {
         let formatter = ISO8601DateFormatter()
 
         assets.enumerateObjects { asset, _, stop in
-            if results.count >= limit {
-                stop.pointee = true
-                return
-            }
             if let payload = try? Self.renderAsset(
                 asset,
                 maxWidth: maxWidth,
                 quality: quality,
                 formatter: formatter)
             {
-                // Keep the entire response under the gateway WS max payload.
                 if payload.base64.count > remainingBudget {
                     stop.pointee = true
                     return
@@ -96,8 +91,7 @@ final class PhotoLibraryService: PhotosServicing {
 
         let (data, finalImage) = try encodeJpegUnderBudget(
             image: image,
-            quality: quality,
-            maxBase64Chars: maxPerPhotoBase64Chars)
+            quality: quality)
 
         let created = asset.creationDate.map { formatter.string(from: $0) }
         return OpenClawPhotoPayload(
@@ -110,11 +104,10 @@ final class PhotoLibraryService: PhotosServicing {
 
     private static func encodeJpegUnderBudget(
         image: UIImage,
-        quality: Double,
-        maxBase64Chars: Int) throws -> (Data, UIImage)
+        quality: Double) throws -> (Data, UIImage)
     {
         var currentImage = image
-        var currentQuality = max(0.1, min(1.0, quality))
+        var currentQuality = quality
 
         // Try lowering JPEG quality first, then downscale if needed.
         for _ in 0..<10 {
@@ -125,7 +118,7 @@ final class PhotoLibraryService: PhotosServicing {
             }
 
             let base64Len = ((data.count + 2) / 3) * 4
-            if base64Len <= maxBase64Chars {
+            if base64Len <= self.maxPerPhotoBase64Chars {
                 return (data, currentImage)
             }
 
@@ -149,7 +142,7 @@ final class PhotoLibraryService: PhotosServicing {
 
     private static func resize(image: UIImage, targetWidth: CGFloat) -> UIImage {
         let size = image.size
-        if size.width <= 0 || size.height <= 0 || targetWidth <= 0 {
+        if size.width <= 0 || size.height <= 0 {
             return image
         }
         let scale = targetWidth / size.width

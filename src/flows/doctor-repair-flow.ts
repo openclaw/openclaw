@@ -1,4 +1,3 @@
-// Doctor repair flow builds and runs repair actions for doctor findings.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
@@ -32,126 +31,98 @@ interface DoctorRepairRunResult {
   readonly checksValidated: number;
 }
 
-/** Runs health checks in fix mode, applies repair outputs, and validates repaired scopes. */
 export async function runDoctorHealthRepairs(
   ctx: HealthRepairContext,
   opts: DoctorRepairRunOptions = {},
 ): Promise<DoctorRepairRunResult> {
   const inputs = opts.checks ?? copyHealthChecks(listHealthChecks());
   const checks: readonly DoctorHealthCheck[] = inputs.map(normalizeHealthCheck);
-  const result = createRepairRunResult(ctx.cfg, checks.length);
-
-  for (const check of checks) {
-    const runResult = await runHealthCheck(check, { ...ctx, cfg: result.config }, opts);
-    result.config = runResult.config;
-    result.findings.push(...runResult.findings);
-    // Only a completed validation can replace this check's original findings;
-    // skipped, failed, and unvalidated siblings must remain visible in mixed batches.
-    result.remainingFindings.push(
-      ...(runResult.checksValidated > 0 ? runResult.remainingFindings : runResult.findings),
-    );
-    result.changes.push(...runResult.changes);
-    result.warnings.push(...runResult.warnings);
-    result.diffs.push(...runResult.diffs);
-    result.effects.push(...runResult.effects);
-    result.checksRepaired += runResult.checksRepaired;
-    result.checksValidated += runResult.checksValidated;
-  }
-
-  return result;
-}
-
-async function runHealthCheck(
-  check: DoctorHealthCheck,
-  ctx: HealthRepairContext,
-  opts: DoctorRepairRunOptions,
-): Promise<DoctorRepairRunResult> {
-  const outcome = createRepairRunResult(ctx.cfg, 1);
-
-  let checkFindings: readonly HealthFinding[];
-  try {
-    checkFindings = await check.detect(ctx);
-  } catch (err) {
-    outcome.warnings.push(`${check.id} detect failed: ${scrubDoctorErrorMessage(err)}`);
-    return outcome;
-  }
-  outcome.findings.push(...checkFindings);
-  if (checkFindings.length === 0 || check.repair === undefined) {
-    return outcome;
-  }
-
-  // Split checks expose detect/repair separately, so repair output must be validated by detect().
-  try {
-    const result = await check.repair(
-      { ...ctx, dryRun: opts.dryRun === true, diff: opts.diff === true },
-      checkFindings,
-    );
-    outcome.warnings.push(...(result.warnings ?? []));
-    outcome.diffs.push(...(result.diffs ?? []));
-    outcome.effects.push(...(result.effects ?? []));
-    outcome.changes.push(...result.changes);
-    const status = result.status ?? "repaired";
-    if (status !== "repaired") {
-      outcome.warnings.push(
-        `${check.id} repair ${status}${result.reason ? `: ${result.reason}` : ""}`,
-      );
-      return outcome;
-    }
-    if (result.config !== undefined && opts.dryRun !== true) {
-      outcome.config = result.config;
-    }
-    outcome.checksRepaired++;
-    if (opts.dryRun === true) {
-      return outcome;
-    }
-    try {
-      const validationFindings = await check.detect(
-        { ...ctx, cfg: outcome.config },
-        createValidationScope(outcome.findings),
-      );
-      outcome.remainingFindings.push(...validationFindings);
-      outcome.checksValidated++;
-      if (validationFindings.length > 0) {
-        outcome.warnings.push(`${check.id} repair left ${validationFindings.length} finding(s)`);
-      }
-    } catch (err) {
-      outcome.warnings.push(`${check.id} validation failed: ${scrubDoctorErrorMessage(err)}`);
-    }
-  } catch (err) {
-    outcome.warnings.push(`${check.id} repair failed: ${scrubDoctorErrorMessage(err)}`);
-  }
-
-  return outcome;
-}
-
-function createRepairRunResult(config: OpenClawConfig, checksRun: number) {
   const findings: HealthFinding[] = [];
-  const remainingFindings: HealthFinding[] = [];
+  const allRemainingFindings: HealthFinding[] = [];
   const changes: string[] = [];
   const warnings: string[] = [];
   const diffs: HealthRepairDiff[] = [];
   const effects: HealthRepairEffect[] = [];
-  return {
-    config,
+  const outcome = {
+    config: ctx.cfg,
     findings,
-    remainingFindings,
+    remainingFindings: allRemainingFindings,
     changes,
     warnings,
     diffs,
     effects,
-    checksRun,
+    checksRun: checks.length,
     checksRepaired: 0,
     checksValidated: 0,
   };
-}
 
-// Re-run only the failing paths/ocPaths after repair to avoid unrelated expensive checks.
-function createValidationScope(findings: readonly HealthFinding[]) {
-  return {
-    findings,
-    paths: uniqueDefined(findings.map((finding) => finding.path)),
-    ocPaths: uniqueDefined(findings.map((finding) => finding.ocPath)),
-  };
+  for (const check of checks) {
+    const checkContext = { ...ctx, cfg: outcome.config };
+    let checkFindings: readonly HealthFinding[];
+    try {
+      checkFindings = await check.detect(checkContext);
+    } catch (err) {
+      outcome.warnings.push(`${check.id} detect failed: ${scrubDoctorErrorMessage(err)}`);
+      continue;
+    }
+    outcome.findings.push(...checkFindings);
+    if (checkFindings.length === 0 || check.repair === undefined) {
+      outcome.remainingFindings.push(...checkFindings);
+      continue;
+    }
+
+    let remainingFindings: readonly HealthFinding[] = [...checkFindings];
+    // Split checks expose detect/repair separately, so repair output must be validated by detect().
+    try {
+      const result = await check.repair(
+        { ...checkContext, dryRun: opts.dryRun === true, diff: opts.diff === true },
+        checkFindings,
+      );
+      outcome.warnings.push(...(result.warnings ?? []));
+      outcome.diffs.push(...(result.diffs ?? []));
+      outcome.effects.push(...(result.effects ?? []));
+      outcome.changes.push(...result.changes);
+      const status = result.status ?? "repaired";
+      if (status !== "repaired") {
+        outcome.warnings.push(
+          `${check.id} repair ${status}${result.reason ? `: ${result.reason}` : ""}`,
+        );
+        continue;
+      }
+      if (result.config !== undefined && opts.dryRun !== true) {
+        outcome.config = result.config;
+      }
+      outcome.checksRepaired++;
+      if (opts.dryRun === true) {
+        continue;
+      }
+      try {
+        // Re-run only failing paths/ocPaths to avoid unrelated expensive checks.
+        const validationFindings = await check.detect(
+          { ...checkContext, cfg: outcome.config },
+          {
+            findings: remainingFindings,
+            paths: uniqueDefined(remainingFindings.map((finding) => finding.path)),
+            ocPaths: uniqueDefined(remainingFindings.map((finding) => finding.ocPath)),
+          },
+        );
+        remainingFindings = validationFindings;
+        outcome.checksValidated++;
+        if (validationFindings.length > 0) {
+          outcome.warnings.push(`${check.id} repair left ${validationFindings.length} finding(s)`);
+        }
+      } catch (err) {
+        outcome.warnings.push(`${check.id} validation failed: ${scrubDoctorErrorMessage(err)}`);
+      }
+    } catch (err) {
+      outcome.warnings.push(`${check.id} repair failed: ${scrubDoctorErrorMessage(err)}`);
+    } finally {
+      // Only completed validation replaces the original findings for this check.
+      outcome.remainingFindings.push(...remainingFindings);
+    }
+  }
+
+  return outcome;
 }
 
 function uniqueDefined(values: readonly (string | undefined)[]): readonly string[] {

@@ -26,25 +26,34 @@ function snapshot(step: number, memory = 100): GatewayResourceSnapshot {
 }
 
 describe("Kitchen Sink resource phase receipts", () => {
-  it("splits the original 20 calls with one shared midpoint and outer aggregate counters", async () => {
+  it.each([false, true])("samples completed operations with splitFirst=%s", async (splitFirst) => {
     const before = snapshot(1, 100);
     const midpoint = snapshot(3, 80);
-    const after = snapshot(12, 70);
+    const after = splitFirst ? snapshot(12, 70) : snapshot(2);
+    const count = splitFirst ? 20 : 2;
     const order: string[] = [];
-    const samples = [before, midpoint, after];
+    const samples = splitFirst ? [before, midpoint, after] : [before, after];
     const sample = vi.fn(async () => {
       order.push("sample");
       return samples.shift()!;
     });
     const phase = await measureResourceOperations({
-      name: "plugin-tool",
-      count: 20,
-      splitFirst: true,
+      name: splitFirst ? "plugin-tool" : "neutral-rpc",
+      count,
+      splitFirst,
       sample,
       run: async (index) => {
-        order.push(`run:${index}`);
+        await Promise.resolve();
+        order.push(`${splitFirst ? "run" : "completed"}:${index}`);
       },
     });
+    if (!splitFirst) {
+      expect(order).toEqual(["sample", "completed:0", "completed:1", "sample"]);
+      expect(phase.status).toBe("exercised");
+      expect(phase.operations).toEqual({ attempted: 2, completed: 2, failed: 0 });
+      expect(phase.processCpuMsPerCompletedOperation).toBeCloseTo(0.055);
+      return;
+    }
     expect(order).toEqual([
       "sample",
       "run:0",
@@ -81,20 +90,29 @@ describe("Kitchen Sink resource phase receipts", () => {
     expect(phase.processCpuMsPerCompletedOperation).toBeCloseTo(1.21 / 20);
   });
 
-  it.each([0, 1, 3])(
-    "retains partial split counts when original operation %i fails",
-    async (failedIndex) => {
+  it.each([
+    { splitFirst: true, failedIndex: 0 },
+    { splitFirst: true, failedIndex: 3 },
+    { splitFirst: false, failedIndex: 1 },
+  ])(
+    "retains asserted responses without retrying operation $failedIndex, splitFirst=$splitFirst",
+    async ({ failedIndex, splitFirst }) => {
       let step = 0;
-      const sample = vi.fn(async () => snapshot(++step));
+      const sample = splitFirst
+        ? vi.fn(async () => snapshot(++step))
+        : vi
+            .fn<() => Promise<GatewayResourceSnapshot>>()
+            .mockResolvedValueOnce(snapshot(1))
+            .mockResolvedValueOnce(snapshot(4, 80));
       const run = vi.fn(async (index: number) => {
         if (index === failedIndex) {
-          throw new Error("invalid tool result");
+          throw new Error(splitFirst ? "invalid tool result" : "tool output missed its fixture");
         }
       });
       const phase = await measureResourceOperations({
         name: "plugin-tool",
         count: 20,
-        splitFirst: true,
+        splitFirst,
         sample,
         run,
       });
@@ -106,6 +124,13 @@ describe("Kitchen Sink resource phase receipts", () => {
         operations: { attempted: failedIndex + 1, completed: failedIndex, failed: 1 },
         processCpuMsPerCompletedOperation: null,
       });
+      if (!splitFirst) {
+        expect(phase).toMatchObject({
+          error: "tool output missed its fixture",
+          memoryChangeBytes: { rss: -20, heapUsed: -20 },
+        });
+        return;
+      }
       expect(sample).toHaveBeenCalledTimes(failedIndex === 0 ? 2 : 3);
       expect(phase.breakdown).toHaveLength(failedIndex === 0 ? 1 : 2);
       if (failedIndex > 0) {
@@ -150,30 +175,85 @@ describe("Kitchen Sink resource phase receipts", () => {
       }),
     ],
   ];
-  it.each(invalidSamples)(
-    "stops before warm work on a %s midpoint without failing a completed call",
-    async (_name, invalidSample) => {
-      const sample = vi
-        .fn()
-        .mockResolvedValueOnce(snapshot(1))
-        .mockImplementationOnce(invalidSample);
+  it.each([
+    ...invalidSamples.map(([name, invalidSample]) => ({
+      name,
+      invalidSample,
+      splitFirst: true,
+      final: false,
+    })),
+    {
+      name: "missing final",
+      invalidSample: async () => {
+        throw new Error("sample unavailable");
+      },
+      splitFirst: true,
+      final: true,
+    },
+    {
+      name: "child exited",
+      invalidSample: async () => {
+        throw new Error("child exited");
+      },
+      splitFirst: false,
+      final: true,
+    },
+  ])(
+    "preserves completed receipts after $name with splitFirst=$splitFirst, final=$final",
+    async ({ name, invalidSample, splitFirst, final }) => {
+      const before = snapshot(1);
+      const midpoint = snapshot(2, 90);
+      const count = splitFirst ? 20 : 2;
+      const completed = final ? count : 1;
+      const sample = vi.fn().mockResolvedValueOnce(before);
+      if (splitFirst && final) {
+        sample.mockResolvedValueOnce(midpoint);
+      }
+      sample.mockImplementationOnce(invalidSample);
       const run = vi.fn(async () => {});
       const phase = await measureResourceOperations({
-        name: "plugin-tool",
-        count: 20,
-        splitFirst: true,
+        name: splitFirst ? "plugin-tool" : "neutral-rpc",
+        count,
+        splitFirst,
         sample,
         run,
       });
-      expect(run.mock.calls).toEqual([[0]]);
-      expect(sample).toHaveBeenCalledTimes(2);
+      expect(run).toHaveBeenCalledTimes(completed);
+      expect(sample).toHaveBeenCalledTimes(splitFirst && final ? 3 : 2);
       expect(phase).toMatchObject({
         status: "failed",
-        operations: { attempted: 1, completed: 1, failed: 0 },
+        operations: { attempted: completed, completed, failed: 0 },
         after: null,
         cpu: null,
       });
       expect(phase.error).toContain("Resource sample failed");
+      if (!splitFirst) {
+        expect(phase).toMatchObject({
+          memoryChangeBytes: null,
+          processCpuMsPerCompletedOperation: null,
+        });
+        expect(phase.error).toContain(name);
+        return;
+      }
+      if (final) {
+        expect(phase.before).toBe(before);
+        expect(phase.breakdown![0]).toEqual(
+          summarizeResourcePhase("plugin-tool-first", before, midpoint, {
+            attempted: 1,
+            completed: 1,
+            failed: 0,
+          }),
+        );
+        expect(phase.breakdown![1]).toMatchObject({
+          name: "plugin-tool-warm",
+          status: "failed",
+          operations: { attempted: 19, completed: 19, failed: 0 },
+          after: null,
+          cpu: null,
+        });
+        return;
+      }
+      expect(run.mock.calls).toEqual([[0]]);
       expect(phase.breakdown).toHaveLength(1);
       expect(phase.breakdown![0]).toMatchObject({
         name: "plugin-tool-first",
@@ -182,115 +262,6 @@ describe("Kitchen Sink resource phase receipts", () => {
       });
     },
   );
-
-  it.each(invalidSamples)(
-    "preserves the first receipt and all completions on a %s final sample",
-    async (_name, invalidSample) => {
-      const before = snapshot(1);
-      const midpoint = snapshot(2, 90);
-      const sample = vi
-        .fn()
-        .mockResolvedValueOnce(before)
-        .mockResolvedValueOnce(midpoint)
-        .mockImplementationOnce(invalidSample);
-      const run = vi.fn(async () => {});
-      const phase = await measureResourceOperations({
-        name: "plugin-tool",
-        count: 20,
-        splitFirst: true,
-        sample,
-        run,
-      });
-      expect(run).toHaveBeenCalledTimes(20);
-      expect(sample).toHaveBeenCalledTimes(3);
-      expect(phase).toMatchObject({
-        status: "failed",
-        operations: { attempted: 20, completed: 20, failed: 0 },
-        after: null,
-        cpu: null,
-      });
-      expect(phase.before).toBe(before);
-      expect(phase.breakdown![0]).toEqual(
-        summarizeResourcePhase("plugin-tool-first", before, midpoint, {
-          attempted: 1,
-          completed: 1,
-          failed: 0,
-        }),
-      );
-      expect(phase.breakdown![1]).toMatchObject({
-        name: "plugin-tool-warm",
-        status: "failed",
-        operations: { attempted: 19, completed: 19, failed: 0 },
-        after: null,
-        cpu: null,
-      });
-    },
-  );
-
-  it("counts only asserted responses and stops on the first failure without retrying", async () => {
-    const sample = vi
-      .fn()
-      .mockResolvedValueOnce(snapshot(1))
-      .mockResolvedValueOnce(snapshot(4, 80));
-    const run = vi.fn(async (index: number) => {
-      if (index === 1) {
-        throw new Error("tool output missed its fixture");
-      }
-    });
-    const phase = await measureResourceOperations({ name: "plugin-tool", count: 20, sample, run });
-    expect(run.mock.calls).toEqual([[0], [1]]);
-    expect(phase).toMatchObject({
-      status: "failed",
-      operations: { attempted: 2, completed: 1, failed: 1 },
-      error: "tool output missed its fixture",
-      memoryChangeBytes: { rss: -20, heapUsed: -20 },
-      processCpuMsPerCompletedOperation: null,
-    });
-  });
-
-  it("keeps completed-operation receipts when the final resource sample is unavailable", async () => {
-    const sample = vi
-      .fn()
-      .mockResolvedValueOnce(snapshot(1))
-      .mockRejectedValueOnce(new Error("child exited"));
-    const phase = await measureResourceOperations({
-      name: "neutral-rpc",
-      count: 2,
-      sample,
-      run: async () => {},
-    });
-    expect(phase).toMatchObject({
-      status: "failed",
-      operations: { attempted: 2, completed: 2, failed: 0 },
-      after: null,
-      cpu: null,
-      memoryChangeBytes: null,
-      processCpuMsPerCompletedOperation: null,
-    });
-    expect(phase.error).toContain("child exited");
-  });
-
-  it("waits for work before sampling and divides CPU only by completed operations", async () => {
-    const order: string[] = [];
-    let tick = 0;
-    const sample = async () => {
-      order.push("sample");
-      return snapshot(++tick);
-    };
-    const phase = await measureResourceOperations({
-      name: "neutral-rpc",
-      count: 2,
-      sample,
-      run: async (index) => {
-        await Promise.resolve();
-        order.push(`completed:${index}`);
-      },
-    });
-    expect(order).toEqual(["sample", "completed:0", "completed:1", "sample"]);
-    expect(phase.status).toBe("exercised");
-    expect(phase.operations).toEqual({ attempted: 2, completed: 2, failed: 0 });
-    expect(phase.processCpuMsPerCompletedOperation).toBeCloseTo(0.055);
-  });
 
   it("preserves signed paired deltas without inventing an empty-host tool workload", () => {
     const ops = { attempted: 2, completed: 2, failed: 0 };
@@ -325,16 +296,6 @@ describe("Kitchen Sink resource phase receipts", () => {
         [{ ...enabled, operations: { attempted: 1, completed: 1, failed: 0 } }],
       ),
     ).toEqual([]);
-  });
-
-  it("rejects mixed process identities and unavailable memory rather than reporting zero", () => {
-    const ops = { attempted: 0, completed: 0, failed: 0 };
-    expect(() =>
-      summarizeResourcePhase("idle", snapshot(1), { ...snapshot(2), pid: 999 }, ops),
-    ).toThrow("one process");
-    const invalid = snapshot(2);
-    invalid.memory.rss = Number.NaN;
-    expect(() => summarizeResourcePhase("idle", snapshot(1), invalid, ops)).toThrow("invalid rss");
   });
 
   it("retains signed resource changes and rejects missing observations", () => {

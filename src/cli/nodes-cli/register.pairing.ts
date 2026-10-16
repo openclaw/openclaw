@@ -19,25 +19,12 @@ import {
 import type { NodesRpcOpts } from "./types.js";
 
 const DEFAULT_NODE_PAIR_APPROVE_SCOPES: OperatorScope[] = ["operator.pairing"];
-const NODE_PAIR_APPROVE_SCOPE_SET = new Set<OperatorScope>([
-  "operator.pairing",
-  "operator.write",
-  "operator.admin",
-]);
-
 function normalizeNodePairApproveScopes(scopes: unknown): OperatorScope[] {
   const normalized = new Set<OperatorScope>(DEFAULT_NODE_PAIR_APPROVE_SCOPES);
-  if (!Array.isArray(scopes)) {
-    return [...normalized];
-  }
-  for (const scope of scopes) {
-    if (typeof scope !== "string") {
-      continue;
+  for (const scope of Array.isArray(scopes) ? scopes : []) {
+    if (scope === "operator.pairing" || scope === "operator.write" || scope === "operator.admin") {
+      normalized.add(scope);
     }
-    if (!NODE_PAIR_APPROVE_SCOPE_SET.has(scope as OperatorScope)) {
-      continue;
-    }
-    normalized.add(scope as OperatorScope);
   }
   return [...normalized];
 }
@@ -108,21 +95,6 @@ function buildUnknownNodePairRequestIdMessage(
   return lines.join("\n");
 }
 
-function rethrowUnknownNodePairRequestId(
-  error: unknown,
-  requestId: string,
-  opts: NodesRpcOpts,
-): never {
-  if (!isUnknownNodePairRequestIdError(error)) {
-    throw error;
-  }
-  // Reuse the gateway error so generic formatting does not append its raw cause.
-  error.name = "Error";
-  error.message = buildUnknownNodePairRequestIdMessage(requestId, opts);
-  throw error;
-}
-
-/** Register node pairing management commands. */
 export function registerNodesPairingCommands(nodes: Command) {
   nodesCallOpts(
     nodes
@@ -141,14 +113,14 @@ export function registerNodesPairingCommands(nodes: Command) {
             defaultRuntime.log(muted("No pending pairing requests."));
             return;
           }
-          const { heading, warn, muted } = getNodesTheme();
+          const { heading, muted } = getNodesTheme();
           const tableWidth = getTerminalTableWidth();
           const now = Date.now();
           const rendered = renderPendingPairingRequestsTable({
             pending,
             now,
             tableWidth,
-            theme: { heading, warn, muted },
+            theme: { heading, muted },
           });
           defaultRuntime.log(rendered.heading);
           defaultRuntime.log(rendered.table);
@@ -182,7 +154,12 @@ export function registerNodesPairingCommands(nodes: Command) {
                   )
                 : await callNodesGatewayCli("node.pair.reject", opts, { requestId });
             } catch (error) {
-              rethrowUnknownNodePairRequestId(error, requestId, opts);
+              if (isUnknownNodePairRequestIdError(error)) {
+                // Preserve the gateway error without appending its raw cause.
+                error.name = "Error";
+                error.message = buildUnknownNodePairRequestIdMessage(requestId, opts);
+              }
+              throw error;
             }
             defaultRuntime.writeJson(result);
           });

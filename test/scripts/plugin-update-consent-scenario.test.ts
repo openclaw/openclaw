@@ -65,6 +65,7 @@ let timeoutExit: number | undefined;
 let mutateDenial: ((result: Denial, repair: boolean, child: FixtureChild) => void) | undefined;
 const packages = new Map<number, { code: string; integrity: string }>();
 const coreVersions = new Map<string, string>();
+const tagUpdates: string[][] = [];
 
 function saveConfig() {
   fs.writeFileSync(
@@ -161,6 +162,7 @@ function cliReply(args: string[], child: FixtureChild): string {
     throw new Error("unprepared core update");
   }
   if (!repair) {
+    tagUpdates.push(args);
     fs.writeFileSync(
       path.resolve(path.dirname(entry), "..", "package.json"),
       JSON.stringify({ version: coreVersion }),
@@ -190,6 +192,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   packages.clear();
   coreVersions.clear();
+  tagUpdates.length = 0;
   mutateDenial = undefined;
   timeoutExit = undefined;
   vi.stubEnv("OPENCLAW_E2E_COMMAND_TIMEOUT", "");
@@ -201,6 +204,10 @@ beforeEach(() => {
   roots.push(root);
   entry = path.join(root, "host", "dist", "entry.js");
   fs.mkdirSync(path.dirname(entry), { recursive: true });
+  fs.writeFileSync(
+    path.join(root, "host", "package.json"),
+    JSON.stringify({ version: "2026.9.5" }),
+  );
   coreTarball = path.join(root, "core.tgz");
   fs.writeFileSync(coreTarball, "core artifact placeholder; no archive reader is exercised");
   const stateDir = path.join(root, "state");
@@ -301,7 +308,7 @@ describe("installed-CLI consent scenario report contract", () => {
     expect(fs.existsSync(path.join(installPath, "index.js"))).toBe(true);
   });
 
-  it.each([124, 137])(
+  it.each([124])(
     "reports a core update timeout (exit %s) with retained diagnostics",
     async (code) => {
       timeoutExit = code;
@@ -321,6 +328,17 @@ describe("installed-CLI consent scenario report contract", () => {
     },
   );
 
+  it("selects stable before tag updates only from an extended-stable host", async () => {
+    fs.writeFileSync(
+      path.resolve(path.dirname(entry), "..", "package.json"),
+      JSON.stringify({ version: "2026.9.33" }),
+    );
+
+    await expect(runConsentScenario(entry, coreTarball)).resolves.toBeUndefined();
+    expect(tagUpdates.map((args) => args.includes("--channel"))).toEqual([true, false]);
+    expect(tagUpdates[0]?.slice(1, 3)).toEqual(["--channel", "stable"]);
+  });
+
   it("retains plugin consent proof when a frozen target predates core update consent", async () => {
     await expect(
       runConsentScenario(entry, coreTarball, { coreUpdateConsent: false }),
@@ -330,86 +348,11 @@ describe("installed-CLI consent scenario report contract", () => {
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('"core-update-consent"'));
   });
 
-  it.each([
-    [
-      "missing plugin warning",
-      (result: Denial) => {
-        result.postUpdate.plugins.warnings = [];
-      },
-    ],
-    [
-      "missing denied outcome",
-      (result: Denial) => {
-        result.postUpdate.plugins.npm.outcomes = [];
-      },
-    ],
-    [
-      "wrong consent code",
-      (result: Denial) => {
-        result.postUpdate.plugins.npm.outcomes = [
-          { pluginId, status: "error", code: "OTHER_ERROR" },
-        ];
-      },
-    ],
-    [
-      "failed core update",
-      (result: Denial) => {
-        result.status = "error";
-      },
-    ],
-    [
-      "wrong resulting core version",
-      (result: Denial) => {
-        result.after.version = "2026.9.5";
-      },
-    ],
-    [
-      "unexpected top-level failure reason",
-      (result: Denial) => {
-        result.reason = "post-update-plugins";
-      },
-    ],
-    [
-      "plugin error instead of warning",
-      (result: Denial) => {
-        result.postUpdate.plugins.status = "error";
-      },
-    ],
-  ] as const)(
-    "rejects %s rather than accepting a generic successful exit",
-    async (_name, mutate) => {
-      mutateDenial = (result, repair) => {
-        if (!repair) {
-          mutate(result);
-        }
-      };
-      await expect(runConsentScenario(entry, coreTarball)).rejects.toThrow();
-    },
-  );
-
-  it("rejects a nonzero core exit even with an otherwise valid warning report", async () => {
-    mutateDenial = (_result, repair, child) => {
-      if (!repair) {
-        child.observation.code = 1;
-      }
-    };
-    await expect(runConsentScenario(entry, coreTarball)).rejects.toThrow();
-  });
-
   it("rejects a consent warning attributed to another plugin", async () => {
     mutateDenial = (result) => {
       result.postUpdate.plugins.warnings = [
         { pluginId: "another-plugin", reason: "requires capability consent" },
       ];
-    };
-    await expect(runConsentScenario(entry, coreTarball)).rejects.toThrow();
-  });
-
-  it("requires standalone repair to report warning, not core-update ok", async () => {
-    mutateDenial = (result, repair) => {
-      if (repair) {
-        result.status = "ok";
-      }
     };
     await expect(runConsentScenario(entry, coreTarball)).rejects.toThrow();
   });

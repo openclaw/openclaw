@@ -1,4 +1,3 @@
-// Usage types define shared usage accounting structures for sessions and runs.
 import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import type {
@@ -24,23 +23,18 @@ export type SessionUsageCreator = {
   actor?: SessionCreatedActor;
 };
 
-/** One session or session-family row returned by the gateway usage endpoint. */
 export type SessionUsageEntry = {
   /** Stable row key for UI diffing; may be a session id or family key. */
   key: string;
-  /** Human-readable session label when available. */
   label?: string;
   /** Concrete session id for instance-scoped rows. */
   sessionId?: string;
-  /** Whether this row represents one session instance or a grouped family. */
   scope?: "instance" | "family";
   /** Grouping key shared by related historical session instances. */
   sessionFamilyKey?: string;
   /** Latest/current session id for a grouped family row. */
   currentSessionId?: string;
-  /** Session ids included in a family aggregate row. */
   includedSessionIds?: string[];
-  /** Count of historical instances included in the family row. */
   historicalInstanceCount?: number;
   updatedAt?: number;
   agentId?: string;
@@ -70,7 +64,6 @@ export type SessionUsageEntry = {
   contextWeight?: SessionSystemPromptReport | null;
 };
 
-/** Cross-session aggregate buckets returned alongside usage rows. */
 export type SessionsUsageAggregates = {
   /** Sessions with activity in the requested range, before the row `limit` cap. */
   sessionCount?: number;
@@ -91,13 +84,14 @@ export type SessionsUsageAggregates = {
       sessionActivity: Array<{ dates: string[]; sessionCount: number }>;
     }
   >;
-  /** Full token/cost categories for every matched session, before the row limit. */
+  /** Full token/cost categories before the row limit. Overview keeps this calendar facet before selectedDays. */
   costDaily?: CostUsageSummary["daily"];
   latency?: SessionLatencyStats;
   dailyLatency?: SessionDailyLatency[];
   modelDaily?: SessionDailyModelUsage[];
   daily: Array<{
     date: string;
+    usageReport?: CostUsageSummary["totals"]["usageReport"];
     tokens: number;
     cost: number;
     messages: number;
@@ -106,7 +100,6 @@ export type SessionsUsageAggregates = {
   }>;
 };
 
-/** Full gateway response for the sessions usage view. */
 export type SessionsUsageResult = {
   /** Unix epoch milliseconds for when this report was generated. */
   updatedAt: number;
@@ -120,4 +113,57 @@ export type SessionsUsageResult = {
   /** Visible candidate identities before applying the creator filter. */
   creatorOptions?: SessionUsageCreator[];
   cacheStatus?: CostUsageSummary["cacheStatus"];
+  overview?: SessionsUsageOverview;
+  partial?: { reason: "time-budget"; message: string };
+};
+
+export type UsageOverviewOptions = {
+  limit?: number;
+  offset?: number;
+  query?: string;
+  selectedDays?: string[];
+  selectedHours?: number[];
+  selectedSessions?: string[];
+  recentKeys?: string[];
+  sort?: "recent" | "tokens" | "cost" | "messages" | "errors";
+  sortDirection?: "asc" | "desc";
+};
+
+export type SessionsUsageOverview = {
+  /** Completeness of full-session chart sources before selected-day totals. */
+  usageReport?: CostUsageSummary["totals"]["usageReport"];
+  total: number;
+  unfilteredSessionCount: number;
+  /** Sessions with activity in the selected population; empty comparison rows do not count. */
+  selectedSessionCount: number;
+  /** Matching rows in the selected population, including empty sessions eligible for detail reads. */
+  selectedRowCount: number;
+  /** Every explicitly selected source has complete usage before query/day/hour filtering. */
+  selectedUsageComplete?: boolean;
+  /** Explicitly selected matching rows, in selection order and independent of the table page. */
+  selectedRows: SessionUsageEntry[];
+  /** Comparison statistics before paging and the Recent roster selection. */
+  tableSessionCount: number;
+  tableTotals: {
+    tokens: number;
+    cost: number;
+    errors: number;
+    usageReport?: CostUsageSummary["totals"]["usageReport"];
+  };
+  offset: number;
+  limit: number;
+  queryWarnings: string[];
+  hourTokens: number[];
+  weekdayTokens: number[];
+  hasTimelineData: boolean;
+  durationMs: number;
+  durationCount: number;
+  hourlyMessages: number[];
+  hourlyErrors: number[];
+  filterOptions: Record<"agent" | "channel" | "provider" | "model" | "tool", string[]>;
+};
+
+/** Aggregated report with one final, bounded comparison page. */
+export type UsageOverviewSlice = Pick<SessionsUsageResult, "sessions" | "totals" | "aggregates"> & {
+  overview: SessionsUsageOverview;
 };

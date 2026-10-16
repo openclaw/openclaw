@@ -1,4 +1,3 @@
-// Entry points for the full configure wizard and section-limited runs.
 import { formatCliCommand } from "../cli/command-format.js";
 import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -43,8 +42,5 @@ export async function configureCommandFromSectionsArg(
   }
 
   // Omission opens the full chooser; an empty array means no selected changes to the runner.
-  await runConfigureWizard(
-    { command: "configure", ...(sections.length > 0 ? { sections } : {}) },
-    runtime,
-  );
+  await runConfigureWizard(sections.length > 0 ? { sections } : {}, runtime);
 }

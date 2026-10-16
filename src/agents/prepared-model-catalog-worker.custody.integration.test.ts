@@ -4,6 +4,8 @@ import path from "node:path";
 import { threadId, Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
+import * as captureDirectory from "../plugins/plugin-source-capture-directory.js";
 import { sweepPluginSourceCapturesForTest } from "../plugins/plugin-source-capture-directory.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -41,6 +43,26 @@ describe("catalog worker capture custody", () => {
   ])(
     "keeps the $owner artifact selection in catalog and auth workers",
     async (selection, { signal }) => {
+      const captureReleases = new Map<string, Promise<void>>();
+      const createCapture = captureDirectory.createPluginSourceCaptureRoot;
+      const observeCapture = vi
+        .spyOn(captureDirectory, "createPluginSourceCaptureRoot")
+        .mockImplementation((...args) => {
+          const capture = createCapture(...args);
+          const released = createDeferredCore();
+          captureReleases.set(capture.directory, released.promise);
+          return {
+            ...capture,
+            release: () => {
+              const pending = capture.release();
+              released.resolve(pending);
+              return pending;
+            },
+          };
+        });
+      retireAfterTest(() => {
+        observeCapture.mockRestore();
+      });
       const fixture = await createStaticSnapshot(
         0,
         {},
@@ -111,7 +133,7 @@ describe("catalog worker capture custody", () => {
       });
       try {
         fixture.supersede();
-        await exitRequested.promise;
+        await withinTest(exitRequested.promise, signal);
         await sweepPluginSourceCapturesForTest(fixture.env.OPENCLAW_STATE_DIR!);
         expect(workerCaptures.every((capture) => fs.existsSync(capture.filename))).toBe(true);
       } finally {
@@ -120,7 +142,10 @@ describe("catalog worker capture custody", () => {
         termination.mockRestore();
       }
       await waitForWorkers();
-      await expect.poll(() => fs.existsSync(captureRoot)).toBe(false);
+      const released = captureReleases.get(captureRoot);
+      expect(released, "the worker capture release owner was observed").toBeDefined();
+      await withinTest(released!, signal);
+      expect(fs.existsSync(captureRoot)).toBe(false);
       expect(workerCaptures.filter((capture) => fs.existsSync(capture.filename))).toEqual([]);
       expect(parentCaptures.every((capture) => fs.existsSync(capture.filename))).toBe(true);
     },

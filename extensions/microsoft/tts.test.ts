@@ -1,6 +1,8 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { EdgeTTS } from "node-edge-tts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { edgeTTS } from "./tts.js";
 
@@ -11,7 +13,7 @@ const baseEdgeConfig = {
   saveSubtitles: false,
 };
 
-describe("edgeTTS empty audio validation", () => {
+describe("edgeTTS", () => {
   let tempDir: string | undefined;
   let outputPath: string;
 
@@ -21,6 +23,7 @@ describe("edgeTTS empty audio validation", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     if (tempDir) {
       rmSync(tempDir, { recursive: true, force: true });
       tempDir = undefined;
@@ -31,16 +34,39 @@ describe("edgeTTS empty audio validation", () => {
     ttsPromise: (text: string, filePath: string) => Promise<void>,
     text = "Hello",
   ) {
-    return edgeTTS(
-      {
-        text,
+    vi.spyOn(EdgeTTS.prototype, "ttsPromise").mockImplementation(ttsPromise);
+    return edgeTTS({
+      text,
+      outputPath,
+      config: baseEdgeConfig,
+      timeoutMs: 10000,
+    });
+  }
+
+  it("uses the supported Microsoft synthesis endpoint and authentication parameter", async () => {
+    // Intercept the dependency's CommonJS transport, including Bun's native ws shim.
+    const webSocketModule: typeof import("ws") = createRequire(import.meta.url)("ws");
+    let requestUrl: URL | undefined;
+    const intercepted = new Error("synthesis handshake intercepted");
+    vi.spyOn(webSocketModule, "WebSocket").mockImplementation(function (address) {
+      requestUrl = new URL(String(address));
+      throw intercepted;
+    });
+
+    await expect(
+      edgeTTS({
+        text: "Hello",
         outputPath,
         config: baseEdgeConfig,
         timeoutMs: 10000,
-      },
-      { ttsPromise },
-    );
-  }
+      }),
+    ).rejects.toBe(intercepted);
+
+    expect(requestUrl?.protocol).toBe("wss:");
+    expect(requestUrl?.hostname).toBe("api.msedgeservices.com");
+    expect(requestUrl?.pathname).toBe("/tts/cognitiveservices/websocket/v1");
+    expect(requestUrl?.searchParams.has("Ocp-Apim-Subscription-Key")).toBe(true);
+  });
 
   it("rejects blank text before calling Edge TTS", async () => {
     const ttsPromise = vi.fn(async (_text: string, filePath: string) => {

@@ -23,13 +23,13 @@ import {
   isValidGeminiEmbeddingValues,
   sanitizeGeminiEmbedding,
   type GeminiEmbeddingClient,
-  type GeminiTextEmbeddingRequest,
+  type GeminiEmbeddingRequest,
 } from "./embedding-provider.js";
 import { parseGeminiAuth } from "./gemini-auth.js";
 
 type GeminiBatchRequest = {
   custom_id: string;
-  request: GeminiTextEmbeddingRequest;
+  request: GeminiEmbeddingRequest;
 };
 
 type GeminiBatchOperation = {

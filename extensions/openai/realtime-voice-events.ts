@@ -3,14 +3,17 @@ import {
   canonicalizeBase64,
   normalizeRealtimeVoiceResponseOutcome,
 } from "openclaw/plugin-sdk/realtime-voice-provider";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalObjectRecord,
+  isRecord,
+  readStringField,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readRealtimeErrorDetail } from "./realtime-provider-shared.js";
 import { OpenAIRealtimeProtocol } from "./realtime-voice-protocol.js";
 import {
   OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX,
   OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR,
   isOpenAIRealtimeMaxSessionDurationError,
-  readRealtimeErrorEventId,
   type RealtimeEvent,
 } from "./realtime-voice-session-policy.js";
 
@@ -175,7 +178,7 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
         // Validation errors can omit event_id. The response parameter still belongs
         // to our single pending create; an explicit id always overrides that evidence.
         const rejectedEventId =
-          readRealtimeErrorEventId(event.error) ??
+          readStringField(asOptionalObjectRecord(event.error), "event_id") ??
           (this.responseCreateState === "in-flight" &&
           error?.type === "invalid_request_error" &&
           typeof error.param === "string" &&
@@ -199,7 +202,8 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
         }
         const rejectsManualResponseCancel =
           this.manualResponseCancelEventId !== null &&
-          readRealtimeErrorEventId(event.error) === this.manualResponseCancelEventId;
+          readStringField(asOptionalObjectRecord(event.error), "event_id") ===
+            this.manualResponseCancelEventId;
         if (detail === OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR) {
           if (!rejectsManualResponseCancel) {
             return;
@@ -273,44 +277,39 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
       }
       this.completedToolCallIds.add(callId);
       this.pendingToolCallIds.add(callId);
-      if (typeof output.arguments !== "string") {
-        this.rejectToolCallArguments({
+      const rejectArguments = (
+        reason: string,
+        message = "Invalid tool arguments: expected a JSON object.",
+      ) => {
+        this.config.onEvent?.({
+          direction: "server",
+          type: "tool_call.arguments.rejected",
+          detail: `reason=${reason}`,
           itemId,
-          callId,
-          reason: "invalid-json-type",
-          message: "Invalid tool arguments: expected a JSON object.",
         });
+        this.submitToolResult(callId, { error: message });
+      };
+      if (typeof output.arguments !== "string") {
+        rejectArguments("invalid-json-type");
         continue;
       }
       const rawArgs = output.arguments;
       if (Buffer.byteLength(rawArgs, "utf8") > OpenAIRealtimeProtocol.MAX_TOOL_ARGUMENT_BYTES) {
-        this.rejectToolCallArguments({
-          itemId,
-          callId,
-          reason: "too-large",
-          message: `Realtime tool arguments exceed the ${OpenAIRealtimeProtocol.MAX_TOOL_ARGUMENT_BYTES}-byte UTF-8 limit`,
-        });
+        rejectArguments(
+          "too-large",
+          `Realtime tool arguments exceed the ${OpenAIRealtimeProtocol.MAX_TOOL_ARGUMENT_BYTES}-byte UTF-8 limit`,
+        );
         continue;
       }
       let args: unknown;
       try {
         args = JSON.parse(rawArgs || "{}");
       } catch {
-        this.rejectToolCallArguments({
-          itemId,
-          callId,
-          reason: "malformed-json",
-          message: "Invalid tool arguments: expected a JSON object.",
-        });
+        rejectArguments("malformed-json");
         continue;
       }
       if (!isRecord(args)) {
-        this.rejectToolCallArguments({
-          itemId,
-          callId,
-          reason: "non-object-json",
-          message: "Invalid tool arguments: expected a JSON object.",
-        });
+        rejectArguments("non-object-json");
         continue;
       }
       this.config.onToolCall({ itemId: itemId ?? callId, callId, name, args });
@@ -356,21 +355,6 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
         ? callbackError
         : new Error("OpenAI realtime response callback failed", { cause: callbackError });
     }
-  }
-
-  private rejectToolCallArguments(params: {
-    itemId?: string;
-    callId: string;
-    reason: string;
-    message: string;
-  }): void {
-    this.config.onEvent?.({
-      direction: "server",
-      type: "tool_call.arguments.rejected",
-      detail: `reason=${params.reason}`,
-      itemId: params.itemId,
-    });
-    this.submitToolResult(params.callId, { error: params.message });
   }
 
   private describeServerEvent(event: RealtimeEvent): string | undefined {

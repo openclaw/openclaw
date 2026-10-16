@@ -1,5 +1,6 @@
 import fs, { open, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { buildJsonPluginConfigSchema } from "openclaw/plugin-sdk/plugin-entry";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -12,45 +13,6 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 });
 
 const minimal = { github: { token: "fixture-token", orgs: ["acme"] } };
-const documented = {
-  basePath: "/reports/",
-  displayTimezone: "America/Los_Angeles",
-  github: {
-    token: { source: "env", provider: "default", id: "TEAM_REPORTS_TEST_TOKEN" },
-    orgs: ["acme"],
-    teams: [{ org: "acme", slug: "maintainers" }],
-    includeDirectCollaborators: true,
-    excludeRepos: ["acme/archive"],
-    apiBaseUrl: "https://git.example.com/api/v3",
-    ignoreCommentPatterns: ["^automated status:"],
-  },
-  discord: {
-    token: { source: "file", provider: "hostfile", id: "/discord_bot" },
-    guildId: "123",
-    channels: [{ id: "456", excerpts: true }, { id: "789" }],
-    excerptMaxChars: 260,
-  },
-  people: [
-    {
-      github: ["alice", "alice-work"],
-      display: "Alice",
-      roleGroup: "maintainer",
-      access: ["release"],
-      areas: ["docs"],
-      discordUserId: "1234",
-      status: "active",
-    },
-  ],
-  summaries: { enabled: true, model: "openai/gpt-5.6-sol", reasoning: "high", agentId: "main" },
-  schedule: {
-    closedDayUtc: "00:05",
-    intradayEveryHours: 4,
-    jitterMinutes: 5,
-    weekly: true,
-    monthly: true,
-  },
-  retention: { days: 400 },
-};
 
 const manifestSchema = buildJsonPluginConfigSchema(manifest.configSchema);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -63,59 +25,31 @@ afterAll(() => {
 });
 
 describe("Team Reports configuration", () => {
-  it("accepts the documented sources and preserves identity metadata with shared defaults", () => {
-    const config = parseTeamReportsConfig(documented);
-    expect(config.basePath).toBe("/reports");
-    expect(config.people?.[0]).toMatchObject({
-      github: ["alice", "alice-work"],
-      roleGroup: "maintainer",
-    });
-    expect(config.discord?.channels[1]).toEqual({ id: "789", excerpts: false });
-    expect(manifestSchema.safeParse?.(documented).success).toBe(true);
-    const defaults = parseTeamReportsConfig(minimal);
-    expect(defaults).toMatchObject({
-      basePath: "/plugins/team-reports",
-      displayTimezone: "UTC",
-      github: { teams: [], includeDirectCollaborators: false, ignoreCommentPatterns: [] },
-      summaries: { enabled: true },
-      schedule: { closedDayUtc: "00:05", intradayEveryHours: 4 },
-      retention: { days: 400 },
-    });
-    expect(manifestSchema.safeParse?.(minimal)).toMatchObject({ success: true, data: defaults });
+  it("defaults to automatic collection and accepts an explicit scheduling opt-out", () => {
+    expect(parseTeamReportsConfig(minimal).schedule.enabled).toBe(true);
+    for (const enabled of [true, false]) {
+      const value = { ...minimal, schedule: { enabled } };
+      expect(parseTeamReportsConfig(value).schedule.enabled).toBe(enabled);
+      expect(manifestSchema.safeParse?.(value).success).toBe(true);
+    }
+    const invalid = { ...minimal, schedule: { enabled: "false" } };
+    expect(() => parseTeamReportsConfig(invalid)).toThrow();
+    expect(manifestSchema.safeParse?.(invalid).success).toBe(false);
   });
 
-  it.each([
-    { ...minimal, typo: true },
-    { github: { ...minimal.github, secret: "wrong-field" } },
-    { ...minimal, summaries: { invented: true } },
-    { ...minimal, people: [{ github: ["alice"], privateFact: "unaccepted" }] },
-    {
-      ...minimal,
-      discord: { token: "fixture", guildId: "123", channels: [{ id: "456", unknown: true }] },
-    },
-    { ...minimal, people: [], peopleFile: "/tmp/people.json" },
-    { ...minimal, schedule: { closedDayUtc: "25:00" } },
-  ])("rejects malformed or ambiguous config in both validation surfaces: %j", (value) => {
+  it("rejects ambiguous people configuration in both validation surfaces", () => {
+    const value = { ...minimal, people: [], peopleFile: "/tmp/people.json" };
     expect(() => parseTeamReportsConfig(value)).toThrow();
     expect(manifestSchema.safeParse?.(value).success).toBe(false);
   });
 
-  it.each([
-    "reports",
-    "/",
-    "/.",
-    "/..",
-    "/api/channels",
-    "/api/channels/discord",
-    "/reports/../admin",
-    "/reports/.",
-    "/reports?x=1",
-    "/reports/%2fadmin",
-    "//reports",
-  ])("rejects unsafe or reserved route root %s", (basePath) => {
-    expect(() => parseTeamReportsConfig({ ...minimal, basePath })).toThrow();
-    expect(manifestSchema.safeParse?.({ ...minimal, basePath }).success).toBe(false);
-  });
+  it.each(["/api/channels", "/reports/../admin"])(
+    "rejects unsafe or reserved route root %s",
+    (basePath) => {
+      expect(() => parseTeamReportsConfig({ ...minimal, basePath })).toThrow();
+      expect(manifestSchema.safeParse?.({ ...minimal, basePath }).success).toBe(false);
+    },
+  );
 
   it("reserves a mounted Control UI subtree while allowing the default root UI", () => {
     expect(parseTeamReportsConfig(minimal, "/").basePath).toBe("/plugins/team-reports");

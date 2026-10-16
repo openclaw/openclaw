@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { withBrowserFetchPreconnect } from "../../test-fetch.js";
 import "../test-support/browser-security.mock.js";
 import "./server-context.chrome-test-harness.js";
-import * as cdpModule from "./cdp.js";
+import * as cdp from "./cdp.js";
 import { OPEN_TAB_DISCOVERY_POLL_MS } from "./server-context.constants.js";
 import { createBrowserRouteContext } from "./server-context.js";
 import { beginProfileTransition, markBrowserRuntimeStopping } from "./server-context.lifecycle.js";
@@ -12,7 +12,8 @@ import {
   originalFetch,
 } from "./server-context.remote-tab-ops.harness.js";
 import { createProfileSelectionOps } from "./server-context.selection.js";
-import type { ProfileRuntimeState } from "./server-context.types.js";
+import { makeBrowserProfile } from "./server-context.test-harness.js";
+import type { BrowserTab } from "./server-context.types.js";
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -20,8 +21,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function flushUntil(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+async function flushUntil(predicate: () => boolean) {
+  for (let attempt = 0; attempt < 20; attempt++) {
     if (predicate()) {
       return;
     }
@@ -30,230 +31,151 @@ async function flushUntil(predicate: () => boolean): Promise<void> {
   throw new Error("condition did not settle");
 }
 
-function makeProfileRuntime(): ProfileRuntimeState {
-  return {
-    profile: {
-      name: "openclaw",
-      cdpPort: 18800,
-      cdpUrl: "http://127.0.0.1:18800",
-      cdpHost: "127.0.0.1",
-      cdpIsLoopback: true,
-      color: "#FF4500",
-      driver: "openclaw",
-      headless: true,
-      headlessSource: "config",
-      attachOnly: false,
-    },
-    running: { pid: 1234, proc: { on: vi.fn() } },
-    lastTargetId: null,
-  } as unknown as ProfileRuntimeState;
+const tab: BrowserTab = {
+  targetId: "PAGE",
+  title: "page",
+  url: "http://127.0.0.1:3001",
+  type: "page",
+};
+function selection(listTabs: () => Promise<(typeof tab)[]>) {
+  const profile = makeBrowserProfile();
+  return createProfileSelectionOps({
+    profile,
+    runtime: { profile, running: null, lastTargetId: null },
+    getCdpControlPolicy: () => undefined,
+    listTabs,
+    openTab: async () => tab,
+  });
 }
 
-describe("browser tab discovery poll abort", () => {
-  it.each(["caller", "deadline"])(
-    "cancels an in-flight local tab listing on %s",
-    async (source) => {
-      vi.useFakeTimers();
-      let requestSignal: AbortSignal | null | undefined;
-      let releaseRequest!: () => void;
-      let markStarted!: () => void;
-      const started = new Promise<void>((resolve) => {
-        markStarted = resolve;
-      });
-      globalThis.fetch = withBrowserFetchPreconnect(
-        vi.fn(async (_url: unknown, init?: RequestInit) => {
-          requestSignal = init?.signal;
-          return await new Promise<Response>((resolve, reject) => {
-            releaseRequest = () => resolve(new Response("[]"));
-            requestSignal?.addEventListener(
-              "abort",
-              () => reject(new Error("tab listing aborted", { cause: requestSignal?.reason })),
-              { once: true },
-            );
-            markStarted();
-          });
-        }),
-      );
-      const state = makeState("openclaw");
-      const profile = createTestBrowserRouteContext({ getState: () => state }).forProfile(
-        "openclaw",
-      );
-      const controller = new AbortController();
-      const listing = profile.listTabs({ signal: controller.signal, timeoutMs: 25 });
-      const rejected = listing.catch((error: unknown) => error);
-      await started;
-      if (source === "caller") {
-        controller.abort(new Error("listing cancelled"));
-      } else {
-        await vi.advanceTimersByTimeAsync(25);
-      }
-      try {
-        expect(requestSignal?.aborted).toBe(true);
-      } finally {
-        releaseRequest();
-      }
-      expect(await rejected).toBeInstanceOf(Error);
-      expect(state.profiles.get("openclaw")?.tabAliases).toBeUndefined();
-    },
-  );
-
-  it("does not adopt a local tab listing returned after cancellation", async () => {
-    let releaseRequest!: () => void;
-    let markStarted!: () => void;
-    const started = new Promise<void>((resolve) => {
-      markStarted = resolve;
-    });
+describe("browser tab discovery cancellation", () => {
+  it.each(["caller", "deadline"])("cancels an in-flight local listing on %s", async (source) => {
+    vi.useFakeTimers();
+    const started = Promise.withResolvers<void>();
+    const request = Promise.withResolvers<Response>();
+    let requestSignal: AbortSignal | null | undefined;
     globalThis.fetch = withBrowserFetchPreconnect(
-      vi.fn(async () => {
-        markStarted();
-        return await new Promise<Response>((resolve) => {
-          releaseRequest = () =>
-            resolve(
-              new Response(
-                JSON.stringify([
-                  { id: "LATE", title: "Late tab", url: "about:blank", type: "page" },
-                ]),
-              ),
-            );
-        });
+      vi.fn(async (_url: unknown, init?: RequestInit) => {
+        requestSignal = init?.signal;
+        requestSignal?.addEventListener(
+          "abort",
+          () => request.reject(new Error("tab listing aborted")),
+          { once: true },
+        );
+        started.resolve();
+        return request.promise;
       }),
     );
     const state = makeState("openclaw");
     const profile = createTestBrowserRouteContext({ getState: () => state }).forProfile("openclaw");
     const controller = new AbortController();
-    const listing = profile.listTabs({ signal: controller.signal });
-    const rejected = expect(listing).rejects.toThrow("listing cancelled");
-    await started;
+    const rejected = profile
+      .listTabs({ signal: controller.signal, timeoutMs: 25 })
+      .catch((error: unknown) => error);
+    await started.promise;
+    if (source === "caller") {
+      controller.abort(new Error("listing cancelled"));
+    } else {
+      await vi.advanceTimersByTimeAsync(25);
+    }
+    try {
+      expect(requestSignal?.aborted).toBe(true);
+    } finally {
+      request.resolve(Response.json([]));
+    }
+    expect(await rejected).toBeInstanceOf(Error);
+    expect(state.profiles.get("openclaw")?.tabAliases).toBeUndefined();
+  });
+
+  it("does not adopt a local listing returned after cancellation", async () => {
+    const started = Promise.withResolvers<void>();
+    const request = Promise.withResolvers<Response>();
+    globalThis.fetch = withBrowserFetchPreconnect(
+      vi.fn(async () => {
+        started.resolve();
+        return request.promise;
+      }),
+    );
+    const state = makeState("openclaw");
+    const profile = createTestBrowserRouteContext({ getState: () => state }).forProfile("openclaw");
+    const controller = new AbortController();
+    const rejected = expect(profile.listTabs({ signal: controller.signal })).rejects.toThrow(
+      "listing cancelled",
+    );
+    await started.promise;
     controller.abort(new Error("listing cancelled"));
-    releaseRequest();
+    request.resolve(
+      Response.json([{ id: "LATE", title: "Late tab", url: "about:blank", type: "page" }]),
+    );
     await rejected;
     expect(state.profiles.get("openclaw")?.tabAliases).toBeUndefined();
   });
 
   it("cancels the selection discovery timer", async () => {
     vi.useFakeTimers();
-    const runtime = makeProfileRuntime();
-    const tabWithoutWsUrl = {
-      targetId: "PAGE",
-      title: "page",
-      url: "http://127.0.0.1:3001",
-      type: "page" as const,
-    };
-    const listTabs = vi.fn(async () => [tabWithoutWsUrl]);
-
-    const ops = createProfileSelectionOps({
-      profile: runtime.profile,
-      runtime,
-      getCdpControlPolicy: () => undefined,
-      listTabs,
-      openTab: async () => tabWithoutWsUrl,
-    });
-
     const controller = new AbortController();
-    const ensurePromise = ops.ensureTabAvailable(undefined, { signal: controller.signal });
-
+    const ensure = selection(async () => [tab]).ensureTabAvailable(undefined, {
+      signal: controller.signal,
+    });
     await flushUntil(() => vi.getTimerCount() === 1);
     controller.abort();
-
-    await expect(ensurePromise).rejects.toThrow(/aborted/i);
+    await expect(ensure).rejects.toThrow(/aborted/i);
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("rejects when an in-flight tab read succeeds after abort", async () => {
+  it("rejects an in-flight selection read that succeeds after abort", async () => {
     vi.useFakeTimers();
-    const runtime = makeProfileRuntime();
-    const tab = {
-      targetId: "PAGE",
-      title: "page",
-      url: "http://127.0.0.1:3001",
-      wsUrl: "ws://127.0.0.1/devtools/page/PAGE",
-      type: "page" as const,
-    };
-    let resolveFirstRead!: (tabs: (typeof tab)[]) => void;
-    const firstRead = new Promise<(typeof tab)[]>((resolve) => {
-      resolveFirstRead = resolve;
-    });
+    const request = Promise.withResolvers<(typeof tab)[]>();
     const listTabs = vi
       .fn()
-      .mockImplementationOnce(async () => await firstRead)
+      .mockImplementationOnce(() => request.promise)
       .mockResolvedValue([tab]);
-    const ops = createProfileSelectionOps({
-      profile: runtime.profile,
-      runtime,
-      getCdpControlPolicy: () => undefined,
-      listTabs,
-      openTab: async () => tab,
-    });
     const controller = new AbortController();
-    const ensurePromise = ops.ensureTabAvailable(undefined, { signal: controller.signal });
-
+    const ensure = selection(listTabs).ensureTabAvailable(undefined, { signal: controller.signal });
     await flushUntil(() => listTabs.mock.calls.length === 1);
     controller.abort();
-    resolveFirstRead([tab]);
-
-    await expect(ensurePromise).rejects.toThrow(/aborted/i);
+    request.resolve([{ ...tab, wsUrl: "ws://127.0.0.1/devtools/page/PAGE" }]);
+    await expect(ensure).rejects.toThrow(/aborted/i);
     expect(listTabs).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it.each([
-    { closeFails: false, shutdown: false },
-    { closeFails: true, shutdown: false },
-    { closeFails: false, shutdown: true },
-  ])(
-    "cancels opened-target discovery and closes the target (close fails: $closeFails, shutdown: $shutdown)",
-    async ({ closeFails, shutdown }) => {
-      vi.useFakeTimers();
-      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-      vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({
-        targetId: "PENDING",
-        finalUrl: "about:blank",
-      });
-      const closeRequests: string[] = [];
-      const closeSignalsAborted: Array<boolean | undefined> = [];
-      const fetchMock = vi.fn(async (url: unknown, init?: RequestInit) => {
+  it("cancels opened-target discovery on shutdown even when compensating close fails", async () => {
+    vi.useFakeTimers();
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    vi.spyOn(cdp, "createTargetViaCdp").mockResolvedValue({
+      targetId: "PENDING",
+      finalUrl: "about:blank",
+    });
+    const closes: Array<[string, boolean | undefined]> = [];
+    globalThis.fetch = withBrowserFetchPreconnect(
+      vi.fn(async (url: unknown, init?: RequestInit) => {
         if (String(url).includes("/json/close/")) {
-          closeRequests.push(String(url));
-          closeSignalsAborted.push(init?.signal?.aborted);
-          if (closeFails) {
-            throw new Error("close request failed");
-          }
-          return { ok: true } as Response;
+          closes.push([String(url), init?.signal?.aborted]);
+          throw new Error("close request failed");
         }
-        if (!String(url).includes("/json/list")) {
-          throw new Error(`unexpected fetch: ${String(url)}`);
+        if (String(url).includes("/json/list")) {
+          return Response.json([]);
         }
-        return { ok: true, json: async () => [] } as unknown as Response;
-      });
-      globalThis.fetch = withBrowserFetchPreconnect(fetchMock);
-      const state = makeState("openclaw");
-      const openclaw = createBrowserRouteContext({ getState: () => state }).forProfile("openclaw");
-      const controller = new AbortController();
-      const openPromise = openclaw.openTab("about:blank", { signal: controller.signal });
-
-      await vi.advanceTimersByTimeAsync(0);
-      expect(setTimeoutSpy.mock.calls.some((call) => call[1] === OPEN_TAB_DISCOVERY_POLL_MS)).toBe(
-        true,
-      );
-      expect(vi.getTimerCount()).toBe(1);
-      let stopping: Promise<unknown> | undefined;
-      if (shutdown) {
-        markBrowserRuntimeStopping(state);
-        stopping = beginProfileTransition({
-          state,
-          runtime: state.profiles.get("openclaw")!,
-          reason: "runtime shutdown",
-          closeSharedAdapters: false,
-        });
-      } else {
-        controller.abort();
-      }
-
-      await expect(openPromise).rejects.toMatchObject({ name: "AbortError", message: "aborted" });
-      expect(closeRequests).toEqual(["http://127.0.0.1:18800/json/close/PENDING"]);
-      expect(closeSignalsAborted).toEqual([false]);
-      await stopping;
-      expect(vi.getTimerCount()).toBe(0);
-    },
-  );
+        throw new Error("unexpected fetch: " + String(url));
+      }),
+    );
+    const state = makeState("openclaw");
+    const openclaw = createBrowserRouteContext({ getState: () => state }).forProfile("openclaw");
+    const open = openclaw.openTab("about:blank", { signal: new AbortController().signal });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(timers.mock.calls.some((call) => call[1] === OPEN_TAB_DISCOVERY_POLL_MS)).toBe(true);
+    expect(vi.getTimerCount()).toBe(1);
+    markBrowserRuntimeStopping(state);
+    const stopping = beginProfileTransition({
+      state,
+      runtime: state.profiles.get("openclaw")!,
+      reason: "runtime shutdown",
+      closeSharedAdapters: false,
+    });
+    await expect(open).rejects.toMatchObject({ name: "AbortError", message: "aborted" });
+    expect(closes).toEqual([["http://127.0.0.1:18800/json/close/PENDING", false]]);
+    await stopping;
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });

@@ -21,6 +21,7 @@ import {
   type WorkerWorkspaceManifestEntry,
   type WorkerWorkspaceReconciliationJournal,
 } from "./workspace-manifest.js";
+import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import {
   assertWorkspaceMatchesManifest,
   ConcurrentWorkspacePathError,
@@ -32,9 +33,7 @@ import {
   reconciliationEntries,
 } from "./workspace-reconcile-derived-paths.js";
 import {
-  directoryContainsOnlyDerivedWorkspaceEntries,
-  directoryContainsOnlyJournalPaths,
-  entryMatches,
+  directoryContainsOnlyWorkspaceEntries,
   localPath,
   removeEmptyWorkspaceDirectory,
 } from "./workspace-reconcile-fs.js";
@@ -47,6 +46,12 @@ type WorkspaceRecoveryContext = {
   isRetainedInput: ReturnType<typeof createStagedInputPathMatcher>;
   assertCurrent?: () => void;
 };
+function workspaceRecoveryConflict(entryPath: string): ConcurrentWorkspacePathError {
+  return new ConcurrentWorkspacePathError(
+    `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
+  );
+}
+
 async function requireGit(
   cwd: string,
   args: string[],
@@ -219,7 +224,6 @@ export async function createWorkspacePatch(params: {
 export async function applyWorkspacePatch(params: {
   root: string;
   patch: Uint8Array;
-  reverse?: boolean;
   assertCurrent?: () => void;
 }): Promise<void> {
   if (params.patch.byteLength === 0) {
@@ -234,15 +238,7 @@ export async function applyWorkspacePatch(params: {
   try {
     await requireGit(
       params.root,
-      [
-        "-c",
-        "core.autocrlf=false",
-        "apply",
-        "--no-index",
-        "--binary",
-        "--whitespace=nowarn",
-        ...(params.reverse ? ["--reverse"] : []),
-      ],
+      ["-c", "core.autocrlf=false", "apply", "--no-index", "--binary", "--whitespace=nowarn"],
       params.patch,
       { GIT_DIR: path.join(temporary, ".git") },
       params.assertCurrent,
@@ -277,9 +273,8 @@ async function createWorkspaceRecoveryPatch(params: WorkspaceRecoveryContext): P
     const paths = new Set([...baseByPath.keys(), ...appliedByPath.keys()]);
     const directories = new Set<string>();
     for (const entryPath of paths) {
-      const segments = entryPath.split("/");
-      for (let index = 1; index < segments.length; index += 1) {
-        directories.add(segments.slice(0, index).join("/"));
+      for (const ancestor of workspacePathAncestors(entryPath)) {
+        directories.add(ancestor);
       }
     }
     const actualEntries: WorkerWorkspaceManifestEntry[] = [];
@@ -292,9 +287,7 @@ async function createWorkspaceRecoveryPatch(params: WorkspaceRecoveryContext): P
         if (baseEntry && appliedEntry) {
           // A missing replacement path is ambiguous: Git may have removed the
           // old entry mid-apply, or the user may have deleted it afterward.
-          throw new ConcurrentWorkspacePathError(
-            `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
-          );
+          throw workspaceRecoveryConflict(entryPath);
         }
         continue;
       }
@@ -311,22 +304,19 @@ async function createWorkspaceRecoveryPatch(params: WorkspaceRecoveryContext): P
       const isJournalDirectory =
         actual.type === "directory" &&
         ((directories.has(entryPath) &&
-          (await directoryContainsOnlyJournalPaths(
+          (await directoryContainsOnlyWorkspaceEntries(
             params.root,
             entryPath,
-            paths,
-            directories,
             params.isRetainedInput,
+            { paths, directories },
           ))) ||
-          (await directoryContainsOnlyDerivedWorkspaceEntries(
+          (await directoryContainsOnlyWorkspaceEntries(
             params.root,
             entryPath,
             params.isRetainedInput,
           )));
       if (!isJournalDirectory) {
-        throw new ConcurrentWorkspacePathError(
-          `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
-        );
+        throw workspaceRecoveryConflict(entryPath);
       }
     }
     const actualTree = await writeRawWorkspaceTree({
@@ -360,17 +350,14 @@ async function assertWorkspaceRecoveryBase(params: WorkspaceRecoveryContext): Pr
   for (const entryPath of baseDirectoryPaths) {
     const node = await localWorkspaceNode(params.root, entryPath);
     if (node?.type !== "directory") {
-      throw new ConcurrentWorkspacePathError(
-        `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
-      );
+      throw workspaceRecoveryConflict(entryPath);
     }
   }
   const basePaths = new Set(baseEntries.map((entry) => entry.path));
   const baseDirectories = new Set<string>();
   for (const entryPath of basePaths) {
-    const segments = entryPath.split("/");
-    for (let index = 1; index < segments.length; index += 1) {
-      baseDirectories.add(segments.slice(0, index).join("/"));
+    for (const ancestor of workspacePathAncestors(entryPath)) {
+      baseDirectories.add(ancestor);
     }
   }
   for (const entry of appliedEntries) {
@@ -382,20 +369,17 @@ async function assertWorkspaceRecoveryBase(params: WorkspaceRecoveryContext): Pr
       existing?.isDirectory() &&
       !existing.isSymbolicLink() &&
       baseDirectories.has(entry.path) &&
-      (await directoryContainsOnlyJournalPaths(
+      (await directoryContainsOnlyWorkspaceEntries(
         params.root,
         entry.path,
-        basePaths,
-        baseDirectories,
         params.isRetainedInput,
+        { paths: basePaths, directories: baseDirectories },
       ))
     ) {
       continue;
     }
     if (existing) {
-      throw new ConcurrentWorkspacePathError(
-        `Gateway workspace changed while cloud recovery was pending: ${entry.path}`,
-      );
+      throw workspaceRecoveryConflict(entry.path);
     }
   }
   for (const entryPath of appliedDirectoryPaths) {
@@ -407,16 +391,14 @@ async function assertWorkspaceRecoveryBase(params: WorkspaceRecoveryContext): Pr
       node &&
       !(
         node.type === "directory" &&
-        (await directoryContainsOnlyDerivedWorkspaceEntries(
+        (await directoryContainsOnlyWorkspaceEntries(
           params.root,
           entryPath,
           params.isRetainedInput,
         ))
       )
     ) {
-      throw new ConcurrentWorkspacePathError(
-        `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
-      );
+      throw workspaceRecoveryConflict(entryPath);
     }
   }
 }
@@ -436,39 +418,32 @@ async function assertWorkspaceRecoveryDirectoriesRecoverable(
       if (
         baseEntries.has(entryPath) &&
         appliedDirectories.has(entryPath) &&
-        !(await directoryContainsOnlyJournalPaths(
+        !(await directoryContainsOnlyWorkspaceEntries(
           params.root,
           entryPath,
-          appliedEntryPaths,
-          appliedDirectories,
           params.isRetainedInput,
+          { paths: appliedEntryPaths, directories: appliedDirectories },
         ))
       ) {
-        throw new ConcurrentWorkspacePathError(
-          `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
-        );
+        throw workspaceRecoveryConflict(entryPath);
       }
       continue;
     }
     if (!local) {
       if (baseDirectories.has(entryPath) && appliedDirectories.has(entryPath)) {
-        throw new ConcurrentWorkspacePathError(
-          `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
-        );
+        throw workspaceRecoveryConflict(entryPath);
       }
       continue;
     }
     const baseEntry = baseEntries.get(entryPath);
     const appliedEntry = appliedEntries.get(entryPath);
     if (
-      (baseEntry && (await entryMatches(params.root, baseEntry))) ||
-      (appliedEntry && (await entryMatches(params.root, appliedEntry)))
+      (baseEntry && sameEntry(local, baseEntry)) ||
+      (appliedEntry && sameEntry(local, appliedEntry))
     ) {
       continue;
     }
-    throw new ConcurrentWorkspacePathError(
-      `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
-    );
+    throw workspaceRecoveryConflict(entryPath);
   }
 }
 
@@ -497,14 +472,10 @@ async function restoreWorkspaceJournalDirectories(params: WorkspaceRecoveryConte
 export async function recoverWorkerWorkspaceReconciliation(params: {
   root: string;
   journal: WorkerWorkspaceReconciliationJournal;
-  preservePaths?: ReadonlySet<string>;
   assertCurrent?: () => void;
 }): Promise<void> {
   if (params.journal.appliedManifestRef) {
     throw new Error("Cloud workspace result is already applied and awaits fence acceptance");
-  }
-  if (params.preservePaths?.size) {
-    throw new Error("Cloud workspace patch recovery cannot preserve partial paths");
   }
   const root = await fs.realpath(params.root);
   validateJournalSnapshot(params.journal);

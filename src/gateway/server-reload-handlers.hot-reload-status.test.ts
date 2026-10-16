@@ -86,7 +86,7 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
     const broadcast = vi.fn();
     const invalidateMentions = vi.fn();
     const gatewayContext = {
-      mentionInbox: { invalidate: invalidateMentions },
+      mentionInbox: { invalidateAsync: invalidateMentions },
     } as unknown as GatewayRequestContext;
     const reloader = startManagedGatewayConfigReloader({
       scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),

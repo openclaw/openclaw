@@ -67,7 +67,7 @@ import {
 import { initializeNodeWorkerGitWorkspace } from "./node-worker-workspace-git.js";
 import {
   recoverWorkspaceReplacement,
-  replaceWorkspace,
+  replaceNodeWorkerDirectory,
 } from "./node-worker-workspace-replacement.js";
 import { copyNodeWorkerProjectSeedObjects } from "./node-worker-workspace-seeds.js";
 
@@ -181,18 +181,18 @@ async function downloadFile(params: {
     await params.root.create(
       workspacePath(params.root.rootReal, params.relativePath),
       (async function* () {
-        const hash = createHash("sha256");
+        const hash = params.expectedSha256 === undefined ? undefined : createHash("sha256");
         let bytes = 0;
         for await (const value of response) {
           const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
           bytes += chunk.byteLength;
-          hash.update(chunk);
+          hash?.update(chunk);
           yield chunk;
         }
         // Reject invalid content before the completed file is published.
         if (
           (params.expectedBytes !== undefined && bytes !== params.expectedBytes) ||
-          (params.expectedSha256 !== undefined && hash.digest("hex") !== params.expectedSha256)
+          (hash && hash.digest("hex") !== params.expectedSha256)
         ) {
           throw new Error("workspace transfer blob failed integrity validation");
         }
@@ -369,6 +369,7 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
     params.setStage("materialize");
     const blobApplyStartedAt = performance.now();
     const stagingHashMemo: WorkspaceHashMemo = new Map();
+    const downloadedBlobs = new Map<string, string>();
     for (const directory of checkpointBase ? [] : (manifest.directories ?? [])) {
       await stagingRoot.mkdir(`./${directory}`);
     }
@@ -412,6 +413,17 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
           });
           continue;
         }
+        const blobKey = `${entry.sha256}:${entry.size}`;
+        const downloaded = downloadedBlobs.get(blobKey);
+        if (downloaded) {
+          // Reuse validated bytes within this private staging tree, with independent file modes.
+          await stagingRoot.copyIn(
+            `./${entry.path}`,
+            { root: stagingRoot, relativePath: `./${downloaded}` },
+            { overwrite: false, mode: entry.mode, maxBytes: entry.size, signal: params.signal },
+          );
+          continue;
+        }
         await downloadFile({
           request: {
             ...params.request,
@@ -424,13 +436,14 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
           expectedSha256: entry.sha256,
           mode: entry.mode,
         });
+        downloadedBlobs.set(blobKey, entry.path);
       }
     });
     const blobApplyMs = performance.now() - blobApplyStartedAt;
     // Reuse only hashes validated on this staging filesystem. Capture still checks
     // the complete tree and current handle identities before the atomic replacement.
+    params.setStage("verify");
     if (checkpointBase && checkpointBaseRef && !overlay) {
-      params.setStage("verify");
       await applyNodeRepositoryCheckpoint({
         workspaceDir: params.workspaceDir,
         stagingRoot: staging,
@@ -442,7 +455,6 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
       });
       params.hashMemo?.clear();
     } else {
-      params.setStage("verify");
       const observed = overlay
         ? await overlay.apply(staging)
         : await captureManifest({
@@ -490,8 +502,20 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
         params.signal?.throwIfAborted();
       }
     } else if (!overlay && !checkpointBase) {
+      // Retain this node's Git state across the atomic workspace swap.
+      const git = path.join(params.workspaceDir, ".git");
+      const parent = await fsRoot(path.dirname(params.workspaceDir));
+      if (manifest.baseCommit && (await parent.exists(path.relative(parent.rootReal, git)))) {
+        const stagedGit = path.join(staging, ".git");
+        for (const entry of await fsp.readdir(stagedGit)) {
+          if (entry !== "objects") {
+            await fsp.rm(path.join(stagedGit, entry), { recursive: true, force: true });
+          }
+        }
+        await fsp.cp(git, stagedGit, { recursive: true, verbatimSymlinks: true });
+      }
       params.setStage("replace");
-      await replaceWorkspace(params.workspaceDir, staging);
+      await replaceNodeWorkerDirectory(params.workspaceDir, staging, "workspace", params.signal);
     }
     if (params.hashMemo && !overlay && !checkpointBase) {
       replaceWorkerWorkspaceHashMemoEntries(params.hashMemo, [...stagingHashMemo]);
@@ -658,23 +682,18 @@ export async function runNodeWorkerWorkspaceTransfer(
       throw error;
     }
     if (error instanceof NodeWorkerTransferHttpError) {
-      if (error.reason === "cloudflare-access-requires-tls") {
-        throw new NodeWorkerWorkspaceTransferError(
-          "workspace-transfer-failed: Cloudflare Access credentials require HTTPS",
-          { cause: error },
-        );
-      }
-      if (error.reason === "tls-fingerprint-mismatch") {
-        throw new NodeWorkerWorkspaceTransferError(
-          "workspace-transfer-failed: gateway TLS fingerprint mismatch",
-          { cause: error },
-        );
-      }
-      if (error.reason === "invalid-tls-fingerprint") {
-        throw new NodeWorkerWorkspaceTransferError(
-          "workspace-transfer-failed: gateway TLS fingerprint is invalid",
-          { cause: error },
-        );
+      const detail =
+        error.reason === "cloudflare-access-requires-tls"
+          ? "Cloudflare Access credentials require HTTPS"
+          : error.reason === "tls-fingerprint-mismatch"
+            ? "gateway TLS fingerprint mismatch"
+            : error.reason === "invalid-tls-fingerprint"
+              ? "gateway TLS fingerprint is invalid"
+              : undefined;
+      if (detail) {
+        throw new NodeWorkerWorkspaceTransferError(`workspace-transfer-failed: ${detail}`, {
+          cause: error,
+        });
       }
     }
     throw new NodeWorkerWorkspaceTransferError(

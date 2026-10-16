@@ -17,22 +17,13 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
     }
 
     private var authorizationWaits: [UUID: AuthorizationWait] = [:]
-    private var locationContinuation: CheckedContinuation<CLLocation, Swift.Error>?
     var locationRequestContinuations: [UUID: CheckedContinuation<CLLocation, Swift.Error>] = [:]
     private var cachedAuthorizationSnapshot = LocationAuthorizationSnapshot.undetermined
     private var authorizationChangeHandler: (@MainActor @Sendable (LocationAuthorizationSnapshot) -> Void)?
     private var significantLocationCallback: (@Sendable (CLLocation) -> Void)?
-    private var isMonitoringSignificantChanges = false
 
     var locationManager: CLLocationManager {
         self.manager
-    }
-
-    /// Compatibility witness for the shipped single-waiter protocol; app calls use the
-    /// concurrent extension and its per-request continuation dictionary.
-    var locationRequestContinuation: CheckedContinuation<CLLocation, Swift.Error>? {
-        get { self.locationContinuation }
-        set { self.locationContinuation = newValue }
     }
 
     override init() {
@@ -188,9 +179,9 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
     }
 
     func startMonitoringSignificantLocationChanges(onUpdate: @escaping @Sendable (CLLocation) -> Void) {
+        let wasMonitoring = self.significantLocationCallback != nil
         self.significantLocationCallback = onUpdate
-        guard !self.isMonitoringSignificantChanges else { return }
-        self.isMonitoringSignificantChanges = true
+        guard !wasMonitoring else { return }
         self.manager.startMonitoringSignificantLocationChanges()
     }
 
@@ -206,7 +197,6 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
 
     func stopMonitoringSignificantLocationChanges() {
         self.significantLocationCallback = nil
-        self.isMonitoringSignificantChanges = false
         self.manager.stopMonitoringSignificantLocationChanges()
     }
 

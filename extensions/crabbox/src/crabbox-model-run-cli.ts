@@ -19,7 +19,7 @@ export function registerCrabboxModelRunCommand({
     .requiredOption("--id <lease>", "Existing, exclusively owned Crabbox lease")
     .requiredOption("--model <provider/model>", "Configured OpenAI-compatible API-key model")
     .option("--provider <provider>", "Crabbox backend override; otherwise use the lease's provider")
-    .option("--binary <path>", "Crabbox binary with upstream proxy support")
+    .option("--binary <path>", "Preferred Crabbox binary (managed release used if outdated)")
     .option("--timeout <seconds>", "Total command and setup deadline in seconds", "600")
     .argument("<command...>", "Remote executable and arguments, following --")
     .action(

@@ -26,7 +26,6 @@ type FakeRestCall = {
 
 type FakeRestClient = RequestClient & {
   calls: FakeRestCall[];
-  enqueueResponse: (value: unknown) => void;
 };
 
 export function createJsonResponse(body: unknown, init?: ResponseInit): Response {
@@ -100,9 +99,6 @@ export function createFakeRestClient(responses: unknown[] = []): FakeRestClient 
   };
   return {
     calls,
-    enqueueResponse: (value: unknown) => {
-      queued.push(value);
-    },
     get: async (path, query) => await request("GET", path, undefined, query),
     post: async (path, data, query) => await request("POST", path, data, query),
     patch: async (path, data, query) => await request("PATCH", path, data, query),

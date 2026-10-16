@@ -28,24 +28,11 @@ export function resolveAgentTimeoutMs(opts: {
   // Config and per-run zero share the exact timer-safe unlimited sentinel.
   const defaultMs = seconds === 0 ? NO_TIMEOUT_MS : clampTimeoutMs(Math.max(seconds, 1) * 1000);
   const overrideMs = resolveOptionalIntegerOption(opts.overrideMs);
-  if (overrideMs !== undefined) {
-    if (overrideMs === 0) {
-      return NO_TIMEOUT_MS;
-    }
-    if (overrideMs < 0) {
-      return defaultMs;
-    }
-    return clampTimeoutMs(overrideMs);
+  const override = overrideMs ?? resolveOptionalIntegerOption(opts.overrideSeconds);
+  if (override === undefined || override < 0) {
+    return defaultMs;
   }
-  const overrideSeconds = resolveOptionalIntegerOption(opts.overrideSeconds);
-  if (overrideSeconds !== undefined) {
-    if (overrideSeconds === 0) {
-      return NO_TIMEOUT_MS;
-    }
-    if (overrideSeconds < 0) {
-      return defaultMs;
-    }
-    return clampTimeoutMs(overrideSeconds * 1000);
-  }
-  return defaultMs;
+  return override === 0
+    ? NO_TIMEOUT_MS
+    : clampTimeoutMs(override * (overrideMs === undefined ? 1000 : 1));
 }

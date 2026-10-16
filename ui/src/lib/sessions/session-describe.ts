@@ -73,57 +73,57 @@ export function createSessionDescribeReads(host: {
       }
       throw new Error("gateway not connected");
     }
+    const impliedAgentId = parseAgentSessionKey(params.key)?.agentId;
     const key = JSON.stringify([
       params.key,
-      params.agentId,
+      impliedAgentId && normalizeAgentId(impliedAgentId) === normalizeAgentId(params.agentId)
+        ? undefined
+        : params.agentId,
       params.includeDerivedTitles,
       params.includeLastMessage,
       options.timeoutMs,
     ]);
-    let read = reads.get(key);
-    if (read && (!current(read) || options.refresh || (!host.canReuse() && read.result))) {
-      reads.delete(key);
-      read = undefined;
+    const read = reads.get(key);
+    if (read && current(read) && !options.refresh && (!read.result || host.canReuse())) {
+      return read.promise;
     }
-    if (!read) {
-      const request = scope.client.request<Result>("sessions.describe", params, ...requestOptions);
-      const pending: Read = {
-        params: { ...params },
-        scope,
-        promise: request,
-        issuedRow: host.currentRow(params),
-        reusable: host.canReuse(),
-      };
-      pending.promise = request.then(
-        (response) => {
-          const result =
-            response.session?.runtimeMs === undefined
-              ? response
-              : {
-                  ...response,
-                  session: { ...response.session, runtimeSampledAt: Date.now() },
-                };
-          if (reads.get(key) === pending && host.connection.isCurrent(scope)) {
-            pending.result = result;
-            if (!pending.reusable || !host.canReuse() || !current(pending)) {
-              reads.delete(key);
-            }
-            trim();
-          }
-          return result;
-        },
-        (error: unknown) => {
-          if (reads.get(key) === pending) {
+    reads.delete(key);
+    const request = scope.client.request<Result>("sessions.describe", params, ...requestOptions);
+    const pending: Read = {
+      params: { ...params },
+      scope,
+      promise: request,
+      issuedRow: host.currentRow(params),
+      reusable: host.canReuse(),
+    };
+    pending.promise = request.then(
+      (response) => {
+        const result =
+          response.session?.runtimeMs === undefined
+            ? response
+            : {
+                ...response,
+                session: { ...response.session, runtimeSampledAt: Date.now() },
+              };
+        if (reads.get(key) === pending && host.connection.isCurrent(scope)) {
+          pending.result = result;
+          if (!pending.reusable || !host.canReuse() || !current(pending)) {
             reads.delete(key);
           }
-          throw error;
-        },
-      );
-      read = pending;
-      reads.set(key, read);
-      trim();
-    }
-    return read.promise;
+          trim();
+        }
+        return result;
+      },
+      (error: unknown) => {
+        if (reads.get(key) === pending) {
+          reads.delete(key);
+        }
+        throw error;
+      },
+    );
+    reads.set(key, pending);
+    trim();
+    return pending.promise;
   };
 
   return {

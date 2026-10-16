@@ -6,13 +6,14 @@ import { resolveMcpBearerBundleConfig, withMcpAuthProfileBearer } from "./mcp-au
 import * as mcpHttpFetch from "./mcp-http-fetch.js";
 
 const authMocks = vi.hoisted(() => ({
-  loadAuthProfileStoreForSecretsRuntime: vi.fn(),
+  loadAuthProfileStoreForRuntimeAsync: vi.fn(),
   resolveApiKeyForProfile: vi.fn(),
   resolveMcpOAuthAccessToken: vi.fn(),
 }));
 
+// mock-isolation: Bearer projection uses synthetic profile snapshots without reading host stores.
 vi.mock("./auth-profiles/store-runtime.js", () => ({
-  loadAuthProfileStoreForSecretsRuntime: authMocks.loadAuthProfileStoreForSecretsRuntime,
+  loadAuthProfileStoreForRuntimeAsync: authMocks.loadAuthProfileStoreForRuntimeAsync,
 }));
 
 vi.mock("./auth-profiles/oauth.js", () => ({
@@ -52,7 +53,7 @@ function resolvedProfile(provider: string, access: string, apiKey = access) {
 
 describe("mcp auth profile bearer projection", () => {
   beforeEach(() => {
-    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReset();
+    authMocks.loadAuthProfileStoreForRuntimeAsync.mockReset();
     authMocks.resolveApiKeyForProfile.mockReset();
     authMocks.resolveMcpOAuthAccessToken.mockReset();
   });
@@ -62,7 +63,10 @@ describe("mcp auth profile bearer projection", () => {
   });
 
   it("projects existing MCP-native OAuth credentials without an auth profile", async () => {
-    const buildMcpHttpFetch = vi.spyOn(mcpHttpFetch, "buildMcpHttpFetch");
+    const buildMcpOAuthAuthorizationFetch = vi.spyOn(
+      mcpHttpFetch,
+      "buildMcpOAuthAuthorizationFetch",
+    );
     authMocks.resolveMcpOAuthAccessToken.mockResolvedValueOnce("native-access-token");
 
     const resolved = await resolveMcpBearerBundleConfig({
@@ -88,10 +92,11 @@ describe("mcp auth profile bearer projection", () => {
     expect(resolved.config.mcpServers.docs?.auth).toBeUndefined();
     expect(resolved.config.mcpServers.docs?.oauth).toBeUndefined();
     expect(Object.values(resolved.env ?? {})).toEqual(["native-access-token"]);
-    expect(buildMcpHttpFetch).toHaveBeenCalledWith(
+    expect(buildMcpOAuthAuthorizationFetch).toHaveBeenCalledWith(
       expect.objectContaining({
-        resourceUrl: "https://mcp.example.com/mcp",
-        timeoutMs: 25,
+        url: "https://mcp.example.com/mcp",
+        requestTimeoutMs: 25,
+        headers: undefined,
       }),
     );
     expect(authMocks.resolveMcpOAuthAccessToken).toHaveBeenCalledWith(
@@ -136,7 +141,7 @@ describe("mcp auth profile bearer projection", () => {
   });
 
   it("resolves refreshable OAuth profiles into env-backed CLI bearer headers", async () => {
-    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValueOnce(
+    authMocks.loadAuthProfileStoreForRuntimeAsync.mockResolvedValueOnce(
       authProfileStore("ducktape"),
     );
     authMocks.resolveApiKeyForProfile.mockResolvedValueOnce(
@@ -182,7 +187,7 @@ describe("mcp auth profile bearer projection", () => {
   });
 
   it("rejects static token profiles instead of pretending they are refreshable", async () => {
-    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValueOnce(
+    authMocks.loadAuthProfileStoreForRuntimeAsync.mockResolvedValueOnce(
       createAuthProfileStoreFixture({
         "ducktape:static": {
           type: "token",
@@ -209,7 +214,7 @@ describe("mcp auth profile bearer projection", () => {
   });
 
   it("projects the raw OAuth access token even when provider formatting returns structured auth", async () => {
-    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValueOnce(authProfileStore("google"));
+    authMocks.loadAuthProfileStoreForRuntimeAsync.mockResolvedValueOnce(authProfileStore("google"));
     authMocks.resolveApiKeyForProfile.mockResolvedValueOnce(
       resolvedProfile(
         "google",
@@ -241,7 +246,7 @@ describe("mcp auth profile bearer projection", () => {
   });
 
   it("injects fresh bearer headers only for same-origin embedded MCP requests", async () => {
-    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValue(authProfileStore("ducktape"));
+    authMocks.loadAuthProfileStoreForRuntimeAsync.mockResolvedValue(authProfileStore("ducktape"));
     authMocks.resolveApiKeyForProfile.mockResolvedValue(
       resolvedProfile("ducktape", "fresh-access-token"),
     );

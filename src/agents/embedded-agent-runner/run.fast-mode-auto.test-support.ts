@@ -61,6 +61,8 @@ describe("runEmbeddedAgent fast auto progress", () => {
     resetSharedRunIntegrationHarnessMocks();
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     state = await createOpenClawTestState({ label: "run.fast-mode-auto" });
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot({});
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
     mockedClassifyFailoverReason.mockReturnValue(null);
   });
@@ -71,6 +73,15 @@ describe("runEmbeddedAgent fast auto progress", () => {
     await state?.cleanup();
   });
 
+  it("preserves explicit Ultrafast through attempt dispatch", async () => {
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
+      expect(params.fastMode).toBe("ultrafast");
+      return successAttempt("ollama", "glm-5.1:cloud");
+    });
+    await runEmbeddedAgent({ ...createOverflowRunParams(state), fastMode: "ultrafast" });
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+  });
+
   it("uses the selected model's auto cutoff when the caller omits one", async () => {
     let attemptParams: FastModeAttemptParams | undefined;
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
@@ -79,19 +90,22 @@ describe("runEmbeddedAgent fast auto progress", () => {
       return successAttempt("ollama", "glm-5.1:cloud");
     });
 
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "ollama/glm-5.1:cloud": { params: { fastAutoOnSeconds: 23 } },
+          },
+        },
+      },
+    };
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot(config);
     await runEmbeddedAgent({
       ...createOverflowRunParams(state),
       provider: "ollama",
       model: "glm-5.1:cloud",
-      config: {
-        agents: {
-          defaults: {
-            models: {
-              "ollama/glm-5.1:cloud": { params: { fastAutoOnSeconds: 23 } },
-            },
-          },
-        },
-      },
+      config,
       fastMode: "auto",
     });
 

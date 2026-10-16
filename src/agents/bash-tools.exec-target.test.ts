@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { requireValidExecTarget } from "../infra/exec-approvals.js";
 import { resolveExecTarget } from "./bash-tools.exec-runtime.js";
+import { createExecHostResolver } from "./bash-tools.exec-support.js";
+import { createExecTool } from "./bash-tools.js";
+import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
+import { createLazyExecTool } from "./lazy-exec-tool.js";
 import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
 
 describe("resolveExecTarget", () => {
@@ -46,7 +50,6 @@ describe("resolveExecTarget", () => {
   });
 
   it.each([
-    ["auto", undefined, true, false, "auto", "sandbox"],
     ["auto", undefined, false, false, "auto", "gateway"],
     ["auto", "node", false, true, "node", "node"],
     ["node", "node", true, false, "node", "node"],
@@ -105,7 +108,7 @@ describe("resolveExecTarget", () => {
   });
 
   describe("required session sandbox", () => {
-    it.each(["gateway", "node"] as const)(
+    it.each(["node"] as const)(
       "rejects explicit host=%s even when configured host matches",
       (host) => {
         expect(() =>
@@ -154,4 +157,60 @@ describe("resolveExecTarget", () => {
       ).toThrow(/sandbox|required|unavailable/i);
     });
   });
+});
+
+describe("removed exec timeout field", () => {
+  it("rejects a stale timeout argument before command execution", async () => {
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+    await expect(
+      tool.execute("legacy-timeout", {
+        command: "exit 99",
+        timeout: 5,
+      } as never),
+    ).rejects.toThrow('exec parameter "timeout" is unsupported; use "timeoutSeconds" instead');
+  });
+});
+
+describe("named node host policy", () => {
+  const sandbox = {
+    containerName: "test-sandbox",
+    workspaceDir: "/workspace",
+    containerWorkdir: "/workspace",
+  };
+
+  it.each([
+    { host: "gateway" as const },
+    { sandbox },
+    { host: "node" as const, sandbox, sandboxRequired: true },
+  ])("keeps node-only calls within configured policy %j", (defaults) => {
+    const resolveHost = createExecHostResolver(defaults);
+    expect(() => resolveHost({ command: "echo ok", node: "node-1" })).toThrow(
+      /exec host not allowed.*node/,
+    );
+  });
+});
+
+describe("foreground node exec wait budgets", () => {
+  it.each([
+    { timeoutSec: undefined, timeoutSeconds: undefined, expectedMs: 1_810_000 },
+    { timeoutSec: 120, timeoutSeconds: 0, expectedMs: 130_000 },
+  ])(
+    "keeps prepared and pinned budgets for $timeoutSec/$timeoutSeconds seconds",
+    ({ timeoutSec, timeoutSeconds, expectedMs }) => {
+      for (const createTool of [createExecTool, createLazyExecTool]) {
+        const tool = createTool({ host: "node", timeoutSec });
+        const args = { command: "echo ready", timeoutSeconds };
+        expect(tool.getExecutionTimeoutMs?.(args)).toBe(expectedMs);
+        const defaultTool = createTool({ timeoutSec });
+        expect(defaultTool.getExecutionTimeoutMs?.({ ...args, node: "node-1" })).toBe(expectedMs);
+
+        const nodeTool = pinExecToolTarget(tool, { host: "node" });
+        expect(nodeTool.getExecutionTimeoutMs?.({ ...args, host: "gateway" })).toBe(expectedMs);
+
+        const gatewayTool = pinExecToolTarget(tool, { host: "gateway" });
+        expect(gatewayTool.getExecutionTimeoutMs?.({ ...args, host: "node" })).toBeUndefined();
+      }
+    },
+  );
 });

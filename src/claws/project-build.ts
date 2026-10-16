@@ -1,10 +1,10 @@
-import { createHash } from "node:crypto";
 import { link, lstat, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import * as tar from "tar";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { digestClawBytes } from "./digest.js";
 import {
   CLAW_PROJECT_RESULT_SCHEMA_VERSION,
   ClawProjectError,
@@ -34,7 +34,6 @@ async function readSelectedProjectFile(projectRoot: string, path: string): Promi
   const read = await sourceRoot.read(path, {
     hardlinks: "reject",
     maxBytes: MAX_MANAGED_FILE_BYTES,
-    nonBlockingRead: true,
     symlinks: path === "CLAW.md" ? "follow-within-root" : "reject",
   });
   return read.buffer;
@@ -45,7 +44,7 @@ function assertValidatedBytes(
   bytes: Buffer,
   expected: { byteLength: number; digest: string },
 ): void {
-  const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+  const digest = digestClawBytes(bytes);
   if (bytes.byteLength !== expected.byteLength || digest !== expected.digest) {
     throw new ClawProjectError(
       "project_changed_during_build",
@@ -119,6 +118,11 @@ export async function buildClawProject(
     const clawMarkdown = await readSelectedProjectFile(project.root, "CLAW.md");
     assertValidatedBytes("CLAW.md", clawMarkdown, project.claw.snapshot.manifest);
     files.set("CLAW.md", clawMarkdown);
+    if (project.license) {
+      const license = await readSelectedProjectFile(project.root, "LICENSE");
+      assertValidatedBytes("LICENSE", license, project.license);
+      files.set("LICENSE", license);
+    }
     if (project.claw.packageBootstrap) {
       const bootstrap = await readSelectedProjectFile(project.root, "BOOTSTRAP.md");
       assertValidatedBytes("BOOTSTRAP.md", bootstrap, project.claw.packageBootstrap);
@@ -180,7 +184,7 @@ export async function buildClawProject(
     }
 
     const packed = await readFile(temporaryArtifact);
-    const integrity = `sha256:${createHash("sha256").update(packed).digest("hex")}`;
+    const integrity = digestClawBytes(packed);
     {
       await using extracted = await extractBuiltClawArtifact(temporaryArtifact);
       const reread = await readClawManifestFile(extracted.packageRoot);

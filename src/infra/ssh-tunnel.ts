@@ -1,6 +1,8 @@
-// Starts and monitors SSH tunnels for remote gateway access.
 import { spawn } from "node:child_process";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
+  containsAsciiControlCharacter,
+  normalizeStringEntries,
+} from "@openclaw/normalization-core/string-normalization";
 import { createAbortError, isAbortError, racePromiseWithAbortSignal } from "./abort-signal.js";
 import { sleepWithAbort } from "./backoff.js";
 import { formatErrorMessage, isErrno } from "./errors.js";
@@ -24,13 +26,7 @@ export type SshTunnel = {
 };
 
 function hasControlOrWhitespace(value: string): boolean {
-  for (const char of value) {
-    const code = char.charCodeAt(0);
-    if (code <= 0x1f || code === 0x7f || /\s/.test(char)) {
-      return true;
-    }
-  }
-  return false;
+  return containsAsciiControlCharacter(value) || /\s/.test(value);
 }
 
 function isSafeSshTargetUser(user: string): boolean {

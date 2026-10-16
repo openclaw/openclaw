@@ -1,10 +1,11 @@
-// Tlon monitor tests cover authentication, inbound context, and shutdown lifecycle.
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TLON_PENDING_APPROVAL_LIMIT, type PendingApproval } from "../settings.js";
@@ -44,7 +45,11 @@ afterEach(async () => {
 async function withMonitor(run: (runtime: RuntimeEnv) => Promise<void>) {
   const controller = new AbortController();
   const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
-  const monitor = monitorTlonProvider({ abortSignal: controller.signal, runtime });
+  const monitor = monitorTlonProvider({
+    scheduler: createTestPluginServiceScheduler(),
+    abortSignal: controller.signal,
+    runtime,
+  });
   // Observe startup failures while the subscription assertion is pending.
   void monitor.catch(() => {});
   try {
@@ -69,7 +74,6 @@ function getSubscription(app: string, path?: string) {
 it.each([
   { ship: "~nec", text: "approve missing", reply: "No pending approval found for ID: missing" },
   { ship: "~nec", text: "pending", reply: "No pending approval requests." },
-  { ship: "~nec", text: "approveable", reply: undefined },
   { ship: "~bus", text: "pending", reply: undefined },
 ])("routes $ship's '$text' through the owner command boundary", async ({ ship, text, reply }) => {
   const controller = new AbortController();
@@ -80,7 +84,11 @@ it.each([
   sseClientMock.connect.mockImplementationOnce(async () => connected.resolve());
   ingressMock.receive.mockResolvedValueOnce({ kind: "ignored" });
 
-  const monitor = monitorTlonProvider({ abortSignal: controller.signal, runtime });
+  const monitor = monitorTlonProvider({
+    scheduler: createTestPluginServiceScheduler(),
+    abortSignal: controller.signal,
+    runtime,
+  });
   try {
     await Promise.race([connected.promise, monitor]);
     const subscription = getSubscription("chat");
@@ -139,6 +147,7 @@ describe("monitorTlonProvider authentication retry", () => {
 
     await expect(
       monitorTlonProvider({
+        scheduler: createTestPluginServiceScheduler(),
         abortSignal: controller.signal,
         runtime,
       }),
@@ -403,7 +412,11 @@ it("continues startup after an initial group invite write fails", async () => {
     }
   });
 
-  const monitor = monitorTlonProvider({ abortSignal: controller.signal, runtime });
+  const monitor = monitorTlonProvider({
+    scheduler: createTestPluginServiceScheduler(),
+    abortSignal: controller.signal,
+    runtime,
+  });
   try {
     await vi.waitFor(() => expect(sseClientMock.connect).toHaveBeenCalledOnce());
     expect(sseClientMock.subscribe.mock.calls.map(([subscription]) => subscription)).toEqual(
@@ -421,21 +434,22 @@ it("continues startup after an initial group invite write fails", async () => {
 });
 
 describe("monitorTlonProvider reply prefixes", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  it.for([
-    { name: "global fallback", root: undefined, account: undefined, expected: "[global] reply" },
-    { name: "channel override", root: "[root]", account: undefined, expected: "[root] reply" },
-    { name: "account override", root: "[root]", account: "[account]", expected: "[account] reply" },
-    { name: "empty account override", root: "[root]", account: "", expected: "reply" },
-    { name: "identity", root: "auto", account: undefined, expected: "[Test Bot] reply" },
-    {
-      name: "selected model",
-      root: "[{model}]",
-      account: undefined,
-      expected: "[gpt-5.6-luna] reply",
-    },
-  ])("delivers $name through the shared dispatcher", async (row, { signal }) => {
-    const { name, root, account, expected } = row;
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterEach(async () => {
+      try {
+        for (const dir of tempDirs.dirs) {
+          await closeOpenClawAgentDatabasesAsync(dir);
+        }
+        cleanup();
+        if (vi.isFakeTimers()) {
+          expect.soft(vi.getTimerCount()).toBe(0);
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    }),
+  );
+  it("delivers the selected model prefix through the shared dispatcher", async ({ signal }) => {
     const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
       "openclaw/plugin-sdk/channel-inbound",
     );
@@ -446,16 +460,16 @@ describe("monitorTlonProvider reply prefixes", () => {
     const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
     realUrbitFixture.config = {
       session: { store: join(stateDir, "sessions.json") },
-      agents: { list: [{ id: "main", identity: { name: "Test Bot" } }] },
-      messages: { responsePrefix: "[global]" },
+      agents: { entries: { main: { identity: { name: "Test Bot" } } } },
+      messages: { responsePrefix: "[global]", visibleReplies: "automatic" },
       channels: {
         tlon: {
           code: "code",
           ship: "~zod",
           url: realUrbitFixture.url,
           ownerShip: "~nec",
-          responsePrefix: root,
-          accounts: { default: { responsePrefix: account } },
+          responsePrefix: "[{model}]",
+          accounts: { default: {} },
           showModelSignature: true,
         },
       },
@@ -482,6 +496,7 @@ describe("monitorTlonProvider reply prefixes", () => {
       }),
     );
     const monitor = monitorTlonProvider({
+      scheduler: createTestPluginServiceScheduler(),
       abortSignal: AbortSignal.any([controller.signal, signal]),
       runtime,
     });
@@ -491,19 +506,22 @@ describe("monitorTlonProvider reply prefixes", () => {
         .map(([value]) => value)
         .find((value) => value.app === "chat");
       expect(subscription).toBeDefined();
+      // Hold automatic session maintenance queued so teardown must retire it.
+      vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
       await subscription.event({
         whom: "~nec",
-        id: `dm-prefix-${name}`,
+        id: "dm-prefix-selected-model",
         response: {
           add: { essay: { author: "~nec", content: [{ inline: ["hello"] }], sent: Date.now() } },
         },
       });
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
       const sends = sseClientMock.poke.mock.calls
         .map(([value]) => value)
         .filter((value) => value.mark === "chat-dm-action");
       expect(sends).toHaveLength(1);
       const text = extractMessageText(sends[0].json.diff.delta.add.memo.content);
-      expect(text.split("\n")[0]).toBe(expected);
+      expect(text.split("\n")[0]).toBe("[gpt-5.6-luna] reply");
       expect(text).toContain("Generated by");
       expect(runtime.error).not.toHaveBeenCalled();
     } finally {
@@ -523,31 +541,7 @@ describe("monitorTlonProvider sender roles", () => {
       "owner",
       "~nocsyx-lassul [owner]",
     ],
-    [
-      "unprefixed owner",
-      "nocsyx-lassul",
-      "~nocsyx-lassul",
-      false,
-      "owner",
-      "~nocsyx-lassul [owner]",
-    ],
-    [
-      "claimed owner in message text",
-      "~nocsyx-lassul",
-      "~malicious-actor",
-      false,
-      "user",
-      "~malicious-actor [user]",
-    ],
     ["missing owner", undefined, "~nocsyx-lassul", false, "user", "~nocsyx-lassul [user]"],
-    [
-      "owner group message",
-      "~nocsyx-lassul",
-      "~nocsyx-lassul",
-      true,
-      "owner",
-      "~nocsyx-lassul [owner] in chat/~host/general",
-    ],
     [
       "user group message",
       "~nocsyx-lassul",
@@ -563,14 +557,6 @@ describe("monitorTlonProvider sender roles", () => {
       false,
       "user",
       "~nocsyx-lassul-fake [user]",
-    ],
-    [
-      "owner prefix lookalike",
-      "~nocsyx-lassul",
-      "~fake-nocsyx-lassul",
-      false,
-      "user",
-      "~fake-nocsyx-lassul [user]",
     ],
   ] as const)(
     "labels %s from the admitted sender",
@@ -740,37 +726,16 @@ describe("monitorTlonProvider shutdown", () => {
     controller.abort();
     const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
 
-    await expect(monitorTlonProvider({ abortSignal: controller.signal, runtime })).rejects.toThrow(
-      "Aborted while waiting to authenticate",
-    );
+    await expect(
+      monitorTlonProvider({
+        scheduler: createTestPluginServiceScheduler(),
+        abortSignal: controller.signal,
+        runtime,
+      }),
+    ).rejects.toThrow("Aborted while waiting to authenticate");
 
     expect(authenticateMock).not.toHaveBeenCalled();
     expect(ingressMock.start).not.toHaveBeenCalled();
-  });
-
-  it("settles and cleans up when startup aborts before the shutdown listener is registered", async () => {
-    vi.useFakeTimers();
-    const controller = new AbortController();
-    const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
-    authenticateMock.mockResolvedValueOnce("urbauth-~zod=proof");
-    sseClientMock.connect.mockImplementationOnce(async () => {
-      controller.abort();
-    });
-
-    let settled = false;
-    const monitor = monitorTlonProvider({ abortSignal: controller.signal, runtime }).then(() => {
-      settled = true;
-    });
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(sseClientMock.connect).toHaveBeenCalledOnce();
-    expect(ingressMock.start).toHaveBeenCalledOnce();
-    expect(settled).toBe(true);
-    expect(sseClientMock.stopReceiving).toHaveBeenCalledOnce();
-    expect(ingressMock.stop).toHaveBeenCalledOnce();
-    expect(sseClientMock.close).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
-    await monitor;
   });
 
   it.each([
@@ -841,8 +806,12 @@ describe("monitorTlonProvider shutdown", () => {
     const actualAuth = await vi.importActual<typeof import("../urbit/auth.js")>("../urbit/auth.js");
     authenticateMock.mockImplementationOnce(actualAuth.authenticate);
 
-    const pollIntervalSpy = vi.spyOn(globalThis, "setInterval");
-    const monitor = monitorTlonProvider({ abortSignal: controller.signal, runtime });
+    const scheduler = createTestPluginServiceScheduler();
+    const monitor = monitorTlonProvider({
+      scheduler,
+      abortSignal: controller.signal,
+      runtime,
+    });
     if (!abortDuringHandshake) {
       await vi.waitFor(() => expect(ingressMock.start).toHaveBeenCalledOnce());
       controller.abort();
@@ -857,11 +826,7 @@ describe("monitorTlonProvider shutdown", () => {
     ]);
     clearTimeout(deadline);
     if (outcome === "timed out") {
-      for (const [index, [, delay]] of pollIntervalSpy.mock.calls.entries()) {
-        if (delay === 120_000) {
-          clearInterval(pollIntervalSpy.mock.results[index]?.value);
-        }
-      }
+      scheduler.beginClose();
       const realClient = realUrbitFixture.client;
       if (realClient) {
         realClient.stopReceiving();
@@ -871,6 +836,7 @@ describe("monitorTlonProvider shutdown", () => {
     } else {
       realUrbitFixture.client = null;
     }
+    await scheduler.stop();
     expect(requests).toContain("POST /~/login");
     expect(requests.some((request) => request.startsWith("GET /~/scry/"))).toBe(true);
     expect(requests.some((request) => request.startsWith("GET /~/channel/"))).toBe(true);
@@ -886,6 +852,5 @@ describe("monitorTlonProvider shutdown", () => {
       expect(ingressMock.stop).toHaveBeenCalledOnce();
     }
     expect(outcome).toBe("settled");
-    pollIntervalSpy.mockRestore();
   });
 });

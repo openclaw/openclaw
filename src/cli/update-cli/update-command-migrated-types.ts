@@ -1,5 +1,5 @@
-import type { TriageFailureContext } from "../../commands/triage-prompt.js";
 import type { UpdateDatabaseGenerations } from "../../infra/update-database-generations.js";
+import type { UpdateRecoveryBaselineRef } from "../../infra/update-recovery-baseline-capture.js";
 import type {
   UpdateRequester,
   UpdateRequesterAuthority,
@@ -17,15 +17,12 @@ export type UpdatePostCoreInput = {
   runId: string;
   root: string;
   requester?: UpdateRequester;
+  originalRecoveryCapture?: UpdateRecoveryBaselineRef;
   opts: Pick<UpdateCommandOptions, "json" | "restart" | "yes" | "acceptCapabilities" | "timeout">;
 };
 
-export type UpdateDoctorInput = {
-  executor: UpdateCommandChildGrant;
-  runId: string;
-  root: string;
+export type UpdateDoctorInput = Omit<UpdatePostCoreInput, "opts"> & {
   configInputHash: string;
-  requester?: UpdateRequester;
   repair: boolean;
   yes?: boolean;
   workspaceSuggestions?: boolean;
@@ -64,7 +61,6 @@ export type MigratedUpdateFinalizationResult = {
   /** Missing on older workers; only explicit false permits pre-start database restoration. */
   candidateStartAttempted?: boolean;
   executorDelegation?: "pid-start-v1";
-  automaticTriage?: TriageFailureContext;
 } & (
   | { terminalRunId: string; restartRunId?: never }
   | { restartRunId: string; terminalRunId?: never }

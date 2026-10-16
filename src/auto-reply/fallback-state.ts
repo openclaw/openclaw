@@ -1,7 +1,7 @@
 /** Formats model-fallback notice state for UI/status messages and persisted transition tracking. */
 import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { formatRawAssistantErrorForUi } from "../agents/embedded-agent-helpers.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -20,20 +20,17 @@ const TRANSIENT_FALLBACK_REASONS = new Set([
 const TRANSIENT_ERROR_DETAIL_HINT_RE =
   /\b(?:429|5\d\d|too many requests|usage limit|quota|try again in|retry[- ]after|seconds?|minutes?|hours?|temporarily unavailable|overloaded|service unavailable|throttl\w*)\b/i;
 
-function truncateFallbackReasonPart(value: string, max = FALLBACK_REASON_PART_MAX): string {
-  const text = value.replace(/\s+/g, " ").trim();
-  if (text.length <= max) {
-    return text;
-  }
-  return `${truncateUtf16Safe(text, max - 1).trimEnd()}…`;
+function truncateFallbackReasonPart(value: string): string {
+  return truncateWithMarker(value.replace(/\s+/g, " ").trim(), FALLBACK_REASON_PART_MAX, {
+    marker: "…",
+    reserve: 1,
+    trimEnd: true,
+  });
 }
 
 function formatFallbackAttemptErrorPreview(attempt: RuntimeFallbackAttempt): string | undefined {
   const rawError = attempt.error?.trim();
-  if (!rawError) {
-    return undefined;
-  }
-  if (!attempt.reason || !TRANSIENT_FALLBACK_REASONS.has(attempt.reason)) {
+  if (!rawError || !attempt.reason || !TRANSIENT_FALLBACK_REASONS.has(attempt.reason)) {
     return undefined;
   }
   // Only expose transient-looking raw details; permanent/auth errors can leak noisy provider text.
@@ -60,13 +57,12 @@ function formatFallbackAttemptReason(attempt: RuntimeFallbackAttempt): string {
     return reason.replace(/_/g, " ");
   }
   const code = attempt.code?.trim();
-  if (code) {
-    return code;
-  }
-  if (typeof attempt.status === "number") {
-    return `HTTP ${attempt.status}`;
-  }
-  return truncateFallbackReasonPart(attempt.error || "error");
+  return (
+    code ||
+    (typeof attempt.status === "number"
+      ? `HTTP ${attempt.status}`
+      : truncateFallbackReasonPart(attempt.error || "error"))
+  );
 }
 
 function buildFallbackReasonSummary(attempts: RuntimeFallbackAttempt[]): string {
@@ -119,22 +115,13 @@ export function buildFallbackClearedNotice(params: {
 }): string {
   const selected = buildModelCatalogRef(params.selectedProvider, params.selectedModel);
   const previous = normalizeOptionalString(params.previousActiveModel);
-  if (previous && previous !== selected) {
-    return `↪️ Model Fallback cleared: ${selected} (was ${previous})`;
-  }
-  return `↪️ Model Fallback cleared: ${selected}`;
+  return `↪️ Model Fallback cleared: ${selected}${previous && previous !== selected ? ` (was ${previous})` : ""}`;
 }
 
 /** Resolves fallback state transitions and the next persisted notice-state fields. */
-export function resolveFallbackTransition(params: {
-  selectedProvider: string;
-  selectedModel: string;
-  activeProvider: string;
-  activeModel: string;
-  attempts: RuntimeFallbackAttempt[];
-  state?: FallbackNoticeState;
-  cfg?: OpenClawConfig;
-}) {
+export function resolveFallbackTransition(
+  params: Parameters<typeof buildFallbackNotice>[0] & { state?: FallbackNoticeState },
+) {
   const selectedModelRef = buildModelCatalogRef(params.selectedProvider, params.selectedModel);
   const activeModelRef = buildModelCatalogRef(params.activeProvider, params.activeModel);
   const previousState = {
@@ -148,13 +135,10 @@ export function resolveFallbackTransition(params: {
     activeModelRef,
     comparisonOptions,
   );
-  const fallbackTransitioned =
-    fallbackActive &&
-    (previousState.selectedModel !== selectedModelRef ||
-      previousState.activeModel !== activeModelRef);
   const previousStateMatchesCurrent =
     previousState.selectedModel === selectedModelRef &&
     previousState.activeModel === activeModelRef;
+  const fallbackTransitioned = fallbackActive && !previousStateMatchesCurrent;
   const previousStateWasRealFallback = previousStateMatchesCurrent
     ? fallbackActive
     : Boolean(

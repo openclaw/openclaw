@@ -44,7 +44,7 @@ afterEach(() => {
 });
 
 describe("pull request subscription acknowledgment lifetime", () => {
-  it("retains a forced refresh while the connected gateway temporarily omits the capability", async () => {
+  it("retains refresh and unsubscribe intent while the connected gateway omits the capability", async () => {
     vi.useFakeTimers();
     const harness = createPendingHarness();
     const store = sessionPullRequestsForGateway(harness.gateway);
@@ -85,7 +85,31 @@ describe("pull request subscription acknowledgment lifetime", () => {
       await vi.advanceTimersByTimeAsync(60_000);
       expect(harness.request).toHaveBeenCalledTimes(3);
       expect(harness.pending.hasPending).toBe(false);
+      const passiveOwner = {};
+      store.watch(passiveOwner, [key], { passive: true });
+      harness.setSnapshot({
+        ...harness.gateway.snapshot,
+        hello: { ...createHello(), features: { methods: [] } },
+      });
+      await flushSync();
       store.unwatch(owner);
+      harness.setSnapshot({ ...harness.gateway.snapshot, hello: createHello() });
+      await flushSync();
+      expect(harness.request.mock.calls[3]?.[1]).toEqual({ sessionKeys: [] });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(harness.request).toHaveBeenCalledTimes(5);
+      expect(harness.request.mock.calls[4]?.[1]).toEqual({ sessionKeys: [] });
+      harness.acknowledge(4);
+      await flushSync();
+      harness.setSnapshot({
+        ...harness.gateway.snapshot,
+        hello: { ...createHello(), features: { methods: [] } },
+      });
+      await flushSync();
+      harness.setSnapshot({ ...harness.gateway.snapshot, hello: createHello() });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(harness.request).toHaveBeenCalledTimes(5);
+      store.unwatch(passiveOwner);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       harness.setSnapshot({ ...harness.gateway.snapshot, phase: "stopped", hello: null });

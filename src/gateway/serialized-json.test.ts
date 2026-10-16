@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { SerializedJsonArray, serializeGatewayFrame } from "./serialized-json.js";
+import {
+  registerSerializedJsonArray,
+  SerializedJsonArray,
+  serializeGatewayFrame,
+} from "./serialized-json.js";
 
 describe("serialized Gateway response arrays", () => {
   it("forwards worker JSON without materializing its messages", () => {
@@ -39,6 +43,33 @@ describe("serialized Gateway response arrays", () => {
     expect(JSON.parse(encoded.toString())).toEqual(expected);
     expect(materialize).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "reuses row bytes in ordinary list arrays (subscription=%s)",
+    (subscription) => {
+      const row = { key: "agent:main:one", label: 'é🦞\\\"\nready' };
+      const encoded = JSON.stringify(row);
+      const toJSON = vi.fn(() => row);
+      const sessions = registerSerializedJsonArray(
+        Object.freeze([Object.freeze({ ...row, toJSON })]),
+        [encoded],
+      );
+      const list = { count: 1, sessions };
+      const payload = subscription ? { subscribed: true, list } : list;
+      const frame = { type: "res", id: "list", ok: true, payload };
+      const serialized = serializeGatewayFrame(frame);
+      expect(toJSON).not.toHaveBeenCalled();
+      expect(JSON.parse(serialized.toString())).toEqual({
+        ...frame,
+        payload: subscription
+          ? { subscribed: true, list: { count: 1, sessions: [row] } }
+          : { count: 1, sessions: [row] },
+      });
+      expect(Array.isArray(sessions)).toBe(true);
+      expect(JSON.stringify(frame)).toBe(serialized.toString());
+      expect(toJSON).toHaveBeenCalledOnce();
+    },
+  );
 
   it("preserves ordinary responses and JSON callers", () => {
     const messages = [{ text: "ready" }];

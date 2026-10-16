@@ -28,17 +28,6 @@ function shouldStripOpenAICompletionsStore(model: Parameters<StreamFn>[0]): bool
   return !capabilities.usesKnownNativeOpenAIRoute;
 }
 
-function createOpenAICompletionsStoreCompatWrapper(underlying: StreamFn): StreamFn {
-  return (model, context, options) => {
-    if (!shouldStripOpenAICompletionsStore(model)) {
-      return underlying(model, context, options);
-    }
-    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
-      delete payloadObj.store;
-    });
-  };
-}
-
 function resolveExtraBodyRecord(
   value: unknown,
   param: "extra_body" | "chat_template_kwargs",
@@ -60,74 +49,51 @@ function resolveExtraBodyRecord(
   return Object.keys(record).length > 0 ? record : undefined;
 }
 
-function createOpenAICompletionsChatTemplateKwargsWrapper(
-  underlying: StreamFn,
-  configured: Record<string, unknown>,
-): StreamFn {
-  return (model, context, options) => {
-    if (model.api !== "openai-completions") {
-      return underlying(model, context, options);
-    }
-    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
-      const existing = payloadObj.chat_template_kwargs;
-      if (existing && typeof existing === "object" && !Array.isArray(existing)) {
-        payloadObj.chat_template_kwargs = {
-          ...existing,
-          ...configured,
-        };
-        return;
-      }
-      payloadObj.chat_template_kwargs = configured;
-    });
-  };
-}
-
 const FRAMEWORK_MANAGED_EXTRA_BODY_KEYS = new Set(["messages", "model", "stream"]);
-
-function createOpenAICompletionsExtraBodyWrapper(
-  underlying: StreamFn,
-  extraBody: Record<string, unknown>,
-): StreamFn {
-  return (model, context, options) => {
-    if (model.api !== "openai-completions") {
-      return underlying(model, context, options);
-    }
-    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
-      const clobberedManagedKeys = Object.keys(extraBody).filter(
-        (key) => Object.hasOwn(payloadObj, key) && FRAMEWORK_MANAGED_EXTRA_BODY_KEYS.has(key),
-      );
-      if (clobberedManagedKeys.length > 0) {
-        log.warn(
-          `extra_body overrides framework-managed request keys: ${clobberedManagedKeys.join(", ")}`,
-        );
-      }
-      Object.assign(payloadObj, extraBody);
-    });
-  };
-}
 
 /** Apply configured payload fields before removing store from non-native completion routes. */
 export function createOpenAICompletionsPayloadPolicyWrapper(
   streamFn: StreamFn,
   sources: ReadonlyArray<Record<string, unknown> | undefined>,
 ): StreamFn {
-  let wrappedStreamFn = streamFn;
   const configuredChatTemplateKwargs = resolveExtraBodyRecord(
     resolveAliasedParamValue(sources, ["chat_template_kwargs", "chatTemplateKwargs"]),
     "chat_template_kwargs",
   );
-  if (configuredChatTemplateKwargs) {
-    wrappedStreamFn = createOpenAICompletionsChatTemplateKwargsWrapper(
-      wrappedStreamFn,
-      configuredChatTemplateKwargs,
-    );
-  }
   const extraBody = resolveExtraBodyRecord(
     resolveAliasedParamValue(sources, ["extra_body", "extraBody"]),
     "extra_body",
   );
-  if (extraBody) {
-    wrappedStreamFn = createOpenAICompletionsExtraBodyWrapper(wrappedStreamFn, extraBody);
-  }
-  return createOpenAICompletionsStoreCompatWrapper(wrappedStreamFn);
+  return (model, context, options) => {
+    const stripStore = shouldStripOpenAICompletionsStore(model);
+    if (
+      model.api !== "openai-completions" ||
+      (!configuredChatTemplateKwargs && !extraBody && !stripStore)
+    ) {
+      return streamFn(model, context, options);
+    }
+    return streamWithPayloadPatch(streamFn, model, context, options, (payload) => {
+      if (configuredChatTemplateKwargs) {
+        const existing = payload.chat_template_kwargs;
+        payload.chat_template_kwargs =
+          existing && typeof existing === "object" && !Array.isArray(existing)
+            ? { ...existing, ...configuredChatTemplateKwargs }
+            : configuredChatTemplateKwargs;
+      }
+      if (extraBody) {
+        const clobberedManagedKeys = Object.keys(extraBody).filter(
+          (key) => Object.hasOwn(payload, key) && FRAMEWORK_MANAGED_EXTRA_BODY_KEYS.has(key),
+        );
+        if (clobberedManagedKeys.length > 0) {
+          log.warn(
+            `extra_body overrides framework-managed request keys: ${clobberedManagedKeys.join(", ")}`,
+          );
+        }
+        Object.assign(payload, extraBody);
+      }
+      if (stripStore) {
+        delete payload.store;
+      }
+    });
+  };
 }

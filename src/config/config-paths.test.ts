@@ -45,6 +45,54 @@ describe("concrete config path readers and mutation guards", () => {
 });
 
 describe("config path own-property traversal", () => {
+  it.each([
+    { parent: ["agents", "defaults", "model"], member: "fallbacks", value: ["openai/gpt-4o"] },
+    {
+      parent: ["agents", "defaults", "subagents", "model"],
+      member: "fallbacks",
+      value: ["openai/gpt-4o"],
+    },
+    {
+      parent: ["agents", "entries", "worker", "model"],
+      member: "fallbacks",
+      value: ["openai/gpt-4o"],
+    },
+    {
+      parent: ["agents", "entries", "worker", "subagents", "model"],
+      member: "fallbacks",
+      value: ["openai/gpt-4o"],
+    },
+    {
+      parent: ["tools", "exec", "reviewer", "model"],
+      member: "fallbacks",
+      value: ["openai/gpt-4o"],
+    },
+    {
+      parent: ["agents", "entries", "worker", "tools", "exec", "reviewer", "model"],
+      member: "fallbacks",
+      value: ["openai/gpt-4o"],
+    },
+    { parent: ["agents", "defaults", "pdfModel"], member: "timeoutMs", value: 5000 },
+    { parent: ["agents", "defaults", "mediaModels", "video"], member: "timeoutMs", value: 5000 },
+  ])("keeps a shorthand primary when setting $parent.$member", ({ parent, member, value }) => {
+    const root: Record<string, unknown> = {};
+    setConfigValueAtPath(root, parent, "openai/gpt-4o-mini");
+    setConfigValueAtPath(root, [...parent, member], value);
+    expect(getConfigValueAtPath(root, parent)).toEqual({
+      primary: "openai/gpt-4o-mini",
+      [member]: value,
+    });
+  });
+
+  it.each([
+    { member: "fallbacks", value: ["backup"] },
+    { member: "timeoutMs", value: 5000 },
+  ])("does not promote unrelated plugin strings when setting $member", ({ member, value }) => {
+    const root = { plugins: { entries: { demo: { config: { model: "opaque" } } } } };
+    setConfigValueAtPath(root, ["plugins", "entries", "demo", "config", "model", member], value);
+    expect(root.plugins.entries.demo.config.model).toEqual({ [member]: value });
+  });
+
   it("does not treat an inherited prototype leaf as config", () => {
     const key = "toString";
     const parent: Record<string, unknown> = {};

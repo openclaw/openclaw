@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { expectedNpmCommand } from "../test-utils/npm-command.js";
 import {
   installPackageDir,
   requestDeferredPackageDirInstall,
@@ -133,14 +134,13 @@ describe("package install runtime manifest", () => {
         ).resolves.toEqual([]);
       }
       expect(runCommandWithTimeout).toHaveBeenCalledWith(
-        [
-          "npm",
+        expectedNpmCommand([
           "install",
           "--omit=dev",
           "--loglevel=error",
           "--ignore-scripts",
           "--workspaces=false",
-        ],
+        ]),
         expect.objectContaining({ cwd: expect.stringContaining(".openclaw-install-stage-") }),
       );
     },

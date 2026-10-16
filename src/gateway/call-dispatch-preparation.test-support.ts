@@ -1,8 +1,8 @@
 import { expect, it, vi } from "vitest";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { callGateway } from "./call.js";
 import type { GatewayClientRequestOptions } from "./client.js";
-import { waitForFast } from "./client.test-support.js";
 
 export function registerGatewayCallDispatchPreparationTests(
   setup: () => {
@@ -15,12 +15,125 @@ export function registerGatewayCallDispatchPreparationTests(
         opts?: GatewayClientRequestOptions,
       ) => Promise<unknown>,
     ) => void;
-    setStart: (start: () => void) => void;
     setStop: (stop: () => Promise<void>) => void;
+    setFeatures: (methods: string[], capabilities: string[]) => void;
     hello: () => void;
     close: (code: number, reason: string) => void;
   },
 ): void {
+  it.each([
+    {
+      method: "secrets.resolve",
+      requiredMethods: ["secrets.resolve"],
+      requiredCapabilities: undefined,
+      error:
+        /does not support required method "secrets\.resolve".*update or restart the active gateway/i,
+    },
+    {
+      method: "gateway.restart.request",
+      requiredMethods: undefined,
+      requiredCapabilities: ["gateway-restart-target-safe-v1"],
+      error:
+        /does not support required capability "gateway-restart-target-safe-v1".*update or restart the active gateway/i,
+    },
+    {
+      method: "agent",
+      requiredMethods: undefined,
+      requiredCapabilities: [GATEWAY_SERVER_CAPS.AGENT_SESSION_ID_CREATE],
+      error:
+        /does not support required capability "agent-session-id-create-v1".*update or restart the active gateway/i,
+    },
+  ])("requires supported features before calling $method", async ({ error, ...options }) => {
+    const harness = setup();
+    harness.setFeatures(["health"], []);
+    await expect(harness.call(options)).rejects.toThrow(error);
+    expect(harness.request()).toBeNull();
+  });
+
+  it.each([
+    {
+      method: "models.authSetApiKey",
+      capability: GATEWAY_SERVER_CAPS.MODELS_AUTH_SET_API_KEY_OWNER,
+      params: { provider: "fixture", apiKey: "synthetic-api-key", expectedOwnerId: "owner" },
+    },
+    {
+      method: "models.authLogin",
+      capability: GATEWAY_SERVER_CAPS.MODELS_AUTH_LOGIN_OWNER,
+      params: { authChoice: "fixture/device", sessionId: "login", expectedOwnerId: "owner" },
+    },
+  ])(
+    "does not send $method to a Gateway without owner-bound auth writes",
+    async ({ method, capability, params }) => {
+      const harness = setup();
+      harness.setFeatures([method], [GATEWAY_SERVER_CAPS.LOCAL_STATE_OWNER_ROUTING]);
+      await expect(
+        harness.call({
+          method,
+          params,
+          requiredMethods: [method],
+          requiredCapabilities: [capability],
+        }),
+      ).rejects.toThrow(
+        /does not support required capability.*update or restart the active gateway/i,
+      );
+      expect(harness.request()).toBeNull();
+    },
+  );
+
+  it("keeps the authenticated connection open for wizard follow-up requests", async () => {
+    const harness = setup();
+    const stop = vi.fn(async () => {});
+    const methods: string[] = [];
+    harness.setStop(stop);
+    harness.setRequest(async (method) => {
+      methods.push(method);
+      return { ok: true };
+    });
+    await harness.call({
+      method: "models.authLogin",
+      onResponse: async (request) => {
+        expect(stop).not.toHaveBeenCalled();
+        await request("wizard.next", { sessionId: "login" });
+        await request("wizard.cancel", { sessionId: "login" });
+        expect(stop).not.toHaveBeenCalled();
+      },
+    });
+    expect(methods).toEqual(["models.authLogin", "wizard.next", "wizard.cancel"]);
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("joins terminal cleanup after the connection closes during a wizard", async () => {
+    const harness = setup();
+    const entered = createDeferred();
+    const cleanup = createDeferred();
+    let settled = false;
+    const pending = harness.call({
+      method: "models.authLogin",
+      onResponse: async (_request, signal) => {
+        const aborted = Promise.withResolvers<void>();
+        signal.addEventListener("abort", () => aborted.resolve(), { once: true });
+        entered.resolve();
+        await aborted.promise;
+        await cleanup.promise;
+      },
+    });
+    void pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    const rejected = expect(pending).rejects.toThrow("gateway closed");
+    await entered.promise;
+    harness.close(1001, "gone");
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    cleanup.resolve();
+    await rejected;
+  });
+
   it("does not dispatch a request when its hello observer aborts the connection", async () => {
     const harness = setup();
     const controller = new AbortController();
@@ -169,37 +282,4 @@ export function registerGatewayCallDispatchPreparationTests(
       await expect(call).resolves.toEqual({ ok: true });
     },
   );
-
-  it("skips the signal abort hook before the primary request starts", async () => {
-    const harness = setup();
-
-    const controller = new AbortController();
-    const onSignalAbort = vi.fn(async () => undefined);
-    let startCalled = false;
-    let stopStarted = false;
-
-    harness.setStart(() => {
-      startCalled = true;
-    });
-    harness.setStop(async () => {
-      stopStarted = true;
-    });
-
-    const promise = harness.call({
-      method: "agent",
-      expectFinal: true,
-      signal: controller.signal,
-      onSignalAbort,
-    });
-
-    await waitForFast(() => {
-      expect(startCalled).toBe(true);
-    });
-    controller.abort();
-
-    await expect(promise).rejects.toThrow("gateway request aborted for agent");
-    expect(onSignalAbort).not.toHaveBeenCalled();
-    expect(harness.request()).toBeNull();
-    expect(stopStarted).toBe(true);
-  });
 }

@@ -1,11 +1,10 @@
 // Gateway client bootstrap tests keep URL override provenance wired into shared
 // auth resolution so CLI and env callers authenticate against the intended target.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { inspectGatewayTlsCertificate } from "../infra/tls/gateway.js";
 import type { buildGatewayConnectionDetailsWithResolvers } from "./connection-details.js";
 import type { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
-
-type AuthResolutionParams = Parameters<typeof resolveGatewayCredentialsWithSecretInputs>[0];
 
 const mockState = vi.hoisted(() => ({
   buildGatewayConnectionDetails: vi.fn<typeof buildGatewayConnectionDetailsWithResolvers>(),
@@ -30,19 +29,16 @@ const { resolveGatewayClientBootstrap } = await import("./client-bootstrap.js");
 
 const LOCAL_TLS_FINGERPRINT = "ab".repeat(32);
 const REMOTE_TLS_FINGERPRINT = "cd".repeat(32);
+const LOCAL_URL = "wss://127.0.0.1:18789";
+const TLS_CONFIG = { enabled: true };
+const SSH_SCOPE = "remote:ssh:9d0708e04e550511a6fc9dba41c94ffc895fdd5029a3e5c779f2c0bc16bd4c44";
 
-function expectLastAuthResolutionParams(expected: {
-  urlOverride?: string;
-  urlOverrideSource?: "cli" | "env";
-}) {
-  const [params] = mockState.resolveGatewayCredentialsWithSecretInputs.mock.calls.at(-1) ?? [];
-  if (params === undefined) {
-    throw new Error("Expected shared auth resolution to be called");
-  }
-  const authParams = params as AuthResolutionParams;
-  expect(authParams.env).toBe(process.env);
-  expect(authParams.urlOverride).toBe(expected.urlOverride);
-  expect(authParams.urlOverrideSource).toBe(expected.urlOverrideSource);
+function remoteTlsConfig(url: string, fingerprint: string): OpenClawConfig {
+  return { gateway: { mode: "remote", remote: { url, tlsFingerprint: `sha256:${fingerprint}` } } };
+}
+
+function connection(url: string, urlSource: string) {
+  return { url, urlSource, message: `Gateway target: ${url}` };
 }
 
 describe("resolveGatewayClientBootstrap", () => {
@@ -60,159 +56,104 @@ describe("resolveGatewayClientBootstrap", () => {
     });
   });
 
-  it("passes cli override context into shared auth resolution", async () => {
-    mockState.buildGatewayConnectionDetails.mockReturnValueOnce({
-      url: "wss://override.example/ws",
-      urlSource: "cli --url",
-      message: "Gateway target: wss://override.example/ws",
-    });
+  it.each([
+    ["wss://override.example/ws", "cli --url", "cli"],
+    ["wss://gateway.example/ws", "config gateway.remote.url", undefined],
+  ] as const)("preserves auth provenance for %s", async (url, urlSource, source) => {
+    const details = connection(url, urlSource);
+    mockState.buildGatewayConnectionDetails.mockReturnValueOnce(details);
 
     const result = await resolveGatewayClientBootstrap({
-      config: {} as never,
-      gatewayUrl: "wss://override.example/ws",
+      config: {},
+      gatewayUrl: source ? url : undefined,
       env: process.env,
     });
 
     expect(result).toEqual({
-      url: "wss://override.example/ws",
-      urlSource: "cli --url",
-      connectionDetails: {
-        url: "wss://override.example/ws",
-        urlSource: "cli --url",
-        message: "Gateway target: wss://override.example/ws",
-      },
-      urlOverrideSource: "cli",
-      deviceAuthScope: "wss://override.example/ws",
+      url,
+      urlSource,
+      connectionDetails: details,
+      urlOverrideSource: source,
+      deviceAuthScope: url,
       preauthHandshakeTimeoutMs: undefined,
       auth: {
         token: undefined,
         password: undefined,
       },
     });
-    expectLastAuthResolutionParams({
-      urlOverride: "wss://override.example/ws",
-      urlOverrideSource: "cli",
-    });
-  });
-
-  it("does not mark config-derived urls as overrides", async () => {
-    mockState.buildGatewayConnectionDetails.mockReturnValue({
-      url: "wss://gateway.example/ws",
-      urlSource: "config gateway.remote.url",
-      message: "Gateway target: wss://gateway.example/ws",
-    });
-
-    await resolveGatewayClientBootstrap({
-      config: {} as never,
-      env: process.env,
-    });
-
-    expectLastAuthResolutionParams({
-      urlOverride: undefined,
-      urlOverrideSource: undefined,
+    const [params] = mockState.resolveGatewayCredentialsWithSecretInputs.mock.lastCall ?? [];
+    expect(params?.env).toBe(process.env);
+    expect(params).toMatchObject({
+      urlOverride: source ? url : undefined,
+      urlOverrideSource: source,
     });
   });
 
   it.each([
-    {
-      name: "configured route",
-      localPort: 18789,
-      target: " me@studio ",
-      remotePort: 18789,
-      scope: "remote:ssh:9d0708e04e550511a6fc9dba41c94ffc895fdd5029a3e5c779f2c0bc16bd4c44",
-    },
-    {
-      name: "same remote route on another local port",
-      localPort: 19876,
-      target: "me@studio",
-      remotePort: 18789,
-      scope: "remote:ssh:9d0708e04e550511a6fc9dba41c94ffc895fdd5029a3e5c779f2c0bc16bd4c44",
-    },
-    {
-      name: "another remote host on the same local port",
-      localPort: 18789,
-      target: "me@other",
-      remotePort: 18789,
-      scope: "remote:ssh:5edeb1113b126b3d30a9ee533ab3395392e63d47c36eaf64e487d373ac34f46d",
-    },
-    {
-      name: "another remote Gateway port",
-      localPort: 18789,
-      target: "me@studio",
-      remotePort: 19876,
-      scope: "remote:ssh:e993208b4f1479276efe8579fa25f72cd56d0fcecb4d04744167d753c7b07124",
-    },
-    {
-      name: "explicit default WebSocket port",
-      localPort: 80,
-      target: "me@studio",
-      remotePort: undefined,
-      scope: "remote:ssh:6c8c5d79c1d9004541ae70273a98b22705fafb16ecc4ee40547602a2277e1272",
-    },
-  ])("binds device auth to $name", async ({ localPort, target, remotePort, scope }) => {
-    const url = `ws://127.0.0.1:${localPort}`;
-    mockState.buildGatewayConnectionDetails.mockReturnValue({
-      url,
-      urlSource: "config gateway.remote.url",
-      message: `Gateway target: ${url}`,
-    });
-    const result = await resolveGatewayClientBootstrap({
-      config: {
-        gateway: {
-          mode: "remote",
-          remote: {
-            url,
-            transport: "ssh",
-            sshTarget: target,
-            remotePort,
-            sshIdentity: "/tmp/key",
-            sshHostKeyPolicy: "openssh",
+    [18789, " me@studio ", 18789, SSH_SCOPE],
+    [19876, "me@studio", 18789, SSH_SCOPE],
+    [
+      18789,
+      "me@other",
+      18789,
+      "remote:ssh:5edeb1113b126b3d30a9ee533ab3395392e63d47c36eaf64e487d373ac34f46d",
+    ],
+    [
+      18789,
+      "me@studio",
+      19876,
+      "remote:ssh:e993208b4f1479276efe8579fa25f72cd56d0fcecb4d04744167d753c7b07124",
+    ],
+    [
+      80,
+      "me@studio",
+      undefined,
+      "remote:ssh:6c8c5d79c1d9004541ae70273a98b22705fafb16ecc4ee40547602a2277e1272",
+    ],
+  ] as const)(
+    "binds device auth on local port %s to %s:%s",
+    async (localPort, target, remotePort, scope) => {
+      const url = `ws://127.0.0.1:${localPort}`;
+      mockState.buildGatewayConnectionDetails.mockReturnValue(
+        connection(url, "config gateway.remote.url"),
+      );
+      const result = await resolveGatewayClientBootstrap({
+        config: {
+          gateway: {
+            mode: "remote",
+            remote: {
+              url,
+              transport: "ssh",
+              sshTarget: target,
+              remotePort,
+              sshIdentity: "/tmp/key",
+              sshHostKeyPolicy: "openssh",
+            },
           },
         },
-      },
-      env: {},
-    });
+        env: {},
+      });
 
-    expect(result.deviceAuthScope).toBe(scope);
-    expect(result.sshTunnel).toEqual({
-      target: target.trim(),
-      remotePort: remotePort ?? localPort,
-      identity: "/tmp/key",
-      hostKeyPolicy: "openssh",
-    });
-  });
+      expect(result.deviceAuthScope).toBe(scope);
+      expect(result.sshTunnel).toEqual({
+        target: target.trim(),
+        remotePort: remotePort ?? localPort,
+        identity: "/tmp/key",
+        hostKeyPolicy: "openssh",
+      });
+    },
+  );
 
   it.each([
-    {
-      name: "direct transport",
-      transport: "direct" as const,
-      url: "ws://127.0.0.1:18789",
-      source: "cli",
-    },
-    {
-      name: "different explicit URL",
-      transport: "ssh" as const,
-      url: "ws://127.0.0.1:19876",
-      source: "cli",
-    },
-    {
-      name: "same explicit URL",
-      transport: "ssh" as const,
-      url: "ws://127.0.0.1:18789",
-      source: "cli",
-    },
-    {
-      name: "same environment URL",
-      transport: "ssh" as const,
-      url: "ws://127.0.0.1:18789",
-      source: "env",
-    },
-  ])("does not borrow the configured SSH route for $name", async ({ transport, url, source }) => {
-    mockState.buildGatewayConnectionDetails.mockReturnValue({
-      url,
-      urlSource: source === "cli" ? "cli --url" : "env OPENCLAW_GATEWAY_URL",
-      message: `Gateway target: ${url}`,
-    });
+    ["direct transport", "direct", "ws://127.0.0.1:18789", "cli", false],
+    ["different explicit URL", "ssh", "ws://127.0.0.1:19876", "cli", false],
+    ["same explicit URL", "ssh", "ws://127.0.0.1:18789", "cli", false],
+    ["same environment URL", "ssh", "ws://127.0.0.1:18789", "env", false],
+    ["allowed exact-target resume", "ssh", "ws://127.0.0.1:18789", "cli", true],
+  ] as const)("selects SSH ownership for %s", async (_name, transport, url, source, allowExact) => {
+    mockState.buildGatewayConnectionDetails.mockReturnValue(
+      connection(url, source === "cli" ? "cli --url" : "env OPENCLAW_GATEWAY_URL"),
+    );
     const result = await resolveGatewayClientBootstrap({
       config: {
         gateway: {
@@ -221,60 +162,14 @@ describe("resolveGatewayClientBootstrap", () => {
         },
       },
       ...(source === "cli" ? { gatewayUrl: url } : {}),
+      allowConfiguredAuthForExactTarget: allowExact,
       env: source === "env" ? { OPENCLAW_GATEWAY_URL: url } : {},
     });
 
-    expect(result.deviceAuthScope).toBe(url);
-    expect(result.sshTunnel).toBeUndefined();
-  });
-
-  it("retains configured SSH ownership for an explicitly allowed exact-target resume", async () => {
-    const url = "ws://127.0.0.1:18789";
-    mockState.buildGatewayConnectionDetails.mockReturnValue({
-      url,
-      urlSource: "cli --url",
-      message: `Gateway target: ${url}`,
-    });
-    const result = await resolveGatewayClientBootstrap({
-      config: {
-        gateway: { mode: "remote", remote: { url, transport: "ssh", sshTarget: "me@studio" } },
-      },
-      gatewayUrl: url,
-      allowConfiguredAuthForExactTarget: true,
-      env: {},
-    });
-
-    expect(result.deviceAuthScope).toBe(
-      "remote:ssh:9d0708e04e550511a6fc9dba41c94ffc895fdd5029a3e5c779f2c0bc16bd4c44",
+    expect(result.deviceAuthScope).toBe(allowExact ? SSH_SCOPE : url);
+    expect(result.sshTunnel).toEqual(
+      allowExact ? { target: "me@studio", remotePort: 18789 } : undefined,
     );
-    expect(result.sshTunnel).toEqual({ target: "me@studio", remotePort: 18789 });
-  });
-
-  it.each([
-    {
-      fingerprint: LOCAL_TLS_FINGERPRINT,
-      scope: "remote:tls:f40b2abc628c46b0d05315dada50e36a2d04147d5d7d5c290a8ccecad5ac26ad",
-    },
-    {
-      fingerprint: REMOTE_TLS_FINGERPRINT,
-      scope: "remote:tls:684dff5e10578007130807c7d9aa95d045019428f2d404c7d708f38f2d7b5fa2",
-    },
-  ])("isolates loopback device auth by TLS pin $fingerprint", async ({ fingerprint, scope }) => {
-    const url = "wss://127.0.0.1:18789";
-    mockState.buildGatewayConnectionDetails.mockReturnValue({
-      url,
-      urlSource: "config gateway.remote.url",
-      message: `Gateway target: ${url}`,
-    });
-    const result = await resolveGatewayClientBootstrap({
-      config: {
-        gateway: { mode: "remote", remote: { url, tlsFingerprint: `sha256:${fingerprint}` } },
-      },
-      env: {},
-    });
-
-    expect(result.deviceAuthScope).toBe(scope);
-    expect(result.sshTunnel).toBeUndefined();
   });
 
   it("selects local credentials for a hosted Gateway port with a remote primary", async () => {
@@ -316,257 +211,154 @@ describe("resolveGatewayClientBootstrap", () => {
     });
   });
 
-  it("returns the local TLS fingerprint for config-derived WSS clients", async () => {
-    const tlsConfig = { enabled: true };
-    mockState.buildGatewayConnectionDetails.mockReturnValue({
-      url: "wss://127.0.0.1:18789",
-      urlSource: "local loopback",
-      message: "Gateway target: wss://127.0.0.1:18789",
-    });
-    mockState.inspectGatewayTlsCertificate.mockResolvedValue({
-      ok: true,
-      value: { cert: "public-certificate", fingerprintSha256: LOCAL_TLS_FINGERPRINT },
-    });
-
-    const result = await resolveGatewayClientBootstrap({
-      config: { gateway: { tls: tlsConfig } } as never,
-      env: process.env,
-    });
-
-    expect(result.tlsFingerprint).toBe(LOCAL_TLS_FINGERPRINT);
-    expect(mockState.inspectGatewayTlsCertificate).toHaveBeenCalledWith(tlsConfig);
-  });
-
-  it("reuses local auth without pinning an exact public-origin target to the local certificate", async () => {
-    const publicUrl = "wss://gateway.example/openclaw";
-    const tlsConfig = { enabled: true };
-    mockState.buildGatewayConnectionDetails
-      .mockReturnValueOnce({
-        url: publicUrl,
-        urlSource: "cli --url",
-        message: `Gateway target: ${publicUrl}`,
-      })
-      .mockReturnValueOnce({
-        url: "wss://127.0.0.1:18789",
-        urlSource: "local loopback",
-        message: "Gateway target: wss://127.0.0.1:18789",
-      });
-    mockState.inspectGatewayTlsCertificate.mockResolvedValue({
-      ok: true,
-      value: { cert: "public-certificate", fingerprintSha256: LOCAL_TLS_FINGERPRINT },
-    });
-
-    const result = await resolveGatewayClientBootstrap({
+  it.each<{
+    name: string;
+    url: string;
+    source: string;
+    config: OpenClawConfig;
+    pin?: string;
+    scope?: string;
+    inspect?: boolean;
+  }>([
+    {
+      name: "configured local listener",
+      url: LOCAL_URL,
+      source: "local loopback",
+      config: { gateway: { tls: TLS_CONFIG } },
+      pin: LOCAL_TLS_FINGERPRINT,
+      inspect: true,
+    },
+    {
+      name: "remote fallback to local",
+      url: LOCAL_URL,
+      source: "missing gateway.remote.url (fallback local)",
       config: {
         gateway: {
-          mode: "local",
-          publicOrigin: "https://gateway.example",
-          controlUi: { basePath: "/openclaw" },
-          tls: tlsConfig,
-          auth: { mode: "token", token: "configured-token" },
+          mode: "remote",
+          tls: TLS_CONFIG,
+          remote: { tlsFingerprint: REMOTE_TLS_FINGERPRINT },
         },
-      } as never,
-      gatewayUrl: publicUrl,
-      authPolicy: "interactive",
-      allowConfiguredAuthForExactTarget: true,
-      env: process.env,
-    });
-
-    expect(result.auth.token).toBe("configured-token");
-    expect(result.tlsFingerprint).toBeUndefined();
-    expect(mockState.inspectGatewayTlsCertificate).not.toHaveBeenCalled();
-  });
-
-  it("retains the local certificate pin for an exact direct-local target", async () => {
-    const localUrl = "wss://127.0.0.1:18789/openclaw";
-    const tlsConfig = { enabled: true };
-    mockState.buildGatewayConnectionDetails
-      .mockReturnValueOnce({
-        url: localUrl,
-        urlSource: "cli --url",
-        message: `Gateway target: ${localUrl}`,
-      })
-      .mockReturnValueOnce({
-        url: "wss://127.0.0.1:18789",
-        urlSource: "local loopback",
-        message: "Gateway target: wss://127.0.0.1:18789",
-      });
+      },
+      pin: LOCAL_TLS_FINGERPRINT,
+      inspect: true,
+    },
+    ...["config gateway.remote.url", "env OPENCLAW_GATEWAY_URL", "cli --url"].map((source) => ({
+      name: source,
+      url:
+        source === "config gateway.remote.url"
+          ? "wss://gateway.example/ws"
+          : "wss://override.example/ws",
+      source,
+      config: remoteTlsConfig("wss://gateway.example/ws", REMOTE_TLS_FINGERPRINT.toUpperCase()),
+      pin: source === "cli --url" ? undefined : REMOTE_TLS_FINGERPRINT,
+    })),
+    {
+      name: "plaintext remote target fails closed",
+      url: "ws://127.0.0.1:18789",
+      source: "config gateway.remote.url",
+      config: remoteTlsConfig("ws://127.0.0.1:18789", REMOTE_TLS_FINGERPRINT),
+      pin: REMOTE_TLS_FINGERPRINT,
+    },
+    ...(
+      [
+        [
+          LOCAL_TLS_FINGERPRINT,
+          "remote:tls:f40b2abc628c46b0d05315dada50e36a2d04147d5d7d5c290a8ccecad5ac26ad",
+        ],
+        [
+          REMOTE_TLS_FINGERPRINT,
+          "remote:tls:684dff5e10578007130807c7d9aa95d045019428f2d404c7d708f38f2d7b5fa2",
+        ],
+      ] as const
+    ).map(([pin, scope]) => ({
+      name: `loopback scope ${pin}`,
+      url: LOCAL_URL,
+      source: "config gateway.remote.url",
+      config: remoteTlsConfig(LOCAL_URL, pin),
+      pin,
+      scope,
+    })),
+  ])("selects TLS ownership for $name", async ({ url, source, config, pin, scope, inspect }) => {
+    mockState.buildGatewayConnectionDetails.mockReturnValue(connection(url, source));
     mockState.inspectGatewayTlsCertificate.mockResolvedValue({
       ok: true,
       value: { cert: "public-certificate", fingerprintSha256: LOCAL_TLS_FINGERPRINT },
     });
-
     const result = await resolveGatewayClientBootstrap({
-      config: {
-        gateway: {
-          mode: "local",
-          controlUi: { basePath: "/openclaw" },
-          tls: tlsConfig,
-          auth: { mode: "token", token: "configured-token" },
-        },
-      } as never,
-      gatewayUrl: localUrl,
-      explicitAuth: { token: "explicit-token" },
-      authPolicy: "interactive",
-      allowConfiguredAuthForExactTarget: true,
+      config,
+      gatewayUrl: source === "cli --url" ? url : undefined,
       env: process.env,
     });
-
-    expect(result.auth.token).toBe("explicit-token");
-    expect(result.tlsFingerprint).toBe(LOCAL_TLS_FINGERPRINT);
-    expect(mockState.inspectGatewayTlsCertificate).toHaveBeenCalledWith(tlsConfig);
-  });
-
-  it("prefers direct-local TLS ownership when publicOrigin resolves to the same URL", async () => {
-    const localUrl = "wss://127.0.0.1:18789/openclaw";
-    const tlsConfig = { enabled: true };
-    mockState.buildGatewayConnectionDetails
-      .mockReturnValueOnce({
-        url: localUrl,
-        urlSource: "cli --url",
-        message: `Gateway target: ${localUrl}`,
-      })
-      .mockReturnValueOnce({
-        url: "wss://127.0.0.1:18789",
-        urlSource: "local loopback",
-        message: "Gateway target: wss://127.0.0.1:18789",
-      });
-    mockState.inspectGatewayTlsCertificate.mockResolvedValue({
-      ok: true,
-      value: { cert: "public-certificate", fingerprintSha256: LOCAL_TLS_FINGERPRINT },
-    });
-
-    const result = await resolveGatewayClientBootstrap({
-      config: {
-        gateway: {
-          mode: "local",
-          publicOrigin: "https://127.0.0.1:18789",
-          controlUi: { basePath: "/openclaw" },
-          tls: tlsConfig,
-          auth: { mode: "token", token: "configured-token" },
-        },
-      } as never,
-      gatewayUrl: localUrl,
-      authPolicy: "interactive",
-      allowConfiguredAuthForExactTarget: true,
-      env: process.env,
-    });
-
-    expect(result.auth.token).toBe("configured-token");
-    expect(result.tlsFingerprint).toBe(LOCAL_TLS_FINGERPRINT);
-    expect(mockState.inspectGatewayTlsCertificate).toHaveBeenCalledWith(tlsConfig);
+    expect(result.tlsFingerprint).toBe(pin);
+    if (inspect) {
+      expect(mockState.inspectGatewayTlsCertificate).toHaveBeenCalledWith(TLS_CONFIG);
+    } else {
+      expect(mockState.inspectGatewayTlsCertificate).not.toHaveBeenCalled();
+    }
+    if (scope) {
+      expect(result.deviceAuthScope).toBe(scope);
+      expect(result.sshTunnel).toBeUndefined();
+    }
   });
 
   it.each([
     {
-      url: "wss://gateway.example/ws",
-      urlSource: "config gateway.remote.url",
+      name: "public origin",
+      host: "gateway.example",
+      publicOrigin: "https://gateway.example",
+      explicit: false,
+      pin: undefined,
     },
     {
-      url: "wss://override.example/ws",
-      urlSource: "env OPENCLAW_GATEWAY_URL",
+      name: "direct local target",
+      host: "127.0.0.1:18789",
+      publicOrigin: undefined,
+      explicit: true,
+      pin: LOCAL_TLS_FINGERPRINT,
     },
-  ])("returns the configured remote pin for $urlSource", async ({ url, urlSource }) => {
-    mockState.buildGatewayConnectionDetails.mockReturnValue({
-      url,
-      urlSource,
-      message: `Gateway target: ${url}`,
-    });
-
-    const result = await resolveGatewayClientBootstrap({
-      config: {
-        gateway: {
-          mode: "remote",
-          remote: {
-            url: "wss://gateway.example/ws",
-            tlsFingerprint: `sha256:${REMOTE_TLS_FINGERPRINT.toUpperCase()}`,
+    {
+      name: "public origin matching local",
+      host: "127.0.0.1:18789",
+      publicOrigin: "https://127.0.0.1:18789",
+      explicit: false,
+      pin: LOCAL_TLS_FINGERPRINT,
+    },
+  ])(
+    "retains auth and TLS ownership for an exact $name",
+    async ({ host, publicOrigin, explicit, pin }) => {
+      const url = `wss://${host}/openclaw`;
+      mockState.buildGatewayConnectionDetails
+        .mockReturnValueOnce(connection(url, "cli --url"))
+        .mockReturnValueOnce(connection(LOCAL_URL, "local loopback"));
+      mockState.inspectGatewayTlsCertificate.mockResolvedValue({
+        ok: true,
+        value: { cert: "public-certificate", fingerprintSha256: LOCAL_TLS_FINGERPRINT },
+      });
+      const result = await resolveGatewayClientBootstrap({
+        config: {
+          gateway: {
+            mode: "local",
+            publicOrigin,
+            controlUi: { basePath: "/openclaw" },
+            tls: TLS_CONFIG,
+            auth: { mode: "token", token: "configured-token" },
           },
         },
-      } as never,
-      env: process.env,
-    });
-
-    expect(result.tlsFingerprint).toBe(REMOTE_TLS_FINGERPRINT);
-    expect(mockState.inspectGatewayTlsCertificate).not.toHaveBeenCalled();
-  });
-
-  it("does not inherit the configured remote pin for CLI URL overrides", async () => {
-    const url = "wss://override.example/ws";
-    mockState.buildGatewayConnectionDetails.mockReturnValue({
-      url,
-      urlSource: "cli --url",
-      message: `Gateway target: ${url}`,
-    });
-
-    const result = await resolveGatewayClientBootstrap({
-      config: {
-        gateway: {
-          mode: "remote",
-          remote: {
-            url: "wss://gateway.example/ws",
-            tlsFingerprint: `sha256:${REMOTE_TLS_FINGERPRINT}`,
-          },
-        },
-      } as never,
-      gatewayUrl: url,
-      env: process.env,
-    });
-
-    expect(result.tlsFingerprint).toBeUndefined();
-    expect(mockState.inspectGatewayTlsCertificate).not.toHaveBeenCalled();
-  });
-
-  it("preserves the configured remote pin so plaintext targets fail closed", async () => {
-    const url = "ws://127.0.0.1:18789";
-    mockState.buildGatewayConnectionDetails.mockReturnValue({
-      url,
-      urlSource: "config gateway.remote.url",
-      message: `Gateway target: ${url}`,
-    });
-
-    const result = await resolveGatewayClientBootstrap({
-      config: {
-        gateway: {
-          mode: "remote",
-          remote: {
-            url,
-            tlsFingerprint: `sha256:${REMOTE_TLS_FINGERPRINT}`,
-          },
-        },
-      } as never,
-      env: process.env,
-    });
-
-    expect(result.tlsFingerprint).toBe(REMOTE_TLS_FINGERPRINT);
-    expect(mockState.inspectGatewayTlsCertificate).not.toHaveBeenCalled();
-  });
-
-  it("uses the local pin when remote mode falls back to the configured local gateway", async () => {
-    const tlsConfig = { enabled: true };
-    mockState.buildGatewayConnectionDetails.mockReturnValue({
-      url: "wss://127.0.0.1:18789",
-      urlSource: "missing gateway.remote.url (fallback local)",
-      message: "Gateway target: wss://127.0.0.1:18789",
-    });
-    mockState.inspectGatewayTlsCertificate.mockResolvedValue({
-      ok: true,
-      value: { cert: "public-certificate", fingerprintSha256: LOCAL_TLS_FINGERPRINT },
-    });
-
-    const result = await resolveGatewayClientBootstrap({
-      config: {
-        gateway: {
-          mode: "remote",
-          tls: tlsConfig,
-          remote: { tlsFingerprint: `sha256:${REMOTE_TLS_FINGERPRINT}` },
-        },
-      } as never,
-      env: process.env,
-    });
-
-    expect(result.tlsFingerprint).toBe(LOCAL_TLS_FINGERPRINT);
-    expect(mockState.inspectGatewayTlsCertificate).toHaveBeenCalledWith(tlsConfig);
-  });
+        gatewayUrl: url,
+        ...(explicit ? { explicitAuth: { token: "explicit-token" } } : {}),
+        authPolicy: "interactive",
+        allowConfiguredAuthForExactTarget: true,
+        env: process.env,
+      });
+      expect(result.auth.token).toBe(explicit ? "explicit-token" : "configured-token");
+      expect(result.tlsFingerprint).toBe(pin);
+      if (pin) {
+        expect(mockState.inspectGatewayTlsCertificate).toHaveBeenCalledWith(TLS_CONFIG);
+      } else {
+        expect(mockState.inspectGatewayTlsCertificate).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("rejects an invalid explicit TLS fingerprint", async () => {
     mockState.buildGatewayConnectionDetails.mockReturnValue({
@@ -577,7 +369,7 @@ describe("resolveGatewayClientBootstrap", () => {
 
     await expect(
       resolveGatewayClientBootstrap({
-        config: {} as never,
+        config: {},
         gatewayUrl: "wss://gateway.example/ws",
         explicitTlsFingerprint: "sha256:abc123",
         env: process.env,

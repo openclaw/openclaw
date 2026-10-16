@@ -2,15 +2,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { hasErrnoCode } from "../infra/errno.js";
 import { tryReadJson } from "../infra/json-files.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
 import {
   resolveSqliteInspectionBudget,
   runSqliteReadOnlyWorker,
 } from "../infra/sqlite-readonly-worker.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
-import { checkGitCandidateNodeRuntime } from "../infra/update-runner-git-node-preflight.js";
+import { prepareGitCandidateNodeRuntime } from "../infra/update-runner-git-node-preflight.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { readAgentDatabasePreflightTargets } from "../state/openclaw-agent-db-registry.read.js";
@@ -94,7 +96,7 @@ export async function assertNodeRuntimeUpdateCompatible(params: {
   // launcher's readiness fallback own that compatibility check.
   const nodeRuntimeFailure = process.versions.bun
     ? null
-    : await checkGitCandidateNodeRuntime(params.packageRoot);
+    : (await prepareGitCandidateNodeRuntime(params.packageRoot, undefined, "current-runtime")).step;
   if (nodeRuntimeFailure) {
     throw new Error(
       nodeRuntimeFailure.stderrTail ?? "Node runtime is incompatible with the update.",
@@ -145,18 +147,23 @@ export async function assertNodeRuntimeUpdateCompatible(params: {
         sourcePath,
         (await fs.stat(consolidated)).size,
       );
-      const result = await runCommandWithTimeout(
-        [
-          process.execPath,
-          path.join(params.packageRoot, "openclaw.mjs"),
+      const invocation = resolveOpenClawCliInvocation({
+        execArgv: resolveRuntimeArgs(),
+        entryPath: path.join(params.packageRoot, "openclaw.mjs"),
+        args: [
           "database",
           agentId === undefined ? "preflight" : "preflight-agent",
           consolidated,
           ...(agentId === undefined ? [] : ["--agent-id", agentId]),
           "--json",
         ],
-        { timeoutMs, signal: params.signal, killProcessTree: true, env },
-      );
+      });
+      const result = await runCommandWithTimeout([invocation.command, ...invocation.args], {
+        timeoutMs,
+        signal: params.signal,
+        killProcessTree: true,
+        env,
+      });
       let report: Record<string, unknown> | null = null;
       try {
         report = asNullableRecord(JSON.parse(result.stdout));

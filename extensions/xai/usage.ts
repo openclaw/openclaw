@@ -72,26 +72,21 @@ function readCurrentPeriod(config: BillingConfig) {
   return asOptionalRecord(config["currentPeriod"] ?? config["current_period"]);
 }
 
-function readPeriodType(currentPeriod: Record<string, unknown> | undefined): string {
-  return normalizeOptionalString(currentPeriod?.type) ?? "";
-}
-
 function readPeriodBoundMs(
   config: BillingConfig,
   currentPeriod: Record<string, unknown> | undefined,
   bound: "start" | "end",
 ): number | undefined {
-  const periodKey = bound === "start" ? "start" : "end";
   const billingKey = bound === "start" ? "billingPeriodStart" : "billingPeriodEnd";
   const billingSnakeKey = bound === "start" ? "billing_period_start" : "billing_period_end";
   return parseDateStringTimestampMs(
-    currentPeriod?.[periodKey] ?? config[billingKey] ?? config[billingSnakeKey],
+    currentPeriod?.[bound] ?? config[billingKey] ?? config[billingSnakeKey],
   );
 }
 
 function hasRecognizedUsagePeriod(config: BillingConfig): boolean {
   const currentPeriod = readCurrentPeriod(config);
-  const periodType = readPeriodType(currentPeriod);
+  const periodType = normalizeOptionalString(currentPeriod?.type) ?? "";
   if (!periodType.endsWith("WEEKLY") && !periodType.endsWith("MONTHLY")) {
     return false;
   }
@@ -99,10 +94,6 @@ function hasRecognizedUsagePeriod(config: BillingConfig): boolean {
     readPeriodBoundMs(config, currentPeriod, "start") !== undefined ||
     readPeriodBoundMs(config, currentPeriod, "end") !== undefined
   );
-}
-
-function hasIncludedUsagePercentField(config: BillingConfig): boolean {
-  return (config["creditUsagePercent"] ?? config["credit_usage_percent"]) !== undefined;
 }
 
 function resolveUsageWindow(config: BillingConfig): UsageWindow | undefined {
@@ -121,7 +112,7 @@ function resolveUsageWindow(config: BillingConfig): UsageWindow | undefined {
     return undefined;
   }
 
-  const periodType = readPeriodType(currentPeriod);
+  const periodType = normalizeOptionalString(currentPeriod?.type) ?? "";
   const label = periodType.endsWith("WEEKLY")
     ? "Weekly"
     : periodType.endsWith("MONTHLY") ||
@@ -169,27 +160,21 @@ function buildSuperGrokUsageSnapshot(data: unknown): ProviderUsageSnapshot {
   const billing = resolveBilling(config);
   const plan =
     parsePlan(payload?.["subscription_tier"] ?? payload?.["subscriptionTier"]) ?? "SuperGrok";
-  if (window) {
-    return {
-      provider: XAI_PROVIDER_ID,
-      displayName: "SuperGrok",
-      windows: [window],
-      billing,
-      plan,
-    };
-  }
-
   // xAI omits default-zero included-usage scalars on valid weekly/monthly
   // billing responses. Do not invent a percent, and do not read on-demand
   // pay-as-you-go counters as SuperGrok subscription quota.
-  if (!hasIncludedUsagePercentField(config) && hasRecognizedUsagePeriod(config)) {
+  if (
+    window ||
+    ((config["creditUsagePercent"] ?? config["credit_usage_percent"]) === undefined &&
+      hasRecognizedUsagePeriod(config))
+  ) {
     return {
       provider: XAI_PROVIDER_ID,
       displayName: "SuperGrok",
-      windows: [],
+      windows: window ? [window] : [],
       billing,
       plan,
-      summary: "Included usage omitted",
+      ...(window ? {} : { summary: "Included usage omitted" }),
     };
   }
 

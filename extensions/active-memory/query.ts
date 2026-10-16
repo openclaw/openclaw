@@ -5,6 +5,7 @@ import {
   resolveDefaultModelForAgent,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   ACTIVE_MEMORY_CLOSE_TAG,
@@ -137,10 +138,10 @@ export function extractTextContentParts(content: unknown): string[] {
       parts.push(item);
       continue;
     }
-    if (!item || typeof item !== "object") {
+    const typed = asOptionalObjectRecord(item);
+    if (!typed) {
       continue;
     }
-    const typed = item as { type?: unknown; text?: unknown; content?: unknown };
     if (typeof typed.text === "string") {
       parts.push(typed.text);
       continue;
@@ -156,29 +157,20 @@ export function extractTextContent(content: unknown): string {
   return extractTextContentParts(content).join(" ").trim();
 }
 
-function findActiveMemoryCloseLine(lines: string[], startIndex: number): number {
-  for (let index = startIndex; index < lines.length; index += 1) {
-    if ((lines[index]?.trim() ?? "") === ACTIVE_MEMORY_CLOSE_TAG) {
-      return index;
-    }
-  }
-  return -1;
-}
-
 function stripRecalledContextNoise(text: string, injectedPrefixOnly = false): string {
-  const lines = text.split("\n");
+  const lines = text.split("\n").map((line) => line.trim());
   const cleanedLines: string[] = [];
   for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index]?.trim() ?? "";
+    const line = lines[index] ?? "";
     if (!line) {
       continue;
     }
     const blockStart = line === ACTIVE_MEMORY_CONTEXT_HEADER ? index + 1 : index;
     if (
       (!injectedPrefixOnly || line === ACTIVE_MEMORY_CONTEXT_HEADER) &&
-      lines[blockStart]?.trim() === ACTIVE_MEMORY_OPEN_TAG
+      lines[blockStart] === ACTIVE_MEMORY_OPEN_TAG
     ) {
-      const closeIndex = findActiveMemoryCloseLine(lines, blockStart + 1);
+      const closeIndex = lines.indexOf(ACTIVE_MEMORY_CLOSE_TAG, blockStart + 1);
       if (closeIndex !== -1) {
         index = closeIndex;
         continue;
@@ -200,10 +192,10 @@ function stripRecalledContextNoise(text: string, injectedPrefixOnly = false): st
 export function extractRecentTurns(messages: unknown[]): ActiveRecallRecentTurn[] {
   const turns: ActiveRecallRecentTurn[] = [];
   for (const message of messages) {
-    if (!message || typeof message !== "object") {
+    const typed = asOptionalObjectRecord(message);
+    if (!typed) {
       continue;
     }
-    const typed = message as { role?: unknown; content?: unknown };
     const role = typed.role === "user" || typed.role === "assistant" ? typed.role : undefined;
     if (!role) {
       continue;

@@ -11,7 +11,6 @@ type LegacyNotifyMigrationOutcome = {
   warnings: string[];
 };
 
-/** Migrate legacy notify fallback flags into explicit delivery destinations when possible. */
 export function migrateLegacyNotifyFallback(params: {
   jobs: Array<Record<string, unknown>>;
   legacyWebhook?: string;
@@ -30,8 +29,7 @@ export function migrateLegacyNotifyFallback(params: {
 
     const jobName =
       normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id) ?? "<unnamed>";
-    const notify = raw.notify === true;
-    if (!notify) {
+    if (raw.notify !== true) {
       delete raw.notify;
       changed = true;
       continue;
@@ -69,33 +67,27 @@ export function migrateLegacyNotifyFallback(params: {
       );
       continue;
     }
-    if (!legacyWebhook) {
-      // Without a configured target, the top-level marker cannot affect delivery.
-      delete raw.notify;
-      changed = true;
-      continue;
-    }
-
-    if ((mode === undefined && !hasLegacyChatDelivery) || mode === "none" || mode === "webhook") {
+    if (
+      legacyWebhook &&
+      ((mode === undefined && !hasLegacyChatDelivery) || mode === "none" || mode === "webhook")
+    ) {
       raw.delivery = {
         ...delivery,
         mode: "webhook",
         to: mode === "none" ? legacyWebhook : (validWebhookTo ?? legacyWebhook),
       };
-      delete raw.notify;
-      changed = true;
-      continue;
+    } else if (legacyWebhook) {
+      raw.delivery = {
+        ...delivery,
+        ...(hasLegacyChatDelivery ? { mode: "announce" } : {}),
+        completionDestination: {
+          ...completionDestination,
+          mode: "webhook",
+          to: legacyWebhook,
+        },
+      };
     }
-
-    raw.delivery = {
-      ...delivery,
-      ...(hasLegacyChatDelivery ? { mode: "announce" } : {}),
-      completionDestination: {
-        ...completionDestination,
-        mode: "webhook",
-        to: legacyWebhook,
-      },
-    };
+    // Without a configured target, the top-level marker cannot affect delivery.
     delete raw.notify;
     changed = true;
   }

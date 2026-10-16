@@ -1,12 +1,16 @@
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { NODE_WORKER_BUNDLE_INSTALL_COMMAND } from "../../infra/node-commands.js";
+import { notifyListeners } from "../../shared/listeners.js";
 import {
   parseNodeWorkerBundleInstallResult,
   type NodeWorkerBundleInstallResult,
 } from "../../worker/node-bundle-install-protocol.js";
 import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
-import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
+import type {
+  NodeWorkerSupervisorNodeProof,
+  NodeWorkerSupervisorTransport,
+} from "../node-registry-private.js";
 import { workerBootstrapOperationTimeoutMs } from "./bootstrap-timeouts.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { NodeWorkerBundleTransferService } from "./node-worker-bundle-transfer-service.js";
@@ -49,6 +53,20 @@ type ActiveInstall = {
 
 const megabytes = (bytes: number) => (bytes / 1_000_000).toFixed(1);
 
+function sameNodeAuthority(
+  left: NodeWorkerSupervisorNodeProof,
+  right: NodeWorkerSupervisorNodeProof,
+): boolean {
+  return (
+    left.nodeId === right.nodeId &&
+    left.pairingIdentity === right.pairingIdentity &&
+    left.pairingGeneration === right.pairingGeneration &&
+    left.clientId === right.clientId &&
+    left.clientMode === right.clientMode &&
+    left.protocolFeature === right.protocolFeature
+  );
+}
+
 export function createGatewayNodeWorkerBundleInstaller(options: {
   gatewayNamespace: string;
   getTransport: () => NodeWorkerSupervisorTransport | undefined;
@@ -60,13 +78,6 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
   const now = options.now ?? Date.now;
   const active = new Map<string, ActiveInstall>();
   let version = 0;
-  const notifyProgress = (listener: () => void) => {
-    try {
-      listener();
-    } catch {
-      // Run-progress observers do not own installation success.
-    }
-  };
   const publish = (entry: ActiveInstall, environmentIds = entry.observation.environmentIds) => {
     entry.lastPublicationAtMs = now();
     try {
@@ -74,7 +85,7 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
     } catch {
       // Session projection observers do not own installation success.
     }
-    entry.progressListeners.forEach(notifyProgress);
+    notifyListeners(entry.progressListeners, undefined);
   };
   const install: GatewayNodeWorkerBundleInstall = async (params) => {
     let startedAtMs = now();
@@ -153,7 +164,7 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
         publish(entry);
       } else if (progressListener) {
         // Joining an environment's in-flight install is progress even without a new publication.
-        notifyProgress(progressListener);
+        notifyListeners([progressListener], undefined);
       }
       const currentEntry = entry;
       startedAtMs = currentEntry.observation.startedAtMs;
@@ -161,7 +172,6 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
       let serve: ActiveInstall["serve"];
       try {
         prepared = options.transfer.prepare({
-          node,
           gatewayNamespace: options.gatewayNamespace,
           artifact,
           ...(bundlePrewarm ? { bundlePrewarm } : {}),
@@ -241,7 +251,27 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
           ...(params.signal ? { signal: params.signal } : {}),
         });
         if (!isAuthorized()) {
-          throw new Error("Device worker installation connection is no longer current");
+          if (params.signal?.aborted) {
+            throw new Error("Device worker installation connection is no longer current");
+          }
+          params.assertCurrent?.();
+          const replacement =
+            options.getTransport() === transport
+              ? await racePromiseWithAbortSignal(
+                  transport.getCurrentNode(params.deviceId),
+                  params.signal,
+                )
+              : undefined;
+          params.signal?.throwIfAborted();
+          params.assertCurrent?.();
+          if (
+            options.getTransport() !== transport ||
+            replacement === undefined ||
+            !sameNodeAuthority(node, replacement) ||
+            !transport.isCurrent(replacement)
+          ) {
+            throw new Error("Device worker installation connection is no longer current");
+          }
         }
         if (!result.ok) {
           throw new Error(

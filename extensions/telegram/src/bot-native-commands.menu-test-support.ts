@@ -2,7 +2,10 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
-import type { TelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
+import {
+  defaultTelegramNativeCommandDeps,
+  type TelegramNativeCommandDeps,
+} from "./bot-native-command-deps.runtime.js";
 import {
   createNativeCommandTestParams as createBaseNativeCommandTestParams,
   createTelegramPrivateCommandContext,
@@ -26,8 +29,8 @@ type CreateCommandBotParams = {
 };
 
 const skillCommandMocks = vi.hoisted(() => ({
-  listSkillCommandsForAgents: vi.fn<TelegramNativeCommandDeps["listSkillCommandsForAgents"]>(
-    () => [],
+  prepareSkillCommandsForAgents: vi.fn<TelegramNativeCommandDeps["prepareSkillCommandsForAgents"]>(
+    async () => [],
   ),
 }));
 
@@ -37,7 +40,7 @@ const deliveryMocks = vi.hoisted(() => ({
   })),
 }));
 
-export const listSkillCommandsForAgents = skillCommandMocks.listSkillCommandsForAgents;
+export const prepareSkillCommandsForAgents = skillCommandMocks.prepareSkillCommandsForAgents;
 export const deliverReplies = deliveryMocks.deliverReplies;
 
 // Vitest hoists this factory before static imports are initialized.
@@ -60,8 +63,8 @@ export async function waitForRegisteredCommands(
 }
 
 export function resetNativeCommandMenuMocks() {
-  listSkillCommandsForAgents.mockClear();
-  listSkillCommandsForAgents.mockReturnValue([]);
+  prepareSkillCommandsForAgents.mockClear();
+  prepareSkillCommandsForAgents.mockResolvedValue([]);
   deliverReplies.mockClear();
   deliverReplies.mockResolvedValue({ delivered: true });
 }
@@ -94,14 +97,17 @@ export function createNativeCommandTestParams(
     readChannelAllowFromStore: vi.fn(
       async () => [],
     ) as TelegramNativeCommandDeps["readChannelAllowFromStore"],
-    listSkillCommandsForAgents,
-    syncTelegramMenuCommands: vi.fn(({ bot, commandsToRegister }) => {
-      if (commandsToRegister.length === 0) {
-        return undefined;
+    prepareSkillCommandsForAgents,
+    syncTelegramMenuCommands: vi.fn(async ({ bot, commandsToRegister }) => {
+      if (commandsToRegister.length > 0) {
+        await bot.api.setMyCommands(commandsToRegister);
       }
-      return bot.api.setMyCommands(commandsToRegister);
     }) as TelegramNativeCommandDeps["syncTelegramMenuCommands"],
     sendMessageTelegram: vi.fn(async () => ({ messageId: "999", chatId: "100" })),
+    runModelsAuthLoginFlow: defaultTelegramNativeCommandDeps.runModelsAuthLoginFlow,
+    async editMessageTelegram() {
+      throw new Error("Native menu fixtures do not edit progress messages");
+    },
   };
   return {
     ...createBaseNativeCommandTestParams({

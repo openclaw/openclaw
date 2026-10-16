@@ -1,4 +1,3 @@
-// Defines plugin tool metadata and filesystem policy types.
 import type { ConversationRecallContext } from "../agents/conversation-recall.types.js";
 import type { ToolFsPolicy } from "../agents/tool-fs-policy.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
@@ -6,6 +5,7 @@ import type { ConversationReadInvocationOrigin } from "../channels/plugins/conve
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { MemoryAudience } from "./memory-provider-types.js";
 
 export type OpenClawPluginActiveModelContext = {
   provider?: string;
@@ -31,6 +31,8 @@ type OpenClawPluginToolContextBase = {
   agentDir?: string;
   agentId?: string;
   sessionKey?: string;
+  /** Host-selected reviewer devices for an approval request; not an approval grant. */
+  approvalReviewerDeviceIds?: readonly string[];
   /** Ephemeral session UUID - regenerated on /new and /reset. Use for per-conversation isolation. */
   sessionId?: string;
   /** Out-of-band plugin-owned bindings attached by the current run initiator. */
@@ -65,6 +67,12 @@ type OpenClawPluginToolContextBase = {
   requesterSenderId?: string;
   /** Trusted owner bit from inbound context (runtime-provided, not tool args). */
   senderIsOwner?: boolean;
+  /** Host-resolved memory partition for this turn. Providers must not reconstruct it. */
+  memoryAudience?: MemoryAudience;
+  /** Stable identity for one provider-owned pre-compaction flush cycle. */
+  memoryFlush?: { flushId: string };
+  /** Rejects a retained audience after any captured session incarnation changes. */
+  assertMemoryAudienceCurrent?: () => void;
   /** Live host-bound authority. Recheck inside the final synchronous effect/write guard. */
   assertInvocationCurrent?: () => void;
   /**
@@ -103,6 +111,8 @@ export type OpenClawPluginToolOptions = {
   name?: string;
   names?: string[];
   optional?: boolean;
+  /** False: independent; execute: pure factory with workspace use; true/omitted: factory may use it. */
+  workspaceAccess?: boolean | "execute";
 };
 
 export type OpenClawPluginHookOptions = {

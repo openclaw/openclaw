@@ -3,6 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { WORKER_PUBLIC_INGRESS_PATH } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
@@ -14,7 +18,8 @@ import {
 } from "../process/gateway-work-admission.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
-import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
+import { attachGatewayUpgradeHandler } from "./server-http-upgrades.js";
+import { createGatewayHttpServer } from "./server-http.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import {
@@ -45,6 +50,7 @@ async function withUpgradeServer(
   ) => Promise<void>,
   onConnection: (socket: WebSocket) => void = (socket) => socket.close(),
 ) {
+  setRuntimeConfigSnapshot({});
   const clients = new GatewayClientRegistry();
   const resolvedAuth = { mode: "none" as const, allowTailscale: false };
   const httpServer = createGatewayHttpServer({
@@ -81,6 +87,7 @@ async function withUpgradeServer(
     await new Promise<void>((resolve, reject) => {
       httpServer.close((error) => (error ? reject(error) : resolve()));
     });
+    clearRuntimeConfigSnapshot();
   }
 }
 

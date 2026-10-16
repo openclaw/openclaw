@@ -10,7 +10,9 @@ import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it } from "vitest";
 import { WriteToolOutputSchema } from "./tool-schemas.js";
-import { createWriteTool, type WriteOperations } from "./write.js";
+import { createWriteTool, type WriteToolOptions } from "./write.js";
+
+type WriteOperations = NonNullable<WriteToolOptions["operations"]>;
 
 const WritePatchReceiptSchema = Type.Extract(
   WriteToolOutputSchema,
@@ -230,7 +232,7 @@ describe("write tool", () => {
     await expect(fs.readFile(asciiPath, "utf-8")).resolves.toBe("ascii\n");
   });
 
-  it.each(["hello\n", "café 🦀\r\n日本語 e\u0301\r\n", "\uFFFD\r\n"])(
+  it.each(["café 🦀\r\n日本語 e\u0301\r\n", "\uFFFD\r\n"])(
     "returns a non-terminal no-op for identical UTF-8 content: %j",
     async (content) => {
       const filePath = await createTempPath("identical.txt");

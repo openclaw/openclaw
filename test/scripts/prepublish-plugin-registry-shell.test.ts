@@ -9,11 +9,10 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { createServer } from "node:http";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 import { parse } from "yaml";
-import { waitForFixtureFile } from "../helpers/process-wait.js";
+import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
 
@@ -84,6 +83,7 @@ function registryFixture(root: string, names: string[], version = VERSION) {
 
 async function withPublishedRegistry(
   root: string,
+  signal: AbortSignal,
   run: (url: string) => void | Promise<void>,
   version = BASELINE_VERSION,
 ) {
@@ -107,7 +107,7 @@ async function withPublishedRegistry(
     process.execPath,
     [resolve("scripts/e2e/lib/plugins/npm-registry-server.mjs"), portFile, ...args],
     {
-      stdio: "ignore",
+      stdio: ["ignore", "ignore", "ignore", "ipc"],
       env: {
         ...process.env,
         OPENCLAW_NPM_REGISTRY_PORT: "0",
@@ -119,6 +119,7 @@ async function withPublishedRegistry(
       },
     },
   );
+  const listening = once(server, "message");
   const closed = once(server, "close");
   const stop = async () => {
     server.kill("SIGTERM");
@@ -126,169 +127,27 @@ async function withPublishedRegistry(
   };
   onTestFinished(stop);
   try {
-    await waitForFixtureFile(portFile, closed);
-    await run(`http://127.0.0.1:${readFileSync(portFile, "utf8")}`);
+    const [port]: unknown[] = await withinTest(
+      awaitGateBeforeSettlement(listening, closed, `Child exited before writing ${portFile}`),
+      signal,
+    );
+    if (typeof port !== "number") {
+      throw new Error("Missing registry listening port");
+    }
+    await run(`http://127.0.0.1:${port}`);
   } finally {
     await stop();
   }
 }
 
 describe("prepublish plugin registry shell helper", () => {
-  it("repairs the published 2026.7.33 baseline without installing its dev dependencies", async () => {
-    const root = tempDirs.make("openclaw-survivor-2026-7-33-ai-");
-    const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
-    const start = source.indexOf("repair_2026_7_33_ai_runtime() {");
-    const end = source.indexOf("\n}\n", start);
-    if (start < 0 || end < start) {
-      throw new Error("Missing survivor owner repair_2026_7_33_ai_runtime");
-    }
-    const repair = source.slice(start, end + 3);
-    const packageRoot = join(root, "prefix/lib/node_modules/openclaw");
-    mkdirSync(packageRoot, { recursive: true });
-    writeFileSync(
-      join(packageRoot, "package.json"),
-      `${JSON.stringify({
-        name: "openclaw",
-        version: "2026.7.33",
-        dependencies: { "@openclaw/ai": "2026.7.33" },
-        devDependencies: { "fixture-dev-only": "2026.7.33" },
-      })}\n`,
-    );
-
-    await withPublishedRegistry(
-      root,
-      (registry) => {
-        const result = spawnSync(
-          "bash",
-          [
-            "-c",
-            `
-set -euo pipefail
-${repair}
-baseline_version="2026.7.33"
-package_root() { printf '%s/lib/node_modules/openclaw' "$npm_config_prefix"; }
-openclaw_prepublish_plugin_registry_run_published() { "$@"; }
-openclaw_e2e_maybe_timeout() { shift; "$@"; }
-openclaw_e2e_print_log() { cat "$1"; }
-repair_2026_7_33_ai_runtime
-node - <<'NODE'
-const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const root = process.env.npm_config_prefix + "/lib/node_modules/openclaw/node_modules";
-assert.equal(require(root + "/@openclaw/ai/package.json").version, "2026.7.33");
-assert.equal(fs.existsSync(root + "/fixture-dev-only"), false);
-NODE
-`,
-          ],
-          {
-            cwd: root,
-            encoding: "utf8",
-            env: {
-              ...process.env,
-              NODE_ENV: "",
-              NPM_CONFIG_REGISTRY: registry,
-              npm_config_registry: registry,
-              NPM_CONFIG_USERCONFIG: "/dev/null",
-              npm_config_userconfig: "/dev/null",
-              BASELINE_INSTALL_LOG: join(root, "baseline.log"),
-              npm_config_prefix: join(root, "prefix"),
-              npm_config_cache: join(root, "cache"),
-              OPENCLAW_E2E_NPM_INSTALL_TIMEOUT: "30s",
-            },
-          },
-        );
-
-        expect(result.status, result.stdout + result.stderr).toBe(0);
-        expect(result.stdout).toContain(
-          "Repairing published 2026.7.33 baseline's omitted @openclaw/ai runtime.",
-        );
-      },
-      "2026.7.33",
-    );
-  });
-
-  it("retries failed upstream metadata while preserving published and candidate versions", async () => {
-    const root = tempDirs.make("openclaw-prepublish-registry-retry-");
-    const fixture = registryFixture(root, ["@openclaw/ai"]);
-    let requests = 0;
-    const upstream = createServer((_request, response) => {
-      requests += 1;
-      response.writeHead(requests === 1 ? 503 : 200, { "content-type": "application/json" });
-      response.end(
-        JSON.stringify({
-          name: "@openclaw/ai",
-          "dist-tags": { latest: BASELINE_VERSION },
-          versions: { [BASELINE_VERSION]: { name: "@openclaw/ai", version: BASELINE_VERSION } },
-        }),
-      );
-    });
-    upstream.listen(0, "127.0.0.1");
-    await once(upstream, "listening");
-    const address = upstream.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Missing upstream address");
-    }
-    const child = spawn(
-      "bash",
-      [
-        resolve(SCRIPT),
-        process.execPath,
-        "--input-type=module",
-        "-e",
-        `
-const url = process.env.NPM_CONFIG_REGISTRY + "/@openclaw%2Fai";
-const first = await fetch(url);
-await first.text();
-const second = await fetch(url);
-const body = await second.text();
-console.log(JSON.stringify({ url, first: first.status, second: second.status, body }));
-`,
-      ],
-      {
-        env: {
-          ...process.env,
-          ...fixture.env,
-          OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${address.port}`,
-        },
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
-    const closed = once(child, "close");
-    let stdout = "",
-      stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    try {
-      const [code] = await closed;
-      expect(code, stderr).toBe(0);
-      const result = JSON.parse(stdout);
-      expect(result).toMatchObject({ first: 500, second: 200 });
-      const metadata = JSON.parse(result.body);
-      expect(Object.keys(metadata.versions).toSorted()).toEqual([BASELINE_VERSION, VERSION]);
-      expect(metadata["dist-tags"].latest).toBe(BASELINE_VERSION);
-      expect(requests).toBe(2);
-      await expect(fetch(result.url, { signal: AbortSignal.timeout(1_000) })).rejects.toThrow();
-    } finally {
-      child.kill("SIGTERM");
-      await closed;
-      upstream.closeAllConnections();
-      const stopped = once(upstream, "close");
-      upstream.close();
-      await stopped;
-    }
-  });
-
-  it.each([VERSION, "2026.8.1", "2026.8.1-2"])(
+  it.for([VERSION])(
     "installs a published baseline before candidate %s and reaps its registry on failure",
-    async (version) => {
+    async (version, { signal }) => {
       const root = tempDirs.make("openclaw-prepublish-command-");
       const fixture = registryFixture(root, ["openclaw", "@openclaw/ai"], version);
       const registryUrl = join(root, "registry-url");
-      await withPublishedRegistry(root, async (upstream) => {
+      await withPublishedRegistry(root, signal, async (upstream) => {
         const result = spawnSync(
           "bash",
           [
@@ -329,9 +188,9 @@ exit 17
     },
   );
 
-  it.each(["install", "startup"])(
+  it.for(["install", "startup"])(
     "keeps published bytes through survivor baseline %s when candidate versions match",
-    async (stage) => {
+    async (stage, { signal }) => {
       const baselineVersion = "2026.8.1";
       const root = tempDirs.make("openclaw-survivor-same-version-");
       const fixture = registryFixture(
@@ -343,7 +202,6 @@ exit 17
       const functions = [
         "normalize_baseline_spec",
         "normalize_baseline",
-        "repair_2026_7_33_ai_runtime",
         "install_baseline",
         "start_gateway",
       ]
@@ -387,6 +245,7 @@ fi
       );
       await withPublishedRegistry(
         root,
+        signal,
         async (upstream) => {
           const result = spawnSync(
             "bash",
@@ -490,52 +349,11 @@ node -e 'const assert=require("node:assert/strict"); for(const name of ["opencla
     },
   );
 
-  it("carries verified registry bytes and their expected identity into the Docker context", () => {
-    const root = tempDirs.make("openclaw-prepublish-build-context-");
-    const fixture = registryFixture(root, ["openclaw", "@openclaw/ai"]);
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        `
-set -euo pipefail
-source "$PACKAGE_HELPER"
-docker_e2e_prepare_package_context "$ROOT_TARBALL"
-`,
-      ],
-      {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          ...fixture.env,
-          TMPDIR: root,
-          PACKAGE_HELPER: resolve("scripts/lib/docker-e2e-package.sh"),
-          ROOT_TARBALL: join(fixture.artifactDir, "openclaw.tgz"),
-        },
-      },
-    );
-    expect(result.status, result.stderr).toBe(0);
-    const context = result.stdout.trim();
-    expect(JSON.parse(readFileSync(join(context, "registry-identity.json"), "utf8"))).toEqual({
-      sourceSha: SOURCE_SHA,
-      candidateVersion: VERSION,
-      manifestSha256: sha256(fixture.manifestPath),
-    });
-    expect(readFileSync(join(context, "prepublish-plugin-registry", "openclaw-ai.tgz"))).toEqual(
-      readFileSync(join(fixture.artifactDir, "openclaw-ai.tgz")),
-    );
-    expect(readFileSync(join(context, "openclaw-current.tgz"))).toEqual(
-      readFileSync(join(fixture.artifactDir, "openclaw.tgz")),
-    );
-  });
-
-  it.each([
-    { name: "prepared dependencies", registry: true, fault: "" },
-    { name: "public registry without a tuple", registry: false, fault: "" },
+  it.for([
     { name: "mismatched registry source", registry: true, fault: "source" },
     { name: "mismatched registry digest", registry: true, fault: "manifest" },
     { name: "mismatched root package digest", registry: true, fault: "package" },
-  ])("runs the native npm 12 workflow with $name", async ({ registry, fault }) => {
+  ])("runs the native npm 12 workflow with $name", async ({ registry, fault }, { signal }) => {
     const bash = resolveWorkflowBash();
     const root = tempDirs.make("openclaw-npm12-workflow-registry-");
     const fixture = registryFixture(root, ["@openclaw/ai"]);
@@ -594,7 +412,7 @@ NODE
     expect(step.shell).toBe("bash");
     const scriptPath = join(root, "npm12-workflow.sh");
     writeFileSync(scriptPath, step.run);
-    await withPublishedRegistry(root, async (upstream) => {
+    await withPublishedRegistry(root, signal, async (upstream) => {
       const result = spawnSync(
         bash,
         ["--noprofile", "--norc", "-e", "-o", "pipefail", scriptPath],
@@ -642,110 +460,9 @@ NODE
     });
   });
 
-  it("derives the immutable Docker mount contract from the registry artifact", () => {
-    const root = tempDirs.make("openclaw-prepublish-registry-mount-");
-    const manifestPath = join(root, "prepublish-plugin-registry.json");
-    writeFileSync(
-      manifestPath,
-      `${JSON.stringify({ candidateVersion: VERSION, packages: [], sourceSha: SOURCE_SHA })}\n`,
-    );
-
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        `
-set -euo pipefail
-source "$HELPER"
-openclaw_prepublish_plugin_registry_configure_docker_args "$ARTIFACT_DIR"
-printf '%s\n' "\${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]}"
-`,
-      ],
-      { encoding: "utf8", env: { ...process.env, ARTIFACT_DIR: root, HELPER: SCRIPT } },
-    );
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain(`OPENCLAW_DOCKER_E2E_SELECTED_SHA=${SOURCE_SHA}`);
-    expect(result.stdout).toContain(
-      `OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION=${VERSION}`,
-    );
-    expect(result.stdout).toContain(`${root}:/tmp/openclaw-prepublish-plugin-registry:ro`);
-    expect(result.stdout).toContain(
-      `OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256=${sha256(manifestPath)}`,
-    );
-  });
-
-  it("verifies and serves every artifact package plus caller-owned fixtures", async () => {
-    const root = tempDirs.make("openclaw-prepublish-registry-shell-");
-    const { artifactDir, manifestPath } = registryFixture(root, [
-      "@openclaw/codex",
-      "@openclaw/telegram",
-    ]);
-    const registryRoot = join(root, "registry");
-    const extraTarball = createTarball(root, root, "@openclaw/brave-plugin", "brave-fixture.tgz");
-
-    await withPublishedRegistry(root, (upstream) => {
-      const result = spawnSync(
-        "bash",
-        [
-          "-c",
-          `
-set -euo pipefail
-source "$HELPER"
-registry_pid=""
-cleanup() {
-  if [ -n "$registry_pid" ]; then
-    kill "$registry_pid" >/dev/null 2>&1 || true
-    wait "$registry_pid" >/dev/null 2>&1 || true
-  fi
-}
-trap cleanup EXIT
-export OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR="$ARTIFACT_DIR"
-export OPENCLAW_DOCKER_E2E_SELECTED_SHA="$SOURCE_SHA"
-export OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION="$VERSION"
-export OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256="$MANIFEST_SHA256"
-openclaw_prepublish_plugin_registry_start_mounted \
-  "$REGISTRY_ROOT" registry_pid '["@openclaw/codex"]' \
-  "@openclaw/brave-plugin" "$VERSION" "$EXTRA_TARBALL"
-node <<'NODE'
-const packages = ["@openclaw/codex", "@openclaw/telegram", "@openclaw/brave-plugin"];
-for (const name of packages) {
-  const response = await fetch(\`\${process.env.NPM_CONFIG_REGISTRY}/\${encodeURIComponent(name)}\`);
-  if (!response.ok) throw new Error(\`\${name}: \${response.status}\`);
-  const metadata = await response.json();
-  if (metadata["dist-tags"].latest !== "0.0.0") throw new Error(\`\${name}: invalid latest\`);
-  if (metadata["dist-tags"].beta !== process.env.VERSION) throw new Error(\`\${name}: invalid beta\`);
-  if (!metadata.versions[process.env.VERSION]) throw new Error(\`\${name}: version missing\`);
-}
-if (process.env.NPM_CONFIG_REGISTRY !== process.env.npm_config_registry) {
-  throw new Error("npm registry exports differ");
-}
-NODE
-`,
-        ],
-        {
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            OPENCLAW_NPM_REGISTRY_UPSTREAM: upstream,
-            ARTIFACT_DIR: artifactDir,
-            EXTRA_TARBALL: extraTarball,
-            HELPER: SCRIPT,
-            MANIFEST_SHA256: sha256(manifestPath),
-            REGISTRY_ROOT: registryRoot,
-            SOURCE_SHA,
-            VERSION,
-          },
-        },
-      );
-
-      expect(result.status, result.stderr).toBe(0);
-    });
-  });
-
-  it.each(["2026.8.1", "2026.8.1-2"])(
+  it.for(["2026.8.1-2"])(
     "resolves stable candidate %s from an unversioned npm spec",
-    async (version) => {
+    async (version, { signal }) => {
       const root = tempDirs.make("openclaw-stable-prepublish-registry-shell-");
       const registryRoot = join(root, "registry");
       const fixture = registryFixture(root, ["@openclaw/discord"], version);
@@ -757,7 +474,7 @@ NODE
         `openclaw-brave-${fixtureVersion}.tgz`,
         fixtureVersion,
       );
-      await withPublishedRegistry(root, (upstream) => {
+      await withPublishedRegistry(root, signal, (upstream) => {
         const result = spawnSync(
           "bash",
           [

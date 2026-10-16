@@ -20,6 +20,11 @@ export const nativeProcessTestEntrypoints = {
     sourceWorkerName: "fs-safe",
     distWorkerPath: "infra/fs-safe.js",
   },
+  fsSafeEnv: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "fs-safe-env",
+    distWorkerPath: "infra/fs-safe-env.js",
+  },
   memoryFsUtils: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../../packages/memory-host-sdk/src/host/fs-utils",

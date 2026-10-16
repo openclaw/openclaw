@@ -17,11 +17,13 @@ describe("direct provider policy surface", () => {
       throw new Error("unexpected manifest registry import");
     });
     const resolveModelRoutes = vi.fn();
+    const resolveServiceTiers = vi.fn(() => ["default"]);
     const isResponseModelEquivalent = vi.fn();
     const projectRealtimeVoicePublicProjection = vi.fn();
     const loadBundledPluginPublicArtifactModuleFromCandidatesSync = vi.fn(() => ({
       deprecatedProfileIds: ["demo:legacy"],
       resolveModelRoutes,
+      resolveServiceTiers,
       isResponseModelEquivalent,
       projectRealtimeVoicePublicProjection,
     }));
@@ -41,6 +43,7 @@ describe("direct provider policy surface", () => {
     const surface = resolveDirectBundledProviderPolicySurface("openai");
 
     expect(surface?.resolveModelRoutes).toBe(resolveModelRoutes);
+    expect(surface?.resolveServiceTiers).toBe(resolveServiceTiers);
     expect(surface?.isResponseModelEquivalent).toBe(isResponseModelEquivalent);
     expect(surface?.projectRealtimeVoicePublicProjection).toBe(
       projectRealtimeVoicePublicProjection,

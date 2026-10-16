@@ -36,7 +36,6 @@ export function createMockNostrBus(eventId?: string) {
   return {
     sendDm: vi.fn(async () => eventId),
     close: vi.fn(async () => {}),
-    getMetrics: vi.fn(() => ({ counters: {} })),
     publishProfile: vi.fn(),
     getProfileState: vi.fn(async () => null),
   };

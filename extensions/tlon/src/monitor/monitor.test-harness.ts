@@ -56,7 +56,6 @@ const {
   },
   settingsManagerMock: {
     load: vi.fn().mockResolvedValue({}),
-    onChange: vi.fn().mockReturnValue(() => {}),
     startSubscription: vi.fn().mockResolvedValue(undefined),
   },
   realUrbitFixture: {
@@ -76,7 +75,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>()),
-  createChannelInboundEnvelopeBuilder: createChannelInboundEnvelopeBuilderMock,
+  createChannelInboundEnvelopeBuilderAsync: createChannelInboundEnvelopeBuilderMock,
   formatInboundMediaUnavailableText: formatInboundMediaUnavailableTextMock,
 }));
 
@@ -168,7 +167,7 @@ export function useTlonMonitorFixture() {
     inboundRuntimeMock.resolveStable
       .mockReset()
       .mockImplementation((params) => ingress.resolveStable(params));
-    createChannelInboundEnvelopeBuilderMock.mockReturnValue(buildChannelInboundEnvelopeMock);
+    createChannelInboundEnvelopeBuilderMock.mockResolvedValue(buildChannelInboundEnvelopeMock);
     buildChannelInboundEnvelopeMock.mockReturnValue("tlon-envelope");
     formatInboundMediaUnavailableTextMock.mockReturnValue("formatted-inbound-body");
     inboundRuntimeMock.buildContext.mockReset().mockReturnValue(builtInboundContextPayload);

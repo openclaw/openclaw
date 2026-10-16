@@ -12,17 +12,28 @@ import {
   normalizePendingFinalDeliveryPayloads,
   normalizePendingFinalRecoveryPayloads,
 } from "../auto-reply/reply/pending-final-delivery.js";
+import { advanceHarnessCompletionClaim } from "../config/sessions/harness-completion-compaction.js";
 import {
+  getRestartRecoveryPendingFinalSourceRunId,
   getRestartRecoveryTerminalDeliveryEvidence,
   mergeRestartRecoveryTerminalDeliveryEvidence,
 } from "../config/sessions/restart-recovery-state.js";
 import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
 import { resolveSqliteSessionKey } from "../config/sessions/session-accessor.sqlite-scope.js";
+import type { SessionAdmissionTransition } from "../config/sessions/session-admission-transition.types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
+import {
+  advancePendingFinalRecoverySource,
+  matchesPendingFinalRecoverySource,
+  type PendingFinalRecoverySource,
+} from "./pending-final-recovery-source.js";
 
 type PersistPendingFinalDeliveryMarkerParams = {
+  /** Required by the command caller; omitted legacy callers cannot acknowledge a source. */
+  admittedRecoverySource?: PendingFinalRecoverySource;
+  compactionTransitions?: readonly SessionAdmissionTransition[];
   agentId: string;
   deliver: boolean;
   sessionStore?: Record<string, SessionEntry>;
@@ -55,11 +66,15 @@ export async function persistPendingFinalDeliveryMarker(
   const recoverableText = buildRecoverablePendingFinalDeliveryText(
     normalizePendingFinalRecoveryPayloads(params.payloads),
   );
+  const entry =
+    (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined) ??
+    params.sessionEntry;
 
   if (
     !params.deliver ||
     !params.sessionStore ||
     !params.sessionKey ||
+    !entry ||
     params.suppressVisibleSessionEffects ||
     params.sessionReboundDuringRun ||
     isSubagentSessionKey(params.sessionKey) ||
@@ -75,22 +90,15 @@ export async function persistPendingFinalDeliveryMarker(
     };
   }
 
-  const entry = params.sessionStore[params.sessionKey] ?? params.sessionEntry;
-  if (!entry) {
-    return {
-      sessionEntry: params.sessionEntry,
-      pendingFinalDeliveryMarkerPersisted: false,
-      hasSendableFinalPayload,
-    };
-  }
-
   params.assertCurrent?.();
   const sessionKey = resolveSqliteSessionKey(params.sessionKey, params.agentId);
   const now = Date.now();
   const intentId = randomUUID();
   const deliveryId = randomUUID();
-  const harnessCompletion = entry.restartRecoveryHarnessCompletion
-    ? structuredClone(entry.restartRecoveryHarnessCompletion)
+  const admitted = params.admittedRecoverySource;
+  const harnessCompletion = admitted
+    ? advancePendingFinalRecoverySource(admitted, params.compactionTransitions)
+        ?.restartRecoveryHarnessCompletion
     : undefined;
   const persisted = await applySessionEntryReplacements<SessionEntry | undefined>({
     agentId: params.agentId,
@@ -103,6 +111,8 @@ export async function persistPendingFinalDeliveryMarker(
         !current ||
         current.sessionId !== params.runOwnedSessionId ||
         current.abortedLastRun === true ||
+        (admitted &&
+          !matchesPendingFinalRecoverySource(current, admitted, params.compactionTransitions)) ||
         (harnessCompletion &&
           (harnessCompletion.sessionId !== current.sessionId ||
             harnessCompletion.lifecycleRevision !== current.lifecycleRevision ||
@@ -110,6 +120,13 @@ export async function persistPendingFinalDeliveryMarker(
       ) {
         return { result: current };
       }
+      // Bind a normal requester final only while the same original source and route
+      // still own it. A later turn or changed channel cannot acknowledge this source.
+      const sourceRunId =
+        harnessCompletion?.sourceRunId ??
+        (admitted
+          ? getRestartRecoveryPendingFinalSourceRunId(current, params.deliveryContext)
+          : undefined);
       const savedEvidence = harnessCompletion
         ? getRestartRecoveryTerminalDeliveryEvidence(current, harnessCompletion.sourceRunId)
         : undefined;
@@ -120,6 +137,7 @@ export async function persistPendingFinalDeliveryMarker(
             ? { kind: "replayable" as const, text: recoverableText }
             : { kind: "transport-only" as const }),
           intentId,
+          ...(sourceRunId ? { sourceRunId } : {}),
           deliveries: [{ id: deliveryId, state: "prepared" as const }],
           createdAt: now,
           context: params.deliveryContext,
@@ -176,8 +194,8 @@ export async function persistPendingFinalDeliveryMarker(
           agentId: params.agentId,
           deliveryId,
           intentId,
-          ...(entry.restartRecoveryDeliveryRunId
-            ? { recoveryRunId: entry.restartRecoveryDeliveryRunId }
+          ...(admitted?.restartRecoveryDeliveryRunId
+            ? { recoveryRunId: admitted.restartRecoveryDeliveryRunId }
             : {}),
           sessionId: params.runOwnedSessionId,
           sessionKey: params.sessionKey,
@@ -193,4 +211,56 @@ export async function persistPendingFinalDeliveryMarker(
     ...(markerPersisted ? { pendingFinalDeliveryIntentId: intentId } : {}),
     hasSendableFinalPayload,
   };
+}
+
+/** Keep only this captured intent's completion locator in step with a host commit. */
+export function advancePendingFinalDeliveryCompletion(params: {
+  payloads: ReplyPayload[];
+  intentId?: string;
+  transition?: SessionAdmissionTransition;
+  entry: SessionEntry;
+}): void {
+  const { transition, entry } = params;
+  if (
+    !transition?.previous ||
+    !params.intentId ||
+    entry.sessionId !== transition.current.sessionId ||
+    entry.lifecycleRevision !== transition.current.lifecycleRevision
+  ) {
+    return;
+  }
+  for (const payload of params.payloads) {
+    const metadata = getReplyPayloadMetadata(payload);
+    const completion = metadata?.pendingFinalDeliveryCompletion;
+    if (
+      completion?.sessionId === transition.previous.sessionId &&
+      completion.intentId === params.intentId &&
+      entry.pendingFinalDelivery?.intentId === completion.intentId &&
+      entry.pendingFinalDelivery.deliveries?.some(
+        (delivery) => delivery.id === completion.deliveryId,
+      )
+    ) {
+      const authority = metadata?.sessionWriterDeliveryAuthority;
+      const claim = advanceHarnessCompletionClaim(authority?.harnessCompletion, transition);
+      if (
+        authority?.harnessCompletion &&
+        (!claim || !isDeepStrictEqual(entry.restartRecoveryHarnessCompletion, claim))
+      ) {
+        continue;
+      }
+      setReplyPayloadMetadata(payload, {
+        ...(claim && authority
+          ? {
+              sessionWriterDeliveryAuthority: {
+                ...authority,
+                expectedSessionId: transition.current.sessionId,
+                expectedLifecycleRevision: transition.current.lifecycleRevision,
+                harnessCompletion: claim,
+              },
+            }
+          : {}),
+        pendingFinalDeliveryCompletion: { ...completion, sessionId: transition.current.sessionId },
+      });
+    }
+  }
 }

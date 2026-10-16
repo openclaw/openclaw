@@ -11,7 +11,6 @@ import {
   identitiesOverlap,
   type WhatsAppIdentity,
 } from "../identity.js";
-import { requireWhatsAppInboundAdmission } from "../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../inbound/types.js";
 import { isSelfChatMode } from "../targets-runtime.js";
 
@@ -43,7 +42,7 @@ function isBotMentionedFromTargets(
   const explicitSelfChatOverride = typeof mentionCfg.isSelfChat === "boolean";
   // Having our own number in allowFrom suppresses native self-mentions only in DMs.
   // Explicit caller overrides also apply to groups.
-  const admission = requireWhatsAppInboundAdmission(msg);
+  const admission = msg.admission;
   const isGroupConversation = admission.conversation.kind === "group";
   const isSelfChat = explicitSelfChatOverride
     ? Boolean(mentionCfg.isSelfChat)
@@ -69,23 +68,8 @@ function isBotMentionedFromTargets(
     return false;
   }
 
-  // Fallback: detect body containing our own number (with or without +, spacing)
-  if (targets.self.e164) {
-    const selfDigits = targets.self.e164.replace(/\D/g, "");
-    if (selfDigits) {
-      const bodyDigits = bodyClean.replace(/[^\d]/g, "");
-      if (bodyDigits.includes(selfDigits)) {
-        return true;
-      }
-      const bodyNoSpace = msg.payload.body.replace(/[\s-]/g, "");
-      const pattern = new RegExp(`\\+?${selfDigits}`, "i");
-      if (pattern.test(bodyNoSpace)) {
-        return true;
-      }
-    }
-  }
-
-  return false;
+  const selfDigits = targets.self.e164?.replace(/\D/g, "");
+  return Boolean(selfDigits && bodyClean.replace(/\D/g, "").includes(selfDigits));
 }
 
 export function debugMention(
@@ -98,11 +82,9 @@ export function debugMention(
     self: getSelfIdentity(msg, authDir),
   };
   const result = isBotMentionedFromTargets(msg, mentionCfg, mentionTargets);
-  const admission = requireWhatsAppInboundAdmission(msg);
+  const admission = msg.admission;
   const details = {
     from: admission.conversation.id,
-    body: msg.payload.body,
-    bodyClean: normalizeMentionText(msg.payload.body),
     mentionedJids: msg.group?.mentions?.jids ?? null,
     normalizedMentionedJids: mentionTargets.normalizedMentions.length
       ? mentionTargets.normalizedMentions.map((identity) => getComparableIdentityValues(identity))

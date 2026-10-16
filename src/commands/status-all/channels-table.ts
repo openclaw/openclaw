@@ -1,17 +1,6 @@
+import type { ChannelStatusIssue } from "../../channels/plugins/types.core.js";
 import { indexFirstByKey } from "../../shared/dedupe-by-key.js";
-
-type ChannelTableRowInput = {
-  id: string;
-  label: string;
-  enabled: boolean;
-  state: "ok" | "warn" | "off" | "setup";
-  detail: string;
-};
-
-type ChannelIssueLike = {
-  channel: string;
-  message: string;
-};
+import type { buildChannelsTable } from "./channels.js";
 
 export const statusChannelsTableColumns = [
   { key: "Channel", header: "Channel", minWidth: 10 },
@@ -21,8 +10,8 @@ export const statusChannelsTableColumns = [
 ] as const;
 
 export function buildStatusChannelsTableRows(params: {
-  rows: readonly ChannelTableRowInput[];
-  channelIssues: readonly ChannelIssueLike[];
+  rows: Readonly<Awaited<ReturnType<typeof buildChannelsTable>>["rows"]>;
+  channelIssues: readonly Pick<ChannelStatusIssue, "channel" | "message">[];
   ok: (text: string) => string;
   warn: (text: string) => string;
   muted: (text: string) => string;

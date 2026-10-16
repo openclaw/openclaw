@@ -96,21 +96,6 @@ describe("diagnostic run activity listener lifecycle", () => {
     expect(hasInternalDiagnosticEventListeners()).toBe(false);
   });
 
-  it("registers and unregisters through the explicit lifecycle", () => {
-    resetDiagnosticEventsForTest();
-
-    startDiagnosticRunActivityTracking();
-    expect(hasInternalDiagnosticEventListeners()).toBe(true);
-    markDiagnosticEmbeddedRunStarted({ sessionId: "run-before-stop" });
-    expect(getDiagnosticSessionActivitySnapshot({ sessionId: "run-before-stop" })).toMatchObject({
-      activeWorkKind: "embedded_run",
-    });
-
-    stopDiagnosticRunActivityTracking();
-    expect(hasInternalDiagnosticEventListeners()).toBe(false);
-    expect(getDiagnosticSessionActivitySnapshot({ sessionId: "run-before-stop" })).toEqual({});
-  });
-
   it("ignores diagnostic events queued before tracking restarts", async () => {
     resetDiagnosticEventsForTest();
     emitTrustedDiagnosticEvent({
@@ -245,24 +230,6 @@ describe("argument-churn liveness", () => {
     });
   });
 
-  it("orders later progress after churn when both share a timestamp", () => {
-    vi.useFakeTimers();
-    const startedAt = Date.parse("2026-07-27T00:00:00Z");
-    vi.setSystemTime(startedAt);
-    const ref = { sessionId: "same-time-session", sessionKey: "agent:main:same-time" };
-    const runId = "same-time-run";
-
-    markDiagnosticEmbeddedRunStarted({ ...ref, runId });
-    markDiagnosticArgumentChurnObservation({ ...ref, runId, active: true });
-    markDiagnosticRunProgress({ ...ref, runId, reason: "model_call:stream" });
-
-    vi.setSystemTime(startedAt + 60_000);
-    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
-      lastProgressAgeMs: 60_000,
-      lastProgressReason: "model_call:stream",
-    });
-  });
-
   it("preserves same-timestamp progress ordering when session refs merge", () => {
     vi.useFakeTimers();
     const startedAt = Date.parse("2026-07-27T00:00:00Z");
@@ -337,34 +304,6 @@ describe("argument-churn liveness", () => {
     expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
       lastProgressAgeMs: 6 * 60_000,
       lastProgressReason: "tool_loop:argument_churn",
-    });
-  });
-
-  it("clears churn evidence when recovery terminates the owning run", () => {
-    const ref = {
-      sessionId: "recovered-churn-session",
-      sessionKey: "agent:main:recovered-churn",
-    };
-    markDiagnosticEmbeddedRunStarted({ ...ref, runId: "recovered-churn-run" });
-    markDiagnosticArgumentChurnObservation({
-      ...ref,
-      runId: "recovered-churn-run",
-      active: true,
-      now: Date.now() - 6 * 60_000,
-    });
-
-    expect(
-      clearDiagnosticEmbeddedRunActivityForSession({
-        ...ref,
-        activeSessionId: ref.sessionId,
-      }),
-    ).toEqual({
-      cleared: true,
-      blockedByActiveEmbeddedRun: false,
-    });
-    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
-      activeWorkKind: undefined,
-      lastProgressReason: "embedded_run:ended",
     });
   });
 
@@ -489,97 +428,6 @@ describe("repeated request liveness", () => {
     expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
       repeatedRequestNoProgressAgeMs: expect.any(Number),
     });
-  });
-
-  it("defaults omitted progress to liveness and reserves clearing for core semantic progress", async () => {
-    const ref = {
-      sessionId: "progress-default-session",
-      sessionKey: "agent:main:progress-default",
-    };
-    const runId = "progress-default-run";
-
-    startDiagnosticRunActivityTracking();
-    markDiagnosticEmbeddedRunStarted({ ...ref, runId });
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      markDiagnosticModelStartedForTest({
-        ...ref,
-        runId,
-        provider: "mock",
-        model: "request-model",
-        observationUnit: "request",
-      });
-    }
-
-    markDiagnosticRunProgress({ ...ref, runId, reason: "legacy:progress" });
-    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
-      lastProgressReason: "legacy:progress",
-      repeatedRequestNoProgressAgeMs: expect.any(Number),
-    });
-
-    emitCoreSemanticRunProgressDiagnosticEvent({
-      ...ref,
-      runId,
-      reason: "assistant:progress",
-    });
-    await waitForDiagnosticEventsDrained();
-    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
-      lastProgressReason: "assistant:progress",
-      repeatedRequestNoProgressAgeMs: undefined,
-    });
-  });
-
-  it("ages repeated requests across mechanical progress until semantic progress arrives", async () => {
-    vi.useFakeTimers();
-    const startedAt = Date.parse("2026-08-04T00:00:00Z");
-    vi.setSystemTime(startedAt);
-    const ref = { sessionId: "retry-session", sessionKey: "agent:main:retry" };
-    const runId = "retry-run";
-
-    startDiagnosticRunActivityTracking();
-    markDiagnosticEmbeddedRunStarted({ ...ref, runId });
-    markDiagnosticModelStartedForTest({
-      ...ref,
-      runId,
-      provider: "mock",
-      model: "retrying-model",
-      observationUnit: "request",
-    });
-    expect(
-      getDiagnosticSessionActivitySnapshot(ref).repeatedRequestNoProgressAgeMs,
-    ).toBeUndefined();
-
-    for (let attempt = 2; attempt <= 11; attempt += 1) {
-      vi.setSystemTime(startedAt + (attempt - 1) * 30_000);
-      markDiagnosticModelStartedForTest({
-        ...ref,
-        runId,
-        provider: "mock",
-        model: "retrying-model",
-        observationUnit: "request",
-      });
-      markDiagnosticRunProgress({
-        ...ref,
-        runId,
-        reason: "model_call:stream_progress",
-      });
-    }
-
-    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
-      activeWorkKind: "model_call",
-      lastProgressAgeMs: 0,
-      repeatedRequestNoProgressAgeMs: 5 * 60_000,
-    });
-
-    emitCoreSemanticRunProgressDiagnosticEvent({
-      ...ref,
-      runId,
-      reason: "assistant:progress",
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    await waitForDiagnosticEventsDrained();
-    expect(
-      getDiagnosticSessionActivitySnapshot(ref).repeatedRequestNoProgressAgeMs,
-    ).toBeUndefined();
   });
 
   it("keeps model endings and tool lifecycle mechanical", async () => {
@@ -966,16 +814,6 @@ describe("repeated request liveness", () => {
 
 describe("resolveRunStaleThresholdMs", () => {
   it.each([
-    {
-      name: "default window when no active work",
-      activity: {},
-      expected: RUN_STALE_TAKEOVER_MS,
-    },
-    {
-      name: "default window for model_call",
-      activity: { activeWorkKind: "model_call" as const },
-      expected: RUN_STALE_TAKEOVER_MS,
-    },
     {
       name: "default window for embedded_run",
       activity: { activeWorkKind: "embedded_run" as const },

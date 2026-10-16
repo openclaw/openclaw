@@ -1,10 +1,10 @@
 import fs from "node:fs";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import {
   assertQaGatewayCredentialLeaseQuarantine,
   shouldRetainQaGatewayCredentialLease,
 } from "../../gateway-process-boundary.js";
+import { releaseQaCredentialLease } from "../shared/credential-lease-cleanup.js";
 import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
@@ -144,11 +144,7 @@ export async function createTelegramQaTransportAdapter(
     if (leaseReleased || !leasedRuntime) {
       return;
     }
-    try {
-      await leasedRuntime.heartbeat.stop();
-    } finally {
-      await leasedRuntime.credentialLease.release();
-    }
+    await releaseQaCredentialLease(leasedRuntime.credentialLease, leasedRuntime.heartbeat);
     leaseReleased = true;
   };
   let stateRoot: string | undefined;
@@ -582,11 +578,8 @@ export async function createTelegramQaTransportAdapter(
       };
     },
     createGatewayConfig: () =>
-      // SAFETY: The builder accepts an empty base and supplies every QA-owned config section.
-      buildTelegramQaConfig({} as OpenClawConfig, {
+      buildTelegramQaConfig({
         apiRoot: activeApiProxy?.apiRoot,
-        directMessageOnly,
-        enableDirectMessages: true,
         additionalTesterUserIds: participants
           .slice(1)
           .map((participant) => participant.testerUserId),

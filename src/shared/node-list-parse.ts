@@ -10,8 +10,8 @@ import type { NodeListNode, PairedNode, PairingList, PendingRequest } from "./no
 // non-string required id drops the row entirely rather than becoming an empty-string sentinel that
 // downstream consumers would treat as a real id.
 function normalizePendingRequest(row: PendingRequest): PendingRequest | null {
-  const requestId = normalizeOptionalString(row.requestId);
-  const nodeId = normalizeOptionalString(row.nodeId);
+  const requestId = normalizeOptionalString(row?.requestId);
+  const nodeId = normalizeOptionalString(row?.nodeId);
   if (requestId === undefined || nodeId === undefined) {
     return null;
   }
@@ -29,7 +29,7 @@ function normalizePendingRequest(row: PendingRequest): PendingRequest | null {
 }
 
 function normalizePairedNode(row: PairedNode): PairedNode | null {
-  const nodeId = normalizeOptionalString(row.nodeId);
+  const nodeId = normalizeOptionalString(row?.nodeId);
   if (nodeId === undefined) {
     return null;
   }

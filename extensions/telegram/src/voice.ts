@@ -6,14 +6,11 @@ export function resolveTelegramVoiceSend(opts: {
   fileName?: string | null;
   logFallback?: (message: string) => void;
 }): { useVoice: boolean } {
-  if (!opts.wantsVoice) {
-    return { useVoice: false };
+  const useVoice = opts.wantsVoice && isVoiceMessageCompatibleAudio(opts);
+  if (opts.wantsVoice && !useVoice) {
+    opts.logFallback?.(
+      `Telegram voice requested but media is ${opts.contentType ?? "unknown"} (${opts.fileName ?? "unknown"}); sending as audio file instead.`,
+    );
   }
-  if (isVoiceMessageCompatibleAudio(opts)) {
-    return { useVoice: true };
-  }
-  opts.logFallback?.(
-    `Telegram voice requested but media is ${opts.contentType ?? "unknown"} (${opts.fileName ?? "unknown"}); sending as audio file instead.`,
-  );
-  return { useVoice: false };
+  return { useVoice };
 }

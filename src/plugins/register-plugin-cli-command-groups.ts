@@ -1,4 +1,3 @@
-// Registers plugin-provided CLI command groups.
 import type { Command } from "commander";
 import { setCommandJsonMode } from "../cli/program/json-mode.js";
 import {
@@ -36,10 +35,6 @@ function findCommandByPath(program: Command, path: readonly string[]): Command |
     current = next;
   }
   return current;
-}
-
-function commandNamesFor(program: Command): Set<string> {
-  return new Set(program.commands.flatMap((command) => [command.name(), ...command.aliases()]));
 }
 
 function applyMachineOutputMode(
@@ -82,7 +77,11 @@ export async function registerPluginCliCommandGroups(
       continue;
     }
     const existingCommands =
-      parentPath.length === 0 ? params.existingCommands : commandNamesFor(targetProgram);
+      parentPath.length === 0
+        ? params.existingCommands
+        : new Set(
+            targetProgram.commands.flatMap((command) => [command.name(), ...command.aliases()]),
+          );
     const registerEntry = async () => {
       await entry.register(targetProgram);
       for (const descriptor of entry.placeholders) {

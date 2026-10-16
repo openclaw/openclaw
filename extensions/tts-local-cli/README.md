@@ -14,5 +14,8 @@ Arguments can use `{{Text}}` and `{{OutputPath}}`. Without a text argument,
 OpenClaw sends the text on standard input. Install FFmpeg when output needs
 conversion for voice notes or telephony.
 
+Synthesis debug messages record the target and audio format/size, not spoken
+text. Your speech executable still receives the text as described above.
+
 See [local speech configuration](https://docs.openclaw.ai/tools/tts/configuration)
 for platform-specific examples and supported engines.

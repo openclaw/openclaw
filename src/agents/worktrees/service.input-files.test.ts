@@ -4,6 +4,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
 import { withSandboxMediaTempHome } from "../../auto-reply/stage-sandbox-media.test-harness.js";
+import {
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "../../gateway/github-publication-git-transport.js";
 import { prepareNodeWorkspaceTransferSnapshot } from "../../gateway/worker-environments/node-workspace-transfer-snapshot.js";
 import { prepareWorkerTurnMedia } from "../../gateway/worker-environments/worker-turn-media.js";
@@ -25,6 +29,7 @@ const sandbox = vi.hoisted(() => ({ ensureSandboxWorkspaceForSession: vi.fn() })
 vi.mock("../sandbox.js", () => sandbox);
 
 afterEach(() => {
+  resetConfigRuntimeState();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
 });
@@ -53,6 +58,7 @@ it.each(["writable sandbox", "cloud"])(
       ]);
       await requireGit(repo, ["commit", "-qm", "project-owned inputs"]);
       const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, "state") };
+      setRuntimeConfigSnapshot({}, {});
       const service = new ManagedWorktreeService({ env });
       const worktree = await service.create({ repoRoot: repo, name: "inputs", baseRef: "HEAD" });
       const cwd = worktree.path;
@@ -228,7 +234,12 @@ it.each(["writable sandbox", "cloud"])(
         base: base.manifest,
         current,
         acceptance: { kind: "reconcile" },
-        journal: { load: () => undefined, begin: () => {}, commit: () => {}, abort: () => {} },
+        journal: {
+          load: async () => undefined,
+          begin: async () => {},
+          commit: async () => {},
+          abort: async () => {},
+        },
       });
       expect(applied.conflictPaths).toEqual([]);
       const replacement = await snapshot(cwd, "replacement-transfer");

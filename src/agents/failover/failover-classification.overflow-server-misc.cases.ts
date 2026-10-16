@@ -14,6 +14,15 @@ import {
 export const overflowServerMiscCases = [
   // Transient transport and provider failures.
   {
+    id: "openai-sdk-malformed-sse",
+    source: "openai/core/streaming",
+    signal: {
+      provider: "openai",
+      message: "Error reading response: malformed server-sent event JSON.",
+    },
+    expected: reason("server_error"),
+  },
+  {
     id: "bedrock-incomplete-terminal-stream",
     source: "extensions/amazon-bedrock/stream.runtime.ts",
     signal: { provider: "amazon-bedrock", message: "Bedrock stream ended before messageStop" },
@@ -33,6 +42,18 @@ export const overflowServerMiscCases = [
       message: "Google stream ended before a terminal finish reason",
     },
     expected: reason("timeout"),
+  },
+  {
+    id: "google-sse-eof-incomplete-frame",
+    source: "extensions/google/transport-stream.ts",
+    signal: { provider: "google", message: "Google SSE stream ended with an incomplete frame" },
+    expected: reason("timeout"),
+  },
+  {
+    id: "google-sse-malformed-json-frame",
+    source: "extensions/google/transport-stream.ts",
+    signal: { provider: "google", message: "Google SSE stream returned malformed JSON" },
+    expected: null,
   },
   {
     id: "mistral-incomplete-terminal-stream",

@@ -98,15 +98,16 @@ export class GatewayBrowserDeviceAuthLifecycle {
       storedScopes: selectedAuth.storedScopes,
       defaultScopes: params.defaultScopes,
     });
+    const plan: GatewayBrowserDeviceAuthPlan = {
+      clientId: params.client.id,
+      role: params.role,
+      identity,
+      selectedAuth,
+      scopes,
+      auth: buildGatewayConnectAuth(selectedAuth),
+    };
     if (!identity) {
-      return {
-        clientId: params.client.id,
-        role: params.role,
-        identity,
-        selectedAuth,
-        scopes,
-        auth: buildGatewayConnectAuth(selectedAuth),
-      };
+      return plan;
     }
     // Undefined is reserved for an explicit no-challenge fallback; a received invalid challenge is null.
     const signedAtMs =
@@ -127,21 +128,14 @@ export class GatewayBrowserDeviceAuthLifecycle {
       platform: params.client.platform,
       deviceFamily: params.client.deviceFamily,
     });
-    return {
-      clientId: params.client.id,
-      role: params.role,
-      identity,
-      selectedAuth,
-      scopes,
-      auth: buildGatewayConnectAuth(selectedAuth),
-      device: {
-        id: identity.deviceId,
-        publicKey: identity.publicKey,
-        signature: await identity.sign(payload),
-        signedAt: signedAtMs,
-        nonce,
-      },
+    plan.device = {
+      id: identity.deviceId,
+      publicKey: identity.publicKey,
+      signature: await identity.sign(payload),
+      signedAt: signedAtMs,
+      nonce,
     };
+    return plan;
   }
 
   async acceptHello(

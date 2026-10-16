@@ -1,17 +1,10 @@
-import {
-  clearToolActivityRun,
-  getLastToolActivityMs,
-  notifyToolActivity,
-  onToolActivity,
-} from "../../../shared/tool-activity-heartbeat.js";
+import { notifyToolActivity } from "../../../shared/tool-activity-heartbeat.js";
 import { copyAgentToolMetadata } from "../../agent-tool-metadata.js";
 import {
   attachInternalToolExecutionPreparer,
   getInternalToolExecutionPreparer,
 } from "../../runtime/internal-hooks.js";
 import type { AnyAgentTool } from "../../tools/common.js";
-
-export { clearToolActivityRun, getLastToolActivityMs, notifyToolActivity, onToolActivity };
 
 export async function withEmbeddedAttemptToolActivity<R>(
   runId: string,

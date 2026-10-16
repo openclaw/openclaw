@@ -1,4 +1,3 @@
-// Trajectory metadata helpers capture environment metadata for trajectory files.
 import { resolveStateDir } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
@@ -82,10 +81,10 @@ function toSortedUniqueStrings(values: readonly string[] | undefined): string[] 
   if (!values || values.length === 0) {
     return undefined;
   }
-  return [
-    ...new Set(values.filter((value) => typeof value === "string" && value.trim().length > 0)),
-  ]
+  return [...new Set(values)]
+    .filter((value) => typeof value === "string")
     .map((value) => value.trim())
+    .filter(Boolean)
     .toSorted((left, right) => left.localeCompare(right));
 }
 
@@ -314,32 +313,10 @@ export function buildTrajectoryRunMetadata(
 export function buildTrajectoryArtifacts(
   params: BuildTrajectoryArtifactsParams,
 ): Record<string, unknown> {
+  const { status, ...artifacts } = params;
   return {
     capturedAt: new Date().toISOString(),
-    finalStatus: params.status,
-    aborted: params.aborted,
-    externalAbort: params.externalAbort,
-    timedOut: params.timedOut,
-    idleTimedOut: params.idleTimedOut,
-    timedOutDuringCompaction: params.timedOutDuringCompaction,
-    timedOutDuringToolExecution: params.timedOutDuringToolExecution,
-    timedOutByRunBudget: params.timedOutByRunBudget,
-    promptError: params.promptError,
-    promptErrorSource: params.promptErrorSource,
-    terminalError: params.terminalError,
-    usage: params.usage,
-    promptCache: params.promptCache,
-    compactionCount: params.compactionCount,
-    assistantTexts: params.assistantTexts,
-    stopReason: params.stopReason,
-    finalPromptText: params.finalPromptText,
-    itemLifecycle: params.itemLifecycle,
-    toolMetas: params.toolMetas,
-    didSendViaMessagingTool: params.didSendViaMessagingTool,
-    successfulCronAdds: params.successfulCronAdds,
-    messagingToolSentTexts: params.messagingToolSentTexts,
-    messagingToolSentMediaUrls: params.messagingToolSentMediaUrls,
-    messagingToolSentTargets: params.messagingToolSentTargets,
-    lastToolError: params.lastToolError,
+    finalStatus: status,
+    ...artifacts,
   };
 }

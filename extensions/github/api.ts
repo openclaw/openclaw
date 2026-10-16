@@ -6,7 +6,10 @@ export {
   fetchGitHubApi,
   fetchGitHubJson,
   formatControlUiGitHubPreviewError,
+  resolveGitHubApiUrls,
   GITHUB_API_ORIGIN,
+  GITHUB_API_BASE_URL,
+  GITHUB_GRAPHQL_URL,
   GITHUB_REQUEST_TIMEOUT_MS,
   GitHubGraphQLUnavailableError,
   githubApiCredentialCacheScope,
@@ -27,3 +30,6 @@ export type {
 export type { ControlUiGitHubPreview } from "./src/preview-contract.js";
 export { loadGitHubDetail } from "./src/detail.js";
 export { parseGitHubTarget } from "./src/targets.js";
+
+export { searchPublicGitHubItems } from "./src/search.js";
+export { parseGitHubSearchParams } from "./src/search-params.js";

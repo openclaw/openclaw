@@ -1,9 +1,8 @@
 import { getRuntimeConfig } from "../config/config.js";
-import { DEFAULT_ASK, DEFAULT_SECURITY } from "../infra/exec-approvals-config.js";
+import { assertCurrentUsageAuthorization } from "../infra/exec-approvals-authorization.kernel.js";
 import {
   createExecApprovalPolicySnapshot,
-  loadExecApprovals,
-  recordAllowlistMatchesUse,
+  type ExecApprovalsFile,
 } from "../infra/exec-approvals.js";
 import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node-host.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -17,6 +16,7 @@ export function preparePluginExecAuthorization(params: {
   command: string;
   sessionKey?: string;
   assertActive: () => void;
+  readCurrent: () => ExecApprovalsFile;
 }): () => void {
   params.assertActive();
   const agentId = parseAgentSessionKey(params.sessionKey)?.agentId;
@@ -24,11 +24,10 @@ export function preparePluginExecAuthorization(params: {
     resolveNodeExecConfigPolicy({
       cfg: getRuntimeConfig(),
       agentId,
-      defaultSecurity: DEFAULT_SECURITY,
-      defaultAsk: DEFAULT_ASK,
     });
   const policy = resolvePolicy();
-  const approvals = loadExecApprovals();
+  const readCurrent = params.readCurrent;
+  const approvals = readCurrent();
   const policySnapshot = createExecApprovalPolicySnapshot({ file: approvals, agentId });
   const assertCurrent = () => {
     params.assertActive();
@@ -42,13 +41,12 @@ export function preparePluginExecAuthorization(params: {
     ) {
       throw new Error("SYSTEM_RUN_DENIED: node-local exec policy does not authorize this launch");
     }
-    // The synchronous commit primitive rereads the canonical approvals floor.
-    // Empty matches validate authority without writing usage or durable grants.
-    recordAllowlistMatchesUse({
-      approvals,
+    // Committed in-process policy facts remain current through awaited plugin setup.
+    assertCurrentUsageAuthorization({
+      file: readCurrent(),
       agentId,
       command: params.command,
-      matches: [],
+      matchKeys: new Set(),
       authorization: {
         source: params.source === "human-approved" ? "explicit-approval" : "current-policy",
         security: current.security,

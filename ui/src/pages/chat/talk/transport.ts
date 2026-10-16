@@ -18,7 +18,3 @@ export function normalizeLaunchTransport(value: unknown): RealtimeTalkLaunchTran
   }
   return undefined;
 }
-
-export function resolveRealtimeTalkTransport(session: RealtimeTalkSessionResult): string {
-  return normalizeTalkTransport(session.transport) ?? "webrtc";
-}

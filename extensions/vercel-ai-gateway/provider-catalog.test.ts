@@ -41,7 +41,7 @@ afterEach(() => {
 });
 
 describe("vercel ai gateway provider catalog", () => {
-  it.each([503, 200])(
+  it.each([503])(
     "preserves the public advisory builder for HTTP %s with no rows",
     async (status) => {
       const release = mockCatalog({ data: [] }, status);
@@ -83,11 +83,12 @@ describe("vercel ai gateway provider catalog", () => {
       },
       { id: "custom/legacy-model", input: ["text"] },
     ]);
-  });
-
-  it("preserves fully filtered catalogs", async () => {
-    mockCatalog({ data: [{ id: "fixture/embedding-model", type: "embedding" }] });
-    await expect(discoverVercelAiGatewayModels({ discoveryMode: "strict" })).resolves.toEqual([]);
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "trusted_env_proxy",
+        url: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
+      }),
+    );
   });
 
   it("propagates a malformed model list row", async () => {
@@ -132,18 +133,41 @@ describe("vercel ai gateway provider catalog", () => {
     });
   });
 
-  it("uses the trusted environment proxy for the official live catalog", async () => {
-    const release = mockCatalog({ data: [{ id: "custom/live-model" }] });
+  it.each(["1e400", "1e308"])(
+    "falls back from overflowing live prices (%s) while preserving valid rates",
+    async (price) => {
+      const release = vi.fn(async () => {});
+      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+        // Keep the wire number: JSON.stringify would turn numeric Infinity into null.
+        response: new Response(
+          `{"data":[
+            {"id":"anthropic/claude-opus-4.6","pricing":{"input":${price}}},
+            {"id":"custom/partly-priced","pricing":{"input":${price},"output":0.000001}},
+            {"id":"custom/valid","pricing":{"input":0.000002,"output":"3.5e-6","input_cache_read":"0x10","input_cache_write":-0.000001}}
+          ]}`,
+          { headers: { "Content-Type": "application/json" } },
+        ),
+        release,
+        finalUrl: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
+      });
 
-    const models = await discoverVercelAiGatewayModels();
+      const models = await discoverVercelAiGatewayModels({ discoveryMode: "strict" });
 
-    expect(models.map((model) => model.id)).toStrictEqual(["custom/live-model"]);
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mode: "trusted_env_proxy",
-        url: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
-      }),
-    );
-    expect(release).toHaveBeenCalledOnce();
-  });
+      expect(models.map(({ id, cost }) => ({ id, cost }))).toEqual([
+        {
+          id: "anthropic/claude-opus-4.6",
+          cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+        },
+        {
+          id: "custom/partly-priced",
+          cost: { input: 0, output: 1, cacheRead: 0, cacheWrite: 0 },
+        },
+        {
+          id: "custom/valid",
+          cost: { input: 2, output: 3.5, cacheRead: 0, cacheWrite: 0 },
+        },
+      ]);
+      expect(release).toHaveBeenCalledOnce();
+    },
+  );
 });

@@ -12,7 +12,7 @@ Worked `models.providers` configurations. For what each field means, see [Custom
 ## Provider examples
 
 <AccordionGroup>
-  <Accordion title="Cerebras (GLM 4.7 / GPT OSS)">
+  <Accordion title="Cerebras (GPT OSS)">
     The official external `cerebras` provider plugin can configure this via `openclaw onboard --auth-choice cerebras-api-key`. Use explicit provider config only when overriding defaults.
 
     ```json5
@@ -21,12 +21,10 @@ Worked `models.providers` configurations. For what each field means, see [Custom
       agents: {
         defaults: {
           model: {
-            primary: "cerebras/zai-glm-4.7",
-            fallbacks: ["cerebras/gpt-oss-120b"],
+            primary: "cerebras/gpt-oss-120b",
           },
           models: {
-            "cerebras/zai-glm-4.7": { alias: "GLM 4.7 (Cerebras)" },
-            "cerebras/gpt-oss-120b": { alias: "GPT OSS 120B (Cerebras)" },
+            "cerebras/gpt-oss-120b": { alias: "Cerebras GPT OSS 120B" },
           },
         },
       },
@@ -38,7 +36,6 @@ Worked `models.providers` configurations. For what each field means, see [Custom
             apiKey: "${CEREBRAS_API_KEY}",
             api: "openai-completions",
             models: [
-              { id: "zai-glm-4.7", name: "GLM 4.7 (Cerebras)" },
               { id: "gpt-oss-120b", name: "GPT OSS 120B (Cerebras)" },
             ],
           },
@@ -47,7 +44,7 @@ Worked `models.providers` configurations. For what each field means, see [Custom
     }
     ```
 
-    Use `cerebras/zai-glm-4.7` for Cerebras; `zai/glm-4.7` for Z.AI direct.
+    Use `cerebras/gpt-oss-120b` for Cerebras. For Z.AI models, use the separate `zai` provider.
 
   </Accordion>
   <Accordion title="Kimi Coding">
@@ -67,7 +64,7 @@ Worked `models.providers` configurations. For what each field means, see [Custom
 
   </Accordion>
   <Accordion title="Local models (llama.cpp / llama-server)">
-    The canonical `llama-cpp` provider applies the llama.cpp schema cleaner in managed and existing-server modes. If you instead point a **custom provider ID** at a remote `llama-server` (or another OpenAI-compatible llama.cpp endpoint), set `compat.toolSchemaProfile: "llamacpp"` on each model whose chat template compiles tool arguments into GBNF. The profile removes `pattern` and `maxLength` values at or above 2000, covering the `cron` tool's `trigger.script` limit of 65536. It is a targeted mitigation, not complete compatibility for every JSON Schema constraint or `minLength`.
+    The built-in `llama-cpp` provider applies the llama.cpp schema cleaner in managed and existing-server modes. If you instead point a **custom provider ID** at a remote `llama-server` (or another OpenAI-compatible llama.cpp endpoint), set `compat.toolSchemaProfile: "llamacpp"` on each model whose chat template compiles tool arguments into GBNF. The profile removes `pattern` and `maxLength` values at or above 2000, covering the `cron` tool's `trigger.script` limit of 65536. It is a targeted mitigation, not complete compatibility for every JSON Schema constraint or `minLength`.
 
     ```json5
     {
@@ -248,11 +245,11 @@ Worked `models.providers` configurations. For what each field means, see [Custom
     }
     ```
 
-    Set `ZAI_API_KEY`. Model refs use the canonical `zai/*` provider ID. Shortcut: `openclaw onboard --auth-choice zai-api-key`.
+    Set `ZAI_API_KEY`. Model refs use the standard `zai/*` provider ID. Shortcut: `openclaw onboard --auth-choice zai-api-key`.
 
     - General endpoint: `https://api.z.ai/api/paas/v4`
     - Coding endpoint: `https://api.z.ai/api/coding/paas/v4`
-    - The default `zai-api-key` auth choice probes your key and auto-detects which endpoint it belongs to (falling back to a prompt, defaulting to Global, if detection is inconclusive). Dedicated CN and Coding-Plan auth choices are also available for explicit selection.
+    - The default `zai-api-key` auth choice checks your key and auto-detects which endpoint it belongs to (falling back to a prompt, defaulting to Global, if detection is inconclusive). Dedicated CN and Coding-Plan auth choices are also available for explicit selection.
     - For the general endpoint, define a custom provider with the base URL override.
 
   </Accordion>

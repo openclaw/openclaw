@@ -48,13 +48,13 @@ suite.define(() => {
       await page.getByText("Earlier completed reply.").waitFor();
       const earlierAssistant = page.locator(".chat-group.assistant").first();
       const footerPresentation = (group: typeof earlierAssistant) =>
-        group.locator(".chat-group-footer").evaluate((element) => {
+        group.locator(":scope > .chat-group-footer").evaluate((element) => {
           const style = getComputedStyle(element);
           return { opacity: style.opacity, pointerEvents: style.pointerEvents };
         });
       const actionOpacities = (group: typeof earlierAssistant) =>
         group
-          .locator(".chat-group-footer-actions button")
+          .locator(":scope > .chat-group-footer .chat-group-footer-actions button")
           .evaluateAll((buttons) => buttons.map((button) => getComputedStyle(button).opacity));
       await page.mouse.move(0, 0);
       await expect
@@ -70,7 +70,7 @@ suite.define(() => {
       await expect
         .poll(() =>
           earlierAssistant
-            .locator(".chat-message-actions-row button")
+            .locator(".chat-message-actions-row button, .chat-message-footer button")
             .evaluateAll((buttons) => buttons.map((button) => getComputedStyle(button).opacity)),
         )
         .toEqual(["0", "0"]);
@@ -232,7 +232,9 @@ suite.define(() => {
           height,
         );
         await page.mouse.move(0, 0);
-        const actions = group.locator(".chat-group-footer-actions button");
+        const actions = group.locator(
+          ":scope > .chat-group-footer .chat-group-footer-actions button",
+        );
         const focusedActionOpacities = mobile ? ["1", "1"] : ["0.6", "0.6"];
         await actions.first().focus();
         await page.keyboard.press("Shift+Tab");
@@ -251,7 +253,7 @@ suite.define(() => {
           await expect
             .poll(() =>
               group
-                .locator(".chat-message-actions-row button")
+                .locator(".chat-message-actions-row button, .chat-message-footer button")
                 .evaluateAll((buttons) =>
                   buttons.map((button) => getComputedStyle(button).opacity),
                 ),
@@ -280,60 +282,6 @@ suite.define(() => {
         );
         await page.locator(".agent-chat__composer-combobox textarea").focus();
       }
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("renders stable markdown during a streaming chat turn and finalizes the tail", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page);
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-
-      const prompt = "stream markdown through the GUI";
-      await gateway.deferNext("chat.send");
-      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
-      await page.getByRole("button", { name: "Send message" }).click();
-
-      const sendRequest = await gateway.waitForRequest("chat.send");
-      const params = requireRecord(sendRequest.params);
-      const runId = requireString(params.idempotencyKey, "chat send idempotency key");
-      const streamingText = "## Streaming heading\n\nworking **tail";
-      await gateway.emitGatewayEvent("chat", {
-        deltaText: streamingText,
-        message: {
-          content: [{ text: streamingText, type: "text" }],
-          role: "assistant",
-          timestamp: Date.now(),
-        },
-        runId,
-        sessionKey: "main",
-        state: "delta",
-      });
-
-      await page.locator(".chat-thread h2").getByText("Streaming heading").waitFor({
-        timeout: 10_000,
-      });
-      await page.locator(".chat-bubble.streaming strong").getByText("tail").waitFor({
-        timeout: 10_000,
-      });
-      expect(await page.locator(".markdown-plain-text-fallback").count()).toBe(0);
-
-      await gateway.resolveDeferred("chat.send", { runId, status: "started" });
-      await page.locator(".chat-thread h2").getByText("Streaming heading").waitFor({
-        timeout: 10_000,
-      });
-
-      await gateway.emitChatFinal({
-        runId,
-        text: "## Streaming heading\n\nworking **tail**",
-      });
-
-      await page.locator(".chat-thread strong").getByText("tail").waitFor({ timeout: 10_000 });
-      expect(await page.locator(".markdown-plain-text-fallback").count()).toBe(0);
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -378,9 +326,12 @@ suite.define(() => {
       expect(await page.locator(".markdown-plain-text-fallback").count()).toBe(0);
 
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
+      await page.locator(".chat-thread h2").getByText("Unicode stream").waitFor({
+        timeout: 10_000,
+      });
       await gateway.emitChatFinal({
         runId,
-        text: "## Unicode final\u2028\u2028- first\u2029- second",
+        text: "## Unicode final\u2028\u2028- first\u2029- **second**",
       });
 
       await page.locator(".chat-thread h2").getByText("Unicode final").waitFor({
@@ -389,6 +340,8 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".chat-thread li").allTextContents(), { timeout: 10_000 })
         .toEqual(["first", "second"]);
+      await page.locator(".chat-thread strong").getByText("second").waitFor({ timeout: 10_000 });
+      expect(await page.locator(".markdown-plain-text-fallback").count()).toBe(0);
       const finalChatText = await page.locator(".chat-thread .chat-text").last().textContent();
       expect(finalChatText).not.toContain("\u2028");
       expect(finalChatText).not.toContain("\u2029");
@@ -715,7 +668,7 @@ suite.define(() => {
       });
 
       await page.locator(".chat-thread-inner").getByText(response).waitFor({ timeout: 10_000 });
-      await indicator.waitFor({ timeout: 10_000 });
+      await indicator.waitFor({ state: "detached", timeout: 10_000 });
       const streamingLayout = await pendingRow.evaluate(
         (row, visibleResponse) => ({
           connected: row.isConnected,
@@ -728,9 +681,13 @@ suite.define(() => {
       expect(streamingLayout).toEqual({
         connected: true,
         hasResponse: true,
-        hasTokens: true,
+        hasTokens: false,
         key: pendingLayout.key,
       });
+      await page.getByRole("button", { name: "Stop generating" }).waitFor();
+      expect(
+        await page.locator(".chat-thread-inner").getByText(response, { exact: true }).count(),
+      ).toBe(1);
     } finally {
       await suite.closeBrowserContext(context);
     }

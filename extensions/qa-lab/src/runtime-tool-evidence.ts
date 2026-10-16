@@ -1,20 +1,10 @@
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { readQaMessageFunctionCalls, readQaTranscriptMessages } from "./runtime-transcript.js";
-import { projectQaToolMessages } from "./tool-activity.js";
-
-type QaRuntimeToolFixtureTranscriptToolCall = {
-  id?: string;
-  tool: string;
-  args: unknown;
-};
-
-type QaRuntimeToolFixtureTranscriptToolResult = {
-  id?: string;
-  tool?: string;
-  text: string;
-  failure: boolean;
-  hardFailure: boolean;
-};
+import {
+  extractQaContentText,
+  readQaMessageToolCalls,
+  readQaTranscriptMessages,
+} from "./runtime-transcript.js";
+import { projectQaToolActivity } from "./tool-activity.js";
 
 const RUNTIME_PATCH_WORKSPACE_DENIAL_RE =
   /(?:path\s+escapes\s+(?:the\s+)?(?:sandbox|workspace)(?:\s+root)?|outside(?:\s+of)?\s+(?:the\s+)?(?:project|sandbox|workspace|allowed\s+(?:sandbox|workspace|root)|writable\s+roots?)(?:\s+root)?|workspace[- ]only|permission\s+denied|operation\s+not\s+permitted|\bos\s+error\s+1\b|\b(?:EACCES|EPERM)\b)/iu;
@@ -49,69 +39,34 @@ function stringifyTranscriptToolResult(value: unknown): string {
 }
 
 function extractTranscriptText(value: unknown): string {
-  if (typeof value === "string") {
-    return value.trim();
-  }
-  if (!Array.isArray(value)) {
-    return "";
-  }
-  const parts: string[] = [];
-  for (const block of value) {
-    if (typeof block === "string" && block.trim()) {
-      parts.push(block.trim());
-      continue;
-    }
-    if (!isRecord(block)) {
-      continue;
-    }
-    const text =
+  return extractQaContentText(
+    value,
+    (block) =>
       normalizeOptionalString(block.text) ??
       normalizeOptionalString(block.content) ??
       normalizeOptionalString(block.message) ??
-      normalizeOptionalString(block.error);
-    if (text) {
-      parts.push(text);
-    }
-  }
-  return parts.join("\n").trim();
+      normalizeOptionalString(block.error),
+  );
 }
 
-function extractTranscriptToolCalls(
-  message: Record<string, unknown>,
-): QaRuntimeToolFixtureTranscriptToolCall[] {
-  const calls: QaRuntimeToolFixtureTranscriptToolCall[] = [];
-  const rawContent = message.content;
-  if (Array.isArray(rawContent)) {
-    for (const block of rawContent) {
-      if (!isRecord(block)) {
-        continue;
-      }
-      const type = normalizeOptionalString(block.type)?.toLowerCase();
-      if (type !== "tool_use" && type !== "toolcall" && type !== "tool_call") {
-        continue;
-      }
-      const tool = normalizeOptionalString(block.name);
-      if (!tool) {
-        continue;
-      }
-      calls.push({
-        id:
-          normalizeOptionalString(block.id) ??
-          normalizeOptionalString(block.toolCallId) ??
-          normalizeOptionalString(block.toolUseId),
-        tool,
-        // OpenClaw mirrors provider arguments separately; a placeholder input
-        // can be empty even though arguments contains the executed patch.
-        args: block.arguments ?? block.input ?? block.args ?? block.payload ?? null,
-      });
+function extractTranscriptToolCalls(message: Record<string, unknown>): Record<string, unknown>[] {
+  const calls: Record<string, unknown>[] = [];
+  // OpenClaw mirrors provider arguments separately; a placeholder input can be empty.
+  for (const { block, id, tool, args } of readQaMessageToolCalls(message, {
+    preferArguments: true,
+  })) {
+    if (!tool) {
+      continue;
     }
+    calls.push({
+      ...block,
+      type: "toolCall",
+      id,
+      name: tool,
+      arguments: args,
+    });
   }
 
-  for (const call of readQaMessageFunctionCalls(message)) {
-    if (call.tool) {
-      calls.push({ ...call, tool: call.tool });
-    }
-  }
   return calls;
 }
 
@@ -142,114 +97,96 @@ export function classifyToolResultFailure(params: {
   };
 }
 
-function extractTranscriptToolResults(
-  message: Record<string, unknown>,
-): QaRuntimeToolFixtureTranscriptToolResult[] {
-  const results: QaRuntimeToolFixtureTranscriptToolResult[] = [];
-  const tool =
-    normalizeOptionalString(message.toolName) ??
-    normalizeOptionalString(message.tool_name) ??
-    normalizeOptionalString(message.name) ??
-    normalizeOptionalString(message.tool);
-  if ((message.role === "tool" || message.role === "toolResult") && message.content !== undefined) {
-    const text = extractTranscriptText(message.content);
-    results.push({
-      id:
-        normalizeOptionalString(message.tool_call_id) ??
-        normalizeOptionalString(message.toolCallId) ??
-        normalizeOptionalString(message.toolUseId) ??
-        normalizeOptionalString(message.id),
-      ...(tool ? { tool } : {}),
-      text,
-      ...classifyToolResultFailure({
-        text,
-        isError: message.isError,
-        is_error: message.is_error,
-      }),
-    });
-  }
-
-  const rawContent = message.content;
-  if (!Array.isArray(rawContent)) {
-    return results;
-  }
-  for (const block of rawContent) {
+function extractTranscriptToolResults(message: Record<string, unknown>): Record<string, unknown>[] {
+  const results: Record<string, unknown>[] = [];
+  const isToolEnvelope =
+    (message.role === "tool" || message.role === "toolResult") && message.content !== undefined;
+  // The tool envelope owns its result; nested display blocks are its payload.
+  const blocks = isToolEnvelope ? [message] : Array.isArray(message.content) ? message.content : [];
+  const idFields = isToolEnvelope
+    ? ["tool_call_id", "toolCallId", "toolUseId", "id"]
+    : ["tool_use_id", "toolUseId", "tool_call_id", "toolCallId", "id"];
+  for (const block of blocks) {
     if (!isRecord(block)) {
       continue;
     }
     const type = normalizeOptionalString(block.type)?.toLowerCase();
-    if (type !== "tool_result" && type !== "toolresult" && type !== "tool_result_error") {
+    if (
+      !isToolEnvelope &&
+      type !== "tool_result" &&
+      type !== "toolresult" &&
+      type !== "tool_result_error"
+    ) {
       continue;
     }
-    const text = stringifyTranscriptToolResult(
-      block.content ?? block.text ?? block.result ?? block.error ?? block.message,
-    );
+    const text = isToolEnvelope
+      ? extractTranscriptText(block.content)
+      : stringifyTranscriptToolResult(
+          block.content ?? block.text ?? block.result ?? block.error ?? block.message,
+        );
     const blockTool =
       normalizeOptionalString(block.toolName) ??
       normalizeOptionalString(block.tool_name) ??
       normalizeOptionalString(block.name) ??
       normalizeOptionalString(block.tool);
     results.push({
-      id:
-        normalizeOptionalString(block.tool_use_id) ??
-        normalizeOptionalString(block.toolUseId) ??
-        normalizeOptionalString(block.tool_call_id) ??
-        normalizeOptionalString(block.toolCallId) ??
-        normalizeOptionalString(block.id),
-      ...(blockTool ? { tool: blockTool } : {}),
-      text,
-      ...classifyToolResultFailure({
-        type,
-        text,
-        isError: block.isError,
-        is_error: block.is_error,
-      }),
+      ...block,
+      role: "toolResult",
+      toolCallId: idFields.map((field) => normalizeOptionalString(block[field])).find(Boolean),
+      toolName: blockTool,
+      content: text,
+      isError:
+        (!isToolEnvelope && type === "tool_result_error") ||
+        block.isError === true ||
+        block.is_error === true,
     });
   }
   return results;
 }
 
-function transcriptToolResultLinksCall(params: {
-  call: QaRuntimeToolFixtureTranscriptToolCall;
-  result: QaRuntimeToolFixtureTranscriptToolResult;
-  targetCallCount: number;
-}) {
-  if (params.result.tool && params.result.tool !== params.call.tool) {
-    return false;
-  }
-  if (params.call.id || params.result.id) {
-    return Boolean(params.call.id && params.result.id && params.call.id === params.result.id);
-  }
-  if (params.result.tool) {
-    return params.result.tool === params.call.tool;
-  }
-  return params.targetCallCount === 1;
-}
-
 export function readTranscriptToolEvidence(transcriptBytes: string, toolName: string) {
-  const calls: QaRuntimeToolFixtureTranscriptToolCall[] = [];
-  const results: QaRuntimeToolFixtureTranscriptToolResult[] = [];
+  // Adapt provider wire shapes once; the shared projection owns correlation and settlement.
+  const messages: Record<string, unknown>[] = [];
   for (const message of readQaTranscriptMessages(transcriptBytes)) {
-    for (const projected of projectQaToolMessages([message])) {
-      calls.push(...extractTranscriptToolCalls(projected).filter((call) => call.tool === toolName));
-      results.push(...extractTranscriptToolResults(projected));
+    if (message.role === "custom") {
+      messages.push(message);
+      continue;
     }
+    const calls = message.role === "assistant" ? extractTranscriptToolCalls(message) : [];
+    const results = extractTranscriptToolResults(message);
+    if (calls.length === 0 && results.length === 0) {
+      messages.push(message);
+      continue;
+    }
+    if (calls.length > 0) {
+      messages.push({ ...message, role: "assistant", content: calls });
+    }
+    messages.push(...results);
   }
-  const linkedEvidence = calls
-    .map((call) => ({
-      call,
-      result: results.find((result) =>
-        transcriptToolResultLinksCall({
-          call,
-          result,
-          targetCallCount: calls.length,
-        }),
-      ),
-    }))
-    .find(({ result }) => result && result.text.trim().length > 0);
+  const evidence = projectQaToolActivity(messages)
+    .filter((activity) => activity.kind === "tool" && activity.toolName === toolName)
+    .map((activity) => {
+      const call = {
+        id: activity.toolCallId,
+        tool: activity.toolName,
+        args: activity.input,
+      };
+      const text = extractTranscriptText(activity.result?.content);
+      const result =
+        activity.completed && text
+          ? {
+              id: activity.toolCallId,
+              tool: activity.toolName,
+              text,
+              ...classifyToolResultFailure({ text, isError: !activity.successful }),
+            }
+          : undefined;
+      return { call, result };
+    });
+  const linkedEvidence = evidence.find(({ result }) => result);
   const outputResult = linkedEvidence?.result;
   return {
-    plannedRequest: calls[0],
+    plannedRequest: evidence[0]?.call,
     executedRequest: linkedEvidence?.call,
     outputRequest: outputResult,
     failureOutputRequest: outputResult?.failure ? outputResult : undefined,

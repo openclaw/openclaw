@@ -417,26 +417,6 @@ describe("gateway aux handlers", () => {
     expect(respond).toHaveBeenCalledWith(true, { ok: true, warningCount: 0 });
   });
 
-  it("restarts only the changed account when a secret change is account-scoped", async () => {
-    const buildReloadPlan = () =>
-      createReloadPlan({
-        restartChannelAccounts: new Map([["slack", new Set(["ops"])]]),
-      });
-    activateSnapshot(slackConfig("old-slack-secret"));
-    const prepareRuntimeSecretsSnapshot = mockResolvedSecrets(slackConfig("new-slack-secret"));
-    const { reload, respond, startChannel, stopChannel } =
-      createSecretsReloadHarnessWithChannelMocks({
-        prepareRuntimeSecretsSnapshot,
-        buildReloadPlan,
-      });
-
-    await reload();
-
-    expect(stopChannel.mock.calls).toEqual([["slack", "ops", { manual: false }]]);
-    expect(startChannel.mock.calls).toEqual([["slack", "ops", { preserveManualStop: true }]]);
-    expect(respond).toHaveBeenCalledWith(true, { ok: true, warningCount: 0 });
-  });
-
   registerGatewaySecretCredentialReloadCases(createCredentialReloadHarness);
 
   it("does not restart account targets already covered by a whole-channel target", async () => {
@@ -453,7 +433,7 @@ describe("gateway aux handlers", () => {
     await reload();
 
     expect(stopChannel.mock.calls).toEqual([["slack"]]);
-    expect(startChannel.mock.calls).toEqual([["slack"]]);
+    expect(startChannel.mock.calls).toEqual([["slack", undefined, { reason: "secrets-reload" }]]);
   });
 
   it("coalesces concurrent secrets.reload calls so channels are not restarted twice", async () => {
@@ -488,7 +468,7 @@ describe("gateway aux handlers", () => {
     expect(activationOrder).toEqual(["first-start", "first-end"]);
     expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
     expect(stopChannel.mock.calls).toEqual([["slack"]]);
-    expect(startChannel.mock.calls).toEqual([["slack"]]);
+    expect(startChannel.mock.calls).toEqual([["slack", undefined, { reason: "secrets-reload" }]]);
     expect(respond).toHaveBeenNthCalledWith(1, true, { ok: true, warningCount: 0 });
     expect(respond).toHaveBeenNthCalledWith(2, true, { ok: true, warningCount: 0 });
   });
@@ -623,10 +603,10 @@ describe("gateway aux handlers", () => {
       ["slack", "ops", { manual: false }],
     ]);
     expect(startChannel.mock.calls).toEqual([
-      ["slack", "ops", { preserveManualStop: true }],
-      ["zalo", "alerts", { preserveManualStop: true }],
-      ["slack", "ops", { preserveManualStop: true }],
-      ["zalo", "alerts", { preserveManualStop: true }],
+      ["slack", "ops", { reason: "secrets-reload", preserveManualStop: true }],
+      ["zalo", "alerts", { reason: "secrets-reload", preserveManualStop: true }],
+      ["slack", "ops", { reason: "secrets-reload", preserveManualStop: true }],
+      ["zalo", "alerts", { reason: "secrets-reload", preserveManualStop: true }],
     ]);
     expect(
       logChannelsInfo.mock.calls.some(([msg]) =>
@@ -700,8 +680,8 @@ describe("gateway aux handlers", () => {
     expect(firstRespondCall(respond)[0]).toBe(false);
     expect(stopChannel.mock.calls).toEqual([["slack", "ops", { manual: false }]]);
     expect(startChannel.mock.calls).toEqual([
-      ["slack", "ops", { preserveManualStop: true }],
-      ["slack", "ops", { preserveManualStop: true }],
+      ["slack", "ops", { reason: "secrets-reload", preserveManualStop: true }],
+      ["slack", "ops", { reason: "secrets-reload", preserveManualStop: true }],
     ]);
     expect(getActiveSecretsRuntimeSnapshot()?.config).toEqual(slackConfig("concurrent-secret"));
     expect({

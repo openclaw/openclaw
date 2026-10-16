@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   approve: vi.fn(),
+  approveCode: vi.fn(),
+  captureOwnerGuard: vi.fn(),
   bootstrapOwner: vi.fn(),
   dismiss: vi.fn(),
   hasOwners: vi.fn(),
@@ -24,12 +26,16 @@ vi.mock("../../pairing/command-owner.js", () => ({
   bootstrapCommandOwnerFromPairing: mocks.bootstrapOwner,
 }));
 vi.mock("../../pairing/pairing-store.js", () => ({
+  approveChannelPairingCode: mocks.approveCode,
   approveChannelPairingRequest: mocks.approve,
   CHANNEL_PAIRING_PENDING_MAX: 3,
   CHANNEL_PAIRING_PENDING_TTL_MS: 3_600_000,
   dismissChannelPairingRequest: mocks.dismiss,
   listChannelPairingRequests: mocks.listRequests,
   resolveChannelPairingRequestId: vi.fn(() => "opaque-request-id"),
+}));
+vi.mock("./local-state-owner.js", () => ({
+  captureLocalStateMutationGuard: mocks.captureOwnerGuard,
 }));
 
 import { channelPairingHandlers } from "./channel-pairing.js";
@@ -71,6 +77,7 @@ function createContext() {
 async function invoke(
   method: keyof typeof channelPairingHandlers,
   params: Record<string, unknown>,
+  scopes: string[] = [],
 ) {
   const respond = vi.fn();
   const handler = expectDefined(channelPairingHandlers[method], `${method} test invariant`);
@@ -78,6 +85,7 @@ async function invoke(
     params,
     respond,
     context: createContext(),
+    client: { connect: { scopes } },
   } as unknown as Parameters<typeof handler>[0]);
   return respond;
 }
@@ -88,9 +96,73 @@ beforeEach(() => {
   mocks.hasOwners.mockReturnValue(false);
   mocks.listRequests.mockResolvedValue([]);
   mocks.bootstrapOwner.mockResolvedValue({ ownerEntry: "whatsapp:+1555", status: "configured" });
+  mocks.captureOwnerGuard.mockReturnValue(() => {});
 });
 
 describe("channel DM pairing gateway handlers", () => {
+  it.each([
+    ["channels.pairing.list", { channel: "whatsapp", format: "cli" }],
+    ["channels.pairing.approve", { channel: "whatsapp", code: "SECRET12" }],
+    [
+      "channels.pairing.list",
+      { channel: "whatsapp", format: "cli", accountId: " ", expectedOwnerId: "owner" },
+    ],
+    [
+      "channels.pairing.approve",
+      { channel: "whatsapp", code: "SECRET12", accountId: " ", expectedOwnerId: "owner" },
+    ],
+    [
+      "channels.pairing.approve",
+      {
+        channel: "whatsapp",
+        code: "SECRET12",
+        requestId: "opaque",
+        accountId: "personal",
+        expectedOwnerId: "owner",
+      },
+    ],
+  ] as const)("rejects an invalid CLI selector for %s", async (method, params) => {
+    const respond = await invoke(method, params, ["operator.admin"]);
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+    expect(mocks.listRequests).not.toHaveBeenCalled();
+    expect(mocks.approveCode).not.toHaveBeenCalled();
+    expect(mocks.approve).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["channels.pairing.list", { channel: "whatsapp", format: "cli", expectedOwnerId: "owner" }],
+    [
+      "channels.pairing.approve",
+      { channel: "whatsapp", code: "SECRET12", expectedOwnerId: "owner" },
+    ],
+  ] as const)("requires current admin owner authority for %s", async (method, params) => {
+    const denied = await invoke(method, params, ["operator.pairing"]);
+    expect(denied).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "FORBIDDEN", details: { mutationAccepted: false } }),
+    );
+    expect(mocks.captureOwnerGuard).not.toHaveBeenCalled();
+
+    mocks.captureOwnerGuard.mockImplementationOnce(() => {
+      throw new Error("owner replaced");
+    });
+    const replaced = await invoke(method, params, ["operator.admin"]);
+    expect(replaced).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        details: { mutationAccepted: false, reason: "STATE_OWNER_CHANGED" },
+      }),
+    );
+    expect(mocks.listRequests).not.toHaveBeenCalled();
+    expect(mocks.approveCode).not.toHaveBeenCalled();
+  });
+
   it.each(["sync", "async"] as const)(
     "lists only pairing-policy accounts with %s hooks without exposing the human code",
     async (hooks) => {
@@ -106,6 +178,14 @@ describe("channel DM pairing gateway handlers", () => {
               resolveAccount: refuseSync,
               resolveAccountAsync: async (cfg: unknown, accountId: string) =>
                 pairingPlugin.config.resolveAccount(cfg, accountId),
+              describeAccount: refuseSync,
+              describeAccountAsync: async (account: { name: string }) =>
+                pairingPlugin.config.describeAccount(account),
+            },
+            security: {
+              resolveDmPolicy: refuseSync,
+              resolveDmPolicyAsync: async (context: { account: { dmPolicy: string } }) =>
+                pairingPlugin.security.resolveDmPolicy(context),
             },
           },
         ]);

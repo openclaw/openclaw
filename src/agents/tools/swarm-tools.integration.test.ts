@@ -2,9 +2,11 @@ import "../subagents/registry/subagent-registry.mocks.shared.js";
 import assert from "node:assert/strict";
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import { resolveContextEngine } from "../../context-engine/registry.js";
@@ -14,18 +16,17 @@ import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
-import { createOpenClawTools } from "../openclaw-tools.js";
+import { createOpenClawToolsAsync } from "../openclaw-tools.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../runtime-plugins.js";
+import { configureMockSubagentRegistryPersistence } from "../subagent-test-fixtures.test-helpers.js";
 import {
   captureSubagentCompletionReply,
   runSubagentAnnounceFlow,
 } from "../subagents/announce/subagent-announce.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../subagents/announce/subagent-announce.requester-settle-wake.js";
-import {
-  persistSubagentRunsToDisk,
-  persistSubagentRunsToDiskOrThrow,
-  restoreSubagentRunsFromDisk,
-} from "../subagents/registry/subagent-registry-state.js";
+import { restoreSubagentRunsFromDisk } from "../subagents/registry/subagent-registry-persistence.js";
+import { saveSubagentRegistryChangesToSqlite } from "../subagents/registry/subagent-registry-state.fixture.test-support.js";
+import { observeRootWork } from "../subagents/registry/subagent-registry.browser-cleanup.test-support.js";
 import { resetSubagentRegistryForTests } from "../subagents/registry/subagent-registry.test-helpers.js";
 import { supportedSpawnModelChoice } from "../subagents/spawn/subagent-spawn.test-helpers.js";
 import { testing as spawnTesting } from "../subagents/spawn/subagent-spawn.test-support.js";
@@ -50,6 +51,7 @@ vi.mock("../timeout.js", { spy: true });
 vi.mock("../subagents/announce/subagent-announce.js", { spy: true });
 vi.mock("../subagents/announce/subagent-announce.requester-settle-wake.js", { spy: true });
 vi.mock("../subagents/registry/subagent-registry-state.js", { spy: true });
+vi.mock("../subagents/registry/subagent-registry-persistence.js", { spy: true });
 
 const requesterSessionKey = "agent:main:main";
 const config: OpenClawConfig = {
@@ -77,15 +79,15 @@ describe("swarm tools integration", () => {
   const completionResolvers = new Map<string, () => void>();
   const collectorRunIds = new Set<string>();
 
-  beforeEach(() => {
+  beforeEach(async () => {
     completionResolvers.clear();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     swarmSchedulerTesting.reset();
   });
 
   afterEach(async () => {
     spawnTesting.setDepsForTest();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     for (const runId of collectorRunIds) {
       consumeSwarmStructuredOutput(runId);
     }
@@ -93,16 +95,20 @@ describe("swarm tools integration", () => {
     swarmSchedulerTesting.reset();
     await closeOpenClawAgentDatabasesAsync();
     await closeOpenClawStateDatabaseAsync();
+    clearRuntimeConfigSnapshot();
     tempDirs.cleanup();
     vi.unstubAllEnvs();
     vi.resetAllMocks();
   });
 
   it("spawns text and structured collectors with explicit collection guidance and drains them in completion order", async () => {
+    const settleRootWork = observeRootWork();
+    const waitsStarted = createDeferred();
     const stateDir = tempDirs.make("openclaw-swarm-tools-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    setRuntimeConfigSnapshot(config);
     const publicToGateway = new Map<string, string>();
-    const resultTextBySession = new Map<string, string>();
+    const resultTextByRun = new Map<string, string>();
     const modelStructuredCalls: number[] = [];
     const childGuidance: string[] = [];
     const acceptedNotes: string[] = [];
@@ -126,16 +132,18 @@ describe("swarm tools integration", () => {
       const gatewayRunId = `gateway-${index}`;
       collectorRunIds.add(publicRunId);
       collectorRunIds.add(gatewayRunId);
-      const structuredOutput = createOpenClawTools({
-        agentSessionKey: childSessionKey,
-        runId: publicRunId,
-        config,
-        disableMessageTool: true,
-        disablePluginTools: true,
-        wrapBeforeToolCallHook: false,
-        swarmCollector: true,
-        swarmOutputSchema: outputSchema,
-      }).find((tool) => tool.name === "structured_output");
+      const structuredOutput = (
+        await createOpenClawToolsAsync({
+          agentSessionKey: childSessionKey,
+          runId: publicRunId,
+          config,
+          disableMessageTool: true,
+          disablePluginTools: true,
+          wrapBeforeToolCallHook: false,
+          swarmCollector: true,
+          swarmOutputSchema: outputSchema,
+        })
+      ).find((tool) => tool.name === "structured_output");
       if (outputSchema) {
         expect(structuredOutput).toBeDefined();
         await structuredOutput?.execute("mock-model-output", { result: { index } });
@@ -144,7 +152,7 @@ describe("swarm tools integration", () => {
         expect(structuredOutput).toBeUndefined();
       }
       publicToGateway.set(publicRunId, gatewayRunId);
-      resultTextBySession.set(childSessionKey, `result-${index}`);
+      resultTextByRun.set(gatewayRunId, `result-${index}`);
       return { runId: gatewayRunId, status: "accepted", acceptedAt: Date.now() };
     });
     spawnTesting.setDepsForTest({
@@ -172,22 +180,30 @@ describe("swarm tools integration", () => {
         assert(typeof runId === "string", "collector wait must identify its run");
         await new Promise<void>((resolve) => {
           completionResolvers.set(runId, resolve);
+          if (completionResolvers.size === 3) {
+            waitsStarted.resolve();
+          }
         });
-        return { status: "ok", startedAt: 1, endedAt: Date.now() } as T;
+        const resultText = resultTextByRun.get(runId);
+        assert(resultText, "collector run must have a terminal result");
+        return {
+          status: "ok",
+          startedAt: 1,
+          endedAt: Date.now(),
+          terminalReply: { disposition: "visible", text: resultText },
+        } as T;
       },
     );
-    vi.mocked(captureSubagentCompletionReply).mockImplementation(async (sessionKey) => {
-      return resultTextBySession.get(sessionKey) ?? "";
-    });
     vi.mocked(cleanupBrowserSessionsForLifecycleEnd).mockResolvedValue(undefined);
     vi.mocked(getRuntimeConfig).mockReturnValue(config);
     vi.mocked(maybeWakeRequesterAfterAllChildrenSettled).mockResolvedValue(false);
-    vi.mocked(persistSubagentRunsToDisk).mockImplementation(() => {});
-    vi.mocked(persistSubagentRunsToDiskOrThrow).mockImplementation(() => {});
+    await configureMockSubagentRegistryPersistence({
+      persistRegistryRows: saveSubagentRegistryChangesToSqlite,
+    });
     vi.mocked(resolveAgentTimeoutMs).mockReturnValue(1_000);
-    vi.mocked(restoreSubagentRunsFromDisk).mockReturnValue(0);
+    vi.mocked(restoreSubagentRunsFromDisk).mockResolvedValue(0);
     vi.mocked(runSubagentAnnounceFlow).mockResolvedValue("delivered");
-    vi.mocked(ensureContextEnginesInitialized).mockImplementation(() => {});
+    vi.mocked(ensureContextEnginesInitialized).mockResolvedValue(undefined);
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(createTestRegistry([]));
     vi.mocked(resolveContextEngine).mockImplementation(async () => ({
       info: { id: "test", name: "Test", version: "0.0.1" },
@@ -243,7 +259,7 @@ describe("swarm tools integration", () => {
       expect(details.runId).toBeTruthy();
       runIds.push(details.runId ?? "");
     }
-    await vi.waitFor(() => expect(completionResolvers.size).toBe(3));
+    await waitsStarted.promise;
     expect(modelStructuredCalls).toEqual([1, 3]);
 
     const pending = new Set(runIds);
@@ -254,8 +270,9 @@ describe("swarm tools integration", () => {
       completionResolvers.get(gatewayRunId ?? "")?.();
       const result = await wait.execute("wait", {
         ids: [...pending],
-        timeoutSeconds: 1,
+        timeoutSeconds: 30,
       });
+      await settleRootWork(true);
       const details = result.details as {
         completed: Array<{ runId: string; result: string; structured?: unknown }>;
       };
@@ -268,8 +285,10 @@ describe("swarm tools integration", () => {
       }
     }
 
+    await settleRootWork();
     expect(completionOrder).toEqual([runIds[1], runIds[2], runIds[0]]);
     expect(pending.size).toBe(0);
+    expect(captureSubagentCompletionReply).not.toHaveBeenCalled();
     for (const runId of runIds) {
       expect(peekSwarmStructuredOutput(runId)).toBeUndefined();
     }

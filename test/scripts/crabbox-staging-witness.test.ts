@@ -115,39 +115,27 @@ function fixture() {
 }
 
 describe.skipIf(process.platform === "win32")("Crabbox staging witness object proof", () => {
-  it("Finder metadata in the ref database does not block the object proof", async () => {
-    const f = fixture();
-    f.addFinderMetadata();
-
-    expect(await verifySourceWitness(f.params)).toMatchObject({ ok: true });
-    for (const path of f.metadataPaths) {
-      expect(existsSync(path)).toBe(true);
-    }
-  });
-
-  it("missing reachable history objects fail closed with the object reason", async () => {
-    const f = fixture();
-    unlinkSync(
-      join(f.params.witness.gitDir, "objects", f.historyBlob.slice(0, 2), f.historyBlob.slice(2)),
-    );
-
-    expect(await verifySourceWitness(f.params)).toMatchObject({
-      ok: false,
-      reason: expect.stringContaining("missing, corrupt, or unconnected objects"),
-    });
-  });
-
-  it("older Git without --[no-]references keeps recovering", async () => {
-    const f = fixture();
-    const realGit = execFileSync("/bin/sh", ["-c", "command -v git"], {
-      encoding: "utf8",
-    }).trim();
-    const version = /^git version (\d+)\.(\d+)/u.exec(f.git("version"));
-    const shimDir = join(f.root, "bin");
-    mkdirSync(shimDir);
-    writeFileSync(
-      join(shimDir, "git"),
-      `#!/bin/sh
+  it.each(["native", "older"] as const)(
+    "verifies objects with %s Git's reference support",
+    async (git) => {
+      const f = fixture();
+      if (git === "native") {
+        f.addFinderMetadata();
+        expect(await verifySourceWitness(f.params)).toMatchObject({ ok: true });
+        for (const path of f.metadataPaths) {
+          expect(existsSync(path)).toBe(true);
+        }
+        return;
+      }
+      const realGit = execFileSync("/bin/sh", ["-c", "command -v git"], {
+        encoding: "utf8",
+      }).trim();
+      const version = /^git version (\d+)\.(\d+)/u.exec(f.git("version"));
+      const shimDir = join(f.root, "bin");
+      mkdirSync(shimDir);
+      writeFileSync(
+        join(shimDir, "git"),
+        `#!/bin/sh
 for arg in "$@"; do
   case "$arg" in
     version) printf 'git version 2.49.0\\n'; exit 0 ;;
@@ -156,64 +144,69 @@ for arg in "$@"; do
 done
 exec '${realGit.replaceAll("'", "'\\''")}' "$@"
 `,
-      { mode: 0o755 },
-    );
-    vi.stubEnv("PATH", shimDir + delimiter + process.env.PATH);
+        { mode: 0o755 },
+      );
+      vi.stubEnv("PATH", shimDir + delimiter + process.env.PATH);
 
-    expect(await verifySourceWitness(f.params)).toMatchObject({ ok: true });
-    if (
-      version &&
-      (Number(version[1]) > 2 || (Number(version[1]) === 2 && Number(version[2]) >= 50))
-    ) {
-      f.addFinderMetadata();
-      expect(await verifySourceWitness(f.params)).toMatchObject({
-        ok: false,
-        reason: expect.stringContaining("reference database has errors"),
-      });
-    }
-  });
+      expect(await verifySourceWitness(f.params)).toMatchObject({ ok: true });
+      if (
+        version &&
+        (Number(version[1]) > 2 || (Number(version[1]) === 2 && Number(version[2]) >= 50))
+      ) {
+        f.addFinderMetadata();
+        expect(await verifySourceWitness(f.params)).toMatchObject({
+          ok: false,
+          reason: expect.stringContaining("reference database has errors"),
+        });
+      }
+    },
+  );
 
-  it("a Git read cut off by the budget reports budget exhaustion, not missing objects", async () => {
+  it.each([
+    ["missing history", "missing, corrupt, or unconnected objects"],
+    ["timeout", "exceeded its work budget"],
+  ] as const)("classifies %s without permitting disposal", async (failure, reason) => {
     const f = fixture();
-    fsck.timeOut = true;
-
+    if (failure === "timeout") {
+      fsck.timeOut = true;
+    } else {
+      unlinkSync(
+        join(f.params.witness.gitDir, "objects", f.historyBlob.slice(0, 2), f.historyBlob.slice(2)),
+      );
+    }
     const result = await verifySourceWitness(f.params);
-    expect(result).toMatchObject({
-      ok: false,
-      reason: expect.stringContaining("exceeded its work budget"),
-    });
-    if (!result.ok) {
+    expect(result).toMatchObject({ ok: false, reason: expect.stringContaining(reason) });
+    if (failure === "timeout" && !result.ok) {
       expect(result.reason).not.toContain("fsck");
     }
   });
 
-  it("explicit recovery scales fsck time with object storage; automatic recovery keeps the base bound", async () => {
-    const f = fixture();
-    // A sparse file stands in for a 4 GiB object store without allocating disk.
-    const sizing = join(f.params.witness.gitDir, "objects", "info", "sizing");
-    mkdirSync(join(sizing, ".."), { recursive: true });
-    writeFileSync(sizing, "");
-    truncateSync(sizing, 4 * 1024 ** 3);
+  it.each([0, 4 * 1024 ** 3])(
+    "keeps automatic verification and revalidation bounded with %i extra bytes",
+    async (bytes) => {
+      const f = fixture();
+      if (bytes) {
+        // A sparse file models object-store size without allocating 4 GiB.
+        const sizing = join(f.params.witness.gitDir, "objects", "info", "sizing");
+        mkdirSync(join(sizing, ".."), { recursive: true });
+        writeFileSync(sizing, "");
+        truncateSync(sizing, bytes);
+      }
+      const explicit = await verifySourceWitness(f.params);
+      const automatic = await verifySourceWitness({ ...f.params, automatic: true });
+      expect(explicit).toMatchObject({ ok: true });
+      expect(automatic).toMatchObject({ ok: true });
+      if (!explicit.ok || !automatic.ok) {
+        throw new Error("fixture witness must verify");
+      }
+      if (bytes) {
+        expect(fsck.budgets[0]).toBeGreaterThan(200_000);
+        expect(fsck.budgets[1]).toBeLessThanOrEqual(120_000);
+      }
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 121_000);
 
-    expect(await verifySourceWitness(f.params)).toMatchObject({ ok: true });
-    expect(await verifySourceWitness({ ...f.params, automatic: true })).toMatchObject({
-      ok: true,
-    });
-    const [explicit, automatic] = fsck.budgets;
-    expect(explicit).toBeGreaterThan(200_000);
-    expect(automatic).toBeLessThanOrEqual(120_000);
-  });
-
-  it("automatic revalidation before disposal stays inside the original bound", async () => {
-    const f = fixture();
-    const explicit = await verifySourceWitness(f.params);
-    const automatic = await verifySourceWitness({ ...f.params, automatic: true });
-    if (!explicit.ok || !automatic.ok) {
-      throw new Error("fixture witness must verify");
-    }
-    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 121_000);
-
-    expect(() => automatic.revalidate()).toThrow("exceeded its work budget");
-    expect(() => explicit.revalidate()).not.toThrow();
-  });
+      expect(() => automatic.revalidate()).toThrow("exceeded its work budget");
+      expect(() => explicit.revalidate()).not.toThrow();
+    },
+  );
 });

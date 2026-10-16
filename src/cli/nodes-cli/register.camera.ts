@@ -1,4 +1,3 @@
-// Node camera commands: list devices, capture photos, and capture short clips through node.invoke.
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -19,12 +18,12 @@ import {
   writeCameraPayloadToFile,
   writeCameraClipPayloadToFile,
 } from "../nodes-camera.js";
-import { parseDurationMs } from "../parse-duration.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import {
   buildNodeInvokeParams,
   callNodesGatewayCli,
   nodesCallOpts,
+  parseNodeDurationMs,
   parseOptionalNodeFiniteNumber,
   parseOptionalNodeInteger,
   resolveCliNode,
@@ -40,7 +39,6 @@ const parseFacing = (value: string): CameraFacing => {
   throw new Error(`invalid facing: ${value} (expected front|back)`);
 };
 
-/** Register node camera list/snap/clip commands. */
 export function registerNodesCameraCommands(nodes: Command) {
   const camera = nodes.command("camera").description("Capture camera media from a paired node");
 
@@ -113,7 +111,8 @@ export function registerNodesCameraCommands(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 20000)", "20000")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("camera snap", async () => {
-          const facing = normalizeLowercaseStringOrEmpty(opts.facing) || undefined;
+          const facing =
+            opts.facing === undefined ? undefined : normalizeLowercaseStringOrEmpty(opts.facing);
           if (
             facing !== undefined &&
             facing !== "both" &&
@@ -131,7 +130,7 @@ export function registerNodesCameraCommands(nodes: Command) {
           const delayMs = parseOptionalNodeInteger(opts.delayMs, "--delay-ms", "non-negative");
           const deviceId = normalizeOptionalString(opts.deviceId);
           const timeoutMs = parseOptionalNodeInteger(opts.invokeTimeout, "--invoke-timeout");
-          const node = await resolveCliNode(opts, normalizeOptionalString(opts.node) ?? "");
+          const node = await resolveCliNode(opts, opts.node ?? "");
           const nodeId = node.nodeId;
           if (deviceId && facing === "both" && node.platform?.toLowerCase() !== "linux") {
             throw new Error("facing=both is not allowed when --device-id is set");
@@ -156,7 +155,7 @@ export function registerNodesCameraCommands(nodes: Command) {
                 quality,
                 format: "jpg",
                 delayMs,
-                deviceId: deviceId || undefined,
+                deviceId,
               },
               timeoutMs,
             });
@@ -219,11 +218,11 @@ export function registerNodesCameraCommands(nodes: Command) {
       .action(async (opts: NodesRpcOpts & { audio?: boolean }) => {
         await runNodesCommand("camera clip", async () => {
           const facing = parseFacing(opts.facing ?? "front");
-          const durationMs = parseDurationMs(opts.duration ?? "3000");
+          const durationMs = parseNodeDurationMs(opts.duration ?? "3000");
           const includeAudio = opts.audio !== false;
           const timeoutMs = parseOptionalNodeInteger(opts.invokeTimeout, "--invoke-timeout");
           const deviceId = normalizeOptionalString(opts.deviceId);
-          const node = await resolveCliNode(opts, normalizeOptionalString(opts.node) ?? "");
+          const node = await resolveCliNode(opts, opts.node ?? "");
           const nodeId = node.nodeId;
           const target = resolveCameraClipTarget({ facing, platform: node.platform });
 
@@ -235,7 +234,7 @@ export function registerNodesCameraCommands(nodes: Command) {
               durationMs,
               includeAudio,
               format: "mp4",
-              deviceId: deviceId || undefined,
+              deviceId,
             },
             timeoutMs,
           });

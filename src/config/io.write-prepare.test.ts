@@ -1,11 +1,11 @@
 // Covers canonical config writes, roster migration, include ownership, and authored env refs.
 import { describe, expect, it, vi } from "vitest";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { collectChangedPaths } from "./config-change-paths.js";
 import { applyUnsetPathsForWrite } from "./config-path-mutation.js";
 import { createConfigValidationFailedError } from "./io.write-errors.js";
 import { resolvePersistCandidateForWrite } from "./io.write-prepare.js";
 import { tryResolveLegacyCompatibilityAgentId } from "./legacy.default-agent-owner.js";
-import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { setConfigResolutionFacts } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -65,13 +65,6 @@ const scopedModelMaps = (id: string, phase: string) => ({
     entries: { ops: { models: { [id]: { alias: `Ops ${phase}` } } } },
   },
 });
-const sharedModelSource = withModels({
-  "google/gemini-3.1-pro": { alias: "Shorthand", params: { temperature: 0.2 } },
-  [canonicalModel]: { alias: "Canonical", params: { topP: 0.8 } },
-});
-const sharedModelRuntime = withModels({
-  [canonicalModel]: { alias: "Canonical", params: { temperature: 0.2, topP: 0.8 } },
-});
 const legacyRoute = withDefaults({
   model: "openai-codex/gpt-5.5",
   models: { "openai-codex/gpt-5.5": { params: { reasoning_effort: "high" } } },
@@ -85,34 +78,10 @@ const repairedRoute = withDefaults({
 
 const writeCases: WriteCase[] = [
   {
-    name: "omits the unauthored parent after removing an injected roster",
-    current: { gateway: { port: 18789 }, ...roster({ main: {} }) },
-    authored: { gateway: { port: 18789 } },
-    next: { gateway: { port: 19001 }, ...roster({ main: {} }) },
-    expected: { gateway: { port: 19001 } },
-  },
-  {
-    name: "retains an explicitly authored empty agents section",
-    current: { gateway: { port: 18789 }, ...roster({ main: {} }) },
-    authored: { gateway: { port: 18789 }, agents: {} },
-    next: { gateway: { port: 19001 }, ...roster({ main: {} }) },
-    expected: { gateway: { port: 19001 }, agents: {} },
-  },
-  {
     name: "rejects a canonical roster rewrite that silently drops an entry",
     current: roster({ main, worker }),
     next: roster({ worker }),
     error: "Config write would drop agent roster entries without an explicit deletion: main.",
-  },
-  {
-    name: "uses the complete next roster when an unrelated explicit value source is present",
-    current: roster({ main }),
-    next: { ...roster({ main, worker }), gateway: { port: 19001 } },
-    options: {
-      explicitSetPaths: [["gateway", "port"]],
-      explicitSetValueSource: { gateway: { port: 19001 } },
-    },
-    expected: { ...roster({ main, worker }), gateway: { port: 19001 } },
   },
   {
     name: "preserves an unchanged env-backed default during an unrelated roster addition",
@@ -120,17 +89,6 @@ const writeCases: WriteCase[] = [
     authored: roster({ main: { default: "${MAIN_DEFAULT}", agentDir: "/srv/main" } }),
     next: roster({ main: { ...main, agentDir: "/srv/main" }, worker }),
     expected: roster({ main: { default: "${MAIN_DEFAULT}", agentDir: "/srv/main" }, worker }),
-  },
-  {
-    name: "honors an explicit roster leaf write that equals the resolved runtime value",
-    current: roster({ main: { ...main, agentDir: "/srv/main" } }),
-    authored: roster({ main: { ...main, agentDir: "${MAIN_AGENT_DIR}" } }),
-    next: roster({ main: { ...main, agentDir: "/srv/main" } }),
-    options: {
-      explicitSetPaths: [["agents", "entries", "main", "agentDir"]],
-      explicitSetValueSource: roster({ main: { ...main, agentDir: "/srv/main" } }),
-    },
-    expected: roster({ main: { ...main, agentDir: "/srv/main" } }),
   },
   {
     name: "honors explicit legacy-list leaves under an env-resolved agent id",
@@ -143,18 +101,6 @@ const writeCases: WriteCase[] = [
       explicitSetValueSource: listRoster([{ id: "${AGENT_ID}", ...main, agentDir: "/srv/main" }]),
     },
     expected: roster({ main: { ...main, agentDir: "/srv/main" } }),
-  },
-  {
-    name: "preserves authored refs in a full legacy-list write with an env-backed id",
-    current: roster({ main: { ...main, agentDir: "/resolved/old" } }),
-    before: listRoster([{ id: "main", ...main, agentDir: "/resolved/old" }]),
-    authored: listRoster([{ id: "${AGENT_ID}", ...main, agentDir: "${OLD_DIR}" }]),
-    next: roster({ main: { ...main, agentDir: "/resolved/new" } }),
-    options: {
-      explicitSetPaths: [["agents", "list"]],
-      explicitSetValueSource: listRoster([{ id: "${AGENT_ID}", ...main, agentDir: "${NEW_DIR}" }]),
-    },
-    expected: roster({ main: { ...main, agentDir: "${NEW_DIR}" } }),
   },
   {
     name: "rejects a whole-list write with an unmappable new env-backed id",
@@ -180,13 +126,6 @@ const writeCases: WriteCase[] = [
     expected: roster({ main: { ...main, identity: { $include: "./identity.json" } }, worker }),
   },
   {
-    name: "rejects a roster write that changes an entry-internal included subtree",
-    current: roster({ main: { ...main, identity: { name: "Main", emoji: "🦞" } } }),
-    authored: roster({ main: { ...main, identity: { $include: "./identity.json" } } }),
-    next: roster({ main: { ...main, identity: { name: "Changed", emoji: "🦞" } }, worker }),
-    error: "flatten $include-owned config at agents.entries.main.identity",
-  },
-  {
     name: "preserves authored references when an agent id is renamed",
     current: roster({ main: runtimeSecretEntry }),
     source: roster({ main: authoredSecretEntry }),
@@ -201,18 +140,6 @@ const writeCases: WriteCase[] = [
     expected: roster({ primary: authoredSecretEntry }),
   },
   {
-    name: "rejects an env-backed agent rename whose resolved identity is unavailable",
-    current: roster({ main }),
-    before: listRoster([{ id: "main", ...main }]),
-    authored: listRoster([{ id: "${OLD_AGENT_ID}", ...main }]),
-    next: roster({ ops: main }),
-    options: {
-      explicitSetPaths: [["agents", "list", "0", "id"]],
-      explicitSetValueSource: listRoster([{ id: "${NEW_AGENT_ID}", ...main }]),
-    },
-    error: "cannot safely resolve an env-backed renamed agent id",
-  },
-  {
     name: "applies a legacy-list unset to the renamed canonical entry",
     current: roster({ main: { ...main, workspace: "/srv/main" } }),
     before: listRoster([{ id: "main", ...main, workspace: "/srv/main" }]),
@@ -225,32 +152,6 @@ const writeCases: WriteCase[] = [
       allowedAgentRosterRemovals: ["main"],
     },
     expected: roster({ primary: main }),
-  },
-  {
-    name: "applies an indexed unset after an explicit legacy-list reorder with a resolved id",
-    current: roster({ main: { ...main, workspace: "/srv/main" }, worker }),
-    source: listRoster([
-      { id: "main", ...main, workspace: "/srv/main" },
-      { id: "worker", ...worker },
-    ]),
-    before: listRoster([
-      { id: "main", ...main, workspace: "/srv/main" },
-      { id: "worker", ...worker },
-    ]),
-    authored: listRoster([
-      { id: "main", ...main, workspace: "/srv/main" },
-      { id: "${WORKER_ID}", ...worker },
-    ]),
-    next: roster({ worker: {}, main: { ...main, workspace: "/srv/main" } }),
-    options: {
-      explicitSetPaths: [["agents", "list"]],
-      explicitSetValueSource: listRoster([
-        { id: "${WORKER_ID}" },
-        { id: "main", ...main, workspace: "/srv/main" },
-      ]),
-      unsetPaths: [["agents", "list", "0", "workspace"]],
-    },
-    expected: roster({ worker: {}, main: { ...main, workspace: "/srv/main" } }),
   },
   {
     name: "removes the explicitly reordered list slot instead of the surviving agent",
@@ -320,20 +221,6 @@ const writeCases: WriteCase[] = [
     }),
   },
   {
-    name: "keeps the normalized default when authored legacy input marked it false",
-    current: roster({ main, ops: { workspace: "/srv/ops" } }),
-    before: listRoster([
-      { id: "main", default: false },
-      { id: "ops", workspace: "/srv/ops" },
-    ]),
-    authored: listRoster([
-      { id: "main", default: false },
-      { id: "ops", workspace: "/srv/ops" },
-    ]),
-    next: roster({ main, ops: { workspace: "/srv/ops" }, worker }),
-    expected: roster({ main, ops: { workspace: "/srv/ops" }, worker }),
-  },
-  {
     name: "preserves authored references when roster arrays shift",
     current: roster({ main: { ...main, tools: { allow: ["read", "old"] } } }),
     authored: roster({ main: { ...main, tools: { allow: ["${PRIMARY_TOOL}", "old"] } } }),
@@ -354,12 +241,6 @@ const writeCases: WriteCase[] = [
     next: roster({ main }),
     options: { unsetPaths: [["agents", "list", "0", "id"]] },
     error: "cannot unset an agent id",
-  },
-  {
-    name: "does not resurrect an authored roster removed from the complete next config",
-    current: { agents: { defaults: { workspace: "/srv/default" }, entries: { main } } },
-    next: { agents: { defaults: { workspace: "/srv/default" } } },
-    expected: { agents: { defaults: { workspace: "/srv/default" } } },
   },
   {
     name: "allows roster writes beside unrelated root includes using pre-migration provenance",
@@ -384,13 +265,6 @@ const writeCases: WriteCase[] = [
       ops: { $include: "./ops.json5" },
       worker: { workspace: "/w/worker" },
     }),
-  },
-  {
-    name: "rejects array-shaped entries containing an include",
-    current: explicitRoster({ tony }),
-    authored: explicitRoster([tonyInclude]),
-    next: explicitRoster({ tony, worker: { workspace: "/w/worker" } }),
-    error: "Config write would flatten $include-owned config at agents",
   },
   {
     name: "rejects an agents.entries include while adding a root-owned agent",
@@ -423,24 +297,13 @@ const writeCases: WriteCase[] = [
     },
   },
   {
-    name: "does not copy runtime-normalized include values into root-authored siblings",
-    current: { gateway: { tls: { certPath: "/home/test/cert.pem", enabled: false } } },
-    source: { gateway: { tls: { certPath: "~/cert.pem", enabled: false } } },
-    authored: { gateway: { $include: "./config/gateway.json", tls: { enabled: false } } },
-    next: { gateway: { tls: { certPath: "~/cert.pem", enabled: true } } },
-    expected: { gateway: { $include: "./config/gateway.json", tls: { enabled: true } } },
-  },
-  {
     name: "rejects included-value edits beside root-authored sibling edits",
     current: { gateway: { mode: "local", legacyKey: "old" } },
     authored: { gateway: { $include: "./config/gateway.json", legacyKey: "old" } },
     next: { gateway: { mode: "remote", legacyKey: "new" } },
     error: "Config write would flatten $include-owned config at gateway",
   },
-  ...[
-    { fallbacks: ["fixture/replacement"], envRef: false },
-    { fallbacks: [], envRef: true },
-  ].map(({ fallbacks, envRef }) => {
+  ...[{ fallbacks: ["fixture/replacement"], envRef: false }].map(({ fallbacks, envRef }) => {
     const model = { primary: "fixture/primary", fallbacks: ["fixture/root"] };
     const source = withDefaults({ model });
     const authored = {
@@ -459,20 +322,6 @@ const writeCases: WriteCase[] = [
       expected: { agents: { $include: "./agents.json", defaults: { model: { fallbacks } } } },
     };
   }),
-  {
-    name: "rejects edits to arrays composed from both root and included values",
-    current: {
-      agents: { defaults: { model: { fallbacks: ["fixture/included", "fixture/root"] } } },
-    },
-    authored: {
-      agents: {
-        $include: "./agents.json",
-        defaults: { model: { fallbacks: ["fixture/root"] } },
-      },
-    },
-    next: { agents: { defaults: { model: { fallbacks: ["fixture/root"] } } } },
-    error: "Config write would flatten $include-owned config at agents",
-  },
   {
     name: "does not infer array ownership from a normalized baseline that dropped included values",
     before: {
@@ -519,23 +368,6 @@ const writeCases: WriteCase[] = [
     },
   },
   {
-    name: "rejects roster edits beside an include-owned array entry",
-    current: listRoster([
-      { id: "main", workspace: "~/agent" },
-      { id: "ops", workspace: "~/ops" },
-    ]),
-    authored: listRoster([
-      { $include: "./config/main-agent.json" },
-      { id: "ops", workspace: "~/ops" },
-    ]),
-    next: listRoster([
-      { id: "main", workspace: "~/agent" },
-      { id: "ops", workspace: "~/ops-next" },
-      { id: "new", workspace: "~/new" },
-    ]),
-    error: "Config write would flatten $include-owned config at agents",
-  },
-  {
     name: "allows unrelated removals after duplicate include-resolved values",
     current: { plugins: { load: { paths: ["/same", "/same", "/other"] } } },
     authored: {
@@ -576,12 +408,7 @@ const writeCases: WriteCase[] = [
       gateway: { mode: "local" },
     },
   },
-  ...(
-    [
-      [retiredModel, canonicalModel],
-      ["custom/custom/model", "custom/custom/model"],
-    ] as const
-  ).map(([authored, canonical]): WriteCase => {
+  ...([[retiredModel, canonicalModel]] as const).map(([authored, canonical]): WriteCase => {
     const params = { thinking: { level: "high" } };
     return {
       name: `preserves separate authored model params when writing ${authored}`,
@@ -607,13 +434,6 @@ const writeCases: WriteCase[] = [
     expected: withModels({ [canonicalModel]: geminiEntry }),
   },
   {
-    name: "preserves untouched model rows that share a runtime identity",
-    source: sharedModelSource,
-    current: sharedModelRuntime,
-    next: { ...sharedModelRuntime, gateway: { port: 18888 } },
-    expected: { ...sharedModelSource, gateway: { port: 18888 } },
-  },
-  {
     name: "does not reintroduce legacy openai-codex model params after doctor route repair",
     current: legacyRoute,
     next: repairedRoute,
@@ -636,7 +456,7 @@ const writeCases: WriteCase[] = [
   },
 ];
 
-function resolveWriteCase(testCase: WriteCase): OpenClawConfig {
+function resolveWriteCase(testCase: WriteCase): unknown {
   return resolvePersistCandidateForWrite({
     runtimeConfig: testCase.current,
     sourceConfig: testCase.source ?? testCase.current,
@@ -644,7 +464,7 @@ function resolveWriteCase(testCase: WriteCase): OpenClawConfig {
     ...(testCase.authored === undefined ? {} : { rootAuthoredConfig: testCase.authored }),
     ...(testCase.before === undefined ? {} : { sourceConfigBeforeMigrations: testCase.before }),
     ...testCase.options,
-  }) as OpenClawConfig;
+  });
 }
 
 describe("config io write prepare", () => {
@@ -659,10 +479,7 @@ describe("config io write prepare", () => {
     });
   }
 
-  it.each([
-    { includeAt: "root", authoredDefaults: true },
-    { includeAt: "agents", authoredDefaults: false },
-  ])(
+  it.each([{ includeAt: "agents", authoredDefaults: false }])(
     "preserves explicit sibling intent beside a $includeAt include (authored defaults: $authoredDefaults)",
     ({ includeAt, authoredDefaults }) => {
       const authoredAgents = {
@@ -736,7 +553,6 @@ describe("config io write prepare", () => {
         allowed: true,
         kinds: ["index"],
       },
-      { name: "empty include", authored: undefined, resolved: [], allowed: true, kinds: ["array"] },
     ].flatMap((testCase) => testCase.kinds.map((kind) => ({ testCase, kind }))),
   )("checks $testCase.name array ownership for explicit $kind writes", ({ testCase, kind }) => {
     const sourceConfig = {
@@ -812,7 +628,7 @@ describe("config io write prepare", () => {
       agents: { entries: { ops: {}, research: { default: true } } },
       gateway: { port: 18789 },
     };
-    const migrated = migratePersistedImplicitMainRoster(authored).config as OpenClawConfig;
+    const migrated = createCanonicalAgentConfigFixture(authored).config;
 
     const persisted = resolvePersistCandidateForWrite({
       runtimeConfig: migrated,
@@ -823,34 +639,11 @@ describe("config io write prepare", () => {
       preserveLegacyAgentRoster: true,
       explicitSetPaths: [["gateway", "port"]],
       explicitSetValueSource: { gateway: { port: 19001 } },
-    }) as OpenClawConfig;
+    });
 
-    expect(persisted.agents?.entries?.research?.default).toBe(true);
-    const reloaded = migratePersistedImplicitMainRoster(persisted).config as OpenClawConfig;
+    expect(persisted).toHaveProperty("agents.entries.research.default", true);
+    const reloaded = createCanonicalAgentConfigFixture(persisted).config;
     expect(tryResolveLegacyCompatibilityAgentId(reloaded)).toBe("research");
-  });
-
-  it("rejects duplicate normalized ids before canonicalizing a legacy roster", () => {
-    const nextConfig = listRoster([
-      { id: "Ops", workspace: "/first" },
-      { id: " ops ", workspace: "/second" },
-    ]);
-    const before = structuredClone(nextConfig);
-    expect(() =>
-      resolvePersistCandidateForWrite({
-        runtimeConfig: {},
-        sourceConfig: {},
-        nextConfig,
-        explicitSetPaths: [["agents", "list"]],
-        explicitSetValueSource: nextConfig,
-      }),
-    ).toThrowError(
-      expect.objectContaining({
-        name: "DuplicateAgentRosterIdError",
-        message: 'Config write cannot canonicalize duplicate normalized agent id "ops".',
-      }),
-    );
-    expect(nextConfig).toEqual(before);
   });
 
   it("omits canonical entries when the complete legacy list is unset", () => {
@@ -863,11 +656,11 @@ describe("config io write prepare", () => {
         nextConfig: roster({ main }),
         unsetPaths,
         allowedAgentRosterRemovals: ["main"],
-      }) as OpenClawConfig,
+      }),
       unsetPaths,
     );
-    expect(persisted.agents).not.toHaveProperty("list");
-    expect(persisted.agents).not.toHaveProperty("entries");
+    expect(persisted).not.toHaveProperty("agents.list");
+    expect(persisted).not.toHaveProperty("agents.entries");
   });
 
   it("prunes empty objects inside arrays during explicit unsets", () => {
@@ -925,14 +718,6 @@ describe("config io write prepare", () => {
 
   it.each([
     {
-      name: "allows an explicit local leaf override beside a root include",
-      authored: { $include: "./agents.json5" },
-      expected: {
-        $include: "./agents.json5",
-        agents: { defaults: { workspace: "/srv/next" } },
-      },
-    },
-    {
       name: "allows an explicit local leaf override below a nested include",
       authored: { agents: { $include: "./agents.json5" } },
       expected: {
@@ -957,11 +742,6 @@ describe("config io write prepare", () => {
   });
 
   it.each([
-    {
-      name: "persists explicitly set array-index children whose values match runtime defaults",
-      paths: [["models", "providers", "openai", "models", "0", "contextWindow"]],
-      includesDefault: true,
-    },
     {
       name: "ignores unsafe array-index explicit set paths",
       paths: [

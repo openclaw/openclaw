@@ -11,16 +11,6 @@ export function makePreflightConfigSnapshot(config: Record<string, unknown>) {
   };
 }
 
-export function queueConfigSnapshot<T>(
-  reader: { mockResolvedValueOnce(snapshot: T): unknown },
-  snapshot: T,
-  count = 1,
-): void {
-  for (let index = 0; index < count; index += 1) {
-    reader.mockResolvedValueOnce(snapshot);
-  }
-}
-
 export type StateMigrationResult = {
   migrated: boolean;
   skipped: boolean;
@@ -73,39 +63,4 @@ export function makeStartupConvergenceResult(
     installRecords: {},
     ...overrides,
   };
-}
-
-export function makeQuarantinedPluginRepairConvergence(
-  pluginId: string,
-  repairPluginId: string | undefined,
-): StartupConvergenceResult {
-  return makeStartupConvergenceResult({
-    errored: true,
-    warnings: [
-      {
-        kind: "repair",
-        pluginId: repairPluginId,
-        reason: "npm package not found",
-        message: `Failed to update ${repairPluginId ?? pluginId}: npm package not found.`,
-        guidance: ["Run `openclaw update repair` to retry plugin repair."],
-      },
-      {
-        pluginId,
-        reason: "missing-package-json: package.json is missing",
-        message: `Plugin "${pluginId}" failed post-core payload smoke check (missing): package.json is missing`,
-        guidance: [
-          "Run `openclaw update repair` to retry plugin repair.",
-          `Run \`openclaw plugins inspect ${pluginId} --runtime --json\` for details.`,
-        ],
-      },
-    ],
-    smokeFailures: [
-      {
-        pluginId,
-        installPath: `/plugins/${pluginId}`,
-        reason: "missing-package-json",
-        detail: "package.json is missing",
-      },
-    ],
-  });
 }

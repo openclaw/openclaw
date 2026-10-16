@@ -11,7 +11,6 @@ import {
 } from "./heartbeat-display.ts";
 import { extractText, extractTextCached, isEmptyUserTextOnlyMessage } from "./message-extract.ts";
 
-const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
 
@@ -36,35 +35,9 @@ export function resolveMessageVisibleContent(
   return hasText || extractTextCached(message)?.trim() ? "text" : "none";
 }
 
-export function isSilentReplyStream(text: string): boolean {
-  return SILENT_REPLY_PATTERN.test(text);
-}
-
-/** Client-side defense-in-depth: detect assistant messages whose text is purely NO_REPLY. */
-function isAssistantSilentReply(message: unknown): boolean {
-  const entry = asNullableRecord(message);
-  if (!entry) {
-    return false;
-  }
-  const role = normalizeLowercaseStringOrEmpty(entry.role);
-  if (role !== "assistant") {
-    return false;
-  }
-  // entry.text takes precedence — matches gateway extractAssistantTextForSilentCheck
-  if (typeof entry.text === "string") {
-    return isSilentReplyStream(entry.text);
-  }
-  const text = extractText(message);
-  return typeof text === "string" && isSilentReplyStream(text);
-}
-
 function isSyntheticTranscriptRepairToolResult(message: unknown): boolean {
   const entry = asNullableRecord(message);
-  if (!entry) {
-    return false;
-  }
-  const role = normalizeLowercaseStringOrEmpty(entry.role);
-  if (role !== "toolresult") {
+  if (!entry || normalizeLowercaseStringOrEmpty(entry.role) !== "toolresult") {
     return false;
   }
   const text = extractText(message);
@@ -72,11 +45,11 @@ function isSyntheticTranscriptRepairToolResult(message: unknown): boolean {
 }
 
 export function isHiddenAssistantStreamText(text: string): boolean {
-  return isSilentReplyStream(text) || stripHeartbeatTokenForDisplay(text).shouldSkip;
+  return stripHeartbeatTokenForDisplay(text).shouldSkip;
 }
 
 export function shouldHideAssistantChatMessage(message: unknown): boolean {
-  return isAssistantSilentReply(message) || isAssistantHeartbeatAckForDisplay(message);
+  return isAssistantHeartbeatAckForDisplay(message);
 }
 
 export function isVisibleChatHistoryMessage(message: unknown): boolean {

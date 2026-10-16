@@ -5,8 +5,10 @@ import { expect, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import * as serviceChildControl from "../process/supervisor/service-child-control-reader.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { workerBackgroundExecEntrypoints } from "../worker/worker-runtime-background-exec-entrypoints.test-support.js";
-import type { NodeWorkerLaunchClaim } from "./node-worker-launch-store.js";
+import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
+import { NodeWorkerLaunchStore, type NodeWorkerLaunchClaim } from "./node-worker-launch-store.js";
 import * as workerLaunchTransport from "./node-worker-launch-transport.js";
 import {
   inspectNodeWorkerProcessIdentity,
@@ -16,8 +18,10 @@ import {
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
   testWorkerLaunchInput,
+  testNodeWorkerLaunchIdentity,
   writeNodeWorkerFixture,
 } from "./node-worker-supervisor.test-support.js";
+import { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
 
 const supervisorUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.supervisor);
 const turnsUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.turnStore);
@@ -280,4 +284,63 @@ export async function waitForNodeWorkerTerminal(
     throw new Error(`missing launch receipt ${launchId}`);
   }
   return receipt;
+}
+
+export async function insertNodeWorkerRecoveryLaunch(params: {
+  env: NodeJS.ProcessEnv;
+  input: ReturnType<typeof testWorkerLaunchInput>;
+  state: "pending" | "running";
+  supervisor: NodeWorkerProcessIdentity;
+  worker?: NodeWorkerProcessIdentity;
+  turn?: true;
+}) {
+  const database = openOpenClawStateDatabase({ env: params.env }).db;
+  const state = params.turn ? "pending" : params.state;
+  database
+    .prepare(
+      `INSERT INTO node_worker_launches (
+        launch_id, plan_hash, gateway_namespace, environment_id, session_id,
+        owner_epoch, placement_generation, run_id, state,
+        supervisor_pid, supervisor_start_time, worker_pid, worker_start_time,
+        result_json, error_text, completed_at_ms, created_at_ms, updated_at_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 1, 1)`,
+    )
+    .run(
+      params.input.launchId,
+      testNodeWorkerLaunchIdentity(params.input).planHash,
+      params.input.gatewayNamespace,
+      params.input.descriptor.admission.environmentId,
+      params.input.descriptor.admission.sessionId,
+      params.input.descriptor.admission.ownerEpoch,
+      params.input.placementGeneration,
+      params.input.descriptor.assignment.runId,
+      state,
+      params.supervisor.pid,
+      params.supervisor.startTime,
+      state === "running" ? (params.worker?.pid ?? null) : null,
+      state === "running" ? (params.worker?.startTime ?? null) : null,
+    );
+  if (params.turn) {
+    const journal = new NodeWorkerJournalWorker({ env: params.env });
+    await new NodeWorkerTurnStore(journal).claim({
+      claim: {
+        ...testNodeWorkerLaunchIdentity(params.input),
+        gatewayNamespace: params.input.gatewayNamespace,
+      },
+      ownerLaunchId: params.input.launchId,
+      supervisor: params.supervisor,
+    });
+    if (params.state === "running") {
+      await new NodeWorkerLaunchStore(journal).markRunning({
+        launchId: params.input.launchId,
+        planHash: testNodeWorkerLaunchIdentity(params.input).planHash,
+        supervisor: params.supervisor,
+        worker: params.worker!,
+        cleanupMode: "process-group",
+      });
+      database
+        .prepare("DELETE FROM node_worker_launch_cleanup WHERE launch_id = ?")
+        .run(params.input.launchId);
+    }
+  }
 }

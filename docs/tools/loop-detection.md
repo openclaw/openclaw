@@ -8,8 +8,15 @@ read_when:
   - You hit `compaction_loop_persisted` aborts after a context-overflow retry
 ---
 
-OpenClaw has two cooperating guardrails against repetitive tool-call patterns,
-both configured under `tools.loopDetection`:
+OpenClaw always stops a turn after three consecutive identical tool errors: the
+same tool, arguments, and error result. This narrow guard is independent of
+`tools.loopDetection`, including an explicit `enabled: false`. The turn ends with
+a recorded error explaining how to recover, such as checking the arguments or
+switching to a model with native tool calling. Changed results, changed arguments,
+and successful calls reset the error streak, so progress-making retries and
+normal polling continue.
+
+Two additional guardrails are configured under `tools.loopDetection`:
 
 1. **Loop detection** (`enabled`) - disabled by default. Watches the rolling
    tool-call history for repeated patterns and unknown-tool retries.
@@ -18,7 +25,7 @@ both configured under `tools.loopDetection`:
    aborts the run if the agent repeats the same `(tool, args, result)` triple
    within the window.
 
-Set `tools.loopDetection.enabled: false` to silence both guardrails.
+Set `tools.loopDetection.enabled: false` to disable these two additional guardrails.
 
 ## Why this exists
 
@@ -50,7 +57,6 @@ Per-agent override (optional, at `agents.entries.*.tools.loopDetection`):
   agents: {
     entries: {
       "safe-runner": {
-        default: true,
         tools: {
           loopDetection: {
             enabled: true,
@@ -88,6 +94,13 @@ as duration, PID, session ID, and working directory.
 For typed terminal failures, it also ignores diagnostic timestamps, explicit
 attempt or retry counters, elapsed durations, and labeled process IDs. Other
 text and numbers remain significant, so a new failure cause resets the streak.
+
+For successful `memory_search` results, comparison preserves ordered hits and
+their content while ignoring per-call debug timings and the aggregate hit score,
+which changes with temporal decay. Changes to hit order, paths, snippets, line
+ranges, warnings, or other stable result metadata still count as progress. Scores
+and debug data remain in the delivered result; error results keep full comparison.
+
 Outbound message-send results are hashed with volatile per-call ids (message id, file id, timestamp)
 stripped, so delivery IDs alone do not make repeated equivalent sends look like
 progress. When a run id is available, history is evaluated only within that run,
@@ -99,6 +112,10 @@ not their write revision or receipt wording. Saved revisions and delivered recei
 are unchanged, so a requested refresh still receives a newer saved revision even
 when the card content is unchanged. Errors and results without the tool’s private
 semantic outcome keep full outcome comparison.
+
+Calls rejected by argument validation (for example `exec` without `command`) never
+run, but they are recorded as failed calls, so repeating one is detected like any
+other loop. They do not extend or end an `exec` failure streak.
 
 Window observations from `computer` `get_window_state` are compared without fresh
 observation and element references. Pixels, element labels, values, bounds, and
@@ -117,8 +134,22 @@ change authorization, or modify delivered tool results.
 - For smaller models, set `enabled: true`. Flagship models rarely need rolling-history detection and can
   leave the master switch unset while still benefiting from the
   post-compaction guard.
-- To disable everything, including the post-compaction guard, set
-  `tools.loopDetection.enabled: false` explicitly.
+- To disable the rolling detectors and post-compaction guard, set
+  `tools.loopDetection.enabled: false` explicitly. The identical-error guard
+  remains active.
+
+## Repeated tool errors
+
+Three identical consecutive failures allow the initial attempt and two retries.
+The third failure ends the turn without asking the model for another response.
+Unknown tool IDs count as errors for the requested name. Loop-policy vetoes
+preserve the preceding failure evidence rather than resetting the streak.
+
+Already-running parallel calls settle before the terminal failure is recorded;
+unstarted calls in the batch are blocked. The error count follows the model's
+call order, not completion timing. Committed user messages start a fresh count,
+including follow-ups and steering. Continuation retries without new user input
+keep the current count.
 
 ## Post-compaction guard
 
@@ -155,9 +186,8 @@ so a no-config user still gets the protection.
 
 ## Logs and expected behavior
 
-When a loop is detected, OpenClaw logs a loop event and either warns or blocks
-the next tool-cycle depending on severity, protecting against runaway token
-spend and lockups while preserving normal tool access.
+The always-on identical-error guard ends the turn with a visible error. The
+optional rolling detectors use the warning and recovery sequence below:
 
 - Warnings come first. On OpenClaw-executed tool calls, a short system note is
   appended to the affected tool result so the model can change approach before

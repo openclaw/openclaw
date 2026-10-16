@@ -1,11 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createDeferred, awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import * as sentinelStore from "./restart-sentinel.js";
 import { readRestartSentinel } from "./restart-sentinel.js";
 import { UpdateCampaignController } from "./update-campaign.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
@@ -15,7 +17,12 @@ import {
   listUpdateRuns,
   recordUpdateRunVerification,
 } from "./update-run-ledger.js";
-import { runAutoUpdateCommand, runCampaignUpdate } from "./update-startup-auto-run.js";
+import {
+  runAutoUpdateCommand,
+  runCampaignUpdate,
+  type AutoUpdateRunner,
+} from "./update-startup-auto-run.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const { cancel, start, transfer, restart } = vi.hoisted(() => ({
   cancel:
@@ -50,10 +57,10 @@ vi.mock("./restart.js", async (importOriginal) => ({
   scheduleGatewayRestart: restart,
 }));
 
-function createApplyingCampaign() {
+function createApplyingCampaign(version = "2.0.0-beta.1") {
   const campaign = new UpdateCampaignController(createTestGatewayScheduler());
   campaign.announce({
-    target: { kind: "package", version: "2.0.0-beta.1" },
+    target: { kind: "package", version },
     inspect: { getQueueSize: () => 1 },
     apply: async () => "failed",
     onChange: () => {},
@@ -85,8 +92,177 @@ describe("automatic campaign handoff failure", () => {
   });
 
   afterEach(async () => {
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     await state.cleanup();
+  });
+
+  it.each([
+    "unchanged",
+    "new candidate",
+    "manual update",
+    "different reason",
+    "different check",
+    "different detail",
+    "transient metadata",
+  ] as const)(
+    "backs off only identical candidate Doctor failures across restart: %s",
+    async (resume) => {
+      const log = { info: vi.fn() };
+      const step: UpdateStepResult = {
+        name: "candidate-doctor",
+        command: "doctor",
+        cwd: "/private/candidate",
+        durationMs: 10,
+        exitCode: 1,
+        stderrTail: "Plugin dependency is outside the temporary update copy: chromium-bidi",
+      };
+      const outcome: Awaited<ReturnType<AutoUpdateRunner>> = {
+        status: "failed",
+        message: "Candidate Doctor failed.",
+        result: {
+          status: "error",
+          mode: "npm",
+          reason: "doctor-failed",
+          steps: [step],
+          durationMs: 10,
+        },
+      };
+      const runAuto = vi.fn<AutoUpdateRunner>(async () => structuredClone(outcome));
+      const attempt = async (version = "2.0.0-beta.1") => {
+        const campaign = createApplyingCampaign(version);
+        try {
+          return await runCampaignUpdate({
+            channel: "beta",
+            mode: "npm",
+            version,
+            tag: "beta",
+            forced: false,
+            root: "/opt/openclaw",
+            log,
+            canApply: () => true,
+            campaign,
+            onAttempt: () => {},
+            runAuto,
+          });
+        } finally {
+          campaign.clear();
+        }
+      };
+      if (resume === "transient metadata") {
+        step.failureFacts = [
+          {
+            check: "doctor",
+            code: "doctor-failed",
+            message: "Check failed in openclaw-update-canary-Abc123 (5ms)",
+          },
+        ];
+      }
+      await attempt();
+      if (resume === "different reason") {
+        outcome.result.reason = "candidate-checks-timeout";
+      } else if (resume === "different check") {
+        step.name = "candidate-doctor-lint";
+      } else if (resume === "different detail") {
+        step.stderrTail = "A different dependency is unavailable: kerberos";
+      } else if (resume === "transient metadata") {
+        step.failureFacts = [
+          {
+            check: "doctor",
+            code: "doctor-failed",
+            message: "Check failed in openclaw-update-canary-Def456 (19ms)",
+          },
+        ];
+      }
+      await attempt();
+      expect(runAuto).toHaveBeenCalledTimes(2);
+      const failures = listUpdateRuns();
+      expect(failures).toHaveLength(2);
+      await closeStateDatabaseForTest();
+      await attempt();
+      if (resume.startsWith("different")) {
+        expect(runAuto).toHaveBeenCalledTimes(3);
+        return;
+      }
+      expect(runAuto).toHaveBeenCalledTimes(2);
+      expect(listUpdateRuns()).toHaveLength(2);
+      expect(log.info).toHaveBeenCalledWith(
+        expect.stringContaining("Automatic updates paused after repeated candidate-doctor failure"),
+        expect.objectContaining({
+          version: "2.0.0-beta.1",
+          runIds: failures.map((run) => run.runId),
+          nextAction: expect.stringContaining("openclaw update"),
+        }),
+      );
+      if (resume === "manual update") {
+        const manual = createUpdateRun({ trigger: "cli" });
+        finishUpdateRun(manual.runId, { status: "failed", reason: "doctor-failed" });
+      }
+      await attempt(resume === "new candidate" ? "2.0.0-beta.2" : undefined);
+      expect(runAuto).toHaveBeenCalledTimes(
+        resume === "new candidate" || resume === "manual update" ? 3 : 2,
+      );
+    },
+  );
+
+  it("does not clear a replacement campaign after sentinel settlement", async () => {
+    const campaign = createApplyingCampaign();
+    const persisted = createDeferred();
+    const release = createDeferred();
+    const write = sentinelStore.writeRestartSentinelIfUnchanged;
+    const spy = vi
+      .spyOn(sentinelStore, "writeRestartSentinelIfUnchanged")
+      .mockImplementationOnce(async (params) => {
+        const result = await write(params);
+        persisted.resolve();
+        await release.promise;
+        return result;
+      });
+    const operation = runCampaignUpdate({
+      channel: "beta",
+      mode: "npm",
+      version: "2.0.0-beta.1",
+      tag: "beta",
+      forced: false,
+      root: "/opt/openclaw",
+      log: { info: vi.fn() },
+      campaign,
+      onAttempt: vi.fn(),
+      canApply: () => true,
+      runAuto: async () => ({
+        status: "skipped",
+        message: "Already current",
+        result: {
+          status: "skipped",
+          mode: "npm",
+          reason: "already-current",
+          steps: [],
+          durationMs: 0,
+        },
+      }),
+    });
+    try {
+      await awaitGateBeforeSettlement(
+        persisted.promise,
+        operation,
+        "Campaign did not persist its sentinel",
+      );
+      campaign.clear();
+      campaign.announce({
+        target: { kind: "package", version: "3.0.0" },
+        inspect: { getQueueSize: () => 1 },
+        apply: async () => "failed",
+        onChange: () => {},
+      });
+      const replacement = campaign.getState()?.id;
+      release.resolve();
+      await expect(operation).resolves.toBe("failed");
+      expect(campaign.getState()?.id).toBe(replacement);
+    } finally {
+      release.resolve();
+      await operation;
+      spy.mockRestore();
+      campaign.clear();
+    }
   });
 
   it.each(["state", "diagnostics"] as const)(
@@ -95,25 +271,23 @@ describe("automatic campaign handoff failure", () => {
       const run = createUpdateRun({ trigger: "campaign", target: { kind: "package" } });
       const log = { info: vi.fn() };
       cancel.mockResolvedValueOnce("restored-in-process");
-      let record: MockInstance<typeof import("./update-run-codec.js").encodeRun> | undefined;
+      let record:
+        | MockInstance<
+            typeof import("../state/openclaw-state-worker-store.js").runOpenClawStateWorkerOperation
+          >
+        | undefined;
       transfer.mockImplementationOnce(async () => {
-        const codec = await import("./update-run-codec.js");
-        const encode = codec.encodeRun;
-        record = vi.spyOn(codec, "encodeRun").mockImplementation((current, options) => {
-          if (
-            failure === "state"
-              ? current.reason === "managed-service-handoff-failed"
-              : current.steps.some((step) =>
-                  step.failureFacts?.some((fact) => fact.check === "managed-service"),
-                )
-          ) {
-            record?.mockRestore();
-            throw Object.assign(new Error("diagnostic ledger is read-only"), {
-              code: "SQLITE_READONLY",
-            });
-          }
-          return encode(current, options);
-        });
+        const worker = await import("../state/openclaw-state-worker-store.js");
+        const execute = worker.runOpenClawStateWorkerOperation;
+        record = vi.spyOn(worker, "runOpenClawStateWorkerOperation");
+        if (failure === "diagnostics") {
+          record.mockImplementationOnce(execute);
+        }
+        record.mockRejectedValueOnce(
+          Object.assign(new Error("diagnostic ledger is read-only"), {
+            code: "SQLITE_READONLY",
+          }),
+        );
         throw new Error("pipe closed");
       });
       try {
@@ -159,10 +333,7 @@ describe("automatic campaign handoff failure", () => {
 
   it.each([
     { throws: false, diagnosticFailure: null },
-    { throws: true, diagnosticFailure: null },
-    { throws: true, diagnosticFailure: "read" },
-    { throws: true, diagnosticFailure: "write" },
-    { throws: true, diagnosticFailure: "stale" },
+    { throws: true, diagnosticFailure: "unavailable" },
   ] as const)(
     "preserves cause and verified recovery when transfer throws=$throws and diagnostics=$diagnosticFailure",
     async ({ throws, diagnosticFailure }) => {
@@ -172,7 +343,6 @@ describe("automatic campaign handoff failure", () => {
         transfer.mockResolvedValueOnce(false);
       }
       let stepsBeforeCancellation: ReturnType<typeof listUpdateRuns>[number]["steps"] = [];
-      let beforeCancellation: ReturnType<typeof listUpdateRuns>[number] | undefined;
       cancel.mockImplementationOnce(async () => {
         const run = expectDefined(listUpdateRuns()[0], "admitted campaign run");
         expect(run).toMatchObject({
@@ -181,7 +351,6 @@ describe("automatic campaign handoff failure", () => {
             expect.objectContaining({ step: "requested", status: "failed" }),
           ]),
         });
-        beforeCancellation = run;
         stepsBeforeCancellation = run.steps;
         recordUpdateRunVerification(run.runId, {
           rollbackOutcome: {
@@ -209,22 +378,14 @@ describe("automatic campaign handoff failure", () => {
             runAuto: async (params) => {
               const outcome = await runAutoUpdateCommand(params, log);
               if (diagnosticFailure) {
-                const reader = await import("./update-run-reader.js");
-                const readKernel = await import("./update-run-read.kernel.js");
-                const verificationOwner = await import("./update-run-verification.js");
-                const failed = () => {
-                  throw Object.assign(new Error("summary diagnostics unavailable"), {
-                    code: "SQLITE_READONLY",
-                  });
-                };
-                const fault =
-                  diagnosticFailure === "stale"
-                    ? vi.spyOn(reader, "getUpdateRun").mockReturnValueOnce(beforeCancellation)
-                    : diagnosticFailure === "read"
-                      ? vi.spyOn(readKernel, "readUpdateRunRecord").mockImplementationOnce(failed)
-                      : vi
-                          .spyOn(verificationOwner, "recordUpdateRunVerificationRecord")
-                          .mockImplementationOnce(failed);
+                const worker = await import("../state/openclaw-state-worker-store.js");
+                const fault = vi
+                  .spyOn(worker, "runOpenClawStateWorkerOperation")
+                  .mockRejectedValueOnce(
+                    Object.assign(new Error("summary diagnostics unavailable"), {
+                      code: "SQLITE_READONLY",
+                    }),
+                  );
                 restoreDiagnosticFailure = () => fault.mockRestore();
               }
               return outcome;
@@ -280,7 +441,7 @@ describe("automatic campaign handoff failure", () => {
         );
         expect(report.body).toContain("managed-service");
         expect(report.body).toContain("Rollback outcome: not needed");
-        if (diagnosticFailure && diagnosticFailure !== "stale") {
+        if (diagnosticFailure) {
           expect(log.info).toHaveBeenCalledWith(
             expect.stringContaining("Update diagnostics could not be recorded"),
           );
@@ -319,10 +480,13 @@ describe("automatic campaign handoff failure", () => {
               const read =
                 failure === "read"
                   ? vi
-                      .spyOn(await import("./update-run-ledger.js"), "getUpdateRun")
+                      .spyOn(await import("./update-run-reader.js"), "getUpdateRunAsync")
                       .mockImplementationOnce(fail)
                   : vi
-                      .spyOn(await import("./update-run-codec.js"), "encodeRun")
+                      .spyOn(
+                        await import("../state/openclaw-state-worker-store.js"),
+                        "runOpenClawStateWorkerOperation",
+                      )
                       .mockImplementationOnce(fail);
               restoreRead = () => read.mockRestore();
               throw original;

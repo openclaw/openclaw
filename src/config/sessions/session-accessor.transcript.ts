@@ -1,25 +1,35 @@
-import { safeParseJsonRecord } from "@openclaw/normalization-core";
-import "./session-accessor.sqlite-compaction.js";
-import "./session-accessor.sqlite-delta.js";
-import "./session-accessor.sqlite-entry.js";
-import "./session-accessor.sqlite-events.js";
-import "./session-accessor.sqlite-metadata-read.js";
-import { readTranscriptStatsSync } from "./session-accessor.sqlite-read.js";
-import "./session-accessor.sqlite-suffix-read.js";
-import "./session-accessor.sqlite-transcript-message-rewrite.js";
-import { trimTranscriptForManualCompact } from "./session-accessor.sqlite-transcript-write.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
+import { trimTranscriptForManualCompact } from "./session-accessor.sqlite-compaction.js";
 import type {
   SessionTranscriptRuntimeScope,
   SessionTranscriptManualTrimResult,
   SessionTranscriptManualTrimPreflightResult,
 } from "./session-accessor.types.js";
 import {
-  scanSessionTranscriptTree,
-  selectSessionTranscriptTreePathNodes,
-} from "./transcript-tree.js";
+  captureSessionActorStorageOwner,
+  withSessionActorStorage,
+} from "./session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
+import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
+import { selectManualCompactTranscriptLines } from "./session-manual-compact-selection.js";
+import { trimSessionTranscriptInWorker } from "./session-manual-compact.js";
+import type { ManualCompactValidation } from "./session-manual-compact.worker.js";
+import {
+  acceptSessionSourceValidation,
+  prepareSessionSourceAuthority,
+  releaseSessionSourceAuthorities,
+  type SessionSourceAssertion,
+} from "./session-source-authority.js";
+import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
+import { readTranscriptStatsAsync } from "./session-transcript-stats.js";
+import { resolveSessionWorkStartError } from "./session-work-start.js";
+import { SessionWorkStartChangedError } from "./work-start-error.js";
 export { persistCompactionBoundaryWithSessionEntrySync } from "./session-accessor.sqlite-compaction.js";
+export { persistCompactionBoundaryWithSessionEntryAsync } from "./session-accessor.sqlite-compaction-runtime.js";
 export { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 export { resolveSessionKeyBySessionId as resolveTranscriptSessionKeyBySessionId } from "./session-accessor.sqlite-entry.js";
+export { resolveSessionKeyBySessionIdAsync as resolveTranscriptSessionKeyBySessionIdAsync } from "./session-accessor.transcript-target.js";
 export { publishTranscriptUpdate } from "./session-accessor.sqlite-events.js";
 export {
   hasSessionTranscriptEventsSync,
@@ -27,11 +37,9 @@ export {
   readTranscriptMutationStateSync,
 } from "./session-accessor.sqlite-metadata-read.js";
 export {
-  hasSessionTranscriptMessage,
   inspectTranscriptEventsSync,
   loadLatestAssistantText as readLatestTranscriptAssistantText,
   loadTranscriptEventRowsAfterSeqSync,
-  loadTranscriptEvents,
   loadTranscriptEventsSync,
   loadTranscriptHeaderSync,
   readTranscriptExportSnapshotReadOnlySync,
@@ -41,26 +49,20 @@ export {
   readTranscriptEventAtSeqSync,
   readTranscriptIdentityByEventId,
 } from "./session-accessor.sqlite-read.js";
+export { hasSessionTranscriptMessage } from "./session-transcript-message-presence.js";
+export { loadSessionTranscriptEvents as loadTranscriptEvents } from "./session-transcript-events.js";
 export {
-  loadTranscriptSuffixEventsBoundedSync,
-  readPreviousIndexedTranscriptEventSync,
-} from "./session-accessor.sqlite-suffix-read.js";
-export {
-  rewriteAssistantTranscriptMessageForRun,
-  rewriteTranscriptMessageAtAnchor,
-} from "./session-accessor.sqlite-transcript-message-rewrite.js";
+  rewritePreparedAssistantTranscriptMessageForRun as rewriteAssistantTranscriptMessageForRun,
+  rewritePreparedTranscriptMessageAtAnchor as rewriteTranscriptMessageAtAnchor,
+} from "./session-message-rewrite.js";
 export {
   appendTranscriptEvent,
-  appendTranscriptEventSync,
   appendTranscriptMessage,
   appendTranscriptMessageSync,
-  replaceTranscriptEvents,
-  replaceTranscriptEventsSync,
-  replaceSessionWithBranchedTranscript,
   replaceTranscriptSuffixEventsSync,
   rewriteTranscriptEventRowsExact,
   withTranscriptWriteLock,
-  withTranscriptWriteTransaction,
+  withTranscriptWriteSequence,
 } from "./session-accessor.sqlite-transcript-write.js";
 
 export { emitSessionTranscriptUpdate as emitTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -74,7 +76,7 @@ export async function preflightSessionTranscriptForManualCompact(
   scope: SessionTranscriptRuntimeScope,
   params: { maxLines: number; sessionFile?: string },
 ): Promise<SessionTranscriptManualTrimPreflightResult> {
-  const eventCount = readTranscriptStatsSync(scope).eventCount;
+  const { eventCount } = await readTranscriptStatsAsync(scope);
   if (eventCount === 0) {
     return { compacted: false, reason: "no transcript" };
   }
@@ -83,123 +85,305 @@ export async function preflightSessionTranscriptForManualCompact(
   return eventCount > maxLines ? { compacted: true } : { compacted: false, kept: eventCount };
 }
 
+type ManualCompactAuthority = {
+  source: SessionSourceAssertion;
+  assertHostCurrent: () => void;
+  expectedLifecycleRevision: string | undefined;
+  expectedSource?: CapturedSessionEntryReadSource;
+};
+
 export async function trimSessionTranscriptForManualCompact(
   scope: SessionTranscriptRuntimeScope,
-  params: { maxLines: number; nowMs?: number; sessionFile?: string },
+  params: {
+    maxLines: number;
+    nowMs?: number;
+    sessionFile?: string;
+    authority?: ManualCompactAuthority;
+  },
 ): Promise<SessionTranscriptManualTrimResult> {
-  const maxLines = Math.max(1, Math.floor(params.maxLines));
-  const maxTailLines = Math.max(0, maxLines - 1);
+  const authority = params.authority;
+  const memory = captureSessionActorStorageOwner(scope, {
+    assertCurrent: () => authority?.assertHostCurrent(),
+    authorize: () => authority?.assertHostCurrent(),
+  });
+  if (memory) {
+    if (!memory.owner && !memory.binding) {
+      return { compacted: false, reason: "no transcript" };
+    }
+    const source = authority ? await prepareSessionSourceAuthority(authority.source) : undefined;
+    const assertCurrent = () => {
+      memory.owner?.assertCurrent();
+      memory.binding?.actor.assertReadable();
+      memory.authority.assertCurrent();
+    };
+    try {
+      return (
+        (await withSessionActorStorage(
+          scope,
+          {
+            lifetime: { assertCurrent, assertReadable: assertCurrent },
+            authority: memory.authority,
+          },
+          async (binding) => {
+            const expected = authority?.expectedSource;
+            if (
+              expected &&
+              (expected.path !== binding.path ||
+                expected.agentId !== binding.agentId ||
+                expected.databaseIdentity !== binding.actor.target.database.incarnation)
+            ) {
+              throw new Error("Session compaction changed its memory owner");
+            }
+            return readSessionActorStorageResult(
+              await binding.actor.storage.mutate(
+                {
+                  type: "session.transcript.manualCompact",
+                  input: {
+                    scope: { ...scope, storePath: binding.path },
+                    maxLines: params.maxLines,
+                    nowMs: params.nowMs,
+                    sources: source?.checks.map(({ predicate }) => predicate),
+                  },
+                },
+                {
+                  assertCurrent,
+                  authorize(stage, facts, publication) {
+                    binding.authority.authorize(stage, facts, publication);
+                    if (
+                      authority &&
+                      stage === "commit" &&
+                      facts.target.sessionKey === scope.sessionKey &&
+                      (!facts.entry ||
+                        facts.entry.sessionId !== scope.sessionId ||
+                        facts.entry.lifecycleRevision !== authority.expectedLifecycleRevision ||
+                        resolveSessionWorkStartError(scope.sessionKey, facts.entry))
+                    ) {
+                      throw new SessionWorkStartChangedError(
+                        "Session changed before compaction. Retry.",
+                      );
+                    }
+                    if (
+                      source &&
+                      isRecord(publication) &&
+                      publication.kind === "session-manual-compact-validated"
+                    ) {
+                      // SAFETY: The paired memory kernel supplies this command's validated source facts.
+                      const validation = publication as Pick<
+                        ManualCompactValidation,
+                        "kind" | "sourceValidation"
+                      >;
+                      acceptSessionSourceValidation(source, validation.sourceValidation);
+                    }
+                  },
+                },
+                { beforeCommit: () => source?.assertCurrent() },
+              ),
+            );
+          },
+        )) ?? { compacted: false, reason: "no transcript" }
+      );
+    } finally {
+      if (source) {
+        await releaseSessionSourceAuthorities([source]);
+      }
+    }
+  }
+  if (!authority) {
+    return withSessionTranscriptReadSource(
+      scope,
+      async ({ scope: captured, resolved, expectedIdentity, assertCurrent }) => {
+        const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
+        assertCurrent();
+        await restoreSessionColdTranscript(captured, assertCurrent);
+        assertCurrent();
+        return trimSessionTranscriptInWorker(
+          {
+            ...resolved,
+            sessionKey: resolved.sessionKey ?? scope.sessionKey,
+            path: captured.storePath,
+          },
+          params,
+          {
+            assertCurrent,
+            databaseIdentity: expectedIdentity?.key.slice("file:".length),
+          },
+        );
+      },
+    );
+  }
+  const assertEntryCurrent = (entry: Parameters<typeof resolveSessionWorkStartError>[1]) => {
+    if (
+      !entry ||
+      entry.sessionId !== scope.sessionId ||
+      entry.lifecycleRevision !== authority.expectedLifecycleRevision ||
+      resolveSessionWorkStartError(scope.sessionKey, entry)
+    ) {
+      throw new SessionWorkStartChangedError("Session changed before compaction. Retry.");
+    }
+  };
+  return withSessionTranscriptReadSource(
+    scope,
+    async ({ scope: captured, resolved, owner, expectedIdentity, assertCurrent: assertReader }) => {
+      const expectedSource = authority.expectedSource;
+      const assertPhysicalSource = () => {
+        if (expectedSource && typeof expectedSource.databaseIdentity === "string") {
+          if (captured.storePath !== expectedSource.path) {
+            throw new Error("Session compaction changed its physical store");
+          }
+          assertExistingDatabaseIdentity(
+            captured.storePath,
+            `file:${expectedSource.databaseIdentity}`,
+            expectedSource.databaseBirthtime,
+          );
+        }
+      };
+      assertPhysicalSource();
+      const source = await prepareSessionSourceAuthority(authority.source);
+      const nativeCommit = source.nativeSource || source.hasOpaqueCheck;
+      try {
+        const assertOwnerCurrent = () => {
+          assertReader();
+          assertPhysicalSource();
+          authority.assertHostCurrent();
+        };
+        const assertCurrent = () => {
+          assertOwnerCurrent();
+          if (source.assertPreparedCurrent) {
+            source.assertPreparedCurrent();
+          } else if (!nativeCommit) {
+            source.assertCurrent();
+          }
+        };
+        assertCurrent();
+        const sources = source.checks.map(({ predicate }) => predicate);
+        const read = await owner.readExactEntries({
+          sessionKeys: [scope.sessionKey],
+          projection: "exact",
+          expectedIdentity: expectedIdentity && {
+            ...expectedIdentity,
+            canonicalPath: captured.storePath,
+          },
+          env: captured.env,
+          manualCompact: { sessionId: resolved.sessionId, sources },
+        });
+        assertCurrent();
+        const refused = read.manualCompact?.refusedSource;
+        if (refused) {
+          source.checks[refused.index]!.refuse(refused.facts);
+        }
+        assertEntryCurrent(read.entries[0]?.entry);
+        if (nativeCommit) {
+          authority.source();
+        }
+        const preparation = {
+          snapshot: read.entries,
+          assertEntryCurrent,
+          assertCurrent,
+          // Released opaque callbacks require their native transaction-local fence.
+          assertCommitCurrent: () => {
+            assertCurrent();
+            authority.source();
+          },
+          restore: async () => {
+            const {
+              restoreSessionColdTranscript,
+              SessionColdSourceReboundError,
+              SessionColdTurnReboundError,
+            } = await import("./session-cold-storage.js");
+            assertCurrent();
+            try {
+              await restoreSessionColdTranscript(
+                captured,
+                assertCurrent,
+                {
+                  target: resolved,
+                  acceptSourceValidation: (validation) =>
+                    acceptSessionSourceValidation(source, validation),
+                  readMetadata: async (phase) =>
+                    phase === "initial"
+                      ? read.manualCompact?.archive
+                      : (
+                          await owner.readColdMetadata({
+                            sessionId: resolved.sessionId,
+                            env: captured.env,
+                          })
+                        ).archive,
+                },
+                {
+                  kind: "turn",
+                  agentId: resolved.agentId,
+                  sessionKey: scope.sessionKey,
+                  options: {
+                    keyFormat: "agent-qualified",
+                    expectedSessionId: resolved.sessionId,
+                    selectedSessionId: resolved.sessionId,
+                    selectedLifecycleRevision: authority.expectedLifecycleRevision ?? null,
+                  },
+                  sources,
+                  requireActive: true,
+                },
+              );
+            } catch (error) {
+              if (error instanceof SessionColdTurnReboundError) {
+                throw new SessionWorkStartChangedError(error.message);
+              }
+              if (error instanceof SessionColdSourceReboundError) {
+                source.checks[error.refusal.index]!.refuse(error.refusal.facts);
+              }
+              throw error;
+            }
+            assertCurrent();
+          },
+        };
+        if (nativeCommit) {
+          return await trimPreparedSessionTranscriptForManualCompact(
+            { ...captured, sessionKey: scope.sessionKey },
+            params,
+            preparation,
+          );
+        }
+        await preparation.restore();
+        assertCurrent();
+        return await trimSessionTranscriptInWorker(
+          {
+            ...resolved,
+            sessionKey: resolved.sessionKey ?? scope.sessionKey,
+            path: captured.storePath,
+          },
+          { maxLines: params.maxLines, nowMs: params.nowMs, entries: read.entries },
+          {
+            assertCurrent: assertOwnerCurrent,
+            source,
+            databaseIdentity: expectedIdentity?.key.slice("file:".length),
+          },
+        );
+      } finally {
+        await releaseSessionSourceAuthorities([source]);
+      }
+    },
+  );
+}
+
+async function trimPreparedSessionTranscriptForManualCompact(
+  scope: SessionTranscriptRuntimeScope,
+  params: { maxLines: number; nowMs?: number; sessionFile?: string },
+  preparation?: NonNullable<Parameters<typeof trimTranscriptForManualCompact>[2]>["preparation"],
+): Promise<SessionTranscriptManualTrimResult> {
   let declined: SessionTranscriptManualTrimResult = { compacted: false, reason: "no transcript" };
   const trimmed = await trimTranscriptForManualCompact(
     scope,
     (lines) => {
-      if (lines.length === 0) {
-        declined = { compacted: false, reason: "no transcript" };
-        return null;
-      }
-      if (lines.length <= maxLines) {
-        declined = { compacted: false, kept: lines.length };
-        return null;
-      }
-      const tailLines = lines.slice(1);
-      const retainedLines = normalizeManualCompactTranscriptLines(
-        lines[0],
-        maxTailLines > 0 ? tailLines.slice(-maxTailLines) : [],
-      );
-      if (!retainedLines) {
-        declined = { compacted: false, kept: 0 };
-        return null;
-      }
-      return retainedLines;
+      const selected = selectManualCompactTranscriptLines(lines, params.maxLines);
+      declined = selected.result;
+      return selected.result.compacted ? selected.lines : null;
     },
-    params.nowMs === undefined ? {} : { nowMs: params.nowMs },
+    { nowMs: params.nowMs, preparation },
   );
   if (!trimmed.trimmed) {
     return declined;
   }
 
   return { compacted: true, kept: trimmed.kept };
-}
-
-function parseManualCompactTranscriptRecord(line: string): Record<string, unknown> | null {
-  return safeParseJsonRecord(line) ?? null;
-}
-
-function normalizeManualCompactTranscriptLines(
-  headerLine: string | undefined,
-  tailLines: readonly string[],
-): string[] | null {
-  if (!headerLine) {
-    return null;
-  }
-  const header = parseManualCompactTranscriptRecord(headerLine);
-  if (header?.type !== "session" || typeof header.id !== "string") {
-    return null;
-  }
-
-  const records = tailLines
-    .map(parseManualCompactTranscriptRecord)
-    .filter((record): record is Record<string, unknown> => record !== null);
-  const retainedIds = new Set<string>();
-  const transparentParents = new Map<string, string | null>();
-  const normalizedRecords: Record<string, unknown>[] = [];
-  for (const record of records) {
-    let parentId = record.parentId;
-    const seenTransparentParents = new Set<string>();
-    while (
-      typeof parentId === "string" &&
-      transparentParents.has(parentId) &&
-      !seenTransparentParents.has(parentId)
-    ) {
-      seenTransparentParents.add(parentId);
-      parentId = transparentParents.get(parentId) ?? null;
-    }
-    let next =
-      typeof parentId === "string" && !retainedIds.has(parentId)
-        ? { ...record, parentId: null }
-        : parentId !== record.parentId
-          ? { ...record, parentId }
-          : record;
-    if (next.type === "leaf") {
-      const targetId = next.targetId;
-      const validTargetId =
-        targetId === null || (typeof targetId === "string" && targetId.trim().length > 0);
-      if (!validTargetId && typeof next.id === "string") {
-        transparentParents.set(
-          next.id,
-          next.parentId === null || typeof next.parentId === "string" ? next.parentId : null,
-        );
-      }
-      if (typeof targetId === "string" && targetId.trim() && !retainedIds.has(targetId)) {
-        // The selected branch fell outside the retained window. Select an
-        // empty root instead of accidentally activating abandoned or side rows.
-        next = { ...next, targetId: null, appendParentId: null };
-      } else if (
-        validTargetId &&
-        typeof next.appendParentId === "string" &&
-        !retainedIds.has(next.appendParentId)
-      ) {
-        next = { ...next, appendParentId: targetId };
-      }
-    }
-    if ((next.type === "compaction" || next.type === "reset") && typeof next.id === "string") {
-      const firstKeptEntryId = next.firstKeptEntryId;
-      if (typeof firstKeptEntryId === "string" && firstKeptEntryId !== next.id) {
-        const tree = scanSessionTranscriptTree([...normalizedRecords, next]);
-        const branchPath = selectSessionTranscriptTreePathNodes(tree, next.id);
-        if (!branchPath.some((node) => node.id === firstKeptEntryId)) {
-          // Replay starts at the earliest retained entry on this compaction's
-          // normalized branch, never at an abandoned row earlier in file order.
-          next = { ...next, firstKeptEntryId: branchPath[0]?.id ?? next.id };
-        }
-      }
-    }
-    normalizedRecords.push(next);
-    if (typeof next.id === "string" && next.id.trim()) {
-      retainedIds.add(next.id);
-    }
-  }
-  return [JSON.stringify(header), ...normalizedRecords.map((record) => JSON.stringify(record))];
 }
 
 export { findTranscriptEvent } from "./session-transcript-match.js";

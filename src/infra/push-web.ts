@@ -1,13 +1,18 @@
-// Stores and verifies web push subscriptions and delivery payloads.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { expectDefined, normalizeOptionalString } from "@openclaw/normalization-core";
+import {
+  extractErrorCode,
+  formatErrorMessage,
+  readErrorName,
+} from "@openclaw/normalization-core/error-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../config/paths.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { pathMayExistSync } from "./path-existence.js";
 import {
   WebPushSubscriptionBindingError,
-  createWebPushVapidKeyPair,
   deleteBoundWebPushSubscription,
   deleteWebPushSubscriptionIfCurrent,
   hashWebPushEndpoint,
@@ -32,6 +37,8 @@ type WebPushSendResult = {
   statusCode?: number;
   error?: string;
 };
+
+const log = createSubsystemLogger("gateway/web-push");
 
 const LEGACY_WEB_PUSH_PATHS = ["push/web-push-subscriptions.json", "push/vapid-keys.json"] as const;
 
@@ -102,12 +109,11 @@ export async function resolveVapidKeys(baseDir?: string): Promise<VapidKeyPair> 
   const webPush = await loadWebPushRuntime();
   const keys = webPush.generateVAPIDKeys();
   const pair = await insertVapidKeyPairIfAbsent({
-    candidate: createWebPushVapidKeyPair(
-      keys.publicKey,
-      keys.privateKey,
-      resolveVapidSubjectFromEnv(),
-    ),
-    nowMs: Date.now(),
+    candidate: {
+      publicKey: keys.publicKey,
+      privateKey: keys.privateKey,
+      subject: resolveVapidSubjectFromEnv(),
+    },
     stateDir: baseDir,
   });
   return { ...pair, subject: resolveVapidSubjectFromEnv() };
@@ -119,12 +125,11 @@ function resolveVapidSubjectFromEnv(): string {
   );
 }
 
-type RegisterWebPushParams = {
-  endpoint: string;
-  keys: { p256dh: string; auth: string };
-  binding?: { deviceId: string; userProfileId: string | null };
+type RegisterWebPushParams = Pick<
+  Parameters<typeof upsertWebPushSubscription>[0],
+  "endpoint" | "keys" | "binding" | "guard"
+> & {
   baseDir?: string;
-  guard?: WebPushMutationGuard;
 };
 
 export async function registerWebPushSubscription(
@@ -201,14 +206,20 @@ async function sendPreparedWebPushNotification(
       statusCode: result.statusCode,
     };
   } catch (err: unknown) {
-    const statusCode =
-      typeof err === "object" && err !== null && "statusCode" in err
-        ? (err as { statusCode: number }).statusCode
-        : undefined;
-    const message =
-      typeof err === "object" && err !== null && "message" in err
-        ? (err as { message: string }).message
-        : "unknown error";
+    const failure = isRecord(err) ? err : undefined;
+    const statusCode = typeof failure?.statusCode === "number" ? failure.statusCode : undefined;
+    const message = formatErrorMessage(err);
+    log.warn("Web Push delivery failed", {
+      subscriptionId: subscription.subscriptionId,
+      endpointHost: new URL(subscription.endpoint).host,
+      statusCode,
+      error: message,
+      errorName: readErrorName(err),
+      errorCode: extractErrorCode(err),
+      responseBody: typeof failure?.body === "string" ? failure.body : undefined,
+      retry: false,
+      subscriptionAction: statusCode === 404 || statusCode === 410 ? "prune" : "retain",
+    });
     return {
       ok: false,
       subscriptionId: subscription.subscriptionId,
@@ -230,7 +241,7 @@ async function sendPreparedWebPushNotifications(params: {
     return [];
   }
 
-  const results = await Promise.allSettled(
+  const mapped: WebPushSendResult[] = await Promise.all(
     subscriptions.map((subscription) =>
       sendPreparedWebPushNotification(
         webPush,
@@ -241,22 +252,12 @@ async function sendPreparedWebPushNotifications(params: {
     ),
   );
 
-  const mapped = results.map((r, i) =>
-    r.status === "fulfilled"
-      ? r.value
-      : {
-          ok: false,
-          subscriptionId: expectDefined(subscriptions[i], "subscriptions entry at i")
-            .subscriptionId,
-          error: r.reason instanceof Error ? r.reason.message : "unknown error",
-        },
-  );
-
   // Clean up expired subscriptions (HTTP 410 Gone or 404 Not Found) per Web Push spec.
-  const expiredSubscriptions = mapped
-    .map((result, i) => ({ result, sub: subscriptions[i] }))
-    .filter(({ result }) => !result.ok && (result.statusCode === 410 || result.statusCode === 404))
-    .map(({ sub }) => expectDefined(sub, "push web sub"));
+  const expiredSubscriptions = mapped.flatMap((result, i) =>
+    !result.ok && (result.statusCode === 410 || result.statusCode === 404)
+      ? [expectDefined(subscriptions[i], "push web sub")]
+      : [],
+  );
 
   for (const subscription of expiredSubscriptions) {
     try {
@@ -266,8 +267,16 @@ async function sendPreparedWebPushNotifications(params: {
         subscription,
         stateDir: params.baseDir,
       });
-    } catch {
-      // Delivery already completed. Cleanup stays best-effort so callers do not retry valid sends.
+    } catch (error) {
+      // Keep completed results: retrying this batch would duplicate successful sends.
+      log.warn("Web Push expired subscription cleanup failed", {
+        subscriptionId: subscription.subscriptionId,
+        endpointHost: new URL(subscription.endpoint).host,
+        error: formatErrorMessage(error),
+        errorName: readErrorName(error),
+        errorCode: extractErrorCode(error),
+        retry: false,
+      });
     }
   }
 
@@ -278,11 +287,9 @@ async function sendPreparedWebPushNotifications(params: {
 export async function prepareWebPushNotificationSender(
   baseDir?: string,
 ): Promise<
-  (params: {
-    subscriptions: readonly WebPushSubscription[];
-    payload: WebPushPayload;
-    deliveryOptions?: WebPushDeliveryOptions;
-  }) => Promise<WebPushSendResult[]>
+  (
+    params: Omit<Parameters<typeof sendPreparedWebPushNotifications>[0], "webPush" | "baseDir">,
+  ) => Promise<WebPushSendResult[]>
 > {
   assertLegacyWebPushMigrationComplete(baseDir);
   const vapidKeys = await resolveVapidKeys(baseDir);

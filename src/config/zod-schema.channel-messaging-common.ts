@@ -1,4 +1,3 @@
-// Shared Zod leaves for bundled channel messaging configuration.
 import { z, type ZodRawShape, type ZodTypeAny } from "zod";
 import { NativeExecApprovalEnableModeSchema } from "./zod-schema.approvals.js";
 import {
@@ -21,34 +20,35 @@ import {
 export { ChannelBotLoopProtectionSchema } from "./zod-schema.channel-bot-loop.js";
 
 export const UnifiedStreamingModeSchema = z.enum(["off", "partial", "block", "progress"]);
-export const ChannelStreamingPreviewSchema = z
-  .object({
-    chunk: BlockStreamingChunkSchema.optional(),
-    toolProgress: z.boolean().optional(),
-    commandText: z.enum(["raw", "status"]).optional(),
-  })
-  .strict();
-export const ChannelStreamingProgressSchema = z
-  .object({
-    label: z.union([z.string(), z.literal(false)]).optional(),
-    labels: z.array(z.string()).optional(),
-    maxLines: z.number().int().positive().optional(),
-    maxLineChars: z.number().int().positive().optional(),
-    toolProgress: z.boolean().optional(),
-    commandText: z.enum(["raw", "status"]).optional(),
-    commentary: z.boolean().optional(),
-    narration: z.boolean().optional(),
-  })
-  .strict();
-export const ChannelPreviewStreamingConfigSchema = z
-  .object({
-    mode: UnifiedStreamingModeSchema.optional(),
-    chunkMode: TextChunkModeSchema.optional(),
-    preview: ChannelStreamingPreviewSchema.optional(),
-    progress: ChannelStreamingProgressSchema.optional(),
-    block: ChannelStreamingBlockSchema.optional(),
-  })
-  .strict();
+export const ChannelThreadBindingsSchema = z.strictObject({
+  enabled: z.boolean().optional(),
+  idleHours: z.number().nonnegative().optional(),
+  maxAgeHours: z.number().nonnegative().optional(),
+  spawnSessions: z.boolean().optional(),
+  defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
+});
+export const ChannelStreamingPreviewSchema = z.strictObject({
+  chunk: BlockStreamingChunkSchema.optional(),
+  toolProgress: z.boolean().optional(),
+  commandText: z.enum(["raw", "status"]).optional(),
+});
+export const ChannelStreamingProgressSchema = z.strictObject({
+  label: z.union([z.string(), z.literal(false)]).optional(),
+  labels: z.array(z.string()).optional(),
+  maxLines: z.number().int().positive().optional(),
+  maxLineChars: z.number().int().positive().optional(),
+  toolProgress: z.boolean().optional(),
+  commandText: z.enum(["raw", "status"]).optional(),
+  commentary: z.boolean().optional(),
+  narration: z.boolean().optional(),
+});
+export const ChannelPreviewStreamingConfigSchema = z.strictObject({
+  mode: UnifiedStreamingModeSchema.optional(),
+  chunkMode: TextChunkModeSchema.optional(),
+  preview: ChannelStreamingPreviewSchema.optional(),
+  progress: ChannelStreamingProgressSchema.optional(),
+  block: ChannelStreamingBlockSchema.optional(),
+});
 
 const CommonCapabilitiesSchema = z.array(z.string()).optional();
 const CommonIdListSchema = z.array(z.union([z.string(), z.number()])).optional();
@@ -66,32 +66,30 @@ const ChannelAccountPolicyDefaults = {
 };
 
 /** Canonical optional account contract shared by bundled messaging channels. */
-export const CommonChannelAccountSchema = z
-  .object({
-    name: z.string().optional(),
-    capabilities: CommonCapabilitiesSchema,
-    markdown: MarkdownConfigSchema,
-    configWrites: z.boolean().optional(),
-    enabled: z.boolean().optional(),
-    dmPolicy: DmPolicySchema.optional(),
-    allowFrom: CommonIdListSchema,
-    defaultTo: CommonDefaultToSchema,
-    groupAllowFrom: CommonIdListSchema,
-    groupPolicy: GroupPolicySchema.optional(),
-    mentionPatterns: CommonMentionPatternsSchema,
-    contextVisibility: ContextVisibilityModeSchema.optional(),
-    historyLimit: z.number().int().min(0).optional(),
-    dmHistoryLimit: z.number().int().min(0).optional(),
-    dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
-    textChunkLimit: z.number().int().positive().optional(),
-    streaming: CommonStreamingSchema,
-    heartbeatVisibility: ChannelHeartbeatVisibilitySchema,
-    healthMonitor: ChannelHealthMonitorSchema,
-    responsePrefix: z.string().optional(),
-    mediaMaxMb: CommonMediaMaxMbSchema,
-    replyToMode: CommonReplyToModeSchema,
-  })
-  .strict();
+export const CommonChannelAccountSchema = z.strictObject({
+  name: z.string().optional(),
+  capabilities: CommonCapabilitiesSchema,
+  markdown: MarkdownConfigSchema,
+  configWrites: z.boolean().optional(),
+  enabled: z.boolean().optional(),
+  dmPolicy: DmPolicySchema.optional(),
+  allowFrom: CommonIdListSchema,
+  defaultTo: CommonDefaultToSchema,
+  groupAllowFrom: CommonIdListSchema,
+  groupPolicy: GroupPolicySchema.optional(),
+  mentionPatterns: CommonMentionPatternsSchema,
+  contextVisibility: ContextVisibilityModeSchema.optional(),
+  historyLimit: z.number().int().min(0).optional(),
+  dmHistoryLimit: z.number().int().min(0).optional(),
+  dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
+  textChunkLimit: z.number().int().positive().optional(),
+  streaming: CommonStreamingSchema,
+  heartbeatVisibility: ChannelHeartbeatVisibilitySchema,
+  healthMonitor: ChannelHealthMonitorSchema,
+  responsePrefix: z.string().optional(),
+  mediaMaxMb: CommonMediaMaxMbSchema,
+  replyToMode: CommonReplyToModeSchema,
+});
 
 type CommonChannelAccountField = keyof typeof CommonChannelAccountSchema.shape;
 
@@ -157,12 +155,13 @@ export function buildChannelAllowBotsSchema<
 }
 
 /** Build native exec-approval routing with channel-specific approver ids and extras. */
+// oxlint-disable-next-line typescript/no-generated-empty-object-type -- A keyless Zod shape preserves named fields without a string index signature.
 export function buildChannelExecApprovalsSchema<T extends ZodRawShape = Record<never, never>>(
   approverSchema: ZodTypeAny,
   extraShape?: T,
 ) {
   return z
-    .object({
+    .strictObject({
       enabled: NativeExecApprovalEnableModeSchema.optional(),
       approvers: z.array(approverSchema).optional(),
       agentFilter: z.array(z.string()).optional(),
@@ -170,7 +169,6 @@ export function buildChannelExecApprovalsSchema<T extends ZodRawShape = Record<n
       target: z.enum(["dm", "channel", "both"]).optional(),
       ...(extraShape ?? ({} as T)),
     })
-    .strict()
     .optional();
 }
 
@@ -189,16 +187,14 @@ type EnumSchema<TValues extends StringEnumValues> = z.ZodEnum<{
 
 type EnumShape<TValues, TKey extends string> = TValues extends StringEnumValues
   ? { [TResultKey in TKey]: z.ZodOptional<EnumSchema<TValues>> }
-  : Record<never, never>;
+  : object;
 type ChannelReactionShape<TOptions extends ChannelReactionShapeOptions> = ZodRawShape &
   EnumShape<TOptions["notificationModes"], "reactionNotifications"> &
   EnumShape<TOptions["reactionLevels"], "reactionLevel"> &
   (TOptions["reactionAllowlist"] extends true
     ? { reactionAllowlist: z.ZodOptional<z.ZodArray<z.ZodUnion<[z.ZodString, z.ZodNumber]>>> }
-    : Record<never, never>) &
-  (TOptions["ackReaction"] extends ZodTypeAny
-    ? { ackReaction: TOptions["ackReaction"] }
-    : Record<never, never>);
+    : object) &
+  (TOptions["ackReaction"] extends ZodTypeAny ? { ackReaction: TOptions["ackReaction"] } : object);
 
 /** Build the repeated reaction leaves while retaining each channel's exact enum. */
 export function buildChannelReactionShape<const TOptions extends ChannelReactionShapeOptions>(

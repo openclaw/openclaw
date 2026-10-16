@@ -37,6 +37,17 @@ export async function readText(filePath: string | undefined): Promise<string | u
   return filePath ? await fs.readFile(filePath, "utf8").catch(() => undefined) : undefined;
 }
 
+export async function readJsonObject(
+  filePath: string | undefined,
+): Promise<Record<string, unknown>> {
+  const raw = await readText(filePath);
+  try {
+    return raw ? asNonArrayRecord(JSON.parse(raw)) : {};
+  } catch {
+    return {};
+  }
+}
+
 export function parseEnv(content: string | undefined): Record<string, string> {
   return content ? parseDotenv(content) : {};
 }

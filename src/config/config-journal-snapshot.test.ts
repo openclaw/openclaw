@@ -2,17 +2,22 @@
 import fs, { promises as fsPromises } from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   fingerprintConfigSnapshotAuthoredConfig,
-  readLatestConfigSnapshotAuditRecord,
   readLatestConfigSnapshotAuditRecordAsync,
-  restoreConfigSnapshotAuditRecord,
-  upsertConfigSnapshotAuditRecord,
+  restoreConfigSnapshotAuditRecordAsync,
   upsertConfigSnapshotAuditRecordAsync,
 } from "./config-journal-snapshot.js";
+import {
+  CONFIG_SNAPSHOT_KEY,
+  CONFIG_SNAPSHOT_SCOPE,
+  type ConfigSnapshotAuditRecord,
+} from "./config-journal-snapshot.kernel.js";
 
 describe("config journal snapshots", () => {
   const suiteRootTracker = createSuiteTempRootTracker({
@@ -95,7 +100,7 @@ describe("config journal snapshots", () => {
     const configPath = path.join(home, ".openclaw", "openclaw.json");
     const env = { OPENCLAW_STATE_DIR: path.join(home, ".openclaw") } as NodeJS.ProcessEnv;
     const context = { env, homedir: () => home };
-    const prior = upsertConfigSnapshotAuditRecord({
+    const prior = await upsertConfigSnapshotAuditRecordAsync({
       ...context,
       configPath,
       rawHash: "prior",
@@ -115,52 +120,107 @@ describe("config journal snapshots", () => {
       authoredConfig: { gateway: { port: 18792 } },
       expectedSnapshot: written,
     });
-    upsertConfigSnapshotAuditRecord({
-      ...context,
+    // A separate native writer can advance the slot while this actor is queued.
+    createSqliteAuditRecordStore<ConfigSnapshotAuditRecord>({
+      scope: CONFIG_SNAPSHOT_SCOPE,
+      maxEntries: 1,
+      env,
+    }).upsert(CONFIG_SNAPSHOT_KEY, {
       configPath,
       rawHash: "newer-process",
-      authoredConfig: { gateway: { port: 18791 } },
+      fingerprintedAuthoredConfig: fingerprintConfigSnapshotAuthoredConfig(
+        { gateway: { port: 18791 } },
+        context,
+      ),
     });
     await expect(pending).resolves.toBeNull();
 
-    restoreConfigSnapshotAuditRecord({
+    await restoreConfigSnapshotAuditRecordAsync({
       ...context,
       snapshot: prior,
       expectedSnapshot: written,
     });
 
-    expect(readLatestConfigSnapshotAuditRecord(context)).toMatchObject({
+    expect(await readLatestConfigSnapshotAuditRecordAsync(context)).toMatchObject({
       rawHash: "newer-process",
     });
-    expect(await readLatestConfigSnapshotAuditRecordAsync(context)).toEqual(
-      readLatestConfigSnapshotAuditRecord(context),
-    );
   });
 
-  it("refuses a queued publication after its owner is revoked", async () => {
-    const home = await suiteRootTracker.make("snapshot-revoked-publication");
-    const env = { OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
-    const context = { env, homedir: () => home };
-    const configPath = path.join(home, ".openclaw", "openclaw.json");
-    const prior = await upsertConfigSnapshotAuditRecordAsync({
-      ...context,
-      configPath,
-      rawHash: "prior",
-      authoredConfig: { gateway: { port: 18789 } },
-    });
-    expect(prior).not.toBeNull();
-    let revoked = false;
-    const pending = upsertConfigSnapshotAuditRecordAsync(
-      { ...context, configPath, rawHash: "revoked", authoredConfig: {}, expectedSnapshot: prior },
-      () => {
+  it.each(["publication", "restoration"] as const)(
+    "refuses queued %s after its owner is revoked",
+    async (operation) => {
+      const home = await suiteRootTracker.make("snapshot-revoked-publication");
+      const env = { OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
+      const context = { env, homedir: () => home };
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const prior = await upsertConfigSnapshotAuditRecordAsync({
+        ...context,
+        configPath,
+        rawHash: "prior",
+        authoredConfig: { gateway: { port: 18789 } },
+      });
+      expect(prior).not.toBeNull();
+      let revoked = false;
+      const assertCurrent = () => {
         if (revoked) {
           throw new Error("Config source owner stopped");
         }
-      },
-    );
-    revoked = true;
-    await expect(pending).rejects.toThrow("Config source owner stopped");
-    expect(await readLatestConfigSnapshotAuditRecordAsync(context)).toEqual(prior);
+      };
+      const pending =
+        operation === "publication"
+          ? upsertConfigSnapshotAuditRecordAsync(
+              {
+                ...context,
+                configPath,
+                rawHash: "revoked",
+                authoredConfig: {},
+                expectedSnapshot: prior,
+              },
+              assertCurrent,
+            )
+          : restoreConfigSnapshotAuditRecordAsync(
+              { ...context, snapshot: null, expectedSnapshot: prior },
+              assertCurrent,
+            );
+      revoked = true;
+      await expect(pending).rejects.toThrow("Config source owner stopped");
+      expect(await readLatestConfigSnapshotAuditRecordAsync(context)).toEqual(prior);
+    },
+  );
+
+  it.each([false, true])("restores a prior snapshot off thread (existing=%s)", async (existing) => {
+    const home = await suiteRootTracker.make("snapshot-restoration");
+    const env = { OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
+    const context = { env, homedir: () => home };
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const sql = observeMainThreadSql();
+    sql.calibrate();
+    try {
+      const prior = existing
+        ? await upsertConfigSnapshotAuditRecordAsync({
+            ...context,
+            configPath,
+            rawHash: "prior",
+            authoredConfig: { gateway: { port: 18789 } },
+          })
+        : null;
+      const written = await upsertConfigSnapshotAuditRecordAsync({
+        ...context,
+        configPath,
+        rawHash: "written",
+        authoredConfig: { gateway: { port: 18790 } },
+      });
+      expect(written).not.toBeNull();
+      await restoreConfigSnapshotAuditRecordAsync({
+        ...context,
+        snapshot: prior,
+        expectedSnapshot: written,
+      });
+      expect(await readLatestConfigSnapshotAuditRecordAsync(context)).toEqual(prior);
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
   });
 
   it("falls back to a redaction marker when the fingerprint key cannot be stored", async () => {

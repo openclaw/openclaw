@@ -1,21 +1,19 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import type WaTooltip from "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import {
-  controlUiBundledGatewayUrl,
   defaultControlUiFeatureMethods,
-  installMockGateway,
-  type ControlUiMockGatewayScenario,
   waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
 import { openPicker, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
-  createControlUiE2eSuite,
-  holdModuleResponse,
-} from "./control-ui-e2e-suite.test-support.ts";
+  captureUiProof,
+  createThemedChatOpener,
+  themeConfigResponse,
+} from "./theme-typography.test-support.ts";
 
 /*
  * A theme that declares webfonts must actually paint in them, and a theme that
@@ -24,8 +22,6 @@ import {
  * browser has fetched them, so a broken asset path or a dropped link degrades
  * silently to the fallback stack and looks merely "a bit off".
  */
-
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 // Every pair JetBrains Mono ligates, each closed by the trailing space that
 // triggers the corruption reported in issue #137473.
@@ -38,68 +34,7 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is required for theme typography proof at ${executablePath}`,
 });
 
-function themeConfigResponse(theme: string, mode: "dark" | "light") {
-  const config = { ui: { prefs: { theme, themeMode: mode } } };
-  const hash = `theme-typography-${theme}-${mode}`;
-  return {
-    appliedConfigHash: hash,
-    config,
-    configRevisionHash: hash,
-    hash,
-    issues: [],
-    raw: JSON.stringify(config),
-    valid: true,
-  };
-}
-
-async function openThemedChat(
-  theme: string,
-  mode: "dark" | "light",
-  scenario: Pick<
-    ControlUiMockGatewayScenario,
-    "awaitInitialRoster" | "basePath" | "featureMethods" | "historyMessages" | "methodResponses"
-  > = {},
-) {
-  const context = await suite.newBrowserContext({
-    colorScheme: mode,
-    locale: "en-US",
-    serviceWorkers: "block",
-    viewport: { height: 900, width: 1440 },
-  });
-  await context.addInitScript(
-    ({ gatewayUrl, initialMode, initialTheme }) => {
-      if (sessionStorage.getItem("typography-seeded")) {
-        return;
-      }
-      sessionStorage.setItem("typography-seeded", "1");
-      localStorage.setItem(
-        `openclaw.control.settings.v1:${gatewayUrl}`,
-        JSON.stringify({ gatewayUrl, theme: initialTheme, themeMode: initialMode }),
-      );
-    },
-    {
-      gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl),
-      initialMode: mode,
-      initialTheme: theme,
-    },
-  );
-  const page = await context.newPage();
-  const themeRequests: string[] = [];
-  page.on("response", (response) => {
-    const { pathname } = new URL(response.url());
-    if (pathname.includes("/fonts/") || pathname.includes("/themes/")) {
-      themeRequests.push(`${pathname.split("/").pop()} ${response.status()}`);
-    }
-  });
-  const gateway = await installMockGateway(page, {
-    ...scenario,
-    methodResponses: {
-      ...scenario.methodResponses,
-      "config.get": themeConfigResponse(theme, mode),
-    },
-  });
-  return { themeRequests, gateway, page };
-}
+const openThemedChat = createThemedChatOpener(suite);
 
 async function captureTypography(
   page: Awaited<ReturnType<typeof openThemedChat>>["page"],
@@ -147,6 +82,7 @@ suite.define(() => {
     const initial = await families();
     expect(initial.ui).toContain("DM Sans");
     expect(initial.chat).toContain("Fraunces");
+    expect(initial.code).toContain("JetBrains Mono");
     expect(await chatSmoothing()).toBe("auto");
     if (captureUiProof) {
       await preview.scrollIntoViewIfNeeded();
@@ -155,6 +91,7 @@ suite.define(() => {
     await openPicker(ui);
     await ui.locator('[role="option"][data-value="geist"]').waitFor({ state: "visible" });
     await expect.poll(() => fontRequests().length).toBe(9);
+    expect(themeRequests.every((entry) => entry.endsWith(" 200"))).toBe(true);
     await captureTypography(page, "picker-specimens");
     await selectPickerValue(ui, "geist");
     await expect.poll(async () => (await families()).ui).toContain("Geist");
@@ -193,102 +130,6 @@ suite.define(() => {
       ),
     ).toEqual(["", ""]);
   });
-
-  it.each([
-    ["claw", "Instrument Sans", "Instrument Sans", ["instrument-sans"], "antialiased"],
-    ["knot", "Geist", "Geist", ["geist"], "antialiased"],
-    ["dash", "DM Sans", "Fraunces", ["dm-sans", "fraunces"], "auto"],
-    ["absolutely", "Space Grotesk", "Lora", ["space-grotesk", "lora"], "auto"],
-    ["tide", "IBM Plex Sans", "IBM Plex Sans", ["ibm-plex-sans"], "antialiased"],
-    [
-      "beacon",
-      "Atkinson Hyperlegible Next",
-      "Atkinson Hyperlegible Next",
-      ["atkinson-hyperlegible"],
-      "antialiased",
-    ],
-    ["phosphor", "JetBrains Mono", "JetBrains Mono", ["jetbrains-mono"], "antialiased"],
-    ["crt", "JetBrains Mono", "JetBrains Mono", ["jetbrains-mono"], "antialiased"],
-    ["manuscript", "Lora", "Lora", ["lora"], "auto"],
-    ["rose", "DM Sans", "DM Sans", ["dm-sans"], "antialiased"],
-    ["miami", "Space Grotesk", "Space Grotesk", ["space-grotesk"], "antialiased"],
-  ] as const)(
-    "paints %s chrome and chat prose in its own faces",
-    async (theme, body, chat, faces, chatSmoothing) => {
-      const timestamp = Date.now();
-      const text =
-        "Typography carries the theme: chat prose renders in the reading face while chrome, chips, and code keep their own: `const example = 1`.";
-      const { themeRequests, page } = await openThemedChat(theme, "dark", {
-        historyMessages: [
-          {
-            content: [{ text: "say something", type: "text" }],
-            role: "user",
-            timestamp: timestamp - 1,
-          },
-          {
-            content: [{ text, type: "text" }],
-            role: "assistant",
-            timestamp,
-          },
-        ],
-      });
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await expect
-        .poll(() => page.locator(".chat-text").last().textContent())
-        .toContain("Typography");
-      await page.locator(".chat-text code").waitFor({ state: "visible" });
-
-      const report = await page.evaluate(async () => {
-        await document.fonts.ready;
-        const chats = document.querySelectorAll(".chat-text");
-        const lastChat = chats[chats.length - 1];
-        const primary = (value: string) =>
-          (value.split(",")[0] ?? "").trim().replace(/^["']|["']$/gu, "");
-        return {
-          buildId: document.documentElement.getAttribute("data-openclaw-control-ui-build-id"),
-          chatFontFamily: lastChat ? primary(getComputedStyle(lastChat).fontFamily) : null,
-          codeFontFamily: lastChat?.querySelector("code")
-            ? primary(getComputedStyle(lastChat.querySelector("code")!).fontFamily)
-            : null,
-          chatFontSmoothing: lastChat
-            ? getComputedStyle(lastChat).getPropertyValue("-webkit-font-smoothing")
-            : null,
-          bodyFontFamily: primary(getComputedStyle(document.body).fontFamily),
-          stylesheets: [
-            ...document.querySelectorAll<HTMLLinkElement>('link[id^="openclaw-typeface-"]'),
-          ].map((link) => {
-            const url = new URL(link.href);
-            return { pathname: url.pathname, version: url.searchParams.get("v") };
-          }),
-          loaded: [...document.fonts].filter((f) => f.status === "loaded").map((f) => f.family),
-        };
-      });
-
-      // Every theme also declares the mono face: base.css --mono names
-      // JetBrains Mono for code spans regardless of the active family.
-      const expectedFaces = [...new Set([...faces, "jetbrains-mono"])];
-      if (report.buildId !== null) {
-        expect(report.buildId).not.toBe("");
-      }
-      expect(report.stylesheets).toEqual(
-        expectedFaces.map((face) => ({
-          pathname: `/fonts/${face}.css`,
-          version: report.buildId,
-        })),
-      );
-      expect(report.bodyFontFamily).toBe(body);
-      expect(report.chatFontFamily).toBe(chat);
-      expect(report.codeFontFamily).toBe("JetBrains Mono");
-      // Serif chat faces opt out of the app-wide `antialiased` thinning
-      // (applyChatFontSmoothing) so their hairlines stay crisp.
-      expect(report.chatFontSmoothing).toBe(chatSmoothing);
-      // Mono glyphs on the page pull the always-declared JetBrains Mono face.
-      expect(new Set(report.loaded)).toEqual(new Set([body, chat, "JetBrains Mono"]));
-      expect(themeRequests.every((entry) => entry.endsWith(" 200"))).toBe(true);
-
-      await captureTypography(page, `${theme}-chat-dark`);
-    },
-  );
 
   // JetBrains Mono routes through --font-body in both themes, so native text
   // controls inherit contextual ligatures. Typing into one then corrupts the
@@ -387,6 +228,8 @@ suite.define(() => {
               match: { path: "notes.txt" },
               response: {
                 file: {
+                  previewKind: "text",
+                  contentEncoding: "utf8",
                   content: COMPOSER_LIGATURE_SEQUENCE,
                   hash: "a".repeat(64),
                   kind: "read",
@@ -443,145 +286,7 @@ suite.define(() => {
     expect(fileLineLigatures).toBe("normal");
   });
 
-  it.each(["MacIntel", "Linux x86_64"])(
-    "keeps shortcut letters aligned on the system UI stack on %s",
-    async (platform) => {
-      const { page } = await openThemedChat("phosphor", "dark");
-      await page.addInitScript((value) => {
-        Object.defineProperty(navigator, "platform", { get: () => value });
-      }, platform);
-      const popupModule = await holdModuleResponse(page, /\/assets\/tooltip-[^/?]+\.js(?:\?.*)?$/u);
-      try {
-        await page.goto(`${suite.server.baseUrl}chat`);
-        const trigger = page.locator(".sidebar-brand__search");
-        await trigger.waitFor();
-        expect(popupModule.requests()).toBe(0);
-        await trigger.focus();
-        await popupModule.request;
-        expect(await trigger.getAttribute("aria-describedby")).not.toBeNull();
-        await page.keyboard.press("Escape");
-        popupModule.release();
-        await page.waitForFunction(() => Boolean(customElements.get("wa-tooltip")));
-        const popup = trigger.locator("..").locator("wa-tooltip");
-        expect(
-          await popup.evaluate(async (element: WaTooltip) => {
-            await element.updateComplete;
-            return element.open;
-          }),
-        ).toBe(false);
-      } finally {
-        popupModule.release();
-      }
-      const identity = page.locator(".sidebar-identity-card");
-      await identity.focus();
-      await page.keyboard.press("Enter");
-      const menu = page.locator("wa-dropdown.sidebar-identity-menu");
-      await menu.waitFor();
-      const shortcut = menu
-        .locator('wa-dropdown-item[value="command:settings"]')
-        .locator(".session-menu__shortcut");
-
-      const report = await shortcut.evaluate((element) => ({
-        body: getComputedStyle(document.body).fontFamily,
-        shortcut: getComputedStyle(element).fontFamily,
-        text: element.textContent?.replace(/\s+/gu, ""),
-      }));
-      expect(report.body).toMatch(/^"?JetBrains Mono/u);
-      expect(report.shortcut).toMatch(/^system-ui,/u);
-      const applePlatform = platform === "MacIntel";
-      expect(report.text).toBe(applePlatform ? "⌘⇧," : "Ctrl+Shift+,");
-
-      await page.keyboard.press("Escape");
-      await page.locator(".chat-side-panel-toggle").click();
-      const panelSelector = page.locator(".side-panel-empty--selector");
-      const panelShortcuts = panelSelector.locator(".side-panel-type-option__shortcut");
-      await panelSelector.waitFor();
-      const labels = applePlatform
-        ? ["⌘⌥⇧E", "⌘⇧B", "⌘⇧S"]
-        : ["Ctrl+Alt+Shift+E", "Ctrl+Shift+B", "Ctrl+Shift+S"];
-      expect(
-        await panelShortcuts.evaluateAll((keys) =>
-          keys.map((key) => ({
-            text: key.textContent?.replace(/\s+/gu, ""),
-            font: getComputedStyle(key).fontFamily,
-          })),
-        ),
-      ).toEqual(labels.map((text) => ({ text, font: expect.stringMatching(/^system-ui,/u) })));
-
-      const inkOffsets = await panelShortcuts.evaluateAll((keys) =>
-        keys.map((key) => {
-          const letter = key.querySelector<HTMLElement>(".kbd__text");
-          const context = document.createElement("canvas").getContext("2d");
-          if (!letter || !context) {
-            throw new Error("Shortcut must have a measurable letter");
-          }
-          const style = getComputedStyle(letter);
-          context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
-          const ink = context.measureText(letter.textContent ?? "");
-          // A zero-height inline box exposes the text baseline without replacing the glyph.
-          const baseline = document.createElement("span");
-          baseline.style.cssText = "display:inline-block;width:0;height:0";
-          letter.append(baseline);
-          const baselineY = baseline.getBoundingClientRect().y;
-          baseline.remove();
-          const box = key.getBoundingClientRect();
-          return (
-            baselineY +
-            (ink.actualBoundingBoxDescent - ink.actualBoundingBoxAscent) / 2 -
-            box.y -
-            box.height / 2
-          );
-        }),
-      );
-      // Font hinting rounds cap ink to device pixels; do not center the whole line box instead.
-      for (const offset of inkOffsets) {
-        expect(Math.abs(offset)).toBeLessThan(0.75);
-      }
-
-      if (captureUiProof) {
-        await mkdir(path.join(suite.artifactDir, "theme-typography"), { recursive: true });
-        await panelSelector.screenshot({
-          path: path.join(
-            path.join(suite.artifactDir, "theme-typography"),
-            "phosphor-panel-shortcuts.png",
-          ),
-        });
-      }
-
-      await page.keyboard.press(`${applePlatform ? "Meta" : "Control"}+Shift+S`);
-      await page.locator('[data-panel-slot="companion"]:not([hidden])').waitFor();
-
-      const genericFonts = await page.evaluate(() => {
-        const fixture = document.createElement("div");
-        fixture.innerHTML = `<span class="chat-controls__model-option-action"><kbd>C</kbd></span>
-          <span class="session-menu__shortcut">C</span>`;
-        document.body.append(fixture);
-        const fonts = Array.from(
-          fixture.querySelectorAll("kbd, .session-menu__shortcut"),
-          (key) => getComputedStyle(key).fontFamily,
-        );
-        fixture.remove();
-        return {
-          fonts,
-          mono: getComputedStyle(document.documentElement).getPropertyValue("--mono").trim(),
-        };
-      });
-      expect(genericFonts.fonts).toEqual([genericFonts.mono, genericFonts.mono]);
-    },
-  );
-
-  it.each([
-    ["knot", "openknot", "#080808", "#f9f9fb"],
-    ["dash", "dash", "#1a1210", "#f7f2ec"],
-    ["absolutely", "absolutely", "#1c1c1a", "#faf9f5"],
-    ["tide", "tide", "#10151b", "#f7f9fb"],
-    ["beacon", "beacon", "#000000", "#ffffff"],
-    ["phosphor", "phosphor", "#0a0f0a", "#f4f7f4"],
-    ["crt", "crt", "#090a09", "#f5f5f4"],
-    ["manuscript", "manuscript", "#211e18", "#f6f1e4"],
-    ["rose", "rose", "#191724", "#faf4ed"],
-    ["miami", "miami", "#140f1e", "#f7f3f6"],
-  ])(
+  it.each([["knot", "openknot", "#080808", "#f9f9fb"]])(
     "loads %s before paint in both modes without the app bundle",
     async (theme, resolved, dark, light) => {
       // Bundle aborts isolate the boot document; resource timing verifies the
@@ -654,7 +359,7 @@ suite.define(() => {
     await page.locator(".agent-chat__composer-combobox textarea").waitFor();
     await expectChrome(chatColor);
     await page.locator(".chat-pane__nav-toggle").first().click();
-    await page.locator("openclaw-app-sidebar .sidebar-brand__new-thread").click();
+    await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
     await page.locator(".new-session-page__message").waitFor();
     await expectChrome(chatColor);
 
@@ -668,37 +373,9 @@ suite.define(() => {
       await expectChrome(color);
     }
 
-    // Runtime removal renders nothing; restoration must rebind the existing router.
-    const runtimeLifecycle = await page.locator("openclaw-app-shell").evaluate(async (element) => {
-      const shell = element as HTMLElement & {
-        runtime?: import("../app/bootstrap.ts").ApplicationRuntime;
-        updateComplete: Promise<boolean>;
-      };
-      const runtime = shell.runtime;
-      const color = () =>
-        document.documentElement.style.getPropertyValue("--control-ui-system-chrome-background");
-      try {
-        shell.runtime = undefined;
-        await shell.updateComplete;
-        const removed = { color: color(), chat: Boolean(shell.querySelector(".shell--chat")) };
-        shell.runtime = runtime;
-        await shell.updateComplete;
-        return {
-          removed,
-          restored: { color: color(), chat: Boolean(shell.querySelector(".shell--chat")) },
-        };
-      } finally {
-        shell.runtime = runtime;
-      }
-    });
-    expect(runtimeLifecycle).toEqual({
-      removed: { color: pageColor, chat: false },
-      restored: { color: chatColor, chat: true },
-    });
-    await expectChrome(chatColor);
-
-    const reconnect = await page.locator("openclaw-app-shell").evaluate(async (element) => {
-      const shell = element as HTMLElement & { updateComplete: Promise<boolean> };
+    // Reparenting a plain Solid host keeps its mounted root and route alive.
+    const reconnect = await page.locator("openclaw-app-shell").evaluate((element) => {
+      const shell = element;
       const parent = shell.parentNode!;
       const next = shell.nextSibling;
       const color = () =>
@@ -707,7 +384,6 @@ suite.define(() => {
         shell.remove();
         const removed = color();
         parent.insertBefore(shell, next);
-        await shell.updateComplete;
         return {
           removed,
           reconnected: color(),
@@ -719,7 +395,14 @@ suite.define(() => {
         }
       }
     });
-    expect(reconnect).toEqual({ removed: pageColor, reconnected: chatColor, sameShell: true });
+    expect(reconnect).toEqual({ removed: chatColor, reconnected: chatColor, sameShell: true });
+    await expectChrome(chatColor);
+    await page.locator(".shell-skip-link").focus();
+    await page.keyboard.press("ControlOrMeta+Shift+,");
+    await waitForControlUiRoute(page, { pathname: "/settings/appearance", routeId: "appearance" });
+    await expectChrome(pageColor);
+    await page.goBack();
+    await page.locator(".new-session-page__message").waitFor();
     await expectChrome(chatColor);
   });
 

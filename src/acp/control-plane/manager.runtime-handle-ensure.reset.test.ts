@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
-import {
-  createSupersededActorError,
-  ensureManagerRuntimeHandle,
-} from "./manager.runtime-handle-ensure.js";
+import { ensureManagerRuntimeHandle } from "./manager.runtime-handle-ensure.js";
 import { baseCfg, createRuntime, readySessionMeta } from "./manager.test-helpers.js";
 import type { WriteManagerSessionMeta } from "./manager.types.js";
+import { createSupersededActorError } from "./manager.utils.js";
 
 describe("reset during ensured runtime metadata publication", () => {
   it("closes the unpublished stale handle and retains the concurrently accepted successor", async () => {

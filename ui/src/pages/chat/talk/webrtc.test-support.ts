@@ -54,3 +54,17 @@ export function requirePeer(): FakePeerConnection {
   }
   return peer;
 }
+
+export type SentRealtimeEvent = {
+  type?: string;
+  item?: { type?: string; [key: string]: unknown };
+  [key: string]: unknown;
+};
+
+export function dispatchRealtimeEvent(peer: FakePeerConnection | undefined, event: unknown): void {
+  peer?.channel.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(event) }));
+}
+
+export function sentRealtimeEvents(peer: FakePeerConnection | undefined): SentRealtimeEvent[] {
+  return peer?.channel.send.mock.calls.map(([payload]) => JSON.parse(String(payload))) ?? [];
+}

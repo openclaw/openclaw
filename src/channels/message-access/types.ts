@@ -1,5 +1,7 @@
 import type { ResolvedChannelImplicitMentions } from "../../config/implicit-mentions.js";
 import type { AccessGroupConfig } from "../../config/types.access-groups.js";
+import type { DmPolicy, GroupPolicy } from "../../config/types.base.js";
+import type { ChatType } from "../chat-type.js";
 import type { ChatChannelId } from "../ids.js";
 import type { InboundImplicitMentionKind, InboundMentionFacts } from "../mention-gating.js";
 import type { IdentifierAuthentication } from "./identifier-authentication.js";
@@ -39,14 +41,9 @@ export type NormalizedIngressSubject = {
 };
 
 /** Public, redacted form of a normalized allowlist entry. */
-type ChannelIngressNormalizedEntry = {
+type ChannelIngressNormalizedEntry = Omit<MatchableIdentifier, "opaqueId"> & {
   opaqueEntryId: string;
-  kind: ChannelIngressIdentifierKind;
   wildcard?: boolean;
-  authentication?: IdentifierAuthentication;
-  /** @deprecated Use `authentication: "mutable"`. Remove in the next Plugin SDK major. */
-  dangerous?: boolean;
-  sensitivity?: "normal" | "pii";
 };
 
 /** Internal normalized allowlist entry with its raw comparable value retained. */
@@ -216,7 +213,7 @@ export type ChannelIngressStateInput = {
   accountId: string;
   subject: InternalChannelIngressSubject;
   conversation: {
-    kind: "direct" | "group" | "channel";
+    kind: ChatType;
     id: string;
     parentId?: string;
     threadId?: string;
@@ -238,8 +235,8 @@ export type ChannelIngressStateInput = {
 };
 
 export type ChannelIngressPolicyInput = {
-  dmPolicy: "pairing" | "allowlist" | "open" | "disabled";
-  groupPolicy: "allowlist" | "open" | "disabled";
+  dmPolicy: DmPolicy;
+  groupPolicy: GroupPolicy;
   groupAllowFromFallbackToAllowFrom?: boolean;
   minIdentifierAuthentication?: IdentifierAuthentication;
   /** @deprecated `enabled` maps to minimum `mutable`; otherwise minimum `asserted`. Remove in the next Plugin SDK major. */
@@ -352,7 +349,7 @@ export type AccessGraphGate = {
 export type ChannelIngressState = {
   channelId: ChannelIngressChannelId;
   accountId: string;
-  conversationKind: "direct" | "group" | "channel";
+  conversationKind: ChatType;
   event: RedactedChannelIngressEvent;
   mentionFacts?: InboundMentionFacts;
   routeFacts: ResolvedRouteGateFacts[];

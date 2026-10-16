@@ -67,7 +67,9 @@ type Counts = {
   bindingAuthorityReads: number;
   otherSqliteReads: number;
   fileReadCalls: number;
+  ownershipFileReadCalls: number;
   fileOpenCalls: number;
+  ownershipFileOpenCalls: number;
   nativeRpcCalls: number;
   nativeThreadListCalls: number;
 };
@@ -79,7 +81,9 @@ const empty = (): Counts => ({
   bindingAuthorityReads: 0,
   otherSqliteReads: 0,
   fileReadCalls: 0,
+  ownershipFileReadCalls: 0,
   fileOpenCalls: 0,
+  ownershipFileOpenCalls: 0,
   nativeRpcCalls: 0,
   nativeThreadListCalls: 0,
 });
@@ -88,9 +92,22 @@ const empty = (): Counts => ({
 export function createCatalogIoCounters() {
   let enabled = false;
   let counts = empty();
+  let ownershipFile: Pick<fsSync.BigIntStats, "dev" | "ino"> | undefined;
   const catalogPersistence = createDeferredCore<string>();
   workerCounter.catalogPersisted = catalogPersistence.resolve;
   const restore: Array<() => void> = [];
+  const isOwnershipFile = (fd: unknown): boolean => {
+    if (!ownershipFile || typeof fd !== "number") {
+      return false;
+    }
+    try {
+      const current = fsSync.fstatSync(fd, { bigint: true });
+      return current.dev === ownershipFile.dev && current.ino === ownershipFile.ino;
+    } catch {
+      // Instrumentation must leave descriptor errors to the original operation.
+      return false;
+    }
+  };
   function replace(target: object, key: string, value: unknown) {
     const descriptor = Object.getOwnPropertyDescriptor(target, key);
     if (!descriptor) {
@@ -110,11 +127,7 @@ export function createCatalogIoCounters() {
         }
         if (args.includes("app-server-thread-bindings")) {
           counts.bindingAuthorityReads++;
-        } else if (
-          sql.includes("pragma data_version") ||
-          sql.includes("pragma schema_version") ||
-          sql.includes("openclaw_session_nodes_cache_generation")
-        ) {
+        } else if (sql.includes("pragma data_version") || sql.includes("pragma schema_version")) {
           counts.sqliteFreshnessReads++;
         } else if (sql.includes("entry_json") || sql.includes("entry_list_json")) {
           counts.sessionPayloadReads++;
@@ -142,9 +155,16 @@ export function createCatalogIoCounters() {
           counts.fileOpenCalls++;
         } else {
           counts.fileReadCalls++;
+          if (isOwnershipFile(args[0])) {
+            counts.ownershipFileReadCalls++;
+          }
         }
       }
-      return Reflect.apply(original, this, args);
+      const result = Reflect.apply(original, this, args);
+      if (enabled && method === "openSync" && isOwnershipFile(result)) {
+        counts.ownershipFileOpenCalls++;
+      }
+      return result;
     });
   }
   syncBuiltinESMExports();
@@ -155,6 +175,10 @@ export function createCatalogIoCounters() {
   });
   return {
     snapshot,
+    observeOwnershipFile(pathname: string) {
+      // Classify the acquired lease's physical file, independently of bundled module identities.
+      ownershipFile = fsSync.statSync(pathname, { bigint: true });
+    },
     catalogPersisted: catalogPersistence.promise,
     nativeRequest(method: string) {
       if (!enabled) {

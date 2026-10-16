@@ -29,7 +29,8 @@ export type Operation =
   | "xcode-version"
   | "simslim-version"
   | "simulator-runtime"
-  | "gateway-build"
+  | "gateway-install"
+  | "gateway-preflight"
   | "native-generate"
   | "native-build"
   | "native-build-reuse"
@@ -468,6 +469,7 @@ async function main() {
       "build-dir": { type: "string" },
       "build-only": { type: "boolean", default: false },
       "gateway-only": { type: "boolean", default: false },
+      "gateway-selection": { type: "string" },
     },
   });
   if (
@@ -521,6 +523,8 @@ async function main() {
       proof,
       buildDir: values["build-dir"],
       gatewayOnly: values["gateway-only"],
+      buildOnly: values["build-only"],
+      gatewaySelectionDir: path.resolve(values["gateway-selection"] ?? `${values.output}.gateway`),
       onProgress: writeProof,
     });
     cleanup = native.cleanup;

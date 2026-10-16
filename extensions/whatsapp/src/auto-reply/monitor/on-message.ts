@@ -15,7 +15,6 @@ import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveWhatsAppAccount } from "../../accounts.js";
 import { resolveWhatsAppGroupSessionRoute } from "../../group-session-key.js";
 import { getPrimaryIdentityId, getSenderIdentity } from "../../identity.js";
-import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { buildMentionConfig } from "../mentions.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
@@ -50,7 +49,7 @@ export function createWebOnMessageHandler(params: {
     msg: AdmittedWebInboundMessage,
     peerId: string,
   ): AdmittedWebInboundMessage => {
-    const admission = requireWhatsAppInboundAdmission(msg);
+    const admission = msg.admission;
     if (
       admission.conversation.kind === "group" ||
       msg.platform.sender?.e164 ||
@@ -88,21 +87,12 @@ export function createWebOnMessageHandler(params: {
     },
   ) => {
     return processMessage({
+      ...params,
       cfg,
       msg,
       route,
       groupHistoryKey,
-      groupHistories: params.groupHistories,
-      groupHistoryLimit: params.groupHistoryLimit,
-      groupMemberNames: params.groupMemberNames,
-      connectionId: params.connectionId,
-      verbose: params.verbose,
-      maxMediaBytes: params.maxMediaBytes,
-      replyResolver: params.replyResolver,
-      replyLogger: params.replyLogger,
-      backgroundTasks: params.backgroundTasks,
       buildContext: params.buildContext,
-      dispatchReplyFromConfig: params.dispatchReplyFromConfig,
       ...opts,
     });
   };
@@ -112,7 +102,7 @@ export function createWebOnMessageHandler(params: {
     const cfg = params.loadConfig?.() ?? params.cfg;
     const peerId = resolvePeerId(normalizedMsg);
     const msg = withDirectSenderPeer(normalizedMsg, peerId);
-    const admission = requireWhatsAppInboundAdmission(msg);
+    const admission = msg.admission;
     if (admission.ingress.admission !== "dispatch" && admission.ingress.admission !== "observe") {
       return;
     }

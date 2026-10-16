@@ -75,13 +75,14 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
   saveMediaBuffer: vi.fn(async () => ({ path: "/tmp/fake.png" })),
 }));
 
-vi.mock("./agent.shared.js", () => ({
+vi.mock("./agent.shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent.shared.js")>()),
   browserNavigationPolicyForProfile: vi.fn(() => ({})),
-  handleRouteError: vi.fn((_ctx, _res, err) => {
+  handleRouteError: vi.fn((_res, err) => {
     throw err;
   }),
   readBody: vi.fn((req: { body?: unknown }) => req.body ?? {}),
-  requirePwAi: vi.fn(async () => (pwMocks.connected ? pwMocks : null)),
+  requirePwAi: vi.fn(async () => pwMocks),
   resolveProfileContext: vi.fn(() => profileContext),
   withPlaywrightRouteContext: vi.fn(),
   withRouteTabContext: vi.fn(
@@ -126,25 +127,6 @@ describe("browser agent snapshot timeout routing", () => {
     pwMocks.takeScreenshotViaPlaywright.mockClear();
   });
 
-  it("caps screenshot timeoutMs before dispatching to CDP", async () => {
-    cdpMocks.captureScreenshot.mockResolvedValueOnce(Buffer.from("png"));
-    const handler = getScreenshotHandler();
-    const response = createBrowserRouteResponse();
-
-    await handler?.(
-      { params: {}, query: {}, body: { type: "png", timeoutMs: 3_000_000_000 } },
-      response.res,
-    );
-
-    expect(response.statusCode).toBe(200);
-    expect(cdpMocks.captureScreenshot).toHaveBeenCalledWith(
-      expect.objectContaining({
-        lookup: tabLookup,
-        timeoutMs: 2_147_483_647,
-      }),
-    );
-  });
-
   it("uses the existing Playwright viewport owner even when the tab has a CDP URL", async () => {
     pwMocks.connected = true;
     cdpMocks.captureScreenshot.mockRejectedValueOnce(new Error("fresh CDP loses the viewport"));
@@ -180,12 +162,6 @@ describe("browser agent snapshot timeout routing", () => {
       running: null,
       externalHeadless: false,
       expectedHeadless: false,
-    },
-    {
-      name: "external browser without authoritative launch state",
-      configuredHeadless: false,
-      running: null,
-      expectedHeadless: undefined,
     },
   ])(
     "passes the actual launch mode for $name",

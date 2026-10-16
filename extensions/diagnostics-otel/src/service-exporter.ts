@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import nodePath from "node:path";
 import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
+import { collectErrorGraphCandidates, readErrorName } from "openclaw/plugin-sdk/error-runtime";
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   normalizeOptionalString,
@@ -178,14 +178,6 @@ export function errorCategory(err: unknown): string {
   } catch {
     return "unknown";
   }
-}
-
-function readErrorName(err: unknown): string | undefined {
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  const name = (err as { name?: unknown }).name;
-  return typeof name === "string" && name.trim() ? name : undefined;
 }
 
 export function readErrorCode(err: unknown): string | number | undefined {

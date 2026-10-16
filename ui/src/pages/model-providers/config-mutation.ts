@@ -50,7 +50,10 @@ export function readModelBehaviorConfig(
   return {
     thinkingLevel: typeof thinkingValue === "string" ? thinkingValue : undefined,
     thinkingOverridden: agentsDefaults !== null && Object.hasOwn(agentsDefaults, "thinkingDefault"),
-    fastMode: fastValue === "auto" || typeof fastValue === "boolean" ? fastValue : undefined,
+    fastMode:
+      fastValue === "auto" || fastValue === "ultrafast" || typeof fastValue === "boolean"
+        ? fastValue
+        : undefined,
     fastModeOverridden: agentsDefaults !== null && Object.hasOwn(agentsDefaults, "fastModeDefault"),
   };
 }
@@ -100,12 +103,6 @@ const PROBE_FAILURE_PRIORITY: readonly ModelsProbeResult["status"][] = [
   "unknown",
 ];
 
-export function isMissingMethodError(error: unknown): boolean {
-  return /method (?:not found|not supported)|unknown method/iu.test(
-    modelProviderErrorMessage(error),
-  );
-}
-
 export function mergeProbeResults(cardId: string, results: ModelsProbeResult[]): ModelsProbeResult {
   if (results.length === 1) {
     return results[0]!;
@@ -147,8 +144,7 @@ export function modelProviderConfigBusy(context: ApplicationContext): boolean {
   );
 }
 
-export type ModelProviderConfigMutation = {
-  key: string;
+type ModelProviderConfigMutation = {
   raw: Record<string, unknown>;
   note: string;
   replacePaths?: string[];
@@ -183,6 +179,29 @@ export function modelProviderErrorMessage(error: unknown): string {
   return formatUiError(error, t("modelProviders.requestFailed"));
 }
 
+export async function modelProviderMutationWarnings(
+  result: {
+    value: { warning?: string };
+    refresh: { ok: true } | { ok: false; error: string };
+  },
+  refreshProviders: () => Promise<string | null | undefined>,
+): Promise<string | null> {
+  const warnings = result.value.warning ? [result.value.warning] : [];
+  if (!result.refresh.ok) {
+    warnings.push(result.refresh.error);
+  } else {
+    try {
+      const warning = await refreshProviders();
+      if (warning) {
+        warnings.push(warning);
+      }
+    } catch (error) {
+      warnings.push(modelProviderErrorMessage(error));
+    }
+  }
+  return warnings.length ? warnings.join(" ") : null;
+}
+
 /**
  * The config owner adopts the committed snapshot and reconciles application.
  * Saving ends at its acknowledgement, not at a second read or provider discovery.
@@ -207,13 +226,11 @@ export async function runModelProviderConfigMutation(
     if (!owner.isCurrentClient()) {
       return;
     }
-    if (!patched) {
-      if (owner.isCurrentAgent()) {
-        owner.setMessage({
-          kind: "error",
-          text: runtimeConfig.state.lastError ?? t("modelProviders.configUnavailable"),
-        });
-      }
+    if (!patched && owner.isCurrentAgent()) {
+      owner.setMessage({
+        kind: "error",
+        text: runtimeConfig.state.lastError ?? t("modelProviders.configUnavailable"),
+      });
     }
   } catch (error) {
     if (owner.isCurrentClient() && owner.isCurrentAgent()) {
@@ -271,23 +288,10 @@ export async function runModelProviderApiKeyMutation(
       owner.setMessage({ kind: "error", text: result.error });
       return { ok: false };
     }
-    const warnings = result.value.warning ? [result.value.warning] : [];
-    if (!result.refresh.ok) {
-      warnings.push(result.refresh.error);
-    } else {
-      try {
-        const warning = await owner.refreshProviders();
-        if (warning) {
-          warnings.push(warning);
-        }
-      } catch (error) {
-        warnings.push(modelProviderErrorMessage(error));
-      }
-    }
+    const warning = await modelProviderMutationWarnings(result, () => owner.refreshProviders());
     if (!isCurrent()) {
       return { ok: false };
     }
-    const warning = warnings.length > 0 ? warnings.join(" ") : null;
     owner.setMessage({ kind: "success", text: params.success, ...(warning ? { warning } : {}) });
     return { ok: true, warning };
   } finally {
@@ -295,19 +299,4 @@ export async function runModelProviderApiKeyMutation(
       owner.setBusy(false);
     }
   }
-}
-
-export function modelProviderApiKeySuccess(
-  action: "edit" | "add",
-  apiKey: string | null,
-  provider: string,
-): string {
-  return t(
-    action === "add"
-      ? "modelProviders.add.saved"
-      : apiKey === null
-        ? "modelProviders.apiKey.removed"
-        : "modelProviders.apiKey.saved",
-    { provider },
-  );
 }

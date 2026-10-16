@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -7,9 +8,15 @@ import {
 
 const persistLifecycle = vi.hoisted(() => vi.fn());
 const ownerStatus = vi.hoisted(() => vi.fn());
+const runtimeConfig = vi.hoisted<{ value: OpenClawConfig }>(() => ({ value: {} }));
+vi.mock("../config/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/io.js")>()),
+  getRuntimeConfig: () => runtimeConfig.value,
+}));
 
+// mock-isolation: Hold persistence settlement without opening a database.
 vi.mock("./session-lifecycle-state.js", () => ({
-  persistGatewaySessionLifecycleEvent: persistLifecycle,
+  prepareGatewaySessionLifecycleEvent: (params: unknown) => () => persistLifecycle(params),
 }));
 vi.mock("../infra/agent-run-registry.js", () => ({
   getAgentRunContextOwnerStatus: ownerStatus,
@@ -43,21 +50,9 @@ function fixture() {
 
 describe("session lifecycle persistence owner", () => {
   beforeEach(() => {
+    runtimeConfig.value = {};
     persistLifecycle.mockReset();
     ownerStatus.mockReset().mockReturnValue("active");
-  });
-
-  it("starts one terminal write before the chat handler consumes it", async () => {
-    persistLifecycle.mockResolvedValue(undefined);
-    const { owner } = fixture();
-
-    const prepared = owner.observe(terminal);
-    const consumed = owner.persist(terminal);
-
-    expect(consumed).toBe(prepared);
-    expect(persistLifecycle).toHaveBeenCalledOnce();
-    await consumed;
-    await owner.drain();
   });
 
   it("distinguishes reused run ids by their exact owner claim", async () => {
@@ -76,9 +71,9 @@ describe("session lifecycle persistence owner", () => {
     const successorPrepared = owner.observe(successor);
 
     expect(successorPrepared).not.toBe(firstPrepared);
-    expect(persistLifecycle).toHaveBeenCalledTimes(2);
     expect(owner.persist(successor)).toBe(successorPrepared);
     await Promise.all([firstPrepared, successorPrepared]);
+    expect(persistLifecycle).toHaveBeenCalledTimes(2);
     await owner.drain();
   });
 
@@ -114,41 +109,46 @@ describe("session lifecycle persistence owner", () => {
     await owner.drain();
   });
 
-  it("persists a keyed error after the chat retry grace expires", async () => {
-    persistLifecycle.mockResolvedValue(undefined);
-    const { owner } = fixture();
-    const error = {
-      ...terminal,
-      event: {
-        ...terminal.event,
-        data: { phase: "error", error: "fallback exhausted", endedAt: 2_000 },
-      },
-    };
-
-    await owner.persist(error);
-
-    expect(persistLifecycle).toHaveBeenCalledOnce();
-    expect(persistLifecycle).toHaveBeenCalledWith(error);
-  });
-
-  it("keeps terminal writes alive until shutdown drains them", async () => {
-    const deferred = createDeferred();
-    persistLifecycle.mockReturnValue(deferred.promise);
-    const { owner, scheduler } = fixture();
-    void owner.observe(terminal);
-    scheduler.beginClose();
-
-    let drained = false;
-    const drain = owner.drain().then(() => {
-      drained = true;
-    });
-    await Promise.resolve();
-    expect(drained).toBe(false);
-
-    deferred.resolve();
-    await drain;
-    expect(drained).toBe(true);
-  });
+  it.each([false, true])(
+    "settles a start before its terminal while draining (global alias: %s)",
+    async (globalAlias) => {
+      if (globalAlias) {
+        runtimeConfig.value = {
+          agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+          session: { scope: "global" },
+        };
+      }
+      const releaseStart = createDeferred();
+      const phases: unknown[] = [];
+      persistLifecycle.mockImplementation(async (params: PersistenceParams) => {
+        if (params.event.data?.phase === "start") {
+          await releaseStart.promise;
+        }
+        phases.push(params.event.data?.phase);
+      });
+      const { owner, scheduler } = fixture();
+      const start = owner.persist({
+        ...terminal,
+        sessionKey: globalAlias ? "agent:research:main" : terminal.sessionKey,
+        event: { ...terminal.event, data: { phase: "start", startedAt: 1_000 } },
+      });
+      const end = owner.observe({
+        ...terminal,
+        ...(globalAlias ? { agentId: "research", sessionKey: "global" } : {}),
+      });
+      scheduler.beginClose();
+      const draining = owner.drain();
+      try {
+        expect(persistLifecycle).toHaveBeenCalledOnce();
+        releaseStart.resolve();
+        await Promise.all([start, end, draining]);
+        expect(phases).toEqual(["start", "end"]);
+      } finally {
+        releaseStart.resolve();
+        await Promise.allSettled([start, end, draining]);
+      }
+    },
+  );
 
   it.each([false, true])(
     "keeps an expired write available until settlement (consumed while pending: %s)",

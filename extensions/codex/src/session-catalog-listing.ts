@@ -40,7 +40,6 @@ import type {
 } from "./session-catalog-types.js";
 import { listVisiblePage } from "./session-catalog-visible-page.js";
 
-/** Builds the node-local read-only Codex app-server catalog command. */
 export function createCodexSessionCatalogNodeHostCommands(
   controlFactory: CodexSessionCatalogControlFactory,
   bindingStore?: CodexAppServerBindingStore,
@@ -168,10 +167,9 @@ type CodexNodeSessionTranscriptParams = {
   limit: number;
 };
 
-function readNodeTranscriptParams(value: unknown): CodexNodeSessionTranscriptParams {
-  if (!isRecord(value)) {
-    throw new CatalogParamsError("Codex session read parameters must be an object");
-  }
+function readNodeTranscriptParams(
+  value: Record<string, unknown>,
+): CodexNodeSessionTranscriptParams {
   requireOnlyKeys(value, new Set(["threadId", "cursor", "limit"]));
   const threadId = readBoundedOptionalString(value, "threadId", MAX_SESSION_ID_LENGTH);
   if (!threadId) {
@@ -187,7 +185,6 @@ function readNodeTranscriptParams(value: unknown): CodexNodeSessionTranscriptPar
   return { threadId, limit, ...(cursor ? { cursor } : {}) };
 }
 
-/** Reads the persisted transcript for a Gateway-local or paired-node Codex session. */
 export async function readCodexSessionTranscript(params: {
   agentId: string;
   runtime: PluginRuntime;

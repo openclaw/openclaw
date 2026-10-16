@@ -1,7 +1,9 @@
 /** Owns each admitted turn from actor admission through final settlement. */
 import { createDeferredCore } from "../../shared/deferred.js";
-import type { AcpSessionRuntimeLocator } from "../runtime/session-control-owner.js";
-import type { AcpSessionControlConstraint } from "../runtime/session-meta-control.types.js";
+import type {
+  AcpSessionRuntimeLocator,
+  AcpSessionControlConstraint,
+} from "../runtime/session-meta-control.types.js";
 import type {
   AcpRunTurnInput,
   ActiveTurnState,

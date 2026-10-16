@@ -28,16 +28,12 @@ enum VoiceWakeTextUtils {
         scalar.isASCII && CharacterSet.alphanumerics.contains(scalar)
     }
 
-    private static func requiresASCIIWordBoundaries(_ value: String) -> Bool {
-        value.unicodeScalars.contains(where: self.isASCIIWordScalar)
-    }
-
     private static func hasASCIIWordBoundaries(
         transcript: String,
         range: Range<String.Index>,
         trigger: String) -> Bool
     {
-        guard self.requiresASCIIWordBoundaries(trigger) else { return true }
+        guard trigger.unicodeScalars.contains(where: self.isASCIIWordScalar) else { return true }
 
         if range.lowerBound > transcript.startIndex {
             let beforeIndex = transcript.index(before: range.lowerBound)
@@ -68,8 +64,6 @@ enum VoiceWakeTextUtils {
             guard !normalizedTokens.isEmpty else { continue }
             let rawTrigger = trigger.trimmingCharacters(in: self.whitespaceAndPunctuation)
             let tokenCount = normalizedTokens.count
-            guard !rawTrigger.isEmpty else { continue }
-
             var searchStart = transcript.startIndex
             while searchStart < transcript.endIndex,
                   let range = transcript.range(
@@ -117,13 +111,8 @@ enum VoiceWakeTextUtils {
         minCommandLength: Int,
         trimWake: TrimWake) -> String?
     {
-        guard !transcript.isEmpty else { return nil }
         guard !self.normalizeToken(transcript).isEmpty else { return nil }
-        guard WakeWordGate.matchesTextOnly(text: transcript, triggers: triggers) else { return nil }
-        guard
-            self.startsWithTrigger(transcript: transcript, triggers: triggers)
-            || self.hasOnlyFillerBeforeTrigger(transcript: transcript, triggers: triggers)
-        else { return nil }
+        guard self.matchesTriggerPrefix(transcript: transcript, triggers: triggers) else { return nil }
         let trimmed = trimWake(transcript, triggers)
         guard !self.isFillerOnly(trimmed) else { return nil }
         guard trimmed.count >= minCommandLength else { return nil }
@@ -135,13 +124,15 @@ enum VoiceWakeTextUtils {
         triggers: [String],
         trimWake: TrimWake) -> Bool
     {
-        guard WakeWordGate.matchesTextOnly(text: transcript, triggers: triggers) else { return false }
-        guard
-            self.startsWithTrigger(transcript: transcript, triggers: triggers)
-            || self.hasOnlyFillerBeforeTrigger(transcript: transcript, triggers: triggers)
-        else { return false }
+        guard self.matchesTriggerPrefix(transcript: transcript, triggers: triggers) else { return false }
         let trimmed = trimWake(transcript, triggers)
         return trimmed.isEmpty || self.isFillerOnly(trimmed)
+    }
+
+    private static func matchesTriggerPrefix(transcript: String, triggers: [String]) -> Bool {
+        WakeWordGate.matchesTextOnly(text: transcript, triggers: triggers) &&
+            (self.startsWithTrigger(transcript: transcript, triggers: triggers) ||
+                self.hasOnlyFillerBeforeTrigger(transcript: transcript, triggers: triggers))
     }
 
     static func hasOnlyFillerBeforeTrigger(transcript: String, triggers: [String]) -> Bool {

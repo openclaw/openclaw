@@ -7,6 +7,7 @@ import {
   editChannelMessage,
   getChannel,
   getChannelMessage,
+  isUnknownDiscordMessageError,
   pinChannelMessage,
   unpinChannelMessage,
 } from "./internal/discord.js";
@@ -76,13 +77,6 @@ function assertDiscordResponseObject(value: unknown, label: string): Record<stri
   return value as Record<string, unknown>;
 }
 
-function resolveDefaultThreadAutoArchiveDuration(channel?: APIChannel): number | undefined {
-  if (!channel || !("default_auto_archive_duration" in channel)) {
-    return undefined;
-  }
-  return channel.default_auto_archive_duration;
-}
-
 function describeDiscordThreadInitialMessageFailure(
   delivery?: DiscordThreadInitialMessageDelivery,
 ): string {
@@ -112,12 +106,7 @@ export class DiscordThreadInitialMessageError extends Error {
       describeDiscordThreadInitialMessageFailure(initialMessageDelivery);
     super(`${initialMessageWarning}: ${initialMessageError}`, { cause: error });
     this.name = "DiscordThreadInitialMessageError";
-    this.initialMessageDelivery = initialMessageDelivery
-      ? {
-          ...initialMessageDelivery,
-          deliveredMessageIds: [...initialMessageDelivery.deliveredMessageIds],
-        }
-      : undefined;
+    this.initialMessageDelivery = initialMessageDelivery;
     this.initialMessageError = initialMessageError;
     this.initialMessageWarning = initialMessageWarning;
     this.thread = thread;
@@ -139,14 +128,11 @@ export async function readMessagesDiscord(
   if (limit) {
     params.limit = limit;
   }
-  if (messageQuery.before) {
-    params.before = messageQuery.before;
-  }
-  if (messageQuery.after) {
-    params.after = messageQuery.after;
-  }
-  if (messageQuery.around) {
-    params.around = messageQuery.around;
+  for (const key of ["before", "after", "around"] as const) {
+    const value = messageQuery[key];
+    if (value) {
+      params[key] = value;
+    }
   }
   return assertDiscordResponseArray<APIMessage>(
     await rest.get(Routes.channelMessages(channelId), params),
@@ -169,43 +155,50 @@ export async function editMessageDiscord(
   payload: DiscordMessageEdit,
   opts: DiscordReactOpts,
 ): Promise<APIMessage> {
-  const rest = resolveDiscordRest(opts);
-  return await editChannelMessage(rest, channelId, messageId, {
-    body: {
-      content: payload.content,
-      ...(payload.flags !== undefined ? { flags: payload.flags } : {}),
-      ...(payload.allowedMentions ? { allowed_mentions: payload.allowedMentions } : {}),
-    },
-  });
+  const { rest, request } = createDiscordClient(opts);
+  return await request(
+    () =>
+      editChannelMessage(rest, channelId, messageId, {
+        body: {
+          content: payload.content,
+          ...(payload.flags !== undefined ? { flags: payload.flags } : {}),
+          ...(payload.allowedMentions ? { allowed_mentions: payload.allowedMentions } : {}),
+        },
+      }),
+    "message-edit",
+  );
 }
+
+function messageMutation(operation: typeof deleteChannelMessage, label: string) {
+  return async (channelId: string, messageId: string, opts: DiscordReactOpts) => {
+    const { rest, request } = createDiscordClient(opts);
+    await request(() => operation(rest, channelId, messageId), label);
+    return { ok: true };
+  };
+}
+
+export const pinMessageDiscord = messageMutation(pinChannelMessage, "message-pin");
+export const unpinMessageDiscord = messageMutation(unpinChannelMessage, "message-unpin");
 
 export async function deleteMessageDiscord(
   channelId: string,
   messageId: string,
   opts: DiscordReactOpts,
-) {
-  const rest = resolveDiscordRest(opts);
-  await deleteChannelMessage(rest, channelId, messageId);
-  return { ok: true };
-}
-
-export async function pinMessageDiscord(
-  channelId: string,
-  messageId: string,
-  opts: DiscordReactOpts,
-) {
-  const rest = resolveDiscordRest(opts);
-  await pinChannelMessage(rest, channelId, messageId);
-  return { ok: true };
-}
-
-export async function unpinMessageDiscord(
-  channelId: string,
-  messageId: string,
-  opts: DiscordReactOpts,
-) {
-  const rest = resolveDiscordRest(opts);
-  await unpinChannelMessage(rest, channelId, messageId);
+): Promise<{ ok: boolean }> {
+  const { rest, request } = createDiscordClient(opts);
+  let mayHaveApplied = false;
+  await request(async () => {
+    try {
+      await deleteChannelMessage(rest, channelId, messageId);
+    } catch (err) {
+      // A lost response can hide an applied delete; the replay then reports Unknown Message.
+      if (mayHaveApplied && isUnknownDiscordMessageError(err)) {
+        return;
+      }
+      mayHaveApplied ||= classifyDiscordDeliveryFailure(err) === "ambiguous";
+      throw err;
+    }
+  }, "message-delete");
   return { ok: true };
 }
 
@@ -231,16 +224,16 @@ export async function createThreadDiscord(
   }
   let channel: APIChannel | undefined;
   if (!payload.messageId) {
-    try {
-      channel = await getChannel(rest, channelId);
-    } catch {
-      // Channel metadata only enriches standalone creation; Discord still validates it.
-    }
+    // Channel metadata only enriches standalone creation; Discord still validates it.
+    channel = await getChannel(rest, channelId).catch(() => undefined);
   }
   // Discord clients preselect the parent default, but REST thread creation needs
   // it explicitly. Keep a caller override authoritative when one was supplied.
   const archiveDuration =
-    payload.autoArchiveMinutes ?? resolveDefaultThreadAutoArchiveDuration(channel);
+    payload.autoArchiveMinutes ??
+    (channel && "default_auto_archive_duration" in channel
+      ? channel.default_auto_archive_duration
+      : undefined);
   if (archiveDuration !== undefined) {
     body.auto_archive_duration = archiveDuration;
   }

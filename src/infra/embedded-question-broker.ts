@@ -21,7 +21,7 @@ import {
   QuestionManagerErrorCodes,
 } from "../gateway/question-manager.js";
 import { questionShapeError } from "../gateway/question-validation.js";
-import { notifyListeners } from "../shared/listeners.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import {
   getActiveAgentRunDelegatedAuthority,
@@ -57,10 +57,7 @@ export class EmbeddedQuestionBroker {
   }
 
   subscribe(listener: (event: QuestionEvent) => void): () => void {
-    this.listeners.add(listener);
-    return () => {
-      this.listeners.delete(listener);
-    };
+    return registerListener(this.listeners, listener);
   }
 
   request(params: unknown, signal?: AbortSignal): QuestionRequestResult {

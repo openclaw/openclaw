@@ -29,10 +29,10 @@ export function isDangerousNameMatchingEnabled(
 export function resolveDangerousNameMatchingEnabled(
   input: DangerousNameMatchingResolverInput,
 ): boolean {
-  if (typeof input.accountConfig?.dangerouslyAllowNameMatching === "boolean") {
-    return input.accountConfig.dangerouslyAllowNameMatching;
-  }
-  return isDangerousNameMatchingEnabled(input.providerConfig);
+  return (
+    asBoolean(input.accountConfig?.dangerouslyAllowNameMatching) ??
+    isDangerousNameMatchingEnabled(input.providerConfig)
+  );
 }
 
 /** Collects provider/account scopes that policy and doctor surfaces can audit. */

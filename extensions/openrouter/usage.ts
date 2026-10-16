@@ -57,15 +57,6 @@ function resolveKeyBudget(
   return used === undefined ? undefined : { used, limit, ...(period ? { period } : {}) };
 }
 
-async function readJson(response: Response, timeoutMs: number): Promise<unknown> {
-  return await readProviderJsonResponse(response, "OpenRouter usage", {
-    maxBytes: OPENROUTER_USAGE_RESPONSE_MAX_BYTES,
-    chunkTimeoutMs: timeoutMs,
-    onIdleTimeout: ({ chunkTimeoutMs }) =>
-      new Error(`OpenRouter usage response stalled for ${chunkTimeoutMs}ms`),
-  });
-}
-
 async function fetchEndpoint(params: {
   path: "credits" | "key";
   baseUrl: string;
@@ -106,7 +97,14 @@ async function fetchEndpoint(params: {
       return { ok: false, status: response.status };
     }
     try {
-      const root = asOptionalRecord(await readJson(response, params.timeoutMs));
+      const root = asOptionalRecord(
+        await readProviderJsonResponse(response, "OpenRouter usage", {
+          maxBytes: OPENROUTER_USAGE_RESPONSE_MAX_BYTES,
+          chunkTimeoutMs: params.timeoutMs,
+          onIdleTimeout: ({ chunkTimeoutMs }) =>
+            new Error(`OpenRouter usage response stalled for ${chunkTimeoutMs}ms`),
+        }),
+      );
       const data = asOptionalRecord(root?.data);
       return data ? { ok: true, data } : { ok: false, reason: "malformed" };
     } catch {

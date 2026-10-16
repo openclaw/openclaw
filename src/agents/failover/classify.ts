@@ -36,7 +36,3 @@ export function classifyFailoverReason(
     classifyProviderPluginError({ ...context, providerPlugin: opts?.providerPlugin }),
   );
 }
-
-export function isFailoverErrorMessage(raw: string, opts?: { provider?: string }): boolean {
-  return classifyFailoverReason(raw, opts) !== null;
-}

@@ -1,5 +1,27 @@
 import type { FeishuCardInteractionEnvelope } from "./card-interaction.js";
 
+export function buildFeishuActionCard(params: {
+  title: string;
+  template: string;
+  content: string;
+  actions: ReturnType<typeof buildFeishuCardButton>[];
+}): Record<string, unknown> {
+  return {
+    schema: "2.0",
+    config: { width_mode: "fill" },
+    header: {
+      title: { tag: "plain_text", content: params.title },
+      template: params.template,
+    },
+    body: {
+      elements: [
+        { tag: "markdown", content: params.content },
+        { tag: "action", actions: params.actions },
+      ],
+    },
+  };
+}
+
 export function buildFeishuCardButton(params: {
   label: string;
   value: FeishuCardInteractionEnvelope;

@@ -24,6 +24,8 @@ export type DispatchProcessedOutcome = "completed" | "skipped" | "error";
 export type DispatchProcessedOptions = {
   reason?: string;
   error?: string;
+  userPrompt?: string;
+  finalResponse?: string;
 };
 
 const completedInboundAuditReasons = new Map<
@@ -47,7 +49,6 @@ const skippedInboundAuditReasons = new Map<
 >([
   ["duplicate", "duplicate"],
   ["reply-operation-active", "reply_operation_active"],
-  ["reply_operation_aborted", "reply_operation_aborted"],
 ]);
 
 function resolveInboundMessageAuditTerminal(
@@ -56,34 +57,20 @@ function resolveInboundMessageAuditTerminal(
 ): InboundMessageAuditTerminal {
   // Diagnostics keep their legacy outcomes and reason strings; audit projects
   // those signals into the stricter terminal contract independently.
-  if (reason === "plugin-bound-error") {
+  if (reason === "plugin-bound-error" || reason?.startsWith("acp_error:")) {
     return {
       status: "failed",
       outcome: "failed",
       errorCode: "message_processing_failed",
-      reasonCode: "plugin_bound_error",
+      reasonCode: reason === "plugin-bound-error" ? "plugin_bound_error" : "acp_dispatch_failed",
     };
   }
-  if (reason?.startsWith("acp_error:")) {
-    return {
-      status: "failed",
-      outcome: "failed",
-      errorCode: "message_processing_failed",
-      reasonCode: "acp_dispatch_failed",
-    };
-  }
-  if (reason === "reply_operation_aborted") {
+  if (reason === "reply_operation_aborted" || reason === "acp_aborted") {
     return {
       status: "blocked",
       outcome: "skipped",
-      reasonCode: "reply_operation_aborted",
-    };
-  }
-  if (reason === "acp_aborted") {
-    return {
-      status: "blocked",
-      outcome: "skipped",
-      reasonCode: "acp_dispatch_aborted",
+      reasonCode:
+        reason === "reply_operation_aborted" ? "reply_operation_aborted" : "acp_dispatch_aborted",
     };
   }
   if (outcome === "completed") {

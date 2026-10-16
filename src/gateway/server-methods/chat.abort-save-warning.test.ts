@@ -7,11 +7,11 @@ import { registerSubagentRun } from "../../agents/subagents/registry/subagent-re
 import { enqueueSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
+  loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { registerWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
@@ -29,10 +29,70 @@ import {
 } from "./chat.abort.test-helpers.js";
 import { sessionAbortHandlers } from "./sessions-abort.js";
 
+vi.mock("../../infra/worker-cpu.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/worker-cpu.js")>();
+  const trigger =
+    "CREATE TEMP TRIGGER IF NOT EXISTS reject_abort_reply BEFORE INSERT ON transcript_events " +
+    "WHEN json_extract(NEW.event_json, '$.message.openclawAbort.runId') = 'run-save-failure' " +
+    "BEGIN SELECT RAISE(ABORT, 'fixture transcript write failed'); END";
+  // Install the fault on the writing connection after canonical schema admission.
+  const preload = `
+    import { DatabaseSync } from "node:sqlite";
+    const prepare = DatabaseSync.prototype.prepare;
+    DatabaseSync.prototype.prepare = function(sql) {
+      if (sql.startsWith('insert into "transcript_events"')) {
+        this.exec(${JSON.stringify(trigger)});
+      }
+      return prepare.call(this, sql);
+    };
+  `;
+  return {
+    ...actual,
+    createCpuTrackedWorker(
+      ...[filename, options]: Parameters<typeof actual.createCpuTrackedWorker>
+    ) {
+      return actual.createCpuTrackedWorker(filename, {
+        ...options,
+        execArgv: [
+          ...(options?.execArgv ?? []),
+          "--import",
+          `data:text/javascript,${encodeURIComponent(preload)}`,
+        ],
+      });
+    },
+  };
+});
+
 const fixture = useChatAbortRegistryFixture();
 const abortSession = sessionAbortHandlers["sessions.abort"];
 if (!abortSession) {
   throw new Error("sessions.abort handler is not registered");
+}
+
+async function queueCollector(sessionKey: string, groupId: string, runId: string) {
+  enqueueSwarmRun({
+    groupId,
+    runId,
+    start: vi.fn(async () => {}),
+    activeRunIds: ["occupied-slot"],
+    maxConcurrent: 1,
+    onStartFailure: () => true,
+  });
+  await registerSubagentRun({
+    runId,
+    childSessionKey: sessionKey,
+    childAgentId: "main",
+    sessionEntry: loadSessionEntry({ agentId: "main", sessionKey }),
+    requesterSessionKey: "agent:main:main",
+    requesterAgentId: "main",
+    requesterDisplayKey: "main",
+    task: "queued collector",
+    cleanup: "keep",
+    collect: true,
+    queued: true,
+    expectsCompletionMessage: false,
+  });
+  await fixture.settle();
 }
 
 it.each([false, true])(
@@ -44,38 +104,19 @@ it.each([false, true])(
       sessionId: "queued-worker-failure-session",
     };
     await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
-    enqueueSwarmRun({
-      groupId: "queued-worker-failure",
-      runId: "queued-collector",
-      start: vi.fn(async () => {}),
-      activeRunIds: ["occupied-slot"],
-      maxConcurrent: 1,
-      onStartFailure: () => true,
-    });
-    await registerSubagentRun({
-      runId: "queued-collector",
-      childSessionKey: scope.sessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterAgentId: "main",
-      requesterDisplayKey: "main",
-      task: "queued collector",
-      cleanup: "keep",
-      collect: true,
-      queued: true,
-      expectsCompletionMessage: false,
-    });
-    await fixture.settle();
+    await queueCollector(scope.sessionKey, "queued-worker-failure", "queued-collector");
     const killFailure = new Error("collector cancellation failed");
     const workerFailure = new Error("worker cancellation persistence failed", {
       cause: new SqliteWorkerError("worker result lost", "outcome-unknown"),
     });
     const service = {};
     registerWorkerInferenceSessionControl(service, {
-      reserveDrain: () => {
+      hasSession: () => true,
+      reserveSessionDrain: () => {
         throw new Error("unexpected drain reservation");
       },
-      resolveTarget: () => undefined,
-      captureCancel: () => ({
+      resolveSessionTargetForRunId: () => undefined,
+      captureSessionCancellation: () => ({
         runIds: ["worker-run"],
         cancel: (control) => {
           control?.assertCurrent?.();
@@ -93,7 +134,8 @@ it.each([false, true])(
     const kill = vi
       .spyOn(subagentKill, "killSubagentRunAdmin")
       .mockImplementationOnce(async (params, control) => {
-        control?.beforeSessionKill?.();
+        await control?.prepareRead?.();
+        await control?.beforeSessionKill?.();
         if (killFails) {
           throw killFailure;
         }
@@ -141,13 +183,11 @@ it.each([
     sessionKey: "agent:main:subagent:save-warning",
     sessionId: "save-warning-session",
   };
-  await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
-  // Keep the append fault local so worker admission sees the canonical schema.
-  openOpenClawAgentDatabase(scope).db.exec(
-    "CREATE TEMP TRIGGER reject_abort_reply BEFORE INSERT ON transcript_events " +
-      "WHEN json_extract(NEW.event_json, '$.message.openclawAbort.runId') = 'run-save-failure' " +
-      "BEGIN SELECT RAISE(ABORT, 'fixture transcript write failed'); END",
-  );
+  await replaceSessionEntry(scope, {
+    sessionId: scope.sessionId,
+    lifecycleRevision: "save-warning-original",
+    updatedAt: Date.now(),
+  });
   const runId = "run-save-failure";
   const active: ChatAbortControllerEntry = createActiveRun(scope.sessionKey, scope);
   const refusal = new SessionMutationAuthorizationChangedError({
@@ -172,27 +212,7 @@ it.each([
     void active.projectSessionTerminalPersistence.catch(() => {});
   }
   if (route === "queued") {
-    enqueueSwarmRun({
-      groupId: "save-warning",
-      runId: "queued-save-warning",
-      start: vi.fn(async () => {}),
-      activeRunIds: ["occupied-slot"],
-      maxConcurrent: 1,
-      onStartFailure: () => true,
-    });
-    await registerSubagentRun({
-      runId: "queued-save-warning",
-      childSessionKey: scope.sessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterAgentId: "main",
-      requesterDisplayKey: "main",
-      task: "queued collector",
-      cleanup: "keep",
-      collect: true,
-      queued: true,
-      expectsCompletionMessage: false,
-    });
-    await fixture.settle();
+    await queueCollector(scope.sessionKey, "save-warning", "queued-save-warning");
   }
   const respond = vi.fn();
   const context = createChatAbortContext({

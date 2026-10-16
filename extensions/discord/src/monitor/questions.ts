@@ -35,7 +35,9 @@ class QuestionButton extends Button {
     }
     try {
       await interaction.acknowledge();
-    } catch {}
+    } catch {
+      // The Gateway can accept the answer even when Discord cannot acknowledge it.
+    }
     let content: string;
     try {
       const result = await this.ctx.resolveQuestion({
@@ -84,7 +86,6 @@ export function createDiscordQuestionButton(params: {
             label: "discord question",
             componentLabel: "button",
             unauthorizedReply: "You are not authorized to answer this question.",
-            defer: false,
           }),
         )),
   });

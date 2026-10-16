@@ -1,11 +1,14 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
-import { resolveModelAuthMode } from "../../agents/model-auth.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { resolveModelAuthModeAsync } from "../../agents/model-auth.js";
+import {
+  resolveSessionPluginStatusLines,
+  resolveSessionPluginTraceLines,
+  type SessionEntry,
+} from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
-import { buildInlinePluginStatusPayload } from "./agent-runner-core.js";
 import { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
 import {
   accumulateSessionUsageFromTranscript,
@@ -56,14 +59,18 @@ export async function buildReplyDiagnosticsPayload(params: {
   const traceAuthorized = followupRun.run.traceAuthorized === true;
   const traceLevel = followupRun.run.traceLevelOverride ?? activeSessionEntry?.traceLevel;
   const traceEnabled = traceAuthorized && (traceLevel === "on" || traceLevel === "raw");
-  if (!verboseEnabled && !traceEnabled) {
+  const thinkingClamp = runResult.meta?.requestShaping?.thinkingClamp;
+  if (!verboseEnabled && !traceEnabled && !thinkingClamp) {
     return undefined;
   }
-  let diagnosticsPayload = buildInlinePluginStatusPayload({
-    entry: activeSessionEntry,
-    includeStatusLines: verboseEnabled,
-    includeTraceLines: traceEnabled,
-  });
+  const lines = [
+    ...(thinkingClamp ? [thinkingClamp] : []),
+    ...(verboseEnabled ? resolveSessionPluginStatusLines(activeSessionEntry) : []),
+    ...(traceEnabled ? resolveSessionPluginTraceLines(activeSessionEntry) : []),
+  ];
+  let diagnosticsPayload: ReplyPayload | undefined = lines.length
+    ? { text: lines.join("\n") }
+    : undefined;
   if (traceAuthorized && traceLevel === "raw") {
     const isHookBlockedRun = runResult.meta?.error?.kind === "hook_block";
     const rawUserText = isHookBlockedRun
@@ -77,9 +84,9 @@ export async function buildReplyDiagnosticsPayload(params: {
       authMode:
         runResult.meta?.requestShaping?.authMode ??
         (cfg?.models?.providers && providerUsed in cfg.models.providers
-          ? (resolveModelAuthMode(providerUsed, cfg, undefined, {
+          ? ((await resolveModelAuthModeAsync(providerUsed, cfg, undefined, {
               workspaceDir: followupRun.run.workspaceDir,
-            }) ?? undefined)
+            })) ?? undefined)
           : undefined),
       thinking:
         runResult.meta?.requestShaping?.thinking ??

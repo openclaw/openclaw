@@ -12,22 +12,23 @@ import { resolveRetainedManagedNpmInstallPackageInfo } from "./managed-npm-reten
 import { safeRealpathSync } from "./path-safety.js";
 import { getPluginCache } from "./plugin-cache.js";
 import type { PluginCache } from "./plugin-cache.types.js";
+import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
 import type {
   PluginNativeArtifactFact,
   PluginNativeNamespaceFact,
   PluginSourceAdmissionReceipt,
 } from "./plugin-source-admission.types.js";
+import { resolvePluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import {
   createPluginNativeCaptureRoot,
   retainPluginNativeCapturePath,
 } from "./plugin-source-capture-directory.js";
-import { resolvePluginSourceCaptureStateDir } from "./plugin-source-capture-state-dir.js";
 
 type NativeSnapshot = ReturnType<typeof createPluginNativeCaptureRoot>;
 export type AdmissionState = {
   readonly viewKey: string;
-  readonly captureStateDir: string;
+  readonly captureStorage: PluginSourceCaptureStorage;
   readonly publicationStateDir: string;
   readonly artifactPreservingReadOnly: boolean;
   preparedIndexes: WeakSet<InstalledPluginIndex>;
@@ -47,8 +48,18 @@ const admissions = new WeakMap<PluginCache, Map<string, AdmissionState>>();
 const admissionScopes = new WeakMap<PluginCache, Set<AdmissionState>>();
 export const snapshotOwners = new WeakMap<NativeSnapshot, Set<object>>();
 
-function resolveAdmissionViewKey(readOnly = isArtifactPreservingStateRead()): string {
-  return `${readOnly ? "readonly" : "writable"}:${resolvePluginMetadataEnvFingerprint()}`;
+function resolveAdmissionViewKey(
+  readOnly = isArtifactPreservingStateRead(),
+  storage = resolvePluginSourceCaptureStorage(),
+  publicationStateDir = resolveActivePluginInstallRoots().stateDir,
+): string {
+  return JSON.stringify([
+    readOnly ? "readonly" : "writable",
+    resolvePluginMetadataEnvFingerprint(),
+    storage.stateDir,
+    storage.placement,
+    publicationStateDir,
+  ]);
 }
 
 export function retainNativePath(state: AdmissionState, filename: string): void {
@@ -135,15 +146,21 @@ function bindAdmissionState(cache: PluginCache, state: AdmissionState): Admissio
 
 export function nativeAdmissionStateFor(cache = getPluginCache()): AdmissionState {
   const artifactPreservingReadOnly = isArtifactPreservingStateRead();
-  const viewKey = resolveAdmissionViewKey(artifactPreservingReadOnly);
+  const captureStorage = resolvePluginSourceCaptureStorage();
+  const publicationStateDir = resolveActivePluginInstallRoots().stateDir;
+  const viewKey = resolveAdmissionViewKey(
+    artifactPreservingReadOnly,
+    captureStorage,
+    publicationStateDir,
+  );
   const state = admissions.get(cache)?.get(viewKey);
   return (
     state ??
     bindAdmissionState(cache, {
       viewKey,
       // Deferred publication and disposal can run after the caller restores its environment.
-      captureStateDir: resolvePluginSourceCaptureStateDir(),
-      publicationStateDir: resolveActivePluginInstallRoots().stateDir,
+      captureStorage,
+      publicationStateDir,
       artifactPreservingReadOnly,
       preparedIndexes: new WeakSet(),
       owners: new Map(),
