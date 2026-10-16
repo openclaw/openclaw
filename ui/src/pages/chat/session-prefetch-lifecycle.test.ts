@@ -39,9 +39,9 @@ describe("session prefetch pane and navigation ownership", () => {
     "observes sidebar %s intent after a detached host joins the shell",
     async (eventType) => {
       const intended = "agent:main:warm-after-attachment";
-      fixture.controller.hostDisconnected();
+      fixture.unmountPrefetch();
       fixture.host.remove();
-      fixture.controller.hostConnected();
+      fixture.mountPrefetch();
       shell.append(fixture.host);
       const request = vi.fn(async (_method: string, params: unknown) =>
         historyResult((params as { sessionKey: string }).sessionKey),

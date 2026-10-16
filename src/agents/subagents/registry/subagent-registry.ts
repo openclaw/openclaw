@@ -512,6 +512,10 @@ function retireSupersededSubagentRun(
       assertCurrent?.();
       return isRequesterRetirementCustodyCurrent(current, entry);
     },
+  }).then(() => {
+    if (!subagentRuns.has(runId)) {
+      subagentLifecycleController.resumeAncestorCleanup(entry);
+    }
   });
 }
 

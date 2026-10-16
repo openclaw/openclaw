@@ -421,14 +421,14 @@ export function markPostCompactionModelFailurePayload(
   return postCompactionModelFailure === true &&
     payload.isError === true &&
     isReplyPayloadTerminalContent(payload) &&
-    typeof payload.text === "string"
+    payload.text !== undefined
     ? setReplyPayloadMetadata(payload, { postCompactionModelFailure: true })
     : payload;
 }
 
 export function renderPostCompactionModelFailurePayload(payload: ReplyPayload): ReplyPayload {
   return getReplyPayloadMetadata(payload)?.postCompactionModelFailure === true &&
-    typeof payload.text === "string"
+    payload.text !== undefined
     ? copyReplyPayloadMetadata(payload, {
         ...payload,
         text: `⚠️ Context compaction succeeded, but the later model request still failed. ${payload.text.replace(/^⚠️\s*/u, "")}`,

@@ -92,6 +92,15 @@ export function ChatDetailsContext(props: Props) {
             </span>
             <meter
               class="chat-details__meter"
+              style={{
+                color: usage().approximate
+                  ? "var(--muted)"
+                  : usage().pct >= 85
+                    ? "var(--danger)"
+                    : usage().pct >= 65
+                      ? "var(--warn)"
+                      : "var(--ok)",
+              }}
               min="0"
               max="100"
               value={usage().pct}

@@ -224,7 +224,7 @@ export function renderChannelDetail(params: {
           </div>
         </div>
         <div class="channels-detail__body">
-          {params.props.wizardHost.blockedByDirtyConfig && params.props.config.configFormDirty ? (
+          {params.props.wizardHost.blockedByDirtyConfig() && params.props.config.configFormDirty ? (
             <div class="callout warn">{t("channels.hub.saveBeforeSetup")}</div>
           ) : undefined}
           <For each={statusIssues()}>

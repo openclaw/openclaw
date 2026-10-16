@@ -6020,17 +6020,24 @@ cp.spawnSync = (command, args, options) => {
             preload,
             `const fs = require("node:fs"); const chmod = fs.chmodSync; fs.chmodSync = (file, mode) => { chmod(file, mode); if (file === "mode.sh") { ${mutation === "mode" ? "chmod(file, mode & ~0o100)" : mutation === "deletion" ? 'fs.writeFileSync("committed-deleted.ignored", "stale restored source")' : 'fs.appendFileSync(file, "corrupted after materialization")'}; } };`,
           );
+          let priorIndex: Buffer | undefined;
           const rejected = receive(
             `receiver-${mutation}-mismatch`,
             candidate.remoteCommand,
             candidate.bundle,
             origin,
             { NODE_OPTIONS: `--require=${preload}` },
+            true,
+            [],
+            (receiver) => {
+              priorIndex = readFileSync(path.join(receiver, ".git", "index"));
+            },
           );
           expect(rejected.result.status, failureDetail(rejected.result)).toBe(2);
           expect(rejected.result.stderr).toContain(`source ${mutation} mismatch`);
           expect(rejected.result.stdout).not.toContain("transport fixture reached");
           expect(git(rejected.receiver, ["rev-parse", "HEAD"])).toBe(base);
+          expect(readFileSync(path.join(rejected.receiver, ".git", "index"))).toEqual(priorIndex);
         }
         const reserved = path.join(producer, ".openclaw-crabbox-changed-gate.bundle");
         const victim = path.join(external, "canary.txt");

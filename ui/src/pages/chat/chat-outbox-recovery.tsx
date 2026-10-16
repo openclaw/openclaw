@@ -1,4 +1,5 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, Show, untrack } from "solid-js";
+import type { SessionsListResult } from "../../api/types.ts";
 import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import type { DurableComposerRecoveryEntry } from "../../lib/chat/composer-draft-store.runtime.ts";
@@ -22,14 +23,24 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
+import type { ElementProperties } from "../../types/solid-elements.d.ts";
 
 type RecoveryEntry = ChatOutboxRecoveryEntry | DurableComposerRecoveryEntry;
+type RecoveryHost = Parameters<typeof captureChatOutboxRecoveryDestination>[0] &
+  Required<
+    Pick<
+      Parameters<typeof captureChatOutboxRecoveryDestination>[0],
+      "sessionKey" | "chatAttachments" | "chatQueue" | "chatMessages"
+    >
+  > & {
+    settings: { gatewayUrl: string };
+    sessionsResult?: SessionsListResult | null;
+  };
 
 const draftStore = import("../../lib/chat/composer-draft-store.runtime.ts");
 
 type RecoveryProps = {
-  host: ChatPageHost | undefined;
+  host: RecoveryHost | undefined;
   identity: string;
   messages: readonly unknown[];
 };
@@ -467,3 +478,36 @@ defineSolidBridge<RecoveryProps>(
     },
   },
 );
+
+export function PaneOutboxRecovery(props: {
+  state: RecoveryHost;
+  identity: string;
+  onRestored: () => void;
+}) {
+  return (
+    <openclaw-chat-outbox-recovery
+      prop:host={props.state}
+      prop:messages={props.state.chatMessages}
+      prop:identity={props.identity}
+      onOutbox-restored={() => props.onRestored()}
+    />
+  );
+}
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-chat-outbox-recovery": HTMLAttributes<
+        HTMLElementTagNameMap["openclaw-chat-outbox-recovery"]
+      > &
+        ElementProperties<
+          Pick<
+            HTMLElementTagNameMap["openclaw-chat-outbox-recovery"],
+            "host" | "identity" | "messages"
+          >
+        > & {
+          "onOutbox-restored"?: () => void;
+        };
+    }
+  }
+}

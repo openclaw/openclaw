@@ -1,4 +1,5 @@
 import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
+import { isLocalProviderBaseUrl } from "../agents/model-provider-local.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
@@ -19,6 +20,7 @@ import {
   resolveCustomModelAliasError,
   resolveCustomModelImageInputInference,
   resolveCustomProviderId,
+  resolveCustomProviderApi,
   type CustomApiCompatibility,
   type CustomApiResult,
 } from "./onboard-custom-config.js";
@@ -127,7 +129,7 @@ async function promptBaseUrlAndKey(params: {
   config: OpenClawConfig;
   secretInputMode?: SecretInputMode;
   initialBaseUrl?: string;
-}): Promise<{ baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string }> {
+}): Promise<{ baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string; noAuth: boolean }> {
   const baseUrlInput = await params.prompter.text({
     message: t("wizard.customProvider.apiBaseUrl"),
     initialValue: params.initialBaseUrl,
@@ -138,27 +140,48 @@ async function promptBaseUrlAndKey(params: {
   });
   const baseUrl = baseUrlInput.trim();
   const providerHint = buildEndpointIdFromUrl(baseUrl) || "custom";
-  let apiKeyInput: SecretInput | undefined;
-  // Keep the persisted key shape from the credential helper while also keeping
-  // the resolved plaintext only for the immediate verification probe.
-  const resolvedApiKey = await ensureApiKeyFromEnvOrPrompt({
-    config: params.config,
-    provider: providerHint,
-    envLabel: "CUSTOM_API_KEY",
-    promptMessage: t("wizard.customProvider.apiKeyPrompt"),
-    normalize: normalizeSecretInput,
-    validate: () => undefined,
-    prompter: params.prompter,
-    secretInputMode: params.secretInputMode,
-    setCredential: async (apiKey) => {
-      apiKeyInput = apiKey;
-    },
-  });
-  return {
-    baseUrl,
-    apiKey: normalizeOptionalProviderApiKey(apiKeyInput),
-    resolvedApiKey: normalizeSecretInput(resolvedApiKey),
-  };
+  for (;;) {
+    let apiKeyInput: SecretInput | undefined;
+    // Keep the persisted key shape from the credential helper while also keeping
+    // the resolved plaintext only for the immediate verification probe.
+    const resolvedApiKey = normalizeSecretInput(
+      await ensureApiKeyFromEnvOrPrompt({
+        config: params.config,
+        provider: providerHint,
+        envLabel: "CUSTOM_API_KEY",
+        promptMessage: t("wizard.customProvider.apiKeyPrompt"),
+        normalize: normalizeSecretInput,
+        validate: () => undefined,
+        prompter: params.prompter,
+        secretInputMode: params.secretInputMode,
+        setCredential: async (apiKey) => {
+          apiKeyInput = apiKey;
+        },
+      }),
+    );
+    if (resolvedApiKey.trim()) {
+      return {
+        baseUrl,
+        apiKey: normalizeOptionalProviderApiKey(apiKeyInput),
+        resolvedApiKey,
+        noAuth: false,
+      };
+    }
+    // Loopback/RFC1918 blanks already resolve through synthetic local auth, so
+    // only ask where a blank key would otherwise produce a broken provider.
+    if (isLocalProviderBaseUrl(baseUrl)) {
+      return { baseUrl, apiKey: undefined, resolvedApiKey: "", noAuth: false };
+    }
+    // A blank key must yield a working configuration for servers that do not
+    // enforce auth, even when hostname checks cannot prove the host is local.
+    const noAuth = await params.prompter.confirm({
+      message: t("wizard.customProvider.noAuthConfirm"),
+      initialValue: true,
+    });
+    if (noAuth) {
+      return { baseUrl, resolvedApiKey: "", noAuth: true };
+    }
+  }
 }
 
 async function promptCustomApiModelId(prompter: WizardPrompter): Promise<string> {
@@ -189,7 +212,7 @@ export async function promptCustomApiConfig(params: {
     env: process.env,
   }).plugins;
 
-  let { baseUrl, apiKey, resolvedApiKey } = await promptBaseUrlAndKey({
+  let { baseUrl, apiKey, resolvedApiKey, noAuth } = await promptBaseUrlAndKey({
     prompter,
     config,
     secretInputMode: params.secretInputMode,
@@ -280,7 +303,7 @@ export async function promptCustomApiConfig(params: {
       ],
     });
     if (retryChoice === "baseUrl" || retryChoice === "both") {
-      ({ baseUrl, apiKey, resolvedApiKey } = await promptBaseUrlAndKey({
+      ({ baseUrl, apiKey, resolvedApiKey, noAuth } = await promptBaseUrlAndKey({
         prompter,
         config,
         secretInputMode: params.secretInputMode,
@@ -338,12 +361,43 @@ export async function promptCustomApiConfig(params: {
           initialValue: imageInputInference.supportsImageInput,
         });
   const resolvedCompatibility = compatibility ?? "openai";
+  const { providerId } = resolveCustomProviderId({ config, baseUrl, providerId: providerIdInput });
+  const modelApi = config.models?.providers?.[providerId]?.models.find(
+    (model) => model.id === modelId,
+  )?.api;
+  if (
+    noAuth &&
+    resolveCustomProviderApi({ baseUrl, compatibility: resolvedCompatibility, modelApi }) !==
+      "openai-completions"
+  ) {
+    // The no-auth confirmation happens before compatibility is chosen, and only
+    // openai-completions transports can suppress the auth header, so require a
+    // real key instead of persisting an unsupported no-auth combination.
+    noAuth = false;
+    let compatKeyInput: SecretInput | undefined;
+    resolvedApiKey = await ensureApiKeyFromEnvOrPrompt({
+      config,
+      provider: buildEndpointIdFromUrl(baseUrl) || "custom",
+      envLabel: "CUSTOM_API_KEY",
+      promptMessage: t("wizard.customProvider.apiKeyPrompt"),
+      normalize: normalizeSecretInput,
+      validate: (value) =>
+        value.trim() ? undefined : t("wizard.customProvider.noAuthCompatKeyRequired"),
+      prompter,
+      secretInputMode: params.secretInputMode,
+      setCredential: async (key) => {
+        compatKeyInput = key;
+      },
+    });
+    apiKey = normalizeOptionalProviderApiKey(compatKeyInput);
+  }
   const result = applyCustomApiConfig({
     config,
     baseUrl,
     modelId,
     compatibility: resolvedCompatibility,
     apiKey,
+    ...(noAuth ? { noAuth: true } : {}),
     providerId: providerIdInput,
     alias: aliasInput,
     manifestPlugins,

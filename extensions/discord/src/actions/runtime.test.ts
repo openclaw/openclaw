@@ -20,15 +20,9 @@ import { handleDiscordMessageAction } from "./handle-action.js";
 import { handleDiscordGuildAction } from "./runtime.guild.js";
 import { handleDiscordAction } from "./runtime.js";
 import { handleDiscordMessagingAction } from "./runtime.messaging.js";
+import type { DiscordModerationAction } from "./runtime.moderation-shared.js";
 import { handleDiscordModerationAction } from "./runtime.moderation.js";
-
-type DiscordChannelInfoTest = {
-  id: string;
-  type: number;
-  guild_id?: string;
-  name?: string;
-  parent_id?: string;
-};
+import type { DiscordChannelInfoTest, DiscordSearchResult } from "./runtime.test-support.js";
 
 const {
   discordSendMocks,
@@ -93,7 +87,7 @@ const {
     removeOwnReactionsDiscord: vi.fn(async () => ({ removed: ["👍"] })),
     removeReactionDiscord: vi.fn(async () => ({})),
     removeRoleDiscord: vi.fn(async () => ({ ok: true })),
-    searchMessagesDiscord: vi.fn(async () => ({})),
+    searchMessagesDiscord: vi.fn(async (): Promise<DiscordSearchResult> => ({ messages: [] })),
     sendDiscordComponentMessage: vi.fn(componentMessageDefault),
     sendMessageDiscord: vi.fn(async () => ({})),
     sendStickerDiscord: vi.fn(async () => ({})),
@@ -229,7 +223,7 @@ function handleGuildAction(
 }
 
 function handleModerationAction(
-  action: string,
+  action: DiscordModerationAction,
   params: Record<string, unknown>,
   isActionEnabled: (
     key: keyof DiscordActionConfig,
@@ -251,7 +245,7 @@ async function expectBlockedRead(
 }
 const disabledActions = (key: keyof DiscordActionConfig) => key !== "reactions";
 const channelInfoEnabled = (key: keyof DiscordActionConfig) => key === "channelInfo";
-const moderationEnabled = (key: keyof DiscordActionConfig) => key === "moderation";
+const moderationEnabled = (key: keyof DiscordActionConfig): boolean => key === "moderation";
 const rolesEnabled = (key: keyof DiscordActionConfig) => key === "roles";
 
 beforeEach(() => {
@@ -2109,7 +2103,8 @@ describe("Discord action numeric validation", () => {
     {
       action: "timeout",
       params: { guildId: "G1", userId: "U1", durationMinutes: 5.5 },
-      handle: handleModerationAction,
+      handle: (_action: string, params: Record<string, unknown>, gate: typeof moderationEnabled) =>
+        handleModerationAction("timeout", params, gate),
       gate: moderationEnabled,
       call: timeoutMemberDiscord,
       error: "durationMinutes must be a non-negative integer",

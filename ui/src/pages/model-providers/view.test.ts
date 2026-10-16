@@ -2,7 +2,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
-import { choosePickerValue, updatePickers } from "../../test-helpers/select-picker.ts";
+import { choosePickerValue, openPicker, updatePickers } from "../../test-helpers/select-picker.ts";
 import { card, mount, props, text } from "./view.test-support.tsx";
 
 it("offers only decision models, even without a chat provider, and retains an unavailable selection", async () => {
@@ -24,6 +24,7 @@ it("offers only decision models, even without a chat provider, and retains an un
   const picker = container.querySelector<HTMLButtonElement>("#model-providers-decision-model")!;
   expect(picker.disabled).toBe(false);
   expect(picker.textContent).toContain("typesafe/retired");
+  await openPicker(picker);
   expect(
     container.querySelectorAll('[role="option"][data-value="typesafe/jev-latest"]'),
   ).toHaveLength(1);
@@ -61,14 +62,16 @@ it("retains a saved unavailable model without offering it for another default se
   );
 
   await updatePickers(container);
-  const blocked = [...container.querySelectorAll('[role="option"][data-value="fixture/blocked"]')];
+  const blocked: Element[] = [];
+  const ready: Element[] = [];
+  for (const picker of container.querySelectorAll<HTMLElement>("openclaw-select-picker")) {
+    await openPicker(picker);
+    blocked.push(...picker.querySelectorAll('[role="option"][data-value="fixture/blocked"]'));
+    ready.push(...picker.querySelectorAll('[role="option"][data-value="fixture/ready"]'));
+  }
   expect(blocked).toHaveLength(3);
   expect(blocked.every((option) => option.getAttribute("aria-disabled") === "true")).toBe(true);
-  expect(
-    [...container.querySelectorAll('[role="option"][data-value="fixture/ready"]')].every(
-      (option) => option.getAttribute("aria-disabled") === "false",
-    ),
-  ).toBe(true);
+  expect(ready.every((option) => option.getAttribute("aria-disabled") === "false")).toBe(true);
   const utility = container.querySelector<HTMLButtonElement>("#model-providers-utility-model")!;
   expect(utility.textContent).toContain("Blocked");
   await choosePickerValue(utility, "fixture/blocked");
@@ -359,6 +362,7 @@ describe("renderModelProviders", () => {
     await updatePickers(container);
     const primary = settingsRow(defaults!, "Model").querySelector<HTMLButtonElement>("button")!;
     expect(primary.disabled).toBe(false);
+    await openPicker(primary);
     expect(
       [...settingsRow(defaults!, "Model").querySelectorAll('[role="option"]')].every(
         (option) => option.getAttribute("aria-disabled") === "true",
@@ -654,11 +658,17 @@ describe("renderModelProviders", () => {
         }),
       );
       await updatePickers(automatic);
+      await openPicker(automatic.querySelector("openclaw-select-picker")!);
       expect(
         automatic
           .querySelector('[role="option"][data-value="opus"]')
           ?.getAttribute("aria-selected") === "true",
       ).toBe(true);
+      await openPicker(
+        automatic.querySelectorAll<HTMLElement>(
+          ".model-providers__defaults openclaw-select-picker",
+        )[1]!,
+      );
       const automaticOption = automatic
         .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
         ?.querySelector('[role="option"][aria-selected="true"]');
@@ -674,6 +684,11 @@ describe("renderModelProviders", () => {
         }),
       );
       await updatePickers(disabled);
+      await openPicker(
+        disabled.querySelectorAll<HTMLElement>(
+          ".model-providers__defaults openclaw-select-picker",
+        )[1]!,
+      );
       expect(
         text(
           disabled
@@ -684,7 +699,12 @@ describe("renderModelProviders", () => {
     },
   );
 
-  function utilityOption(container: HTMLElement, value: string) {
+  async function utilityOption(container: HTMLElement, value: string) {
+    await openPicker(
+      container.querySelectorAll<HTMLElement>(
+        ".model-providers__defaults openclaw-select-picker",
+      )[1]!,
+    );
     const option = container
       .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
       ?.querySelector(`[role="option"][data-value="${value}"]`);
@@ -712,10 +732,10 @@ describe("renderModelProviders", () => {
       }),
     );
     await updatePickers(container);
-    const chosen = utilityOption(container, "anthropic/claude-haiku-4-5");
+    const chosen = await utilityOption(container, "anthropic/claude-haiku-4-5");
     expect(chosen.label).toBe("Claude Haiku 4.5");
     expect(chosen.detail).toContain("Claude CLI · native");
-    expect(utilityOption(container, "__openclaw_automatic_utility__").detail).not.toContain(
+    expect((await utilityOption(container, "__openclaw_automatic_utility__")).detail).not.toContain(
       "Claude CLI",
     );
   });

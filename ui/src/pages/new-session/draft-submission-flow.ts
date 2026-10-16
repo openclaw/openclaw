@@ -17,7 +17,7 @@ import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import { promptNewSessionNotifications } from "./background-session-notice.ts";
 import { NewSessionCapabilityController } from "./capability-controller.ts";
 import * as catalog from "./catalog-target.ts";
-import { NewSessionComposerTextareaController } from "./composer-controller.ts";
+import { createNewSessionComposerTextarea } from "./composer-controller.ts";
 import type { DraftSessionCreateOverrides, NewSessionVisibility } from "./create-params.ts";
 import { CreationComposer, retainCreatedComposer } from "./creation-composer.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
@@ -90,7 +90,7 @@ export class DraftSubmissionFlow {
   get creationComposer(): CreationComposer | undefined {
     return this.creationComposerValue?.canDisplay() ? this.creationComposerValue : undefined;
   }
-  readonly composerTextarea = new NewSessionComposerTextareaController();
+  readonly composerTextarea = createNewSessionComposerTextarea();
   permissionMode: SessionCreateParams["permissionMode"];
   readonly draftPersistence: NewSessionDraftPersistence;
   readonly capabilities: NewSessionCapabilityController;

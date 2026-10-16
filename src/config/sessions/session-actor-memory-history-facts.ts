@@ -11,6 +11,7 @@ import {
 } from "../../gateway/session-transcript-source-pages.js";
 import { hasInterSessionUserProvenance } from "../../sessions/input-provenance.js";
 import { NESTED_TOOL_ACTIVITY_CUSTOM_TYPE } from "../../sessions/nested-tool-activity.js";
+import { resolveSessionTitleSource } from "../../sessions/session-title-source.js";
 import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import {
   createVisibleAssistantResultEventMatcher,
@@ -332,13 +333,20 @@ export function readSessionActorMemoryHistoryFacts(
       });
     }
     case "session.history.title": {
-      const first = navigation.visibleMessages.slice(0, 100).find(({ event }) => {
+      let firstUserMessage: string | null = null;
+      for (const { event } of navigation.visibleMessages.slice(0, 100)) {
         const message = asOptionalRecord(asOptionalRecord(event)?.message);
-        return (
-          projectSessionDisplayMessage(message)?.role === "user" &&
+        const projected = projectSessionDisplayMessage(message);
+        if (
+          projected?.role === "user" &&
           (query.input.includeInterSession === true || !hasInterSessionUserProvenance(message))
-        );
-      });
+        ) {
+          firstUserMessage = resolveSessionTitleSource(projected.text, query.input.skillCommands);
+        }
+        if (firstUserMessage !== null) {
+          break;
+        }
+      }
       let lastMessagePreview: string | null = null;
       const tail = navigation.visibleMessages.slice(-100);
       for (let index = tail.length - 1; index >= 0 && lastMessagePreview === null; index -= 1) {
@@ -350,8 +358,7 @@ export function readSessionActorMemoryHistoryFacts(
       return {
         kind: "session-title-fields",
         fields: {
-          firstUserMessage:
-            projectSessionDisplayMessage(asOptionalRecord(first?.event)?.message)?.text ?? null,
+          firstUserMessage,
           lastMessagePreview,
         },
       };

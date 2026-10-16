@@ -4,7 +4,7 @@ import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
-import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { MessageImages, type MessageImagesProps } from "./chat-message-images-solid.tsx";
@@ -13,9 +13,11 @@ import {
   type ImageBlock,
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
+import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 
 let container: HTMLDivElement;
 let onRequestUpdate: () => void;
+let disconnectMedia: Set<() => void>;
 let view:
   | {
       update: (props: MessageImagesProps) => void;
@@ -29,6 +31,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   container = document.body.appendChild(document.createElement("div"));
   onRequestUpdate = vi.fn();
+  disconnectMedia = new Set();
   vi.stubGlobal(
     "IntersectionObserver",
     class implements IntersectionObserver {
@@ -88,9 +91,11 @@ function draw(images: ImageBlock[], options: ImageRenderOptions = {}) {
   const [presented, setPresented] = createSignal(true);
   const mounted = mountSolid(
     () => (
-      <SolidContentPresentation value={presented}>
-        <MessageImages {...current()} />
-      </SolidContentPresentation>
+      <ContentPresentation value={presented}>
+        <TranscriptMediaDisconnect value={disconnectMedia}>
+          <MessageImages {...current()} />
+        </TranscriptMediaDisconnect>
+      </ContentPresentation>
     ),
     { container },
   );
@@ -183,7 +188,7 @@ it("replaces failed native images with unavailable cards and offers local retry"
   );
 });
 
-it.each(["assistant", "managed", "omitted"] as const)(
+it.each(["assistant", "managed", "omitted", "standalone"] as const)(
   "defers offscreen %s image reads and shares acquisition after admission",
   async (kind) => {
     const source =
@@ -201,7 +206,11 @@ it.each(["assistant", "managed", "omitted"] as const)(
     const resolveArtifactDownload = vi.fn(async () => ({
       url: kind === "omitted" ? "data:image/png;base64,cG5n" : source,
     }));
-    draw([image, image], { sessionKey: "agent:main:main", resolveArtifactDownload });
+    draw([image, image], {
+      sessionKey: "agent:main:main",
+      resolveArtifactDownload,
+      onRequestUpdate: kind === "standalone" ? undefined : onRequestUpdate,
+    });
 
     expect(fetch).not.toHaveBeenCalled();
     expect(resolveArtifactDownload).not.toHaveBeenCalled();
@@ -476,6 +485,35 @@ it("preserves an immediate inline submission and its settled canonical handoff",
   expect(container.querySelector("img")).toBe(image);
   expect(fetch).toHaveBeenCalledOnce();
   expect(intersections).toHaveLength(0);
+});
+
+it("retires inline handoff pixels synchronously when the transcript disconnects", async () => {
+  const artifactId = crypto.randomUUID();
+  const metadata = createDeferred<Response>();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => metadata.promise),
+  );
+  draw([{ url: "data:image/png;base64,cG5n", artifactId }], { localSubmission: true });
+  const image = container.querySelector("img")!;
+  Object.defineProperty(image, "naturalWidth", { value: 20 });
+  image.dispatchEvent(new Event("load"));
+  draw([{ url: `media://inbound/${artifactId}`, artifactId, factIndex: 0 }], {
+    localSubmission: true,
+    canonicalMessageKey: "disconnecting-submission",
+  });
+  expect(container.querySelector("img")).toBe(image);
+
+  for (const disconnect of disconnectMedia) {
+    disconnect();
+  }
+  expect(image.isConnected).toBe(false);
+  image.dispatchEvent(new Event("load"));
+  metadata.resolve(ticketResponse());
+  await vi.advanceTimersByTimeAsync(0);
+  expect(container.querySelector("img")).toBeNull();
+  unmount();
+  expect(disconnectMedia.size).toBe(0);
 });
 
 it("ignores replaced observers and aborts detached artifact resolution before blob fetch", async () => {

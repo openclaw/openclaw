@@ -2755,6 +2755,7 @@ export const en: TranslationMap & {
   login: {},
   chat: {
     sessionDetails: {
+      menu: "Session details",
       title: "Details",
       close: "Close details",
       session: "Session details",
@@ -2892,6 +2893,7 @@ export const en: TranslationMap & {
       preparingCloudEnvironment: "Preparing cloud environment…",
       savingSnapshot: "Saving snapshot…",
       preparingContext: "Preparing this turn…",
+      waitingForTurn: "Waiting for turn to start…",
       memoryFlushing: "Saving conversation memory…",
       startingModel: "Waiting for a response",
       waitingForLocalModel: "Waiting for the local model to respond",
@@ -3730,6 +3732,8 @@ export const en: TranslationMap & {
       dockRight: "Move side panel right",
       dockBottom: "Move side panel below",
       conversation: "Chat",
+      showChat: "Show this conversation",
+      hideChat: "Hide this conversation",
       conversationEmpty: "The conversation for this task.",
       minimize: "Minimize side panel",
       resize: "Resize side panel",

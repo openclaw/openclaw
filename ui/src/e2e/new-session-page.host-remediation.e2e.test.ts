@@ -48,6 +48,14 @@ suite.define(() => {
               status: "unavailable",
               sessionHost: true,
             },
+            // Keep the phone inventory overflowing independently of composer placement.
+            ...Array.from({ length: width === 390 ? 12 : 0 }, (_, index) => ({
+              id: `node:additional-device-${index}`,
+              type: "node",
+              label: `Additional device ${index + 1}`,
+              status: "available",
+              sessionHost: true,
+            })),
           ],
         },
       });

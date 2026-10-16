@@ -71,7 +71,6 @@ export function registerRequesterStartupAdmissionTests({
           status: "pending",
           attemptCount: 0,
           replayCount: 0,
-          deferralCount: 2,
           batchRunIds: [runId],
           requesterYieldBatch: true,
           rearmGeneration: 1,

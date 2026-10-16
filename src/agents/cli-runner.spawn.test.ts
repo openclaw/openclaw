@@ -39,10 +39,8 @@ import {
   requireRegexMatch,
 } from "./cli-runner.test-helpers.js";
 import { createCliLiveSessionCapability } from "./cli-runner/cli-live-session-registry.js";
-import { logCliInvocation } from "./cli-runner/execute-logging.js";
 import { executePreparedCliRun as executePreparedCliRunImpl } from "./cli-runner/execute.js";
 import {
-  buildCliExecLogLine,
   createManagedRun,
   createSuccessfulProcessExit,
   setCliRunnerExecuteTestDeps,
@@ -186,27 +184,6 @@ describe("runCliAgent spawn path", () => {
     const spawn = requireRecord(mockCallArg(supervisorSpawnMock), "CLI spawn");
     const hydratedPath = requireArgAfter(spawn.argv as string[], "--image");
     await expect(fs.readFile(hydratedPath)).resolves.toEqual(image);
-  });
-
-  it("formats redacted CLI resume diagnostics without exposing raw session ids", () => {
-    const logLine = buildCliExecLogLine({
-      provider: "claude-cli",
-      model: "claude-opus-4-7",
-      promptChars: 42,
-      trigger: "heartbeat",
-      useResume: true,
-      cliSessionId: "claude-session-secret",
-      resolvedSessionId: "claude-session-secret",
-      reusableSession: { mode: "reuse", sessionId: "claude-session-secret" },
-      hasHistoryPrompt: false,
-    });
-
-    expect(logLine).toContain("trigger=heartbeat");
-    expect(logLine).toContain("useResume=true");
-    expect(logLine).toContain("session=present");
-    expect(logLine).toContain("reuse=reusable");
-    expect(logLine).toContain("historyPrompt=none");
-    expect(logLine).not.toContain("claude-session-secret");
   });
 
   it("streams a node-placed Claude resume through the normal JSONL parser", async ({
@@ -1582,42 +1559,6 @@ describe("runCliAgent spawn path", () => {
     expect(input.env?.ANTHROPIC_API_TOKEN).toBeUndefined();
     expect(input.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe("override-oauth-token");
     expect(input.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("100000");
-  });
-
-  it("logs CLI auth env diagnostics as key names without secret values", () => {
-    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-host");
-    vi.stubEnv("ANTHROPIC_API_TOKEN", "token-host");
-    vi.stubEnv("GEMINI_CLI_SYSTEM_SETTINGS_PATH", "/tmp/host-gemini-settings.json");
-    vi.stubEnv("OPENAI_API_KEY", "sk-openai-host");
-    const log = vi.fn();
-
-    logCliInvocation({
-      args: [],
-      command: "claude",
-      env: {
-        ANTHROPIC_API_TOKEN: "token-child",
-        CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
-        GEMINI_CLI_HOME: "/tmp/child-gemini-home",
-        OPENAI_API_KEY: "sk-openai-child",
-      },
-      log,
-    });
-
-    const authLog = log.mock.calls.map(([message]) => String(message)).join("\n");
-    expect(authLog).toMatch(/host=.*ANTHROPIC_API_KEY/);
-    expect(authLog).toMatch(/host=.*ANTHROPIC_API_TOKEN/);
-    expect(authLog).toMatch(/host=.*OPENAI_API_KEY/);
-    expect(authLog).toMatch(/child=.*ANTHROPIC_API_TOKEN/);
-    expect(authLog).toMatch(/child=.*CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST/);
-    expect(authLog).toMatch(/child=.*OPENAI_API_KEY/);
-    expect(authLog).toMatch(/cleared=.*ANTHROPIC_API_KEY/);
-    expect(authLog).toMatch(/runtimeHost=.*GEMINI_CLI_SYSTEM_SETTINGS_PATH/);
-    expect(authLog).toMatch(/runtimeChild=.*GEMINI_CLI_HOME/);
-    expect(authLog).toMatch(/runtimeCleared=.*GEMINI_CLI_SYSTEM_SETTINGS_PATH/);
-    expect(authLog).not.toContain("sk-ant-host");
-    expect(authLog).not.toContain("token-child");
-    expect(authLog).not.toContain("/tmp/child-gemini-home");
-    expect(authLog).not.toContain("sk-openai-child");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

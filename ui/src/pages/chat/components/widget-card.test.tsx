@@ -4,7 +4,7 @@ import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { mcpAppWidgetNameForViewId, type BoardProvider } from "../../../lib/board/provider.ts";
 import { bumpCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
-import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { ToolPreview } from "./widget-card.ts";
@@ -495,7 +495,7 @@ describe("widget-card presentation", () => {
     const cancel = vi.spyOn(globalThis, "cancelAnimationFrame").mockImplementation(() => {});
     const [presented, setPresented] = createSignal(true);
     const root = mountSolid(() => (
-      <SolidContentPresentation value={presented}>
+      <ContentPresentation value={presented}>
         <div class="chat-thread">
           <ToolPreview
             preview={{ ...canvasPreview, url: "about:blank", sandbox: "strict" }}
@@ -503,7 +503,7 @@ describe("widget-card presentation", () => {
             options={{ rawText: "Widget details" }}
           />
         </div>
-      </SolidContentPresentation>
+      </ContentPresentation>
     ));
     onTestFinished(() => {
       root.unmount();
