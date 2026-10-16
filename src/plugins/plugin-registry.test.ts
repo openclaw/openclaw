@@ -678,6 +678,32 @@ describe("plugin registry facade", () => {
     }
   });
 
+  it("rediscovers when a policy enables a persisted plugin whose files are gone", async () => {
+    const stateDir = makeTempDir();
+    const configDir = makeTempDir();
+    const pluginRoot = path.join(configDir, "extensions", "demo");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    createCandidate(pluginRoot);
+    const env = hermeticEnv({ OPENCLAW_CONFIG_PATH: path.join(configDir, "openclaw.json") });
+    const disabled: OpenClawConfig = {
+      plugins: { slots: { memory: "none" }, entries: { demo: { enabled: false } } },
+    };
+    const installed = loadPluginRegistrySnapshotWithMetadata({ stateDir, env, config: disabled });
+    await writePersistedInstalledPluginIndex(installed.snapshot, { stateDir });
+    // Freshness tolerates missing files only while the persisted record is disabled.
+    fs.rmSync(pluginRoot, { recursive: true, force: true });
+    clearPluginMetadataLifecycleCaches();
+
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      stateDir,
+      env,
+      config: { plugins: { slots: { memory: "none" } } },
+    });
+
+    expect(result.source).toBe("derived");
+    expect(result.snapshot.plugins.filter((plugin) => plugin.enabled)).toEqual([]);
+  });
+
   it("reloads profile extensions after the metadata lifecycle is cleared", () => {
     const stateDir = makeTempDir();
     const configDir = makeTempDir();

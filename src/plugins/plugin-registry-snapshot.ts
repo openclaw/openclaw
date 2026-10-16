@@ -507,20 +507,33 @@ function loadPluginRegistrySnapshotWithPreparedValidation(
         return { snapshot: persistedIndex, source: "persisted", diagnostics };
       }
       // The inventory on disk is current; only activation changed. Never rescan for policy.
-      return {
-        snapshot: {
-          ...persistedIndex,
-          policyHash,
-          plugins: projectInstalledPluginIndexPolicy({
-            plugins: persistedIndex.plugins,
-            config: params.config,
-            env,
-            artifactPreservingReadOnly: params.artifactPreservingReadOnly,
-          }),
-        },
-        source: "derived",
-        diagnostics,
+      const projected: InstalledPluginIndex = {
+        ...persistedIndex,
+        policyHash,
+        plugins: projectInstalledPluginIndexPolicy({
+          plugins: persistedIndex.plugins,
+          config: params.config,
+          env,
+          artifactPreservingReadOnly: params.artifactPreservingReadOnly,
+        }),
       };
+      // Freshness tolerates missing files only for disabled records; recheck those this policy enables.
+      const activated: InstalledPluginIndex = {
+        ...projected,
+        plugins: projected.plugins.filter(
+          (plugin, index) => plugin.enabled && !persistedIndex.plugins[index]?.enabled,
+        ),
+      };
+      if (
+        activated.plugins.length === 0 ||
+        !(
+          hasStalePersistedPluginMetadataFiles(activated) ||
+          hasStaleDoctorContractFiles(activated, params) ||
+          hasMismatchedPersistedBundledRoot(activated, env)
+        )
+      ) {
+        return { snapshot: projected, source: "derived", diagnostics };
+      }
     }
   }
 
