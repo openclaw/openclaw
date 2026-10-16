@@ -29,7 +29,10 @@ import { publishUserProfileAliasChange } from "../../state/user-profile-events.j
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setDisplayName } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  type OpenClawTestState,
+  withOpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import {
   registerGatewayModelCatalogPrivateAccess,
@@ -161,6 +164,25 @@ function fixture() {
     readPrepared,
     loadDeferred,
     request,
+    writeSession: (
+      scope: Parameters<typeof writeSessionFixture>[0],
+      patch: Partial<SessionEntry>,
+    ) =>
+      writeSessionFixture(scope, {
+        updatedAt: 1,
+        createdActor: { type: "human", source: "profile", id: person.id },
+        ...patch,
+      }),
+    holdCatalog: () => {
+      const entered = createDeferred();
+      const release = createDeferred();
+      readPrepared.mockImplementationOnce(async () => {
+        entered.resolve();
+        await release.promise;
+        return snapshot;
+      });
+      return { entered, release };
+    },
   };
 }
 
@@ -171,17 +193,51 @@ const isolated = {
   env: WITHOUT_OPENAI_ENV_AUTH,
 } as const;
 
+async function withFixture(
+  run: (f: ReturnType<typeof fixture>, state: OpenClawTestState) => Promise<void>,
+  writeConfig = true,
+) {
+  await withOpenClawTestState(isolated, async (state) => {
+    const f = fixture();
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    if (writeConfig) {
+      await state.writeConfig(f.config);
+    }
+    await run(f, state);
+  });
+}
+
+const personalSelection = (authProfileId: string) =>
+  expect.objectContaining({ kind: "personal", authProfileId, source: "user" });
+
+const availableModel = expect.objectContaining({ id: "gpt-5.6-luna", available: true });
+
+type Reply = ReturnType<typeof vi.fn<RespondFn>>;
+
+function expectReply(respond: Reply, result: object, once = false) {
+  if (once) {
+    expect(respond).toHaveBeenCalledTimes(1);
+  }
+  expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(result), undefined);
+}
+
+function expectError(respond: Reply, error: object, once = false) {
+  if (once) {
+    expect(respond).toHaveBeenCalledTimes(1);
+  }
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
+}
+
+function expectModels(respond: Reply, available: boolean) {
+  expectReply(respond, { models: [expect.objectContaining({ available })] });
+}
+
 describe("direct session model catalogs", () => {
   it("shares a saved selection revision with session events without retiring it for activity", async () => {
-    await withOpenClawTestState(isolated, async (state) => {
-      const f = fixture();
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      await state.writeConfig(f.config);
+    await withFixture(async (f) => {
       const scope = { agentId: "main", sessionKey: "agent:main:catalog-revision" };
-      await writeSessionFixture(scope, {
+      await f.writeSession(scope, {
         sessionId: "catalog-revision-session",
-        updatedAt: 1,
-        createdActor: { type: "human", source: "profile", id: f.person.id },
         authProfileOverride: f.authProfileId,
         authProfileOverrideSource: "user",
       });
@@ -226,25 +282,21 @@ describe("direct session model catalogs", () => {
   it.each(["missing", "foreign"] as const)(
     "rejects a saved session with %s ownership before catalog I/O",
     async (ownership) => {
-      await withOpenClawTestState(isolated, async (state) => {
-        const f = fixture();
-        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-        await state.writeConfig(f.config);
+      await withFixture(async (f, state) => {
         const sessionKey = "agent:main:hidden-catalog";
         await writeSessionFixture(
           { agentId: "main", sessionKey },
           {
             sessionId: "hidden-catalog-session",
             updatedAt: 1,
-            ...(ownership === "foreign"
-              ? {
-                  createdActor: {
-                    type: "human" as const,
-                    source: "profile" as const,
+            createdActor:
+              ownership === "foreign"
+                ? {
+                    type: "human",
+                    source: "profile",
                     id: ensureProfileForEmail("hidden-catalog-owner@example.test").id,
-                  },
-                }
-              : {}),
+                  }
+                : undefined,
           },
         );
         const respond = await f.request({ sessionKey, view: "configured" });
@@ -261,16 +313,11 @@ describe("direct session model catalogs", () => {
   );
 
   it("keeps a scoped models.list result across only a committed read acknowledgment", async () => {
-    await withOpenClawTestState(isolated, async (state) => {
-      const f = fixture();
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      await state.writeConfig(f.config);
+    await withFixture(async (f, state) => {
       const scope = { agentId: "main", sessionKey: "agent:main:catalog-read-marker" };
-      await writeSessionFixture(scope, {
+      await f.writeSession(scope, {
         sessionId: "catalog-read-marker-session",
         lifecycleRevision: "catalog-read-marker-lifecycle",
-        updatedAt: 1,
-        createdActor: { type: "human", source: "profile", id: f.person.id },
         lastReadAt: 1,
         label: "catalog-read-marker-label",
         authProfileOverride: f.authProfileId,
@@ -293,20 +340,14 @@ describe("direct session model catalogs", () => {
       );
       const params = { sessionKey: scope.sessionKey, view: "configured" };
       const control = await f.request(params);
-      expect(control).toHaveBeenCalledExactlyOnceWith(
+      expectReply(
+        control,
+        {
+          models: [availableModel],
+        },
         true,
-        expect.objectContaining({
-          models: [expect.objectContaining({ id: "gpt-5.6-luna", available: true })],
-        }),
-        undefined,
       );
-      const entered = createDeferred();
-      const release = createDeferred();
-      f.readPrepared.mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
-        return f.snapshot;
-      });
+      const { entered, release } = f.holdCatalog();
       const pending = f.request(params);
       void pending.catch(() => {});
       try {
@@ -347,26 +388,15 @@ describe("direct session model catalogs", () => {
     "profile alias change",
     "catalog owner",
   ] as const)("revalidates the selected model catalog after %s", async (change) => {
-    await withOpenClawTestState(isolated, async (state) => {
+    await withFixture(async (f, state) => {
       let closedStorePath: string | undefined;
-      const f = fixture();
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      await state.writeConfig(f.config);
       const scope = { agentId: "main", sessionKey: "agent:main:held-saved" };
-      await writeSessionFixture(scope, {
+      await f.writeSession(scope, {
         sessionId: "original",
-        updatedAt: 1,
-        createdActor: { type: "human", source: "profile", id: f.person.id },
         authProfileOverride: f.authProfileId,
         authProfileOverrideSource: "user",
       });
-      const entered = createDeferred();
-      const release = createDeferred();
-      f.readPrepared.mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
-        return f.snapshot;
-      });
+      const { entered, release } = f.holdCatalog();
       const pending = f.request({ sessionKey: scope.sessionKey, view: "configured" });
       void pending.catch(() => {});
       try {
@@ -399,28 +429,24 @@ describe("direct session model catalogs", () => {
       const respond = await pending;
       if (change === "selected patch") {
         expect(loadSessionEntry(scope)?.label).toBe("changed");
-        expect(respond).toHaveBeenCalledExactlyOnceWith(
+        expectReply(
+          respond,
+          {
+            models: [availableModel],
+            accountSelection: personalSelection(f.authProfileId),
+          },
           true,
-          expect.objectContaining({
-            models: [expect.objectContaining({ id: "gpt-5.6-luna", available: true })],
-            accountSelection: expect.objectContaining({
-              kind: "personal",
-              authProfileId: f.authProfileId,
-              source: "user",
-            }),
-          }),
-          undefined,
         );
       } else {
-        expect(respond).toHaveBeenCalledExactlyOnceWith(
-          false,
-          undefined,
-          expect.objectContaining({
+        expectError(
+          respond,
+          {
             code: "UNAVAILABLE",
             message: expect.stringMatching(/changed|current/),
             retryable: true,
             retryAfterMs: 0,
-          }),
+          },
+          true,
         );
         if (closedStorePath) {
           // Synchronous revocation precedes the async resource owner's settlement.
@@ -435,21 +461,14 @@ describe("direct session model catalogs", () => {
   it.each([false, true])(
     "revalidates chat.metadata before response (selected model changed: %s)",
     async (changeSelected) => {
-      await withOpenClawTestState(isolated, async (state) => {
-        const f = fixture();
-        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-        await state.writeConfig(f.config);
+      await withFixture(async (f, state) => {
         const selected = { agentId: "main", sessionKey: "agent:main:metadata-selected" };
         const other = { ...selected, sessionKey: "agent:main:metadata-other" };
-        await writeSessionFixture(selected, {
+        await f.writeSession(selected, {
           sessionId: "selected",
-          updatedAt: 1,
-          createdActor: { type: "human", source: "profile", id: f.person.id },
         });
-        await writeSessionFixture(other, {
+        await f.writeSession(other, {
           sessionId: "other",
-          updatedAt: 1,
-          createdActor: { type: "human", source: "profile", id: f.person.id },
         });
         const entered = createDeferred();
         const release = createDeferred();
@@ -491,9 +510,7 @@ describe("direct session model catalogs", () => {
   );
 
   it("uses a saved session pin after the viewer changes their default and keeps agent reads separate", async () => {
-    await withOpenClawTestState(isolated, async (state) => {
-      const f = fixture();
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    await withFixture(async (f, state) => {
       f.config.agents = {
         ...f.config.agents,
         ownership: "explicit",
@@ -505,63 +522,40 @@ describe("direct session model catalogs", () => {
       };
       await state.writeConfig(f.config);
       const sessionKey = "agent:main:saved";
-      await writeSessionFixture(
+      await f.writeSession(
         { agentId: "main", sessionKey },
         {
           sessionId: "saved-catalog-session",
-          updatedAt: 1,
-          createdActor: { type: "human", source: "profile", id: f.person.id },
           authProfileOverride: f.authProfileId,
           authProfileOverrideSource: "user",
         },
       );
       clearUserProfileAuthLink({ profileId: f.person.id, provider: "openai" });
       const saved = await f.request({ sessionKey, view: "configured" });
-      expect(saved).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          models: [expect.objectContaining({ id: "gpt-5.6-luna", available: true })],
-          accountSelection: expect.objectContaining({
-            kind: "personal",
-            authProfileId: f.authProfileId,
-            source: "user",
-          }),
-        }),
-        undefined,
-      );
+      expectReply(saved, {
+        models: [availableModel],
+        accountSelection: personalSelection(f.authProfileId),
+      });
       const neutral = await f.request({ agentId: "main", view: "configured" });
-      expect(neutral).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          models: [expect.objectContaining({ available: false })],
-          accountSelection: { kind: "automatic", label: "Automatic account selection" },
-        }),
-        undefined,
-      );
+      expectReply(neutral, {
+        models: [expect.objectContaining({ available: false })],
+        accountSelection: { kind: "automatic", label: "Automatic account selection" },
+      });
       const mismatch = await f.request({ agentId: "other", sessionKey, view: "configured" });
-      expect(mismatch).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
-      );
+      expectError(mismatch, { code: "INVALID_REQUEST" });
       expect(f.loadDeferred).not.toHaveBeenCalled();
       expect(f.snapshot.authStore.profiles).toEqual({});
-    });
+    }, false);
   });
 
   it("projects a saved native session without borrowing host authentication state", async () => {
-    await withOpenClawTestState(isolated, async (state) => {
-      const f = fixture();
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      await state.writeConfig(f.config);
+    await withFixture(async (f) => {
       clearUserProfileAuthLink({ profileId: f.person.id, provider: "openai" });
       const sessionKey = "agent:main:harness:catalog-native:saved";
-      await writeSessionFixture(
+      await f.writeSession(
         { agentId: "main", sessionKey },
         {
           sessionId: "catalog-native-session",
-          updatedAt: 1,
-          createdActor: { type: "human", source: "profile", id: f.person.id },
           agentHarnessId: "catalog-native",
           modelSelectionLocked: true,
         },
@@ -599,11 +593,7 @@ describe("direct session model catalogs", () => {
           }),
         );
         const neutral = await f.request({ agentId: "main", view: "configured" });
-        expect(neutral).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ models: [expect.objectContaining({ available: false })] }),
-          undefined,
-        );
+        expectModels(neutral, false);
         expect(f.snapshot.entries[0]).not.toHaveProperty("available");
       } finally {
         resetPluginRuntimeStateForTest();
@@ -612,29 +602,16 @@ describe("direct session model catalogs", () => {
   });
 
   it("does not substitute a viewer default for a session with no saved pin", async () => {
-    await withOpenClawTestState(isolated, async (state) => {
-      const f = fixture();
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      await state.writeConfig(f.config);
+    await withFixture(async (f) => {
       const agent = await f.request({ agentId: "main", view: "configured" });
-      expect(agent).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ models: [expect.objectContaining({ available: true })] }),
-        undefined,
-      );
+      expectModels(agent, true);
       const session = await f.request({ sessionKey: "agent:main:uncreated", view: "configured" });
-      expect(session).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ models: [expect.objectContaining({ available: false })] }),
-        undefined,
-      );
+      expectModels(session, false);
     });
   });
 
   it("previews a retained self-owned draft without changing shared inventory or account defaults", async () => {
-    await withOpenClawTestState(isolated, async () => {
-      const f = fixture();
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    await withFixture(async (f) => {
       clearUserProfileAuthLink({ profileId: f.person.id, provider: "openai" });
       const before = readUserModelAuthProfile(f.authProfileId);
       const preview = await f.request({
@@ -642,18 +619,10 @@ describe("direct session model catalogs", () => {
         authProfileId: f.authProfileId,
         view: "configured",
       });
-      expect(preview).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          models: [expect.objectContaining({ available: true })],
-          accountSelection: expect.objectContaining({
-            kind: "personal",
-            authProfileId: f.authProfileId,
-            source: "user",
-          }),
-        }),
-        undefined,
-      );
+      expectReply(preview, {
+        models: [expect.objectContaining({ available: true })],
+        accountSelection: personalSelection(f.authProfileId),
+      });
       const inventory = await f.request({
         agentId: "main",
         authProfileId: f.authProfileId,
@@ -664,15 +633,13 @@ describe("direct session model catalogs", () => {
       expect(readUserModelAuthProfile(f.authProfileId)).toEqual(before);
       expect(f.snapshot.authStore.profiles).toEqual({});
       expect(f.loadDeferred).not.toHaveBeenCalled();
-    });
+    }, false);
   });
 
   it.each(["foreign admin", "anonymous", "synthetic", "forged locator"] as const)(
     "rejects %s before reading private catalog state",
     async (caller) => {
-      await withOpenClawTestState(isolated, async () => {
-        const f = fixture();
-        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      await withFixture(async (f) => {
         let authProfileId = f.authProfileId;
         if (caller === "foreign admin") {
           const other = ensureProfileForEmail("other-reader@example.test");
@@ -692,47 +659,29 @@ describe("direct session model catalogs", () => {
           { agentId: "main", authProfileId },
           caller === "anonymous" ? { client: null } : {},
         );
-        expect(result).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: "FORBIDDEN" }),
-        );
+        expectError(result, { code: "FORBIDDEN" });
         expect(f.readPrepared).not.toHaveBeenCalled();
-      });
+      }, false);
     },
   );
 
   it("rejects a combined saved-session and draft-account request", async () => {
-    await withOpenClawTestState(isolated, async () => {
-      const f = fixture();
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    await withFixture(async (f) => {
       const result = await f.request({
         sessionKey: "agent:main:saved",
         authProfileId: f.authProfileId,
       });
-      expect(result).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
-      );
+      expectError(result, { code: "INVALID_REQUEST" });
       expect(f.readPrepared).not.toHaveBeenCalled();
-    });
+    }, false);
   });
 
   it.each(["disconnect", "role loss", "abort"] as const)(
     "rechecks draft authority after a snapshot await and %s",
     async (loss) => {
-      await withOpenClawTestState(isolated, async () => {
-        const f = fixture();
-        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-        const entered = createDeferred();
-        const release = createDeferred();
+      await withFixture(async (f) => {
+        const { entered, release } = f.holdCatalog();
         const abort = new AbortController();
-        f.readPrepared.mockImplementationOnce(async () => {
-          entered.resolve();
-          await release.promise;
-          return f.snapshot;
-        });
         const pending = f.request(
           { agentId: "main", authProfileId: f.authProfileId },
           { signal: abort.signal },
@@ -751,13 +700,9 @@ describe("direct session model catalogs", () => {
           release.resolve();
         }
         const result = await pending;
-        expect(result).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: "FORBIDDEN" }),
-        );
+        expectError(result, { code: "FORBIDDEN" });
         expect(f.snapshot.authStore.profiles).toEqual({});
-      });
+      }, false);
     },
   );
 });

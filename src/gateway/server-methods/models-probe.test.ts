@@ -1,4 +1,3 @@
-// Model probe RPC tests cover validation, normalization, bounded execution, and redacted mapping.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
@@ -46,49 +45,46 @@ function summary(results: AuthProbeSummary["results"]): AuthProbeSummary {
   };
 }
 
-function createOptions(params: Record<string, unknown>, cfg: OpenClawConfig = {}) {
+async function probe(params: Record<string, unknown>, cfg: OpenClawConfig = {}) {
   const respond = vi.fn();
   const warn = vi.fn();
-  return {
-    options: {
-      req: { type: "req", id: "probe-1", method: "models.probe", params },
-      params,
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: { getRuntimeConfig: () => cfg, logGateway: { warn } } as never,
-    } as GatewayRequestHandlerOptions,
+  await handler({
+    req: { type: "req", id: "probe-1", method: "models.probe", params },
+    params,
+    client: null,
+    isWebchatConnect: () => false,
     respond,
-    warn,
-  };
+    context: { getRuntimeConfig: () => cfg, logGateway: { warn } } as never,
+  } as GatewayRequestHandlerOptions);
+  return { respond, warn };
+}
+
+function expectFailure(respond: ReturnType<typeof vi.fn>, error: object) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
+}
+
+function expectSuccess(respond: ReturnType<typeof vi.fn>, result: object) {
+  expect(respond).toHaveBeenCalledWith(true, result, undefined);
+}
+
+function target(
+  overrides: Partial<AuthProbeSummary["results"][number]>,
+): AuthProbeSummary["results"][number] {
+  return { provider: "openai", label: "env", source: "profile", status: "ok", ...overrides };
 }
 
 describe("models.probe", () => {
   beforeEach(() => {
-    mocks.listAgentIds.mockClear();
+    vi.clearAllMocks();
     mocks.listAgentIds.mockReturnValue(["main", "writer"]);
-    mocks.resolveAgentDir.mockClear();
-    mocks.resolveAgentDir.mockImplementation(
-      (_cfg: unknown, agentId: string) => `/tmp/agent-${agentId}`,
-    );
-    mocks.resolveDefaultAgentId.mockClear();
     mocks.resolveDefaultAgentId.mockReturnValue("main");
-    mocks.resolveAgentWorkspaceDir.mockClear();
-    mocks.resolveAgentWorkspaceDir.mockImplementation(
-      (_cfg: unknown, agentId: string) => `/tmp/workspace-${agentId}`,
-    );
     mocks.runAuthProbes.mockReset();
     mocks.runAuthProbes.mockResolvedValue(summary([]));
   });
 
   it("rejects invalid parameters before running a probe", async () => {
-    const { options, respond } = createOptions({ provider: "openai", extra: true });
-    await handler(options);
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+    const { respond } = await probe({ provider: "openai", extra: true });
+    expectFailure(respond, { code: "INVALID_REQUEST" });
     expect(mocks.runAuthProbes).not.toHaveBeenCalled();
   });
 
@@ -99,18 +95,12 @@ describe("models.probe", () => {
         hint: "Pass agentId to select a configured agent.",
       });
     });
-    const { options, respond } = createOptions({ provider: "openai" });
+    const { respond } = await probe({ provider: "openai" });
 
-    await handler(options);
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: expect.stringContaining("agent"),
-      }),
-    );
+    expectFailure(respond, {
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("agent"),
+    });
     expect(mocks.runAuthProbes).not.toHaveBeenCalled();
   });
 
@@ -126,11 +116,7 @@ describe("models.probe", () => {
         },
       },
     };
-    const { options } = createOptions(
-      { provider: " OpenAI ", profileId: " work ", timeoutMs: 1 },
-      cfg,
-    );
-    await handler(options);
+    await probe({ provider: " OpenAI ", profileId: " work ", timeoutMs: 1 }, cfg);
     expect(mocks.runAuthProbes).toHaveBeenCalledWith({
       cfg,
       agentId: "main",
@@ -150,9 +136,7 @@ describe("models.probe", () => {
 
   it("probes the default agent when agentId is empty", async () => {
     const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-    const { options } = createOptions({ provider: "openai", agentId: "" }, cfg);
-
-    await handler(options);
+    await probe({ provider: "openai", agentId: "" }, cfg);
 
     expect(mocks.runAuthProbes).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -172,9 +156,7 @@ describe("models.probe", () => {
         entries: { main: {}, writer: { utilityModel: { fallbacks: ["openai/writer-backup"] } } },
       },
     };
-    const { options } = createOptions({ provider: "openai", agentId: "Writer" }, cfg);
-
-    await handler(options);
+    await probe({ provider: "openai", agentId: "Writer" }, cfg);
 
     expect(mocks.runAuthProbes).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -189,9 +171,7 @@ describe("models.probe", () => {
   it.each(["retired", "   "])("rejects explicit unknown agentId %j", async (agentId) => {
     const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     mocks.listAgentIds.mockReturnValue(["main"]);
-    const { options, respond } = createOptions({ provider: "openai", agentId }, cfg);
-
-    await handler(options);
+    const { respond } = await probe({ provider: "openai", agentId }, cfg);
 
     expect(mocks.resolveAgentDir).not.toHaveBeenCalled();
     expect(mocks.runAuthProbes).not.toHaveBeenCalled();
@@ -221,8 +201,7 @@ describe("models.probe", () => {
       },
       agents: { defaults: { model: { primary: "byteplus-plan/ark-code-latest" } } },
     };
-    const { options, respond } = createOptions({ provider: "byteplus-plan" }, cfg);
-    await handler(options);
+    const { respond } = await probe({ provider: "byteplus-plan" }, cfg);
     expect(mocks.runAuthProbes).toHaveBeenCalledWith(
       expect.objectContaining({
         cfg,
@@ -240,9 +219,7 @@ describe("models.probe", () => {
 
   it("does not require a configured default before probing provider credentials", async () => {
     const cfg: OpenClawConfig = {};
-    const { options } = createOptions({ provider: "openai" }, cfg);
-
-    await handler(options);
+    await probe({ provider: "openai" }, cfg);
 
     expect(mocks.runAuthProbes).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -256,51 +233,31 @@ describe("models.probe", () => {
   it("maps target results and reports provider success when one credential works", async () => {
     mocks.runAuthProbes.mockResolvedValue(
       summary([
-        {
-          provider: "openai",
-          profileId: "old",
-          label: "Old",
-          source: "profile",
-          status: "auth",
-          error: "expired",
-          latencyMs: 20,
-        },
-        {
-          provider: "openai",
-          profileId: "work",
-          label: "Work",
-          source: "profile",
-          status: "ok",
-          latencyMs: 125,
-        },
+        target({ profileId: "old", label: "Old", status: "auth", error: "expired", latencyMs: 20 }),
+        target({ profileId: "work", label: "Work", latencyMs: 125 }),
       ]),
     );
-    const { options, respond } = createOptions({ provider: "openai", timeoutMs: 90_000 });
-    await handler(options);
+    const { respond } = await probe({ provider: "openai", timeoutMs: 90_000 });
     expect(mocks.runAuthProbes).toHaveBeenCalledWith(
       expect.objectContaining({
         options: expect.objectContaining({ includeDirectKeys: true, timeoutMs: 60_000 }),
       }),
     );
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      {
-        provider: "openai",
-        status: "ok",
-        latencyMs: 125,
-        results: [
-          {
-            profileId: "old",
-            label: "Profile Old",
-            status: "auth",
-            latencyMs: 20,
-            error: "Authentication failed.",
-          },
-          { profileId: "work", label: "Profile Work", status: "ok", latencyMs: 125 },
-        ],
-      },
-      undefined,
-    );
+    expectSuccess(respond, {
+      provider: "openai",
+      status: "ok",
+      latencyMs: 125,
+      results: [
+        {
+          profileId: "old",
+          label: "Profile Old",
+          status: "auth",
+          latencyMs: 20,
+          error: "Authentication failed.",
+        },
+        { profileId: "work", label: "Profile Work", status: "ok", latencyMs: 125 },
+      ],
+    });
   });
 
   it("names mixed probe routes and keeps preflight failures actionable", async () => {
@@ -331,50 +288,35 @@ describe("models.probe", () => {
     const cfg = {
       agents: { defaults: { model: { primary: "ollama/gemma4:latest" } } },
     } satisfies OpenClawConfig;
-    const { options, respond } = createOptions({ provider: "ollama" }, cfg);
+    const { respond } = await probe({ provider: "ollama" }, cfg);
 
-    await handler(options);
-
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      {
-        provider: "ollama",
-        status: "ok",
-        latencyMs: 16121,
-        results: [
-          {
-            label: "Configured credential · ollama/gemma4:latest",
-            status: "unknown",
-            error:
-              "The configured credential could not be resolved. Update or remove it, then retry.",
-          },
-          {
-            profileId: "ollama:default",
-            label: "Profile ollama:default · ollama/gemma4:latest",
-            status: "ok",
-            latencyMs: 16121,
-          },
-        ],
-      },
-      undefined,
-    );
+    expectSuccess(respond, {
+      provider: "ollama",
+      status: "ok",
+      latencyMs: 16121,
+      results: [
+        {
+          label: "Configured credential · ollama/gemma4:latest",
+          status: "unknown",
+          error:
+            "The configured credential could not be resolved. Update or remove it, then retry.",
+        },
+        {
+          profileId: "ollama:default",
+          label: "Profile ollama:default · ollama/gemma4:latest",
+          status: "ok",
+          latencyMs: 16121,
+        },
+      ],
+    });
   });
 
   it("redacts credential-shaped text from target and provider errors", async () => {
     const secret = ["AI", "za", "SyOpaqueProviderCredential"].join("");
     mocks.runAuthProbes.mockResolvedValue(
-      summary([
-        {
-          provider: "openai",
-          label: "env",
-          source: "env",
-          status: "auth",
-          error: `request rejected for ${secret}`,
-        },
-      ]),
+      summary([target({ source: "env", status: "auth", error: `request rejected for ${secret}` })]),
     );
-    const { options, respond } = createOptions({ provider: "openai" });
-    await handler(options);
+    const { respond } = await probe({ provider: "openai" });
     const payload = respond.mock.calls[0]?.[1];
     expect(payload).toMatchObject({ provider: "openai", status: "auth" });
     expect(JSON.stringify(payload)).not.toContain(secret);
@@ -384,15 +326,9 @@ describe("models.probe", () => {
   it("records a redacted typed diagnostic when probe execution fails", async () => {
     const secret = ["AI", "za", "SyOpaqueProviderCredential"].join("");
     mocks.runAuthProbes.mockRejectedValue(new Error(`runtime failed for ${secret}`));
-    const { options, respond, warn } = createOptions({ provider: "ollama", timeoutMs: 9_000 });
+    const { respond, warn } = await probe({ provider: "ollama", timeoutMs: 9_000 });
 
-    await handler(options);
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE", message: "Connection check failed." }),
-    );
+    expectFailure(respond, { code: "UNAVAILABLE", message: "Connection check failed." });
     expect(warn).toHaveBeenCalledWith("Model connection check failed.", {
       event: "models_probe_failed",
       provider: "ollama",

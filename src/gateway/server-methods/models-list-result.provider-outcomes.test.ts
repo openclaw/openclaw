@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { createModelCatalogDecisions } from "../../agents/model-catalog-decisions.js";
 import { markPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
 import { createCatalogAttemptReporter } from "../../agents/prepared-model-runtime.publication-events.js";
@@ -12,6 +13,30 @@ import { buildModelsListResult, prepareModelsListResult } from "./models-list-re
 import type { GatewayRequestContext } from "./types.js";
 
 const metadataSnapshot = createPluginMetadataSnapshotFixture();
+const modelConfig: OpenClawConfig = {
+  agents: {
+    defaults: {
+      model: { primary: "openai/gpt-5.6-sol" },
+      models: { "openai/*": {}, "openai/gpt-5.6-sol": {} },
+    },
+  },
+};
+const openaiModel = {
+  id: "gpt-5.6-sol",
+  name: "GPT-5.6 Sol",
+  provider: "openai",
+  api: "openai-responses" as const,
+  baseUrl: "https://api.openai.com/v1",
+};
+function oauth(label: string): AuthProfileStore["profiles"][string] {
+  return {
+    type: "oauth",
+    provider: "openai",
+    access: `${label}-access-token`,
+    refresh: `${label}-refresh-token`,
+    expires: Date.now() + 30 * 60_000,
+  };
+}
 const emptyAuthStore = { version: 1, profiles: {} } as const;
 
 function catalogContext(config: OpenClawConfig) {
@@ -84,25 +109,10 @@ describe("models.list provider catalog outcomes", () => {
       },
     },
   ])("marks configured API-key rows unavailable after $name rejection", async (testCase) => {
-    const config = {
-      auth: { order: { openai: ["openai:chatgpt"] } },
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.6-sol" },
-          models: { "openai/*": {}, "openai/gpt-5.6-sol": {} },
-        },
-      },
-    } as OpenClawConfig;
-    const model = {
-      id: "gpt-5.6-sol",
-      name: "GPT-5.6 Sol",
-      provider: "openai",
-      api: "openai-responses" as const,
-      baseUrl: "https://api.openai.com/v1",
-    };
+    const config = { ...modelConfig, auth: { order: { openai: ["openai:chatgpt"] } } };
     const snapshot = markPreparedModelCatalogFull({
-      entries: [model],
-      routeVariants: [model],
+      entries: [openaiModel],
+      routeVariants: [openaiModel],
       providerOutcomes: [
         {
           provider: "openai",
@@ -125,23 +135,18 @@ describe("models.list provider catalog outcomes", () => {
             provider: "openai",
             key: "rejected-api-key",
           },
-          "openai:other": {
-            type: "oauth",
-            provider: "openai",
-            access: "accepted-access-token",
-            refresh: "accepted-refresh-token",
-            expires: Date.now() + 30 * 60_000,
-          },
+          "openai:other": oauth("accepted"),
         },
         ...(testCase.usageStats ? { usageStats: testCase.usageStats } : {}),
       },
       preferredProfileId: "openai:chatgpt",
     });
-    const context = catalogContext(config) as unknown as GatewayRequestContext;
-
     await expect(
       buildModelsListResult({
-        source: { kind: "gateway", context },
+        source: {
+          kind: "gateway",
+          context: catalogContext(config) as unknown as GatewayRequestContext,
+        },
         agentId: "main",
         params: { view: "configured", includeDefaultModels: false },
         preloadedCatalog: { agentId: "main", config, snapshot },
@@ -163,24 +168,15 @@ describe("models.list provider catalog outcomes", () => {
   });
 
   it("does not apply one profile rejection to a different selected profile", () => {
-    const config = {
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.6-sol" },
-          models: { "openai/*": {}, "openai/gpt-5.6-sol": {} },
-        },
-      },
-    } as OpenClawConfig;
-    const model = {
-      id: "gpt-5.6-sol",
-      name: "GPT-5.6 Sol",
-      provider: "openai",
+    const config = modelConfig;
+    const subscriptionModel = {
+      ...openaiModel,
       api: "openai-chatgpt-responses" as const,
       baseUrl: "https://chatgpt.com/backend-api/codex",
     };
     const snapshot = {
-      entries: [model],
-      routeVariants: [model],
+      entries: [subscriptionModel],
+      routeVariants: [subscriptionModel],
       providerOutcomes: [
         {
           provider: "openai",
@@ -198,25 +194,13 @@ describe("models.list provider catalog outcomes", () => {
       preparedAuthStore: {
         version: 1,
         profiles: {
-          "openai:rejected": {
-            type: "oauth",
-            provider: "openai",
-            access: "rejected-access-token",
-            refresh: "rejected-refresh-token",
-            expires: Date.now() + 30 * 60_000,
-          },
-          "openai:accepted": {
-            type: "oauth",
-            provider: "openai",
-            access: "accepted-access-token",
-            refresh: "accepted-refresh-token",
-            expires: Date.now() + 30 * 60_000,
-          },
+          "openai:rejected": oauth("rejected"),
+          "openai:accepted": oauth("accepted"),
         },
       },
     });
 
-    expect(projector.evaluateEntry(model, [model])).toMatchObject({
+    expect(projector.evaluateEntry(subscriptionModel, [subscriptionModel])).toMatchObject({
       availability: true,
       selectedProfileId: "openai:accepted",
     });
@@ -263,10 +247,11 @@ describe("models.list provider catalog outcomes", () => {
       routeResolution: null,
     });
     const evaluateNative = vi.spyOn(projector, "evaluateNative");
-    const context = catalogContext(config) as unknown as GatewayRequestContext;
-
     const prepared = await prepareModelsListResult({
-      source: { kind: "gateway", context },
+      source: {
+        kind: "gateway",
+        context: catalogContext(config) as unknown as GatewayRequestContext,
+      },
       params: { view: "configured" },
       preloadedCatalog: { agentId: "main", config, snapshot },
       preloadedOnly: true,

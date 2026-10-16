@@ -35,7 +35,6 @@ const config = {
 async function listClaudeCliModel(
   params: {
     authenticated?: boolean;
-    providerApiKey?: boolean;
     pluginDisabled?: boolean;
     cfg?: OpenClawConfig;
   } = {},
@@ -77,36 +76,18 @@ describe("models.list CLI runtime availability", () => {
   });
 
   it.each([
-    {
-      authenticated: true,
-      providerApiKey: false,
-      pluginDisabled: false,
-      available: true,
-      reason: undefined,
-    },
-    {
-      authenticated: false,
-      providerApiKey: true,
-      pluginDisabled: false,
-      available: false,
-      reason: "missing-auth",
-    },
-    {
-      authenticated: true,
-      providerApiKey: false,
-      pluginDisabled: true,
-      available: false,
-      reason: "missing-auth",
-    },
-  ])(
-    "reports native login=$authenticated, provider key=$providerApiKey, and plugin disabled=$pluginDisabled",
-    async (scenario) => {
-      vi.stubEnv("ANTHROPIC_API_KEY", scenario.providerApiKey ? "test-key" : "");
-      const result = await listClaudeCliModel(scenario);
+    [true, false, false, true, undefined],
+    [false, true, false, false, "missing-auth"],
+    [true, false, true, false, "missing-auth"],
+  ] as const)(
+    "reports native login=%s, provider key=%s, plugin disabled=%s",
+    async (authenticated, providerApiKey, pluginDisabled, available, reason) => {
+      vi.stubEnv("ANTHROPIC_API_KEY", providerApiKey ? "test-key" : "");
+      const result = await listClaudeCliModel({ authenticated, pluginDisabled });
       expect(result).toEqual({
-        models: [expect.objectContaining({ id: "claude-opus-5", available: scenario.available })],
+        models: [expect.objectContaining({ id: "claude-opus-5", available })],
       });
-      expect(result.models[0]?.unavailableReason).toBe(scenario.reason);
+      expect(result.models[0]?.unavailableReason).toBe(reason);
       expect(result.models[0]?.unavailableUntil).toBeUndefined();
     },
   );

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
@@ -25,6 +26,56 @@ import {
   createModelsListTestContext,
   WITHOUT_OPENAI_ENV_AUTH,
 } from "./models-list-result.openai-routes.test-support.js";
+
+const advertisedTiers = ["priority", "ultrafast"];
+
+function modelConfig(
+  ids: string[],
+  runtime = "openclaw",
+  pickerRuntimes?: string[],
+): OpenClawConfig {
+  return {
+    agents: {
+      defaults: {
+        model: "openai/" + ids[0],
+        models: Object.fromEntries(
+          ids.map((id) => [
+            "openai/" + id,
+            { agentRuntime: { id: runtime }, ...(pickerRuntimes ? { pickerRuntimes } : {}) },
+          ]),
+        ),
+      },
+    },
+  };
+}
+
+async function installAccountCatalog(
+  context: ReturnType<typeof createModelsListTestContext>,
+  isCurrent = () => true,
+  includeConfig = false,
+) {
+  const initial = expectDefined(await readPreparedCatalog(context, "main"), "prepared fixture");
+  const accountCatalog = createPreparedAccountCatalogAccess(
+    isCurrent,
+    undefined,
+    includeConfig ? initial.config : undefined,
+  );
+  const owner = { ...initial, isCurrent, accountCatalog };
+  registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
+    readPrepared: async () => owner,
+    loadDeferred: async () => owner,
+  });
+  return accountCatalog;
+}
+
+function preparePublic(context: ReturnType<typeof createModelsListTestContext>) {
+  return prepareModelsListResult({
+    source: { kind: "gateway", context },
+    agentId: "main",
+    params: { view: "all", preparedOnly: true, includeDefaultModels: false },
+    routeResolverFactory: routeResolverFactory(dualRoutes),
+  });
+}
 
 describe("models.list account service tiers", () => {
   it.each(["profile", "direct"] as const)(
@@ -54,41 +105,17 @@ describe("models.list account service tiers", () => {
                 },
               }
             : {}),
-          agents: {
-            defaults: {
-              model: "openai/synthetic-api-model",
-              models: { "openai/synthetic-api-model": { agentRuntime: { id: "openclaw" } } },
-            },
-          },
+          ...modelConfig([model.id]),
         },
         catalog: [model],
         preparedAuthStore: { version: 1, profiles: profileId ? { [profileId]: credential } : {} },
       });
-      const initial = await readPreparedCatalog(context, "main");
-      if (!initial) {
-        throw new Error("Missing prepared fixture");
-      }
-      const accountCatalog = createPreparedAccountCatalogAccess(
-        () => true,
-        undefined,
-        initial.config,
-      );
-      const owner = { ...initial, accountCatalog };
-      registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
-        readPrepared: async () => owner,
-        loadDeferred: async () => owner,
-      });
-      const prepare = () =>
-        prepareModelsListResult({
-          source: { kind: "gateway", context },
-          agentId: "main",
-          params: { view: "all", preparedOnly: true, includeDefaultModels: false },
-          routeResolverFactory: routeResolverFactory(dualRoutes),
-        });
+      const accountCatalog = await installAccountCatalog(context, () => true, true);
+      const prepare = () => preparePublic(context);
       const first = await prepare();
       expect(first.read().models.find((row) => row.id === model.id)).toMatchObject({
         available: true,
-        serviceTiers: ["priority", "ultrafast"],
+        serviceTiers: advertisedTiers,
       });
       const selectedCredential = resolveSelectedModelCredential({
         provider: "openai",
@@ -114,7 +141,7 @@ describe("models.list account service tiers", () => {
       const next = await prepare();
       for (const projection of [first, next]) {
         expect(projection.read().models.find((row) => row.id === model.id)).toMatchObject({
-          serviceTiers: ["priority", "ultrafast"],
+          serviceTiers: advertisedTiers,
           supportsServiceTierRecovery: true,
           serviceTierObservation: { requestedTier: "ultrafast", responseTier: "priority" },
         });
@@ -143,20 +170,8 @@ describe("models.list account service tiers", () => {
             api: subscriptionRoute.api,
             baseUrl: subscriptionRoute.baseUrl,
           };
-          const cfg: OpenClawConfig = {
-            agents: {
-              defaults: {
-                workspace: state.workspaceDir,
-                model: "openai/synthetic-tier-model",
-                models: {
-                  "openai/synthetic-tier-model": {
-                    agentRuntime: { id: selectedRuntime },
-                    pickerRuntimes: ["codex", "openclaw"],
-                  },
-                },
-              },
-            },
-          };
+          const cfg = modelConfig([model.id], selectedRuntime, ["codex", "openclaw"]);
+          cfg.agents!.defaults!.workspace = state.workspaceDir;
           const human = ensureProfileForEmail("tier-owner@example.test");
           const connectAccount = (token: string) =>
             connectUserModelAccount({
@@ -200,7 +215,7 @@ describe("models.list account service tiers", () => {
                         runtimeId: "codex",
                         api: subscriptionRoute.api,
                         baseUrl: subscriptionRoute.baseUrl,
-                        serviceTiers: auth.profileId === accountA ? ["priority", "ultrafast"] : [],
+                        serviceTiers: auth.profileId === accountA ? [...advertisedTiers] : [],
                       },
                     ],
                   },
@@ -220,20 +235,8 @@ describe("models.list account service tiers", () => {
             catalog: [model],
             pluginRegistry: registry,
           });
-          const initial = await readPreparedCatalog(context, "main");
-          if (!initial) {
-            throw new Error("Missing prepared fixture");
-          }
           let current = true;
-          const owner = {
-            ...initial,
-            isCurrent: () => current,
-            accountCatalog: createPreparedAccountCatalogAccess(() => current),
-          };
-          registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
-            readPrepared: async () => owner,
-            loadDeferred: async () => owner,
-          });
+          await installAccountCatalog(context, () => current);
           const prepare = (profile: string, preparedOnly = false, refresh = false) =>
             prepareModelsListResult({
               source: { kind: "gateway", context },
@@ -265,7 +268,7 @@ describe("models.list account service tiers", () => {
           });
           expect(readRuntime(a, "codex")).toMatchObject({
             available: true,
-            serviceTiers: ["priority", "ultrafast"],
+            serviceTiers: advertisedTiers,
             agentRuntime: { id: "codex" },
           });
           expect(filterModelServiceTiers).toHaveBeenCalledWith({
@@ -273,28 +276,25 @@ describe("models.list account service tiers", () => {
             agentId: "main",
             provider: model.provider,
             modelId: model.id,
-            serviceTiers: ["priority", "ultrafast"],
+            serviceTiers: advertisedTiers,
           });
           filteredTiers = ["priority"];
           expect(readRuntime(a, "codex")?.serviceTiers).toEqual(["priority"]);
           expect(readRuntime(a, "openclaw")).not.toHaveProperty("serviceTiers");
           filteredTiers = ["priority", "ultrafast", "unadvertised-tier"];
-          expect(readRuntime(a, "codex")?.serviceTiers).toEqual(["priority", "ultrafast"]);
+          expect(readRuntime(a, "codex")?.serviceTiers).toEqual(advertisedTiers);
           filteredTiers = undefined;
           expect(a.read().providerOutcomes).toEqual([
             { provider: "openai", profileId: accountA, status: "ready" },
           ]);
           const repeated = await prepare(accountA);
-          expect(readRuntime(repeated, "codex")?.serviceTiers).toEqual(["priority", "ultrafast"]);
+          expect(readRuntime(repeated, "codex")?.serviceTiers).toEqual(advertisedTiers);
           expect(discover).toHaveBeenCalledOnce();
           const b = await prepare(accountB, false, true);
           expect(readRuntime(b, "codex")?.serviceTiers).toEqual([]);
           expect(discover).toHaveBeenCalledTimes(2);
           const preparedOnly = await prepare(accountA, true);
-          expect(readRuntime(preparedOnly, "codex")?.serviceTiers).toEqual([
-            "priority",
-            "ultrafast",
-          ]);
+          expect(readRuntime(preparedOnly, "codex")?.serviceTiers).toEqual(advertisedTiers);
           expect(discover).toHaveBeenCalledTimes(2);
           const entered = createDeferred();
           const release = createDeferred();
@@ -308,12 +308,9 @@ describe("models.list account service tiers", () => {
           try {
             await withinTest(entered.promise, signal);
             const saved = await prepare(accountA, true);
-            expect(readRuntime(saved, "codex")?.serviceTiers).toEqual(["priority", "ultrafast"]);
+            expect(readRuntime(saved, "codex")?.serviceTiers).toEqual(advertisedTiers);
             const duringRefresh = await withinTest(prepare(accountA), signal);
-            expect(readRuntime(duringRefresh, "codex")?.serviceTiers).toEqual([
-              "priority",
-              "ultrafast",
-            ]);
+            expect(readRuntime(duringRefresh, "codex")?.serviceTiers).toEqual(advertisedTiers);
             expect(a.isCurrent()).toBe(true);
             expect(readRuntime(await prepare(accountB), "codex")?.serviceTiers).toEqual([]);
           } finally {
@@ -349,16 +346,7 @@ it("publishes provider tier restrictions through the model catalog projection", 
   });
   const context = createModelsListTestContext({
     pluginRegistry,
-    cfg: {
-      agents: {
-        defaults: {
-          model: "openai/" + ids[0],
-          models: Object.fromEntries(
-            ids.map((id) => ["openai/" + id, { agentRuntime: { id: "openclaw" } }]),
-          ),
-        },
-      },
-    },
+    cfg: modelConfig(ids),
     catalog: ids.map((id) => ({ id, name: id, provider: "openai", ...platformRoute })),
     preparedAuthStore: {
       version: 1,
@@ -371,12 +359,7 @@ it("publishes provider tier restrictions through the model catalog projection", 
       },
     },
   });
-  const result = await prepareModelsListResult({
-    source: { kind: "gateway", context },
-    agentId: "main",
-    params: { view: "all", preparedOnly: true, includeDefaultModels: false },
-    routeResolverFactory: routeResolverFactory(dualRoutes),
-  });
+  const result = await preparePublic(context);
   const models = result.read().models;
   expect(models.find((row) => row.id === ids[0])).toMatchObject({
     available: true,

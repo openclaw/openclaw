@@ -13,6 +13,36 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareModelsListResult } from "./models-list-result.js";
 import { WITHOUT_OPENAI_ENV_AUTH } from "./models-list-result.openai-routes.test-support.js";
 
+function expectMissing(value: unknown, ...keys: string[]) {
+  for (const key of keys) {
+    expect(value).not.toHaveProperty(key);
+  }
+}
+
+function preparePicker(
+  cfg: OpenClawConfig,
+  snapshot: ModelCatalogSnapshot,
+  projector: ReturnType<typeof createModelCatalogDecisions>,
+) {
+  const loadGatewayModelCatalogSnapshot = vi.fn();
+  const params = {
+    source: {
+      kind: "gateway",
+      context: {
+        getRuntimeConfig: () => cfg,
+        loadGatewayModelCatalogSnapshot,
+        logGateway: { debug: vi.fn() },
+      },
+    },
+    agentId: "main",
+    params: { view: "configured", includeDetails: true },
+    preloadedCatalog: { agentId: "main", config: cfg, snapshot },
+    preloadedOnly: true,
+    catalogProjector: projector,
+  } satisfies Parameters<typeof prepareModelsListResult>[0];
+  return { params, loadGatewayModelCatalogSnapshot };
+}
+
 describe("models.list configured runtime choices", () => {
   it.each([false, true, "revoked"] as const)(
     "indexes configured rows once while projecting several logical models (auth rejects: %s)",
@@ -226,22 +256,11 @@ describe("models.list configured runtime choices", () => {
             },
             pluginRegistry,
           });
-          const loadGatewayModelCatalogSnapshot = vi.fn();
-          const listParams = {
-            source: {
-              kind: "gateway",
-              context: {
-                getRuntimeConfig: () => cfg,
-                loadGatewayModelCatalogSnapshot,
-                logGateway: { debug: vi.fn() },
-              },
-            },
-            agentId: "main",
-            params: { view: "configured", includeDetails: true },
-            preloadedCatalog: { agentId: "main", config: cfg, snapshot },
-            preloadedOnly: true,
-            catalogProjector: projector,
-          } satisfies Parameters<typeof prepareModelsListResult>[0];
+          const { params: listParams, loadGatewayModelCatalogSnapshot } = preparePicker(
+            cfg,
+            snapshot,
+            projector,
+          );
           const prepared = await prepareModelsListResult(listParams);
           const row = prepared.read().models.find((entry) => entry.id === "model");
           expect(row).toMatchObject({
@@ -264,13 +283,9 @@ describe("models.list configured runtime choices", () => {
               ],
             });
           } else {
-            expect(choice).not.toHaveProperty("contextWindow");
-            expect(choice).not.toHaveProperty("reasoning");
-            expect(choice).not.toHaveProperty("thinkingLevels");
-            expect(choice).not.toHaveProperty("input");
+            expectMissing(choice, "contextWindow", "reasoning", "thinkingLevels", "input");
           }
-          expect(choice).not.toHaveProperty("contextWindows");
-          expect(choice).not.toHaveProperty("contextWindowDefault");
+          expectMissing(choice, "contextWindows", "contextWindowDefault");
           expect(row).not.toHaveProperty("manualSelectionAllowed");
           expect(choice).not.toHaveProperty("manualSelectionAllowed");
           const scoped = await prepareModelsListResult({
@@ -292,40 +307,14 @@ describe("models.list configured runtime choices", () => {
   );
 
   it.each([
-    {
-      provider: "openai",
-      runtime: "codex",
-      runtimeOverride: "codex",
-      initialReadiness: "ready",
-    },
-    {
-      provider: "openai",
-      runtime: "agentsapi",
-      runtimeOverride: undefined,
-      initialReadiness: "ready",
-    },
-    {
-      provider: "openai",
-      runtime: "codex",
-      runtimeOverride: undefined,
-      initialReadiness: "missing",
-    },
-    {
-      provider: "openai",
-      runtime: "codex",
-      runtimeOverride: undefined,
-      initialReadiness: "throws",
-    },
-    {
-      // A registered harness still cannot serve a provider it is incompatible with.
-      provider: "picker-fixture",
-      runtime: "codex",
-      runtimeOverride: undefined,
-      initialReadiness: "ready",
-    },
-  ])(
-    "keeps $runtime capabilities and selection availability with session runtime $runtimeOverride, readiness $initialReadiness",
-    async ({ provider, runtime, runtimeOverride, initialReadiness }) => {
+    ["openai", "codex", "codex", "ready"],
+    ["openai", "agentsapi", undefined, "ready"],
+    ["openai", "codex", undefined, "missing"],
+    ["openai", "codex", undefined, "throws"],
+    ["picker-fixture", "codex", undefined, "ready"],
+  ] as const)(
+    "keeps %s/%s capabilities with session runtime %s and readiness %s",
+    async (provider, runtime, runtimeOverride, initialReadiness) => {
       await withOpenClawTestState(
         {
           layout: "state-only",
@@ -413,22 +402,12 @@ describe("models.list configured runtime choices", () => {
             pluginRegistry,
             ...(runtimeOverride ? { runtimeOverride, profileProvider: provider } : {}),
           });
-          const loadGatewayModelCatalogSnapshot = vi.fn();
-          const prepared = await prepareModelsListResult({
-            source: {
-              kind: "gateway",
-              context: {
-                getRuntimeConfig: () => cfg,
-                loadGatewayModelCatalogSnapshot,
-                logGateway: { debug: vi.fn() },
-              },
-            },
-            agentId: "main",
-            params: { view: "configured", includeDetails: true },
-            preloadedCatalog: { agentId: "main", config: cfg, snapshot },
-            preloadedOnly: true,
-            catalogProjector: projector,
-          });
+          const { params, loadGatewayModelCatalogSnapshot } = preparePicker(
+            cfg,
+            snapshot,
+            projector,
+          );
+          const prepared = await prepareModelsListResult(params);
           const rows = prepared.read().models;
           expect(rows).toHaveLength(1);
           expect(rows[0]).toMatchObject({
@@ -471,15 +450,13 @@ describe("models.list configured runtime choices", () => {
             } else {
               expect(nativeChoice?.unavailableReason).toBe("unsupported-runtime");
             }
-            expect(nativeChoice).not.toHaveProperty("contextWindow");
-            expect(nativeChoice).not.toHaveProperty("thinkingLevels");
+            expectMissing(nativeChoice, "contextWindow", "thinkingLevels");
           }
           expect(rows[0]?.runtimeChoices?.[1]).toMatchObject({
             available: false,
             unavailableReason: "unsupported-runtime",
           });
-          expect(rows[0]?.runtimeChoices?.[1]).not.toHaveProperty("contextWindow");
-          expect(rows[0]?.runtimeChoices?.[1]).not.toHaveProperty("thinkingLevels");
+          expectMissing(rows[0]?.runtimeChoices?.[1], "contextWindow", "thinkingLevels");
           expect(Value.Check(ModelChoiceSchema, rows[0])).toBe(true);
           readiness = "missing";
           const revokedChoice = prepared.read().models[0]?.runtimeChoices?.[0];
