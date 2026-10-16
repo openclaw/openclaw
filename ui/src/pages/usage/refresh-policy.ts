@@ -113,8 +113,8 @@ export class UsageRefreshPolicy {
     this.reloadPending = false;
   }
 
-  request(reason: UsageRefreshReason): void {
-    void this.requestAndWait(reason);
+  request(reason: UsageRefreshReason): Promise<void> {
+    return this.requestAndWait(reason);
   }
 
   private async requestAndWait(reason: UsageRefreshReason): Promise<void> {
@@ -149,6 +149,6 @@ export class UsageRefreshPolicy {
       return;
     }
     this.pendingAutomaticRefresh = false;
-    this.request("focus");
+    void this.request("focus");
   }
 }

@@ -59,47 +59,38 @@ export type ChannelWizardState =
 // catalog plugin install; the modal stays interactive via the busy flag.
 const WIZARD_STEP_TIMEOUT_MS = 120_000;
 
-export class ChannelWizardController {
-  private currentState: ChannelWizardState = { phase: "idle" };
-  private sessionId: string | null = null;
-  private channel: string | null = null;
-  private generation = 0;
-  private abortController: AbortController | null = null;
-  private pendingCancellation: {
+export function createChannelWizard(
+  getClient: () => WizardGatewayClient | null,
+  onChange: () => void,
+  isKnownChannel: (value: string) => boolean,
+  sessionExpiredMessage: () => string,
+) {
+  let currentState: ChannelWizardState = { phase: "idle" };
+  let wizardSessionId: string | null = null;
+  let currentChannel: string | null = null;
+  let currentGeneration = 0;
+  let abortController: AbortController | null = null;
+  let pendingCancellation: {
     client: WizardGatewayClient;
     completion: Promise<unknown>;
   } | null = null;
 
-  constructor(
-    private readonly getClient: () => WizardGatewayClient | null,
-    private readonly onChange: () => void,
-    // Known channel ids from the status snapshot. Presentation only: lets a
-    // browse-all session title/link the wizard for the picked channel; the
-    // completion behavior keys off the gateway-reported accounts instead.
-    private readonly isKnownChannel: (value: string) => boolean,
-    private readonly sessionExpiredMessage: () => string,
-  ) {}
-
-  get state(): ChannelWizardState {
-    return this.currentState;
-  }
-
-  async start(channel: string | null): Promise<void> {
-    const client = this.getClient();
+  async function start(channel: string | null): Promise<void> {
+    const client = getClient();
     if (!client) {
       return;
     }
-    const generation = ++this.generation;
-    this.abortController?.abort();
-    this.abortController = new AbortController();
-    this.sessionId = null;
-    this.channel = channel;
-    this.setState({ phase: "starting", channel });
+    const generation = ++currentGeneration;
+    abortController?.abort();
+    abortController = new AbortController();
+    wizardSessionId = null;
+    currentChannel = channel;
+    setState({ phase: "starting", channel });
     try {
-      const cancellation = this.pendingCancellation;
+      const cancellation = pendingCancellation;
       if (cancellation?.client === client) {
         await cancellation.completion;
-        if (this.generation !== generation) {
+        if (currentGeneration !== generation) {
           return;
         }
       }
@@ -112,91 +103,91 @@ export class ChannelWizardController {
         },
         (lateResult) => cancelRunningWizardResult(client, lateResult),
       );
-      if (this.generation !== generation) {
+      if (currentGeneration !== generation) {
         // The modal was closed/superseded mid-start, but the gateway already
         // created a running session; cancel it or later starts get rejected.
         cancelRunningWizardResult(client, result);
         return;
       }
-      this.sessionId = result.sessionId ?? null;
-      this.applyResult(result);
+      wizardSessionId = result.sessionId ?? null;
+      applyResult(result);
     } catch (err) {
-      if (this.generation !== generation) {
+      if (currentGeneration !== generation) {
         return;
       }
-      this.setState({ phase: "error", channel, message: formatUiError(err) });
+      setState({ phase: "error", channel, message: formatUiError(err) });
     }
   }
 
-  async answer(value: unknown): Promise<void> {
-    const current = this.currentState;
-    if (!this.getClient() || !this.sessionId || current.phase !== "step" || current.busy) {
+  async function answer(value: unknown): Promise<void> {
+    const current = currentState;
+    if (!getClient() || !wizardSessionId || current.phase !== "step" || current.busy) {
       return;
     }
-    const generation = this.generation;
-    if (current.step.type === "select" && typeof value === "string" && this.isKnownChannel(value)) {
-      this.channel ??= value;
+    const generation = currentGeneration;
+    if (current.step.type === "select" && typeof value === "string" && isKnownChannel(value)) {
+      currentChannel ??= value;
     }
-    this.setState({ ...current, busy: true, validationError: null });
-    await this.advance(generation, { stepId: current.step.id, value });
+    setState({ ...current, busy: true, validationError: null });
+    await advance(generation, { stepId: current.step.id, value });
   }
 
-  private async advance(
+  async function advance(
     generation: number,
-    answer?: { stepId: string; value: unknown },
+    response?: { stepId: string; value: unknown },
   ): Promise<void> {
-    const client = this.getClient();
-    const sessionId = this.sessionId;
-    if (!client || !sessionId || this.generation !== generation) {
+    const client = getClient();
+    const sessionId = wizardSessionId;
+    if (!client || !sessionId || currentGeneration !== generation) {
       return;
     }
-    const signal = this.abortController?.signal;
-    if (!answer && !signal) {
+    const signal = abortController?.signal;
+    if (!response && !signal) {
       return;
     }
     try {
       const params = {
         sessionId,
-        ...(answer ? { answer } : {}),
+        ...(response ? { answer: response } : {}),
       };
-      const result = answer
+      const result = response
         ? await requestWithTimeout<WizardNextResult>(client, "wizard.next", params)
         : await client.request<WizardNextResult>("wizard.next", params, {
             timeoutMs: null,
             ...(signal ? { signal } : {}),
           });
-      if (this.generation !== generation) {
+      if (currentGeneration !== generation) {
         return;
       }
-      this.applyResult(result);
+      applyResult(result);
     } catch (err) {
-      if (this.generation !== generation) {
+      if (currentGeneration !== generation) {
         return;
       }
       if (isWizardNotFoundError(err)) {
-        this.sessionId = null;
-        this.abortController?.abort();
-        this.abortController = null;
-        this.setState({
+        wizardSessionId = null;
+        abortController?.abort();
+        abortController = null;
+        setState({
           phase: "error",
-          channel: this.channel,
-          message: this.sessionExpiredMessage(),
+          channel: currentChannel,
+          message: sessionExpiredMessage(),
         });
         return;
       }
-      this.setState({ phase: "error", channel: this.channel, message: formatUiError(err) });
+      setState({ phase: "error", channel: currentChannel, message: formatUiError(err) });
     }
   }
 
-  async cancel(): Promise<void> {
-    const client = this.getClient();
-    const sessionId = this.sessionId;
-    this.generation += 1;
-    this.sessionId = null;
-    this.abortController?.abort();
-    this.abortController = null;
-    this.channel = null;
-    this.setState({ phase: "idle" });
+  async function cancel(): Promise<void> {
+    const client = getClient();
+    const sessionId = wizardSessionId;
+    currentGeneration += 1;
+    wizardSessionId = null;
+    abortController?.abort();
+    abortController = null;
+    currentChannel = null;
+    setState({ phase: "idle" });
     if (client && sessionId) {
       // Replacement starts await this settlement, so it needs the same ceiling as wizard.start.
       const completion = Promise.resolve()
@@ -204,20 +195,20 @@ export class ChannelWizardController {
         .catch(() => {
           // Session may already be finished/purged; closing the modal wins.
         });
-      this.pendingCancellation = { client, completion };
+      pendingCancellation = { client, completion };
       await completion;
-      if (this.pendingCancellation?.completion === completion) {
-        this.pendingCancellation = null;
+      if (pendingCancellation?.completion === completion) {
+        pendingCancellation = null;
       }
     }
   }
 
-  private applyResult(result: WizardNextResult): void {
+  function applyResult(result: WizardNextResult): void {
     if (!result.done && result.step) {
       const gatewayOwned = result.step.executor === "gateway";
-      this.setState({
+      setState({
         phase: "step",
-        channel: this.channel,
+        channel: currentChannel,
         step: result.step,
         busy: gatewayOwned,
         validationError: result.error ? formatUiExternalText(result.error) : null,
@@ -225,38 +216,46 @@ export class ChannelWizardController {
       if (gatewayOwned) {
         // Gateway-owned steps cannot consume an answer; next long-polls for
         // progress or completion while keeping this generation cancellable.
-        void this.advance(this.generation);
+        void advance(currentGeneration);
       }
       return;
     }
-    this.sessionId = null;
-    this.abortController = null;
+    wizardSessionId = null;
+    abortController = null;
     if (result.status === "done") {
       // The gateway reports what the flow actually configured; the initially
       // requested channel is only a preselection and may have been skipped.
       const channels = result.channels ?? [];
-      this.setState({
+      setState({
         phase: "done",
-        channel: this.channel ?? channels[0] ?? null,
+        channel: currentChannel ?? channels[0] ?? null,
         channels,
         accounts: result.accounts ?? [],
       });
       return;
     }
     if (result.status === "cancelled") {
-      this.channel = null;
-      this.setState({ phase: "idle" });
+      currentChannel = null;
+      setState({ phase: "idle" });
       return;
     }
-    this.setState({
+    setState({
       phase: "error",
-      channel: this.channel,
+      channel: currentChannel,
       message: formatUiExternalText(result.error, "Wizard failed."),
     });
   }
 
-  private setState(next: ChannelWizardState): void {
-    this.currentState = next;
-    this.onChange();
+  function setState(next: ChannelWizardState): void {
+    currentState = next;
+    onChange();
   }
+  return {
+    get state() {
+      return currentState;
+    },
+    start,
+    answer,
+    cancel,
+  };
 }

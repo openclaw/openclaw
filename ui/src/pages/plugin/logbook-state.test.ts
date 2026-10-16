@@ -1,16 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createRoot } from "solid-js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import {
-  askLogbook,
-  configureLogbookPolling,
-  getLogbookState,
-  loadLogbook,
-  loadLogbookStandup,
-  runLogbookAnalysisNow,
-  setLogbookCapturePaused,
-  stopLogbookPolling,
-} from "./logbook-controller.ts";
+import { createLogbook } from "./logbook-state.ts";
 import type { LogbookStatusPayload } from "./logbook-types.ts";
 
 function clientWithRequest(
@@ -55,23 +47,29 @@ function timelineFor(day: string, title: string) {
   };
 }
 
-describe("Logbook controller", () => {
-  const hosts: object[] = [];
+describe("Logbook request ownership", () => {
+  const disposals: Array<() => void> = [];
+  const createModel = () =>
+    createRoot((dispose) => {
+      disposals.push(dispose);
+      return createLogbook();
+    });
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 6, 4, 12));
+  });
 
   afterEach(() => {
-    for (const host of hosts.splice(0)) {
-      stopLogbookPolling(host);
+    for (const dispose of disposals.splice(0)) {
+      dispose();
     }
     vi.useRealTimers();
   });
 
   it("does not overlap silent poll refreshes and resumes after settlement", async () => {
     vi.useFakeTimers();
-    const host = {};
-    hosts.push(host);
-    const state = getLogbookState(host);
-    state.day = "2026-07-04";
-    state.dayPinned = true;
+    const model = createModel();
+    const state = model.state;
     const status = createDeferred<unknown>();
     const days = createDeferred<unknown>();
     const timeline = createDeferred<unknown>();
@@ -95,7 +93,7 @@ describe("Logbook controller", () => {
       return Promise.resolve(timelineFor("2026-07-04", "Resumed poll"));
     });
 
-    configureLogbookPolling(state, clientWithRequest(request));
+    model.connect(clientWithRequest(request));
     await vi.advanceTimersByTimeAsync(30_000);
     expect(request).toHaveBeenCalledTimes(3);
 
@@ -118,11 +116,8 @@ describe("Logbook controller", () => {
 
   it("shares the background refresh owner with analysis completion", async () => {
     vi.useFakeTimers();
-    const host = {};
-    hosts.push(host);
-    const state = getLogbookState(host);
-    state.day = "2026-07-04";
-    state.dayPinned = true;
+    const model = createModel();
+    const state = model.state;
     const status = createDeferred<unknown>();
     const days = createDeferred<unknown>();
     const timeline = createDeferred<unknown>();
@@ -150,8 +145,8 @@ describe("Logbook controller", () => {
     });
     const client = clientWithRequest(request);
 
-    configureLogbookPolling(state, client);
-    await runLogbookAnalysisNow(state, client);
+    model.connect(client);
+    await model.analyze();
     expect(request).toHaveBeenCalledTimes(4);
 
     await vi.advanceTimersByTimeAsync(60_000);
@@ -169,9 +164,8 @@ describe("Logbook controller", () => {
   });
 
   it("keeps the replacement analysis locked until its own request settles", async () => {
-    const host = {};
-    hosts.push(host);
-    const state = getLogbookState(host);
+    const model = createModel();
+    const state = model.state;
     const oldAnalysis = createDeferred<unknown>();
     const newAnalysis = createDeferred<unknown>();
     const oldClient = clientWithRequest(() => oldAnalysis.promise);
@@ -188,15 +182,15 @@ describe("Logbook controller", () => {
       return Promise.resolve(timelineFor(state.day, "Current analysis"));
     });
     const newClient = clientWithRequest(request);
-    configureLogbookPolling(state, oldClient);
-    const oldRequest = runLogbookAnalysisNow(state, oldClient);
-    configureLogbookPolling(state, newClient);
-    const newRequest = runLogbookAnalysisNow(state, newClient);
+    model.connect(oldClient);
+    const oldRequest = model.analyze();
+    model.connect(newClient);
+    const newRequest = model.analyze();
 
     oldAnalysis.resolve({ started: true });
     await oldRequest;
     expect(state.actionPending).toBe(true);
-    await runLogbookAnalysisNow(state, newClient);
+    await model.analyze();
     expect(request).toHaveBeenCalledTimes(1);
 
     newAnalysis.resolve({ started: true });
@@ -205,18 +199,17 @@ describe("Logbook controller", () => {
   });
 
   it("discards a capture result from a retired polling client", async () => {
-    const host = {};
-    hosts.push(host);
-    const state = getLogbookState(host);
+    const model = createModel();
+    const state = model.state;
     const oldStatus = createDeferred<unknown>();
     const oldClient = clientWithRequest(() => oldStatus.promise);
     const newStatus = { ...statusFor("2026-07-05"), capturePaused: true };
     const newClient = clientWithRequest(() => Promise.resolve(newStatus));
 
-    configureLogbookPolling(state, oldClient);
-    const oldRequest = setLogbookCapturePaused(state, oldClient, true);
-    configureLogbookPolling(state, newClient);
-    await setLogbookCapturePaused(state, newClient, true);
+    model.connect(oldClient);
+    const oldRequest = model.setCapturePaused(true);
+    model.connect(newClient);
+    await model.setCapturePaused(true);
     expect(state.status).toEqual(newStatus);
 
     oldStatus.resolve(statusFor("2026-07-04"));
@@ -227,11 +220,8 @@ describe("Logbook controller", () => {
 
   it("queues an analysis refresh behind an in-flight poll", async () => {
     vi.useFakeTimers();
-    const host = {};
-    hosts.push(host);
-    const state = getLogbookState(host);
-    state.day = "2026-07-04";
-    state.dayPinned = true;
+    const model = createModel();
+    const state = model.state;
     const status = createDeferred<unknown>();
     const days = createDeferred<unknown>();
     const timeline = createDeferred<unknown>();
@@ -259,11 +249,11 @@ describe("Logbook controller", () => {
     });
     const client = clientWithRequest(request);
 
-    configureLogbookPolling(state, client);
+    model.connect(client);
     await vi.advanceTimersByTimeAsync(30_000);
     expect(request).toHaveBeenCalledTimes(3);
 
-    await runLogbookAnalysisNow(state, client);
+    await model.analyze();
     expect(request).toHaveBeenCalledTimes(4);
 
     status.resolve(statusFor("2026-07-04"));
@@ -277,11 +267,8 @@ describe("Logbook controller", () => {
 
   it("drops a queued analysis refresh when polling stops", async () => {
     vi.useFakeTimers();
-    const host = {};
-    hosts.push(host);
-    const state = getLogbookState(host);
-    state.day = "2026-07-04";
-    state.dayPinned = true;
+    const model = createModel();
+    const state = model.state;
     const status = createDeferred<unknown>();
     const days = createDeferred<unknown>();
     const timeline = createDeferred<unknown>();
@@ -303,26 +290,25 @@ describe("Logbook controller", () => {
     });
     const client = clientWithRequest(request);
 
-    configureLogbookPolling(state, client);
+    model.connect(client);
     await vi.advanceTimersByTimeAsync(30_000);
     expect(request).toHaveBeenCalledTimes(3);
-    await runLogbookAnalysisNow(state, client);
+    await model.analyze();
     expect(request).toHaveBeenCalledTimes(4);
 
-    stopLogbookPolling(host);
+    model.connect(null);
     status.resolve(statusFor("2026-07-04"));
     days.resolve({ days: [] });
     timeline.resolve(timelineFor("2026-07-04", "Detached host"));
     await vi.advanceTimersByTimeAsync(0);
 
     expect(request).toHaveBeenCalledTimes(4);
-    expect(state.timeline?.cards[0]?.title).toBe("Detached host");
+    expect(state.timeline).toBeNull();
   });
 
   it("does not let an older day load overwrite a newer selection", async () => {
-    const host = {};
-    hosts.push(host);
-    const state = getLogbookState(host);
+    const model = createModel();
+    const state = model.state;
     const oldStatus = createDeferred<unknown>();
     const oldDays = createDeferred<unknown>();
     const oldTimeline = createDeferred<unknown>();
@@ -350,12 +336,12 @@ describe("Logbook controller", () => {
 
     const oldClient = clientWithRequest(oldRequest);
     const newClient = clientWithRequest(newerRequest);
-    configureLogbookPolling(state, oldClient);
-    const olderLoad = loadLogbook(state, oldClient, { day: "2026-07-04" });
+    model.connect(oldClient);
+    const olderLoad = model.load({ day: "2026-07-04" });
     expect(oldRequest).toHaveBeenCalledWith("logbook.timeline", { day: "2026-07-04" });
 
-    configureLogbookPolling(state, newClient);
-    await loadLogbook(state, newClient, { day: "2026-07-05" });
+    model.connect(newClient);
+    await model.load({ day: "2026-07-05" });
     expect(newerRequest).toHaveBeenCalledWith("logbook.timeline", { day: "2026-07-05" });
     expect(state.timeline?.cards[0]?.title).toBe("New day");
 
@@ -372,16 +358,25 @@ describe("Logbook controller", () => {
   });
 
   it("discards a standup response after the selected day changes", async () => {
-    const host = {};
-    hosts.push(host);
-    const state = getLogbookState(host);
-    state.day = "2026-07-04";
+    const model = createModel();
+    const state = model.state;
     const pending = createDeferred<unknown>();
-    const client = clientWithRequest(() => pending.promise);
-    configureLogbookPolling(state, client);
-    const request = loadLogbookStandup(state, client, false);
+    const client = clientWithRequest((method) => {
+      if (method === "logbook.status") {
+        return Promise.resolve(statusFor("2026-07-05"));
+      }
+      if (method === "logbook.days") {
+        return Promise.resolve({ days: [] });
+      }
+      if (method === "logbook.timeline") {
+        return Promise.resolve(timelineFor("2026-07-05", "Next day"));
+      }
+      return pending.promise;
+    });
+    model.connect(client);
+    const request = model.standup(false);
 
-    state.day = "2026-07-05";
+    await model.load({ day: "2026-07-05" });
     pending.resolve({ day: "2026-07-04", text: "Old day", updatedMs: 1 });
     await request;
 
@@ -389,17 +384,25 @@ describe("Logbook controller", () => {
   });
 
   it("discards an ask response after the selected day changes", async () => {
-    const host = {};
-    hosts.push(host);
-    const state = getLogbookState(host);
-    state.day = "2026-07-04";
-    state.askQuestion = "What did I do?";
+    const model = createModel();
+    const state = model.state;
     const pending = createDeferred<unknown>();
-    const client = clientWithRequest(() => pending.promise);
-    configureLogbookPolling(state, client);
-    const request = askLogbook(state, client);
+    const client = clientWithRequest((method) => {
+      if (method === "logbook.status") {
+        return Promise.resolve(statusFor("2026-07-05"));
+      }
+      if (method === "logbook.days") {
+        return Promise.resolve({ days: [] });
+      }
+      if (method === "logbook.timeline") {
+        return Promise.resolve(timelineFor("2026-07-05", "Next day"));
+      }
+      return pending.promise;
+    });
+    model.connect(client);
+    const request = model.ask("What did I do?");
 
-    state.day = "2026-07-05";
+    await model.load({ day: "2026-07-05" });
     pending.resolve({ answer: "Old day" });
     await request;
 

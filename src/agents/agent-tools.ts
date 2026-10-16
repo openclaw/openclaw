@@ -352,9 +352,8 @@ function* assembleOpenClawCodingTools(
   // Passed by reference to sessions_spawn and populated after the final policy
   // pass so child sessions inherit the parent's tool policy.
   const inheritedToolAllowlist = options?.inheritedToolAllowlistRef ?? [];
-  const toolPolicyInheritanceSources = capabilityProfile.policy.inheritancePolicies;
   const shouldInheritEffectiveToolAllowlist =
-    toolPolicyInheritanceSources.some(hasRestrictiveAllowPolicy);
+    capabilityProfile.policy.inheritancePolicies.some(hasRestrictiveAllowPolicy);
   // A new managed child has its own publication workspace. Run the real tool
   // through all parent policies before capturing it, without exposing it here.
   const unavailablePublicationTool =
@@ -444,6 +443,7 @@ function* assembleOpenClawCodingTools(
             ...pluginToolOptions,
             sessionPortalTarget,
             sandboxSessionRenameOnly: capabilityProfile.policy.sandboxSessionRenameOnly,
+            questionInputMode: capabilityProfile.conversation.questionInputMode,
             sessionPermissionPolicy,
             execSession: sessionPermissionPolicy
               ? { permissionMode: sessionPermissionPolicy.mode }
