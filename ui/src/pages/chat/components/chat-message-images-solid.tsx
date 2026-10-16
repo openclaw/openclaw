@@ -448,7 +448,8 @@ function createMessageImagePresentation(props: MessageImageProps) {
     previewElement = undefined;
     loadedElement = undefined;
     releaseChatMediaResourceSubscriber(refreshImage);
-    void refresh(model);
+    // Transcript disposal can run inside a render computation; only invalidation waits.
+    queueMicrotask(refreshImage);
   };
 
   const model = createMemo(() => readPresentation(props.image, props.options));
