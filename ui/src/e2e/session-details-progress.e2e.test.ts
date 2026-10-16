@@ -239,6 +239,8 @@ suite.define(() => {
         };
         await geometry(true);
         expect(await details.locator(".chat-details__toolbar").count()).toBe(0);
+        expect(await details.locator(".chat-details__participants").count()).toBe(0);
+        expect(await details.locator(".chat-details__meta-actions").count()).toBe(0);
         const environment = details.locator(".chat-details__environment");
         expect(await environment.textContent()).toContain("openclaw");
         expect(await environment.textContent()).not.toContain(
@@ -270,7 +272,7 @@ suite.define(() => {
         await expect
           .poll(() =>
             details
-              .locator(".chat-details__participants > summary")
+              .locator(".chat-details__environment > summary")
               .evaluate((el) => el === document.activeElement),
           )
           .toBe(true);
