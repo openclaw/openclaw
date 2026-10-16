@@ -265,7 +265,7 @@ suite.define(() => {
         await expect
           .poll(() => pane.locator('openclaw-chat-header-session-menu [role^="menuitem"]').count())
           .toBeGreaterThan(0);
-        await expect(pane.locator('[role="menu"][popover]:popover-open')).toHaveCount(0);
+        expect(await pane.locator('[role="menu"][popover]:popover-open').count()).toBe(0);
         const measurement = await page.evaluate(() => ({
           tags: Object.fromEntries(window.chatBootRenderCounts),
           closedMenuItems: document.querySelectorAll(
