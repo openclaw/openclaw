@@ -32,7 +32,13 @@ describe("Solid native popover", () => {
     expect(document.activeElement).toBe(input);
     await phase(handle.overlay.surface, "open");
     expect(document.querySelectorAll(":popover-open")).toHaveLength(1);
-    await userEvent.keyboard("{Escape}");
+    expect(handle.hide()).toBe(true);
+    expect(handle.overlay.phase).toBe("closing");
+    expect(input.isConnected).toBe(true);
+    expect(handle.show()).toBe(true);
+    expect(view.getByRole("textbox")).toBe(input);
+    await phase(handle.overlay.surface, "open");
+    handle.hide();
     await phase(handle.overlay.surface, "hidden");
     expect(handle.overlay.surface.querySelector("input")).toBeNull();
     setValue("Third");

@@ -15,7 +15,7 @@ export interface PopoverHandle {
 }
 
 export interface PopoverProps {
-  /** Preserve drafts by default; transient bodies can live only while open. */
+  /** Preserve drafts by default; transient bodies are released after the exit. */
   lazy?: boolean | "while-open";
   /** The caller keeps anchor and surface in one DOM root for this mount. */
   sameRoot?: boolean;

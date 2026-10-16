@@ -81,7 +81,7 @@ export type MenuProps = {
   id: string;
   label: string;
   items: readonly MenuEntry[];
-  /** Defer until opened; "while-open" also releases transient content on close. */
+  /** Defer until opened; "while-open" releases transient content after the exit. */
   lazy?: boolean | "while-open";
   trigger?: JSX.Element;
   children?: JSX.Element;

@@ -50,9 +50,6 @@ export function useOverlayControl(
   const connect = (onConnect: () => void, onOpen?: (open: boolean) => void) => {
     mounted = true;
     const stopOpen = overlay.subscribe((open) => {
-      if (!open && lazy === "while-open") {
-        clearBody();
-      }
       onOpen?.(open);
       untrack(() => props.onOpenChange?.(open));
     });
@@ -85,6 +82,14 @@ export function useOverlayControl(
     };
     const stopShow = listen(overlay.surface, "overlay-show", show);
     const stopHide = listen(overlay.surface, "overlay-hide", hide);
+    const stopHidden =
+      lazy === "while-open"
+        ? listen(overlay.surface, "overlay-after-hide", () => {
+            if (!overlay.open) {
+              clearBody();
+            }
+          })
+        : undefined;
     onConnect();
     if (props.open) {
       syncOpen(true);
@@ -94,6 +99,7 @@ export function useOverlayControl(
       stopOpen();
       stopShow();
       stopHide();
+      stopHidden?.();
     };
   };
   return { connect, bodyMounted: () => Boolean(disposeBody) };
