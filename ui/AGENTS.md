@@ -57,7 +57,7 @@ modules keep `render`. Keep page imports inside their route's `component` loader
 
 ## Stylesheet Policy
 
-- No universal targets/pseudo-elements after `:has()` compound, `:has()` with `::placeholder`, or descendants after sibling-relative `:has(+ …)` on repeated items. Use owner-set classes, named children, or subject custom property. No `:has()` subjects on `.shell`, `.content`, `.chat-thread`, `.chat-split-view`, `:root`, `html`, `body`, including modifiers, `:is()`/`:where()`, nested `&`: insertions restyle subtree; stylelint cannot resolve nesting. Third-party global CSS uses Vite PostCSS; `config/control-ui-web-awesome-page-rule.ts` drops Web Awesome's never-matching `:is(html, body):has(wa-page)` rule.
+- No universal targets/pseudo-elements after `:has()` compound, `:has()` with `::placeholder`, or descendants after sibling-relative `:has(+ …)` on repeated items. Use owner-set classes, named children, or subject custom property. No `:has()` subjects on `.shell`, `.content`, `.chat-thread`, `.chat-split-view`, `:root`, `html`, `body`, including modifiers, `:is()`/`:where()`, nested `&`: insertions restyle subtree; stylelint cannot resolve nesting.
 - New-tab links/controls: pointer cursors; state-changing controls: default arrow.
 - Colors: `src/styles/base.css` tokens (`color-no-hex`). Stated exemptions: token definitions, `lobster-pet.css` artwork, `--theme-chip-*` previews. Prefer tokens in currently ungated Lit CSS templates too.
 - `max-width` breakpoints: 400/560/640/768/900/1100/1320px + 932×500 landscape-phone compound. Round new thresholds up; new rungs require config comment + this rule updates.

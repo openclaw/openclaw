@@ -5,7 +5,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { ModelProviderAuthLabel } from "../../../lib/model-provider-auth-label.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import { openDetails } from "../../../test-helpers/web-awesome.ts";
 import { ChatModelPicker } from "./chat-model-picker.tsx";
 
 afterEach(() => document.body.replaceChildren());
@@ -171,7 +170,10 @@ it.each([false, true])(
     flush();
     await Promise.resolve();
     const more = container.querySelector<HTMLButtonElement>("[data-chat-model-more-toggle]")!;
-    await openDetails(container.querySelector("details")!);
+    const details = container.querySelector("details")!;
+    details.open = true;
+    details.dispatchEvent(new Event("toggle"));
+    await Promise.resolve();
     const rest = container.querySelector<HTMLButtonElement>(
       '[data-chat-model-option="fixture/rest"]',
     )!;
