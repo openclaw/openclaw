@@ -166,7 +166,8 @@ describe("Codex migration discovery deadline with real request owner", () => {
     expect(rewound).toBe(true);
     const discoveryRequests = requestSpy.mock.calls.filter(([method]) => method === "plugin/list");
     expect(discoveryRequests.length).toBeGreaterThanOrEqual(2);
-    for (const [, , options] of discoveryRequests) {
+    for (const call of discoveryRequests) {
+      const options = call[2];
       expect(options?.timeoutMs).toBeGreaterThan(0);
       expect(options?.timeoutMs).toBeLessThanOrEqual(30_000);
     }
