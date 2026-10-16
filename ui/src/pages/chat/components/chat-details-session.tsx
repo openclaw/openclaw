@@ -12,7 +12,7 @@ import {
   hasChatPullRequests,
   type ChatPullRequestsProps,
 } from "./chat-pull-requests.tsx";
-import "./chat-subagent-activity-live.ts";
+import "./chat-subagent-activity-live.tsx";
 import { ChatSummaryAutomations } from "./chat-summary-automations.tsx";
 
 type Props = { props?: ChatDetailsProps; presented: boolean; dismissed?: boolean };

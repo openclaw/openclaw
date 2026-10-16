@@ -22,7 +22,7 @@ import { resolveChatAgentId } from "./chat-state-route.ts";
 import {
   canManageChatSessionSharing,
   type ChatSessionSharingState,
-} from "./components/chat-session-sharing.ts";
+} from "./components/chat-session-sharing.solid.tsx";
 
 const SESSION_MEMBERS_LIST_METHOD = "session.members.listEvidence";
 

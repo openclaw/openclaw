@@ -8,7 +8,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { attachHistoryActivity } from "../chat/chat-history-request.ts";
 import { mergeChatTranscriptPages } from "../chat/chat-transcript-pages.ts";
 import { ChatHistoryBoundary } from "../chat/components/chat-history-boundary.tsx";
-import { ChatTranscriptFeed } from "../chat/components/chat-transcript-feed.ts";
+import { ChatTranscriptFeed } from "../chat/components/chat-transcript-feed-view.tsx";
 
 type Scope = { client: GatewayBrowserClient; isCurrent: () => boolean };
 

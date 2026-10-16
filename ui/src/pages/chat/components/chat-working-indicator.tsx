@@ -16,8 +16,8 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { projectSource } from "../../../lib/reactive/projection.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
-import { ChatSubagentActivity } from "./chat-subagent-activity-live.ts";
-import type { SubagentActivityProps } from "./chat-subagent-activity.ts";
+import { ChatSubagentActivity } from "./chat-subagent-activity-live.tsx";
+import type { SubagentActivityProps } from "./chat-subagent-activity.tsx";
 import "./chat-retry-status.tsx";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
 

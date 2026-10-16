@@ -28,7 +28,7 @@ import {
   renderPaneHeaderInto,
   type ChatPaneHeaderProps,
 } from "./chat-pane-header.test-support.ts";
-import { resolveChatPaneWorkspaceIcon } from "./chat-pane-header.ts";
+import { resolveChatPaneWorkspaceIcon } from "./chat-pane-header.tsx";
 
 const containers: HTMLElement[] = [];
 
