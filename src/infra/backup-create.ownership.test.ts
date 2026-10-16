@@ -2,14 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { backupRestoreCommand } from "../commands/backup-restore.js";
 import { buildBackupArchivePath } from "../commands/backup-shared.js";
 import { backupCreateCommand } from "../commands/backup.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
-import {
-  createColdPluginConfig,
-  createColdPluginFixture,
-} from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { readBackupRunFreshness } from "../state/backup-run-records.js";
 import { inspectOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry-listing.js";
 import {
@@ -26,11 +21,25 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { inspectDatabase, expectDatabaseRows } from "./backup-create-family.test-support.js";
+import {
+  withBackupFixture,
+  isolateBackupScratch,
+  createVerifiedBackup,
+  restoreBackup,
+  expectAbsent,
+  expectDatabaseRows,
+  declarePluginSqliteResources,
+} from "./backup-create-family.test-support.js";
 import { listArchiveEntries } from "./backup-create.test-support.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
+
+function expectSnapshotOwners(callback: unknown, globalPath: string, agentPath: string) {
+  expect(callback).toHaveBeenCalledExactlyOnceWith([
+    expect.objectContaining({ role: "global", sourcePath: globalPath }),
+    expect.objectContaining({ role: "agent", agentId: "main", sourcePath: agentPath }),
+  ]);
+}
 
 type RegisteredAlias = "dot" | "symlink" | "namespace";
 const registeredAliases: { includeWorkspace: boolean; alias: RegisteredAlias }[] = [
@@ -45,11 +54,10 @@ describe("backup SQLite ownership", () => {
   it.each(registeredAliases)(
     "backs up registered state inside its workspace ($alias, includeWorkspace=$includeWorkspace)",
     async ({ includeWorkspace, alias }) => {
-      await withOpenClawTestState(
+      await withBackupFixture(
         {
           layout: "home",
           prefix: alias === "namespace" ? "backup-namespace-alias-" : "backup-enclosing-workspace-",
-          scenario: "minimal",
         },
         async (state) => {
           await state.writeConfig({ agents: { defaults: { workspace: state.home } } });
@@ -83,34 +91,20 @@ describe("backup SQLite ownership", () => {
           });
           expect(archive.verified).toBe(true);
           if (alias !== "namespace") {
-            expect(onSqliteSnapshots).toHaveBeenCalledExactlyOnceWith([
-              expect.objectContaining({
-                role: "global",
-                sourcePath: resolveOpenClawStateSqlitePath(state.env),
-              }),
-              expect.objectContaining({ role: "agent", agentId: "main", sourcePath: agentPath }),
-            ]);
+            expectSnapshotOwners(
+              onSqliteSnapshots,
+              resolveOpenClawStateSqlitePath(state.env),
+              agentPath,
+            );
           }
           const restoredRoot = state.path("restored");
-          await expect(
-            backupRestoreCommand(runtime, {
-              archive: archive.archivePath,
-              target: restoredRoot,
-            }),
-          ).resolves.toMatchObject({ ok: true });
+          await expect(restoreBackup(state, archive, runtime)).resolves.toMatchObject({ ok: true });
           if (alias === "namespace") {
-            const restoredAgents: string[] = [];
-            const visit = async (directory: string) => {
-              for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
-                const child = path.join(directory, entry.name);
-                if (entry.isDirectory()) {
-                  await visit(child);
-                } else if (entry.name === "openclaw-agent.sqlite") {
-                  restoredAgents.push(child);
-                }
-              }
-            };
-            await visit(restoredRoot);
+            const restoredAgents = (
+              await fs.readdir(restoredRoot, { recursive: true, withFileTypes: true })
+            )
+              .filter((entry) => !entry.isDirectory() && entry.name === "openclaw-agent.sqlite")
+              .map((entry) => path.join(entry.parentPath, entry.name));
             expect(
               restoredAgents.map((restoredAgent) => restoredAgent.replaceAll("\\", "/")),
             ).toEqual([
@@ -139,8 +133,8 @@ describe("backup SQLite ownership", () => {
   it.each(["same path", "agent hardlink", "global hardlink"])(
     "refuses different registered owners sharing a database (%s)",
     async (alias) => {
-      await withOpenClawTestState(
-        { layout: "home", prefix: "backup-conflicting-owners-", scenario: "minimal" },
+      await withBackupFixture(
+        { layout: "home", prefix: "backup-conflicting-owners-" },
         async (state) => {
           await state.writeConfig({ agents: { defaults: { workspace: state.home } } });
           const agentPath = path.join(state.agentDir(), "openclaw-agent.sqlite");
@@ -167,7 +161,7 @@ describe("backup SQLite ownership", () => {
           await expect(
             backupCreateCommand(createTestRuntime(), { output, verify: true }),
           ).rejects.toThrow(/SQLite path aliases multiple core database owners/iu);
-          await expect(fs.stat(output)).rejects.toMatchObject({ code: "ENOENT" });
+          await expectAbsent(output);
         },
       );
     },
@@ -176,142 +170,97 @@ describe("backup SQLite ownership", () => {
   it.skipIf(process.platform === "win32")(
     "refuses a declared plugin database hidden behind a symlink",
     async () => {
-      await withOpenClawTestState(
-        { layout: "state-only", prefix: "backup-plugin-symlink-", scenario: "minimal" },
-        async (state) => {
-          const pluginRoot = state.path("backup-plugin");
-          await fs.mkdir(pluginRoot);
-          const fixture = createColdPluginFixture({
-            rootDir: pluginRoot,
-            pluginId: "backup-owner",
-            manifest: {
-              backupResources: [
-                { disposition: "include", scope: "state", relativePath: "plugins/linked.sqlite" },
-              ],
-            },
-          });
-          await state.writeConfig(createColdPluginConfig(pluginRoot, fixture.pluginId));
-          const linkedPath = state.statePath("plugins", "linked.sqlite");
-          const backingPath = state.statePath("plugins", "database.bin");
-          await fs.mkdir(path.dirname(backingPath));
-          const sqlite = requireNodeSqlite();
-          const database = new sqlite.DatabaseSync(backingPath);
-          try {
-            database.function(
-              "plugin_double",
-              { deterministic: true },
-              (value) => Number(value) * 2,
-            );
-            database.exec(`
+      await withBackupFixture({ prefix: "backup-plugin-symlink-" }, async (state) => {
+        await declarePluginSqliteResources(state, "plugins/linked.sqlite");
+        const linkedPath = state.statePath("plugins", "linked.sqlite");
+        const backingPath = state.statePath("plugins", "database.bin");
+        await fs.mkdir(path.dirname(backingPath));
+        const sqlite = requireNodeSqlite();
+        const database = new sqlite.DatabaseSync(backingPath);
+        try {
+          database.function("plugin_double", { deterministic: true }, (value) => Number(value) * 2);
+          database.exec(`
             CREATE TABLE records (value INTEGER NOT NULL);
             INSERT INTO records VALUES (7);
             CREATE INDEX records_double ON records(plugin_double(value));
           `);
-          } finally {
-            database.close();
-          }
-          await fs.symlink("database.bin", linkedPath);
-          const sourceBytes = await fs.readFile(backingPath);
-          const output = state.path("rejected.tar.gz");
+        } finally {
+          database.close();
+        }
+        await fs.symlink("database.bin", linkedPath);
+        const sourceBytes = await fs.readFile(backingPath);
+        const output = state.path("rejected.tar.gz");
 
-          await expect(
-            backupCreateCommand(createTestRuntime(), { output, includeWorkspace: false }),
-          ).rejects.toThrow(/SQLite backup source identity changed.*linked\.sqlite/iu);
-          await expect(fs.stat(output)).rejects.toMatchObject({ code: "ENOENT" });
-          expect(await fs.readFile(backingPath)).toEqual(sourceBytes);
-        },
-      );
+        await expect(
+          backupCreateCommand(createTestRuntime(), { output, includeWorkspace: false }),
+        ).rejects.toThrow(/SQLite backup source identity changed.*linked\.sqlite/iu);
+        await expectAbsent(output);
+        expect(await fs.readFile(backingPath)).toEqual(sourceBytes);
+      });
     },
   );
 
   it("restores an agent registered immediately before the root snapshot with its registry row", async () => {
-    await withOpenClawTestState(
-      { layout: "state-only", prefix: "backup-late-agent-owner-", scenario: "minimal" },
-      async (state) => {
-        // This registry snapshot fixture must not inspect another backup's scratch.
-        const scratchRoot = state.path("scratch");
-        await fs.mkdir(scratchRoot);
-        Object.assign(state.envVars, { TMPDIR: scratchRoot, TMP: scratchRoot, TEMP: scratchRoot });
-        state.applyEnv();
-        const agentPath = state.path("external-agent", "openclaw-agent.sqlite");
-        const registration = { agentId: "main", path: agentPath, env: state.env };
-        const agent = openOpenClawAgentDatabase(registration);
-        agent.db.exec(`
+    await withBackupFixture({ prefix: "backup-late-agent-owner-" }, async (state) => {
+      // This registry snapshot fixture must not inspect another backup's scratch.
+      await isolateBackupScratch(state);
+      const agentPath = state.path("external-agent", "openclaw-agent.sqlite");
+      const registration = { agentId: "main", path: agentPath, env: state.env };
+      const agent = openOpenClawAgentDatabase(registration);
+      agent.db.exec(`
           CREATE TABLE durable_records (value TEXT NOT NULL);
           INSERT INTO durable_records VALUES ('registered-before-root-capture');
         `);
-        closeOpenClawAgentDatabasesForTest();
-        unregisterOpenClawAgentDatabase(registration);
-        closeOpenClawStateDatabase();
-        expect(await inspectOpenClawRegisteredAgentDatabases({ env: state.env })).toEqual([]);
-        const globalPath = resolveOpenClawStateSqlitePath(state.env);
-        const output = state.path("registered-agent.tar.gz");
-        const capture = sqliteSnapshot.createVerifiedSqliteSnapshot;
-        let registered = false;
-        const snapshot = vi
-          .spyOn(sqliteSnapshot, "createVerifiedSqliteSnapshot")
-          .mockImplementation(async (options) => {
-            if (!registered && options.sourcePath === globalPath) {
-              registerOpenClawAgentDatabase(registration);
-              closeOpenClawStateDatabase();
-              registered = true;
-            }
-            return await capture(options);
-          });
-        try {
-          const runtime = createTestRuntime();
-          const onSqliteSnapshots = vi.fn();
-          const archive = await backupCreateCommand(runtime, {
-            output,
-            includeWorkspace: false,
-            verify: true,
-            onSqliteSnapshots,
-          });
-          expect(onSqliteSnapshots).toHaveBeenCalledExactlyOnceWith([
-            expect.objectContaining({ role: "global", sourcePath: globalPath }),
-            expect.objectContaining({ role: "agent", agentId: "main", sourcePath: agentPath }),
-          ]);
-          expect(registered).toBe(true);
-          expect(archive.verified).toBe(true);
-          expect(archive.warnings ?? []).toEqual([]);
-          const restored = await backupRestoreCommand(runtime, {
-            archive: archive.archivePath,
-            target: state.path("restored"),
-          });
-          inspectDatabase(
-            path.join(restored.targetPath, buildBackupArchivePath(archive.archiveRoot, globalPath)),
-            (database) => {
-              expect(database.prepare("SELECT agent_id, path FROM agent_databases").all()).toEqual([
-                { agent_id: "main", path: agentPath },
-              ]);
-            },
-          );
-          inspectDatabase(
-            path.join(restored.targetPath, buildBackupArchivePath(archive.archiveRoot, agentPath)),
-            (database) => {
-              expect(
-                database
-                  .prepare("SELECT role, agent_id FROM schema_meta WHERE meta_key = 'primary'")
-                  .get(),
-              ).toEqual({ role: "agent", agent_id: "main" });
-              expect(database.prepare("SELECT value FROM durable_records").all()).toEqual([
-                { value: "registered-before-root-capture" },
-              ]);
-            },
-          );
-          await expect(
-            fs.stat(
-              path.join(
-                restored.targetPath,
-                `${buildBackupArchivePath(archive.archiveRoot, agentPath)}.seal`,
-              ),
-            ),
-          ).rejects.toMatchObject({ code: "ENOENT" });
-        } finally {
-          snapshot.mockRestore();
-        }
-      },
-    );
+      closeOpenClawAgentDatabasesForTest();
+      unregisterOpenClawAgentDatabase(registration);
+      closeOpenClawStateDatabase();
+      expect(await inspectOpenClawRegisteredAgentDatabases({ env: state.env })).toEqual([]);
+      const globalPath = resolveOpenClawStateSqlitePath(state.env);
+      const output = state.path("registered-agent.tar.gz");
+      const capture = sqliteSnapshot.createVerifiedSqliteSnapshot;
+      let registered = false;
+      const snapshot = vi
+        .spyOn(sqliteSnapshot, "createVerifiedSqliteSnapshot")
+        .mockImplementation(async (options) => {
+          if (!registered && options.sourcePath === globalPath) {
+            registerOpenClawAgentDatabase(registration);
+            closeOpenClawStateDatabase();
+            registered = true;
+          }
+          return await capture(options);
+        });
+      try {
+        const runtime = createTestRuntime();
+        const onSqliteSnapshots = vi.fn();
+        const archive = await backupCreateCommand(runtime, {
+          output,
+          includeWorkspace: false,
+          verify: true,
+          onSqliteSnapshots,
+        });
+        expectSnapshotOwners(onSqliteSnapshots, globalPath, agentPath);
+        expect(registered).toBe(true);
+        expect(archive.verified).toBe(true);
+        expect(archive.warnings ?? []).toEqual([]);
+        const restored = await restoreBackup(state, archive, runtime);
+        const restoredPath = (source: string) =>
+          path.join(restored.targetPath, buildBackupArchivePath(archive.archiveRoot, source));
+        expectDatabaseRows(restoredPath(globalPath), "SELECT agent_id, path FROM agent_databases", [
+          { agent_id: "main", path: agentPath },
+        ]);
+        expectDatabaseRows(
+          restoredPath(agentPath),
+          "SELECT role, agent_id FROM schema_meta WHERE meta_key = 'primary'",
+          [{ role: "agent", agent_id: "main" }],
+        );
+        expectDatabaseRows(restoredPath(agentPath), "SELECT value FROM durable_records", [
+          { value: "registered-before-root-capture" },
+        ]);
+        await expectAbsent(`${restoredPath(agentPath)}.seal`);
+      } finally {
+        snapshot.mockRestore();
+      }
+    });
   });
 });
 
@@ -324,169 +273,138 @@ describe("registered backup hardlinks", () => {
   ])(
     "preserves committed rows or refuses unsafe $journal ($role, $aliasName)",
     async ({ role, aliasName, journal }) => {
-      await withOpenClawTestState(
-        { layout: "state-only", prefix: "backup-registered-hardlinks-", scenario: "minimal" },
-        async (state) => {
-          const ownerPath =
-            role === "global"
-              ? resolveOpenClawStateSqlitePath(state.env)
-              : path.join(state.agentDir(), "openclaw-agent.sqlite");
-          const aliasPath = path.join(path.dirname(ownerPath), aliasName);
-          const owner =
-            role === "global"
-              ? openOpenClawStateDatabase({ env: state.env })
-              : openOpenClawAgentDatabase({ agentId: "main", path: ownerPath, env: state.env });
-          owner.db.exec("CREATE TABLE durable_records (value TEXT NOT NULL)");
-          closeOpenClawAgentDatabasesForTest();
+      await withBackupFixture({ prefix: "backup-registered-hardlinks-" }, async (state) => {
+        const ownerPath =
+          role === "global"
+            ? resolveOpenClawStateSqlitePath(state.env)
+            : path.join(state.agentDir(), "openclaw-agent.sqlite");
+        const aliasPath = path.join(path.dirname(ownerPath), aliasName);
+        const owner =
+          role === "global"
+            ? openOpenClawStateDatabase({ env: state.env })
+            : openOpenClawAgentDatabase({ agentId: "main", path: ownerPath, env: state.env });
+        owner.db.exec("CREATE TABLE durable_records (value TEXT NOT NULL)");
+        closeOpenClawAgentDatabasesForTest();
+        closeOpenClawStateDatabase();
+        await fs.link(ownerPath, aliasPath);
+        if (role === "agent") {
+          registerOpenClawAgentDatabase({ agentId: "main", path: aliasPath, env: state.env });
           closeOpenClawStateDatabase();
-          await fs.link(ownerPath, aliasPath);
-          if (role === "agent") {
-            registerOpenClawAgentDatabase({ agentId: "main", path: aliasPath, env: state.env });
-            closeOpenClawStateDatabase();
-          }
-          const sqlite = requireNodeSqlite();
-          const writer = new sqlite.DatabaseSync(ownerPath);
-          try {
-            writer.exec(`
+        }
+        const sqlite = requireNodeSqlite();
+        const writer = new sqlite.DatabaseSync(ownerPath);
+        try {
+          writer.exec(`
             PRAGMA journal_mode = WAL;
             PRAGMA wal_autocheckpoint = 0;
             INSERT INTO durable_records VALUES ('committed-only-in-wal');
           `);
-            expect((await fs.stat(`${ownerPath}-wal`)).size).toBeGreaterThan(0);
-            await expect(fs.stat(`${aliasPath}-wal`)).rejects.toMatchObject({ code: "ENOENT" });
-            if (journal === "competing WALs") {
-              await fs.copyFile(`${ownerPath}-wal`, `${aliasPath}-wal`);
-            }
-            const output = state.path("backup.tar.gz");
-            const runtime = createTestRuntime();
-            const create = () =>
-              backupCreateCommand(runtime, { output, includeWorkspace: false, verify: true });
-            if (journal !== "one WAL") {
-              const reason =
-                /Ambiguous SQLite hardlink journal ownership: multiple non-empty WAL/iu;
-              await expect(create()).rejects.toThrow(reason);
-              expect((await readBackupRunFreshness(state.env)).latest).toMatchObject({
-                status: "failed",
-                error: expect.stringMatching(reason),
-              });
-              await expect(fs.stat(output)).rejects.toMatchObject({ code: "ENOENT" });
-              return;
-            }
-            const archive = await create();
-            expect(archive.verified).toBe(true);
-            const restored = await backupRestoreCommand(runtime, {
-              archive: archive.archivePath,
-              target: state.path("restored"),
-            });
-            for (const source of [ownerPath, aliasPath]) {
-              expectDatabaseRows(
-                path.join(restored.targetPath, buildBackupArchivePath(archive.archiveRoot, source)),
-                "SELECT value FROM durable_records",
-                [{ value: "committed-only-in-wal" }],
-              );
-            }
-          } finally {
-            writer.close();
+          expect((await fs.stat(`${ownerPath}-wal`)).size).toBeGreaterThan(0);
+          await expectAbsent(`${aliasPath}-wal`);
+          if (journal === "competing WALs") {
+            await fs.copyFile(`${ownerPath}-wal`, `${aliasPath}-wal`);
           }
-        },
-      );
+          const output = state.path("backup.tar.gz");
+          const runtime = createTestRuntime();
+          const create = () =>
+            backupCreateCommand(runtime, { output, includeWorkspace: false, verify: true });
+          if (journal !== "one WAL") {
+            const reason = /Ambiguous SQLite hardlink journal ownership: multiple non-empty WAL/iu;
+            await expect(create()).rejects.toThrow(reason);
+            expect((await readBackupRunFreshness(state.env)).latest).toMatchObject({
+              status: "failed",
+              error: expect.stringMatching(reason),
+            });
+            await expectAbsent(output);
+            return;
+          }
+          const archive = await create();
+          expect(archive.verified).toBe(true);
+          const restored = await restoreBackup(state, archive, runtime);
+          for (const source of [ownerPath, aliasPath]) {
+            expectDatabaseRows(
+              path.join(restored.targetPath, buildBackupArchivePath(archive.archiveRoot, source)),
+              "SELECT value FROM durable_records",
+              [{ value: "committed-only-in-wal" }],
+            );
+          }
+        } finally {
+          writer.close();
+        }
+      });
     },
   );
 });
 
 describe.skipIf(process.platform === "win32")("backup SQLite symbolic link loops", () => {
   it("skips an unmanaged loop with one filename warning and restores adjacent files", async () => {
-    await withOpenClawTestState(
-      { layout: "split", prefix: "backup-opaque-link-", scenario: "minimal" },
-      async (state) => {
-        // Keep unrelated backup scratch out of this fixture's warning count.
-        const scratchRoot = state.path("scratch");
-        await fs.mkdir(scratchRoot);
-        state.envVars.TMPDIR = scratchRoot;
-        state.applyEnv();
-        const sideFile = await state.writeText("foreign/keep.txt", "keep this file\n");
-        const loopPath = state.statePath("foreign", "cycle.sqlite");
-        await fs.symlink("cycle.sqlite", loopPath);
-        const runtime = createTestRuntime();
-        const archive = await backupCreateCommand(runtime, {
-          output: state.path("backup.tar.gz"),
-          includeWorkspace: false,
-          verify: true,
-        });
+    await withBackupFixture({ layout: "split", prefix: "backup-opaque-link-" }, async (state) => {
+      // Keep unrelated backup scratch out of this fixture's warning count.
+      const scratchRoot = state.path("scratch");
+      await fs.mkdir(scratchRoot);
+      state.envVars.TMPDIR = scratchRoot;
+      state.applyEnv();
+      const sideFile = await state.writeText("foreign/keep.txt", "keep this file\n");
+      const loopPath = state.statePath("foreign", "cycle.sqlite");
+      await fs.symlink("cycle.sqlite", loopPath);
+      const runtime = createTestRuntime();
+      const archive = await createVerifiedBackup(state, {}, runtime);
 
-        expect(archive.verified).toBe(true);
-        expect(archive.warnings, JSON.stringify(archive.warnings)).toHaveLength(1);
-        const warning = expectDefined(archive.warnings?.[0], "skipped link warning");
-        expect(warning).toContain("cycle.sqlite");
-        expect(warning).toMatch(/skip/iu);
-        expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(warning));
-        const stateAsset = expectDefined(
-          archive.assets.find((asset) => asset.kind === "state"),
-          "state asset",
-        );
-        const archivedDirectory = path.posix.join(stateAsset.archivePath, "foreign");
-        const entries = await listArchiveEntries(archive.archivePath);
-        expect(entries).not.toContain(`${archivedDirectory}/cycle.sqlite`);
-        expect(entries).toContain(`${archivedDirectory}/keep.txt`);
+      expect(archive.verified).toBe(true);
+      expect(archive.warnings, JSON.stringify(archive.warnings)).toHaveLength(1);
+      const warning = expectDefined(archive.warnings?.[0], "skipped link warning");
+      expect(warning).toContain("cycle.sqlite");
+      expect(warning).toMatch(/skip/iu);
+      expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(warning));
+      const stateAsset = expectDefined(
+        archive.assets.find((asset) => asset.kind === "state"),
+        "state asset",
+      );
+      const archivedDirectory = path.posix.join(stateAsset.archivePath, "foreign");
+      const entries = await listArchiveEntries(archive.archivePath);
+      expect(entries).not.toContain(`${archivedDirectory}/cycle.sqlite`);
+      expect(entries).toContain(`${archivedDirectory}/keep.txt`);
 
-        const restored = await backupRestoreCommand(runtime, {
-          archive: archive.archivePath,
-          target: state.path("restored"),
-        });
-        const restoredDirectory = path.join(restored.targetPath, archivedDirectory);
-        expect(await fs.readdir(restoredDirectory)).toEqual(["keep.txt"]);
-        expect(await fs.readFile(path.join(restoredDirectory, "keep.txt"), "utf8")).toBe(
-          "keep this file\n",
-        );
-        expect(await fs.readlink(loopPath)).toBe("cycle.sqlite");
-        expect(await fs.readFile(sideFile, "utf8")).toBe("keep this file\n");
-      },
-    );
+      const restored = await restoreBackup(state, archive, runtime);
+      const restoredDirectory = path.join(restored.targetPath, archivedDirectory);
+      expect(await fs.readdir(restoredDirectory)).toEqual(["keep.txt"]);
+      expect(await fs.readFile(path.join(restoredDirectory, "keep.txt"), "utf8")).toBe(
+        "keep this file\n",
+      );
+      expect(await fs.readlink(loopPath)).toBe("cycle.sqlite");
+      expect(await fs.readFile(sideFile, "utf8")).toBe("keep this file\n");
+    });
   });
 
   it.each(["canonical", "declared plugin"] as const)(
     "refuses a %s loop without publishing an archive",
     async (ownership) => {
-      await withOpenClawTestState(
-        { layout: "split", prefix: "backup-owned-link-", scenario: "minimal" },
-        async (state) => {
-          if (ownership === "declared plugin") {
-            const rootDir = state.path("backup-plugin");
-            await fs.mkdir(rootDir);
-            const plugin = createColdPluginFixture({
-              rootDir,
-              pluginId: "backup-owner",
-              manifest: {
-                backupResources: [
-                  { disposition: "include", scope: "state", relativePath: "foreign" },
-                ],
-              },
-            });
-            await state.writeConfig(createColdPluginConfig(rootDir, plugin.pluginId));
-          }
-          const loopPath =
-            ownership === "canonical"
-              ? resolveOpenClawStateSqlitePath(state.env)
-              : state.statePath("foreign", "cycle.sqlite");
-          await fs.mkdir(path.dirname(loopPath), { recursive: true });
-          await fs.symlink(path.basename(loopPath), loopPath);
-          const output = state.path("rejected.tar.gz");
+      await withBackupFixture({ layout: "split", prefix: "backup-owned-link-" }, async (state) => {
+        if (ownership === "declared plugin") {
+          await declarePluginSqliteResources(state, "foreign");
+        }
+        const loopPath =
+          ownership === "canonical"
+            ? resolveOpenClawStateSqlitePath(state.env)
+            : state.statePath("foreign", "cycle.sqlite");
+        await fs.mkdir(path.dirname(loopPath), { recursive: true });
+        await fs.symlink(path.basename(loopPath), loopPath);
+        const output = state.path("rejected.tar.gz");
 
-          try {
-            await expect(
-              backupCreateCommand(createTestRuntime(), {
-                output,
-                includeWorkspace: false,
-                verify: true,
-              }),
-            ).rejects.toThrow(/ELOOP|too many (?:levels of )?symbolic links/iu);
-            await expect(fs.lstat(output)).rejects.toMatchObject({ code: "ENOENT" });
-            expect(await fs.readlink(loopPath)).toBe(path.basename(loopPath));
-          } finally {
-            await fs.unlink(loopPath);
-          }
-        },
-      );
+        try {
+          await expect(
+            backupCreateCommand(createTestRuntime(), {
+              output,
+              includeWorkspace: false,
+              verify: true,
+            }),
+          ).rejects.toThrow(/ELOOP|too many (?:levels of )?symbolic links/iu);
+          await expect(fs.lstat(output)).rejects.toMatchObject({ code: "ENOENT" });
+          expect(await fs.readlink(loopPath)).toBe(path.basename(loopPath));
+        } finally {
+          await fs.unlink(loopPath);
+        }
+      });
     },
   );
 });
