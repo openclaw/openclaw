@@ -219,13 +219,37 @@ it("settles replaced-endpoint inputs durably so the second restart is silent", a
   });
 });
 
-it("attributes blocked-notice work and retry backoff in the startup summary", async () => {
+it("partitions delivery recovery work and retry backoff in the startup summary", async () => {
   vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", "0");
   const startedAt = Date.now();
   vi.spyOn(performance, "now").mockImplementation(() => Date.now() - startedAt);
   const info = vi.spyOn(context.logGateway, "info").mockImplementation(() => {});
   const trace = createGatewayStartupTrace(context.logGateway, 0);
-  io.source.mockRejectedValueOnce(new WorkerTaskError("Reader starting", "unavailable"));
+  io.discover.mockImplementation(async () => {
+    vi.advanceTimersByTime(10);
+    return [{ agentId: "main", storePath: "/fixture/sessions.json" }];
+  });
+  io.entries.mockImplementation(async () => {
+    vi.advanceTimersByTime(20);
+    return [{ sessionKey: delivery.target.sessionKey, entry: targetEntry }];
+  });
+  io.pending.mockImplementation(async () => {
+    vi.advanceTimersByTime(30);
+    return { items: [input], total: 1 };
+  });
+  io.source.mockImplementationOnce(async () => {
+    vi.advanceTimersByTime(40);
+    throw new WorkerTaskError("Reader starting", "unavailable");
+  });
+  io.load.mockImplementation(async ({ key }: { key: string }) => {
+    vi.advanceTimersByTime(50);
+    return {
+      agentId: "main",
+      canonicalKey: key,
+      storePath: "/fixture/sessions.json",
+      store: { [key]: key === delivery.source.sessionKey ? sourceEntry : targetEntry },
+    };
+  });
   sourceEntry.sessionId = "replaced-source";
   io.report.mockImplementation(async () => {
     vi.advanceTimersByTime(250);
@@ -240,7 +264,7 @@ it("attributes blocked-notice work and retry backoff in the startup summary", as
     await Promise.all([recovery, vi.runAllTimersAsync()]);
     expect(dispatch).not.toHaveBeenCalled();
     expect(info.mock.calls.at(-1)?.[0]).toContain(
-      "deliveryMs=5250.0 deliveryNoticesMs=250.0 retryWaitMs=5000.0",
+      "deliveryMs=5450.0 deliveryDiscoveryMs=10.0 deliveryEntriesMs=20.0 deliveryHistoryMs=30.0 deliveryReplayMs=140.0 deliveryNoticesMs=250.0 retryWaitMs=5000.0",
     );
   } finally {
     trace.close();

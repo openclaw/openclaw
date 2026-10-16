@@ -188,12 +188,8 @@ it.each(process.platform === "win32" ? [false] : [false, true])(
     expect(await exited).toEqual([0, null]);
     const canonicalPath = fs.realpathSync(childPath);
     expect(
-      readSqliteCleanCloseSeal(
-        canonicalPath,
-        sqliteDatabaseSealSchemaFor(),
-        fs.statSync(canonicalPath, { bigint: true }),
-      ),
-    ).toBeDefined();
+      readSqliteCleanCloseSeal(canonicalPath, fs.statSync(canonicalPath, { bigint: true })),
+    ).toMatchObject({ schemaIdentity: sqliteDatabaseSealSchemaFor("agent") });
   },
 );
 

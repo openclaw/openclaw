@@ -19,7 +19,19 @@ import {
   type SqliteDatabaseAdmissionKey,
 } from "./sqlite-database-admission-record.js";
 
-const SQLITE_DATABASE_SEAL_SCHEMA = sqliteDatabaseSealSchemaFor();
+const SQLITE_DATABASE_SEAL_SCHEMAS = {
+  agent: sqliteDatabaseSealSchemaFor("agent"),
+  state: sqliteDatabaseSealSchemaFor("state"),
+  other: sqliteDatabaseSealSchemaFor("other"),
+};
+
+function sealSchema(names: string[]): string {
+  const agent = names.includes("agent.schema-metadata");
+  const state = names.includes("state.schema-version");
+  // Custom paths cannot identify the database family. Its admitted facts can;
+  // unknown or mixed catalogs conservatively depend on both schemas.
+  return SQLITE_DATABASE_SEAL_SCHEMAS[agent === state ? "other" : agent ? "agent" : "state"];
+}
 
 export const integrityVerificationKey: SqliteDatabaseAdmissionKey<number> = {
   name: "sqlite.full-verification",
@@ -107,7 +119,6 @@ export class SqliteDatabaseCleanCloseSeals {
     this.loaded.add(record);
     const seal = readSqliteCleanCloseSeal(
       record.location,
-      SQLITE_DATABASE_SEAL_SCHEMA,
       fs.fstatSync(record.descriptor, { bigint: true }),
     );
     if (!seal || typeof seal.facts !== "string") {
@@ -130,6 +141,9 @@ export class SqliteDatabaseCleanCloseSeals {
         ) ||
         !facts.some(([name, , value]) => name === "sqlite-schema" && isRecord(value))
       ) {
+        return;
+      }
+      if (seal.schemaIdentity !== sealSchema(facts.map(([name]) => name))) {
         return;
       }
       const schema = facts.find(([name]) => name === "sqlite-schema")?.[2];
@@ -202,6 +216,7 @@ export class SqliteDatabaseCleanCloseSeals {
       facts.map(([name, fact]) => [name, fact.schemaDependent, fact.value]),
       encodeSealValue,
     );
+    const schemaIdentity = sealSchema(facts.map(([name]) => name));
     return () => {
       if (
         database.isOpen ||
@@ -219,12 +234,10 @@ export class SqliteDatabaseCleanCloseSeals {
         if (identity(fs.statSync(record.location, { bigint: true })) !== record.identity) {
           return false;
         }
-        const written = writeSqliteCleanCloseSeal(
-          record.location,
-          SQLITE_DATABASE_SEAL_SCHEMA,
-          file,
-          { verifiedAt, facts: serialized },
-        );
+        const written = writeSqliteCleanCloseSeal(record.location, schemaIdentity, file, {
+          verifiedAt,
+          facts: serialized,
+        });
         Atomics.store(
           new Int32Array(record.generation),
           SqliteDatabaseGenerationSlot.sealPresent,

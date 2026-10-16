@@ -57,8 +57,12 @@ close and seal reuse do not advance that timestamp. On Linux, where Node can
 substitute change time for unavailable birthtime, the existing physical-file
 identity policy uses a stable unknown birthtime value.
 
-Schema identity covers the application version, canonical SQL definitions,
-and the admission policy revision. Commit and build
+Schema identity covers the application version, the database family's canonical
+SQL definitions, and the admission policy revision. Admitted facts identify agent
+and shared-state databases, including databases at custom paths. A shared-state
+schema change does not invalidate an unchanged agent database's seal, or vice versa.
+Unclassified or mixed admission facts conservatively depend on both schemas.
+Commit and build
 IDs do not invalidate seals for otherwise compatible builds. Maintainers must advance
 the policy revision for migrations or schema-version changes not reflected in canonical
 SQL, and for changes to validation rules or serialized admission facts.
