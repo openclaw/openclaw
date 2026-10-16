@@ -32,8 +32,8 @@ describe("standalone build interface", () => {
       mode: "jit",
       compileFlags: [],
     });
-    expect(parseStandaloneArguments(["out", "--bytecode"]).mode).toBe("bytecode");
-    expect(parseStandaloneArguments(["out", "--compile-aot"]).mode).toBe("aot");
+    expect(parseStandaloneArguments(["out", "--bytecode"])).toMatchObject({ mode: "bytecode" });
+    expect(parseStandaloneArguments(["out", "--compile-aot"])).toMatchObject({ mode: "aot" });
     expect(() => parseStandaloneArguments(["out", "--bytecode", "--compile-aot"])).toThrow(
       "at most one",
     );
