@@ -3,10 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { JSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
-import {
-  LINK_READER_BADGE_TONES,
-  type ControlUiLinkReaderPreview,
-} from "../../../src/shared/control-ui-link-reader.js";
+import type { ControlUiLinkReaderPreview } from "../../../src/shared/control-ui-link-reader.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
@@ -53,7 +50,9 @@ export function parsePreviewResponse(
     throw new Error("Invalid link preview response");
   }
   const badgeValue = isRecord(value.badge) ? value.badge : undefined;
-  const tone = LINK_READER_BADGE_TONES.find((item) => item === badgeValue?.tone);
+  const tone = (["neutral", "positive", "negative", "attention", "accent"] as const).find(
+    (item) => item === badgeValue?.tone,
+  );
   const badge =
     badgeValue && typeof badgeValue.label === "string" && tone
       ? { label: badgeValue.label, tone, timestamp: readNonBlankString(badgeValue.timestamp) }
