@@ -96,7 +96,7 @@ export function projectSessionActorContextMetadata(
   };
 }
 
-export function rewriteSessionActorContextMetadata(
+function rewriteSessionActorContextMetadata(
   actor: SessionActorStoredState,
   rewritten: Array<
     Pick<SessionActorTranscriptRow, "rawSeq" | "serializedBytes"> & {
