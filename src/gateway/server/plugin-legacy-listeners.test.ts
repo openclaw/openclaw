@@ -465,6 +465,9 @@ describe("legacy channel webhook ports", () => {
 
   it("retains only the restarting account's port across route handoff and registry replacement", async () => {
     let handled = 0;
+    const replyWithPort = (req: IncomingMessage, res: ServerResponse) => {
+      res.end(String(getWebhookLegacyListener(req)?.port));
+    };
     const lease = createPluginRuntimeCapabilityLease("old-account");
     const first = withPluginHttpRouteRegistry(
       registry,
@@ -472,12 +475,12 @@ describe("legacy channel webhook ports", () => {
         register({
           handler: (req, res) => {
             handled += 1;
-            res.end(String(getWebhookLegacyListener(req)?.port));
+            replyWithPort(req, res);
           },
         }),
       lease,
     );
-    const second = register({}, 2);
+    const second = register({ handler: replyWithPort }, 2);
     await listening();
     for (const offset of [1, 2]) {
       expect((await send(offset)).body).toBe(String(claim.port + offset));
@@ -495,7 +498,7 @@ describe("legacy channel webhook ports", () => {
     };
     await expectParkedEndpoint();
     expect((await send(2)).body).toBe(String(claim.port + 2));
-    const revived = register();
+    const revived = register({ handler: replyWithPort });
     expect((await send(1)).body).toBe(String(claim.port + 1));
     revived();
     await expectParkedEndpoint();

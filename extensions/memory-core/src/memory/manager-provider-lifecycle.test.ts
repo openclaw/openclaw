@@ -112,7 +112,7 @@ describe("memory index", () => {
   it("caches embedding probe readiness across transient status managers", async () => {
     const cfg = createCfg({});
     const first = requireManager(
-      await getMemorySearchManager({ cfg, agentId: "main", purpose: "status" }),
+      await memoryIndex.getMemorySearchManager({ cfg, agentId: "main", purpose: "status" }),
     );
     trackManager(first);
 
@@ -121,7 +121,7 @@ describe("memory index", () => {
     await first.close();
 
     const second = requireManager(
-      await getMemorySearchManager({ cfg, agentId: "main", purpose: "status" }),
+      await memoryIndex.getMemorySearchManager({ cfg, agentId: "main", purpose: "status" }),
     );
     trackManager(second);
 
