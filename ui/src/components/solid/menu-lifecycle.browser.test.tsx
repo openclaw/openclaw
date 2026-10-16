@@ -12,7 +12,7 @@ import {
   surface,
   trigger,
 } from "../../test-helpers/solid-menu.tsx";
-import type { MenuItem } from "./menu.tsx";
+import type { MenuItem, MenuItemBindings } from "./menu.tsx";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -25,6 +25,38 @@ async function finishHover() {
 }
 
 describe("Solid menu branch lifetime", () => {
+  it.each(["array", "factory"] as const)(
+    "materializes %s submenus on open and retains their controls across closes",
+    async (kind) => {
+      const renderAda = vi.fn((attributes: MenuItemBindings) => (
+        <button {...attributes}>Ada Rivera</button>
+      ));
+      const entries = [{ id: "ada", label: "Ada Rivera", render: renderAda }];
+      mountMenu({
+        lazy: true,
+        items: [
+          {
+            id: "assign",
+            label: "Assign to",
+            children: kind === "array" ? entries : () => entries,
+          },
+        ],
+      });
+      expect(renderAda).not.toHaveBeenCalled();
+      await openMenu();
+      expect(renderAda).not.toHaveBeenCalled();
+      expect(surface("people-assign").querySelector('[role="menuitem"]')).toBeNull();
+      await openMenu("people-assign");
+      const ada = item("Ada Rivera", "people-assign");
+      expect(renderAda).toHaveBeenCalledTimes(1);
+      await userEvent.keyboard("{Escape}");
+      await phase(surface("people-assign"), "hidden");
+      await openMenu("people-assign");
+      expect(item("Ada Rivera", "people-assign")).toBe(ada);
+      expect(renderAda).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("opens custom form content and retains it when generated items become empty", async () => {
     const [entries, setEntries] = createSignal<readonly MenuItem[]>([]);
     let input!: HTMLInputElement;
