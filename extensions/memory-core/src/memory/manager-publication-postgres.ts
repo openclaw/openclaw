@@ -183,7 +183,7 @@ export function bindPostgresMemoryPublication(
       }
       parts.push(fragment.json);
       if (fragment.last) {
-        // The paired producer serializes one row; only that row is retained while decoding.
+        // SAFETY: The paired producer serializes typed rows; only one row is retained here.
         yield JSON.parse(parts.join("")) as Row;
         parts = [];
       }
@@ -325,6 +325,7 @@ export function bindPostgresMemoryPublication(
           if (typeof next.value.header !== "string") {
             throw new Error("Memory reindex source header is missing");
           }
+          // SAFETY: Only stageSource writes headers into the reindex lane.
           const source = JSON.parse(next.value.header) as MemorySourceIndexHeader;
           checkSource(source);
           next = rows.next();
@@ -429,7 +430,7 @@ export function bindPostgresMemoryPublication(
         const cacheHeader =
           command.type === "cache.write.inline"
             ? command.input.header
-            : (header as MemoryPublicationOperations["cache.stage.start"]["input"]["header"]);
+            : (header as MemoryPublicationOperations["cache.stage.start"]["input"]["header"]); // SAFETY: Paired cache.stage.start header.
         if (!cacheHeader) {
           throw new Error("Memory cache staging was not started");
         }
@@ -462,7 +463,7 @@ export function bindPostgresMemoryPublication(
           ? command.input.sources
           : command.type === "source.replace.inline"
             ? [command.input]
-            : [{ header: header as MemorySourceIndexHeader, fragments: undefined }];
+            : [{ header: header as MemorySourceIndexHeader, fragments: undefined }]; // SAFETY: Paired source stage.start header.
       for (const source of sources) {
         if (!source.header) {
           throw new Error("Memory source staging was not started");
