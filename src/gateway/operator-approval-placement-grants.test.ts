@@ -25,7 +25,6 @@ import {
 } from "./node-invoke-placement-grant.js";
 import { applyPluginNodeInvokePolicy } from "./node-invoke-plugin-policy.js";
 import {
-  createApprovalClientLookup,
   createContext,
   createDemoPolicy,
   createNodeSession,
@@ -41,6 +40,7 @@ import {
   type PlacementStandingGrantRuntime,
 } from "./operator-approval-placement-grants.js";
 import { insertOperatorApproval, resolveOperatorApproval } from "./operator-approval-store.js";
+import { createApprovalClientLookup } from "./server-methods/approval-request.test-support.js";
 
 type PlacementTestDatabase = Pick<
   OpenClawStateKyselyDatabase,

@@ -25,6 +25,7 @@ import {
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   retainAgentDatabase,
@@ -102,7 +103,7 @@ beforeEach(() => {
   options = { agentId: "main", path: path.join(root, "agent.sqlite") };
 });
 async function setup(input?: Parameters<typeof bindSqliteWorkerBackend>[0]) {
-  const { db } = openOpenClawAgentDatabase(options);
+  const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase(options).db);
   db.exec("CREATE TABLE worker_proof (value TEXT NOT NULL)");
   const execution =
     sourceMode === "captured" ? captureOpenClawAgentDatabaseExecution(options) : undefined;

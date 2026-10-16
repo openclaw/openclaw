@@ -161,6 +161,7 @@ describe("publication receipt reads", () => {
           expect.objectContaining({ sessionKey, sessionId, agentId: "main" }),
           "owned-unknown-attempt",
           expect.any(Function),
+          expect.any(Function),
         );
         expect(fixture.personalPending).not.toHaveBeenCalled();
         expect(fixture.requestForSession).not.toHaveBeenCalled();

@@ -120,7 +120,14 @@ export function registerOnboardAuthOptions(command: Command): Command {
   return command
     .option("--custom-base-url <url>", "Custom provider base URL")
     .option("--custom-api-key <key>", "Custom provider API key (optional)")
-    .option("--custom-model-id <id>", "Custom provider model ID")
+    .option(
+      "--custom-no-auth",
+      "Use no auth for a custom OpenAI Chat Completions endpoint (sends no Authorization header)",
+    )
+    .option(
+      "--custom-model-id <id>",
+      "Custom provider model ID (omit to discover OpenAI-compatible endpoint models)",
+    )
     .option("--custom-provider-id <id>", "Custom provider ID (optional; auto-derived by default)")
     .option(
       "--custom-compatibility <mode>",
@@ -215,6 +222,7 @@ export async function resolveOnboardCommandOptions(
     cloudflareAiGatewayGatewayId: opts.cloudflareAiGatewayGatewayId as string | undefined,
     customBaseUrl: opts.customBaseUrl as string | undefined,
     customApiKey: opts.customApiKey as string | undefined,
+    customNoAuth: opts.customNoAuth as boolean | undefined, // SAFETY: Commander parses valueless flags as boolean | undefined.
     customModelId: opts.customModelId as string | undefined,
     customProviderId: opts.customProviderId as string | undefined,
     customCompatibility: opts.customCompatibility as OnboardOptions["customCompatibility"],

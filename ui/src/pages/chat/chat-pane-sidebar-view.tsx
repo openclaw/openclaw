@@ -18,7 +18,7 @@ import {
 
 export type SidebarRegionParams = {
   presentationId: string;
-  conversationTab?: Pick<SidebarPanelDefinition, "label" | "icon">;
+  conversationTab?: RegionProps["conversationTab"];
   fetchFavicon?: LinkFaviconFetcher;
   availableWidth: number;
   callbacks: SidebarRegionCallbacks;

@@ -90,7 +90,7 @@ it("selects the registered family by id and admitted SQLite tables", () => {
 
 it("names supported families when an id or SQLite store is unknown", () => {
   expect(() => requireDatabasePortProvider("unknown")).toThrow(
-    "Unknown database family; supported families: workboard, logbook, team-reports",
+    "Unknown database family; supported families: workboard, state, logbook, team-reports",
   );
   using source = openNodeSqliteDatabase(":memory:");
   source.exec("CREATE TABLE unrelated (id TEXT)");

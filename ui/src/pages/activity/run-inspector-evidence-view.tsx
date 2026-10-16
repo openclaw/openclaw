@@ -27,7 +27,7 @@ export function runInspectorCoverageLabel(
 
 export function renderRunInspectorSafeRef(value: string | number, mono = false, href?: string) {
   const content = (
-    <bdi class={mono ? "run-inspector__ref mono" : "run-inspector__ref"} dir="ltr">
+    <bdi class={["run-inspector__ref", { mono }]} dir="ltr">
       {value}
     </bdi>
   );
@@ -129,7 +129,7 @@ function renderReceiptBadges(receipt: DecisionReceiptDisplayV1, accessible = fal
     >
       {([value, label, labelKey]) => (
         <span
-          class={`run-inspector__receipt-badge run-inspector__receipt-badge--${value}`}
+          class={["run-inspector__receipt-badge", `run-inspector__receipt-badge--${value}`]}
           role={accessible ? "img" : undefined}
           aria-label={
             accessible ? `${t(`activity.runInspector.decisions.${labelKey}`)}: ${label}` : undefined

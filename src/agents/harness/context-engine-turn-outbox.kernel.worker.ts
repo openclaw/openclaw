@@ -4,14 +4,12 @@ import {
   type ClosedTranscriptTurnReadResult,
 } from "../../config/sessions/session-accessor.transcript-range.worker.js";
 import type { TranscriptTurnBoundary } from "../../config/sessions/transcript-entry-anchor.js";
-import { requireNativeDatabaseFile } from "../../infra/database-engine/physical-facts.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
-import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import { ensureContextEngineTurnOutboxSchema } from "../../state/openclaw-agent-context-engine-turn-outbox-schema.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
@@ -434,9 +432,6 @@ export function executeContextEngineTurnOutboxCommand(
   db: EngineConnection,
   command: OutboxCommand,
 ): OutboxOutput {
-  if (isPostgresSqlConnection(db)) {
-    requireNativeDatabaseFile("postgres", "repair");
-  }
   const database = { db };
   switch (command.type) {
     case "prepareRun":

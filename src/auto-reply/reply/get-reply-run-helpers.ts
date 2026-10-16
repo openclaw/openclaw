@@ -1,8 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { MediaImageLayout } from "../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/embedded-agent-runner/types.js";
 import { updateAmbientTranscriptWatermark } from "../../config/sessions/ambient-transcript-watermark.js";
 import { isImageMediaFact, type MediaFact } from "../../media/media-facts.js";
-import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
@@ -16,7 +16,7 @@ export function buildPersistedMediaImageLayout(params: {
   ctxMediaCount: number;
   imageOrder?: readonly ("inline" | "offloaded")[];
   imageSourceIndexes?: readonly (number | undefined)[];
-}): NonNullable<UserTurnInput["mediaImageLayout"]> | undefined {
+}): MediaImageLayout | undefined {
   const describedAttachmentIndexes = new Set(
     params.ctx.MediaUnderstanding?.flatMap((output) =>
       output.kind === "image.description" ? [output.attachmentIndex] : [],
@@ -67,12 +67,12 @@ export function buildPersistedMediaImageLayout(params: {
  * are not conflated.
  */
 export function suppressUnresolvedPromptMedia(params: {
-  promptMedia: readonly MediaFact[];
+  promptMedia: MediaFact[];
   inboundMediaIndexes: readonly number[];
   unresolvedSourceIndexes: ReadonlySet<number>;
 }): MediaFact[] {
   if (params.unresolvedSourceIndexes.size === 0) {
-    return [...params.promptMedia];
+    return params.promptMedia;
   }
   return params.promptMedia.map((fact, promptIndex) =>
     params.inboundMediaIndexes[promptIndex] !== undefined &&
@@ -171,8 +171,8 @@ export const loadSessionUpdatesRuntime = sessionUpdatesRuntimeLoader.load;
 
 export function hasInboundHistoryBody(ctx: TemplateContext): boolean {
   return (
-    Array.isArray(ctx.InboundHistory) &&
-    ctx.InboundHistory.some((entry) => entry.body.replaceAll("\u0000", "").trim().length > 0)
+    ctx.InboundHistory?.some((entry) => entry.body.replaceAll("\u0000", "").trim().length > 0) ??
+    false
   );
 }
 
@@ -180,8 +180,7 @@ export function hasReplyTargetContext(ctx: MsgContext | TemplateContext): boolea
   if (normalizeOptionalString(ctx.ReplyToBody)) {
     return true;
   }
-  const replyChain = ctx.ReplyChain;
-  return Array.isArray(replyChain) && replyChain.length > 0;
+  return (ctx.ReplyChain?.length ?? 0) > 0;
 }
 
 export function finishReplyPreparation(typing: TypingController, createReply?: () => ReplyPayload) {

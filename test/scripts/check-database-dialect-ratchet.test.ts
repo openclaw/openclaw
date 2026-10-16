@@ -173,6 +173,12 @@ it("retains SQLite JSONB debt without counting PostgreSQL catalog constructors",
     "src/sqlite.ts",
     'const sql = "SELECT jsonb_object(), jsonb_array(), jsonb_extract(value), jsonb_group_array(value) FROM facts";',
   );
+  for (const owner of ["postgres-search-schema", "postgres-vector"]) {
+    write(
+      `src/infra/database-engine/${owner}.ts`,
+      'const sql = "SELECT openclaw_vector(embedding, 3)";',
+    );
+  }
   expect(inventory(root)).toMatchObject([
     {
       file: "src/sqlite.ts",
@@ -182,7 +188,7 @@ it("retains SQLite JSONB debt without counting PostgreSQL catalog constructors",
   expect(inventory(root).map((row) => row.matches.length)).toEqual([4]);
 });
 
-it("excludes generated PostgreSQL SQL while retaining SQLite JSON debt", () => {
+it("excludes generated PostgreSQL SQL and captured catalogs while retaining SQLite JSON debt", () => {
   const { root, write, git } = fixture();
   write("src/sqlite.ts", "export {};\n");
   git("add", ".");
@@ -194,6 +200,12 @@ it("excludes generated PostgreSQL SQL while retaining SQLite JSON debt", () => {
     write(
       `src/state/postgres-schema.generated/${file}`,
       "SELECT value ->> 'id' FROM json_each('{}'::json);",
+    );
+  }
+  for (const store of ["state", "agent"]) {
+    write(
+      `src/state/postgres-schema.generated/sqlite-${store}-catalogs.ts`,
+      "export const catalog = { sql: \"CREATE TABLE events AS SELECT json_extract(body, '$') FROM payloads\" };",
     );
   }
   expect(changedProductionFiles(root, base, false)).toEqual([]);

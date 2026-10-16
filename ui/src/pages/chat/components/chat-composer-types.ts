@@ -22,14 +22,11 @@ import type {
 } from "../../../lib/chat/chat-types.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import type { HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
+import type { PresentationBinding } from "../../../lib/presentation.ts";
 import type { ProviderUsageDisplayProps } from "../../../lib/provider-quota-summary.ts";
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
-import type { PresentationBinding } from "../../../lit/presentation-binding.ts";
-import type {
-  LegacyDirectiveResult,
-  LegacyTemplateResult,
-  emptyLegacyContent,
-} from "../../../lit/solid-content.tsx";
+import type { PaneOutboxRecovery } from "../chat-outbox-recovery.tsx";
+import type { ChatPaneModelControl } from "../chat-pane-model-control.tsx";
 import type { ChatRunStartupStatus } from "../chat-run-startup.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import type { ComposerMicrophonePicker } from "../composer-microphone-picker.ts";
@@ -161,9 +158,15 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onOpenDictationSettings?: () => void;
   suggestionComposer?: boolean;
   onTypingChange?: (typing: boolean, preview?: string, cursor?: number) => void;
-  composerControls?: LegacyTemplateResult | LegacyDirectiveResult | typeof emptyLegacyContent;
+  composerControls?: Parameters<typeof ChatPaneModelControl>[0] & {
+    component: typeof ChatPaneModelControl;
+  };
   footerContent?: JSX.Element;
-  composerRecovery?: LegacyTemplateResult | LegacyDirectiveResult | typeof emptyLegacyContent;
+  composerRecovery?:
+    | (Parameters<typeof PaneOutboxRecovery>[0] & {
+        component: typeof PaneOutboxRecovery;
+      })
+    | null;
   notices?: JSX.Element;
   permissionPicker?: ChatPermissionPickerProps;
   onDraftChange: (next: string, mentions?: readonly HumanMention[]) => void;

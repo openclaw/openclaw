@@ -5,12 +5,17 @@ import { t } from "../../../lib/reactive/i18n.ts";
 
 export function TranscriptSearch(props: {
   state: { searchOpen: boolean; searchQuery: string; searchFocusPending: boolean };
+  revision?: unknown;
   requestUpdate: () => void;
   onClose: () => void;
 }) {
-  const query = createMemo(() => props.state.searchQuery);
+  const state = () => {
+    void props.revision;
+    return props.state;
+  };
+  const query = createMemo(() => state().searchQuery);
   return (
-    <Show when={props.state.searchOpen}>
+    <Show when={state().searchOpen}>
       <div
         class="agent-chat__search-bar"
         onKeyDown={(event) => {
@@ -34,10 +39,10 @@ export function TranscriptSearch(props: {
           aria-label={t("chat.thread.search")}
           value={query()}
           ref={(element) => {
-            if (!props.state.searchFocusPending) {
+            if (!state().searchFocusPending) {
               return;
             }
-            props.state.searchFocusPending = false;
+            state().searchFocusPending = false;
             queueMicrotask(() => {
               if (element.isConnected) {
                 element.focus({ preventScroll: true });
@@ -45,7 +50,7 @@ export function TranscriptSearch(props: {
             });
           }}
           onInput={(event) => {
-            props.state.searchQuery = event.currentTarget.value;
+            state().searchQuery = event.currentTarget.value;
             props.requestUpdate();
           }}
         />

@@ -129,6 +129,7 @@ describe("effort bar colour and flow", () => {
     textarea.focus();
     await page.elementLocator(trigger).click();
     await expect.poll(() => surface.matches(":popover-open")).toBe(true);
+    expect(document.activeElement).toBe(textarea);
     try {
       await expect
         .poll(() =>

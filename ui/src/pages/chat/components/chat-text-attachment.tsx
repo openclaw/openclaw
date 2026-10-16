@@ -1,5 +1,6 @@
+import type { JSX as SolidJSX } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
-import { LazyCustomElementRequestController } from "../../../app/lazy-custom-element.ts";
+import { createLazyCustomElementRequests } from "../../../app/lazy-custom-element.ts";
 import { MarkdownBlocks } from "../../../components/markdown-blocks-owner.ts";
 import { createMarkdownRef } from "../../../components/markdown-dom-ref.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
@@ -10,25 +11,28 @@ import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-previe
 import { formatBytes } from "../../../lib/agents/display.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import {
-  defineSolidBridge,
-  LitContent,
-  type SolidBridgeElement,
-} from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
 import { AttachmentPreviewSkeleton } from "./chat-attachment-card-solid.tsx";
 import { readAttachmentText } from "./chat-attachment-text-reader.ts";
 import { htmlPreviewElement, isHtmlDocument } from "./chat-html-preview.ts";
 
 registerEnglishCatalog(registerFilePreviewEnglish);
 
+type HtmlPreviewProperties = Pick<
+  HTMLElementTagNameMap["openclaw-chat-html-preview"],
+  "html" | "sourceIdentity" | "sessionFileSource" | "title" | "embedSandboxMode"
+>;
+
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
       "openclaw-chat-html-preview": HTMLAttributes<
         HTMLElementTagNameMap["openclaw-chat-html-preview"]
-      > &
-        Properties<HTMLElementTagNameMap["openclaw-chat-html-preview"]>;
+      > & {
+        [Key in keyof HtmlPreviewProperties as `prop:${Key}`]?: HtmlPreviewProperties[Key];
+      };
     }
   }
 }
@@ -62,7 +66,7 @@ function MarkdownAttachment(props: { text: string; label: string }) {
 
 type TextAttachmentProps = {
   plainText: boolean;
-  actions: unknown;
+  actions: SolidJSX.Element;
   embedSandboxMode: EmbedSandboxMode;
   src: string;
   sourceIdentity: string;
@@ -95,18 +99,12 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
   const [source, setSource] = createSignal(false);
   const [version, setVersion] = createSignal(0);
   const [retry, setRetry] = createSignal(0);
-  const [loaderRevision, setLoaderRevision] = createSignal(0);
-  let disposed = false;
-  const htmlPreviewLoader = new LazyCustomElementRequestController({
-    requestUpdate: () => {
-      if (!disposed) {
-        setLoaderRevision((value) => value + 1);
-      }
-    },
+  const htmlPreviewLoader = createLazyCustomElementRequests({
     get updateComplete() {
       return host.updateComplete;
     },
   });
+  const previewState = projectOwner(htmlPreviewLoader, (owner) => owner.visibleState);
   const htmlDocument = () => !props.plainText && isHtmlDocument(props.mimeType, props.label);
   const markdown = () => {
     const mimeType = props.mimeType.split(";", 1)[0]?.trim().toLowerCase();
@@ -202,13 +200,9 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
     () => htmlDocument() && text() !== null && !failed(),
     (active) => htmlPreviewLoader.requestWhileActive(htmlPreviewElement, active),
   );
-  onCleanup(() => {
-    disposed = true;
-    htmlPreviewLoader.requestWhileActive(htmlPreviewElement, false);
-  });
+  onCleanup(() => htmlPreviewLoader.requestWhileActive(htmlPreviewElement, false));
   const htmlLoadState = () => {
-    loaderRevision();
-    const state = htmlPreviewLoader.visibleState;
+    const state = previewState.read();
     return state?.status === "error" ? (
       <LazyViewError
         error={state.error}
@@ -237,7 +231,9 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
           {text() !== null && !failed() && (
             <CopyButton text={text()!} idleLabel={t("common.copy")} />
           )}
-          <LitContent render={() => props.actions} />
+          <span class="lit-content" style={{ display: "contents" }}>
+            {props.actions}
+          </span>
           {failed() && (
             <button
               class="btn btn--sm"

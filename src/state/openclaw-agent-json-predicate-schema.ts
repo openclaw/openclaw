@@ -1,42 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
+import {
+  AGENT_JSON_PREDICATE_COLUMNS,
+  AGENT_JSON_PREDICATE_COLUMN_DECLARATIONS as COLUMN_DECLARATIONS,
+} from "./openclaw-agent-schema-history.js";
 import { ensureColumn, tableExists } from "./openclaw-state-db-schema-helpers.js";
 
-/** Derived fields introduced together by agent schema 26. JSON remains canonical. */
-export const AGENT_JSON_PREDICATE_COLUMNS = {
-  session_nodes: ["session_started_at", "has_optional_references"],
-  transcript_events: [
-    "navigation_type",
-    "navigation_custom_type",
-    "navigation_display",
-    "message_role",
-    "navigation_last_type",
-    "navigation_last_custom_type",
-    "navigation_valid",
-  ],
-  context_engine_turn_outbox: ["payload_state"],
-} as const;
-
-const COLUMN_DECLARATIONS = {
-  session_started_at: "INTEGER",
-  has_optional_references: "INTEGER NOT NULL DEFAULT 0",
-  payload_state: "TEXT",
-  navigation_type: "TEXT",
-  navigation_custom_type: "TEXT",
-  navigation_display: "INTEGER NOT NULL DEFAULT 0",
-  message_role: "TEXT",
-  navigation_last_type: "TEXT",
-  navigation_last_custom_type: "TEXT",
-  navigation_valid: "INTEGER NOT NULL DEFAULT 1",
-};
-
-/** Historical admission compares the schema before predicate columns existed. */
-export function withoutAgentJsonPredicateColumns(schema: string): string {
-  let historicalSchema = schema;
-  for (const [column, declaration] of Object.entries(COLUMN_DECLARATIONS)) {
-    historicalSchema = historicalSchema.replace(`  ${column} ${declaration},\n`, "");
-  }
-  return historicalSchema;
-}
+export { AGENT_JSON_PREDICATE_COLUMNS } from "./openclaw-agent-schema-history.js";
 
 /** Runs once inside the versioned migration transaction, never on runtime reads. */
 export function migrateAgentJsonPredicatesInTransaction(database: DatabaseSync): void {

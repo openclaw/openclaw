@@ -5,13 +5,12 @@ import {
   resolveGeneratedMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   pollProviderOperationJson,
   postJsonResponse,
-  resolveProviderHttpRequestConfig,
+  resolveProviderApiKeyHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -82,13 +81,12 @@ function buildCreateBody(req: VideoGenerationRequest): Record<string, unknown> {
   if (fps !== 30 && fps !== 60) {
     throw new Error("Z.AI video fps must be 30 or 60.");
   }
-  const duration = req.durationSeconds;
   const body: Record<string, unknown> = {
     model,
     prompt: req.prompt,
     quality,
     fps,
-    duration: typeof duration === "number" && Number.isFinite(duration) && duration > 7.5 ? 10 : 5,
+    duration: req.durationSeconds ?? 5,
     size:
       resolveClosestSize({
         requestedSize: req.size,
@@ -148,15 +146,17 @@ export function buildZaiVideoGenerationProvider(): VideoGenerationProvider {
     },
     async generateVideo(req) {
       const body = buildCreateBody(req);
-      const auth = await resolveApiKeyForProvider({
-        provider: "zai",
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
-      });
-      if (!auth.apiKey) {
-        throw new Error("Z.AI API key missing");
-      }
+      const providerConfig = req.cfg.models?.providers?.zai;
+      const { baseUrl, headers, allowPrivateNetwork, dispatcherPolicy } =
+        await resolveProviderApiKeyHttpRequestConfig({
+          req,
+          missingApiKeyMessage: "Z.AI API key missing",
+          baseUrl: resolveVideoBaseUrl(providerConfig?.baseUrl),
+          defaultBaseUrl: resolveZaiBaseUrl(),
+          provider: "zai",
+          capability: "video",
+          request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
+        });
       const deadline = createProviderOperationDeadline({
         timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         label: "Z.AI video generation",
@@ -165,20 +165,6 @@ export function buildZaiVideoGenerationProvider(): VideoGenerationProvider {
         deadline,
         defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
       });
-      const providerConfig = req.cfg.models?.providers?.zai;
-      const { baseUrl, headers, allowPrivateNetwork, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: resolveVideoBaseUrl(providerConfig?.baseUrl),
-          defaultBaseUrl: resolveZaiBaseUrl(),
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-            "Content-Type": "application/json",
-          },
-          provider: "zai",
-          capability: "video",
-          transport: "http",
-          request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
-        });
       const submitted = await postJsonResponse({
         url: `${baseUrl}/videos/generations`,
         headers,

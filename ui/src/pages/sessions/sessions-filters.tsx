@@ -1,4 +1,5 @@
 import { createMemo, For } from "solid-js";
+import { registryFor } from "../../components/overlay-registry.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -126,7 +127,7 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
                     <label class="session-filter-field">
                       <span class="session-filter-label">{t(labelKey)}</span>
                       <input
-                        class={`session-filter-input session-filter-input--${suffix}`}
+                        class={["session-filter-input", `session-filter-input--${suffix}`]}
                         placeholder={
                           key === "activeMinutes" ? t("sessionsView.minutesPlaceholder") : undefined
                         }
@@ -230,22 +231,14 @@ export function handleSessionsSearchKeydown(
     !input.value ||
     props.sessionMenu ||
     document.openClawModalLayers?.size ||
-    document.querySelector(
-      "dialog[open], [aria-modal='true'], openclaw-menu-surface, wa-dropdown[open], wa-popover[open], wa-select[open]",
-    )
+    registryFor(document).stack.some((overlay) => overlay.open) ||
+    document.querySelector("dialog[open], [aria-modal='true'], openclaw-menu-surface")
   ) {
     return;
   }
   event.preventDefault();
   event.stopPropagation();
   props.onSearchChange("");
-}
-
-export function clearSessionsSearch(event: MouseEvent, onSearchChange: (query: string) => void) {
-  // SAFETY: This listener is bound directly to the clear button.
-  const input = (event.currentTarget as HTMLElement).parentElement?.querySelector("input");
-  input?.focus({ preventScroll: true });
-  onSearchChange("");
 }
 
 // Drag-over highlighting toggles a class directly on the target row instead of

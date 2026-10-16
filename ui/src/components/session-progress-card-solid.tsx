@@ -3,7 +3,7 @@ import type { JSX } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, For, Show, useContext } from "solid-js";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { i18nRevision, t } from "../lib/reactive/i18n.ts";
-import { SolidContentPresentation } from "../lit/solid-content.tsx";
+import { ContentPresentation } from "../lib/solid/presentation.ts";
 import { ProgressCardMarkdown } from "./session-progress-card-view.tsx";
 import {
   progressCardPresentation,
@@ -14,9 +14,9 @@ import {
   type SessionProgressCardRefreshAction,
 } from "./session-progress-card.ts";
 import {
-  useComposerProgressDisclosure,
+  createComposerProgressDisclosure,
   type ComposerProgressDisclosureContext,
-} from "./session-progress-disclosure-controller.ts";
+} from "./session-progress-disclosure-binding.ts";
 import { Icon } from "./solid/icon.tsx";
 import { useScrollState } from "./solid/scroll-state.ts";
 
@@ -38,7 +38,7 @@ export type SessionProgressCardProps = {
 type CardProps = SessionProgressCardProps & { card: ProgressCard };
 
 function ActivityTime(props: { timestamp: number; labelKey: Parameters<typeof t>[0] }) {
-  const presented = useContext(SolidContentPresentation);
+  const presented = useContext(ContentPresentation);
   const [revision, setRevision] = createSignal(0);
   createEffect(createMemo(presented), (active) => {
     if (!active) {
@@ -230,7 +230,7 @@ function cardPresentation(props: CardProps) {
 
 function ComposerCard(props: CardProps) {
   const view = cardPresentation(props);
-  const disclosure = useComposerProgressDisclosure(() => [
+  const disclosure = createComposerProgressDisclosure(() => [
     props.composerDisclosureContext?.sessionIdentity ?? props.card.sessionKey,
     !props.collapseComposerByDefault,
     props.composerDisclosureContext,
@@ -238,12 +238,14 @@ function ComposerCard(props: CardProps) {
   const bodyScroll = useScrollState();
   return (
     <details
-      ref={disclosure}
+      ref={disclosure.details}
+      onClick={disclosure.onClick}
       class={`session-progress-card session-progress-card--composer ${props.placement === "details" ? "session-progress-card--details" : ""}`}
       data-progress-card-placement={props.placement}
       data-complete={String(view().complete)}
     >
       <summary
+        ref={disclosure.summary}
         class="session-progress-card__summary"
         aria-label={`${view().stepLabel}. ${view().outcomeLabel ?? view().countLabel}`}
       >
@@ -312,7 +314,7 @@ function ComposerCard(props: CardProps) {
         </Show>
       </summary>
       <div
-        ref={bodyScroll}
+        ref={[bodyScroll, disclosure.body]}
         class="session-progress-card__body"
         role="region"
         aria-label={view().countLabel}

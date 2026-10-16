@@ -21,6 +21,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
     ...actual,
     getRuntimeConfig: mocks.getRuntimeConfig,
     loadConfig: mocks.getRuntimeConfig,
+    readConfigFileSnapshot: async () => ({ config: mocks.getRuntimeConfig() }),
     captureRuntimeConfigAsyncReader:
       (...args: Parameters<typeof mocks.getRuntimeConfig>) =>
       async () =>
@@ -76,6 +77,50 @@ describe("Git backup command agent selection", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
+
+  it.each(["backup", "restore"] as const)(
+    "refuses mixed engines before invoking Git %s",
+    async (operation) => {
+      mocks.getRuntimeConfig.mockReturnValue({
+        database: { engine: "postgres", families: { workboard: { engine: "sqlite" } } },
+      });
+      const runtime = createTestRuntime();
+      await expect(
+        operation === "backup"
+          ? backupGitCreateCommand(runtime, { global: true, repository: "/tmp/repository" })
+          : backupGitRestoreCommand(runtime, {
+              global: true,
+              repository: "/tmp/repository",
+              target: "/tmp/restored.sqlite",
+            }),
+      ).rejects.toThrow(
+        `${operation} for mixed-engine installs is not supported yet; use a single engine`,
+      );
+      expect(mocks.createGitBackup).not.toHaveBeenCalled();
+      expect(mocks.restoreGitBackupRef).not.toHaveBeenCalled();
+      expect(mocks.recordBackupRunOutcome).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["sqlite", "postgres"] as const)(
+    "preserves homogeneous %s Git backup and restore",
+    async (engine) => {
+      mocks.getRuntimeConfig.mockReturnValue({ database: { engine } });
+      await expect(
+        backupGitCreateCommand(createTestRuntime(), {
+          global: true,
+          repository: "/tmp/repository",
+        }),
+      ).resolves.toMatchObject({ commit: "backup-commit" });
+      await expect(
+        backupGitRestoreCommand(createTestRuntime(), {
+          global: true,
+          repository: "/tmp/repository",
+          target: "/tmp/restored.sqlite",
+        }),
+      ).resolves.toMatchObject({ commit: "backup-commit" });
+    },
+  );
 
   it.each(["success", "failure", "uncertain"] as const)(
     "retains backup custody through artifact and outcome settlement: %s",
@@ -213,6 +258,6 @@ describe("Git backup command agent selection", () => {
     expect(mocks.restoreGitBackupRef).toHaveBeenCalledWith(
       expect.objectContaining({ identity: { role: "agent", agentId: "retired-agent" } }),
     );
-    expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
+    expect(mocks.getRuntimeConfig).toHaveBeenCalledOnce();
   });
 });

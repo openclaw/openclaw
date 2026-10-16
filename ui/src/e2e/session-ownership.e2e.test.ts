@@ -990,6 +990,52 @@ suite.define(() => {
     expect(await draftToggle.isChecked()).toBe(false);
   });
 
+  it("aligns the Share trigger with the neighboring Layout trigger", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const sessions = sessionsList(["profile-ada", "profile-bob"]);
+    const activeSession = sessions.sessions[0];
+    if (!activeSession) {
+      throw new Error("expected active session fixture");
+    }
+    Object.assign(activeSession, { visibility: "shared", sharingRole: "owner" });
+    await installMockGateway(currentPage, {
+      sessionKey: "agent:main:ada",
+      featureMethods: ["chat.metadata", "chat.startup", "session.visibility.set"],
+      operatorScopes: ["operator.write"],
+      historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
+      methodResponses: { "sessions.list": sessions },
+    });
+
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
+    await currentPage.getByText("Ready.", { exact: true }).waitFor();
+    const share = currentPage.locator(".chat-pane__sharing-trigger");
+    const layout = currentPage.locator(".chat-pane__layout-trigger");
+    await share.waitFor();
+    await layout.waitFor();
+    const measure = (trigger: typeof share) =>
+      trigger.evaluate((button) => {
+        const bounds = button.getBoundingClientRect();
+        const icon = button.querySelector("svg")!.getBoundingClientRect();
+        const range = document.createRange();
+        const label = document.createTreeWalker(button, NodeFilter.SHOW_TEXT, (node) =>
+          node.textContent?.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP,
+        );
+        range.selectNodeContents(label.nextNode()!);
+        const text = range.getBoundingClientRect();
+        return {
+          height: bounds.height,
+          gap: text.left - icon.right,
+          iconOffset: icon.top + icon.height / 2 - (bounds.top + bounds.height / 2),
+        };
+      });
+    const [shareMetrics, layoutMetrics] = await Promise.all([measure(share), measure(layout)]);
+    expect(shareMetrics.height).toBeCloseTo(layoutMetrics.height, 1);
+    expect(shareMetrics.gap).toBeCloseTo(layoutMetrics.gap, 1);
+    expect(shareMetrics.iconOffset).toBeCloseTo(layoutMetrics.iconOffset, 1);
+  });
+
   it("keeps create-as-draft dormant for one owner", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();

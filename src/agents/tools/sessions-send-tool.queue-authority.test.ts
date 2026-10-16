@@ -13,6 +13,10 @@ import { createSecretStoreWriteService } from "../../gateway/server-methods/secr
 import type { GatewayClient, RespondFn } from "../../gateway/server-methods/types.js";
 import { createOperatorClient } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import {
+  consumeSubagentCompletionToolHandoff,
+  registerSubagentCompletionToolHandoff,
+} from "../../gateway/subagent-completion-tool-handoff.js";
+import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
   registerAgentRunDelegatedAuthorityClosedHandler,
@@ -24,6 +28,12 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
+import { createCodingToolsGatewayCaller } from "../agent-tools.caller.js";
+import { prepareConversationCapabilityProfile } from "../conversation-capability-profile.js";
+import {
+  applyDelegationCapability,
+  resolveDelegationCapability,
+} from "../delegation-capability.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
 import {
   clearActiveEmbeddedRun,
@@ -40,6 +50,7 @@ import {
   streamMocks,
 } from "../sessions/agent-session-loop-correctness.test-support.js";
 import { SessionManager } from "../sessions/session-manager.js";
+import { withPreparedSessionCapabilityRead } from "../subagents/spawn/subagent-session-store.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import { createSessionsSendTool } from "./sessions-send-tool.js";
@@ -56,6 +67,10 @@ describe("sessions_send direct queue source authority", () => {
     "peer-revoked",
     "peer-live",
     "ask-revoked",
+    "settle-live",
+    "settle-wildcard",
+    "settle-revoked",
+    "settle-reassigned",
   ] as const)(
     "checks the %s source at the real final enqueue and preserves accepted input",
     async (source) => {
@@ -69,6 +84,8 @@ describe("sessions_send direct queue source authority", () => {
           source === "send-revoked" ||
           source === "peer-revoked" ||
           source === "ask-revoked" ||
+          source === "settle-revoked" ||
+          source === "settle-reassigned" ||
           source === "unscoped";
         const targetAgentId = crossAgent ? "worker" : "main";
         const cfg = {
@@ -208,15 +225,88 @@ describe("sessions_send direct queue source authority", () => {
           return responses[0]![0];
         };
         const message = "guidance-from-" + source + "-source";
-        const send = () =>
-          createSessionsSendTool({
+        const settleOwner = {};
+        let currentSettleOwner: object | undefined = settleOwner;
+        let tool = createSessionsSendTool({
+          config: cfg,
+          agentSessionKey: requesterSessionKey,
+          expectedTargetSessionId: sessionId,
+          completionOwner: "caller",
+          expectedTargetStorePath: target.storePath,
+          callGateway,
+        });
+        if (source.startsWith("settle-")) {
+          const child = "agent:main:subagent:completed-child";
+          await replaceSessionEntry(
+            { agentId: "main", sessionKey: child },
+            {
+              sessionId: "completed-child-id",
+              updatedAt: 1,
+              spawnedBy: requesterSessionKey,
+              spawnDepth: 1,
+              inheritedToolPolicyVersion: 1,
+              inheritedToolAllow: source === "settle-wildcard" ? ["*"] : [],
+              inheritedToolDeny: [],
+            },
+          );
+          const registration = {
+            sourceSessionKey: child,
+            targetSessionKey: requesterSessionKey,
+            targetSessionId: "queue-source-session",
+            idempotencyKey: "settle-source",
+            settleBatch: {
+              sourceSessionKeys: [child],
+              isCurrent: () => currentSettleOwner === settleOwner,
+            },
+          };
+          const trustedInternalHandoff = consumeSubagentCompletionToolHandoff({
+            ...registration,
+            handoffId: registerSubagentCompletionToolHandoff(registration),
+            sourceTool: "subagent_settle",
+            provider: "openai",
+            model: "gpt-4.1-mini",
+          });
+          const requesterContinuation = {
             config: cfg,
-            agentSessionKey: requesterSessionKey,
-            expectedTargetSessionId: sessionId,
-            completionOwner: "caller",
-            expectedTargetStorePath: target.storePath,
-            callGateway,
-          }).execute("source-send", { sessionKey, message, timeoutSeconds: 0 });
+            sessionKey: requesterSessionKey,
+            sessionId: "queue-source-session",
+            modelProvider: "openai",
+            modelId: "gpt-4.1-mini",
+            trustedInternalHandoff,
+            inputProvenance: {
+              kind: "inter_session" as const,
+              sourceTool: "subagent_settle",
+              sourceSessionKey: child,
+            },
+          };
+          const capabilityInput = {
+            fallbackActive: true,
+            inputProvenance: requesterContinuation.inputProvenance,
+            requesterContinuation,
+          };
+          const capability = await withPreparedSessionCapabilityRead(() =>
+            resolveDelegationCapability(capabilityInput),
+          );
+          expect(capability).toBe("host_only");
+          const profile = await prepareConversationCapabilityProfile(requesterContinuation);
+          const wrap = createCodingToolsGatewayCaller({
+            options: requesterContinuation,
+            agentId: "main",
+            sessionKey: requesterSessionKey,
+            capabilityProfile: profile,
+            tools: [tool],
+          });
+          const [available] = applyDelegationCapability([wrap(tool)], capability);
+          expect(
+            available,
+            "authorized requester follow-through must retain sessions_send on fallback",
+          ).toBeDefined();
+          if (!available) {
+            throw new Error("Fallback removed the authorized continuation tool");
+          }
+          tool = available;
+        }
+        const send = () => tool.execute("source-send", { sessionKey, message, timeoutSeconds: 0 });
         const pending =
           source === "unscoped" || crossAgent
             ? send()
@@ -266,6 +356,9 @@ describe("sessions_send direct queue source authority", () => {
           expect(queued).not.toHaveBeenCalled();
           if (source === "revoked") {
             releaseAgentRunDelegatedAuthority(authority);
+          }
+          if (source === "settle-revoked" || source === "settle-reassigned") {
+            currentSettleOwner = source === "settle-reassigned" ? {} : undefined;
           }
           const revokeSend = () =>
             setRuntimeConfigSnapshot({

@@ -18,6 +18,7 @@ import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promis
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { setVerbose } from "../global-state.js";
 import { isPidAlive } from "../shared/pid-alive.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { readPidFile } from "../test-utils/process-tree.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { attachChildProcessBridge } from "./child-process-bridge.js";
@@ -698,8 +699,9 @@ describe("package manager runtime", () => {
       const systemBin = path.join(root, "system", "bin");
       await fs.mkdir(privateBin, { recursive: true });
       await fs.mkdir(systemBin, { recursive: true });
+      const nodeExecPath = resolveTestNodeExecPath();
       const privateNode = path.join(privateBin, "node");
-      await fs.symlink(process.execPath, privateNode);
+      await fs.symlink(nodeExecPath, privateNode);
       await fs.writeFile(path.join(systemBin, "node"), "#!/bin/sh\necho v22.22.3\n", {
         mode: 0o755,
       });
@@ -708,7 +710,7 @@ describe("package manager runtime", () => {
         JSON.stringify({
           name: "runtime-handoff-fixture",
           version: "1.0.0",
-          scripts: { preinstall: 'node -p "process.version"' },
+          scripts: { preinstall: 'node -p "process.execPath"' },
         }),
       );
       const npmCli = path.join(
@@ -741,7 +743,7 @@ describe("package manager runtime", () => {
         },
       );
       expect(result.code, result.stderr).toBe(0);
-      expect(result.stdout).toContain(process.version);
+      expect(result.stdout).toContain(nodeExecPath);
       expect(result.stdout).not.toContain("v22.22.3");
     },
   );

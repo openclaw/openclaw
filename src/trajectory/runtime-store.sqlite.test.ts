@@ -1,4 +1,5 @@
 // SQLite trajectory runtime tests cover session-scoped event row storage.
+
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -16,6 +17,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   appendSqliteTrajectoryRuntimeEventsWithWriter,
@@ -61,8 +63,10 @@ describe("SQLite trajectory runtime store", () => {
         return { ...events[0] };
       },
     });
-    const counter = trackSqliteStatementExecutions(database.db, ["append"], (sql) =>
-      /^insert into "trajectory_runtime_events"/i.test(sql) ? "append" : null,
+    const counter = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["append"],
+      (sql) => (/^insert into "trajectory_runtime_events"/i.test(sql) ? "append" : null),
     );
     try {
       appendSerializedTrajectoryRuntimeEvents(
@@ -198,8 +202,11 @@ describe("SQLite trajectory runtime store", () => {
       ).receipt.windowFacts;
     const first = append(events[0]!);
     let committed = first;
-    const counter = trackSqliteStatementExecutions(database.db, ["window"], (sql) =>
-      /^select\b/i.test(sql) && sql.includes('"trajectory_runtime_events"') ? "window" : null,
+    const counter = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["window"],
+      (sql) =>
+        /^select\b/i.test(sql) && sql.includes('"trajectory_runtime_events"') ? "window" : null,
     );
     try {
       const second = append(events[1]!, first);
@@ -575,9 +582,10 @@ describe("SQLite trajectory runtime reader snapshot consistency", () => {
     // Spy on the cached connection's prepare() to inject a competing row between the budget aggregate and payload SELECT.
     const database = openOpenClawAgentDatabase({ agentId: "main", path: dbPath });
     const injector = createCompetingRowInjector(dbPath, "session-1");
-    const prepare = database.db.prepare.bind(database.db);
+    const native = requireNativeSqliteDatabase(database.db);
+    const prepare = native.prepare.bind(native);
     let injected = false;
-    const prepareSpy = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+    const prepareSpy = vi.spyOn(native, "prepare").mockImplementation((sql) => {
       const statement = prepare(sql);
       // Inject after the budget aggregate, before the payload SELECT iterates rows.
       if (!injected && sql.includes(`"seq", "event_json"`)) {

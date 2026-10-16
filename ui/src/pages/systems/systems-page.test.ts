@@ -23,8 +23,8 @@ import {
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { cleanupSolid as cleanup, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { SystemsController, type SystemsRouteData } from "./systems-controller.ts";
 import { renderSidebar, renderSolid } from "./systems-route-view.tsx";
+import { createSystems, type Systems, type SystemsRouteData } from "./systems-state.ts";
 import "./systems-sidebar.tsx";
 
 setupSidebarTest();
@@ -93,32 +93,34 @@ function harness(
     locations: [],
   }),
 ) {
-  const request = vi.fn(async (method: string) => {
-    if (method === "environments.list") {
-      return { environments: await inventory() };
-    }
-    if (method === "system.info") {
-      return systemInfo;
-    }
-    if (method === "node.list") {
-      return { nodes: nodes() };
-    }
-    if (method === "backup.status") {
-      return backups();
-    }
-    if (method === "storage.locations.probe") {
-      return { state: "ok", freeBytes: 1024 ** 3 };
-    }
-    if (method === "desktop.observe") {
-      return {
-        transport: "rfb",
-        wsPath: "/desktop/proof",
-        expiresAtMs: Date.now() + 60000,
-        control: false,
-      };
-    }
-    throw new Error("Unexpected request: " + method);
-  });
+  const request = vi.fn(
+    async (method: string, _params?: unknown, _options?: { signal?: AbortSignal }) => {
+      if (method === "environments.list") {
+        return { environments: await inventory() };
+      }
+      if (method === "system.info") {
+        return systemInfo;
+      }
+      if (method === "node.list") {
+        return { nodes: nodes() };
+      }
+      if (method === "backup.status") {
+        return backups();
+      }
+      if (method === "storage.locations.probe") {
+        return { state: "ok", freeBytes: 1024 ** 3 };
+      }
+      if (method === "desktop.observe") {
+        return {
+          transport: "rfb",
+          wsPath: "/desktop/proof",
+          expiresAtMs: Date.now() + 60000,
+          control: false,
+        };
+      }
+      throw new Error("Unexpected request: " + method);
+    },
+  );
   const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
   gateway.publish({
     hello: gatewayHelloForMethods(
@@ -137,17 +139,17 @@ function harness(
   const runtimeConfig = createRuntimeConfigCapability(gateway.gateway);
   runtimeConfigs.push(runtimeConfig);
   Object.assign(context, { basePath: "", navigate: vi.fn(), runtimeConfig });
-  const controller = new SystemsController(context);
+  const controller = createSystems(context);
   return { controller, gateway, context, request };
 }
 
-async function mount(controller: SystemsController) {
+async function mount(controller: Systems) {
   const sidebar = renderSidebar({ controller })!;
   const mounted = mountSolid(() => [
     createComponent(renderSolid, { data: { controller }, loaderPending: false, presented: true }),
     sidebar,
   ]);
-  await waitForSolid(() => expect(controller.inventory).not.toBeNull());
+  await waitForSolid(() => expect(controller.state.inventory).not.toBeNull());
   await sidebar.updateComplete;
   const page = mounted.container.querySelector<HTMLElement>("openclaw-systems-page")!;
   return { page, sidebar, unmount: mounted.unmount };
@@ -359,7 +361,7 @@ describe("Systems workspace", () => {
     });
     await pending.promise;
     flush();
-    expect(controller.backups).toBeNull();
+    expect(controller.state.backups).toBeNull();
     expect(page.querySelector(".systems-backups")?.textContent).not.toContain("old-host");
   });
 
@@ -377,16 +379,16 @@ describe("Systems workspace", () => {
     await vi.advanceTimersByTimeAsync(0);
     const statusReads = () => request.mock.calls.filter(([method]) => method === "system.info");
     expect(statusReads()).toHaveLength(0);
-    expect(controller.inventory).toBeNull();
+    expect(controller.state.inventory).toBeNull();
 
     visibility = "visible";
     document.dispatchEvent(new Event("visibilitychange"));
     await vi.advanceTimersByTimeAsync(0);
     expect(statusReads()).toHaveLength(1);
-    const inventory = controller.inventory;
+    const inventory = controller.state.inventory;
     expect(inventory?.gatewaySystemInfo).toEqual(systemInfo);
-    controller.updatePresentation({ showStats: !controller.showStats });
-    expect(controller.showStats || controller.showDetails).toBe(false);
+    controller.updatePresentation({ showStats: !controller.state.showStats });
+    expect(controller.state.showStats || controller.state.showDetails).toBe(false);
 
     visibility = "hidden";
     document.dispatchEvent(new Event("visibilitychange"));
@@ -394,25 +396,25 @@ describe("Systems workspace", () => {
     gateway.publishEvent("presence", {});
     await vi.advanceTimersByTimeAsync(30_000);
     expect(statusReads()).toHaveLength(1);
-    expect(controller.inventory).toBe(inventory);
-    expect(controller.inventory?.errors).toEqual({});
+    expect(controller.state.inventory).toBe(inventory);
+    expect(controller.state.inventory?.errors).toEqual({});
     expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(1);
 
     visibility = "visible";
     document.dispatchEvent(new Event("visibilitychange"));
     await vi.advanceTimersByTimeAsync(0);
     expect(statusReads()).toHaveLength(2);
-    expect(controller.inventory?.errors).toEqual({});
-    expect(controller.sampledAtMs).toBe(Date.now());
-    expect(controller.rows.map((row) => row.environment.id)).toEqual([
+    expect(controller.state.inventory?.errors).toEqual({});
+    expect(controller.sampledAtMs()).toBe(Date.now());
+    expect(controller.state.rows.map((row) => row.environment.id)).toEqual([
       "gateway",
       "worker-after-hidden",
     ]);
     expect(
-      controller.rows.find((row) => row.environment.id === "worker-after-hidden")?.environment
+      controller.state.rows.find((row) => row.environment.id === "worker-after-hidden")?.environment
         .desktop,
     ).toBe(false);
-    expect(controller.needsInventoryRefresh).toBe(false);
+    expect(controller.needsInventoryRefresh()).toBe(false);
   });
 
   it("keeps desktop setup active through route refreshes and renders rejected writes", async () => {
@@ -440,7 +442,7 @@ describe("Systems workspace", () => {
         },
       }),
     );
-    await waitForSolid(() => expect(controller.inventory).not.toBeNull());
+    await waitForSolid(() => expect(controller.state.inventory).not.toBeNull());
     const enable = mounted.container.querySelector<HTMLButtonElement>(".systems-state button")!;
     enable.click();
     await waitForSolid(() => expect(patch).toHaveBeenCalledOnce());
@@ -469,7 +471,7 @@ describe("Systems workspace", () => {
       const patch = vi.spyOn(context.runtimeConfig, "patch");
       const { page } = await mount(controller);
       page.querySelector<HTMLButtonElement>(".systems-state button")!.click();
-      await waitForSolid(() => expect(controller.desktopSetupBusy).toBe(true));
+      await waitForSolid(() => expect(controller.desktopSetupBusy()).toBe(true));
       if (change === "selection") {
         controller.select(worker.id);
       } else {
@@ -481,7 +483,7 @@ describe("Systems workspace", () => {
         });
       }
       loaded.resolve();
-      await waitForSolid(() => expect(controller.desktopSetupBusy).toBe(false));
+      await waitForSolid(() => expect(controller.desktopSetupBusy()).toBe(false));
       expect(patch).not.toHaveBeenCalled();
     },
   );
@@ -572,12 +574,12 @@ describe("Systems workspace", () => {
     await choose("status:offline");
     expect(names()).toEqual(["Alpha laptop"]);
     expect(counts()).toEqual(["1"]);
-    expect(controller.selectedId).toBe(offline.id);
+    expect(controller.state.selectedId).toBe(offline.id);
     expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(1);
 
     initial.unmount();
     ({ page, sidebar } = await mount(controller));
-    await waitForSolid(() => expect(controller.loading).toBe(false));
+    await waitForSolid(() => expect(controller.loading()).toBe(false));
     await sidebar.updateComplete;
     expect(names()).toEqual(["Alpha laptop"]);
     expect(page.querySelector(".systems-heading h1")?.textContent).toBe("Zulu laptop");
@@ -768,8 +770,8 @@ describe("Systems workspace", () => {
     const viewer = page.querySelector("openclaw-desktop-panel");
     expect(viewer?.hasAttribute("embedded")).toBe(true);
     expect(viewer?.embedded).toBe(true);
-    controller.updatePresentation({ showStats: !controller.showStats });
-    controller.updatePresentation({ showDetails: !controller.showDetails });
+    controller.updatePresentation({ showStats: !controller.state.showStats });
+    controller.updatePresentation({ showDetails: !controller.state.showDetails });
     await controller.refresh();
     flush();
     expect(page.querySelector("openclaw-desktop-panel")).toBe(viewer);
@@ -777,9 +779,9 @@ describe("Systems workspace", () => {
     expect(page.querySelector<HTMLSelectElement>(".systems-mobile-picker")?.value).toBe(worker.id);
     unmount();
     ({ page } = await mount(controller));
-    await waitForSolid(() => expect(controller.loading).toBe(false));
+    await waitForSolid(() => expect(controller.loading()).toBe(false));
     flush();
-    expect(controller.selectedId).toBe(worker.id);
+    expect(controller.state.selectedId).toBe(worker.id);
     expect(page.querySelector<HTMLSelectElement>(".systems-mobile-picker")?.value).toBe(worker.id);
     expect(page.querySelector("openclaw-desktop-panel")?.requestedSource).toBe(worker.id);
     await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(2));
@@ -787,7 +789,7 @@ describe("Systems workspace", () => {
     environments = [host, offline];
     await controller.refresh();
     flush();
-    expect(controller.selectedId).toBe(worker.id);
+    expect(controller.state.selectedId).toBe(worker.id);
     expect(page.textContent).toContain("This machine is no longer listed");
     expect(page.querySelector<HTMLSelectElement>(".systems-mobile-picker")?.value).toBe("");
     expect(page.querySelector("openclaw-desktop-panel")).toBeNull();
@@ -798,15 +800,14 @@ describe("Systems workspace", () => {
       }),
     );
     flush();
-    expect(controller.selectedId).toBe("worker-no-longer-known");
+    expect(controller.state.selectedId).toBe("worker-no-longer-known");
     expect(page.textContent).toContain("This machine is no longer listed");
     expect(connect).toHaveBeenCalledTimes(2);
   });
 
   it("keeps selection across route activation and drops late work after departure or gateway replacement", async () => {
     const delayed = createDeferred<EnvironmentSummary[]>();
-    const { controller, gateway } = harness(() => delayed.promise);
-    const refresh = vi.spyOn(controller, "refresh");
+    const { controller, gateway, request } = harness(() => delayed.promise);
     const [data, setData] = createSignal<SystemsRouteData>();
     const [presented, setPresented] = createSignal(true);
     const mounted = mountSolid(() =>
@@ -828,27 +829,29 @@ describe("Systems workspace", () => {
     expect(page).not.toBeNull();
     setPresented(false);
     flush();
+    const initialRead = request.mock.calls.find(([method]) => method === "environments.list");
+    expect(initialRead?.[2]?.signal?.aborted).toBe(true);
     delayed.resolve([host, { ...worker, desktop: false }]);
-    await refresh.mock.results[0]!.value;
+    await delayed.promise;
     flush();
-    expect(controller.inventory).toBeNull();
+    expect(controller.state.inventory).toBeNull();
     setPresented(true);
-    await waitForSolid(() => expect(controller.inventory).not.toBeNull());
+    await waitForSolid(() => expect(controller.state.inventory).not.toBeNull());
     controller.select(worker.id);
     setPresented(false);
     flush();
     setPresented(true);
-    await waitForSolid(() => expect(controller.loading).toBe(false));
-    expect(controller.selectedId).toBe(worker.id);
+    await waitForSolid(() => expect(controller.loading()).toBe(false));
+    expect(controller.state.selectedId).toBe(worker.id);
     expect(mounted.container.querySelector("openclaw-systems-page")).toBe(page);
     // Simulate a new revision from the Gateway owner; consumers only read this property.
     Object.defineProperty(gateway.gateway, "connectionRevision", { value: 1 });
     gateway.publish({});
-    expect(controller.rows).toEqual([]);
-    expect(controller.selected).toBeUndefined();
+    expect(controller.state.rows).toEqual([]);
+    expect(controller.selected()).toBeUndefined();
     const replacement = harness(async () => [host]);
     setData({ controller: replacement.controller });
-    await waitForSolid(() => expect(replacement.controller.inventory).not.toBeNull());
+    await waitForSolid(() => expect(replacement.controller.state.inventory).not.toBeNull());
     expect(mounted.container.querySelector("openclaw-systems-page")).toBe(page);
     mounted.unmount();
     const calls = replacement.request.mock.calls.length;
@@ -859,6 +862,6 @@ describe("Systems workspace", () => {
     );
     replacement.gateway.publishEvent("presence", {});
     expect(replacement.request.mock.calls).toHaveLength(calls);
-    expect(replacement.controller.selectedId).toBe(host.id);
+    expect(replacement.controller.state.selectedId).toBe(host.id);
   });
 });

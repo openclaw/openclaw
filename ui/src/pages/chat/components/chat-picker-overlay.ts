@@ -1,4 +1,4 @@
-import { createEffect, createSignal } from "solid-js";
+import { createEffect, createSignal, untrack } from "solid-js";
 import { createOverlayAnchor } from "../../../components/overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "../../../components/overlay-lifecycle.ts";
 import { registryFor } from "../../../components/overlay-registry.ts";
@@ -19,7 +19,10 @@ const INVOCATION_MENUS = ".agent-chat__input > :is(.slash-menu, .skill-menu)";
 let nextPickerId = 0;
 
 /** Keep native details selectors while the shared overlay owns visibility and dismissal. */
-function bindChatPickerOverlay(details: HTMLDetailsElement): () => void {
+function bindChatPickerOverlay(
+  details: HTMLDetailsElement,
+  onOpenChange?: (details: HTMLDetailsElement) => void,
+): () => void {
   const trigger = details.querySelector<HTMLElement>(":scope > summary")!;
   const surface = details.querySelector<HTMLElement>(":scope > [data-anchored-overlay]")!;
   const overlay = createOverlay(`chat-picker-${++nextPickerId}`, findOverlayParent(trigger), {
@@ -36,7 +39,7 @@ function bindChatPickerOverlay(details: HTMLDetailsElement): () => void {
   surface.setAttribute("aria-labelledby", trigger.id);
   overlay.bindSurface(surface);
   overlay.bindTrigger(trigger);
-  const anchor = createOverlayAnchor(surface);
+  const anchor = createOverlayAnchor(surface, { sameRoot: true });
   const sync = () => {
     const mobile = details.ownerDocument.defaultView?.matchMedia?.(
       MOBILE_COMPOSER_OVERLAY_QUERY,
@@ -50,13 +53,37 @@ function bindChatPickerOverlay(details: HTMLDetailsElement): () => void {
     }
   };
   details.setAttribute("data-chat-native-picker", "");
+  let lastOpen = overlay.open;
   const stop = overlay.subscribe((open) => {
     details.open = open;
+    if (open !== lastOpen) {
+      lastOpen = open;
+      untrack(() => onOpenChange?.(details));
+    }
   });
-  details.addEventListener("toggle", sync);
+  const toggle = () => {
+    if (details.open === overlay.open) {
+      return;
+    }
+    sync();
+  };
+  const activate = (event: MouseEvent) => {
+    if (event.defaultPrevented || !event.composedPath().includes(trigger)) {
+      return;
+    }
+    event.preventDefault();
+    if (trigger.getAttribute("aria-disabled") === "true") {
+      return;
+    }
+    details.open = !details.open;
+    toggle();
+  };
+  details.addEventListener("click", activate);
+  details.addEventListener("toggle", toggle);
   sync();
   return () => {
-    details.removeEventListener("toggle", sync);
+    details.removeEventListener("click", activate);
+    details.removeEventListener("toggle", toggle);
     stop();
     details.removeAttribute("data-chat-native-picker");
     overlay.dispose();
@@ -65,9 +92,13 @@ function bindChatPickerOverlay(details: HTMLDetailsElement): () => void {
 }
 
 /** The ref only publishes the node; the component owner binds and releases its surface. */
-export function createChatPickerOverlay(): (details: HTMLDetailsElement) => void {
+export function createChatPickerOverlay(
+  onOpenChange?: (details: HTMLDetailsElement) => void,
+): (details: HTMLDetailsElement) => void {
   const [element, setElement] = createSignal<HTMLDetailsElement>();
-  createEffect(element, (details) => (details ? bindChatPickerOverlay(details) : undefined));
+  createEffect(element, (details) =>
+    details ? bindChatPickerOverlay(details, onOpenChange) : undefined,
+  );
   return (details) => setElement(details);
 }
 

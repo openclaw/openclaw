@@ -8,7 +8,7 @@ import {
   sameFileIdentity,
   type FileIdentityStat,
 } from "@openclaw/fs-safe/advanced";
-import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/host/sqlite-vec.js";
+import { loadSqliteVecExtension } from "../infra/database-engine/sqlite-vec.js";
 import {
   ensureDurableDirectory,
   getPublishFileExclusiveFailureDetails,
@@ -342,7 +342,6 @@ class LocalSqliteSnapshotProvider {
       return { ref: { path: snapshotRefPath }, manifest };
     } catch (error) {
       await publishedDirectory?.close().catch(() => undefined);
-      publishedDirectory = undefined;
       if (snapshotDirectoryCreated) {
         publishedIdentity ??= await fs.lstat(snapshotDir, { bigint: true }).catch(() => undefined);
       }

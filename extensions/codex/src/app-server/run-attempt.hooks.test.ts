@@ -62,6 +62,94 @@ function holdAgentEnd() {
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
+  it("observes each provider response once without changing whole-turn accounting", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const unsubscribe = onTrustedInternalDiagnosticEvent((event) => events.push(event));
+    try {
+      const harness = createStartedThreadHarness();
+      const params = createTestParams();
+      params.config = {
+        diagnostics: { enabled: true, otel: { enabled: true, traces: true } },
+      };
+      setRuntimeConfigSnapshot(params.config);
+      const run = runCodexAppServerAttempt(params, { nativeHookRelay: { enabled: false } });
+      await run.waitForTurnAccepted();
+      const response = {
+        method: "rawResponse/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          responseId: "private-response-1",
+          usage: {
+            inputTokens: 10,
+            cachedInputTokens: 3,
+            cacheWriteInputTokens: 1,
+            outputTokens: 4,
+            reasoningOutputTokens: 2,
+            totalTokens: 14,
+          },
+        },
+      };
+      await harness.notify(response);
+      await harness.notify(response);
+      const { totalTokens: _total, ...withoutTotal } = response.params.usage;
+      await harness.notify({
+        ...response,
+        params: {
+          ...response.params,
+          responseId: "private-response-2",
+          usage: { ...withoutTotal, cacheWriteInputTokens: 0 },
+        },
+      });
+      const { cacheWriteInputTokens: _cacheWrite, ...withoutCacheWrite } = response.params.usage;
+      await harness.notify({
+        ...response,
+        params: { ...response.params, responseId: "private-response-3", usage: withoutCacheWrite },
+      });
+      await harness.notify({
+        ...response,
+        params: { ...response.params, responseId: "private-response-4", usage: null },
+      });
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      expect((await run).attemptUsage).toMatchObject({
+        input: 20,
+        cacheRead: 9,
+        cacheWrite: 1,
+        output: 12,
+        reasoningTokens: 6,
+        total: 28,
+      });
+      await waitForDiagnosticEventsDrained();
+      const observations = events.filter((event) => event.type === "model.response.observed");
+      expect(observations).toHaveLength(4);
+      expect(observations[0]).toMatchObject({
+        timestampSource: "receipt",
+        usageSource: "native-normalized",
+        usageScope: "response",
+        upstreamRequestIdHash: expect.stringMatching(/^sha256:[a-f0-9]{16}$/),
+        usage: { input: 6, cacheRead: 3, cacheWrite: 1, output: 4, reasoningTokens: 2, total: 14 },
+      });
+      expect(observations[1]?.usage?.cacheWrite).toBe(0);
+      expect(observations[1]?.usage).not.toHaveProperty("total");
+      expect(observations[2]?.usage).toMatchObject({ promptTokens: 10, cacheRead: 3 });
+      expect(observations[2]?.usage).not.toHaveProperty("cacheWrite");
+      expect(observations[2]?.usage).not.toHaveProperty("input");
+      expect(observations[3]).not.toHaveProperty("usage");
+      expect(observations[1]?.upstreamRequestIdHash).not.toBe(
+        observations[0]?.upstreamRequestIdHash,
+      );
+      const started = events.find((event) => event.type === "model.call.started");
+      for (const observation of observations) {
+        expect(observation.trace).toEqual(started?.trace);
+        expect(observation).not.toHaveProperty("durationMs");
+        expect(observation).not.toHaveProperty("sourceTimestampMs");
+        expect(JSON.stringify(observation)).not.toContain("private-response");
+      }
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it("emits gated model-call content diagnostics for codex turns", async () => {
     const diagnosticEvents: DiagnosticEventPayload[] = [];
     const diagnosticContentByType = new Map<string, DiagnosticEventPrivateData>();

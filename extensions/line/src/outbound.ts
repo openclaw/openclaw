@@ -178,10 +178,14 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
 
     const processed = payload.text ? outboundRuntime.processLineMessage(payload.text) : [];
 
-    const chunkLimit =
-      runtime.channel.text.resolveTextChunkLimit?.(cfg, "line", accountId ?? undefined, {
+    const chunkLimit = runtime.channel.text.resolveTextChunkLimit(
+      cfg,
+      "line",
+      accountId ?? undefined,
+      {
         fallbackLimit: 5000,
-      }) ?? 5000;
+      },
+    );
 
     const orderedMessages = processed.flatMap<messagingApi.FlexMessage | messagingApi.TextMessage>(
       (segment) =>

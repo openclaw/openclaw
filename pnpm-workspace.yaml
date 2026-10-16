@@ -18,18 +18,18 @@ minimumReleaseAgeExclude:
   - "@solidjs/*"
   # Reviewed Edge TTS 403 fix; remove after 2026-10-19T16:27:27.581Z.
   - "node-edge-tts@1.2.11"
-  # Reviewed fs-safe 0.26.5 release and native helpers; remove after 2026-10-21T13:01:12.291Z.
-  - "@openclaw/fs-safe@0.26.5"
-  - "@openclaw/fs-safe-darwin-arm64@0.26.5"
-  - "@openclaw/fs-safe-darwin-x64@0.26.5"
-  - "@openclaw/fs-safe-freebsd-arm64@0.26.5"
-  - "@openclaw/fs-safe-freebsd-x64@0.26.5"
-  - "@openclaw/fs-safe-linux-arm64-gnu@0.26.5"
-  - "@openclaw/fs-safe-linux-arm64-musl@0.26.5"
-  - "@openclaw/fs-safe-linux-x64-gnu@0.26.5"
-  - "@openclaw/fs-safe-linux-x64-musl@0.26.5"
-  - "@openclaw/fs-safe-win32-arm64-msvc@0.26.5"
-  - "@openclaw/fs-safe-win32-x64-msvc@0.26.5"
+  # Reviewed fs-safe 0.26.6 release and native helpers; remove after 2026-10-22T17:59:58.961Z.
+  - "@openclaw/fs-safe@0.26.6"
+  - "@openclaw/fs-safe-darwin-arm64@0.26.6"
+  - "@openclaw/fs-safe-darwin-x64@0.26.6"
+  - "@openclaw/fs-safe-freebsd-arm64@0.26.6"
+  - "@openclaw/fs-safe-freebsd-x64@0.26.6"
+  - "@openclaw/fs-safe-linux-arm64-gnu@0.26.6"
+  - "@openclaw/fs-safe-linux-arm64-musl@0.26.6"
+  - "@openclaw/fs-safe-linux-x64-gnu@0.26.6"
+  - "@openclaw/fs-safe-linux-x64-musl@0.26.6"
+  - "@openclaw/fs-safe-win32-arm64-msvc@0.26.6"
+  - "@openclaw/fs-safe-win32-x64-msvc@0.26.6"
   # Reviewed proc-safe 0.3.0 release and native helpers; remove after 2026-10-20T18:53:55.137Z.
   - "@openclaw/proc-safe@0.3.0"
   - "@openclaw/proc-safe-darwin-arm64@0.3.0"
@@ -59,7 +59,7 @@ overrides:
   "chevrotain>lodash-es": 4.18.1
   "@chevrotain/cst-dts-gen>lodash-es": 4.18.1
   "@chevrotain/gast>lodash-es": 4.18.1
-  "@agentclientprotocol/codex-acp@2.1.1>@openai/codex": 0.161.0
+  "@agentclientprotocol/codex-acp@2.1.1>@openai/codex": 0.162.0
   "@codemirror/commands@6.11.1>@codemirror/view": 6.43.14
   "@codemirror/view@6.43.14>@codemirror/state": 6.7.6
   "@anthropic-ai/sdk": 0.132.1
@@ -139,6 +139,5 @@ patchedDependencies:
   "matrix-js-sdk@43.0.0": patches/matrix-js-sdk@43.0.0.patch
   "@novnc/novnc@1.7.0": patches/@novnc__novnc@1.7.0.patch
   vitest@5.0.3: patches/vitest@5.0.3.patch
-  "@awesome.me/webawesome@3.14.0": patches/@awesome.me__webawesome@3.14.0.patch
   ghostty-web@0.4.0: patches/ghostty-web@0.4.0.patch
   chrome-devtools-mcp@1.10.1: patches/chrome-devtools-mcp@1.10.1.patch

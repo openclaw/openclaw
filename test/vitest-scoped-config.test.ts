@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { minimatch } from "minimatch";
 import { globSync } from "tinyglobby";
 import { afterEach, describe, expect, it } from "vitest";
@@ -450,7 +451,9 @@ describe("scoped vitest configs", () => {
           ...(process.versions.bun
             ? ["--tsconfig-override", path.join(process.cwd(), "tsconfig.json")]
             : ["--import", expect.any(String)]),
-          `--import=${new URL("./vitest/vitest.jsdom-preload.mts", import.meta.url).href}`,
+          process.versions.bun
+            ? `--preload=${fileURLToPath(new URL("./vitest/vitest.jsdom-preload.mts", import.meta.url))}`
+            : `--import=${new URL("./vitest/vitest.jsdom-preload.mts", import.meta.url).href}`,
         ],
       },
       {

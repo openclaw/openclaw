@@ -6,8 +6,8 @@ export {
   migrateSqliteSchemaToStrict,
   migrateSqliteSchemaToStrictInTransaction,
 } from "../../../../src/infra/sqlite-strict.js";
+export { assertDynamicSqliteSchemaContains as assertSqliteSchemaContains } from "../../../../src/infra/sqlite-schema-dynamic.js";
 export {
-  assertSqliteSchemaContains,
   createSqliteTableContractReader,
   type SqliteTableContractReader,
 } from "../../../../src/infra/sqlite-schema-contract.js";
@@ -27,3 +27,4 @@ export {
   sqlPublicationAnchor,
   type PostgresSqlConnection,
 } from "../../../../src/infra/sql-connection.js";
+export * from "../../../../src/infra/database-engine/sqlite-search-schema.js";

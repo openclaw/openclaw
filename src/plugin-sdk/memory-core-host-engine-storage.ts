@@ -3,6 +3,10 @@
  */
 export { encodeSqliteStringSet, sqliteStringSetEntries } from "../infra/kysely-sync.js";
 export {
+  loadSqliteVecExtension,
+  loadSqliteVecExtensionFromPath,
+} from "../infra/database-engine/sqlite-vec.js";
+export {
   ensureMemoryEntryOriginsSchema,
   readMemoryEntryOriginsInDatabase,
   recordMemoryEntryOriginsInDatabase,
@@ -24,8 +28,6 @@ export {
   isAutomaticMemoryEntryEligible,
   isFileMissingError,
   listMemoryFiles,
-  loadSqliteVecExtension,
-  loadSqliteVecExtensionFromPath,
   matchesExtraMemoryPathEntry,
   MEMORY_SEARCH_DEADLINE_CONTROL,
   MEMORY_CHUNKING_VERSION,
@@ -54,6 +56,10 @@ export {
   stopMemorySqliteWalMaintenance,
   stripMemoryAnnotationCarriers,
 } from "../../packages/memory-host-sdk/src/engine-storage.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { chunkMarkdown } from "../../packages/memory-host-sdk/src/engine-storage.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { ensureDir } from "../../packages/memory-host-sdk/src/engine-storage.js";
 
 export type {
   MemoryWorkspaceFiles,
@@ -65,6 +71,9 @@ export type {
 } from "../../packages/memory-host-sdk/src/engine-storage.js";
 
 export { openOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
+export { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
+export { isPostgresSqlConnection } from "../infra/sql-connection.js";
+export { DatabaseSearchCapabilityUnavailableError } from "../infra/database-engine/capability-unavailable.js";
 
 /** Health probe result for embedding provider availability checks. */
 export type MemoryEmbeddingProbeResult = {

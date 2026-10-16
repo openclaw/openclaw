@@ -218,7 +218,7 @@ Eligible `control-ui` rows request `blacksmith-16vcpu-ubuntu-2404`; the browser-
 
 In [run 35028248954, UI job 6/7](https://github.com/openclaw/openclaw/actions/runs/35028248954/job/104582299257), the six-shard Control UI plan requested the 16-class and reported four CPUs. Setup took about 3m45s before the test command. The job recorded 168 passing tests and three failures before cancellation about 25m07s after runner startup; a test completed three seconds before cancellation. The twelve-shard plan still needs native CI timing proof, and widening the plan does not resolve those assertions or guarantee completion within the unchanged deadline.
 
-The two real-Gateway rows request the 16-class for current targets and retain the 32-class for frozen or unclassified targets. The split adds one job and one possible registration when this proof lane is selected; ordinary PRs omit it. Current-target Blacksmith shard 1 has a 24-minute job budget for its serial fixtures and selected desktop transport proof; shard 2 has 25 minutes after its observed preparation and passing test phases exceeded 20 minutes. Other Blacksmith rows retain 20 minutes and hosted fallbacks retain 40. This scoped allowance adds no jobs, registrations, or workers and leaves test deadlines unchanged. It follows a confirmed 20-minute job timeout with 16 of 17 files complete in [run 38590548763](https://github.com/openclaw/openclaw/actions/runs/38590548763/job/115948443520); a natural run must establish whether the allowance is sufficient. The split does not change backend, contributor-trust, retry, or cache routing.
+The two real-Gateway rows request the 16-class for current targets and retain the 32-class for frozen or unclassified targets. The split adds one job and one possible registration when this proof lane is selected; ordinary PRs omit it. Blacksmith real-Gateway rows have a 30-minute job budget and hosted fallbacks retain 40 minutes. This scoped allowance adds no jobs, registrations, or workers and leaves test deadlines unchanged. It follows a confirmed 20-minute job timeout with 16 of 17 files complete in [run 38590548763](https://github.com/openclaw/openclaw/actions/runs/38590548763/job/115948443520); a natural run must establish whether the allowance is sufficient. The split does not change backend, contributor-trust, retry, or cache routing.
 
 The browser-extension row prepares only its native-host runtime JavaScript and assets through the existing `qaRuntime` build profile rather than rebuilding declarations and the Control UI. Both the nine-row ordinary plan and thirteen-row full-inventory plan stay inside the existing conservative registration bound. A failed-job-only retry retains its previously emitted matrix, including older plans with six Control UI shards. PR retries and hybrid push retries select hosted Ubuntu through live routing, so they may take longer; the existing 25-minute timeout is unchanged. Rerunning preflight selects eight Control UI shards for an ordinary known-inventory plan, or twelve for complete validation, plus the browser-extension row. Matrices emitted before worker metadata existed retain the two-worker fallback. Upstream push retries on the Blacksmith profile retain Blacksmith routing. The `max-parallel` ceiling stays 14 for historical targets without the named-project contract, which retain their previous width. Physical capacity must be checked separately from the registration bound.
 
@@ -250,6 +250,16 @@ baseline. Node runtime builds remain separate to preserve parallel startup and
 private-QA output variants. Checkout already fetches depth-one selected source;
 historical test prerequisites and revision-comparison inputs stay with their
 existing owners.
+
+Keep the full source checkout for UI E2E jobs. An October 16 blobless sparse
+checkout trial excluded 48.31 MiB of logical mobile/macOS app content, but its
+Blacksmith UI checkout took 56s and its hosted browser checkout 58s in
+[run 38866595993](https://github.com/openclaw/openclaw/actions/runs/38866595993).
+Full UI checkouts in that run took 22–38s. These small, unpaired samples did
+not qualify the trial for rollout and do not establish a billing delta.
+Future trials must include filtered fetch, lazy materialization, and harness
+export in complete checkout timing; omitted logical bytes are not transfer or
+cost savings.
 
 A Linux Testbox check on four CPUs, 15.4 GiB RAM, and Node 24.19.0 measured
 preparation plus joined cleanup at 8.43/9.44 seconds without reuse and 3.21/3.17

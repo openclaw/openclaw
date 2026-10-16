@@ -26,6 +26,7 @@ import {
 } from "./attempt-steering.js";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
+import type { CodexAppServerEventProjectorOptions } from "./event-projector-options.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import {
   createCodexNativeMcpAppResultDetailsPreparer,
@@ -61,6 +62,7 @@ export function activateCodexAttemptTurn(
   lifecycle: CodexAttemptLifecycleController,
   notifications: CodexAttemptNotificationController,
   { turn, upstreamUserText }: CodexStartedTurn,
+  onResponseObserved: CodexAppServerEventProjectorOptions["onResponseObserved"],
 ) {
   const {
     prompt,
@@ -171,6 +173,7 @@ export function activateCodexAttemptTurn(
     activeTurnId,
     {
       agentHookContext: hookContext,
+      onResponseObserved,
       hasDeliveredFinalSourceReply: () => toolBridge.telemetry.finalSourceReplyDelivered === true,
       initialContextTokens: connection.mutable.startupContextTokens,
       nativePostToolUseRelayEnabled:

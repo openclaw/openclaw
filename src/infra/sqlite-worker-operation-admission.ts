@@ -480,7 +480,6 @@ function createOperationAdmission(
     try {
       inOwnerContext(() => {
         databaseAuthority?.assertRequest?.();
-        databaseAuthority?.assertAccess();
       });
       if (
         request.stage === "prepare" &&

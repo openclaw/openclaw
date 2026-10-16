@@ -75,6 +75,8 @@ const repositoryScriptEntries = [
   "scripts/bundle-a2ui.mts!",
   // The standalone build guide invokes this builder by path.
   "scripts/build-bun-standalone.mjs!",
+  // Maintainers invoke the isolated macOS standalone Doctor proof by path.
+  "scripts/verify-standalone-doctor.mjs!",
   "scripts/build-discord-activity-sdk.mts!",
   // Plugin package asset hooks invoke the browser builder by path.
   "scripts/build-plugin-control-ui.mts!",
@@ -448,6 +450,9 @@ const rootEntries = [
   "security/opengrep/rules/ghsa-fv94-qvg8-xqpw/ssh-sandbox-upload.js!",
   "security/opengrep/rules/ghsa-fv94-qvg8-xqpw/ssh-sandbox-upload.ts!",
   "{openclaw,docker-entrypoint}.mjs!",
+  // Desktop service integration consumes this API in the staged builder/app cutover (#172569).
+  // Remove this audit root after those in-tree callers land.
+  "cli-invocation.mjs!",
   // update-command-node-runtime-resolution loads this package-root module by absolute URL.
   "node-runtime-recovery.mjs!",
   "src/index.ts!",

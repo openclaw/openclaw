@@ -6,6 +6,7 @@ import { createMemo, For, Show } from "solid-js";
 import { formatAgentRuntimeLabel } from "../../../../src/shared/agent-runtime-display.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { AgentIdentityResult, GatewaySessionRow } from "../../api/types.ts";
+import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { Icon, type IconName } from "../../components/solid/icon.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import {
@@ -35,7 +36,6 @@ import { CategoryCell } from "./category-cell.tsx";
 import { SessionStatusBadge } from "./session-status.tsx";
 import { categoryDropHandlers } from "./sessions-filters.tsx";
 import type { SessionsProps } from "./view-types.ts";
-import "../../components/agent-row-chip.tsx";
 import "../../components/tooltip.ts";
 import "../../styles/capacity-meter.css";
 
@@ -77,7 +77,7 @@ const SESSION_KIND_ICONS = {
 function renderSessionAvatar(row: GatewaySessionRow) {
   const displayKind = resolveSessionDisplayKind(row);
   return (
-    <span class={`session-avatar session-avatar--${displayKind}`} aria-hidden="true">
+    <span class={["session-avatar", `session-avatar--${displayKind}`]} aria-hidden="true">
       <Icon name={SESSION_KIND_ICONS[displayKind]} />
       {isSessionRunActive(row) ? <span class="session-avatar__status" /> : undefined}
     </span>
@@ -123,7 +123,7 @@ function renderTokensCell(row: GatewaySessionRow) {
           {totalLabel} / {formatCompactTokenCount(context)}
         </span>
         <span
-          class={`session-context-meter session-context-meter--${tone}`}
+          class={["session-context-meter", `session-context-meter--${tone}`]}
           role="img"
           aria-label={title}
         >
@@ -264,18 +264,15 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
       : undefined,
   );
   const displayKind = createMemo(() => resolveSessionDisplayKind(row()));
-  const kindClass = createMemo(() => `session-kind session-kind--${displayKind()}`);
-  const rowClass = createMemo(() =>
-    [
-      "session-data-row",
-      "session-data-row--expandable",
-      props.statusFilter === "all" && row().archived === true ? "session-data-row--archived" : "",
-      isExpanded() ? "session-data-row--expanded" : "",
-      props.sessionMenu?.key === row().key ? "session-data-row--menu-open" : "",
-    ]
-      .filter(Boolean)
-      .join(" "),
-  );
+  const kindClass = createMemo(() => ["session-kind", `session-kind--${displayKind()}`]);
+  const rowClass = createMemo(() => [
+    "session-data-row session-data-row--expandable",
+    {
+      "session-data-row--archived": props.statusFilter === "all" && row().archived === true,
+      "session-data-row--expanded": isExpanded(),
+      "session-data-row--menu-open": props.sessionMenu?.key === row().key,
+    },
+  ]);
   // The {count} placeholder predates the drawer redesign; it carries the session title.
   const detailsToggleLabel = createMemo(() =>
     isExpanded()
@@ -350,7 +347,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
         </td>
         <td class="data-table-key-col">
           <openclaw-tooltip prop:content={keyCellTitle()}>
-            <div class={friendlyKeyLabel() ? "session-key-cell" : "mono session-key-cell"}>
+            <div class={["session-key-cell", { mono: !friendlyKeyLabel() }]}>
               {renderSessionAvatar(row())}
               <div class="session-key-cell__text">
                 <span class="session-key-cell__primary">
@@ -385,8 +382,8 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
                   ) : undefined}
                 </span>
                 {row().kind === "global" && !row().agentId ? undefined : (
-                  <openclaw-agent-row-chip
-                    prop:agentId={parseAgentSessionKey(row().key)?.agentId ?? row().agentId}
+                  <AgentRowChip
+                    agentId={parseAgentSessionKey(row().key)?.agentId ?? row().agentId}
                   />
                 )}
                 {showDisplayName() ? (

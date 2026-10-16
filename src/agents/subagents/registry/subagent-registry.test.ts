@@ -40,7 +40,10 @@ import {
   registerSubagentResultRefreshCases,
   updateSubagentRunFixture as updateFixtureRun,
 } from "./subagent-registry-result-refresh.test-support.js";
-import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry-state.fixture.test-support.js";
+import {
+  loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryChangesToSqlite,
+} from "./subagent-registry-state.fixture.test-support.js";
 import { registerYieldFollowupAdoptionTests } from "./subagent-registry-yield-followup-adoption.test-support.js";
 import { registerYieldedParentCleanupCase } from "./subagent-registry-yielded-cleanup.test-support.js";
 import {
@@ -55,7 +58,10 @@ import {
   registerRestartDrainCompletionSettlementTest,
 } from "./subagent-registry.native-settlement.test-support.js";
 import { registerSupersededNativeTimingTest } from "./subagent-registry.native-termination.test-support.js";
-import { registerSubagentRegistrationPersistenceTests } from "./subagent-registry.persistence.test-support.js";
+import {
+  prepareSubagentRecoveryFixture,
+  registerSubagentRegistrationPersistenceTests,
+} from "./subagent-registry.persistence.test-support.js";
 import {
   activateSubagentRegistryWithRecoveryRuntime,
   registerRestoredLegacyAuthorityTests,
@@ -133,7 +139,9 @@ vi.mock("./subagent-registry-state.js", async (importOriginal) => {
     clearSubagentRunsReadCacheForTest,
     consumeFreshSubagentRegistryRows,
     countActiveSubagentRunsForSession,
+    getSubagentSessionListRunsSnapshotForSessions,
     prepareSubagentRegistrationRows,
+    prepareSubagentSessionListReadCache,
     publishSubagentRunsAfterAtomicStore,
     rememberRestoredSubagentRunNotification,
   } = await importOriginal<typeof import("./subagent-registry-state.js")>();
@@ -141,7 +149,9 @@ vi.mock("./subagent-registry-state.js", async (importOriginal) => {
     clearSubagentRunsReadCacheForTest,
     consumeFreshSubagentRegistryRows,
     countActiveSubagentRunsForSession,
+    getSubagentSessionListRunsSnapshotForSessions,
     prepareSubagentRegistrationRows,
+    prepareSubagentSessionListReadCache,
     rememberRestoredSubagentRunNotification,
     getSubagentRunsSnapshotForChildSession: mocks.getSubagentRunsSnapshotForChildSession,
     getSubagentRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
@@ -1030,6 +1040,7 @@ describe("subagent registry seam flow", () => {
       });
     });
     await settleRootWork();
+    expect(mocks.captureSubagentCompletionReply).toHaveBeenCalledTimes(1);
     expect(
       mocks.callGateway.mock.calls.filter(([request]) => request.method === "agent.wait").length,
     ).toBeGreaterThanOrEqual(2);
@@ -1204,20 +1215,20 @@ describe("subagent registry seam flow", () => {
       try {
         if (source.startsWith("restored")) {
           mocks.resolveAgentTimeoutMs.mockReturnValue(60_000);
-          mockRestoredRuns(() => [
-            createSubagentRunRecord({
-              runId,
-              childSessionIdentity: {
-                sessionId: "sess-child",
-                lifecycleRevision: "revision-child",
-              },
-              task: "resume near explicit timeout",
-              runTimeoutSeconds: duration / 1_000,
-              createdAt,
-              startedAt: createdAt,
-              sessionStartedAt: createdAt,
-            }),
-          ]);
+          const restored = createSubagentRunRecord({
+            runId,
+            childSessionIdentity: {
+              sessionId: "sess-child",
+              lifecycleRevision: "revision-child",
+            },
+            task: "resume near explicit timeout",
+            runTimeoutSeconds: duration / 1_000,
+            createdAt,
+            startedAt: createdAt,
+            sessionStartedAt: createdAt,
+          });
+          await prepareSubagentRecoveryFixture(restored, { entries: mocks.entries });
+          mockRestoredRuns(() => [restored]);
           await hydrateAndActivateRegistry();
         } else {
           await mod.registerSubagentRun({
@@ -1570,6 +1581,7 @@ describe("subagent registry seam flow", () => {
       error: "Agent run ended before producing a complete result.",
     },
   ])("announces $source $kind with its terminal evidence", async ({ source, kind, error }) => {
+    mocks.persistRegistryRows.mockImplementation(saveSubagentRegistryChangesToSqlite);
     const runId = `run-${source}-${kind}`;
     const startedAt = source === "wait" ? 100 : 10;
     const endedAt = source === "wait" ? 250 : 20;
@@ -1627,7 +1639,7 @@ describe("subagent registry seam flow", () => {
           terminalReply: expect.objectContaining({ disposition: "empty" }),
         }),
       );
-      expect(findRequesterRun(runId)?.completion).toMatchObject({
+      expect(loadSubagentRegistryFromSqlite().get(runId)?.completion).toMatchObject({
         terminalReply: { disposition: "empty" },
         resultText: null,
       });
@@ -1953,6 +1965,7 @@ describe("subagent registry seam flow", () => {
         lastAttemptAt: Date.parse("2026-03-24T11:59:40Z"),
       },
     });
+    await prepareSubagentRecoveryFixture(restored, { entries: mocks.entries });
     mocks.restoreSubagentRunsFromDisk.mockImplementation(async ({ runs }) => {
       runs.set(runId, restored);
       return 1;

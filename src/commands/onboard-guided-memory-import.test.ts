@@ -161,7 +161,7 @@ describe("guided onboarding post-inference steps", () => {
     const deps = setupDeps({
       prompter: createWizardPrompter(),
       runAppRecommendations: async ({ config }) => ({ config, commitResult }),
-      runBrowserHandoff: vi.fn(async () => ({ handedOff: true as const })),
+      runBrowserHandoff: vi.fn(async () => true),
     });
     const outcome = runGuidedOnboarding(
       { acceptRisk: true, workspace: "/tmp/work" },

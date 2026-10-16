@@ -1,5 +1,6 @@
 // Coverage for prompt-cache diagnostic tracking across turns.
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
+import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import * as cryptoDigest from "@openclaw/normalization-core/node-crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Usage } from "../../llm/types.js";
@@ -144,6 +145,23 @@ describe("prompt cache observability", () => {
     });
     expect(first[0]?.descriptionDigest).not.toBe(changedDescription[0]?.descriptionDigest);
     expect(first[0]?.schemaDigest).not.toBe(changedSchema[0]?.schemaDigest);
+  });
+
+  it("preserves canonical schema identity when descriptors become published", () => {
+    const source = {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "published-schema-fixture" },
+      },
+    };
+    const first = collectPromptCacheTools([{ name: "read", parameters: source }]);
+    const parameters = publishRuntimeToolInputSchema(source).schema;
+    if (parameters === null || typeof parameters !== "object") {
+      throw new Error("Expected published object schema");
+    }
+    const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
+    expect(collectPromptCacheTools([{ name: "read", parameters }])).toEqual(first);
+    expect(hashes).not.toHaveBeenCalled();
   });
 
   it("fingerprints own __proto__ schema properties without prototype pollution", () => {
@@ -512,48 +530,51 @@ describe("prompt cache observability", () => {
       cacheWrite: 0,
       cacheTelemetry: { state: "unavailable" },
     } satisfies Partial<Usage>,
-  ])("preserves the measured cache baseline across unavailable telemetry: %j", (missingUsage) => {
-    const sessionId = scopedKey("missing-cache-telemetry");
-    const observe = (usage: Partial<Usage> | undefined, changed: boolean) => {
-      const observer = createPromptCacheRequestObserver(
-        {
-          sessionId,
-          streamStrategy: "test",
-          cacheRetention: changed ? "short" : "long",
-          transport: changed ? "websocket" : "sse",
-        },
-        () => {},
-      );
-      observer.onModelRequest(
-        { provider: "ollama", id: "local-model", api: "ollama" },
-        { systemPrompt: changed ? "changed prefix" : "stable prefix", messages: [] },
-      );
-      observer.onModelUsage(normalizeUsage(usage));
-      return observer.getObservation();
-    };
+  ])(
+    "preserves the measured cache baseline across unavailable telemetry: %j",
+    async (missingUsage) => {
+      const sessionId = scopedKey("missing-cache-telemetry");
+      const observe = async (usage: Partial<Usage> | undefined, changed: boolean) => {
+        const observer = createPromptCacheRequestObserver(
+          {
+            sessionId,
+            streamStrategy: "test",
+            cacheRetention: changed ? "short" : "long",
+            transport: changed ? "websocket" : "sse",
+          },
+          () => {},
+        );
+        await observer.onModelRequest(
+          { provider: "ollama", id: "local-model", api: "ollama" },
+          { systemPrompt: changed ? "changed prefix" : "stable prefix", messages: [] },
+        );
+        observer.onModelUsage(normalizeUsage(usage));
+        return observer.getObservation();
+      };
 
-    observe({ cacheRead: 8_000 }, false);
-    expect(observe(missingUsage, true)).toMatchObject({
-      broke: false,
-      cacheRead: undefined,
-      cacheWrite: undefined,
-    });
-    observe(missingUsage, true);
-    expect(observe({ cacheRead: 2_000 }, true)).toMatchObject({
-      broke: true,
-      previousCacheRead: 8_000,
-      cacheRead: 2_000,
-      changes: [
-        { code: "cacheRetention", detail: "long -> short" },
-        { code: "transport", detail: "sse -> websocket" },
-        { code: "systemPrompt", detail: "system prompt digest changed" },
-      ],
-    });
-    expect(observe({ input: 10_000, cacheRead: 0 }, true)).toMatchObject({
-      broke: true,
-      previousCacheRead: 2_000,
-      cacheRead: 0,
-      changes: null,
-    });
-  });
+      await observe({ cacheRead: 8_000 }, false);
+      expect(await observe(missingUsage, true)).toMatchObject({
+        broke: false,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+      });
+      await observe(missingUsage, true);
+      expect(await observe({ cacheRead: 2_000 }, true)).toMatchObject({
+        broke: true,
+        previousCacheRead: 8_000,
+        cacheRead: 2_000,
+        changes: [
+          { code: "cacheRetention", detail: "long -> short" },
+          { code: "transport", detail: "sse -> websocket" },
+          { code: "systemPrompt", detail: "system prompt digest changed" },
+        ],
+      });
+      expect(await observe({ input: 10_000, cacheRead: 0 }, true)).toMatchObject({
+        broke: true,
+        previousCacheRead: 2_000,
+        cacheRead: 0,
+        changes: null,
+      });
+    },
+  );
 });

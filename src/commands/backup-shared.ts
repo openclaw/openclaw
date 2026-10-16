@@ -14,6 +14,7 @@ import {
   resolveBackupConfigCapture,
   type BackupConfigCapture,
 } from "../infra/backup-config-capture.js";
+import { assertHomogeneousDatabaseEngines } from "../infra/database-engine/registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { assertNotUpdateCapturePath, isUpdateCapturePath } from "../infra/update-capture-paths.js";
 import {
@@ -540,6 +541,12 @@ export async function resolveBackupPlanFromDisk(
     return await resolveBackupPlanFromState(params);
   }
   assertNotUpdateCapturePath(resolveOpenClawStateSqlitePath(), resolveStateDir());
+  // Admit the engine choice without opening state before its stable discovery snapshot.
+  const configSnapshot = await createConfigIO({
+    observe: false,
+    pluginValidation: "core-only",
+  }).readConfigFileSnapshot();
+  assertHomogeneousDatabaseEngines(configSnapshot.config, "backup");
   return await withOpenClawStateDatabaseReadSnapshot(() => resolveBackupPlanFromState(params));
 }
 
@@ -568,6 +575,7 @@ async function resolveBackupPlanFromState(params: {
   // Backup discovery must not initialize or migrate the state DB before snapshot validation.
   const configRead = await createConfigIO({ observe: false }).readConfigFileSnapshotForWrite();
   const configSnapshot = configRead.snapshot;
+  assertHomogeneousDatabaseEngines(configSnapshot.config, "backup");
   const discoverySnapshot =
     (await resolveLegacyConfigSnapshotForBackup(configSnapshot)) ?? configSnapshot;
   const configCapture = await resolveBackupConfigCapture(configRead);

@@ -274,7 +274,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: async auth-provider preparation for Codex and voice model-session patches.
       // +1: isHostNoticePayload for agent-to-agent reply filtering.
       // +1: approved jsonPathValue on the experimental database-engine worker entrypoint.
-      3761,
+      // +11: approved experimental engine-owned search capabilities on existing entrypoints.
+      // +1: approved boot-selected family lookup on the database-engine runtime.
+      3773,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -310,7 +312,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the same prepareAuthProfileProvider operation on model-session-runtime.
       // +1: the same host-notice classifier on reply-payload.
       // +1: the same approved database-engine JSON path helper.
-      2196,
+      // +1: the same engine-owned search admission helper.
+      // +1: the same boot-selected family lookup.
+      2198,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

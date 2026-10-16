@@ -245,14 +245,23 @@ export function shouldPreferExplicitConfigApiKeyAuth(
   );
 }
 
-/** True when configured or prepared route facts prove a local no-auth provider. */
+/** True when configured or prepared route facts prove a no-auth provider. */
 export function hasSyntheticLocalProviderAuthConfig(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
+  modelApi?: string;
   route?: { api?: string | null; baseUrl?: unknown };
 }): boolean {
   const providerConfig = resolveMergedModelProviderConfig(params.cfg, params.provider);
   const authOverride = resolveProviderAuthOverride(params.cfg, params.provider);
+  const route = params.route ?? {
+    api: params.modelApi ?? providerConfig?.api,
+    baseUrl: providerConfig?.baseUrl,
+  };
+  // Only this adapter clears the SDK-generated bearer header for the marker.
+  if (authOverride === "none") {
+    return route.api === "openai-completions" && typeof route.baseUrl === "string";
+  }
   if (authOverride && authOverride !== "api-key") {
     return false;
   }
@@ -262,9 +271,8 @@ export function hasSyntheticLocalProviderAuthConfig(params: {
   ) {
     return false;
   }
-  const route = params.route ?? providerConfig;
   return (
-    typeof route?.api === "string" &&
+    typeof route.api === "string" &&
     route.api.trim().length > 0 &&
     typeof route.baseUrl === "string" &&
     isLocalAuthProviderBaseUrl(route.baseUrl)
@@ -277,7 +285,13 @@ export function resolveProviderAuthOverride(
 ): ModelProviderAuthMode | undefined {
   const entry = resolveMergedModelProviderConfig(cfg, provider);
   const auth = entry?.auth;
-  if (auth === "api-key" || auth === "aws-sdk" || auth === "oauth" || auth === "token") {
+  if (
+    auth === "api-key" ||
+    auth === "aws-sdk" ||
+    auth === "oauth" ||
+    auth === "token" ||
+    auth === "none"
+  ) {
     return auth;
   }
   return undefined;

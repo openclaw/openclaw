@@ -44,10 +44,7 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "./context.ts";
-import {
-  COMMAND_PALETTE_ELEMENT,
-  type LazyCustomElementRequestController,
-} from "./lazy-custom-element.ts";
+import { COMMAND_PALETTE_ELEMENT, type LazyCustomElementRequests } from "./lazy-custom-element.ts";
 import {
   persistLazyShellAction,
   readLazyShellAction,
@@ -103,7 +100,7 @@ type ShellLifecycle = Pick<ShellChromeEventState, "connect" | "disconnect">;
 type ShellLazySurfaceState = ShellKeyboardState &
   ShellLifecycle & {
     commandPaletteElement: TestOptionalCustomElement;
-    lazyCustomElements: LazyCustomElementRequestController;
+    lazyCustomElements: LazyCustomElementRequests;
     openPalette: () => void;
     restorePendingLazyAction: () => void;
   };

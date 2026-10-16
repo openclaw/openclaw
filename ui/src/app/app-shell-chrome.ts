@@ -94,7 +94,7 @@ export interface ShellChromeHost extends ShellNewSessionHost, ShellPanelHost {
   navDrawerOpen: boolean;
   desktopNavigationExpanded: boolean;
   navDrawerTrigger: HTMLElement | null;
-  nativeHistoryState: NativeHistoryState;
+  setNativeHistoryState(state: NativeHistoryState): void;
   commandPaletteTarget: CommandPaletteTargetDetail | undefined;
   requestUpdate(): void;
   closeNavDrawer(options?: { restoreFocus?: boolean }): void;
@@ -131,7 +131,7 @@ export class ShellChromeOwner {
     // One connection owns all three targets; abort removes exactly its listeners.
     const options = { signal: this.listeners.signal };
     const host = this.host;
-    host.nativeHistoryState = readNativeHistoryState();
+    host.setNativeHistoryState(readNativeHistoryState());
     host.element.addEventListener(
       COMMAND_PALETTE_TARGET_EVENT,
       this.handleCommandPaletteTarget,
@@ -331,7 +331,7 @@ export class ShellChromeOwner {
     if (typeof detail?.canGoBack !== "boolean" || typeof detail.canGoForward !== "boolean") {
       return;
     }
-    this.host.nativeHistoryState = detail;
+    this.host.setNativeHistoryState(detail);
   };
 
   readonly handleWindowResize = (): void => {
@@ -600,8 +600,7 @@ export class ShellChromeOwner {
     this.requestLazyElement(KEYBOARD_SHORTCUTS_ELEMENT, descriptor);
   };
 
-  // Open controls own Escape. Slotted items hide their menu/listbox in shadow DOM,
-  // so recognize the open control host before Settings can consume the key.
+  // Open overlays and editable controls own Escape before Settings.
   shouldIgnoreSettingsEscape(event: KeyboardEvent): boolean {
     const host = this.host;
     const overlaySnapshot = host.context?.overlays.snapshot;
@@ -620,7 +619,7 @@ export class ShellChromeOwner {
     const control =
       target instanceof Element
         ? target.closest(
-            "input, textarea, select, wa-select[open], wa-dropdown[open], [contenteditable], dialog, [role='dialog'], [role='menu'], [role='listbox']",
+            "input, textarea, select, [contenteditable], dialog, [role='dialog'], [role='menu'], [role='listbox']",
           )
         : null;
     // The drawer owns Escape; its own dialog role is not a nested modal.
@@ -658,7 +657,7 @@ export class ShellChromeOwner {
     if (
       !event ||
       this.host.lazyCustomElements.visibleState ||
-      this.commandPaletteLoading.waitingForComposition
+      this.commandPaletteLoading.waitingForComposition()
     ) {
       return;
     }

@@ -253,49 +253,33 @@ describe("canonical shared-state worker admission", () => {
     },
   );
 
-  it.each(["Web Push", "GitHub publication"] as const)(
-    "keeps writer inspection and the first %s operation in the same actor",
-    async (operation) => {
-      const captured = context();
-      await seedMetadata(captured);
-      const reopened = captureOpenClawStateWorkerContext(databaseOptions(captured));
-      const messages = vi.spyOn(Worker.prototype, "postMessage");
-      await runOpenClawStateWorkerOperation(
-        reopened,
-        async (scope) => {
-          expect(await scope.execute(readBindingApprovals)).toEqual([]);
-          const actorWorker = messages.mock.contexts[0];
-          expect(actorWorker).toBeInstanceOf(Worker);
-          messages.mockClear();
-          if (operation === "Web Push") {
-            expect(
-              await scope.execute({
-                type: "webPush.listTerminalWebPushApprovalDeliveryIds",
-                input: {},
-              }),
-            ).toEqual({ approvalIds: [], nextAfterApprovalId: null, throughApprovalId: null });
-          } else {
-            expect(
-              await scope.execute({
-                type: "githubRepository.personalPending",
-                input: {
-                  ownerProfileId: "profile-first-use",
-                  sessionKey: "agent:main:github-first-use",
-                  agentId: "main",
-                },
-              }),
-            ).toBeUndefined();
-          }
-          expect(messages.mock.contexts.length).toBeGreaterThan(0);
-          expect(messages.mock.contexts.every((worker) => worker === actorWorker)).toBe(true);
-          expect(await scope.execute(readBindingApprovals)).toEqual([]);
-        },
-        { existingOnly: true },
-      );
-      await closeOpenClawStateDatabaseAsync();
-      messages.mockRestore();
-    },
-  );
+  it("keeps writer inspection and the first Web Push operation in the same actor", async () => {
+    const captured = context();
+    await seedMetadata(captured);
+    const reopened = captureOpenClawStateWorkerContext(databaseOptions(captured));
+    const messages = vi.spyOn(Worker.prototype, "postMessage");
+    await runOpenClawStateWorkerOperation(
+      reopened,
+      async (scope) => {
+        expect(await scope.execute(readBindingApprovals)).toEqual([]);
+        const actorWorker = messages.mock.contexts[0];
+        expect(actorWorker).toBeInstanceOf(Worker);
+        messages.mockClear();
+        expect(
+          await scope.execute({
+            type: "webPush.listTerminalWebPushApprovalDeliveryIds",
+            input: {},
+          }),
+        ).toEqual({ approvalIds: [], nextAfterApprovalId: null, throughApprovalId: null });
+        expect(messages.mock.contexts.length).toBeGreaterThan(0);
+        expect(messages.mock.contexts.every((worker) => worker === actorWorker)).toBe(true);
+        expect(await scope.execute(readBindingApprovals)).toEqual([]);
+      },
+      { existingOnly: true },
+    );
+    await closeOpenClawStateDatabaseAsync();
+    messages.mockRestore();
+  });
 
   it("leaves a missing database absent for existing-only inspection", async () => {
     const captured = context();
@@ -376,9 +360,14 @@ describe("canonical shared-state worker admission", () => {
         expect(
           await executeOpenClawStateWorker(alias, {
             type: "audit.writer.prune",
-            input: "events",
+            input: undefined,
           }),
-        ).toMatchObject({ status: "settled", error: expect.any(String) });
+        ).toEqual([
+          { status: "settled", error: expect.any(String) },
+          { status: "settled", error: expect.any(String) },
+          { status: "settled", error: expect.any(String) },
+          { status: "settled", error: expect.any(String) },
+        ]);
       } else {
         await expect(
           executeOpenClawStateWorker(

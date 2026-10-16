@@ -65,12 +65,12 @@ import {
   COMMAND_PALETTE_ELEMENT,
   DESKTOP_PANEL_ELEMENT,
   EXEC_APPROVAL_ELEMENT,
-  LazyCustomElementRequestController,
+  createLazyCustomElementRequests,
   LINK_READER_PANEL_ELEMENT,
   type OptionalCustomElement,
   TERMINAL_PANEL_ELEMENT,
 } from "./lazy-custom-element.ts";
-import { LazyRenderer } from "./lazy-renderer.ts";
+import { createLazyRenderer } from "./lazy-renderer.ts";
 import { postNativeNavState, type NativeNavState } from "./native-nav-state.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
@@ -92,7 +92,7 @@ export class ShellOwner
   readiness: ControlUiReadiness | undefined;
   onboarding = false;
   private readonly cleanups: Array<() => void> = [];
-  readonly shellLayout = new ShellLayoutOwner(() => this.invalidate());
+  readonly shellLayout = new ShellLayoutOwner();
   readonly commandPaletteElement = COMMAND_PALETTE_ELEMENT;
   readonly terminalPanelElement = TERMINAL_PANEL_ELEMENT;
   readonly browserPanelElement = BROWSER_PANEL_ELEMENT;
@@ -104,7 +104,7 @@ export class ShellOwner
     label: t("onboarding.memoryImport.title"),
     loadModule: () => import("../components/onboarding-memory-import.ts"),
   } satisfies OptionalCustomElement;
-  readonly lazyCustomElements = new LazyCustomElementRequestController(
+  readonly lazyCustomElements = createLazyCustomElementRequests(
     this,
     () => this.shellChrome.cancelPendingLazyAction(),
     (canReload) => this.shellChrome.retryPendingLazyAction(canReload),
@@ -156,10 +156,10 @@ export class ShellOwner
   readonly settingsPreloadTimers = new Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>();
   // Settings navigation is needed only after entering the settings takeover.
   // Keep its search, update-card, and sidebar rendering graph off the startup path.
-  readonly settingsSidebar = new LazyRenderer(this, () =>
+  readonly settingsSidebar = createLazyRenderer(() =>
     import("../components/settings-sidebar.tsx").then((module) => module.renderSettingsSidebar),
   );
-  readonly debugOverlayFrame = new LazyRenderer(this, () =>
+  readonly debugOverlayFrame = createLazyRenderer(() =>
     import("../pages/debug/debug-overlay-frame.ts").then(
       (module) => module.renderPendingDebugOverlay,
     ),
@@ -172,7 +172,7 @@ export class ShellOwner
   // boot, so its template, icons, and strings stay off the startup chunk.
   // A rejected chunk must stay visible: the overlay is already open, so the
   // shell renders a recoverable failure instead of an empty dialog frame.
-  readonly devicePairSetup = new LazyRenderer(this, () =>
+  readonly devicePairSetup = createLazyRenderer(() =>
     import("../pages/devices/view-pairing.tsx").then((module) => module.DevicePairSetup),
   );
   private readonly shellNavigation = new ShellNavigationOwner(this);
@@ -254,7 +254,7 @@ export class ShellOwner
   get isConnected() {
     return this.element.isConnected;
   }
-  // Temporary callback ABI used by unported lazy-element and layout owners.
+  // Temporary callback ABI used by unported lazy-element and chrome owners.
   readonly requestUpdate = () => this.invalidate();
 
   replaceRuntime(runtime: ApplicationRuntime): void {
@@ -273,6 +273,7 @@ export class ShellOwner
   connect(): void {
     const context = this.context;
     this.resumePresentation();
+    this.cleanups.push(this.lazyCustomElements.subscribe(() => this.invalidate()));
     const runtime = this.runtime;
     if (context && runtime) {
       const watch = (
@@ -635,9 +636,6 @@ export class ShellOwner
     const context = this.context;
     if (!context) {
       return;
-    }
-    if (this.querySelector(".settings-sidebar__agent")) {
-      void context.agentIdentity.ensure([context.settingsAgentSelection.state.selectedId]);
     }
     if (this.workspaceChromeVisible) {
       this.shellChrome.panels.restore();

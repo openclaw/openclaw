@@ -63,6 +63,7 @@ import {
 } from "./update-command-recovery.js";
 import {
   collectServiceInspectionFailureFacts,
+  recordServiceReconciliationWarning,
   resolveMutableUpdateFailure,
   type MutableUpdateExecutionResult,
 } from "./update-command-result.js";
@@ -120,7 +121,7 @@ export async function executeMutableUpdate(
       : (params.packageInstallTarget?.manager ?? "unknown");
   if (opts.recovery) {
     throw new UpdatePreMutationError(
-      "rollback-state-unverified",
+      "update-recovery-pending",
       "Full-state checkpoint recovery is deferred.",
     );
   }
@@ -657,6 +658,13 @@ export async function executeMutableUpdate(
     }));
   }
 
+  if (originalManagedServiceRuntime && !originalManagedServiceRuntime.definition.runtimePin) {
+    recordServiceReconciliationWarning(
+      result,
+      originalManagedServiceRuntime.service.serviceEnv ?? {},
+      "runtime pins not yet migrated; preserved the current runtime; the post-update Doctor step migrates them",
+    );
+  }
   result = await settleMutableUpdateResult(params, {
     result,
     failure,

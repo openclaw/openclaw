@@ -191,8 +191,8 @@ no tracked work is active. Other idle liveness samples remain diagnostic events
 without escalating to a warning.
 
 The Gateway also emits an always-on `main-thread stall` warning after a synchronous
-callback blocks for more than one second. Each line names the longest-running
-known task segment from scheduled jobs, diagnostic phases, timeline spans, or
+callback blocks for at least 250 milliseconds. Each line names the longest-running
+known task segment from RPC handlers, scheduled jobs, diagnostic phases, timeline spans, or
 worker message handling, with elapsed and task milliseconds. Time awaiting I/O
 does not count as task execution. Labels cover the synchronous portion of explicit
 task scopes. Asynchronous continuations and unknown callbacks use best-effort unattributed
@@ -202,7 +202,14 @@ windows, the native histogram is disabled: an unscoped stall that finishes befor
 the next sampling deadline can go unreported. Explicit task scopes and overdue
 idle wakes remain observable. Process suspension
 can also produce an unattributed delay. Reporting is bounded to eight pending
-named stalls, with an omitted count if that limit is exceeded. These warnings
+named stalls per sampling window, with an omitted count if that limit is exceeded.
+With the Prometheus plugin enabled, `openclaw_gateway_main_thread_stall_seconds`
+records these callback durations by `task`; its `_count` counts observed stalls.
+`openclaw_gateway_main_thread_stalls_dropped_total` counts observations omitted
+by the pending limit. Unattributed event-loop window delays remain a separate
+metric because a delayed window can contain several short callbacks rather than
+one blocking task. RPC labels remain available even with diagnostics disabled.
+These warnings
 require neither an inspector connection nor a sampling profiler.
 
 Startup phases emit `diagnostic.phase.completed` events with wall-clock and
@@ -732,6 +739,11 @@ scavenges, major mark/sweep/compact collections, incremental work, and weak-refe
 processing. Counts and elapsed durations are grouped by main thread or bounded
 worker script kind, without per-GC log lines. Instrumented workers use their
 existing memory telemetry port and observe GC only while an exporter is interested.
+One native `GCProfiler` per isolate supplies batches on a one-second timer, shared
+with the Code Mode thrash guard. It does not schedule JavaScript after each GC:
+per-collection `PerformanceObserver` delivery can keep an idle worker collecting.
+Native counts and durations remain exact; callback flags are unavailable, so the
+`reason` label is `other`.
 Worker GC batches ride the next heap sample (normally every 30 seconds), with a
 flush after 256 pending samples or on orderly worker shutdown. Individual collection counts and durations
 are preserved; worker histogram updates can lag by one sampling interval.
@@ -748,16 +760,17 @@ The record includes the window count and duration plus isolate-local `heapUsed`,
 `heapTotal`, `external`, `arrayBuffers`, and `heapSizeLimitBytes`. ArrayBuffers are
 included in external memory. These warnings use the existing memory port and do
 not require an exporter; they contain no guest source, arguments, or results.
-Attribution describes the cell active when the observer delivers the batch, not
-proof that the cell caused every collection in the window. Node's observer cannot
+Attribution describes the cell active when the sampler delivers the batch, not
+proof that the cell caused every collection in the window. The sampler cannot
 report while synchronous guest execution blocks its event loop.
 
 The first storm starts a five-second allocation and CPU capture in the affected
 worker, at most once per worker per hour (failed attempts also consume the hour).
 Heap sampling uses a 256 KiB interval and includes objects collected by both major
 and minor GC, so short-lived allocation churn remains visible. CPU sampling uses
-a 10 ms interval over the same window. No profiler or capture timer runs before
-a storm. Active tracing, debugging, or profiling can make capture unavailable.
+a 10 ms interval over the same window. CPU and allocation profiling start only
+after a storm; periodic GC sampling remains active. Active tracing, debugging,
+or profiling can make capture unavailable.
 
 The Gateway writes sanitized results to `<state>/diagnostics/code-mode-gc-*`
 as `.heapprofile.json` and `.cpuprofile.json`. The completion warning lists

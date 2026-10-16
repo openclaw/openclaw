@@ -2,7 +2,7 @@ import { readConfigFileSnapshot } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
-import { resolveDatabaseEngineInput } from "../infra/database-engine/config.js";
+import { resolveDatabaseEngineSelection } from "../infra/database-engine/config.js";
 import {
   getDatabaseEngineSelection,
   installDatabaseEngineSelection,
@@ -51,6 +51,5 @@ export async function installGatewayDatabaseEngine(
       isolateEnv: true,
       pluginValidation: "core-only",
     }));
-  const input = await resolveDatabaseEngineInput(selected.config);
-  installDatabaseEngineSelection({ input });
+  installDatabaseEngineSelection(await resolveDatabaseEngineSelection(selected.config));
 }

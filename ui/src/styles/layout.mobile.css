@@ -98,19 +98,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   touch-action: none;
 }
 
-.shell--mobile-nav .shell-nav:is([data-nav-drawer-dragging], [data-nav-drawer-settling]) {
-  will-change: transform;
-}
-
-.shell--mobile-nav .shell-nav-backdrop:is([data-nav-drawer-dragging], [data-nav-drawer-settling]) {
-  will-change: opacity;
-}
-
-.shell--mobile-nav .shell-nav[data-nav-drawer-dragging],
-.shell--mobile-nav .shell-nav-backdrop[data-nav-drawer-dragging] {
-  transition: none;
-}
-
 .shell--mobile-nav.shell--nav-drawer-open .shell-nav-backdrop {
   pointer-events: auto;
   visibility: visible;
@@ -473,7 +460,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
 
 /* ≤768px: hide Tokens (col 6); tighten padding; stack pagination */
 @media (max-width: 768px) {
-  wa-dropdown.session-menu {
+  .session-menu__panel {
     --menu-item-height: 40px;
     --menu-padding: 3px;
   }

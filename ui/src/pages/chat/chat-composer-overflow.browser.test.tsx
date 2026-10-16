@@ -2,8 +2,7 @@ import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, server, userEvent } from "vitest/browser";
 import type { SessionGoal } from "../../api/types.ts";
-import "@awesome.me/webawesome/dist/styles/themes/default.css";
-import { SolidContentPresentation } from "../../lit/solid-content.tsx";
+import { ContentPresentation } from "../../lib/solid/presentation.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { mountSolid as mountSolidProps } from "../../test-helpers/solid-render.tsx";
 import { flush } from "../../test-helpers/solid-settle.ts";
@@ -47,18 +46,18 @@ describe("composer overflow presentation", () => {
 
   function ComposerFixture(props: ComposerFixtureProps) {
     return (
-      <SolidContentPresentation value={presented}>
+      <ContentPresentation value={presented}>
         {props.thread ? <div class="chat-thread" /> : null}
         <ChatComposer {...props.input} renderRevision={props.revision} />
-      </SolidContentPresentation>
+      </ContentPresentation>
     );
   }
 
   function AttachmentFixture(props: ChatAttachmentControlsProps) {
     return (
-      <SolidContentPresentation value={presented}>
+      <ContentPresentation value={presented}>
         <AttachmentPreview {...props} />
-      </SolidContentPresentation>
+      </ContentPresentation>
     );
   }
 

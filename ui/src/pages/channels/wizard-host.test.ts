@@ -1,3 +1,4 @@
+import { createRoot } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -5,7 +6,7 @@ import { createChannelCapability } from "../../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { ChannelWizardHost } from "./wizard-host.ts";
+import { createChannelSetup } from "./wizard-setup.ts";
 
 describe("channel wizard completion", () => {
   afterEach(() => {
@@ -62,10 +63,13 @@ describe("channel wizard completion", () => {
       await operation.promise;
     });
     const startWhatsApp = vi.spyOn(channels, "startWhatsApp").mockResolvedValue();
-    const host = new ChannelWizardHost({
-      getContext: () => currentContext,
-      requestUpdate: () => {},
-      clearSelection: () => {},
+    let dispose!: () => void;
+    const host = createRoot((stop) => {
+      dispose = stop;
+      return createChannelSetup({
+        getContext: () => currentContext,
+        clearSelection: () => {},
+      });
     });
     try {
       host.startSetup("whatsapp");
@@ -73,7 +77,7 @@ describe("channel wizard completion", () => {
       if (outcome === "closed") {
         host.close();
       } else if (outcome === "disconnected") {
-        host.cancelOnDisconnect();
+        dispose();
       } else if (outcome === "replaced") {
         host.startSetup("telegram");
       } else if (outcome === "context changed") {
@@ -86,15 +90,15 @@ describe("channel wizard completion", () => {
       if (outcome === "current") {
         expect(refresh).toHaveBeenCalledWith(true);
         expect(startWhatsApp).toHaveBeenCalledWith(false, "completed-account");
-        expect(host.whatsappAccountId).toBe("completed-account");
+        expect(host.whatsappAccountId()).toBe("completed-account");
       } else {
         expect(refresh).not.toHaveBeenCalled();
         expect(startWhatsApp).not.toHaveBeenCalled();
-        expect(host.whatsappAccountId).toBeUndefined();
+        expect(host.whatsappAccountId()).toBeUndefined();
       }
     } finally {
       operation.resolve();
-      host.cancelOnDisconnect();
+      dispose();
       await vi.runAllTimersAsync();
       channels.dispose();
       runtimeConfig.dispose();

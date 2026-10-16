@@ -56,11 +56,7 @@ function renderPreviewFact(value: string | number, label: string, secondary = fa
   );
 }
 
-function closeAgentFilePreview(event: Event, focusEditor = false) {
-  const button = event.currentTarget;
-  if (!(button instanceof HTMLElement)) {
-    return;
-  }
+function closeAgentFilePreview(button: HTMLButtonElement, focusEditor = false) {
   const modal = button.closest<OpenClawModalDialog>("openclaw-modal-dialog");
   if (!modal) {
     return;
@@ -191,11 +187,8 @@ export function AgentFiles(
                   aria-label={t("agents.files.addFile")}
                   value={""}
                   disabled={params.agentFilesLoading}
-                  onChange={(e: Event) => {
+                  onChange={(e) => {
                     const select = e.currentTarget;
-                    if (!(select instanceof HTMLSelectElement)) {
-                      return;
-                    }
                     const name = select.value;
                     select.value = "";
                     if (name) {
@@ -231,11 +224,8 @@ export function AgentFiles(
                         <button
                           class="btn btn--sm"
                           disabled={!hasContent()}
-                          onClick={(e: Event) => {
+                          onClick={(e) => {
                             const btn = e.currentTarget;
-                            if (!(btn instanceof HTMLElement)) {
-                              return;
-                            }
                             btn
                               .closest(".settings-group")
                               ?.querySelector<OpenClawModalDialog>("openclaw-modal-dialog")
@@ -283,11 +273,9 @@ export function AgentFiles(
                               : t("agents.files.loadHint")
                         }
                         value={draft()}
-                        onInput={(e: Event) => {
-                          if (e.currentTarget instanceof HTMLTextAreaElement) {
-                            params.onFileDraftChange(entry().name, e.currentTarget.value);
-                          }
-                        }}
+                        onInput={(e) =>
+                          params.onFileDraftChange(entry().name, e.currentTarget.value)
+                        }
                       />
                     </label>
                     <openclaw-modal-dialog
@@ -380,11 +368,8 @@ export function AgentFiles(
                                     class="btn btn--sm md-preview-icon-btn md-preview-expand-btn"
                                     aria-label={t("agents.files.expandPreview")}
                                     aria-pressed="false"
-                                    onClick={(e: Event) => {
+                                    onClick={(e) => {
                                       const btn = e.currentTarget;
-                                      if (!(btn instanceof HTMLElement)) {
-                                        return;
-                                      }
                                       const panel = btn.closest(".md-preview-dialog__panel");
                                       if (!panel) {
                                         return;
@@ -409,7 +394,7 @@ export function AgentFiles(
                                     type="button"
                                     class="btn btn--sm md-preview-icon-btn"
                                     aria-label={t("agents.files.closePreview")}
-                                    onClick={(event: Event) => closeAgentFilePreview(event)}
+                                    onClick={(event) => closeAgentFilePreview(event.currentTarget)}
                                   >
                                     <span aria-hidden="true">
                                       <Icon name="x" />
@@ -420,7 +405,7 @@ export function AgentFiles(
                             </div>
                             <div class="md-preview-dialog__meta">
                               <div
-                                class={`md-preview-dialog__chip ${preview().previewStatusClass}`}
+                                class={["md-preview-dialog__chip", preview().previewStatusClass]}
                                 data-priority="essential"
                               >
                                 <strong>{preview().previewStatusLabel}</strong>
@@ -454,7 +439,9 @@ export function AgentFiles(
                                 type="button"
                                 class="btn btn--sm"
                                 aria-label={t("agents.files.editFile")}
-                                onClick={(event: Event) => closeAgentFilePreview(event, true)}
+                                onClick={(event) =>
+                                  closeAgentFilePreview(event.currentTarget, true)
+                                }
                               >
                                 <Icon name="edit" /> {t("agents.files.editFile")}
                               </button>

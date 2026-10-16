@@ -438,30 +438,88 @@ describe("diagnostic-events", () => {
     );
   });
 
-  it("isolates nested diagnostic payloads from listener mutation", () => {
+  it("shares a frozen snapshot isolated from listener and producer mutation", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const usage = { total: 42 };
+    const events: DiagnosticEventPayload[] = [];
     const seen: Array<{ total: number | undefined; trusted: boolean }> = [];
     onInternalDiagnosticEvent((event) => {
+      events.push(event);
+      usage.total = 7;
       if (event.type === "model.usage") {
         event.usage.total = 0;
       }
     });
     onInternalDiagnosticEvent((event, metadata) => {
+      events.push(event);
       if (event.type === "model.usage") {
         seen.push({ total: event.usage.total, trusted: metadata.trusted });
       }
     });
+    onTrustedInternalDiagnosticEvent((event) => events.push(event));
 
-    emitTrustedDiagnosticEvent({
-      type: "model.usage",
-      usage: { total: 42 },
-    });
+    emitTrustedDiagnosticEvent({ type: "model.usage", usage });
 
+    expect(events).toHaveLength(3);
+    expect(events[1]).toBe(events[0]);
+    expect(events[2]).toBe(events[0]);
+    expect(usage.total).toBe(7);
     expect(seen).toEqual([{ total: 42, trusted: true }]);
     expectConsoleErrorPrefix(
       errorSpy,
       "[diagnostic-events] listener error type=model.usage seq=1: TypeError",
     );
+  });
+
+  it("keeps opaque plugin values isolated across listeners", () => {
+    const extra = {
+      map: new Map([["value", 42]]),
+      date: new Date(123),
+      set: new Set([42]),
+      array: Object.assign([1], { bytes: new Uint8Array([42]) }),
+    };
+    const eventInput = { type: "message.queued" as const, source: "plugin", extra };
+    onDiagnosticEvent((event) => {
+      const captured = (event as DiagnosticEventPayload & typeof eventInput).extra;
+      captured.map.set("value", 0);
+      captured.date.setTime(0);
+      captured.set.clear();
+      captured.array.bytes[0] = 0;
+    });
+    const observed: DiagnosticEventPayload[] = [];
+    onTrustedInternalDiagnosticEvent((event) => observed.push(event));
+
+    emitDiagnosticEvent(eventInput);
+
+    expect(observed).toHaveLength(1);
+    const captured = (observed[0] as DiagnosticEventPayload & typeof eventInput).extra;
+    for (const value of [captured, extra]) {
+      expect(value.map.get("value")).toBe(42);
+      expect(value.date.getTime()).toBe(123);
+      expect([...value.set]).toEqual([42]);
+      expect(value.array.bytes[0]).toBe(42);
+    }
+  });
+
+  it("freezes extra array properties and cyclic plugin payloads before sharing", () => {
+    const children = Object.assign([1], { extra: { value: 42 } });
+    const extra = { children, self: {} };
+    extra.self = extra;
+    const input = { type: "message.queued" as const, source: "plugin", extra };
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    onDiagnosticEvent((event) => {
+      (event as DiagnosticEventPayload & typeof input).extra.children.extra.value = 0;
+    });
+    const observed: DiagnosticEventPayload[] = [];
+    onDiagnosticEvent((event) => observed.push(event));
+
+    emitDiagnosticEvent(input);
+
+    const captured = (observed[0] as DiagnosticEventPayload & typeof input).extra;
+    expect(captured.children.extra.value).toBe(42);
+    expect(captured.self).toBe(captured);
+    expect(Object.isFrozen(captured.children.extra)).toBe(true);
+    expect(errors).toHaveBeenCalledOnce();
   });
 
   it("drops prototype-pollution keys during event enrichment", () => {

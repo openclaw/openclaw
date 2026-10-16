@@ -455,7 +455,7 @@ export type CodexModel = {
   description?: string | null;
   hidden: boolean;
   isDefault: boolean;
-  inputModalities: string[];
+  inputModalities?: string[];
   serviceTiers?: { id: string; name: string; description: string }[];
   supportedReasoningEfforts: CodexReasoningEffortOption[];
   defaultReasoningEffort?: string | null;
@@ -478,7 +478,6 @@ export type CodexGetAccountResponse = {
 };
 
 type CodexModelProviderCapabilitiesReadResponse = {
-  namespaceTools: boolean;
   imageGeneration: boolean;
   webSearch: boolean;
 };

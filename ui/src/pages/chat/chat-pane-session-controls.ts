@@ -10,13 +10,13 @@ import {
   readSessionMethodScopeAccess,
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
+import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import {
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
   type SessionPatch,
 } from "../../lib/sessions/index.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import { solidContent, type LegacyDirectiveResult } from "../../lit/solid-content.tsx";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
@@ -34,7 +34,10 @@ registerModelControlsEnglish();
 
 type SessionActionAccess = ReturnType<typeof readChatSessionActionAccess>;
 type SessionAction = keyof SessionActionAccess;
-type SessionActionCallbacks = Pick<ChatProps, "onAbort" | "onForkMessage" | "onRewindMessage">;
+type SessionActionCallbacks = Pick<
+  ChatProps,
+  "onAbort" | "onCompact" | "onForkMessage" | "onRewindMessage"
+>;
 
 type PendingPermissionChange = {
   expectedSessionId?: string;
@@ -137,7 +140,9 @@ export function renderChatPaneComposerControls(params: {
   onProviderSettings?: (provider: string) => void;
   onModelAccounts?: () => void;
 }): {
-  composerControls: LegacyDirectiveResult;
+  composerControls: Parameters<typeof ChatPaneModelControl>[0] & {
+    component: typeof ChatPaneModelControl;
+  };
   permissionPicker: ChatPermissionPickerProps;
 } {
   const {
@@ -232,7 +237,8 @@ export function renderChatPaneComposerControls(params: {
         }
       : selectedSession;
   return {
-    composerControls: solidContent(ChatPaneModelControl, {
+    composerControls: {
+      component: ChatPaneModelControl,
       model: {
         modelAuthStatusResult: state.modelAuthStatusResult,
         accountSelection,
@@ -308,8 +314,7 @@ export function renderChatPaneComposerControls(params: {
         onModelPickerOpen: () => refreshChatModelCatalogOnDemand(state),
         onModelPickerOpenChange: (open) => {
           state.chatModelPickerOpenSessionKey = open ? state.sessionKey : null;
-          // Closing also needs a render; catalog refresh only invalidates on open.
-          state.requestUpdate?.();
+          // The native picker already presents this transition.
         },
         onModelSelect: (next, targetSessionKey, agentRuntime) =>
           modelAccess.allowed && canPatch({ model: next, agentRuntime }, targetSessionKey)
@@ -320,7 +325,7 @@ export function renderChatPaneComposerControls(params: {
             ? switchChatSetting(state, { kind: "thinkingLevel", value: next }, targetSessionKey)
             : Promise.resolve(false),
       },
-    }),
+    },
     permissionPicker: {
       canSelectFull,
       defaultMode: agentDefaultPermissionMode,
@@ -427,7 +432,7 @@ export function createChatPaneSessionActionCallbacks(params: {
   const runId = state.chatRunId ?? null;
   const activeRunIds = runId ? undefined : selectedSession?.activeRunIds?.slice();
   const sessionAbortable = state.chatRunSessionAbortable === true;
-  const ownsAbortTarget = () => {
+  const ownsActionTarget = () => {
     const currentSession = selectedChatSessionRow(state);
     const snapshot = params.getSnapshot();
     const currentRecoveryScope =
@@ -483,10 +488,20 @@ export function createChatPaneSessionActionCallbacks(params: {
       params.sessionParticipationBlocked || !access.abort.allowed
         ? undefined
         : () => {
-            if (ownsAbortTarget() && requireCurrent("abort")) {
+            if (ownsActionTarget() && requireCurrent("abort")) {
               params.onAbort();
             }
           },
+    onCompact:
+      !params.sessionParticipationBlocked &&
+      !parseCatalogSessionKey(sessionKey) &&
+      access.compact.allowed
+        ? async () => {
+            if (ownsActionTarget() && requireCurrent("compact")) {
+              await state.handleSendChat("/compact");
+            }
+          }
+        : undefined,
     onRewindMessage: access.rewind.allowed
       ? (entryId) => (requireCurrent("rewind") ? params.onRewind(entryId) : false)
       : undefined,

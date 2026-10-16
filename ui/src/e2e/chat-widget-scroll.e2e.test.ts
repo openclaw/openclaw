@@ -42,7 +42,15 @@ async function swipe(
         // Preserve physical gesture velocity independently of CDP round-trip latency.
         timestamp: timestamp + step * 0.016,
       });
-      moves.push(await thread.evaluate((element) => element.scrollTop));
+      // CDP acknowledgment can precede the renderer's scroll offset update.
+      moves.push(
+        await thread.evaluate(
+          (element) =>
+            new Promise<number>((resolve) => {
+              requestAnimationFrame(() => resolve(element.scrollTop));
+            }),
+        ),
+      );
     }
     await cdp.send("Input.dispatchTouchEvent", {
       type: "touchEnd",

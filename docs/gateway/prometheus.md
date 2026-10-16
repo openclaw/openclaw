@@ -163,6 +163,8 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_session_recovery_age_seconds`                   | histogram | `action`, `active_work_kind`, `state`, `status`                                           |
 | `openclaw_gateway_event_loop_delay_max_seconds`           | histogram | none                                                                                      |
 | `openclaw_gateway_event_loop_observed_seconds_total`      | counter   | none                                                                                      |
+| `openclaw_gateway_main_thread_stall_seconds`              | histogram | `task`                                                                                    |
+| `openclaw_gateway_main_thread_stalls_dropped_total`       | counter   | none                                                                                      |
 | `openclaw_liveness_warning_total`                         | counter   | `reason`                                                                                  |
 | `openclaw_liveness_sessions`                              | gauge     | `state`                                                                                   |
 | `openclaw_liveness_event_loop_delay_p99_seconds`          | histogram | `reason`                                                                                  |
@@ -471,6 +473,22 @@ exporter's series cap, and process restarts can also lose observations. Watch
 the existing drop counters and the represented-duration counter when assessing
 coverage. Readiness decisions and persistent liveness-warning thresholds are unchanged.
 
+### Main-thread stall attribution
+
+`openclaw_gateway_main_thread_stall_seconds{task}` records individual main-thread
+tasks lasting at least 250 milliseconds. Its `_count` counts recorded tasks;
+`_sum` totals their elapsed seconds. Buckets are 0.25, 0.5, 1, 2.5, 5, and 10
+seconds, plus `+Inf`. The `task` label comes from code-owned work scopes and passes
+through the exporter's normal label sanitizer and series cap. It contains no
+request IDs or message content.
+
+`openclaw_gateway_main_thread_stalls_dropped_total` counts records omitted when
+the attribution buffer fills. It appears only after the first loss; the histogram
+appears only after the first recorded stall. Diagnostic queue drops and exporter
+restarts can also lose observations, so an absent histogram does not establish
+that no stalls occurred. Unlike event-loop window maxima, these observations
+attribute elapsed execution to a work scope; they do not provide CPU profiles.
+
 ### Worker request queues
 
 `openclaw_worker_queue_depth{kind}` reports requests awaiting dispatch across
@@ -677,14 +695,13 @@ cleanup pass. Normal result settlement still removes its own refs immediately.
 `openclaw_gc_duration_seconds` records elapsed garbage collection (GC) duration
 reported by Node.js for the main isolate and instrumented workers. `kind` is
 `scavenge` (minor), `mark_sweep_compact` (major), `incremental`, or
-`weak_processing`, taken from the native entry's `detail.kind`. `thread` is `main`
+`weak_processing`, taken from the native GC profile's collection type. `thread` is `main`
 or an allowlisted worker script basename; unknown worker scripts use `other`.
-The `reason` label maps Node's `detail.flags` to `none`, `forced`,
-`synchronous_phantom_processing`, `all_available_garbage`, `all_external_memory`,
-`schedule_idle`, or `construct_retained`. Combined flags, unknown flags, and
-SDK producers without flags use `other`. These are Node GC callback flags,
-not V8's complete internal reason for starting a collection; `none` means no
-callback flags were set, not that no collection occurred.
+Native sampling reports `reason="other"`: `GCProfiler` does not expose callback
+flags. SDK producers may still supply the bounded callback-flag labels `none`,
+`forced`, `synchronous_phantom_processing`, `all_available_garbage`,
+`all_external_memory`, `schedule_idle`, or `construct_retained`. These flags are
+not V8's complete internal reason for starting a collection.
 
 Code Mode Node workers also carry a reusable `slot` label from 1 through 64.
 The worker registry holds a slot until native worker exit, including pending
@@ -715,8 +732,10 @@ exports are suppressed in the meantime.
 The histogram is absent until the first observation, so absence does not prove
 zero GC. Queue drops, the series cap, observation gaps and process restarts limit
 coverage. Diagnostics disable/re-enable preserves the exporter's existing
-counters; restarting the exporter resets them as usual. No extra timer, GC
-trigger, trace attribution or application payload is collected. Worker GC batches
+counters; restarting the exporter resets them as usual. One shared native profiler
+per isolate drains on an unreferenced one-second timer instead of scheduling
+JavaScript after each GC. Sampling does not force GC or collect application payloads.
+Worker GC batches
 reuse the memory telemetry port; port closure stops its observer. Workers without
 that port, nested workers outside this registry, and runtimes without native GC
 entries are not covered. Worker exit can lose a final undelivered batch.

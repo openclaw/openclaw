@@ -38,6 +38,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { CommandLane } from "../../process/lanes.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   beginSessionWorkAdmission,
@@ -458,6 +459,7 @@ export async function admitReplyTurn(
               agentId: params.agentId,
               cfg: gatewayContext.getRuntimeConfig(),
               expectedSessionId: sessionId,
+              lane: params.kind === "visible" ? CommandLane.Main : undefined,
               expectedRecoveryRunId: admittedSessionEntry.restartRecoveryDeliveryRunId,
               expectedRecoverySourceRunId: admittedSessionEntry.restartRecoveryDeliverySourceRunId,
               gatewayRuntime: recoveryRuntime,

@@ -80,11 +80,11 @@ describe("archived session composer banner", () => {
       canSend: false,
       disabledBanner: {
         kind: "composer-replacement",
-        title: "This session ended during a restart.",
-        text: "Its transcript is safe.",
+        title: "This task was interrupted by a restart.",
+        text: "Your transcript is safe. Resume to continue in this session.",
         tone: "neutral",
         icon: "warning",
-        actionLabel: "Resume in new session",
+        actionLabel: "Resume",
         actionStyle: "primary",
         busy: true,
         busyLabel: "Resuming…",
@@ -100,10 +100,10 @@ describe("archived session composer banner", () => {
     expect(banner?.classList.contains("agent-chat__disabled-banner--neutral")).toBe(true);
     expect(banner?.querySelector(".agent-chat__disabled-banner-icon")).not.toBeNull();
     expect(banner?.querySelector(".agent-chat__disabled-banner-title")?.textContent).toContain(
-      "This session ended during a restart.",
+      "This task was interrupted by a restart.",
     );
     expect(banner?.querySelector(".agent-chat__disabled-banner-detail")?.textContent).toContain(
-      "Its transcript is safe.",
+      "Your transcript is safe. Resume to continue in this session.",
     );
     expect(action?.classList.contains("primary")).toBe(true);
     expect(action?.disabled).toBe(true);

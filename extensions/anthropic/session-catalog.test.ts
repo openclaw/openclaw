@@ -80,6 +80,7 @@ function captureCatalogProvider(runtime: PluginRuntime): SessionCatalogProvider 
   let provider: SessionCatalogProvider | undefined;
   const runtimeWithSession = {
     ...runtime,
+    config: runtime.config ?? { current: () => ({}) },
     agent: runtime.agent ?? { session: { listSessionEntries: () => [] } },
   } as PluginRuntime;
   registerClaudeSessionCatalog({
@@ -1700,37 +1701,7 @@ describe("Claude session catalog", () => {
     expect(transcriptAttempts).toBe(2);
   });
 
-  it("invalidates the assembled scan after same-size same-mtime atomic replacement", async () => {
-    const home = await createHome();
-    const watches = createClaudeCatalogWatchDriver(home);
-    const projectDir = projectFile(home);
-    const sessionId = "atomic-replacement";
-    const transcriptPath = projectFile(home, `${sessionId}.jsonl`);
-    const fixedTime = new Date("2026-07-20T12:00:00.000Z");
-    await writeUnindexedCliSessions(home, { [sessionId]: "Alpha" });
-    await fs.utimes(transcriptPath, fixedTime, fixedTime);
-    await fs.utimes(projectDir, fixedTime, fixedTime);
-    const originalStat = await fs.stat(transcriptPath);
-    expect((await listLocalClaudeSessionPage({}, home)).sessions[0]?.name).toBe("Alpha");
-    watches.arm();
-    await listLocalClaudeSessionPage({}, home);
-
-    const replacementPath = path.join(projectDir, "replacement.tmp");
-    await fs.writeFile(replacementPath, `${JSON.stringify(sdkCliMessage(sessionId, "Bravo"))}\n`);
-    await fs.utimes(replacementPath, fixedTime, fixedTime);
-    await fs.rename(replacementPath, transcriptPath);
-    await fs.utimes(projectDir, fixedTime, fixedTime);
-    const replacementStat = await fs.stat(transcriptPath);
-    expect({ mtimeMs: replacementStat.mtimeMs, size: replacementStat.size }).toEqual({
-      mtimeMs: originalStat.mtimeMs,
-      size: originalStat.size,
-    });
-
-    watches.change(transcriptPath);
-    expect((await listLocalClaudeSessionPage({}, home)).sessions[0]?.name).toBe("Bravo");
-  });
-
-  it("keeps the metadata byte frontier in serial directory order under parallel stats", async () => {
+  it("bounds actual metadata reads in serial directory order under parallel stats", async () => {
     const home = await createHome();
     const projectDir = projectFile(home);
     await fs.mkdir(projectDir, { recursive: true });
@@ -1775,17 +1746,6 @@ describe("Claude session catalog", () => {
     const cold = await listLocalClaudeSessionPage({ limit: 100 }, home);
     expect(maxConcurrentLstats).toBeGreaterThan(1);
     expect(cold.sessions.map((session) => session.threadId).toSorted()).toEqual(expected);
-
-    const readdir = vi.spyOn(fs, "readdir");
-    await fs.utimes(projectDir, new Date(), new Date(Date.now() + 2_000));
-    await expectClaudeCatalogEventually(
-      home,
-      (page) => {
-        expect(page.sessions.map((session) => session.threadId).toSorted()).toEqual(expected);
-        expect(readdir).toHaveBeenCalledWith(projectDir);
-      },
-      { limit: 100 },
-    );
   });
 
   it("retries transient index reads without waiting for the file metadata to change", async () => {

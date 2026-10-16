@@ -8,7 +8,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { DiagnosticEventPayload } from "../infra/diagnostic-events.js";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { expectedNpmCommand } from "../test-utils/npm-command.js";
 import {
   createOpenClawTestState,
@@ -50,7 +49,6 @@ vi.mock("./install-security-scan.js", async () => {
 
 vi.resetModules();
 
-const installSourceUtils = await import("../infra/install-source-utils.js");
 const { installPluginFromGitSpec, parseGitPluginSpec } = await import("./git-install.js");
 const { onInternalDiagnosticEvent } = await import("../infra/diagnostic-events.js");
 
@@ -232,13 +230,14 @@ describe("installPluginFromGitSpec", () => {
       expect(result.git.ref).toBe("v1.2.3");
       expect(result.git.commit).toBe("abc123");
       const cloneArgv = commandArgvAt(0);
-      expect(cloneArgv.slice(0, 4)).toEqual([
+      expect(cloneArgv.slice(0, 5)).toEqual([
         "git",
         "clone",
+        "--no-hardlinks",
         "--",
         "https://github.com/acme/demo.git",
       ]);
-      expect(cloneArgv[4]).toContain("/repo");
+      expect(cloneArgv[5]).toContain("/.openclaw-install-stage-");
       expect(commandArgvAt(2)).toEqual(["git", "switch", "--detach", "--", "abc123"]);
       expect(commandArgvAt(4)).toEqual(
         expectedNpmCommand([
@@ -261,7 +260,7 @@ describe("installPluginFromGitSpec", () => {
       expect(runCommandWithTimeoutMock.mock.calls[4]?.[1]?.timeoutMs).toBe(npmWork);
       const installOptions = firstInstallOptions();
       expect(installOptions?.expectedPluginId).toBe("demo");
-      expect(installOptions?.packageDir).toContain("/repo");
+      expect(installOptions?.packageDir).toBe(cloneArgv[5]);
       expect(installOptions?.installPolicyRequest?.kind).toBe("plugin-git");
       expect(installOptions?.installPolicyRequest?.requestedSpecifier).toBe(
         "git:github.com/acme/demo@v1.2.3",
@@ -352,9 +351,10 @@ describe("installPluginFromGitSpec", () => {
       expect(result.error).toContain("git installs disabled");
     }
     expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(2);
-    expect(commandArgvAt(0).slice(0, 6)).toEqual([
+    expect(commandArgvAt(0).slice(0, 7)).toEqual([
       "git",
       "clone",
+      "--no-hardlinks",
       "--depth",
       "1",
       "--",
@@ -366,7 +366,7 @@ describe("installPluginFromGitSpec", () => {
         pluginId: "demo",
         requestedSpecifier: "git:github.com/acme/demo",
         source: { kind: "git", authority: "third-party", mutable: true, network: true },
-        sourcePath: expect.stringContaining("/repo"),
+        sourcePath: expect.stringContaining("/.openclaw-install-stage-"),
       }),
     );
     expect(installPluginFromInstalledPackageDirMock).not.toHaveBeenCalled();
@@ -472,7 +472,7 @@ describe("installPluginFromGitSpec", () => {
         gitDir,
         normalizedSpec: "git:https://github.com/acme/demo.git",
       });
-      const cloneParent = await fs.realpath(path.dirname(path.dirname(path.resolve(cloneDest))));
+      const cloneParent = await fs.realpath(path.dirname(path.resolve(cloneDest)));
       const targetParent = await fs.realpath(path.dirname(persistentRepoDir));
       expect(cloneParent).toBe(targetParent);
     } finally {
@@ -480,7 +480,7 @@ describe("installPluginFromGitSpec", () => {
     }
   });
 
-  it("reviews the final copied artifact before publishing a deferred git install", async () => {
+  it("reviews the final prepared artifact before publishing a deferred git install", async () => {
     const gitDir = trackedTempDirs.make("openclaw-git-consent-stage-");
     runCommandWithTimeoutMock
       .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
@@ -519,7 +519,7 @@ describe("installPluginFromGitSpec", () => {
     if (!result.ok) {
       throw new Error(result.error);
     }
-    expect(reviewedArtifactDir).not.toBe(firstInstallOptions()?.packageDir);
+    expect(reviewedArtifactDir).toBe(firstInstallOptions()?.packageDir);
     expect(
       path.basename(expectDefined(reviewedArtifactDir, "reviewed artifact test invariant")),
     ).toMatch(/^\.openclaw-install-stage-/);
@@ -556,7 +556,7 @@ describe("installPluginFromGitSpec", () => {
           onBeforePluginArtifactCommit: async ({
             stagedArtifactDir,
           }: PluginInstallArtifactConsentRequest) => {
-            expect(stagedArtifactDir).not.toBe(firstInstallOptions()?.packageDir);
+            expect(stagedArtifactDir).toBe(firstInstallOptions()?.packageDir);
             throw consentRejection;
           },
         }),
@@ -570,53 +570,6 @@ describe("installPluginFromGitSpec", () => {
         }),
       ),
     ).rejects.toThrow();
-  });
-
-  it("falls back to the OpenClaw temp root when target workspace creation fails", async () => {
-    const gitDir = trackedTempDirs.make("openclaw-git-install-stage-fallback-");
-    runCommandWithTimeoutMock
-      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
-      .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" })
-      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
-    mockSuccessfulPackageInstall();
-    const workspaceSpy = vi
-      .spyOn(installSourceUtils, "withInstallWorkspace")
-      .mockRejectedValueOnce(Object.assign(new Error("read-only filesystem"), { code: "EROFS" }));
-
-    try {
-      const result = await installPluginFromGitSpec({
-        spec: "git:github.com/acme/demo",
-        gitDir,
-      });
-
-      expect(result.ok).toBe(true);
-      const cloneWorkspaceCalls = workspaceSpy.mock.calls.filter(
-        ([prefix]) => prefix === "openclaw-git-plugin-",
-      );
-      expect(cloneWorkspaceCalls).toHaveLength(2);
-      const targetRoot = cloneWorkspaceCalls[0]?.[2]?.rootDir;
-      const persistentRepoDir = expectedGitRepoDir({
-        gitDir,
-        normalizedSpec: "git:https://github.com/acme/demo.git",
-      });
-      expect(await fs.realpath(expectDefined(targetRoot, "targetRoot test invariant"))).toBe(
-        await fs.realpath(path.dirname(persistentRepoDir)),
-      );
-      expect(cloneWorkspaceCalls[1]?.[2]).toBeUndefined();
-      const cloneArgv = commandArgvAt(0);
-      const cloneWorkspace = path.dirname(
-        path.resolve(expectDefined(cloneArgv.at(-1), "clone destination test invariant")),
-      );
-      expect(path.basename(cloneWorkspace)).toMatch(/^openclaw-git-plugin-/);
-      expect(path.dirname(cloneWorkspace)).toBe(
-        await fs.realpath(resolvePreferredOpenClawTmpDir()),
-      );
-      expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(3);
-      expect(installPluginFromInstalledPackageDirMock).toHaveBeenCalledTimes(1);
-      await expect(fs.access(cloneWorkspace)).rejects.toThrow();
-    } finally {
-      workspaceSpy.mockRestore();
-    }
   });
 
   it("keeps dry-run clone staging out of managed state", async () => {

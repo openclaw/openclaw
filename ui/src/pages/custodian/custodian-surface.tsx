@@ -18,7 +18,7 @@ import { formatUiExternalText } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
-import { defineSolidBridge, LitContent, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import "../../styles/chat/startup-layout.css";
 import "../../styles/chat/grouped.css";
 import "../../styles/chat/layout.css";
@@ -32,7 +32,7 @@ import {
   disconnectTextareaOverflowObserver,
   observeTextareaOverflow,
 } from "../chat/components/chat-composer-dom.ts";
-import { renderChatDivider } from "../chat/components/chat-divider.ts";
+import { ChatDivider } from "../chat/components/chat-divider.tsx";
 import { MessageGroup } from "../chat/components/chat-message-group-view.tsx";
 import { CustodianAlertCard } from "./custodian-alert-card.tsx";
 import { custodianAlertStore } from "./custodian-alert-store.ts";
@@ -94,15 +94,13 @@ function TranscriptEntry(props: {
         />
       </Show>
       <Show when={props.message.id === props.store().earlierBoundaryAfterId}>
-        <LitContent
-          render={() =>
-            renderChatDivider({
-              kind: "divider",
-              key: "custodian-earlier",
-              label: t("custodian.earlier"),
-              timestamp: props.message.at,
-            })
-          }
+        <ChatDivider
+          item={{
+            kind: "divider",
+            key: "custodian-earlier",
+            label: t("custodian.earlier"),
+            timestamp: props.message.at,
+          }}
         />
       </Show>
       <Show when={question() && !props.store().dismissedQuestions.has(questionKey())}>

@@ -108,19 +108,15 @@ function formatVerificationSasNotice(summary: MatrixVerificationSummary): string
   if (!sas) {
     return null;
   }
-  const emojiLine =
-    Array.isArray(sas.emoji) && sas.emoji.length > 0
-      ? `SAS emoji: ${sas.emoji
-          .map(
-            ([emoji, name]) =>
-              `${normalizeNullableString(emoji) ?? "?"} ${normalizeNullableString(name) ?? "?"}`,
-          )
-          .join(" | ")}`
-      : null;
-  const decimalLine =
-    Array.isArray(sas.decimal) && sas.decimal.length === 3
-      ? `SAS decimal: ${sas.decimal.join(" ")}`
-      : null;
+  const emojiLine = sas.emoji?.length
+    ? `SAS emoji: ${sas.emoji
+        .map(
+          ([emoji, name]) =>
+            `${normalizeNullableString(emoji) ?? "?"} ${normalizeNullableString(name) ?? "?"}`,
+        )
+        .join(" | ")}`
+    : null;
+  const decimalLine = sas.decimal ? `SAS decimal: ${sas.decimal.join(" ")}` : null;
   if (!emojiLine && !decimalLine) {
     return null;
   }
@@ -152,11 +148,6 @@ function resolveVerificationFlowCandidates(params: {
   ]);
 }
 
-function resolveSummaryRecency(summary: MatrixVerificationSummary): number {
-  const ts = Date.parse(summary.updatedAt ?? "");
-  return Number.isFinite(ts) ? ts : 0;
-}
-
 function isActiveVerificationSummary(summary: MatrixVerificationSummary): boolean {
   if (summary.completed) {
     return false;
@@ -164,7 +155,7 @@ function isActiveVerificationSummary(summary: MatrixVerificationSummary): boolea
   if (summary.phaseName === "cancelled" || summary.phaseName === "done") {
     return false;
   }
-  if (typeof summary.phase === "number" && summary.phase >= 4) {
+  if (summary.phase >= 4) {
     return false;
   }
   return true;
@@ -230,9 +221,10 @@ async function resolveVerificationSummaryForSignal(
   }
 
   // Fallback for DM flows where transaction IDs do not match room event IDs consistently.
-  const activeByUser = list
-    .filter((entry) => entry.otherUserId === params.senderId && isActiveVerificationSummary(entry))
-    .toSorted((a, b) => resolveSummaryRecency(b) - resolveSummaryRecency(a));
+  // The verification manager already orders summaries newest-first.
+  const activeByUser = list.filter(
+    (entry) => entry.otherUserId === params.senderId && isActiveVerificationSummary(entry),
+  );
   return (
     activeByUser.find((entry) => normalizeNullableString(entry.roomId) === params.roomId) ??
     activeByUser[0] ??
@@ -271,7 +263,7 @@ function trackBounded(set: Set<string>, value: string): boolean {
   set.add(value);
   if (set.size > MAX_TRACKED_VERIFICATION_EVENTS) {
     const oldest = set.values().next().value;
-    if (typeof oldest === "string") {
+    if (oldest !== undefined) {
       set.delete(oldest);
     }
   }

@@ -49,7 +49,8 @@ import {
 } from "./app-sidebar-session-types.ts";
 import { SessionOrganizerController } from "./session-organizer-controller.ts";
 import { SidebarAgentRoster, renderSidebarPinnedSession } from "./sidebar-agent-roster.tsx";
-import { SidebarContextController } from "./sidebar-context-controller.ts";
+import type { createSidebarScroll } from "./sidebar-context-controller.ts";
+import { equalSidebarContext, selectSidebarContext } from "./sidebar-context-state.ts";
 import { SidebarMenusController } from "./sidebar-menus-controller.tsx";
 import { SidebarPeopleController } from "./sidebar-people-controller.ts";
 import {
@@ -59,7 +60,6 @@ import {
 import { SidebarSnapshotController } from "./sidebar-snapshot-controller.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import { Icon } from "./solid/icon.tsx";
-import { NewSessionMenu } from "./solid/new-session-link.tsx";
 import { PanelRefreshStatus } from "./solid/panel-refresh-status.tsx";
 import { SessionTitlePlaceholder } from "./solid/session-title-placeholder.tsx";
 import { SidebarCommunityInvite } from "./solid/sidebar-community-invite.tsx";
@@ -176,10 +176,22 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   // dropped because the controller aligns from cumulative snapshots.
   private narration: SidebarSessionNarrationController | null = null;
   private narrationLoad: Promise<void> | null = null;
-  private readonly sidebarContext = new SidebarContextController(this);
   constructor(...args: ConstructorParameters<typeof AppSidebarSessionNavigationElement>) {
     super(...args);
     new SubscriptionsController(this)
+      .watch(
+        () => this.router,
+        (router, notify) => {
+          const stop = router.subscribeSelector(selectSidebarContext, notify, equalSidebarContext);
+          return () => {
+            stop();
+            this.contextualSidebar = undefined;
+          };
+        },
+        (router) => {
+          this.contextualSidebar = selectSidebarContext(router.getState());
+        },
+      )
       .effect(
         () => this.context?.chatSubmissions,
         (submissions) => submissions.subscribeCreate(() => this.requestUpdate()),
@@ -527,18 +539,13 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     );
   }
 
-  renderSidebar(Sessions: () => JSX.Element): JSX.Element {
+  renderSidebar(
+    Sessions: () => JSX.Element,
+    scroll: ReturnType<typeof createSidebarScroll>,
+  ): JSX.Element {
     const SidebarFrame = () => {
-      const rail = renderSidebarRail(this, () => (
-        <NewSessionMenu
-          basePath={this.basePath}
-          active={this.navigationVisible}
-          access={this.readNewSessionAccess()}
-          snapshotCards={this.sidebarSnapshot?.cards}
-          onShow={() => this.dismissTransientMenus()}
-          onOpen={(agentId) => this.requestOpenNewSession(agentId)}
-        />
-      ));
+      const scrollRef = scroll.createRef();
+      const rail = renderSidebarRail(this);
       const pages = renderSidebarPages(this);
       const toolbar = renderSessionListToolbar(this);
       const online = renderAppSidebarOnline(this);
@@ -561,8 +568,9 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
           <div class="sidebar-shell" onMouseDown={beginNativeWindowDragFromTopInset}>
             <div class="sidebar-shell__content">
               <div
-                class={`sidebar-shell__body sidebar-shell__body--scroll-${this.sessionData.sessionsScrollState}`}
-                onScroll={(event) => this.sidebarContext.handleScroll(event)}
+                ref={scrollRef}
+                class={["sidebar-shell__body", `sidebar-shell__body--scroll-${scroll.state()}`]}
+                onScroll={scroll.onScroll}
               >
                 <Show
                   when={this.navigationView === "pages"}

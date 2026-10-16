@@ -18,6 +18,7 @@ type ChildMessage = Exclude<
   {
     type:
       | "ready"
+      | "startup-failed"
       | "prepared"
       | "owned"
       | "pipe"

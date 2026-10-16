@@ -1,10 +1,5 @@
 import { hasOnlyAssistantReasoningContent } from "@openclaw/ai/internal/shared";
 import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import {
   hasAcceptedSessionSpawn,
@@ -13,7 +8,6 @@ import {
 } from "../../accepted-session-spawn.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
-import { collectTextContentBlocks } from "../../content-blocks.js";
 import { formatUserFacingAssistantErrorText } from "../../embedded-agent-helpers.js";
 import { renderAgentHarnessPreflightUserMessage } from "../../embedded-agent-helpers/user-facing-text.js";
 import type { MessagingToolSend } from "../../embedded-agent-messaging.types.js";
@@ -22,7 +16,7 @@ import { renderAssistantRequestFailureCopy } from "../../failover/assistant-requ
 import { resolveReplyFailoverFacts } from "../../failover/request-error-facts.js";
 import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
 import { buildProviderAuthRecoveryHint } from "../../provider-auth-recovery-hint.js";
-import type { AgentMessage } from "../../runtime/index.js";
+import { MISSING_REPLY_NOTICE_TEXT } from "../../reply-completion.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
   resolveSourceReplyDelivery,
@@ -40,16 +34,6 @@ import {
   type IncompleteTurnAttempt,
 } from "./incomplete-turn-classification.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
-
-type SilentToolResultAttempt = Pick<
-  EmbeddedRunAttemptResult,
-  | "clientToolCalls"
-  | "yieldDetected"
-  | "didSendDeterministicApprovalPrompt"
-  | "lastToolError"
-  | "messagesSnapshot"
-  | "toolMetas"
->;
 
 type RunLivenessAttempt = Pick<
   EmbeddedRunAttemptResult,
@@ -186,7 +170,7 @@ export function resolveIncompleteTurnPayloadText(params: {
         }))
       : undefined);
   if (params.hadPotentialSideEffects || params.attempt.replayMetadata.hadPotentialSideEffects) {
-    return `${promptFailureText ?? "⚠️ Agent couldn't generate a response."} Note: some tool actions may have already been executed — please verify before retrying.`;
+    return `${promptFailureText ?? MISSING_REPLY_NOTICE_TEXT} Note: some tool actions may have already been executed — please verify before retrying.`;
   }
   if (textToolCallFailureText) {
     return `${textToolCallFailureText} Please try again or use a model with native tool calling.`;
@@ -216,7 +200,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     promptFailureText ??
     (stopReason === "length"
       ? "⚠️ The model reached its output token limit before generating an answer. Please try again."
-      : "⚠️ Agent couldn't generate a response. Please try again.")
+      : MISSING_REPLY_NOTICE_TEXT)
   );
 }
 
@@ -295,72 +279,6 @@ export const YIELD_DIAGNOSTIC_TEXT =
 
 export const TRUNCATED_REPLY_NOTICE_TEXT =
   "⚠️ Reply truncated at the model's output token limit. The text above is partial — ask to continue it.";
-
-function readMessageTextContent(message: AgentMessage): string | undefined {
-  const content = (message as { content?: unknown }).content;
-  return normalizeOptionalString(
-    typeof content === "string"
-      ? content
-      : collectTextContentBlocks(content)
-          .map((item) => item.trim())
-          .filter((item) => item.length > 0)
-          .join("\n"),
-  );
-}
-
-function hasTrailingSilentToolResult(messages: readonly AgentMessage[]): boolean {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const message = messages[i];
-    if (!message) {
-      continue;
-    }
-    const role = normalizeLowercaseStringOrEmpty(message?.role);
-    if (role === "toolresult" || role === "tool_result" || role === "tool") {
-      if ((message as { isError?: boolean }).isError === true) {
-        return false;
-      }
-      const text =
-        readMessageTextContent(message) ??
-        normalizeOptionalString(
-          (message as { details?: { aggregated?: unknown } }).details?.aggregated,
-        );
-      return isSilentReplyText(text, SILENT_REPLY_TOKEN);
-    }
-    if (role === "assistant" && !readMessageTextContent(message)) {
-      continue;
-    }
-    return false;
-  }
-  return false;
-}
-
-/** Emits the silent-reply token for cron turns whose last successful tool result is silent. */
-export function resolveSilentToolResultReplyPayload(params: {
-  isCronTrigger: boolean;
-  payloadCount: number;
-  aborted: boolean;
-  timedOut: boolean;
-  attempt: SilentToolResultAttempt;
-}): { text: typeof SILENT_REPLY_TOKEN } | null {
-  if (
-    !params.isCronTrigger ||
-    params.payloadCount !== 0 ||
-    params.aborted ||
-    params.timedOut ||
-    (params.attempt.toolMetas?.length ?? 0) === 0 ||
-    params.attempt.clientToolCalls ||
-    params.attempt.yieldDetected ||
-    params.attempt.didSendDeterministicApprovalPrompt ||
-    params.attempt.lastToolError ||
-    (params.attempt.messagesSnapshot?.length ?? 0) === 0
-  ) {
-    return null;
-  }
-
-  return hasTrailingSilentToolResult(params.attempt.messagesSnapshot)
-    ? { text: SILENT_REPLY_TOKEN }
-    : null;
-}
 
 /**
  * Marks replay invalid whenever the recorded attempt might not be safe to

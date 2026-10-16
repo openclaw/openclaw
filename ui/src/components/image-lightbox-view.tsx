@@ -14,7 +14,7 @@ export function LightboxAction(props: {
 }) {
   return (
     <button
-      class={`action ${props.class}`}
+      class={["action", props.class]}
       type="button"
       aria-label={t(props.label)}
       aria-disabled={props.disabled ? "true" : "false"}

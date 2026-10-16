@@ -2,7 +2,7 @@
 import { endianness } from "node:os";
 import { constants, DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { writeMemoryVectors } from "./manager-vector-write.js";
+import { writeMemoryVectors } from "./manager-search-knn.test-support.js";
 
 function vectorHex(values: number[]): string {
   const view = new DataView(new ArrayBuffer(values.length * 4));

@@ -43,6 +43,7 @@ import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../state/openclaw-state-db-contract.js";
+import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import { needsOpenClawStateDatabaseSchemaRepair } from "../state/openclaw-state-db-fast-path.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveSchemaMigrationBackupTables } from "../state/schema-migration-backup-scope.js";
@@ -71,7 +72,11 @@ export async function backupDoctorMigrationDatabases(params: {
 > {
   const sharedPath = resolveOpenClawStateSqlitePath(params.env);
   const pending = new Set(params.pendingDatabasePaths);
-  if (existsSync(sharedPath) && needsOpenClawStateDatabaseSchemaRepair(sharedPath)) {
+  if (
+    !isStatePostgres() &&
+    existsSync(sharedPath) &&
+    needsOpenClawStateDatabaseSchemaRepair(sharedPath)
+  ) {
     pending.add(sharedPath);
   }
   if (pending.size === 0) {
@@ -81,9 +86,26 @@ export async function backupDoctorMigrationDatabases(params: {
   if (!maintenance?.ownsSchemaMaintenance) {
     throw new Error("Pre-migration SQLite backups require Doctor maintenance ownership.");
   }
+  if (isStatePostgres()) {
+    const { backupDoctorPostgresMigration } = await import("./doctor-postgres-migration.js");
+    const changes = await backupDoctorPostgresMigration(params.env, maintenance);
+    const nativePaths = [...pending].filter((pathname) => pathname !== sharedPath);
+    const native = await backupDoctorSqliteDatabases({
+      ...params,
+      pendingDatabasePaths: nativePaths,
+      databasePaths: params.databasePaths.filter((pathname) => pathname !== sharedPath),
+      authority: { assertCurrent: () => maintenance.assertAdmission() },
+      stateFamilyBackedUp: true,
+    });
+    return {
+      ...native,
+      changes: [...changes, ...native.changes],
+      versionMigrations: params.pendingMigrations,
+    };
+  }
   const migrationTables = new Map<string, readonly string[]>();
   // Shipped updater checkpoints and general Doctor repairs keep full images.
-  if (params.versionMigrationsOnly && !isUpdateDoctorLintPass(params.env)) {
+  if (params.versionMigrationsOnly && !isStatePostgres() && !isUpdateDoctorLintPass(params.env)) {
     for (const pathname of pending) {
       const migration = params.pendingMigrations?.find((entry) => entry.path === pathname);
       const tables = migration && resolveSchemaMigrationBackupTables(migration);
@@ -175,6 +197,7 @@ export async function backupDoctorSqliteDatabases(params: {
   repair?: { key: string; validate: (database: DatabaseSync) => void };
   verifiedSnapshots?: readonly BackupSqliteSnapshotFact[];
   migrationTables?: ReadonlyMap<string, readonly string[]>;
+  stateFamilyBackedUp?: true;
 }): Promise<MigrationMessages> {
   const pending = new Set(params.pendingDatabasePaths);
   if (pending.size === 0) {
@@ -183,7 +206,14 @@ export async function backupDoctorSqliteDatabases(params: {
   // The registry and migration receipts must roll back with their agent databases.
   const sharedPath = resolveOpenClawStateSqlitePath(params.env);
   if (existsSync(sharedPath)) {
-    pending.add(sharedPath);
+    if (isStatePostgres() && !params.stateFamilyBackedUp) {
+      throw new Error(
+        "PostgreSQL state requires an exact state-family backup before native database repairs. Run the Doctor migration backup phase first.",
+      );
+    }
+    if (!isStatePostgres()) {
+      pending.add(sharedPath);
+    }
   }
   const { authority } = params;
   authority.assertCurrent();

@@ -84,6 +84,25 @@ function captureReports(
   return { captured, services, routes, methods, scheduler };
 }
 
+async function requestReports(
+  methods: ReturnType<typeof captureReports>["methods"],
+  method = "team-reports.status",
+) {
+  const handler = methods.find(([name]) => name === method)![1];
+  const respond = vi.fn<Parameters<typeof handler>[0]["respond"]>();
+  await handler({
+    req: { type: "req", id: "report-read", method, params: {} },
+    params: {},
+    client: null,
+    isWebchatConnect: () => false,
+    respond,
+    get context(): never {
+      throw new Error("Stored report reads do not need Gateway runtime context");
+    },
+  });
+  return respond;
+}
+
 beforeEach(() => vi.clearAllMocks());
 afterEach(() => vi.restoreAllMocks());
 
@@ -104,7 +123,7 @@ describe("Team Reports registration", () => {
     "locates its %s worker from the selected runtime entry",
     async (_layout, entry, worker) => {
       const runtimeSource = path.resolve(entry);
-      const { services, scheduler } = captureReports(runtimeSource);
+      const { services, methods, scheduler } = captureReports(runtimeSource);
       const parsed = configRuntime.parseTeamReportsConfig(pluginConfig);
       vi.spyOn(configRuntime, "resolveTeamReportsConfig").mockResolvedValue({
         github: { ...parsed.github, token: "fixture-github-token", ignoreCommentPatterns: [] },
@@ -114,9 +133,13 @@ describe("Team Reports registration", () => {
       vi.mocked(createTeamReportsStore).mockRejectedValueOnce(stopBeforeOpening);
       await expect(
         services[0]!.start({ config, stateDir: "/unused", logger: console, scheduler }),
-      ).rejects.toBe(stopBeforeOpening);
+      ).resolves.toBeUndefined();
+      expect(await requestReports(methods)).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ message: stopBeforeOpening.message }),
+      );
       expect(createTeamReportsStore).toHaveBeenCalledWith({
-        config,
         stateDir: "/unused",
         workerModuleUrl: pathToFileURL(path.resolve(worker)),
       });
@@ -139,15 +162,74 @@ describe("Team Reports registration", () => {
       github: { ...parsed.github, token: "fixture-github-token", ignoreCommentPatterns: [] },
       people: [],
     });
-    const { services, scheduler } = captureReports();
+    const { services, methods, scheduler } = captureReports();
     const service = services[0]!;
     await scheduler.stop();
     await expect(
       service.start({ config, stateDir: directory, logger: console, scheduler }),
-    ).rejects.toThrow("scheduler cannot be started again");
+    ).resolves.toBeUndefined();
+    expect(await requestReports(methods)).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("scheduler cannot be started again"),
+      }),
+    );
     expect(close).toHaveBeenCalledOnce();
     await expect(store.listRuns()).rejects.toThrow("store is closed");
   });
+
+  it.each([false, true])(
+    "joins storage readiness for first use and shutdown (stop early: %s)",
+    async (stopEarly) => {
+      const { createTeamReportsStore: openStore } =
+        await vi.importActual<typeof import("./src/store.js")>("./src/store.js");
+      const store = await openStore({
+        stateDir: tempDirs.make("team-reports-readiness-"),
+        workerModuleUrl: resolveRuntimeWorkerUrl(teamReportsSqliteBackendEntrypoint),
+      });
+      onTestFinished(() => store.close());
+      const opening = Promise.withResolvers<typeof store>();
+      vi.mocked(createTeamReportsStore).mockReturnValueOnce(opening.promise);
+      const { services, methods, scheduler } = captureReports();
+      const service = services[0]!;
+      const context: OpenClawPluginServiceContextV2 = {
+        config,
+        stateDir: "unused",
+        scheduler,
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        serviceHealth: { reportFailure: vi.fn(), clearFailure: vi.fn() },
+      };
+      await service.start(context);
+      let replied = false;
+      const reading = requestReports(methods, "team-reports.list").then((result) => {
+        replied = true;
+        return result;
+      });
+      let stopped = false;
+      const stopping = stopEarly
+        ? Promise.resolve(service.stop?.(context)).then(() => {
+            stopped = true;
+          })
+        : undefined;
+      expect(replied).toBe(false);
+      expect(stopped).toBe(false);
+      opening.resolve(store);
+      const respond = await reading;
+      if (stopEarly) {
+        await stopping;
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "UNAVAILABLE" }),
+        );
+        await expect(store.listPeriods()).rejects.toThrow("store is closed");
+      } else {
+        expect(respond).toHaveBeenCalledWith(true, { periods: [] });
+        await service.stop?.(context);
+      }
+    },
+  );
 
   it("exposes reports through the authenticated tab, read methods, and admin generation method", () => {
     const { captured, services, routes, methods } = captureReports();
