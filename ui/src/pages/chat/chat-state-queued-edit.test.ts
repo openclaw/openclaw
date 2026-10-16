@@ -38,8 +38,8 @@ afterEach(() => {
 
 function createControllerFixture(withClient = false) {
   const controller = createChatState<ChatPageHost>({
-    invalidate: () => undefined,
-    committed: () => Promise.resolve(true),
+    requestUpdate: () => undefined,
+    updateComplete: Promise.resolve(true),
   });
   const dispose = controller.dispose;
   const state = createPageState(createInitializationContext(), controller.createRenderLifecycle(), {

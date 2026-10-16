@@ -30,7 +30,11 @@ import {
 } from "./composer-persistence-state.ts";
 import { ChatComposerPersistence, markChatComposerEdit } from "./composer-persistence.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
-import type { AfterCommitEffect, RenderLifecycle } from "./render-lifecycle.ts";
+import {
+  type AfterCommitEffect,
+  notifyRenderLifecycleForTest,
+  type RenderLifecycle,
+} from "./render-lifecycle.ts";
 import { hasDirectSessionRun } from "./run-lifecycle.ts";
 import { cancelChatScroll, scheduleCommittedChatScroll } from "./scroll.ts";
 
@@ -50,8 +54,8 @@ function transcriptSources(state: ChatPageHost): readonly unknown[] {
 
 export function createChatState<TState extends ChatPageHost>(
   renderer: {
-    invalidate: () => void;
-    committed: () => Promise<unknown>;
+    requestUpdate: () => void;
+    readonly updateComplete: Promise<unknown>;
   },
   onStateChange?: () => void,
   onQueuedMessageDiscarded?: (item: ChatQueueItem) => void,
@@ -264,6 +268,9 @@ export function createChatState<TState extends ChatPageHost>(
     },
 
     commitRender() {
+      if (renderLifecycleScope && isRenderLifecycleScopeActive(renderLifecycleScope)) {
+        notifyRenderLifecycleForTest(renderer, "commit");
+      }
       const pending = pendingScroll;
       pendingScroll = undefined;
       if (stateValue && pending) {
@@ -439,6 +446,7 @@ export function createChatState<TState extends ChatPageHost>(
     composerPersistence.persistChangedState();
     captureRenderLifecycleChanges();
     onStateChange?.();
+    notifyRenderLifecycleForTest(renderer, "invalidate");
     // Only background producers opt in. Draft persistence and scroll ownership
     // are captured above, and transcript changes still commit before paint.
     if (
@@ -450,12 +458,12 @@ export function createChatState<TState extends ChatPageHost>(
       backgroundRenderFrame ??= requestAnimationFrame(() => {
         backgroundRenderFrame = undefined;
         if (isRenderLifecycleScopeActive(scope)) {
-          renderer.invalidate();
+          renderer.requestUpdate();
         }
       });
     } else {
       cancelBackgroundRender();
-      renderer.invalidate();
+      renderer.requestUpdate();
     }
     return true;
   }
@@ -510,7 +518,7 @@ export function createChatState<TState extends ChatPageHost>(
       cancel();
       return cancel;
     }
-    const completion = renderer.committed();
+    const completion = renderer.updateComplete;
     void completion.then(() => {
       if (!scope.has(cancel)) {
         return;

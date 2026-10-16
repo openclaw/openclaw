@@ -391,7 +391,7 @@ export abstract class ChatPaneBase extends ControllerHost {
 
   private mountChatState() {
     return createChatState<ChatPageHost>(
-      { invalidate: () => this.requestUpdate(), committed: () => this.updateComplete },
+      this,
       () => {
         this.syncQueuedEditRetention();
         const activity = this.runActivity;
