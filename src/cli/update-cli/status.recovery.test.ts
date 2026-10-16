@@ -76,6 +76,8 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let root: string;
 let stateDir: string;
 let configPath: string;
+const printed = () => mocks.log.mock.calls.flat().join("\n");
+const writeJson = (file: string, value: unknown) => fs.writeFile(file, JSON.stringify(value));
 const digest = (raw: string) => createHash("sha256").update(raw).digest("hex");
 
 beforeEach(async () => {
@@ -130,11 +132,23 @@ async function capture(
 function result() {
   return mocks.writeJson.mock.lastCall?.[0];
 }
+async function readBaseline(c: Awaited<ReturnType<typeof capture>>) {
+  const { readUpdateRecoveryBaselineIdentity } =
+    await import("../../infra/update-recovery-backup-reader.js");
+  return readUpdateRecoveryBaselineIdentity({
+    runId: c.manifest.runId,
+    env: process.env,
+    ref: { directory: c.directory, manifestPath: c.manifestPath, manifestSha256: c.manifestSha256 },
+    installRoot: c.manifest.installRoot,
+    readContinuation: () => undefined,
+    assertCurrent: () => {},
+  });
+}
 async function terminal(c: Awaited<ReturnType<typeof capture>>, status: "committed" | "restored") {
-  await fs.writeFile(
-    path.join(c.directory, "outcome.json"),
-    JSON.stringify({ status, manifestSha256: c.manifestSha256 }),
-  );
+  await writeJson(path.join(c.directory, "outcome.json"), {
+    status,
+    manifestSha256: c.manifestSha256,
+  });
 }
 function run(c: Awaited<ReturnType<typeof capture>>, status = "failed") {
   // Build through the production schema, not a widened cast of partial ledger state.
@@ -170,7 +184,7 @@ function run(c: Awaited<ReturnType<typeof capture>>, status = "failed") {
 it("reports standalone Doctor captures as manual evidence", async () => {
   const c = await capture("doctor-11111111-1111-4111-8111-111111111111");
   await updateStatusCommand({});
-  const output = mocks.log.mock.calls.flat().join("\n");
+  const output = printed();
   expect(output).toContain(c.manifestPath);
   expect(output).toContain("No repair outcome is recorded");
   expect(output).not.toContain("no matching update run");
@@ -226,7 +240,7 @@ it.each([
         expect(incomplete).not.toHaveProperty(field);
       }
     } else {
-      const output = mocks.log.mock.calls.flat().join("\n");
+      const output = printed();
       expect(output).toContain(c.manifestPath);
       expect(output).toContain(directory);
       expect(output).toContain("incomplete");
@@ -252,43 +266,14 @@ it("refuses baseline reuse after an interrupted linked seal", async () => {
   const c = await capture();
   const partial = `${c.manifestPath}.partial`;
   await fs.link(c.manifestPath, partial);
-  const { readUpdateRecoveryBaselineIdentity } =
-    await import("../../infra/update-recovery-backup-reader.js");
-  await expect(
-    readUpdateRecoveryBaselineIdentity({
-      runId: c.manifest.runId,
-      env: process.env,
-      ref: {
-        directory: c.directory,
-        manifestPath: c.manifestPath,
-        manifestSha256: c.manifestSha256,
-      },
-      installRoot: c.manifest.installRoot,
-      readContinuation: () => undefined,
-      assertCurrent: () => {},
-    }),
-  ).rejects.toThrow("incomplete publication");
+  await expect(readBaseline(c)).rejects.toThrow("incomplete publication");
   expect(await fs.readFile(partial, "utf8")).toBe(c.raw);
   expect(await fs.readFile(c.manifestPath, "utf8")).toBe(c.raw);
 });
 
 it("reuses an admitted capture whose native spelling differs and still refuses a linked capture", async () => {
   const c = await capture();
-  const { readUpdateRecoveryBaselineIdentity } =
-    await import("../../infra/update-recovery-backup-reader.js");
-  const read = () =>
-    readUpdateRecoveryBaselineIdentity({
-      runId: c.manifest.runId,
-      env: process.env,
-      ref: {
-        directory: c.directory,
-        manifestPath: c.manifestPath,
-        manifestSha256: c.manifestSha256,
-      },
-      installRoot: c.manifest.installRoot,
-      readContinuation: () => undefined,
-      assertCurrent: () => {},
-    });
+  const read = () => readBaseline(c);
   pinSpelling.canonical = (realPath) => realPath.toUpperCase();
   try {
     await expect(read()).resolves.toMatchObject({
@@ -328,19 +313,16 @@ it.each([
     mocks.readRun.mockResolvedValue(row);
   }
   if (fault === "foreign-state") {
-    await fs.writeFile(
-      c.manifestPath,
-      JSON.stringify({ ...c.manifest, stateDir: path.join(root, "foreign") }),
-    );
+    await writeJson(c.manifestPath, { ...c.manifest, stateDir: path.join(root, "foreign") });
   }
   if (fault === "wrong-run-directory") {
     await fs.rename(c.directory, `${c.directory}-wrong`);
   }
   if (fault === "terminal-binding") {
-    await fs.writeFile(
-      path.join(c.directory, "outcome.json"),
-      JSON.stringify({ status: "committed", manifestSha256: "a".repeat(64) }),
-    );
+    await writeJson(path.join(c.directory, "outcome.json"), {
+      status: "committed",
+      manifestSha256: "a".repeat(64),
+    });
   }
   if (fault === "manifest-symlink" || fault === "manifest-hardlink") {
     const target = path.join(root, "manifest-target.json");
@@ -353,7 +335,7 @@ it.each([
   }
   await expect(updateStatusCommand({ json: fault !== "malformed-text" })).resolves.toBeUndefined();
   if (fault === "malformed-text") {
-    expect(mocks.log.mock.calls.flat().join("\n")).toContain("Update recovery sets unavailable:");
+    expect(printed()).toContain("Update recovery sets unavailable:");
   } else {
     expect(result()).toHaveProperty("availability");
     expect(result()).not.toHaveProperty("recoverySets");
