@@ -456,54 +456,55 @@ describe("Bedrock prompt cache ownership", () => {
 });
 
 describe("Bedrock token usage", () => {
-  it("prices one-hour cache writes from the provider's authoritative TTL breakdown", async () => {
-    vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
-      $metadata: { httpStatusCode: 200 },
-      stream: streamEvents([
-        { messageStart: { role: ConversationRole.ASSISTANT } },
-        {
-          metadata: {
-            usage: {
-              inputTokens: 20,
-              outputTokens: 5,
-              totalTokens: 25,
-              cacheReadInputTokens: 70,
-              cacheWriteInputTokens: 10,
-              cacheDetails: [
-                { ttl: CacheTTL.ONE_HOUR, inputTokens: 6 },
-                { ttl: CacheTTL.FIVE_MINUTES, inputTokens: 4 },
-              ],
-            },
-          },
-        },
-        { messageStop: { stopReason: BedrockStopReason.END_TURN } },
-      ]),
-    } as never);
+  it.each([
+    [6, 4, 17, 82],
+    [undefined, 0, 12.5, 77.5],
+    [0, undefined, 12.5, 77.5],
+  ] as const)(
+    "preserves reported TTL buckets and prices one-hour writes for %s/%s",
+    async (oneHour, fiveMinutes, cacheWriteCost, totalCost) => {
+      const usage = {
+        inputTokens: 20,
+        outputTokens: 5,
+        totalTokens: 25,
+        cacheReadInputTokens: 70,
+        cacheWriteInputTokens: 10,
+        cacheDetails: [
+          { ttl: CacheTTL.ONE_HOUR, inputTokens: oneHour },
+          { ttl: CacheTTL.FIVE_MINUTES, inputTokens: fiveMinutes },
+        ],
+      };
+      vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+        $metadata: { httpStatusCode: 200 },
+        stream: streamEvents([
+          { messageStart: { role: ConversationRole.ASSISTANT } },
+          { metadata: { usage } },
+          { messageStop: { stopReason: BedrockStopReason.END_TURN } },
+        ]),
+      } as never);
 
-    const result = await streamBedrockForTest(
-      bedrockModel({
-        cost: { input: 1_000_000, output: 2_000_000, cacheRead: 500_000, cacheWrite: 1_250_000 },
-      }),
-      { messages: [{ role: "user", content: "Hello", timestamp: 0 }] } as never,
-    ).result();
+      const result = await streamBedrockForTest(
+        bedrockModel({
+          cost: { input: 1_000_000, output: 2_000_000, cacheRead: 500_000, cacheWrite: 1_250_000 },
+        }),
+        { messages: [{ role: "user", content: "Hello", timestamp: 0 }] } as never,
+      ).result();
 
-    expect(result.usage).toMatchObject({
-      input: 20,
-      output: 5,
-      cacheRead: 70,
-      cacheWrite: 10,
-      cacheWrite1h: 6,
-      totalTokens: 105,
-      contextUsage: { state: "available", promptTokens: 100, totalTokens: 105 },
-    });
-    expect(result.usage.cost).toMatchObject({
-      input: 20,
-      output: 10,
-      cacheRead: 35,
-      cacheWrite: 17,
-      total: 82,
-    });
-  });
+      expect(result.usage).toMatchObject({
+        input: 20,
+        output: 5,
+        cacheRead: 70,
+        cacheWrite: 10,
+        totalTokens: 105,
+        contextUsage: { state: "available", promptTokens: 100, totalTokens: 105 },
+      });
+      expect(result.usage.cacheWrite1h).toBe(oneHour);
+      expect(result.usage.cacheWrite5m).toBe(fiveMinutes);
+      expect(Object.hasOwn(result.usage, "cacheWrite1h")).toBe(oneHour !== undefined);
+      expect(Object.hasOwn(result.usage, "cacheWrite5m")).toBe(fiveMinutes !== undefined);
+      expect(result.usage.cost).toMatchObject({ cacheWrite: cacheWriteCost, total: totalCost });
+    },
+  );
 });
 
 describe("Bedrock tool-result images", () => {
