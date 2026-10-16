@@ -168,7 +168,6 @@ let receive: (request: SqliteWorkerRequest) => void;
 let nextId = 0;
 let actor = 0;
 let nativeOpened = false;
-let actorClosed = false;
 let actorCloseAttempts = 0;
 
 function opening(
@@ -240,11 +239,13 @@ async function retiredFailure(
   return failure;
 }
 
-function failed(reply: SqliteWorkerReply): asserts reply is FailedReply {
+async function sendFailed(request: SqliteWorkerRequest): Promise<FailedReply> {
+  const reply = await send(request);
   expect(reply.ok).toBe(false);
   if (reply.ok) {
     throw new Error("Worker operation unexpectedly succeeded");
   }
+  return reply;
 }
 
 function send(request: SqliteWorkerRequest): Promise<SqliteWorkerReply> {
@@ -338,7 +339,6 @@ beforeAll(async () => {
 beforeEach(async () => {
   vi.clearAllMocks();
   nativeOpened = false;
-  actorClosed = false;
   actorCloseAttempts = 0;
   edge.database.db.isOpen = true;
   edge.request.mockImplementation(() => {});
@@ -355,9 +355,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  if (!actorClosed) {
-    expect((await send({ id: ++nextId, actor, type: "close" })).ok).toBe(true);
-  }
+  expect((await send({ id: ++nextId, actor, type: "close" })).ok).toBe(true);
   expect(edge.releaseShared).toHaveBeenCalledTimes(actorCloseAttempts);
   expect(edge.nativeClose).toHaveBeenCalledTimes(nativeOpened ? actorCloseAttempts : 0);
   expect(edge.releaseAgent).toHaveBeenCalledTimes(nativeOpened ? actorCloseAttempts : 0);
@@ -438,9 +436,8 @@ it.each([
       stateContext: { environment: input.environment },
     });
     try {
-      const reply = await send(request);
+      const reply = await sendFailed(request);
       expect(witnessed).toBe(outcome === "ordinary closed" ? 0 : 1);
-      failed(reply);
       expect([reply.admissionRefused, reply.openOutcome, reply.openNotEntered]).toEqual([
         outcome === "direct refusal" ? true : undefined,
         undefined,
@@ -496,8 +493,7 @@ it("retains a typed quarantine opening failure after native retirement", async (
     throw openingError;
   });
   const request = prepareRequest({ stateContext: { environment: input.environment } });
-  const reply = await send(request);
-  failed(reply);
+  const reply = await sendFailed(request);
   expect(reply.retire).toBe(true);
   expect(reply.error.sharedState?.nodes).toEqual(
     expect.arrayContaining([
@@ -536,14 +532,12 @@ it.each(["native", "shared"] as const)(
       stateDatabasePath: input.stateDatabasePath,
       stateContext: { environment: input.environment },
     };
-    const reply = await send(request);
-    actorClosed = reply.ok;
+    const reply = await sendFailed(request);
     expect(reply).toMatchObject({
       ok: false,
       retire: true,
       error: { message: cleanupFailure.message },
     });
-    failed(reply);
     for (const cleanup of [edge.nativeClose, edge.releaseAgent, edge.releaseShared]) {
       expect(cleanup).toHaveBeenCalledOnce();
     }
@@ -565,9 +559,8 @@ it("reports the COMMIT and joins retirement after a successful open with refused
       throw reportingError;
     }
   });
-  const reply = await send(prepareRequest());
+  const reply = await sendFailed(prepareRequest());
   expect(reported).toEqual([{ kind: "agent-registration-committed", registration: receipt }]);
-  failed(reply);
   expect(reply.error.message).toContain(reportingError.message);
   expect(reply.retire).toBe(true);
 
@@ -613,13 +606,12 @@ it("recognizes a separately evaluated backend's inner open refusal before comple
     openAdmission: "input",
   });
   try {
-    const reply = await send(request);
+    const reply = await sendFailed(request);
     expect(reply).toMatchObject({
       ok: false,
       openOutcome: "refused-before-agent-open",
       error: { message: refused.message },
     });
-    failed(reply);
     expect(reply.openNotEntered).toBeUndefined();
     expect(edge.request.mock.calls).toEqual([
       [{ stage: "open", facts: input }],

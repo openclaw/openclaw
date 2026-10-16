@@ -586,47 +586,44 @@ it.each([
   },
 );
 
-it("releases an unused creation reservation while a sibling remains", async () => {
-  const options = fixture();
-  const observed = readDatabasePathIdentitySync(options.path);
-  const creator = creatorFor(options, observed);
-  const joining = creatorFor(options, observed);
-  const sibling = capture(options);
-  await using _ = onExit(() => releaseAll(creator, joining, sibling));
-  await creator.release();
-  await expect(sibling.prepare(source())).rejects.toThrow(/captured creating reference/);
-  await joining.release();
-  expect(readDatabasePathIdentitySync(options.path)).toEqual(observed);
-  await sibling.prepare(source());
-  expect(sibling.fileIdentity).toMatchObject({ kind: "file" });
-  await expect(sibling.runExisting(source(), async () => "prepared")).resolves.toBe("prepared");
-});
-
-it("releases a creation reservation after source refusal before native opening", async () => {
-  const options = fixture();
-  const observed = readDatabasePathIdentitySync(options.path);
-  const creator = creatorFor(options, observed);
-  const sibling = capture(options);
-  const refusal = new Error("Original creation source ended before native opening");
-  const revoked = source();
-  revoked.assertCurrent = () => {
-    throw refusal;
-  };
-  const admit = vi.spyOn(revoked, "createAdmission");
-  try {
-    await expect(creator.prepare(revoked)).rejects.toBe(refusal);
-    expect(admit).not.toHaveBeenCalled();
-    expect(creator.fileIdentity).toBeUndefined();
+it.each(["unused", "refused"] as const)(
+  "releases the %s creation reservation while a sibling remains",
+  async (state) => {
+    const options = fixture();
+    const observed = readDatabasePathIdentitySync(options.path);
+    const creator = creatorFor(options, observed);
+    const joining = state === "unused" ? creatorFor(options, observed) : undefined;
+    const sibling = capture(options);
+    await using _ = onExit(() => releaseAll(creator, joining, sibling));
+    if (state === "unused") {
+      await creator.release();
+      await expect(sibling.prepare(source())).rejects.toThrow(/captured creating reference/);
+      assert(joining);
+      await joining.release();
+    } else {
+      const refusal = new Error("Original creation source ended before native opening");
+      const revoked = source();
+      revoked.assertCurrent = () => {
+        throw refusal;
+      };
+      const admit = vi.spyOn(revoked, "createAdmission");
+      try {
+        await expect(creator.prepare(revoked)).rejects.toBe(refusal);
+        expect(admit).not.toHaveBeenCalled();
+        expect(creator.fileIdentity).toBeUndefined();
+      } finally {
+        admit.mockRestore();
+      }
+    }
     expect(readDatabasePathIdentitySync(options.path)).toEqual(observed);
-    await creator.release();
+    if (state === "refused") {
+      await creator.release();
+    }
     await sibling.prepare(source());
     expect(sibling.fileIdentity).toMatchObject({ kind: "file" });
     await expect(sibling.runExisting(source(), async () => "prepared")).resolves.toBe("prepared");
-  } finally {
-    admit.mockRestore();
-    await releaseAll(creator, sibling);
-  }
-});
+  },
+);
 
 it("joins native creating admission before releasing its original reservation", async () => {
   const options = fixture();
