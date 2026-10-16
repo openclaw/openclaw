@@ -161,7 +161,7 @@ export async function createCliBackendProbePlugin(
   id: "${CLI_BACKEND_PROBE_PLUGIN_ID}",
   name: "CLI Backend Probe",
   register(api) {
-    api.registerTool({
+    api.registerTool((ctx) => ctx.sessionKey?.startsWith("agent:dev:cli-announce-") ? {
       name: "${CLI_ANNOUNCE_BARRIER_TOOL_NAME}",
       description: "Wait for the live test controller to release the parent turn after child completion",
       parameters: { type: "object", properties: {}, additionalProperties: false },
@@ -170,7 +170,7 @@ export async function createCliBackendProbePlugin(
         if (!response.ok) throw new Error("CLI announce barrier request failed");
         return { content: [{ type: "text", text: await response.text() }] };
       },
-    });
+    } : null, { name: "${CLI_ANNOUNCE_BARRIER_TOOL_NAME}" });
     const continuity = ${JSON.stringify(probes.continuity ?? null)};
     if (continuity) {
       api.on("before_prompt_build", (event, ctx) => {
