@@ -23,6 +23,8 @@ import {
 } from "./mcp-app-security.ts";
 import { mountView } from "./mcp-app-view.test-support.ts";
 import { McpAppPanel, type McpAppPanelElement } from "./solid/mcp-app-panel.tsx";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+
 const bridgeMocks = vi.hoisted(() => ({
   instances: [] as Array<Record<string, unknown>>,
   transports: [] as Array<Record<string, unknown>>,
@@ -218,7 +220,7 @@ describe("mcp-app-view localization", () => {
       (element) => element.title === preview,
     )!;
     expect(previewElement.title).toBe(preview);
-    expect(previewElement.textContent).toContain(preview.slice(0, 200));
+    expect(previewElement.textContent).toContain(truncateUtf16Safe(preview, 200));
     expect(previewElement.textContent).not.toContain(preview);
     await waitForSolid(() => expect(document.activeElement).toBe(dialog));
     clickButton(dialog, "Cancel");
