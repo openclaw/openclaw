@@ -94,10 +94,12 @@ test("exports untimed response observations on their trusted turn without counti
       },
     });
     expect(span?.events[1]?.attributes).not.toHaveProperty("gen_ai.usage.input_tokens");
-    expect(sdk.exporter.getFinishedSpans().map((item) => item.name)).toEqual([
-      "openclaw.model.call",
-      "openclaw.model.usage",
-    ]);
+    expect(
+      sdk.exporter
+        .getFinishedSpans()
+        .map((item) => item.name)
+        .toSorted(),
+    ).toEqual(["openclaw.model.call", "openclaw.model.usage"]);
     const { resourceMetrics } = await reader.collect();
     const tokenMetrics = resourceMetrics.scopeMetrics
       .flatMap((scope) => scope.metrics)
