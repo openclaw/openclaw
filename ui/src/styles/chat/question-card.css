@@ -119,6 +119,9 @@ openclaw-chat-question-panel {
 }
 
 .chat-question-panel__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
   overflow: hidden;
   color: var(--text-strong);
@@ -127,6 +130,21 @@ openclaw-chat-question-panel {
   line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chat-question-panel__title svg {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+}
+
+.chat-question-panel__store-privacy {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.5;
 }
 
 .chat-question-panel__collapse {

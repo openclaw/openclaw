@@ -393,9 +393,29 @@ describe("handleToolExecutionStart read path checks", () => {
           await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
           const payload = onToolResult.mock.calls[0]?.[0];
           if (available) {
-            expect(payload?.text).toBe(
-              `🔑 Agent requests credential TEST_API_KEY (secret). Reply is disabled for secrets — open to provide it: https://console.example.test/control/ask/${questionId}`,
+            expect(payload?.text).toContain("Credential needed: TEST_API_KEY");
+            expect(payload?.text).toContain("not in this chat");
+            expect(payload?.text).toContain(
+              `https://console.example.test/control/ask/${questionId}`,
             );
+            expect(payload?.presentation).toMatchObject({
+              blocks: [
+                { type: "text", text: expect.stringContaining("console.example.test") },
+                {
+                  type: "buttons",
+                  buttons: [
+                    {
+                      label: "Open secure form",
+                      action: {
+                        type: "url",
+                        url: `https://console.example.test/control/ask/${questionId}`,
+                      },
+                    },
+                  ],
+                },
+              ],
+            });
+            expect(payload?.presentationTextMode).toBe("fallback");
           } else {
             expect(payload?.text).toContain("Credential request unavailable here");
             expect(payload?.text).toContain("Control UI or native app");
@@ -404,7 +424,9 @@ describe("handleToolExecutionStart read path checks", () => {
             expect(payload?.text).not.toMatch(/https?:/);
           }
           expect(payload?.channelData).toEqual({ askUser: { questionId } });
-          expect(payload).not.toHaveProperty("presentation");
+          if (!available) {
+            expect(payload).not.toHaveProperty("presentation");
+          }
           expect(payload).not.toHaveProperty("interactive");
           expect(payload?.text).not.toContain("Reply with your answer");
         }

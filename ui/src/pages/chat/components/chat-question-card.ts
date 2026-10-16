@@ -24,7 +24,11 @@ export function createGatewayQuestionPanelProps(
   return {
     model: {
       requestKey: prompt.id,
-      title: t("chat.questions.eyebrow"),
+      title: t(
+        prompt.questions.length === 1 && prompt.questions[0]?.secretStore?.kind === "secret"
+          ? "chat.questions.storeTitle"
+          : "chat.questions.eyebrow",
+      ),
       questions: prompt.questions,
       agentId: prompt.agentId,
       sessionKey: prompt.sessionKey,

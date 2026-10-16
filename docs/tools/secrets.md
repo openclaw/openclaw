@@ -117,9 +117,12 @@ Control UI, TUI, and native app cards arrive through the existing Gateway connec
 and do not require `gateway.publicOrigin` or a public link.
 
 Chat channels never accept the value. On Telegram, Discord, and similar
-surfaces the request is delivered as a link to the Control UI prompt — typing
-a credential into a chat message is exactly what this flow exists to avoid, so
-a plain-text reply is not captured as an answer. Links require an enabled Control
+surfaces the request includes an **Open secure form** button where supported,
+with a normal Control UI link as the text-only fallback. The message shows the
+entry name, reason, and Gateway hostname before you leave the chat. The link
+still requires the normal Gateway sign-in and session access; opening it does
+not answer the request. Never paste the value into chat: a plain-text reply is
+not captured as an answer. Links require an enabled Control
 UI and a configured `gateway.publicOrigin`. Without a usable link, delivery
 reports a visible blocker and cancels the pending request. Open a trusted Control
 UI or native app and retry, or ask the operator to configure the public origin.

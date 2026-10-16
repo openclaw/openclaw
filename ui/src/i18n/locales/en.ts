@@ -3605,6 +3605,14 @@ export const en: TranslationMap & {
       eyebrow: "Waiting for your answer",
       summaryLabel: "Question outcome",
       ownAnswerFor: "Your own answer for {header}",
+      storeTitle: "Secure credential request",
+      storePrivacy:
+        "Saved directly to the secret store. Not sent to the agent or added to chat history.",
+      storeSave: "Save credential",
+      storeSaving: "Saving credential…",
+      storeSaved: "Credential saved",
+      storeDone:
+        "You can return to your conversation. Your credential was not added to chat history.",
       storeRequestedBy: "Requested by {agent} · {session}",
       storeEntry: "Stores {name} as {kind}",
       storeReplacement: "Replaces {name} — last updated {updated}",

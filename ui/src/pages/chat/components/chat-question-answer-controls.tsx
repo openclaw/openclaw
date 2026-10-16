@@ -143,7 +143,10 @@ function FreeTextControl(
             class={props.class}
             type={revealed() ? "text" : "password"}
             autocomplete="off"
+            autocapitalize="none"
+            autocorrect="off"
             spellcheck="false"
+            enterkeyhint="done"
             placeholder={props.placeholder}
             aria-label={props.label}
             value={props.value}
