@@ -21,6 +21,11 @@ type PolicyTestWatch = {
 // this inventory covers the remaining tests that changed targeting cannot
 // discover from imports alone.
 const policyTestWatches: readonly PolicyTestWatch[] = [
+  {
+    // Preserve the registered-tool image keeper when its narrower Slack case is retired.
+    testFile: "test/slack-download-read-authority.integration.test.ts",
+    watchGlobs: ["extensions/slack/src/action-runtime.download-image.test.ts"],
+  },
   ...NODE_WORKER_E2E_TEST_FILES.map((testFile): PolicyTestWatch => ({
     testFile,
     watchGlobs: NODE_WORKER_E2E_OWNER_GLOBS,

@@ -893,3 +893,49 @@ describe("CI changed Node test plan", () => {
     );
   });
 });
+
+// The registered-tool image keeper must remain on the required changed-owner route.
+it.each(
+  [
+    ["extensions/slack/src/action-runtime.ts"],
+    ["extensions/slack/src/channel-actions.ts"],
+    ["extensions/slack/src/message-action-dispatch.ts"],
+    ["extensions/slack/src/action-runtime.download-image.test.ts"],
+    ["src/agents/tools/common.ts"],
+    ["src/agents/tool-images.ts"],
+    ["src/agents/tool-images.runtime.ts"],
+    ["src/agents/image-sanitization.ts"],
+    ["src/media/image-ops.ts"],
+    ["src/media/image-processor.ts"],
+    ["src/media/image-processor-config.ts"],
+    ["test/slack-download-read-authority.integration.test.ts"],
+    ["extensions/slack/src/action-runtime.ts", "src/media/image-ops.ts"],
+  ].map((changedPaths) => ({ changedPaths })),
+)("keeps the Slack downloaded image contract scheduled for %j", ({ changedPaths }) => {
+  const keeper = "test/slack-download-read-authority.integration.test.ts";
+  const shards = expectDefined(
+    createChangedNodeTestShards(changedPaths, {
+      includePrExemptRuntimeTests: false,
+      includeReleaseOnlyRuntimeTests: false,
+    }),
+    "Slack image owner plan",
+  );
+  const files = selectedFiles(shards);
+  expect(files.filter((file) => file === keeper)).toEqual([keeper]);
+  const keeperGroups = fallbackGroups(shards).filter((group) =>
+    group.includePatterns?.includes(keeper),
+  );
+  expect(keeperGroups).toHaveLength(1);
+  expect(keeperGroups[0]?.configs).toEqual(["test/vitest/vitest.tooling.config.ts"]);
+  if (
+    changedPaths.some((file) => file.startsWith("extensions/slack/") && !file.endsWith(".test.ts"))
+  ) {
+    expect(
+      files.some(
+        (file) =>
+          file.startsWith("extensions/slack/") &&
+          file !== "extensions/slack/src/action-runtime.download-image.test.ts",
+      ),
+    ).toBe(true);
+  }
+});

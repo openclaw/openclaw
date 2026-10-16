@@ -26,6 +26,7 @@ describe("truncateSlackTextByUtf8Bytes", () => {
   it("does not split emoji at the byte boundary", () => {
     const result = truncateSlackTextByUtf8Bytes("😀".repeat(2_000), 4_000);
 
+    expect(result).toBe("😀".repeat(999) + "…");
     expect(result.endsWith("…")).toBe(true);
     expect(result).not.toContain("�");
     expect(countSlackTextUtf8Bytes(result)).toBeLessThanOrEqual(4_000);

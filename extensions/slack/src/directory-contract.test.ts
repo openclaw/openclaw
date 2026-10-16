@@ -76,14 +76,21 @@ describe("Slack directory contract", () => {
       },
     } as unknown as OpenClawConfig;
 
-    const peers = await listSlackDirectoryPeersFromConfig({
+    const filteredPeers = await listSlackDirectoryPeersFromConfig({
+      cfg,
+      accountId: "default",
+      query: "u300",
+      limit: 2,
+    });
+    expect(filteredPeers.map((entry) => entry.id)).toEqual(["user:u300"]);
+
+    const limitedPeers = await listSlackDirectoryPeersFromConfig({
       cfg,
       accountId: "default",
       query: "user:u",
       limit: 2,
     });
-    expect(peers).toHaveLength(2);
-    expect(peers.every((entry) => entry.id.startsWith("user:u"))).toBe(true);
+    expect(limitedPeers.map((entry) => entry.id)).toEqual(["user:u100", "user:u200"]);
   });
 
   it("falls back to auth identity when live user profile lookup fails", async () => {

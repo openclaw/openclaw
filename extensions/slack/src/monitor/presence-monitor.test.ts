@@ -1,3 +1,4 @@
+import { setImmediate } from "node:timers/promises";
 import { WebAPIRateLimitedError } from "@slack/web-api";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -716,31 +717,47 @@ describe("Slack presence monitor", () => {
   });
 
   it("quiesces an in-flight poll before stop returns", async () => {
-    let resolveActive!: (value: { presence: string }) => void;
-    const active = new Promise<{ presence: string }>((resolve) => {
-      resolveActive = resolve;
-    });
+    const active = createDeferred<{ presence: string }>();
+    const activeStarted = createDeferred<void>();
     const getPresence = vi
       .fn()
       .mockResolvedValueOnce({ presence: "away" })
-      .mockReturnValueOnce(active);
+      .mockImplementationOnce(() => {
+        activeStarted.resolve();
+        return active.promise;
+      });
     const enqueue = vi.fn(() => true);
+    const wake = vi.fn();
     const monitor = createPresenceFixture({
       accountId: "default",
       accountConfig: { mode: "auto" },
       resolveClient: () => ({ getPresence }),
       cooldownStore: createCooldownStore(),
       enqueue,
-      wake: vi.fn(),
+      wake,
     });
     monitor.observe(createPrepared({ userId: "U123" }));
     await monitor.advancePoll();
 
     const polling = monitor.advancePoll();
-    const stopping = monitor.stop();
-    resolveActive({ presence: "active" });
-    await Promise.all([polling, stopping]);
-
-    expect(enqueue).not.toHaveBeenCalled();
+    let stopping: Promise<void> | undefined;
+    let stopped = false;
+    try {
+      await activeStarted.promise;
+      stopping = monitor.stop().then(() => {
+        stopped = true;
+      });
+      // Give an incorrectly detached stop time to settle while the request stays held.
+      await setImmediate();
+      expect(stopped).toBe(false);
+      active.resolve({ presence: "active" });
+      await Promise.all([polling, stopping]);
+      expect(stopped).toBe(true);
+      expect(enqueue).not.toHaveBeenCalled();
+      expect(wake).not.toHaveBeenCalled();
+    } finally {
+      active.resolve({ presence: "active" });
+      await Promise.all([polling, stopping, monitor.stop()]);
+    }
   });
 });

@@ -157,6 +157,22 @@ describe("createPersistentDedupeCache", () => {
     expect(restarted.peek("durable")).toBe(false);
     expect(await restarted.lookup("durable")).toBe(true);
     expect(backing.store.lookup).toHaveBeenCalledTimes(2);
+
+    const metadataUnavailable = {
+      ...backing.store,
+      lookup: vi.fn((key: string) => backing.store.lookup(key)),
+      entries: vi.fn(async () => undefined),
+    };
+    const { cache: withoutMetadata } = createCache({
+      ttlMs: 0,
+      openStore: () => metadataUnavailable,
+      readTimestamp: (record) => record.at,
+    });
+    expect(await withoutMetadata.lookup("durable")).toBe(true);
+    expect(withoutMetadata.peek("durable")).toBe(true);
+    expect(await withoutMetadata.lookup("durable")).toBe(true);
+    expect(metadataUnavailable.lookup).toHaveBeenCalledOnce();
+    expect(metadataUnavailable.entries).toHaveBeenCalledOnce();
   });
 
   it("disables persistence after an open failure and never rejects", async () => {

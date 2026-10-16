@@ -102,7 +102,7 @@ describe("Slack conversation-open", () => {
     const { cfg, invoke, requests } = createConversationFixture(channelId);
     cfg.channels!.slack!.dm = { groupEnabled: false, groupChannels: ["G99999999"] };
     const policy = structuredClone(cfg);
-    const opened = await invoke("conversation-open", { userIds: ["U11111111", "U22222222"] });
+    const opened = await invoke("conversation-open", { userIds: [" U11111111 ", "U22222222 "] });
     const target = `team:T11111111:channel:${channelId}`;
     expect(opened.details).toEqual({ ok: true, channelId, target });
     expect(requests).toEqual([
@@ -146,7 +146,7 @@ describe("Slack conversation-open", () => {
     const { invoke, requests } = createConversationFixture();
     await expect(
       invoke("conversation-open", { userIds: ["U11111111", " U11111111 "] }),
-    ).rejects.toThrow();
+    ).rejects.toThrow("Slack conversation-open requires distinct userIds.");
     expect(requests).toEqual([]);
   });
 

@@ -274,45 +274,6 @@ describe("createSlackMessageHandler", () => {
     expect(enqueueMock).not.toHaveBeenCalled();
   });
 
-  it("flushes buffered text before a table-bearing message", async () => {
-    const handler = createSlackMessageHandler({
-      ctx: createContext({ cfg: { messages: { inbound: { debounceMs: 10 } } } }),
-    });
-
-    await handler(
-      {
-        type: "message",
-        channel: "C111",
-        user: "U111",
-        ts: "1709000000.000100",
-        text: "first buffered text",
-      } as never,
-      { source: "message" },
-    );
-    await handler(
-      {
-        type: "message",
-        channel: "C111",
-        user: "U111",
-        ts: "1709000000.000200",
-        text: "table follows",
-        attachments: [
-          {
-            blocks: [
-              {
-                type: "table",
-                rows: [[{ type: "raw_text", text: "kept" }]],
-              },
-            ],
-          },
-        ],
-      } as never,
-      { source: "message" },
-    );
-
-    expect(flushKeyMock).toHaveBeenCalledWith("slack:default:C111:1709000000.000100:U111");
-  });
-
   it("retires a buffered key when replay filtering drops every entry", async () => {
     const handler = createSlackMessageHandler({
       ctx: createContext({ cfg: { messages: { inbound: { debounceMs: 10 } } } }),

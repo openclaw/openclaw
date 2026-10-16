@@ -13,7 +13,6 @@ const mocks = vi.hoisted(() => ({
   resolveAgentRouteMock: vi.fn(),
   finalizeInboundContextMock: vi.fn(),
   resolveConversationLabelMock: vi.fn(),
-  recordSessionMetaFromInboundMock: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
   resolveStorePathMock: vi.fn(),
   recordDeliveredCommandExchangeMock:
     vi.fn<
@@ -47,11 +46,6 @@ vi.mock("./slash-dispatch.runtime.js", async (importOriginal) => {
       replyOptions?: unknown;
     }) => {
       mocks.turnPlanMock(plan);
-      void mocks.recordSessionMetaFromInboundMock({
-        sessionKey:
-          (plan.ctxPayload as { SessionKey?: string }).SessionKey ?? plan.route.sessionKey,
-        ctx: plan.ctxPayload,
-      });
       let dispatchResult: unknown;
       try {
         const deliver = async (...args: unknown[]) => {
@@ -108,7 +102,6 @@ type SlashHarnessMocks = {
   resolveAgentRouteMock: ReturnType<typeof vi.fn>;
   finalizeInboundContextMock: ReturnType<typeof vi.fn>;
   resolveConversationLabelMock: ReturnType<typeof vi.fn>;
-  recordSessionMetaFromInboundMock: AsyncMock;
   resolveStorePathMock: ReturnType<typeof vi.fn>;
   deliverSlackSlashRepliesMock: AsyncMock;
   recordDeliveredCommandExchangeMock: typeof mocks.recordDeliveredCommandExchangeMock;
@@ -132,7 +125,6 @@ export function resetSlackSlashMocks() {
   });
   mocks.finalizeInboundContextMock.mockReset().mockImplementation((ctx: unknown) => ctx);
   mocks.resolveConversationLabelMock.mockReset().mockReturnValue(undefined);
-  mocks.recordSessionMetaFromInboundMock.mockReset().mockResolvedValue(undefined);
   mocks.resolveStorePathMock.mockReset().mockReturnValue("/tmp/openclaw-sessions.json");
   mocks.deliverSlackSlashRepliesMock.mockReset().mockImplementation(async (params: unknown) => {
     const delivery = params as {

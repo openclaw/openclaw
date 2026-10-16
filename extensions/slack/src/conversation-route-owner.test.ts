@@ -84,7 +84,7 @@ describe("inspectSlackConversationRouteOwner", () => {
     ).toBeNull();
   });
 
-  it("fails closed when workspace identity is released during binding inspection", async () => {
+  it("fails closed on the next inspection after workspace identity is released", async () => {
     registerSessionBindingAdapter({
       channel: "slack",
       accountId: "default",

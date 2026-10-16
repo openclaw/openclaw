@@ -102,7 +102,7 @@ const SLACK_GOV_MEDIA_SSRF_POLICY = {
   hostnameAllowlist: ["files.slack-gov.com"],
   allowRfc2544BenchmarkRange: true,
 };
-export const SLACK_MEDIA_READ_IDLE_TIMEOUT_MS = 60_000;
+const SLACK_MEDIA_READ_IDLE_TIMEOUT_MS = 60_000;
 const SLACK_MEDIA_TOTAL_TIMEOUT_MS = 120_000;
 type SlackMediaDownloadParams = {
   url: string;

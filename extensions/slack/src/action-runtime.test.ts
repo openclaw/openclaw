@@ -5,6 +5,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SlackActionContext } from "./action-runtime.js";
 import { handleSlackAction, slackActionRuntime } from "./action-runtime.js";
+import { actionThreadTargetCases } from "./action-runtime.test-support.js";
 import { sendSlackMessage as sendSlackMessageThroughPublicOwner } from "./actions.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import { registerSlackInstallationState } from "./installation-identity-state.js";
@@ -735,6 +736,57 @@ describe("handleSlackAction", () => {
     expect(editSlackMessage).toHaveBeenCalledWith("C123", "123.456", "", { cfg, blocks });
   });
 
+  it.each(actionThreadTargetCases)("selects message thread for $name", async (testCase) => {
+    const threadConfig = slackConfig();
+    await handleSlackAction(
+      { action: "sendMessage", to: testCase.to, content: "Reply", ...testCase.patch },
+      threadConfig,
+      {
+        currentChannelId: testCase.currentChannelId,
+        currentMessagingTarget: testCase.currentMessagingTarget,
+        currentThreadTs: "1111111111.111111",
+        replyToMode: testCase.replyToMode ?? "all",
+      },
+    );
+    expect(sendSlackMessage).toHaveBeenCalledOnce();
+    expectSlackSendCall(0, testCase.to, "Reply", {
+      cfg: threadConfig,
+      mediaUrl: undefined,
+      threadTs: testCase.expectedThreadTs,
+      blocks: undefined,
+    });
+  });
+
+  it.each(["#c123", "channel:C123"])(
+    "consumes the first reply after explicit thread delivery to %s",
+    async (to) => {
+      const threadConfig = slackConfig({ replyToMode: "first" });
+      const context = createReplyToFirstContext();
+      const hasRepliedRef = context.hasRepliedRef;
+
+      await handleSlackAction(
+        {
+          action: "sendMessage",
+          to,
+          content: "Explicit",
+          threadTs: "9999999999.999999",
+        },
+        threadConfig,
+        context,
+      );
+
+      expect(sendSlackMessage).toHaveBeenCalledOnce();
+      expectSlackSendCall(0, to, "Explicit", {
+        cfg: threadConfig,
+        mediaUrl: undefined,
+        threadTs: "9999999999.999999",
+        blocks: undefined,
+      });
+      expect(hasRepliedRef.value).toBe(true);
+      await sendSecondMessageAndExpectNoThread({ cfg: threadConfig, context });
+    },
+  );
+
   it("keeps the batched reply thread available after a failed upload", async () => {
     cfg = slackConfig({ replyToMode: "batched" });
     const context = { ...createReplyToFirstContext(), replyToMode: "batched" as const };
@@ -801,39 +853,19 @@ describe("handleSlackAction", () => {
     expect(context.hasRepliedRef.value).toBe(true);
   });
 
-  it.each([
-    {
-      name: "a prepared channel override disables auto-threading",
-      to: "channel:C123",
-      context: () =>
-        buildSlackThreadingToolContext({
-          cfg: slackConfig({ replyToMode: "all", channels: { C123: { replyToMode: "off" } } }),
-          context: {
-            ChatType: "channel",
-            To: "channel:C123",
-            CurrentMessageId: "1111111111.111111",
-            ReplyToId: "1111111111.111111",
-            ReplyToMode: "off",
-          },
-        }),
-    },
-    {
-      name: "replyToMode=first has no hasRepliedRef",
-      to: "#c123",
-      context: (): SlackActionContext => ({
-        currentChannelId: "C123",
-        currentThreadTs: "1111111111.111111",
-        replyToMode: "first",
-      }),
-    },
-  ])("does not thread when $name", async ({ to, context }) => {
-    await handleSlackAction({ ...send, to, content: "Channel root" }, cfg, context());
-    expectSlackSendCall(0, to, "Channel root", {
-      cfg,
-      mediaUrl: undefined,
-      threadTs: undefined,
-      blocks: undefined,
+  it("preserves a prepared channel override that disables auto-threading", async () => {
+    const context = buildSlackThreadingToolContext({
+      cfg: slackConfig({ replyToMode: "all", channels: { C123: { replyToMode: "off" } } }),
+      context: {
+        ChatType: "channel",
+        To: "channel:C123",
+        CurrentMessageId: "1111111111.111111",
+        ReplyToId: "1111111111.111111",
+        ReplyToMode: "off",
+      },
     });
+    await handleSlackAction({ ...send, content: "Channel root" }, cfg, context);
+    expectLastSlackSend("Channel root", cfg);
   });
 
   it("resolves name-allowlisted reads from a core-shaped Slack threading context", async () => {

@@ -106,7 +106,8 @@ describe("sendMessageSlack NO_REPLY literal", () => {
   it("delivers a literal NO_REPLY text like sibling channels", async () => {
     const result = await send("NO_REPLY");
 
-    expect(client.chat.postMessage).toHaveBeenCalled();
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(1);
+    expect(postedMessage().text).toBe("NO_REPLY");
     expect(result.messageId).toBe("171234.567");
   });
 });

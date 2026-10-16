@@ -25,6 +25,8 @@ import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { mergeSlackAccountConfig } from "./accounts.js";
 import {
+  NATIVE_SCENARIOS,
+  type SlackTraceScenarioName,
   BLOCKS_FINAL_PRESENTATION,
   BLOCKS_FINAL_TEXT,
   SHORT_FINAL_TEXT,
@@ -192,28 +194,11 @@ const TEAM_ID = "T0TRACE";
 // ts is plausible under the fake clock; the normalizer canonicalizes it anyway.
 const INBOUND_TS = "1767225600.000100";
 
-type SlackTraceScenarioName =
-  | "streaming-happy-native"
-  | "short-final-native-rejection"
-  | "final-blocks-and-text"
-  | "cancel-mid-stream"
-  | "progress-compact-commentary"
-  | "progress-session-card"
-  | "progress-native-unified"
-  | "native-prose-then-exec-failed"
-  | "preview-exec-failed-then-prose";
-
-const NATIVE_SCENARIOS = new Set<SlackTraceScenarioName>([
-  "streaming-happy-native",
-  "short-final-native-rejection",
-  "final-blocks-and-text",
-  "native-prose-then-exec-failed",
-]);
-
 const NATIVE_PROGRESS_NARRATION =
   "I’m checking the native Slack stream before applying the focused patch.";
 const NATIVE_PROGRESS_NARRATION_UPDATED = `${NATIVE_PROGRESS_NARRATION} I’m applying it now.`;
 
+const PENDING_PREVIEW_TEXT = "Working on the fix: verifying the patch.";
 const EXEC_FAILED_TRACE = "⚠️ 🛠️ Exec failed: ";
 const EXEC_FAILED_PROSE = "The directory is missing.";
 const COMPACT_COMMENTARY_TEXT = "Checking the current Slack behavior.";
@@ -239,16 +224,17 @@ const slackTraceScenarios: Record<
     { kind: "final", text: BLOCKS_FINAL_TEXT },
     { kind: "idle" },
   ],
-  "cancel-mid-stream": [
+  "pending-preview-without-final": [
     { kind: "reply-start" },
     { kind: "partial", text: "Working on the fix" },
     { kind: "advance", ms: 300 },
     { kind: "partial", text: "Working on the fix: patching now." },
-    // Past the draft throttle (1000ms) so the second preview edit lands
-    // before the run is aborted.
+    // Publish one edit, then settle with a newer throttled update pending.
+    // This owns preview cleanup; it does not claim to abort the core run.
     { kind: "advance", ms: 1100 },
-    { kind: "cancel" },
+    { kind: "partial", text: PENDING_PREVIEW_TEXT },
     { kind: "idle" },
+    { kind: "advance", ms: 2000 },
   ],
   "progress-compact-commentary": [
     { kind: "reply-start" },
@@ -652,8 +638,7 @@ async function setupSlackTrace(
         );
         break;
       case "cancel":
-        // An aborted run stops emitting payloads; closeout happens on idle.
-        break;
+        throw new Error("Slack cancellation requires an explicit owner action in the scenario");
       case "idle": {
         turn.options.typingCallbacks?.onIdle?.();
         turn.options.typingCallbacks?.onCleanup?.();
@@ -686,7 +671,7 @@ describe("slack delivery trace goldens", () => {
         setup: (recorder, client) =>
           setupSlackTrace(
             recorder,
-            mode === "partial" ? "cancel-mid-stream" : "progress-compact-commentary",
+            mode === "partial" ? "pending-preview-without-final" : "progress-compact-commentary",
             (prepared) => {
               if (mode !== "partial") {
                 prepared.account.config.streaming = {
@@ -917,7 +902,7 @@ describe("slack delivery trace goldens", () => {
   for (const scenarioName of [
     "short-final-native-rejection",
     "final-blocks-and-text",
-    "cancel-mid-stream",
+    "pending-preview-without-final",
     "progress-compact-commentary",
     "progress-native-unified",
     "native-prose-then-exec-failed",
@@ -935,6 +920,22 @@ describe("slack delivery trace goldens", () => {
       });
       const wireTexts = collectSlackWireTexts(events);
       expect(wireTexts.join("\n")).not.toMatch(/Exec failed/i);
+      if (scenarioName === "pending-preview-without-final") {
+        const posted = events.find((event) => event.kind === "chat.postMessage");
+        const previewId = (posted?.data as { result?: { ts?: string } } | undefined)?.result?.ts;
+        expect(previewId).toBeDefined();
+        const deleted = events.find((event) => event.kind === "chat.delete");
+        expect(deleted?.data).toMatchObject({ target: previewId });
+        expect(wireTexts).not.toContain(PENDING_PREVIEW_TEXT);
+        expect(
+          events.filter(
+            (event) =>
+              event.seq > (deleted?.seq ?? 0) &&
+              (event.kind === "chat.postMessage" || event.kind === "chat.update"),
+          ),
+        ).toEqual([]);
+        expect(traceRuntimeError).not.toHaveBeenCalled();
+      }
       if (
         scenarioName === "native-prose-then-exec-failed" ||
         scenarioName === "preview-exec-failed-then-prose"
@@ -983,6 +984,7 @@ describe("slack delivery trace goldens", () => {
             markSlackStreamsStopped(traceState.client as unknown as WebClient, CHANNEL_ID, [
               streamTs!,
             ]);
+            return;
           }
           await handleStep(step);
         };

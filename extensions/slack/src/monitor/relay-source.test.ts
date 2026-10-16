@@ -281,15 +281,31 @@ describe("Slack relay source", () => {
 
   describe("parseRelayFrame", () => {
     it("wraps the original SyntaxError as the cause", () => {
+      const malformed = "NOT JSON {{{";
+      const parse = JSON.parse;
+      let cause: unknown;
+      const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((...args) => {
+        try {
+          return parse(...args);
+        } catch (err) {
+          if (args[0] === malformed) {
+            cause = err;
+          }
+          throw err;
+        }
+      });
       let error: unknown;
       try {
-        parseRelayFrame(relayFrame("NOT JSON {{{"));
+        parseRelayFrame(relayFrame(malformed));
       } catch (err: unknown) {
         error = err;
+      } finally {
+        parseSpy.mockRestore();
       }
       expect(error).toBeInstanceOf(SlackRelayMalformedFrameError);
       expect((error as SlackRelayMalformedFrameError).message).toContain("malformed JSON frame");
-      expect((error as SlackRelayMalformedFrameError).cause).toBeDefined();
+      expect((error as SlackRelayMalformedFrameError).cause).toBeInstanceOf(SyntaxError);
+      expect((error as SlackRelayMalformedFrameError).cause).toBe(cause);
     });
   });
 });

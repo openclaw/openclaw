@@ -39,11 +39,10 @@ export async function resolveSlackQuestionAction(params: {
   accountId: string;
   userId: string;
   respond: (text: string) => Promise<void>;
-  resolveQuestion?: QuestionResolver;
 }): Promise<void> {
   let result: Awaited<ReturnType<QuestionResolver>>;
   try {
-    result = await (params.resolveQuestion ?? questionGatewayRuntime.resolveOption)({
+    result = await questionGatewayRuntime.resolveOption({
       cfg: params.cfg,
       questionId: params.action.questionId,
       optionIndex: params.action.optionIndex,

@@ -345,3 +345,21 @@ function emitSlackProgressHttpEvidence(
     })}\n`,
   );
 }
+
+export type SlackTraceScenarioName =
+  | "streaming-happy-native"
+  | "short-final-native-rejection"
+  | "final-blocks-and-text"
+  | "pending-preview-without-final"
+  | "progress-compact-commentary"
+  | "progress-session-card"
+  | "progress-native-unified"
+  | "native-prose-then-exec-failed"
+  | "preview-exec-failed-then-prose";
+
+export const NATIVE_SCENARIOS = new Set<SlackTraceScenarioName>([
+  "streaming-happy-native",
+  "short-final-native-rejection",
+  "final-blocks-and-text",
+  "native-prose-then-exec-failed",
+]);

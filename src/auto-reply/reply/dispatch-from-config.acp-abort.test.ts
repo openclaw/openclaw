@@ -1,20 +1,11 @@
 // Tests ACP dispatch abort behavior and emitted lifecycle hooks.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, raceWithTimeoutResult } from "../../../test/helpers/promise.js";
-import type {
-  AcpSessionResolution,
-  SessionAcpMeta,
-} from "../../acp/control-plane/manager.types.js";
-import { resolveAcpSessionTarget } from "../../acp/control-plane/manager.utils.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
-import type {
-  AcpRuntime,
-  AcpRuntimeEnsureInput,
-  AcpRuntimeEvent,
-  AcpRuntimeTurnInput,
-} from "../../plugin-sdk/acp-runtime.js";
+import type { AcpRuntimeEvent } from "../../plugin-sdk/acp-runtime.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
+import { createMockAcpSessionManager } from "./dispatch-from-config.acp-abort.test-support.js";
 import {
   acpManagerRuntimeMocks,
   acpMocks,
@@ -84,86 +75,6 @@ function expectNoReplies(dispatcher: ReturnType<typeof createDispatcher>) {
 
 function setNoAbort() {
   mocks.tryFastAbortFromMessage.mockResolvedValue(noAbortResult);
-}
-
-function createMockAcpSessionManager() {
-  return {
-    resolveSessionAsync: async (params: {
-      cfg: OpenClawConfig;
-      sessionKey: string;
-      agentId?: string;
-    }): Promise<AcpSessionResolution> => {
-      const target = resolveAcpSessionTarget(params);
-      const entry = acpMocks.readAcpSessionEntry({
-        cfg: params.cfg,
-        ...target,
-      }) as { acp?: SessionAcpMeta } | null;
-      if (entry?.acp) {
-        return {
-          kind: "ready",
-          ...target,
-          meta: entry.acp,
-        };
-      }
-      return { kind: "none", ...target };
-    },
-    getObservabilitySnapshot: () => ({
-      runtimeCache: { activeSessions: 0, idleTtlMs: 0, evictedTotal: 0 },
-      turns: {
-        active: 0,
-        queueDepth: 0,
-        completed: 0,
-        failed: 0,
-        averageLatencyMs: 0,
-        maxLatencyMs: 0,
-      },
-      errorsByCode: {},
-    }),
-    runTurn: vi.fn(
-      async (params: {
-        cfg: OpenClawConfig;
-        sessionKey: string;
-        agentId?: string;
-        text?: string;
-        attachments?: unknown[];
-        mode: string;
-        requestId: string;
-        signal?: AbortSignal;
-        onEvent: (event: Record<string, unknown>) => Promise<void>;
-      }) => {
-        const entry = acpMocks.readAcpSessionEntry({
-          cfg: params.cfg,
-          sessionKey: params.sessionKey,
-          agentId: params.agentId,
-        }) as {
-          acp?: { agent?: string; mode?: string };
-        } | null;
-        const runtimeBackend = acpMocks.requireAcpRuntimeBackend() as {
-          runtime?: AcpRuntime;
-        };
-        if (!runtimeBackend.runtime) {
-          throw new Error("ACP runtime backend not mocked");
-        }
-        const handle = await runtimeBackend.runtime.ensureSession({
-          sessionKey: params.sessionKey,
-          agentId: params.agentId,
-          mode: (entry?.acp?.mode || "persistent") as AcpRuntimeEnsureInput["mode"],
-          agent: entry?.acp?.agent || "codex",
-        });
-        const stream = runtimeBackend.runtime.runTurn({
-          handle,
-          text: params.text ?? "",
-          attachments: params.attachments as AcpRuntimeTurnInput["attachments"],
-          mode: params.mode as AcpRuntimeTurnInput["mode"],
-          requestId: params.requestId,
-          signal: params.signal,
-        });
-        for await (const event of stream) {
-          await params.onEvent(event);
-        }
-      },
-    ),
-  };
 }
 
 describe("dispatchReplyFromConfig ACP abort", () => {
@@ -886,18 +797,23 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     expect(getActiveReplyRunCount()).toBe(0);
   });
 
-  it.each([
+  it.for([
     { abort: "abortByUser", expected: "cancelled" },
     { abort: "abortForRestart", expected: "cancelled" },
     { abort: "supersede", expected: "superseded" },
   ] as const)(
-    "records $abort before an abort-insensitive resolver settles",
-    async ({ abort, expected }) => {
+    "fences late progress and records $abort before an abort-insensitive resolver settles",
+    async ({ abort, expected }, context) => {
       const resolverStarted = createDeferred();
       const releaseResolver = createDeferred();
       const resolverFinished = createDeferred();
       const runState: ReplyOperationRunState = {};
       const dispatcher = createDispatcher();
+      const sendPreparedReply = vi.spyOn(dispatcher, "sendPreparedReply");
+      const onPartialReply = vi.fn();
+      const onReasoningStream = vi.fn();
+      const onItemEvent = vi.fn();
+      const progressCallbacks = [onPartialReply, onReasoningStream, onItemEvent];
       const ctx = buildTestCtx({
         Provider: "discord",
         Surface: "discord",
@@ -906,18 +822,33 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       });
       const dispatchPromise = dispatchReplyFromConfig({
         ctx,
-        cfg: {
-          diagnostics: { enabled: true },
-          session: {
-            sendPolicy: { default: "allow" },
-          },
-        } as OpenClawConfig,
+        cfg: createDispatchConfig(),
         dispatcher,
-        replyOptions: { [REPLY_OPERATION_RUN_STATE]: runState },
+        replyOptions: {
+          [REPLY_OPERATION_RUN_STATE]: runState,
+          suppressDefaultToolProgressMessages: true,
+          onPartialReply,
+          onReasoningStream,
+          onItemEvent,
+        },
         replyResolver: async (_resolverCtx, options) => {
-          resolverStarted.resolve();
-          await releaseResolver.promise;
           try {
+            await options?.onPartialReply?.({ text: "admitted partial" });
+            await options?.onReasoningStream?.({ text: "admitted reasoning" });
+            await options?.onItemEvent?.({
+              kind: "tool",
+              itemId: "before-abort",
+              progressText: "admitted item",
+            });
+            resolverStarted.resolve();
+            await releaseResolver.promise;
+            await options?.onPartialReply?.({ text: "late partial must stay hidden" });
+            await options?.onReasoningStream?.({ text: "late reasoning must stay hidden" });
+            await options?.onItemEvent?.({
+              kind: "tool",
+              itemId: "after-abort",
+              progressText: "late item must stay hidden",
+            });
             await options?.onToolResult?.({ text: "late tool should not send" });
             await options?.onBlockReply?.({ text: "late block should not send" });
             const [plan] = createStructuredOutboundPayloadPlan([
@@ -934,9 +865,24 @@ describe("dispatchReplyFromConfig ACP abort", () => {
         },
       });
 
+      context.onTestFinished(async () => {
+        releaseResolver.resolve();
+        await Promise.allSettled([dispatchPromise]);
+        await replyRunRegistry.waitForIdle("agent:main:resolver-abort");
+      });
       await resolverStarted.promise;
       const operation = replyRunRegistry.get("agent:main:resolver-abort");
       try {
+        for (const callback of progressCallbacks) {
+          expect(callback).toHaveBeenCalledOnce();
+        }
+        expect(onPartialReply).toHaveBeenCalledWith({ text: "admitted partial" });
+        expect(onReasoningStream).toHaveBeenCalledWith({ text: "admitted reasoning" });
+        expect(onItemEvent).toHaveBeenCalledWith({
+          kind: "tool",
+          itemId: "before-abort",
+          progressText: "admitted item",
+        });
         expect(operation?.[abort]()).toBe(true);
         await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
         expect(runState.agentTurnOwner).toBe(operation);
@@ -948,8 +894,12 @@ describe("dispatchReplyFromConfig ACP abort", () => {
         await replyRunRegistry.waitForIdle("agent:main:resolver-abort");
       }
 
+      for (const callback of progressCallbacks) {
+        expect(callback).toHaveBeenCalledOnce();
+      }
       expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
       expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+      expect(sendPreparedReply).not.toHaveBeenCalled();
       expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
       expect(getActiveReplyRunCount()).toBe(0);
     },

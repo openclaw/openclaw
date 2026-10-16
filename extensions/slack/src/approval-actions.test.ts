@@ -19,7 +19,7 @@ describe("Slack approval actions", () => {
     expect(decodeSlackApprovalAction(encoded)).toEqual(action);
   });
 
-  it("round-trips system-agent approval facts emitted by the shared normalizer", () => {
+  it("round-trips system-agent approval facts for allow-once and deny", () => {
     for (const decision of ["allow-once", "deny"] as const) {
       const action = {
         type: "approval" as const,

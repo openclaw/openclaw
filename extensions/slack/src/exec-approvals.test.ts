@@ -170,7 +170,7 @@ describe("slack exec approvals", () => {
     expect(isSlackExecApprovalAuthorizedSender({ cfg, senderId: "U999OTHER" })).toBe(false);
   });
 
-  it("keeps the local Slack approval prompt path active", () => {
+  it("suppresses local exec prompts only while native delivery is enabled", () => {
     const payload = {
       channelData: {
         execApproval: {

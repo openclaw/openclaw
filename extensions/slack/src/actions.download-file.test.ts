@@ -93,6 +93,18 @@ describe("downloadSlackFile", () => {
     });
   });
 
+  it.each([
+    { name: "public channel metadata", file: { channels: ["C123"] } },
+    { name: "private channel metadata", file: { groups: ["C123"] } },
+    { name: "DM metadata", file: { ims: ["C123"] } },
+    { name: "share metadata", file: { shares: { private: { C123: [{ ts: "111.111" }] } } } },
+  ])("downloads when $name independently proves the requested channel", async ({ file }) => {
+    const client = createClient();
+    client.files.info.mockResolvedValueOnce({ file: fileInfo({ channels: undefined, ...file }) });
+    await expect(download(client)).resolves.toEqual(media);
+    expect(resolveSlackMedia).toHaveBeenCalledOnce();
+  });
+
   it("reapplies channel and thread admission when download metadata is refreshed", async () => {
     const client = createClient();
     client.files.info.mockResolvedValueOnce({

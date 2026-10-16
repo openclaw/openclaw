@@ -1371,8 +1371,6 @@
 ["extensions/slack/src/monitor/events/messages.test.ts","openclaw/plugin-sdk/text-chunking","82307ecff700e4251436b6671dd4bab925aff93a8aa40cce1b32d624cc042f63",1]
 ["extensions/slack/src/monitor/events/pins.test.ts","openclaw/plugin-sdk/system-event-runtime","84113ddae7cec993261a08855fce5f4ef2c052f414d47c87d78387efd43d32a9",1]
 ["extensions/slack/src/monitor/events/reactions.test.ts","openclaw/plugin-sdk/system-event-runtime","9286c36bf5b0af4b61f9305253dfeeeea15c8c96d29689b0cc33a7d6302f1ff8",1]
-["extensions/slack/src/monitor/media.test.ts","./media.runtime.js","30166333bfaf79800c2e49a66741fedf520e19f489c146e7a47f71a7f3e99152",1]
-["extensions/slack/src/monitor/message-handler.debounce-policy.test.ts","./message-handler/pipeline.runtime.js","c5209026a8425c4c7929c6d690e03475571eb3c4e15ef686ea1efddbfe5b2111",1]
 ["extensions/slack/src/monitor/message-handler.import-cancellation.test.ts","./message-handler/pipeline.runtime.js","ec34b73919a3320e2d68a63810a734c48fc56d3a2a8fdc51309e1e3c205ebe7c",1]
 ["extensions/slack/src/monitor/message-handler.test.ts","./message-handler/pipeline.runtime.js","b1ba798c011d323299ee27cbf4051201c90e91cc667fa0758255e43e4cd1b07f",1]
 ["extensions/slack/src/monitor/message-handler.test.ts","./thread-resolution.js","734bc4e8d879e3d00bf7bd3eb08f8468861948d850acbf2c2892e7c85c7692c6",1]

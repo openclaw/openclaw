@@ -91,7 +91,8 @@ function assertApprovalCheckpointJson(params: {
   state: MantisApprovalCheckpointState;
 }) {
   assertApprovalCheckpointBaseJson(params);
-  const expectedKind = params.scenarioId.endsWith("-approval-exec-native") ? "exec" : "plugin";
+  // Codex command approvals use the plugin approval owner, despite the exec suffix.
+  const expectedKind = params.scenarioId === "slack-approval-exec-native" ? "exec" : "plugin";
   if (params.record.approvalKind !== expectedKind) {
     throw new Error(`${params.label} has an unexpected approval kind.`);
   }

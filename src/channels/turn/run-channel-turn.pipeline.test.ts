@@ -305,7 +305,15 @@ describe("channel turn pipeline", () => {
   it("can record a target session without changing the command dispatch session", async () => {
     const log = vi.fn();
     const events: string[] = [];
-    const recordInboundSession = createRecordInboundSession(events);
+    const recordStarted = createDeferred();
+    const recordReleased = createDeferred();
+    const recordInboundSession = vi.mocked(createRecordInboundSession(events));
+    recordInboundSession.mockImplementation(async () => {
+      events.push("record");
+      recordStarted.resolve();
+      await recordReleased.promise;
+      events.push("recordSettled");
+    });
     const onAdopted = vi.fn(async () => {
       events.push("adopted");
     });
@@ -326,7 +334,7 @@ describe("channel turn pipeline", () => {
     const commandSessionKey = "agent:main:command:telegram:42";
     const targetSessionKey = "agent:main:telegram:group:42:topic:7";
 
-    const result = await dispatchTestAssembledTurn({
+    const turn = dispatchTestAssembledTurn({
       channel: "telegram",
       routeSessionKey,
       ctxPayload: createCtx({
@@ -345,8 +353,21 @@ describe("channel turn pipeline", () => {
       },
     });
 
+    try {
+      await recordStarted.promise;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(events).toEqual(["record"]);
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(onAdopted).not.toHaveBeenCalled();
+    } finally {
+      recordReleased.resolve();
+      await turn;
+    }
+    const result = await turn;
     expectDispatched(result);
-    expect(events).toEqual(["record", "afterRecord", "dispatch", "adopted"]);
+    expect(events).toEqual(["record", "recordSettled", "afterRecord", "dispatch", "adopted"]);
     expect(onAdopted).toHaveBeenCalledOnce();
     expect(log).not.toHaveBeenCalledWith(
       expect.objectContaining({ reason: "zero-count-visible-dispatch" }),

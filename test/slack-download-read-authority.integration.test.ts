@@ -786,6 +786,7 @@ describe("registered Slack attachment downloads", () => {
       async (fixture) => {
         const result = await fixture.invoke();
         const saved = resultPath(result);
+        expect(path.dirname(saved)).toBe(fixture.mediaDir);
         await expect(fs.readFile(saved)).resolves.toEqual(fixture.body);
         const image = result?.content.find((block) => block.type === "image");
         if (!image || image.type !== "image") {

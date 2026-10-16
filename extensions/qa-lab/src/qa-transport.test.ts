@@ -1,3 +1,6 @@
+import { syncBuiltinESMExports } from "node:module";
+import timersPromises from "node:timers/promises";
+import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import {
@@ -219,17 +222,59 @@ describe("waitForQaTransportOutboundSequence", () => {
     });
   });
 
-  it("does not accept a matching preview that is deleted during final settling", async () => {
-    const state = createQaBusState();
-    const preview = outbound(state, "preview", { senderId: "openclaw" });
-    edit(state, preview.id, "final marker");
-    setTimeout(() => {
-      state.deleteMessage({ accountId: "default", messageId: preview.id });
-    }, 5);
-
-    await expect(waitForSequence(state, { finalSettleMs: 20, timeoutMs: 50 })).rejects.toThrow(
-      "timed out after 50ms",
-    );
+  it.each([false, true])("settles only a live final message (deleted=%s)", async (deleted) => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(0);
+    const sleep = vi.spyOn(timersPromises, "setTimeout").mockImplementation(promisify(setTimeout));
+    syncBuiltinESMExports();
+    try {
+      const state = createQaBusState();
+      const preview = outbound(state, "preview", { senderId: "openclaw" });
+      edit(state, preview.id, "final marker");
+      if (deleted) {
+        setTimeout(() => {
+          state.deleteMessage({ accountId: "default", messageId: preview.id });
+        }, 5);
+      }
+      const readEvents = vi.fn(() => state.getSnapshot().events);
+      const result = waitForQaTransportOutboundSequence({
+        accountId: "default",
+        input: {
+          conversationId: "alice",
+          finalSettleMs: 20,
+          finalTextIncludes: "final marker",
+          minimumPreviewEvents: 1,
+          timeoutMs: 300,
+        },
+        readEvents,
+      }).then(
+        (value) => ({ value, error: undefined, at: Date.now() }),
+        (error: unknown) => ({ value: undefined, error, at: Date.now() }),
+      );
+      // Exercise the imported timers/promises wait across the unchanged 100ms poll.
+      await vi.advanceTimersByTimeAsync(300);
+      const outcome = await result;
+      expect(readEvents.mock.calls.length).toBeGreaterThanOrEqual(2);
+      if (deleted) {
+        expect(outcome.error).toEqual(
+          expect.objectContaining({ message: "timed out after 300ms" }),
+        );
+        expect(outcome.value).toBeUndefined();
+        expect(outcome.at).toBe(300);
+      } else {
+        expect(outcome.error).toBeUndefined();
+        expect(outcome.value).toMatchObject({
+          events: [{ kind: "sent" }, { kind: "edited" }],
+          final: { id: preview.id, text: "final marker" },
+        });
+        expect(outcome.at).toBe(100);
+      }
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      sleep.mockRestore();
+      vi.useRealTimers();
+      syncBuiltinESMExports();
+    }
   });
 
   it("does not count an already-final send as a preview", async () => {

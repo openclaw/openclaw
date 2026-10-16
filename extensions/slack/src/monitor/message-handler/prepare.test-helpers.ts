@@ -5,10 +5,12 @@ import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { upsertSessionEntry, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterAll } from "vitest";
+import { afterAll, vi } from "vitest";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import { installSlackTestRuntime } from "../../test-runtime.test-support.js";
+import type { SlackMessageEvent } from "../../types.js";
 import type { SlackChannelConfigEntries } from "../channel-config.js";
 import { createSlackMonitorContext } from "../context.js";
 
@@ -97,4 +99,58 @@ export function createSlackSessionStoreFixture(prefix: string) {
       return { dir, storePath: path.join(dir, "sessions.json") };
     },
   };
+}
+
+export function createMissingChannelInfoBotCtx(params?: {
+  groupDmEnabled?: boolean;
+  ownerId?: string;
+}) {
+  const conversationsInfo = vi
+    .fn<App["client"]["conversations"]["info"]>()
+    .mockRejectedValue(new Error("missing_scope"));
+  const members = vi.fn().mockResolvedValue({
+    members: params?.ownerId ? [params.ownerId] : [],
+    response_metadata: { next_cursor: "" },
+  });
+  const ctx = createInboundSlackTestContext({
+    cfg: {
+      channels: { slack: { enabled: true, allowBots: true, replyToMode: "all" } },
+    } as OpenClawConfig,
+    appClient: {
+      conversations: { info: conversationsInfo, members },
+    } as unknown as App["client"],
+    defaultRequireMention: false,
+    replyToMode: "all",
+    groupDmEnabled: params?.groupDmEnabled,
+  });
+  ctx.allowFrom = params?.ownerId ? [params.ownerId] : ctx.allowFrom;
+  ctx.resolveUserName = async () => ({ name: "Alice" });
+  return {
+    account: createSlackTestAccount({ allowBots: true, replyToMode: "all" }),
+    conversationsInfo,
+    ctx,
+  };
+}
+
+export function createSlackMessage(overrides: Partial<SlackMessageEvent>): SlackMessageEvent {
+  return {
+    type: "message",
+    channel: "D123",
+    channel_type: "im",
+    user: "U1",
+    text: "hi",
+    ts: "1.000",
+    ...overrides,
+  };
+}
+
+export async function seedSessionEntries(
+  storePath: string,
+  entries: Record<string, SessionEntry>,
+): Promise<void> {
+  await Promise.all(
+    Object.entries(entries).map(([sessionKey, entry]) =>
+      upsertSessionEntry({ storePath, sessionKey, entry }),
+    ),
+  );
 }
