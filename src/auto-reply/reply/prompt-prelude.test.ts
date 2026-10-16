@@ -15,7 +15,7 @@ function countOccurrences(text: string | undefined, needle: string): number {
 }
 
 describe("buildReplyPromptEnvelope", () => {
-  it("keeps bare reset runtime context in the model prompt and out of transcript/current-turn context", () => {
+  it("keeps bare reset user context in the model prompt and trusted metadata outside the transcript", () => {
     const sessionCtx = finalizeInboundContext({
       Body: "",
       BodyStripped: "",
@@ -30,6 +30,7 @@ describe("buildReplyPromptEnvelope", () => {
       baseBody: "A new session was started via /new or /reset.",
       hasUserBody: true,
       inboundUserContext: "Conversation info:\nsender_id=telegram-user-1",
+      inboundMetaPrompt: "Trusted reset metadata",
       isBareSessionReset: true,
       startupAction: "reset",
       startupContextPrelude: "Startup context",
@@ -38,7 +39,10 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.prefixedCommandBody).toContain("sender_id=telegram-user-1");
     expect(envelope.prefixedCommandBody).toContain("Startup context");
     expect(envelope.transcriptCommandBody).toBe("[OpenClaw session reset]");
-    expect(envelope.currentInboundContext).toBeUndefined();
+    expect(envelope.currentInboundContext?.text).toBe("Trusted reset metadata");
+    expect(envelope.currentInboundContext?.fragments).toEqual([
+      { kind: "runtime-instruction", text: "Trusted reset metadata" },
+    ]);
   });
 
   it.each([
@@ -62,6 +66,7 @@ describe("buildReplyPromptEnvelope", () => {
       baseBody: "Tldr",
       hasUserBody: true,
       inboundUserContext: buildInboundUserContextPrefix(sessionCtx),
+      inboundMetaPrompt: "Trusted Telegram metadata",
       inboundUserContextPromptJoiner: resolveInboundUserContextPromptJoiner(sessionCtx),
       isBareSessionReset: false,
       startupAction: "new",
@@ -74,6 +79,10 @@ describe("buildReplyPromptEnvelope", () => {
       prompt: envelope.prefixedCommandBody,
     });
     expect(prompt).toContain('[Replying to: "The restore finished."]\n#42: Tldr');
+    expect(countOccurrences(prompt, "Trusted Telegram metadata")).toBe(1);
+    expect(prompt.indexOf("Trusted Telegram metadata")).toBeLessThan(
+      prompt.indexOf("Current message:"),
+    );
     expect(envelope.transcriptCommandBody).toBe("Tldr");
     for (const event of extra.systemEventBlocks) {
       expect(prompt).toContain(event);
@@ -149,6 +158,7 @@ describe("buildReplyPromptEnvelope", () => {
         baseBody: "Current room event",
         hasUserBody: true,
         inboundUserContext,
+        inboundMetaPrompt: "Trusted room metadata",
         isBareSessionReset: false,
         startupAction: "new",
         inboundEventKind: "room_event",
@@ -168,6 +178,7 @@ describe("buildReplyPromptEnvelope", () => {
         envelope.currentInboundContext?.text,
         envelope.currentInboundContext?.resumableText,
       ]) {
+        expect(countOccurrences(text, "Trusted room metadata")).toBe(1);
         expect(text).toContain("Conversation info:");
         expect(text).toContain("Thread note");
         expect(text).toContain("System event");

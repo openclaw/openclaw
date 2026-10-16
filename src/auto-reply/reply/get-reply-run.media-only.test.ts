@@ -42,6 +42,7 @@ import {
   loadSessionUpdatesRuntime,
 } from "./get-reply-run-helpers.js";
 import { runPreparedReply } from "./get-reply-run.js";
+import { registerReplyPromptContextCases } from "./get-reply-run.prompt-context.test-support.js";
 import { registerPendingRequesterAuthorityCases } from "./get-reply-run.requester-authority.test-support.js";
 import { registerSystemEventAdmissionCases } from "./get-reply-run.system-event-admission.test-support.js";
 import {
@@ -461,6 +462,7 @@ function requireRunReplyAgentCall(index = 0) {
 
 describe("runPreparedReply media-only handling", () => {
   registerPendingRequesterAuthorityCases({ runPrepared, loadSessionEntryMock });
+  registerReplyPromptContextCases({ runPrepared, requireRunReplyAgentCall });
   it.each([
     "owner-alias",
     "non-owner",
@@ -616,6 +618,7 @@ describe("runPreparedReply media-only handling", () => {
     vi.clearAllMocks();
     vi.mocked(buildSourceConversationContext).mockReturnValue("");
     vi.mocked(buildGroupIntro).mockReturnValue("");
+    vi.mocked(buildInboundMetaSystemPrompt).mockReset().mockReturnValue("");
     vi.mocked(buildInboundUserContextPrefix).mockReset().mockReturnValue("");
     vi.mocked(resolveInboundUserContextPromptJoiner).mockReturnValue(undefined);
     vi.mocked(hasControlCommand).mockReturnValue(false);
@@ -643,25 +646,6 @@ describe("runPreparedReply media-only handling", () => {
       defaultLevel: "on",
       fullAccessAvailable: true,
     });
-  });
-
-  it("includes current exec overrides in the queued runner prompt", async () => {
-    await runPrepared({
-      execOverrides: {
-        host: "gateway",
-        security: "full",
-        ask: "always",
-        node: "worker-1",
-      },
-      resolvedElevatedLevel: "off",
-    });
-
-    const prompt = requireRunReplyAgentCall().followupRun.run.extraSystemPromptStatic;
-    expect(prompt).toContain(
-      "Current session exec defaults: host=gateway security=full ask=always node=worker-1.",
-    );
-    expect(prompt).toContain("Current elevated level: off.");
-    expect(prompt).toContain("Do not assume a prior denial still applies");
   });
 
   it.each(["explicit", "stored"] as const)(

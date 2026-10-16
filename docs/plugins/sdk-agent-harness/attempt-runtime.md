@@ -149,6 +149,8 @@ When the capability is absent, this remote attachment preparation is unavailable
 Official native harnesses use `buildCurrentInboundPrompt` from the private
 `openclaw/plugin-sdk/agent-harness-attempt-runtime` to combine the prepared
 `currentInboundContext` with the current prompt using the channel's joiner.
+The host projects producer-owned runtime fragments into that carrier before
+plugin dispatch, including command-turn source metadata and delivery formatting.
 Submit this context with each message, including resumed sessions. Steering
 receives its own `options.currentInboundContext`; do not reuse the initial
 turn's context. Keep context out of the original user transcript and pending

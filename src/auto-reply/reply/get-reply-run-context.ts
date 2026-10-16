@@ -227,19 +227,14 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     fullAccessAvailable: fullAccessState.available,
     fullAccessBlockedReason: fullAccessState.blockedReason,
   });
-  const staticSystemPromptParts = [
+  const extraSystemPromptParts = [
     sessionStableConversationContext,
     groupIntro,
     groupSystemPrompt,
     execOverridePromptHint,
   ].filter(Boolean);
-  const extraSystemPromptParts = [inboundMetaPrompt, ...staticSystemPromptParts].filter(Boolean);
-  const sourceConversationContextPromptOffset = sessionStableConversationContext
-    ? inboundMetaPrompt
-      ? inboundMetaPrompt.length + 2
-      : 0
-    : undefined;
-  const extraSystemPromptStatic = staticSystemPromptParts.join("\n\n");
+  const sourceConversationContextPromptOffset = sessionStableConversationContext ? 0 : undefined;
+  const extraSystemPromptStatic = extraSystemPromptParts.join("\n\n");
   const cliSessionBindingFacts = {
     extraSystemPromptStatic,
     ...(sessionPromptSourceReplyDeliveryMode
@@ -391,6 +386,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     baseBody: baseBodyFinal,
     hasUserBody,
     inboundUserContext,
+    inboundMetaPrompt,
     activeGoalContext,
     inboundUserContextPromptJoiner,
     isBareSessionReset,

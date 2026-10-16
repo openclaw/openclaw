@@ -109,18 +109,38 @@ const claudeTurn = {
   isNewSession: true,
 };
 
-it("preserves private Runtime facts when optional turn context fails", async () => {
-  vi.spyOn(mediaTaskStatus, "buildMediaTaskRuntimeContext").mockRejectedValueOnce(
-    new Error("snapshot unavailable"),
-  );
-  const turn = await prepareCliTurnPromptContext({
-    ...claudeTurn,
-    deliveryGuidance: "Reply in this conversation.",
-  });
-  expect(turn.systemPrompt).toBe("Stable instructions.");
-  expect(turn.prompt).toBe("Hello");
-  expect(turn.promptContext?.appendContext).toBe(`${runtimeFacts}\n\nReply in this conversation.`);
-});
+it.each([false, true])(
+  "preserves private Runtime facts and trusted turn instructions when optional context fails: %s",
+  async (fails) => {
+    const snapshot = vi.spyOn(mediaTaskStatus, "buildMediaTaskRuntimeContext");
+    if (fails) {
+      snapshot.mockRejectedValueOnce(new Error("snapshot unavailable"));
+    } else {
+      snapshot.mockResolvedValueOnce("");
+    }
+    const metadata =
+      '### Message Context\n```json\n{"schema":"openclaw.inbound_meta.v2","channel":"telegram"}\n```';
+    const deliveryFormat =
+      '### Delivery Format\n```json\n{"schema":"openclaw.delivery_format.v1","response_format":{"text_markup":"markdown"}}\n```';
+    const turn = await prepareCliTurnPromptContext({
+      ...claudeTurn,
+      deliveryGuidance: "Reply in this conversation.",
+      runtimeContextFragments: [
+        { kind: "runtime-instruction", text: `${metadata}\n\n${deliveryFormat}` },
+      ],
+    });
+    expect(turn.systemPrompt).toBe("Stable instructions.");
+    expect(turn.prompt).toBe("Hello");
+    expect(turn.promptContext?.appendContext).toContain(
+      `${runtimeFacts}\n\nReply in this conversation.`,
+    );
+    for (const instruction of [metadata, deliveryFormat]) {
+      expect(turn.promptContext?.appendContext?.split(instruction)).toHaveLength(2);
+      expect(turn.promptForHooks).toContain(instruction);
+      expect(turn.systemPrompt).not.toContain(instruction);
+    }
+  },
+);
 
 it("lets a whole-system hook replacement remove ordinary Claude Runtime facts", async () => {
   const turn = await prepareCliTurnPromptContext({

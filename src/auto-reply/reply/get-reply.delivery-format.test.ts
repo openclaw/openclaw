@@ -79,11 +79,16 @@ async function setup(label: string) {
       agentMeta: { sessionId: p.sessionId, provider: "mock-openai", model: "gpt-5.6-luna" },
     },
   }));
-  const lastPrompt = () => runAgent.mock.calls.at(-1)?.[0].extraSystemPrompt ?? "";
+  const lastPrompt = () => runAgent.mock.calls.at(-1)?.[0];
   return { cfg, storePath, lastPrompt };
 }
 
-function expectContractOnce(prompt: string, markup: string) {
+function expectContractOnce(
+  attempt: Parameters<typeof embeddedAgent.runEmbeddedAgent>[0] | undefined,
+  markup: string,
+) {
+  expect(attempt?.extraSystemPrompt ?? "").not.toContain("### Delivery Format");
+  const prompt = attempt?.currentInboundContext?.text ?? "";
   expect(prompt.split("### Delivery Format")).toHaveLength(2);
   expect(prompt).toContain(`"text_markup": "${markup}"`);
 }

@@ -48,6 +48,8 @@ type ReplyPromptEnvelopeBaseParams = {
   baseBody: string;
   hasUserBody: boolean;
   inboundUserContext: string;
+  /** Trusted metadata and delivery formatting belong to the current turn, not its system prefix. */
+  inboundMetaPrompt?: string;
   activeGoalContext?: string;
   inboundUserContextPromptJoiner?: CurrentInboundPromptContext["promptJoiner"];
   isBareSessionReset: boolean;
@@ -202,7 +204,11 @@ export function buildReplyPromptEnvelopeBase(
   return {
     effectiveBaseBody,
     transcriptBody,
-    currentInboundContext,
+    currentInboundContext: params.inboundMetaPrompt
+      ? appendCurrentInboundContext(currentInboundContext, [
+          { kind: "runtime-instruction", text: params.inboundMetaPrompt },
+        ])
+      : currentInboundContext,
   };
 }
 

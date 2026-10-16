@@ -323,7 +323,6 @@ it.each([
             }),
     };
     const normalContext = [
-      buildInboundMetaSystemPrompt(ctx, {}),
       shared
         ? buildGroupChatContext({
             sessionCtx: ctx,
@@ -369,6 +368,18 @@ it.each([
           silentReplyPromptMode: "none",
         });
       expect(prompt(prepared.opts.extraSystemPrompt)).toBe(prompt(normalContext));
+      const metadata = prepared.opts.runtimeContextFragments?.find((fragment) =>
+        fragment.text.startsWith("### Message Context"),
+      );
+      expect(metadata?.kind).toBe("runtime-instruction");
+      expect(JSON.parse(/```json\n([\s\S]*?)\n```/.exec(metadata?.text ?? "")![1]!)).toEqual({
+        schema: "openclaw.inbound_meta.v2",
+        channel,
+        provider: channel,
+        surface: channel,
+        chat_type: chatType,
+        ...(channel === "slack" ? { account_id: "work" } : {}),
+      });
       expect(prepared.opts.privateCompletion).toBe(privateCompletion);
       expect(prepared.opts.silentReplyPromptMode).toBe("none");
       expect(prepared.opts.inputProvenance).toEqual({
@@ -419,6 +430,10 @@ it.each([
       cfg: {},
       opts: {
         message: "Child finished.",
+        extraSystemPrompt: "Keep the authored instruction.",
+        runtimeContextFragments: [
+          { kind: "runtime-instruction", text: "Keep the existing turn instruction." },
+        ],
         deliver: testCase.deliver,
         replyAccountId: testCase.replyAccountId,
         inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
@@ -436,19 +451,25 @@ it.each([
         }),
       },
     });
-    const prompt = prepared.extraSystemPrompt ?? "";
+    expect(prepared.extraSystemPrompt).toBe(
+      "You are in a Telegram direct conversation. Your replies are automatically sent to this conversation unless the current-turn context says final replies stay private.\n\nKeep the authored instruction.",
+    );
+    expect(prepared.runtimeContextFragments?.[0]).toEqual({
+      kind: "runtime-instruction",
+      text: "Keep the existing turn instruction.",
+    });
+    const prompt =
+      prepared.runtimeContextFragments
+        ?.slice(1)
+        .map((fragment) => fragment.text)
+        .join("\n\n") ?? "";
     expect(prompt).toContain('"account_id": "rich"');
     expect(prompt.split("### Delivery Format")).toHaveLength(testCase.deliver ? 2 : 1);
     if (testCase.markup) {
       expect(prompt).toContain(`"text_markup": "${testCase.markup}"`);
     }
     if (testCase.replyAccountId === "rich") {
-      expect(prompt).toBe(
-        [
-          buildInboundMetaSystemPrompt(ctx, {}),
-          buildSourceConversationContext({ sessionCtx: ctx }),
-        ].join("\n\n"),
-      );
+      expect(prompt).toBe(buildInboundMetaSystemPrompt(ctx, {}));
     }
   } finally {
     resetPluginRuntimeStateForTest();
