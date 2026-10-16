@@ -243,4 +243,14 @@ describe("openclaw-board-view retention", () => {
     await settleCells(view);
     expect(cell.isConnected).toBe(false);
   });
+
+  it("tears down its retained cells when removed before disposal", async () => {
+    const view = await mount();
+    const cells = [...view.querySelectorAll("openclaw-board-widget-cell")];
+    const teardown = cells.map((cell) => vi.spyOn(cell, "teardown"));
+    view.remove();
+    const retired = view.teardown();
+    expect(teardown.every((spy) => spy.mock.calls.length === 1)).toBe(true);
+    await retired;
+  });
 });

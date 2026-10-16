@@ -17,7 +17,8 @@ import type { BoardViewCallbacks, BoardWidgetFrameUrl } from "../../lib/board/vi
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { orderedBoardTabs } from "./board-tabs.tsx";
-import type { BoardWidgetCellCallbacks } from "./board-widget-cell.ts";
+import type { BoardWidgetCellMethods } from "./board-widget-cell-options.ts";
+import type { BoardWidgetCellCallbacks, BoardWidgetCellProps } from "./board-widget-cell.ts";
 
 type BoardPointerGesture = {
   mode: "move" | "resize";
@@ -58,7 +59,11 @@ export type BoardViewMethods = {
 };
 export type BoardViewElement = SolidBridgeElement<BoardViewProps, BoardViewMethods>;
 
-export function createBoardViewState(props: BoardViewProps, host: BoardViewElement) {
+export function createBoardViewState(
+  props: BoardViewProps,
+  host: BoardViewElement,
+  cells: () => SolidBridgeElement<BoardWidgetCellProps, BoardWidgetCellMethods>[],
+) {
   // Pointer identity and mutation admission must be visible within the same event turn.
   let gesture: BoardPointerGesture | null = null;
   let grid: HTMLElement | undefined;
@@ -143,9 +148,7 @@ export function createBoardViewState(props: BoardViewProps, host: BoardViewEleme
 
   async function teardown(): Promise<void> {
     update(clearGesture);
-    await Promise.all(
-      [...host.querySelectorAll("openclaw-board-widget-cell")].map((cell) => cell.teardown()),
-    );
+    await Promise.all(cells().map((cell) => cell.teardown()));
   }
 
   // Readiness is sampled after a cell commit; this callback owns no subscription.
@@ -326,9 +329,7 @@ export function createBoardViewState(props: BoardViewProps, host: BoardViewEleme
         local.focusName = target.name;
       });
       queueMicrotask(() => {
-        const cell = [...host.querySelectorAll("openclaw-board-widget-cell")].find(
-          (entry) => entry.widget?.name === target.name,
-        );
+        const cell = cells().find((entry) => entry.widget?.name === target.name);
         cell?.querySelector<HTMLElement>(".board-widget")?.focus();
       });
     },
@@ -361,9 +362,7 @@ export function createBoardViewState(props: BoardViewProps, host: BoardViewEleme
     ) {
       return;
     }
-    const cell = [...host.querySelectorAll("openclaw-board-widget-cell")].find(
-      (entry) => entry.pageChrome && entry.widget === widget,
-    );
+    const cell = cells().find((entry) => entry.pageChrome && entry.widget === widget);
     cell?.selectMenuItem(value);
   }
 

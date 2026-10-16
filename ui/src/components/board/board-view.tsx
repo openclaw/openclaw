@@ -8,7 +8,7 @@ import {
   layout,
 } from "../../lib/board/grid.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import "../../styles/board.css";
 import { BoardTabs } from "./board-tabs.tsx";
@@ -19,6 +19,7 @@ import {
   type BoardViewMethods,
   type BoardViewElement,
 } from "./board-view-state.ts";
+import type { BoardWidgetCellMethods } from "./board-widget-cell-options.ts";
 import { BoardWidgetCell, type BoardWidgetCellProps } from "./board-widget-cell.ts";
 
 export type { BoardViewProps } from "./board-view-state.ts";
@@ -28,20 +29,19 @@ type CellEntry = {
   key: string;
   present: boolean;
   retiring?: boolean;
-  element?: Pick<
-    HTMLElementTagNameMap["openclaw-board-widget-cell"],
-    "teardown" | "restartAfterTeardown"
-  >;
+  element?: SolidBridgeElement<BoardWidgetCellProps, BoardWidgetCellMethods>;
   options: BoardWidgetCellProps;
 };
 
 function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
   const [layoutRevision, setLayoutRevision] = createSignal(0, { ownedWrite: true });
   const invalidateLayout = () => setLayoutRevision((value) => value + 1);
-  const owner = createBoardViewState(props, host);
-  views.set(host, owner);
   // Grid coordinates change; map insertion order keeps iframe nodes in place.
   const entries = new Map<string, CellEntry>();
+  const owner = createBoardViewState(props, host, () =>
+    [...entries.values()].flatMap(({ element }) => (element ? [element] : [])),
+  );
+  views.set(host, owner);
   let disposed = false;
   const cellKey = (name: string) =>
     JSON.stringify([
