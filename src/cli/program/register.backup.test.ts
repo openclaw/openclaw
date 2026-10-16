@@ -24,6 +24,7 @@ vi.mock("../../commands/backup.js", () => ({
   backupCreateCommand: mocks.backupCreateCommand,
 }));
 
+// mock-isolation: Argument parsing must not open database owners or launch backup workers.
 vi.mock("../../commands/backup-git.js", () => ({
   backupGitLogCommand: mocks.backupGitLogCommand,
   backupGitRestoreCommand: mocks.backupGitRestoreCommand,

@@ -4406,7 +4406,6 @@
 ["src/cli/program/register.agent.test.ts","../../commands/agents.commands.team.js","1526bff815e3455689f5009a3f01719fa872e7c62d800dbc3fab98b26a79deab",1]
 ["src/cli/program/register.agent.test.ts","../../global-state.js","63f4bb2b464d726ed2dec2b34655d7ac606b3a1d4f34cffec8763a1903ca42c3",1]
 ["src/cli/program/register.agent.test.ts","../one-shot-exit.js","d70b40254734f465dc1c42158adeb3e484bf6bf7c2ce9c3ebf6372056c5fc851",1]
-["src/cli/program/register.backup.test.ts","../../commands/backup-git.js","a0494db40a5b933ad21d9881238eb03144da5cd0b05456fa01c88b02be15a9ee",1]
 ["src/cli/program/register.backup.test.ts","../../commands/backup-restore.js","aa0d7ff52cf0c38b894ff695ad2abf85bd36defb295a2dc901f3a6a482e2cf4a",1]
 ["src/cli/program/register.backup.test.ts","../../commands/backup-sqlite.js","4e986afce36113045a03958f0104a78ed021b90cc637723f63e9e82c9c0581d3",1]
 ["src/cli/program/register.backup.test.ts","../../commands/backup-verify.js","b5d6c480310c835d774b74b2b74721f37f1833974c562e5092b14c608bde9512",1]
