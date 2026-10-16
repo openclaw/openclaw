@@ -891,7 +891,7 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   padding: 3px 8px;
 }
 
-.new-session-page__environment-option > .session-menu__check:empty {
+.new-session-page__unavailable-status ~ .session-menu__check:empty {
   display: none;
 }
 
