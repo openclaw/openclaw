@@ -28,9 +28,16 @@ import { createOneShotDiagnosticsTestHost } from "./one-shot-diagnostics.test-su
 let host: ReturnType<typeof createOneShotDiagnosticsTestHost>;
 const startOneShotDiagnosticsExporters: typeof startWithoutHost = (params) => host.start(params);
 
-const otelEnabledConfig = {
+const otelEnabledConfig: OpenClawConfig = {
   diagnostics: { otel: { enabled: true, endpoint: "http://127.0.0.1:4318" } },
-} as OpenClawConfig;
+};
+
+function mockAcquiredRegistry(registry: object) {
+  acquirePluginRegistryForInspection.mockResolvedValue({
+    registry,
+    release: vi.fn(async () => {}),
+  });
+}
 
 function mockRegistryWithServices(serviceIds: string[]) {
   const registry = {
@@ -43,10 +50,7 @@ function mockRegistryWithServices(serviceIds: string[]) {
       origin: "bundled",
     })),
   };
-  acquirePluginRegistryForInspection.mockResolvedValue({
-    registry,
-    release: vi.fn(async () => {}),
-  });
+  mockAcquiredRegistry(registry);
   return registry;
 }
 
@@ -61,10 +65,7 @@ async function mockRealExporter(service: OpenClawPluginService, origin: "bundled
     source: "test",
     origin,
   });
-  acquirePluginRegistryForInspection.mockResolvedValue({
-    registry,
-    release: vi.fn(async () => {}),
-  });
+  mockAcquiredRegistry(registry);
   let servicesHandle: PluginServicesHandle | undefined;
   startPluginServices.mockImplementationOnce(
     async (params: Parameters<typeof startRealServices>[0]) => {
@@ -114,47 +115,27 @@ describe("startOneShotDiagnosticsExporters", () => {
     expect(startPluginServices).not.toHaveBeenCalled();
   });
 
-  it("keeps OTLP logs but suppresses stdout JSONL logs when requested", async () => {
-    const config = {
-      diagnostics: { otel: { enabled: true, logs: true, logsExporter: "both" } },
-    } as OpenClawConfig;
-    mockRegistryWithServices(["diagnostics-otel"]);
-    startPluginServices.mockResolvedValue({ stop: vi.fn(async () => {}) });
-
-    const handle = await startOneShotDiagnosticsExporters({
-      config,
-      suppressStdoutDiagnosticLogs: true,
-    });
-
-    expect(handle).not.toBeNull();
-    const startParams = startPluginServices.mock.calls[0]?.[0] as {
-      config: OpenClawConfig;
-    };
-    expect(startParams.config.diagnostics?.otel?.logs).toBe(true);
-    expect(startParams.config.diagnostics?.otel?.logsExporter).toBe("otlp");
-    expect(config.diagnostics?.otel?.logsExporter).toBe("both");
-  });
-
-  it("disables stdout-only JSONL logs when requested", async () => {
-    const config = {
-      diagnostics: { otel: { enabled: true, logs: true, logsExporter: "stdout" } },
-    } as OpenClawConfig;
-    mockRegistryWithServices(["diagnostics-otel"]);
-    startPluginServices.mockResolvedValue({ stop: vi.fn(async () => {}) });
-
-    const handle = await startOneShotDiagnosticsExporters({
-      config,
-      suppressStdoutDiagnosticLogs: true,
-    });
-
-    expect(handle).not.toBeNull();
-    const startParams = startPluginServices.mock.calls[0]?.[0] as {
-      config: OpenClawConfig;
-    };
-    expect(startParams.config.diagnostics?.otel?.logs).toBe(false);
-    expect(startParams.config.diagnostics?.otel?.logsExporter).toBe("otlp");
-    expect(config.diagnostics?.otel?.logsExporter).toBe("stdout");
-  });
+  it.each([
+    { logsExporter: "both", logs: true },
+    { logsExporter: "stdout", logs: false },
+  ] as const)(
+    "suppresses $logsExporter stdout logs without changing caller config",
+    async ({ logsExporter, logs }) => {
+      const config: OpenClawConfig = {
+        diagnostics: { otel: { enabled: true, logs: true, logsExporter } },
+      };
+      mockRegistryWithServices(["diagnostics-otel"]);
+      startPluginServices.mockResolvedValue({ stop: vi.fn(async () => {}) });
+      const handle = await startOneShotDiagnosticsExporters({
+        config,
+        suppressStdoutDiagnosticLogs: true,
+      });
+      expect(handle).not.toBeNull();
+      const startParams = startPluginServices.mock.calls[0]?.[0] as { config: OpenClawConfig };
+      expect(startParams.config.diagnostics?.otel).toMatchObject({ logs, logsExporter: "otlp" });
+      expect(config.diagnostics?.otel?.logsExporter).toBe(logsExporter);
+    },
+  );
 
   it("reports drain and exporter failures without failing the CLI shutdown", async () => {
     const exporterStop = vi.fn(() => {

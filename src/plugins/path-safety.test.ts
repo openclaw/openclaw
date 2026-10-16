@@ -19,36 +19,28 @@ function installWindowsPathFixture(params: {
   const directory = fs.statSync(new URL(".", import.meta.url), { bigint: true });
   const file = fs.statSync(new URL(import.meta.url), { bigint: true });
   const isWindowsPath = (value: string) => /^(?:[A-Za-z]:[\\/]|[\\/]{2})/.test(value);
-  const resolve = path.resolve;
-  const dirname = path.dirname;
-  const relative = path.relative;
-  const isAbsolute = path.isAbsolute;
-  const join = path.join;
-  const parse = path.parse;
-  const win32Resolve = path.win32.resolve;
-  const win32Dirname = path.win32.dirname;
-  const win32Relative = path.win32.relative;
-  const win32IsAbsolute = path.win32.isAbsolute;
-  const win32Join = path.win32.join;
-  const win32Parse = path.win32.parse;
+  const native = { ...path };
+  const windows = { ...path.win32 };
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");
   vi.spyOn(path, "resolve").mockImplementation((...parts) =>
-    parts.some(isWindowsPath) ? win32Resolve(...parts) : resolve(...parts),
+    parts.some(isWindowsPath) ? windows.resolve(...parts) : native.resolve(...parts),
   );
   vi.spyOn(path, "dirname").mockImplementation((value) =>
-    isWindowsPath(value) ? win32Dirname(value) : dirname(value),
+    isWindowsPath(value) ? windows.dirname(value) : native.dirname(value),
   );
   vi.spyOn(path, "relative").mockImplementation((from, to) =>
-    isWindowsPath(from) || isWindowsPath(to) ? win32Relative(from, to) : relative(from, to),
+    isWindowsPath(from) || isWindowsPath(to)
+      ? windows.relative(from, to)
+      : native.relative(from, to),
   );
   vi.spyOn(path, "isAbsolute").mockImplementation((value) =>
-    isWindowsPath(value) ? win32IsAbsolute(value) : isAbsolute(value),
+    isWindowsPath(value) ? windows.isAbsolute(value) : native.isAbsolute(value),
   );
   vi.spyOn(path, "join").mockImplementation((...parts) =>
-    parts.some(isWindowsPath) ? win32Join(...parts) : join(...parts),
+    parts.some(isWindowsPath) ? windows.join(...parts) : native.join(...parts),
   );
   vi.spyOn(path, "parse").mockImplementation((value) =>
-    isWindowsPath(value) ? win32Parse(value) : parse(value),
+    isWindowsPath(value) ? windows.parse(value) : native.parse(value),
   );
   const statSync = fs.statSync;
   const stat = vi.spyOn(fs, "statSync").mockImplementation(((value, options) => {
@@ -59,7 +51,7 @@ function installWindowsPathFixture(params: {
     if (
       name === params.root ||
       name === params.canonicalRoot ||
-      (params.source && name === win32Dirname(params.source))
+      (params.source && name === windows.dirname(params.source))
     ) {
       return directory;
     }
@@ -82,7 +74,7 @@ function installWindowsPathFixture(params: {
         const resolved = Buffer.from(params.canonicalRoot ?? params.root);
         return encoding === "buffer" ? resolved : resolved.toString(encoding ?? "utf8");
       }
-      if (params.source && String(value) === win32Dirname(params.source)) {
+      if (params.source && String(value) === windows.dirname(params.source)) {
         const resolved = Buffer.from(String(value));
         return encoding === "buffer" ? resolved : resolved.toString(encoding ?? "utf8");
       }

@@ -130,6 +130,25 @@ module.exports = {
   };
 }
 
+type NativeFixture = ReturnType<typeof createNativeExporter>;
+
+function expectConnection(
+  fixture: NativeFixture,
+  expected: Partial<NativeConnection> & { open: boolean },
+) {
+  const { open, ...fields } = expected;
+  expect(fixture.connection()).toMatchObject(fields);
+  expect(fixture.connection().database.isOpen).toBe(open);
+}
+
+async function startExporter(fixture: NativeFixture) {
+  const handle = await startOneShotDiagnosticsExporters({ config: fixture.config });
+  if (!handle) {
+    throw new Error("Native exporter did not produce a one-shot handle");
+  }
+  return handle;
+}
+
 afterEach(() => {
   vi.useRealTimers();
   resetPluginLoaderTestStateForTest();
@@ -141,21 +160,19 @@ describe("one-shot diagnostics registration resources", () => {
     const fixture = createNativeExporter();
     const active = createEmptyPluginRegistry();
     setActivePluginRegistry(active);
-    let handle: OneShotDiagnosticsHandle | null | undefined;
+    let handle: OneShotDiagnosticsHandle | undefined;
     try {
-      handle = await startOneShotDiagnosticsExporters({ config: fixture.config });
+      handle = await startExporter(fixture);
       const connection = fixture.connection();
-      expect(handle).not.toBeNull();
-      expect(connection.database.isOpen).toBe(true);
+      expectConnection(fixture, { open: true });
       expect(connection.context?.internalDiagnostics).toBeUndefined();
       fixture.state.finishStop.resolve();
-      await handle?.stop();
+      await handle.stop();
       expect(connection.lateRead).toBe(42);
-      await vi.waitFor(() => expect(connection.database.isOpen).toBe(false));
+      await vi.waitFor(() => expectConnection(fixture, { open: false }));
       expect(connection.disposals).toBe(1);
-      await handle?.stop();
-      expect(connection.stops).toBe(1);
-      expect(connection.disposals).toBe(1);
+      await handle.stop();
+      expectConnection(fixture, { open: false, stops: 1, disposals: 1 });
       expect(getActivePluginRegistry()).toBe(active);
     } finally {
       await fixture.cleanup(handle);
@@ -173,11 +190,10 @@ describe("one-shot diagnostics registration resources", () => {
       await fixture.state.disposalStarted.promise;
       await nextEventLoopTurn();
       expect(returned).toBe(false);
-      expect(fixture.connection().database.isOpen).toBe(true);
+      expectConnection(fixture, { open: true });
       fixture.state.finishDisposal.resolve();
       await expect(starting).resolves.toBeNull();
-      expect(fixture.connection().database.isOpen).toBe(false);
-      expect(fixture.connection().disposals).toBe(1);
+      expectConnection(fixture, { open: false, disposals: 1 });
     } finally {
       fixture.state.finishDisposal.resolve();
       await starting;
@@ -185,135 +201,124 @@ describe("one-shot diagnostics registration resources", () => {
     }
   });
 
-  it("retains slow registration disposal in the actual stop caller's work scope", async () => {
-    const fixture = createNativeExporter({ pauseDisposal: true });
-    const handle = await startOneShotDiagnosticsExporters({ config: fixture.config });
-    if (!handle) {
-      throw new Error("Native exporter did not produce a one-shot handle");
-    }
-    const caller = new AsyncWorkScope();
-    let draining: Promise<void> | undefined;
-    try {
-      fixture.state.finishStop.resolve();
-      const stopping = caller.track(() => handle.stop());
-      await fixture.state.disposalStarted.promise;
-      await stopping;
-      let drained = false;
-      draining = caller.drain().then(() => {
-        drained = true;
-      });
-      await nextEventLoopTurn();
-      expect(drained).toBe(false);
-      expect(fixture.connection().database.isOpen).toBe(true);
-      fixture.state.finishDisposal.resolve();
-      await draining;
-      expect(fixture.connection().database.isOpen).toBe(false);
-      expect(fixture.connection().disposals).toBe(1);
-      const repeatedStop = handle.stop();
-      await repeatedStop;
-      expect(handle.stop()).toBe(repeatedStop);
-      expect(fixture.connection().stops).toBe(1);
-      expect(fixture.connection().disposals).toBe(1);
-    } finally {
-      fixture.state.finishDisposal.resolve();
-      await draining;
-      await caller.drain();
-      await fixture.cleanup(handle);
-    }
-  });
+  it.each([false, true])(
+    "retains pending disposal in a live stop caller (repeated stop: %s)",
+    async (repeat) => {
+      const fixture = createNativeExporter({ pauseDisposal: true });
+      const handle = await startExporter(fixture);
+      const caller = new AsyncWorkScope();
+      let draining: Promise<void> | undefined;
+      try {
+        fixture.state.finishStop.resolve();
+        const firstStop = repeat ? handle.stop() : undefined;
+        await firstStop;
+        if (repeat) {
+          await fixture.state.disposalStarted.promise;
+        }
+        const stopping = caller.track(() => {
+          const stop = handle.stop();
+          if (repeat) {
+            expect(stop).toBe(firstStop);
+          }
+          return stop;
+        });
+        await fixture.state.disposalStarted.promise;
+        await stopping;
+        let drained = false;
+        draining = caller.drain().then(() => {
+          drained = true;
+        });
+        await nextEventLoopTurn();
+        expect(drained).toBe(false);
+        expectConnection(fixture, { open: true });
+        fixture.state.finishDisposal.resolve();
+        await draining;
+        expectConnection(fixture, { open: false, disposals: 1, stops: 1 });
+        if (!repeat) {
+          const repeatedStop = handle.stop();
+          await repeatedStop;
+          expect(handle.stop()).toBe(repeatedStop);
+          expectConnection(fixture, { open: false, disposals: 1, stops: 1 });
+        }
+      } finally {
+        fixture.state.finishDisposal.resolve();
+        await draining;
+        await caller.drain();
+        await fixture.cleanup(handle);
+      }
+    },
+  );
 
-  it("retains pending registration disposal for a second live stop caller", async () => {
-    const fixture = createNativeExporter({ pauseDisposal: true });
-    const handle = await startOneShotDiagnosticsExporters({ config: fixture.config });
-    if (!handle) {
-      throw new Error("Native exporter did not produce a one-shot handle");
-    }
-    const caller = new AsyncWorkScope();
-    let draining: Promise<void> | undefined;
-    try {
-      fixture.state.finishStop.resolve();
-      const firstStop = handle.stop();
-      await firstStop;
-      await fixture.state.disposalStarted.promise;
-      let repeatedStop: Promise<void> | undefined;
-      await caller.track(() => {
-        repeatedStop = handle.stop();
-        return repeatedStop;
-      });
-      expect(repeatedStop).toBe(firstStop);
-      let drained = false;
-      draining = caller.drain().then(() => {
-        drained = true;
-      });
-      await nextEventLoopTurn();
-      expect(drained).toBe(false);
-      expect(fixture.connection().database.isOpen).toBe(true);
-      fixture.state.finishDisposal.resolve();
-      await draining;
-      expect(fixture.connection().database.isOpen).toBe(false);
-      expect(fixture.connection().disposals).toBe(1);
-      expect(fixture.connection().stops).toBe(1);
-    } finally {
-      fixture.state.finishDisposal.resolve();
-      await draining;
-      await caller.drain();
-      await fixture.cleanup(handle);
-    }
-  });
-
-  it("retains cached failed-start cleanup in a later stop caller's work scope", async () => {
-    const fixture = createNativeExporter({ failStart: true });
-    const acquired = await acquirePluginRegistryForInspection({ config: fixture.config });
-    const caller = new AsyncWorkScope();
-    let starting: ReturnType<typeof startPluginServices> | undefined;
-    let released: Promise<void> | undefined;
-    vi.useFakeTimers();
-    try {
-      // One-shot service views omit the inspection runtime binding.
-      starting = startPluginServices({
-        registry: { ...acquired.registry },
-        config: fixture.config,
-        oneShotStopTimeouts: { eventDrainMs: 5_000, serviceStopMs: 10_000 },
-      });
-      await fixture.state.stopStarted.promise;
-      await vi.advanceTimersByTimeAsync(5_000);
-      const services = await starting;
-      const stopping = caller.track(() => services.stop());
-      const observed = expect(stopping).resolves.toMatchObject({
-        errors: [expect.objectContaining({ message: expect.stringContaining("timed out") })],
-      });
-      await vi.advanceTimersByTimeAsync(10_000);
-      await observed;
-      released = caller.drain().then(() => acquired.release());
-      await nextEventLoopTurn();
-      expect(fixture.connection().database.isOpen).toBe(true);
-      expect(fixture.connection().stops).toBe(1);
-      fixture.state.finishStop.resolve();
-      await fixture.state.stopFinished.promise;
-      await released;
-      expect(fixture.connection().lateRead).toBe(42);
-      expect(fixture.connection().database.isOpen).toBe(false);
-      expect(fixture.connection().disposals).toBe(1);
-    } finally {
-      fixture.state.finishStop.resolve();
-      await starting;
-      await fixture.state.stopFinished.promise;
-      await caller.drain();
-      await released;
-      await acquired.release();
-      await fixture.cleanup();
-    }
-  });
+  it.each([false, true])(
+    "retains timed-out service cleanup in the caller scope (failed start: %s)",
+    async (failStart) => {
+      const fixture = createNativeExporter({ failStart });
+      const acquired = await acquirePluginRegistryForInspection({ config: fixture.config });
+      const caller = new AsyncWorkScope();
+      const broadcast = vi.fn();
+      let starting: ReturnType<typeof startPluginServices> | undefined;
+      let released: Promise<void> | undefined;
+      try {
+        // One-shot service views omit the inspection runtime binding.
+        const start = () =>
+          startPluginServices({
+            registry: { ...acquired.registry },
+            config: fixture.config,
+            ...(failStart ? {} : { broadcastPluginEvent: broadcast }),
+            oneShotStopTimeouts: { eventDrainMs: 5_000, serviceStopMs: 10_000 },
+          });
+        if (failStart) {
+          vi.useFakeTimers();
+        }
+        starting = failStart ? start() : caller.track(start);
+        if (failStart) {
+          await fixture.state.stopStarted.promise;
+          await vi.advanceTimersByTimeAsync(5_000);
+        }
+        const services = await starting;
+        if (!failStart) {
+          vi.useFakeTimers();
+        }
+        const stopping = caller.track(() => services.stop());
+        const observed = expect(stopping).resolves.toMatchObject({
+          errors: [expect.objectContaining({ message: expect.stringContaining("timed out") })],
+        });
+        await fixture.state.stopStarted.promise;
+        await vi.advanceTimersByTimeAsync(10_000);
+        await observed;
+        if (!failStart) {
+          expect(() =>
+            fixture
+              .connection()
+              .context?.gatewayEvents?.emit("late", {}, { scope: "operator.read" }),
+          ).toThrow("no longer active");
+          expect(broadcast).not.toHaveBeenCalled();
+        }
+        released = caller.drain().then(() => acquired.release());
+        await nextEventLoopTurn();
+        expectConnection(fixture, { open: true, stops: 1 });
+        fixture.state.finishStop.resolve();
+        await fixture.state.stopFinished.promise;
+        await released;
+        expectConnection(fixture, { lateRead: 42, open: false, disposals: 1 });
+      } finally {
+        fixture.state.finishStop.resolve();
+        await starting;
+        await fixture.state.stopFinished.promise;
+        await caller.drain();
+        await released;
+        await acquired.release();
+        await fixture.cleanup();
+      }
+    },
+  );
 
   it("disposes resources when a retained stop callback restores a closed startup scope", async () => {
     const fixture = createNativeExporter();
     const startup = new AsyncWorkScope();
     let handle: OneShotDiagnosticsHandle | null | undefined;
     const retainedStop = await startup.track(async () => {
-      handle = await startOneShotDiagnosticsExporters({ config: fixture.config });
-      if (!handle) {
-        throw new Error("Native exporter did not produce a one-shot handle");
-      }
+      handle = await startExporter(fixture);
       return AsyncResource.bind(handle.stop);
     });
     await startup.drain();
@@ -376,50 +381,4 @@ describe("one-shot diagnostics registration resources", () => {
       }
     },
   );
-
-  it("keeps raw service cleanup in the caller's work scope after the stop observer times out", async () => {
-    const fixture = createNativeExporter();
-    const acquired = await acquirePluginRegistryForInspection({ config: fixture.config });
-    const work = new AsyncWorkScope();
-    const broadcast = vi.fn();
-    const services = await work.track(() =>
-      startPluginServices({
-        registry: { ...acquired.registry },
-        config: fixture.config,
-        broadcastPluginEvent: broadcast,
-        oneShotStopTimeouts: { eventDrainMs: 5_000, serviceStopMs: 10_000 },
-      }),
-    );
-    let released: Promise<void> | undefined;
-    vi.useFakeTimers();
-    try {
-      const stopping = work.track(() => services.stop());
-      const observed = expect(stopping).resolves.toMatchObject({
-        errors: [expect.objectContaining({ message: expect.stringContaining("timed out") })],
-      });
-      await fixture.state.stopStarted.promise;
-      await vi.advanceTimersByTimeAsync(10_000);
-      await observed;
-      expect(() =>
-        fixture.connection().context?.gatewayEvents?.emit("late", {}, { scope: "operator.read" }),
-      ).toThrow("no longer active");
-      expect(broadcast).not.toHaveBeenCalled();
-      released = work.drain().then(() => acquired.release());
-      await nextEventLoopTurn();
-      expect(fixture.connection().database.isOpen).toBe(true);
-      fixture.state.finishStop.resolve();
-      await fixture.state.stopFinished.promise;
-      await released;
-      expect(fixture.connection().lateRead).toBe(42);
-      expect(fixture.connection().database.isOpen).toBe(false);
-      expect(fixture.connection().disposals).toBe(1);
-    } finally {
-      fixture.state.finishStop.resolve();
-      await fixture.state.stopFinished.promise;
-      await work.drain();
-      await released;
-      await acquired.release();
-      await fixture.cleanup();
-    }
-  });
 });

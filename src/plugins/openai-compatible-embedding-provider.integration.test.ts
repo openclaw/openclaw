@@ -90,6 +90,27 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
     };
   }
 
+  async function withAgentDir(label: string, run: (agentDir: string) => Promise<void>) {
+    const agentDir = await mkdtemp(path.join(os.tmpdir(), `openclaw-embedding-${label}-`));
+    try {
+      await run(agentDir);
+    } finally {
+      closeAuthProfileReadPool({ kind: "root", rootPath: agentDir });
+      closeOpenClawAgentDatabases(agentDir);
+      await rm(agentDir, { force: true, recursive: true });
+    }
+  }
+
+  async function embed(options: EmbeddingProviderCreateOptions) {
+    const result = await openAICompatibleEmbeddingProviderAdapter.create(options);
+    return result.provider?.embed("hello");
+  }
+
+  function expectAuthorization(authorization: string | undefined) {
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.headers.authorization).toBe(authorization);
+  }
+
   it.each<{
     name: string;
     providerOwnsDestination?: boolean;
@@ -233,15 +254,12 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
         provider,
         model: "fixture-model",
       };
-      const embed = async () => {
-        const result = await openAICompatibleEmbeddingProviderAdapter.create(options);
-        return result.provider?.embed("hello");
-      };
+      const send = () => embed(options);
       if (provider === "llmman") {
-        await expect(embed()).rejects.toBeInstanceOf(UnresolvedSecretInputError);
+        await expect(send()).rejects.toBeInstanceOf(UnresolvedSecretInputError);
         expect(requests).toEqual([]);
       } else {
-        await expect(embed()).resolves.toEqual(vector);
+        await expect(send()).resolves.toEqual(vector);
         expect(requests[0]?.headers.authorization).toBe("Bearer llama-cpp-local");
         expect(options.config.models?.providers?.[provider]?.apiKey).toEqual(ref);
       }
@@ -251,9 +269,9 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
   it.each([false, true])(
     "keeps metadata-only profile names literal with owned store = %s",
     async (ownedStore) => {
-      const agentDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-embedding-metadata-"));
-      const profileId = "tenant-embeddings:metadata-only";
-      try {
+      await withAgentDir("metadata", async (agentDir) => {
+        const profileId = "tenant-embeddings:metadata-only";
+
         const options = createOptions({
           providerOwnsDestination: true,
           providerApiKey: profileId,
@@ -281,11 +299,7 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
         const result = await openAICompatibleEmbeddingProviderAdapter.create(options);
         await expect(result.provider?.embed("hello")).resolves.toEqual(vector);
         expect(requests[0]?.headers.authorization).toBe(`Bearer ${profileId}`);
-      } finally {
-        closeAuthProfileReadPool({ kind: "root", rootPath: agentDir });
-        closeOpenClawAgentDatabases(agentDir);
-        await rm(agentDir, { force: true, recursive: true });
-      }
+      });
     },
   );
 
@@ -328,18 +342,12 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
               remote: {},
             });
             options.agentDir = agentDir;
-            const embed = async () => {
-              const result = await openAICompatibleEmbeddingProviderAdapter.create(options);
-              return await result.provider?.embed("hello");
-            };
+            const send = () => embed(options);
             if (populated) {
-              await expect(embed()).resolves.toEqual(vector);
-              expect(requests).toHaveLength(1);
-              expect(requests[0]?.headers.authorization).toBe(
-                "Bearer synthetic-canonical-profile-key",
-              );
+              await expect(send()).resolves.toEqual(vector);
+              expectAuthorization("Bearer synthetic-canonical-profile-key");
             } else {
-              await expect.soft(embed()).rejects.toMatchObject({
+              await expect.soft(send()).rejects.toMatchObject({
                 code: "AUTH_PROFILE_MIGRATION_REQUIRED",
                 action: "openclaw doctor --fix",
               });
@@ -363,13 +371,13 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
   ] as const)(
     "enforces $provider/$api $credentialType profile auth with plugins disabled",
     async ({ provider, api, credentialType }) => {
-      const agentDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-embedding-auth-mode-"));
-      const profileId = `${provider}:bound`;
-      const credential: AuthProfileCredential =
-        credentialType === "api_key"
-          ? { type: credentialType, provider, key: "synthetic-bound-profile-key" }
-          : { type: credentialType, provider, token: "synthetic-bound-profile-key" };
-      try {
+      await withAgentDir("auth-mode", async (agentDir) => {
+        const profileId = `${provider}:bound`;
+        const credential: AuthProfileCredential =
+          credentialType === "api_key"
+            ? { type: credentialType, provider, key: "synthetic-bound-profile-key" }
+            : { type: credentialType, provider, token: "synthetic-bound-profile-key" };
+
         writePersistedAuthProfileStoreRaw(
           { version: 1, profiles: { [profileId]: credential } },
           agentDir,
@@ -387,23 +395,15 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
         };
         const adapter = getEmbeddingProvider(provider, options.config);
         expect(adapter).toBe(openAICompatibleEmbeddingProviderAdapter);
-        const embed = async () => {
-          const result = await adapter!.create(options);
-          return await result.provider?.embed("hello");
-        };
+        const send = async () => (await adapter!.create(options)).provider?.embed("hello");
         if (provider === "openai" && credentialType === "token") {
-          await expect.soft(embed()).rejects.toThrow(/requires an OpenAI API key profile/);
+          await expect.soft(send()).rejects.toThrow(/requires an OpenAI API key profile/);
           expect(requests).toEqual([]);
         } else {
-          await expect(embed()).resolves.toEqual(vector);
-          expect(requests).toHaveLength(1);
-          expect(requests[0]?.headers.authorization).toBe("Bearer synthetic-bound-profile-key");
+          await expect(send()).resolves.toEqual(vector);
+          expectAuthorization("Bearer synthetic-bound-profile-key");
         }
-      } finally {
-        closeAuthProfileReadPool({ kind: "root", rootPath: agentDir });
-        closeOpenClawAgentDatabases(agentDir);
-        await rm(agentDir, { force: true, recursive: true });
-      }
+      });
     },
   );
 
@@ -416,14 +416,14 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
   ] as const)(
     "keeps $binding profile bindings terminal with $route",
     async ({ route, binding }) => {
-      const agentDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-embedding-binding-"));
-      const profileId = "tenant-embeddings:bound";
-      const credential: AuthProfileCredential = {
-        type: "api_key",
-        provider: binding === "incompatible" ? "other-tenant" : "tenant-embeddings",
-        ...(binding === "unresolved" ? {} : { key: "synthetic-bound-profile-key" }),
-      };
-      try {
+      await withAgentDir("binding", async (agentDir) => {
+        const profileId = "tenant-embeddings:bound";
+        const credential: AuthProfileCredential = {
+          type: "api_key",
+          provider: binding === "incompatible" ? "other-tenant" : "tenant-embeddings",
+          ...(binding === "unresolved" ? {} : { key: "synthetic-bound-profile-key" }),
+        };
+
         writePersistedAuthProfileStoreRaw(
           { version: 1, profiles: { [profileId]: credential } },
           agentDir,
@@ -443,16 +443,13 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
             order: { [options.provider]: ["tenant-embeddings:aws"] },
           };
         }
-        const embed = async () => {
-          const result = await openAICompatibleEmbeddingProviderAdapter.create(options);
-          return await result.provider?.embed("hello");
-        };
+        const send = () => embed(options);
         if (binding === "compatible") {
-          await expect(embed()).resolves.toEqual(vector);
+          await expect(send()).resolves.toEqual(vector);
           expect(requests[0]?.headers.authorization).toBe("Bearer synthetic-bound-profile-key");
         } else {
           await expect
-            .soft(embed())
+            .soft(send())
             .rejects.toThrow(
               binding === "incompatible"
                 ? /not compatible with this provider entry's auth binding/
@@ -460,11 +457,7 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
             );
           expect(requests).toEqual([]);
         }
-      } finally {
-        closeAuthProfileReadPool({ kind: "root", rootPath: agentDir });
-        closeOpenClawAgentDatabases(agentDir);
-        await rm(agentDir, { force: true, recursive: true });
-      }
+      });
     },
   );
 
@@ -482,9 +475,9 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
     { name: "whitespace key", apiKey: "   ", authorization: undefined },
     { name: "omitted key", apiKey: undefined, authorization: undefined },
   ])("keeps $name authentication with auth.order at HTTP", async ({ apiKey, authorization }) => {
-    const agentDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-embedding-profile-"));
-    const profileId = "tenant-embeddings:default";
-    try {
+    await withAgentDir("profile", async (agentDir) => {
+      const profileId = "tenant-embeddings:default";
+
       writePersistedAuthProfileStoreRaw(
         {
           version: 1,
@@ -498,7 +491,7 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
         },
         agentDir,
       );
-      const result = await openAICompatibleEmbeddingProviderAdapter.create({
+      const options: EmbeddingProviderCreateOptions = {
         config: {
           auth: {
             profiles: { [profileId]: { provider: "tenant-embeddings", mode: "api_key" } },
@@ -522,16 +515,10 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
         agentDir,
         provider: "tenant-embeddings",
         model: "tenant-embeddings/fixture-model",
-      });
-
-      await expect(result.provider?.embed("hello")).resolves.toEqual(vector);
-      expect(requests).toHaveLength(1);
-      expect(requests[0]?.headers.authorization).toBe(authorization);
-    } finally {
-      closeAuthProfileReadPool({ kind: "root", rootPath: agentDir });
-      closeOpenClawAgentDatabases(agentDir);
-      await rm(agentDir, { force: true, recursive: true });
-    }
+      };
+      await expect(embed(options)).resolves.toEqual(vector);
+      expectAuthorization(authorization);
+    });
   });
 
   it.each(["apiKey", "header", "providerApiKey"])(

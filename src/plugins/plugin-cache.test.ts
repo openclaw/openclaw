@@ -46,6 +46,18 @@ import { createPluginRecord } from "./status.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function readFile(rootDir: string, relativePath: string, rejectHardlinks = true) {
+  return readPluginCacheFile({ rootDir, relativePath, rejectHardlinks });
+}
+
+function writeJson(dir: string, name: string, value: object) {
+  fs.writeFileSync(path.join(dir, name), JSON.stringify(value));
+}
+
+function symlinkDir(target: string, alias: string) {
+  fs.symlinkSync(target, alias, process.platform === "win32" ? "junction" : "dir");
+}
+
 it.each(["success", "plugin failure", "module failure", "host failure"] as const)(
   "keeps adopted instance custody through physical disposal (%s)",
   async (outcome) => {
@@ -126,7 +138,7 @@ function createWindowsRootAliasFixture(
   const source = path.join(root, relativePath);
   fs.mkdirSync(path.dirname(source), { recursive: true });
   fs.writeFileSync(source, contents);
-  fs.symlinkSync(root, alias, process.platform === "win32" ? "junction" : "dir");
+  symlinkDir(root, alias);
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");
   return { parent, root, alias, source };
 }
@@ -143,12 +155,8 @@ function createRetargetedWindowsRootFixture(prefix: string, basename: string) {
   fs.mkdirSync(replacementRoot, { recursive: true });
   fs.writeFileSync(path.join(trustedRoot, basename), "trusted\n");
   fs.writeFileSync(path.join(replacementRoot, basename), "replacement\n");
-  fs.symlinkSync(trustedRoot, trustedAlias, process.platform === "win32" ? "junction" : "dir");
-  fs.symlinkSync(
-    trustedContainer,
-    observedParent,
-    process.platform === "win32" ? "junction" : "dir",
-  );
+  symlinkDir(trustedRoot, trustedAlias);
+  symlinkDir(trustedContainer, observedParent);
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
   const observedRoot = path.join(observedParent, "plugin");
@@ -156,11 +164,7 @@ function createRetargetedWindowsRootFixture(prefix: string, basename: string) {
   vi.spyOn(fs, "realpathSync").mockImplementation(((filePath, options) => {
     if (filePath === observedRoot) {
       fs.unlinkSync(observedParent);
-      fs.symlinkSync(
-        replacementContainer,
-        observedParent,
-        process.platform === "win32" ? "junction" : "dir",
-      );
+      symlinkDir(replacementContainer, observedParent);
     }
     return originalRealpath(filePath, options as never);
   }) as typeof fs.realpathSync);
@@ -232,13 +236,7 @@ describe("plugin package facts", () => {
         fs.renameSync(icons, path.join(root, "previous-assets"));
         fs.symlinkSync(outside, icons, "dir");
         expect(pluginCacheRealpathSync(firstSource)).toBe(firstSource);
-        expect(
-          readPluginCacheFile({
-            rootDir: root,
-            relativePath: "assets/0.svg",
-            rejectHardlinks: true,
-          }).ok,
-        ).toBe(false);
+        expect(readFile(root, "assets/0.svg").ok).toBe(false);
 
         invalidatePluginCacheMetadata(cache);
         expect(pluginCacheRealpathSync(firstSource)).toBe(path.join(outside, "0.svg"));
@@ -254,7 +252,7 @@ describe("plugin package facts", () => {
     fs.mkdirSync(nestedDir, { recursive: true });
     fs.writeFileSync(path.join(root, "catalog.json"), "root");
     fs.writeFileSync(path.join(packageDir, "catalog.json"), "package");
-    fs.symlinkSync(nestedDir, alias, process.platform === "win32" ? "junction" : "dir");
+    symlinkDir(nestedDir, alias);
 
     const paths = [
       packageDir,
@@ -350,13 +348,7 @@ describe("plugin package facts", () => {
         rejectHardlinks: false,
       });
       expect(file.ok && file.contents.toString("utf8")).toBe("export default {};\n");
-      expect(
-        readPluginCacheFile({
-          rootDir: alias,
-          relativePath: "external-link.js",
-          rejectHardlinks: false,
-        }).ok,
-      ).toBe(false);
+      expect(readFile(alias, "external-link.js", false).ok).toBe(false);
     });
   });
 
@@ -382,15 +374,12 @@ describe("plugin package facts", () => {
     (kind) => {
       const dir = fs.realpathSync(tempDirs.make("plugin-provider-source-"));
       const providerDiscoverySource = path.join(dir, "provider-discovery.js");
-      fs.writeFileSync(
-        path.join(dir, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: "cached-provider",
-          providers: ["cached-provider"],
-          providerCatalogEntry: "./provider-discovery.js",
-          configSchema: { type: "object" },
-        }),
-      );
+      writeJson(dir, "openclaw.plugin.json", {
+        id: "cached-provider",
+        providers: ["cached-provider"],
+        providerCatalogEntry: "./provider-discovery.js",
+        configSchema: { type: "object" },
+      });
       if (kind === "symlink") {
         const target = path.join(dir, "catalog.js");
         fs.writeFileSync(target, "export default {};\n", "utf8");
@@ -434,12 +423,7 @@ describe("plugin package facts", () => {
       const filePath = path.join(root, "catalog.json");
       const readers = {
         regular: () => readPluginCacheJsonFile(filePath),
-        boundary: () =>
-          readPluginCacheFile({
-            rootDir: root,
-            relativePath: "catalog.json",
-            rejectHardlinks: true,
-          }),
+        boundary: () => readFile(root, "catalog.json"),
       };
       expect(readers[firstPolicy]().ok).toBe(false);
       fs.writeFileSync(filePath, "{}");
@@ -459,10 +443,7 @@ describe("plugin package facts", () => {
     const alias = path.join(root, "alias.json");
     fs.writeFileSync(filePath, "{}");
     fs.symlinkSync(filePath, alias);
-    expect(
-      readPluginCacheFile({ rootDir: root, relativePath: "catalog.json", rejectHardlinks: false })
-        .ok,
-    ).toBe(true);
+    expect(readFile(root, "catalog.json", false).ok).toBe(true);
     expect(readPluginCacheJsonFile(alias).ok).toBe(false);
     expect(readPluginCacheJsonFile(filePath, { maxBytes: 1 }).ok).toBe(false);
     expect(readPluginCacheJsonFile(filePath).ok).toBe(true);
@@ -500,20 +481,14 @@ describe("plugin package facts", () => {
     const parent = fs.realpathSync(tempDirs.make("plugin-workspace-entry-facts-"));
     const pluginDir = path.join(parent, "package");
     fs.mkdirSync(pluginDir);
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify({
-        name: "@fixture/shared-entry",
-        openclaw: { extensions: ["./index.js"] },
-      }),
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "shared-entry",
-        configSchema: { type: "object" },
-      }),
-    );
+    writeJson(pluginDir, "package.json", {
+      name: "@fixture/shared-entry",
+      openclaw: { extensions: ["./index.js"] },
+    });
+    writeJson(pluginDir, "openclaw.plugin.json", {
+      id: "shared-entry",
+      configSchema: { type: "object" },
+    });
     const entry = path.join(pluginDir, "index.js");
     fs.writeFileSync(entry, 'throw new Error("metadata must not execute code");');
     const first = discoverConfiguredPluginLoadPaths({
@@ -556,15 +531,9 @@ describe("plugin package facts", () => {
     fs.symlinkSync(root, alias, "dir");
     const aliasRecord = getPluginCacheRoot(alias);
     aliasRecord.artifacts.set("missing-surface", null);
-    const first = readPluginCacheFile({
-      rootDir: alias,
-      relativePath: "package.json",
-      rejectHardlinks: true,
-    });
+    const first = readFile(alias, "package.json");
     const open = vi.spyOn(fs, "openSync");
-    expect(
-      readPluginCacheFile({ rootDir: root, relativePath: "package.json", rejectHardlinks: true }),
-    ).toBe(first);
+    expect(readFile(root, "package.json")).toBe(first);
     expect(getPluginCacheRoot(root).artifacts.has("missing-surface")).toBe(true);
     expect(open).not.toHaveBeenCalled();
   });
@@ -575,7 +544,7 @@ describe("plugin package facts", () => {
     const alias = path.join(parent, "alias with spaces");
     fs.mkdirSync(root);
     fs.writeFileSync(path.join(root, "api.cjs"), "module.exports = {};\n");
-    fs.symlinkSync(root, alias, process.platform === "win32" ? "junction" : "dir");
+    symlinkDir(root, alias);
     const aliasPath = path.join(alias, "api.cjs");
     const owner = createPluginCache();
     const lexicalSource = getPluginCacheSource(aliasPath, owner);
@@ -610,14 +579,8 @@ describe("plugin package facts", () => {
     const source = path.join(root, "source.json");
     fs.writeFileSync(source, "{}");
     fs.linkSync(source, path.join(root, "package.json"));
-    expect(
-      readPluginCacheFile({ rootDir: root, relativePath: "package.json", rejectHardlinks: false })
-        .ok,
-    ).toBe(true);
-    expect(
-      readPluginCacheFile({ rootDir: root, relativePath: "package.json", rejectHardlinks: true })
-        .ok,
-    ).toBe(false);
+    expect(readFile(root, "package.json", false).ok).toBe(true);
+    expect(readFile(root, "package.json").ok).toBe(false);
     expect(pluginCacheExistsSync(path.join(root, "missing.json"))).toBe(false);
     fs.writeFileSync(path.join(root, "missing.json"), "{}");
     expect(pluginCacheExistsSync(path.join(root, "missing.json"))).toBe(false);
@@ -670,13 +633,15 @@ describe("plugin package facts", () => {
       expect(discoverOpenClawPlugins({ env, installRecords: {} })).toBe(discovery);
       const registry = loadPluginManifestRegistryCore({ env, discovery, installRecords: {} });
       const exists = vi.spyOn(fs, "existsSync");
-      const records = buildInstalledPluginIndexRecords({
-        candidates: discovery.candidates,
-        registry,
-        config: {},
-        diagnostics: [],
-        installRecords: {},
-      });
+      const buildRecords = () =>
+        buildInstalledPluginIndexRecords({
+          candidates: discovery.candidates,
+          registry,
+          config: {},
+          diagnostics: [],
+          installRecords: {},
+        });
+      const records = buildRecords();
       expect(registry.plugins.find((plugin) => plugin.id === "generation-owner")?.version).toBe(
         "1.0.0",
       );
@@ -695,14 +660,6 @@ describe("plugin package facts", () => {
       fs.mkdirSync(distDir, { recursive: true });
       const contract = "module.exports = {};";
       fs.writeFileSync(path.join(distDir, "doctor-contract-api.cjs"), contract);
-      const buildRecords = () =>
-        buildInstalledPluginIndexRecords({
-          candidates: discovery.candidates,
-          registry,
-          config: {},
-          diagnostics: [],
-          installRecords: {},
-        });
       expect(buildRecords()[0]?.doctorContractHash).toBeUndefined();
       invalidatePluginCacheMetadata(getProcessPluginCache());
       expect(buildRecords()[0]?.doctorContractHash).toBe(

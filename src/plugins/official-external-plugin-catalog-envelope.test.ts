@@ -34,8 +34,21 @@ function createSigningKey(keyId: string): SigningKey {
   return { keyId, privateKey, publicKey };
 }
 
-function exportPublicKey(key: SigningKey): string {
-  return key.publicKey.export({ type: "spki", format: "pem" });
+function expectVerification(
+  envelope: unknown,
+  keys: SigningKey[],
+  expected: object | string,
+  options: { threshold?: number; allowLegacyBetaEnvelope?: boolean } = {},
+) {
+  expect(
+    verifyOfficialExternalPluginCatalogSignedEnvelope(envelope, {
+      trustedKeys: keys.map((key) => ({
+        keyId: key.keyId,
+        publicKey: key.publicKey.export({ type: "spki", format: "pem" }),
+      })),
+      ...options,
+    }),
+  ).toMatchObject(typeof expected === "string" ? { ok: false, error: expected } : expected);
 }
 
 function signingInput(payloadType: string, payloadBytes: Buffer): Buffer {
@@ -70,36 +83,24 @@ describe("official external plugin catalog signed envelopes", () => {
   it("enforces distinct trusted key material for signature thresholds", () => {
     const first = createSigningKey("first");
     const second = createSigningKey("second");
-    const result = verifyOfficialExternalPluginCatalogSignedEnvelope(
+    expectVerification(
       signedEnvelope({ keys: [first, second] }),
+      [first, second],
       {
-        trustedKeys: [
-          { keyId: first.keyId, publicKey: exportPublicKey(first) },
-          { keyId: second.keyId, publicKey: exportPublicKey(second) },
-        ],
+        ok: true,
+        signedByKeyIds: ["first", "second"],
+        signatureCount: 2,
         threshold: 2,
       },
+      { threshold: 2 },
     );
-
-    expect(result).toMatchObject({
-      ok: true,
-      signedByKeyIds: ["first", "second"],
-      signatureCount: 2,
-      threshold: 2,
-    });
-
-    const duplicateId = { ...first, keyId: "duplicate-material" };
-    const duplicateMaterial = verifyOfficialExternalPluginCatalogSignedEnvelope(
-      signedEnvelope({ keys: [first, duplicateId] }),
-      {
-        trustedKeys: [
-          { keyId: first.keyId, publicKey: exportPublicKey(first) },
-          { keyId: duplicateId.keyId, publicKey: exportPublicKey(first) },
-        ],
-        threshold: 2,
-      },
+    const duplicate = { ...first, keyId: "duplicate-material" };
+    expectVerification(
+      signedEnvelope({ keys: [first, duplicate] }),
+      [first, duplicate],
+      "invalid-signature",
+      { threshold: 2 },
     );
-    expect(duplicateMaterial).toMatchObject({ ok: false, error: "invalid-signature" });
   });
 
   it("rejects payload bytes changed after signing", () => {
@@ -109,73 +110,47 @@ describe("official external plugin catalog signed envelopes", () => {
       JSON.stringify({ ...fixtureFeed(), sequence: 43 }),
       "utf8",
     ).toString("base64url");
-
-    expect(
-      verifyOfficialExternalPluginCatalogSignedEnvelope(envelope, {
-        trustedKeys: [{ keyId: key.keyId, publicKey: exportPublicKey(key) }],
-      }),
-    ).toMatchObject({ ok: false, error: "invalid-signature" });
+    expectVerification(envelope, [key], "invalid-signature");
   });
 
   it("distinguishes unknown keys from invalid trusted signatures", () => {
     const signer = createSigningKey("signer");
     const other = createSigningKey("other");
     const envelope = signedEnvelope({ keys: [signer] });
-
-    expect(
-      verifyOfficialExternalPluginCatalogSignedEnvelope(envelope, {
-        trustedKeys: [{ keyId: other.keyId, publicKey: exportPublicKey(other) }],
-      }),
-    ).toMatchObject({ ok: false, error: "missing-trust-key" });
-    expect(
-      verifyOfficialExternalPluginCatalogSignedEnvelope(envelope, {
-        trustedKeys: [{ keyId: signer.keyId, publicKey: exportPublicKey(other) }],
-      }),
-    ).toMatchObject({ ok: false, error: "invalid-signature" });
+    expectVerification(envelope, [other], "missing-trust-key");
+    expectVerification(envelope, [{ ...other, keyId: signer.keyId }], "invalid-signature");
   });
 
   it("rejects duplicate key ids and excessive signature lists", () => {
     const key = createSigningKey("catalog-root");
     const envelope = signedEnvelope({ keys: [key] });
     const signature = envelope.signatures[0];
-    const trustedKeys = [{ keyId: key.keyId, publicKey: exportPublicKey(key) }];
-
-    expect(
-      verifyOfficialExternalPluginCatalogSignedEnvelope(
-        { ...envelope, signatures: [signature, signature] },
-        { trustedKeys },
-      ),
-    ).toMatchObject({ ok: false, error: "invalid-envelope" });
-    expect(
-      verifyOfficialExternalPluginCatalogSignedEnvelope(
-        {
-          ...envelope,
-          signatures: Array.from({ length: 17 }, (_, index) => ({
-            ...signature,
-            keyid: `key-${index}`,
-          })),
-        },
-        { trustedKeys },
-      ),
-    ).toMatchObject({ ok: false, error: "invalid-envelope" });
+    expectVerification(
+      { ...envelope, signatures: [signature, signature] },
+      [key],
+      "invalid-envelope",
+    );
+    expectVerification(
+      {
+        ...envelope,
+        signatures: Array.from({ length: 17 }, (_, index) => ({
+          ...signature,
+          keyid: `key-${index}`,
+        })),
+      },
+      [key],
+      "invalid-envelope",
+    );
   });
 
   it("rejects unsupported payload types and signed invalid feeds", () => {
     const key = createSigningKey("catalog-root");
-    const trustedKeys = [{ keyId: key.keyId, publicKey: exportPublicKey(key) }];
-
-    expect(
-      verifyOfficialExternalPluginCatalogSignedEnvelope(
-        signedEnvelope({ keys: [key], payloadType: "example.unsupported" }),
-        { trustedKeys },
-      ),
-    ).toMatchObject({ ok: false, error: "unsupported-payload" });
-    expect(
-      verifyOfficialExternalPluginCatalogSignedEnvelope(
-        signedEnvelope({ keys: [key], feed: { entries: [] } }),
-        { trustedKeys },
-      ),
-    ).toMatchObject({
+    expectVerification(
+      signedEnvelope({ keys: [key], payloadType: "example.unsupported" }),
+      [key],
+      "unsupported-payload",
+    );
+    expectVerification(signedEnvelope({ keys: [key], feed: { entries: [] } }), [key], {
       ok: false,
       error: "invalid-payload",
       authenticatedPayload: { entries: [] },
@@ -190,18 +165,16 @@ describe("official external plugin catalog signed envelopes", () => {
     if (!signature) {
       throw new Error("expected a generated signature");
     }
-    expect(
-      verifyOfficialExternalPluginCatalogSignedEnvelope(
-        { payloadType: PAYLOAD_TYPE, payload: "", signatures: [] },
-        { trustedKeys: [] },
-      ),
-    ).toMatchObject({ ok: false, error: "invalid-envelope" });
-    expect(
-      verifyOfficialExternalPluginCatalogSignedEnvelope(
-        { ...envelope, signatures: [{ sig: signature.sig }] },
-        { trustedKeys: [{ keyId: key.keyId, publicKey: exportPublicKey(key) }] },
-      ),
-    ).toMatchObject({ ok: false, error: "invalid-envelope" });
+    expectVerification(
+      { payloadType: PAYLOAD_TYPE, payload: "", signatures: [] },
+      [],
+      "invalid-envelope",
+    );
+    expectVerification(
+      { ...envelope, signatures: [{ sig: signature.sig }] },
+      [key],
+      "invalid-envelope",
+    );
   });
 
   it("accepts beta legacy field names only for persisted snapshots", () => {
@@ -217,36 +190,20 @@ describe("official external plugin catalog signed envelopes", () => {
       algorithm: "ed25519",
       signature: signature.sig,
     };
-    const trustedKeys = [{ keyId: key.keyId, publicKey: exportPublicKey(key) }];
-
-    const legacyEnvelope = {
-      ...envelope,
-      schemaVersion: 1,
-      signatures: [legacySignature],
-    };
-
-    expect(
-      verifyOfficialExternalPluginCatalogSignedEnvelope(legacyEnvelope, { trustedKeys }),
-    ).toMatchObject({ ok: false, error: "invalid-envelope" });
-    expect(
-      verifyOfficialExternalPluginCatalogSignedEnvelope(legacyEnvelope, {
-        trustedKeys,
-        allowLegacyBetaEnvelope: true,
-      }),
-    ).toMatchObject({ ok: true, signedBy: key.keyId });
+    const legacyEnvelope = { ...envelope, schemaVersion: 1, signatures: [legacySignature] };
+    expectVerification(legacyEnvelope, [key], "invalid-envelope");
+    expectVerification(
+      legacyEnvelope,
+      [key],
+      { ok: true, signedBy: key.keyId },
+      { allowLegacyBetaEnvelope: true },
+    );
     const mixedEnvelope = {
       ...envelope,
       schemaVersion: 1,
       signatures: [signature, legacySignature],
     };
-    expect(
-      verifyOfficialExternalPluginCatalogSignedEnvelope(mixedEnvelope, { trustedKeys }),
-    ).toMatchObject({ ok: false, error: "invalid-envelope" });
-    expect(
-      verifyOfficialExternalPluginCatalogSignedEnvelope(mixedEnvelope, {
-        trustedKeys,
-        allowLegacyBetaEnvelope: true,
-      }),
-    ).toMatchObject({ ok: false, error: "invalid-envelope" });
+    expectVerification(mixedEnvelope, [key], "invalid-envelope");
+    expectVerification(mixedEnvelope, [key], "invalid-envelope", { allowLegacyBetaEnvelope: true });
   });
 });
