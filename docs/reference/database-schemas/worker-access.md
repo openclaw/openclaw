@@ -6273,6 +6273,14 @@ event still commits before the runtime advances; bulk transcript imports reuse
 their transaction-local append cursor. Root checks read metadata without saved
 prompt payloads. No cross-transaction root cache is introduced.
 
+Bulk appends retain attempt recency and projection watermarks in that cursor,
+then flush the index once and fold final recency into the transcript mutation
+write. Rejected identities still update attempt recency without advancing the
+mutation watermark. If an iterator fails, its accepted prefix's index and
+recency settle before the error escapes; the enclosing transaction still owns
+rollback. Identity and foreign-key checks, rewrite generations, stored payloads,
+and commit boundaries are unchanged.
+
 Awaited metadata and compaction retain the database executor without opening a
 native handle on the Gateway thread. The worker prepares storage and publishes
 its physical identity; transcript and session-entry hooks use that identity for
