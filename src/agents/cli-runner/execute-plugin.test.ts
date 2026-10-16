@@ -152,12 +152,17 @@ describe("plugin-owned CLI execution host boundary", () => {
       },
       runId: "history-owner",
       authFingerprint: "a".repeat(64),
+      bindsNativeLogin: false,
+      replaysHistory: true,
       assertCurrent() {},
       async assertReadable() {
         if (!historyReadable) {
           throw new Error("Private history account changed");
         }
       },
+      checkNativeLoginBoundary() {},
+      bindExecutionEnv() {},
+      async settleNativeLogin() {},
     };
     const preparingPermission = createDeferred();
     const releasePermission = createDeferred();
@@ -179,6 +184,40 @@ describe("plugin-owned CLI execution host boundary", () => {
     }
     expect(await result).toEqual(new Error("Private history account changed"));
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("does not disclose private input when a native login changes after the plugin started", async () => {
+    const { context } = await createExecution();
+    let loginHolds = true;
+    context.cliHistoryWriter = {
+      target: {
+        agentId: "main",
+        sessionId: "sdk-session",
+        sessionKey: "agent:main:main",
+        storePath: "/synthetic/sessions.sqlite",
+      },
+      runId: "history-owner",
+      authFingerprint: "a".repeat(64),
+      bindsNativeLogin: true,
+      replaysHistory: true,
+      assertCurrent() {},
+      async assertReadable() {},
+      checkNativeLoginBoundary(carriesSavedHistory) {
+        if (carriesSavedHistory && !loginHolds) {
+          throw new Error("Private history account changed");
+        }
+      },
+      bindExecutionEnv() {},
+      async settleNativeLogin() {},
+    };
+    const execute: CliBackendExecute = async function* (execution) {
+      // The bundled Claude runtime checks this host-internal field before its prompt send.
+      const host: CliBackendExecuteContext & { assertPrivateInputCurrent?: () => void } = execution;
+      loginHolds = false;
+      host.assertPrivateInputCurrent?.();
+      yield SUCCESS_RESULT;
+    };
+    await expect(runPlugin(context, execute)).rejects.toThrow("Private history account changed");
   });
 
   it.each([false, true])(

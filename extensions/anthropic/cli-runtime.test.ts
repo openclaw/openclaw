@@ -1,155 +1,31 @@
 import { createHash } from "node:crypto";
-import { access, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { access, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import type {
   CliBackendExecuteContext,
-  CliBackendLiveSessionCapability,
-  CliBackendLiveSessionHandle,
   CliBackendMessageInjection,
   CliBackendPreparedExecution,
   CliBackendToolPermissionResult,
 } from "openclaw/plugin-sdk/cli-backend";
 import { formatErrorMessageForDisplay } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import {
-  fixtureReceiptClientSource,
-  openFixtureReceiptChannel,
-  withinTest,
-  type FixtureReceiptChannel,
-} from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
+import { describe, expect, it, vi } from "vitest";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
-import { CLAUDE_PROTOCOL_FIXTURE, resultDetail } from "./cli-runtime.test-support.js";
+import {
+  collect,
+  createContext,
+  createLiveSession,
+  fixtureReadyBeforeSettlement,
+  harness,
+  useClaudeFixture,
+} from "./cli-runtime.test-harness.js";
+import { resultDetail } from "./cli-runtime.test-support.js";
 import { executeClaudeCli } from "./cli.runtime.js";
 
-const roots: string[] = [];
-const handles = new Set<CliBackendLiveSessionHandle>();
-let receipts: FixtureReceiptChannel;
-beforeAll(async () => {
-  receipts = await openFixtureReceiptChannel();
-});
-afterAll(async () => {
-  await receipts.close();
-});
-
-afterEach(async () => {
-  for (const handle of handles) {
-    handle.close("restart");
-    await handle.waitForExit();
-  }
-  handles.clear();
-  vi.restoreAllMocks();
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
-});
-
-async function createContext(
-  scenario = "normal",
-  overrides: Partial<CliBackendExecuteContext> = {},
-): Promise<CliBackendExecuteContext> {
-  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "openclaw-claude-protocol-")));
-  roots.push(root);
-  const fixture = path.join(root, "claude.mjs");
-  await writeFile(
-    fixture,
-    `${fixtureReceiptClientSource(receipts.endpoint)}
-${CLAUDE_PROTOCOL_FIXTURE}`,
-  );
-  return {
-    command: process.execPath,
-    args: [fixture],
-    cwd: root,
-    env: {
-      PATH: process.env.PATH ?? "",
-      HOME: root,
-      CLAUDE_CONFIG_DIR: root,
-      CLAUDE_FIXTURE_SCENARIO: scenario,
-    },
-    prompt: "synthetic user input",
-    systemPrompt: "synthetic operator instructions",
-    modelId: "claude-sonnet-4-6",
-    useResume: false,
-    liveSession: createLiveSession(),
-    timeoutMs: 10_000,
-    abortSignal: AbortSignal.timeout(10_000),
-    requestToolPermission: vi.fn<CliBackendExecuteContext["requestToolPermission"]>(async () => ({
-      behavior: "deny",
-      message: "Fixture denied.",
-    })),
-    requestUserInput: vi.fn<CliBackendExecuteContext["requestUserInput"]>(async () => ({
-      status: "cancelled",
-      message: "No question expected.",
-    })),
-    ...overrides,
-  };
-}
-
-function createLiveSession(cleanup?: () => Promise<void>): CliBackendLiveSessionCapability {
-  let current: CliBackendLiveSessionHandle | undefined;
-  let retiredCleanup: Promise<void> | undefined;
-  return {
-    fingerprint: "synthetic-process-policy",
-    current: () => current,
-    restart: async () => {
-      const previous = current;
-      previous?.close("restart");
-      await previous?.waitForExit();
-      await retiredCleanup;
-    },
-    register: (handle) => {
-      if (retiredCleanup) {
-        throw new Error("Previous CLI live session cleanup has not settled.");
-      }
-      current = handle;
-      handles.add(handle);
-    },
-    activate: () => {},
-    remove: (handle) => {
-      if (current === handle) {
-        current = undefined;
-        if (cleanup) {
-          retiredCleanup = handle
-            .waitForExit()
-            .then(cleanup)
-            .then(() => {
-              retiredCleanup = undefined;
-            });
-        }
-      }
-    },
-  };
-}
-
-async function collect(context: CliBackendExecuteContext) {
-  const records: Record<string, unknown>[] = [];
-  for await (const record of executeClaudeCli(context)) {
-    records.push(record);
-  }
-  return records;
-}
-
-async function fixtureReadyBeforeSettlement(
-  context: CliBackendExecuteContext,
-  fileName: string,
-  operation: PromiseLike<unknown>,
-  signal: AbortSignal,
-): Promise<void> {
-  const readyPath = path.join(context.cwd, fileName);
-  const recorded = async () => {
-    expect(await readFile(readyPath, "utf8")).toBe("ready");
-  };
-  // The fixture writes this record before replying; receipt and protocol pipes are unordered.
-  const settled = Promise.resolve(operation).then(recorded, async (error: unknown) => {
-    try {
-      await recorded();
-    } catch {
-      throw error;
-    }
-  });
-  await withinTest(Promise.race([receipts.waitFor(readyPath, "ready"), settled]), signal);
-}
+useClaudeFixture();
 
 // Native transport joins its root and signal dispatch, not foreign descendant extinction.
 async function waitForProcessExit(pids: number[], signal: AbortSignal): Promise<void> {
@@ -661,7 +537,7 @@ describe("Claude native stdio boundary", () => {
         },
       });
       const running = collect(context);
-      await receipts.waitFor(path.join(context.cwd, "turn.ready"), "ready");
+      await harness.receipts.waitFor(path.join(context.cwd, "turn.ready"), "ready");
       expect(injection?.isAvailable()).toBe(true);
       const withCurrent = vi.fn(async (submit: () => void) => submit());
       const notificationReplay = scenario.includes("notification-replay");
@@ -728,7 +604,7 @@ describe("Claude native stdio boundary", () => {
       },
     });
     const running = collect(context);
-    await receipts.waitFor(path.join(context.cwd, "turn.ready"), "ready");
+    await harness.receipts.waitFor(path.join(context.cwd, "turn.ready"), "ready");
     expect(injection?.isAvailable()).toBe(true);
     await injection!.queueMessage(context.prompt, async (submit) => submit());
     const records = await running;
@@ -749,7 +625,7 @@ describe("Claude native stdio boundary", () => {
     });
     const running = collect(context);
     void running.catch(() => {});
-    await receipts.waitFor(path.join(context.cwd, "turn.ready"), "ready");
+    await harness.receipts.waitFor(path.join(context.cwd, "turn.ready"), "ready");
     expect(injection?.isAvailable()).toBe(true);
     await expect(
       injection!.queueMessage("lost input", async (submit) => submit()),
@@ -768,7 +644,7 @@ describe("Claude native stdio boundary", () => {
         },
       });
       const running = collect(context);
-      await receipts.waitFor(path.join(context.cwd, "turn.ready"), "ready");
+      await harness.receipts.waitFor(path.join(context.cwd, "turn.ready"), "ready");
       expect(injection?.isAvailable()).toBe(true);
       const receipt = injection!.queueMessage("terminal input", async (submit) => submit());
       if (state === "completed") {
@@ -794,7 +670,7 @@ describe("Claude native stdio boundary", () => {
     });
     const running = collect(context);
     void running.catch(() => {});
-    await receipts.waitFor(path.join(context.cwd, "turn.ready"), "ready");
+    await harness.receipts.waitFor(path.join(context.cwd, "turn.ready"), "ready");
     expect(injection?.isAvailable()).toBe(true);
     await expect(
       injection!.queueMessage("revoked input", async () => {

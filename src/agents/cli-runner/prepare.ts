@@ -134,7 +134,7 @@ import {
   unsupportedIsolatedCompletionError,
 } from "./execution-target.js";
 import { isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
-import { prepareCliHistoryBoundary } from "./history-boundary.js";
+import { replayableTarget, prepareCliHistoryBoundary } from "./history-boundary.js";
 import { cliBackendLog } from "./log.js";
 import { mintCliMcpClientGrant } from "./mcp-client-grant.js";
 import { buildCliMcpGrantContext } from "./mcp-grant-context.js";
@@ -1461,13 +1461,13 @@ async function prepareCliRunContextWithinReadFence(
     const allowRawTranscriptReseed =
       backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
     const historyParams = (params = await admitCliRunParams(params, workspaceResolution.agentId));
+    const historyIdentity = { credential: authCredential, preparedBackend: preparedBackendFinal };
     const cliHistoryWriter = !isSideQuestion
-      ? await prepareCliHistoryBoundary(historyParams, { credential: authCredential })
+      ? await prepareCliHistoryBoundary(historyParams, historyIdentity)
       : undefined;
-    // Explicit caller-owned memory remains input; it cannot authorize borrowed durable history.
-    const historyAllowed = params.sessionManager !== undefined || cliHistoryWriter !== undefined;
-    // Native compatibility and transcript account ownership are independent gates.
-    const rawTranscriptReseedReason = !historyAllowed
+    // Native compatibility and transcript account ownership are independent gates. Explicit
+    // caller-owned memory remains input; it cannot authorize borrowed durable history.
+    const rawTranscriptReseedReason = !(params.sessionManager || replayableTarget(cliHistoryWriter))
       ? "auth-unknown"
       : reusableCliSessionId
         ? "session-expired"
@@ -1541,7 +1541,7 @@ async function prepareCliRunContextWithinReadFence(
         thinkLevel: params.thinkLevel,
         runtimeContextFragments: params.runtimeContextFragments,
         // Caller-owned memory cannot grant access to persisted interrupted inputs.
-        sessionTarget: params.isolatedCompletion ? undefined : cliHistoryWriter?.target,
+        sessionTarget: params.isolatedCompletion ? undefined : replayableTarget(cliHistoryWriter),
         context: [promptBuildHookResult?.appendContext, authorizedPromptBuildResult?.appendContext],
       }));
       params.assertCurrent?.();
