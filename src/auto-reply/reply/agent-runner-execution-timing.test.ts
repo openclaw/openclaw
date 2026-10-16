@@ -77,12 +77,10 @@ it("announces a remote native run before its worker starts writing replies", asy
   const turn = createMinimalRunAgentTurnParams();
   turn.opts = { onAgentRunStart, onTranscriptStartPreparation: () => finishObservation };
   turn.followupRun.run.config = {
-    agents: {
-      defaults: { models: { "anthropic/claude": { agentRuntime: { id: "openclaw" } } } },
-    },
+    agents: { defaults: { models: { "anthropic/claude": { agentRuntime: { id: "openclaw" } } } } },
   };
   const transcriptStart = transcriptStartFor("worker-start", 7);
-  const prepare = vi
+  using _ = vi
     .spyOn(transcriptWatermarks, "readSessionTranscriptStartAsync")
     .mockResolvedValue(transcriptStart);
   state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
@@ -91,14 +89,10 @@ it("announces a remote native run before its worker starts writing replies", asy
     expect(onAgentRunStart).toHaveBeenCalledOnce();
     return completed("worker answer");
   });
-  try {
-    const result = await executeAgentTurn(turn);
-    expect(result.outcome.kind).toBe("settled");
-    expect(onAgentRunStart.mock.lastCall?.[3]).toEqual(transcriptStart);
-    expect(finishObservation).toHaveBeenCalledOnce();
-  } finally {
-    prepare.mockRestore();
-  }
+  const result = await executeAgentTurn(turn);
+  expect(result.outcome.kind).toBe("settled");
+  expect(onAgentRunStart.mock.lastCall?.[3]).toEqual(transcriptStart);
+  expect(finishObservation).toHaveBeenCalledOnce();
 });
 
 it.each(["settled", "pending"] as const)(
@@ -127,7 +121,7 @@ it.each(["settled", "pending"] as const)(
     const retiredRead = createDeferred<TranscriptStart>();
     const priorStart = transcriptStartFor("transcript-generation", 7);
     const currentStart = { ...priorStart, maxSeq: 11 };
-    const prepare = vi
+    using _ = vi
       .spyOn(transcriptWatermarks, "readSessionTranscriptStartAsync")
       .mockImplementationOnce(async () => {
         entered.resolve();
@@ -181,7 +175,7 @@ it.each(["settled", "pending"] as const)(
       expect(pendingObservations.size).toBe(0);
     } finally {
       retiredRead.resolve(priorStart);
-      await retiredEvent.finally(() => prepare.mockRestore());
+      await retiredEvent;
     }
   },
 );
@@ -191,7 +185,7 @@ it("keeps native start facts when an earlier event's preparation settles late", 
   const entered = createDeferred();
   const fallback = createDeferred<TranscriptStart>();
   const nativeStart = transcriptStartFor("native-start");
-  const prepare = vi
+  using prepare = vi
     .spyOn(transcriptWatermarks, "readSessionTranscriptStartAsync")
     .mockImplementationOnce(() => {
       entered.resolve();
@@ -218,7 +212,6 @@ it("keeps native start facts when an earlier event's preparation settles late", 
     expect(prepare).toHaveBeenCalledTimes(1);
   } finally {
     fallback.resolve(nativeStart);
-    prepare.mockRestore();
   }
 });
 
@@ -226,7 +219,7 @@ it.each(["embedded preparation", "fallback preparation"])(
   "times %s failure between successful turns without borrowing the previous start",
   async (failureBoundary) => {
     let now = 1_000_000;
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    using _ = vi.spyOn(Date, "now").mockImplementation(() => now);
     const session: InternalSessionEntry = { sessionId: "session", updatedAt: now };
     const lifecycle: AgentEventPayload[] = [];
     const unsubscribe = onAgentEvent((event) => {
@@ -312,7 +305,6 @@ it.each(["embedded preparation", "fallback preparation"])(
       ]);
     } finally {
       unsubscribe();
-      clock.mockRestore();
     }
   },
 );

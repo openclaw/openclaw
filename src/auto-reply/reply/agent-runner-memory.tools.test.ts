@@ -1,15 +1,16 @@
-// Provider-owned pre-compaction persistence through detached maintenance turns.
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   assertMemoryFlushPersistenceToolAvailable,
   projectMemoryFlushTools,
 } from "../../agents/agent-tools.memory-flush.js";
-import type { AnyAgentTool } from "../../agents/agent-tools.types.js";
 import { createSessionMaintenanceFollowup } from "../../agents/session-maintenance/run.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { createStubTool } from "../../agents/test-helpers/agent-tool-stubs.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
@@ -21,6 +22,7 @@ import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.
 import { createSessionTranscriptHeader } from "../../config/sessions/transcript-header.js";
 import { assertMemoryAudienceSession } from "../../plugins/memory-audience.js";
 import { clearMemoryPluginState } from "../../plugins/memory-state.test-fixtures.js";
+import type { MemoryPluginCapability } from "../../plugins/registry-contribution-types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
@@ -28,7 +30,6 @@ import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
 import {
   createMemoryRunEntryMockImplementation,
   createFlushSessionEntry,
-  modelRoutingProvenance,
   runInitialMemoryFallback,
   type EmbeddedAgentParams,
   type ModelFallbackParams,
@@ -68,11 +69,7 @@ vi.mock("../../infra/agent-run-registry.js", async (importOriginal) => ({
 }));
 
 function requireEmbeddedAgentCall(index = 0) {
-  const call = runAgent.mock.calls[index]?.[0] as EmbeddedAgentParams | undefined;
-  if (!call) {
-    throw new Error(`runEmbeddedAgent call ${index} missing`);
-  }
-  return call;
+  return expectDefined<EmbeddedAgentParams>(runAgent.mock.calls[index]?.[0]);
 }
 
 const readOnlyWorkspace = {
@@ -98,8 +95,13 @@ describe("provider-owned memory flush", () => {
     clearMemoryPluginState();
   });
 
-  function registerToolsFlushPlan(sidecar = false) {
+  function registerOwner(pluginId: string, capability: MemoryPluginCapability) {
     const registry = createEmptyPluginRegistry();
+    registry.memoryCapabilities.push({ pluginId, memorySlotSelected: true, capability });
+    return registry;
+  }
+
+  function registerToolsFlushPlan(sidecar = false) {
     const providerFlushPlanResolver = () => ({
       softThresholdTokens: 4_000,
       forceFlushTranscriptBytes: 1_000_000_000,
@@ -109,16 +111,15 @@ describe("provider-owned memory flush", () => {
       persistenceToolNames: ["knowledge_save_page"],
       lookupToolNames: ["knowledge_grep"],
     });
-    registry.memoryCapabilities.push({
-      pluginId: "knowledge",
-      memorySlotSelected: true,
-      capability: sidecar
+    const registry = registerOwner(
+      "knowledge",
+      sidecar
         ? {}
         : {
             providerFlushPlanResolver,
             providerRuntime: { open: vi.fn(async () => ({ provider: null })) },
           },
-    });
+    );
     if (sidecar) {
       registry.memoryCapabilities.push({
         pluginId: "memory-sidecar",
@@ -172,19 +173,13 @@ describe("provider-owned memory flush", () => {
     if (!params.memoryFlushTools) {
       throw new Error("missing tools-arm run context");
     }
-    const tool: AnyAgentTool = {
-      name: "knowledge_save_page",
-      label: "Save page",
-      description: "Persist a page",
-      parameters: { type: "object", properties: {} },
+    const tool = {
+      ...createStubTool("knowledge_save_page"),
       execute: async () => ({ content: [{ type: "text", text: "saved" }], details: {} }),
     };
     setPluginToolMeta(tool, { pluginId: "knowledge", optional: false });
     const [projected] = projectMemoryFlushTools([tool], { ...params.memoryFlushTools });
-    if (!projected) {
-      throw new Error("declared persistence tool was not projected");
-    }
-    await projected.execute("flush-save", {});
+    await expectDefined(projected).execute("flush-save", {});
     return { payloads: [], meta: {} };
   }
 
@@ -197,11 +192,7 @@ describe("provider-owned memory flush", () => {
     const transcript = SessionManager.fromEntries([
       createSessionTranscriptHeader({ cwd: rootDir, sessionId: entry.sessionId }),
     ]);
-    await transcript.appendMessageAsync({
-      role: "user",
-      content: "x".repeat(310_000),
-      timestamp: 1,
-    });
+    await transcript.appendMessageAsync(makeUserMessage("x".repeat(310_000), 1));
     await transcript.appendMessageAsync(
       makeAssistantMessageFixture({
         content: [{ type: "text", text: "Acknowledged" }],
@@ -214,9 +205,7 @@ describe("provider-owned memory flush", () => {
     await waitForSessionTranscriptProjection(scope);
     runAgent.mockImplementationOnce(persistMemory);
 
-    const result = await flush({ promptForEstimate: "" });
-
-    expect(result.outcome).toBe("completed");
+    expect((await flush({ promptForEstimate: "" })).outcome).toBe("completed");
     expect(runAgent).toHaveBeenCalledOnce();
     expect(loadSessionEntry(scope)).toMatchObject({
       totalTokens: 2,
@@ -226,33 +215,20 @@ describe("provider-owned memory flush", () => {
   });
 
   it("does not flush empty history for a large pending input with fresh tokens", async () => {
-    const { flush } = await createToolsFlushFixture({
-      totalTokens: 0,
-      totalTokensFresh: true,
-    });
+    const { flush } = await createToolsFlushFixture({ totalTokens: 0, totalTokensFresh: true });
 
-    const result = await flush({ promptForEstimate: "x".repeat(310_000) });
-
-    expect(result.outcome).toBe("skipped");
+    expect((await flush({ promptForEstimate: "x".repeat(310_000) })).outcome).toBe("skipped");
     expect(runAgent).not.toHaveBeenCalled();
   });
 
   it("does not resolve a legacy file plan for a session that cannot write its workspace", async () => {
-    const registry = createEmptyPluginRegistry();
     const flushPlanResolver = vi.fn(() => {
       throw new Error("legacy resolver failed");
     });
-    registry.memoryCapabilities.push({
-      pluginId: "third-party-memory",
-      memorySlotSelected: true,
-      capability: { flushPlanResolver },
-    });
-    setActivePluginRegistry(registry);
+    setActivePluginRegistry(registerOwner("third-party-memory", { flushPlanResolver }));
     const { flush } = await createToolsFlushFixture();
 
-    const result = await flush({ cfg: readOnlyWorkspace });
-
-    expect(result.outcome).toBe("skipped");
+    expect((await flush({ cfg: readOnlyWorkspace })).outcome).toBe("skipped");
     expect(flushPlanResolver).not.toHaveBeenCalled();
     expect(runAgent).not.toHaveBeenCalled();
   });
@@ -275,10 +251,7 @@ describe("provider-owned memory flush", () => {
       expect(params.sessionId).not.toBe(entry.sessionId);
       expect(isInternalSessionEffectsKey(params.sessionKey ?? "")).toBe(true);
       expect(params.memoryFlushWritePath).toBeUndefined();
-      const audience = params.memoryAudience;
-      if (!audience) {
-        throw new Error("source memory audience missing");
-      }
+      const audience = expectDefined(params.memoryAudience, "source memory audience missing");
       expect(() => assertMemoryAudienceSession(audience, params.sessionKey)).not.toThrow();
       expect(() => assertMemoryAudienceSession(audience, overrides.sessionKey)).toThrow(
         "bound to a different session",
@@ -286,31 +259,18 @@ describe("provider-owned memory flush", () => {
       return persistMemory(params);
     });
 
-    const result = await flush({ cfg: readOnlyWorkspace });
-
-    expect(result.outcome).toBe("completed");
+    expect((await flush({ cfg: readOnlyWorkspace })).outcome).toBe("completed");
     expect(runAgent).toHaveBeenCalledOnce();
     expect(fs.existsSync(path.join(rootDir, "memory"))).toBe(false);
   });
 
   it("keeps a tools flush ID across fallback and retry, then changes it after compaction", async () => {
     const { entry, overrides, flush } = await createToolsFlushFixture();
-    runAgent.mockRejectedValueOnce(new Error("model unavailable"));
-    runFallback.mockImplementationOnce(async (params: ModelFallbackParams) => {
-      await expect(
-        params.run("anthropic", "claude", {
-          modelRoutingProvenance: modelRoutingProvenance("anthropic", "claude"),
-        }),
-      ).rejects.toThrow("model unavailable");
-      return {
-        result: await params.run("anthropic", "fallback", {
-          modelRoutingProvenance: modelRoutingProvenance("anthropic", "claude", "fallback"),
-        }),
-        provider: "anthropic",
-        model: "fallback",
-        attempts: [],
-      };
-    });
+    const primaryError = new Error("model unavailable");
+    runAgent.mockRejectedValueOnce(primaryError);
+    runFallback.mockImplementationOnce((params: ModelFallbackParams) =>
+      runInitialMemoryFallback(params, primaryError),
+    );
     overrides.followupRun.run.thinkingCatalog?.push({
       provider: "anthropic",
       id: "fallback",
@@ -344,7 +304,6 @@ describe("provider-owned memory flush", () => {
       const { entry, overrides, flush } = await createToolsFlushFixture({ chatType });
       const source = overrides.followupRun.run;
       source.senderIsOwner = senderIsOwner;
-      // The scheduled post-turn copy, as reply and command maintenance build it.
       const maintenance = createSessionMaintenanceFollowup({
         run: source,
         sessionEntry: entry,
@@ -356,9 +315,7 @@ describe("provider-owned memory flush", () => {
       });
       runAgent.mockImplementationOnce(persistMemory);
 
-      const result = await flush({ followupRun: maintenance });
-
-      expect(result.outcome).toBe("completed");
+      expect((await flush({ followupRun: maintenance })).outcome).toBe("completed");
       expect(maintenance.run.senderIsOwner).toBe(false);
       expect(requireEmbeddedAgentCall(0).senderIsOwner).toBe(false);
       expect(requireEmbeddedAgentCall(0).memoryAudience?.kind).toBe("conversation");
@@ -372,9 +329,7 @@ describe("provider-owned memory flush", () => {
       meta: { finalAssistantRawText: "Finished." },
     });
 
-    const result = await flush();
-
-    expect(result.outcome).toBe("failed");
+    expect((await flush()).outcome).toBe("failed");
     expect(loadSessionEntry(overrides)?.memoryFlush).toMatchObject({ kind: "failed" });
   });
 

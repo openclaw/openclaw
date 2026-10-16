@@ -2,7 +2,7 @@ import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { text as readBody } from "node:stream/consumers";
 import { expect, it } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   acquireSessionMcpRuntime,
@@ -100,7 +100,6 @@ it.each(["completed", "interrupted"] as const)(
   async (outcome) => {
     await withOpenClawTestState({ label: "private-memory-run" }, async (state) => {
       const entered = createDeferred();
-      const finishFirstResponse = createDeferred<boolean>();
       const interrupted = new AbortController();
       const human = "Reply only FOREGROUND_READY. Preserve ünicode 🦞.\nThis is the human request.";
       const runtimeContext = "Synthetic current runtime fact for the next human turn.";
@@ -109,6 +108,7 @@ it.each(["completed", "interrupted"] as const)(
       const runtimeBudgets: number[] = [];
       const privateSessionIds = new Set<string>();
       let missingPrivateSessionId = false;
+      let completeFirstPrivateResponse: (() => void) | undefined;
       const stopDiagnostics = onInternalDiagnosticEvent((event) => {
         if (
           event.type === "model.call.started" &&
@@ -123,56 +123,62 @@ it.each(["completed", "interrupted"] as const)(
           }
         }
       });
-      const server = createServer(async (request, response) => {
+      const server = createServer((request, response) => {
         if (request.url === "/mcp" && request.method !== "POST") {
           response.writeHead(request.method === "DELETE" ? 200 : 405).end();
           return;
         }
-        try {
-          const body = await readBody(request);
-          // The held-run fixture seeds a real MCP resource for settlement proof;
-          // memory inference itself must not discover unrelated MCP tools.
-          if (request.url === "/mcp") {
-            const message = JSON.parse(body) as {
-              id?: number;
-              method: string;
-              params?: { protocolVersion?: string };
-            };
-            let result;
-            if (message.method === "initialize") {
-              result = {
-                protocolVersion: message.params?.protocolVersion,
-                capabilities: { tools: {} },
-                serverInfo: { name: "memory-lifetime", version: "1" },
+        void readBody(request)
+          .then((body) => {
+            // The held-run fixture seeds a real MCP resource for settlement proof;
+            // memory inference itself must not discover unrelated MCP tools.
+            if (request.url === "/mcp") {
+              const message = JSON.parse(body) as {
+                id?: number;
+                method: string;
+                params?: { protocolVersion?: string };
               };
-            } else if (message.method === "tools/list") {
-              result = { tools: [] };
-            }
-            if (!result) {
-              response.writeHead(202).end();
+              let result;
+              if (message.method === "initialize") {
+                result = {
+                  protocolVersion: message.params?.protocolVersion,
+                  capabilities: { tools: {} },
+                  serverInfo: { name: "memory-lifetime", version: "1" },
+                };
+              } else if (message.method === "tools/list") {
+                result = { tools: [] };
+              }
+              if (!result) {
+                response.writeHead(202).end();
+                return;
+              }
+              response.writeHead(200, { "content-type": "application/json" });
+              response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
               return;
             }
-            response.writeHead(200, { "content-type": "application/json" });
-            response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
-            return;
-          }
-          const modelRequest = JSON.parse(body) as ModelRequest;
-          requests.push(modelRequest);
-          const isHuman = lastHumanText(modelRequest).endsWith(human);
-          response.writeHead(200, { "content-type": "text/event-stream", connection: "close" });
-          response.flushHeaders();
-          if (!isHuman) {
-            entered.resolve();
-            if (requests.length === 1 && !(await finishFirstResponse.promise)) {
-              return;
+            const modelRequest = JSON.parse(body) as ModelRequest;
+            requests.push(modelRequest);
+            const isHuman = lastHumanText(modelRequest).endsWith(human);
+            response.writeHead(200, { "content-type": "text/event-stream", connection: "close" });
+            response.flushHeaders();
+            const completeResponse = () =>
+              finishModelResponse(response, isHuman ? "FOREGROUND_READY" : "NO_REPLY");
+            if (!isHuman) {
+              if (requests.length === 1 && outcome === "completed") {
+                completeFirstPrivateResponse = completeResponse;
+              }
+              entered.resolve();
+              if (requests.length === 1) {
+                return;
+              }
             }
-          }
-          finishModelResponse(response, isHuman ? "FOREGROUND_READY" : "NO_REPLY");
-        } catch (error) {
-          requestErrors.push(error);
-          entered.reject(error);
-          response.destroy();
-        }
+            completeResponse();
+          })
+          .catch((error: unknown) => {
+            requestErrors.push(error);
+            entered.reject(error);
+            response.destroy();
+          });
       });
       await new Promise<void>((resolve) => {
         server.listen(0, "127.0.0.1", resolve);
@@ -187,7 +193,6 @@ it.each(["completed", "interrupted"] as const)(
         sessionKey: "agent:main:main",
         storePath: path.join(state.sessionsDir(), "sessions.json"),
       };
-      const modelRoute = { provider: "test-provider", model: "owner-model" };
       const cfg: OpenClawConfig = {
         agents: {
           entries: { main: { workspace: state.workspaceDir } },
@@ -235,7 +240,8 @@ it.each(["completed", "interrupted"] as const)(
         transcript.appendMessage(makeUserMessage("Remember the Cedar project receipt.", 1));
         transcript.appendMessage(
           makeAssistantMessageFixture({
-            ...modelRoute,
+            provider: "test-provider",
+            model: "owner-model",
             api: "openai-completions",
             content: [{ type: "text", text: "Cedar receipt saved." }],
             stopReason: "stop",
@@ -256,7 +262,8 @@ it.each(["completed", "interrupted"] as const)(
           agentDir: state.agentDir(),
           workspaceDir: state.workspaceDir,
           config: cfg,
-          ...modelRoute,
+          provider: "test-provider",
+          model: "owner-model",
           messageProvider: "webchat",
           thinkLevel: "off",
           timeoutMs: 30_000,
@@ -267,7 +274,8 @@ it.each(["completed", "interrupted"] as const)(
           sessionEntry: entry,
           cfg,
           sessionKey: scope.sessionKey,
-          ...modelRoute,
+          provider: "test-provider",
+          model: "owner-model",
           auth: {},
         });
         installAgentRunnerMemoryFixture(() => ({
@@ -303,11 +311,12 @@ it.each(["completed", "interrupted"] as const)(
             abortSignal: interrupted.signal,
           }),
         );
-        await awaitGateBeforeSettlement(
+        await Promise.race([
           entered.promise,
-          flush,
-          "Memory run ended before reaching inference",
-        );
+          flush.then(() => {
+            throw new Error("Memory run ended before reaching inference");
+          }),
+        ]);
         await waitForDiagnosticEventsDrained();
         expect(missingPrivateSessionId).toBe(false);
         const firstPrivateSessionIds = [...privateSessionIds];
@@ -332,7 +341,11 @@ it.each(["completed", "interrupted"] as const)(
         if (outcome === "interrupted") {
           interrupted.abort(new Error("next human turn"));
         } else {
-          finishFirstResponse.resolve(true);
+          if (!completeFirstPrivateResponse) {
+            throw new Error("Private response was not held before completion");
+          }
+          completeFirstPrivateResponse();
+          completeFirstPrivateResponse = undefined;
         }
         expect((await flush).outcome).toBe(outcome === "interrupted" ? "failed" : "completed");
         admission.release();
@@ -410,7 +423,7 @@ it.each(["completed", "interrupted"] as const)(
           "later private memory run must retire before the human turn returns",
         );
       } finally {
-        finishFirstResponse.resolve(false);
+        completeFirstPrivateResponse?.();
         interrupted.abort(createAbortError("fixture cleanup"));
         await flush?.catch(() => undefined);
         admission?.release();

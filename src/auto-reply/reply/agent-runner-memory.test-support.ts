@@ -1,14 +1,17 @@
+import { expect } from "vitest";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { createAssistantErrorTranscript } from "../../agents/assistant-error-transcript.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import type { ModelFallbackRunOptions } from "../../agents/model-fallback-attempt.js";
 import type { runWithModelFallback } from "../../agents/model-fallback-runner.js";
-import type { ModelFallbackAttemptProvenance } from "../../agents/model-fallback.types.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
+import { ZERO_USAGE_FIXTURE } from "../../agents/test-helpers/usage-fixtures.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
+import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { MemoryFlushPlan } from "../../plugins/registry-contribution-types.js";
 
 export type { RunEmbeddedAgentInternalParams as EmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
@@ -26,12 +29,22 @@ export function createFlushSessionEntry(overrides: Partial<SessionEntry> = {}): 
   return createFreshSessionEntry({ totalTokens: 80_000, compactionCount: 1, ...overrides });
 }
 
-export function modelRoutingProvenance(
-  requestedProvider: string,
-  requestedModel: string,
-  stage: ModelFallbackAttemptProvenance["stage"] = "initial",
-): ModelFallbackAttemptProvenance {
-  return { requestedProvider, requestedModel, stage };
+export function memoryModel(
+  id: string,
+  contextTokens: number,
+  overrides: Partial<ModelDefinitionConfig> = {},
+): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"],
+    contextWindow: contextTokens,
+    contextTokens,
+    maxTokens: 8_192,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    ...overrides,
+  };
 }
 
 export async function seedMemoryAccountingTranscript(
@@ -41,12 +54,7 @@ export async function seedMemoryAccountingTranscript(
 ): Promise<void> {
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
   const transcript = SessionManager.open(scope, workspaceDir);
-  const user = {
-    role: "user" as const,
-    content: "Research this",
-    timestamp: 1,
-    __openclaw: { senderIsOwner: true },
-  };
+  const user = { ...makeUserMessage("Research this", 1), __openclaw: { senderIsOwner: true } };
   transcript.appendMessage(user);
   transcript.appendMessage({
     role: "toolResult",
@@ -62,12 +70,7 @@ export async function seedMemoryAccountingTranscript(
       content: [{ type: "text", text: "network-derived answer" }],
       stopReason: "stop",
       errorMessage: undefined,
-      usage: {
-        ...makeAssistantMessageFixture().usage,
-        input: 78_000,
-        output: 100,
-        totalTokens: 78_100,
-      },
+      usage: { ...ZERO_USAGE_FIXTURE, input: 78_000, output: 100, totalTokens: 78_100 },
     }),
   );
   if (newUser) {
@@ -107,10 +110,20 @@ export type ModelFallbackParams = Omit<
   ) => Promise<EmbeddedAgentRunResult>;
 };
 
-export async function runInitialMemoryFallback({ provider, model, run }: ModelFallbackParams) {
+export async function runInitialMemoryFallback(params: ModelFallbackParams, primaryError?: Error) {
+  const { provider, model: requestedModel } = primaryError
+    ? { provider: "anthropic", model: "claude" }
+    : params;
+  const provenance = { requestedProvider: provider, requestedModel, stage: "initial" as const };
+  if (primaryError) {
+    await expect(
+      params.run(provider, requestedModel, { modelRoutingProvenance: provenance }),
+    ).rejects.toBe(primaryError);
+  }
+  const model = primaryError ? "fallback" : requestedModel;
   return {
-    result: await run(provider, model, {
-      modelRoutingProvenance: modelRoutingProvenance(provider, model),
+    result: await params.run(provider, model, {
+      modelRoutingProvenance: primaryError ? { ...provenance, stage: "fallback" } : provenance,
     }),
     provider,
     model,
@@ -147,10 +160,7 @@ export function createMemoryRunEntryMockImplementation(
     return {
       ...fallbackResult,
       outcome: fallbackResult.outcome ?? ("completed" as const),
-      terminal: {
-        outcome: { reason: "completed" as const, status: "ok" as const },
-        metadata: {},
-      },
+      terminal: { outcome: { reason: "completed" as const, status: "ok" as const }, metadata: {} },
       settleSessionOverride: async () => undefined,
     };
   };
