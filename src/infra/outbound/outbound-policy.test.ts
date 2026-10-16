@@ -1,6 +1,5 @@
-// Covers message action allowlists plus cross-context marker/decorator policy
-// for same-provider and cross-provider sends.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 
 let applyCrossContextDecoration: typeof import("./outbound-policy.js").applyCrossContextDecoration;
@@ -8,38 +7,24 @@ let buildCrossContextDecoration: typeof import("./outbound-policy.js").buildCros
 let enforceCrossContextPolicy: typeof import("./outbound-policy.js").enforceCrossContextPolicy;
 
 const mocks = vi.hoisted(() => ({
-  getChannelPlugin: vi.fn((channel: string) => {
+  getChannelPlugin: vi.fn<(channel: string) => Partial<ChannelPlugin> | undefined>((channel) => {
     if (channel === "slack") {
       return {
         threading: {
-          matchesToolContextTarget: ({
-            target,
-            toolContext,
-          }: {
-            target: string;
-            toolContext: { currentMessagingTarget?: string };
-          }) => target === "U123" && toolContext.currentMessagingTarget === "user:U123",
+          matchesToolContextTarget: ({ target, toolContext }) =>
+            target === "U123" && toolContext.currentMessagingTarget === "user:U123",
         },
       };
     }
     if (channel === "richchat") {
       return {
         messaging: {
-          buildCrossContextPresentation: ({
-            originLabel,
-            message,
-          }: {
-            originLabel: string;
-            message: string;
-          }) => {
-            const trimmed = message.trim();
-            return {
-              blocks: [
-                ...(trimmed ? [{ type: "text" as const, text: message }] : []),
-                { type: "context" as const, text: `From ${originLabel}` },
-              ],
-            };
-          },
+          buildCrossContextPresentation: ({ originLabel, message }) => ({
+            blocks: [
+              ...(message.trim() ? [{ type: "text" as const, text: message }] : []),
+              { type: "context" as const, text: `From ${originLabel}` },
+            ],
+          }),
         },
       };
     }
@@ -50,10 +35,7 @@ const mocks = vi.hoisted(() => ({
     if (!trimmed) {
       return undefined;
     }
-    if (channel === "workspace") {
-      return trimmed.replace(/^#/, "");
-    }
-    return trimmed;
+    return channel === "workspace" ? trimmed.replace(/^#/, "") : trimmed;
   }),
   lookupDirectoryDisplay: vi.fn(async ({ targetId }: { targetId: string }) =>
     targetId.replace(/^#/, ""),

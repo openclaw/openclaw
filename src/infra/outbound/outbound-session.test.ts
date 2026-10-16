@@ -1,5 +1,3 @@
-// Covers outbound session-route resolution through plugin hooks and fallback
-// target parsing, plus best-effort session route persistence.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -42,91 +40,85 @@ vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
     mocks.loadSessionEntryReadOnly(params),
 }));
 
-const imessageRoutePlugin = {
-  ...createChannelTestPluginBase({ id: "imessage" }),
-  messaging: {
-    resolveOutboundSessionRoute: () => ({
-      sessionKey: "agent:main:imessage:direct:Alice",
-      baseSessionKey: "agent:main:imessage:direct:Alice",
-      peer: { kind: "direct" as const, id: "Alice" },
-      chatType: "direct" as const,
-      from: "imessage:Alice",
-      to: "imessage:Alice",
-    }),
-  },
-} satisfies ChannelPlugin;
+function routeFixture(overrides: Partial<OutboundSessionRoute> = {}): OutboundSessionRoute {
+  return {
+    sessionKey: "agent:main:main",
+    peer: { kind: "direct", id: "peer-agent" },
+    chatType: "direct",
+    from: "reef:peer-agent",
+    to: "reef:peer-agent",
+    ...overrides,
+    baseSessionKey: overrides.baseSessionKey ?? overrides.sessionKey ?? "agent:main:main",
+  };
+}
 
-const telegramRoutePlugin = {
-  ...createChannelTestPluginBase({ id: "telegram" }),
-  messaging: {
-    resolveOutboundSessionRoute: () => ({
-      sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
-      baseSessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
-      peer: { kind: "group" as const, id: "-1001234567890:topic:42" },
-      chatType: "group" as const,
-      from: "telegram:group:-1001234567890:topic:42",
-      to: "telegram:-1001234567890:topic:42",
-    }),
-  },
-} satisfies ChannelPlugin;
+function routePlugin(id: string, route: OutboundSessionRoute): ChannelPlugin {
+  return {
+    ...createChannelTestPluginBase({ id }),
+    messaging: { resolveOutboundSessionRoute: () => route },
+  };
+}
+
+const imessageRoutePlugin = routePlugin(
+  "imessage",
+  routeFixture({
+    sessionKey: "agent:main:imessage:direct:Alice",
+    peer: { kind: "direct", id: "Alice" },
+    from: "imessage:Alice",
+    to: "imessage:Alice",
+  }),
+);
+const telegramRoutePlugin = routePlugin(
+  "telegram",
+  routeFixture({
+    sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
+    peer: { kind: "group", id: "-1001234567890:topic:42" },
+    chatType: "group",
+    from: "telegram:group:-1001234567890:topic:42",
+    to: "telegram:-1001234567890:topic:42",
+  }),
+);
+
+type ResolveParams = Parameters<typeof resolveOutboundSessionRoute>[0];
+const perChannelPeerCfg: OpenClawConfig = { session: { dmScope: "per-channel-peer" } };
+const resolveRoute = (params: Omit<ResolveParams, "cfg" | "agentId"> & Partial<ResolveParams>) =>
+  resolveOutboundSessionRoute({ cfg: perChannelPeerCfg, agentId: "main", ...params });
 
 describe("resolveOutboundSessionRoute", () => {
-  it("carries a resolved directory display name into the session route", async () => {
-    const route = await resolveOutboundSessionRoute({
-      cfg: perChannelPeerSessionCfg,
-      channel: "guildchat",
-      agentId: "main",
-      target: "user-42",
-      resolvedTarget: {
-        to: "user-42",
-        kind: "user",
-        display: "Alice",
-        source: "directory",
-        resolutionSource: "directory",
-      },
-    });
-
-    expect(route?.displayName).toBe("Alice");
-  });
-
-  it("keeps directory identifier fallbacks out of durable session names", async () => {
-    const roomId = "8f560ffb-37e2-4078-a6c4-83e4d72e94b3";
-    const route = await resolveOutboundSessionRoute({
-      cfg: perChannelPeerSessionCfg,
-      channel: "telegram",
-      plugin: telegramRoutePlugin,
-      agentId: "main",
-      target: `group:${roomId}`,
-      resolvedTarget: {
-        to: `group:${roomId}`,
-        kind: "group",
-        display: roomId,
-        source: "directory",
-        resolutionSource: "directory",
-      },
-    });
-
-    expect(route?.displayName).toBeUndefined();
-  });
-
-  it("carries an iMessage plugin contact alias into the session route", async () => {
-    const route = await resolveOutboundSessionRoute({
-      cfg: perChannelPeerSessionCfg,
-      channel: "imessage",
-      plugin: imessageRoutePlugin,
-      agentId: "main",
-      target: "imessage:Alice",
-      resolvedTarget: {
-        to: "imessage:Alice",
-        kind: "user",
-        display: "Alice",
-        source: "normalized",
-        resolutionSource: "plugin",
-      },
-    });
-
-    expect(route?.displayName).toBe("Alice");
-  });
+  it.each([
+    ["guildchat", "user-42", "user", "Alice", "directory", "directory", undefined, "Alice"],
+    [
+      "telegram",
+      "group:8f560ffb-37e2-4078-a6c4-83e4d72e94b3",
+      "group",
+      "8f560ffb-37e2-4078-a6c4-83e4d72e94b3",
+      "directory",
+      "directory",
+      telegramRoutePlugin,
+      undefined,
+    ],
+    [
+      "imessage",
+      "imessage:Alice",
+      "user",
+      "Alice",
+      "normalized",
+      "plugin",
+      imessageRoutePlugin,
+      "Alice",
+    ],
+  ] as const)(
+    "resolves %s display names from %s",
+    async (channel, target, kind, display, source, resolutionSource, plugin, expected) => {
+      const route = await resolveRoute({
+        channel,
+        target,
+        plugin,
+        resolvedTarget: { to: target, kind, display, source, resolutionSource },
+      });
+      expect(route?.displayName).toBe(expected);
+    },
+  );
 
   beforeEach(() => {
     mocks.updateSessionLastRoute.mockClear();
@@ -134,24 +126,11 @@ describe("resolveOutboundSessionRoute", () => {
     setMinimalOutboundSessionPluginRegistryForTests();
   });
 
-  const baseConfig = {} as OpenClawConfig;
-  const perChannelPeerCfg = { session: { dmScope: "per-channel-peer" } } as OpenClawConfig;
-  const identityLinksCfg = {
-    session: {
-      dmScope: "per-peer",
-      identityLinks: {
-        alice: ["guildchat:123"],
-      },
-    },
-  } as OpenClawConfig;
+  const identityLinksCfg: OpenClawConfig = {
+    session: { dmScope: "per-peer", identityLinks: { alice: ["guildchat:123"] } },
+  };
   const workspaceMpimCfg = {
-    channels: {
-      workspace: {
-        dm: {
-          groupChannels: ["G123"],
-        },
-      },
-    },
+    channels: { workspace: { dm: { groupChannels: ["G123"] } } },
   } as OpenClawConfig;
 
   it.each([
@@ -192,21 +171,19 @@ describe("resolveOutboundSessionRoute", () => {
       expectedRecipientSessionExact: false,
     },
   ])("applies $name before returning the canonical route", async (testCase) => {
-    const plugin = {
-      ...createChannelTestPluginBase({ id: "bound-channel" }),
-      messaging: {
-        resolveOutboundSessionRoute: () => ({
-          sessionKey: testCase.pluginSessionKey,
-          baseSessionKey: testCase.pluginBaseKey,
-          recipientSessionExact: true as const,
-          peer: testCase.peer,
-          chatType: testCase.peer.kind === "direct" ? ("direct" as const) : ("group" as const),
-          from: `bound-channel:${testCase.peer.id}`,
-          to: testCase.peer.id,
-        }),
-      },
-    } satisfies ChannelPlugin;
-    const route = await resolveOutboundSessionRoute({
+    const plugin = routePlugin(
+      "bound-channel",
+      routeFixture({
+        sessionKey: testCase.pluginSessionKey,
+        baseSessionKey: testCase.pluginBaseKey,
+        recipientSessionExact: true,
+        peer: testCase.peer,
+        chatType: testCase.peer.kind,
+        from: `bound-channel:${testCase.peer.id}`,
+        to: testCase.peer.id,
+      }),
+    );
+    const route = await resolveRoute({
       cfg: {
         session: testCase.globalSession,
         bindings: [
@@ -219,7 +196,6 @@ describe("resolveOutboundSessionRoute", () => {
       } as OpenClawConfig,
       channel: "bound-channel",
       plugin,
-      agentId: "main",
       target: testCase.peer.id,
     });
 
@@ -233,26 +209,18 @@ describe("resolveOutboundSessionRoute", () => {
   type RouteCase = Omit<Parameters<typeof resolveOutboundSessionRoute>[0], "agentId"> & {
     expected: Partial<OutboundSessionRoute> & Pick<OutboundSessionRoute, "sessionKey">;
   };
-  async function expectResolvedRoute({ expected, ...params }: RouteCase) {
-    expect(await resolveOutboundSessionRoute({ agentId: "main", ...params })).toMatchObject(
-      expected,
-    );
-  }
-
   function routeCase(
     channel: string,
     target: string,
     expected: RouteCase["expected"],
-    cfg: OpenClawConfig = baseConfig,
+    cfg: OpenClawConfig = {},
     threadId?: string,
   ) {
     return { name: channel + ": " + target, cfg, channel, target, expected, threadId };
   }
 
   const dmCase = (channel: string, target: string, expected: RouteCase["expected"]) =>
-    routeCase(channel, target, expected, perChannelPeerCfg);
-
-  const perChannelPeerSessionCfg = { session: { dmScope: "per-channel-peer" } } as OpenClawConfig;
+    routeCase(channel, target, { chatType: "direct", ...expected }, perChannelPeerCfg);
 
   it.each([
     routeCase(
@@ -287,11 +255,9 @@ describe("resolveOutboundSessionRoute", () => {
       from: "forum:123456789:topic:99",
       to: "forum:123456789",
       threadId: 99,
-      chatType: "direct",
     }),
     dmCase("forum", "@alice", {
       sessionKey: "agent:main:forum:direct:@alice",
-      chatType: "direct",
     }),
     routeCase(
       "forum",
@@ -328,17 +294,14 @@ describe("resolveOutboundSessionRoute", () => {
       sessionKey: "agent:main:zalo:direct:123456",
       from: "zalo:123456",
       to: "zalo:123456",
-      chatType: "direct",
     }),
     dmCase("zalouser", "123456", {
       sessionKey: "agent:main:zalouser:direct:123456",
-      chatType: "direct",
     }),
     dmCase("nostr", "nostr:npub1example", {
       sessionKey: "agent:main:nostr:direct:npub1example",
       from: "nostr:npub1example",
       to: "nostr:npub1example",
-      chatType: "direct",
     }),
     routeCase("tlon", "group:~zod/main", {
       sessionKey: "agent:main:tlon:group:chat/~zod/main",
@@ -365,19 +328,16 @@ describe("resolveOutboundSessionRoute", () => {
       sessionKey: "agent:main:collabchat:direct:oc_dm_chat",
       from: "collabchat:oc_dm_chat",
       to: "oc_dm_chat",
-      chatType: "direct",
     }),
     dmCase("collabchat", "oc_ambiguous_chat", {
       sessionKey: "agent:main:collabchat:direct:oc_ambiguous_chat",
       from: "collabchat:oc_ambiguous_chat",
       to: "oc_ambiguous_chat",
-      chatType: "direct",
     }),
     dmCase("workspace", "user:U12345ABC", {
       sessionKey: "agent:main:workspace:direct:u12345abc",
       from: "workspace:U12345ABC",
       to: "user:U12345ABC",
-      chatType: "direct",
     }),
     routeCase("workspace", "channel:C999XYZ", {
       sessionKey: "agent:main:workspace:channel:c999xyz",
@@ -395,10 +355,9 @@ describe("resolveOutboundSessionRoute", () => {
       sessionKey: "agent:main:fallbackchat:direct:u123",
       from: "fallbackchat:U123",
       to: "user:U123",
-      chatType: "direct",
     }),
-  ])("$name", async ({ name: _name, ...params }) => {
-    await expectResolvedRoute(params);
+  ])("$name", async ({ expected, ...params }) => {
+    expect(await resolveRoute(params)).toMatchObject(expected);
   });
 
   it.each([
@@ -456,27 +415,15 @@ describe("resolveOutboundSessionRoute", () => {
       },
     },
   ])("$name", async ({ channel = "guildchat", target, threadId, resolvedTarget, expected }) => {
-    const route = await resolveOutboundSessionRoute({
-      cfg: perChannelPeerSessionCfg,
-      channel,
-      agentId: "main",
-      target,
-      threadId,
-      resolvedTarget,
-    });
+    const route = await resolveRoute({ channel, target, threadId, resolvedTarget });
 
     expect(route).toMatchObject(expected);
   });
 
   it("rejects bare numeric GuildChat targets when the caller has no kind hint", async () => {
-    await expect(
-      resolveOutboundSessionRoute({
-        cfg: perChannelPeerSessionCfg,
-        channel: "guildchat",
-        agentId: "main",
-        target: "123",
-      }),
-    ).rejects.toThrow(/Ambiguous Guild Chat recipient/);
+    await expect(resolveRoute({ channel: "guildchat", target: "123" })).rejects.toThrow(
+      /Ambiguous Guild Chat recipient/,
+    );
   });
 });
 
@@ -497,41 +444,34 @@ describe("ensureOutboundSessionEntry", () => {
 
   it("persists metadata in the owning session store for the route session key", async () => {
     await ensureOutboundSessionEntry({
-      cfg: {
-        session: {
-          store: "/stores/{agentId}.json",
-        },
-      } as OpenClawConfig,
+      cfg: { session: { store: "/stores/{agentId}.json" } },
       channel: "workspace",
-      route: {
+      route: routeFixture({
         sessionKey: "agent:main:workspace:channel:c1",
         baseSessionKey: "agent:work:workspace:channel:resolved",
         peer: { kind: "channel", id: "c1" },
         chatType: "channel",
         from: "workspace:channel:C1",
         to: "channel:C1",
-      },
+      }),
     });
 
     expect(mocks.resolveStorePath).toHaveBeenCalledWith("/stores/{agentId}.json", {
       agentId: "main",
     });
     expect(mocks.updateSessionLastRoute).toHaveBeenCalledOnce();
-    const metadata = readMetadata();
-    expect(metadata.storePath).toBe("/stores/main.json");
-    expect(metadata.sessionKey).toBe("agent:main:workspace:channel:c1");
-    expect(metadata.ctx).toMatchObject({
-      NativeChannelId: "c1",
-      OriginatingTo: "channel:C1",
+    expect(readMetadata()).toMatchObject({
+      storePath: "/stores/main.json",
+      sessionKey: "agent:main:workspace:channel:c1",
+      ctx: { NativeChannelId: "c1", OriginatingTo: "channel:C1" },
     });
   });
 
   it("does not persist an identifier-only target as a group title", async () => {
-    const route = await resolveOutboundSessionRoute({
+    const route = await resolveRoute({
       cfg: { session: { groupScope: "per-group" } } as OpenClawConfig,
       channel: "telegram",
       plugin: telegramRoutePlugin,
-      agentId: "main",
       target: "-1001234567890:topic:42",
       resolvedTarget: {
         to: "telegram:-1001234567890:topic:42",
@@ -577,61 +517,30 @@ describe("ensureOutboundSessionEntry", () => {
       await ensureOutboundSessionEntry({
         cfg: {},
         channel: "reef",
-        route: {
+        route: routeFixture({
           sessionKey: "agent:main:reef:direct:first-contact",
-          baseSessionKey: "agent:main:reef:direct:first-contact",
           peer: { kind: "direct", id: "first-contact" },
           chatType: "direct",
           from: "reef:first-contact",
           to: "user:first-contact",
-        },
+        }),
         ...(source === "operator" ? { creation } : { sourceSessionKey: "agent:other:main" }),
       });
 
-      const metadata = mockFirstRecordArg(
-        mocks.updateSessionLastRoute,
-        "updateSessionLastRoute",
-        "expected updateSessionLastRoute params to be an object",
-      );
-      expect(metadata.ctx).toMatchObject({ SessionCreation: creation });
+      expect(readMetadata().ctx).toMatchObject({ SessionCreation: creation });
     },
   );
 
-  it("keeps ordinary outbound sends best-effort when route persistence fails", async () => {
+  it.each([
+    ["best-effort send", ensureOutboundSessionEntry, false],
+    ["required conversation binding", bindOutboundSessionEntry, true],
+  ] as const)("handles persistence failures for %s", async (_name, persist, required) => {
     mocks.updateSessionLastRoute.mockRejectedValueOnce(new Error("storage unavailable"));
-
-    await expect(
-      ensureOutboundSessionEntry({
-        cfg: {} as OpenClawConfig,
-        channel: "reef",
-        route: {
-          sessionKey: "agent:main:main",
-          baseSessionKey: "agent:main:main",
-          peer: { kind: "direct", id: "peer-agent" },
-          chatType: "direct",
-          from: "reef:peer-agent",
-          to: "reef:peer-agent",
-        },
-      }),
-    ).resolves.toBeUndefined();
-  });
-
-  it("surfaces route persistence failures when a conversation requires binding", async () => {
-    mocks.updateSessionLastRoute.mockRejectedValueOnce(new Error("storage unavailable"));
-
-    await expect(
-      bindOutboundSessionEntry({
-        cfg: {} as OpenClawConfig,
-        channel: "reef",
-        route: {
-          sessionKey: "agent:main:main",
-          baseSessionKey: "agent:main:main",
-          peer: { kind: "direct", id: "peer-agent" },
-          chatType: "direct",
-          from: "reef:peer-agent",
-          to: "reef:peer-agent",
-        },
-      }),
-    ).rejects.toThrow("storage unavailable");
+    const result = persist({ cfg: {}, channel: "reef", route: routeFixture() });
+    if (required) {
+      await expect(result).rejects.toThrow("storage unavailable");
+    } else {
+      await expect(result).resolves.toBeUndefined();
+    }
   });
 });

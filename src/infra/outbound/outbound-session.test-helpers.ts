@@ -6,7 +6,6 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildChannelOutboundSessionRoute,
   buildThreadAwareOutboundSessionRoute,
@@ -14,18 +13,13 @@ import {
   stripTargetKindPrefix,
   type ChannelOutboundSessionRouteParams,
 } from "../../plugin-sdk/core.js";
-import {
-  buildOutboundBaseSessionKey,
-  normalizeOutboundThreadId,
-  type RoutePeer,
-} from "../../plugin-sdk/routing.js";
+import { normalizeOutboundThreadId, type RoutePeer } from "../../plugin-sdk/routing.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 
-// Session route fixtures cover direct, group, and threaded outbound routes without real plugins.
 function createSessionRouteTestPlugin(params: {
   id: ChannelPlugin["id"];
   label: string;
@@ -47,46 +41,38 @@ function createSessionRouteTestPlugin(params: {
   };
 }
 
-function routeScope(
-  {
+function buildRoute(
+  { cfg, agentId, accountId }: ChannelOutboundSessionRouteParams,
+  channel: string,
+  kind: RoutePeer["kind"],
+  id: string,
+  options: {
+    from?: string;
+    to?: string;
+    threadId?: string | number;
+    threaded?: boolean;
+    useSuffix?: boolean;
+  } = {},
+) {
+  const route = buildChannelOutboundSessionRoute({
     cfg,
     agentId,
     accountId,
-  }: Pick<ChannelOutboundSessionRouteParams, "cfg" | "agentId" | "accountId">,
-  channel: string,
-) {
-  return { cfg, agentId, accountId, channel };
-}
-
-function buildThreadedChannelRoute(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  channel: string;
-  accountId?: string | null;
-  peer: RoutePeer;
-  chatType: "direct" | "group" | "channel";
-  from: string;
-  to: string;
-  threadId?: string | number;
-  useSuffix?: boolean;
-}) {
-  const baseSessionKey = buildOutboundBaseSessionKey({
-    ...routeScope(params, params.channel),
-    peer: params.peer,
+    channel,
+    peer: { kind, id },
+    chatType: kind,
+    from: options.from ?? `${channel}:${kind === "direct" ? "" : `${kind}:`}${id}`,
+    to: options.to ?? `${channel}:${id}`,
+    ...(!options.threaded && options.threadId !== undefined ? { threadId: options.threadId } : {}),
   });
-  return buildThreadAwareOutboundSessionRoute({
-    route: {
-      sessionKey: baseSessionKey,
-      baseSessionKey,
-      peer: params.peer,
-      chatType: params.chatType,
-      from: params.from,
-      to: params.to,
-    },
-    threadId: params.threadId,
-    useSuffix: params.useSuffix,
-    precedence: ["threadId", "replyToId", "currentSession"],
-  });
+  return options.threaded
+    ? buildThreadAwareOutboundSessionRoute({
+        route,
+        threadId: options.threadId,
+        useSuffix: options.useSuffix,
+        precedence: ["threadId", "replyToId", "currentSession"],
+      })
+    : route;
 }
 
 function parseForumTargetForTest(raw: string): {
@@ -146,33 +132,19 @@ function resolveForumOutboundSessionRouteForTest(params: ChannelOutboundSessionR
       params.resolvedTarget.kind !== "user");
   const peerId =
     isGroup && resolvedThreadId ? buildForumGroupPeerIdForTest(chatId, resolvedThreadId) : chatId;
-  const peer: RoutePeer = {
-    kind: isGroup ? "group" : "direct",
-    id: peerId,
-  };
   if (isGroup) {
-    return buildChannelOutboundSessionRoute({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      channel: "forum",
-      accountId: params.accountId,
-      peer,
-      chatType: "group",
-      from: `forum:group:${peerId}`,
+    return buildRoute(params, "forum", "group", peerId, {
       to: `forum:${chatId}`,
-      ...(resolvedThreadId !== undefined ? { threadId: resolvedThreadId } : {}),
+      threadId: resolvedThreadId,
     });
   }
-  return buildThreadedChannelRoute({
-    ...routeScope(params, "forum"),
-    peer,
-    chatType: "direct",
+  return buildRoute(params, "forum", "direct", peerId, {
     from:
       resolvedThreadId !== undefined
         ? `forum:${chatId}:topic:${resolvedThreadId}`
         : `forum:${chatId}`,
-    to: `forum:${chatId}`,
     threadId: resolvedThreadId,
+    threaded: true,
   });
 }
 
@@ -198,10 +170,7 @@ function resolveWorkspaceOutboundSessionRouteForTest(params: ChannelOutboundSess
       (candidate: unknown) => normalizeLowercaseStringOrEmpty(String(candidate)) === normalizedId,
     );
   const peerKind: RoutePeer["kind"] = isDm ? "direct" : isGroupChannel ? "group" : "channel";
-  return buildThreadedChannelRoute({
-    ...routeScope(params, "workspace"),
-    peer: { kind: peerKind, id: normalizedId },
-    chatType: peerKind === "direct" ? "direct" : peerKind === "group" ? "group" : "channel",
+  return buildRoute(params, "workspace", peerKind, normalizedId, {
     from: isDm
       ? `workspace:${rawId}`
       : isGroupChannel
@@ -209,6 +178,7 @@ function resolveWorkspaceOutboundSessionRouteForTest(params: ChannelOutboundSess
         : `workspace:channel:${rawId}`,
     to: isDm ? `user:${rawId}` : `channel:${rawId}`,
     threadId: params.replyToId ?? params.threadId ?? undefined,
+    threaded: true,
   });
 }
 
@@ -236,18 +206,11 @@ function resolveGuildChatOutboundSessionRouteForTest(params: ChannelOutboundSess
   if (!rawId) {
     return null;
   }
-  const peer: RoutePeer = {
-    kind: kind === "user" ? "direct" : "channel",
-    id: rawId,
-  };
-  return buildThreadedChannelRoute({
-    ...routeScope(params, "guildchat"),
-    peer,
-    chatType: kind === "user" ? "direct" : "channel",
-    from: kind === "user" ? `guildchat:${rawId}` : `guildchat:channel:${rawId}`,
+  return buildRoute(params, "guildchat", kind === "user" ? "direct" : "channel", rawId, {
     to: kind === "user" ? `user:${rawId}` : `channel:${rawId}`,
     threadId: params.threadId ?? undefined,
     useSuffix: false,
+    threaded: true,
   });
 }
 
@@ -261,13 +224,10 @@ function resolveBoardChatOutboundSessionRouteForTest(params: ChannelOutboundSess
   if (!rawId) {
     return null;
   }
-  return buildThreadedChannelRoute({
-    ...routeScope(params, "boardchat"),
-    peer: { kind: isUser ? "direct" : "channel", id: rawId },
-    chatType: isUser ? "direct" : "channel",
-    from: isUser ? `boardchat:${rawId}` : `boardchat:channel:${rawId}`,
+  return buildRoute(params, "boardchat", isUser ? "direct" : "channel", rawId, {
     to: isUser ? `user:${rawId}` : `channel:${rawId}`,
     threadId: params.replyToId ?? params.threadId ?? undefined,
+    threaded: true,
   });
 }
 
@@ -279,10 +239,7 @@ function resolveMobileChatOutboundSessionRouteForTest(params: ChannelOutboundSes
     return null;
   }
   const isGroup = normalized.endsWith("@g.us");
-  return buildChannelOutboundSessionRoute({
-    ...routeScope(params, "mobilechat"),
-    peer: { kind: isGroup ? "group" : "direct", id: normalized },
-    chatType: isGroup ? "group" : "direct",
+  return buildRoute(params, "mobilechat", isGroup ? "group" : "direct", normalized, {
     from: normalized,
     to: normalized,
   });
@@ -296,11 +253,7 @@ function resolveMatrixOutboundSessionRouteForTest(params: ChannelOutboundSession
   if (!rawId) {
     return null;
   }
-  return buildChannelOutboundSessionRoute({
-    ...routeScope(params, "matrix"),
-    peer: { kind: isUser ? "direct" : "channel", id: rawId },
-    chatType: isUser ? "direct" : "channel",
-    from: isUser ? `matrix:${rawId}` : `matrix:channel:${rawId}`,
+  return buildRoute(params, "matrix", isUser ? "direct" : "channel", rawId, {
     to: `room:${rawId}`,
   });
 }
@@ -319,15 +272,7 @@ function resolveMeetingChatOutboundSessionRouteForTest(params: ChannelOutboundSe
   const isUser = lower.startsWith("user:");
   const isChannel = !isUser && /@thread\.tacv2/i.test(conversationId);
   const peerKind: RoutePeer["kind"] = isUser ? "direct" : isChannel ? "channel" : "group";
-  return buildChannelOutboundSessionRoute({
-    ...routeScope(params, "meetingchat"),
-    peer: { kind: peerKind, id: conversationId },
-    chatType: peerKind,
-    from: isUser
-      ? `meetingchat:${conversationId}`
-      : isChannel
-        ? `meetingchat:channel:${conversationId}`
-        : `meetingchat:group:${conversationId}`,
+  return buildRoute(params, "meetingchat", peerKind, conversationId, {
     to: isUser ? `user:${conversationId}` : `conversation:${conversationId}`,
   });
 }
@@ -350,11 +295,7 @@ function resolveCollabChatOutboundSessionRouteForTest(params: ChannelOutboundSes
   ) {
     isGroup = false;
   }
-  return buildChannelOutboundSessionRoute({
-    ...routeScope(params, "collabchat"),
-    peer: { kind: isGroup ? "group" : "direct", id: trimmed },
-    chatType: isGroup ? "group" : "direct",
-    from: isGroup ? `collabchat:group:${trimmed}` : `collabchat:${trimmed}`,
+  return buildRoute(params, "collabchat", isGroup ? "group" : "direct", trimmed, {
     to: trimmed,
   });
 }
@@ -368,12 +309,8 @@ function resolveNextcloudTalkOutboundSessionRouteForTest(
   if (!roomId) {
     return null;
   }
-  return buildChannelOutboundSessionRoute({
-    ...routeScope(params, "nextcloud-talk"),
-    peer: { kind: "group", id: roomId },
-    chatType: "group",
+  return buildRoute(params, "nextcloud-talk", "group", roomId, {
     from: `nextcloud-talk:room:${roomId}`,
-    to: `nextcloud-talk:${roomId}`,
   });
 }
 
@@ -391,10 +328,7 @@ function resolveLocalChatOutboundSessionRouteForTest(params: ChannelOutboundSess
   }
   const normalizedId = normalizeLowercaseStringOrEmpty(rawId);
   const isGroup = match !== null;
-  return buildChannelOutboundSessionRoute({
-    ...routeScope(params, "localchat"),
-    peer: { kind: isGroup ? "group" : "direct", id: normalizedId },
-    chatType: isGroup ? "group" : "direct",
+  return buildRoute(params, "localchat", isGroup ? "group" : "direct", normalizedId, {
     from: isGroup ? `group:${rawId}` : `localchat:${rawId}`,
     to: `localchat:${stripped}`,
   });
@@ -410,13 +344,7 @@ function resolveZaloOutboundSessionRouteForTest(params: ChannelOutboundSessionRo
   if (!peerId) {
     return null;
   }
-  return buildChannelOutboundSessionRoute({
-    ...routeScope(params, "zalo"),
-    peer: { kind: isGroup ? "group" : "direct", id: peerId },
-    chatType: isGroup ? "group" : "direct",
-    from: isGroup ? `zalo:group:${peerId}` : `zalo:${peerId}`,
-    to: `zalo:${peerId}`,
-  });
+  return buildRoute(params, "zalo", isGroup ? "group" : "direct", peerId);
 }
 
 function resolveZalouserOutboundSessionRouteForTest(params: ChannelOutboundSessionRouteParams) {
@@ -430,13 +358,7 @@ function resolveZalouserOutboundSessionRouteForTest(params: ChannelOutboundSessi
   if (!peerId) {
     return null;
   }
-  return buildChannelOutboundSessionRoute({
-    ...routeScope(params, "zalouser"),
-    peer: { kind: isGroup ? "group" : "direct", id: peerId },
-    chatType: isGroup ? "group" : "direct",
-    from: isGroup ? `zalouser:group:${peerId}` : `zalouser:${peerId}`,
-    to: `zalouser:${peerId}`,
-  });
+  return buildRoute(params, "zalouser", isGroup ? "group" : "direct", peerId);
 }
 
 function resolveNostrOutboundSessionRouteForTest(params: ChannelOutboundSessionRouteParams) {
@@ -444,13 +366,7 @@ function resolveNostrOutboundSessionRouteForTest(params: ChannelOutboundSessionR
   if (!target) {
     return null;
   }
-  return buildChannelOutboundSessionRoute({
-    ...routeScope(params, "nostr"),
-    peer: { kind: "direct", id: target },
-    chatType: "direct",
-    from: `nostr:${target}`,
-    to: `nostr:${target}`,
-  });
+  return buildRoute(params, "nostr", "direct", target);
 }
 
 function resolveTlonOutboundSessionRouteForTest(params: ChannelOutboundSessionRouteParams) {
@@ -461,24 +377,9 @@ function resolveTlonOutboundSessionRouteForTest(params: ChannelOutboundSessionRo
   const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (lower.startsWith("group:")) {
     const nest = `chat/${trimmed.slice("group:".length).trim()}`;
-    return buildChannelOutboundSessionRoute({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      channel: "tlon",
-      accountId: params.accountId,
-      peer: { kind: "group", id: nest },
-      chatType: "group",
-      from: `tlon:group:${nest}`,
-      to: `tlon:${nest}`,
-    });
+    return buildRoute(params, "tlon", "group", nest);
   }
-  return buildChannelOutboundSessionRoute({
-    ...routeScope(params, "tlon"),
-    peer: { kind: "direct", id: trimmed },
-    chatType: "direct",
-    from: `tlon:${trimmed}`,
-    to: `tlon:${trimmed}`,
-  });
+  return buildRoute(params, "tlon", "direct", trimmed);
 }
 
 /** Installs a minimal channel registry for outbound session route tests. */
