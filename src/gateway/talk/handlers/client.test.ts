@@ -177,12 +177,7 @@ async function createBrowserConsult(publicOnly = false) {
   const createBrowserSession = vi.fn(async (_request: BrowserRequest) => browserSession);
   const fixture = configureDelegatedBrowserProvider(createBrowserSession, publicOnly);
   const respond = vi.fn();
-  await invokeCreate({
-    params: { sessionKey, provider: "openai", model: "gpt-live-test" },
-    respond,
-    context: fixture.context,
-    client: fixture.client,
-  } as never);
+  await invokeBrowser(fixture, respond, { sessionKey, provider: "openai", model: "gpt-live-test" });
   expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(browserSession), undefined);
   const createdSession = respond.mock.calls[0]?.[1];
   if (!createdSession) {
@@ -208,6 +203,27 @@ async function useRealConsultRuntime() {
       meta: { durationMs: 0 },
     }));
   });
+}
+
+function expectErrorResponse(respond: ReturnType<typeof vi.fn>, message: unknown) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ message }));
+}
+
+function expectBrowserResponse(respond: ReturnType<typeof vi.fn>) {
+  expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(browserSession), undefined);
+}
+
+function invokeBrowser(
+  fixture: Pick<ReturnType<typeof createDelegatedBrowserProviderFixture>, "context" | "client">,
+  respond: GatewayRequestHandlerOptions["respond"],
+  params: Record<string, unknown>,
+) {
+  return invokeCreate({
+    params,
+    respond,
+    context: fixture.context,
+    client: fixture.client,
+  } as never);
 }
 
 describe("talk.client.transcript", () => {
@@ -264,23 +280,14 @@ describe("talk.client.transcript", () => {
     });
     const create = async (voiceChangeId?: string) => {
       const respond = vi.fn();
-      await invokeCreate({
-        params: {
-          sessionKey,
-          provider: "openai",
-          model: "gpt-realtime-2.1",
-          capabilities: ["gateway-control-v1", "voice-selection"],
-          voiceChangeId,
-        },
-        respond,
-        context: fixture.context,
-        client: fixture.client,
-      } as never);
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining(browserSession),
-        undefined,
-      );
+      await invokeBrowser(fixture, respond, {
+        sessionKey,
+        provider: "openai",
+        model: "gpt-realtime-2.1",
+        capabilities: ["gateway-control-v1", "voice-selection"],
+        voiceChangeId,
+      });
+      expectBrowserResponse(respond);
       ownedVoiceSessionId = respond.mock.calls[0]?.[1].voiceSessionId as string;
       createBrowserSession.mock.calls.at(-1)?.[0].gatewayControl?.onReady?.();
       return ownedVoiceSessionId;
@@ -548,22 +555,13 @@ describe("talk.client.transcript", () => {
       const finish = createDeferred<{ text: string }>();
       voiceMocks.consultRealtimeVoiceAgent.mockReturnValueOnce(finish.promise);
       const respond = vi.fn();
-      await invokeCreate({
-        params: {
-          sessionKey,
-          provider: "openai",
-          model: "gpt-realtime-2.1",
-          capabilities: ["gateway-control-v1", "voice-selection"],
-        },
-        respond,
-        context: fixture.context,
-        client: fixture.client,
-      } as never);
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining(browserSession),
-        undefined,
-      );
+      await invokeBrowser(fixture, respond, {
+        sessionKey,
+        provider: "openai",
+        model: "gpt-realtime-2.1",
+        capabilities: ["gateway-control-v1", "voice-selection"],
+      });
+      expectBrowserResponse(respond);
       const voiceSessionId = respond.mock.calls[0]?.[1].voiceSessionId as string;
       ownedVoiceSessionId = voiceSessionId;
       const control = createBrowserSession.mock.calls[0]?.[0].gatewayControl;
@@ -634,18 +632,9 @@ describe("talk.client.transcript", () => {
       const fixture = configureDelegatedBrowserProvider(createBrowserSession, publicOnly);
       const respond = vi.fn();
       const create = (voiceSessionId?: string) =>
-        invokeCreate({
-          params: { sessionKey, provider: "openai", voiceSessionId },
-          respond,
-          context: fixture.context,
-          client: fixture.client,
-        } as never);
+        invokeBrowser(fixture, respond, { sessionKey, provider: "openai", voiceSessionId });
       await create();
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining(browserSession),
-        undefined,
-      );
+      expectBrowserResponse(respond);
       const voiceSessionId = respond.mock.calls[0]?.[1].voiceSessionId as string;
       ownedVoiceSessionId = voiceSessionId;
       const original = resolveTalkVoiceSession({
@@ -698,11 +687,7 @@ describe("talk.client.transcript", () => {
         finishCreation(browserSession);
         await starting;
       }
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringMatching(/closed|disconnected/) }),
-      );
+      expectErrorResponse(respond, expect.stringMatching(/closed|disconnected/));
       expect(cancelBrowserSession).toHaveBeenCalledTimes(publicOnly ? 0 : 1);
       expect(loadSessionEntry({ agentId: "main", sessionKey: pendingSessionKey })).toBeUndefined();
       expect(voiceMocks.consultRealtimeVoiceAgent).not.toHaveBeenCalled();
@@ -727,11 +712,7 @@ describe("talk.client.transcript", () => {
       clients.delete(client);
       cleanupTalkConnection(client.connId, context.logGateway);
       await starting;
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining("disconnected") }),
-      );
+      expectErrorResponse(respond, expect.stringContaining("disconnected"));
       expect(createBrowserSession).not.toHaveBeenCalled();
     },
   );
@@ -761,11 +742,7 @@ describe("talk.client.transcript", () => {
         context,
         client,
       } as never);
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining("disconnected") }),
-      );
+      expectErrorResponse(respond, expect.stringContaining("disconnected"));
       expect(cancelBrowserSession).toHaveBeenCalledOnce();
       expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.status).toBe("closed");
     } finally {
@@ -788,12 +765,6 @@ describe("talk.client.transcript", () => {
       role: "user",
       text: "hello",
     });
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("does not allow this transcript source"),
-      }),
-    );
+    expectErrorResponse(respond, expect.stringContaining("does not allow this transcript source"));
   });
 });

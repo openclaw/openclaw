@@ -19,6 +19,7 @@ import * as voiceSessions from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import type { GatewayRequestHandlerOptions } from "../../server-methods/types.js";
 import { cleanupTalkConnection } from "../session-registry.js";
+import { createBrowserInvoker } from "./client-create-ensure.test-support.js";
 import {
   browserSession,
   observeTalkVoiceChangeRequest,
@@ -42,6 +43,8 @@ type SourceAuthorityHarness = {
 };
 
 export function registerClientCreateSourceAuthorityTests(harness: SourceAuthorityHarness) {
+  const invokeBrowser = createBrowserInvoker(harness.invokeCreate);
+
   const { sessionKey, sessionId, observeAdmission: setObserver } = harness;
   it.each(["missing", "idless"] as const)(
     "keeps the acknowledged %s creation bound to its original physical source",
@@ -73,12 +76,11 @@ export function registerClientCreateSourceAuthorityTests(harness: SourceAuthorit
         });
       const respond = vi.fn();
       try {
-        await harness.invokeCreate({
-          params: { sessionKey: key, provider: "openai", voiceSessionId: "created-source-voice" },
-          respond,
-          context: fixture.context,
-          client: fixture.client,
-        } as never);
+        await invokeBrowser(fixture, respond, {
+          sessionKey: key,
+          provider: "openai",
+          voiceSessionId: "created-source-voice",
+        });
         expect(replaced).toBe(true);
         expect(ensureSpy).toHaveBeenCalledOnce();
         expect(respond.mock.lastCall?.[0]).toBe(false);
@@ -124,12 +126,7 @@ export function registerClientCreateSourceAuthorityTests(harness: SourceAuthorit
     });
     const respond = vi.fn();
     try {
-      await harness.invokeCreate({
-        params: { sessionKey, provider: "openai", voiceSessionId },
-        respond,
-        context: fixture.context,
-        client: fixture.client,
-      } as never);
+      await invokeBrowser(fixture, respond, { sessionKey, provider: "openai", voiceSessionId });
       expect(revoked).toBe(true);
       expect(respond.mock.lastCall?.[0]).toBe(false);
       expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId)).toBeUndefined();
@@ -156,12 +153,11 @@ export function registerClientCreateSourceAuthorityTests(harness: SourceAuthorit
       Object.assign(fixture.provider, { voices: ["cove", "ember"] });
       const respond = vi.fn();
       const create = (params: Record<string, unknown>) =>
-        harness.invokeCreate({
-          params: { sessionKey, capabilities: ["voice-selection"], ...params },
-          respond,
-          context: fixture.context,
-          client: fixture.client,
-        } as never);
+        invokeBrowser(fixture, respond, {
+          sessionKey,
+          capabilities: ["voice-selection"],
+          ...params,
+        });
       await create({});
       expect(respond.mock.lastCall?.[0]).toBe(true);
       const ownedVoiceSessionId = respond.mock.lastCall?.[1].voiceSessionId;

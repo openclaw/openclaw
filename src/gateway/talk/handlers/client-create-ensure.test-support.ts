@@ -50,7 +50,23 @@ type EnsureHarness = {
   ) => void;
 };
 
+export function createBrowserInvoker(invokeCreate: EnsureHarness["invokeCreate"]) {
+  return (
+    fixture: Pick<ReturnType<typeof createDelegatedBrowserProviderFixture>, "context" | "client">,
+    respond: GatewayRequestHandlerOptions["respond"],
+    params: Record<string, unknown>,
+  ) => {
+    return invokeCreate({
+      params,
+      respond,
+      context: fixture.context,
+      client: fixture.client,
+    } as never);
+  };
+}
+
 export function registerClientCreateEnsureTests(harness: EnsureHarness) {
+  const invokeBrowser = createBrowserInvoker(harness.invokeCreate);
   it.for(["missing", "idless"] as const)(
     "refuses a changed %s entry while its transaction authority is being prepared",
     async (kind, { signal }) => {
@@ -84,12 +100,11 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
           return grant;
         });
       const respond = vi.fn();
-      const pending = harness.invokeCreate({
-        params: { sessionKey: key, provider: "openai", voiceSessionId: "changed-entry-voice" },
-        respond,
-        context: fixture.context,
-        client: fixture.client,
-      } as never);
+      const pending = invokeBrowser(fixture, respond, {
+        sessionKey: key,
+        provider: "openai",
+        voiceSessionId: "changed-entry-voice",
+      });
       try {
         await withinTest(
           Promise.race([
@@ -176,12 +191,11 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
               );
       const respond = vi.fn();
       try {
-        await harness.invokeCreate({
-          params: { sessionKey: key, provider: "openai", voiceSessionId: "profile-changed-voice" },
-          respond,
-          context: fixture.context,
-          client: fixture.client,
-        } as never);
+        await invokeBrowser(fixture, respond, {
+          sessionKey: key,
+          provider: "openai",
+          voiceSessionId: "profile-changed-voice",
+        });
         expect(changed, respond.mock.lastCall?.[2]?.message).toBe(true);
         const entry = loadSessionEntry({ agentId: "main", sessionKey: key });
         if (phase === "preparation") {
@@ -294,12 +308,7 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
     });
     const respond = vi.fn();
     try {
-      await harness.invokeCreate({
-        params: { sessionKey: key, provider: "openai" },
-        respond,
-        context: fixture.context,
-        client: fixture.client,
-      } as never);
+      await invokeBrowser(fixture, respond, { sessionKey: key, provider: "openai" });
       expect(respond.mock.lastCall?.[0], JSON.stringify(respond.mock.lastCall?.[2])).toBe(true);
       const ownedVoiceSessionId = respond.mock.lastCall?.[1].voiceSessionId;
       harness.ownVoice(ownedVoiceSessionId, key);
@@ -355,12 +364,7 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
     expect(loadSessionEntry({ agentId: "main", sessionKey: key })).toBeUndefined();
     const fixture = harness.configureProvider(async () => browserSession);
     const respond = vi.fn();
-    await harness.invokeCreate({
-      params: { sessionKey: key, provider: "openai", voiceSessionId },
-      respond,
-      context: fixture.context,
-      client: fixture.client,
-    } as never);
+    await invokeBrowser(fixture, respond, { sessionKey: key, provider: "openai", voiceSessionId });
     expect(respond).toHaveBeenLastCalledWith(
       false,
       undefined,
@@ -424,12 +428,7 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
         },
       );
       const respond = vi.fn();
-      await harness.invokeCreate({
-        params: { sessionKey: key, provider: "openai" },
-        respond,
-        context: fixture.context,
-        client: fixture.client,
-      } as never);
+      await invokeBrowser(fixture, respond, { sessionKey: key, provider: "openai" });
       expect(changed).toBe(true);
       expect(respond.mock.lastCall?.[0]).toBe(false);
       expect(fixture.cancelBrowserSession).toHaveBeenCalledOnce();

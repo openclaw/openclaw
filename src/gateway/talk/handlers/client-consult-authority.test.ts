@@ -93,6 +93,45 @@ let workerGrantReads: string[] = [];
 let sqlReads: ReturnType<typeof observeSqliteReadSql> | undefined;
 const authorizations: SessionMutationAuthorization[] = [];
 
+function consultContext(
+  config = {
+    agents: { defaults: { workspace: path.join(tempDir, "workspace") } },
+  },
+) {
+  const context = createGatewayRequestContext(makeContextParams());
+  context.getRuntimeConfig = () => config;
+  context.getCommittedRuntimeConfig = () => config;
+  return context;
+}
+
+async function authorizeConsult(
+  params: GatewayRequestHandlerOptions["params"],
+  context: GatewayRequestHandlerOptions["context"],
+  client: GatewayRequestHandlerOptions["client"] = null,
+) {
+  const authorized = await resolveSessionMutationAuthorizationAsync({
+    method: "talk.client.toolCall",
+    requestParams: params,
+    context,
+    client,
+  });
+  if (authorized.authorization) {
+    authorizations.push(authorized.authorization);
+  }
+  expect(authorized.error).toBeNull();
+  return authorized;
+}
+
+function consultParams(callId: string) {
+  return {
+    sessionKey: scope.sessionKey,
+    voiceSessionId,
+    callId,
+    name: "openclaw_agent_consult",
+    args: { question: "Report the fixture status" },
+  };
+}
+
 describe("voice consult registration authority", () => {
   const tempDirs = useAutoCleanupTempDirTracker((remove) =>
     afterEach(async () => {
@@ -158,9 +197,7 @@ describe("voice consult registration authority", () => {
         agents: { defaults: { workspace: path.join(tempDir, "workspace") } },
         session: { store: resolveOpenClawAgentSqlitePath({ agentId: scope.agentId }) },
       };
-      const context = createGatewayRequestContext(makeContextParams());
-      context.getRuntimeConfig = () => config;
-      context.getCommittedRuntimeConfig = () => config;
+      const context = consultContext(config);
       const client = { connId: `${origin}-${wait}-delegation-source` };
       const created =
         origin === "relay"
@@ -204,16 +241,7 @@ describe("voice consult registration authority", () => {
           name: "openclaw_agent_consult",
           args: { question: "Report fixture status" },
         };
-        const authorized = await resolveSessionMutationAuthorizationAsync({
-          method: "talk.client.toolCall",
-          requestParams: params,
-          context,
-          client: client as never,
-        });
-        if (authorized.authorization) {
-          authorizations.push(authorized.authorization);
-        }
-        expect(authorized.error).toBeNull();
+        const authorized = await authorizeConsult(params, context, client as never);
         if (wait === "preparation") {
           const lookup = voiceSessionReaders.resolveOpenClientVoiceSessionId;
           vi.spyOn(voiceSessionReaders, "resolveOpenClientVoiceSessionId").mockImplementationOnce(
@@ -322,15 +350,7 @@ describe("voice consult registration authority", () => {
         name: "openclaw_agent_consult",
         args: { question: "Report fixture status" },
       };
-      const authorized = await resolveSessionMutationAuthorizationAsync({
-        method: "talk.client.toolCall",
-        requestParams: params,
-        context,
-        client: client as never,
-      });
-      if (authorized.authorization) {
-        authorizations.push(authorized.authorization);
-      }
+      const authorized = await authorizeConsult(params, context, client as never);
       const respond = vi.fn();
       const pending = talkClientHandlers["talk.client.toolCall"]!({
         req: { type: "req", id: "replacement-registration", method: "talk.client.toolCall" },
@@ -393,27 +413,9 @@ describe("voice consult registration authority", () => {
       await cleanupSessionStateForTest({ stateDir: tempDir });
       closeOpenClawAgentDatabasesForTest(tempDir);
       workerGrantReads = [];
-      const config = { agents: { defaults: { workspace: path.join(tempDir, "workspace") } } };
-      const context = createGatewayRequestContext(makeContextParams());
-      context.getRuntimeConfig = () => config;
-      context.getCommittedRuntimeConfig = () => config;
-      const params = {
-        sessionKey: scope.sessionKey,
-        voiceSessionId,
-        callId: "cold-consult-call",
-        name: "openclaw_agent_consult",
-        args: { question: "Report the fixture status" },
-      };
-      const authorized = await resolveSessionMutationAuthorizationAsync({
-        method: "talk.client.toolCall",
-        requestParams: params,
-        context,
-        client: null,
-      });
-      if (authorized.authorization) {
-        authorizations.push(authorized.authorization);
-      }
-      expect(authorized.error).toBeNull();
+      const context = consultContext();
+      const params = consultParams("cold-consult-call");
+      const authorized = await authorizeConsult(params, context);
       expect(getOpenClawAgentDatabaseIfOpen(scope)).toBeUndefined();
       const targetPath = resolveOpenClawAgentSqlitePath(scope);
       const targetPaths = new Set([
@@ -479,27 +481,9 @@ describe("voice consult registration authority", () => {
   it.for(["current", "worker-current", "sdk", "session", "chat"] as const)(
     "publishes only a currently authorized queued consult (%s)",
     async (revoked, { signal }) => {
-      const config = { agents: { defaults: { workspace: path.join(tempDir, "workspace") } } };
-      const context = createGatewayRequestContext(makeContextParams());
-      context.getRuntimeConfig = () => config;
-      context.getCommittedRuntimeConfig = () => config;
-      const params = {
-        sessionKey: scope.sessionKey,
-        voiceSessionId,
-        callId: "queued-consult-call",
-        name: "openclaw_agent_consult",
-        args: { question: "Report the fixture status" },
-      };
-      const authorized = await resolveSessionMutationAuthorizationAsync({
-        method: "talk.client.toolCall",
-        requestParams: params,
-        context,
-        client: null,
-      });
-      if (authorized.authorization) {
-        authorizations.push(authorized.authorization);
-      }
-      expect(authorized.error).toBeNull();
+      const context = consultContext();
+      const params = consultParams("queued-consult-call");
+      const authorized = await authorizeConsult(params, context);
       const queued = createDeferred();
       const entered = createDeferred();
       const releaseQueue = createDeferred();

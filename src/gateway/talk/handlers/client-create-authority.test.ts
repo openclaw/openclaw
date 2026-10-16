@@ -63,7 +63,10 @@ import {
   requestTalkVoiceChange,
   resolveTalkVoiceSession,
 } from "../voice-selection.js";
-import { registerClientCreateEnsureTests } from "./client-create-ensure.test-support.js";
+import {
+  createBrowserInvoker,
+  registerClientCreateEnsureTests,
+} from "./client-create-ensure.test-support.js";
 import { registerClientCreateSourceAuthorityTests } from "./client-create-source-authority.test-support.js";
 import { createTalkClient } from "./client-create.js";
 import {
@@ -127,6 +130,8 @@ async function invokeCreate(options: GatewayRequestHandlerOptions, retainRequest
     admission.authorization?.release?.();
   }
 }
+
+const invokeBrowser = createBrowserInvoker(invokeCreate);
 
 describe("voice creation authority", () => {
   const prepareProfiles = useUserProfileCatalogForTest();
@@ -250,12 +255,7 @@ describe("voice creation authority", () => {
     Object.assign(fixture.provider, { voices: ["cove", "ember"] });
     const respond = vi.fn();
     const create = (params: Record<string, unknown>) =>
-      invokeCreate({
-        params: { sessionKey, capabilities: ["voice-selection"], ...params },
-        respond,
-        context: fixture.context,
-        client: fixture.client,
-      } as never);
+      invokeBrowser(fixture, respond, { sessionKey, capabilities: ["voice-selection"], ...params });
     await create({ provider: "openai", model: "gpt-live-1-codex" });
     expect(respond).toHaveBeenLastCalledWith(
       true,
@@ -675,12 +675,7 @@ describe("voice creation authority", () => {
         });
       const respond = vi.fn();
       try {
-        await invokeCreate({
-          params: { sessionKey, provider: "openai", voiceSessionId },
-          respond,
-          context: fixture.context,
-          client: fixture.client,
-        } as never);
+        await invokeBrowser(fixture, respond, { sessionKey, provider: "openai", voiceSessionId });
         expect(respond.mock.lastCall?.[0]).toBe(phase !== "startup-copy");
         if (phase !== "startup-copy") {
           ownedVoiceSessionId = voiceSessionId;
@@ -739,12 +734,11 @@ describe("voice creation authority", () => {
       });
     const close = prepareTalkConnectionClose([fixture.client], fixture.context.logGateway);
     const respond = vi.fn();
-    const creating = invokeCreate({
-      params: { sessionKey, provider: "openai", voiceSessionId },
-      respond,
-      context: fixture.context,
-      client: fixture.client,
-    } as never);
+    const creating = invokeBrowser(fixture, respond, {
+      sessionKey,
+      provider: "openai",
+      voiceSessionId,
+    });
     let closing: Promise<void> | undefined;
     let closeFinished = false;
     try {
