@@ -55,7 +55,13 @@ export function registerThreadPolicyRefreshTests({
       { nativeStatus: "notLoaded", outcome: "timeout", sibling: true, closing: 1 },
       { nativeStatus: "notLoaded", outcome: "abort", sibling: true, closing: 1 },
       { nativeStatus: "notLoaded", outcome: "revoked", sibling: true, closing: 1 },
-    ].map((scenario) => ({ closing: 0, earlyClose: false, ...scenario })),
+    ].map(({ nativeStatus, outcome, sibling, closing = 0, earlyClose = false }) => ({
+      nativeStatus,
+      outcome,
+      sibling,
+      closing,
+      earlyClose,
+    })),
   )(
     "preserves managed $nativeStatus history across $outcome with sibling=$sibling, closing=$closing, early=$earlyClose",
     async ({ nativeStatus, outcome, sibling, closing, earlyClose }) => {
