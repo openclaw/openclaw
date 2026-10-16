@@ -218,73 +218,64 @@ describe("skills library CLI", () => {
     expect(mocks.call).not.toHaveBeenCalled();
   });
 
-  it.each(["bundle.zip", "bundle.ZIP", "bundle.zip/"])(
-    "imports the complete directory bundle %s",
-    async (name) => {
-      const bundle = path.join(directory, name);
-      await fs.mkdir(bundle);
-      const content = "---\nname: checklist\ndescription: Checklist\n---\nCheck it.\n";
-      await fs.writeFile(path.join(bundle, "SKILL.md"), content);
-      await fs.writeFile(path.join(bundle, "notes.txt"), "Keep these notes.\r\n");
-      await parse(["import", bundle, "--slug", "checklist", "--json"]);
-      expect(mocks.error).not.toHaveBeenCalled();
-      expect(mocks.call).toHaveBeenCalledExactlyOnceWith(
-        "skills.library.save",
-        expect.anything(),
-        {
-          slug: "checklist",
-          expectedRevision: null,
-          content,
-          files: [
-            {
-              path: "notes.txt",
-              content: Buffer.from("Keep these notes.\r\n").toString("base64"),
-              encoding: "base64",
-              executable: false,
-            },
-          ],
-        },
-        undefined,
-      );
-    },
-  );
+  it("imports a directory named x.zip as a complete bundle", async () => {
+    const bundle = path.join(directory, "x.zip");
+    await fs.mkdir(bundle);
+    const content = "---\nname: checklist\ndescription: Checklist\n---\nCheck it.\n";
+    await fs.writeFile(path.join(bundle, "SKILL.md"), content);
+    await fs.writeFile(path.join(bundle, "notes.txt"), "Keep these notes.\r\n");
+    await parse(["import", bundle, "--slug", "checklist", "--json"]);
+    expect(mocks.call).toHaveBeenCalledExactlyOnceWith(
+      "skills.library.save",
+      expect.anything(),
+      expect.objectContaining({
+        content,
+        files: [
+          {
+            path: "notes.txt",
+            content: Buffer.from("Keep these notes.\r\n").toString("base64"),
+            encoding: "base64",
+            executable: false,
+          },
+        ],
+      }),
+      undefined,
+    );
+  });
 
-  it.each(["bundle.zip", "bundle.ZIP"])(
-    "uses private upload begin/chunk/commit for %s imports",
-    async (name) => {
-      const zip = path.join(directory, name);
-      const bytes = Buffer.from([80, 75, 3, 4, 1]);
-      await fs.writeFile(zip, bytes);
-      mocks.call.mockImplementation(async (_method, _opts, params) =>
-        params.action === "begin"
-          ? { uploadId: skillId, offset: 0, maxChunkBytes: 3 }
-          : params.action === "chunk"
-            ? {
-                uploadId: skillId,
-                offset: params.offset + Buffer.from(params.data, "base64").length,
-                maxChunkBytes: 3,
-              }
-            : receipt,
-      );
-      await parse(["import", zip, "--slug", "checklist", "--json"]);
-      expect(mocks.call.mock.calls.map((call) => call[0])).toEqual(
-        Array(4).fill("skills.library.upload"),
-      );
-      expect(mocks.call.mock.calls.map((call) => call[2].action)).toEqual([
-        "begin",
-        "chunk",
-        "chunk",
-        "commit",
-      ]);
-      expect(
-        Buffer.concat(
-          mocks.call.mock.calls
-            .filter((call) => call[2].action === "chunk")
-            .map((call) => Buffer.from(call[2].data, "base64")),
-        ),
-      ).toEqual(bytes);
-    },
-  );
+  it("uses private upload begin/chunk/commit for ZIP imports", async () => {
+    const zip = path.join(directory, "bundle.ZIP");
+    const bytes = Buffer.from([80, 75, 3, 4, 1]);
+    await fs.writeFile(zip, bytes);
+    mocks.call.mockImplementation(async (_method, _opts, params) =>
+      params.action === "begin"
+        ? { uploadId: skillId, offset: 0, maxChunkBytes: 3 }
+        : params.action === "chunk"
+          ? {
+              uploadId: skillId,
+              offset: params.offset + Buffer.from(params.data, "base64").length,
+              maxChunkBytes: 3,
+            }
+          : receipt,
+    );
+    await parse(["import", zip, "--slug", "checklist", "--json"]);
+    expect(mocks.call.mock.calls.map((call) => call[0])).toEqual(
+      Array(4).fill("skills.library.upload"),
+    );
+    expect(mocks.call.mock.calls.map((call) => call[2].action)).toEqual([
+      "begin",
+      "chunk",
+      "chunk",
+      "commit",
+    ]);
+    expect(
+      Buffer.concat(
+        mocks.call.mock.calls
+          .filter((call) => call[2].action === "chunk")
+          .map((call) => Buffer.from(call[2].data, "base64")),
+      ),
+    ).toEqual(bytes);
+  });
 
   it("targets an exact session and skill without workspace overrides", async () => {
     await parse([

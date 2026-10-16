@@ -285,6 +285,9 @@ Import a ZIP privately:
 openclaw skills library import ./my-skill.zip --slug my-skill
 ```
 
+Local bundle directories are also accepted, including directory names ending in
+`.zip`. Directory imports include `SKILL.md` and supporting files.
+
 Import a ClawHub skill without publishing your library:
 
 ```bash
