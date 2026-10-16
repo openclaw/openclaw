@@ -150,6 +150,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/gateway/server-methods/chat-send-reply-session.test.ts",
   "src/gateway/server-methods/chat-send-commentary-media.test.ts",
   "src/agents/model-auth.profiles.test.ts",
+  "src/agents/model-auth.provider-binding.test.ts",
   // Native credential fixtures need the host's exclusive offline writer custody.
   "src/agents/agent-model-discovery.auth.test.ts",
   "src/agents/auth-profiles/session-override.model-endpoint.test.ts",
