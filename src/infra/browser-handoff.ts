@@ -1,3 +1,4 @@
+// Private browser handoff for credential-bearing URLs.
 //
 // Launching an authenticated URL through a desktop opener (xdg-open, wslview,
 // open) places the complete URL, including any credential fragment, in the

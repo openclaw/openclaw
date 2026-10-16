@@ -1,3 +1,8 @@
+/**
+ * Assistant stream message builders.
+ *
+ * Centralizes zero-cost usage records and assistant message construction for simple stream transports.
+ */
 import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import type { AssistantMessage, StopReason, Usage } from "../llm/types.js";
 

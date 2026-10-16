@@ -1,3 +1,4 @@
+// Inference backend detection shared by onboarding bootstrap and OpenClaw setup.
 import os from "node:os";
 import path from "node:path";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";

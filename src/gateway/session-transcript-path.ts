@@ -1,3 +1,4 @@
+// Session transcript path comparison helper.
 // Normalizes transcript paths for cache, history, and update matching.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";

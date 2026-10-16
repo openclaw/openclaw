@@ -1,3 +1,8 @@
+/**
+ * In-memory registry for bash exec sessions.
+ * Tracks running/backgrounded sessions, bounded pending output, finished
+ * session retention, and process cleanup for reconnect/poll flows.
+ */
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";

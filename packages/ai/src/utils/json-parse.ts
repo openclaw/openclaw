@@ -1,3 +1,4 @@
+// JSON parse helpers recover structured values from partial model output.
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as partialParse } from "partial-json";
 

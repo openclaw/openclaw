@@ -1,3 +1,4 @@
+// Stable public facade for config loading, snapshots, recovery, and writes.
 export { createConfigIO } from "./io.factory.js";
 export {
   parseConfigJson5,

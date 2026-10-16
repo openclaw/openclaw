@@ -1,3 +1,4 @@
+// Gateway run command option registration and lazy handoff to runtime startup.
 import { Option, type Command } from "commander";
 import type { StartupConfigPreflightOptions } from "../../commands/startup-config-preflight.js";
 import {

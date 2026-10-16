@@ -1,3 +1,4 @@
+// Resolves runtime-only inputs for status JSON after the fast scan completes.
 // Keeps gateway health, usage, security audit, and service summaries behind explicit option gates.
 
 import { readBackupRunFreshness } from "../state/backup-run-records.js";

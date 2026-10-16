@@ -1,3 +1,4 @@
+// Repairs canonical binding references after agent config migration.
 import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { AgentSelectionRequiredError } from "../../../agents/agent-scope-config.js";
 import { resolveReadOnlyChannelPluginsForConfig } from "../../../channels/plugins/read-only.js";

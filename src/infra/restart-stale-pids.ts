@@ -1,3 +1,4 @@
+// Finds and cleans stale gateway process ids.
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";

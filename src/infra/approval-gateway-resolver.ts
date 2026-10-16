@@ -1,3 +1,4 @@
+// Resolves exec, plugin, and system-agent approvals through the gateway client.
 import type {
   ApprovalChannelReviewer,
   ApprovalDecision,

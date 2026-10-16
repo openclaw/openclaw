@@ -1,3 +1,4 @@
+// Lazy lifecycle runtime export hub used by gateway run-loop restart paths.
 // run-loop.ts primes this hub before the HTTP listener binds, so each re-export
 // must target the module that defines the symbol rather than a re-export facade;
 // a facade also evaluates its siblings and drags their graphs onto cold start.

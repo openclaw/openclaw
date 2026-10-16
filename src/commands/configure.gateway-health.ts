@@ -1,3 +1,4 @@
+// Runs the configure wizard's target-bound Gateway health check.
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

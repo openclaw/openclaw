@@ -1,3 +1,4 @@
+// Shell completion runtime: cache paths, profile installation, and shell detection.
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";

@@ -1,3 +1,4 @@
+// Exposes generic path guard helpers with fs-safe defaults.
 import path from "node:path";
 import { isPathInside } from "@openclaw/fs-safe/path";
 

@@ -1,3 +1,4 @@
+// Shared lifecycle handling for interactive onboarding entrypoints.
 import path from "node:path";
 import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
 import type { RuntimeEnv } from "../runtime.js";

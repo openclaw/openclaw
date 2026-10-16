@@ -1,3 +1,4 @@
+// Applies metadata defaults and plugin-dependent rules to a core-validated config.
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntriesWithSource } from "../agents/agent-scope.js";

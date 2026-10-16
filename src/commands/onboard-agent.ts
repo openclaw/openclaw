@@ -1,3 +1,4 @@
+// First-run main-agent creation through the canonical agent service.
 import { createAgent, validateAgentIdInput } from "../agents/agent-create.js";
 import {
   listAgentEntries,

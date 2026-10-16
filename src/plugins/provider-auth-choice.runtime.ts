@@ -1,3 +1,4 @@
+// Runtime boundary for resolving provider auth choices from plugins.
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import { loadInstalledPluginIndexWithDiscovery } from "./installed-plugin-index.js";

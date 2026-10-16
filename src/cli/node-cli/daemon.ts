@@ -1,3 +1,4 @@
+// Node-host daemon lifecycle commands for install, status, start, stop, and restart.
 import { colorize } from "../../../packages/terminal-core/src/theme.js";
 import {
   resolveGatewayDaemonRuntime,

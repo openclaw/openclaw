@@ -10,6 +10,7 @@ export function getCallByProviderCallId(params: {
   return callId ? params.activeCalls.get(callId) : undefined;
 }
 
+/** Resolve an active call by internal call id or provider call id. */
 export function findCall(params: {
   activeCalls: Map<CallId, CallRecord>;
   providerCallIdMap: Map<string, CallId>;

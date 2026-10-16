@@ -1,3 +1,8 @@
+/**
+ * Shared auth profile data contracts.
+ * These types describe credential payloads, runtime selection state, and repair
+ * results consumed by providers, sessions, doctor, and plugin-facing seams.
+ */
 import type { z } from "zod";
 import type { SchemaContract } from "../../../packages/gateway-protocol/src/schema-contract.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

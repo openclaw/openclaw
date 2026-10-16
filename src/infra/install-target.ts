@@ -1,3 +1,4 @@
+// Resolves canonical plugin install target directories.
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "./errors.js";
 import { pathExists } from "./fs-safe.js";

@@ -1,3 +1,6 @@
+/**
+ * Google/Gemini-specific embedded-agent runtime helpers.
+ */
 // Re-exported from the helper barrel so Google-specific callers do not import
 // bootstrap internals directly.
 export { sanitizeGoogleTurnOrdering } from "./bootstrap.js";

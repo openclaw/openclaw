@@ -1,3 +1,4 @@
+// Applies existing activation policy to already prepared candidates.
 import {
   asOptionalObjectRecord,
   asOptionalRecord,

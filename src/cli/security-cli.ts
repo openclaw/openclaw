@@ -1,3 +1,4 @@
+// Security CLI for local/deep audits and safe remediation.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,

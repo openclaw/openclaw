@@ -1,3 +1,4 @@
+// Parses and normalizes the persisted exec approval policy.
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";

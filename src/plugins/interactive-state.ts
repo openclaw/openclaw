@@ -1,3 +1,4 @@
+// Stores interactive plugin state and dedupe caches.
 import { resolveGlobalDedupeCache, type DedupeCache } from "../infra/dedupe.js";
 
 type InteractiveState = {

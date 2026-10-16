@@ -1,3 +1,4 @@
+// Approval kind is shared by exec and plugin approval routing surfaces.
 import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals-core.js";
 import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
 import type {

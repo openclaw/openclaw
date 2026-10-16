@@ -1,3 +1,7 @@
+/**
+ * Classifies transcript messages that contain real user-visible conversation
+ * for compaction and history pruning.
+ */
 import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { isSilentAssistantTranscriptMessage } from "../shared/chat-message-content.js";
 import { isToolCallBlockType } from "../shared/tool-block-contract.js";

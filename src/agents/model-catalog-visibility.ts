@@ -1,3 +1,8 @@
+/**
+ * Resolves model catalog entries visible to browse/UI surfaces. Visibility
+ * combines explicit policy, configured models, defaults, and runtime
+ * auth-backed availability.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";

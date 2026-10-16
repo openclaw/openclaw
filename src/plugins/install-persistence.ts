@@ -1,3 +1,4 @@
+// Persistence helpers for plugin installs plus related config mutation.
 import path from "node:path";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { readConfigFileSnapshotForWrite } from "../config/config.js";

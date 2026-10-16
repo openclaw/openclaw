@@ -1,3 +1,4 @@
+// Voice Call plugin module handles cli command input and output.
 import { format } from "node:util";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 

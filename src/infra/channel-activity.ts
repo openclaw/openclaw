@@ -1,3 +1,4 @@
+// Tracks last inbound/outbound activity for channel accounts.
 import type { ChannelId } from "../channels/plugins/channel-id.types.js";
 
 /** Direction of the last observed activity for a channel/account pair. */

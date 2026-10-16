@@ -1,3 +1,4 @@
+// Commander registration for device pairing and auth-token commands.
 import { Option, type Command } from "commander";
 import { createLazyRuntimeMethodBinder } from "../shared/lazy-runtime.js";
 import { isDevicesMachineOutput } from "./devices-output-mode.js";

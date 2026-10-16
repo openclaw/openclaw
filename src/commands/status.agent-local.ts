@@ -1,3 +1,4 @@
+// Reads local agent/session state for status output.
 // This never contacts the gateway; it inspects configured agents and their read-only session stores.
 
 import path from "node:path";

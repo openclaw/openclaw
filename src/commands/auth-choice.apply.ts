@@ -1,3 +1,4 @@
+// Applies an onboarding auth choice through provider setup flows and legacy normalization.
 import { formatCliCommand } from "../cli/command-format.js";
 import { prepareAuthChoiceLoadedPluginProvider } from "../plugins/provider-auth-choice.js";
 import type {

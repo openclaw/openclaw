@@ -1,3 +1,4 @@
+// Session-envelope context resolver for inbound channel turns.
 import { resolveEnvelopeFormatOptions } from "../auto-reply/envelope.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import { readSessionUpdatedAtCore } from "../config/sessions/session-accessor.js";

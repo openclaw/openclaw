@@ -1,3 +1,4 @@
+// Legacy model-provider aliases that encoded runtime/backend selection in model refs.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeStaticProviderModelId } from "../../../agents/model-ref-shared.js";
 

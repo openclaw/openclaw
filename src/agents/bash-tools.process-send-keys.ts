@@ -1,3 +1,8 @@
+/**
+ * Send-keys support for process-controlled PTY sessions.
+ * Encodes symbolic keys, hex bytes, and literal input before writing to a
+ * live process stdin.
+ */
 import type { ManagedRunStdin } from "../process/supervisor/types.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import { deriveSessionName } from "./bash-tools.shared.js";

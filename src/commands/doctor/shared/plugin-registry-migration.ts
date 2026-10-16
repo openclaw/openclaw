@@ -1,3 +1,4 @@
+// Doctor recovery of the persisted plugin registry.
 import fs from "node:fs";
 import {
   copyPluginInstallRecordMap,

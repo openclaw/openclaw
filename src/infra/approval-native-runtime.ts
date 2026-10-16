@@ -1,3 +1,4 @@
+// Creates channel-native approval runtimes and delivery flows.
 import type {
   ChannelApprovalNativeAdapter,
   ChannelApprovalNativeAdapterAsync,

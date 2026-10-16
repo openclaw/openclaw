@@ -1,3 +1,4 @@
+// Normalizes user-submitted model config at config mutation boundaries.
 import {
   normalizeConfiguredProviderCatalogModelId,
   type ManifestModelIdNormalizationProvider,

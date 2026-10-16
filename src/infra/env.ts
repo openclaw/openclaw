@@ -1,3 +1,4 @@
+// Normalizes env flag values and logs env warnings lazily.
 import { parseBooleanValue } from "../utils/boolean.js";
 import { normalizeFsSafeNativeEnv } from "./fs-safe-env.js";
 export { isFastTestRuntimeEnv, isVitestRuntimeEnv } from "./test-runtime-env.js";

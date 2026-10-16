@@ -1,3 +1,4 @@
+// Command config resolver that combines secret materialization with optional plugin auto-enable.
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {

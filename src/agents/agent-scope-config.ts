@@ -1,3 +1,4 @@
+/** Resolves configured agent ids, directories, workspaces, and merged agent defaults. */
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {

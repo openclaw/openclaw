@@ -1,3 +1,4 @@
+// Redacts credential-bearing command arguments while preserving argv shape.
 import { redactToolPayloadText } from "../logging/redact.js";
 
 // These credential flags do not have a sensitive suffix.

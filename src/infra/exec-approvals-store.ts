@@ -1,3 +1,4 @@
+// Loads, updates, restores, and initializes exec approval policy state.
 import crypto from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";

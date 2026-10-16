@@ -1,3 +1,4 @@
+// Exposes private secret file helpers with fs-safe defaults.
 import path from "node:path";
 import { FsSafeError, type FsSafeErrorCode } from "@openclaw/fs-safe";
 import {

@@ -1,3 +1,4 @@
+/** Bedrock control-plane SDK loading and deadline-bound command dispatch. */
 import type {
   GetInferenceProfileCommandInput,
   ListInferenceProfilesCommandInput,

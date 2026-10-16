@@ -1,3 +1,4 @@
+// Gateway-first agent CLI implementation with explicit --local embedded execution.
 import fs from "node:fs/promises";
 import { TextDecoder } from "node:util";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";

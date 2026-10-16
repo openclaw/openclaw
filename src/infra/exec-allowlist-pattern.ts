@@ -1,3 +1,4 @@
+// Parses execution allowlist patterns for approval policy checks.
 import path from "node:path";
 import { safeRealpathSync } from "@openclaw/fs-safe/path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";

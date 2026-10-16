@@ -1,3 +1,4 @@
+// Main CLI startup policy helpers for fast paths, proxy startup, aliases, and missing commands.
 import { existsSync } from "node:fs";
 import path from "node:path";
 import {

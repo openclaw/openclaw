@@ -1,3 +1,4 @@
+// Config-tranche migrations move legacy aliases before canonical validation.
 import { ensureRecord, getRecord } from "../../../config/legacy.shared.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/account-id.js";
 import { deleteRetiredPath, visitAgentConfigScopes } from "./legacy-config-record-shared.js";

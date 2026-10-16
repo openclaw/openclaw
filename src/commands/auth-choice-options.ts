@@ -1,3 +1,4 @@
+// Builds provider-aware auth-choice options and grouped onboarding menus.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

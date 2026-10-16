@@ -1,3 +1,7 @@
+/**
+ * Anthropic Vertex region, project, and ADC auth detection helpers. They keep
+ * credential probing local to the provider plugin.
+ */
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import type { GoogleAuthOptions } from "google-auth-library";

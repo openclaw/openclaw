@@ -389,6 +389,7 @@ function formatBedrockError(error: unknown): string {
   return message;
 }
 
+/** Stream a Bedrock Converse request from the generic OpenClaw stream options. */
 export const streamSimpleBedrock: StreamFunction<"bedrock-converse-stream", SimpleStreamOptions> = (
   model,
   context,
@@ -679,6 +680,7 @@ function isClaudeMythosPreviewModelId(modelId?: string): boolean {
   );
 }
 
+/** Check canonical metadata and profile names for adaptive Claude support. */
 function supportsAdaptiveThinking(model: Model<"bedrock-converse-stream">): boolean {
   const profileModelId = resolveClaudeProfileNameModelId(model.name);
   return (

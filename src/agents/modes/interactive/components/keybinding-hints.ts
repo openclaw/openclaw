@@ -1,3 +1,7 @@
+/**
+ * Utilities for formatting keybinding hints in the UI.
+ */
+
 import { getKeybindings, type Keybinding } from "@earendil-works/pi-tui";
 import { interactiveAgentTheme as theme } from "../theme/theme.js";
 

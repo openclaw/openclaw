@@ -1,3 +1,4 @@
+// Data-only primitives shared by runtime models, catalogs, and configuration.
 export const MODEL_DATA_APIS = [
   "openai-completions",
   "openai-responses",

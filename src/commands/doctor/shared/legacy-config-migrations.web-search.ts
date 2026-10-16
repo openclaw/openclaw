@@ -1,3 +1,4 @@
+// Legacy web-search config migration from tools.web.search to plugin-owned config.
 import type { LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
 import {
   listLegacyWebSearchConfigPaths,

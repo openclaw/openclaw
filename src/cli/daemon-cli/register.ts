@@ -1,3 +1,4 @@
+// Legacy `daemon` command registration, backed by the same Gateway service commands.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";

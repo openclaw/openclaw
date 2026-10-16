@@ -1,3 +1,4 @@
+// Stores the fingerprinted config snapshot used by the config change journal.
 import { createHmac, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import { homedir as defaultHomedir } from "node:os";

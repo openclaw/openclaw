@@ -1,3 +1,4 @@
+// Declarative front for channel doctor streaming/dm alias migrations.
 import {
   asObjectRecord,
   hasLegacyAccountStreamingAliases,

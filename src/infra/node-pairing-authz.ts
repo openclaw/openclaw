@@ -1,3 +1,4 @@
+// Maps node pairing command declarations to required operator scopes.
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   NODE_EXEC_APPROVALS_COMMANDS,

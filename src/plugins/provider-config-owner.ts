@@ -1,3 +1,4 @@
+// Resolves provider config ownership between core and plugins.
 import {
   findNormalizedProviderValue,
   normalizeProviderId,

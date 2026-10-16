@@ -1,3 +1,8 @@
+/**
+ * CLI session persistence helpers.
+ * Keeps provider-keyed session bindings and reuse fingerprints in one
+ * normalized session-store contract.
+ */
 import crypto from "node:crypto";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";

@@ -1,3 +1,4 @@
+// Config snapshots and pre/post-update config restoration.
 import fs from "node:fs/promises";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";

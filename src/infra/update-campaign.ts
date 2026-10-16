@@ -1,3 +1,4 @@
+// Coordinates the process-local idle/countdown window before an automatic update.
 import { randomUUID } from "node:crypto";
 import type { UpdateScheduleState } from "../../packages/gateway-protocol/src/index.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";

@@ -1,3 +1,4 @@
+// Builds the trust plan for exec wrappers before commands are launched.
 import { resolveCarrierCommandArgv } from "./command-carriers.js";
 import {
   type DispatchWrapperInvocation,

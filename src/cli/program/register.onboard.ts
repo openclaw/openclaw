@@ -1,3 +1,4 @@
+// Commander registration for onboard setup flags and lazy onboard runtime execution.
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { Option, type Command } from "commander";
 import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";

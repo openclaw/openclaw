@@ -1,3 +1,4 @@
+// CLI respawn skip policy for help, interactive TTY commands, and foreground Gateway runs.
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { getCommandPathWithRootOptions } from "./argv.js";
 import { isForegroundGatewayRunArgv } from "./gateway-run-argv.js";
