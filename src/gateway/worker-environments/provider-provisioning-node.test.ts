@@ -1,13 +1,11 @@
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ensureSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import {
   consumeDeviceBootstrapTokenWithSetupCompletion,
   verifyDeviceBootstrapToken,
 } from "../../infra/device-bootstrap.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { decodePairingSetupCode } from "../../pairing/setup-code.js";
 import type {
   WorkerNodeEnrollment,
@@ -16,10 +14,7 @@ import type {
 } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
-import type {
-  NodeWorkerSupervisorNodeProof,
-  NodeWorkerSupervisorTransport,
-} from "../node-registry-private.js";
+import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import { createWorkerNodeEnrollmentManager } from "./node-enrollment.js";
 import { createGatewayNodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
 import { createNodeWorkerBundleTransferService } from "./node-worker-bundle-transfer-service.js";
@@ -38,13 +33,20 @@ function create(service: Service, idempotencyKey: string, overrides: Partial<Req
   return service.createWithRequest({ profileId: "development", idempotencyKey, ...overrides });
 }
 
-function nodeProvider(overrides: Partial<WorkerProvider>, requiresNodeEnrollment = true) {
-  return support.createProvider({
-    supportedExecutionModes: ["worker-turn"],
-    provisionBeforeInstallation: true,
-    ...(requiresNodeEnrollment ? { requiresNodeEnrollment: true } : {}),
-    ...overrides,
-  });
+function nodeService(
+  overrides: Partial<WorkerProvider>,
+  options: Parameters<typeof support.createService>[1] = {},
+  requiresNodeEnrollment = true,
+) {
+  return support.createService(
+    support.createProvider({
+      supportedExecutionModes: ["worker-turn"],
+      provisionBeforeInstallation: true,
+      ...(requiresNodeEnrollment ? { requiresNodeEnrollment: true } : {}),
+      ...overrides,
+    }),
+    options,
+  );
 }
 
 function resumeEnrollment(deviceId: string, displayName: string): WorkerNodeEnrollment {
@@ -74,67 +76,46 @@ describe("node worker provider provisioning", () => {
   afterEach(() => closeOpenClawAgentDatabases());
 
   it.each([
-    { target: "primary", executionMode: undefined, prewarm: true },
-    { target: "conversation", executionMode: undefined, prewarm: false },
+    { target: "primary", prewarm: true },
+    { target: "conversation", prewarm: false },
   ] as const)(
-    "installs the verified bundle with runtime-appropriate prewarming for $target/$executionMode",
-    async ({ target, executionMode, prewarm }) => {
-      const node: NodeWorkerSupervisorNodeProof = {
-        nodeId: "cloud-device-mode",
-        connId: "connection-mode",
-        pairingIdentity: "pairing-mode",
-        pairingGeneration: "generation-mode",
-        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-        clientMode: "node",
-        protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-        workerHost: { enabled: true, capacity: { total: 1, available: 1 }, bundlePrewarm: 1 },
-        commands: [],
-      };
+    "installs the verified bundle with runtime-appropriate prewarming for $target",
+    async ({ target, prewarm }) => {
+      const transport = nodeTunnelSupport.transport();
+      const node = (await transport.listCurrentNodes())[0]!;
+      node.workerHost = { enabled: true, capacity: { total: 1, available: 1 }, bundlePrewarm: 1 };
+      node.commands = [];
+      transport.listCurrentNodes = async () => [node];
+      transport.isCurrent = (candidate) => candidate === node;
       const transfer = createNodeWorkerBundleTransferService();
       const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () => ({
         ok: true,
         payload: support.BOOTSTRAP_RECEIPT,
       }));
-      const transport: NodeWorkerSupervisorTransport = {
-        getCurrentNode: async (nodeId) => (node.nodeId === nodeId ? node : undefined),
-        hasCurrentRunner: () => true,
-        listCurrentNodes: async () => [node],
-        isCurrent: (candidate) => candidate === node,
-        invoke,
-      };
+      transport.invoke = invoke;
       const ensureNodeWorkerBundle = createGatewayNodeWorkerBundleInstaller({
         log: { info: vi.fn(), warn: vi.fn() },
         gatewayNamespace: "gateway-test",
         getTransport: () => transport,
         transfer,
       });
-      const service = support.createService(
-        nodeProvider(
-          {
-            supportedExecutionModes: ["worker-turn", "remote-exec"],
-            provision: async () => ({
-              leaseId: "cloud-lease-mode",
-              node: { deviceId: node.nodeId },
-            }),
-          },
-          false,
-        ),
+      const service = nodeService(
+        {
+          supportedExecutionModes: ["worker-turn", "remote-exec"],
+          provision: async () => ({ leaseId: "cloud-lease-mode", node: { deviceId: node.nodeId } }),
+        },
         { ensureNodeWorkerBundle },
+        false,
       );
       try {
-        const request = {
-          profileId: "development",
-          idempotencyKey: "runtime-mode",
-        };
+        const request = { profileId: "development", idempotencyKey: "runtime-mode" };
         const identity = {
           agentId: "main",
           sessionId: "conversation-mode",
           sessionKey: "agent:main:crabbox",
         };
         if (target === "conversation") {
-          state.config.session = {
-            store: path.join(state.root, "sessions.json"),
-          };
+          state.config.session = { store: path.join(state.root, "sessions.json") };
           ensureSessionEntrySync(
             { ...identity, storePath: state.config.session.store },
             { sessionId: identity.sessionId, updatedAt: 1 },
@@ -144,7 +125,7 @@ describe("node worker provider provisioning", () => {
           target === "conversation"
             ? (await service.createSessionAttachment({ ...request, ...identity }, () => {}))
                 .environment
-            : await service.createWithRequest({ ...request, executionMode });
+            : await service.createWithRequest(request);
         expect(environment).toMatchObject({
           state: "ready",
           bootstrapReceipt: support.BOOTSTRAP_RECEIPT,
@@ -189,11 +170,11 @@ describe("node worker provider provisioning", () => {
       });
       state.prepareInstallation = prepareInstallation;
       const closeNodeEnrollment = vi.fn();
-      const ensureNodeWorkerBundle = vi.fn(async () => support.BOOTSTRAP_RECEIPT);
+      const ensureNodeWorkerBundle = vi.fn(cloneReceipt);
       const destroy = vi.fn(async () => {});
       let begin: (() => Promise<WorkerNodeEnrollment>) | undefined;
-      const service = support.createService(
-        nodeProvider({
+      const service = nodeService(
+        {
           resolveAllocation: async () => ({ leaseId, sharedHost: false }),
           provision: async (_profile, _operationId, options) => {
             begin = options!.beginNodeEnrollment!;
@@ -204,7 +185,7 @@ describe("node worker provider provisioning", () => {
             return { leaseId, node: { deviceId }, sharedHost: false };
           },
           destroy,
-        }),
+        },
         {
           prepareNodeEnrollment: async () => enrollment,
           closeNodeEnrollment,
@@ -296,8 +277,8 @@ describe("node worker provider provisioning", () => {
         };
       },
     );
-    const service = support.createService(
-      nodeProvider({
+    const service = nodeService(
+      {
         resolveProvisionTimeoutMs: (_profile, options) => {
           expect(prepareNodeEnrollment).not.toHaveBeenCalled();
           expect(options?.nodeBootstrapTimeoutMs).toBe(105 * 60_000);
@@ -305,7 +286,7 @@ describe("node worker provider provisioning", () => {
           return declaredTimeoutMs ?? 1;
         },
         provision,
-      }),
+      },
       {
         prepareNodeEnrollment,
         closeNodeEnrollment,
@@ -352,27 +333,27 @@ describe("node worker provider provisioning", () => {
         sharedHost: false,
       };
     });
-    const service = support.createService(nodeProvider({ provision }), {
-      prepareNodeBootstrap: async () => {
-        entered.resolve();
-        await prepared.promise;
-        return support.NODE_BOOTSTRAP.sha256;
+    const service = nodeService(
+      { provision },
+      {
+        ensureNodeWorkerBundle: cloneReceipt,
+        prepareNodeBootstrap: async () => {
+          entered.resolve();
+          await prepared.promise;
+          return support.NODE_BOOTSTRAP.sha256;
+        },
+        prepareNodeEnrollment: async () => {
+          throw new Error("provider does not need enrollment in this case");
+        },
       },
-      prepareNodeEnrollment: async () => {
-        throw new Error("provider does not need enrollment in this case");
-      },
-      ensureNodeWorkerBundle: cloneReceipt,
-    });
+    );
     const completed = resultOf(create(service, "request-node-preparation-teardown"));
     try {
       await entered.promise;
       expect(provision).not.toHaveBeenCalled();
       const record = state.store.list()[0]!;
       expect(record.state).toBe("requested");
-      await state.store.requestDestroy({
-        environmentId: record.environmentId,
-        state: "requested",
-      });
+      await state.store.requestDestroy({ environmentId: record.environmentId, state: "requested" });
       prepared.resolve();
       expect(await completed).toMatchObject({
         error: { message: expect.stringContaining("changed during bootstrap preparation") },
@@ -422,8 +403,8 @@ describe("node worker provider provisioning", () => {
       let pendingEnrollment: Promise<WorkerNodeEnrollment> | undefined;
       let prepareRuntime: (() => Promise<WorkerNodeRuntimePreparation>) | undefined;
       let pendingRuntime: Promise<WorkerNodeRuntimePreparation> | undefined;
-      const service = support.createService(
-        nodeProvider({
+      const service = nodeService(
+        {
           provision: async (_profile, _operationId, options) => {
             begin = options!.beginNodeEnrollment!;
             prepareRuntime = options!.prepareNodeRuntime!;
@@ -435,7 +416,7 @@ describe("node worker provider provisioning", () => {
             await finishProvider.promise;
             return { leaseId: "cloud-lease-closed", node: { deviceId: "cloud-device-closed" } };
           },
-        }),
+        },
         {
           prepareNodeRuntime,
           closeNodeRuntime,
@@ -490,9 +471,7 @@ describe("node worker provider provisioning", () => {
 
   it("destroys an unreported node allocation without reenrolling or admitting its worker", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", state.root);
-    onTestFinished(() => {
-      vi.unstubAllEnvs();
-    });
+    onTestFinished(() => vi.unstubAllEnvs());
     const leaseId = "cloud-lease-destroy-replay";
     const deviceId = "cloud-device-destroy-replay";
     const operationIds: string[] = [];
@@ -538,8 +517,8 @@ describe("node worker provider provisioning", () => {
     });
     onTestFinished(() => enrollmentManager.stop());
     const prepareNodeEnrollment = vi.fn(enrollmentManager.begin);
-    const service = support.createService(
-      nodeProvider({
+    const service = nodeService(
+      {
         resolveAllocation: async () => ({ leaseId, sharedHost: false }),
         provision: async (_profile, operationId, options) => {
           operationIds.push(operationId);
@@ -568,7 +547,7 @@ describe("node worker provider provisioning", () => {
           throw new Error("provider response was lost after node allocation");
         },
         destroy,
-      }),
+      },
       {
         prepareNodeEnrollment,
         closeNodeEnrollment: enrollmentManager.close,
@@ -652,21 +631,16 @@ describe("node worker provider provisioning", () => {
 
   it("keeps paired-device roles when a node lease has no cloud enrollment owner", async () => {
     const retireNodeEnrollment = vi.fn(async () => {});
-    const service = support.createService(
-      nodeProvider(
-        {
-          provision: async () => ({
-            leaseId: "device-lease-1",
-            node: { deviceId: "paired-device-1" },
-            sharedHost: true,
-          }),
-        },
-        false,
-      ),
+    const service = nodeService(
       {
-        retireNodeEnrollment,
-        ensureNodeWorkerBundle: cloneReceipt,
+        provision: async () => ({
+          leaseId: "device-lease-1",
+          node: { deviceId: "paired-device-1" },
+          sharedHost: true,
+        }),
       },
+      { retireNodeEnrollment, ensureNodeWorkerBundle: cloneReceipt },
+      false,
     );
 
     const environment = await create(service, "request-paired-device");

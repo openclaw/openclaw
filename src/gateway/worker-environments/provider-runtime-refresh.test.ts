@@ -28,6 +28,13 @@ describe("worker environment runtime upgrades", () => {
     ],
   };
   const installedReceipt = { ...currentReceipt, installKind: "bundle" as const };
+  type InstallNodeBundle = NonNullable<
+    support.WorkerEnvironmentServiceOptions["ensureNodeWorkerBundle"]
+  >;
+  const unsupported = (message: string) =>
+    vi.fn(async () => {
+      throw new Error(message);
+    });
 
   async function setupUpgrade(
     transport: "node" | "ssh",
@@ -107,28 +114,20 @@ describe("worker environment runtime upgrades", () => {
       provision: vi.fn(support.createProvider().provision),
       destroy: vi.fn(async () => {}),
     };
-    const ensureNodeWorkerBundle = vi.fn(
-      async (
-        params: Parameters<
-          NonNullable<support.WorkerEnvironmentServiceOptions["ensureNodeWorkerBundle"]>
-        >[0],
-      ) => {
-        expect(params.deviceId).toBe(environment.nodeDeviceId);
-        expect(params.artifact.bundleHash).toBe(targetReceipt.bundleHash);
-        params.assertCurrent?.();
-        return install();
-      },
-    );
+    const ensureNodeWorkerBundle = vi.fn<InstallNodeBundle>(async (params) => {
+      expect(params).toMatchObject({
+        deviceId: environment.nodeDeviceId,
+        artifact: { bundleHash: targetReceipt.bundleHash },
+      });
+      params.assertCurrent?.();
+      return install();
+    });
     const nodeTunnelManager: NonNullable<
       support.WorkerEnvironmentServiceOptions["nodeTunnelManager"]
     > = {
       status: () => "stopped",
-      observeProcesses: vi.fn(async () => {
-        throw new Error("Process observation is not configured in this fixture");
-      }),
-      start: vi.fn(async () => {
-        throw new Error("Node workspace transport was not configured");
-      }),
+      observeProcesses: unsupported("Process observation is not configured in this fixture"),
+      start: unsupported("Node workspace transport was not configured"),
       stop: vi.fn(async () => {}),
       stopAll: vi.fn(async () => {}),
     };
@@ -253,10 +252,7 @@ describe("worker environment runtime upgrades", () => {
   it("keeps an idle SSH machine through startup recovery when its runtime upgrade must retry", async () => {
     const h = await setupUpgrade("ssh", "attached", {
       ...support.BOOTSTRAP_RECEIPT,
-      protocolFeatures: [
-        WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-        WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-      ],
+      protocolFeatures: currentReceipt.protocolFeatures,
     });
     const recovery = await createRecoveryService(h.placements, h.service);
     h.install.mockRejectedValueOnce(new Error("runtime download interrupted"));
@@ -317,10 +313,7 @@ describe("worker environment runtime upgrades", () => {
           ...REQUEST,
           claimId: "reclaim-runtime-upgrade",
           runId: "reclaim-runtime-upgrade",
-          owner: {
-            kind: "local",
-            ...h.owner,
-          },
+          owner: { kind: "local", ...h.owner },
         });
       }
       const restarted = await h.restart();
@@ -427,9 +420,6 @@ describe("worker environment runtime upgrades", () => {
           workspaceBaseManifestRef: fixture.reconciledManifestRef,
         });
         expect(await restarted.placements.listPendingWorkspaceResultsAsync()).toEqual([]);
-        console.info(
-          `[stop-recovery-proof] published-state=v2026.9.6 case=${change} reopened=draining events=${fixture.log.join(",")} final=reclaimed`,
-        );
       } finally {
         unsubscribe();
       }
@@ -459,10 +449,7 @@ describe("worker environment runtime upgrades", () => {
       } else if (race === "move") {
         await h.placements.beginPlacementMove({
           sessionId: REQUEST.sessionId,
-          source: {
-            generation: h.placement!.generation,
-            ...h.owner,
-          },
+          source: { generation: h.placement!.generation, ...h.owner },
           target: { kind: "gateway" },
         });
       } else {
@@ -470,10 +457,7 @@ describe("worker environment runtime upgrades", () => {
           ...REQUEST,
           claimId: "new-live-claim",
           runId: "new-live-run",
-          owner: {
-            kind: "worker",
-            ...h.owner,
-          },
+          owner: { kind: "worker", ...h.owner },
         });
       }
       installed.resolve(currentReceipt);

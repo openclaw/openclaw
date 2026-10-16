@@ -71,6 +71,18 @@ async function seedAttached(environmentId: string, sessionId = "session-1") {
   );
 }
 
+async function beginTeardown(record: Environment, lastError?: string) {
+  const { environmentId, state } = record;
+  await testState.store.requestDestroy({
+    environmentId,
+    state,
+    ...(lastError ? { terminalState: "failed", lastError } : {}),
+  });
+  const patch = lastError ? { lastError } : undefined;
+  await transition(environmentId, state, "draining", patch);
+  await transition(environmentId, "draining", "destroying", patch);
+}
+
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
@@ -88,7 +100,7 @@ describe("worker environment service", () => {
 
     await workerService.reconcileOnce();
 
-    expect(testState.store.get(environmentId)?.ownerEpoch).toBe(1);
+    expectState(environmentId, "ready", { ownerEpoch: 1, lastError: "provider unavailable" });
     expect(testState.store.getCredential(environmentId)).toMatchObject({
       ownerEpoch: 1,
       sessionId: null,
@@ -99,7 +111,6 @@ describe("worker environment service", () => {
       credential: support.CREDENTIAL,
       ownerEpoch: 1,
     });
-    expect(testState.store.get(environmentId)?.lastError).toBe("provider unavailable");
     expect(testState.bootstrapWorker).not.toHaveBeenCalled();
   });
 
@@ -107,7 +118,7 @@ describe("worker environment service", () => {
     await support.seedBootstrapping("worker-crash");
     testState.config.cloudWorkers!.profiles = {};
     const inspected: WorkerLifecycleLease[] = [];
-    const provider = support.createProvider({
+    const workerService = service({
       inspect: async (lease) => {
         inspected.push(lease);
         return { status: "active" };
@@ -115,7 +126,7 @@ describe("worker environment service", () => {
       provision: fail("provision must not run for a known lease"),
     });
 
-    await support.createService(provider).reconcileOnce();
+    await workerService.reconcileOnce();
 
     expect(inspected).toEqual([
       expect.objectContaining({ leaseId: "lease:worker-crash", profile: { region: "test" } }),
@@ -285,16 +296,17 @@ describe("worker environment service", () => {
 
   it("uses the snapshotted npm selection after live config changes", async () => {
     support.getDevelopmentProfile().install = "npm";
-    const provider = support.createProvider({
+    const workerService = service({
       provision: async () => {
         support.getDevelopmentProfile().install = "bundle";
         return { leaseId: "lease-npm", ssh: support.SSH_ENDPOINT };
       },
     });
 
-    const result = await support
-      .createService(provider)
-      .createWithRequest({ profileId: "development", idempotencyKey: "request-npm" });
+    const result = await workerService.createWithRequest({
+      profileId: "development",
+      idempotencyKey: "request-npm",
+    });
 
     expect(result).toMatchObject({
       state: "ready",
@@ -313,13 +325,7 @@ describe("worker environment service", () => {
   it("fences unknown leases before stop and retries their durable teardown", async () => {
     const originalOwner = await support.seedReady("worker-unknown");
     await support.seedReady("worker-transient");
-    await support.seedReady("worker-destroyed-unknown");
-    await testState.store.requestDestroy({
-      environmentId: "worker-destroyed-unknown",
-      state: "ready",
-    });
-    await transition("worker-destroyed-unknown", "ready", "draining");
-    await transition("worker-destroyed-unknown", "draining", "destroying");
+    await beginTeardown(await support.seedReady("worker-destroyed-unknown"));
     const provider = support.createProvider({
       inspect: async ({ leaseId }) => {
         if (leaseId !== "lease:worker-transient") {
@@ -393,9 +399,7 @@ describe("worker environment service", () => {
     { status: "unknown", sharedHost: true },
   ])("retains retryable state for malformed inspection result %#", async (inspection) => {
     await support.seedReady("worker-malformed");
-    const provider = support.createProvider({ inspect: async () => inspection as never });
-
-    await support.createService(provider).reconcileOnce();
+    await service({ inspect: async () => inspection as never }).reconcileOnce();
 
     expectState("worker-malformed", "ready", {
       lastError: expect.stringContaining("invalid inspection"),
@@ -407,12 +411,11 @@ describe("worker environment service", () => {
     await seedAttached("worker-destroyed-attached");
     await support.seedReady("worker-destroyed-draining");
     await transition("worker-destroyed-draining", "ready", "draining");
-    const provider = support.createProvider({
+    const workerService = service({
       inspect: async () => ({ status: "destroyed" }),
       destroy: fail("destroy must not run for provider-proven teardown"),
     });
 
-    const workerService = support.createService(provider);
     await workerService.reconcileOnce();
 
     for (const environmentId of [
@@ -429,25 +432,13 @@ describe("worker environment service", () => {
 
   it("adopts a provider-proven bootstrap teardown as failed after restart", async () => {
     const bootstrapping = await support.seedBootstrapping("worker-bootstrap-teardown-crash");
-    const requested = await testState.store.requestDestroy({
-      environmentId: bootstrapping.environmentId,
-      state: bootstrapping.state,
-      terminalState: "failed",
-      lastError: "remote bootstrap failed",
-    });
-    const draining = await transition(requested.environmentId, requested.state, "draining", {
-      lastError: requested.lastError,
-    });
-    await transition(draining.environmentId, draining.state, "destroying", {
-      lastError: draining.lastError,
-    });
+    await beginTeardown(bootstrapping, "remote bootstrap failed");
     const destroy = vi.fn(async () => {});
-    const provider = support.createProvider({
+    const workerService = service({
       inspect: async () => ({ status: "destroyed" }),
       destroy,
     });
     testState.providersEnabled = false;
-    const workerService = support.createService(provider);
 
     await workerService.reconcileOnce();
     expectState(bootstrapping.environmentId, "destroying", {
