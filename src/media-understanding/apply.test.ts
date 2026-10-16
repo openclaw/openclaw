@@ -289,9 +289,14 @@ describe("applyMediaUnderstanding", () => {
     vi.doMock("../utils/message-channel.js", () => ({
       isDeliverableMessageChannel: (channel: string) => channel === "voicechat",
     }));
-    vi.doMock("../media/fetch.js", () => ({
-      readRemoteMediaBuffer: readRemoteMediaBufferMock,
-    }));
+    vi.doMock("../media/fetch.js", async () => {
+      const actual = await vi.importActual<typeof import("../media/fetch.js")>("../media/fetch.js");
+      return {
+        ...actual,
+        readRemoteMediaBuffer: readRemoteMediaBufferMock,
+        readRemoteMediaBufferWithHeaders: readRemoteMediaBufferMock,
+      };
+    });
     vi.doMock("../media/media-services.js", () => ({
       runFfmpeg: runFfmpegMock,
       convertHeicToJpeg: convertHeicToJpegMock,

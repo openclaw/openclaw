@@ -19,6 +19,7 @@ export const ChatPageView = defineSolidBridge<ChatPageProps, ChatPageMethods>(
     const state = ChatPageState.forHost(host);
     const application = untrack(() => props.context ?? useApplication());
     state.context = application;
+    state.createPresentation();
     Object.defineProperty(host, "sessionSplitAvailable", {
       configurable: true,
       get: () => state.sessionSplitAvailable,
@@ -61,6 +62,10 @@ export const ChatPageView = defineSolidBridge<ChatPageProps, ChatPageMethods>(
       get snapshot() {
         return frame();
       },
+      get indicator() {
+        return props.data?.creation?.admitted === false ? null : state.sessionDrop.indicator();
+      },
+      containerRef: state.sessionDrop.containerRef,
     });
   },
   {

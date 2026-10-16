@@ -573,30 +573,6 @@ export function buildScopedSubagentRunReadIndexFromRuns<T extends SubagentRunRea
   });
 }
 
-export function countActiveDescendantRunsFromRuns(
-  runs: Map<string, SubagentRunRecord>,
-  rootSessionKey: string,
-  requesterAgentId?: string,
-  requesterStorePath?: string | null,
-  rootRunIds?: ReadonlySet<string>,
-): number {
-  return buildScopedSubagentRunReadIndexFromRuns(
-    runs,
-    rootSessionKey,
-    requesterAgentId,
-    requesterStorePath,
-    rootRunIds,
-  ).countActiveDescendantRuns(rootSessionKey);
-}
-
-/** Counts descendants that are live or ended but not yet cleaned up. */
-export function countPendingDescendantRunsFromRuns(
-  runs: Map<string, SubagentRunRecord>,
-  rootSessionKey: string,
-): number {
-  return buildSubagentRunReadIndexFromRuns({ runs }).countPendingDescendantRuns(rootSessionKey);
-}
-
 /**
  * True when any descendant below a root session has not reached a terminal
  * settle. Differs from the pending count in one way: a run whose final

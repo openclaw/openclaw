@@ -129,6 +129,36 @@ the session's instructions rather than a user-turn check at send time.
 
 The X front-door agent continues to reply directly to incoming mentions.
 
+## Reply outcomes and failures
+
+Automatic replies to mentions are posted only when the agent declares success.
+The channel's delivery rules ask the agent to start each reply with
+`[[x_success]]` or `[[x_failure]]`; the tag is removed before posting. Replies
+tagged `[[x_failure]]`, untagged replies, and host error replies are withheld
+from X. `NO_REPLY` and empty replies are dropped. If a model omits the tag on a
+successful answer, that answer is withheld rather than posted.
+
+Without a failure route, withheld replies are discarded and logged as
+`reply withheld post=<id> reason=<failure|error|unclassified> route=none`. With
+`failureRoute`, OpenClaw sends a notice through the target channel's normal
+outbound delivery: the mention's post URL, the author's handle, and a redacted
+summary of at most 500 characters. Delivery is best-effort; a failed notice is
+logged with its result and never falls back to X.
+
+```json5
+{
+  channels: {
+    x: {
+      failureRoute: { channel: "discord", to: "channel:<channelId>" },
+    },
+  },
+}
+```
+
+Set `failureRoute.accountId` to choose an account on the route channel. The
+route cannot target `x`. Message-tool posts from work sessions stay manual: a
+`[[x_success]]` tag is removed and a draft tagged `[[x_failure]]` is refused.
+
 ## Manage the allowlist
 
 Open **X replies** in the Control UI as an administrator. The page shows the
@@ -585,6 +615,7 @@ These fields work at `channels.x` and on individual account entries unless noted
 | `costLimits.monthlyUsd`             | `1000`                  | Maximum estimated X API spend per billing cycle; `0` blocks paid calls.           |
 | `costLimits.cycleStartDay`          | `1`                     | UTC billing-cycle start day of the month, from 1 to 28.                           |
 | `replySignature`                    | `🤖 automated reply`    | Added to the last reply chunk; up to 140 characters, empty disables it.           |
+| `failureRoute`                      | Unset (discard)         | `{ channel, to, accountId? }` notice target for replies withheld from X.          |
 | `accounts`                          | Unset                   | Named account overrides; channel root only.                                       |
 | `defaultAccount`                    | `default`               | Account selected when none is specified; channel root only.                       |
 

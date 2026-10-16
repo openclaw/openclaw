@@ -1,5 +1,5 @@
 # Trusted Telegram proof harness image. Build before admitting candidate source.
-FROM mcr.microsoft.com/playwright:v1.63.0-noble@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7
+FROM mcr.microsoft.com/playwright:v1.64.0-noble@sha256:06a9939e57531807f8d5fd76ce44b53165ffb7d7501d87ab10e285c20b1e971f
 WORKDIR /harness
 RUN apt-get update && apt-get install -y --no-install-recommends openssh-server git rsync curl sudo python3 \
     && rm -rf /var/lib/apt/lists/*

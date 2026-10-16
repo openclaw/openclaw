@@ -37,6 +37,31 @@ function fixture(source = "export {};\n") {
 }
 
 describe("Control UI Lit ratchet", () => {
+  it("keeps controller growth advisory until all production controllers are retired", () => {
+    const root = fixture("class OldController { hostConnected() {} }\n");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const target = path.join(root, "ui/src/new.ts");
+    fs.writeFileSync(target, "class NewController { hostDisconnected() {} requestUpdate() {} }\n");
+    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    expect(log.mock.calls.flat().join("\n")).toContain("controllerPatterns");
+
+    fs.writeFileSync(path.join(root, "ui/src/view.ts"), "// class OldController {}\n");
+    fs.writeFileSync(target, 'const text = "hostConnected requestUpdate";\n');
+    fs.writeFileSync(path.join(root, "ui/src/view.test.ts"), "class TestController {}\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "retire production controllers"]);
+    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    for (const source of [
+      "class NewController {}",
+      "const host = { hostConnected() {}, hostDisconnected() {}, requestUpdate() {} };",
+      "host.requestUpdate();",
+    ]) {
+      fs.writeFileSync(target, source);
+      expect(main(root, ["--base", "HEAD"]), source).toBe(1);
+    }
+  });
+
   it("allows the named interop owner but rejects a new sibling Lit implementation", () => {
     const root = fixture();
     const content =

@@ -2,7 +2,6 @@ import Foundation
 import Testing
 @testable import OpenClawNativeState
 #if canImport(Darwin)
-import Darwin
 import Darwin.membership
 #endif
 
@@ -102,24 +101,23 @@ struct OpenClawNativeStateSQLiteTests {
             }
             let original = try Data(contentsOf: url)
             let reader = try OpenClawNativeStateSQLite(databaseURL: url, createIfMissing: false, readOnly: true)
-            let expected: OpenClawNativeStateConfigValue? = hasTable
-                ? .init(value: "retained-pin", updatedAtMilliseconds: 10)
-                : nil
-
-            #expect(try reader.configMachineStateValue(key: "fixture") == expected)
+            #expect(try reader.schemaObjectExists(type: "table", name: "config_machine_state") == hasTable)
+            if hasTable {
+                #expect(try reader.scalarText("SELECT value_json FROM config_machine_state") == "retained-pin")
+            }
             #expect(try Data(contentsOf: url) == original)
         }
     }
 
-    @Test func `read-only bootstrap admission records that config state is absent`() throws {
+    @Test func `read-only bootstrap admission preserves absent config state`() throws {
         try self.withDatabaseURL { writer, url in
             try writer.ensureCanonicalTable(.deviceAuthTokens)
             let original = try Data(contentsOf: url)
             let reader = try OpenClawNativeStateSQLite(databaseURL: url, createIfMissing: false, readOnly: true)
 
-            #expect(try reader.configMachineStateValue(key: "fixture") == nil)
+            #expect(try reader.scalarInt64("PRAGMA user_version") == 0)
             #expect(try Data(contentsOf: url) == original)
-            #expect(try writer.schemaObjectExists(type: "table", name: "config_machine_state") == false)
+            #expect(try reader.schemaObjectExists(type: "table", name: "config_machine_state") == false)
         }
     }
 
@@ -148,44 +146,11 @@ struct OpenClawNativeStateSQLiteTests {
         let original = try Data(contentsOf: url)
         let reader = try OpenClawNativeStateSQLite(databaseURL: url, createIfMissing: false, readOnly: true)
 
-        #expect(try reader.configMachineStateValue(key: "fixture") == .init(
-            value: "retained-pin",
-            updatedAtMilliseconds: 10))
+        #expect(try reader.scalarText("SELECT value_json FROM config_machine_state") == "retained-pin")
         #expect(throws: OpenClawNativeStateError.self) {
             try reader.execute("UPDATE config_machine_state SET value_json = 'unexpected'")
         }
         #expect(try Data(contentsOf: url) == original)
-    }
-
-    @Test func `admitted config reads observe foreign rows without replacing their handle`() throws {
-        try self.withDatabaseURL { writer, url in
-            try self.createConfigMachineState(writer)
-            let reader = try OpenClawNativeStateSQLite(databaseURL: url, createIfMissing: false, readOnly: true)
-            #expect(try reader.configMachineStateValue(key: "fixture") == nil)
-
-            try writer.execute("INSERT INTO config_machine_state VALUES ('fixture', 'first', 10)")
-            #expect(try reader.configMachineStateValue(key: "fixture") == .init(
-                value: "first",
-                updatedAtMilliseconds: 10))
-            try writer.execute("UPDATE config_machine_state SET value_json = 'second', updated_at_ms = 20")
-            #expect(try reader.configMachineStateValue(key: "fixture") == .init(
-                value: "second",
-                updatedAtMilliseconds: 20))
-            try writer.execute("DELETE FROM config_machine_state")
-            #expect(try reader.configMachineStateValue(key: "fixture") == nil)
-            #expect(throws: OpenClawNativeStateError.self) { try writer.configMachineStateValue(key: "fixture") }
-        }
-    }
-
-    @Test(arguments: ["NULL, 10", "'fixture', 'invalid-timestamp'"])
-    func `admitted config reads still reject malformed row values`(_ row: String) throws {
-        try self.withDatabaseURL { writer, url in
-            try self.createConfigMachineState(writer)
-            try writer.execute("INSERT INTO config_machine_state VALUES ('fixture', \(row))")
-            let reader = try OpenClawNativeStateSQLite(databaseURL: url, createIfMissing: false, readOnly: true)
-
-            #expect(throws: OpenClawNativeStateError.self) { try reader.configMachineStateValue(key: "fixture") }
-        }
     }
 
     private func createConfigMachineState(_ database: OpenClawNativeStateSQLite) throws {

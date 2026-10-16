@@ -5,6 +5,60 @@ Use this when writing or auditing rendering consumers. The installed rc.14
 `@solidjs/signals/dist/types/` own the API contract; Solid 1 examples are not a
 substitute. Examples below abbreviate code from the named OpenClaw modules.
 
+## Replace Lit-era controllers
+
+Replace a rendering controller with `createThing(deps)`, called inside the owning
+component or Solid root. Return accessors and actions. Local interaction state
+belongs in signals; structured local drafts belong in `createStore` with its
+draft setter and `reconcile` for keyed updates. Derive values with `createMemo`,
+never effects that copy state. Domain owners stay plain TypeScript; their
+synchronous decisions do not become signals or stores.
+
+Replace `hostConnected`/`hostDisconnected` with owner-scoped setup and cleanup in
+the same function. Signals replace `requestUpdate`. For example, this local
+disclosure replaces a controller's mutable `open`, key listener, and host update:
+
+```ts
+import { createMemo, createSignal, onSettled } from "solid-js";
+import { listen } from "./listener.ts";
+
+function createDisclosure(trigger: () => HTMLElement, label: () => string) {
+  const [open, setOpen] = createSignal(false);
+  const accessibleLabel = createMemo(() => `${label()}: ${open() ? "open" : "closed"}`);
+  onSettled(() =>
+    listen(trigger(), "keydown", (event) => {
+      if (event instanceof KeyboardEvent && event.key === "Escape") {
+        setOpen(false);
+      }
+    }),
+  );
+  return { open, accessibleLabel, toggle: () => setOpen((value) => !value) };
+}
+```
+
+Prefer JSX handlers. When native capture/options or an external target requires
+an imperative listener, `lib/reactive/listener.ts` returns teardown for the
+owning `onSettled` callback, split-effect apply phase, or explicit lifetime.
+`lib/solid-native-listener.ts` remains the owned ref factory for native bubbling
+through custom-element boundaries. Ref callbacks capture nodes; they must not
+create cleanup registrations. Use refs instead of `querySelector`; retain
+deliberate xterm, noVNC, PDF, and canvas islands as ref-owned regions.
+JSX handlers can still fire on a detached node retained by another owner. Use
+explicit listener teardown when late events could observe replacement props.
+
+Remove `untrack` unless a read deliberately must not subscribe; explain
+non-obvious snapshots. Delete the old controller, host adapter wiring, and
+test-only exports together. Keep an adapter only while `git grep` shows real
+callers. Tests assert public behavior and cleanup, not controller internals.
+
+Keep routes, keyboard/focus behavior, tags, selectors, and lazy boundaries.
+Before editing, check open `solid2/*` PRs and skip files owned by another lane.
+Keep each PR focused (about 40 files maximum) and reduce production LOC. Report
+before/after controller-pattern references, `createEffect`, `untrack`, native
+listener registrations, and LOC for touched production files. The existing Lit
+ratchet reports controller-pattern growth while legacy callers remain; after
+the production baseline reaches zero it rejects reintroductions.
+
 ## Derive values; effects perform work
 
 A component body runs once. JSX bindings, memos, and effect compute phases track

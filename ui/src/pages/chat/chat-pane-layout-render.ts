@@ -1,7 +1,6 @@
 import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
-import "./chat-outbox-recovery.tsx";
-import "./components/chat-details.tsx";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/index.js";
+import "./components/chat-details.tsx";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { availableLinkReaders } from "../../app/link-reader-routing.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
@@ -14,6 +13,7 @@ import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
 import { emptyLegacyContent, solidContent } from "../../lit/solid-content.tsx";
+import { PaneOutboxRecovery } from "./chat-outbox-recovery.tsx";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { PresentedPaneContent } from "./chat-pane-embedded-view.tsx";
@@ -22,7 +22,6 @@ import type { PaneDetailsProps } from "./chat-pane-header-view.tsx";
 import {
   PaneHeaderContent,
   PaneSubagentContent,
-  PaneOutboxRecovery,
   PanePrimary,
   PaneSubagentHeader,
   PaneSubagentStop,
@@ -134,8 +133,9 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     // Recovery mutates the composer, so do not mount it in a view-only conversation.
     const recovery =
       chatProps.disabledBanner?.kind === "composer-replacement"
-        ? emptyLegacyContent
-        : solidContent(PaneOutboxRecovery, {
+        ? null
+        : {
+            component: PaneOutboxRecovery,
             state,
             identity: JSON.stringify([
               state.settings.gatewayUrl,
@@ -149,7 +149,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
               this.chatState.composerPersistence.restore();
               state.requestUpdate?.();
             },
-          });
+          };
     const latestBrowserTabs = latestBrowserTabCards(chatProps.messages, chatProps.toolMessages);
     const panePresentation = { owner: this, isPresented: () => this.presented };
     const slotPresentation = (slot: SidebarSlotId, mode: "visible" | "active" = "visible") => ({
