@@ -36,6 +36,14 @@ import { resolveCronAgentSessionKey } from "./session-key.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
+function runJob(job: Record<string, unknown>, overrides: Record<string, unknown> = {}) {
+  return runCronIsolatedAgentTurn(makeJobParams(job, overrides));
+}
+
+function makeJobParams(job: Record<string, unknown>, overrides: Record<string, unknown> = {}) {
+  return makeIsolatedAgentParamsFixture({ ...overrides, job: makeIsolatedAgentJobFixture(job) });
+}
+
 describe("runCronIsolatedAgentTurn isolated session identity", () => {
   setupRunCronIsolatedAgentTurnSuite({ fast: true });
 
@@ -53,12 +61,10 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
       expect(sessionKey).toMatch(/:run:run-[ab]$/u);
       expect(isSessionWorkAdmissionActive("/tmp/store.json", [sessionKey])).toBe(false);
     });
-    const params = makeIsolatedAgentParamsFixture({
-      sessionKey: "cron:daily-monitor",
-      job: makeIsolatedAgentJobFixture({
-        payload: { kind: "agentTurn", message: "test", lightContext: true },
-      }),
-    });
+    const params = makeJobParams(
+      { payload: { kind: "agentTurn", message: "test", lightContext: true } },
+      { sessionKey: "cron:daily-monitor" },
+    );
     const first = await runCronIsolatedAgentTurn(params);
     const second = await runCronIsolatedAgentTurn(params);
     expect([first.status, second.status]).toEqual(["ok", "ok"]);
@@ -145,12 +151,7 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
       );
     }
     await expect(
-      runCronIsolatedAgentTurn(
-        makeIsolatedAgentParamsFixture({
-          sessionKey,
-          job: makeIsolatedAgentJobFixture({ sessionTarget: `session:${sessionKey}` }),
-        }),
-      ),
+      runJob({ sessionTarget: `session:${sessionKey}` }, { sessionKey }),
     ).rejects.toThrow(error);
     expect(resolveCronSessionMock).toHaveBeenCalledOnce();
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
@@ -173,12 +174,7 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     loadSessionEntryMock.mockReturnValue(legacyEntry);
     mockRunCronFallbackPassthrough();
 
-    const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentParamsFixture({
-        sessionKey,
-        job: makeIsolatedAgentJobFixture({ sessionTarget: `session:${sessionKey}` }),
-      }),
-    );
+    const result = await runJob({ sessionTarget: `session:${sessionKey}` }, { sessionKey });
 
     expect(result.status).toBe("ok");
     expect(result.sessionKey).toBe(sessionKey);
@@ -195,10 +191,7 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     isCliProviderMock.mockReturnValue(true);
     getCliSessionBindingMock.mockReturnValue({ sessionId: "previous-cli-session" });
     const cronSession = makeCronSession({
-      sessionEntry: {
-        ...makeCronSession().sessionEntry,
-        sessionId: "isolated-cli-run-1",
-      },
+      sessionEntry: { ...makeCronSession().sessionEntry, sessionId: "isolated-cli-run-1" },
     });
     resolveCronSessionMock.mockReturnValue(cronSession);
     mockRunCronFallbackPassthrough();
@@ -207,17 +200,9 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
       meta: { agentMeta: { usage: { input: 10, output: 20 } } },
     });
 
-    const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentParamsFixture({
-        sessionKey: "cron:cli-monitor",
-        job: makeIsolatedAgentJobFixture({
-          payload: {
-            kind: "agentTurn",
-            message: "test",
-            lightContext: true,
-          },
-        }),
-      }),
+    const result = await runJob(
+      { payload: { kind: "agentTurn", message: "test", lightContext: true } },
+      { sessionKey: "cron:cli-monitor" },
     );
 
     expect(result.status).toBe("ok");
@@ -248,17 +233,9 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
       meta: { agentMeta: { usage: { input: 10, output: 20 } } },
     });
 
-    const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentParamsFixture({
-        sessionKey: "hook:webhook:cli-monitor",
-        job: makeIsolatedAgentJobFixture({
-          payload: {
-            kind: "agentTurn",
-            message: "test",
-            externalContentSource: "webhook",
-          },
-        }),
-      }),
+    const result = await runJob(
+      { payload: { kind: "agentTurn", message: "test", externalContentSource: "webhook" } },
+      { sessionKey: "hook:webhook:cli-monitor" },
     );
 
     expect(result.status).toBe("ok");
@@ -302,10 +279,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     expect(result.error).toContain("turn/start rejected before result metadata");
     expect(await patchSessionEntryMock.mock.results[0]?.value).toMatchObject({
       systemSent: true,
-      skillsSnapshot: {
-        prompt: "<available_skills></available_skills>",
-        version: 42,
-      },
+      skillsSnapshot: { prompt: "<available_skills></available_skills>", version: 42 },
     });
     expect(persistedAtStartup.get("agent:main:cron:test")).toMatchObject({
       sessionId: "test-session-id",
@@ -353,13 +327,9 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     },
   ])("rejects payload model $model before execution", async ({ model, error, expected }) => {
     resolveAllowedModelRefMock.mockReturnValueOnce({ error });
-    const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentParamsFixture({
-        cfg: { agents: { defaults: { modelPolicy: { allow: ["openai/gpt-5.4"] } } } },
-        job: makeIsolatedAgentJobFixture({
-          payload: { kind: "agentTurn", message: "test", model },
-        }),
-      }),
+    const result = await runJob(
+      { payload: { kind: "agentTurn", message: "test", model } },
+      { cfg: { agents: { defaults: { modelPolicy: { allow: ["openai/gpt-5.4"] } } } } },
     );
     expect(result).toMatchObject({ status: "error", error: expected });
     expect(result.diagnostics?.entries).toEqual([

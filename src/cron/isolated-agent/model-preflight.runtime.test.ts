@@ -34,13 +34,22 @@ function socketResult(error?: Error) {
   return socket;
 }
 
-function mockReachableEndpoint() {
-  connectMock.mockImplementationOnce(() => socketResult());
-}
-
-function mockUnavailableEndpoint(error: Error) {
+function mockEndpoint(error?: Error) {
   connectMock.mockImplementationOnce(() => socketResult(error));
 }
+
+type PreflightParams = Parameters<typeof preflightCronModelProvider>[0];
+async function expectAvailable(params: PreflightParams) {
+  expect(await preflightCronModelProvider(params)).toEqual({ status: "available" });
+}
+function expectUnavailable(result: Awaited<ReturnType<typeof preflightCronModelProvider>>) {
+  expect(result.status).toBe("unavailable");
+  if (result.status !== "unavailable") {
+    throw new Error(`expected preflight unavailable, got ${result.status}`);
+  }
+  return result.reason;
+}
+const deadline = expect.stringContaining("preflight exceeded its configured 2500ms deadline");
 
 describe("preflightCronModelProvider", () => {
   beforeEach(() => {
@@ -61,7 +70,7 @@ describe("preflightCronModelProvider", () => {
     "skips network checks for non-local provider URL %s",
     async (baseUrl) => {
       const params = makeLocalPreflightParams("vllm", baseUrl);
-      expect(await preflightCronModelProvider(params)).toEqual({ status: "available" });
+      await expectAvailable(params);
       expect(connectMock).not.toHaveBeenCalled();
     },
   );
@@ -69,9 +78,9 @@ describe("preflightCronModelProvider", () => {
   it.each(["127.0.0.1", "10.0.0.1", "172.16.0.1", "192.168.0.222", "[::1]", "[::ffff:7f00:1]"])(
     "checks local endpoint host %s without retaining its socket or timer",
     async (host) => {
-      mockReachableEndpoint();
+      mockEndpoint();
       const params = makeLocalPreflightParams("vllm", `http://${host}:8000/v1`);
-      expect(await preflightCronModelProvider(params)).toEqual({ status: "available" });
+      await expectAvailable(params);
       expect(connectMock.mock.results[0]?.value.destroyed).toBe(true);
       expect(vi.getTimerCount()).toBe(0);
     },
@@ -81,9 +90,9 @@ describe("preflightCronModelProvider", () => {
     ["http://127.0.0.1/v1", 80],
     ["https://127.0.0.1/v1", 443],
   ] as const)("uses the protocol's default port for %s", async (baseUrl, port) => {
-    mockReachableEndpoint();
+    mockEndpoint();
     const params = makeLocalPreflightParams("vllm", baseUrl);
-    expect(await preflightCronModelProvider(params)).toEqual({ status: "available" });
+    await expectAvailable(params);
     expect(connectMock).toHaveBeenCalledWith(expect.objectContaining({ port }));
   });
 
@@ -97,7 +106,7 @@ describe("preflightCronModelProvider", () => {
   });
 
   it("caches connection failures per endpoint while preserving each model's diagnostic", async () => {
-    mockUnavailableEndpoint(new Error("ECONNREFUSED"));
+    mockEndpoint(new Error("ECONNREFUSED"));
     const params = makeLocalPreflightParams("ollama");
     const first = await preflightCronModelProvider({ ...params, nowMs: 1000 });
     const second = await preflightCronModelProvider({ ...params, model: "second", nowMs: 2000 });
@@ -115,15 +124,13 @@ describe("preflightCronModelProvider", () => {
   });
 
   it("retries an unavailable endpoint after the cache ttl", async () => {
-    mockUnavailableEndpoint(new Error("ECONNREFUSED"));
-    mockReachableEndpoint();
+    mockEndpoint(new Error("ECONNREFUSED"));
+    mockEndpoint();
     const params = makeLocalPreflightParams("ollama");
     expect(await preflightCronModelProvider({ ...params, nowMs: 1000 })).toMatchObject({
       status: "unavailable",
     });
-    expect(await preflightCronModelProvider({ ...params, nowMs: 301001 })).toEqual({
-      status: "available",
-    });
+    await expectAvailable({ ...params, nowMs: 301001 });
     expect(connectMock).toHaveBeenCalledTimes(2);
   });
 
@@ -138,15 +145,10 @@ describe("preflightCronModelProvider", () => {
     const pending = preflightCronModelProvider({ ...params, nowMs: 1000 });
     const socket = await started.promise;
     await vi.advanceTimersByTimeAsync(2500);
-    expect(await pending).toMatchObject({
-      status: "unavailable",
-      reason: expect.stringContaining("preflight exceeded its configured 2500ms deadline"),
-    });
+    expect(await pending).toMatchObject({ status: "unavailable", reason: deadline });
     expect(socket.destroyed).toBe(true);
-    mockReachableEndpoint();
-    expect(await preflightCronModelProvider({ ...params, nowMs: 2000 })).toEqual({
-      status: "available",
-    });
+    mockEndpoint();
+    await expectAvailable({ ...params, nowMs: 2000 });
     expect(connectMock).toHaveBeenCalledTimes(2);
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -167,10 +169,7 @@ describe("preflightCronModelProvider", () => {
     try {
       const pending = preflightCronModelProvider(makeLocalPreflightParams("ollama"));
       await vi.advanceTimersByTimeAsync(2500);
-      expect(await pending).toMatchObject({
-        status: "unavailable",
-        reason: expect.stringContaining("preflight exceeded its configured 2500ms deadline"),
-      });
+      expect(await pending).toMatchObject({ status: "unavailable", reason: deadline });
       expect(connectMock).not.toHaveBeenCalled();
       expect(vi.getTimerCount()).toBe(0);
     } finally {
@@ -183,7 +182,7 @@ describe("preflightCronModelProvider", () => {
       name: "ConnectError",
       code: "ECONNREFUSED",
     });
-    mockUnavailableEndpoint(
+    mockEndpoint(
       Object.assign(new Error("request aborted", { cause: connectionError }), {
         name: "AbortError",
         code: "ABORT_ERR",
@@ -211,24 +210,19 @@ describe("preflightCronModelProvider", () => {
       errors[index]!.cause = errors[index + 1];
     }
     errors.at(-1)!.cause = errors[0];
-    mockUnavailableEndpoint(errors[0]!);
+    mockEndpoint(errors[0]!);
     const result = await preflightCronModelProvider(makeLocalPreflightParams("ollama"));
-    if (result.status !== "unavailable") {
-      throw new Error(`expected preflight unavailable, got ${result.status}`);
-    }
-    expect(result.reason.match(/failure-0/g)).toHaveLength(1);
-    expect(result.reason).toContain("failure-7 | ELOOP7");
-    expect(result.reason).toContain("failure-11 | ELOOP11");
-    expect(result.reason).not.toContain("NestedError");
+    const reason = expectUnavailable(result);
+    expect(reason.match(/failure-0/g)).toHaveLength(1);
+    expect(reason).toContain("failure-7 | ELOOP7");
+    expect(reason).toContain("failure-11 | ELOOP11");
+    expect(reason).not.toContain("NestedError");
   });
 
   it("bounds long diagnostics without splitting UTF-16 surrogate pairs", async () => {
-    mockUnavailableEndpoint(new Error(`${"x".repeat(992)}😀truncated-detail`));
+    mockEndpoint(new Error(`${"x".repeat(992)}😀truncated-detail`));
     const result = await preflightCronModelProvider(makeLocalPreflightParams("ollama"));
-    if (result.status !== "unavailable") {
-      throw new Error(`expected preflight unavailable, got ${result.status}`);
-    }
-    const diagnostic = result.reason.split("Last error: ")[1];
+    const diagnostic = expectUnavailable(result).split("Last error: ")[1];
     expect(diagnostic).toHaveLength(1000);
     expect(diagnostic).toMatch(/^x{992}😀trunc…$/u);
     expect(diagnostic).not.toContain("truncated-detail");
@@ -244,11 +238,9 @@ describe("preflightCronModelProvider", () => {
       vi.stubEnv("NO_PROXY", bypass ? "127.0.0.1" : "");
       vi.stubEnv("no_proxy", undefined);
       if (bypass) {
-        mockReachableEndpoint();
+        mockEndpoint();
       }
-      expect(await preflightCronModelProvider(makeLocalPreflightParams("vllm"))).toEqual({
-        status: "available",
-      });
+      await expectAvailable(makeLocalPreflightParams("vllm"));
       expect(connectMock).toHaveBeenCalledTimes(bypass ? 1 : 0);
     },
   );

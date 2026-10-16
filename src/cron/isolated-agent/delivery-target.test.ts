@@ -68,9 +68,7 @@ vi.mock("../../infra/outbound/channel-selection.runtime.js", () => ({
     .mockResolvedValue({ channel: "alpha", configured: ["alpha"] }),
 }));
 
-vi.mock("../../infra/outbound/targets.runtime.js", () => ({
-  resolveOutboundTarget: vi.fn(),
-}));
+vi.mock("../../infra/outbound/targets.runtime.js", () => ({ resolveOutboundTarget: vi.fn() }));
 const mockedModuleIds = [
   "../../config/sessions/main-session.js",
   "../../config/sessions/delivery-info.js",
@@ -91,19 +89,7 @@ afterAll(() => {
   vi.resetModules();
 });
 
-function createStubOutbound(label: string): ChannelOutboundAdapter {
-  return {
-    deliveryMode: "gateway",
-    resolveTarget: ({ to }) => {
-      const trimmed = typeof to === "string" ? to.trim() : "";
-      return trimmed
-        ? { ok: true, to: trimmed }
-        : { ok: false, error: new Error(`${label} requires target`) };
-    },
-  };
-}
-
-function createAllowlistAwareStubOutbound(label: string): ChannelOutboundAdapter {
+function createStubOutbound(label: string, checkAllowlist = false): ChannelOutboundAdapter {
   return {
     deliveryMode: "gateway",
     resolveTarget: ({ to, allowFrom }) => {
@@ -111,7 +97,7 @@ function createAllowlistAwareStubOutbound(label: string): ChannelOutboundAdapter
       if (!trimmed) {
         return { ok: false, error: new Error(`${label} requires target`) };
       }
-      if (allowFrom && allowFrom.length > 0 && !allowFrom.includes(trimmed)) {
+      if (checkAllowlist && allowFrom && allowFrom.length > 0 && !allowFrom.includes(trimmed)) {
         return { ok: false, error: new Error(`${label} target blocked`) };
       }
       return { ok: true, to: trimmed };
@@ -137,46 +123,29 @@ beforeEach(() => {
   normalizeTelegramTargetForDeliveryTest.mockClear();
   vi.mocked(resolveOutboundTarget).mockReset();
   vi.mocked(loadSessionEntry).mockReset().mockReturnValue(undefined);
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "forum",
-        plugin: createOutboundTestPlugin({
-          id: "forum",
-          outbound: createStubOutbound("Forum"),
-          messaging: forumMessagingForTest,
-        }),
-        source: "test",
+  setPlugins(
+    createOutboundTestPlugin({
+      id: "forum",
+      outbound: createStubOutbound("Forum"),
+      messaging: forumMessagingForTest,
+    }),
+    createOutboundTestPlugin({
+      id: "telegram",
+      outbound: createStubOutbound("Telegram"),
+      messaging: {
+        ...telegramMessagingForTest,
+        normalizeTarget: normalizeTelegramTargetForDeliveryTest,
       },
-      {
-        pluginId: "telegram",
-        plugin: createOutboundTestPlugin({
-          id: "telegram",
-          outbound: createStubOutbound("Telegram"),
-          messaging: {
-            ...telegramMessagingForTest,
-            normalizeTarget: normalizeTelegramTargetForDeliveryTest,
-          },
-        }),
-        source: "test",
+    }),
+    {
+      ...createOutboundTestPlugin({ id: "alpha", outbound: createStubOutbound("Alpha", true) }),
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({}),
+        resolveAllowFrom: ({ cfg }: { cfg: OpenClawConfig }) =>
+          (cfg.channels?.alpha as { allowFrom?: string[] } | undefined)?.allowFrom,
       },
-      {
-        pluginId: "alpha",
-        plugin: {
-          ...createOutboundTestPlugin({
-            id: "alpha",
-            outbound: createAllowlistAwareStubOutbound("Alpha"),
-          }),
-          config: {
-            listAccountIds: () => [],
-            resolveAccount: () => ({}),
-            resolveAllowFrom: ({ cfg }: { cfg: OpenClawConfig }) =>
-              (cfg.channels?.alpha as { allowFrom?: string[] } | undefined)?.allowFrom,
-          },
-        },
-        source: "test",
-      },
-    ]),
+    },
   );
 });
 
@@ -185,44 +154,47 @@ afterEach(() => {
 });
 
 function makeCfg(overrides?: Partial<OpenClawConfig>): OpenClawConfig {
-  return {
-    bindings: [],
-    channels: {},
-    ...overrides,
-  };
+  return { bindings: [], channels: {}, ...overrides };
 }
 
 function makeForumBoundCfg(accountId = "account-b"): OpenClawConfig {
-  return makeCfg({
-    bindings: [
-      {
-        agentId: AGENT_ID,
-        match: { channel: "forum", accountId },
-      },
-    ],
-  });
+  return makeCfg({ bindings: [{ agentId: AGENT_ID, match: { channel: "forum", accountId } }] });
 }
 
 function setSingleOutboundTestPlugin(
   params: Parameters<typeof createOutboundTestPlugin>[0],
   overrides: Partial<ReturnType<typeof createOutboundTestPlugin>> = {},
 ) {
+  setPlugins({ ...createOutboundTestPlugin(params), ...overrides });
+}
+
+function setPlugins(...plugins: ReturnType<typeof createOutboundTestPlugin>[]) {
   setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: params.id,
-        source: "test",
-        plugin: { ...createOutboundTestPlugin(params), ...overrides },
-      },
-    ]),
+    createTestRegistry(plugins.map((plugin) => ({ pluginId: plugin.id, source: "test", plugin }))),
   );
 }
 
+function resolveTarget(
+  target: Parameters<typeof resolveDeliveryTarget>[2],
+  cfg = makeCfg(),
+  options?: Parameters<typeof resolveDeliveryTarget>[3],
+) {
+  return resolveDeliveryTarget(cfg, AGENT_ID, target, options);
+}
+
+function expectTargetError(
+  result: Awaited<ReturnType<typeof resolveDeliveryTarget>>,
+  text: string,
+) {
+  expect(result.ok).toBe(false);
+  if (result.ok) {
+    throw new Error("expected unresolved delivery target");
+  }
+  expect(result.error.message).toContain(text);
+}
+
 const AGENT_ID = "agent-b";
-const DEFAULT_TARGET = {
-  channel: "forum" as const,
-  to: "room:default",
-};
+const DEFAULT_TARGET = { channel: "forum" as const, to: "room:default" };
 
 function sessionEntry(context: DeliveryContext): SessionEntry {
   return {
@@ -247,10 +219,7 @@ async function resolveLastTarget(cfg: OpenClawConfig) {
 describe("resolveDeliveryTarget", () => {
   // Regression #91613: the shared main bucket can belong to another conversation.
   it("refuses keyless delivery inherited from the shared main recipient", async () => {
-    setLastSessionEntry({
-      channel: "alpha",
-      to: "room-allowed",
-    });
+    setLastSessionEntry({ channel: "alpha", to: "room-allowed" });
 
     const result = await resolveLastTarget(makeCfg({ channels: { alpha: { allowFrom: [] } } }));
 
@@ -262,19 +231,13 @@ describe("resolveDeliveryTarget", () => {
   });
 
   it("applies allowFrom rerouting to dry-run delivery previews", async () => {
-    setLastSessionEntry({
-      channel: "alpha",
-      to: "room-denied",
-    });
+    setLastSessionEntry({ channel: "alpha", to: "room-denied" });
 
     const cfg = makeCfg({ channels: { alpha: { allowFrom: ["room-allowed"] } } });
     const result = await resolveDeliveryTarget(
       cfg,
       AGENT_ID,
-      {
-        channel: "last",
-        to: undefined,
-      },
+      { channel: "last", to: undefined },
       { dryRun: true },
     );
 
@@ -316,16 +279,9 @@ describe("resolveDeliveryTarget", () => {
       },
     );
 
-    const result = await resolveDeliveryTarget(makeCfg(), AGENT_ID, {
-      channel: "alpha",
-      to: "ops",
-    });
+    const result = await resolveTarget({ channel: "alpha", to: "ops" });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("expected target resolver error");
-    }
-    expect(result.error.message).toContain("directory auth failed");
+    expectTargetError(result, "directory auth failed");
   });
 
   it("resolves cron reserved explicit targets through directory entries", async () => {
@@ -345,31 +301,19 @@ describe("resolveDeliveryTarget", () => {
         messaging: {
           ...telegramMessagingForTest,
           normalizeTarget: normalizeTelegramTargetForDeliveryTest,
-          targetResolver: {
-            reservedLiterals: ["current", "self", "this", "me"],
-            hint: "<chatId>",
-          },
+          targetResolver: { reservedLiterals: ["current", "self", "this", "me"], hint: "<chatId>" },
         },
       },
       { directory: { listGroups } },
     );
 
-    const result = await resolveDeliveryTarget(makeCfg(), AGENT_ID, {
-      channel: "telegram",
-      to: "current",
-    });
+    const result = await resolveTarget({ channel: "telegram", to: "current" });
 
-    expect(result.ok).toBe(true);
-    expect(result.to).toBe("-1002458651455");
-    expect(result.threadId).toBeUndefined();
+    expect(result).toMatchObject({ ok: true, to: "-1002458651455", threadId: undefined });
   });
 
   it("ignores stale previous-route parse failures for explicit cron targets", async () => {
-    setLastSessionEntry({
-      channel: "alpha",
-      to: "bad:stored:target",
-      threadId: "old-thread",
-    });
+    setLastSessionEntry({ channel: "alpha", to: "bad:stored:target", threadId: "old-thread" });
     setSingleOutboundTestPlugin({
       id: "alpha",
       outbound: createStubOutbound("Alpha"),
@@ -394,14 +338,9 @@ describe("resolveDeliveryTarget", () => {
       },
     });
 
-    const result = await resolveDeliveryTarget(makeCfg(), AGENT_ID, {
-      channel: "alpha",
-      to: "alpha:room-a",
-    });
+    const result = await resolveTarget({ channel: "alpha", to: "alpha:room-a" });
 
-    expect(result.ok).toBe(true);
-    expect(result.to).toBe("room-a");
-    expect(result.threadId).toBeUndefined();
+    expect(result).toMatchObject({ ok: true, to: "room-a", threadId: undefined });
   });
 
   it("falls back to the runtime target resolver when the channel plugin is not already loaded", async () => {
@@ -435,114 +374,63 @@ describe("resolveDeliveryTarget", () => {
       },
     });
 
-    const result = await resolveDeliveryTarget(makeCfg(), AGENT_ID, {
-      channel: "alpha",
-      to: "room:default",
-    });
+    const result = await resolveTarget({ channel: "alpha", to: "room:default" });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("expected invalid delivery target");
-    }
-    expect(result.error.message).toContain("Invalid delivery target: target normalizer exploded");
+    expectTargetError(result, "Invalid delivery target: target normalizer exploded");
   });
 
   it("returns an unresolved target when the shared prefix guard rejects the explicit target", async () => {
-    const resolveTarget = vi.fn(() => ({ ok: true as const, to: "telegram:1234567890" }));
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "alpha",
-          plugin: createOutboundTestPlugin({
-            id: "alpha",
-            outbound: {
-              deliveryMode: "gateway",
-              resolveTarget,
-            },
-          }),
-          source: "test",
-        },
-        {
-          pluginId: "telegram",
-          plugin: createOutboundTestPlugin({
-            id: "telegram",
-            outbound: createStubOutbound("Telegram"),
-            messaging: telegramMessagingForTest,
-          }),
-          source: "test",
-        },
-      ]),
+    const resolveOutbound = vi.fn(() => ({ ok: true as const, to: "telegram:1234567890" }));
+    setPlugins(
+      createOutboundTestPlugin({
+        id: "alpha",
+        outbound: { deliveryMode: "gateway", resolveTarget: resolveOutbound },
+      }),
+      createOutboundTestPlugin({
+        id: "telegram",
+        outbound: createStubOutbound("Telegram"),
+        messaging: telegramMessagingForTest,
+      }),
     );
 
-    const result = await resolveDeliveryTarget(makeCfg(), AGENT_ID, {
-      channel: "alpha",
-      to: "telegram:1234567890",
-    });
+    const result = await resolveTarget({ channel: "alpha", to: "telegram:1234567890" });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("expected invalid delivery target");
-    }
-    expect(result.error.message).toContain("belongs to telegram, not alpha");
-    expect(resolveTarget).not.toHaveBeenCalled();
+    expectTargetError(result, "belongs to telegram, not alpha");
+    expect(resolveOutbound).not.toHaveBeenCalled();
   });
 
   it("drops session threadId when destination does not match the previous recipient", async () => {
-    setLastSessionEntry({
-      channel: "forum",
-      to: "room:other",
-      threadId: "thread-1",
-    });
+    setLastSessionEntry({ channel: "forum", to: "room:other", threadId: "thread-1" });
 
-    const result = await resolveDeliveryTarget(makeCfg(), AGENT_ID, DEFAULT_TARGET);
+    const result = await resolveTarget(DEFAULT_TARGET);
     expect(result.threadId).toBeUndefined();
   });
 
   it("does not carry a Telegram topic threadId to a bare explicit group target", async () => {
-    setLastSessionEntry({
-      channel: "telegram",
-      to: "-100200300:topic:77",
-      threadId: "77",
-    });
+    setLastSessionEntry({ channel: "telegram", to: "-100200300:topic:77", threadId: "77" });
     normalizeTelegramTargetForDeliveryTest.mockClear();
 
-    const result = await resolveDeliveryTarget(makeCfg(), AGENT_ID, {
-      channel: "telegram",
-      to: "-100200300",
-    });
+    const result = await resolveTarget({ channel: "telegram", to: "-100200300" });
 
-    expect(result.ok).toBe(true);
-    expect(result.to).toBe("-100200300");
-    expect(result.threadId).toBeUndefined();
+    expect(result).toMatchObject({ ok: true, to: "-100200300", threadId: undefined });
     expect(normalizeTelegramTargetForDeliveryTest).toHaveBeenCalledWith("-100200300");
   });
 
   it("keeps session threadId when destination matches the previous recipient", async () => {
-    setLastSessionEntry({
-      channel: "forum",
-      to: "room:default",
-      threadId: "thread-2",
-    });
+    setLastSessionEntry({ channel: "forum", to: "room:default", threadId: "thread-2" });
 
-    const result = await resolveDeliveryTarget(makeCfg(), AGENT_ID, DEFAULT_TARGET);
+    const result = await resolveTarget(DEFAULT_TARGET);
     expect(result.threadId).toBe("thread-2");
   });
 
   it("uses single configured channel when neither explicit nor session channel exists", async () => {
     const result = await resolveLastTarget(makeCfg());
     expect(result.channel).toBe("alpha");
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("expected unresolved delivery target");
-    }
-    expect(result.error.message).toContain("requires target");
+    expectTargetError(result, "requires target");
   });
 
   it("rejects provider-prefixed explicit targets without a recipient", async () => {
-    const result = await resolveDeliveryTarget(makeCfg(), AGENT_ID, {
-      channel: "last",
-      to: "telegram:",
-    });
+    const result = await resolveTarget({ channel: "last", to: "telegram:" });
 
     expect(result.ok).toBe(false);
     expect(result.channel).toBe("telegram");
@@ -561,11 +449,7 @@ describe("resolveDeliveryTarget", () => {
     const result = await resolveLastTarget(makeCfg());
     expect(result.channel).toBeUndefined();
     expect(result.to).toBeUndefined();
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("expected ambiguous channel selection error");
-    }
-    expect(result.error.message).toContain("Channel is required");
+    expectTargetError(result, "Channel is required");
   });
 
   it("prefers stored deliveryContext lookup over exact session-store entries", async () => {
@@ -586,7 +470,7 @@ describe("resolveDeliveryTarget", () => {
       }),
     });
 
-    const result = await resolveDeliveryTarget(makeCfg(), AGENT_ID, {
+    const result = await resolveTarget({
       channel: "last",
       sessionKey: "agent:test:thread:42",
       to: undefined,
@@ -610,21 +494,13 @@ describe("resolveDeliveryTarget", () => {
       threadId: undefined,
     }));
 
-    const result = await resolveDeliveryTarget(makeCfg(), AGENT_ID, {
-      channel: "last",
-      sessionKey: "main",
-      to: undefined,
-    });
+    const result = await resolveTarget({ channel: "last", sessionKey: "main", to: undefined });
 
     expect(extractDeliveryInfoMock).toHaveBeenCalledWith("agent:agent-b:main", {
       cfg: expect.any(Object),
       agentId: AGENT_ID,
     });
-    expect(result).toMatchObject({
-      ok: true,
-      channel: "alpha",
-      to: "ops-room",
-    });
+    expect(result).toMatchObject({ ok: true, channel: "alpha", to: "ops-room" });
   });
 
   it("resolves plugin default targets through the modern target route", async () => {
@@ -646,25 +522,18 @@ describe("resolveDeliveryTarget", () => {
       },
     );
 
-    const result = await resolveDeliveryTarget(makeCfg(), AGENT_ID, {
-      channel: "telegram",
-      to: undefined,
-    });
+    const result = await resolveTarget({ channel: "telegram", to: undefined });
 
-    expect(result.ok).toBe(true);
-    expect(result.to).toBe("-100200300");
-    expect(result.threadId).toBe(77);
+    expect(result).toMatchObject({ ok: true, to: "-100200300", threadId: 77 });
   });
 
   it("keeps explicit delivery threadId when stripping telegram :topic: targets", async () => {
-    const result = await resolveDeliveryTarget(makeCfg(), AGENT_ID, {
+    const result = await resolveTarget({
       channel: "telegram",
       to: "63448508:topic:1008013",
       threadId: "42",
     });
 
-    expect(result.ok).toBe(true);
-    expect(result.to).toBe("63448508");
-    expect(result.threadId).toBe("42");
+    expect(result).toMatchObject({ ok: true, to: "63448508", threadId: "42" });
   });
 });
