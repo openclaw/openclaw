@@ -59,6 +59,7 @@ Secret activation runs on:
 Activation contract:
 
 - Success swaps the snapshot atomically.
+- If concurrent config, auth-store, or secrets publications keep invalidating a refresh candidate, OpenClaw makes at most four activation attempts and reports failure. The current active snapshot remains authoritative; retry after the writes settle.
 - A strict startup failure aborts Gateway startup.
 - During cold startup, a retryable resolution failure for a mapped, isolatable non-Gateway owner may publish the snapshot with that exact owner configured-unavailable. Requests for the owner fail with `SECRET_SURFACE_UNAVAILABLE`; model-provider owners do not fall back to environment or auth-profile credentials after an explicit ref fails.
 - Reload and restart-check isolate eligible mapped owners. Unchanged ref identities with unchanged provider definitions and an unchanged complete non-secret owner contract retain their exact last-known-good values as stale; changed or newly configured unresolved refs publish cold for only that owner. A strict reload failure preserves the previously active snapshot.

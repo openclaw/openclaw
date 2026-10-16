@@ -2208,7 +2208,7 @@ src/secrets/runtime-owner-assignments.ts	1
 src/secrets/runtime-secret-scan.ts	1
 src/secrets/runtime-state.ts	4
 src/secrets/runtime-web-tools.ts	2
-src/secrets/runtime.ts	4
+src/secrets/runtime.ts	3
 src/secrets/store/secret-store.ts	2
 src/secrets/target-registry-query.ts	1
 src/security/audit-channel.ts	4
