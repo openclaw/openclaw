@@ -180,3 +180,33 @@ it.each(["run", "placement"] as const)("preserves expanded diagnostics and focus
     );
   });
 });
+
+it.each([
+  [
+    "thread not loaded: synthetic-thread",
+    "Conversation context is unavailable.",
+    "Refresh and try again.",
+  ],
+  [
+    "managed worktree allocation lease core:managed-worktrees:create/capacity was lost",
+    "Workspace preparation was interrupted.",
+    "Refresh to check its status before trying again.",
+  ],
+])("keeps startup recovery outside collapsed details: %s", (error, title, recovery) => {
+  const [props, publish] = createSignal<Parameters<typeof renderChatComposerNotices>[0]>({
+    connected: true,
+    messages: [],
+    runError: { summary: error },
+  });
+  const { container } = mountSolid(() => <>{renderChatComposerNotices(props())}</>);
+  const copy = container.querySelector(".chat-composer-neighbor-card__copy");
+  expect(copy?.querySelector("strong")?.textContent).toBe(title);
+  expect(copy?.textContent).toContain(recovery);
+  expect(copy?.closest("details")).toBeNull();
+  expect(container.querySelector("details")?.open).toBe(false);
+  expect(container.querySelector("pre")?.textContent).toContain(error);
+  publish({ connected: true, messages: [], runError: { summary: "Ordinary failure" } });
+  flush();
+  expect(container.querySelector(".chat-composer-neighbor-card__copy")).toBeNull();
+  expect(container.textContent).toContain("Ordinary failure");
+});

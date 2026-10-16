@@ -164,3 +164,33 @@ it("keeps ordinary assistant warning text as authored content", () => {
   };
   expect(projectChatSystemNotice(item)).toEqual([item]);
 });
+
+it.each([
+  [
+    "thread not loaded: synthetic-thread",
+    "Conversation context is unavailable.",
+    "Refresh and try again.",
+  ],
+  [
+    "managed worktree allocation lease core:managed-worktrees:create/capacity was lost",
+    "Workspace preparation was interrupted.",
+    "Refresh to check its status before trying again.",
+  ],
+])(
+  "keeps startup recovery visible in the canonical failure row: %s",
+  async (summary, title, recovery) => {
+    drawNotice({
+      kind: "notice",
+      key: "failure",
+      label: "",
+      text: "",
+      timestamp: 1,
+      runError: { runId: "run-a", summary },
+    });
+    await container.querySelector("openclaw-chat-run-failure-notice")?.updateComplete;
+    expect(container.querySelector(".chat-run-failure__title")?.textContent).toBe(title);
+    expect(container.querySelector(".chat-run-failure__summary")?.textContent).toContain(recovery);
+    expect(container.querySelector("details")?.open).toBe(false);
+    expect(container.querySelector("pre")?.textContent).toContain(summary);
+  },
+);

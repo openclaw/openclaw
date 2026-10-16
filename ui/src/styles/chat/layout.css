@@ -476,6 +476,14 @@ openclaw-pending-session-create {
   display: none;
 }
 
+.chat-topbar-notices .chat-error .chat-composer-neighbor-card__copy {
+  white-space: normal;
+}
+
+.chat-topbar-notices .chat-error .chat-composer-neighbor-card__copy span {
+  display: block;
+}
+
 .chat-topbar-notices .chat-error__dismiss {
   width: 24px;
   height: 24px;

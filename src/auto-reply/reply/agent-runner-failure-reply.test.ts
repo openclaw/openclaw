@@ -28,6 +28,25 @@ it("shows unshrinkable request guidance without verbose diagnostics", () => {
 });
 
 describe("buildExternalRunFailureReply", () => {
+  it.each([
+    ["thread not loaded: synthetic-thread", "Conversation context is unavailable."],
+    [
+      "managed worktree allocation lease core:managed-worktrees:create/capacity was lost",
+      "Workspace preparation was interrupted.",
+    ],
+  ])("delivers startup recovery guidance without diagnostic identifiers: %s", (message, title) => {
+    const reply = buildExternalRunFailureReply({ message, error: new Error(message) });
+    expect(reply.isGenericRunnerFailure).toBe(false);
+    expect(reply.text).toContain(title);
+    expect(reply.text).toContain("Control UI");
+    expect(reply.text).toContain("refresh");
+    if (title.startsWith("Conversation")) {
+      expect(reply.text).toContain("/new");
+    }
+    expect(reply.text).not.toContain("synthetic-thread");
+    expect(reply.text).not.toContain("lease");
+  });
+
   it.each(["wrapped"])(
     "keeps %s skill delivery-limit guidance visible without diagnostics",
     (kind) => {

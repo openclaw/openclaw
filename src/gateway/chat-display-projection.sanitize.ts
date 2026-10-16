@@ -7,7 +7,6 @@ import {
 import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
 import { normalizeContextUsage } from "../agents/usage.js";
 import { parseInboundMediaUri, buildInboundMediaUriFromPath } from "../media/media-reference.js";
-import { STATE_CONTENTION_DIAGNOSTIC } from "../sessions/session-run-error-presentation.js";
 import {
   isSilentAssistantTranscriptMessage,
   parseAssistantTextSignature,
@@ -27,6 +26,7 @@ import {
   hasTranscriptMediaFacts,
   isAssistantTextContentType,
   isProjectedForwardedMessage,
+  projectChatRunFailureDetails,
   shouldPreserveAssistantControlReplyText,
   stripAssistantMediaDirectivesForDisplay,
   stripPrivateToolCallContextForDisplay,
@@ -515,22 +515,18 @@ export function sanitizeChatHistoryMessage(
       !conflictDetails && messageHasToolResultShape(entry)
         ? projectToolResultDetails(entry.details, maxChars)
         : undefined;
-    // Only the terminal owner's presentation category crosses this report boundary.
-    // Correlation is projected separately; raw diagnostics and report fields stay private.
-    const runFailureDetails =
-      entry.role === "custom" &&
-      entry.customType === "run-failed-before-reply" &&
-      readRecord(entry.details)?.errorKind === "state_contention"
-        ? { errorKind: "state_contention", diagnostic: STATE_CONTENTION_DIAGNOSTIC }
-        : undefined;
-    const projectedDetails = conflictDetails ?? toolResultDetails?.details ?? runFailureDetails;
+    const runFailure = projectChatRunFailureDetails(entry, maxChars);
+    const projectedDetails = conflictDetails ?? toolResultDetails?.details ?? runFailure?.details;
+    if (runFailure?.notice) {
+      entry.openclawRunError = runFailure.notice;
+    }
     if (projectedDetails) {
       entry.details = projectedDetails;
     } else {
       delete entry.details;
     }
     changed = true;
-    truncated ||= toolResultDetails?.truncated === true;
+    truncated ||= toolResultDetails?.truncated === true || runFailure?.truncated === true;
   }
 
   for (const field of ["usage", "cost"] as const) {

@@ -347,3 +347,20 @@ it.each(["state_contention", "unknown"])(
     expect(JSON.stringify(result)).not.toContain("PRIVATE_");
   },
 );
+
+it.each([
+  "PRIVATE_DIAGNOSTIC_CANARY",
+  "managed worktree allocation lease core:managed-worktrees:create/capacity was lost",
+])("does not attach an unrelated diagnostic to a curated startup report: %s", (diagnostic) => {
+  const [result] = projectChatDisplayMessages([
+    {
+      role: "custom",
+      customType: "run-failed-before-reply",
+      content:
+        "Conversation context is unavailable. Refresh and try again. If it still fails, start a new conversation with the context you need.",
+      details: { runId: "run-1", diagnostic },
+    },
+  ]);
+  expect(result).not.toHaveProperty("details");
+  expect(JSON.stringify(result)).not.toContain(diagnostic);
+});
