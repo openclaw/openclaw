@@ -53,6 +53,7 @@ function cachedRosterCards(host: RosterHost) {
     unreadCount: 0,
     lastActiveAt: 0,
     preview: undefined,
+    assistantPreview: undefined,
     target: sessionNavigationTarget({
       face: "chat",
       sessionKey: card.mainKey,
@@ -287,7 +288,12 @@ export function SidebarAgentRoster(props: RosterProps) {
                       }}
                     >
                       <span class="sidebar-agent-roster__copy">
-                        <span>{card().name}</span>
+                        <span class="sidebar-agent-roster__name">{card().name}</span>
+                        <Show when={card().assistantPreview}>
+                          <span class="sidebar-agent-roster__preview">
+                            {card().assistantPreview}
+                          </span>
+                        </Show>
                       </span>
                     </a>
                     <span class="sidebar-agent-roster__signals">

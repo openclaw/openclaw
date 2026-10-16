@@ -157,6 +157,81 @@ it("reuses batch transcript facts across row-owner restarts", async () => {
   });
 });
 
+it("keeps the latest visible assistant preview across user followups and clears replaced sessions", async ({
+  signal,
+}) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const target = {
+      agentId: "main",
+      sessionKey: "agent:main:assistant-preview",
+      sessionId: "assistant-preview",
+    };
+    const query = { agentId: "main", key: target.sessionKey };
+    replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
+    await persistSessionTranscriptTurn(target, {
+      messages: [
+        { message: { role: "assistant", content: "**Ready** to review", timestamp: 100 } },
+        {
+          message: { role: "assistant", content: "Hidden answer", display: false, timestamp: 200 },
+        },
+        { message: { role: "assistant", content: "NO_REPLY", timestamp: 300 } },
+        { message: { role: "toolResult", content: "Tool result", timestamp: 400 } },
+        { message: { role: "user", content: "Next question", timestamp: 500 } },
+      ],
+      touchSessionEntry: false,
+    });
+    for (let pass = 0; pass < 2; pass++) {
+      const published = observeSessionRowBackfill([target.sessionKey]);
+      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+      try {
+        await withinTest(published, signal);
+        expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
+          lastMessagePreview: "Next question",
+          lastAssistantMessage: { text: "Ready to review", timestamp: 100 },
+        });
+        expect(projection.snapshot(query, {}).row?.lastAssistantMessage).toBeUndefined();
+        if (pass === 1) {
+          const appended = observeSessionRowBackfill([target.sessionKey]);
+          await persistSessionTranscriptTurn(target, {
+            messages: [
+              { message: { role: "assistant", content: "Latest answer", timestamp: 600 } },
+            ],
+            touchSessionEntry: false,
+          });
+          await withinTest(appended, signal);
+          expect(
+            projection.snapshot(query, { includeLastMessage: true }).row?.lastAssistantMessage,
+          ).toEqual({
+            text: "Latest answer",
+            timestamp: 600,
+          });
+          const followedUp = observeSessionRowBackfill([target.sessionKey]);
+          await persistSessionTranscriptTurn(target, {
+            messages: [{ message: { role: "user", content: "One more question", timestamp: 700 } }],
+            touchSessionEntry: false,
+          });
+          await withinTest(followedUp, signal);
+          expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
+            lastMessagePreview: "One more question",
+            lastAssistantMessage: { text: "Latest answer", timestamp: 600 },
+          });
+          replaceSessionEntrySync(target, { sessionId: "replacement", updatedAt: 2 });
+          const replacement = await withReadySessionRows(
+            projection,
+            () => [query],
+            () => projection.snapshot(query, { includeLastMessage: true }).row,
+          );
+          expect(replacement?.lastAssistantMessage).toBeUndefined();
+        }
+      } finally {
+        projection.dispose();
+      }
+    }
+  });
+});
+
 it("refreshes committed metadata and lifecycle marks during a transcript window", async () => {
   await withStreamingProjection(async ({ projection, target, query, append }) => {
     await append("Leading update");
@@ -615,6 +690,7 @@ it("backfills terminal fallback models and clears previews when the newest messa
     expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
       activeModel: undefined,
       lastMessagePreview: undefined,
+      lastAssistantMessage: undefined,
     });
   });
 });
