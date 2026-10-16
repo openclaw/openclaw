@@ -136,48 +136,35 @@ describe("Gateway dreaming session restart cleanup", () => {
       closeOpenClawAgentDatabasesForTest(instance.state.root);
 
       const now = Date.now();
+      const seed = (suffix: string, overrides: Partial<Parameters<typeof seedSession>[0]> = {}) =>
+        seedSession({
+          agentId: "main",
+          suffix,
+          updatedAt: now - STALE_AGE_MS,
+          pluginOwnerId: "memory-core",
+          ...overrides,
+        });
       const stale = await Promise.all([
         ...["light", "rem", "deep", "consolidation"].map(async (phase) =>
-          seedSession({
-            agentId: "main",
-            suffix: `dreaming-narrative-${phase}-interrupted`,
-            updatedAt: now - STALE_AGE_MS,
+          seed(`dreaming-narrative-${phase}-interrupted`, {
             transcript: true,
-            ...(phase === "rem" ? {} : { pluginOwnerId: "memory-core" }),
+            ...(phase === "rem" ? { pluginOwnerId: undefined } : {}),
           }),
         ),
-        seedSession({
-          agentId: "worker",
-          suffix: "dreaming-narrative-worker-interrupted",
-          updatedAt: now - STALE_AGE_MS,
-          pluginOwnerId: "memory-core",
-        }),
+        seed("dreaming-narrative-worker-interrupted", { agentId: "worker" }),
       ]);
       const preserved = await Promise.all([
-        seedSession({
-          agentId: "main",
-          suffix: "dreaming-narrative-active-with-transcript",
+        seed("dreaming-narrative-active-with-transcript", {
           updatedAt: now,
-          pluginOwnerId: "memory-core",
           transcript: true,
         }),
-        seedSession({
-          agentId: "main",
-          suffix: "dreaming-narrative-active-before-transcript",
-          updatedAt: now,
-          pluginOwnerId: "memory-core",
-        }),
-        seedSession({
-          agentId: "main",
-          suffix: "dreaming-narrative-foreign",
-          updatedAt: now - STALE_AGE_MS,
+        seed("dreaming-narrative-active-before-transcript", { updatedAt: now }),
+        seed("dreaming-narrative-foreign", {
           pluginOwnerId: "other-plugin",
           transcript: true,
         }),
-        seedSession({
-          agentId: "main",
-          suffix: "telegram:group:dreaming-narrative-conversation",
-          updatedAt: now - STALE_AGE_MS,
+        seed("telegram:group:dreaming-narrative-conversation", {
+          pluginOwnerId: undefined,
         }),
       ]);
 
