@@ -187,7 +187,7 @@ export class SqliteWorkerBroker {
     reusable?: StoreClient,
   ): Promise<SqliteWorkerStore<Operations> | undefined> {
     // Cached client callbacks share this scope; never capture the opening options in it.
-    const { maintenanceScope } = options;
+    const { maintenanceScope, cleanupAccess } = options;
     options.signal?.throwIfAborted();
     options.assertCurrent?.();
     const { databasePath, inputHash, identity, key } =
@@ -407,8 +407,8 @@ export class SqliteWorkerBroker {
             scope,
             assertCurrent,
             createAdmission,
-            cleanupAccess: options.cleanupAccess,
-            maintenanceScope: options.cleanupAccess
+            cleanupAccess,
+            maintenanceScope: cleanupAccess
               ? undefined
               : scope
                 ? scope.maintenanceScope

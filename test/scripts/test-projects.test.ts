@@ -3733,6 +3733,9 @@ describe("scripts/test-projects full-suite sharding", () => {
     const gatewayFiles = await listVitestConfigTestFiles(
       "test/vitest/vitest.gateway-database-workers.config.ts",
     );
+    const extensionDatabaseFiles = await listVitestConfigTestFiles(
+      "test/vitest/vitest.extension-database-workers.config.ts",
+    );
     withEnv(
       {
         OPENCLAW_TEST_PROJECTS_LEAF_SHARDS: undefined,
@@ -3779,6 +3782,20 @@ describe("scripts/test-projects full-suite sharding", () => {
         expect(gatewayPlans.flatMap((plan) => plan.forwardedArgs).toSorted()).toEqual(
           [...new Set(gatewayFiles)].toSorted(),
         );
+        const extensionDatabasePlans = targetedPlans(
+          "test/vitest/vitest.extension-database-workers.config.ts",
+        );
+        expect(extensionDatabasePlans.every((plan) => plan.forwardedArgs.length <= 20)).toBe(true);
+        expect(extensionDatabasePlans.flatMap((plan) => plan.forwardedArgs).toSorted()).toEqual(
+          [...new Set(extensionDatabaseFiles)].toSorted(),
+        );
+        expect(
+          extensionDatabasePlans
+            .filter((plan) =>
+              plan.forwardedArgs.some((file) => file.startsWith("extensions/telegram/")),
+            )
+            .every((plan) => plan.forwardedArgs.length === 1),
+        ).toBe(true);
         const infraPlans = plans.filter((plan) => plan.config === infraConfig);
         expect(infraPlans.length).toBeGreaterThan(1);
         expect(
@@ -3801,6 +3818,19 @@ describe("scripts/test-projects full-suite sharding", () => {
           expect(plan.timingTargets).toEqual(plan.forwardedArgs);
           expect(plan.includePatterns).toBeNull();
         }
+      },
+    );
+  });
+
+  it("preserves one database invocation when Vitest owns suite-wide sharding", () => {
+    withEnv(
+      { CI: undefined, GITHUB_ACTIONS: undefined, OPENCLAW_TEST_PROJECTS_PARALLEL: undefined },
+      () => {
+        const plans = buildFullSuiteVitestRunPlans(["--shard=1/2"], process.cwd()).filter(
+          (plan) => plan.config === "test/vitest/vitest.extension-database-workers.config.ts",
+        );
+        expect(plans).toHaveLength(1);
+        expect(plans[0]?.forwardedArgs).toContain("--shard=1/2");
       },
     );
   });

@@ -1,6 +1,5 @@
-import { dynamic } from "@solidjs/web";
 import type { Component } from "solid-js";
-import { createEffect, createMemo, createSignal, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, Show, untrack } from "solid-js";
 import type { ControlUiSurfaceProps } from "../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { ExecApprovalCard } from "../../components/exec-approval-card-solid.tsx";
@@ -205,6 +204,20 @@ function ChatComposerCompanion(input: ChatViewInput) {
   );
 }
 
+/** Plugin mountDefault creates a separate root and must carry its application scope. */
+function ChatSurfaceContent(input: { view: Component<ChatViewInput>; viewProps: ChatViewInput }) {
+  const View = untrack(() => input.view);
+  return (
+    <Show when={input.viewProps.application} keyed fallback={<View {...input.viewProps} />}>
+      {(application) => (
+        <ApplicationProvider value={application}>
+          <View {...input.viewProps} />
+        </ApplicationProvider>
+      )}
+    </Show>
+  );
+}
+
 type ChatSurfaceBinding = {
   [Surface in "transcript" | "composer"]: {
     "prop:surface": Surface;
@@ -223,15 +236,12 @@ function ChatSurface(input: {
       surface={input.binding["prop:surface"]}
       props={input.binding["prop:props"]}
       presented={input.viewProps.presented}
-      renderDefault={() => <input.view {...input.viewProps} />}
-      renderCompanion={
-        input.companion
-          ? () => {
-              const Companion = dynamic(() => input.companion!);
-              return <Companion {...input.viewProps} />;
-            }
-          : undefined
-      }
+      renderDefault={() => <ChatSurfaceContent view={input.view} viewProps={input.viewProps} />}
+      renderCompanion={() => (
+        <Show when={input.companion} keyed>
+          {(View) => <ChatSurfaceContent view={View} viewProps={input.viewProps} />}
+        </Show>
+      )}
     />
   );
 }

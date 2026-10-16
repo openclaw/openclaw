@@ -3,6 +3,9 @@ import { createFunctionModule, sql } from "kysely";
 import type { FullTextCapability, TextIndex, TextQuery } from "./text-contract.js";
 
 function literalQuery(query: TextQuery): string {
+  if (query.kind === "contains") {
+    throw new Error("Literal contains requires the owner's SQLite substring policy");
+  }
   if (query.kind === "term" || query.kind === "phrase") {
     const text =
       query.kind === "term" ? query.text.replaceAll('"', "") : query.text.replaceAll('"', '""');

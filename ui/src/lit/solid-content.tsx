@@ -4,7 +4,6 @@ import { AsyncDirective, directive } from "lit/async-directive.js";
 import type { Part } from "lit/directive.js";
 import {
   createComponent,
-  createContext,
   createEffect,
   createMemo,
   createRoot,
@@ -18,6 +17,9 @@ import {
   type Accessor,
   type Component,
 } from "solid-js";
+import { ContentPresentation as SolidContentPresentation } from "../lib/solid/presentation.ts";
+
+export { ContentPresentation as SolidContentPresentation } from "../lib/solid/presentation.ts";
 
 export type { TemplateResult as LegacyTemplateResult } from "lit";
 export type { DirectiveResult as LegacyDirectiveResult } from "lit/directive.js";
@@ -30,9 +32,6 @@ export function renderLegacyTemplate(template: unknown, target: HTMLElement, hos
     mountLitContent(template, target, { host });
   }
 }
-
-/** Retained content keeps its DOM while foreground directive work is disconnected. */
-export const SolidContentPresentation = createContext<Accessor<boolean>>(() => true);
 
 export const emptyLegacyContent: typeof nothing = nothing;
 

@@ -8,7 +8,7 @@ import { AgentStartupState, LazyViewError } from "../components/solid/lazy-view-
 import { LoadingState } from "../components/solid/loading-state.tsx";
 import { isAgentDatabaseInspectionPendingError } from "../lib/gateway-availability.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { SolidContentPresentation } from "../lit/solid-content.tsx";
+import { ContentPresentation } from "../lib/solid/presentation.ts";
 import type { ApplicationContext } from "./context.ts";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import { LitRouteHost } from "./lit-route-host.tsx";
@@ -216,7 +216,7 @@ function RoutePresentation(props: {
       <>
         <Show when={native()}>
           {(current) => (
-            <SolidContentPresentation value={() => props.presented !== false}>
+            <ContentPresentation value={() => props.presented !== false}>
               <Show when={current().render} keyed>
                 {(View) => (
                   <View
@@ -226,7 +226,7 @@ function RoutePresentation(props: {
                   />
                 )}
               </Show>
-            </SolidContentPresentation>
+            </ContentPresentation>
           )}
         </Show>
         <Show when={error()}>{(current) => <RouteError {...current()} />}</Show>

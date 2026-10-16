@@ -12,6 +12,7 @@ import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts"
 import "../plugins/control-ui-view.solid.tsx";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
+import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { equalShellRouteState, selectShellRouteState } from "./app-host-route-state.ts";
 import { ShellOwner } from "./app-host.tsx";
 import { connectLegacyApplicationContext } from "./app-root-lit.ts";
@@ -28,6 +29,7 @@ async function mountShell() {
   document.body.append(owner.element);
   const view = render(() => renderApplicationShell(owner), {
     container: owner.element,
+    wrapper: createSolidApplicationContextProvider(runtime.context).wrapper,
   });
   onTestFinished(() => {
     view.unmount();
@@ -282,10 +284,12 @@ it("restores the delegated shell after a pending update and can select another w
   };
   const selected = vi.spyOn(runtime.context.plugins, "selectedReplacement");
   selected.mockReturnValue(undefined);
+  runtime.context.plugins.selectReplacement("workspace", null);
   owner.routeState = { routeId: "plugins" };
   owner.invalidate();
   flush();
   selected.mockImplementation((surface) => (surface === "workspace" ? replacement : undefined));
+  runtime.context.plugins.selectReplacement("workspace", null);
   owner.invalidate();
   flush();
   expect(view.container.querySelector("openclaw-plugin-view")).toBeNull();
@@ -308,6 +312,7 @@ it("restores the delegated shell after a pending update and can select another w
   // A pending plugin update cannot remove the shell restored directly on Dashboard.
   plugin!.props = { sessionKey: "agent:main:updated", routeId: "dashboard" };
   selected.mockReturnValue(undefined);
+  runtime.context.plugins.selectReplacement("workspace", null);
   owner.invalidate();
   flush();
   expect(view.container.querySelector("openclaw-plugin-view")).toBeNull();
@@ -319,6 +324,7 @@ it("restores the delegated shell after a pending update and can select another w
   expect(shell?.isConnected).toBe(true);
 
   selected.mockImplementation((surface) => (surface === "workspace" ? replacement : undefined));
+  runtime.context.plugins.selectReplacement("workspace", null);
   owner.invalidate();
   flush();
   plugin =
@@ -344,6 +350,7 @@ it("restores the delegated shell after a pending update and can select another w
   expect(shell?.isConnected).toBe(true);
 
   selected.mockReturnValue(undefined);
+  runtime.context.plugins.selectReplacement("workspace", null);
   owner.invalidate();
   flush();
   owner.routeState = { routeId: "dashboard" };
@@ -371,6 +378,7 @@ it("restores the delegated shell after a pending update and can select another w
   owner.invalidate();
   flush();
   selected.mockImplementation((surface) => (surface === "workspace" ? customWorkspace : undefined));
+  runtime.context.plugins.selectReplacement("workspace", null);
   owner.invalidate();
   flush();
   expect(view.container.querySelector("openclaw-plugin-view")).toBeNull();
@@ -396,6 +404,7 @@ it("restores the delegated shell after a pending update and can select another w
   expect(view.container.querySelector("openclaw-app-sidebar")).toBe(sidebar);
 
   selected.mockReturnValue(undefined);
+  runtime.context.plugins.selectReplacement("workspace", null);
   owner.invalidate();
   flush();
   owner.routeState = { routeId: "dashboard" };

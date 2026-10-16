@@ -30,8 +30,8 @@ import { TerminalPanelUploadController } from "./terminal-panel-upload.ts";
 import type { TerminalPanelViewState } from "./terminal-panel-view.tsx";
 import { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
 
-// Hosted-tab getters can run in ownerless effects. Render static artwork at module load.
-const hostedTabIcon = renderSolidSnapshot(terminalPanelTabIcon);
+// Clone the SVG itself: insertion consumes a fragment and loses its replacement boundary.
+const hostedTabIcon = renderSolidSnapshot(terminalPanelTabIcon).firstElementChild!;
 
 type TerminalDock = Exclude<DockPanelPlacement, "left">;
 

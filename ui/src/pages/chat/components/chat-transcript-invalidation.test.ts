@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { resolveThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import { resolveControlUiAuthToken } from "../../../app/control-ui-auth.ts";
@@ -21,10 +20,14 @@ import {
 } from "../chat-thread.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
+import {
+  render,
+  renderChatThread,
+  renderTranscriptSearch,
+} from "../test-helpers/chat-transcript-native.tsx";
 import * as chatMessage from "./chat-message-group-frame.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 import { resetTranscriptSession, toggleTranscriptSearch } from "./chat-thread-interactions.ts";
-import { renderChatThread, mountTranscriptSearch } from "./chat-thread.test-support.ts";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import {
@@ -74,7 +77,7 @@ describe("chat transcript invalidation", () => {
         expect(container.querySelector(".identity-avatar__hat")).toBeNull();
       } finally {
         setCurrentThemeBranding(previousBranding);
-        render(nothing, container);
+        render(null, container);
         transcript.hostDisconnected();
       }
     },
@@ -126,11 +129,10 @@ describe("chat transcript invalidation", () => {
       const container = document.body.appendChild(document.createElement("div"));
       const searchContainer = document.body.appendChild(document.createElement("div"));
       const rerender = () => {
-        searchView.update();
+        render(renderTranscriptSearch(paneId, rerender), searchContainer);
         render(renderChatThread({ ...props, onRequestUpdate: rerender }, transcript), container);
         transcript.hostUpdated();
       };
-      const searchView = mountTranscriptSearch(() => paneId, rerender, searchContainer);
       const ownName = () =>
         container.querySelector(".chat-group.user:not(.chat-group--peer) .chat-sender-name");
       try {
@@ -232,7 +234,7 @@ describe("chat transcript invalidation", () => {
       transcript.hostConnected();
     });
     afterEach(() => {
-      render(nothing, container);
+      render(null, container);
       transcript.hostDisconnected();
     });
     async function renderPreview() {
@@ -371,7 +373,7 @@ describe("chat transcript invalidation", () => {
       const project = () =>
         transcript.renderSession(sessionKey, (session) => {
           projectChatTranscript(props, session);
-          return html``;
+          return null;
         });
       project();
 
@@ -436,6 +438,7 @@ describe("chat transcript invalidation", () => {
         render(renderChatThread(props, transcript), container);
         transcript.hostUpdated();
       };
+      const prepareFrame = vi.spyOn(chatMessage, "prepareMessageGroupFrame");
       try {
         rerender();
         transcript.hostConnected();
@@ -452,7 +455,10 @@ describe("chat transcript invalidation", () => {
         expect(container.querySelector(".chat-bubble.streaming")?.textContent).toContain(
           props.stream,
         );
-        const prepareMessage = vi.spyOn(chatMessage, "prepareGroupMessage");
+        expect(prepareFrame.mock.calls.some(([group]) => group.runId === completedRunId)).toBe(
+          true,
+        );
+        prepareFrame.mockClear();
         if (update === "stream-only") {
           props.stream = "Advanced next reply";
         }
@@ -464,9 +470,9 @@ describe("chat transcript invalidation", () => {
         expect(container.querySelector('[data-entry-id="settled-final"]')).toBe(finalBubble);
         expect(finalBubble.textContent).toContain("Workspace checked");
         expect(workToggle.getAttribute("aria-expanded")).toBe("false");
-        expect(
-          prepareMessage.mock.calls.filter(([group]) => group.runId === completedRunId),
-        ).toEqual([]);
+        expect(prepareFrame.mock.calls.filter(([group]) => group.runId === completedRunId)).toEqual(
+          [],
+        );
       } finally {
         transcript.hostDisconnected();
       }
@@ -582,14 +588,16 @@ describe("chat transcript invalidation", () => {
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
     const rerender = () => render(renderChatThread(props, transcript), container);
+    const prepareFrame = vi.spyOn(chatMessage, "prepareMessageGroupFrame");
     rerender();
     const userRow = expectDefined(container.querySelector(".chat-group.user"), "user row");
     expect(userRow.querySelector(".chat-avatar")).toBeNull();
-    const prepareMessage = vi.spyOn(chatMessage, "prepareGroupMessage");
+    expect(prepareFrame.mock.calls.some(([group]) => group.role === "user")).toBe(true);
+    prepareFrame.mockClear();
 
     props.selectedSession = { ...props.selectedSession, updatedAt: 2, label: "Renamed chat" };
     rerender();
-    expect(prepareMessage).not.toHaveBeenCalled();
+    expect(prepareFrame).not.toHaveBeenCalled();
     expect(container.querySelector(".chat-group.user")).toBe(userRow);
 
     props.selectedSession = { ...props.selectedSession, kind: "group" };

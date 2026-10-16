@@ -5,10 +5,8 @@ import { withGatewayServiceOperationLock } from "../../daemon/service-operation-
 import { resolveGatewayService, type GatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPackageVersion } from "../../infra/package-json.js";
-import {
-  readUpdateStateSchemaVersions,
-  resolveUpdateStateContentVersion,
-} from "../../infra/update-candidate-state.js";
+import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
+import { resolveUpdateStateContentVersion } from "../../infra/update-candidate-state.versions.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import {
   getUpdateRun,
