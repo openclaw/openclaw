@@ -43,6 +43,7 @@ const delivery = vi.hoisted(() => ({
   afterTouch: undefined as (() => Promise<void>) | undefined,
   commands: [] as string[],
 }));
+// mock-isolation: Gate worker publication deterministically; the helper preserves real exports.
 vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../state/openclaw-state-worker-store.js")>();

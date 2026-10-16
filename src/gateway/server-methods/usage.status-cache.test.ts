@@ -28,6 +28,7 @@ vi.mock("../../plugins/provider-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/provider-runtime.js")>()),
   listProviderUsagePluginDescriptors: mocks.listDescriptors,
 }));
+// mock-isolation: Control usage refresh completion without querying real provider accounts.
 vi.mock("../../infra/provider-usage.load.js", () => ({
   loadProviderUsageSummary: mocks.loadSummary,
 }));

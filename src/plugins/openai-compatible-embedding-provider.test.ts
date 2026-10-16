@@ -327,7 +327,7 @@ describe("openai-compatible generic embedding provider", () => {
 
   it.each([true, false])("preserves caller-owned HTTP deadlines: signal=%s", async (withSignal) => {
     const server = await startEmbeddingServer();
-    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+    const { provider } = await createProvider(
       createOptions({ remote: { baseUrl: server.baseUrl } }),
     );
     const requests: Dispatcher.DispatchOptions[] = [];

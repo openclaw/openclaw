@@ -405,6 +405,7 @@ suite.define(() => {
       const {
         page,
         gateway,
+        runId,
         startedAt,
         initialText,
         steerText,

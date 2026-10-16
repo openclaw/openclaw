@@ -86,8 +86,8 @@ describe("meeting browser leave ownership", () => {
 
   it("carries initiated-leave evidence into the next page evaluation", async () => {
     const leaveInitiated: boolean[] = [];
-    const deleteStarted = createDeferredCore<void>();
-    const deleteGate = createDeferredCore<void>();
+    const deleteStarted = createDeferredCore();
+    const deleteGate = createDeferredCore();
     const { leaving, deletedTabs } = startLeaving(
       (evaluation) =>
         evaluation === 1

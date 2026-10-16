@@ -27,6 +27,7 @@ import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap
 const delivery = vi.hoisted(() => ({
   afterResult: undefined as ((command: string) => Promise<void>) | undefined,
 }));
+// mock-isolation: Intercept worker result delivery; the shared helper preserves real exports.
 vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../state/openclaw-state-worker-store.js")>();

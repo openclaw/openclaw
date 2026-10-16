@@ -1,4 +1,5 @@
 import type { HandleCommandsParams } from "./commands-types.js";
+import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 
 export function buildSessionCommandTestParams(
   command: HandleCommandsParams["command"],
@@ -9,7 +10,7 @@ export function buildSessionCommandTestParams(
     cfg: {},
     command,
     agentId: "main",
-    directives: {},
+    directives: parseInlineSessionDirectives(""),
     elevated: { enabled: true, allowed: true, failures: [] },
     sessionKey: "agent:main:main",
     workspaceDir: "/tmp",

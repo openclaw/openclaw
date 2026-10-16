@@ -330,16 +330,16 @@ describe("meeting node host audio output", () => {
       bridge.inputStdout.emit("data", Buffer.alloc(chunkBytes, value));
     }
 
-    const status = await invokeBridge(bridge, "status");
+    const status = await rpc(bridge, "status");
     expect((status.bridge as Record<string, unknown>).queuedInputChunks).toBe(
       MAX_QUEUED_INPUT_BYTES / chunkBytes,
     );
-    const pulled = await invokeBridge(bridge, "pullAudio");
+    const pulled = await rpc(bridge, "pullAudio");
     assert.deepStrictEqual(
       Buffer.from(pulled.base64 as string, "base64"),
       Buffer.alloc(chunkBytes, 1),
     );
-    await invokeBridge(bridge, "stop");
+    await rpc(bridge, "stop");
   });
 
   it("copies only the newest bytes from an oversized input chunk", async () => {
@@ -353,9 +353,9 @@ describe("meeting node host audio output", () => {
     bridge.inputStdout.emit("data", source);
     source.fill(0);
 
-    const pulled = await invokeBridge(bridge, "pullAudio");
+    const pulled = await rpc(bridge, "pullAudio");
     assert.deepStrictEqual(Buffer.from(pulled.base64 as string, "base64"), expected);
-    await invokeBridge(bridge, "stop");
+    await rpc(bridge, "stop");
   });
 
   it("delivers terminal close to an outstanding pull and then deletes the session", async () => {

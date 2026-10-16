@@ -85,6 +85,7 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
+// mock-isolation: Keep lifecycle resolution on this fixture's registry, not process-global plugins.
 vi.mock("../../plugins/runtime.js", () => ({
   getActivePluginRegistry: () => hoisted.registry,
   requireActivePluginRegistry: () => hoisted.registry,
@@ -93,6 +94,7 @@ vi.mock("../../plugins/runtime.js", () => ({
   getActivePluginRegistryVersion: () => 1,
   getActivePluginChannelRegistryVersion: () => 1,
 }));
+// mock-isolation: Resolve only the fixture channels without loading bundled channel runtimes.
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: (channelId: string) =>
     hoisted.registry.channels.find((entry) => entry.plugin.id === channelId)?.plugin,
@@ -100,10 +102,12 @@ vi.mock("../../channels/plugins/index.js", () => ({
     hoisted.registry.channels.find((entry) => entry.plugin.id === channelId)?.plugin,
   normalizeChannelId: (raw?: string | null) => raw?.trim().toLowerCase() || null,
 }));
+// mock-isolation: Registry lookups must observe the same fixture-owned channel instances.
 vi.mock("../../channels/plugins/registry.js", () => ({
   getChannelPlugin: (channelId: string) =>
     hoisted.registry.channels.find((entry) => entry.plugin.id === channelId)?.plugin,
 }));
+// mock-isolation: Observe binding effects without opening the live outbound binding store.
 vi.mock("../../infra/outbound/session-binding-service.js", () => ({
   getSessionBindingService: () => ({
     resolveByConversationAsync: async (ref: unknown) => hoisted.resolveBinding(ref),

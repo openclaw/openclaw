@@ -50,7 +50,7 @@ function fixture() {
     ) => getTranscriptLibrary(store, { selector, ...params }),
     download: (selector: string, format: "markdown" | "jsonl") =>
       exportTranscriptLibrary(store, { selector, format }),
-    async seed(target: TranscriptSessionDescriptor, utterances: TranscriptUtterance[] = []) {
+    seed: async (target: TranscriptSessionDescriptor, utterances: TranscriptUtterance[] = []) => {
       await store.writeSession(target);
       for (const utterance of utterances) {
         await store.appendUtteranceForSession(target, utterance);

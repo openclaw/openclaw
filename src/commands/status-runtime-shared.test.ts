@@ -137,7 +137,7 @@ describe("status-runtime-shared", () => {
   it("shares the usage deadline with Codex synthetic usage", async () => {
     mocks.loadProviderUsageSummary
       .mockImplementationOnce(async () => {
-        vi.mocked(performance.now).mockReturnValue(3456);
+        vi.spyOn(performance, "now").mockReturnValue(3456);
         return {
           updatedAt: 1,
           providers: [anthropicUsage()],
@@ -339,7 +339,7 @@ describe("status-runtime-shared", () => {
 
   it("shares the readiness deadline with deep health and skips heartbeat when it expires", async () => {
     mocks.callGateway.mockImplementation(async () => {
-      vi.mocked(performance.now).mockReturnValue(38_000);
+      vi.spyOn(performance, "now").mockReturnValue(38_000);
       return { ok: true };
     });
     const result = await snapshot({

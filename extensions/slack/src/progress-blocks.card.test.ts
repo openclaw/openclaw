@@ -65,8 +65,8 @@ describe("buildSlackProgressCardBlocks", () => {
     const headings = [...(state === "error" ? [plain("Failed")] : []), plain("Implementing")];
     const failure = `${state === "success" ? "Recovered: " : ""}Exec — failed check — exit 1`;
     const attention = [
-      ...(state === "working" ? ["Approval required: Run checks"] : []),
       ...(detailed ? [failure] : []),
+      ...(state === "working" ? ["Approval required: Run checks"] : []),
     ];
     expect(blocks).toEqual([
       ...headings,

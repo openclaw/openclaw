@@ -187,7 +187,6 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-const containing = expect.objectContaining;
 const cases = [
   { name: "Teams", preserveTrackedBrowserOnEngineFailure: false, expectedLeaves: 1 },
   { name: "Zoom", preserveTrackedBrowserOnEngineFailure: true, expectedLeaves: 0 },
@@ -219,8 +218,8 @@ describe("meeting Chrome transport", () => {
 
     expect(dispose).toHaveBeenCalledOnce();
     expect(browserMocks.open).toHaveBeenCalledWith(
-      containing({
-        session: containing({ captureCaptions: false, mode: "agent" }),
+      expect.objectContaining({
+        session: expect.objectContaining({ captureCaptions: false, mode: "agent" }),
       }),
     );
     expect(browserMocks.leave).toHaveBeenCalledTimes(testCase.expectedLeaves);
@@ -260,8 +259,8 @@ describe("meeting Chrome transport", () => {
     expect(result.audioBridge?.type).toBe("node-command-pair");
     expect(result.audioBridge?.providerId).toBe("openai");
     expect(runtime.nodes.invoke).toHaveBeenCalledWith(
-      containing({
-        params: containing({
+      expect.objectContaining({
+        params: expect.objectContaining({
           action: "setup",
           audioBackend: "auto",
           audioBufferBytes: 4_096,
@@ -455,8 +454,8 @@ describe("Chrome configured audio input contract", () => {
         }
         if (host === "node" && customInput) {
           expect(invoke).toHaveBeenCalledWith(
-            containing({
-              params: containing({
+            expect.objectContaining({
+              params: expect.objectContaining({
                 action: "start",
                 audioInputCommand: ["custom-capture"],
               }),

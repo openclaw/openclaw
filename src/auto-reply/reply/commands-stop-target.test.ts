@@ -34,12 +34,15 @@ const stopChildren = vi.hoisted(() =>
 const abortTarget = vi.hoisted(() => vi.fn<(params: unknown) => AbortOutcome>(() => outcome()));
 const formatReply = vi.hoisted(() => vi.fn(() => "⚙️ Agent was aborted."));
 
+// mock-isolation: Abort only the fixture run, never a live embedded agent.
 vi.mock("../../agents/embedded-agent.js", () => ({
   abortEmbeddedAgentRun: abortEmbedded,
 }));
 
+// mock-isolation: Stop-target assertions do not depend on process-global verbose logging.
 vi.mock("../../globals.js", () => ({ logVerbose: vi.fn() }));
 
+// mock-isolation: Record hook delivery without invoking installed operator hooks.
 vi.mock("../../hooks/internal-hooks.js", () => ({
   createInternalHookEvent: hookEvent,
   triggerInternalHook: vi.fn(async () => undefined),
@@ -61,10 +64,13 @@ vi.mock(import("./abort-operation.js"), async (importOriginal) => ({
 
 vi.mock("./abort-trigger-text.js", () => ({ isAbortTrigger: vi.fn(() => false) }));
 
+// mock-isolation: Do not mutate the process-global abort-memory registry.
 vi.mock("./abort-primitives.js", () => ({ setAbortMemory: vi.fn() }));
 
+// mock-isolation: Reply formatting is fixed so the test isolates target selection and effects.
 vi.mock("./abort.js", () => ({ formatAbortReplyText: formatReply }));
 
+// mock-isolation: Observe persistence calls without reading or writing operator session state.
 vi.mock("./commands-session-store.js", () => ({
   persistAbortTargetEntry: persistAbort,
   resolveCommandSessionEntryForKey: resolveEntry,

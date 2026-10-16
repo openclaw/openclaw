@@ -17,10 +17,10 @@ export function admissionFixture(
 ) {
   const admissions: PreparedAgentRunAdmission[] = [];
   return {
-    async admittedAttempt(
+    admittedAttempt: async (
       runId = "run-1",
       overrides: Omit<Partial<HostAttempt>, "admittedRunContext" | "runId"> = {},
-    ) {
+    ) => {
       const admission = prepareAgentRunAdmission({
         cfg: {},
         facts: { runId, agentId: "main", ingress: { kind: "system", boundary, state: "present" } },
@@ -39,7 +39,7 @@ export function admissionFixture(
       };
       return { admission, attempt };
     },
-    closeAdmissions() {
+    closeAdmissions: () => {
       for (const admission of admissions.splice(0)) {
         admission.close();
       }

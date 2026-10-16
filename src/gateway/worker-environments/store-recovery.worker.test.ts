@@ -57,6 +57,7 @@ vi.mock("../../infra/sqlite-worker-operation-admission.js", async (importOrigina
       }),
   };
 });
+// mock-isolation: Inject receipt/result failures while the shared helper preserves real exports.
 vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../state/openclaw-state-worker-store.js")>();

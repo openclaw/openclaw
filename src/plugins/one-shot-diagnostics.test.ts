@@ -39,7 +39,7 @@ async function mockExporter(
   const service: OpenClawPluginService = { id: exporterId, start() {}, ...overrides };
   const registry = createEmptyPluginRegistry();
   registry.services.push({
-    pluginId: exporterId,
+    pluginId: service.id,
     id: service.id.trim(),
     service,
     source: "test",

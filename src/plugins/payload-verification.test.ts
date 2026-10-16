@@ -87,7 +87,7 @@ async function writeBundle(
 function formatMarkedBundleRecord(params: {
   installPath: string;
   bundleFormat?: BundleFormat;
-}): PluginInstallRecord {
+}): FormatMarkedBundleInstallRecord {
   return {
     source: "marketplace",
     format: "bundle",

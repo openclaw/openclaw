@@ -32,9 +32,11 @@ const mocks = vi.hoisted(() => ({
   trigger: vi.fn(() => ({ ok: true, method: "launchctl" })),
 }));
 
+// mock-isolation: Exercise both restart policy outcomes using a fixture-owned gate.
 vi.mock("../../config/commands.flags.js", () => ({
   isRestartEnabled: mocks.enabled,
 }));
+// mock-isolation: Delivery metadata comes from the fixture, without reading operator sessions.
 vi.mock("../../config/sessions.js", () => ({
   extractDeliveryInfo: mocks.delivery,
 }));
@@ -56,6 +58,7 @@ vi.mock("../../infra/restart-sentinel.js", async (importOriginal) => ({
   writeRestartSentinel: mocks.write,
 }));
 
+// mock-isolation: Record restart requests without scheduling or restarting a real Gateway.
 vi.mock("../../infra/restart.js", () => ({
   scheduleGatewayRestart: mocks.schedule,
   triggerOpenClawRestart: mocks.trigger,
