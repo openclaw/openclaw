@@ -177,6 +177,54 @@ const reviewed = new Map([
     },
   ],
   [
+    "src/config/sessions/session-accessor.sqlite-history-projection.ts",
+    {
+      priority: 99,
+      evidence:
+        "The history builder and boundary-shape query also serve deprecated SDK readSessionTranscriptCatalogTitle through the native page reader. Coordinate reads are classified separately; do not exempt the shared builder.",
+    },
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-history.ts",
+    {
+      priority: 99,
+      evidence:
+        "Archive and instance kernels serve transcript/usage workers plus deprecated SDK loadArchivedSessions, loadMemorySessionMetadata and resolveMemorySessionTargets (shipped in v2026.10.4). Retain native compatibility until the SDK owner removes it.",
+    },
+  ],
+  [
+    "src/config/sessions/session-history.ts",
+    {
+      priority: 99,
+      evidence:
+        "Durable instance listings use session-transcript.worker.ts; deprecated memory-session SDK readers retain the native implementation. The async facade's incognito branch reaches withOpenClawAgentDatabaseReadOnly, which returns database-missing before SQL for that sentinel.",
+    },
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-participant-projection.ts",
+    {
+      priority: 99,
+      evidence:
+        "Participant rows serve workers and deprecated resolveMemorySessionTargets, but also generic entry decoding through entry-current-check's native source-authority fallback. This shared kernel is neither worker-only nor deprecated-only.",
+    },
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-pending-inputs.ts",
+    {
+      priority: 99,
+      evidence:
+        "Completion SQL remains reachable through deprecated UserTurnTranscriptRecorder.completeProcessing (shipped in v2026.10.4); bundled completion awaits completeProcessingAsync. Append/read/consume kernels also serve native transcript transactions carrying opaque source authority. Deletion is classified separately.",
+    },
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-reset-window.ts",
+    {
+      priority: 99,
+      evidence:
+        "Boundary/control queries serve workers plus deprecated SessionManager synchronous context reads and readSessionTranscriptCatalogTitle (shipped in v2026.10.4). Worker-only interval, lookup, oversized-message and accounting queries are classified separately.",
+    },
+  ],
+  [
     "src/config/sessions/session-transcript-search.ts",
     {
       priority: 4,
@@ -298,6 +346,68 @@ const reviewed = new Map([
 
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
+  [
+    "src/config/sessions/session-accessor.sqlite-history-interval.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "readDisplayableActiveEventById",
+          "readDisplayableActiveEventMetadataById",
+          "countHistoricalDisplayEvents",
+          "readHistoricalDisplayEventRange",
+          "readHistoricalHistoryAnchorPage",
+        ],
+        evidence:
+          "Only history-query's ID/lookup/anchor readers execute this SQL: session-transcript.worker.ts owns the readonly history reader; session-history-read-operation.worker.ts owns the prepared anchor-message callback. Native catalog title calls only the page reader; other imports use pure expression/parser helpers.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-history-projection.ts",
+    [
+      {
+        tier: "W",
+        operations: ["readActiveTranscriptCoordinate"],
+        evidence:
+          "Source pages run in session-history-worker-reader.ts under session-transcript.worker.ts. The other caller, resolveHistoryReadWindowChange, returns before this read without an expected anchor; deprecated catalog title's only native page calls supply no expectedReadWindow.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-reset-window.ts",
+    [
+      {
+        tier: "W",
+        operations: ["resolveClosedResetInterval", "hasUnindexedVisibleMessages"],
+        evidence:
+          "Closed intervals are called only by history-interval's worker-owned ID/anchor readers. Unindexed-message probing is called only by history-query's lookup reader, constructed by the readonly history reader inside session-transcript.worker.ts.",
+      },
+      {
+        tier: "W",
+        operations: ["readVisibleTranscriptStats"],
+        evidence:
+          "Only session-actor-context-stats.worker.ts and session-transcript-accounting.ts call this reader; accounting's sole production caller is the readonly history reader inside session-transcript.worker.ts.",
+      },
+      {
+        tier: "W",
+        operations: ["hasOversizedVisibleMessages"],
+        evidence:
+          "Only the bounded-tail projection's oversizedMessageCheck branch calls this query. Projection consumers run in workers; its native facade is used only by the title worker and Doctor title repair, neither of which supplies oversizedMessageCheck.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-pending-inputs.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["deleteSessionPendingInputs"],
+        evidence:
+          "Only deleteSessionNodeArtifacts calls this deletion, from deleteSessionEntryRows. That entry-deletion owner runs in worker/maintenance lifecycle, reclamation, purge and finalization, or cleanup-utils.ts offline reset; it already has the same reviewed T3 classification.",
+      },
+    ],
+  ],
   [
     "src/infra/backup-sqlite-snapshot.ts",
     [
