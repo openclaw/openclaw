@@ -12,6 +12,7 @@ import {
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { SessionActorAuthority } from "./session-actor-contract.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import { memoryStorage } from "./session-actor-memory-publication.test-support.js";
 import {
   acquireSessionActorStorage,
   runWithSessionActorStorage,
@@ -70,43 +71,27 @@ async function fixture(target = scope) {
     throw new Error("Memory creation did not select the actor");
   }
   const actor = initial.actor;
-  const created = await actor.storage!.mutate(
-    {
-      type: "session.entry.create",
-      input: {
-        entry: { sessionId: target.sessionId, updatedAt: 1 },
-        transcriptEvents: [
-          { type: "session", id: target.sessionId, version: 3, cwd: "/synthetic" },
-          message("old", "Previous discussion"),
-          { type: "reset", id: "reset", parentId: "old", firstKeptEntryId: "old" },
-          message("new", "Current discussion"),
-        ],
-      },
-    },
-    authority,
-  );
-  expect(created.kind).toBe("committed");
+  await memoryStorage(actor.storage!).commit("session.entry.create", {
+    entry: { sessionId: target.sessionId, updatedAt: 1 },
+    transcriptEvents: [
+      { type: "session", id: target.sessionId, version: 3, cwd: "/synthetic" },
+      message("old", "Previous discussion"),
+      { type: "reset", id: "reset", parentId: "old", firstKeptEntryId: "old" },
+      message("new", "Current discussion"),
+    ],
+  });
   return { actor };
 }
 
 describe("Memory export from the session actor", () => {
   it("projects retained snapshots and reset cutoff through the host facade without native storage", async () => {
     const { actor } = await fixture();
-    const expected = await actor.storage!.read(
-      { type: "session.entry.read", input: {} },
-      authority,
-    );
-    expect(
-      (
-        await actor.storage!.mutate(
-          {
-            type: "session.lifecycle.reset",
-            input: { expected, nextEntry: { ...expected!, sessionId: "after-reset" } },
-          },
-          authority,
-        )
-      ).kind,
-    ).toBe("committed");
+    const storage = memoryStorage(actor.storage!);
+    const expected = await storage.read("session.entry.read", {});
+    await storage.commit("session.lifecycle.reset", {
+      expected,
+      nextEntry: { ...expected!, sessionId: "after-reset" },
+    });
     expect(await loadMemorySessionMetadataAsync(scope)).toMatchObject({
       agentId: "main",
       sessionId: "before-reset",

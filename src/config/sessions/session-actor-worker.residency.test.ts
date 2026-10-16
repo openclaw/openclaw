@@ -76,13 +76,10 @@ it("retains one oversized actor across competing small actors and replaces it wi
       }).kind,
     ).toBe("committed");
 
-    runSqliteImmediateTransactionSync(f.database.db, () => {
-      writeSessionEntry(f.database, companion.sessionKey, {
-        sessionId: "byte-budget-companion",
-        updatedAt: 2,
-        label: largeLabel,
-      });
-    });
+    f.writeEntry(
+      { sessionId: "byte-budget-companion", updatedAt: 2, label: largeLabel },
+      companion.sessionKey,
+    );
     const secondOversized = f.read(companion);
     expect(secondOversized.version.epoch).not.toBe(neighboring.version.epoch);
     expect(f.read(other).version).toEqual(competing.version);
@@ -94,13 +91,7 @@ it("retains one oversized actor across competing small actors and replaces it wi
     expect(f.read(companion).version.epoch).not.toBe(secondOversized.version.epoch);
 
     f.read();
-    runSqliteImmediateTransactionSync(f.database.db, () => {
-      writeSessionEntry(f.database, f.target.sessionKey, {
-        sessionId: f.scope.sessionId,
-        updatedAt: 3,
-        label: "small replacement",
-      });
-    });
+    f.writeEntry({ sessionId: f.scope.sessionId, updatedAt: 3, label: "small replacement" });
     const smaller = f.read();
     f.read(other);
     f.read(companion);

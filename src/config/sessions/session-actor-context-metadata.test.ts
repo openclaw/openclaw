@@ -72,21 +72,24 @@ function reader(f: Fixture) {
     }
     return retained;
   };
+  const accounting = () =>
+    withSessionTranscriptProjectionReceipt({ ...receipt(), contextOnly: true }, () =>
+      readCurrentProjectionSnapshot(f.database, f.scope, (projection) =>
+        readSessionTranscriptAccountingFromProjection(projection, {
+          includeByteSize: true,
+          includeUsage: false,
+        }),
+      ),
+    );
   return {
     replica,
     receipt,
     install() {
       expect(replica.beginRead()(f.read())).toBe(true);
     },
-    accounting: () =>
-      withSessionTranscriptProjectionReceipt({ ...receipt(), contextOnly: true }, () =>
-        readCurrentProjectionSnapshot(f.database, f.scope, (projection) =>
-          readSessionTranscriptAccountingFromProjection(projection, {
-            includeByteSize: true,
-            includeUsage: false,
-          }),
-        ),
-      ),
+    expectAccounting(eventCount: number, byteSize: number) {
+      expect(accounting()).toMatchObject({ kind: "value", value: { eventCount, byteSize } });
+    },
     bounded: () =>
       withSessionTranscriptProjectionReceipt(receipt(), () =>
         readSessionTranscriptBoundedActiveContextCore(f.scope, {
@@ -104,13 +107,7 @@ it("reads rewritten stored bytes from compact receipts and preserves committed t
     try {
       context.install();
       expect(context.receipt().facts?.contextMetadata).toBeUndefined();
-      expect(context.accounting()).toMatchObject({
-        kind: "value",
-        value: {
-          eventCount: 2,
-          byteSize: Buffer.byteLength(questionJson) + 1 + storedBytes(answer),
-        },
-      });
+      context.expectAccounting(2, Buffer.byteLength(questionJson) + 1 + storedBytes(answer));
 
       const rewritten = {
         ...question,
@@ -124,7 +121,7 @@ it("reads rewritten stored bytes from compact receipts and preserves committed t
       // The compact publication updates exact totals without copying row metadata.
       expect(context.receipt().facts?.contextMetadata).toBeUndefined();
       const expected = { eventCount: 2, byteSize: storedBytes(rewritten) + storedBytes(answer) };
-      expect(context.accounting()).toMatchObject({ kind: "value", value: expected });
+      context.expectAccounting(expected.eventCount, expected.byteSize);
       expect(context.bounded()).toMatchObject({
         events: [header, rewritten, answer],
         serializedBytes: storedBytes(header) + expected.byteSize,
@@ -146,7 +143,7 @@ it("reads rewritten stored bytes from compact receipts and preserves committed t
         }),
       ).toThrow("Synthetic context rewrite rollback");
       context.install();
-      expect(context.accounting()).toMatchObject({ kind: "value", value: expected });
+      context.expectAccounting(expected.eventCount, expected.byteSize);
       expect(context.bounded().events).toEqual([header, rewritten, answer]);
     } finally {
       context.replica.close();
@@ -191,13 +188,10 @@ it.each(["reset", "compaction", "leaf"] as const)(
         expect(context.receipt().facts?.contextMetadata).toBeUndefined();
         const counted =
           kind === "reset" ? [tail] : kind === "compaction" ? [control, tail] : [question, tail];
-        expect(context.accounting()).toMatchObject({
-          kind: "value",
-          value: {
-            eventCount: counted.length,
-            byteSize: counted.reduce((total, event) => total + storedBytes(event), 0),
-          },
-        });
+        context.expectAccounting(
+          counted.length,
+          counted.reduce((total, event) => total + storedBytes(event), 0),
+        );
         const bounded = context.bounded();
         expect(bounded.boundaryCount).toBe(kind === "leaf" ? 0 : 1);
         expect(bounded.events).toEqual(
@@ -230,13 +224,7 @@ it("keeps exact accounting through appends and rewrites beyond the actor's resid
         /\bsum\(/iu.test(sql) && sql.includes('"transcript_events"') ? "aggregate" : null,
       );
       const originalBytes = events.reduce((total, event) => total + storedBytes(event), 0);
-      expect(context.accounting()).toMatchObject({
-        kind: "value",
-        value: {
-          eventCount: events.length,
-          byteSize: originalBytes,
-        },
-      });
+      context.expectAccounting(events.length, originalBytes);
       const appended = {
         type: "message" as const,
         id: "after-window",
@@ -273,22 +261,13 @@ it("keeps exact accounting through appends and rewrites beyond the actor's resid
         await f.prepare(command);
         expect(f.mutate(command)).toMatchObject({ kind: "committed" });
         context.install();
-        expect(context.accounting()).toMatchObject({
-          kind: "value",
-          value: { eventCount: events.length + 1, byteSize: originalBytes + storedBytes(appended) },
-        });
+        context.expectAccounting(events.length + 1, originalBytes + storedBytes(appended));
         runSqliteImmediateTransactionSync(f.database.db, () => {
           rewriteSqliteTranscriptEventRowsInTransaction(f.database, f.scope, [
             { seq: events.length, expectedEventJson: JSON.stringify(appended), event: rewritten },
           ]);
         });
-        expect(context.accounting()).toMatchObject({
-          kind: "value",
-          value: {
-            eventCount: events.length + 1,
-            byteSize: originalBytes + storedBytes(rewritten),
-          },
-        });
+        context.expectAccounting(events.length + 1, originalBytes + storedBytes(rewritten));
         expect(stats.counts.aggregate).toBe(0);
       } finally {
         stats.restore();

@@ -3,8 +3,8 @@ import type { SessionLeafControl } from "../../agents/sessions/session-manager-t
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { SessionActorAuthority, SessionActorStorage } from "./session-actor-contract.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import { memoryStorage } from "./session-actor-memory-publication.test-support.js";
 import { acquireSessionActorStorage } from "./session-actor-storage-binding.js";
-import type { SessionActorStorageOutcome } from "./session-actor-storage-contract.js";
 import { readSessionTranscriptIndexStatus } from "./session-transcript-projection-writer.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
@@ -35,13 +35,6 @@ const env = { OPENCLAW_STATE_DIR: "/synthetic/incognito-search" };
 const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId, env });
 afterEach(() => memorySessionActorOwners.reset());
 
-function committed<T>(outcome: SessionActorStorageOutcome<T>): T {
-  if (outcome.kind !== "committed") {
-    throw new Error(outcome.error.message);
-  }
-  return outcome.value;
-}
-
 function message(
   id: string,
   content: string,
@@ -64,19 +57,11 @@ async function fixture() {
       { authority, lifetime, create: true },
     ))!;
     const storage = binding.actor.storage;
-    committed(
-      await storage.mutate(
-        {
-          type: "session.entry.create",
-          input: {
-            entry: { sessionId: id, updatedAt: 1 },
-            cwd: "/synthetic",
-            transcriptEvents: events,
-          },
-        },
-        authority,
-      ),
-    );
+    await memoryStorage(storage).commit("session.entry.create", {
+      entry: { sessionId: id, updatedAt: 1 },
+      cwd: "/synthetic",
+      transcriptEvents: events,
+    });
     return { sessionKey, storage, binding };
   };
   const search = (query: string, options: Partial<SessionTranscriptSearchParams> = {}) =>
@@ -94,35 +79,27 @@ async function append(
   event: ReturnType<typeof message> | SessionLeafControl,
 ) {
   const prepared = event.type === "message" ? event : undefined;
-  committed(
-    await storage.mutate(
-      {
-        type: "session.metadata.append",
-        input: {
-          scope: { agentId, storePath, sessionKey, sessionId },
-          event: prepared
-            ? {
-                type: prepared.type,
-                id: prepared.id,
-                parentId: prepared.parentId,
-                timestamp: prepared.timestamp,
-              }
-            : JSON.stringify(event),
-          options: {},
-          ...(prepared
-            ? {
-                message: {
-                  messageJson: JSON.stringify(prepared.message),
-                  cwd: "/synthetic",
-                  validateTurn: false,
-                },
-              }
-            : {}),
-        },
-      },
-      authority,
-    ),
-  );
+  await memoryStorage(storage).commit("session.metadata.append", {
+    scope: { agentId, storePath, sessionKey, sessionId },
+    event: prepared
+      ? {
+          type: prepared.type,
+          id: prepared.id,
+          parentId: prepared.parentId,
+          timestamp: prepared.timestamp,
+        }
+      : JSON.stringify(event),
+    options: {},
+    ...(prepared
+      ? {
+          message: {
+            messageJson: JSON.stringify(prepared.message),
+            cwd: "/synthetic",
+            validateTurn: false,
+          },
+        }
+      : {}),
+  });
 }
 
 describe("actor-owned transcript search", () => {
@@ -232,19 +209,12 @@ describe("actor-owned transcript search", () => {
       message("fresh", "fresh content", { parentId: "base" }),
     );
     expect((await search("fresh")).hits.map((hit) => hit.messageId)).toEqual(["fresh"]);
-    const expected = await session.storage.read(
-      { type: "session.entry.read", input: {} },
-      authority,
-    );
-    committed(
-      await session.storage.mutate(
-        {
-          type: "session.lifecycle.reset",
-          input: { expected, nextEntry: { ...expected!, sessionId: "after-reset" } },
-        },
-        authority,
-      ),
-    );
+    const storage = memoryStorage(session.storage);
+    const expected = await storage.read("session.entry.read", {});
+    await storage.commit("session.lifecycle.reset", {
+      expected,
+      nextEntry: { ...expected!, sessionId: "after-reset" },
+    });
     expect((await search("fresh", { sessionId: "before-reset" })).hits).toHaveLength(1);
     expect((await search("fresh", { sessionId: "after-reset" })).hits).toEqual([]);
     // A current acquisition closes the previous window's handle; deletion removes every retained window.
@@ -252,9 +222,7 @@ describe("actor-owned transcript search", () => {
       { agentId, storePath, env, sessionKey: session.sessionKey },
       { authority, lifetime },
     ))!.actor;
-    committed(
-      await current.storage!.mutate({ type: "session.lifecycle.delete", input: {} }, authority),
-    );
+    await memoryStorage(current.storage!).commit("session.lifecycle.delete", {});
     expect((await search("fresh")).hits).toEqual([]);
   });
 });

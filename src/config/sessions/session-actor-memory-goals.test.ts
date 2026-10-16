@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSessionActorMemoryGoals } from "./session-actor-memory-goals.js";
-import { createSessionActorMemoryState } from "./session-actor-memory-state.js";
+import { createMemoryTestState } from "./session-actor-memory-publication.test-support.js";
 
 const sessionKey = "agent:main:dashboard:incognito-side-state";
 const sessionId = "session-1";
@@ -11,37 +11,24 @@ afterEach(() => vi.useRealTimers());
 function fixture() {
   vi.useFakeTimers();
   vi.setSystemTime(now);
-  const initial = createSessionActorMemoryState({
-    database: { kind: "memory", handle: "memory-1", incarnation: "incarnation-1" },
-    sessionKey,
-  });
-  const state: ReturnType<typeof createSessionActorMemoryState> = {
-    ...initial,
-    hot: {
-      ...initial.hot,
-      version: { epoch: "epoch-1", sequence: 0 },
-      writeToken: "0",
-      dependencySessionIds: [sessionId],
-      entry: {
-        sessionId,
-        updatedAt: now,
-        incognito: true,
-        forkSource: { sessionKey: "agent:main:parent", sessionId: "parent-session" },
-        goal: {
-          schemaVersion: 1,
-          id: "goal-1",
-          objective: "Original objective",
-          status: "active",
-          createdAt: now,
-          updatedAt: now,
-          tokenStart: 0,
-          tokenStartFresh: true,
-          tokensUsed: 0,
-          continuationTurns: 0,
-        },
-      },
+  const state = createMemoryTestState(sessionKey, {
+    sessionId,
+    updatedAt: now,
+    incognito: true,
+    forkSource: { sessionKey: "agent:main:parent", sessionId: "parent-session" },
+    goal: {
+      schemaVersion: 1,
+      id: "goal-1",
+      objective: "Original objective",
+      status: "active",
+      createdAt: now,
+      updatedAt: now,
+      tokenStart: 0,
+      tokenStartFresh: true,
+      tokensUsed: 0,
+      continuationTurns: 0,
     },
-  };
+  });
   return {
     state,
     goals: createSessionActorMemoryGoals({ state, agentId: "main", path: "/synthetic/incognito" }),

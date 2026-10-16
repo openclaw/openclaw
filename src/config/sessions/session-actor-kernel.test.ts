@@ -1,7 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
@@ -17,7 +16,7 @@ import {
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { applySessionActorAppend } from "./session-actor-append.worker.js";
 import { initializeSessionActorContextStats } from "./session-actor-context-stats.worker.js";
-import type { SessionActorAppend, SessionActorTarget } from "./session-actor-contract.js";
+import type { SessionActorAppend } from "./session-actor-contract.js";
 import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
 import {
   hydrateSessionActorState,
@@ -27,6 +26,7 @@ import {
   forkSessionActorStoredState,
   withSessionActorTransactionState,
 } from "./session-actor-transaction.js";
+import { sessionActorFileTarget } from "./session-actor-worker.test-support.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
 import { mutatePendingInput, readPendingInput } from "./session-pending-input-operations.kernel.js";
 import { readSessionTranscriptAnchorFactsInDatabase } from "./session-transcript-anchor-read.kernel.js";
@@ -45,19 +45,7 @@ it("hydrates once and commits, rejects, and rolls back against the exact actor p
     const database = f.database;
     const options = { agentId: "main", path: database.path };
     const scope = { ...f.scope, path: database.path };
-    const identity = readOpenClawAgentDatabaseIdentity(database);
-    if (typeof identity.identity !== "string") {
-      throw new Error("Fixture requires a physical database");
-    }
-    const target: SessionActorTarget = {
-      sessionKey: f.scope.sessionKey,
-      database: {
-        kind: "file",
-        physicalIdentity: identity.identity,
-        birthtime: identity.birthtime,
-        nativeLocation: database.path,
-      },
-    };
+    const target = sessionActorFileTarget(database, scope.sessionKey);
     runOpenClawAgentWriteTransaction((db) => {
       appendTranscriptEventsInTransaction(db, scope, [
         {
@@ -340,19 +328,7 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
       sessionKey: f.scope.sessionKey,
       sessionId: f.scope.sessionId,
     };
-    const identity = readOpenClawAgentDatabaseIdentity(database);
-    if (typeof identity.identity !== "string") {
-      throw new Error("Fixture requires a physical database");
-    }
-    const target: SessionActorTarget = {
-      sessionKey: scope.sessionKey,
-      database: {
-        kind: "file",
-        physicalIdentity: identity.identity,
-        birthtime: identity.birthtime,
-        nativeLocation: database.path,
-      },
-    };
+    const target = sessionActorFileTarget(database, scope.sessionKey);
     runOpenClawAgentWriteTransaction((db) => {
       appendTranscriptEventsInTransaction(db, { ...scope, path: database.path }, [
         {
@@ -439,6 +415,14 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
         initialWriterRunId: "first-run",
       },
     };
+    const execute = (input: SessionActorAppend, working = state) =>
+      runOpenClawAgentWriteTransaction(
+        (db) =>
+          withSessionActorTransactionState(db, working, () =>
+            applySessionActorAppend(input, working, context),
+          ),
+        options,
+      );
     const retainedReads = trackSqliteStatementExecutions(
       database.db,
       ["entry", "newer", "parents", "projection"],
@@ -455,21 +439,12 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
     );
     const committed = (() => {
       try {
-        return runOpenClawAgentWriteTransaction(
-          (db) =>
-            withSessionActorTransactionState(db, state, () =>
-              applySessionActorAppend(append, state, context),
-            ),
-          options,
-        );
+        return execute(append);
       } finally {
         retainedReads.restore();
       }
     })();
-    expect(retainedReads.counts.entry).toBe(0);
-    expect(retainedReads.counts.newer).toBe(0);
-    expect(retainedReads.counts.parents).toBe(0);
-    expect(retainedReads.counts.projection).toBe(0);
+    expect(retainedReads.counts).toEqual({ entry: 0, newer: 0, parents: 0, projection: 0 });
     initializeSessionActorContextStats(database, state);
     expect(committed.kind).toBe("metadata");
     if (committed.kind !== "metadata") {
@@ -508,13 +483,7 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
     });
     expect(freshChecks).toBe(1);
     expect(f.events()).toHaveLength(3);
-    const replay = runOpenClawAgentWriteTransaction(
-      (db) =>
-        withSessionActorTransactionState(db, state, () =>
-          applySessionActorAppend({ kind: "metadata", input: append.input }, state, context),
-        ),
-      options,
-    );
+    const replay = execute({ kind: "metadata", input: append.input });
     expect(replay.value.snapshot).toMatchObject({
       ok: true,
       value: {
@@ -529,61 +498,47 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
     rejectFresh = true;
     const abandoned = forkSessionActorStoredState(state);
     expect(() =>
-      runOpenClawAgentWriteTransaction(
-        (db) =>
-          withSessionActorTransactionState(db, abandoned, () =>
-            applySessionActorAppend(
-              {
-                kind: "metadata",
-                input: {
-                  ...append.input,
-                  event: {
-                    type: "message",
-                    timestamp: "2026-01-01T00:00:03.000Z",
-                    id: "refused",
-                    parentId: "prepared-assistant",
-                  },
-                  message: {
-                    ...append.input.message!,
-                    messageJson: JSON.stringify({
-                      role: "assistant",
-                      content: "must not persist",
-                      idempotencyKey: "refused",
-                    }),
-                  },
-                },
-              },
-              abandoned,
-              context,
-            ),
-          ),
-        options,
+      execute(
+        {
+          kind: "metadata",
+          input: {
+            ...append.input,
+            event: {
+              type: "message",
+              timestamp: "2026-01-01T00:00:03.000Z",
+              id: "refused",
+              parentId: "prepared-assistant",
+            },
+            message: {
+              ...append.input.message!,
+              messageJson: JSON.stringify({
+                role: "assistant",
+                content: "must not persist",
+                idempotencyKey: "refused",
+              }),
+            },
+          },
+        },
+        abandoned,
       ),
     ).toThrow("fresh authority revoked");
     const directAbandoned = forkSessionActorStoredState(state);
     expect(() =>
-      runOpenClawAgentWriteTransaction(
-        (db) =>
-          withSessionActorTransactionState(db, directAbandoned, () =>
-            applySessionActorAppend(
-              {
-                kind: "message",
-                input: {
-                  scope,
-                  cwd: "/synthetic",
-                  freshMessageCheck: true,
-                  messageJson: JSON.stringify({
-                    role: "assistant",
-                    content: "direct append must check fresh authority",
-                    idempotencyKey: "direct-refused",
-                  }),
-                },
-              },
-              directAbandoned,
-              context,
-            ),
-          ),
-        options,
+      execute(
+        {
+          kind: "message",
+          input: {
+            scope,
+            cwd: "/synthetic",
+            freshMessageCheck: true,
+            messageJson: JSON.stringify({
+              role: "assistant",
+              content: "direct append must check fresh authority",
+              idempotencyKey: "direct-refused",
+            }),
+          },
+        },
+        directAbandoned,
       ),
     ).toThrow("fresh authority revoked");
     expect(freshChecks).toBe(3);
@@ -594,33 +549,23 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
       ),
     ).toEqual(projectSessionActorHotState(state));
     rejectFresh = false;
-    const advanced = runOpenClawAgentWriteTransaction(
-      (db) =>
-        withSessionActorTransactionState(db, state, () =>
-          applySessionActorAppend(
-            {
-              kind: "metadata",
-              input: {
-                ...append.input,
-                event: {
-                  type: "message",
-                  id: "newer-user",
-                  parentId: "prepared-assistant",
-                  timestamp: "2026-01-01T00:00:04.000Z",
-                },
-                message: {
-                  ...append.input.message!,
-                  messageJson: JSON.stringify({ role: "user", content: "a different turn" }),
-                  validateTurn: false,
-                },
-              },
-            },
-            state,
-            context,
-          ),
-        ),
-      options,
-    );
+    const advanced = execute({
+      kind: "metadata",
+      input: {
+        ...append.input,
+        event: {
+          type: "message",
+          id: "newer-user",
+          parentId: "prepared-assistant",
+          timestamp: "2026-01-01T00:00:04.000Z",
+        },
+        message: {
+          ...append.input.message!,
+          messageJson: JSON.stringify({ role: "user", content: "a different turn" }),
+          validateTurn: false,
+        },
+      },
+    });
     expect(advanced).toMatchObject({
       kind: "metadata",
       value: {
@@ -640,55 +585,35 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
       },
     });
     expect(() =>
-      runOpenClawAgentWriteTransaction(
-        (db) =>
-          withSessionActorTransactionState(db, state, () =>
-            applySessionActorAppend(
-              {
-                kind: "metadata",
-                input: {
-                  ...append.input,
-                  event: {
-                    type: "message",
-                    id: "stale-assistant",
-                    parentId: "prepared-assistant",
-                    timestamp: "2026-01-01T00:00:05.000Z",
-                  },
-                },
-              },
-              state,
-              context,
-            ),
-          ),
-        options,
-      ),
+      execute({
+        kind: "metadata",
+        input: {
+          ...append.input,
+          event: {
+            type: "message",
+            id: "stale-assistant",
+            parentId: "prepared-assistant",
+            timestamp: "2026-01-01T00:00:05.000Z",
+          },
+        },
+      }),
     ).toThrow("changed");
     expect(f.events().at(-1)).toMatchObject({ id: "newer-user" });
-    const reset = runOpenClawAgentWriteTransaction(
-      (db) =>
-        withSessionActorTransactionState(db, state, () =>
-          applySessionActorAppend(
-            {
-              kind: "metadata",
-              input: {
-                ...append.input,
-                event: JSON.stringify({
-                  type: "reset",
-                  id: "reset",
-                  parentId: "newer-user",
-                  timestamp: "2026-01-01T00:00:06.000Z",
-                  reason: "new",
-                }),
-                message: undefined,
-                view: { ...append.input.view!, limits: { maxBytes: 10_000, maxEvents: 1 } },
-              },
-            },
-            state,
-            context,
-          ),
-        ),
-      options,
-    );
+    const reset = execute({
+      kind: "metadata",
+      input: {
+        ...append.input,
+        event: JSON.stringify({
+          type: "reset",
+          id: "reset",
+          parentId: "newer-user",
+          timestamp: "2026-01-01T00:00:06.000Z",
+          reason: "new",
+        }),
+        message: undefined,
+        view: { ...append.input.view!, limits: { maxBytes: 10_000, maxEvents: 1 } },
+      },
+    });
     expect(reset).toMatchObject({
       kind: "metadata",
       value: {

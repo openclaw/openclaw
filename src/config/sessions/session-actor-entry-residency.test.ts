@@ -3,7 +3,6 @@ import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-sta
 import { prepareSessionCostUsageRefreshLock } from "../../infra/session-cost-usage-cache.sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import * as participantCache from "./session-accessor.sqlite-entry-cache.js";
-import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   participantRecordsBySessionKey,
   projectSqliteSessionParticipants,
@@ -11,7 +10,11 @@ import {
 import { recordSessionParticipantFromWorker } from "./session-accessor.sqlite-participants.native.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
-import { withActor, type Mutation } from "./session-actor-worker.test-support.js";
+import {
+  participantRecord,
+  withActor,
+  type Mutation,
+} from "./session-actor-worker.test-support.js";
 import type { SessionEntryPatchGuard } from "./session-entry-patch.types.js";
 import { readSessionEntryPatchSnapshot } from "./session-entry-patch.worker.js";
 
@@ -47,14 +50,7 @@ it("reads committed participant counts and ordering in the same and next turn wi
     try {
       runSqliteImmediateTransactionSync(f.database.db, () => {
         expect(record("second", 20).value).toBe("inserted");
-        expect(participants()).toMatchObject([
-          {
-            identity: { id: "second" },
-            contributionCount: 1,
-            firstPromptedAt: 20,
-            lastPromptedAt: 20,
-          },
-        ]);
+        expect(participants()).toMatchObject([participantRecord("second", 1, 20)]);
         expect(record("first", 10).value).toBe("inserted");
         expect(record("second", 5).value).toBe("updated");
         expect(participants()?.map((participant) => participant.identity.id)).toEqual([
@@ -64,18 +60,8 @@ it("reads committed participant counts and ordering in the same and next turn wi
       });
       expect(f.read().participants).toEqual(participants());
       expect(participants()).toMatchObject([
-        {
-          identity: { id: "second" },
-          contributionCount: 2,
-          firstPromptedAt: 5,
-          lastPromptedAt: 20,
-        },
-        {
-          identity: { id: "first" },
-          contributionCount: 1,
-          firstPromptedAt: 10,
-          lastPromptedAt: 10,
-        },
+        participantRecord("second", 2, 5, 20),
+        participantRecord("first", 1, 10),
       ]);
       runSqliteImmediateTransactionSync(f.database.db, () => record("second", 30));
       const next = f.read();
@@ -109,9 +95,7 @@ it("autocommits resident contributions and keeps consecutive actor counts curren
     try {
       f.participant({ ...input, promptedAt: 20 });
       f.participant({ ...input, promptedAt: 30 });
-      expect(f.read().participants).toMatchObject([
-        { identity: { id: "peer" }, contributionCount: 3, firstPromptedAt: 10, lastPromptedAt: 30 },
-      ]);
+      expect(f.read().participants).toMatchObject([participantRecord("peer", 3, 10, 30)]);
       expect(sql.counts).toEqual({ contribution: 2, read: 0 });
       expect(exec.mock.calls.some(([text]) => /BEGIN|COMMIT/iu.test(text))).toBe(false);
     } finally {
@@ -217,12 +201,7 @@ it("retains resident session facts across usage cache writes and reloads actual 
       await usage.release();
       unchanged();
 
-      runSqliteImmediateTransactionSync(f.database.db, () =>
-        writeSessionEntry(f.database, f.target.sessionKey, {
-          ...initial.entry!,
-          label: "changed by the session owner",
-        }),
-      );
+      f.writeEntry({ ...initial.entry!, label: "changed by the session owner" });
       expect(f.read().entry?.label).toBe("changed by the session owner");
       expect(reads.counts.hydration).toBe(1);
     } finally {
@@ -257,23 +236,21 @@ it("keeps transcript residency across entry patches without losing either owner'
         },
       ]),
     );
-    runSqliteImmediateTransactionSync(f.database.db, () =>
-      writeSessionEntry(f.database, f.target.sessionKey, {
-        ...f.nativeEntry()!,
-        activitySummary: {
-          version: 1,
-          text: "Retained input",
-          updatedAt: 10,
-          sessionId: f.scope.sessionId,
-          generation: null,
-          maxSeq: null,
-          leafEntryId: null,
-          coveredMessages: 1,
-          totalMessages: 1,
-          omittedContent: false,
-        },
-      }),
-    );
+    f.writeEntry({
+      ...f.nativeEntry()!,
+      activitySummary: {
+        version: 1,
+        text: "Retained input",
+        updatedAt: 10,
+        sessionId: f.scope.sessionId,
+        generation: null,
+        maxSeq: null,
+        leafEntryId: null,
+        coveredMessages: 1,
+        totalMessages: 1,
+        omittedContent: false,
+      },
+    });
     const before = f.read();
     const predicate: SessionEntryPatchGuard["shouldCommitIf"] = {
       kind: "transcript",
@@ -474,12 +451,7 @@ it.each(["entry", "target"] as const)(
       expect(f.nativeEntry()?.label).toBe("second committed patch");
 
       const beforeExternalWrite = prepare("stale after another owner writes");
-      runSqliteImmediateTransactionSync(f.database.db, () =>
-        writeSessionEntry(f.database, f.target.sessionKey, {
-          ...f.nativeEntry()!,
-          model: "other owner model",
-        }),
-      );
+      f.writeEntry({ ...f.nativeEntry()!, model: "other owner model" });
       expect(() => f.patchEntry(beforeExternalWrite)).toThrow(/changed|conflict/i);
       expect(snapshot()[0]?.entry.model).toBe("other owner model");
       f.restartActor();

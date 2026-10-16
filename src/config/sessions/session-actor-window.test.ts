@@ -1,6 +1,5 @@
 import { expect, it, vi } from "vitest";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import {
   ensureSessionInputCompletionsSchema,
@@ -19,7 +18,6 @@ import {
   resolveTranscriptMessageAppendParent,
 } from "./session-accessor.sqlite-transcript-parent.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
-import type { SessionActorTarget } from "./session-actor-contract.js";
 import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
 import { hydrateSessionActorState } from "./session-actor-hydration.worker.js";
 import { createSessionActorResidency } from "./session-actor-residency.worker.js";
@@ -27,6 +25,7 @@ import {
   forkSessionActorStoredState,
   withSessionActorTransactionState,
 } from "./session-actor-transaction.js";
+import { sessionActorFileTarget } from "./session-actor-worker.test-support.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 
@@ -38,19 +37,7 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 
 function hydrateActor(f: ReturnType<typeof createSessionCompoundWorkerFixture>) {
-  const identity = readOpenClawAgentDatabaseIdentity(f.database);
-  if (typeof identity.identity !== "string") {
-    throw new Error("Actor window proof requires a physical database");
-  }
-  const target: SessionActorTarget = {
-    sessionKey: f.scope.sessionKey,
-    database: {
-      kind: "file",
-      physicalIdentity: identity.identity,
-      birthtime: identity.birthtime,
-      nativeLocation: f.database.path,
-    },
-  };
+  const target = sessionActorFileTarget(f.database, f.scope.sessionKey);
   return hydrateSessionActorState(f.database, target, { epoch: "window", sequence: 0 }, "");
 }
 

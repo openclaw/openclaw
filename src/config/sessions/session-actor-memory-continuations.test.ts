@@ -26,12 +26,12 @@ import {
   assertSessionPendingInputLifetimeCurrent,
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import { commitMemory, readMemory } from "./session-actor-memory-publication.test-support.js";
 import {
   acquireSessionActorStorage,
   runWithSessionActorStorage,
   type SessionActorStorageBinding,
 } from "./session-actor-storage-binding.js";
-import type { SessionActorStorageOutcome } from "./session-actor-storage-contract.js";
 import type { SessionMetadataOperations } from "./session-manager-write-contract.js";
 import { listSessionPendingInputs } from "./session-pending-input-history.js";
 import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
@@ -69,13 +69,6 @@ afterEach(() => {
   memorySessionActorOwners.closeDatabase({ agentId: scope.agentId, path: scope.storePath });
 });
 
-function committed<T>(outcome: SessionActorStorageOutcome<T>): T {
-  if (outcome.kind !== "committed") {
-    throw new Error(JSON.stringify(outcome));
-  }
-  return outcome.value;
-}
-
 async function fixture(patch: Partial<SessionEntry> = {}) {
   const owner = memorySessionActorOwners.get({ agentId: scope.agentId, path: scope.storePath });
   const acquire = async (): Promise<SessionActorStorageBinding> => {
@@ -91,15 +84,9 @@ async function fixture(patch: Partial<SessionEntry> = {}) {
   };
   const binding = await acquire();
   const storage = binding.actor.storage!;
-  committed(
-    await storage.mutate(
-      {
-        type: "session.entry.create",
-        input: { entry: { sessionId: scope.sessionId, updatedAt: 1, incognito: true, ...patch } },
-      },
-      authority,
-    ),
-  );
+  await commitMemory(storage, "session.entry.create", {
+    entry: { sessionId: scope.sessionId, updatedAt: 1, incognito: true, ...patch },
+  });
   const append = async (
     event: ResetEntry | (Omit<SessionMessageEntry, "message"> & { message: unknown }),
   ) => {
@@ -119,9 +106,7 @@ async function fixture(patch: Partial<SessionEntry> = {}) {
     }
     const current = await acquire();
     try {
-      return committed(
-        await current.actor.storage!.mutate({ type: "session.metadata.append", input }, authority),
-      );
+      return await commitMemory(current.actor.storage!, "session.metadata.append", input);
     } finally {
       await current.actor.release();
     }
@@ -133,15 +118,10 @@ async function fixture(patch: Partial<SessionEntry> = {}) {
       if (!entry) {
         throw new Error("Expected current memory entry");
       }
-      return committed(
-        await current.actor.storage!.mutate(
-          {
-            type: "session.entry.replace",
-            input: { expected: entry, entry: { ...entry, ...next } },
-          },
-          authority,
-        ),
-      );
+      return await commitMemory(current.actor.storage!, "session.entry.replace", {
+        expected: entry,
+        entry: { ...entry, ...next },
+      });
     } finally {
       await current.actor.release();
     }
@@ -208,36 +188,27 @@ describe("memory continuation adapters", () => {
       idempotencyKey,
       timestamp: 1,
     });
-    const expected = await storage.read(
-      {
-        type: "session.pendingInput.read",
-        input: { ...scope, kind: "stage", idempotencyKey, trackCompletion: true },
-      },
-      authority,
-    );
+    const expected = await readMemory(storage, "session.pendingInput.read", {
+      ...scope,
+      kind: "stage",
+      idempotencyKey,
+      trackCompletion: true,
+    });
     if (expected.kind !== "stage") {
       throw new Error("Expected pending stage");
     }
-    committed(
-      await storage.mutate(
-        {
-          type: "session.pendingInput.mutate",
-          input: {
-            ...scope,
-            kind: "stage",
-            idempotencyKey,
-            trackCompletion: true,
-            expected,
-            inputId: "pending-input",
-            messageJson,
-            runId: "pending",
-            requestHash: "hash",
-            lifecycleGeneration: getAgentEventLifecycleGeneration(),
-          },
-        },
-        authority,
-      ),
-    );
+    await commitMemory(storage, "session.pendingInput.mutate", {
+      ...scope,
+      kind: "stage",
+      idempotencyKey,
+      trackCompletion: true,
+      expected,
+      inputId: "pending-input",
+      messageJson,
+      runId: "pending",
+      requestHash: "hash",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    });
     const pendingOwner: SessionPendingInputOwner = {
       ...scope,
       inputId: "pending-input",

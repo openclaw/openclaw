@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createSessionActorMemoryPending } from "./session-actor-memory-pending.js";
-import { createSessionActorMemoryState } from "./session-actor-memory-state.js";
+import { createMemoryTestState } from "./session-actor-memory-publication.test-support.js";
 import type {
   PendingInputCustodyGrant,
   PendingInputMutation,
@@ -25,20 +25,11 @@ const message = {
 };
 
 function fixture() {
-  const initial = createSessionActorMemoryState({
-    database: { kind: "memory", handle: "memory-1", incarnation: "incarnation-1" },
-    sessionKey: scope.sessionKey,
+  const state = createMemoryTestState(scope.sessionKey, {
+    sessionId: scope.sessionId,
+    updatedAt: 1,
+    incognito: true,
   });
-  const state: ReturnType<typeof createSessionActorMemoryState> = {
-    ...initial,
-    hot: {
-      ...initial.hot,
-      version: { epoch: "epoch-1", sequence: 0 },
-      writeToken: "0",
-      dependencySessionIds: [scope.sessionId],
-      entry: { sessionId: scope.sessionId, updatedAt: 1, incognito: true },
-    },
-  };
   const grants: Array<{ stage: string; grant: PendingInputCustodyGrant }> = [];
   const pending = createSessionActorMemoryPending(state, {
     agentId: "main",
@@ -64,7 +55,18 @@ function fixture() {
       ...overrides,
     };
   };
-  return { state, pending, grants, stageInput };
+  const stageMany = (count: number) => {
+    for (let index = 1; index <= count; index++) {
+      pending.mutate(
+        stageInput({
+          idempotencyKey: `key-${index}`,
+          inputId: `input-${index}`,
+          runId: `run-${index}`,
+        }),
+      );
+    }
+  };
+  return { state, pending, grants, stageInput, stageMany };
 }
 
 describe("memory actor pending input custody", () => {
@@ -190,16 +192,8 @@ describe("memory actor pending input custody", () => {
   });
 
   it("pages unconsumed inputs and reconciles receipts without exposing payloads", () => {
-    const { state, pending, stageInput } = fixture();
-    for (const index of [1, 2, 3]) {
-      pending.mutate(
-        stageInput({
-          idempotencyKey: `key-${index}`,
-          inputId: `input-${index}`,
-          runId: `run-${index}`,
-        }),
-      );
-    }
+    const { state, pending, stageInput, stageMany } = fixture();
+    stageMany(3);
     const consumed = state.pendingInputs.get("key-2")!;
     state.pendingInputs.set("key-2", { ...consumed, consumed_event_id: "event-2" });
     const page = pending.history({ ...scope, limit: 1 });
@@ -224,16 +218,8 @@ describe("memory actor pending input custody", () => {
   });
 
   it("interrupts only unconsumed inputs without live custody", () => {
-    const { pending, stageInput } = fixture();
-    for (const index of [1, 2]) {
-      pending.mutate(
-        stageInput({
-          idempotencyKey: `key-${index}`,
-          inputId: `input-${index}`,
-          runId: `run-${index}`,
-        }),
-      );
-    }
+    const { pending, stageMany } = fixture();
+    stageMany(2);
     const checked: string[] = [];
     const receipt = pending.interruptHistory(
       { ...scope, ids: ["input-1", "input-2"] },

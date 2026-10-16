@@ -56,6 +56,7 @@ import {
   retainSessionActorTranscriptReplica,
 } from "./session-actor-replica.js";
 import type { SessionActorTranscriptReplica } from "./session-actor-transcript-replica.js";
+import { sessionActorFileTarget } from "./session-actor-worker.test-support.js";
 import { createSessionActor } from "./session-actor.js";
 import { readSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
 import { mutatePendingInput, readPendingInput } from "./session-pending-input-operations.kernel.js";
@@ -91,15 +92,7 @@ async function withReplica(
     if (typeof identity.identity !== "string") {
       throw new Error("Replica fixture requires a durable database");
     }
-    const target = {
-      sessionKey: scope.sessionKey,
-      database: {
-        kind: "file" as const,
-        physicalIdentity: identity.identity,
-        birthtime: identity.birthtime,
-        nativeLocation: database.path,
-      },
-    };
+    const target = sessionActorFileTarget(database, scope.sessionKey);
     let generation = 0;
     const reacquire = () =>
       createSessionActorReplica({
@@ -145,6 +138,11 @@ function hydrate({ replica, load }: Fixture, epoch = "first", sequence = 0) {
   const snapshot = load(epoch, sequence);
   expect(selected(snapshot)).toBe(true);
   return snapshot;
+}
+
+function reloadInvalidated(fixture: Fixture) {
+  expect(fixture.replica.read()).toBeUndefined();
+  return hydrate(fixture);
 }
 
 it("keeps transcript replacement charges within the shared byte and entry budgets", async () => {
@@ -360,19 +358,7 @@ it("retains the first creation after restart before any replica reader and appli
       entry: { sessionId: "first-reader-session", updatedAt: 1, label: "created" },
     }));
     expect(created.ok).toBe(true);
-    const identity = readOpenClawAgentDatabaseIdentity(database);
-    if (typeof identity.identity !== "string") {
-      throw new Error("Expected durable session target");
-    }
-    const durableTarget = {
-      sessionKey,
-      database: {
-        kind: "file" as const,
-        physicalIdentity: identity.identity,
-        birthtime: identity.birthtime,
-        nativeLocation: database.path,
-      },
-    };
+    const durableTarget = sessionActorFileTarget(database, sessionKey);
     expect(readSessionActorEntryFacts(durableTarget)?.entry).toMatchObject({ label: "created" });
     await patchSessionEntryCore(createdScope, () => ({ updatedAt: 2, label: "updated" }));
     expect(readSessionActorEntryFacts(durableTarget)?.entry).toMatchObject({ label: "updated" });
@@ -582,8 +568,7 @@ it("invalidates partial native publications before disclosure and count-only par
       addSessionMember(scope, { identityId: "reader", addedBy: "owner", addedAt: 2 });
       expect(disclosures.length).toBeGreaterThan(0);
       expect(disclosures.every((value) => value === undefined)).toBe(true);
-      expect(replica.read()).toBeUndefined();
-      expect(hydrate(fixture).members).toEqual([
+      expect(reloadInvalidated(fixture).members).toEqual([
         { identityId: "reader", addedBy: "owner", addedAt: 2 },
       ]);
 
@@ -596,8 +581,7 @@ it("invalidates partial native publications before disclosure and count-only par
       expect(replica.read()?.participants[0]?.contributionCount).toBe(1);
       recordSessionParticipant(scope, { ...participant, promptedAt: 4 });
       // This writer intentionally omits a display delta for contribution-only changes.
-      expect(replica.read()).toBeUndefined();
-      expect(hydrate(fixture).participants[0]).toMatchObject({
+      expect(reloadInvalidated(fixture).participants[0]).toMatchObject({
         contributionCount: 2,
         lastPromptedAt: 4,
       });
@@ -720,15 +704,14 @@ it("installs complete outcomes and fences unknowns", async () => {
 
 it("invalidates for native owner, replacement, transcript and deletion writers", async () => {
   await withReplica((fixture) => {
-    const { replica, scope, database } = fixture;
+    const { scope, database } = fixture;
     hydrate(fixture);
     assignSessionOwner(scope, {
       owner: { type: "agent", id: "assigned" },
       assignedBy: { type: "agent", id: "main" },
       assignedAt: 10,
     });
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).entry?.owner?.actor.id).toBe("assigned");
+    expect(reloadInvalidated(fixture).entry?.owner?.actor.id).toBe("assigned");
 
     replaceSessionEntrySync(scope, {
       ...fixture.load().entry!,
@@ -737,8 +720,7 @@ it("invalidates for native owner, replacement, transcript and deletion writers",
       restartRecoveryDeliveryRunId: "recovery-run",
       restartRecoveryDeliveryReceiptState: "terminal-pending",
     });
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).entry).toMatchObject({
+    expect(reloadInvalidated(fixture).entry).toMatchObject({
       category: "work",
       archivedAt: 12,
       restartRecoveryDeliveryRunId: "recovery-run",
@@ -748,14 +730,12 @@ it("invalidates for native owner, replacement, transcript and deletion writers",
     expect(
       appendTranscriptEventSync(transcriptScope, { type: "proof", id: "first-event" }).ok,
     ).toBe(true);
-    expect(replica.read()).toBeUndefined();
-    const first = hydrate(fixture).transcript.watermark;
+    const first = reloadInvalidated(fixture).transcript.watermark;
     expect(first.maxSeq).not.toBeNull();
     expect(
       replaceTranscriptEventsSync(transcriptScope, [{ type: "proof", id: "replacement-event" }]),
     ).toBe(true);
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).transcript.watermark).not.toEqual(first);
+    expect(reloadInvalidated(fixture).transcript.watermark).not.toEqual(first);
 
     runOpenClawAgentWriteTransaction(
       (current) => deleteSessionEntryRows(current, scope.sessionKey),
@@ -765,8 +745,7 @@ it("invalidates for native owner, replacement, transcript and deletion writers",
         env: scope.env,
       },
     );
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).entry).toBeUndefined();
+    expect(reloadInvalidated(fixture).entry).toBeUndefined();
   });
 });
 
@@ -883,7 +862,7 @@ it("reuses list facts and invalidates summary watermarks after transcript writes
 
 it("invalidates pending custody for staging, promotion, terminal completion and withdrawal", async () => {
   await withReplica((fixture) => {
-    const { replica, scope, database } = fixture;
+    const { scope, database } = fixture;
     const options = { agentId: scope.agentId, path: database.path, env: scope.env };
     const mutate = (input: PendingInputMutation) =>
       mutatePendingInput(
@@ -925,8 +904,7 @@ it("invalidates pending custody for staging, promotion, terminal completion and 
 
     hydrate(fixture);
     stage("promote");
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).pendingInputs).toMatchObject([
+    expect(reloadInvalidated(fixture).pendingInputs).toMatchObject([
       { input_id: "promote", state: "queued" },
     ]);
     runOpenClawAgentWriteTransaction(
@@ -938,14 +916,12 @@ it("invalidates pending custody for staging, promotion, terminal completion and 
         }),
       options,
     );
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).pendingInputs).toEqual([]);
+    expect(reloadInvalidated(fixture).pendingInputs).toEqual([]);
 
     const complete = stage("complete");
     hydrate(fixture);
     mutate({ ...complete, kind: "complete", outcome: { reason: "completed", status: "ok" } });
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).pendingInputs).toEqual([]);
+    expect(reloadInvalidated(fixture).pendingInputs).toEqual([]);
     expect(readSessionInputCompletion(database, complete)?.outcome).toMatchObject({
       reason: "completed",
       status: "ok",
@@ -954,8 +930,7 @@ it("invalidates pending custody for staging, promotion, terminal completion and 
     const withdraw = stage("withdraw");
     hydrate(fixture);
     mutate({ ...withdraw, kind: "finish", inputId: "withdraw", disposition: "cancelled" });
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).pendingInputs).toMatchObject([
+    expect(reloadInvalidated(fixture).pendingInputs).toMatchObject([
       { input_id: "withdraw", state: "cancelled" },
     ]);
   });
@@ -963,7 +938,7 @@ it("invalidates pending custody for staging, promotion, terminal completion and 
 
 it("retires hot facts across the released SDK and restart delivery owners", async () => {
   await withReplica(async (fixture) => {
-    const { scope, replica } = fixture;
+    const { scope } = fixture;
     replaceSessionEntrySync(scope, {
       ...fixture.load().entry!,
       restartRecoveryDeliveryRunId: "recovery-run",
@@ -977,8 +952,7 @@ it("retires hot facts across the released SDK and restart delivery owners", asyn
         update: () => ({ label: "sdk label" }),
       }),
     ).resolves.toMatchObject({ label: "sdk label" });
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).entry).toMatchObject({
+    expect(reloadInvalidated(fixture).entry).toMatchObject({
       label: "sdk label",
       restartRecoveryDeliveryRunId: "recovery-run",
     });
@@ -990,17 +964,19 @@ it("retires hot facts across the released SDK and restart delivery owners", asyn
       toolCallId: "synthetic-delivery",
     };
     await expect(beginRestartRecoveryTerminalDelivery(delivery)).resolves.toBe("started");
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).entry?.restartRecoveryDeliveryReceiptState).toBe("terminal-pending");
+    expect(reloadInvalidated(fixture).entry?.restartRecoveryDeliveryReceiptState).toBe(
+      "terminal-pending",
+    );
     await expect(completeRestartRecoveryTerminalDelivery(delivery)).resolves.toBe("recorded");
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).entry?.restartRecoveryDeliveryReceiptState).toBe("delivered-terminal");
+    expect(reloadInvalidated(fixture).entry?.restartRecoveryDeliveryReceiptState).toBe(
+      "delivered-terminal",
+    );
   });
 });
 
 it("retires a resident session when native maintenance archives it", async () => {
   await withReplica(async (fixture) => {
-    const { scope, replica, database } = fixture;
+    const { scope, database } = fixture;
     const preservation = await prepareSessionMaintenancePreservation(scope.storePath);
     try {
       hydrate(fixture);
@@ -1022,8 +998,7 @@ it("retires a resident session when native maintenance archives it", async () =>
         { agentId: scope.agentId, path: database.path, env: scope.env },
       );
       expect(result.archived).toBe(1);
-      expect(replica.read()).toBeUndefined();
-      expect(hydrate(fixture).entry).toMatchObject({
+      expect(reloadInvalidated(fixture).entry).toMatchObject({
         archivedAt: expect.any(Number),
         archiveReason: "age-retention",
       });

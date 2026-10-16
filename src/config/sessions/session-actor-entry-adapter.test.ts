@@ -8,8 +8,10 @@ import {
   upsertSessionEntryCore,
 } from "./session-accessor.sqlite-entry.js";
 import { applySessionEntryExactReplacements } from "./session-accessor.sqlite-replacement-projection.js";
+import type { SessionActorStorage } from "./session-actor-contract.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { runWithSessionActorStorage } from "./session-actor-storage-binding.js";
+import type { SessionActorStorageWrites } from "./session-actor-storage-contract.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
 import * as maintenanceRuntime from "./store-maintenance-runtime.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
@@ -18,6 +20,16 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 const authority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
+const readEntry = (storage: SessionActorStorage) =>
+  storage.read({ type: "session.entry.read", input: {} }, authority);
+const readHistory = (storage: SessionActorStorage) =>
+  storage.read({ type: "session.history.hydrate", input: {} }, authority);
+async function commit<Key extends keyof SessionActorStorageWrites>(
+  storage: SessionActorStorage,
+  command: { type: Key; input: SessionActorStorageWrites[Key]["input"] },
+) {
+  expect(await storage.mutate(command, authority)).toMatchObject({ kind: "committed" });
+}
 const owned: Array<{ agentId: string; path: string }> = [];
 afterEach(() => {
   vi.restoreAllMocks();
@@ -150,9 +162,10 @@ describe("generic session entry APIs with actor memory storage", () => {
         label: "Requested label",
         owner,
       });
-      expect(
-        await current.storage!.read({ type: "session.history.hydrate", input: {} }, authority),
-      ).toMatchObject({ kind: "full", snapshot: { events } });
+      expect(await readHistory(current.storage!)).toMatchObject({
+        kind: "full",
+        snapshot: { events },
+      });
     });
     await Promise.all([actor.release(), current.release()]);
   });
@@ -211,9 +224,10 @@ describe("generic session entry APIs with actor memory storage", () => {
           label: change === "target changed" ? "Concurrent edit" : "Original",
         });
         expect(loadSessionEntryReadOnly(scope)?.owner).toBeUndefined();
-        expect(
-          await actor.storage!.read({ type: "session.history.hydrate", input: {} }, authority),
-        ).toMatchObject({ kind: "full", snapshot: { events: [] } });
+        expect(await readHistory(actor.storage!)).toMatchObject({
+          kind: "full",
+          snapshot: { events: [] },
+        });
       });
       await actor.release();
     },
@@ -332,15 +346,10 @@ describe("generic session entry APIs with actor memory storage", () => {
     const sessionKey = "agent:other:dashboard:incognito-replacement";
     const other = await owner.acquire({ database: owner.identity, sessionKey }, lifetime);
     try {
-      expect(
-        await other.storage!.mutate(
-          {
-            type: "session.entry.create",
-            input: { entry: { sessionId: "other", updatedAt: 1, label: "Other original" } },
-          },
-          authority,
-        ),
-      ).toMatchObject({ kind: "committed" });
+      await commit(other.storage!, {
+        type: "session.entry.create",
+        input: { entry: { sessionId: "other", updatedAt: 1, label: "Other original" } },
+      });
       await runWithSessionActorStorage(binding, () =>
         applySessionEntryExactReplacements({
           agentId: target.agentId,
@@ -356,12 +365,8 @@ describe("generic session entry APIs with actor memory storage", () => {
           }),
         }),
       );
-      expect(
-        await other.storage!.read({ type: "session.entry.read", input: {} }, authority),
-      ).toMatchObject({ label: "Other replaced" });
-      expect(
-        await actor.storage!.read({ type: "session.entry.read", input: {} }, authority),
-      ).toMatchObject({ label: "Original" });
+      expect(await readEntry(other.storage!)).toMatchObject({ label: "Other replaced" });
+      expect(await readEntry(actor.storage!)).toMatchObject({ label: "Original" });
     } finally {
       await Promise.all([actor.release(), other.release()]);
     }
@@ -372,31 +377,18 @@ describe("generic session entry APIs with actor memory storage", () => {
     const staleKey = "agent:main:dashboard:incognito-replacement-stale";
     const stale = await actor.storage!.acquire(staleKey);
     try {
-      const original = await actor.storage!.read(
-        { type: "session.entry.read", input: {} },
-        authority,
-      );
-      expect(
-        await actor.storage!.mutate(
-          {
-            type: "session.entry.replace",
-            input: { expected: original, entry: { ...original!, updatedAt: 0 } },
-          },
-          authority,
-        ),
-      ).toMatchObject({ kind: "committed" });
-      expect(
-        await stale.storage!.mutate(
-          {
-            type: "session.entry.create",
-            input: {
-              entry: { sessionId: "stale", updatedAt: 1 },
-              transcriptEvents: [{ type: "metadata", id: "retained" }],
-            },
-          },
-          authority,
-        ),
-      ).toMatchObject({ kind: "committed" });
+      const original = await readEntry(actor.storage!);
+      await commit(actor.storage!, {
+        type: "session.entry.replace",
+        input: { expected: original, entry: { ...original!, updatedAt: 0 } },
+      });
+      await commit(stale.storage!, {
+        type: "session.entry.create",
+        input: {
+          entry: { sessionId: "stale", updatedAt: 1 },
+          transcriptEvents: [{ type: "metadata", id: "retained" }],
+        },
+      });
       vi.spyOn(maintenanceRuntime, "resolveMaintenanceConfig").mockReturnValue(
         resolveMaintenanceConfigFromInput({ mode: "enforce", pruneAfter: "1d", maxEntries: 100 }),
       );
@@ -417,25 +409,14 @@ describe("generic session entry APIs with actor memory storage", () => {
           }),
         });
       await replace(false);
-      expect(
-        (await actor.storage!.read({ type: "session.entry.read", input: {} }, authority))
-          ?.updatedAt,
-      ).toBe(0);
-      expect(
-        (await stale.storage!.read({ type: "session.entry.read", input: {} }, authority))
-          ?.archivedAt,
-      ).toBeUndefined();
+      expect((await readEntry(actor.storage!))?.updatedAt).toBe(0);
+      expect((await readEntry(stale.storage!))?.archivedAt).toBeUndefined();
       await replace(true);
-      expect(
-        (await actor.storage!.read({ type: "session.entry.read", input: {} }, authority))
-          ?.updatedAt,
-      ).toBeGreaterThan(0);
-      expect(
-        await stale.storage!.read({ type: "session.entry.read", input: {} }, authority),
-      ).toMatchObject({ archivedAt: expect.any(Number) });
-      expect(
-        await stale.storage!.read({ type: "session.history.hydrate", input: {} }, authority),
-      ).toMatchObject({ snapshot: { events: [{ type: "metadata", id: "retained" }] } });
+      expect((await readEntry(actor.storage!))?.updatedAt).toBeGreaterThan(0);
+      expect(await readEntry(stale.storage!)).toMatchObject({ archivedAt: expect.any(Number) });
+      expect(await readHistory(stale.storage!)).toMatchObject({
+        snapshot: { events: [{ type: "metadata", id: "retained" }] },
+      });
       await expect(
         applySessionEntryExactReplacements({
           agentId: scope.agentId,
