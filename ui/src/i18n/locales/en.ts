@@ -3122,6 +3122,7 @@ export const en: TranslationMap & {
       },
     },
     sessionHeader: {
+      agentContext: "Session and workspace for {agent}",
       renameTooltip: "Rename session",
       renameAria: "Rename session {title}",
       renameInputAria: "Session title",

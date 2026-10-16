@@ -30,6 +30,7 @@ import {
   canSplitSessionView,
 } from "../../lib/sessions/session-menu-navigation.ts";
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
+import { resolveChatAgentIdentity } from "./chat-agent-id.ts";
 import { displayedChatSessionBranches } from "./chat-history-branches.ts";
 import { ChatPaneDiscussion } from "./chat-pane-discussion.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
@@ -538,6 +539,10 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       title:
         (catalog ? this.catalogSession?.name?.trim() : undefined) ||
         this.resolveHeaderSessionTitle(row),
+      agent:
+        !catalog && this.state?.settings.sidebarAgentsMode === "roster"
+          ? resolveChatAgentIdentity(this.state, this.context)
+          : undefined,
       session: row,
       showOwnerChip,
       ownerViewing,

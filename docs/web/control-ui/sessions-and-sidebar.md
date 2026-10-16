@@ -528,6 +528,12 @@ or replace them explicitly. New Android device labels are stored separately, so
 a generated conversation title can replace the device label without changing
 your custom name.
 
+In team mode, the chat header shows the conversation's agent avatar and name.
+Select the agent to open its session and workspace context: rename the session,
+open its parent conversation, or use the workspace actions. **Details** also
+keeps workspace information available. The regular session view and external
+CLI catalog headers keep their workspace/session breadcrumbs.
+
 ### Session menu
 
 Root sessions and ordinary Home-linked dashboard sessions can be pinned. Spawned and nested-child sessions reject pin requests, including when they appear as top-level threads. Subagent runs also reject pin requests and remain outside sidebar navigation.
