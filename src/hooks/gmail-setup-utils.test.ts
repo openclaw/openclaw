@@ -8,13 +8,9 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 
 const itUnix = process.platform === "win32" ? it.skip : it;
-const { runCommandWithTimeoutMock } = vi.hoisted(() => ({
-  runCommandWithTimeoutMock: vi.fn(),
-}));
+const { runCommandWithTimeoutMock } = vi.hoisted(() => ({ runCommandWithTimeoutMock: vi.fn() }));
 
-vi.mock("../process/exec.js", () => ({
-  runCommandWithTimeout: runCommandWithTimeoutMock,
-}));
+vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: runCommandWithTimeoutMock }));
 
 const success = {
   code: 0,
@@ -49,9 +45,19 @@ async function writeExecutable(executable: string): Promise<string> {
   return executable;
 }
 
-describe("ensureDependency binary availability", () => {
-  afterEach(() => runCommandWithTimeoutMock.mockReset());
+const pythonProbe = (executable: string, version = "3.12") => ({
+  ...success,
+  stdout: `${executable}\n${version}\n`,
+});
 
+function expectGcloudPython(python?: string) {
+  expect(runCommandWithTimeoutMock).toHaveBeenLastCalledWith(["gcloud", "config", "list"], {
+    timeoutMs: 120_000,
+    env: { CLOUDSDK_PYTHON: python, CLOUDSDK_PYTHON_ARGS: undefined },
+  });
+}
+
+describe("ensureDependency binary availability", () => {
   it.each([true, false])(
     "checks the installed executable when installer creates it: %s",
     async (createsBinary) => {
@@ -117,29 +123,14 @@ describe("runGcloud interpreter resolution", () => {
 
         await withEnvAsync({ PATH: shimDirs.join(path.delimiter) }, async () => {
           runCommandWithTimeoutMock
-            // python3 -> Python 3.9 (unsupported by gcloud): must be skipped.
-            .mockResolvedValueOnce({
-              ...success,
-              stdout: `${oldPython}\n3.9\n`,
-            })
-            // A future Python beyond gcloud's current cap must also be skipped.
-            .mockResolvedValueOnce({
-              ...success,
-              stdout: `${path.join(tmp, "python-future")}\n3.15\n`,
-            })
-            // Python 3.12 is supported and should be selected.
-            .mockResolvedValueOnce({
-              ...success,
-              stdout: `${goodPython}\n3.12\n`,
-            })
+            .mockResolvedValueOnce(pythonProbe(oldPython, "3.9"))
+            .mockResolvedValueOnce(pythonProbe(path.join(tmp, "python-future"), "3.15"))
+            .mockResolvedValueOnce(pythonProbe(goodPython))
             .mockResolvedValue(success);
 
           await runGcloud(["config", "list"]);
 
-          expect(runCommandWithTimeoutMock).toHaveBeenLastCalledWith(["gcloud", "config", "list"], {
-            timeoutMs: 120_000,
-            env: { CLOUDSDK_PYTHON: goodPython, CLOUDSDK_PYTHON_ARGS: undefined },
-          });
+          expectGcloudPython(goodPython);
         });
       });
     },
@@ -165,21 +156,12 @@ describe("runGcloud", () => {
           },
           async () => {
             runCommandWithTimeoutMock
-              .mockResolvedValueOnce({
-                ...success,
-                stdout: `${realPython}\n3.12\n`,
-              })
+              .mockResolvedValueOnce(pythonProbe(realPython))
               .mockResolvedValueOnce(success);
 
             await runGcloud(["config", "list"]);
 
-            expect(runCommandWithTimeoutMock).toHaveBeenLastCalledWith(
-              ["gcloud", "config", "list"],
-              {
-                timeoutMs: 120_000,
-                env: { CLOUDSDK_PYTHON: realPython, CLOUDSDK_PYTHON_ARGS: undefined },
-              },
-            );
+            expectGcloudPython(realPython);
           },
         );
       });
@@ -201,10 +183,7 @@ describe("runGcloud", () => {
         await runGcloud(["config", "list"]);
 
         expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
-        expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(["gcloud", "config", "list"], {
-          timeoutMs: 120_000,
-          env: { CLOUDSDK_PYTHON: undefined, CLOUDSDK_PYTHON_ARGS: undefined },
-        });
+        expectGcloudPython();
       },
     );
   });
@@ -228,22 +207,11 @@ describe("ensureTailscaleEndpoint", () => {
       signal: abortController.signal,
     });
 
-    expect(runCommandWithTimeoutMock).toHaveBeenNthCalledWith(
-      1,
-      ["tailscale", "status", "--json"],
-      {
-        timeoutMs: 30_000,
-        signal: abortController.signal,
-      },
-    );
-    expect(runCommandWithTimeoutMock).toHaveBeenNthCalledWith(
-      2,
-      ["tailscale", "serve", "--bg", "--set-path", "/gmail-pubsub", "--yes", "8788"],
-      {
-        timeoutMs: 30_000,
-        signal: abortController.signal,
-      },
-    );
+    const options = { timeoutMs: 30_000, signal: abortController.signal };
+    expect(runCommandWithTimeoutMock.mock.calls).toEqual([
+      [["tailscale", "status", "--json"], options],
+      [["tailscale", "serve", "--bg", "--set-path", "/gmail-pubsub", "--yes", "8788"], options],
+    ]);
   });
 });
 
@@ -274,13 +242,11 @@ describe("Gmail setup diagnostics and decisions", () => {
             hasBinaryMock.mockImplementation((bin: string) => bin === "brew");
             return withMockedPlatform("darwin", () => utils.ensureDependency("gog", ["gogcli"]));
           }
-          if (boundary.startsWith("tailscale")) {
-            if (boundary === "tailscale serve") {
-              runCommandWithTimeoutMock.mockResolvedValueOnce({
-                ...success,
-                stdout: '{"Self":{"DNSName":"fixture.example."}}',
-              });
-            }
+          if (boundary === "tailscale serve") {
+            runCommandWithTimeoutMock.mockResolvedValueOnce({
+              ...success,
+              stdout: '{"Self":{"DNSName":"fixture.example."}}',
+            });
             return utils.ensureTailscaleEndpoint({ mode: "serve", path: "/gmail", port: 8788 });
           }
           return utils.runGcloud([

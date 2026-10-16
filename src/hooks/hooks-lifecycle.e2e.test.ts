@@ -34,7 +34,7 @@ async function runHooksCli(args: string[], env: NodeJS.ProcessEnv) {
       maxBuffer: 1024 * 1024,
       timeout: 90_000,
     });
-    return { stdout: result.stdout, stderr: result.stderr };
+    return result;
   } catch (error) {
     const failed = error as Error & { stdout?: string; stderr?: string };
     throw new Error(
@@ -61,13 +61,11 @@ async function createHookPackFixture() {
   const archivePath = path.join(rootDir, "qa-lifecycle-hooks.tgz");
   const configPath = path.join(stateDir, "openclaw.json");
 
-  await Promise.all([
-    fs.mkdir(homeDir, { recursive: true }),
-    fs.mkdir(stateDir, { recursive: true }),
-    fs.mkdir(workspaceDir, { recursive: true }),
-    fs.mkdir(bundledHooksDir, { recursive: true }),
-    fs.mkdir(hookDir, { recursive: true }),
-  ]);
+  await Promise.all(
+    [homeDir, stateDir, workspaceDir, bundledHooksDir, hookDir].map((dir) =>
+      fs.mkdir(dir, { recursive: true }),
+    ),
+  );
 
   const initialConfig: OpenClawConfig = {
     agents: { defaults: { workspace: workspaceDir } },
@@ -76,29 +74,16 @@ async function createHookPackFixture() {
   await fs.writeFile(configPath, `${JSON.stringify(initialConfig, null, 2)}\n`, "utf8");
   await fs.writeFile(
     path.join(packageDir, "package.json"),
-    `${JSON.stringify(
-      {
-        name: "@openclaw/qa-lifecycle-hooks",
-        version: "1.0.0",
-        openclaw: { hooks: [`./hooks/${hookName}`] },
-      },
-      null,
-      2,
-    )}\n`,
+    JSON.stringify({
+      name: "@openclaw/qa-lifecycle-hooks",
+      version: "1.0.0",
+      openclaw: { hooks: [`./hooks/${hookName}`] },
+    }),
     "utf8",
   );
   await fs.writeFile(
     path.join(hookDir, "HOOK.md"),
-    [
-      "---",
-      `name: ${hookName}`,
-      "description: Records a Gateway startup lifecycle event",
-      'metadata: {"openclaw":{"events":["gateway:startup"]}}',
-      "---",
-      "",
-      "# QA lifecycle recorder",
-      "",
-    ].join("\n"),
+    `---\nname: ${hookName}\ndescription: Records a Gateway startup lifecycle event\nmetadata: {"openclaw":{"events":["gateway:startup"]}}\n---\n\n# QA lifecycle recorder\n`,
     "utf8",
   );
   await fs.writeFile(
@@ -131,6 +116,29 @@ async function createHookPackFixture() {
   };
 }
 
+async function toggleAndDispatch(
+  fixture: Awaited<ReturnType<typeof createHookPackFixture>>,
+  enabled: boolean,
+) {
+  const result = await runHooksCli([enabled ? "enable" : "disable", hookName], fixture.env);
+  expect(result.stdout).toContain(hookName);
+  const config = await readConfig(fixture.configPath);
+  expect(config.hooks?.internal?.entries?.[hookName]?.enabled).toBe(enabled);
+  clearInternalHooks();
+  const prepared = await prepareInternalHooks(config, fixture.workspaceDir, {
+    bundledHooksDir: fixture.bundledHooksDir,
+    managedHooksDir: fixture.managedHooksDir,
+  });
+  expect(prepared.loadedCount).toBe(enabled ? 1 : 0);
+  prepared.commit();
+  const event = createInternalHookEvent("gateway", "startup", "gateway:startup", {
+    cfg: config,
+    workspaceDir: fixture.workspaceDir,
+  });
+  await triggerInternalHook(event);
+  return event.messages;
+}
+
 describe("internal hook lifecycle", () => {
   it("installs, discovers, toggles, and dispatches an authored hook pack", async () => {
     const fixture = await createHookPackFixture();
@@ -160,52 +168,12 @@ describe("internal hook lifecycle", () => {
     });
     expect(discovered).toEqual([
       expect.objectContaining({
-        hook: expect.objectContaining({
-          name: hookName,
-          source: "openclaw-managed",
-        }),
-        metadata: expect.objectContaining({
-          events: ["gateway:startup"],
-        }),
+        hook: expect.objectContaining({ name: hookName, source: "openclaw-managed" }),
+        metadata: expect.objectContaining({ events: ["gateway:startup"] }),
       }),
     ]);
 
-    const disabled = await runHooksCli(["disable", hookName], fixture.env);
-    expect(disabled.stdout).toContain(hookName);
-    const disabledConfig = await readConfig(fixture.configPath);
-    expect(disabledConfig.hooks?.internal?.entries?.[hookName]?.enabled).toBe(false);
-
-    clearInternalHooks();
-    const disabledHooks = await prepareInternalHooks(disabledConfig, fixture.workspaceDir, {
-      bundledHooksDir: fixture.bundledHooksDir,
-      managedHooksDir: fixture.managedHooksDir,
-    });
-    expect(disabledHooks.loadedCount).toBe(0);
-    disabledHooks.commit();
-    const disabledEvent = createInternalHookEvent("gateway", "startup", "gateway:startup", {
-      cfg: disabledConfig,
-      workspaceDir: fixture.workspaceDir,
-    });
-    await triggerInternalHook(disabledEvent);
-    expect(disabledEvent.messages).not.toContain(hookMarker);
-
-    const enabled = await runHooksCli(["enable", hookName], fixture.env);
-    expect(enabled.stdout).toContain(hookName);
-    const enabledConfig = await readConfig(fixture.configPath);
-    expect(enabledConfig.hooks?.internal?.entries?.[hookName]?.enabled).toBe(true);
-
-    clearInternalHooks();
-    const enabledHooks = await prepareInternalHooks(enabledConfig, fixture.workspaceDir, {
-      bundledHooksDir: fixture.bundledHooksDir,
-      managedHooksDir: fixture.managedHooksDir,
-    });
-    expect(enabledHooks.loadedCount).toBe(1);
-    enabledHooks.commit();
-    const event = createInternalHookEvent("gateway", "startup", "gateway:startup", {
-      cfg: enabledConfig,
-      workspaceDir: fixture.workspaceDir,
-    });
-    await triggerInternalHook(event);
-    expect(event.messages).toContain(hookMarker);
+    expect(await toggleAndDispatch(fixture, false)).not.toContain(hookMarker);
+    expect(await toggleAndDispatch(fixture, true)).toContain(hookMarker);
   }, 180_000);
 });

@@ -12,12 +12,7 @@ const mocks = vi.hoisted(() => ({
   killProcessTree: vi.fn(),
   spawn: vi.fn(),
   log: { debug: vi.fn(), trace: vi.fn(), error: vi.fn(), warn: vi.fn(), info: vi.fn() },
-  defaultRuntime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    writeJson: vi.fn(),
-    exit: vi.fn(),
-  },
+  defaultRuntime: { log: vi.fn(), error: vi.fn(), writeJson: vi.fn(), exit: vi.fn() },
 }));
 
 vi.mock("../logging/subsystem.js", () => ({ createSubsystemLogger: () => mocks.log }));
@@ -30,13 +25,9 @@ vi.mock("node:child_process", async () => {
   );
 });
 
-vi.mock("../process/exec.js", () => ({
-  runCommandWithTimeout: mocks.runCommandWithTimeout,
-}));
+vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: mocks.runCommandWithTimeout }));
 
-vi.mock("../process/kill-tree.js", () => ({
-  killProcessTree: mocks.killProcessTree,
-}));
+vi.mock("../process/kill-tree.js", () => ({ killProcessTree: mocks.killProcessTree }));
 
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
@@ -47,9 +38,7 @@ vi.mock("../config/config.js", async () => {
   };
 });
 
-vi.mock("../runtime.js", () => ({
-  defaultRuntime: mocks.defaultRuntime,
-}));
+vi.mock("../runtime.js", () => ({ defaultRuntime: mocks.defaultRuntime }));
 
 vi.mock("./gmail-setup-utils.js", () => ({
   ensureDependency: mocks.ensureDependency,

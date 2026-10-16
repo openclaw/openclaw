@@ -1,4 +1,3 @@
-// Hook install tests cover archive extraction, validation, and install records.
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -14,6 +13,14 @@ import { createZipBuffer, createZipHookPackBuffer } from "./install-archive.test
 
 type InstallHooksFromPath = typeof import("./install.js").installHooksFromPath;
 
+const commandSuccess = {
+  code: 0,
+  stdout: "",
+  stderr: "",
+  signal: null,
+  killed: false,
+  termination: "exit",
+};
 const runCommandWithTimeoutMock = vi.fn();
 const scanPackageInstallSourceMock = vi.fn();
 const scanInstalledPackageDependencyTreeMock = vi.fn();
@@ -49,12 +56,7 @@ const zipHooksBuffer = await createZipHookPackBuffer({
 const zipTraversalBuffer = await createZipBuffer([{ path: "../pwned.txt", contents: "pwned" }]);
 const tarTraversalBuffer = fs.readFileSync(path.join(fixturesDir, "tar-traversal.tar"));
 const tarEvilIdBuffer = fs.readFileSync(path.join(fixturesDir, "tar-evil-id.tar"));
-const npmPackHooksBuffer = await createTarGzHookPackBuffer({
-  packageName: "@openclaw/test-hooks",
-  hookName: "one-hook",
-  hookDescription: "One hook",
-  heading: "One Hook",
-});
+const npmPackHooksBuffer = await createTarGzHookPackBuffer();
 
 function makeTempDir() {
   const dir = path.join(fixtureRoot, `case-${tempDirIndex++}`);
@@ -93,11 +95,7 @@ function writeArchiveFixture(params: { fileName: string; contents: Buffer }) {
     fs.writeFileSync(archivePath, params.contents);
     sharedArchivePathByName.set(archiveKey, archivePath);
   }
-  return {
-    stateDir,
-    archivePath,
-    hooksDir: path.join(stateDir, "hooks"),
-  };
+  return { stateDir, archivePath, hooksDir: path.join(stateDir, "hooks") };
 }
 
 function expectInstallFailureContains(
@@ -116,21 +114,20 @@ function expectInstallFailureContains(
 function writeHookPackManifest(params: {
   pkgDir: string;
   hooks: string[];
+  packageName?: string;
   dependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
   extensions?: string[];
 }) {
   fs.writeFileSync(
     path.join(params.pkgDir, "package.json"),
     JSON.stringify({
-      name: "@openclaw/test-hooks",
+      name: params.packageName ?? "@openclaw/test-hooks",
       version: "0.0.1",
       openclaw: {
         hooks: params.hooks,
         ...(params.extensions ? { extensions: params.extensions } : {}),
       },
       ...(params.dependencies ? { dependencies: params.dependencies } : {}),
-      ...(params.optionalDependencies ? { optionalDependencies: params.optionalDependencies } : {}),
     }),
     "utf-8",
   );
@@ -138,52 +135,30 @@ function writeHookPackManifest(params: {
 
 function writeHookPackFiles(params: {
   pkgDir: string;
-  packageName: string;
-  hookName: string;
-  hookDescription: string;
-  heading: string;
+  packageName?: string;
   dependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
 }) {
   writeHookPackManifest({
     pkgDir: params.pkgDir,
-    hooks: [`./hooks/${params.hookName}`],
+    packageName: params.packageName,
+    hooks: ["./hooks/one-hook"],
     dependencies: params.dependencies,
-    optionalDependencies: params.optionalDependencies,
   });
-  const hookDir = path.join(params.pkgDir, "hooks", params.hookName);
+  const hookDir = path.join(params.pkgDir, "hooks", "one-hook");
   fs.mkdirSync(hookDir, { recursive: true });
   fs.writeFileSync(
     path.join(hookDir, "HOOK.md"),
-    [
-      "---",
-      `name: ${params.hookName}`,
-      `description: ${params.hookDescription}`,
-      'metadata: {"openclaw":{"events":["command:new"]}}',
-      "---",
-      "",
-      `# ${params.heading}`,
-    ].join("\n"),
+    '---\nname: one-hook\ndescription: One hook\nmetadata: {"openclaw":{"events":["command:new"]}}\n---\n\n# One Hook',
     "utf-8",
   );
   fs.writeFileSync(path.join(hookDir, "handler.ts"), "export default async () => {};\n", "utf-8");
-
-  const manifestPath = path.join(params.pkgDir, "package.json");
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as Record<string, unknown>;
-  manifest.name = params.packageName;
-  fs.writeFileSync(manifestPath, JSON.stringify(manifest), "utf-8");
 }
 
-async function createTarGzHookPackBuffer(params: {
-  packageName: string;
-  hookName: string;
-  hookDescription: string;
-  heading: string;
-}) {
+async function createTarGzHookPackBuffer() {
   const workDir = path.join(fixtureRoot, "_generated", `pack-${randomUUID()}`);
   const packageDir = path.join(workDir, "package");
   fs.mkdirSync(packageDir, { recursive: true });
-  writeHookPackFiles({ pkgDir: packageDir, ...params });
+  writeHookPackFiles({ pkgDir: packageDir });
   const archivePath = path.join(workDir, "pack.tgz");
   await tar.c({ cwd: workDir, file: archivePath, gzip: true }, ["package"]);
   return fs.readFileSync(archivePath);
@@ -198,29 +173,10 @@ async function installArchiveFixture(params: { fileName: string; contents: Buffe
   return { fixture, result };
 }
 
-function expectPathInstallFailureContains(
-  result: Awaited<ReturnType<InstallHooksFromPath>>,
-  snippet: string,
-) {
-  expect(result.ok).toBe(false);
-  if (result.ok) {
-    throw new Error("expected install failure");
-  }
-  expect(result.error).toContain(snippet);
-}
-
 describe("installHooksFromPath archives", () => {
   it.each([
-    {
-      name: "zip",
-      fileName: "traversal.zip",
-      contents: zipTraversalBuffer,
-    },
-    {
-      name: "tar",
-      fileName: "traversal.tar",
-      contents: tarTraversalBuffer,
-    },
+    { name: "zip", fileName: "traversal.zip", contents: zipTraversalBuffer },
+    { name: "tar", fileName: "traversal.tar", contents: tarTraversalBuffer },
   ])("rejects $name archives with traversal entries", async (tc) => {
     const { fixture, result } = await installArchiveFixture({
       fileName: tc.fileName,
@@ -230,19 +186,27 @@ describe("installHooksFromPath archives", () => {
     expect(fs.existsSync(fixture.hooksDir)).toBe(false);
   });
 
-  it.each([
-    {
-      name: "traversal-like ids",
-      contents: tarEvilIdBuffer,
-    },
-  ])("rejects hook packs with $name", async (tc) => {
+  it("rejects hook packs with traversal-like ids", async () => {
     const { result } = await installArchiveFixture({
       fileName: "hooks.tar",
-      contents: tc.contents,
+      contents: tarEvilIdBuffer,
     });
     expectInstallFailureContains(result, ["reserved path segment"]);
   });
 });
+
+function makePackage(packageName = "@acme/canonical-hooks", dependencies?: Record<string, string>) {
+  const pkgDir = makeTempDir();
+  const hooksDir = path.join(makeTempDir(), "hooks");
+  writeHookPackFiles({ pkgDir, packageName, dependencies });
+  return { pkgDir, hooksDir };
+}
+
+function writeBareHook(hookDir: string, name = "my-hook") {
+  fs.mkdirSync(hookDir, { recursive: true });
+  fs.writeFileSync(path.join(hookDir, "HOOK.md"), `---\nname: ${name}\n---\n`, "utf8");
+  fs.writeFileSync(path.join(hookDir, "handler.ts"), "export default async () => {};\n");
+}
 
 describe("installHooksFromPath", () => {
   it.each([
@@ -268,13 +232,8 @@ describe("installHooksFromPath", () => {
     expect(result).toEqual({ ok: false, error, code });
   });
 
-  it.each([
-    {
-      mode: "package inspection",
-      options: { inspection: "package-kind" as const },
-      names: ["shared-hook", "shared-hook"],
-    },
-  ])("validates hook-name uniqueness before $mode side effects", async ({ options, names }) => {
+  it("validates hook-name uniqueness before package inspection side effects", async () => {
+    const names = ["shared-hook", "shared-hook"];
     const pkgDir = makeTempDir();
     const hooksDir = path.join(makeTempDir(), "managed-hooks");
     writeHookPackManifest({
@@ -290,7 +249,11 @@ describe("installHooksFromPath", () => {
     const targetAvailability = vi.spyOn(hookInstallRuntime, "ensureInstallTargetAvailable");
 
     try {
-      const result = await installHooksFromPath({ path: pkgDir, hooksDir, ...options });
+      const result = await installHooksFromPath({
+        path: pkgDir,
+        hooksDir,
+        inspection: "package-kind",
+      });
       expect(result).toEqual({
         ok: false,
         error: 'duplicate hook name "shared-hook" in hook package',
@@ -304,86 +267,42 @@ describe("installHooksFromPath", () => {
     }
   });
 
-  it.each(["dependencies"] as const)(
-    "installs %s with lifecycle scripts disabled",
-    async (dependencyField) => {
-      const workDir = makeTempDir();
-      const stateDir = makeTempDir();
-      const pkgDir = path.join(workDir, "package");
-      fs.mkdirSync(pkgDir, { recursive: true });
-      writeHookPackFiles({
-        pkgDir,
-        packageName: "@openclaw/test-hooks",
-        hookName: "one-hook",
-        hookDescription: "One hook",
-        heading: "One Hook",
-        [dependencyField]: { "left-pad": "1.3.0" },
-      });
+  it("installs dependencies with lifecycle scripts disabled", async () => {
+    const { pkgDir, hooksDir } = makePackage("@openclaw/test-hooks", { "left-pad": "1.3.0" });
 
-      const run = runCommandWithTimeoutMock;
-      await expectInstallUsesIgnoreScripts({
-        run,
-        install: async () =>
-          await installHooksFromPath({
-            path: pkgDir,
-            hooksDir: path.join(stateDir, "hooks"),
-          }),
-      });
-    },
-  );
+    const run = runCommandWithTimeoutMock;
+    await expectInstallUsesIgnoreScripts({
+      run,
+      install: async () => await installHooksFromPath({ path: pkgDir, hooksDir }),
+    });
+  });
 
-  it.each(["update"] as const)(
-    "preserves the declared OpenClaw dependency during %s",
-    async (mode) => {
-      const pkgDir = makeTempDir();
-      const hooksDir = path.join(makeTempDir(), "hooks");
-      writeHookPackFiles({
-        pkgDir,
-        packageName: "@openclaw/test-hooks",
-        hookName: "one-hook",
-        hookDescription: "One hook",
-        heading: "One Hook",
-        dependencies: { openclaw: ">=2026.4.5" },
-      });
-      if (mode === "update") {
-        fs.mkdirSync(path.join(hooksDir, "test-hooks"), { recursive: true });
+  it("preserves the declared OpenClaw dependency during update", async () => {
+    const { pkgDir, hooksDir } = makePackage("@openclaw/test-hooks", { openclaw: ">=2026.4.5" });
+    fs.mkdirSync(path.join(hooksDir, "test-hooks"), { recursive: true });
+    runCommandWithTimeoutMock.mockImplementation(async (_argv, optionsOrTimeout) => {
+      const cwd = typeof optionsOrTimeout === "number" ? undefined : optionsOrTimeout.cwd;
+      if (!cwd) {
+        throw new Error("expected staged hook install cwd");
       }
-      runCommandWithTimeoutMock.mockImplementation(async (_argv, optionsOrTimeout) => {
-        const cwd = typeof optionsOrTimeout === "number" ? undefined : optionsOrTimeout.cwd;
-        if (!cwd) {
-          throw new Error("expected staged hook install cwd");
-        }
-        const manifest = JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf8"));
-        expect(manifest.dependencies?.openclaw).toBe(">=2026.4.5");
-        return {
-          stdout: "",
-          stderr: "",
-          code: 0,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
-      });
+      const manifest = JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf8"));
+      expect(manifest.dependencies?.openclaw).toBe(">=2026.4.5");
+      return commandSuccess;
+    });
 
-      const result = await installHooksFromPath({ path: pkgDir, hooksDir, mode });
+    const result = await installHooksFromPath({ path: pkgDir, hooksDir, mode: "update" });
 
-      expect(result.ok).toBe(true);
-      expect(runCommandWithTimeoutMock).toHaveBeenCalled();
-    },
-  );
+    expect(result.ok).toBe(true);
+    expect(runCommandWithTimeoutMock).toHaveBeenCalled();
+  });
 
   it("blocks a staged single hook before publishing the target", async () => {
     const stateDir = makeTempDir();
     const workDir = makeTempDir();
     const hookDir = path.join(workDir, "my-hook");
-    fs.mkdirSync(hookDir, { recursive: true });
-    fs.writeFileSync(path.join(hookDir, "HOOK.md"), "---\nname: my-hook\n---\n", "utf8");
-    fs.writeFileSync(path.join(hookDir, "handler.ts"), "export default async () => {};\n");
+    writeBareHook(hookDir);
     scanInstalledPackageDependencyTreeMock.mockResolvedValue({
-      blocked: {
-        code: "security_scan_blocked",
-        reason: "blocked staged hook",
-      },
+      blocked: { code: "security_scan_blocked", reason: "blocked staged hook" },
     });
 
     const hooksDir = path.join(stateDir, "hooks");
@@ -440,9 +359,7 @@ describe("installHooksFromPath", () => {
     const stateDir = makeTempDir();
     const pkgDir = makeTempDir();
     const hookDir = path.join(pkgDir, "hooks", "one-hook");
-    fs.mkdirSync(hookDir, { recursive: true });
-    fs.writeFileSync(path.join(hookDir, "HOOK.md"), "---\nname: one-hook\n---\n", "utf8");
-    fs.writeFileSync(path.join(hookDir, "handler.ts"), "export default async () => {};\n");
+    writeBareHook(hookDir, "one-hook");
     writeHookPackManifest({
       pkgDir,
       hooks: ["./hooks/one-hook"],
@@ -455,74 +372,38 @@ describe("installHooksFromPath", () => {
       dryRun: true,
     });
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-    expect(result.packageKind).toBe("plugin-capable");
+    expect(result).toMatchObject({ ok: true, packageKind: "plugin-capable" });
   });
 
-  it.each(["hooks/hooks.json"])(
-    "classifies hook packages with bundle marker %s as plugin-capable",
-    async (bundleMarker) => {
-      const stateDir = makeTempDir();
-      const pkgDir = makeTempDir();
-      const hookDir = path.join(pkgDir, "hooks", "one-hook");
-      fs.mkdirSync(hookDir, { recursive: true });
-      fs.writeFileSync(path.join(hookDir, "HOOK.md"), "---\nname: one-hook\n---\n", "utf8");
-      fs.writeFileSync(path.join(hookDir, "handler.ts"), "export default async () => {};\n");
-      writeHookPackManifest({
-        pkgDir,
-        hooks: ["./hooks/one-hook"],
-      });
-      const markerPath = path.join(pkgDir, bundleMarker);
-      fs.mkdirSync(path.dirname(markerPath), { recursive: true });
-      fs.writeFileSync(markerPath, "{}\n", "utf8");
-
-      const hooksDir = path.join(stateDir, "hooks");
-      const result = await installHooksFromPath({
-        path: pkgDir,
-        hooksDir,
-        dryRun: true,
-      });
-
-      expect(result.ok).toBe(true);
-      if (!result.ok) {
-        return;
-      }
-      expect(result.packageKind).toBe("plugin-capable");
-      const rejected = await installHooksFromPath({
-        path: pkgDir,
-        hooksDir,
-        expectedPackageKind: "hook-only",
-      });
-      expect(rejected.ok).toBe(false);
-      if (rejected.ok) {
-        return;
-      }
-      expect(rejected.error).toContain("hook package kind mismatch");
-      expect(fs.existsSync(path.join(hooksDir, "test-hooks"))).toBe(false);
-    },
-  );
-
-  it("enforces install policy with the validated hook identity before local install side effects", async () => {
+  it("classifies hook packages with hooks/hooks.json as plugin-capable", async () => {
     const stateDir = makeTempDir();
     const pkgDir = makeTempDir();
-    writeHookPackFiles({
-      pkgDir,
-      packageName: "@acme/canonical-hooks",
-      hookName: "one-hook",
-      hookDescription: "One hook",
-      heading: "One Hook",
-    });
-    scanPackageInstallSourceMock.mockResolvedValue({
-      blocked: {
-        code: "security_scan_blocked",
-        reason: "blocked by operator install policy",
-      },
-    });
+    const hookDir = path.join(pkgDir, "hooks", "one-hook");
+    writeBareHook(hookDir, "one-hook");
+    writeHookPackManifest({ pkgDir, hooks: ["./hooks/one-hook"] });
+    const markerPath = path.join(pkgDir, "hooks/hooks.json");
+    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+    fs.writeFileSync(markerPath, "{}\n", "utf8");
 
     const hooksDir = path.join(stateDir, "hooks");
+    const result = await installHooksFromPath({ path: pkgDir, hooksDir, dryRun: true });
+
+    expect(result).toMatchObject({ ok: true, packageKind: "plugin-capable" });
+    const rejected = await installHooksFromPath({
+      path: pkgDir,
+      hooksDir,
+      expectedPackageKind: "hook-only",
+    });
+    expectInstallFailureContains(rejected, ["hook package kind mismatch"]);
+    expect(fs.existsSync(path.join(hooksDir, "test-hooks"))).toBe(false);
+  });
+
+  it("enforces install policy with the validated hook identity before local install side effects", async () => {
+    const { pkgDir, hooksDir } = makePackage();
+    scanPackageInstallSourceMock.mockResolvedValue({
+      blocked: { code: "security_scan_blocked", reason: "blocked by operator install policy" },
+    });
+
     const result = await installHooksFromPath({
       path: pkgDir,
       hooksDir,
@@ -545,28 +426,14 @@ describe("installHooksFromPath", () => {
         mode: "install",
         requestKind: "plugin-dir",
         requestedSpecifier: pkgDir,
-        source: {
-          kind: "local-path",
-          authority: "user",
-          mutable: true,
-          network: false,
-        },
+        source: { kind: "local-path", authority: "user", mutable: true, network: false },
       }),
     );
     expect(fs.existsSync(path.join(hooksDir, "canonical-hooks"))).toBe(false);
   });
 
   it("inspects hook package kind without running install policy or target availability checks", async () => {
-    const stateDir = makeTempDir();
-    const pkgDir = makeTempDir();
-    writeHookPackFiles({
-      pkgDir,
-      packageName: "@acme/canonical-hooks",
-      hookName: "one-hook",
-      hookDescription: "One hook",
-      heading: "One Hook",
-    });
-    const hooksDir = path.join(stateDir, "hooks");
+    const { pkgDir, hooksDir } = makePackage();
     const ensureInstallTargetAvailableSpy = vi.spyOn(
       hookInstallRuntime,
       "ensureInstallTargetAvailable",
@@ -579,11 +446,7 @@ describe("installHooksFromPath", () => {
         inspection: "package-kind",
       });
 
-      expect(result.ok).toBe(true);
-      if (!result.ok) {
-        return;
-      }
-      expect(result.packageKind).toBe("hook-only");
+      expect(result).toMatchObject({ ok: true, packageKind: "hook-only" });
       expect(scanPackageInstallSourceMock).not.toHaveBeenCalled();
       expect(ensureInstallTargetAvailableSpy).not.toHaveBeenCalled();
       expect(fs.existsSync(hooksDir)).toBe(false);
@@ -603,18 +466,12 @@ describe("installHooksFromPath", () => {
         params.packageDir !== archivePath &&
         fs.existsSync(path.join(params.packageDir, "package.json"));
       return {
-        blocked: {
-          code: "security_scan_blocked",
-          reason: "blocked extracted hook package",
-        },
+        blocked: { code: "security_scan_blocked", reason: "blocked extracted hook package" },
       };
     });
 
     const hooksDir = path.join(stateDir, "hooks");
-    const result = await installHooksFromPath({
-      path: archivePath,
-      hooksDir,
-    });
+    const result = await installHooksFromPath({ path: archivePath, hooksDir });
 
     expect(result).toEqual({
       ok: false,
@@ -627,64 +484,30 @@ describe("installHooksFromPath", () => {
         pluginId: "zip-hooks",
         requestKind: "plugin-archive",
         requestedSpecifier: archivePath,
-        source: {
-          kind: "archive",
-          authority: "user",
-          mutable: true,
-          network: false,
-        },
+        source: { kind: "archive", authority: "user", mutable: true, network: false },
       }),
     );
     expect(fs.existsSync(path.join(hooksDir, "zip-hooks"))).toBe(false);
   });
 
   it("fails closed when hook install policy evaluation throws", async () => {
-    const stateDir = makeTempDir();
-    const pkgDir = makeTempDir();
-    writeHookPackFiles({
-      pkgDir,
-      packageName: "@acme/canonical-hooks",
-      hookName: "one-hook",
-      hookDescription: "One hook",
-      heading: "One Hook",
-    });
+    const { pkgDir, hooksDir } = makePackage();
     scanPackageInstallSourceMock.mockRejectedValue(new Error("policy runner unavailable"));
 
-    const result = await installHooksFromPath({
-      path: pkgDir,
-      hooksDir: path.join(stateDir, "hooks"),
-    });
+    const result = await installHooksFromPath({ path: pkgDir, hooksDir });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
-    expect(result.code).toBe("security_scan_failed");
-    expect(result.error).toContain("policy runner unavailable");
+    expect(result).toMatchObject({
+      ok: false,
+      code: "security_scan_failed",
+      error: expect.stringContaining("policy runner unavailable"),
+    });
   });
 
   it("blocks materialized hook dependencies before publishing the target", async () => {
-    const stateDir = makeTempDir();
-    const pkgDir = makeTempDir();
-    writeHookPackFiles({
-      pkgDir,
-      packageName: "@acme/canonical-hooks",
-      hookName: "one-hook",
-      hookDescription: "One hook",
-      heading: "One Hook",
+    const { pkgDir, hooksDir } = makePackage("@acme/canonical-hooks", {
+      "blocked-transitive": "1.0.0",
     });
-    const manifestPath = path.join(pkgDir, "package.json");
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
-    manifest.dependencies = { "blocked-transitive": "1.0.0" };
-    fs.writeFileSync(manifestPath, JSON.stringify(manifest), "utf8");
-    runCommandWithTimeoutMock.mockResolvedValue({
-      code: 0,
-      stdout: "",
-      stderr: "",
-      signal: null,
-      killed: false,
-      termination: "exit",
-    });
+    runCommandWithTimeoutMock.mockResolvedValue(commandSuccess);
     scanInstalledPackageDependencyTreeMock.mockResolvedValue({
       blocked: {
         code: "security_scan_blocked",
@@ -692,11 +515,7 @@ describe("installHooksFromPath", () => {
       },
     });
 
-    const hooksDir = path.join(stateDir, "hooks");
-    const result = await installHooksFromPath({
-      path: pkgDir,
-      hooksDir,
-    });
+    const result = await installHooksFromPath({ path: pkgDir, hooksDir });
 
     expect(result).toEqual({
       ok: false,
@@ -756,17 +575,14 @@ describe("installHooksFromPath", () => {
           continue;
         }
       }
-      writeHookPackManifest({
-        pkgDir,
-        hooks: [...testCase.hooks],
-      });
+      writeHookPackManifest({ pkgDir, hooks: [...testCase.hooks] });
 
       const result = await installHooksFromPath({
         path: pkgDir,
         hooksDir: path.join(stateDir, "hooks"),
       });
 
-      expectPathInstallFailureContains(result, testCase.expected);
+      expectInstallFailureContains(result, [testCase.expected]);
     }
   });
 });
@@ -783,7 +599,7 @@ describe("installHooksFromNpmSpec", () => {
         packTmpDir = typeof opts === "number" ? "" : (opts.cwd ?? "");
         fs.writeFileSync(path.join(packTmpDir, packedName), npmPackHooksBuffer);
         return {
-          code: 0,
+          ...commandSuccess,
           stdout: JSON.stringify([
             {
               id: "@openclaw/test-hooks@0.0.1",
@@ -794,10 +610,6 @@ describe("installHooksFromNpmSpec", () => {
               shasum: "hookshasum",
             },
           ]),
-          stderr: "",
-          signal: null,
-          killed: false,
-          termination: "exit",
         };
       }
       throw new Error(`unexpected command: ${argv.join(" ")}`);

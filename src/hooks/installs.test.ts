@@ -24,6 +24,16 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   });
 });
 
+const readText = (file: string) => fs.readFileSync(file, "utf8");
+const readPayload = (dir: string) => readText(join(dir, "payload.txt"));
+const readEntry = (file: string) =>
+  JSON.parse(readText(file)).hooks?.internal?.entries?.["command-audit"]?.enabled;
+
+async function persistenceSnapshot() {
+  const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
+  return { config: snapshot.config, baseHash: snapshot.hash ?? undefined, writeOptions };
+}
+
 describe("hook install machine state", () => {
   it("reads newly recorded packs after a worker read", async () => {
     const stateDir = tempDirs.make("openclaw-hook-installs-");
@@ -32,23 +42,9 @@ describe("hook install machine state", () => {
     expect(await readHookInstallsAsync(options)).toMatchObject({ alpha: { source: "npm" } });
 
     recordHookInstall({ hookId: "beta", source: "path" }, options);
-    expect(await readHookInstallsAsync(options)).toMatchObject({
-      alpha: { source: "npm" },
-      beta: { source: "path" },
-    });
-  });
-
-  it("merges independently recorded hook packs", () => {
-    const stateDir = tempDirs.make("openclaw-hook-installs-");
-    const options = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
-
-    recordHookInstall({ hookId: "alpha", source: "npm" }, options);
-    recordHookInstall({ hookId: "beta", source: "path" }, options);
-
-    expect(readHookInstalls(options)).toMatchObject({
-      alpha: { source: "npm" },
-      beta: { source: "path" },
-    });
+    const expected = { alpha: { source: "npm" }, beta: { source: "path" } };
+    expect(await readHookInstallsAsync(options)).toMatchObject(expected);
+    expect(readHookInstalls(options)).toMatchObject(expected);
   });
 });
 
@@ -123,18 +119,14 @@ describe("hook install commit ownership", () => {
       await withHookInstallFixture(
         mode,
         async ({ configPath, sourceDir, targetDir, payloadTransaction }) => {
-          const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
+          const snapshot = await persistenceSnapshot();
           const previousRecords = readConfigMachineState("hooks.internal.installs");
-          const previousConfig = fs.readFileSync(configPath, "utf8");
+          const previousConfig = readText(configPath);
           let closed = phase === "before record";
 
           await expect(
             persistHookPackInstall({
-              snapshot: {
-                config: snapshot.config,
-                baseHash: snapshot.hash ?? undefined,
-                writeOptions,
-              },
+              snapshot,
               hookPackId: "alpha",
               hooks: ["command-audit"],
               // Missing optional fields must compare equal to their persisted JSON representation.
@@ -142,11 +134,7 @@ describe("hook install commit ownership", () => {
               payloadTransaction,
               beforePersistentApply() {
                 if (phase === "after config") {
-                  closed = Boolean(
-                    JSON.parse(fs.readFileSync(configPath, "utf8")).hooks?.internal?.entries?.[
-                      "command-audit"
-                    ]?.enabled,
-                  );
+                  closed = Boolean(readEntry(configPath));
                 }
                 if (closed) {
                   throw new Error("hook authority closed");
@@ -161,14 +149,12 @@ describe("hook install commit ownership", () => {
           ).rejects.toThrow("hook authority closed");
 
           expect(readConfigMachineState("hooks.internal.installs")).toEqual(previousRecords);
-          expect(fs.readFileSync(configPath, "utf8")).toBe(previousConfig);
-          expect(fs.readFileSync(join(sourceDir, "payload.txt"), "utf8")).toBe("candidate");
+          expect(readText(configPath)).toBe(previousConfig);
+          expect(readPayload(sourceDir)).toBe("candidate");
           if (mode === "install") {
             expect(fs.existsSync(targetDir)).toBe(false);
           } else {
-            expect(fs.readFileSync(join(targetDir, "payload.txt"), "utf8")).toBe(
-              mode === "update" ? "previous" : "candidate",
-            );
+            expect(readPayload(targetDir)).toBe(mode === "update" ? "previous" : "candidate");
           }
         },
       );
@@ -239,14 +225,10 @@ describe("hook install commit ownership", () => {
           if (!payloadTransaction) {
             throw new Error("expected payload transaction");
           }
-          const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
+          const snapshot = await persistenceSnapshot();
           await expect(
             persistHookPackInstall({
-              snapshot: {
-                config: snapshot.config,
-                baseHash: snapshot.hash ?? undefined,
-                writeOptions,
-              },
+              snapshot,
               hookPackId: "alpha",
               hooks: ["command-audit"],
               install: { source: "path", installPath: targetDir, version: "2.0.0" },
@@ -272,11 +254,8 @@ describe("hook install commit ownership", () => {
           ).rejects.toThrow(failure === "cleanup" ? "committed" : "logging unavailable");
 
           expect(readHookInstalls().alpha).toMatchObject({ version: "2.0.0" });
-          expect(fs.readFileSync(join(targetDir, "payload.txt"), "utf8")).toBe("candidate");
-          expect(
-            JSON.parse(fs.readFileSync(configPath, "utf8")).hooks.internal.entries["command-audit"]
-              .enabled,
-          ).toBe(true);
+          expect(readPayload(targetDir)).toBe("candidate");
+          expect(readEntry(configPath)).toBe(true);
         },
       );
     },
