@@ -13,6 +13,7 @@ import {
 } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
+import { createCommandResult as result } from "../../test-utils/process-result.js";
 import {
   WorkerTunnelOwnerDisconnectedError,
   type WorkerWorkspaceCommand,
@@ -84,18 +85,6 @@ function observeApplyChild(
       onAbort();
     }
   });
-}
-
-function result(overrides: Partial<SpawnResult> = {}): SpawnResult {
-  return {
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
 }
 
 function manifest(content: string): WorkerWorkspaceManifest {

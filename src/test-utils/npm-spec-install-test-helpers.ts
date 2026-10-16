@@ -5,6 +5,9 @@ import { expect } from "vitest";
 import type { CommandOptions, SpawnResult } from "../process/exec.js";
 import { expectSingleNpmInstallIgnoreScriptsCall } from "./exec-assertions.js";
 import { npmCommandArgs } from "./npm-command.js";
+import { createCommandResult } from "./process-result.js";
+
+export { createCommandResult };
 
 const emptyNpmFailure: SpawnResult = {
   stdout: "",
@@ -89,19 +92,6 @@ type NpmViewMetadata = {
   integrity?: string;
   shasum?: string;
 };
-
-// Keep command doubles shaped like the real process helper across install and update tests.
-export function createCommandResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
-  return {
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
-}
 
 /** Mocks npm view JSON metadata for package install validation tests. */
 export function mockNpmViewMetadataResult(
