@@ -13,6 +13,12 @@ afterEach(() => fixture.cleanup());
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const nodeReportIt = it.skipIf(!shouldEnableNodeDiagnosticReports());
 const teardownTimeoutError = "[vitest-pool-runner]: Timeout waiting for worker to respond";
+const readJson = (file: string) => JSON.parse(fs.readFileSync(file, "utf8"));
+const exitMarker = (pid: number) => ({
+  operation: "process.exit",
+  pid,
+  enteredAt: expect.any(Number),
+});
 
 nodeReportIt.for([
   "normal",
@@ -250,7 +256,7 @@ export default {
         });
         const output = `${result.stdout}\n${result.stderr}`;
         expect(output).toMatch(/2 passed/u);
-        const outcome = JSON.parse(fs.readFileSync(outcomeFile, "utf8"));
+        const outcome = readJson(outcomeFile);
         expect(outcome, output).toEqual({
           // Vitest's reason reflects test assertions; unhandled teardown errors set the CLI exit.
           reason: "passed",
@@ -273,12 +279,9 @@ export default {
           }
         }
         if (mode === "normal" || mode === "write-failure") {
-          expect(JSON.parse(fs.readFileSync(exitReceipt, "utf8"))).toEqual({
+          expect(readJson(exitReceipt)).toEqual({
             code: 0,
-            marker:
-              useAdapter && mode === "normal"
-                ? { operation: "process.exit", pid: worker.pid, enteredAt: expect.any(Number) }
-                : null,
+            marker: useAdapter && mode === "normal" ? exitMarker(worker.pid) : null,
             writeFailure: useAdapter && mode === "write-failure",
           });
           expect(result.code, output).toBe(0);
@@ -287,7 +290,7 @@ export default {
           continue;
         }
         expect(result.code, output).toBe(1);
-        expect(JSON.parse(fs.readFileSync(receipt, "utf8"))).toEqual({
+        expect(readJson(receipt)).toEqual({
           liveDeadlines: 1,
           delay: 60_000,
         });
@@ -307,11 +310,7 @@ export default {
         if (mode === "exit-listener") {
           const marker = output.match(/exit-entry\.json: (\{[^\n]+\})/u)?.[1];
           expect(marker, output).toBeDefined();
-          expect(JSON.parse(marker!)).toEqual({
-            operation: "process.exit",
-            pid: worker.pid,
-            enteredAt: expect.any(Number),
-          });
+          expect(JSON.parse(marker!)).toEqual(exitMarker(worker.pid));
           expect(report).toBe("No complete Node diagnostic report captured within 2000ms.");
           continue;
         }
@@ -321,7 +320,7 @@ export default {
         if (mode === "blocked-after-ack") {
           expect(report).toBe("No complete Node diagnostic report captured within 2000ms.");
           expect(output).toContain('"operation":"Atomics.wait"');
-          expect(JSON.parse(fs.readFileSync(diagnosticReceipt, "utf8"))).toEqual({
+          expect(readJson(diagnosticReceipt)).toEqual({
             delay: 2_000,
             scheduled: 1,
             fired: 1,
@@ -401,13 +400,11 @@ process.exit("7");
           signal,
         });
         expect(code, stderr.text()).toBe(7);
-        const result = JSON.parse(fs.readFileSync(receipt, "utf8"));
+        const result = readJson(receipt);
         expect(result).toEqual({
           code: 7,
           pid: expect.any(Number),
-          marker: useAdapter
-            ? { operation: "process.exit", pid: result.pid, enteredAt: expect.any(Number) }
-            : null,
+          marker: useAdapter ? exitMarker(result.pid) : null,
         });
         outcomes.push({ code, listenerCode: result.code });
       }

@@ -41,6 +41,28 @@ function observeReadyLine(child: ChildProcess, line: string, ready: () => void) 
   child.stdout!.on("data", observe);
 }
 
+function expectClosedPipes(child: ChildProcess) {
+  expect(child.stdout?.closed).toBe(true);
+  expect(child.stderr?.closed).toBe(true);
+}
+
+function observeOutcome<T>(invocation: Promise<T>) {
+  return invocation.then(
+    (result) => ({ result, error: undefined }),
+    (error: unknown) => ({ result: undefined, error }),
+  );
+}
+
+function processRows(args: string[]) {
+  return execFileSync("ps", args, { encoding: "utf8", timeout: 1_000 })
+    .trim()
+    .split("\n")
+    .map((row) => {
+      const [pid, ppid, pgid] = row.trim().split(/\s+/).map(Number);
+      return { pid: pid!, ppid: ppid!, pgid: pgid! };
+    });
+}
+
 async function waitForFixtureProcessesDead(pids: number[], signal: AbortSignal) {
   // Group completion can precede Darwin's foreign-zombie reap. The harness
   // has no child handles for those PIDs; only the owning test bounds observation.
@@ -125,8 +147,9 @@ it.for([
     const root = tempDirs.make("vitest-fork-shutdown-", fixtureRoots);
     const { stdout } = await runFixture(root, options, [], { signal: context.signal });
     const result = JSON.parse(stdout);
-    console.log(JSON.stringify({ root, options, ...result, output: undefined }));
     const { scenario, setup, fail } = options;
+    const hasEvent = (name: string) =>
+      result.events.some((event: { event: string }) => event.event === name);
     if (scenario === "forced") {
       // Node uses TerminateProcess for TERM on Windows; POSIX exercises escalation.
       expect(result.signal).toBe(process.platform === "win32" ? "SIGTERM" : "SIGKILL");
@@ -163,32 +186,24 @@ it.for([
       }
       expect(result.output).toContain("unexpected-exit-tail");
       expect(result.output).not.toContain("[test] passed");
-      expect(result.events.some((event: { event: string }) => event.event === "terminate")).toBe(
-        false,
-      );
+      expect(hasEvent("terminate")).toBe(false);
     } else if (scenario.startsWith("hung-")) {
       // Advance the real stop deadline only after the worker reaches the hung boundary.
       expect(result.events).toContainEqual({ event: "deadline", delay: 60_000 });
       expect(result.output).toContain("Timeout waiting for worker to respond");
-      expect(result.events.some((event: { event: string }) => event.event === "terminate")).toBe(
-        true,
-      );
+      expect(hasEvent("terminate")).toBe(true);
     } else if (scenario === "bad-exit") {
       expect(result.output).toContain("Worker exited during graceful shutdown");
     } else if (scenario === "custom") {
       expect(result.output).toContain("1 passed");
       expect(result.events).toContainEqual({ event: "stopped-consumed" });
       expect(result.events).toContainEqual({ event: "parent-stop" });
-      expect(result.events.some((event: { event: string }) => event.event === "deadline")).toBe(
-        false,
-      );
+      expect(hasEvent("deadline")).toBe(false);
       expect(result.events).toContainEqual({ event: "terminate", signal: "SIGTERM" });
     } else if (scenario !== "plain") {
       expect(result.profiles.cpu, result.output).toBeGreaterThan(0);
       expect(result.profiles.heap, result.output).toBeGreaterThan(0);
-      expect(result.events.some((event: { event: string }) => event.event === "terminate")).toBe(
-        false,
-      );
+      expect(hasEvent("terminate")).toBe(false);
       if (scenario === "slow-exit") {
         expect(result.events).toContainEqual({ event: "home-removed" });
       }
@@ -228,8 +243,7 @@ it.for([
               expect(Buffer.byteLength(result[stream], "utf8")).toBe(options.limit);
             });
         await proof;
-        expect(child.stdout?.closed).toBe(true);
-        expect(child.stderr?.closed).toBe(true);
+        expectClosedPipes(child);
       }
     }
   }),
@@ -292,10 +306,7 @@ installVitestShutdownCancellation({root:${JSON.stringify(root)},preload:import.m
       } finally {
         deadlineSpy?.mockRestore();
       }
-      const outcome = invocation.then(
-        (result) => ({ result, error: undefined }),
-        (error: unknown) => ({ result: undefined, error }),
-      );
+      const outcome = observeOutcome(invocation);
       const pids: number[] = [];
       try {
         await withinTest(
@@ -321,16 +332,7 @@ installVitestShutdownCancellation({root:${JSON.stringify(root)},preload:import.m
             )
             .toMatch(/^T/);
         }
-        const rows = execFileSync("ps", ["-axo", "pid=,ppid=,pgid="], {
-          encoding: "utf8",
-          timeout: 1_000,
-        })
-          .trim()
-          .split("\n")
-          .map((row) => {
-            const [pid, ppid, pgid] = row.trim().split(/\s+/).map(Number);
-            return { pid: pid!, ppid: ppid!, pgid: pgid! };
-          });
+        const rows = processRows(["-axo", "pid=,ppid=,pgid="]);
         const owned = new Set([child.pid!]);
         for (let previous = 0; previous !== owned.size;) {
           previous = owned.size;
@@ -354,27 +356,12 @@ installVitestShutdownCancellation({root:${JSON.stringify(root)},preload:import.m
         const result = await withinTest(outcome, context.signal);
         // The fixture writes this synchronously in its TERM handler, before exit.
         expect(fs.existsSync(path.join(root, "term-received"))).toBe(true);
-        console.log(
-          JSON.stringify({
-            mode,
-            root,
-            fixture: child.pid,
-            pids,
-            processes: rows.filter((row) => owned.has(row.pid)),
-            exitCode: child.exitCode,
-            signalCode: child.signalCode,
-            ...result,
-          }),
-        );
         expect(result.error).toMatchObject({
           code: mode === "timeout" ? "ETIMEDOUT" : 143,
-        });
-        expect(result.error).toMatchObject({
           stderr: expect.stringContaining("exit code 143"),
         });
         expect(pids.filter(isProcessAlive)).toEqual([]);
-        expect(child.stdout?.closed).toBe(true);
-        expect(child.stderr?.closed).toBe(true);
+        expectClosedPipes(child);
         expectReleasedNamespace(root);
         ownedDirs.cleanup();
       } finally {
@@ -438,10 +425,7 @@ spawn(process.execPath, ["-e", ${JSON.stringify(descendantSource)}, process.argv
           observeReadyLine(child, "descendant-ready\n", () => descendantReady.resolve());
         },
       });
-      const outcome = invocation.then(
-        (result) => ({ result, error: undefined }),
-        (error: unknown) => ({ result: undefined, error }),
-      );
+      const outcome = observeOutcome(invocation);
       try {
         await withinTest(
           awaitGateBeforeSettlement(
@@ -457,17 +441,12 @@ spawn(process.execPath, ["-e", ${JSON.stringify(descendantSource)}, process.argv
         }
         context.signal.throwIfAborted();
         const childPid = child.pid!;
-        const processes = execFileSync(
-          "ps",
-          ["-p", `${childPid},${descendantPid}`, "-o", "pid=,ppid=,pgid="],
-          { encoding: "utf8", timeout: 1_000 },
-        )
-          .trim()
-          .split("\n")
-          .map((row) => {
-            const [pid, ppid, pgid] = row.trim().split(/\s+/).map(Number);
-            return { pid, ppid, pgid };
-          });
+        const processes = processRows([
+          "-p",
+          `${childPid},${descendantPid}`,
+          "-o",
+          "pid=,ppid=,pgid=",
+        ]);
         expect(processes).toEqual(
           expect.arrayContaining([
             { pid: childPid, ppid: process.pid, pgid: childPid },
@@ -486,22 +465,10 @@ spawn(process.execPath, ["-e", ${JSON.stringify(descendantSource)}, process.argv
             stderr: expect.stringContaining(`${role}-err\n`),
           });
         }
-        expect(child.exitCode).toBeNull();
-        expect(child.signalCode).toBe("SIGKILL");
+        expect(child).toMatchObject({ exitCode: null, signalCode: "SIGKILL" });
         expect([childPid, descendantPid].filter(isProcessAlive)).toEqual([]);
         expect(inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" })).toBe("dead");
-        expect(child.stdout?.closed).toBe(true);
-        expect(child.stderr?.closed).toBe(true);
-        console.log(
-          JSON.stringify({
-            root,
-            childPid,
-            descendantPid,
-            processes,
-            signal: child.signalCode,
-            ...result,
-          }),
-        );
+        expectClosedPipes(child);
       } finally {
         controller.abort();
         expect((await outcome).error).toMatchObject({ code: "ABORT_ERR" });

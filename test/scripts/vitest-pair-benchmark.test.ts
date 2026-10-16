@@ -75,11 +75,7 @@ const manifest: BenchmarkManifest = {
       files: ["src/gateway.test.ts"],
     },
     { id: "ui", critical: true, config: "test/ui.config.ts", files: ["ui/view.test.ts"] },
-    {
-      id: "lifecycle",
-      critical: true,
-      files: ["test/scripts/lifecycle.test.ts"],
-    },
+    { id: "lifecycle", critical: true, files: ["test/scripts/lifecycle.test.ts"] },
   ],
 };
 
@@ -120,18 +116,18 @@ function recordsFor(
         : () => durations;
   const records: BenchmarkRunRecord[] = [];
   for (const lane of manifest.lanes) {
-    for (let round = 1; round <= manifest.rounds; round += 1) {
-      const pair = `measured-${round}-${lane.id}`;
+    for (const round of [...Array.from({ length: manifest.rounds }, (_, i) => i + 1), null]) {
+      const pair = round === null ? `cold-${lane.id}` : `measured-${round}-${lane.id}`;
       const pairDurations = durationsFor(lane.id, round);
       for (const side of ["baseline", "candidate"] as const) {
         records.push({
           id: `${pair}-${side}`,
-          phase: "measured",
+          phase: round === null ? "cold" : "measured",
           side,
           lane: lane.id,
           round,
           pair,
-          cacheMode: "warm",
+          cacheMode: round === null ? "fresh" : "warm",
           command: ["node"],
           packageManager,
           startedAt: "2026-09-05T00:00:00.000Z",
@@ -142,26 +138,6 @@ function recordsFor(
           exitCode: 0,
         });
       }
-    }
-    const coldDurations = durationsFor(lane.id, null);
-    for (const side of ["baseline", "candidate"] as const) {
-      records.push({
-        id: `cold-${lane.id}-${side}`,
-        phase: "cold",
-        side,
-        lane: lane.id,
-        round: null,
-        pair: `cold-${lane.id}`,
-        cacheMode: "fresh",
-        command: ["node"],
-        packageManager,
-        startedAt: "2026-09-05T00:00:00.000Z",
-        durationMs: side === "baseline" ? coldDurations.baselineMs : coldDurations.candidateMs,
-        userCpuMs: 50,
-        systemCpuMs: 10,
-        execution,
-        exitCode: 0,
-      });
     }
   }
   return records;
@@ -233,6 +209,45 @@ function writeVitestReport(
   );
 }
 
+function reportAssertion(
+  fullName = "suite stable test",
+  location: unknown = { line: 62, column: 5 },
+  status: ReportAssertion["status"] = "passed",
+): ReportAssertion {
+  return { fullName, status, location };
+}
+
+function reportFixture(id: string, files = ["src/example.test.ts"]) {
+  const root = tempDirs.make(`vitest-pair-${id}-`);
+  const lane = { id, critical: true, files };
+  writeSelectedFiles(root, files);
+  return {
+    root,
+    lane,
+    read(assertions: ReportAssertion[], name = "report.json") {
+      const file = path.join(root, name);
+      writeVitestReport(file, root, [{ path: files[0]!, assertions }]);
+      return parseVitestExecutionReport(file, root, lane);
+    },
+  };
+}
+
+function runScript(
+  root: string,
+  args: string[],
+  options: Partial<Pick<Parameters<typeof runOwnedCommand>[0], "deadline" | "logPath">> = {},
+) {
+  return runOwnedCommand({
+    bin: process.execPath,
+    args,
+    cwd: root,
+    env: { PATH: process.env.PATH },
+    logPath: path.join(root, "output.log"),
+    timeoutMs: 10_000,
+    ...options,
+  });
+}
+
 describe("Vitest pair benchmark contract", () => {
   it("keeps the committed representative inventory valid and available", () => {
     const committed = loadBenchmarkManifest("scripts/vitest-pair-benchmark-lanes.json");
@@ -268,14 +283,8 @@ describe("Vitest pair benchmark contract", () => {
   it("rejects selected workload byte mismatches between sides", () => {
     const baselineRoot = tempDirs.make("vitest-pair-baseline-inventory-");
     const candidateRoot = tempDirs.make("vitest-pair-candidate-inventory-");
-    for (const lane of manifest.lanes) {
-      for (const relative of inventoryPaths(lane)) {
-        for (const root of [baselineRoot, candidateRoot]) {
-          const file = path.join(root, relative);
-          mkdirSync(path.dirname(file), { recursive: true });
-          writeFileSync(file, `${relative}\n`);
-        }
-      }
+    for (const root of [baselineRoot, candidateRoot]) {
+      writeSelectedFiles(root, manifest.lanes.flatMap(inventoryPaths));
     }
     writeFileSync(path.join(candidateRoot, manifest.lanes[0]!.files[0]!), "changed workload\n");
 
@@ -288,22 +297,12 @@ describe("Vitest pair benchmark contract", () => {
   });
 
   it("requires successful JSON execution reports with the exact selected file set", () => {
-    const root = tempDirs.make("vitest-pair-report-files-");
-    const lane = {
-      id: "report-files",
-      critical: true,
-      files: ["src/first.test.ts", "src/second.test.ts"],
-    };
-    writeSelectedFiles(root, lane.files);
-    const reportFile = path.join(root, "report.json");
-    writeVitestReport(reportFile, root, [
-      {
-        path: lane.files[0]!,
-        assertions: [{ fullName: "first test", status: "passed" }],
-      },
+    const { root, lane, read } = reportFixture("report-files", [
+      "src/first.test.ts",
+      "src/second.test.ts",
     ]);
-
-    expect(() => parseVitestExecutionReport(reportFile, root, lane)).toThrow(
+    const reportFile = path.join(root, "report.json");
+    expect(() => read([{ fullName: "first test", status: "passed" }])).toThrow(
       "executed files differ",
     );
 
@@ -322,74 +321,30 @@ describe("Vitest pair benchmark contract", () => {
   });
 
   it("uses source locations instead of version-specific rendered names", () => {
-    const root = tempDirs.make("vitest-pair-report-digest-");
-    const lane = {
-      id: "report-digest",
-      critical: true,
-      files: ["src/example.test.ts"],
-    };
-    writeSelectedFiles(root, lane.files);
-    const baselineFile = path.join(root, "baseline.json");
-    writeVitestReport(baselineFile, root, [
-      {
-        path: lane.files[0]!,
-        assertions: [
-          {
-            fullName: "mime detection maps 'avif' image format",
-            status: "passed",
-            location: { line: 62, column: 5 },
-          },
-          {
-            fullName: "mime detection maps 'jpg' image format",
-            status: "passed",
-            location: { line: 62, column: 5 },
-          },
-          {
-            fullName: "mime detection 'detects docx from buffer'",
-            status: "passed",
-            location: { line: 79, column: 14 },
-          },
-        ],
-      },
-    ]);
-    const baseline = parseVitestExecutionReport(baselineFile, root, lane);
-    const candidateFile = path.join(root, "candidate.json");
-    writeVitestReport(candidateFile, root, [
-      {
-        path: lane.files[0]!,
-        assertions: [
-          {
-            fullName: "mime detection maps avif image format",
-            status: "passed",
-            location: { line: 62, column: 5 },
-          },
-          {
-            fullName: "mime detection maps jpg image format",
-            status: "passed",
-            location: { line: 62, column: 5 },
-          },
-          {
-            fullName: "mime detection detects docx from buffer",
-            status: "passed",
-            location: { line: 79, column: 14 },
-          },
-        ],
-      },
-    ]);
-    const candidate = parseVitestExecutionReport(candidateFile, root, lane);
+    const { read } = reportFixture("report-digest");
+    const baseline = read(
+      [
+        reportAssertion("mime detection maps 'avif' image format"),
+        reportAssertion("mime detection maps 'jpg' image format"),
+        reportAssertion("mime detection 'detects docx from buffer'", { line: 79, column: 14 }),
+      ],
+      "baseline.json",
+    );
+    const candidate = read(
+      [
+        reportAssertion("mime detection maps avif image format"),
+        reportAssertion("mime detection maps jpg image format"),
+        reportAssertion("mime detection detects docx from buffer", { line: 79, column: 14 }),
+      ],
+      "candidate.json",
+    );
 
     expect(candidate.digest).toBe(baseline.digest);
     expect(candidate.assertionCount).toBe(3);
   });
 
   it("fails closed when assertion locations are missing or malformed", () => {
-    const root = tempDirs.make("vitest-pair-report-location-");
-    const lane = {
-      id: "report-location",
-      critical: true,
-      files: ["src/example.test.ts"],
-    };
-    writeSelectedFiles(root, lane.files);
+    const { read } = reportFixture("report-location");
 
     for (const [label, location] of [
       ["missing", undefined],
@@ -397,63 +352,24 @@ describe("Vitest pair benchmark contract", () => {
       ["fractional", { line: 62, column: 5.5 }],
       ["string", { line: 62, column: "5" }],
     ] as const) {
-      const candidateFile = path.join(root, `candidate-${label}.json`);
-      writeVitestReport(candidateFile, root, [
-        {
-          path: lane.files[0]!,
-          assertions: [{ fullName: "suite stable test", status: "passed", location }],
-        },
-      ]);
-      expect(() => parseVitestExecutionReport(candidateFile, root, lane)).toThrow(
-        "location must contain positive integer line and column",
-      );
+      expect(() =>
+        read(
+          [{ fullName: "suite stable test", status: "passed", location }],
+          `candidate-${label}.json`,
+        ),
+      ).toThrow("location must contain positive integer line and column");
     }
   });
 
   it("fails closed when assertion status or source location diverges", () => {
-    const root = tempDirs.make("vitest-pair-report-divergence-");
-    const lane = {
-      id: "report-divergence",
-      critical: true,
-      files: ["src/example.test.ts"],
-    };
-    writeSelectedFiles(root, lane.files);
-    const baselineFile = path.join(root, "baseline.json");
-    writeVitestReport(baselineFile, root, [
-      {
-        path: lane.files[0]!,
-        assertions: [
-          {
-            fullName: "suite stable test",
-            status: "passed",
-            location: { line: 62, column: 5 },
-          },
-        ],
-      },
-    ]);
-    const baseline = parseVitestExecutionReport(baselineFile, root, lane);
+    const { read } = reportFixture("report-divergence");
+    const baseline = read([reportAssertion()], "baseline.json");
 
     for (const [label, assertion] of [
-      [
-        "status",
-        {
-          fullName: "suite stable test",
-          status: "skipped" as const,
-          location: { line: 62, column: 5 },
-        },
-      ],
-      [
-        "location",
-        {
-          fullName: "suite stable test",
-          status: "passed" as const,
-          location: { line: 63, column: 5 },
-        },
-      ],
+      ["status", reportAssertion("suite stable test", { line: 62, column: 5 }, "skipped")],
+      ["location", reportAssertion("suite stable test", { line: 63, column: 5 })],
     ] as const) {
-      const candidateFile = path.join(root, `candidate-${label}.json`);
-      writeVitestReport(candidateFile, root, [{ path: lane.files[0]!, assertions: [assertion] }]);
-      const candidate = parseVitestExecutionReport(candidateFile, root, lane);
+      const candidate = read([assertion], `candidate-${label}.json`);
       expect(() =>
         assertExecutionDigest(candidate, baseline.digest, `${label} timing run`),
       ).toThrow("execution digest differs");
@@ -500,13 +416,11 @@ describe("Vitest pair benchmark contract", () => {
     );
 
     const neutral = analyzeBenchmark(recordsFor(0.98), manifest);
-    expect(neutral.verdict).toBe("pass");
-    expect(neutral.performance).toBe("no-material-change");
+    expect(neutral).toMatchObject({ verdict: "pass", performance: "no-material-change" });
     expect(neutral.claim).toContain("No broad improvement claim");
 
     const improved = analyzeBenchmark(recordsFor(0.9), manifest);
-    expect(improved.verdict).toBe("pass");
-    expect(improved.performance).toBe("improved");
+    expect(improved).toMatchObject({ verdict: "pass", performance: "improved" });
 
     const noisyFaster = analyzeBenchmark(
       recordsFor((_lane, round) => ({
@@ -515,8 +429,7 @@ describe("Vitest pair benchmark contract", () => {
       })),
       manifest,
     );
-    expect(noisyFaster.verdict).toBe("pass");
-    expect(noisyFaster.performance).toBe("no-material-change");
+    expect(noisyFaster).toMatchObject({ verdict: "pass", performance: "no-material-change" });
     expect(noisyFaster.lanes.every((lane) => lane.candidateImprovedPairs === 4)).toBe(true);
   });
 
@@ -642,14 +555,9 @@ describe("Vitest pair benchmark lifecycle", () => {
             withTerminalManifest(output, async () => {
               await withVitestPairDeadline(async (deadline) => {
                 const active = deadlineFixtureLifetime.track(
-                  runOwnedCommand({
-                    bin: process.execPath,
-                    args: ["--input-type=module", "-e", activeScript],
-                    cwd: root,
-                    env: { PATH: process.env.PATH },
+                  runScript(root, ["--input-type=module", "-e", activeScript], {
                     logPath: path.join(root, "active.log"),
                     deadline,
-                    timeoutMs: 10_000,
                   }),
                 );
                 commands.push(active);
@@ -669,18 +577,17 @@ describe("Vitest pair benchmark lifecycle", () => {
                 fireDeadline();
                 await Promise.allSettled([active]);
                 const next = deadlineFixtureLifetime.track(
-                  runOwnedCommand({
-                    bin: process.execPath,
-                    args: [
+                  runScript(
+                    root,
+                    [
                       "-e",
                       `require("node:fs").writeFileSync(${JSON.stringify(successor)}, "started")`,
                     ],
-                    cwd: root,
-                    env: { PATH: process.env.PATH },
-                    logPath: path.join(root, "successor.log"),
-                    deadline,
-                    timeoutMs: 10_000,
-                  }),
+                    {
+                      logPath: path.join(root, "successor.log"),
+                      deadline,
+                    },
+                  ),
                 );
                 commands.push(next);
                 await Promise.allSettled([next]);
@@ -727,14 +634,7 @@ describe("Vitest pair benchmark lifecycle", () => {
       "process.exit(7);",
     ].join("\n");
 
-    const result = await runOwnedCommand({
-      bin: process.execPath,
-      args: ["-e", script],
-      cwd: root,
-      env: { PATH: process.env.PATH },
-      logPath: path.join(root, "output.log"),
-      timeoutMs: 10_000,
-    });
+    const result = await runScript(root, ["-e", script]);
 
     expect(result.exitCode).toBe(7);
     expect(readFileSync(attempts, "utf8")).toBe("attempt\n");
@@ -753,16 +653,9 @@ describe("Vitest pair benchmark lifecycle", () => {
         "child.unref();",
       ].join("\n");
 
-      await expect(
-        runOwnedCommand({
-          bin: process.execPath,
-          args: ["-e", script],
-          cwd: root,
-          env: { PATH: process.env.PATH },
-          logPath: path.join(root, "output.log"),
-          timeoutMs: 10_000,
-        }),
-      ).rejects.toThrow(/process group remained active|cleanup could not verify/u);
+      await expect(runScript(root, ["-e", script])).rejects.toThrow(
+        /process group remained active|cleanup could not verify/u,
+      );
 
       const pid = Number.parseInt(readFileSync(pidFile, "utf8"), 10);
       await waitForDescendantReap(pid, signal);

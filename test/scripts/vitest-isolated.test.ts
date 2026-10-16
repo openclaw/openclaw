@@ -2,18 +2,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  copyIsolatedVitestSource,
-  prepareIsolatedVitestDependencies,
-  prepareIsolatedVitestScratch,
+  copyIsolatedVitestSource as copySource,
+  prepareIsolatedVitestDependencies as prepareDependencies,
+  prepareIsolatedVitestScratch as prepareScratch,
 } from "../../scripts/lib/vitest-isolated-source.mts";
 import * as isolatedVitest from "../../scripts/lib/vitest-isolated.mts";
 import {
-  admitIsolatedVitestArgs,
-  isolatedVitestCreateArgs,
-  parseIsolatedVitestArgs,
-  runIsolatedVitestContainer,
-  verifyIsolatedVitestContainer,
-  verifyIsolatedVitestHost,
+  admitIsolatedVitestArgs as admitArgs,
+  isolatedVitestCreateArgs as createArgs,
+  parseIsolatedVitestArgs as parseArgs,
+  runIsolatedVitestContainer as runContainer,
+  verifyIsolatedVitestContainer as verifyContainer,
+  verifyIsolatedVitestHost as verifyHost,
   type IsolatedPodmanCommand,
 } from "../../scripts/lib/vitest-isolated.mts";
 import { runVitest } from "../../scripts/run-vitest.mts";
@@ -28,6 +28,20 @@ const label = "io.openclaw.vitest-isolated";
 function write(root: string, relative: string, content = "fixture") {
   fs.mkdirSync(path.dirname(path.join(root, relative)), { recursive: true });
   fs.writeFileSync(path.join(root, relative), content);
+}
+function sourceFixture() {
+  const root = temp.make("isolated-source-");
+  const snapshot = temp.make("isolated-copy-");
+  return {
+    root,
+    snapshot,
+    write: (relative: string, content?: string) => write(root, relative, content),
+    read: (relative: string) => fs.readFileSync(path.join(snapshot, relative), "utf8"),
+    exists: (relative: string) => fs.existsSync(path.join(snapshot, relative)),
+    link: (target: string, relative: string) => fs.symlinkSync(target, path.join(root, relative)),
+    readlink: (relative: string) => fs.readlinkSync(path.join(snapshot, relative)),
+    copy: (tracked: string[], target = snapshot) => copySource(root, target, tracked),
+  };
 }
 function createOptions() {
   return {
@@ -44,7 +58,7 @@ function createOptions() {
   };
 }
 function containerInspection() {
-  const create = isolatedVitestCreateArgs(createOptions());
+  const create = createArgs(createOptions());
   return {
     Config: {
       Labels: { [label]: name },
@@ -96,18 +110,15 @@ describe("isolated Vitest admission", () => {
     { args: ["--isolated-image", image, "--isolated-image", image], error: "once" },
   ])("parses only an unambiguous image selector: $args", (scenario) => {
     if ("error" in scenario) {
-      expect(() => parseIsolatedVitestArgs(scenario.args)).toThrow(scenario.error);
+      expect(() => parseArgs(scenario.args)).toThrow(scenario.error);
     } else {
-      expect(parseIsolatedVitestArgs(scenario.args)).toEqual(scenario.expected);
+      expect(parseArgs(scenario.args)).toEqual(scenario.expected);
     }
   });
   it("admits tracked exact files and config but not old/untracked or alternate inputs", () => {
     const tracked = new Set([file, config]);
     expect(() =>
-      admitIsolatedVitestArgs(
-        ["run", "--config", config, "--configLoader", "runner", file],
-        tracked,
-      ),
+      admitArgs(["run", "--config", config, "--configLoader", "runner", file], tracked),
     ).not.toThrow();
     for (const args of [
       ["run"],
@@ -122,11 +133,11 @@ describe("isolated Vitest admission", () => {
       ["run", file, "--reporter", "./private-reporter.ts"],
       ["run", file, "--", "other.test.ts"],
     ]) {
-      expect(() => admitIsolatedVitestArgs(args, tracked)).toThrow();
+      expect(() => admitArgs(args, tracked)).toThrow();
     }
   });
   it("fixes isolation limits, image entrypoint and an explicit benign environment", () => {
-    const args = isolatedVitestCreateArgs(createOptions());
+    const args = createArgs(createOptions());
     expect(args).toEqual(
       expect.arrayContaining([
         "--pull=never",
@@ -159,9 +170,9 @@ describe("isolated Vitest admission", () => {
       "type=bind,src=/repo/node_modules/.pnpm,dst=/workspace/node_modules/.pnpm,ro",
     );
     expect(args.slice(-2)).toEqual(["run", file]);
-    expect(() =>
-      isolatedVitestCreateArgs({ ...createOptions(), snapshot: "/owned,escape" }),
-    ).toThrow("bind path");
+    expect(() => createArgs({ ...createOptions(), snapshot: "/owned,escape" })).toThrow(
+      "bind path",
+    );
   });
   it.each([
     ["test/vitest/vitest.unit-fast.config.ts", "src/plugins/source-checkout-runtime.test.ts"],
@@ -170,7 +181,7 @@ describe("isolated Vitest admission", () => {
       "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
     ],
   ])("reserves bounded build capacity for %s", (selectedConfig, selectedFile) => {
-    const args = isolatedVitestCreateArgs({
+    const args = createArgs({
       ...createOptions(),
       argv: ["run", "--config", selectedConfig, selectedFile],
     });
@@ -179,33 +190,26 @@ describe("isolated Vitest admission", () => {
   });
 
   it("admits only supported host isolation without relabeling shared host files", () => {
-    expect(() => verifyIsolatedVitestHost({ rootless: true, selinuxEnabled: false })).not.toThrow();
-    expect(() => verifyIsolatedVitestHost({ rootless: false, selinuxEnabled: false })).toThrow(
-      "rootless",
-    );
-    expect(() => verifyIsolatedVitestHost({ rootless: true, selinuxEnabled: true })).toThrow(
-      "will not relabel",
-    );
-    expect(() => verifyIsolatedVitestHost({ rootless: true })).toThrow("SELinux");
+    expect(() => verifyHost({ rootless: true, selinuxEnabled: false })).not.toThrow();
+    expect(() => verifyHost({ rootless: false, selinuxEnabled: false })).toThrow("rootless");
+    expect(() => verifyHost({ rootless: true, selinuxEnabled: true })).toThrow("will not relabel");
+    expect(() => verifyHost({ rootless: true })).toThrow("SELinux");
   });
   it("refuses inherited image environment, host networking and unexpected engine mounts", () => {
-    const expected = ["/owned/source:/workspace:rw"];
-    expect(() =>
-      verifyIsolatedVitestContainer(containerInspection(), name, expected),
-    ).not.toThrow();
+    const verify =
+      (value = containerInspection()) =>
+      () =>
+        verifyContainer(value, name, ["/owned/source:/workspace:rw"]);
+    expect(verify()).not.toThrow();
     const poisoned = containerInspection();
     poisoned.Config.Env.push("HTTP_PROXY=http://credential-proxy");
-    expect(() => verifyIsolatedVitestContainer(poisoned, name, expected)).toThrow("environment");
+    expect(verify(poisoned)).toThrow("environment");
     const network = containerInspection();
     network.HostConfig.NetworkMode = "host";
-    expect(() => verifyIsolatedVitestContainer(network, name, expected)).toThrow(
-      "isolation settings",
-    );
+    expect(verify(network)).toThrow("isolation settings");
     const noInit = containerInspection();
     noInit.HostConfig.Init = false;
-    expect(() => verifyIsolatedVitestContainer(noInit, name, expected)).toThrow(
-      "isolation settings",
-    );
+    expect(verify(noInit)).toThrow("isolation settings");
     const mount = containerInspection();
     mount.Mounts.push({
       Type: "bind",
@@ -213,9 +217,7 @@ describe("isolated Vitest admission", () => {
       Destination: "/engine",
       RW: true,
     });
-    expect(() => verifyIsolatedVitestContainer(mount, name, expected)).toThrow(
-      "unexpected host/default mounts",
-    );
+    expect(verify(mount)).toThrow("unexpected host/default mounts");
   });
 });
 
@@ -226,7 +228,7 @@ describe("isolated working-tree source", () => {
     if (kind === "symlink") {
       fs.symlinkSync(outside, path.join(snapshot, ".openclaw"), "dir");
     } else {
-      prepareIsolatedVitestScratch(snapshot);
+      prepareScratch(snapshot);
       for (const relative of [".openclaw", ".openclaw/tmp"]) {
         const directory = path.join(snapshot, relative);
         expect(fs.realpathSync(directory)).toBe(directory);
@@ -235,99 +237,72 @@ describe("isolated working-tree source", () => {
         }
       }
     }
-    expect(() => prepareIsolatedVitestScratch(snapshot)).toThrow(/EEXIST/u);
+    expect(() => prepareScratch(snapshot)).toThrow(/EEXIST/u);
     if (kind === "symlink") {
       expect(fs.readdirSync(outside)).toEqual([]);
     }
   });
   it("copies current staged-path bytes, preserves deletions, excludes private state and does not copy untracked files", () => {
-    const root = temp.make("isolated-source-");
-    const snapshot = temp.make("isolated-copy-");
-    for (const item of [
-      file,
-      "new.test.ts",
-      "untracked.test.ts",
-      ".git/config",
-      ".openclaw/private",
-      ".env",
-      "dist/old.js",
-    ]) {
-      write(root, item, item === file ? "working tree, not HEAD" : "private");
+    const source = sourceFixture();
+    const tracked = [file, "new.test.ts", "deleted.test.ts"];
+    const privateFiles = [".git/config", ".openclaw/private", ".env", "dist/old.js"];
+    for (const item of [file, "new.test.ts", "untracked.test.ts", ...privateFiles]) {
+      source.write(item, item === file ? "working tree, not HEAD" : "private");
     }
-    const result = copyIsolatedVitestSource(root, snapshot, [
-      file,
-      "new.test.ts",
-      "deleted.test.ts",
-      ".git/config",
-      ".openclaw/private",
-      ".env",
-      "dist/old.js",
-    ]);
-    expect(fs.readFileSync(path.join(snapshot, file), "utf8")).toBe("working tree, not HEAD");
+    const result = source.copy([...tracked, ...privateFiles]);
+    expect(source.read(file)).toBe("working tree, not HEAD");
     expect(result.copied).toEqual(new Set([file, "new.test.ts"]));
-    expect(fs.existsSync(path.join(snapshot, "untracked.test.ts"))).toBe(false);
-    write(root, file, "changed working bytes");
-    expect(
-      copyIsolatedVitestSource(root, temp.make("isolated-second-"), [
-        file,
-        "new.test.ts",
-        "deleted.test.ts",
-      ]).digest,
-    ).not.toBe(result.digest);
+    expect(source.exists("untracked.test.ts")).toBe(false);
+    source.write(file, "changed working bytes");
+    expect(source.copy(tracked, temp.make("isolated-second-")).digest).not.toBe(result.digest);
   });
   it("preserves tracked relative symlinks but refuses outside or untracked targets", () => {
-    const root = temp.make("isolated-links-");
-    write(root, "AGENTS.md");
-    fs.symlinkSync("AGENTS.md", path.join(root, "CLAUDE.md"));
-    const snapshot = temp.make("isolated-good-link-");
-    copyIsolatedVitestSource(root, snapshot, ["AGENTS.md", "CLAUDE.md"]);
-    expect(fs.readlinkSync(path.join(snapshot, "CLAUDE.md"))).toBe("AGENTS.md");
-    expect(() =>
-      copyIsolatedVitestSource(root, temp.make("isolated-untracked-link-"), ["CLAUDE.md"]),
-    ).toThrow("excluded/untracked");
-    fs.symlinkSync("/etc/passwd", path.join(root, "outside.ts"));
-    expect(() =>
-      copyIsolatedVitestSource(root, temp.make("isolated-outside-link-"), ["outside.ts"]),
-    ).toThrow("escapes");
+    const source = sourceFixture();
+    source.write("AGENTS.md");
+    source.link("AGENTS.md", "CLAUDE.md");
+    source.copy(["AGENTS.md", "CLAUDE.md"]);
+    expect(source.readlink("CLAUDE.md")).toBe("AGENTS.md");
+    expect(() => source.copy(["CLAUDE.md"], temp.make("isolated-untracked-link-"))).toThrow(
+      "excluded/untracked",
+    );
+    source.link("/etc/passwd", "outside.ts");
+    expect(() => source.copy(["outside.ts"], temp.make("isolated-outside-link-"))).toThrow(
+      "escapes",
+    );
   });
   it("projects readonly package trees and relocatable workspace symlinks without cached outputs", () => {
-    const root = temp.make("isolated-deps-");
-    const snapshot = temp.make("isolated-deps-copy-");
-    write(root, "packages/example/package.json", "{}");
-    write(root, "node_modules/.pnpm/example/node_modules/dependency/package.json", "{}");
-    write(
-      root,
+    const source = sourceFixture();
+    const dependency = "node_modules/.pnpm/example/node_modules/dependency";
+    source.write("packages/example/package.json", "{}");
+    source.write(`${dependency}/package.json`, "{}");
+    source.write(
       "node_modules/.bin/tool",
       `#!/bin/sh
-NODE_PATH='${root}/node_modules'
+NODE_PATH='${source.root}/node_modules'
 `,
     );
-    write(root, "node_modules/.vite/stale", "old output");
-    fs.symlinkSync("../packages/example", path.join(root, "node_modules/example"));
-    const copied = copyIsolatedVitestSource(root, snapshot, [
-      "packages/example/package.json",
-    ]).copied;
-    const mounts = prepareIsolatedVitestDependencies(root, snapshot, copied);
+    source.write("node_modules/.vite/stale", "old output");
+    source.link("../packages/example", "node_modules/example");
+    const copied = source.copy(["packages/example/package.json"]).copied;
+    const prepare = (snapshot = source.snapshot) =>
+      prepareDependencies(source.root, snapshot, copied);
+    const mounts = prepare();
     expect(mounts).toEqual([
-      { source: path.join(root, "node_modules/.pnpm"), target: "/workspace/node_modules/.pnpm" },
+      {
+        source: path.join(source.root, "node_modules/.pnpm"),
+        target: "/workspace/node_modules/.pnpm",
+      },
     ]);
-    expect(fs.readlinkSync(path.join(snapshot, "node_modules/example"))).toBe(
-      "../packages/example",
-    );
-    expect(fs.readFileSync(path.join(snapshot, "node_modules/.bin/tool"), "utf8")).toContain(
-      "/workspace/node_modules",
-    );
-    expect(fs.existsSync(path.join(snapshot, "node_modules/.vite/stale"))).toBe(false);
-    write(root, "node_modules/.pnpm/example/node_modules/dependency/.env", "synthetic-secret");
-    const maskedSnapshot = temp.make("isolated-masked-deps-");
-    const masked = prepareIsolatedVitestDependencies(root, maskedSnapshot, copied);
+    expect(source.readlink("node_modules/example")).toBe("../packages/example");
+    expect(source.read("node_modules/.bin/tool")).toContain("/workspace/node_modules");
+    expect(source.exists("node_modules/.vite/stale")).toBe(false);
+    source.write(`${dependency}/.env`, "synthetic-secret");
+    const masked = prepare(temp.make("isolated-masked-deps-"));
     const dotenv = masked.find((mount) => mount.target.endsWith("/.env"));
     expect(dotenv).toBeDefined();
     expect(fs.readFileSync(dotenv!.source, "utf8")).toBe("");
-    fs.symlinkSync("/etc/passwd", path.join(root, "node_modules/.pnpm/escape"));
-    expect(() =>
-      prepareIsolatedVitestDependencies(root, temp.make("isolated-bad-deps-"), copied),
-    ).toThrow("escapes");
+    source.link("/etc/passwd", "node_modules/.pnpm/escape");
+    expect(() => prepare(temp.make("isolated-bad-deps-"))).toThrow("escapes");
   });
 });
 
@@ -339,6 +314,7 @@ function lifecycle(
     failRemove?: boolean;
     label?: string;
     failVerify?: boolean;
+    unjoined?: Error;
   } = {},
 ) {
   const calls: string[][] = [];
@@ -351,6 +327,9 @@ function lifecycle(
       return { code: present ? 0 : 1, stdout: "" };
     }
     if (args[0] === "create") {
+      if (options.unjoined) {
+        throw options.unjoined;
+      }
       present = true;
       return { code: options.failCreate ? 125 : 0, stdout: "id" };
     }
@@ -388,7 +367,7 @@ function lifecycle(
   };
   const onAbsent = vi.fn();
   const run = () =>
-    runIsolatedVitestContainer({
+    runContainer({
       command,
       name,
       createArgs: ["create"],
@@ -421,26 +400,10 @@ describe("isolated container lifecycle", () => {
         [Object.assign(new Error("process cleanup unresolved"), { processTreeState })],
         "Podman create failed",
       );
-      const calls: string[][] = [];
-      const command: IsolatedPodmanCommand = async (args) => {
-        calls.push(args);
-        if (args[0] === "create") {
-          throw failure;
-        }
-        return { code: 1, stdout: "" };
-      };
-      const onAbsent = vi.fn();
-      await expect(
-        runIsolatedVitestContainer({
-          command,
-          name,
-          createArgs: ["create"],
-          verify: vi.fn(),
-          onAbsent,
-        }),
-      ).rejects.toBe(failure);
-      expect(calls.at(-1)).toEqual(["container", "exists", name]);
-      expect(onAbsent).not.toHaveBeenCalled();
+      const fixture = lifecycle({ unjoined: failure });
+      await expect(fixture.run()).rejects.toBe(failure);
+      expect(fixture.calls.at(-1)).toEqual(["container", "exists", name]);
+      expect(fixture.onAbsent).not.toHaveBeenCalled();
     },
   );
   it.each([
