@@ -11,7 +11,7 @@ import {
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
-import { buildAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
+import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
 import { captureAgentToolSourceExecutionGuard } from "../agents/agent-tool-source-execution-guard.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
 import {
@@ -200,10 +200,34 @@ describe("spawn input ownership transfer", () => {
         }
         const text =
           opts.sessionKey === childKey ? "delayed child result" : "received child result";
-        const terminalReply = buildAgentRunTerminalReplySnapshot({
-          visibleText: text,
-          rawText: text,
-        });
+        const { terminalReply } = prepareAgentRunTerminalReply({ rawText: text });
+        const loaded = await loadSessionEntryAsync(opts.sessionKey!, { agentId: "main" });
+        await sessionAccessor.persistSessionTranscriptTurn(
+          {
+            agentId: "main",
+            sessionKey: opts.sessionKey!,
+            sessionId: loaded.entry!.sessionId,
+            storePath: loaded.storePath,
+          },
+          {
+            cwd: "/tmp",
+            runId: opts.runId,
+            expectedSessionId: loaded.entry!.sessionId,
+            touchSessionEntry: false,
+            updateMode: "none",
+            messages: [
+              {
+                message: {
+                  role: "assistant",
+                  phase: "final_answer",
+                  stopReason: "stop",
+                  content: [{ type: "text", text }],
+                },
+                now: Date.now(),
+              },
+            ],
+          },
+        );
         emitAgentEvent({
           runId: opts.runId!,
           stream: "lifecycle",

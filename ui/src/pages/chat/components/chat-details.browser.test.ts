@@ -242,7 +242,6 @@ describe("chat Details presentation", () => {
     flush();
     expect(sessionSection.checkVisibility()).toBe(true);
     expect(progressSection.open).toBe(false);
-    expect(progressSection.open).toBe(false);
   });
 
   it("constrains the popover to its conversation and above the composer after narrowing", async () => {

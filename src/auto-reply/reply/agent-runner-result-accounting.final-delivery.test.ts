@@ -191,8 +191,8 @@ async function prepareLocalReply(
   context.sessionCtx = { Provider: "webchat", Surface: "webchat" };
   context.opts = { resolveReplyDelivery: dispatch.resolveReplyDelivery };
   context.execution.result = resolved.result;
-  // Aggregate delivery includes committed local text; it does not identify its source.
-  expect(resolved.result.sourceReplyDeliveryState).toBe(facts.terminal);
+  // Source delivery remains distinct from committed local transcript delivery.
+  expect(resolved.result.sourceReplyDeliveryState).toBe(facts.source);
   return scope;
 }
 
@@ -230,6 +230,10 @@ it("keeps a committed local answer in history without a second final delivery in
   const fixture = await createFixture();
   const scope = await prepareLocalReply(fixture, "Committed local answer.");
   const { context } = fixture;
+  expect(
+    getReplyPayloadMetadata(context.execution.result.payloads![0]!)
+      ?.localTranscriptDeliveryConfirmed,
+  ).toBe(true);
   const settledAt = 1_000;
   const settled = {
     ...fixture.read()!,

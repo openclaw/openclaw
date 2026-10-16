@@ -44,6 +44,7 @@ import {
   seedMainSessionStore,
   seedSessionStore,
   setHeartbeatAgentTurnStatus,
+  setHeartbeatSilentCompletion,
   type HeartbeatReplySpy,
   withTempHeartbeatSandbox,
   withTempTelegramHeartbeatSandbox,
@@ -151,7 +152,7 @@ describe("heartbeat acknowledgements", () => {
   }>([
     {
       name: "canonical NO_REPLY acknowledgement",
-      payload: { text: "NO_REPLY" },
+      payload: {},
       options: { showOk: true },
       sends: 1,
       sentText: "HEARTBEAT_OK",
@@ -160,14 +161,15 @@ describe("heartbeat acknowledgements", () => {
       name: "truncated NO_REPLY final",
       payload: { text: "NO_R" },
       options: { telegram: true },
-      sends: 0,
+      sends: 1,
+      sentText: "NO_R",
     },
     {
       name: "truncated NO_REPLY acknowledgement",
       payload: { text: "NO_RE" },
       options: { showOk: true },
       sends: 1,
-      sentText: "HEARTBEAT_OK",
+      sentText: "NO_RE",
     },
     {
       name: "exec summary with trailing acknowledgement",
@@ -198,8 +200,17 @@ describe("heartbeat acknowledgements", () => {
       if (exec) {
         enqueueCompletion(sessionKey);
       }
-      replySpy.mockResolvedValue(payload);
-      expect((await run({}, exec ? "exec-event" : undefined)).status).toBe("ran");
+      replySpy.mockImplementation(async (_ctx, opts) => {
+        if (!Object.keys(payload).length) {
+          setHeartbeatSilentCompletion(opts);
+          return undefined;
+        }
+        return payload;
+      });
+      const outcome = await run({}, exec ? "exec-event" : undefined);
+      expect(outcome.status, JSON.stringify({ outcome, event: getLastHeartbeatEvent() })).toBe(
+        "ran",
+      );
       expect(send).toHaveBeenCalledTimes(sends);
       if (sentText) {
         expect(send.mock.calls[0]?.slice(0, 2)).toEqual([
@@ -353,7 +364,8 @@ async function runCommittedWork(params: {
         if (params.status) {
           setHeartbeatAgentTurnStatus(opts, params.status);
         }
-        return { text: "NO_REPLY" };
+        state.replyCompletion = { expectation: "optional", outcome: "silent" };
+        return undefined;
       });
       const result = await run();
       return { result, event: getLastHeartbeatEvent(), send };

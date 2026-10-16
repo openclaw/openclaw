@@ -302,7 +302,6 @@ src/agents/tool-policy-match.ts
 src/agents/tool-policy-shared.ts
 src/agents/tool-policy.ts
 src/agents/tools/automations-tool-name.ts
-src/agents/tools/sessions-send-tokens.ts
 src/agents/utility-model-setting.ts
 src/agents/utils/git.ts
 src/agents/workspace-access.ts
@@ -405,6 +404,7 @@ src/auto-reply/reply/delivery-hints.ts
 src/auto-reply/reply/display-text-sanitize.ts
 src/auto-reply/reply/history-limit.ts
 src/auto-reply/reply/inbound-context-marker.ts
+src/auto-reply/reply/mixed-silent-reply-tokens.ts
 src/auto-reply/reply/strip-inbound-meta.ts
 src/auto-reply/thinking.shared.ts
 src/auto-reply/tokens.ts
@@ -2395,7 +2395,6 @@ src/config/sessions/transcript-message-equality.ts
 src/config/sessions/transcript-replay.ts
 src/config/sessions/transcript-visible-events.ts
 src/config/sessions/work-start-error.ts
-src/gateway/control-reply-text.ts
 src/gateway/payload-limits.ts
 src/gateway/server-constants.ts
 src/gateway/session-display-projection.ts
@@ -2471,3 +2470,23 @@ src/state/user-model-account-id.ts
 src/state/user-profile-authority.ts
 src/state/user-profile-events.ts
 src/utils/normalize-secret-input.ts
+packages/gateway-protocol/src/schema/approval-id.ts
+packages/memory-host-sdk/src/host/openclaw-runtime-session-visibility.ts
+src/agents/delivery-evidence-values.ts
+src/agents/embedded-agent-runner/message-visibility.ts
+src/auto-reply/reply-payload.ts
+src/chat/canvas-render.ts
+src/chat/tool-content.ts
+src/gateway/chat-display-projection.canvas.ts
+src/gateway/chat-display-projection.commentary.ts
+src/gateway/chat-display-projection.sanitize.ts
+src/gateway/worker-environments/workspace-conflicts.ts
+src/infra/sibling-temp-file.ts
+src/interactive/payload.ts
+src/media/media-reference.ts
+src/media/store.shared.ts
+src/media/store.ts
+src/sessions/session-run-error-presentation.ts
+src/sessions/user-turn-media.ts
+src/shared/channel-read-authority.ts
+src/shared/tool-approval-reviews.ts

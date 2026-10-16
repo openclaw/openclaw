@@ -27,7 +27,6 @@ import {
 import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions } from "../types.js";
 import {
   createAgentTurnExecutionDefaults,
@@ -347,7 +346,7 @@ describe("executeAgentTurn: terminal failures", () => {
           kind: "rejected",
           payload: {
             text: continuing
-              ? SILENT_REPLY_TOKEN
+              ? ""
               : `${loss.message} This turn will not be continued automatically.`,
           },
         });
@@ -374,7 +373,9 @@ describe("executeAgentTurn: terminal failures", () => {
           );
         expect(terminals).toHaveLength(1);
         expect(terminals[0]?.data).toMatchObject(
-          continuing ? { phase: "end", yielded: true } : { phase: "error" },
+          continuing
+            ? { phase: "end", yielded: true, terminalReply: { disposition: "empty" } }
+            : { phase: "error" },
         );
       } finally {
         replyOperation.complete();
