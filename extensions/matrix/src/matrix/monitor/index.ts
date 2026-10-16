@@ -1,4 +1,5 @@
 import { format } from "node:util";
+import { listAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import {
@@ -49,7 +50,9 @@ import { registerMatrixAutoJoin } from "./auto-join.js";
 import { resolveMatrixMonitorConfig } from "./config.js";
 import { createDirectRoomTracker } from "./direct.js";
 import { registerMatrixMonitorEvents } from "./events.js";
+import { isMatrixPreStartupEvent } from "./handler-ingress-prefix.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
+import { createMatrixInboundDebouncer } from "./inbound-debounce.js";
 import { createMatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import { shouldPromoteRecentInviteRoom } from "./recent-invite.js";
 import { createMatrixRoomInfoResolver } from "./room-info.js";
@@ -468,7 +471,43 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       logger,
       getHealthySyncSinceMs: () => healthySyncSinceMs,
       formatNativeDependencyHint: core.system.formatNativeDependencyHint,
-      onRoomMessage: handleRoomMessage,
+      onRoomMessage: createMatrixInboundDebouncer({
+        // Not the monitor's resolved cfg copy: that one is pinned to startup values.
+        // SAFETY: same runtime config the monitor narrows to CoreConfig at startup.
+        readConfig: () => core.config.current() as CoreConfig,
+        selfUserId: auth.userId,
+        handleRoomMessage,
+        inboundDeduper,
+        runDetachedTask: monitorTaskRunner.runDetachedTask,
+        logVerboseMessage,
+        isPreStartupEvent: (event) =>
+          isMatrixPreStartupEvent({
+            dropPreStartupMessages,
+            eventTs: event.origin_server_ts ?? undefined,
+            eventAge: event.unsigned?.age ?? undefined,
+            startupMs,
+          }),
+        // The route (and so the agent) is resolved later in the handler; every agent's
+        // patterns are a superset, and over-detection only dispatches a message alone.
+        resolveCommandPrefixInputs: async (roomId, event) => {
+          return {
+            displayName: event.content.formatted_body
+              ? await getMemberDisplayName(roomId, auth.userId).catch(() => undefined)
+              : undefined,
+            mentionRegexes: listAgentIds(core.config.current()).flatMap((agentId) =>
+              // Same cfg the handler passes when it strips the prefix.
+              core.channel.mentions.buildMentionRegexes(cfg, agentId, {
+                provider: "matrix",
+                conversationId: roomId,
+                providerPolicy: accountConfig?.mentionPatterns,
+              }),
+            ),
+          };
+        },
+        onError: (err) => {
+          logger.warn("matrix inbound debounce flush failed", { error: String(err) });
+        },
+      }),
       runDetachedTask: monitorTaskRunner.runDetachedTask,
     });
 

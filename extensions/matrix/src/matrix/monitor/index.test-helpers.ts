@@ -196,6 +196,7 @@ const hoisted = vi.hoisted(() => {
     inboundDeduper,
     inboundReplayClaim,
     logger,
+    messagesConfig: undefined as undefined | Record<string, unknown>,
     registeredHealthySyncGetter: undefined as undefined | (() => number | undefined),
     registeredOnRoomMessage: null as null | ((roomId: string, event: unknown) => Promise<void>),
     registerChannelRuntimeContext,
@@ -237,6 +238,7 @@ vi.mock("../../resolve-targets.js", () => ({
   resolveMatrixTargets: vi.fn(async () => []),
 }));
 
+// mock-isolation: The monitor must read config, logging, and channel helpers from this fake runtime, not the process-wide singleton.
 vi.mock("../../runtime.js", () => ({
   getMatrixRuntime: () => ({
     config: {
@@ -244,6 +246,7 @@ vi.mock("../../runtime.js", () => ({
         channels: {
           matrix: hoisted.accountConfig,
         },
+        ...(hoisted.messagesConfig ? { messages: hoisted.messagesConfig } : {}),
       }),
       replaceConfigFile: vi.fn(),
       mutateConfigFile: vi.fn(),
@@ -354,7 +357,8 @@ vi.mock("./handler.js", () => ({
   createMatrixRoomMessageHandler: hoisted.createMatrixRoomMessageHandler,
 }));
 
-vi.mock("./inbound-dedupe.js", () => ({
+vi.mock("./inbound-dedupe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./inbound-dedupe.js")>()),
   createMatrixInboundEventDeduper: hoisted.createMatrixInboundEventDeduper,
 }));
 
