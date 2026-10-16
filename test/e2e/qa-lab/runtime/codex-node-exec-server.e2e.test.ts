@@ -5,7 +5,7 @@ import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { setTimeout as waitForProofTick } from "node:timers/promises";
 import { promisify } from "node:util";
-import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
+import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -26,6 +26,7 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../../../helpers/fixture-receipts.js";
+import { acquireGatewayTestClient } from "../../../helpers/gateway-client.js";
 import { createDeferred, withinTest } from "../../../helpers/promise.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
@@ -371,27 +372,8 @@ async function connectApprovalReviewer(
   gateway: GatewayHandle,
   onEvent?: GatewayClientOptions["onEvent"],
 ): Promise<GatewayClient> {
-  return await new Promise<GatewayClient>((resolve, reject) => {
-    let settled = false;
-    const finish = (error?: Error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      if (error) {
-        client.stop();
-        reject(error);
-      } else {
-        resolve(client);
-      }
-    };
-    const timeout = setTimeout(
-      () => finish(new Error("Codex node approval reviewer connection timed out")),
-      REQUEST_TIMEOUT_MS,
-    );
-    timeout.unref();
-    const client = new GatewayClient({
+  return acquireGatewayTestClient(
+    {
       url: gateway.wsUrl,
       token: gateway.token,
       role: "operator",
@@ -403,12 +385,14 @@ async function connectApprovalReviewer(
       deviceIdentity: null,
       requestTimeoutMs: REQUEST_TIMEOUT_MS,
       onEvent,
-      onHelloOk: () => finish(),
-      onConnectError: (error) => finish(error),
-      onClose: (code, reason) => finish(new Error(`approval reviewer closed (${code}): ${reason}`)),
-    });
-    client.start();
-  });
+    },
+    {
+      timeoutMs: REQUEST_TIMEOUT_MS,
+      timeoutMessage: "Codex node approval reviewer connection timed out",
+      closeMessage: "approval reviewer closed",
+      unrefTimeout: true,
+    },
+  );
 }
 
 async function resolveNextApproval(
@@ -623,32 +607,17 @@ describe("Codex paired-device exec-server carrier", () => {
             GITHUB_TOKEN: "codex-node-gateway-fake-forge-canary",
             NODE_ENV: "ordinary-node-process-value",
           },
-          mutateConfig: (config) => ({
-            ...config,
-            gateway: {
-              ...config.gateway,
-              nodes: {
-                ...config.gateway?.nodes,
-                commands: { allow: [COMMAND] },
-                pairing: {
-                  ...config.gateway?.nodes?.pairing,
-                  autoApproveLocal: false,
-                  sshVerify: false,
-                },
-              },
-            },
-            agents: {
-              ...config.agents,
-              defaults: {
-                ...config.agents?.defaults,
-                models: {
-                  ...config.agents?.defaults?.models,
-                  "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } },
-                },
-              },
-            },
-            nodeHost: { ...config.nodeHost, workerRuns: { enabled: true } },
-          }),
+          mutateConfig: (config) => {
+            const gatewayConfig = (config.gateway ??= {});
+            const nodes = (gatewayConfig.nodes ??= {});
+            nodes.commands = { allow: [COMMAND] };
+            nodes.pairing = { ...nodes.pairing, autoApproveLocal: false, sshVerify: false };
+            const agents = (config.agents ??= {});
+            const defaults = (agents.defaults ??= {});
+            (defaults.models ??= {})["openai/gpt-5.6-luna"] = { agentRuntime: { id: "codex" } };
+            (config.nodeHost ??= {}).workerRuns = { enabled: true };
+            return config;
+          },
         });
         requester = await connectApprovalReviewer(gateway, (event) => {
           const payload = event.payload;
@@ -686,10 +655,13 @@ describe("Codex paired-device exec-server carrier", () => {
           },
         });
         const gatewayPort = Number(new URL(gateway.baseUrl).port);
+        const restartNode = async () => {
+          await stopChild(node);
+          return startNodeProcess(gatewayPort, nodeEnv);
+        };
         node = startNodeProcess(gatewayPort, nodeEnv);
         const nodeId = await approvePairing(gateway, "device");
-        await stopChild(node);
-        node = startNodeProcess(gatewayPort, nodeEnv);
+        node = await restartNode();
         await approvePairing(gateway, "node", nodeId);
         await vi.waitFor(async () => {
           const approved = (await readNode(gateway!, nodeId)) as NodeStatus | undefined;
@@ -741,11 +713,9 @@ describe("Codex paired-device exec-server carrier", () => {
 
         nodeConfig.plugins!.entries!.codex!.enabled = true;
         await fs.writeFile(nodeConfigPath, `${JSON.stringify(nodeConfig)}\n`, { mode: 0o600 });
-        await stopChild(node);
-        node = startNodeProcess(gatewayPort, nodeEnv);
+        node = await restartNode();
         await approvePairing(gateway, "node", nodeId);
-        await stopChild(node);
-        node = startNodeProcess(gatewayPort, nodeEnv);
+        node = await restartNode();
         await vi.waitFor(async () => {
           const approved = (await readNode(gateway!, nodeId)) as NodeStatus | undefined;
           expect(approved).toMatchObject({
@@ -868,25 +838,18 @@ describe("Codex paired-device exec-server carrier", () => {
         node = undefined;
         const interruptedOutcome = await interruptedTerminal;
         expect(interruptedOutcome).toMatchObject({ status: "error" });
-        if (
-          typeof interruptedOutcome.error !== "string" ||
-          !/execution node disconnected.*fresh attempt/iu.test(interruptedOutcome.error)
-        ) {
-          throw new Error(
-            `Codex node disconnect omitted actionable guidance: ${JSON.stringify({
-              runId: interrupted.runId,
-              status: interruptedOutcome.status,
-              error:
-                typeof interruptedOutcome.error === "string"
-                  ? interruptedOutcome.error.slice(0, 1_000)
-                  : undefined,
-              observations: provider.observations,
-            })}\n${gateway.logs().slice(-6_000)}`,
-          );
-        }
-        expect(interruptedOutcome.error).toEqual(
-          expect.stringMatching(/execution node disconnected.*fresh attempt/iu),
-        );
+        expect(
+          interruptedOutcome.error,
+          `Codex node disconnect omitted actionable guidance: ${JSON.stringify({
+            runId: interrupted.runId,
+            status: interruptedOutcome.status,
+            error:
+              typeof interruptedOutcome.error === "string"
+                ? interruptedOutcome.error.slice(0, 1_000)
+                : undefined,
+            observations: provider.observations,
+          })}\n${gateway.logs().slice(-6_000)}`,
+        ).toEqual(expect.stringMatching(/execution node disconnected.*fresh attempt/iu));
         await waitForProofState(
           () => expect(processIsAlive(interruptedProcess)).toBe(false),
           `interrupted Codex command ${interruptedProcess} to exit`,
@@ -966,18 +929,7 @@ describe("Codex paired-device exec-server carrier", () => {
             repeatedRunId: repeated.runId,
             interruptedRunId: interrupted.runId,
             recoveredRunId: recovered.runId,
-            inferenceProvider: "deterministic mock",
-            realAppServer: true,
-            realExecServer: true,
             httpHits: provider.httpHits,
-            credentialCanaries: "absent",
-            missingCommandRejectedBeforeProvision: true,
-            workerSlotsDoNotGrantCommandAuthority: true,
-            workspaceReconciled: true,
-            disconnectTerminal: true,
-            freshReconnect: true,
-            placementMoveInvalidatedStandingGrant: true,
-            workerChildLaunched: false,
           }),
         );
       };

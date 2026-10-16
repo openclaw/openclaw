@@ -30,22 +30,21 @@ afterEach(async () => {
 });
 
 function messageText(content: unknown): string {
-  if (typeof content === "string") {
-    return content;
+  if (!Array.isArray(content)) {
+    return typeof content === "string" ? content : "";
   }
-  return Array.isArray(content)
-    ? content
-        .flatMap((part) =>
-          part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string"
-            ? [(part as { text: string }).text]
-            : [],
-        )
-        .join("\n")
-    : "";
+  return content
+    .flatMap((part: unknown) =>
+      part && typeof part === "object" && "text" in part && typeof part.text === "string"
+        ? [part.text]
+        : [],
+    )
+    .join("\n");
 }
 
 async function readRequests(log: string): Promise<AppServerMessage[]> {
-  return (await fs.readFile(log, "utf8"))
+  const text = await fs.readFile(log, "utf8");
+  return text
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line));
@@ -66,6 +65,13 @@ describe("Gateway Codex failure recovery with automatic cyber failover off", () 
       const { CODEX_APP_SERVER_VERSION } = await loadBundledPluginFacade<{
         CODEX_APP_SERVER_VERSION: string;
       }>({ pluginId: "codex", artifactBasename: "test-api.js" });
+      const appServer = {
+        mode: "yolo",
+        command: process.execPath,
+        args: [fileURLToPath(new URL("./codex-refusal-app-server.fixture.mjs", import.meta.url))],
+        requestTimeoutMs: 60_000,
+        cyberFailover: { mode: "off" },
+      };
       instance = await createOpenClawTestInstance({
         name: "qa-codex-refusal-product-proof",
         env: {
@@ -79,25 +85,7 @@ describe("Gateway Codex failure recovery with automatic cyber failover off", () 
           plugins: {
             enabled: true,
             allow: ["codex"],
-            entries: {
-              codex: {
-                enabled: true,
-                config: {
-                  appServer: {
-                    mode: "yolo",
-                    command: process.execPath,
-                    args: [
-                      fileURLToPath(
-                        new URL("./codex-refusal-app-server.fixture.mjs", import.meta.url),
-                      ),
-                    ],
-                    requestTimeoutMs: 60_000,
-                    // This fixture proves terminal refusals on the selected model.
-                    cyberFailover: { mode: "off" },
-                  },
-                },
-              },
-            },
+            entries: { codex: { enabled: true, config: { appServer } } },
           },
           agents: {
             defaults: {
@@ -123,15 +111,10 @@ describe("Gateway Codex failure recovery with automatic cyber failover off", () 
         oauthAccess: "synthetic-codex-refusal-oauth",
         shape: "oauth-only",
       });
-      expect(JSON.parse(await fs.readFile(instance.configPath, "utf8"))).toMatchObject({
-        agents: {
-          defaults: {
-            model: {
-              primary: `openai/${REPAIRED_MODEL_ID}`,
-              fallbacks: [REPAIRED_FALLBACK_MODEL],
-            },
-          },
-        },
+      const config = JSON.parse(await fs.readFile(instance.configPath, "utf8"));
+      expect(config.agents?.defaults?.model).toMatchObject({
+        primary: `openai/${REPAIRED_MODEL_ID}`,
+        fallbacks: [REPAIRED_FALLBACK_MODEL],
       });
       await instance.startGateway();
       const client = await connectGatewayStatusClient(instance);
@@ -204,11 +187,7 @@ describe("Gateway Codex failure recovery with automatic cyber failover off", () 
         };
         console.log(`[gateway Codex failure recovery proof] ${JSON.stringify(proof)}`);
         expect(proof).toEqual({
-          visibleReplies: paused
-            ? []
-            : retryable
-              ? [LATER_TURN_TEXT, LATER_TURN_TEXT]
-              : [LATER_TURN_TEXT],
+          visibleReplies: Array<string>(paused ? 0 : retryable ? 2 : 1).fill(LATER_TURN_TEXT),
           failureNotices: terminalFailureSummary
             ? [{ runId: firstRunId, summary: terminalFailureSummary }]
             : [],

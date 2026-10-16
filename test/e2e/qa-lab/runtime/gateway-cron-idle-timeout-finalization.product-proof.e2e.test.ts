@@ -1,13 +1,16 @@
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
+import { json } from "node:stream/consumers";
 import { setTimeout as sleep } from "node:timers/promises";
+import type { Locator } from "playwright";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createQaBusState,
   createQaChannelTransport,
   createQaGatewayChild,
   startQaBusServer,
+  type QaGatewayChild,
 } from "../../../../extensions/qa-lab/api.js";
 import {
   FileSettingsStorage,
@@ -45,11 +48,6 @@ type CronRunEntry = {
   status?: unknown;
   completionStatus?: unknown;
   error?: unknown;
-  summary?: unknown;
-  delivered?: unknown;
-  deliveryStatus?: unknown;
-  runId?: unknown;
-  durationMs?: unknown;
 };
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -63,56 +61,22 @@ afterEach(async () => {
       errors.push(error);
     }
   }
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  if (errors.length > 1) {
-    throw new AggregateError(errors, "cron idle-timeout finalization proof cleanup failed");
+  if (errors.length) {
+    throw errors.length === 1
+      ? errors[0]
+      : new AggregateError(errors, "cron idle-timeout finalization proof cleanup failed");
   }
 });
 
-function completedEvent(id: string, item: object, input_tokens: number, output_tokens: number) {
-  return {
-    type: "response.completed",
-    response: {
-      id,
-      status: "completed",
-      output: [item],
-      usage: { input_tokens, output_tokens, total_tokens: input_tokens + output_tokens },
-    },
-  };
-}
-
-function writeFunctionCall(response: ServerResponse, seq: number): void {
+function writeProviderReply(response: ServerResponse, seq: number, empty = false): void {
   const args = JSON.stringify({ path: NOTE_FILE, content: "settled" });
-  const item = {
+  const call = {
     type: "function_call",
     id: `fc_idle_timeout_proof_${seq}`,
     call_id: `call_idle_timeout_proof_${seq}`,
     name: "write",
     arguments: args,
   };
-  writeOpenAiResponsesSse(response, [
-    { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
-    {
-      type: "response.function_call_arguments.delta",
-      item_id: item.id,
-      output_index: 0,
-      delta: args,
-    },
-    {
-      type: "response.function_call_arguments.done",
-      item_id: item.id,
-      output_index: 0,
-      name: item.name,
-      arguments: args,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    completedEvent(`resp_idle_timeout_proof_${seq}`, item, 32, 12),
-  ]);
-}
-
-function writeEmptyAssistant(response: ServerResponse, seq: number): void {
   // Summary recovery answers with a completed message that carries no text.
   const message = {
     type: "message",
@@ -121,14 +85,38 @@ function writeEmptyAssistant(response: ServerResponse, seq: number): void {
     status: "completed",
     content: [],
   };
+  const item = empty ? message : call;
+  const event = (type: string, fields: Record<string, unknown>) => ({
+    type: `response.${type}`,
+    output_index: 0,
+    ...fields,
+  });
+  const input_tokens = empty ? 8 : 32;
+  const output_tokens = empty ? 0 : 12;
   writeOpenAiResponsesSse(response, [
+    event("output_item.added", {
+      item: empty ? { ...message, status: "in_progress" } : { ...call, arguments: "" },
+    }),
+    ...(empty
+      ? []
+      : [
+          event("function_call_arguments.delta", { item_id: call.id, delta: args }),
+          event("function_call_arguments.done", {
+            item_id: call.id,
+            name: call.name,
+            arguments: args,
+          }),
+        ]),
+    event("output_item.done", { item }),
     {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...message, status: "in_progress" },
+      type: "response.completed",
+      response: {
+        id: `resp_idle_timeout_proof_${empty ? "empty_" : ""}${seq}`,
+        status: "completed",
+        output: [item],
+        usage: { input_tokens, output_tokens, total_tokens: input_tokens + output_tokens },
+      },
     },
-    { type: "response.output_item.done", output_index: 0, item: message },
-    completedEvent(`resp_idle_timeout_proof_empty_${seq}`, message, 8, 0),
   ]);
 }
 
@@ -149,11 +137,7 @@ async function startControlledProvider() {
         response.writeHead(404).end();
         return;
       }
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.from(chunk));
-      }
-      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+      const body = (await json(request)) as {
         tools?: unknown[];
         input?: unknown;
       };
@@ -171,11 +155,11 @@ async function startControlledProvider() {
       };
       requests.push(entry);
       if (entry.kind === "finalization") {
-        writeEmptyAssistant(response, seq);
+        writeProviderReply(response, seq, true);
         return;
       }
       if (entry.kind === "tool-call") {
-        writeFunctionCall(response, seq);
+        writeProviderReply(response, seq);
         return;
       }
       // The post-tool turn: stay silent until the Gateway's idle watchdog aborts it.
@@ -214,57 +198,53 @@ async function startControlledProvider() {
   };
 }
 
-async function captureAutomationsScreenshots(params: {
-  baseUrl: string;
-  wsUrl: string;
-  token: string;
-  jobId: string;
-  jobName: string;
-  outputDir: string;
-}): Promise<string[]> {
+async function captureAutomationsScreenshots(
+  gateway: Pick<QaGatewayChild, "baseUrl" | "wsUrl" | "token">,
+  jobId: string,
+  outputDir: string,
+): Promise<string[]> {
   const { chromium } = await import("playwright");
   const browser = await chromium.launch();
   const written: string[] = [];
   try {
-    await fs.mkdir(params.outputDir, { recursive: true });
+    await fs.mkdir(outputDir, { recursive: true });
     const viewport = { width: 1440, height: 1000 };
     const context = await browser.newContext({
       locale: "en-US",
-      recordVideo: { dir: params.outputDir, size: viewport },
+      recordVideo: { dir: outputDir, size: viewport },
       viewport,
     });
     const page = await context.newPage();
+    const waitFor = (locator: Locator, timeout = 60_000) =>
+      locator
+        .first()
+        .waitFor({ timeout })
+        .catch(() => undefined);
     // Native-shell auth avoids an interactive pairing prompt.
     await page.addInitScript(
       (auth) => {
-        (window as Window & { ["__OPENCLAW_NATIVE_CONTROL_AUTH__"]?: unknown })[
-          "__OPENCLAW_NATIVE_CONTROL_AUTH__"
-        ] = auth;
+        Object.assign(window, { __OPENCLAW_NATIVE_CONTROL_AUTH__: auth });
       },
       {
-        gatewayUrl: params.wsUrl,
-        token: params.token,
+        gatewayUrl: gateway.wsUrl,
+        token: gateway.token,
         client: {
           id: "openclaw-control-ui",
           mode: "webchat",
           platform: "linux",
           deviceFamily: "desktop",
-          scopes: [
-            "operator.admin",
-            "operator.approvals",
-            "operator.questions",
-            "operator.read",
-            "operator.write",
-          ],
+          scopes: ["admin", "approvals", "questions", "read", "write"].map(
+            (scope) => `operator.${scope}`,
+          ),
         },
       },
     );
     const capture = async (name: string) => {
-      const file = path.join(params.outputDir, `${PROOF_LABEL}-${name}.png`);
+      const file = path.join(outputDir, `${PROOF_LABEL}-${name}.png`);
       await page.screenshot({ path: file, fullPage: true });
       written.push(file);
     };
-    await page.goto(`${params.baseUrl}/automations?job=${encodeURIComponent(params.jobId)}`, {
+    await page.goto(`${gateway.baseUrl}/automations?job=${encodeURIComponent(jobId)}`, {
       waitUntil: "domcontentloaded",
       timeout: 60_000,
     });
@@ -272,11 +252,7 @@ async function captureAutomationsScreenshots(params: {
     if (await exitSetup.isVisible({ timeout: 5_000 }).catch(() => false)) {
       await exitSetup.click();
     }
-    await page
-      .getByText(params.jobName)
-      .first()
-      .waitFor({ timeout: 60_000 })
-      .catch(() => undefined);
+    await waitFor(page.getByText(JOB_NAME));
     await sleep(3_000);
     await capture("automations-job");
     // The job route opens on Settings; the run outcome lives under Run history.
@@ -286,11 +262,7 @@ async function captureAutomationsScreenshots(params: {
     if (await history.isVisible().catch(() => false)) {
       await history.click().catch(() => undefined);
       await sleep(3_000);
-      await page
-        .locator(".cron-run-entry")
-        .first()
-        .waitFor({ timeout: 30_000 })
-        .catch(() => undefined);
+      await waitFor(page.locator(".cron-run-entry"), 30_000);
       await sleep(1_000);
       await capture("automations-run-history");
     }
@@ -299,7 +271,7 @@ async function captureAutomationsScreenshots(params: {
     await context.close();
     const recordedPath = await video?.path();
     if (recordedPath) {
-      const videoFile = path.join(params.outputDir, `${PROOF_LABEL}-automations.webm`);
+      const videoFile = path.join(outputDir, `${PROOF_LABEL}-automations.webm`);
       await fs.rename(recordedPath, videoFile);
       written.push(videoFile);
     }
@@ -374,19 +346,11 @@ describe.runIf(process.env.OPENCLAW_CRON_IDLE_TIMEOUT_FINALIZATION_PROOF === "1"
             if (!providerConfig) {
               throw new Error("mock-openai provider is missing from QA gateway config");
             }
-            return {
-              ...config,
-              models: {
-                ...config.models,
-                providers: {
-                  ...config.models?.providers,
-                  "mock-openai": {
-                    ...providerConfig,
-                    timeoutSeconds: PROVIDER_IDLE_TIMEOUT_SECONDS,
-                  },
-                },
-              },
+            const providers = {
+              ...config.models?.providers,
+              "mock-openai": { ...providerConfig, timeoutSeconds: PROVIDER_IDLE_TIMEOUT_SECONDS },
             };
+            return { ...config, models: { ...config.models, providers } };
           },
         });
 
@@ -462,47 +426,34 @@ describe.runIf(process.env.OPENCLAW_CRON_IDLE_TIMEOUT_FINALIZATION_PROOF === "1"
 
         phase = "screenshots";
         const screenshots = SCREENSHOT_DIR
-          ? await captureAutomationsScreenshots({
-              baseUrl: gateway.baseUrl,
-              wsUrl: gateway.wsUrl,
-              token: gateway.token,
-              jobId: added.id,
-              jobName: JOB_NAME,
-              outputDir: SCREENSHOT_DIR,
-            })
+          ? await captureAutomationsScreenshots(gateway, added.id, SCREENSHOT_DIR)
           : [];
 
-        console.log(
-          JSON.stringify(
-            {
-              phase: "cron-idle-timeout-finalization-proof",
-              head:
-                process.env.OPENCLAW_PROOF_HEAD_SHA ?? process.env.GITHUB_SHA ?? "local-checkout",
-              providerIdleTimeoutSeconds: PROVIDER_IDLE_TIMEOUT_SECONDS,
-              providerMaxRetries: PROVIDER_MAX_RETRIES,
-              cronRunTrigger: triggered,
-              providerRequests: provider.requests.map((request) => ({
-                seq: request.seq,
-                kind: request.kind,
-                ...(request.clientClosedAt !== undefined
-                  ? { clientClosedAfterMs: request.clientClosedAt - request.startedAt }
-                  : {}),
-              })),
-              settledWriteLanded: noteExists,
-              announcedToChannel: announced,
-              screenshots,
-              cronRun: entry ?? null,
-              jobState: {
-                lastRunStatus: job.state?.lastRunStatus,
-                lastDeliveryStatus: job.state?.lastDeliveryStatus,
-                lastError: job.state?.lastError,
-              },
-              gatewayLogs,
-            },
-            null,
-            2,
-          ),
-        );
+        const proof = {
+          phase: "cron-idle-timeout-finalization-proof",
+          head: process.env.OPENCLAW_PROOF_HEAD_SHA ?? process.env.GITHUB_SHA ?? "local-checkout",
+          providerIdleTimeoutSeconds: PROVIDER_IDLE_TIMEOUT_SECONDS,
+          providerMaxRetries: PROVIDER_MAX_RETRIES,
+          cronRunTrigger: triggered,
+          providerRequests: provider.requests.map((request) => ({
+            seq: request.seq,
+            kind: request.kind,
+            ...(request.clientClosedAt !== undefined
+              ? { clientClosedAfterMs: request.clientClosedAt - request.startedAt }
+              : {}),
+          })),
+          settledWriteLanded: noteExists,
+          announcedToChannel: announced,
+          screenshots,
+          cronRun: entry ?? null,
+          jobState: {
+            lastRunStatus: job.state?.lastRunStatus,
+            lastDeliveryStatus: job.state?.lastDeliveryStatus,
+            lastError: job.state?.lastError,
+          },
+          gatewayLogs,
+        };
+        console.log(JSON.stringify(proof, null, 2));
 
         expect(entry, "cron run never finished").toBeDefined();
         expect(noteExists).toBe(true);

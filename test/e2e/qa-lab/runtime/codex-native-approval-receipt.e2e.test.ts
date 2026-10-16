@@ -33,7 +33,6 @@ let instance: OpenClawTestInstance | undefined;
 type AppServerLogEntry = {
   id?: number | string;
   method?: string;
-  params?: unknown;
   result?: unknown;
 };
 
@@ -76,58 +75,48 @@ function readJsonLines(filePath: string): AppServerLogEntry[] {
   }
 }
 
-function withApprovalDatabase<T>(owner: OpenClawTestInstance, read: (db: DatabaseSync) => T) {
+function queryApproval<T>(owner: OpenClawTestInstance, sql: string, ...args: string[]) {
   const database = new DatabaseSync(path.join(owner.stateDir, "state", "openclaw.sqlite"), {
     readOnly: true,
   });
   try {
-    return read(database);
+    return database.prepare(sql).get(...args) as T;
   } finally {
     database.close();
   }
 }
 
 function readApprovalIdentity(testInstance: OpenClawTestInstance, approvalId: string) {
-  return withApprovalDatabase(testInstance, (database) => {
-    return database
-      .prepare(
-        `SELECT approval.source_agent_id,
-                approval.source_session_key,
-                approval.source_run_id,
-                approval.source_tool_call_id,
-                approval.source_tool_name,
-                binding.source_context_id,
-                binding.source_execution_id
-           FROM operator_approvals AS approval
-           LEFT JOIN operator_approval_execution_identities AS binding
-             ON binding.approval_id = approval.approval_id
-          WHERE approval.approval_id = ?`,
-      )
-      .get(approvalId) as ApprovalIdentityRow | undefined;
-  });
+  return queryApproval<ApprovalIdentityRow | undefined>(
+    testInstance,
+    `SELECT approval.source_agent_id, approval.source_session_key, approval.source_run_id,
+            approval.source_tool_call_id, approval.source_tool_name,
+            binding.source_context_id, binding.source_execution_id
+       FROM operator_approvals AS approval
+       LEFT JOIN operator_approval_execution_identities AS binding
+         ON binding.approval_id = approval.approval_id
+      WHERE approval.approval_id = ?`,
+    approvalId,
+  );
 }
 
 function assertNoGenericDuplicate(testInstance: OpenClawTestInstance, approvalId: string) {
-  withApprovalDatabase(testInstance, (database) => {
-    const table = database
-      .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-      .get("execution_decision_facts");
-    if (table) {
-      const row = database
-        .prepare(
-          `SELECT COUNT(*) AS count
-             FROM execution_decision_facts
-            WHERE owner = 'operator_approvals'
-               OR source_ref = (
-                    SELECT resolution_ref
-                      FROM operator_approvals
-                     WHERE approval_id = ?
-                  )`,
-        )
-        .get(approvalId) as { count: number };
-      expect(row.count).toBe(0);
-    }
-  });
+  const table = queryApproval(
+    testInstance,
+    "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?",
+    "execution_decision_facts",
+  );
+  if (table) {
+    const row = queryApproval<{ count: number }>(
+      testInstance,
+      `SELECT COUNT(*) AS count FROM execution_decision_facts
+        WHERE owner = 'operator_approvals' OR source_ref = (
+          SELECT resolution_ref FROM operator_approvals WHERE approval_id = ?
+        )`,
+      approvalId,
+    );
+    expect(row.count).toBe(0);
+  }
 }
 
 function requireAllowedOnceReceipt(result: AuditRunInspectResult) {
@@ -202,6 +191,12 @@ describe("Codex native approval receipt", () => {
       const fixture = fileURLToPath(
         new URL("./codex-native-approval-app-server.fixture.mjs", import.meta.url),
       );
+      const appServer = {
+        mode: "guardian",
+        command: process.execPath,
+        args: [fixture],
+        requestTimeoutMs: REQUEST_TIMEOUT_MS,
+      };
       instance = await createOpenClawTestInstance({
         name: "qa-codex-native-approval-receipt",
         env: {
@@ -217,19 +212,7 @@ describe("Codex native approval receipt", () => {
           plugins: {
             enabled: true,
             allow: ["codex"],
-            entries: {
-              codex: {
-                enabled: true,
-                config: {
-                  appServer: {
-                    mode: "guardian",
-                    command: process.execPath,
-                    args: [fixture],
-                    requestTimeoutMs: REQUEST_TIMEOUT_MS,
-                  },
-                },
-              },
-            },
+            entries: { codex: { enabled: true, config: { appServer } } },
           },
           agents: {
             defaults: {
@@ -343,14 +326,10 @@ describe("Codex native approval receipt", () => {
         const sourceRunId = identity.source_run_id;
 
         const serialized = await inspectReceipt(instance, sourceRunId, approval.id);
-        for (const privateValue of [
-          PRIVATE_COMMAND,
-          PRIVATE_THREAD_ID,
-          PRIVATE_ITEM_ID,
-          process.cwd(),
-        ]) {
-          expect(serialized).not.toContain(privateValue);
-        }
+        expect(serialized).not.toContain(PRIVATE_COMMAND);
+        expect(serialized).not.toContain(PRIVATE_THREAD_ID);
+        expect(serialized).not.toContain(PRIVATE_ITEM_ID);
+        expect(serialized).not.toContain(process.cwd());
 
         reviewer.stop();
         await instance.stopGateway();
