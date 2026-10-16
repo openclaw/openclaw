@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
@@ -146,14 +146,14 @@ test("keeps node authority available while retained setup cleanup is pending", a
   });
 });
 
-test.each([
+test.for([
   "session-host consent",
   "host stats",
   "skill bins",
   "rename",
   "token revocation",
   "metadata after a failed read",
-] as const)("retains only usable node authority during %s", async (change) => {
+] as const)("retains only usable node authority during %s", async (change, { signal }) => {
   const snapshot = await readDevicePairingNodeSnapshot(baseDir);
   const generation = await withEnvAsync({ OPENCLAW_STATE_DIR: baseDir }, () =>
     captureNodePairingGeneration("node"),
@@ -227,6 +227,8 @@ test.each([
       );
     } else {
       expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(binding);
+      // Discovery must finish while the write is still queued, using committed facts.
+      expect(await withinTest(readDevicePairingNodeSnapshot(baseDir), signal)).toBe(snapshot);
     }
     releaseMutation.resolve();
     expect(await mutation).toEqual(
