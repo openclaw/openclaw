@@ -12,6 +12,8 @@ export function readStandaloneRuntimeManifest(
 ): StandaloneRuntimeManifest | undefined;
 export function isStandaloneRuntimeExecutable(executable?: string): boolean;
 export function getEmbeddedStandaloneRuntimeRoot(): string | undefined;
+export function resolveStandaloneNpmCliPath(): string | undefined;
+export function resolveRuntimeScriptEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
 export function resolveOpenClawCliInvocation(params?: {
   execPath?: string;
   /** Null selects an executable CLI command without inheriting the current script. */
