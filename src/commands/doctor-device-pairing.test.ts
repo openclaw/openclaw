@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
-// Doctor device pairing tests cover device-pairing checks, repair prompts, and diagnostics.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { seedDeviceAuthToken } from "../infra/device-auth-store.test-support.js";
@@ -16,49 +15,41 @@ import {
   detectLegacyDeviceAuth,
   migrateLegacyDeviceAuth,
 } from "../infra/state-migrations.device-auth.js";
-import {
-  closeOpenClawStateDatabaseByPathAsync,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { withTempDir } from "../test-utils/temp-dir.js";
 
 const callGatewayMock = vi.hoisted(() => vi.fn());
 const noteMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../gateway/call.js", () => ({
-  callGateway: (...args: unknown[]) => callGatewayMock(...args),
-}));
+vi.mock("../gateway/call.js", () => ({ callGateway: callGatewayMock }));
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: noteMock }));
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({
-  note: (...args: unknown[]) => noteMock(...args),
-}));
-
-function requireMockCall(
-  mock: { mock: { calls: unknown[][] } },
-  callIndex: number,
-  label: string,
-): unknown[] {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`expected ${label} call ${callIndex}`);
-  }
-  return call;
-}
-
-function requireNoteMessage(callIndex = 0): string {
-  const [message] = requireMockCall(noteMock, callIndex, "doctor note");
+function requireNoteMessage(): string {
+  const message: unknown = noteMock.mock.calls[0]?.[0];
   if (typeof message !== "string") {
-    throw new Error(`expected doctor note message ${callIndex}`);
+    throw new Error("expected doctor note message");
   }
   return message;
 }
 
-function requireNoteTitle(callIndex = 0): unknown {
-  const [, title] = requireMockCall(noteMock, callIndex, "doctor note");
-  return title;
-}
+const localHealth = { cfg: { gateway: { mode: "local" as const } }, healthOk: false };
+const remoteHealth = { cfg: { gateway: { mode: "remote" as const } }, healthOk: true };
+const operatorRequest = {
+  role: "operator",
+  scopes: ["operator.read"],
+  clientId: "control-ui",
+  clientMode: "webchat",
+  displayName: "Dashboard",
+};
+const pendingDevice = {
+  ...operatorRequest,
+  requestId: "req-gateway-1",
+  deviceId: "device-gateway-1",
+  publicKey: "pubkey",
+  roles: ["operator"],
+  ts: 1,
+  isRepair: false,
+};
 
 const legacyDeviceAuthContents = JSON.stringify({
   version: 1,
@@ -79,44 +70,30 @@ describe("noteDevicePairingHealth", () => {
 
   async function withApprovedOperatorPairing(
     run: (context: {
-      stateDir: string;
       identity: ReturnType<typeof loadOrCreateDeviceIdentity>;
       publicKey: string;
-      initial: Awaited<ReturnType<typeof requestDevicePairing>>;
     }) => Promise<void>,
   ): Promise<void> {
-    await withTempDir("openclaw-doctor-device-pairing-", async (stateDir) => {
-      await withEnvAsync(
-        {
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_TEST_FAST: "1",
-        },
-        async () => {
-          const identity = loadOrCreateDeviceIdentity();
-          const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
-          const initial = await requestDevicePairing({
-            deviceId: identity.deviceId,
-            publicKey,
-            role: "operator",
-            scopes: ["operator.read"],
-            clientId: "control-ui",
-            clientMode: "webchat",
-            displayName: "Dashboard",
-          });
-          await approveDevicePairing(initial.request.requestId, {
-            callerScopes: ["operator.read"],
-          });
+    await withOpenClawTestState(
+      { prefix: "openclaw-doctor-device-pairing-", env: { OPENCLAW_TEST_FAST: "1" } },
+      async () => {
+        const identity = loadOrCreateDeviceIdentity();
+        const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
+        const initial = await requestDevicePairing({
+          deviceId: identity.deviceId,
+          publicKey,
+          ...operatorRequest,
+        });
+        await approveDevicePairing(initial.request.requestId, { callerScopes: ["operator.read"] });
+        await run({ identity, publicKey });
+      },
+    );
+  }
 
-          try {
-            await run({ stateDir, identity, publicKey, initial });
-          } finally {
-            await closeOpenClawStateDatabaseByPathAsync(
-              path.join(stateDir, "state", "openclaw.sqlite"),
-            );
-          }
-        },
-      );
-    });
+  async function localNote(): Promise<string> {
+    await noteDevicePairingHealth(localHealth);
+    expect(noteMock).toHaveBeenCalledTimes(1);
+    return requireNoteMessage();
   }
 
   beforeAll(async () => {
@@ -132,8 +109,6 @@ describe("noteDevicePairingHealth", () => {
 
   afterEach(() => {
     __setFsSafeTestHooksForTest(undefined);
-    callGatewayMock.mockReset();
-    noteMock.mockReset();
   });
 
   it("warns about pending scope upgrades from local pairing state when the gateway is down", async () => {
@@ -141,29 +116,18 @@ describe("noteDevicePairingHealth", () => {
       const pending = await requestDevicePairing({
         deviceId: identity.deviceId,
         publicKey,
-        role: "operator",
+        ...operatorRequest,
         scopes: ["operator.admin"],
-        clientId: "control-ui",
-        clientMode: "webchat",
-        displayName: "Dashboard",
       });
 
-      await noteDevicePairingHealth({
-        cfg: { gateway: { mode: "local" } },
-        healthOk: false,
-      });
-
-      expect(noteMock).toHaveBeenCalledTimes(1);
-      const message = requireNoteMessage();
-      expect(requireNoteTitle()).toBe("Device pairing");
+      const message = await localNote();
+      expect(noteMock.mock.calls[0]?.[1]).toBe("Device pairing");
       expect(message).toContain("Pending scope upgrade");
       expect(message).toContain("operator.admin");
       expect(message).toContain("openclaw devices approve");
       expect(callGatewayMock).not.toHaveBeenCalled();
 
-      const findings = await collectDevicePairingHealthFindings({
-        cfg: { gateway: { mode: "local" } },
-      });
+      const findings = await collectDevicePairingHealthFindings(localHealth);
       expect(findings).toEqual([
         expect.objectContaining({
           checkId: "core/doctor/device-pairing",
@@ -324,13 +288,7 @@ describe("noteDevicePairingHealth", () => {
       });
       expect(rotated.ok).toBe(true);
 
-      await noteDevicePairingHealth({
-        cfg: { gateway: { mode: "local" } },
-        healthOk: false,
-      });
-
-      expect(noteMock).toHaveBeenCalledTimes(1);
-      const message = requireNoteMessage();
+      const message = await localNote();
       expect(message).toContain("stale device-token pattern");
       expect(message).toContain("openclaw devices rotate");
     });
@@ -342,9 +300,7 @@ describe("noteDevicePairingHealth", () => {
         .spyOn(await import("../infra/device-auth-store.js"), "loadDeviceAuthTokens")
         .mockRejectedValueOnce(new Error("synthetic inventory failure"));
       try {
-        await expect(
-          collectDevicePairingHealthFindings({ cfg: { gateway: { mode: "local" } } }),
-        ).resolves.toEqual([]);
+        await expect(collectDevicePairingHealthFindings(localHealth)).resolves.toEqual([]);
         expect(inventory).toHaveBeenCalledOnce();
       } finally {
         inventory.mockRestore();
@@ -373,10 +329,7 @@ describe("noteDevicePairingHealth", () => {
         ],
       });
 
-      const findings = await collectDevicePairingHealthFindings({
-        cfg: { gateway: { mode: "remote" } },
-        healthOk: true,
-      });
+      const findings = await collectDevicePairingHealthFindings(remoteHealth);
 
       expect(findings).toContainEqual(
         expect.objectContaining({
@@ -396,13 +349,7 @@ describe("noteDevicePairingHealth", () => {
         scopes: [],
       });
 
-      await noteDevicePairingHealth({
-        cfg: { gateway: { mode: "local" } },
-        healthOk: false,
-      });
-
-      expect(noteMock).toHaveBeenCalledTimes(1);
-      const message = requireNoteMessage();
+      const message = await localNote();
       expect(message).toContain("Local cached node device auth");
       expect(message).toContain("role is no longer approved");
       expect(message).toContain("remove the stale cached node auth entry");
@@ -414,26 +361,16 @@ describe("noteDevicePairingHealth", () => {
     callGatewayMock.mockResolvedValue({
       pending: [
         {
-          requestId: "req-gateway-1",
-          deviceId: "device-gateway-1",
-          publicKey: "pubkey",
-          role: "operator",
-          roles: ["operator"],
+          ...pendingDevice,
           scopes: ["operator.admin"],
           clientId: "control-ui\tclient",
-          clientMode: "webchat",
           displayName: "\u001b[2Kbad\nname",
-          ts: 1,
-          isRepair: false,
         },
       ],
       paired: [],
     });
 
-    await noteDevicePairingHealth({
-      cfg: { gateway: { mode: "remote" } },
-      healthOk: true,
-    });
+    await noteDevicePairingHealth(remoteHealth);
 
     const message = requireNoteMessage();
     expect(callGatewayMock).toHaveBeenCalledExactlyOnceWith({
@@ -452,16 +389,9 @@ describe("noteDevicePairingHealth", () => {
     callGatewayMock.mockResolvedValue({
       pending: [
         {
-          requestId: "req-gateway-1",
+          ...pendingDevice,
           deviceId: "device; echo pwn",
           publicKey: "pending-pubkey",
-          role: "operator",
-          roles: ["operator"],
-          scopes: ["operator.read"],
-          clientId: "control-ui",
-          clientMode: "webchat",
-          displayName: "Dashboard",
-          ts: 1,
           isRepair: true,
         },
       ],
@@ -483,10 +413,7 @@ describe("noteDevicePairingHealth", () => {
       ],
     });
 
-    await noteDevicePairingHealth({
-      cfg: { gateway: { mode: "remote" } },
-      healthOk: true,
-    });
+    await noteDevicePairingHealth(remoteHealth);
 
     const message = requireNoteMessage();
     expect(message).toContain("openclaw devices remove 'device; echo pwn'");
@@ -508,10 +435,7 @@ describe("noteDevicePairingHealth", () => {
         role: "operator",
       });
 
-      await noteDevicePairingHealth({
-        cfg: { gateway: { mode: "local" } },
-        healthOk: false,
-      });
+      await noteDevicePairingHealth(localHealth);
 
       const message = requireNoteMessage();
       expect(message).toContain("has no active operator device token");

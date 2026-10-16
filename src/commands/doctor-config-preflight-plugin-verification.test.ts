@@ -26,6 +26,7 @@ vi.mock("../plugins/clawhub.js", async (importOriginal) => ({
     throw new Error("unselected plugin reached ClawHub installation");
   },
 }));
+const freshCache = <T>(run: () => T) => withPluginCache(createPluginCache(), run);
 
 describe("update canary plugin verification", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -45,7 +46,7 @@ describe("update canary plugin verification", () => {
       { "canary-fixture": { source: "npm", spec: "@example/canary-fixture" } },
       { config: cfg, env },
     );
-    await withPluginCache(createPluginCache(), async () => {
+    await freshCache(async () => {
       const result = await runDoctorPluginConvergence({ cfg, env });
       expect(npmInstall).not.toHaveBeenCalled();
       expect(result).toEqual({
@@ -83,6 +84,23 @@ describe("update canary plugin verification", () => {
 describe.each(["startup", "repair"] as const)("%s consent inventory", (first) => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   afterEach(() => npmInstall.mockReset());
+  function createInventory(prefix: string) {
+    const home = tempDirs.make(prefix);
+    const bundledRoot = path.join(home, "bundled");
+    fs.mkdirSync(bundledRoot, { recursive: true });
+    return {
+      home,
+      bundledRoot,
+      cfg: { plugins: { allow: ["selected-fixture"] } },
+      env: {
+        HOME: home,
+        OPENCLAW_STATE_DIR: path.join(home, "state"),
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+        VITEST: "true",
+      },
+    };
+  }
 
   async function converge(
     cfg: Parameters<typeof runDoctorPluginConvergence>[0]["cfg"],
@@ -101,23 +119,14 @@ describe.each(["startup", "repair"] as const)("%s consent inventory", (first) =>
     "does not install catalog-only plugins or retained bundled records (retained=%s)",
     async (retained) => {
       npmInstall.mockClear();
-      const home = tempDirs.make("openclaw-consent-inventory-");
-      const bundledRoot = path.join(home, "bundled");
+      const { home, bundledRoot, cfg, env } = createInventory("openclaw-consent-inventory-");
       const pluginId = "bundled-consent-fixture";
       const packageName = "@openclaw/bundled-consent-fixture";
       const rootDir = path.join(bundledRoot, pluginId);
       fs.mkdirSync(rootDir, { recursive: true });
       const fixture = createColdPluginFixture({ rootDir, pluginId, packageName });
-      const env = {
-        HOME: home,
-        OPENCLAW_STATE_DIR: path.join(home, "state"),
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
-        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-        VITEST: "true",
-      };
-      const cfg = { plugins: { allow: ["selected-fixture"] } };
-      await withPluginCache(createPluginCache(), async () => {
-        await seedInstalledPluginIndex(
+      await freshCache(() =>
+        seedInstalledPluginIndex(
           retained
             ? {
                 [pluginId]: {
@@ -129,18 +138,18 @@ describe.each(["startup", "repair"] as const)("%s consent inventory", (first) =>
               }
             : {},
           { config: cfg, env },
-        );
-      });
+        ),
+      );
       expect(listOfficialExternalPluginCatalogEntries().length).toBeGreaterThan(0);
       for (let start = 0; start < 2; start += 1) {
-        await withPluginCache(createPluginCache(), async () => {
+        await freshCache(async () => {
           await converge(cfg, env);
           const repair = await runPostCorePluginConvergence({ cfg, env });
           expect(repair.warnings).toEqual([]);
           expect(repair.installRecords).toEqual({});
         });
         // A completed lifecycle changes the next generation, not the invoking snapshot.
-        const persisted = await withPluginCache(createPluginCache(), () =>
+        const persisted = await freshCache(() =>
           readPersistedInstalledPluginIndexInstallRecordsAsync({ env }),
         );
         expect(persisted).toEqual({});
@@ -162,18 +171,8 @@ describe.each(["startup", "repair"] as const)("%s consent inventory", (first) =>
   ])(
     "converges verified official packages selected only by $envVar",
     async ({ envVar, packages }) => {
-      const home = tempDirs.make("openclaw-consent-env-");
-      const bundledRoot = path.join(home, "bundled");
-      fs.mkdirSync(bundledRoot, { recursive: true });
-      const env = {
-        HOME: home,
-        OPENCLAW_STATE_DIR: path.join(home, "state"),
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
-        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-        VITEST: "true",
-        [envVar]: "synthetic-credential",
-      };
-      const cfg = { plugins: { allow: ["selected-fixture"] } };
+      const { home, cfg, env: baseEnv } = createInventory("openclaw-consent-env-");
+      const env = { ...baseEnv, [envVar]: "synthetic-credential" };
       const runtimeMarkers: string[] = [];
       npmInstall.mockClear();
       npmInstall.mockImplementation(async (params) => {
@@ -218,10 +217,8 @@ describe.each(["startup", "repair"] as const)("%s consent inventory", (first) =>
           npmResolution,
         };
       });
-      await withPluginCache(createPluginCache(), async () => {
-        await converge(cfg, env);
-      });
-      await withPluginCache(createPluginCache(), async () => {
+      await freshCache(() => converge(cfg, env));
+      await freshCache(async () => {
         const repair = await runPostCorePluginConvergence({ cfg, env });
         expect(repair.warnings).toEqual([]);
         expect(Object.keys(repair.installRecords).toSorted()).toEqual(

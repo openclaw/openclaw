@@ -30,6 +30,8 @@ const success = (stdout = ""): ExecResult => ({
   stderr: "",
 });
 const property = (type: string, data: unknown) => ({ type, data });
+const execStart = (args: string[]) =>
+  property("a(sasbttttuii)", [[args[0], args, false, 0, 0, 0, 0, 0, 0, 0]]);
 
 type Difference =
   | "account"
@@ -105,12 +107,13 @@ async function exerciseDoctor(
     OPENCLAW_SERVICE_KIND: "gateway",
     ...(installation === "Compose env ports" ? { OPENCLAW_GATEWAY_PORT: "127.0.0.1:18789" } : {}),
   };
+  const unitEnvironment = (name: string, patch: Record<string, string> = {}) =>
+    Object.entries({ ...environment, OPENCLAW_SYSTEMD_UNIT: name, ...patch }).map(
+      ([key, value]) => `${key}=${value}`,
+    );
   const unit = (name: string) =>
-    `[Service]\nExecStart=${args.join(" ")}\n${Object.entries({
-      ...environment,
-      OPENCLAW_SYSTEMD_UNIT: name,
-    })
-      .map(([key, value]) => `Environment="${key}=${value}"`)
+    `[Service]\nExecStart=${args.join(" ")}\n${unitEnvironment(name)
+      .map((value) => `Environment="${value}"`)
       .join("\n")}\n`;
   await fs.writeFile(userPath, unit(userName));
   const legacyName = "openclaw-lisa.service";
@@ -158,14 +161,9 @@ async function exerciseDoctor(
     ActiveState: property("s", "active"),
     CanStart: property("b", true),
     RefuseManualStart: property("b", false),
-    ExecStart: property("a(sasbttttuii)", [[args[0], args, false, 0, 0, 0, 0, 0, 0, 0]]),
+    ExecStart: execStart(args),
     WorkingDirectory: property("s", home),
-    Environment: property(
-      "as",
-      Object.entries({ ...environment, OPENCLAW_SYSTEMD_UNIT: name }).map(
-        ([key, value]) => `${key}=${value}`,
-      ),
-    ),
+    Environment: property("as", unitEnvironment(name)),
     EnvironmentFiles: property("a(sb)", []),
     UnsetEnvironment: property("as", []),
     User: property("s", "gateway"),
@@ -173,12 +171,7 @@ async function exerciseDoctor(
   const userProperties = properties(userName, userPath);
   const systemProperties = properties(systemName, systemPath);
   const setSystemEnv = (patch: Record<string, string>) => {
-    systemProperties.Environment = property(
-      "as",
-      Object.entries({ ...environment, OPENCLAW_SYSTEMD_UNIT: systemName, ...patch }).map(
-        ([key, value]) => `${key}=${value}`,
-      ),
-    );
+    systemProperties.Environment = property("as", unitEnvironment(systemName, patch));
   };
   if (installation === "Compose env ports") {
     setSystemEnv({ OPENCLAW_GATEWAY_PORT: "[::1]:18789" });
@@ -188,11 +181,7 @@ async function exerciseDoctor(
   } else if (difference === "user profile") {
     userProperties.Environment = property(
       "as",
-      Object.entries({
-        ...environment,
-        OPENCLAW_PROFILE: "darlene",
-        OPENCLAW_SYSTEMD_UNIT: userName,
-      }).map(([key, value]) => `${key}=${value}`),
+      unitEnvironment(userName, { OPENCLAW_PROFILE: "darlene" }),
     );
     userProperties.NeedDaemonReload = property("b", true);
   } else if (difference === "profile environment") {
@@ -216,9 +205,7 @@ async function exerciseDoctor(
     if (difference === "node service") {
       setSystemEnv({ OPENCLAW_SERVICE_KIND: "node" });
     }
-    systemProperties.ExecStart = property("a(sasbttttuii)", [
-      [systemArgs[0], systemArgs, false, 0, 0, 0, 0, 0, 0, 0],
-    ]);
+    systemProperties.ExecStart = execStart(systemArgs);
   }
   const unexpected: string[] = [];
   let removed = false;
