@@ -196,6 +196,7 @@ describe("PostgreSQL schema generation", () => {
     expect((await generatePostgresSchemas(root)).files).toEqual(files);
     expect(Object.keys(files).toSorted()).toEqual(
       [
+        "agent-port.json",
         "agent-runtime.ts",
         "agent.postgres.sql",
         "agent-search-runtime.ts",

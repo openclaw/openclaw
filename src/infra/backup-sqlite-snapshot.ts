@@ -39,6 +39,7 @@ import {
   type BackupSqliteSourceGroup,
 } from "./backup-sqlite-source-groups.js";
 import { isTransientSqliteBackupPath } from "./backup-volatile-filter.js";
+import { resolveAgentPortRoots } from "./database-engine/agent-port.js";
 import { listDatabaseEngineStores } from "./database-engine/registry.js";
 import { hasErrnoCode } from "./errno.js";
 import { collectErrorGraphCandidates, formatErrorMessage } from "./errors.js";
@@ -209,6 +210,7 @@ export async function discoverBackupDatabasePaths(params: {
   }
   const discovered = await collectStateDatabasePaths(params);
   const paths = [...discovered.values()].flatMap((database) => database.spellings);
+  paths.push(...(await resolveAgentPortRoots({ ...params, env: params.env ?? process.env })));
   const plugins = resolvePluginMetadataSnapshot(params);
   const capable = new Set<string>(
     listDatabaseEngineStores()

@@ -87,8 +87,15 @@ The supported PostgreSQL families are:
   uses the engine's admitted full-text capability and requires `unaccent`.
   Memory indexing remains unavailable until the memory owner supports PostgreSQL;
   requests fail with `DATABASE_SEARCH_CAPABILITY_UNAVAILABLE`.
-  Existing SQLite agent stores cannot switch engines; agent ports and backup
-  providers are not available yet. PostgreSQL agent schemas support current-version
+  Existing agent stores support bidirectional ports and matched backups, including
+  retained registry paths and explicit session or agent directories. Older SQLite
+  schemas migrate only in the port's private copy. Compressed transcript events
+  become plain JSON on PostgreSQL; transcript search is rebuilt before publication.
+  Rebuildable memory indexes are omitted and their empty metadata requests a rebuild
+  when the memory owner supports the selected engine. Canonical memory origins and
+  tombstones remain intact. Duplicate-key voice JSON refuses the port with a hashed
+  row locator. Cold archive references are retained; user backups embed their blobs.
+  PostgreSQL agent schemas support current-version
   bootstrap only and reject schema drift before exposing the store.
 - **Workboard:** runtime storage, bidirectional database ports, and matched backups.
 - **Logbook:** runtime frames, batches, observations, cards, and standups;
@@ -490,6 +497,12 @@ Doctor-owned deletion history. Its persisted projection columns and tables are
 canonical data, so they are retained rather than rebuilt. Exact captures keep
 secrets and transient rows; user exports apply the existing shared-state sanitizer.
 Restore uses normal owner admission, including PostgreSQL catalog drift checks.
+
+Matched agent backups retain PostgreSQL sequence high-watermarks, including retired
+outbox rows. A reverse port uses SQLite's native allocator: plain `INTEGER PRIMARY
+KEY` columns allocate after the largest retained row, while `AUTOINCREMENT` columns
+retain their recorded high-watermark. Retained outbox order is preserved in both
+directions.
 
 Preserve the complete matched set: an anchor alone contains
 no PostgreSQL rows. Existing format-1 SQLite backups remain readable.

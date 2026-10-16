@@ -3,6 +3,7 @@ import type { Client } from "pg";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAdmittedSqliteSchemaFacts, admitSqliteSchema } from "../sqlite-schema-facts.js";
 import { quoteSqliteIdentifier as quote } from "../sqlite-schema-sql.js";
+import { agentPortProvider } from "./agent-port.js";
 import { logbookPortProvider } from "./logbook-port.js";
 import {
   DatabasePortDataError,
@@ -18,6 +19,7 @@ import { workboardPortProvider } from "./workboard-port.js";
 export const databasePortProviders: readonly DatabasePortProvider[] = [
   workboardPortProvider,
   statePortProvider,
+  agentPortProvider,
   logbookPortProvider,
   teamReportsPortProvider,
 ];

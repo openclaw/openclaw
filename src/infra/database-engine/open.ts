@@ -196,8 +196,7 @@ export function openEngineStore(ref: {
     if (!known || (known.engine === "postgres" && known.version !== schema.version)) {
       admitPostgresCapabilities(db);
       // Bootstrap borrows opening custody; ordinary writes still require domain admission.
-      const admitExistingOnly = ref.existingOnly && schema.postgresMigrations?.length === 0;
-      // Bootstrap-only stores can admit an existing schema without a mutation receipt.
+      // Existing-only forbids creation; an unsealed port still needs writable schema admission.
       db.runTransaction(
         () => {
           const fresh = !db
@@ -255,7 +254,7 @@ export function openEngineStore(ref: {
           admit(!meta);
         },
         undefined,
-        admitExistingOnly,
+        false,
       );
     } else {
       admit(false);
