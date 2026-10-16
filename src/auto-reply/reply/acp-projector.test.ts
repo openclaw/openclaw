@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { prefixSystemMessage } from "../../infra/system-message.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import { createAcpTestConfig as createCfg } from "./test-fixtures/acp-runtime.js";
@@ -9,7 +9,6 @@ function createProjectorHarness(
   cfgOverrides?: Parameters<typeof createCfg>[0],
   opts?: {
     onProgress?: () => void;
-    shouldSendToolSummaries?: boolean;
     shouldSendToolSummariesNow?: () => boolean;
     shouldSendFullToolDetails?: boolean;
     getConversationContext?: () => string | undefined;
@@ -18,8 +17,7 @@ function createProjectorHarness(
   const deliveries: Delivery[] = [];
   const projector = createAcpReplyProjector({
     cfg: createCfg(cfgOverrides),
-    shouldSendToolSummaries: async () =>
-      opts?.shouldSendToolSummariesNow?.() ?? opts?.shouldSendToolSummaries ?? true,
+    shouldSendToolSummaries: async () => opts?.shouldSendToolSummariesNow?.() ?? true,
     shouldSendFullToolDetails: async () => opts?.shouldSendFullToolDetails ?? false,
     deliver: async (kind, payload) => {
       deliveries.push({ kind, text: payload.text });
@@ -100,25 +98,23 @@ function emitTool(projector: Projector, event: Partial<Omit<EventOf<"tool_call">
 }
 
 describe("createAcpReplyProjector", () => {
-  it("shows execute details only in full verbose mode", async () => {
-    const summary = createLiveToolLifecycleHarness();
-    await emitTool(summary.projector, {
-      kind: "execute",
-      title: "exec: cat /private/operator-file",
-    });
-    expect(summary.deliveries[0]?.text).not.toContain("cat /private/operator-file");
-    expect(summary.deliveries[0]?.text).toContain("status=in_progress");
-
-    const full = createStreamHarness(
+  afterEach(() => vi.useRealTimers());
+  it.each([false, true])("shows execute details only in full verbose mode: %s", async (verbose) => {
+    const { deliveries, projector } = createStreamHarness(
       "live",
       { tagVisibility: { tool_call: true } },
-      { shouldSendFullToolDetails: true },
+      { shouldSendFullToolDetails: verbose },
     );
-    await emitTool(full.projector, {
+    await emitTool(projector, {
       kind: "execute",
       title: "exec: cat /private/operator-file",
     });
-    expect(full.deliveries[0]?.text).toContain("cat /private/operator-file");
+    if (verbose) {
+      expect(deliveries[0]?.text).toContain("cat /private/operator-file");
+    } else {
+      expect(deliveries[0]?.text).not.toContain("cat /private/operator-file");
+      expect(deliveries[0]?.text).toContain("status=in_progress");
+    }
   });
 
   it("reports progress for ACP runtime events before delivery filtering", async () => {
@@ -136,27 +132,23 @@ describe("createAcpReplyProjector", () => {
 
   it("bounds output and reports truncation once in live mode", async () => {
     vi.useFakeTimers();
-    try {
-      const { deliveries, projector } = createStreamHarness("live");
-      const inputText = Array.from({ length: 4_001 }, (_, index) =>
-        String(index).padStart(6, "0"),
-      ).join("");
-      await emitText(projector, inputText);
-      await emitText(projector, "discarded after the limit");
-      await projector.flush();
+    const { deliveries, projector } = createStreamHarness("live");
+    const inputText = Array.from({ length: 4_001 }, (_, index) =>
+      String(index).padStart(6, "0"),
+    ).join("");
+    await emitText(projector, inputText);
+    await emitText(projector, "discarded after the limit");
+    await projector.flush();
 
-      const output = deliveries.filter(({ kind }) => kind !== "tool");
-      expect(output.map(({ text }) => text).join("")).toBe(inputText.slice(0, 24_000));
-      for (const { kind, text } of output) {
-        expect(kind).toBe("block");
-        expect(text?.length).toBeLessThanOrEqual(1800);
-      }
-      expect(deliveries.filter(({ kind }) => kind === "tool")).toEqual([
-        { kind: "tool", text: prefixSystemMessage("output truncated") },
-      ]);
-    } finally {
-      vi.useRealTimers();
+    const output = deliveries.filter(({ kind }) => kind !== "tool");
+    expect(output.map(({ text }) => text).join("")).toBe(inputText.slice(0, 24_000));
+    for (const { kind, text } of output) {
+      expect(kind).toBe("block");
+      expect(text?.length).toBeLessThanOrEqual(1800);
     }
+    expect(deliveries.filter(({ kind }) => kind === "tool")).toEqual([
+      { kind: "tool", text: prefixSystemMessage("output truncated") },
+    ]);
   });
 
   it.each(["live", "final_only"] as const)(
@@ -205,26 +197,22 @@ describe("createAcpReplyProjector", () => {
 
   it("does not flush short live fragments mid-phrase on idle", async () => {
     vi.useFakeTimers();
-    try {
-      const { deliveries, projector } = createStreamHarness("live");
+    const { deliveries, projector } = createStreamHarness("live");
 
-      await emitText(projector, "Yes. Send me the term(s), and I’ll run ");
+    await emitText(projector, "Yes. Send me the term(s), and I’ll run ");
 
-      await vi.advanceTimersByTimeAsync(1200);
-      expect(deliveries).toStrictEqual([]);
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(deliveries).toStrictEqual([]);
 
-      await emitText(projector, "`wd-cli` searches right away. ");
-      await projector.flush();
+    await emitText(projector, "`wd-cli` searches right away. ");
+    await projector.flush();
 
-      expect(deliveries).toEqual([
-        {
-          kind: "block",
-          text: "Yes. Send me the term(s), and I’ll run `wd-cli` searches right away. ",
-        },
-      ]);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(deliveries).toEqual([
+      {
+        kind: "block",
+        text: "Yes. Send me the term(s), and I’ll run `wd-cli` searches right away. ",
+      },
+    ]);
   });
 
   it("supports deliveryMode=final_only by buffering all projected output until done", async () => {
@@ -347,7 +335,6 @@ describe("createAcpReplyProjector", () => {
       "live",
       { tagVisibility: { tool_call: true } },
       {
-        shouldSendToolSummaries: false,
         shouldSendToolSummariesNow: () => false,
       },
     );

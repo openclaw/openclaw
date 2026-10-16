@@ -70,7 +70,6 @@ it.each(["spawned", "legacy", "configured", "removed", "reassigned", "reopened"]
           id: "acpx",
           origin: "bundled",
           source: state.path("acpx", "index.ts"),
-          status: "loaded",
         });
         const api = registry.createApi(plugin, { config: cfg });
         registry.registry.plugins.push(plugin);
@@ -89,7 +88,6 @@ it.each(["spawned", "legacy", "configured", "removed", "reassigned", "reopened"]
               throw new Error(`No published runtime for ${agentId}`);
             }
             afterRuntimePrepared?.();
-            return undefined;
           });
         const turns: Array<{ agentId: string | undefined; sessionKey: string }> = [];
         registerAcpRuntimeBackend({
@@ -135,19 +133,14 @@ it.each(["spawned", "legacy", "configured", "removed", "reassigned", "reopened"]
           const storeAgentId =
             kind === "spawned" ? "main" : kind === "configured" ? "work" : "free-harness";
           if (kind === "spawned") {
+            const args = ["free-harness", "--thread", "off", "--label", "owner-proof"];
             const params = buildCommandTestParams(
-              "/acp spawn free-harness --thread off --label owner-proof",
+              `/acp spawn ${args.join(" ")}`,
               cfg,
               { AgentId: "main", SessionKey: "agent:main:main" },
               { workspaceDir: state.workspaceDir },
             );
-            const result = await handleAcpSpawnAction(params, [
-              "free-harness",
-              "--thread",
-              "off",
-              "--label",
-              "owner-proof",
-            ]);
+            const result = await handleAcpSpawnAction(params, args);
             expect(result?.reply?.text).toContain("Spawned ACP session agent:main:acp:");
             sessionKey = result?.reply?.text?.match(/Spawned ACP session (\S+)/)?.[1] ?? "";
             expect(loadSessionEntryReadOnly({ agentId: storeAgentId, sessionKey })?.label).toBe(
@@ -163,6 +156,7 @@ it.each(["spawned", "legacy", "configured", "removed", "reassigned", "reopened"]
               mode: "persistent",
             });
           }
+          const scope = { agentId: storeAgentId, sessionKey };
           if (kind === "reopened") {
             await disposeAcpSessionManagerInstance(manager, "simulate-restart");
             testing.resetAcpSessionManagerForTests();
@@ -227,33 +221,22 @@ it.each(["spawned", "legacy", "configured", "removed", "reassigned", "reopened"]
           expect(delivered.join("")).toContain("owner reply");
           expect(turns).toEqual([{ agentId: storeAgentId, sessionKey }]);
           await waitForSessionParticipantRecording({
-            agentId: storeAgentId,
-            sessionKey,
+            ...scope,
             storePath: resolveSessionStorePathCore(undefined, { agentId: storeAgentId }),
           });
-          expect(
-            listSessionParticipantsReadOnly({ agentId: storeAgentId, sessionKey }).get(sessionKey),
-          ).toHaveLength(1);
-          const entry = loadSessionEntryReadOnly({ agentId: storeAgentId, sessionKey });
+          expect(listSessionParticipantsReadOnly(scope).get(sessionKey)).toHaveLength(1);
+          const entry = loadSessionEntryReadOnly(scope);
           if (!entry) {
             throw new Error("ACP dispatch lost its canonical session");
           }
+          expect((await readAcpSessionMetaAsync({ cfg, ...scope }))?.agent).toBe("free-harness");
           expect(
-            (await readAcpSessionMetaAsync({ cfg, agentId: storeAgentId, sessionKey }))?.agent,
-          ).toBe("free-harness");
-          expect(
-            await loadTranscriptEvents({
-              agentId: storeAgentId,
-              sessionKey,
-              sessionId: entry.sessionId,
+            await loadTranscriptEvents({ ...scope, sessionId: entry.sessionId }),
+          ).toContainEqual(
+            expect.objectContaining({
+              type: "message",
+              message: expect.objectContaining({ role: "assistant" }),
             }),
-          ).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                type: "message",
-                message: expect.objectContaining({ role: "assistant" }),
-              }),
-            ]),
           );
           expect(
             loadSessionEntryReadOnly({
