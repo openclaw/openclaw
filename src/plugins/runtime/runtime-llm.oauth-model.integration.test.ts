@@ -8,34 +8,29 @@ import { createRuntimeLlm } from "./runtime-llm.runtime.js";
 import type { LlmCompleteParams } from "./types-core.js";
 
 const mocks = vi.hoisted(() => ({
-  acquireSimpleCompletionModelForAgent:
+  acquire:
     vi.fn<
       typeof import("../../agents/simple-completion-runtime.js").acquireSimpleCompletionModelForAgent
     >(),
-  resolveSimpleCompletionSelectionForAgent: vi.fn(),
+  select: vi.fn(),
 }));
 
 vi.mock("../../agents/simple-completion-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/simple-completion-runtime.js")>()),
-  acquireSimpleCompletionModelForAgent: mocks.acquireSimpleCompletionModelForAgent,
-  resolveSimpleCompletionSelectionForAgent: mocks.resolveSimpleCompletionSelectionForAgent,
+  acquireSimpleCompletionModelForAgent: mocks.acquire,
+  resolveSimpleCompletionSelectionForAgent: mocks.select,
 }));
 
 const modelId = "gpt-5.6-luna";
 const responseModel = "gpt-5.6-luna-2026-08-01";
-const authToken = (() => {
-  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
-  const body = Buffer.from(
-    JSON.stringify({
-      "https://api.openai.com/auth": { chatgpt_account_id: "acct-runtime-model-test" },
-    }),
-  ).toString("base64url");
-  return `${header}.${body}.signature`;
-})();
+const authToken = `${[
+  { alg: "none", typ: "JWT" },
+  { "https://api.openai.com/auth": { chatgpt_account_id: "acct-runtime-model-test" } },
+]
+  .map((part) => Buffer.from(JSON.stringify(part)).toString("base64url"))
+  .join(".")}.signature`;
 
-const cfg = {
-  agents: { defaults: { model: `openai/${modelId}` } },
-} satisfies OpenClawConfig;
+const cfg = { agents: { defaults: { model: `openai/${modelId}` } } } satisfies OpenClawConfig;
 
 const policy = { allowModelOverride: true, allowedModels: [`openai/${modelId}`] };
 const pluginCfg = {
@@ -47,10 +42,7 @@ const verdict = '{"classification":"safe","reason":"fixture"}';
 
 function preparedOauthModel(
   profileId = "openai:test-oauth",
-): Extract<
-  Awaited<ReturnType<typeof mocks.acquireSimpleCompletionModelForAgent>>,
-  { model: unknown }
-> {
+): Extract<Awaited<ReturnType<typeof mocks.acquire>>, { model: unknown }> {
   return {
     [Symbol.asyncDispose]: vi.fn(async () => {}),
     selection: { ...selection, profileId },
@@ -60,9 +52,6 @@ function preparedOauthModel(
       api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
       reasoning: true,
-      contextWindow: 128_000,
-      maxTokens: 4_096,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     }),
     auth: { apiKey: authToken, source: "test", mode: "oauth", profileId },
   };
@@ -119,10 +108,9 @@ function complete(
 }
 
 function selectOverride(preparedProfile = "openai:work") {
-  const profileId = "openai:work";
-  mocks.resolveSimpleCompletionSelectionForAgent.mockReturnValueOnce({ ...selection, profileId });
+  mocks.select.mockReturnValueOnce({ ...selection, profileId: "openai:work" });
   const prepared = preparedOauthModel(preparedProfile);
-  mocks.acquireSimpleCompletionModelForAgent.mockResolvedValueOnce(prepared);
+  mocks.acquire.mockResolvedValueOnce(prepared);
   return prepared;
 }
 
@@ -145,8 +133,7 @@ beforeEach(async () => {
   // otherwise the first completion replaces this host and selects native WebSocket.
   await import("../../agents/ai-transport-runtime-host.js");
   previousHost = getAiTransportHost();
-  modelFetch.mockReset();
-  modelFetch.mockImplementation(async () => completedResponse());
+  modelFetch.mockReset().mockImplementation(async () => completedResponse());
   configureAiTransportHost({
     ...previousHost,
     buildModelFetch: () => modelFetch,
@@ -157,10 +144,8 @@ beforeEach(async () => {
       wrapSimpleCompletionStream: () => undefined,
     },
   });
-  mocks.resolveSimpleCompletionSelectionForAgent.mockReset();
-  mocks.resolveSimpleCompletionSelectionForAgent.mockReturnValue(selection);
-  mocks.acquireSimpleCompletionModelForAgent.mockReset();
-  mocks.acquireSimpleCompletionModelForAgent.mockResolvedValue(preparedOauthModel());
+  mocks.select.mockReset().mockReturnValue(selection);
+  mocks.acquire.mockReset().mockResolvedValue(preparedOauthModel());
 });
 
 afterEach(async () => {
@@ -198,26 +183,10 @@ describe("runtime.llm.complete managed ChatGPT OAuth model identity", () => {
     expect(modelFetch).toHaveBeenCalledTimes(1);
   });
 
-  it("requires the selected credential to use the requested OAuth mode", async () => {
-    const prepared = preparedOauthModel();
-    mocks.acquireSimpleCompletionModelForAgent.mockResolvedValueOnce({
-      ...prepared,
-      auth: { apiKey: "test-api-key", source: "test", mode: "api-key" },
-    });
-    await expect(complete()).rejects.toThrow(
-      "selected a credential with the wrong authentication mode",
-    );
-    await completionWork.drain();
-    expect(modelFetch).not.toHaveBeenCalled();
-    expect(prepared[Symbol.asyncDispose]).toHaveBeenCalledTimes(1);
-  });
-
   it("binds a direct model override to its selected OAuth profile", async () => {
     selectOverride();
-    await expect(completeOverride()).resolves.toMatchObject({
-      text: verdict,
-    });
-    expect(mocks.acquireSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+    await expect(completeOverride()).resolves.toMatchObject({ text: verdict });
+    expect(mocks.acquire).toHaveBeenCalledWith(
       expect.objectContaining({
         modelRef: `openai/${modelId}@openai:work`,
         bindAuthOwner: true,
@@ -225,9 +194,18 @@ describe("runtime.llm.complete managed ChatGPT OAuth model identity", () => {
     );
   });
 
-  it("rejects a direct model override resolved to another OAuth profile", async () => {
-    const prepared = selectOverride("openai:other");
-    await expect(completeOverride()).rejects.toThrow("selected a different authentication profile");
+  it.each([
+    ["mode", "selected a credential with the wrong authentication mode"],
+    ["profile", "selected a different authentication profile"],
+  ])("rejects the wrong auth %s before transport and releases it", async (boundary, error) => {
+    const prepared = boundary === "profile" ? selectOverride("openai:other") : preparedOauthModel();
+    if (boundary === "mode") {
+      mocks.acquire.mockResolvedValueOnce({
+        ...prepared,
+        auth: { apiKey: "test-api-key", source: "test", mode: "api-key" },
+      });
+    }
+    await expect(boundary === "profile" ? completeOverride() : complete()).rejects.toThrow(error);
     await completionWork.drain();
     expect(modelFetch).not.toHaveBeenCalled();
     expect(prepared[Symbol.asyncDispose]).toHaveBeenCalledTimes(1);

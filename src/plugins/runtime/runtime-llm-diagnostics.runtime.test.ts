@@ -7,7 +7,7 @@ import {
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
 import { markTrustedOtelDiagnosticListener } from "../../infra/diagnostic-otel-listener-provenance.js";
-import { createRuntimeLlm } from "./runtime-llm.runtime.js";
+import { createRuntimeLlm, type RuntimeLlmAuthority } from "./runtime-llm.runtime.js";
 
 const hoisted = vi.hoisted(() => ({
   acquire:
@@ -34,22 +34,24 @@ const preparedModel = {
     id: "gpt-5.5",
     api: "openai-completions",
     baseUrl: "https://fixture.invalid/v1",
-    contextWindow: 128_000,
-    maxTokens: 4096,
     cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 },
   }),
   auth: { apiKey: "test-api-key", source: "test", mode: "api-key" },
 } satisfies Extract<Awaited<ReturnType<typeof hoisted.acquire>>, { model: unknown }>;
 
-function runtime(config: OpenClawConfig = cfg) {
-  return createRuntimeLlm({
-    getConfig: () => config,
-    authority: { allowComplete: true, pluginIdForPolicy: "trusted-plugin" },
-  });
+function runtime(
+  config: OpenClawConfig = cfg,
+  authority: RuntimeLlmAuthority = { allowComplete: true, pluginIdForPolicy: "trusted-plugin" },
+) {
+  return createRuntimeLlm({ getConfig: () => config, authority });
 }
 
 function complete(config: OpenClawConfig = cfg) {
   return runtime(config).complete({ messages: [{ role: "user", content: "Ping" }] });
+}
+
+function completion(usage: unknown) {
+  return { content: [{ type: "text", text: "done" }], usage, stopReason: "stop" };
 }
 
 function trustedEvent(event: object) {
@@ -62,16 +64,6 @@ function trustedEvent(event: object) {
 }
 
 const emptyUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, promptTokens: 0, total: 0 };
-
-function usageCase(
-  name: string,
-  rawUsage: unknown,
-  expectedUsage?: typeof emptyUsage,
-  expectedCost?: number,
-  enabled = true,
-) {
-  return [name, rawUsage, enabled, expectedUsage, expectedCost] as const;
-}
 
 function captureUsageEvents() {
   const events: Array<{
@@ -98,34 +90,29 @@ function captureUsageEvents() {
 describe("runtime.llm.complete diagnostics", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
-    hoisted.acquire.mockReset();
-    hoisted.complete.mockReset();
-    hoisted.select.mockReset();
+    for (const mock of Object.values(hoisted)) {
+      mock.mockReset();
+    }
     hoisted.acquire.mockResolvedValue(preparedModel);
     hoisted.select.mockReturnValue(preparedModel.selection);
-    hoisted.complete.mockResolvedValue({
-      content: [{ type: "text", text: "done" }],
-      usage: {
+    hoisted.complete.mockResolvedValue(
+      completion({
         input: 11,
         output: 7,
         cacheRead: 5,
         cacheWrite: 2,
         total: 25,
         cost: { total: 0.0042 },
-      },
-      stopReason: "stop",
-    });
+      }),
+    );
   });
 
   it("emits one trusted usage event using only host-owned plugin identity", async () => {
     const usageEvents = captureUsageEvents();
-    const llm = createRuntimeLlm({
-      getConfig: () => cfg,
-      authority: {
-        caller: { kind: "host", id: "runtime-test" },
-        pluginIdForPolicy: "trusted-plugin",
-        allowComplete: true,
-      },
+    const llm = runtime(cfg, {
+      caller: { kind: "host", id: "runtime-test" },
+      pluginIdForPolicy: "trusted-plugin",
+      allowComplete: true,
     });
 
     const result = await llm.complete({
@@ -141,14 +128,12 @@ describe("runtime.llm.complete diagnostics", () => {
     });
     usageEvents.stop();
 
-    expect(result.execution).toEqual({
-      mode: "direct-provider",
-      owner: { kind: "provider", id: "openai" },
-    });
-    expect(result.audit).toEqual({
-      caller: { kind: "host", id: "runtime-test" },
-      purpose: "test-purpose",
-    });
+    expect(result).toEqual(
+      expect.objectContaining({
+        execution: { mode: "direct-provider", owner: { kind: "provider", id: "openai" } },
+        audit: { caller: { kind: "host", id: "runtime-test" }, purpose: "test-purpose" },
+      }),
+    );
     expect(usageEvents.events).toEqual([
       trustedEvent({
         type: "model.usage",
@@ -162,19 +147,15 @@ describe("runtime.llm.complete diagnostics", () => {
   });
 
   it.each([
-    { name: "unpriced adapter zero", cost: { total: 0 }, expected: undefined },
-    { name: "authored free price", cost: { total: 0 }, free: true, expected: 0 },
-    {
-      name: "provider-billed zero",
-      cost: { total: 0, totalOrigin: "provider-billed" },
-      expected: 0,
-    },
-    { name: "zero with recorded components", cost: { total: 0, input: 0.25 }, expected: 0 },
-    { name: "legacy numeric zero", cost: 0, expected: 0 },
-    { name: "legacy USD zero", cost: { totalUsd: 0, total: 1 }, expected: 0 },
-  ])(
-    "preserves cost evidence without inventing prices: $name",
-    async ({ cost, free, expected }) => {
+    ["unpriced adapter zero", { total: 0 }, undefined],
+    ["authored free price", { total: 0 }, 0, true],
+    ["provider-billed zero", { total: 0, totalOrigin: "provider-billed" }, 0],
+    ["zero with recorded components", { total: 0, input: 0.25 }, 0],
+    ["legacy numeric zero", 0, 0],
+    ["legacy USD zero", { totalUsd: 0, total: 1 }, 0],
+  ] as const)(
+    "preserves cost evidence without inventing prices: %s",
+    async (_name, cost, expected, free) => {
       const prepared = {
         ...preparedModel,
         selection: { ...preparedModel.selection, provider: "pricing-fixture", modelId: "unpriced" },
@@ -182,11 +163,7 @@ describe("runtime.llm.complete diagnostics", () => {
       };
       hoisted.acquire.mockResolvedValue(prepared);
       hoisted.select.mockReturnValue(prepared.selection);
-      hoisted.complete.mockResolvedValue({
-        content: [{ type: "text", text: "done" }],
-        stopReason: "stop",
-        usage: { input: 1_000, output: 500, cost },
-      });
+      hoisted.complete.mockResolvedValue(completion({ input: 1_000, output: 500, cost }));
       const config: OpenClawConfig = free
         ? {
             ...cfg,
@@ -205,9 +182,9 @@ describe("runtime.llm.complete diagnostics", () => {
             },
           }
         : cfg;
-      const result = await createRuntimeLlm({
-        getConfig: () => config,
-        authority: { allowComplete: true, allowModelOverride: true },
+      const result = await runtime(config, {
+        allowComplete: true,
+        allowModelOverride: true,
       }).complete({
         model: "pricing-fixture/unpriced",
         messages: [{ role: "user", content: "Ping" }],
@@ -217,29 +194,21 @@ describe("runtime.llm.complete diagnostics", () => {
   );
 
   it.each([
-    usageCase("absent", undefined),
-    usageCase("all-zero", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }),
-    usageCase("reasoning-only", { reasoningTokens: 7 }),
-    usageCase("unavailable context usage", { contextUsage: { state: "unavailable" } }),
-    usageCase("input-only", { input: 4 }, { ...emptyUsage, input: 4, promptTokens: 4, total: 4 }),
-    usageCase(
-      "cache-only",
-      { cacheRead: 9 },
-      { ...emptyUsage, cacheRead: 9, promptTokens: 9, total: 9 },
-    ),
-    usageCase("positive explicit cost-only", { cost: { total: 0.0042 } }, emptyUsage, 0.0042),
-    usageCase("zero explicit cost-only", { cost: { total: 0 } }),
-    usageCase("disabled", { input: 1 }, undefined, undefined, false),
+    ["absent", undefined],
+    ["all-zero", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }],
+    ["reasoning-only", { reasoningTokens: 7 }],
+    ["unavailable context usage", { contextUsage: { state: "unavailable" } }],
+    ["input-only", { input: 4 }, { ...emptyUsage, input: 4, promptTokens: 4, total: 4 }],
+    ["cache-only", { cacheRead: 9 }, { ...emptyUsage, cacheRead: 9, promptTokens: 9, total: 9 }],
+    ["positive explicit cost-only", { cost: { total: 0.0042 } }, emptyUsage, 0.0042],
+    ["zero explicit cost-only", { cost: { total: 0 } }],
+    ["disabled", { input: 1 }, undefined, undefined, true],
   ] as const)(
     "emits usage only for positive enabled tokens or cost: %s",
-    async (_name, rawUsage, enabled, expectedEventUsage, expectedCostUsd) => {
-      hoisted.complete.mockResolvedValueOnce({
-        content: [{ type: "text", text: "done" }],
-        usage: rawUsage,
-        stopReason: "stop",
-      });
+    async (_name, rawUsage, expectedEventUsage, expectedCostUsd, disabled) => {
+      hoisted.complete.mockResolvedValueOnce(completion(rawUsage));
       const usageEvents = captureUsageEvents();
-      await complete(enabled ? cfg : { ...cfg, diagnostics: { enabled: false } });
+      await complete(disabled ? { ...cfg, diagnostics: { enabled: false } } : cfg);
       usageEvents.stop();
 
       if (expectedEventUsage) {

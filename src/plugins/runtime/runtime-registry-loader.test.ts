@@ -1,4 +1,3 @@
-// Runtime registry loader tests cover the surviving process-root load scopes.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as runtimeConfig from "../../config/io.runtime.js";
 
@@ -16,22 +15,12 @@ const mocks = vi.hoisted(() => ({
   applyPluginAutoEnable:
     vi.fn<typeof import("../../config/plugin-auto-enable.js").applyPluginAutoEnable>(),
   metadata: vi.fn<typeof import("../plugin-metadata-snapshot.js").resolvePluginMetadataSnapshot>(),
-  listAgentEntries: vi.fn<typeof import("../../agents/agent-scope.js").listAgentEntries>(() => []),
-  resolveAgentWorkspaceDir: vi.fn<
-    typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir
-  >(() => "/resolved-workspace"),
-  tryResolveConfiguredAgentWorkspaceDir: vi.fn<
-    typeof import("../../agents/agent-scope.js").tryResolveConfiguredAgentWorkspaceDir
-  >(() => "/resolved-workspace"),
   resolvePluginControlPlaneWorkspace: vi.fn<
     typeof import("../control-plane-workspace.js").resolvePluginControlPlaneWorkspace
   >((params) => ({
     workspaceDir: params.workspaceDir ?? "/resolved-workspace",
     workspaceScope: "selected",
   })),
-  resolveDefaultAgentId: vi.fn<typeof import("../../agents/agent-scope.js").resolveDefaultAgentId>(
-    () => "default",
-  ),
 }));
 
 vi.mock("../loader.js", () => ({
@@ -67,13 +56,6 @@ vi.mock("../../config/io.plugin-metadata.js", () => ({
 vi.mock("../plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugin-metadata-snapshot.js")>()),
   resolvePluginMetadataSnapshot: mocks.metadata,
-}));
-
-vi.mock("../../agents/agent-scope.js", () => ({
-  listAgentEntries: mocks.listAgentEntries,
-  resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
-  tryResolveConfiguredAgentWorkspaceDir: mocks.tryResolveConfiguredAgentWorkspaceDir,
-  resolveDefaultAgentId: mocks.resolveDefaultAgentId,
 }));
 
 vi.mock("../control-plane-workspace.js", () => ({
@@ -142,15 +124,10 @@ describe("ensurePluginRegistryLoaded", () => {
   });
 
   it("loads configured channel owners through the canonical root loader", async () => {
-    const env = { HOME: "/tmp/openclaw-home" };
     const config = { channels: { demo: { enabled: true } } };
     mocks.configuredChannels.mockReturnValue(["demo-channel"]);
 
-    await ensurePluginRegistryLoaded({
-      scope: "configured-channels",
-      config: config as never,
-      env,
-    });
+    await ensurePluginRegistryLoaded({ scope: "configured-channels", config: config as never });
 
     expect(mocks.configuredChannels).toHaveBeenCalledWith(
       expect.objectContaining({ config, workspaceDir: "/resolved-workspace" }),
@@ -231,7 +208,6 @@ describe("ensurePluginRegistryLoaded", () => {
   });
 
   it("loads only the selected memory backend and embedding provider owners", async () => {
-    const env = { HOME: "/tmp/openclaw-home" };
     const config = {
       memory: { search: { provider: "openai" } },
       plugins: {
@@ -242,7 +218,7 @@ describe("ensurePluginRegistryLoaded", () => {
     };
     mocks.embeddingIds.mockReturnValue(new Set(["openai"]));
 
-    await ensurePluginRegistryLoaded({ scope: "memory", config, env });
+    await ensurePluginRegistryLoaded({ scope: "memory", config });
 
     expect(mocks.embeddingIds).toHaveBeenCalledWith(config);
     expectLoad({
@@ -269,10 +245,11 @@ describe("ensurePluginRegistryLoaded", () => {
 
     await ensurePluginRegistryLoaded({ scope: "memory", config });
 
-    const options = requireLoadOptions();
-    expect(options.onlyPluginIds).toEqual(["google", "memory-core"]);
-    expect(options.config).toEqual(config);
-    expect(options.activationSourceConfig).toEqual(config);
+    expectLoad({
+      onlyPluginIds: ["google", "memory-core"],
+      config,
+      activationSourceConfig: config,
+    });
   });
 
   it("keeps an empty memory scope empty when no backend is selected", async () => {

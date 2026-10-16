@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import fs from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
@@ -22,6 +23,7 @@ import { resetPreparedModelRuntimeSnapshotsForTest } from "../../agents/prepared
 import { AuthStorage } from "../../agents/sessions/auth-storage.js";
 import { ModelRegistry } from "../../agents/sessions/model-registry.js";
 import { acquireSimpleCompletionModelForAgent } from "../../agents/simple-completion-runtime.js";
+import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { bindModelLlmRuntime, getModelLlmRuntime } from "../../llm/model-runtime-binding.js";
 import {
@@ -45,7 +47,11 @@ import {
 import { createSyncSuiteTempRootTracker } from "../test-helpers/fs-fixtures.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
 
-function waitForWork(started: Promise<unknown>, completion: Promise<unknown>, message: string) {
+function waitForWork(
+  started: Promise<unknown>,
+  completion: Promise<unknown>,
+  message = "Completion settled before accepted work",
+) {
   return Promise.race([
     started,
     completion.then(() => {
@@ -99,6 +105,7 @@ it.each([
     pluginId: "completion-lease-fixture",
     providerId: "completion-lease-provider",
   });
+  const profileId = `${fixture.providerId}:control`;
   fs.writeFileSync(
     fixture.runtimeSource,
     `module.exports = {
@@ -129,6 +136,7 @@ it.each([
     if (!response.headersSent) {
       response.writeHead(200, { "content-type": "text/event-stream" });
     }
+    const text = `result-${index}|${requestFacts[index]?.url}|${requestFacts[index]?.authorization}`;
     if (anthropicReadCancel) {
       const events = [
         {
@@ -145,10 +153,7 @@ it.each([
         {
           type: "content_block_delta",
           index: 0,
-          delta: {
-            type: "text_delta",
-            text: `result-${index}|${requestFacts[index]?.url}|${requestFacts[index]?.authorization}`,
-          },
+          delta: { type: "text_delta", text },
         },
         { type: "content_block_stop", index: 0 },
         { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
@@ -171,15 +176,7 @@ it.each([
         id: "completion-lease-response",
         object: "chat.completion.chunk",
         model: "lease-model",
-        choices: [
-          {
-            index: 0,
-            delta: {
-              content: `result-${index}|${requestFacts[index]?.url}|${requestFacts[index]?.authorization}`,
-            },
-            finish_reason: "stop",
-          },
-        ],
+        choices: [{ index: 0, delta: { content: text }, finish_reason: "stop" }],
       })}\n\ndata: [DONE]\n\n`,
     );
   };
@@ -197,54 +194,46 @@ it.each([
       finish(response, index);
     }
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.removeListener("error", reject);
-      resolve();
-    });
-  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
   const pending: Promise<unknown>[] = [];
   try {
     const address = server.address();
     if (!address || typeof address === "string") {
       throw new Error("Completion fixture did not expose a TCP port");
     }
+    const provider: ModelProviderConfig = {
+      api: anthropicReadCancel ? "anthropic-messages" : "openai-completions",
+      ...(anthropicReadCancel ? { request: { tls: { insecureSkipVerify: false } } } : {}),
+      ...(mode === "auth" ? {} : { apiKey: "fixture-auth-A" }),
+      baseUrl: `http://127.0.0.1:${address.port}/A/v1`,
+      models: ["lease-model", ...Array.from({ length: 9 }, (_, index) => `churn-${index}`)].map(
+        (id) => ({
+          id,
+          name: "Lease model",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 8192,
+          maxTokens: 1024,
+        }),
+      ),
+    };
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
           workspace: root,
-          model: `${fixture.providerId}/lease-model${mode === "auth" ? `@${fixture.providerId}:control` : ""}`,
+          model: `${fixture.providerId}/lease-model${mode === "auth" ? `@${profileId}` : ""}`,
         },
       },
-      models: {
-        providers: {
-          [fixture.providerId]: {
-            api: anthropicReadCancel ? "anthropic-messages" : "openai-completions",
-            ...(anthropicReadCancel ? { request: { tls: { insecureSkipVerify: false } } } : {}),
-            ...(mode === "auth" ? {} : { apiKey: "fixture-auth-A" }),
-            baseUrl: `http://127.0.0.1:${address.port}/A/v1`,
-            models: [
-              "lease-model",
-              ...Array.from({ length: 9 }, (_, index) => `churn-${index}`),
-            ].map((id) => ({
-              id,
-              name: "Lease model",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 8192,
-              maxTokens: 1024,
-            })),
-          },
-        },
-      },
+      models: { providers: { [fixture.providerId]: provider } },
       plugins: {
         load: { paths: [fixture.rootDir] },
         slots: { memory: "none" },
         entries: { [fixture.pluginId]: { enabled: true } },
       },
     };
+    const completionInput = { cfg, agentId: "main" };
     const env = {
       ...createColdPluginHermeticEnv(root, { bundledPluginsDir: roots.makeTempDir() }),
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
@@ -281,6 +270,15 @@ it.each([
       const responseFailure = new Error("fixture response callback failure");
       const cancellationFailure = new Error("fixture cancellation failure");
       const transportSpies: Array<{ mockRestore: () => void }> = [];
+      const acceptedWork = async (run: () => Promise<void>) => {
+        acceptedWorkStarted = true;
+        workStarted.resolve();
+        try {
+          await run();
+        } finally {
+          workSettled.resolve();
+        }
+      };
       if (drainMode || mode === "nested-prepare") {
         const { configureAiTransportRuntimeHost } =
           await import("../../agents/ai-transport-runtime-host.js");
@@ -300,10 +298,9 @@ it.each([
                     return;
                   }
                   if (mode === "nested-prepare") {
-                    const nested = await prepareSimpleCompletionModelForAgent({
-                      cfg,
-                      agentId: "main",
-                    }).catch((error: unknown) => {
+                    const nested = await prepareSimpleCompletionModelForAgent(
+                      completionInput,
+                    ).catch((error: unknown) => {
                       nestedPreparationFailure =
                         error instanceof Error ? error.message : "Non-Error preparation failure";
                       throw error;
@@ -317,13 +314,7 @@ it.each([
                   if (mode === "cancel-drain") {
                     throw responseFailure;
                   }
-                  acceptedWorkStarted = true;
-                  workStarted.resolve();
-                  try {
-                    await finishWork.promise;
-                  } finally {
-                    workSettled.resolve();
-                  }
+                  await acceptedWork(() => finishWork.promise);
                 },
               });
           }),
@@ -367,18 +358,14 @@ it.each([
                   },
                   async cancel(reason) {
                     cancelledInOrigin = getAsyncWorkSignal() === origin;
-                    acceptedWorkStarted = true;
-                    workStarted.resolve();
-                    try {
-                      await finishWork.promise;
-                      throw cancellationFailure;
-                    } finally {
+                    await acceptedWork(async () => {
                       try {
-                        await reader.cancel(reason);
+                        await finishWork.promise;
+                        throw cancellationFailure;
                       } finally {
-                        workSettled.resolve();
+                        await reader.cancel(reason);
                       }
-                    }
+                    });
                   },
                 }),
                 { status: response.status, headers: response.headers },
@@ -404,7 +391,7 @@ it.each([
             providers: {
               ...cfg.models?.providers,
               [fixture.providerId]: {
-                ...cfg.models!.providers![fixture.providerId]!,
+                ...provider,
                 baseUrl: `http://127.0.0.1:${address.port}/B/v1`,
                 apiKey: "fixture-auth-B",
               },
@@ -427,13 +414,7 @@ it.each([
         setRuntimeAuthProfileStoreSnapshot(
           {
             version: 1,
-            profiles: {
-              [`${fixture.providerId}:control`]: {
-                type: "api_key",
-                provider: fixture.providerId,
-                key,
-              },
-            },
+            profiles: { [profileId]: { type: "api_key", provider: fixture.providerId, key } },
           },
           input().agentDir,
         );
@@ -450,11 +431,58 @@ it.each([
         mode === "config" || mode === "auth"
           ? await acquireAgentRunPreparedModelRuntime(input(), { catalogMode: "static" })
           : undefined;
+      const [firstHost, secondHost, thirdHost, foreignHost] = sdkHosts;
+      const prepare = (host: LegacyPluginSdkResourceHost, gated = false) =>
+        host.run(() =>
+          prepareSimpleCompletionModelForAgent({
+            cfg: currentConfig,
+            agentId: "main",
+            ...(gated
+              ? {
+                  modelResolver: async (...args) => {
+                    const resolved = await resolveModel(...args);
+                    prepareStarted.resolve();
+                    await finishPrepare.promise;
+                    return resolved;
+                  },
+                }
+              : {}),
+          }),
+        );
+      const preparedModels: Array<Parameters<typeof completeWithPreparedSimpleCompletionModel>[0]> =
+        [];
+      const completeSdk = async (index: number, signal?: AbortSignal) => {
+        const prepared = await prepare(sdkHosts[index]!);
+        if ("error" in prepared) {
+          throw new Error(prepared.error);
+        }
+        expect(Object.keys(prepared).toSorted()).toEqual(["auth", "model", "selection"]);
+        const runtime = getModelLlmRuntime(prepared.model);
+        if (!runtime) {
+          throw new Error("SDK preparation did not bind its real model runtime");
+        }
+        const execution = {
+          ...prepared,
+          // Legitimate transport copies must carry the original completion owner.
+          model: bindModelLlmRuntime(prepared.model, runtime),
+          context: {
+            messages: [{ role: "user" as const, content: `request-${index}`, timestamp: 0 }],
+          },
+          options: { signal },
+        };
+        preparedModels.push(execution);
+        const message = await foreignHost.run(() =>
+          completeWithPreparedSimpleCompletionModel(execution),
+        );
+        return { text: extractAssistantText(message) };
+      };
       const start = (index: number, signal?: AbortSignal) => {
-        const completion = llm.complete({
-          messages: [{ role: "user", content: `request-${index}` }],
-          ...(signal ? { signal } : {}),
-        });
+        const completion = sdk
+          ? completeSdk(index, signal)
+          : llm.complete({
+              messages: [{ role: "user", content: `request-${index}` }],
+              ...(signal ? { signal } : {}),
+            });
         pending.push(completion);
         return completion;
       };
@@ -464,6 +492,14 @@ it.each([
           completion,
           `Completion ${index} settled before its provider request`,
         );
+      const expectNoRequest = async (rejection: Promise<unknown>, index = 0) => {
+        await waitForWork(
+          rejection,
+          arrivals[index]!.promise,
+          "Rejected completion reached provider",
+        );
+        expect(requests).toHaveLength(index);
+      };
       try {
         if (setupMode) {
           type SetupRecord = {
@@ -512,7 +548,7 @@ it.each([
           const host = sdkHosts[0];
           const first =
             mode === "setup-success"
-              ? acquireSimpleCompletionModelForAgent({ cfg, agentId: "main" }).then((acquired) => {
+              ? acquireSimpleCompletionModelForAgent(completionInput).then((acquired) => {
                   if ("error" in acquired) {
                     throw new Error(acquired.error);
                   }
@@ -520,19 +556,15 @@ it.each([
                 })
               : sdk
                 ? host
-                    .run(() => prepareSimpleCompletionModelForAgent({ cfg, agentId: "main" }))
+                    .run(() => prepareSimpleCompletionModelForAgent(completionInput))
                     .then(() => undefined)
                 : start(0).then(() => undefined);
           pending.push(first);
-          await waitForWork(workStarted.promise, first, "Setup did not start its real descendant");
+          await waitForWork(workStarted.promise, first);
           if (mode === "setup-error") {
             await expect(first).rejects.toThrow("fixture setup failure");
             expect(requests).toHaveLength(0);
-          } else if (sdk || mode === "setup-success") {
-            await first;
           } else {
-            await waitForRequest(0, first);
-            finish(requests[0]!, 0);
             await first;
           }
           if (!record || !setupTail) {
@@ -564,33 +596,11 @@ it.each([
           return;
         }
         if (sdk) {
-          const [firstHost, secondHost, thirdHost, foreignHost] = sdkHosts;
           await foreignHost.close();
-          const prepare = (host: LegacyPluginSdkResourceHost, gated = false) =>
-            host.run(() =>
-              prepareSimpleCompletionModelForAgent({
-                cfg: currentConfig,
-                agentId: "main",
-                ...(gated
-                  ? {
-                      modelResolver: async (...args) => {
-                        const resolved = await resolveModel(...args);
-                        prepareStarted.resolve();
-                        await finishPrepare.promise;
-                        return resolved;
-                      },
-                    }
-                  : {}),
-              }),
-            );
           if (mode === "late-prepare") {
             const preparing = prepare(firstHost, true);
             pending.push(preparing);
-            await waitForWork(
-              prepareStarted.promise,
-              preparing,
-              "SDK preparation did not enter the real model resolver",
-            );
+            await waitForWork(prepareStarted.promise, preparing);
             const firstBuilds = create.mock.calls.length;
             expect(firstBuilds).toBeGreaterThan(0);
             let closed = false;
@@ -630,137 +640,30 @@ it.each([
             });
             pending.push(completion);
             const closing = mode === "dispatch-close" ? firstHost.close() : undefined;
-            await Promise.race([
+            await expectNoRequest(
               mode === "current-check"
                 ? expect(completion).rejects.toBe(callerFailure)
                 : expect(completion).rejects.toThrow("Plugin SDK resource host is closed"),
-              arrivals[0]!.promise.then(() => {
-                throw new Error("Closed completion reached the provider");
-              }),
-            ]);
-            await closing;
-            expect(requests).toHaveLength(0);
-            return;
-          }
-          const preparedModels: Array<
-            Parameters<typeof completeWithPreparedSimpleCompletionModel>[0]
-          > = [];
-          const startSdk = (
-            index: number,
-            host: LegacyPluginSdkResourceHost,
-            signal?: AbortSignal,
-          ) => {
-            const completion = (async () => {
-              const prepared = await prepare(host);
-              if ("error" in prepared) {
-                throw new Error(prepared.error);
-              }
-              expect(Object.keys(prepared).toSorted()).toEqual(["auth", "model", "selection"]);
-              const runtime = getModelLlmRuntime(prepared.model);
-              if (!runtime) {
-                throw new Error("SDK preparation did not bind its real model runtime");
-              }
-              const execution = {
-                ...prepared,
-                // Legitimate transport copies must carry the original completion owner.
-                model: bindModelLlmRuntime(prepared.model, runtime),
-                context: {
-                  messages: [{ role: "user" as const, content: `request-${index}`, timestamp: 0 }],
-                },
-                options: { signal },
-              };
-              preparedModels.push(execution);
-              const message = await foreignHost.run(() =>
-                completeWithPreparedSimpleCompletionModel(execution),
-              );
-              return { text: extractAssistantText(message) };
-            })();
-            pending.push(completion);
-            return completion;
-          };
-          const controller = mode === "callback-drain" ? new AbortController() : undefined;
-          const first = startSdk(0, firstHost, controller?.signal);
-          await waitForRequest(0, first);
-          const firstBuilds = create.mock.calls.length;
-          expect(firstBuilds).toBeGreaterThan(0);
-          let closed = false;
-          let closing: Promise<void> | undefined;
-          if (drainMode) {
-            finish(requests[0]!, 0);
-            await waitForWork(
-              workStarted.promise,
-              first,
-              "SDK completion settled before accepted work",
             );
-            controller?.abort();
-            await expect(first).resolves.toMatchObject({ text: "" });
-            closing = firstHost.close().then(() => {
-              closed = true;
-            });
-          }
-          if (mode === "config") {
-            changeConfig();
-          }
-          if (mode === "auth") {
-            publishAuth("fixture-auth-B");
-            await prepareModelRuntimeSnapshot(input());
-          }
-          const second = startSdk(1, secondHost);
-          await waitForRequest(1, second);
-          if (mode === "overlap" || drainMode) {
-            expect.soft(create.mock.calls.length).toBe(firstBuilds);
-          }
-          expectSeparateForks(1);
-          if (drainMode) {
-            expect.soft(closed).toBe(false);
-            finishWork.resolve();
-            await workSettled.promise;
             await closing;
-          } else {
-            finish(requests[0]!, 0);
-            const firstResult = await first;
-            expect(nestedPreparationFailure).toBeUndefined();
-            expect(firstResult).toMatchObject(expectedResult(0));
-          }
-          if (mode === "nested-prepare") {
-            expect(nestedPreparationCompleted).toBe(true);
-          }
-          await finishResult(1, second, true);
-          await firstHost.close();
-          await secondHost.close();
-          const staleCompletion = completeWithPreparedSimpleCompletionModel({
-            ...preparedModels[0]!,
-            options: {},
-          });
-          pending.push(staleCompletion);
-          await Promise.race([
-            expect(staleCompletion).rejects.toThrow("Plugin SDK resource host is closed"),
-            arrivals[2]!.promise.then(() => {
-              throw new Error("Closed SDK model reached the provider");
-            }),
-          ]);
-          expect(requests).toHaveLength(2);
-          if (mode === "config" || mode === "auth") {
             return;
           }
-          const beforeThird = create.mock.calls.length;
-          const third = startSdk(2, thirdHost);
-          await waitForRequest(2, third);
-          expect(create.mock.calls.length).toBe(beforeThird + 1);
-          finish(requests[2]!, 2);
-          await third;
-          return;
         }
         if (mode === "fork" || mode === "prepare-error" || mode === "prepare-throw") {
+          const failure =
+            mode === "fork"
+              ? "fixture store fork failure"
+              : mode === "prepare-throw"
+                ? "fixture preparation failure"
+                : "Plugin LLM completion failed:";
+          const fail = () => {
+            throw new Error(failure);
+          };
           if (mode === "fork") {
-            fork.mockImplementationOnce(() => {
-              throw new Error("fixture store fork failure");
-            });
+            fork.mockImplementationOnce(fail);
           }
           if (mode === "prepare-throw") {
-            setRuntimeKey.mockImplementationOnce(() => {
-              throw new Error("fixture preparation failure");
-            });
+            setRuntimeKey.mockImplementationOnce(fail);
           }
           if (mode === "prepare-error") {
             resolver.mockImplementationOnce(async (...args) => ({
@@ -769,28 +672,7 @@ it.each([
               error: "fixture model preparation unavailable",
             }));
           }
-          const unexpectedRequest = createDeferred<never>();
-          const rejectProviderRequest = () =>
-            unexpectedRequest.reject(
-              new Error("Preparation failure unexpectedly reached the provider"),
-            );
-          server.once("request", rejectProviderRequest);
-          const failed = start(0);
-          try {
-            await Promise.race([
-              expect(failed).rejects.toThrow(
-                mode === "fork"
-                  ? "fixture store fork failure"
-                  : mode === "prepare-throw"
-                    ? "fixture preparation failure"
-                    : "Plugin LLM completion failed:",
-              ),
-              unexpectedRequest.promise,
-            ]);
-          } finally {
-            server.removeListener("request", rejectProviderRequest);
-          }
-          expect(requests).toHaveLength(0);
+          await expectNoRequest(expect(start(0)).rejects.toThrow(failure));
           const buildsAfterFailure = create.mock.calls.length;
           expect(buildsAfterFailure).toBeGreaterThan(0);
           const next = start(0);
@@ -803,50 +685,13 @@ it.each([
           mode === "abort" || mode === "callback-drain" || anthropicReadCancel
             ? new AbortController()
             : undefined;
-        const first = drainMode
-          ? parentWork.track(() => start(0, abortController?.signal))
-          : start(0, abortController?.signal);
+        const first =
+          drainMode && !sdk
+            ? parentWork.track(() => start(0, abortController?.signal))
+            : start(0, abortController?.signal);
         await waitForRequest(0, first);
         const firstBuilds = create.mock.calls.length;
         expect(firstBuilds).toBeGreaterThan(0);
-        if (drainMode) {
-          finish(requests[0]!, 0);
-          if (anthropicReadCancel) {
-            await bodyReadStarted.promise;
-            await nextTurn();
-            foreignWork.run(() => abortController?.abort(new Error("foreign cancellation")));
-          }
-          await waitForWork(
-            workStarted.promise,
-            first,
-            "Completion settled before accepted fixture work",
-          );
-          abortController?.abort();
-          await expect(first).resolves.toMatchObject({ text: "" });
-          parentDrain = parentWork.drain().then(() => {
-            parentDrained = true;
-          });
-          const second = start(1);
-          await waitForRequest(1, second);
-          expect.soft(parentDrained).toBe(false);
-          if (anthropicReadCancel) {
-            expect.soft(cancelledInOrigin).toBe(true);
-            await foreignWork.drain();
-          }
-          expect.soft(create.mock.calls.length).toBe(firstBuilds);
-          expectSeparateForks(1);
-          finishWork.resolve();
-          await workSettled.promise;
-          await parentDrain;
-          expect(parentDrained).toBe(true);
-          await finishResult(1, second);
-          const buildsAfterSecond = create.mock.calls.length;
-          const third = start(2);
-          await waitForRequest(2, third);
-          expect(create.mock.calls.length).toBe(buildsAfterSecond + 1);
-          await finishResult(2, third);
-          return;
-        }
         if (mode === "provider-error" || mode === "abort") {
           if (abortController) {
             abortController.abort();
@@ -864,6 +709,20 @@ it.each([
           expect(create.mock.calls.length).toBe(firstBuilds + 1);
           await finishResult(1, next);
           return;
+        }
+        if (drainMode) {
+          finish(requests[0]!, 0);
+          if (anthropicReadCancel) {
+            await bodyReadStarted.promise;
+            await nextTurn();
+            foreignWork.run(() => abortController?.abort(new Error("foreign cancellation")));
+          }
+          await waitForWork(workStarted.promise, first);
+          abortController?.abort();
+          await expect(first).resolves.toMatchObject({ text: "" });
+          parentDrain = (sdk ? firstHost.close() : parentWork.drain()).then(() => {
+            parentDrained = true;
+          });
         }
         if (mode === "config") {
           changeConfig();
@@ -885,16 +744,51 @@ it.each([
         const second = start(1);
         await waitForRequest(1, second);
         const secondBuilds = create.mock.calls.length;
-        if (mode === "overlap" || mode === "lru") {
-          expect.soft(secondBuilds).toBe(buildsBeforeSecond);
+        if (mode === "overlap" || mode === "lru" || drainMode) {
+          expect.soft(secondBuilds).toBe(sdk || drainMode ? firstBuilds : buildsBeforeSecond);
         }
-        expectSeparateForks(forksBeforeSecond);
-        await finishResult(0, first);
+        expectSeparateForks(sdk || drainMode ? 1 : forksBeforeSecond);
+        if (drainMode) {
+          expect.soft(parentDrained).toBe(false);
+          if (anthropicReadCancel) {
+            expect.soft(cancelledInOrigin).toBe(true);
+            await foreignWork.drain();
+          }
+          finishWork.resolve();
+          await workSettled.promise;
+          await parentDrain;
+          expect(parentDrained).toBe(true);
+        } else {
+          await finishResult(0, first);
+          expect(nestedPreparationFailure).toBeUndefined();
+        }
+        if (mode === "nested-prepare") {
+          expect(nestedPreparationCompleted).toBe(true);
+        }
         await finishResult(1, second, true);
-        if (mode === "overlap") {
+        if (sdk) {
+          await firstHost.close();
+          await secondHost.close();
+          const staleCompletion = completeWithPreparedSimpleCompletionModel({
+            ...preparedModels[0]!,
+            options: {},
+          });
+          pending.push(staleCompletion);
+          await expectNoRequest(
+            expect(staleCompletion).rejects.toThrow("Plugin SDK resource host is closed"),
+            2,
+          );
+          if (mode === "config" || mode === "auth") {
+            return;
+          }
+        }
+        if (sdk || drainMode || mode === "overlap") {
+          const beforeThird = create.mock.calls.length;
           const third = start(2);
           await waitForRequest(2, third);
-          expect(create.mock.calls.length).toBe(secondBuilds + 1);
+          expect(create.mock.calls.length).toBe(
+            sdk || drainMode ? beforeThird + 1 : secondBuilds + 1,
+          );
           await finishResult(2, third);
         }
       } finally {
@@ -915,10 +809,9 @@ it.each([
           spy.mockRestore();
         }
         await retained?.[Symbol.asyncDispose]();
-        create.mockRestore();
-        fork.mockRestore();
-        setRuntimeKey.mockRestore();
-        resolver.mockRestore();
+        for (const spy of [create, fork, setRuntimeKey, resolver]) {
+          spy.mockRestore();
+        }
         await resetPreparedModelRuntimeSnapshotsForTest();
         clearRuntimeAuthProfileStoreSnapshots();
         clearPluginMetadataLifecycleCaches();

@@ -1,4 +1,3 @@
-// Isolated runtime.llm.complete tests cover zero-tool dispatch and policy enforcement.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -36,6 +35,12 @@ const cfg = {
     defaults: { model: "openai/gpt-5.5" },
   },
 } satisfies OpenClawConfig;
+const isolatedResult = {
+  text: "isolated",
+  provider: "openai",
+  model: "gpt-5.5",
+  owner: { kind: "harness", id: "openclaw" },
+};
 
 function configWithPluginPolicy(pluginId: string, llm: PluginEntryConfig["llm"]): OpenClawConfig {
   return { ...cfg, plugins: { entries: { [pluginId]: { llm } } } };
@@ -74,10 +79,7 @@ function primeCompletionMocks() {
     };
   });
   hoisted.isolated.mockResolvedValue({
-    text: "isolated",
-    provider: "openai",
-    model: "gpt-5.5",
-    owner: { kind: "harness", id: "openclaw" },
+    ...isolatedResult,
     usage: { input: 3, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 5 },
   });
 }
@@ -92,18 +94,12 @@ function captureUsageEvents() {
   return { events, stop };
 }
 
-function expectSingleCallFirstArg(mock: { mock: { calls: unknown[][] } }, expected: object) {
-  expect(mock.mock.calls).toHaveLength(1);
-  expect(mock.mock.calls[0]?.[0]).toEqual(expect.objectContaining(expected));
-}
-
 describe("runtime.llm.complete isolated agent runtime", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
-    hoisted.acquire.mockReset();
-    hoisted.complete.mockReset();
-    hoisted.select.mockReset();
-    hoisted.isolated.mockReset();
+    for (const mock of Object.values(hoisted)) {
+      mock.mockReset();
+    }
     primeCompletionMocks();
   });
 
@@ -132,33 +128,35 @@ describe("runtime.llm.complete isolated agent runtime", () => {
       authority: { allowComplete: true, preferredProfile: "openai:authority-bound" },
     });
 
+    const input = request({
+      systemPrompt: "JSON only",
+      reasoning: "high",
+      execution: {
+        mode: "isolated-agent-runtime",
+        authProfileId: "openai:work",
+        timeoutMs: 12_000,
+      },
+    });
     const result = await withPluginRuntimePluginScope({ pluginId: "llm-task" }, () =>
-      llm.complete({
-        messages: [{ role: "user", content: "Return JSON" }],
-        systemPrompt: "JSON only",
-        reasoning: "high",
-        execution: {
-          mode: "isolated-agent-runtime",
-          authProfileId: "openai:work",
-          timeoutMs: 12_000,
-        },
-      }),
+      llm.complete(input),
     );
     stop();
 
-    expectSingleCallFirstArg(hoisted.isolated, {
-      purpose: "plugin-completion",
-      config: expect.any(Object),
-      provider: "openai",
-      model: "gpt-5.5",
-      authProfileId: "openai:work",
-      agentId: "main",
-      systemPrompt: "JSON only",
-      prompt: "Return JSON",
-      timeoutMs: 12_000,
-      thinkLevel: "high",
-      streamParams: { maxTokens: undefined, temperature: undefined },
-    });
+    expect(hoisted.isolated).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        purpose: "plugin-completion",
+        config: expect.any(Object),
+        provider: "openai",
+        model: "gpt-5.5",
+        authProfileId: "openai:work",
+        agentId: "main",
+        systemPrompt: "JSON only",
+        prompt: "Return JSON",
+        timeoutMs: 12_000,
+        thinkLevel: "high",
+        streamParams: { maxTokens: undefined, temperature: undefined },
+      }),
+    );
     expect(result).toMatchObject({
       text: "isolated",
       execution: {
@@ -191,12 +189,9 @@ describe("runtime.llm.complete isolated agent runtime", () => {
       const flatCost = { input: 1, output: 0, cacheRead: 0, cacheWrite: 0 };
       const model = makeProviderModelFixture<"openai-completions">({
         id: "priced",
-        name: "Priced",
         provider: "fixture",
         api: "openai-completions",
         baseUrl: "https://fixture.invalid",
-        contextWindow: 1_000_000,
-        maxTokens: 1_000,
         cost: tiered
           ? { ...flatCost, tieredPricing: [{ ...flatCost, input: 2, range: [200_000] }] }
           : flatCost,
@@ -208,10 +203,9 @@ describe("runtime.llm.complete isolated agent runtime", () => {
       };
       hoisted.select.mockReturnValueOnce(selection);
       hoisted.isolated.mockResolvedValueOnce({
-        text: "isolated",
+        ...isolatedResult,
         provider: "fixture",
         model: "priced",
-        owner: { kind: "cli", id: "fixture-cli" },
         usage,
       });
       hoisted.acquire.mockResolvedValueOnce({
@@ -241,9 +235,7 @@ describe("runtime.llm.complete isolated agent runtime", () => {
 
   it("keeps usage-free isolated completions silent", async () => {
     hoisted.isolated.mockResolvedValueOnce({
-      text: "isolated",
-      provider: "openai",
-      model: "gpt-5.5",
+      ...isolatedResult,
       owner: { kind: "cli", id: "claude-cli" },
     });
     const { events: usageEvents, stop } = captureUsageEvents();
@@ -291,13 +283,6 @@ describe("runtime.llm.complete isolated agent runtime", () => {
     },
   );
 
-  it("validates isolated reasoning against the host-resolved model and runtime", async () => {
-    await expect(runtime().complete(request({ reasoning: "max" }))).rejects.toMatchObject({
-      code: "LLM_ISOLATED_INPUT_REJECTED",
-    });
-    expect(hoisted.isolated).not.toHaveBeenCalled();
-  });
-
   it.each(["request", "model"] as const)(
     "denies %s auth profile overrides without host policy",
     async (source) => {
@@ -328,46 +313,48 @@ describe("runtime.llm.complete isolated agent runtime", () => {
     },
   );
 
-  it("rejects chat histories before isolated runtime dispatch", async () => {
-    await expect(
-      runtime().complete({
+  it.each([
+    ["unsupported reasoning", request({ reasoning: "max" })],
+    [
+      "chat histories",
+      {
         messages: [
           { role: "user", content: "first" },
           { role: "assistant", content: "second" },
         ],
         execution: { mode: "isolated-agent-runtime" },
-      } as unknown as LlmCompleteParams),
-    ).rejects.toMatchObject({ code: "LLM_ISOLATED_INPUT_REJECTED" });
-    expect(hoisted.isolated).not.toHaveBeenCalled();
-  });
-
-  it("rejects unknown execution modes instead of falling through to direct inference", async () => {
-    await expect(
-      runtime().complete({
-        messages: [{ role: "user", content: "Return JSON" }],
+      } as unknown as LlmCompleteParams,
+    ],
+    [
+      "unknown execution modes",
+      {
+        ...request(),
         execution: { mode: "isoltaed-agent-runtime" },
-      } as unknown as LlmCompleteParams),
-    ).rejects.toMatchObject({ code: "LLM_ISOLATED_INPUT_REJECTED" });
+      } as unknown as LlmCompleteParams,
+    ],
+    [
+      "requiredAuthMode",
+      { ...request(), requiredAuthMode: "oauth" } as unknown as LlmCompleteParams,
+    ],
+    [
+      "responseFormat",
+      { ...request(), responseFormat: { type: "json_object" } } as unknown as LlmCompleteParams,
+    ],
+    [
+      "overflow timeout",
+      request({ execution: { mode: "isolated-agent-runtime", timeoutMs: 2_147_483_648 } }),
+    ],
+    [
+      "NaN timeout",
+      request({ execution: { mode: "isolated-agent-runtime", timeoutMs: Number.NaN } }),
+    ],
+  ] as const)("rejects %s before isolated runtime dispatch", async (_name, input) => {
+    await expect(runtime().complete(input)).rejects.toMatchObject({
+      code: "LLM_ISOLATED_INPUT_REJECTED",
+    });
     expect(hoisted.isolated).not.toHaveBeenCalled();
+    expect(hoisted.acquire).not.toHaveBeenCalled();
     expect(hoisted.complete).not.toHaveBeenCalled();
-  });
-
-  it.each([{ requiredAuthMode: "oauth" }, { responseFormat: { type: "json_object" } }])(
-    "rejects direct-provider controls before isolated dispatch: %j",
-    async (controls) => {
-      await expect(
-        runtime().complete({ ...request(), ...controls } as unknown as LlmCompleteParams),
-      ).rejects.toMatchObject({ code: "LLM_ISOLATED_INPUT_REJECTED" });
-      expect(hoisted.isolated).not.toHaveBeenCalled();
-      expect(hoisted.acquire).not.toHaveBeenCalled();
-      expect(hoisted.complete).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([2_147_483_648, Number.NaN])("rejects invalid isolated timeout %s", async (timeoutMs) => {
-    await expect(
-      runtime().complete(request({ execution: { mode: "isolated-agent-runtime", timeoutMs } })),
-    ).rejects.toMatchObject({ code: "LLM_ISOLATED_INPUT_REJECTED" });
   });
 
   it("settles at the deadline when the isolated runtime ignores cancellation", async () => {

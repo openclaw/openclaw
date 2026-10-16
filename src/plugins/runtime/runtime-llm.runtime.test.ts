@@ -1,4 +1,3 @@
-// Runtime LLM tests cover plugin provider hooks inside the model runtime adapter.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveContextEngineCapabilities } from "../../agents/embedded-agent-runner/context-engine-capabilities.js";
 import { runContextEngineMaintenance } from "../../agents/embedded-agent-runner/context-engine-maintenance.js";
@@ -39,6 +38,19 @@ function runtime(options: CreateRuntimeLlmOptions = {}) {
   });
 }
 
+function pluginComplete(
+  llm: PluginEntryConfig["llm"],
+  pluginId = "trusted-plugin",
+  options: CreateRuntimeLlmOptions = {},
+) {
+  const scoped = runtime({
+    getConfig: () => configWithPluginPolicy(pluginId.toLowerCase(), llm),
+    ...options,
+  });
+  return (request: Parameters<typeof scoped.complete>[0]) =>
+    withPluginRuntimePluginScope({ pluginId }, () => scoped.complete(request));
+}
+
 function context(overrides: Partial<Parameters<typeof resolveContextEngineCapabilities>[0]> = {}) {
   return resolveContextEngineCapabilities({
     config: cfg,
@@ -62,9 +74,6 @@ function createPreparedModel(
       id: modelId,
       api: "openai",
       baseUrl: "https://fixture.invalid/v1",
-      contextWindow: 128_000,
-      maxTokens: 4096,
-      cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 },
     }),
     auth: { apiKey: "test-api-key", source: "test", mode: "api-key" },
   };
@@ -78,57 +87,42 @@ type MockCalls = {
   mock: { calls: unknown[][] };
 };
 
-function expectFields(record: unknown, expected: object) {
-  expect(record).toEqual(expect.objectContaining(expected));
-}
-
 function expectSingleCallFirstArg(mock: MockCalls, expected: object) {
   expect(mock.mock.calls).toHaveLength(1);
-  expectFields(mock.mock.calls[0]?.[0], expected);
+  expect(mock.mock.calls[0]?.[0]).toMatchObject(expected);
 }
 
 function expectSingleLogPayload(mock: MockCalls, message: string, expected: object) {
   expect(mock.mock.calls).toEqual([[message, expect.objectContaining(expected)]]);
 }
 
-function primeCompletionMocks() {
-  hoisted.acquire.mockResolvedValue(createPreparedModel());
-  hoisted.select.mockImplementation((params: { modelRef?: string; agentId: string }) => {
-    if (!params.modelRef) {
-      return {
-        provider: "openai",
-        modelId: "gpt-5.5",
-        agentDir: `/tmp/${params.agentId}`,
-      };
-    }
-    const slash = params.modelRef.indexOf("/");
-    return {
-      provider: slash > 0 ? params.modelRef.slice(0, slash) : "openai",
-      modelId: slash > 0 ? params.modelRef.slice(slash + 1) : params.modelRef,
-      agentDir: `/tmp/${params.agentId}`,
-    };
-  });
-  hoisted.complete.mockResolvedValue({
-    content: [{ type: "text", text: "done" }],
-    responseModel: "gpt-5.5-2026-08-01",
-    stopReason: "stop",
-    usage: {
-      input: 11,
-      output: 7,
-      cacheRead: 5,
-      cacheWrite: 2,
-      total: 25,
-      cost: { total: 0.0042 },
-    },
-  });
-}
-
 describe("runtime.llm.complete", () => {
   beforeEach(() => {
-    hoisted.acquire.mockReset();
-    hoisted.complete.mockReset();
-    hoisted.select.mockReset();
-    primeCompletionMocks();
+    hoisted.acquire.mockReset().mockResolvedValue(createPreparedModel());
+    hoisted.select
+      .mockReset()
+      .mockImplementation((params: { modelRef?: string; agentId: string }) => {
+        const modelRef = params.modelRef || "gpt-5.5";
+        const slash = modelRef.indexOf("/");
+        return {
+          provider: slash > 0 ? modelRef.slice(0, slash) : "openai",
+          modelId: slash > 0 ? modelRef.slice(slash + 1) : modelRef,
+          agentDir: `/tmp/${params.agentId}`,
+        };
+      });
+    hoisted.complete.mockReset().mockResolvedValue({
+      content: [{ type: "text", text: "done" }],
+      responseModel: "gpt-5.5-2026-08-01",
+      stopReason: "stop",
+      usage: {
+        input: 11,
+        output: 7,
+        cacheRead: 5,
+        cacheWrite: 2,
+        total: 25,
+        cost: { total: 0.0042 },
+      },
+    });
   });
 
   it("denies context-engine model overrides without owning plugin llm policy", async () => {
@@ -160,11 +154,13 @@ describe("runtime.llm.complete", () => {
       allowMissingApiKeyModes: ["aws-sdk"],
       skipAgentDiscovery: true,
     });
-    expect(result.agentId).toBe("ada");
-    expectFields(result.audit, {
-      caller: { kind: "context-engine", id: "context-engine.after-turn" },
-      purpose: "memory-maintenance",
-      sessionKey: "agent:ada:session:abc",
+    expect(result).toMatchObject({
+      agentId: "ada",
+      audit: {
+        caller: { kind: "context-engine", id: "context-engine.after-turn" },
+        purpose: "memory-maintenance",
+        sessionKey: "agent:ada:session:abc",
+      },
     });
   });
 
@@ -321,20 +317,13 @@ describe("runtime.llm.complete", () => {
   });
 
   it("requires model overrides to satisfy host and plugin allowlists", async () => {
-    const llm = runtime({
-      getConfig: () =>
-        configWithPluginPolicy("restricted-plugin", {
-          allowModelOverride: true,
-          allowedModels: ["openai/gpt-5.4"],
-        }),
-      authority: { allowModelOverride: true, allowedModels: ["openai/gpt-5.5"] },
-    });
+    const complete = pluginComplete(
+      { allowModelOverride: true, allowedModels: ["openai/gpt-5.4"] },
+      "restricted-plugin",
+      { authority: { allowModelOverride: true, allowedModels: ["openai/gpt-5.5"] } },
+    );
 
-    await expect(
-      withPluginRuntimePluginScope({ pluginId: "restricted-plugin" }, () =>
-        llm.complete({ model: "openai/gpt-5.5", messages }),
-      ),
-    ).rejects.toThrow(
+    await expect(complete({ model: "openai/gpt-5.5", messages })).rejects.toThrow(
       'model override "openai/gpt-5.5" is not allowlisted for plugin "restricted-plugin"',
     );
     expect(hoisted.acquire).not.toHaveBeenCalled();
@@ -381,7 +370,7 @@ describe("runtime.llm.complete", () => {
         },
       }),
     });
-    expectFields(result, {
+    expect(result).toMatchObject({
       text: "done",
       provider: "openai",
       model: "gpt-5.5",
@@ -447,64 +436,42 @@ describe("runtime.llm.complete", () => {
       ),
     ).rejects.toThrow("cannot override the target agent");
 
-    const allowed = runtime({
-      getConfig: () => configWithPluginPolicy("trusted-plugin", { allowAgentIdOverride: true }),
-    });
-
-    await withPluginRuntimePluginScope({ pluginId: "trusted-plugin" }, () =>
-      allowed.complete({ agentId: "worker", messages }),
-    );
+    await pluginComplete({ allowAgentIdOverride: true })({ agentId: "worker", messages });
     expectSingleCallFirstArg(hoisted.acquire, { agentId: "worker" });
   });
 
   it("allows model overrides for case-insensitive plugin ids only when configured and allowlisted", async () => {
-    const pluginId = "TrUsTeD-plugin";
-    const llm = runtime({
-      getConfig: () =>
-        configWithPluginPolicy("trusted-plugin", {
-          allowModelOverride: true,
-          allowedModels: ["openai/gpt-5.4"],
-        }),
-    });
-
-    await withPluginRuntimePluginScope({ pluginId }, () =>
-      llm.complete({ model: "openai/gpt-5.4", messages }),
+    const complete = pluginComplete(
+      { allowModelOverride: true, allowedModels: ["openai/gpt-5.4"] },
+      "TrUsTeD-plugin",
     );
+    await complete({ model: "openai/gpt-5.4", messages });
     expectSingleCallFirstArg(hoisted.acquire, { agentId: "main", modelRef: "openai/gpt-5.4" });
 
-    await expect(
-      withPluginRuntimePluginScope({ pluginId }, () =>
-        llm.complete({ model: "openai/gpt-5.6", messages }),
-      ),
-    ).rejects.toThrow('model override "openai/gpt-5.6" is not allowlisted');
+    await expect(complete({ model: "openai/gpt-5.6", messages })).rejects.toThrow(
+      'model override "openai/gpt-5.6" is not allowlisted',
+    );
   });
 
   it("applies the completion allowlist to the host-resolved default for case-insensitive plugin ids", async () => {
-    const pluginId = "ReStRiCtEd-plugin";
-    const llm = runtime({
-      getConfig: () =>
-        configWithPluginPolicy("restricted-plugin", {
-          allowedCompletionModels: ["anthropic/claude-haiku-4-5"],
-        }),
-    });
-
-    await expect(
-      withPluginRuntimePluginScope({ pluginId }, () => llm.complete({ messages })),
-    ).rejects.toThrow('model "openai/gpt-5.5" is not allowlisted for completions');
+    const complete = pluginComplete(
+      { allowedCompletionModels: ["anthropic/claude-haiku-4-5"] },
+      "ReStRiCtEd-plugin",
+    );
+    await expect(complete({ messages })).rejects.toThrow(
+      'model "openai/gpt-5.5" is not allowlisted for completions',
+    );
     expect(hoisted.acquire).not.toHaveBeenCalled();
   });
 
   it("fails closed for an unusable completion allowlist", async () => {
-    const allowedCompletionModels = ["not-a-canonical-model-ref"];
-    const llm = runtime({
-      getConfig: () => configWithPluginPolicy("restricted-plugin", { allowedCompletionModels }),
-    });
-
-    await expect(
-      withPluginRuntimePluginScope({ pluginId: "restricted-plugin" }, () =>
-        llm.complete({ messages }),
-      ),
-    ).rejects.toThrow("completion model allowlist has no valid models");
+    const complete = pluginComplete(
+      { allowedCompletionModels: ["not-a-canonical-model-ref"] },
+      "restricted-plugin",
+    );
+    await expect(complete({ messages })).rejects.toThrow(
+      "completion model allowlist has no valid models",
+    );
     expect(hoisted.acquire).not.toHaveBeenCalled();
   });
 
