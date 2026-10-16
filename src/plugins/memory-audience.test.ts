@@ -51,12 +51,13 @@ function childEntry(parent: FakeSessionRow, parentKey = ROOT_KEY): FakeSessionRo
   };
 }
 
-function resolveEntry(
+function resolveAt(
   sessionKey: string,
   entry: FakeSessionRow,
   senderIsOwner?: boolean,
   identity: { sessionId?: string } = { sessionId: entry.sessionId },
 ) {
+  fakeSessionOwner.rows.set(sessionKey, entry);
   return resolveMemoryAudienceFromEntry(
     {
       agentId: AGENT_ID,
@@ -67,11 +68,6 @@ function resolveEntry(
     },
     entry,
   );
-}
-
-function resolveAt(sessionKey: string, entry: FakeSessionRow, senderIsOwner?: boolean) {
-  fakeSessionOwner.rows.set(sessionKey, entry);
-  return resolveEntry(sessionKey, entry, senderIsOwner);
 }
 
 function delegate(audience: MemoryAudience, sessionKey = CHILD_KEY) {
@@ -112,10 +108,6 @@ function provider(): MemoryProviderHandle & { health: ReturnType<typeof vi.fn> }
   };
 }
 
-function patchChild(patch: Partial<FakeSessionRow>) {
-  return (_parent: FakeSessionRow, child: FakeSessionRow) => Object.assign(child, patch);
-}
-
 function pendingPublication(sessionKey: string) {
   const publication = createDeferredCore();
   fakeSessionOwner.publications.set(sessionKey, publication.promise);
@@ -146,13 +138,25 @@ function requireGrant(resolution: MemoryAudienceResolution) {
 beforeEach(() => fakeSessionOwner.reset());
 
 it.each([
-  ["owner direct", "direct", true, "owner-private"],
-  ["non-owner direct", "direct", false, "conversation"],
-  ["group", "group", true, "conversation"],
-  ["channel", "channel", true, "conversation"],
-] as const)("maps a %s root", async (_name, chatType, owner, expectedKind) => {
+  ["owner direct", "direct", true, false, "owner-private"],
+  ["non-owner direct", "direct", false, false, "conversation"],
+  ["group", "group", true, false, "conversation"],
+  ["channel", "channel", true, false, "conversation"],
+  ["nested private", "direct", true, true, "owner-private"],
+  ["nested non-owner", "direct", false, true, "conversation"],
+  ["nested group", "group", true, true, "conversation"],
+] as const)("maps a %s audience", async (_name, chatType, owner, nested, expectedKind) => {
   const root = rootEntry(chatType);
-  const { audience } = await grantAt(ROOT_KEY, root, owner);
+  let sessionKey = ROOT_KEY;
+  let entry = root;
+  if (nested) {
+    const child = { ...childEntry(root), spawnedBySenderIsOwner: owner };
+    fakeSessionOwner.rows.set(ROOT_KEY, root);
+    fakeSessionOwner.rows.set(CHILD_KEY, child);
+    sessionKey = "agent:main:subagent:nested";
+    entry = childEntry(child, CHILD_KEY);
+  }
+  const { audience } = await grantAt(sessionKey, entry, nested ? !owner : owner);
   expect(audience).toEqual(
     expectedKind === "owner-private"
       ? { kind: "owner-private", agentId: AGENT_ID }
@@ -174,64 +178,34 @@ it.each([
       ? resolveAt(CHILD_KEY, childEntry(root), true)
       : missing === "missing chat type"
         ? resolveAt(ROOT_KEY, { ...root, chatType: undefined }, true)
-        : resolveEntry(ROOT_KEY, root, true, {
+        : resolveAt(ROOT_KEY, root, true, {
             sessionId: missing === "missing session id" ? undefined : randomUUID(),
           });
   await expect(result).resolves.toMatchObject({ status: "denied", kind });
   expect(fakeSessionOwner.activeLeases).toBe(0);
 });
 
-it.each([
-  ["private", "direct", true, "owner-private"],
-  ["non-owner conversation", "direct", false, "conversation"],
-  ["group conversation", "group", true, "conversation"],
-] as const)(
-  "inherits the root %s audience through nested children",
-  async (_name, chatType, owner, kind) => {
-    const root = rootEntry(chatType);
-    const child = { ...childEntry(root), spawnedBySenderIsOwner: owner };
-    const nestedKey = "agent:main:subagent:nested";
-    fakeSessionOwner.rows.set(ROOT_KEY, root);
-    fakeSessionOwner.rows.set(CHILD_KEY, child);
-    const { audience } = await grantAt(nestedKey, childEntry(child, CHILD_KEY), !owner);
-    expect(audience.kind).toBe(kind);
-    if (audience.kind === "conversation") {
-      expect(audience).toMatchObject({ sessionKey: ROOT_KEY, sessionId: root.sessionId });
-    }
-  },
-);
-
 it("denies malformed, stale, cyclic, and cross-agent lineage", async () => {
-  const mutations: Array<
-    [
-      Extract<MemoryAudienceResolution, { status: "denied" }>["kind"],
-      (parent: FakeSessionRow, child: FakeSessionRow) => void,
-    ]
-  > = [
-    ["ineligible", patchChild({ spawnedBySessionId: undefined })],
-    ["stale-lineage", patchChild({ spawnedBySessionId: randomUUID() })],
-    ["stale-lineage", (parent) => Object.assign(parent, { lifecycleRevision: randomUUID() })],
-    ["stale-lineage", patchChild({ parentSessionLifecycleRevision: undefined })],
-    ["ineligible", patchChild({ parentSessionKey: "agent:main:other" })],
-    [
-      "ineligible",
-      patchChild({ spawnedBy: "agent:foreign:root", parentSessionKey: "agent:foreign:root" }),
-    ],
-    [
-      "ineligible",
-      (_parent, child) =>
-        Object.assign(child, {
-          spawnedBy: CHILD_KEY,
-          parentSessionKey: CHILD_KEY,
-          spawnedBySessionId: child.sessionId,
-          parentSessionLifecycleRevision: child.lifecycleRevision,
-        }),
-    ],
-  ];
-  for (const [kind, mutate] of mutations) {
+  const mutations = [
+    ["child", "spawnedBySessionId", undefined, "ineligible"],
+    ["child", "spawnedBySessionId", randomUUID(), "stale-lineage"],
+    ["parent", "lifecycleRevision", randomUUID(), "stale-lineage"],
+    ["child", "parentSessionLifecycleRevision", undefined, "stale-lineage"],
+    ["child", "parentSessionKey", "agent:main:other", "ineligible"],
+    ["lineage", "spawnedBy", "agent:foreign:root", "ineligible"],
+    ["cycle", "spawnedBy", CHILD_KEY, "ineligible"],
+  ] as const;
+  for (const [target, field, value, kind] of mutations) {
     const parent = rootEntry();
     const child = childEntry(parent);
-    mutate(parent, child);
+    Reflect.set(target === "parent" ? parent : child, field, value);
+    if (target === "lineage" || target === "cycle") {
+      child.parentSessionKey = child.spawnedBy;
+    }
+    if (target === "cycle") {
+      child.spawnedBySessionId = child.sessionId;
+      child.parentSessionLifecycleRevision = child.lifecycleRevision;
+    }
     await expect(resolveChild(parent, child)).resolves.toMatchObject({ status: "denied", kind });
   }
   expect(fakeSessionOwner.activeLeases).toBe(0);

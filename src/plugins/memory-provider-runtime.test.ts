@@ -1,4 +1,3 @@
-/** Tests selected-owner fallback, caller revocation, and legacy compatibility at the resolver. */
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { delegateMemoryAudience, resolveMemoryAudienceFromEntry } from "./memory-audience.js";
@@ -87,9 +86,7 @@ function advertise(raw = provider()) {
 function legacy(searchManager: RegisteredMemorySearchManager) {
   return {
     getMemorySearchManager: vi.fn(async () => ({ manager: searchManager })),
-    resolveMemoryBackendConfig: vi.fn<MemoryPluginRuntime["resolveMemoryBackendConfig"]>(() => ({
-      backend: "builtin",
-    })),
+    resolveMemoryBackendConfig: vi.fn(() => ({ backend: "builtin" as const })),
   } satisfies MemoryPluginRuntime;
 }
 const hit = {
@@ -297,33 +294,22 @@ it.each([
   expect(raw.close).toHaveBeenCalledTimes(1);
 });
 
-it.each([
-  ["source", { query: "q", sources: ["sessions" as const] }, "sessions source capability"],
-  ["pagination", { query: "q", cursor: "next" }, "pagination capability"],
-  ["project filter", { query: "q", activeProjectKeys: ["repo"] }, "project filter capability"],
-])("rejects undeclared search %s before calling the provider", async (_name, request, message) => {
+type CapabilityRequest =
+  | Parameters<MemoryProviderHandle["search"]>[0]
+  | Parameters<NonNullable<MemoryProviderHandle["candidates"]>>[0];
+it.each<[CapabilityRequest, string]>([
+  [{ query: "q", sources: ["sessions"] }, "sessions source capability"],
+  [{ query: "q", cursor: "next" }, "pagination capability"],
+  [{ query: "q", activeProjectKeys: ["repo"] }, "project filter capability"],
+  [{ kind: "project" }, "project candidates capability"],
+  [{ kind: "trigger", activeProjectKeys: ["repo"] }, "project filter capability"],
+])("rejects undeclared capability in %j", async (request, message) => {
   const raw = provider(true);
   const bound = await bind(raw);
-  await expect(bound.search(request)).rejects.toThrow(message);
-  expect(raw.search).not.toHaveBeenCalled();
+  const pending = "query" in request ? bound.search(request) : bound.candidates!(request);
+  await expect(pending).rejects.toThrow(message);
+  expect("query" in request ? raw.search : raw.candidates).not.toHaveBeenCalled();
 });
-
-it.each([
-  ["kind", { kind: "project" as const }, "project candidates capability"],
-  [
-    "project filter",
-    { kind: "trigger" as const, activeProjectKeys: ["repo"] },
-    "project filter capability",
-  ],
-])(
-  "rejects undeclared candidate %s before calling the provider",
-  async (_name, request, message) => {
-    const raw = provider(true);
-    const bound = await bind(raw);
-    await expect(bound.candidates!(request)).rejects.toThrow(message);
-    expect(raw.candidates).not.toHaveBeenCalled();
-  },
-);
 
 it("preserves frozen class receivers, statusless empty reads, and read pagination", async () => {
   state.capability.runtime = legacy(Object.freeze(new LegacyManager("")));
@@ -360,11 +346,8 @@ it("withholds legacy session hits without authorization and enumerates no candid
     projectFilter: true,
   });
   expect("candidates" in bound).toBe(false);
-  expect(
-    [bound.capabilities, bound.capabilities.sources, bound.capabilities.candidates].map(
-      Object.isFrozen,
-    ),
-  ).toEqual([true, true, true]);
+  const caps = bound.capabilities;
+  expect([caps, caps.sources, caps.candidates].map(Object.isFrozen)).toEqual([true, true, true]);
   const authorizeSearchHits = vi.fn(async () => []);
   old.authorizeSearchHits = authorizeSearchHits;
   await bound.search({ query: "q", lexicalOnly: true, activeProjectKeys: ["repo"] });
@@ -379,11 +362,15 @@ it("withholds legacy session hits without authorization and enumerates no candid
 
 it("keeps authorized legacy session and keyless project hits ineligible for automatic recall", async () => {
   const oldManager = manager();
-  const owner = { originClass: "owner", sessionKind: "interactive", observedAt: 1 } as const;
+  const recall = {
+    ...hit,
+    provenance: { originClass: "owner", sessionKind: "interactive", observedAt: 1 } as const,
+    triggers: "remember",
+  };
   vi.spyOn(oldManager, "search").mockResolvedValue([
-    { ...hit, source: "sessions", provenance: owner, triggers: "remember" },
-    { ...hit, provenance: owner, triggers: "remember", projectKey: ";" },
-    { ...hit, provenance: owner, triggers: "remember" },
+    { ...recall, source: "sessions" },
+    { ...recall, projectKey: ";" },
+    recall,
   ]);
   await withLegacy(
     {
@@ -391,8 +378,8 @@ it("keeps authorized legacy session and keyless project hits ineligible for auto
       authorizeSearchHits: async ({ hits }) => hits,
     },
     async (bound) => {
-      const page = await bound.search({ query: "q" });
-      expect(page.hits.map(({ automaticRecall }) => automaticRecall?.eligible)).toEqual([
+      const { hits } = await bound.search({ query: "q" });
+      expect(hits.map(({ automaticRecall }) => automaticRecall?.eligible)).toEqual([
         false,
         false,
         true,

@@ -79,18 +79,14 @@ it.each([false, true])("resolves a configured API with registered adapter=%s", (
 it("returns generic provider, runtime, and identity objects unchanged", async () => {
   const runtime = {
     id: "generic",
-    inlineQueryTimeoutMs: 1234,
-    sourceWideBatchEmbed: true,
     batchEmbed: async (options) => options.chunks.map(() => [5, 6]),
   } satisfies EmbeddingProviderRuntime;
   const runtimeFactsKey = Symbol.for("openclaw.localEmbeddingRuntimeFacts");
   const provider = {
     id: "generic",
     model: "generic-model",
-    maxInputTokens: 2048,
     embed: async () => [1, 2],
     embedBatch: async (inputs: unknown[]) => inputs.map(() => [3, 4]),
-    close() {},
   };
   const runtimeFacts = () => ({ model: "generic-model" });
   Object.defineProperty(provider, runtimeFactsKey, { value: runtimeFacts });
@@ -140,8 +136,6 @@ it("returns generic provider, runtime, and identity objects unchanged", async ()
 it("preserves private memory metadata through generic registration", () => {
   const memoryAdapter = {
     id: "migrated-memory",
-    autoSelectPriority: 20,
-    allowExplicitWhenConfiguredAuto: true,
     supportsMultimodalEmbeddings: ({ model }: { model: string }) => model === "multimodal",
     shouldContinueAutoSelection: () => true,
     create: async () => ({ provider: null }),

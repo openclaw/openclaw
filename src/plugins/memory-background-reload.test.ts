@@ -122,8 +122,7 @@ async function openManager(
 }
 
 function enableInterval(manager: object) {
-  // Interval scheduling is dormant in current config defaults. Exercise the
-  // existing owner without inventing a public config option.
+  // Exercise the dormant interval owner without inventing a public config option.
   const scheduled = manager as {
     settings: { sync: { intervalMinutes: number } };
     ensureIntervalSync(): void;
@@ -221,8 +220,7 @@ it("retires live watchers and starts successor indexing without a search or turn
     const memory = loadMemory(initial, config);
     instances.push(memory.instance);
     const { manager, raw, prototype } = await openManager(memory, config);
-    // Close drains accepted syncs by contract; settle the dirty startup index first so the
-    // fixed retirement budget measures watcher retirement, not cold first-index latency.
+    // Drain cold indexing before measuring watcher retirement's fixed budget.
     await manager.sync?.({ reason: "startup-settled" });
     closeInitial = async () => {
       await prototype.close?.call(raw);
@@ -413,6 +411,7 @@ it.for([false, true])(
       const storePath = path.join(resolveSessionTranscriptsDirForAgent(agentId), "sessions.json");
       const sessionId = "background-session";
       const sessionKey = `agent:${agentId}:memory:${sessionId}`;
+      const identity = { agentId, sessionId, sessionKey, storePath };
       await upsertSessionEntry({
         agentId,
         sessionKey,
@@ -420,17 +419,14 @@ it.for([false, true])(
         entry: { sessionId, updatedAt: Date.now() },
       });
       await appendSessionTranscriptMessageByIdentity({
-        agentId,
-        sessionId,
-        sessionKey,
-        storePath,
+        ...identity,
         message: {
           role: "user",
           timestamp: Date.now(),
           content: [{ type: "text", text: `Remember the violet ${agentId} background fact.` }],
         },
       });
-      return { agentId, sessionId, sessionKey, storePath };
+      return identity;
     };
     const errors: unknown[] = [];
     try {
@@ -590,8 +586,7 @@ it.for([false, true])(
       }
       if (replaceMemory) {
         awaitingStage = "retired manager interval callback";
-        // A queued callback may arrive after cancellation from a newer caller.
-        // Its manager must still ask the original owner for admission.
+        // Even a queued, cancelled callback must ask its original owner for admission.
         const callsBefore = current.instance.ordinaryCallCount;
         const syncsBefore = syncObserver.mock.calls.length;
         current.instance.run(() => retiredInterval());
@@ -605,6 +600,7 @@ it.for([false, true])(
       errors.push(error);
     } finally {
       awaitingStage = "fixture cleanup";
+      // Convert synchronous cleanup throws into rejections so every owner still retires.
       const closed = await Promise.allSettled(
         [...managers].map(async (manager) => await manager.close?.()),
       );
