@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 
+const SUPPRESS_EMBEDS = 1 << 2;
 const repository = "openclaw/openclaw";
 const releases = [
   { platform: "iOS", path: ".github/workflows/ios-store-release.yml" },
@@ -228,7 +229,7 @@ async function main() {
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content, allowed_mentions: { parse: [] } }),
+      body: JSON.stringify({ content, flags: SUPPRESS_EMBEDS, allowed_mentions: { parse: [] } }),
     },
     "Discord notification",
   );

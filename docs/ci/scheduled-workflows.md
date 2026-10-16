@@ -240,7 +240,7 @@ channel and save its URL as `DISCORD_MOBILE_RELEASE_WEBHOOK_URL` in each of the
 notification job enters its matching environment and receives only the webhook
 secret; it does not access signing assets or run release code. It checks out
 trusted default-branch notification code, reads only
-the completed attempt's job metadata, disables mentions, and waits for Discord
+the completed attempt's job metadata, disables mentions and link embeds, and waits for Discord
 to confirm message creation. Transient delivery errors receive bounded retries;
 an ambiguous network failure can produce a duplicate message. Exhausted retries
 or a missing webhook fail only the notification workflow, never rerun an upload.

@@ -32,7 +32,7 @@ type Options = {
 type Trace = {
   method: string;
   url?: string;
-  body?: { content: string; allowed_mentions: { parse: string[] } };
+  body?: { content: string; flags: number; allowed_mentions: { parse: string[] } };
   delay?: number;
   redirect?: string;
   abortable?: boolean;
@@ -206,21 +206,25 @@ describe("scheduled mobile store release notifications", () => {
   it.each([
     ["iOS", "Build uploaded and prepared in App Store Connect."],
     ["Android", "Google Play upload completed."],
-  ] as const)("reports a proven %s store release without enabling mentions", (platform, detail) => {
-    const result = evaluate({ platform });
-    expect(result.status, result.output).toBe(0);
-    expect(result.posts).toHaveLength(1);
-    expect(result.posts[0]).toMatchObject({
-      url: `${webhook}?wait=true`,
-      redirect: "error",
-      abortable: true,
-      body: {
-        content: `✅ **PASS — ${platform} Store Release**\n${detail}\n[**View run ↗**](https://github.com/openclaw/openclaw/actions/runs/123/attempts/1)`,
-        allowed_mentions: { parse: [] },
-      },
-    });
-    expect(result.requests.every((request) => request.abortable)).toBe(true);
-  });
+  ] as const)(
+    "reports a proven %s store release without mentions or embeds",
+    (platform, detail) => {
+      const result = evaluate({ platform });
+      expect(result.status, result.output).toBe(0);
+      expect(result.posts).toHaveLength(1);
+      expect(result.posts[0]).toMatchObject({
+        url: `${webhook}?wait=true`,
+        redirect: "error",
+        abortable: true,
+        body: {
+          content: `✅ **PASS — ${platform} Store Release**\n${detail}\n[**View run ↗**](https://github.com/openclaw/openclaw/actions/runs/123/attempts/1)`,
+          flags: 4,
+          allowed_mentions: { parse: [] },
+        },
+      });
+      expect(result.requests.every((request) => request.abortable)).toBe(true);
+    },
+  );
 
   it.each([
     { event: "workflow_dispatch" },
@@ -291,6 +295,7 @@ describe("scheduled mobile store release notifications", () => {
       expect(result.posts[0]?.body?.content).toContain(
         `❌ **FAIL — iOS Store Release**\n${reason} Store acceptance is unconfirmed.`,
       );
+      expect(result.posts[0]?.body?.flags).toBe(4);
     },
   );
 
