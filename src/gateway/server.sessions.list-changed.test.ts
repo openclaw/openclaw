@@ -30,6 +30,7 @@ import {
 } from "./session-row-fixtures.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
+import type { SessionsListResult } from "./session-utils.types.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   getGatewayConfigModule,
@@ -49,47 +50,50 @@ const {
 type SessionStoreEntryOptions = Parameters<typeof sessionStoreEntry>[1];
 type MutationMethod = "sessions.patch" | "sessions.compact";
 
-async function invokeSessionsList({
-  requestId,
-  params = {},
-  context = {},
-  defer = false,
-}: {
-  requestId: string;
-  params?: Record<string, unknown>;
-  context?: Record<string, unknown>;
-  defer?: boolean;
-}) {
+async function prepareRequest(context: Record<string, unknown> = {}) {
   const respond = vi.fn();
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
   const requestContext = {
     getRuntimeConfig,
-    readPreparedGatewayModelCatalog: async () => ({ entries: [] }),
     ...context,
   } as unknown as GatewayRequestContext;
-  const request = initializeSessionReadContext(requestContext).then(() =>
-    expectDefined(
-      sessionsHandlers["sessions.list"],
-      'sessionsHandlers["sessions.list"] test invariant',
-    )({
-      req: {
-        type: "req",
-        id: requestId,
-        method: "sessions.list",
+  return {
+    respond,
+    context: requestContext,
+    invoke: async (method: "sessions.list" | MutationMethod, params: Record<string, unknown>) => {
+      await initializeSessionReadContext(requestContext);
+      const options = {
+        req: { type: "req" as const, id: "test-request", method, params },
         params,
-      },
-      params,
-      respond,
-      client: null,
-      isWebchatConnect: () => false,
-      context: requestContext,
-    }),
-  );
+        respond,
+        client: null,
+        isWebchatConnect: () => false,
+        context: requestContext,
+      };
+      await expectDefined(sessionsHandlers[method], "session handler")(
+        method === "sessions.list"
+          ? options
+          : bindInProcessRequestMutationAuthority(options, undefined, undefined),
+      );
+    },
+  };
+}
+
+async function invokeSessionsList(
+  params: Record<string, unknown> = {},
+  context: Record<string, unknown> = {},
+  defer = false,
+) {
+  const prepared = await prepareRequest({
+    readPreparedGatewayModelCatalog: async () => ({ entries: [] }),
+    ...context,
+  });
+  const request = prepared.invoke("sessions.list", params);
   if (!defer) {
     await request;
   }
-  return { request, respond, context: requestContext };
+  return { request, respond: prepared.respond, context: prepared.context };
 }
 
 async function mutationCatalogSnapshot(
@@ -120,10 +124,7 @@ async function invokeSessionMutation({
   subscribedConnIds?: Set<string>;
 }) {
   const broadcastToConnIds = vi.fn();
-  const respond = vi.fn();
-  const sessionsHandlers = await getSessionsHandlers();
-  const { getRuntimeConfig } = await getGatewayConfigModule();
-  const requestContext = {
+  const prepared = await prepareRequest({
     broadcastToConnIds,
     chatAbortControllers: new Map(),
     chatQueuedTurns: new Map(),
@@ -131,31 +132,13 @@ async function invokeSessionMutation({
     getSessionEventSubscriberConnIds: () => subscribedConnIds,
     loadGatewayModelCatalog: async () => ({ providers: [] }),
     loadGatewayModelCatalogSnapshot: () => mutationCatalogSnapshot([]),
-    getRuntimeConfig,
     ...context,
-  } as unknown as GatewayRequestContext;
-  await initializeSessionReadContext(requestContext);
-  await expectDefined(
-    sessionsHandlers[method],
-    "sessionsHandlers[method] test invariant",
-  )(
-    bindInProcessRequestMutationAuthority(
-      {
-        req: { type: "req", id: method, method, params },
-        params,
-        respond,
-        context: requestContext,
-        client: null,
-        isWebchatConnect: () => false,
-      },
-      undefined,
-      undefined,
-    ),
-  );
-  await flushPendingSessionsChangedEvents(requestContext);
+  });
+  await prepared.invoke(method, params);
+  await flushPendingSessionsChangedEvents(prepared.context);
   return {
     broadcastToConnIds,
-    responsePayload: expectRespondPayload(respond),
+    responsePayload: expectRespondPayload(prepared.respond),
   };
 }
 
@@ -177,40 +160,18 @@ async function expectManagementPatch(
 
 async function writeMainSessionStore(options?: SessionStoreEntryOptions) {
   await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-main", options),
-    },
-  });
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main", options) } });
 }
 
-function expectMainPatchBroadcast(
-  result: Awaited<ReturnType<typeof invokeSessionsPatch>>,
-  expected: Record<string, unknown>,
-): Record<string, unknown> {
-  expectFields(result.responsePayload, { ok: true, key: "agent:main:main" });
-  return expectChangedBroadcast(result.broadcastToConnIds, {
-    sessionKey: "agent:main:main",
-    reason: "patch",
-    ...expected,
-  });
-}
-
-async function invokeSessionsCompact({
-  getRuntimeConfig,
-  params,
+async function invokeSessionsCompact(
+  getRuntimeConfig: unknown,
+  params: Record<string, unknown> = {},
   subscribedConnIds = new Set(["conn-1"]),
-}: {
-  getRuntimeConfig: unknown;
-  params: Record<string, unknown>;
-  subscribedConnIds?: Set<string>;
-}) {
+) {
   return invokeSessionMutation({
     method: "sessions.compact",
-    params,
-    context: {
-      getRuntimeConfig,
-    },
+    params: { key: "global", agentId: "work", ...params },
+    context: { getRuntimeConfig },
     subscribedConnIds,
   });
 }
@@ -266,20 +227,7 @@ test("sessions.list uses persisted usage and selected model fields", async () =>
   });
 
   const { ws } = await openClient();
-  const listed = await rpcReq<{
-    sessions: Array<{
-      key: string;
-      parentSessionKey?: string;
-      childSessions?: string[];
-      totalTokens?: number;
-      totalTokensFresh?: boolean;
-      contextTokens?: number;
-      estimatedCostUsd?: number;
-      modelProvider?: string;
-      model?: string;
-      modelSelectionLocked?: boolean;
-    }>;
-  }>(ws, "sessions.list", {});
+  const listed = await rpcReq<SessionsListResult>(ws, "sessions.list", {});
 
   expect(listed.ok).toBe(true);
   const parent = listed.payload?.sessions.find((session) => session.key === "agent:main:main");
@@ -298,7 +246,7 @@ test("sessions.list uses persisted usage and selected model fields", async () =>
   });
   expect(child?.contextTokens).toBeUndefined();
 
-  const gallery = await rpcReq<{ sessions: Array<Record<string, unknown>> }>(ws, "sessions.list", {
+  const gallery = await rpcReq<SessionsListResult>(ws, "sessions.list", {
     rowMode: "dashboard",
   });
   expect(gallery.ok).toBe(true);
@@ -382,7 +330,7 @@ test("sessions.changed mutations reach plugin subscribers without websocket clie
 test("sessions.list distinguishes proven idle from unavailable run identities", async () => {
   await writeMainSessionStore();
 
-  const idle = await invokeSessionsList({ requestId: "req-sessions-list-idle-exact-runs" });
+  const idle = await invokeSessionsList();
   const idleSession = findSession(expectRespondPayload(idle.respond), "agent:main:main");
   expect(idleSession).toMatchObject({ hasActiveRun: false, activeRunIds: [] });
 
@@ -394,9 +342,7 @@ test("sessions.list distinguishes proven idle from unavailable run identities", 
     projectSessionActive: true,
   });
   try {
-    const unavailable = await invokeSessionsList({
-      requestId: "req-sessions-list-unavailable-runs",
-    });
+    const unavailable = await invokeSessionsList();
     const unavailableSession = findSession(
       expectRespondPayload(unavailable.respond),
       "agent:main:main",
@@ -438,16 +384,11 @@ test("sessions.list yields for bulk metadata and later serves previews without r
   const releaseForeground = retainSessionListForegroundWork();
   try {
     const params = { includeDerivedTitles: true, includeLastMessage: true, limit: 11 };
-    const { request, respond, context } = await invokeSessionsList({
-      requestId: "req-sessions-list-yield",
-      defer: true,
+    const { request, respond, context } = await invokeSessionsList(
       params,
-      context: {
-        logGateway: {
-          debug: vi.fn(),
-        },
-      },
-    });
+      { logGateway: { debug: vi.fn() } },
+      true,
+    );
 
     await Promise.resolve();
     await Promise.resolve();
@@ -462,11 +403,7 @@ test("sessions.list yields for bulk metadata and later serves previews without r
     );
     releaseForeground();
     await backfilled;
-    const refreshed = await invokeSessionsList({
-      requestId: "req-sessions-list-backfilled",
-      params,
-      context: { ...context },
-    });
+    const refreshed = await invokeSessionsList(params, { ...context });
     const payload = expectRespondPayload(refreshed.respond);
     const session = findSession(payload, "agent:main:bulk-0");
     expectFields(session, {
@@ -512,12 +449,12 @@ test("sessions.changed includes live usage metadata without inventing an unprice
     },
   });
 
-  const result = await invokeSessionsPatch({
-    key: "main",
-    label: "Renamed",
-  });
+  const result = await invokeSessionsPatch({ key: "main", label: "Renamed" });
 
-  const payload = expectMainPatchBroadcast(result, {
+  expectFields(result.responsePayload, { ok: true, key: "agent:main:main" });
+  expectChangedBroadcast(result.broadcastToConnIds, {
+    sessionKey: "agent:main:main",
+    reason: "patch",
     effectiveResponseUsage: "off",
     totalTokens: 6_643,
     totalTokensFresh: true,
@@ -525,8 +462,8 @@ test("sessions.changed includes live usage metadata without inventing an unprice
     estimatedCostUsd: undefined,
     modelProvider: "openai",
     model: "test-unpriced-model",
+    responseUsage: undefined,
   });
-  expect(payload.responseUsage).toBeUndefined();
 });
 
 test("sessions.changed mutation events include session management metadata", async () => {
@@ -541,52 +478,40 @@ test("sessions.changed mutation events include session management metadata", asy
     },
   });
 
-  await expectManagementPatch(
-    { expectedSessionId: "sess-dev", archived: true },
-    {
-      archived: true,
-      archivedAt: expect.any(Number),
-      pinned: false,
-      pinnedAt: null,
-      unread: false,
-      lastReadAt: 20,
-      lastActivityAt: 5,
-    },
-  );
-
-  await expectManagementPatch(
-    { expectedSessionId: "sess-dev", archived: false },
-    {
-      archived: false,
-      archivedAt: null,
-    },
-  );
-
-  await expectManagementPatch(
-    { pinned: true },
-    {
-      pinned: true,
-      pinnedAt: expect.any(Number),
-    },
-  );
-
-  await expectManagementPatch(
-    { pinned: false },
-    {
-      pinned: false,
-      pinnedAt: null,
-    },
-  );
-
-  const unreadPayload = await expectManagementPatch(
-    { unread: true },
-    {
-      unread: true,
-      lastReadAt: 20,
-      markedUnreadAt: expect.any(Number),
-      lastActivityAt: 5,
-    },
-  );
+  for (const archived of [true, false]) {
+    await expectManagementPatch(
+      { expectedSessionId: "sess-dev", archived },
+      {
+        archived,
+        archivedAt: archived ? expect.any(Number) : null,
+        ...(archived
+          ? { pinned: false, pinnedAt: null, unread: false, lastReadAt: 20, lastActivityAt: 5 }
+          : {}),
+      },
+    );
+  }
+  for (const pinned of [true, false]) {
+    await expectManagementPatch(
+      { pinned },
+      { pinned, pinnedAt: pinned ? expect.any(Number) : null },
+    );
+  }
+  const markUnread = (expected: Record<string, unknown> = {}) =>
+    expectManagementPatch(
+      { unread: true },
+      { unread: true, markedUnreadAt: expect.any(Number), ...expected },
+    );
+  const markRead = (params: Record<string, unknown> = {}) =>
+    expectManagementPatch(
+      { unread: false, ...params },
+      {
+        unread: false,
+        lastReadAt: expect.any(Number),
+        markedUnreadAt: null,
+        lastActivityAt: 5,
+      },
+    );
+  const unreadPayload = await markUnread({ lastReadAt: 20, lastActivityAt: 5 });
 
   const marker = expectDefined(
     unreadPayload.markedUnreadAt as number | undefined,
@@ -605,33 +530,9 @@ test("sessions.changed mutation events include session management metadata", asy
     marker,
   );
 
-  await expectManagementPatch(
-    { unread: false, expectedMarkedUnreadAt: marker },
-    {
-      unread: false,
-      lastReadAt: expect.any(Number),
-      markedUnreadAt: null,
-      lastActivityAt: 5,
-    },
-  );
-
-  await expectManagementPatch(
-    { unread: true },
-    {
-      unread: true,
-      markedUnreadAt: expect.any(Number),
-    },
-  );
-
-  await expectManagementPatch(
-    { unread: false },
-    {
-      unread: false,
-      lastReadAt: expect.any(Number),
-      markedUnreadAt: null,
-      lastActivityAt: 5,
-    },
-  );
+  await markRead({ expectedMarkedUnreadAt: marker });
+  await markUnread();
+  await markRead();
 });
 
 test("sessions.patch scopes selected global mutations and events to the requested agent", async () => {
@@ -667,14 +568,10 @@ test("sessions.patch scopes selected global mutations and events to the requeste
 
 test("sessions.compact scopes selected global truncation to the requested agent", async () => {
   const globalStores = await createConfiguredGlobalAgentSessionStore({ withTranscripts: true });
-  const { broadcastToConnIds, responsePayload } = await invokeSessionsCompact({
-    getRuntimeConfig: globalStores.getRuntimeConfig,
-    params: {
-      key: "global",
-      agentId: "work",
-      maxLines: 2,
-    },
-  });
+  const { broadcastToConnIds, responsePayload } = await invokeSessionsCompact(
+    globalStores.getRuntimeConfig,
+    { maxLines: 2 },
+  );
 
   expectFields(responsePayload, { ok: true, key: "global", compacted: true, kept: 2 });
   expectChangedBroadcast(broadcastToConnIds, {
@@ -683,35 +580,29 @@ test("sessions.compact scopes selected global truncation to the requested agent"
     reason: "compact",
     compacted: true,
   });
-  await expect(
-    loadSeededTranscriptEvents({
-      agentId: "main",
-      sessionId: "sess-main-global",
-      sessionKey: "global",
-      storePath: globalStores.mainStorePath,
-    }).then(transcriptMessageContents),
-  ).resolves.toEqual(["main one", "main two"]);
-  await expect(
-    loadSeededTranscriptEvents({
-      agentId: "work",
-      sessionId: "sess-work-global",
-      sessionKey: "global",
-      storePath: globalStores.workStorePath,
-    }).then(transcriptMessageContents),
-  ).resolves.toEqual(["work two"]);
+  for (const [agentId, storePath, expected] of [
+    ["main", globalStores.mainStorePath, ["main one", "main two"]],
+    ["work", globalStores.workStorePath, ["work two"]],
+  ] as const) {
+    await expect(
+      loadSeededTranscriptEvents({
+        agentId,
+        sessionId: `sess-${agentId}-global`,
+        sessionKey: "global",
+        storePath,
+      }).then(transcriptMessageContents),
+    ).resolves.toEqual(expected);
+  }
   await resetConfiguredGlobalAgentSessionStore(globalStores);
 });
 
 test("sessions.compact passes the selected global agent into embedded compaction", async () => {
   const globalStores = await createConfiguredGlobalAgentSessionStore({ withTranscripts: true });
-  const { responsePayload } = await invokeSessionsCompact({
-    getRuntimeConfig: globalStores.getRuntimeConfig,
-    params: {
-      key: "global",
-      agentId: "work",
-    },
-    subscribedConnIds: new Set(),
-  });
+  const { responsePayload } = await invokeSessionsCompact(
+    globalStores.getRuntimeConfig,
+    {},
+    new Set(),
+  );
 
   expectFields(responsePayload, { ok: true, key: "global", compacted: true });
   expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledTimes(1);

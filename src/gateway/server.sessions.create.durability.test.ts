@@ -64,22 +64,17 @@ vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
                     command.input !== null &&
                     "turn" in command.input &&
                     command.input.turn !== undefined;
-                  if (committing) {
-                    turnBoundary.committing = true;
+                  if (!committing) {
+                    return worker.execute(command, commandOptions);
                   }
+                  turnBoundary.committing = true;
                   try {
-                    if (committing) {
-                      turnBoundary.afterPrepare?.();
-                    }
+                    turnBoundary.afterPrepare?.();
                     const result = await worker.execute(command, commandOptions);
-                    if (committing) {
-                      turnBoundary.afterCommit?.();
-                    }
+                    turnBoundary.afterCommit?.();
                     return result;
                   } finally {
-                    if (committing) {
-                      turnBoundary.committing = false;
-                    }
+                    turnBoundary.committing = false;
                   }
                 },
               }),
@@ -123,6 +118,61 @@ async function matchingTranscript(scope: Parameters<typeof loadTranscriptEvents>
   return (await loadTranscriptEvents(scope)).filter((event) =>
     JSON.stringify(event).includes(text),
   );
+}
+
+async function accepted<T>(request: ReturnType<typeof rpcReq<T>>, payload: Partial<T> = {}) {
+  const reply = await request;
+  expect(reply, JSON.stringify(reply)).toMatchObject({ ok: true, payload });
+  return expectDefined(reply.payload, "successful RPC payload");
+}
+
+async function inputFixture(key: string, options?: Parameters<typeof openClient>[0]) {
+  const { storePath } = await createSessionStoreDir();
+  const connection = await openClient(options);
+  const target = { agentId: "main", sessionKey: key, storePath };
+  const send = (message: string, idempotencyKey: string) =>
+    rpcReq<{ status: string }>(connection.ws, "chat.send", {
+      sessionKey: key,
+      message,
+      idempotencyKey,
+    });
+  return Object.assign(connection, {
+    storePath,
+    key,
+    target,
+    create: (params: Record<string, unknown> = {}, runStarted?: boolean) =>
+      accepted(
+        rpcReq<{ sessionId: string; runStarted: boolean }>(connection.ws, "sessions.create", {
+          agentId: "main",
+          key,
+          ...params,
+        }),
+        runStarted === undefined ? {} : { runStarted },
+      ),
+    send,
+    retry: (message: string, runId: string, status = "started") =>
+      accepted(send(message, runId), { status }),
+    history: () =>
+      rpcReq<{
+        messages: unknown[];
+        pendingInputs: { items: Array<{ state: string; message: unknown }> };
+      }>(connection.ws, "chat.history", { sessionKey: key }),
+    read: () => expectDefined(loadSessionEntry(target), "persisted session"),
+  });
+}
+
+async function expectUncommittedInput(
+  target: Parameters<typeof loadSessionEntry>[0],
+  entry: NonNullable<ReturnType<typeof loadSessionEntry>>,
+) {
+  expect(entry.restartRecoveryDeliveryRunId).toBeUndefined();
+  expect(entry.restartRecoveryDeliverySourceRunId).toBeUndefined();
+  const scope = { ...target, sessionId: entry.sessionId };
+  expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
+  expect(await loadTranscriptEvents(scope)).toEqual([
+    expect.objectContaining({ type: "session", id: entry.sessionId }),
+  ]);
+  return scope;
 }
 
 test("persists and dispatches concurrent Gateway inputs while participant writes queue", async () => {
@@ -208,11 +258,10 @@ test.for([
 ] as const)(
   "keeps only the created session when fresh input fails at %s",
   async (fault, { signal }) => {
-    const { storePath } = await createSessionStoreDir();
-    let { ws } = await openClient();
-    const key = `agent:main:dashboard:initial-failure-${fault}`;
+    const fixture = await inputFixture(`agent:main:dashboard:initial-failure-${fault}`);
+    const { storePath, key, target } = fixture;
+    let { ws } = fixture;
     const message = "Only retain this initial input after its restart claim commits.";
-    const target = { agentId: "main", sessionKey: key, storePath };
     const failure = new Error(`initial input ${fault}`);
     let initial: GatewayRequestHandlerOptions | undefined;
     const initialSettled = createDeferred();
@@ -278,9 +327,7 @@ test.for([
     dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
     try {
       const params = { agentId: "main", key, message };
-      let created:
-        | { ok: boolean; payload?: { sessionId: string; runStarted: boolean } | null }
-        | undefined;
+      let created: Awaited<ReturnType<typeof fixture.create>> | undefined;
       if (fault === "permission-revoked-at-commit") {
         // Revocation suppresses this request's wire response. Join its real handler
         // and native settlement instead of waiting for an intentionally absent ACK.
@@ -308,29 +355,17 @@ test.for([
         } finally {
           ws.off("message", onMessage);
         }
-        ({ ws } = await openClient());
+        fixture.ws = ws = (await openClient()).ws;
       } else {
-        created = await rpcReq<{ sessionId: string; runStarted: boolean }>(
-          ws,
-          "sessions.create",
-          params,
-        );
-        expect(created.ok, JSON.stringify(created)).toBe(true);
-        expect(created.payload?.runStarted).toBe(false);
+        created = await fixture.create({ message }, false);
       }
       expect(hit).toHaveBeenCalledOnce();
       expect(dispatch.start).not.toHaveBeenCalled();
-      const before = expectDefined(loadSessionEntry(target), "committed session creation");
-      if (created?.payload) {
-        expect(before.sessionId).toBe(created.payload.sessionId);
+      const before = fixture.read();
+      if (created) {
+        expect(before.sessionId).toBe(created.sessionId);
       }
-      expect(before.restartRecoveryDeliveryRunId).toBeUndefined();
-      expect(before.restartRecoveryDeliverySourceRunId).toBeUndefined();
-      const scope = { ...target, sessionId: before.sessionId };
-      expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
-      expect(await loadTranscriptEvents(scope)).toEqual([
-        expect.objectContaining({ type: "session", id: before.sessionId }),
-      ]);
+      const scope = await expectUncommittedInput(target, before);
       const described = await rpcReq<{ sessionId: string }>(ws, "sessions.describe", {
         key,
         agentId: "main",
@@ -341,13 +376,7 @@ test.for([
       refuse.mockRestore();
       intercept.mockRestore();
       const runId = String(expectDefined(initial, "initial request").params.idempotencyKey);
-      const retry = await rpcReq<{ status: string }>(ws, "chat.send", {
-        sessionKey: key,
-        message,
-        idempotencyKey: runId,
-      });
-      expect(retry.ok, JSON.stringify(retry)).toBe(true);
-      expect(retry.payload?.status).toBe("started");
+      await fixture.retry(message, runId);
       expect(loadSessionEntry(target)).toMatchObject({
         restartRecoveryDeliveryRunId: runId,
         restartRecoveryDeliverySourceRunId: runId,
@@ -367,11 +396,9 @@ test.for([
 test.for(["lost-worker-response", "restart-before-ack"] as const)(
   "retains exactly one recoverable initial turn after %s",
   async (fault) => {
-    const { storePath } = await createSessionStoreDir();
-    const { ws } = await openClient();
-    const key = `agent:main:dashboard:initial-committed-${fault}`;
+    const fixture = await inputFixture(`agent:main:dashboard:initial-committed-${fault}`);
+    const { storePath, ws, key, target } = fixture;
     const message = "Recover this committed initial input exactly once.";
-    const target = { agentId: "main", sessionKey: key, storePath };
     let initial: GatewayRequestHandlerOptions | undefined;
     const send = chatSendOwner.handleDirectExternalChatSend;
     const intercept = vi
@@ -416,23 +443,13 @@ test.for(["lost-worker-response", "restart-before-ack"] as const)(
       await options.userTurnTranscriptRecorder?.persistApproved();
     });
     try {
-      const created = await rpcReq<{ sessionId: string; runStarted: boolean }>(
-        ws,
-        "sessions.create",
-        {
-          agentId: "main",
-          key,
-          message,
-        },
-      );
-      expect(created.ok, JSON.stringify(created)).toBe(true);
-      expect(created.payload?.runStarted).toBe(fault === "lost-worker-response");
+      const created = await fixture.create({ message }, fault === "lost-worker-response");
       expect(hit).toHaveBeenCalledOnce();
       const options = expectDefined(initial, "initial request");
       const runId = String(options.params.idempotencyKey);
-      const before = expectDefined(loadSessionEntry(target), "committed initial turn");
+      const before = fixture.read();
       expect(before).toMatchObject({
-        sessionId: created.payload?.sessionId,
+        sessionId: created.sessionId,
         restartRecoveryDeliveryRunId: runId,
         restartRecoveryDeliverySourceRunId: runId,
       });
@@ -451,13 +468,7 @@ test.for(["lost-worker-response", "restart-before-ack"] as const)(
         expect(await recover()).toMatchObject({ settled: 0, failed: 0 });
         expect(agentCommandMock).not.toHaveBeenCalled();
         options.context.dedupe.delete(`chat:${runId}`);
-        const retried = await rpcReq<{ status: string }>(ws, "chat.send", {
-          sessionKey: key,
-          message,
-          idempotencyKey: runId,
-        });
-        expect(retried.ok, JSON.stringify(retried)).toBe(true);
-        expect(retried.payload?.status).toBe("started");
+        await fixture.retry(message, runId);
         expect(dispatch.start).toHaveBeenCalledOnce();
         const retriedRelease = getSessionWorkAdmissionRelease({
           scope: storePath,
@@ -474,13 +485,7 @@ test.for(["lost-worker-response", "restart-before-ack"] as const)(
       expect(recovered).toMatchObject({ settled: 1, failed: 0 });
       expect(agentCommandMock).toHaveBeenCalledOnce();
       expect(await matchingTranscript(scope, message)).toHaveLength(1);
-      const retry = await rpcReq<{ status: string }>(ws, "chat.send", {
-        sessionKey: key,
-        message,
-        idempotencyKey: runId,
-      });
-      expect(retry.ok, JSON.stringify(retry)).toBe(true);
-      expect(retry.payload?.status).toBe("ok");
+      await fixture.retry(message, runId, "ok");
       expect(agentCommandMock).toHaveBeenCalledOnce();
       expect(await matchingTranscript(scope, message)).toHaveLength(1);
     } finally {
@@ -494,12 +499,10 @@ test.for(["lost-worker-response", "restart-before-ack"] as const)(
 );
 
 test("retries idle chat input after its atomic commit is refused", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const { ws } = await openClient();
-  const key = "agent:main:dashboard:idle-commit-retry";
+  const fixture = await inputFixture("agent:main:dashboard:idle-commit-retry");
+  const { storePath, ws, key, target } = fixture;
   const message = "Idle input retries its original bytes.";
   const runId = "idle-commit-retry";
-  const target = { agentId: "main", sessionKey: key, storePath };
   dispatch.start.mockClear();
   dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
   const refused = vi.fn();
@@ -511,35 +514,18 @@ test("retries idle chat input after its atomic commit is refused", async () => {
     callback(request, grant);
   });
   try {
-    const created = await rpcReq<{ sessionId: string }>(ws, "sessions.create", {
-      agentId: "main",
-      key,
-    });
-    expect(created.ok, JSON.stringify(created)).toBe(true);
-    const sent = await rpcReq(ws, "chat.send", { sessionKey: key, message, idempotencyKey: runId });
+    await fixture.create();
+    const sent = await fixture.send(message, runId);
     expect(sent.ok).toBe(false);
     await getSessionWorkAdmissionRelease({ scope: storePath, identities: [key] });
     expect(refused).toHaveBeenCalledOnce();
     expect(dispatch.start).not.toHaveBeenCalled();
-    const entry = expectDefined(loadSessionEntry(target), "idle session");
-    expect(entry.restartRecoveryDeliveryRunId).toBeUndefined();
-    expect(entry.restartRecoveryDeliverySourceRunId).toBeUndefined();
-    const scope = { ...target, sessionId: entry.sessionId };
-    expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
-    expect(await loadTranscriptEvents(scope)).toEqual([
-      expect.objectContaining({ type: "session", id: entry.sessionId }),
-    ]);
+    const scope = await expectUncommittedInput(target, fixture.read());
 
     refuse.mockRestore();
-    const retried = await rpcReq<{ status: string }>(ws, "chat.send", {
-      sessionKey: key,
-      message,
-      idempotencyKey: runId,
-    });
-    expect(retried.ok, JSON.stringify(retried)).toBe(true);
-    expect(retried.payload?.status).toBe("started");
+    await fixture.retry(message, runId);
     expect(loadSessionEntry(target)).toMatchObject({
-      sessionId: entry.sessionId,
+      sessionId: scope.sessionId,
       restartRecoveryDeliveryRunId: runId,
       restartRecoveryDeliverySourceRunId: runId,
     });
@@ -556,26 +542,15 @@ test("retries idle chat input after its atomic commit is refused", async () => {
 });
 
 test("dispatches the original bytes of a committed initial input", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const { ws } = await openClient();
-  const key = "agent:main:dashboard:initial-redaction";
+  const fixture = await inputFixture("agent:main:dashboard:initial-redaction");
+  const { storePath, ws, key } = fixture;
   const message = "Check initial-secret before execution.";
   const previousLogging = readLoggingConfig();
   dispatch.start.mockClear();
   dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
   applyLoggingConfig({ redactPatterns: ["initial-secret"] });
   try {
-    const created = await rpcReq<{ sessionId: string; runStarted: boolean }>(
-      ws,
-      "sessions.create",
-      {
-        agentId: "main",
-        key,
-        message,
-      },
-    );
-    expect(created.ok, JSON.stringify(created)).toBe(true);
-    expect(created.payload?.runStarted).toBe(true);
+    await fixture.create({ message }, true);
     const turn = expectDefined(dispatch.start.mock.calls[0]?.[0], "admitted initial dispatch");
     const persisted = expectDefined(
       turn.userTurn.recorder.getPersistedMessage?.(),
@@ -588,7 +563,7 @@ test("dispatches the original bytes of a committed initial input", async () => {
       BodyForCommands: persisted.content,
       RawBody: persisted.content,
     });
-    const history = await rpcReq<{ messages: unknown[] }>(ws, "chat.history", { sessionKey: key });
+    const history = await fixture.history();
     expect(history.ok, JSON.stringify(history)).toBe(true);
     expect(JSON.stringify(history.payload?.messages)).toContain("initial-secret");
     expect(JSON.stringify(history.payload?.messages)).toContain(JSON.stringify(persisted.content));
@@ -609,21 +584,18 @@ test.for([
   async ({ id, mode, worktree }) => {
     testState.agentConfig = { workspace };
     testState.gatewayControlUi = { allowedOrigins: ["http://localhost"] };
-    const { storePath } = await createSessionStoreDir();
-    const { ws } = await openClient({
+    const key = `agent:main:dashboard:durable-${id}-${worktree}`;
+    const fixture = await inputFixture(key, {
       client: { id, mode, platform: "test", version: "1.0.0" },
       browserOrigin: mode === "webchat" ? "http://localhost" : undefined,
     });
-    const key = `agent:main:dashboard:durable-${id}-${worktree}`;
+    const { storePath, ws, target } = fixture;
     const message = "Reply with exactly: retained first message.";
     dispatch.start.mockClear();
     agentCommandMock.mockImplementation(async (raw) => {
       const options = raw as AgentCommandGatewayIngressOpts;
       expect(options.pinnedWidgetAuthoring).toBe(mode === "webchat" ? true : undefined);
-      const entry = expectDefined(
-        loadSessionEntry({ agentId: "main", sessionKey: key, storePath }),
-        "session at execution",
-      );
+      const entry = fixture.read();
       expect(entry.pendingWorktree).toBeUndefined();
       if (worktree) {
         expect(entry.worktree?.id).toBeDefined();
@@ -631,38 +603,24 @@ test.for([
       }
       await options.userTurnTranscriptRecorder?.persistApproved();
     });
-    let captured: StartChatDispatchParams | undefined;
     try {
-      const created = await rpcReq<{
-        key: string;
-        sessionId: string;
-        runId: string;
-        runStarted: boolean;
-      }>(ws, "sessions.create", {
-        agentId: "main",
-        key,
-        cwd: workspace,
-        worktree,
-        worktreeName: worktree ? `durability-${id}` : undefined,
-        message,
-      });
-      expect(created.ok, JSON.stringify(created)).toBe(true);
-      expect(created.payload?.runStarted).toBe(true);
-      captured = expectDefined(dispatch.start.mock.calls[0]?.[0], "accepted dispatch");
-      const target = { agentId: "main", sessionKey: key, storePath };
-      const before = expectDefined(loadSessionEntry(target), "created session");
+      const created = await fixture.create(
+        {
+          cwd: workspace,
+          worktree,
+          worktreeName: worktree ? `durability-${id}` : undefined,
+          message,
+        },
+        true,
+      );
+      const captured = expectDefined(dispatch.start.mock.calls[0]?.[0], "accepted dispatch");
+      const before = fixture.read();
       expect(before.pendingWorktree !== undefined).toBe(worktree);
       const followup = "Also retain this queued follow-up.";
       if (worktree) {
-        const sent = await rpcReq(ws, "chat.send", {
-          sessionKey: key,
-          message: followup,
-          idempotencyKey: `followup-${id}`,
-        });
+        const sent = await fixture.send(followup, `followup-${id}`);
         expect(sent.ok, JSON.stringify(sent)).toBe(true);
-        const pending = await rpcReq<{ pendingInputs: { items: unknown[] } }>(ws, "chat.history", {
-          sessionKey: key,
-        });
+        const pending = await fixture.history();
         expect(JSON.stringify(pending.payload?.pendingInputs.items)).toContain(followup);
       }
       // Drop process-only dispatches; do not run their terminal/error persistence.
@@ -673,28 +631,15 @@ test.for([
         cfg,
         gatewayRuntime: expectDefined(captured.context.recoveryRuntime, "Gateway recovery owner"),
       });
-      expect(
-        recovery,
-        JSON.stringify({
-          entry: loadSessionEntry(target),
-          outcomes: [...captured.context.dedupe.values()],
-        }),
-      ).toMatchObject({
-        settled: 1,
-        failed: 0,
-      });
+      expect(recovery).toMatchObject({ settled: 1, failed: 0 });
       expect(agentCommandMock).toHaveBeenCalledOnce();
-      const after = expectDefined(loadSessionEntry(target), "recovered session");
+      const after = fixture.read();
       expect(after.pendingWorktree).toBeUndefined();
-      expect(after.sessionId).toBe(created.payload?.sessionId);
-      const transcript = await loadTranscriptEvents({ ...target, sessionId: after.sessionId });
-      expect(transcript.filter((event) => JSON.stringify(event).includes(message))).toHaveLength(1);
-      const history = await rpcReq<{
-        messages: unknown[];
-        pendingInputs: { items: Array<{ state: string; message: unknown }> };
-      }>(ws, "chat.history", {
-        sessionKey: key,
-      });
+      expect(after.sessionId).toBe(created.sessionId);
+      expect(
+        await matchingTranscript({ ...target, sessionId: after.sessionId }, message),
+      ).toHaveLength(1);
+      const history = await fixture.history();
       expect(history.ok, JSON.stringify(history)).toBe(true);
       expect(JSON.stringify(history.payload?.messages)).toContain(message);
       if (worktree) {

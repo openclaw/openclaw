@@ -38,6 +38,10 @@ import {
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 type Client = Awaited<ReturnType<typeof connectGatewayClient>>;
+const operatorScopes = ["operator.read", "operator.write"];
+const adminScopes = ["operator.admin"];
+const profileId = async (client: Client) =>
+  (await client.request<UsersSelfResult>("users.self", {})).profile.id;
 
 function send(
   client: Client,
@@ -63,6 +67,47 @@ function waitForRun(client: Client, runId: string) {
   );
 }
 
+async function expectRun(client: Client, runId: string) {
+  const terminal = await waitForRun(client, runId);
+  expect(
+    terminal,
+    redactSensitiveText(JSON.stringify(terminal), { mode: "tools" }).slice(0, 4_000),
+  ).toMatchObject({ status: "ok" });
+}
+
+async function expectHeld(entered: Promise<unknown>, completed: Promise<unknown>) {
+  await Promise.race([
+    entered,
+    completed.then((result) => {
+      throw new Error(`Operation settled before its hold: ${JSON.stringify(result)}`);
+    }),
+  ]);
+}
+
+function expectText(value: unknown, present: string[], absent: string[] = []) {
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  for (const item of present) {
+    expect(text).toContain(item);
+  }
+  for (const item of absent) {
+    expect(text).not.toContain(item);
+  }
+}
+
+function seedSession(
+  scope: { agentId: string; sessionKey: string; sessionId: string },
+  ownerId: string,
+  visibility: "shared" | "read-only" = "read-only",
+  sessionId = scope.sessionId,
+) {
+  return replaceSessionEntry(scope, {
+    sessionId,
+    updatedAt: Date.now(),
+    visibility,
+    createdActor: { type: "human", source: "profile", id: ownerId },
+  });
+}
+
 // Attempt every cleanup even if an earlier owner fails to close.
 async function cleanupAll(...actions: Array<() => Promise<unknown>>) {
   const [first, ...rest] = actions;
@@ -76,8 +121,8 @@ async function cleanupAll(...actions: Array<() => Promise<unknown>>) {
 }
 
 function holdSessionAuthorization(sessionKey: string) {
-  const authorizationCaptured = createDeferredCore();
-  const resumeAuthorization = createDeferredCore();
+  const entered = createDeferredCore();
+  const resume = createDeferredCore();
   const resolveAuthorization = sessionSharingAuthorization.resolveSessionMutationAuthorizationAsync;
   let held = false;
   const resolveWithHold: typeof resolveAuthorization = async (params) => {
@@ -89,9 +134,9 @@ function holdSessionAuthorization(sessionKey: string) {
       reply.authorization
     ) {
       held = true;
-      authorizationCaptured.resolve();
+      entered.resolve();
       // Revoke captured authority before the handler can persist or dispatch input.
-      await resumeAuthorization.promise;
+      await resume.promise;
     }
     return reply;
   };
@@ -99,11 +144,30 @@ function holdSessionAuthorization(sessionKey: string) {
     .spyOn(sessionSharingAuthorization, "resolveSessionMutationAuthorizationAsync")
     .mockImplementation(resolveWithHold);
   return {
-    entered: authorizationCaptured.promise,
-    resume: () => resumeAuthorization.resolve(),
-    wasHeld: () => held,
+    entered: entered.promise,
+    resume: () => resume.resolve(),
     restore: () => authorization.mockRestore(),
   };
+}
+
+async function rejectAfterChange(
+  client: Client,
+  sessionKey: string,
+  change: () => Promise<void>,
+  error: { code: string; message?: string } = { code: "INVALID_REQUEST" },
+) {
+  const hold = holdSessionAuthorization(sessionKey);
+  const denied = send(client, "chat.send", sessionKey, "Authority changed during this turn.");
+  try {
+    await expectHeld(hold.entered, denied);
+    await change();
+    hold.resume();
+    await expect(denied).rejects.toMatchObject(error);
+  } finally {
+    hold.resume();
+    await Promise.allSettled([denied]);
+    hold.restore();
+  }
 }
 
 it(
@@ -173,8 +237,8 @@ it(
     });
     const agentExecutions: Array<{ release(): Promise<void> }> = [];
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
-    let administrator: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
-    let backingClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+    let administrator: Client | undefined;
+    let backingClient: Client | undefined;
     try {
       await new Promise<void>((resolve, reject) => {
         providerServer.once("error", reject);
@@ -188,9 +252,9 @@ it(
         `http://127.0.0.1:${address.port}/v1`,
         "membership-authority",
       );
-      const proxyUser = "membership-authority-member@example.test";
-      const proxyAdministrator = "membership-authority-administrator@example.test";
-      const proxyBacking = "membership-authority-backing@example.test";
+      const proxyUser = "member@example.test";
+      const proxyAdministrator = "administrator@example.test";
+      const proxyBacking = "backing@example.test";
       setUserProfileRole(ensureProfileForEmail(proxyAdministrator).id, "administrator");
       const certPath = await state.writeText("tls/cert.pem", TEST_TLS_CERT_PEM);
       const keyPath = await state.writeText("tls/key.pem", TEST_TLS_KEY_PEM);
@@ -199,10 +263,7 @@ it(
         requiredHeaders: ["x-forwarded-proto"],
         allowUsers: [proxyUser, proxyAdministrator, proxyBacking],
         allowLoopback: true,
-        deviceAutoApprove: {
-          enabled: true,
-          scopes: ["operator.read", "operator.write"],
-        },
+        deviceAutoApprove: { enabled: true, scopes: operatorScopes },
       };
       const cfg = {
         agents: {
@@ -237,7 +298,7 @@ it(
           auth: {
             mode: "trusted-proxy",
             trustedProxy,
-            identityScopes: { [proxyAdministrator]: ["operator.admin"] },
+            identityScopes: { [proxyAdministrator]: adminScopes },
           },
           trustedProxies: ["127.0.0.1"],
           controlUi: { allowedOrigins: ["https://control.example.com"] },
@@ -245,16 +306,8 @@ it(
           roles: {
             default: "view",
             definitions: {
-              administrator: {
-                sessions: { others: "write" },
-                agents: "*",
-                scopes: ["operator.admin"],
-              },
-              view: {
-                sessions: { others: "view" },
-                agents: "*",
-                scopes: ["operator.read", "operator.write"],
-              },
+              administrator: { sessions: { others: "write" }, agents: "*", scopes: adminScopes },
+              view: { sessions: { others: "view" }, agents: "*", scopes: operatorScopes },
             },
           },
         },
@@ -264,126 +317,92 @@ it(
         mode: GATEWAY_CLIENT_MODES.WEBCHAT,
         origin: "https://control.example.com",
         tlsFingerprint: new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256,
-        scopes: ["operator.read", "operator.write"],
+        scopes: operatorScopes,
       };
       const edgeHeaders = (user: string, forwardedFor: string) => ({
         "x-forwarded-for": forwardedFor,
         "x-forwarded-proto": "https",
         "x-forwarded-user": user,
       });
-      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
       gateway = await startGatewayWithClient({
         ...connection,
         cfg,
         configPath: state.configPath,
-        portClaim,
+        portClaim: await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] }),
         auth: cfg.gateway.auth,
         edgeAuthHeaders: edgeHeaders(proxyUser, "203.0.113.50"),
         secure: true,
       });
       await gateway.server.startupSettled;
+      const client = gateway.client;
+      const gatewayUrl = `wss://127.0.0.1:${gateway.port}`;
+      const connectAs = (user: string, name: string, ip: string) =>
+        connectGatewayClient({
+          ...connection,
+          url: gatewayUrl,
+          edgeAuthHeaders: edgeHeaders(user, ip),
+          deviceIdentity: loadOrCreateDeviceIdentity({
+            path: state.statePath("test-device-identities", `${name}.sqlite`),
+          }),
+        });
+      const historyFor = (agentId: string) =>
+        client.request<{ sessionKey: string; sessionId: string; messages: unknown[] }>(
+          "chat.history",
+          { sessionKey: "global", agentId, limit: 20 },
+        );
       // Keep both fixture agents resident while alternating owners; the runtime retains one idle executor.
       for (const agentId of ["main", "work"]) {
         agentExecutions.push(captureOpenClawAgentDatabaseExecution({ agentId, env: state.env }));
       }
-      administrator = await connectGatewayClient({
-        ...connection,
-        url: `wss://127.0.0.1:${gateway.port}`,
-        edgeAuthHeaders: edgeHeaders(proxyAdministrator, "203.0.113.51"),
-        deviceIdentity: loadOrCreateDeviceIdentity({
-          path: state.statePath("test-device-identities", "administrator.sqlite"),
-        }),
-      });
-      const self = await gateway.client.request<UsersSelfResult>("users.self", {});
-      const memberProfileId = self.profile.id;
+      administrator = await connectAs(proxyAdministrator, "administrator", "203.0.113.51");
+      const memberProfileId = await profileId(client);
       const sessionKey = `agent:main:member-authority-${randomUUID()}`;
       const sessionId = `member-authority-${randomUUID()}`;
       const scope = { agentId: "main", sessionKey, sessionId };
       const owner = ensureProfileForEmail("membership-authority-owner@example.test");
-      await replaceSessionEntry(scope, {
-        sessionId,
-        updatedAt: Date.now(),
-        visibility: "read-only",
-        createdActor: { type: "human", source: "profile", id: owner.id },
-      });
+      await seedSession(scope, owner.id);
       await addSessionMember(scope, { identityId: memberProfileId, addedBy: owner.id });
 
       const allowedMessage = "Persist and dispatch this authorized member turn.";
-      const accepted = await send(gateway.client, "chat.send", sessionKey, allowedMessage);
+      const accepted = await send(client, "chat.send", sessionKey, allowedMessage);
       expect(accepted.status).toBe("started");
-      const acceptedTerminal = await waitForRun(gateway.client, accepted.runId);
-      const acceptedDiagnostic = redactSensitiveText(JSON.stringify(acceptedTerminal), {
-        mode: "tools",
-      }).slice(0, 4_000);
-      expect(acceptedTerminal, acceptedDiagnostic).toMatchObject({ status: "ok" });
-      const allowedTranscript = await loadTranscriptEvents(scope);
-      expect(JSON.stringify(allowedTranscript)).toContain(allowedMessage);
-      expect(JSON.stringify(allowedTranscript)).toContain("Authorized member reply.");
+      await expectRun(client, accepted.runId);
+      expectText(await loadTranscriptEvents(scope), [allowedMessage, "Authorized member reply."]);
       expect(requests).toHaveLength(1);
       expect(requests[0]).toContain(allowedMessage);
       expect(providerErrors).toEqual([]);
 
       const transcriptBeforeDeniedTurn = structuredClone(await loadTranscriptEvents(scope));
+      const expectUnchanged = async () => {
+        expect(await loadTranscriptEvents(scope)).toEqual(transcriptBeforeDeniedTurn);
+        expect(requests).toHaveLength(1);
+        expect(providerErrors).toEqual([]);
+      };
       for (const change of ["membership revoked", "session replaced"] as const) {
         await addSessionMember(scope, { identityId: memberProfileId, addedBy: owner.id });
-        const heldRead = holdSessionAuthorization(sessionKey);
-        const denied = send(
-          gateway.client,
-          "chat.send",
-          sessionKey,
-          "This in-flight revoked member turn must have no effects.",
-        );
-        try {
-          await Promise.race([
-            heldRead.entered,
-            denied.then(() => {
-              throw new Error("chat.send completed before its authorization was held");
-            }),
-          ]);
-          expect(requests).toHaveLength(1);
-          expect(await loadTranscriptEvents(scope)).toEqual(transcriptBeforeDeniedTurn);
+        const revoke = async () => {
+          await expectUnchanged();
           if (change === "membership revoked") {
             await removeSessionMember(scope, memberProfileId);
           } else {
-            await replaceSessionEntry(scope, {
-              sessionId: `${sessionId}-successor`,
-              updatedAt: Date.now(),
-              visibility: "read-only",
-              createdActor: { type: "human", source: "profile", id: owner.id },
-            });
+            await seedSession(scope, owner.id, "read-only", `${sessionId}-successor`);
           }
-          heldRead.resume();
-          await expect(denied).rejects.toMatchObject({ code: "INVALID_REQUEST" });
-        } finally {
-          heldRead.resume();
-          await Promise.allSettled([denied]);
-          heldRead.restore();
-        }
-        expect(heldRead.wasHeld()).toBe(true);
-        expect(await loadTranscriptEvents(scope)).toEqual(transcriptBeforeDeniedTurn);
+        };
+        await rejectAfterChange(client, sessionKey, revoke);
+        await expectUnchanged();
         if (change === "session replaced") {
           expect(
             await loadTranscriptEvents({ ...scope, sessionId: `${sessionId}-successor` }),
           ).toEqual([]);
         }
-        expect(requests).toHaveLength(1);
-        expect(providerErrors).toEqual([]);
       }
       await removeSessionMember(scope, memberProfileId);
       await expect(
-        send(
-          gateway.client,
-          "chat.send",
-          sessionKey,
-          "This later revoked member turn must also have no effects.",
-        ),
+        send(client, "chat.send", sessionKey, "Later revoked member turn."),
       ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
-      expect(await loadTranscriptEvents(scope)).toEqual(transcriptBeforeDeniedTurn);
-      expect(requests).toHaveLength(1);
-      expect(providerErrors).toEqual([]);
+      await expectUnchanged();
 
       // Reset through a separate administrator; member turns must retain their narrow scopes.
-      // The public lifecycle owner clears prior turns and retains only the reset marker.
       let resetGlobalSessions = false;
       for (const [first, second] of [
         ["main", "work"],
@@ -396,7 +415,7 @@ it(
                 administrator.request("sessions.reset", { key: "global", agentId }),
               ).resolves.toMatchObject({ ok: true });
               await expect(
-                gateway.client.request("chat.history", { sessionKey: "global", agentId }),
+                client.request("chat.history", { sessionKey: "global", agentId }),
               ).resolves.toMatchObject({
                 sessionKey: "global",
                 messages: [
@@ -419,7 +438,7 @@ it(
           for (const method of ["chat.send", "agent"] as const) {
             for (const agentId of [first, second]) {
               const otherAgentId = agentId === "main" ? "work" : "main";
-              const message = `${markers[agentId]}_${method}: preserve this owner's global chat.`;
+              const message = `${markers[agentId]}_${method}_INPUT`;
               providerReply = `${markers[agentId]}_${method}_REPLY`;
               const attachmentText = `${markers[agentId]} attachment`;
               const attachments =
@@ -433,37 +452,19 @@ it(
                     ]
                   : undefined;
               const requestOffset = requests.length;
-              const started = await send(gateway.client, method, "global", message, {
+              const started = await send(client, method, "global", message, {
                 agentId,
                 attachments,
               });
               expect(started.status).toBe(method === "chat.send" ? "started" : "accepted");
-              const terminal = await waitForRun(gateway.client, started.runId);
-              const terminalDiagnostic =
-                terminal.status === "ok"
-                  ? undefined
-                  : redactSensitiveText(
-                      JSON.stringify({
-                        firstAgent: first,
-                        agentId,
-                        method,
-                        withAttachment,
-                        providerRequests: requests.length - requestOffset,
-                        terminal,
-                      }),
-                      { mode: "tools" },
-                    ).slice(0, 4_000);
-              expect(terminal, terminalDiagnostic).toMatchObject({ status: "ok" });
+              await expectRun(client, started.runId);
               const providerInput = requests.slice(requestOffset).join("\n");
-              expect(providerInput).toContain(message);
-              expect(providerInput).not.toContain(markers[otherAgentId]);
-              const history = await gateway.client.request<{
-                sessionKey: string;
-                sessionId: string;
-                messages: unknown[];
-              }>("chat.history", { sessionKey: "global", agentId, limit: 20 });
-              expect(history.sessionKey).toBe("global");
-              expect(history.sessionId).toEqual(expect.any(String));
+              expectText(providerInput, [message], [markers[otherAgentId]]);
+              const history = await historyFor(agentId);
+              expect(history).toMatchObject({
+                sessionKey: "global",
+                sessionId: expect.any(String),
+              });
               if (method === "agent") {
                 expect(history.sessionId).toBe(sessionIds.get(agentId));
                 expect(providerInput).toContain(`${markers[agentId]}_chat.send_REPLY`);
@@ -507,25 +508,17 @@ it(
                 sessionId: history.sessionId,
               });
               for (const persisted of [history.messages, transcript]) {
-                const text = JSON.stringify(persisted);
-                expect(text).toContain(message);
-                expect(text).toContain(providerReply);
-                expect(text).not.toContain(markers[otherAgentId]);
-                if (attachmentRef) {
-                  expect(text).toContain(attachmentRef);
-                }
-                if (otherAttachmentRef) {
-                  expect(text).not.toContain(otherAttachmentRef);
-                }
+                expectText(
+                  persisted,
+                  [message, providerReply, ...(attachmentRef ? [attachmentRef] : [])],
+                  [markers[otherAgentId], ...(otherAttachmentRef ? [otherAttachmentRef] : [])],
+                );
               }
-              const otherHistory = await gateway.client.request<{ messages: unknown[] }>(
-                "chat.history",
-                { sessionKey: "global", agentId: otherAgentId, limit: 20 },
+              expectText(
+                (await historyFor(otherAgentId)).messages,
+                [],
+                [markers[agentId], ...(attachmentRef ? [attachmentRef] : [])],
               );
-              expect(JSON.stringify(otherHistory.messages)).not.toContain(markers[agentId]);
-              if (attachmentRef) {
-                expect(JSON.stringify(otherHistory.messages)).not.toContain(attachmentRef);
-              }
               expect(providerErrors).toEqual([]);
             }
           }
@@ -537,66 +530,31 @@ it(
         sessionKey: `agent:main:profile-authority-${randomUUID()}`,
         sessionId: `profile-authority-${randomUUID()}`,
       };
-      await replaceSessionEntry(profileScope, {
-        sessionId: profileScope.sessionId,
-        updatedAt: Date.now(),
-        visibility: "shared",
-        createdActor: { type: "human", source: "profile", id: memberProfileId },
-      });
+      await seedSession(profileScope, memberProfileId, "shared");
       const replacement = ensureProfileForEmail("profile-replacement@example.test");
       const aliasEmail = "profile-custody-alias@example.test";
       const aliasSource = ensureProfileForEmail(aliasEmail);
       const beforeProfileReplacement = await loadTranscriptEvents(profileScope);
       const beforeProfileRequests = requests.length;
-      const profileRead = holdSessionAuthorization(profileScope.sessionKey);
-      const replaced = send(
-        gateway.client,
-        "chat.send",
-        profileScope.sessionKey,
-        "This replaced caller must not reach the transcript or provider.",
-      );
-      try {
-        await Promise.race([
-          profileRead.entered,
-          replaced.then(() => {
-            throw new Error("Profile-bound chat completed before its authorization was held");
-          }),
-        ]);
+      const replaceCaller = async () => {
         linkEmail(proxyUser, replacement.id);
-        await expect(
-          gateway.client.request<UsersSelfResult>("users.self", {}),
-        ).resolves.toMatchObject({
-          profile: { id: replacement.id },
-        });
-        profileRead.resume();
-        await expect(replaced).rejects.toMatchObject({
-          code: "FORBIDDEN",
-          message: "Gateway requester authority changed",
-        });
-      } finally {
-        profileRead.resume();
-        await Promise.allSettled([replaced]);
-        profileRead.restore();
-      }
-      expect(profileRead.wasHeld()).toBe(true);
+        expect(await profileId(client)).toBe(replacement.id);
+      };
+      await rejectAfterChange(client, profileScope.sessionKey, replaceCaller, {
+        code: "FORBIDDEN",
+        message: "Gateway requester authority changed",
+      });
       expect(requests).toHaveLength(beforeProfileRequests);
       expect(await loadTranscriptEvents(profileScope)).toEqual(beforeProfileReplacement);
       expect(await listSessionPendingInputs(profileScope)).toEqual({ items: [], total: 0 });
 
       // Keep both execution sources alive. Retiring either captured canonical
       // identity revokes authority; merging another profile into the sender does not.
-      backingClient = await connectGatewayClient({
-        ...connection,
-        url: `wss://127.0.0.1:${gateway.port}`,
-        edgeAuthHeaders: edgeHeaders(proxyBacking, "203.0.113.52"),
-        deviceIdentity: loadOrCreateDeviceIdentity({
-          path: state.statePath("test-device-identities", "backing.sqlite"),
-        }),
-      });
-      const backingSelf = await backingClient.request<UsersSelfResult>("users.self", {});
-      expect(backingSelf.profile.id).not.toBe(replacement.id);
+      backingClient = await connectAs(proxyBacking, "backing", "203.0.113.52");
+      const backingProfileId = await profileId(backingClient);
+      expect(backingProfileId).not.toBe(replacement.id);
       await addSessionMember(profileScope, {
-        identityId: backingSelf.profile.id,
+        identityId: backingProfileId,
         addedBy: replacement.id,
       });
       const backingMessage = `PROFILE_BACKING_${randomUUID()}`;
@@ -613,21 +571,10 @@ it(
       );
       expect(backing.status).toBe("started");
       const backingTerminal = waitForRun(administrator, backing.runId);
-      await Promise.race([
-        backingHold.entered.promise,
-        backingTerminal.then((result) => {
-          throw new Error(
-            `Backing run settled before its provider hold: ${JSON.stringify(result)}`,
-          );
-        }),
-      ]);
-      const steering = await send(
-        gateway.client,
-        "chat.send",
-        profileScope.sessionKey,
-        steeringMessage,
-        { queueMode: "steer" },
-      );
+      await expectHeld(backingHold.entered.promise, backingTerminal);
+      const steering = await send(client, "chat.send", profileScope.sessionKey, steeringMessage, {
+        queueMode: "steer",
+      });
       expect(steering.status).toBe("started");
       expect(requests).toHaveLength(requestOffset + 1);
       expect(await listSessionPendingInputs(profileScope)).toMatchObject({
@@ -638,24 +585,17 @@ it(
         steeringMessage,
       );
       linkEmail(aliasEmail, replacement.id);
-      const mergedProfile = readResidentUserProfileIdentity(aliasSource.id);
-      expect(mergedProfile).toMatchObject({
+      expect(readResidentUserProfileIdentity(aliasSource.id)).toMatchObject({
         profileId: replacement.id,
+        aliases: expect.arrayContaining([aliasSource.id]),
       });
-      expect(mergedProfile?.aliases).toContain(aliasSource.id);
-      await expect(
-        gateway.client.request<UsersSelfResult>("users.self", {}),
-      ).resolves.toMatchObject({
-        profile: { id: replacement.id },
-      });
+      expect(await profileId(client)).toBe(replacement.id);
       const steeringTerminal = waitForRun(administrator, steering.runId);
       backingHold.resume.resolve();
-      await Promise.race([
+      await expectHeld(
         steeringHold.entered.promise,
-        Promise.all([backingTerminal, steeringTerminal]).then((results) => {
-          throw new Error(`Accepted steering lost its backing run: ${JSON.stringify(results)}`);
-        }),
-      ]);
+        Promise.all([backingTerminal, steeringTerminal]),
+      );
       await expect(
         administrator.request("agent.wait", { runId: backing.runId, timeoutMs: 100 }),
       ).resolves.toMatchObject({ status: "timeout" });
@@ -668,19 +608,14 @@ it(
         const message = asOptionalRecord(asOptionalRecord(event)?.message);
         return message ? [message] : [];
       });
-      for (const input of [backingMessage, steeringMessage]) {
-        expect(
-          settledMessages.filter(
-            (message) => message.role === "user" && JSON.stringify(message.content).includes(input),
-          ),
-        ).toHaveLength(1);
-      }
-      expect(
+      const countMessage = (role: string, text: string) =>
         settledMessages.filter(
-          (message) =>
-            message.role === "assistant" && JSON.stringify(message.content).includes(providerReply),
-        ),
-      ).toHaveLength(2);
+          (message) => message.role === role && JSON.stringify(message.content).includes(text),
+        ).length;
+      for (const input of [backingMessage, steeringMessage]) {
+        expect(countMessage("user", input)).toBe(1);
+      }
+      expect(countMessage("assistant", providerReply)).toBe(2);
       expect(await listSessionPendingInputs(profileScope)).toEqual({ items: [], total: 0 });
       expect(providerErrors).toEqual([]);
     } finally {
