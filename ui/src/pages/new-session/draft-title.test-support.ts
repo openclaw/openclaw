@@ -1,8 +1,8 @@
+import { createRoot, createSignal, flush } from "solid-js";
 import { onTestFinished } from "vitest";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
-import { NewSessionTitleController } from "./draft-title.ts";
+import { createNewSessionTitle } from "./draft-title.ts";
 import type { NewSessionRouteData } from "./location.ts";
-import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
 const DEFAULT_PREPARED_TITLE = "Repair naming";
 
@@ -35,17 +35,31 @@ export function createDraftTitleFixture(
     modelCatalog: (params) => requestOther("models.list", params),
     takePreparedTitle: () => titles.takePreparedTitle(),
   });
-  const titles = new NewSessionTitleController(new TestReactiveControllerHost(), () => ({
-    context: fixture.context,
-    data,
-    place: fixture.place,
-    submission: fixture.flow,
-    dictating: false,
-  }));
-  titles.hostConnected();
+  let titles!: ReturnType<typeof createNewSessionTitle>;
+  let refresh!: () => void;
+  const disposeTitles = createRoot((dispose) => {
+    const [revision, setRevision] = createSignal(0);
+    refresh = () => setRevision((value) => value + 1);
+    titles = createNewSessionTitle(() => {
+      revision();
+      return {
+        context: fixture.context,
+        data,
+        place: fixture.place,
+        submission: fixture.flow,
+        dictating: false,
+      };
+    });
+    return dispose;
+  });
+  const synchronizeTitles = () => {
+    refresh();
+    flush();
+  };
+  flush();
   onTestFinished(() => {
-    titles.hostDisconnected();
+    disposeTitles();
     fixture.flow.disconnect();
   });
-  return { ...fixture, titles };
+  return { ...fixture, titles, synchronizeTitles, disposeTitles };
 }

@@ -320,7 +320,7 @@ describe("warm boot app root", () => {
     expect(loginGate(second.container).props.showGatewaySecret).toBe(false);
   });
 
-  it("provides the same ApplicationContext to Lit descendants and retires it on disposal", async () => {
+  it("provides the same ApplicationContext to native descendants and retires it on disposal", async () => {
     const { container } = await createWarmSurface();
     await vi.dynamicImportSettled();
     await settleRootContent();

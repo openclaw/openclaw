@@ -16,7 +16,7 @@ import {
   type AttachmentCardHeaderOptions,
 } from "./chat-attachment-card.ts";
 import { safeMediaAttachmentHref } from "./chat-attachment-href.ts";
-import { ChatAttachmentViewportRef } from "./chat-attachment-viewport.ts";
+import { createChatAttachmentViewportRef } from "./chat-attachment-viewport.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import { ChatMediaSourceController } from "./chat-media-source.ts";
 
@@ -75,10 +75,6 @@ function ChatVideoPlayerContent(
       }
     });
   };
-  const viewport = new ChatAttachmentViewportRef(() => {
-    mediaVisible = true;
-    syncSource();
-  });
   const sourceSnapshot = createMemo(
     () => [props.src, props.sourceIdentity, props.playback, props.authToken] as const,
     { equals: (before, after) => before.every((value, index) => value === after[index]) },
@@ -142,8 +138,11 @@ function ChatVideoPlayerContent(
         : {},
   );
   const Player = () => {
+    const viewport = createChatAttachmentViewportRef(() => {
+      mediaVisible = true;
+      syncSource();
+    });
     onCleanup(() => {
-      viewport.disconnect();
       mediaVisible = false;
       const previousMedia = media;
       media = undefined;
@@ -159,7 +158,7 @@ function ChatVideoPlayerContent(
           { "chat-assistant-attachment-card--loading": loading() },
         ]}
         aria-busy={loading() ? "true" : undefined}
-        ref={viewport.setElement}
+        ref={viewport}
         data-openable={onExpand() ? "" : undefined}
         onClick={(event) => openAttachmentCardFromClick(event, onExpand())}
       >

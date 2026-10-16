@@ -680,10 +680,6 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/agent-guidance:
-    dependencies:
-      '@openclaw/fs-safe':
-        specifier: 0.26.5
-        version: 0.26.5
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

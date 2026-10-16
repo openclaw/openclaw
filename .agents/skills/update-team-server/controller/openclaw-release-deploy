@@ -2965,7 +2965,7 @@ publish_release() (
 	cp -a --reflink=auto "$build_directory/." "$staging"
 	chown -hR "$root_uid:$root_uid" "$staging"
 	proof manifest "$staging" "$target_sha" "$root_uid" "$frozen_main" >/dev/null
-	bounded 120 "$node_bin" --no-warnings "$release_lib" seal-tree "$staging"
+	"$node_bin" --no-warnings "$release_lib" seal-tree "$staging" 8>&- 9>&-
 	proof validate-release "$staging" "$target_sha" "$root_uid" sealed >/dev/null
 	[[ "$(proof stat-identity "$staging" | cut -d' ' -f1)" == "$(proof stat-identity "$releases_root" | cut -d' ' -f1)" ]] ||
 		fail 'candidate publication crosses filesystem devices'
