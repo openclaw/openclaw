@@ -35,34 +35,25 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
-function makeBundledChannelCatalogEntry(
-  pluginId: string,
-  channelId: string,
-): PluginChannelCatalogEntry {
-  return {
-    pluginId,
-    origin: "bundled",
-    rootDir: "/tmp/openclaw-channel-plugin",
-    channel: {
-      id: channelId,
-      configuredState: { env: { allOf: ["ALIAS_CHAT_TOKEN"] } },
-    },
-  };
-}
-
 function tempRoot(prefix: string) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   tempDirs.push(root);
   return root;
 }
 
+function writeProbe(root: string, source: string, filename = "auth-presence.js") {
+  fs.mkdirSync(root, { recursive: true });
+  fs.writeFileSync(path.join(root, filename), source, "utf8");
+}
+
 function registerModule(
   rootDir: string,
   channel: PluginChannelCatalogEntry["channel"] & { id: string },
+  pluginId = channel.id,
 ) {
   listChannelCatalogEntriesMock.mockReturnValue([
     {
-      pluginId: channel.id,
+      pluginId,
       origin: "bundled",
       rootDir,
       channel,
@@ -163,9 +154,14 @@ describe("channel package-state probes", () => {
   });
 
   it("uses channel ids when manifest plugin ids differ", () => {
-    listChannelCatalogEntriesMock.mockReturnValue([
-      makeBundledChannelCatalogEntry("vendor-alias-chat-plugin", "alias-chat"),
-    ]);
+    registerModule(
+      "/tmp/openclaw-channel-plugin",
+      {
+        id: "alias-chat",
+        configuredState: { env: { allOf: ["ALIAS_CHAT_TOKEN"] } },
+      },
+      "vendor-alias-chat-plugin",
+    );
 
     expect(listBundledChannelIdsForPackageState("configuredState")).toEqual(["alias-chat"]);
     const env = { ALIAS_CHAT_TOKEN: "token" };
@@ -177,12 +173,10 @@ describe("channel package-state probes", () => {
     { name: "PATH", env: { PATH: "/usr/bin" }, configured: false },
     { name: "mixed_case_token", env: { MIXED_CASE_TOKEN: "token" }, configured: true },
   ])("applies the safe channel env-trigger contract to $name", ({ name, env, configured }) => {
-    listChannelCatalogEntriesMock.mockReturnValue([
-      {
-        ...makeBundledChannelCatalogEntry("env-chat", "env-chat"),
-        channel: { id: "env-chat", configuredState: { env: { allOf: [name] } } },
-      } satisfies PluginChannelCatalogEntry,
-    ]);
+    registerModule("/tmp/openclaw-channel-plugin", {
+      id: "env-chat",
+      configuredState: { env: { allOf: [name] } },
+    });
 
     expect(probeState("env-chat", env, "configuredState")).toBe(configured);
   });
@@ -191,18 +185,8 @@ describe("channel package-state probes", () => {
     const root = tempRoot("openclaw-package-state-fallback-");
     const sourceRoot = path.join(root, "extensions", "whatsapp");
     const builtRoot = path.join(root, "dist", "extensions", "whatsapp");
-    fs.mkdirSync(sourceRoot, { recursive: true });
-    fs.mkdirSync(builtRoot, { recursive: true });
-    fs.writeFileSync(
-      path.join(sourceRoot, "auth-presence.js"),
-      "module.exports.hasAnyWhatsAppAuth = () => true;\n",
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(builtRoot, "auth-presence.js"),
-      "module.exports.stale = () => false;\n",
-      "utf8",
-    );
+    writeProbe(sourceRoot, "module.exports.hasAnyWhatsAppAuth = () => true;\n");
+    writeProbe(builtRoot, "module.exports.stale = () => false;\n");
 
     registerModule(sourceRoot, {
       id: "whatsapp",
@@ -215,18 +199,12 @@ describe("channel package-state probes", () => {
     const root = tempRoot("openclaw-package-state-overlay-");
     const sourceRoot = path.join(root, "extensions", "matrix");
     const builtRoot = path.join(root, "dist", "extensions", "matrix");
-    fs.mkdirSync(sourceRoot, { recursive: true });
-    fs.mkdirSync(builtRoot, { recursive: true });
-    fs.writeFileSync(
-      path.join(sourceRoot, "auth-presence.mtsx"),
+    writeProbe(
+      sourceRoot,
       "export const hasAnyMatrixAuth = (): boolean => true;\n",
-      "utf8",
+      "auth-presence.mtsx",
     );
-    fs.writeFileSync(
-      path.join(builtRoot, "auth-presence.js"),
-      "module.exports.hasAnyMatrixAuth = () => false;\n",
-      "utf8",
-    );
+    writeProbe(builtRoot, "module.exports.hasAnyMatrixAuth = () => false;\n");
     isBundledSourceOverlayPathMock.mockImplementation(
       ({ sourcePath }: { sourcePath: string }) => path.resolve(sourcePath) === sourceRoot,
     );

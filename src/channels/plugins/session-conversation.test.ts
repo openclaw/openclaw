@@ -21,6 +21,7 @@ const inherited = {
   id: "room:sender:user",
   __proto__: { parentConversationCandidates: ["topic", "room"] },
 };
+const telegramTopicKey = "agent:main:telegram:group:-100123:topic:77";
 
 function conversation(channel: string, kind: "group" | "channel", rawId: string, id = rawId) {
   return {
@@ -40,9 +41,7 @@ describe("session conversation routing", () => {
     setActivePluginRegistry(createSessionConversationTestRegistry());
   });
 
-  afterEach(() => {
-    clearRuntimeConfigSnapshot();
-  });
+  afterEach(clearRuntimeConfigSnapshot);
 
   it("keeps generic :thread: parsing in core", () => {
     expect(
@@ -55,16 +54,16 @@ describe("session conversation routing", () => {
   });
 
   it("lets Telegram own :topic: session grammar", () => {
-    expect(resolveSessionConversationRef("agent:main:telegram:group:-100123:topic:77")).toEqual({
+    expect(resolveSessionConversationRef(telegramTopicKey)).toEqual({
       ...conversation("telegram", "group", "-100123:topic:77", "-100123"),
       threadId: "77",
       parentConversationCandidates: ["-100123"],
     });
-    expect(resolveSessionThreadInfo("agent:main:telegram:group:-100123:topic:77")).toEqual({
+    expect(resolveSessionThreadInfo(telegramTopicKey)).toEqual({
       baseSessionKey: "agent:main:telegram:group:-100123",
       threadId: "77",
     });
-    expect(resolveSessionParentSessionKey("agent:main:telegram:group:-100123:topic:77")).toBe(
+    expect(resolveSessionParentSessionKey(telegramTopicKey)).toBe(
       "agent:main:telegram:group:-100123",
     );
   });
@@ -73,7 +72,7 @@ describe("session conversation routing", () => {
     resetPluginRuntimeStateForTest();
     setRuntimeConfigSnapshot({ plugins: { entries: { telegram: { enabled: false } } } });
 
-    expect(resolveSessionConversationRef("agent:main:telegram:group:-100123:topic:77")).toEqual(
+    expect(resolveSessionConversationRef(telegramTopicKey)).toEqual(
       conversation("telegram", "group", "-100123:topic:77"),
     );
   });
@@ -131,23 +130,18 @@ describe("session conversation routing", () => {
       const resolveParents = vi.fn(({ rawId }: { rawId: string }) =>
         rawId.endsWith(":sender:user") ? legacy : null,
       );
+      const plugin = {
+        ...createChannelTestPluginBase({
+          id: "legacy-parent",
+          capabilities: { chatTypes: ["group"] },
+        }),
+        messaging: {
+          ...(resolved ? { resolveSessionConversation: () => resolved } : {}),
+          resolveParentConversationCandidates: resolveParents,
+        },
+      };
       setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "legacy-parent",
-            source: "test",
-            plugin: {
-              ...createChannelTestPluginBase({
-                id: "legacy-parent",
-                capabilities: { chatTypes: ["group"] },
-              }),
-              messaging: {
-                ...(resolved ? { resolveSessionConversation: () => resolved } : {}),
-                resolveParentConversationCandidates: resolveParents,
-              },
-            },
-          },
-        ]),
+        createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]),
       );
 
       const key = "agent:main:legacy-parent:group:room:sender:user";

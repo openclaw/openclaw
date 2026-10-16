@@ -25,20 +25,15 @@ describe("resolveChannelDefaultAccountId", () => {
       const cfg: OpenClawConfig = {};
       const before = structuredClone({ cfg, supplied, listed });
       const plugin = createChannelTestPluginBase({ id: "accountchat" });
-      const listAccountIds = vi.fn(function (this: typeof plugin.config, received: OpenClawConfig) {
-        expect(this).toBe(plugin.config);
-        expect(received).toBe(cfg);
-        return listed;
-      });
+      const checkedReader = <T>(value: T) =>
+        vi.fn(function (this: typeof plugin.config, received: OpenClawConfig) {
+          expect(this).toBe(plugin.config);
+          expect(received).toBe(cfg);
+          return value;
+        });
+      const listAccountIds = checkedReader(listed);
       plugin.config.listAccountIds = listAccountIds;
-      const defaultAccountId =
-        defaultId === undefined
-          ? undefined
-          : vi.fn(function (this: typeof plugin.config, received: OpenClawConfig) {
-              expect(this).toBe(plugin.config);
-              expect(received).toBe(cfg);
-              return defaultId;
-            });
+      const defaultAccountId = defaultId === undefined ? undefined : checkedReader(defaultId);
       plugin.config.defaultAccountId = defaultAccountId;
 
       expect(resolveChannelDefaultAccountId({ plugin, cfg, accountIds: supplied })).toBe(expected);
@@ -51,12 +46,20 @@ describe("resolveChannelDefaultAccountId", () => {
   );
 });
 
-function cfgWithChannel(channelKey: string, accounts?: Record<string, unknown>): OpenClawConfig {
+type PolicyInput = Parameters<typeof buildAccountScopedDmSecurityPolicy>[0];
+
+function policyInput(
+  channelKey: string,
+  overrides: Omit<PolicyInput, "cfg" | "channelKey">,
+  section: Record<string, unknown> = {},
+): PolicyInput {
   return {
-    channels: {
-      [channelKey]: accounts ? { accounts } : {},
-    },
-  } as unknown as OpenClawConfig;
+    channelKey,
+    cfg: { channels: { [channelKey]: section } } as OpenClawConfig,
+    fallbackAccountId: "default",
+    policyPathSuffix: "dmPolicy",
+    ...overrides,
+  };
 }
 
 function expectedPolicy(policy: string, allowFrom: string[], base: string, channel: string) {
@@ -74,27 +77,23 @@ describe("buildAccountScopedDmSecurityPolicy", () => {
   it.each([
     {
       name: "builds top-level dm policy paths when no account config exists",
-      input: {
-        cfg: cfgWithChannel("demo-root"),
-        channelKey: "demo-root",
-        fallbackAccountId: "default",
+      input: policyInput("demo-root", {
         policy: "pairing",
         allowFrom: ["123"],
-        policyPathSuffix: "dmPolicy",
-      },
+      }),
       expected: expectedPolicy("pairing", ["123"], "channels.demo-root.", "demo-root"),
     },
     {
       name: "uses account-scoped paths when account config exists",
-      input: {
-        cfg: cfgWithChannel("demo-account", { work: {} }),
-        channelKey: "demo-account",
-        accountId: "work",
-        fallbackAccountId: "default",
-        policy: "allowlist",
-        allowFrom: ["+12125551212"],
-        policyPathSuffix: "dmPolicy",
-      },
+      input: policyInput(
+        "demo-account",
+        {
+          accountId: "work",
+          policy: "allowlist",
+          allowFrom: ["+12125551212"],
+        },
+        { accounts: { work: {} } },
+      ),
       expected: expectedPolicy(
         "allowlist",
         ["+12125551212"],
@@ -104,14 +103,17 @@ describe("buildAccountScopedDmSecurityPolicy", () => {
     },
     {
       name: "supports nested dm paths without explicit policyPath",
-      input: {
-        cfg: cfgWithChannel("demo-nested", { work: {} }),
-        channelKey: "demo-nested",
-        accountId: "work",
-        policy: "pairing",
-        allowFrom: [],
-        allowFromPathSuffix: "dm.",
-      },
+      input: policyInput(
+        "demo-nested",
+        {
+          accountId: "work",
+          policy: "pairing",
+          allowFrom: [],
+          allowFromPathSuffix: "dm.",
+          policyPathSuffix: undefined,
+        },
+        { accounts: { work: {} } },
+      ),
       expected: {
         ...expectedPolicy("pairing", [], "channels.demo-nested.accounts.work.", "demo-nested"),
         policyPath: undefined,
@@ -120,22 +122,24 @@ describe("buildAccountScopedDmSecurityPolicy", () => {
     },
     {
       name: "uses accounts.default paths when shared defaults are inherited",
-      input: {
-        cfg: cfgWithChannel("demo-default-account", {
-          default: {
-            dmPolicy: "allowlist",
-            allowFrom: ["+15550001111"],
+      input: policyInput(
+        "demo-default-account",
+        {
+          accountId: "work",
+          policy: "allowlist",
+          allowFrom: ["+15550001111"],
+          inheritSharedDefaultsFromDefaultAccount: true,
+        },
+        {
+          accounts: {
+            default: {
+              dmPolicy: "allowlist",
+              allowFrom: ["+15550001111"],
+            },
+            work: {},
           },
-          work: {},
-        }),
-        channelKey: "demo-default-account",
-        accountId: "work",
-        fallbackAccountId: "default",
-        policy: "allowlist",
-        allowFrom: ["+15550001111"],
-        policyPathSuffix: "dmPolicy",
-        inheritSharedDefaultsFromDefaultAccount: true,
-      },
+        },
+      ),
       expected: expectedPolicy(
         "allowlist",
         ["+15550001111"],
@@ -145,42 +149,34 @@ describe("buildAccountScopedDmSecurityPolicy", () => {
     },
     {
       name: "ignores accounts.default paths unless the channel opts into shared default-account inheritance",
-      input: {
-        cfg: {
-          channels: {
-            "demo-root": {
-              dmPolicy: "pairing",
-              allowFrom: ["*"],
-              accounts: {
-                default: {
-                  dmPolicy: "allowlist",
-                  allowFrom: ["+15550001111"],
-                },
-                work: {},
-              },
+      input: policyInput(
+        "demo-root",
+        {
+          accountId: "work",
+          policy: "pairing",
+          allowFrom: ["*"],
+        },
+        {
+          dmPolicy: "pairing",
+          allowFrom: ["*"],
+          accounts: {
+            default: {
+              dmPolicy: "allowlist",
+              allowFrom: ["+15550001111"],
             },
+            work: {},
           },
-        } as unknown as OpenClawConfig,
-        channelKey: "demo-root",
-        accountId: "work",
-        fallbackAccountId: "default",
-        policy: "pairing",
-        allowFrom: ["*"],
-        policyPathSuffix: "dmPolicy",
-      },
+        },
+      ),
       expected: expectedPolicy("pairing", ["*"], "channels.demo-root.", "demo-root"),
     },
     {
       name: "supports custom defaults and approve hints",
-      input: {
-        cfg: cfgWithChannel("demo-default"),
-        channelKey: "demo-default",
-        fallbackAccountId: "default",
+      input: policyInput("demo-default", {
         allowFrom: ["user-1"],
         defaultPolicy: "allowlist",
-        policyPathSuffix: "dmPolicy",
         approveHint: "openclaw pairing approve demo-default <code>",
-      },
+      }),
       expected: {
         ...expectedPolicy("allowlist", ["user-1"], "channels.demo-default.", "demo-default"),
         approveHint: "openclaw pairing approve demo-default <code>",
@@ -192,16 +188,10 @@ describe("buildAccountScopedDmSecurityPolicy", () => {
 });
 
 describe("parseOptionalDelimitedEntries", () => {
-  it("returns undefined for empty input", () => {
-    expect(parseOptionalDelimitedEntries("  ")).toBeUndefined();
-  });
-
-  it("splits comma, newline, and semicolon separated entries", () => {
-    expect(parseOptionalDelimitedEntries("alpha, beta\ngamma; delta")).toEqual([
-      "alpha",
-      "beta",
-      "gamma",
-      "delta",
-    ]);
+  it.each([
+    { input: "  ", expected: undefined },
+    { input: "alpha, beta\ngamma; delta", expected: ["alpha", "beta", "gamma", "delta"] },
+  ])("parses $input", ({ input, expected }) => {
+    expect(parseOptionalDelimitedEntries(input)).toEqual(expected);
   });
 });

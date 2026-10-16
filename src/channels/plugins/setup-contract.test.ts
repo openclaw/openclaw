@@ -8,22 +8,17 @@ import {
 import { moveSingleAccountChannelSectionToDefaultAccount } from "./setup-helpers.js";
 
 const adapter = { applyAccountConfig: ({ cfg }: { cfg: OpenClawConfig }) => cfg };
+const cli = (flags: string) => ({ flags, description: "Setup option" });
 const fields = {
-  token: { kind: "string", cli: { flags: "--token <token>", description: "Bot token" } },
+  token: { kind: "string", cli: cli("--token <token>") },
   transport: {
     kind: "choice",
     choices: ["external-native", "container"],
-    cli: { flags: "--transport <kind>", description: "Transport kind" },
+    cli: cli("--transport <kind>"),
   },
-  port: { kind: "integer", cli: { flags: "--port <port>", description: "HTTP port" } },
-  allowFrom: {
-    kind: "string-list",
-    cli: { flags: "--allow-from <ids>", description: "Allowed sender ids" },
-  },
-  useEnv: {
-    kind: "boolean",
-    cli: { flags: "--use-env", description: "Use environment credentials" },
-  },
+  port: { kind: "integer", cli: cli("--port <port>") },
+  allowFrom: { kind: "string-list", cli: cli("--allow-from <ids>") },
+  useEnv: { kind: "boolean", cli: cli("--use-env") },
 } as const;
 
 function booleanContract(key: string, flags: string, negatedFlags: string) {
@@ -113,20 +108,7 @@ describe("defineChannelSetupContract", () => {
         return {};
       },
     );
-    const contract = defineChannelSetupContract({
-      fields,
-      adapter: { applyAccountConfig },
-    });
-
-    const parsed = contract.parseInput({
-      name: "work",
-      token: "secret",
-      transport: "container",
-      port: "8080",
-      allowFrom: "alice,bob",
-      useEnv: true,
-    });
-
+    const contract = defineChannelSetupContract({ fields, adapter: { applyAccountConfig } });
     const expected = {
       name: "work",
       token: "secret",
@@ -135,6 +117,7 @@ describe("defineChannelSetupContract", () => {
       allowFrom: ["alice", "bob"],
       useEnv: true,
     };
+    const parsed = contract.parseInput({ ...expected, port: "8080", allowFrom: "alice,bob" });
     expect(parsed).toEqual({ ok: true, value: expected });
     if (!parsed.ok) {
       throw new Error(parsed.error);

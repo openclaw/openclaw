@@ -4,10 +4,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   applySetupAccountConfigPatch,
   createEnvPatchedAccountSetupAdapter,
@@ -38,45 +35,14 @@ function accountRecord(
   return requireRecord(requireRecord(channel.accounts)[accountId]);
 }
 
-const matrixSingleAccountKeysToMove = [
-  "homeserver",
-  "userId",
-  "accessToken",
-  "allowBots",
-  "deviceId",
-  "deviceName",
-  "encryption",
-] as const;
-const matrixNamedAccountPromotionKeys = [
-  "accessToken",
-  "deviceId",
-  "deviceName",
-  "encryption",
-  "homeserver",
-  "userId",
-] as const;
-const telegramSingleAccountKeysToMove = ["streaming"] as const;
+const matrixSingleAccountKeysToMove = ["homeserver", "userId", "accessToken"] as const;
+const matrixNamedAccountPromotionKeys = ["accessToken", "homeserver", "userId"] as const;
 const matrixSetupSurface = {
   applyAccountConfig: ({ cfg }) => cfg,
   singleAccountKeysToMove: matrixSingleAccountKeysToMove,
   namedAccountPromotionKeys: matrixNamedAccountPromotionKeys,
   resolveSingleAccountPromotionTarget: resolveMatrixSingleAccountPromotionTarget,
 } as ChannelSetupAdapter;
-
-function registration(
-  id: string,
-  label: string,
-  setup: Pick<
-    ChannelSetupAdapter,
-    "singleAccountKeysToMove" | "namedAccountPromotionKeys" | "resolveSingleAccountPromotionTarget"
-  >,
-) {
-  return {
-    pluginId: id,
-    source: "test",
-    plugin: { ...createChannelTestPluginBase({ id, label }), setup },
-  };
-}
 
 function resolveMatrixSingleAccountPromotionTarget(params: {
   channel: { defaultAccount?: string; accounts?: Record<string, unknown> };
@@ -100,63 +66,46 @@ function resolveMatrixSingleAccountPromotionTarget(params: {
 
 beforeEach(() => {
   resetPluginRuntimeStateForTest();
-  setActivePluginRegistry(
-    createTestRegistry([
-      registration("matrix", "Matrix", {
-        singleAccountKeysToMove: matrixSingleAccountKeysToMove,
-        namedAccountPromotionKeys: matrixNamedAccountPromotionKeys,
-        resolveSingleAccountPromotionTarget: resolveMatrixSingleAccountPromotionTarget,
-      }),
-      registration("telegram", "Telegram", {
-        singleAccountKeysToMove: telegramSingleAccountKeysToMove,
-      }),
-    ]),
-  );
+  setActivePluginRegistry(createTestRegistry([]));
 });
 
-afterAll(() => {
-  resetPluginRuntimeStateForTest();
-});
+afterAll(resetPluginRuntimeStateForTest);
 
-describe("applySetupAccountConfigPatch", () => {
-  it("normalizes account id and preserves other accounts", () => {
-    const next = applySetupAccountConfigPatch({
-      cfg: config("demo-setup", { accounts: { personal: { botToken: "personal-token" } } }),
-      channelKey: "demo-setup",
-      accountId: "Work Team",
-      patch: { botToken: "work-token" },
-    });
+it("applySetupAccountConfigPatch normalizes account id and preserves other accounts", () => {
+  const next = applySetupAccountConfigPatch({
+    cfg: config("demo-setup", { accounts: { personal: { botToken: "personal-token" } } }),
+    channelKey: "demo-setup",
+    accountId: "Work Team",
+    patch: { botToken: "work-token" },
+  });
 
-    const channel = channelRecord(next, "demo-setup");
-    expect(accountRecord(channel, "personal").botToken).toBe("personal-token");
-    expect(accountRecord(channel, "work-team")).toMatchObject({
-      enabled: true,
-      botToken: "work-token",
-    });
+  const channel = channelRecord(next, "demo-setup");
+  expect(accountRecord(channel, "personal").botToken).toBe("personal-token");
+  expect(accountRecord(channel, "work-team")).toMatchObject({
+    enabled: true,
+    botToken: "work-token",
   });
 });
 
-describe("patchScopedAccountConfig credential clearing", () => {
-  it("clears only default-account credential fields before applying their replacement", () => {
-    const next = patchScopedAccountConfig({
-      cfg: config("demo-setup", {
-        enabled: false,
-        token: "old-token",
-        tokenFile: "/old/token",
-        webhookPath: "/keep",
-      }),
-      channelKey: "demo-setup",
-      accountId: DEFAULT_ACCOUNT_ID,
-      clearFields: ["token", "tokenFile"],
-      patch: { token: "new-token" },
-      ensureChannelEnabled: false,
-    });
-
-    expect(channelRecord(next, "demo-setup")).toEqual({
+it("patchScopedAccountConfig clears only default-account credentials before replacement", () => {
+  const next = patchScopedAccountConfig({
+    cfg: config("demo-setup", {
       enabled: false,
-      token: "new-token",
+      token: "old-token",
+      tokenFile: "/old/token",
       webhookPath: "/keep",
-    });
+    }),
+    channelKey: "demo-setup",
+    accountId: DEFAULT_ACCOUNT_ID,
+    clearFields: ["token", "tokenFile"],
+    patch: { token: "new-token" },
+    ensureChannelEnabled: false,
+  });
+
+  expect(channelRecord(next, "demo-setup")).toEqual({
+    enabled: false,
+    token: "new-token",
+    webhookPath: "/keep",
   });
 });
 
@@ -240,17 +189,16 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
       setupSurface: matrixSetupSurface,
     });
 
-    const channel = channelRecord(next, "matrix");
-    expect(accountRecord(channel, "main")).toMatchObject({
-      enabled: true,
-      homeserver: "https://matrix.example.org",
-      userId: "@bot:example.org",
-      accessToken: "token",
+    expect(next.channels?.matrix).toEqual({
+      accounts: {
+        main: {
+          enabled: true,
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accessToken: "token",
+        },
+      },
     });
-    expect(next.channels?.matrix?.accounts?.default).toBeUndefined();
-    expect(next.channels?.matrix?.homeserver).toBeUndefined();
-    expect(next.channels?.matrix?.userId).toBeUndefined();
-    expect(next.channels?.matrix?.accessToken).toBeUndefined();
   });
 
   it("preserves explicit named-account values over promoted root defaults", () => {
@@ -269,22 +217,20 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
   });
 });
 
-describe("createEnvPatchedAccountSetupAdapter", () => {
-  it("rejects env mode for named accounts and requires credentials otherwise", () => {
-    const adapter = createEnvPatchedAccountSetupAdapter({
-      channelKey: "demo-env",
-      defaultAccountOnlyEnvError: "env only on default",
-      missingCredentialError: "token required",
-      hasCredentials: (input) => Boolean(input.token || input.tokenFile),
-      buildPatch: (input) => ({ token: input.token }),
-    });
-
-    const validate = (
-      accountId: string,
-      input: Parameters<NonNullable<typeof adapter.validateInput>>[0]["input"],
-    ) => adapter.validateInput?.({ cfg: {}, accountId, input });
-    expect(validate("work", { useEnv: true })).toBe("env only on default");
-    expect(validate(DEFAULT_ACCOUNT_ID, {})).toBe("token required");
-    expect(validate(DEFAULT_ACCOUNT_ID, { token: "tok" })).toBeNull();
+it("createEnvPatchedAccountSetupAdapter rejects named-account env mode and requires credentials", () => {
+  const adapter = createEnvPatchedAccountSetupAdapter({
+    channelKey: "demo-env",
+    defaultAccountOnlyEnvError: "env only on default",
+    missingCredentialError: "token required",
+    hasCredentials: (input) => Boolean(input.token || input.tokenFile),
+    buildPatch: (input) => ({ token: input.token }),
   });
+
+  const validate = (
+    accountId: string,
+    input: Parameters<NonNullable<typeof adapter.validateInput>>[0]["input"],
+  ) => adapter.validateInput?.({ cfg: {}, accountId, input });
+  expect(validate("work", { useEnv: true })).toBe("env only on default");
+  expect(validate(DEFAULT_ACCOUNT_ID, {})).toBe("token required");
+  expect(validate(DEFAULT_ACCOUNT_ID, { token: "tok" })).toBeNull();
 });
