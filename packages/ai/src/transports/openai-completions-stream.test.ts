@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { processCompletionsStream } from "./openai-completions-stream.js";
+import { streamFixture } from "./openai-completions-suite.test-support.js";
 import {
   type CapturedStreamEvent,
   type OpenAICompletionsOutput,
@@ -46,23 +47,6 @@ function toolDelta(args: string, name: string | undefined, id: string, index?: n
       },
     ],
   };
-}
-
-function streamFixture(model = makeCompletionsModel()) {
-  const output = createAssistantOutput(model);
-  const events: CapturedStreamEvent[] = [];
-  const run = (
-    chunks: readonly unknown[],
-    options?: Parameters<typeof processCompletionsStream>[4],
-  ) =>
-    processCompletionsStream(
-      streamChunks(chunks),
-      output,
-      model,
-      { push: (event) => events.push(event) },
-      options,
-    );
-  return { output, events, run };
 }
 
 describe("openai completions stream", () => {
@@ -360,14 +344,12 @@ describe("openai completions stream", () => {
       expectedError: "Exceeded tool-call argument buffer limit",
     },
   ])("$name", async ({ makeChunks, expectedError }) => {
-    const model = makeCompletionsModel(routerMiniMax);
-    const { run } = streamFixture(model);
+    const { run } = streamFixture(routerMiniMax);
     await expect(run(makeChunks())).rejects.toThrow(expectedError);
   });
 
   it("keeps a streaming tool call intact when visible reasoning text arrives between chunks", async () => {
-    const model = makeCompletionsModel(routerMiniMax);
-    const { output, run } = streamFixture(model);
+    const { output, run } = streamFixture(routerMiniMax);
 
     await run([
       makeCompletionsChunk(toolDelta('{"query":', "lookup", "call_1")),

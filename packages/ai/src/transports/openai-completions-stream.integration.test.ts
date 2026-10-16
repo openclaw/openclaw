@@ -1,4 +1,3 @@
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { streamWithIdleTimeout } from "../../../../src/agents/embedded-agent-runner/run/llm-idle-timeout.js";
 import {
@@ -9,52 +8,16 @@ import {
 import { streamOpenAICompletions } from "../providers/openai-completions.js";
 import { registerBuiltInApiProviders } from "../providers/register-builtins.js";
 import { createLlmRuntime } from "../stream.js";
-import { processCompletionsStream } from "./openai-completions-stream.js";
-import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
 import {
-  createAssistantOutput,
-  makeCompletionsChunk,
-  makeCompletionsModel,
-  streamChunks,
-} from "./openai-completions.test-support.js";
-
-function startSse(res: ServerResponse, keepAlive = false) {
-  res.writeHead(200, {
-    "content-type": "text/event-stream; charset=utf-8",
-    ...(keepAlive ? { "cache-control": "no-cache", connection: "keep-alive" } : {}),
-  });
-}
-function writeSse(res: ServerResponse, chunk: unknown) {
-  res.write(`data: ${JSON.stringify(chunk)}\n\n`);
-}
-
-async function withServer(
-  handler: (req: IncomingMessage, res: ServerResponse, body: string) => void,
-  run: (baseUrl: string) => Promise<void>,
-) {
-  const server = createServer((req, res) => {
-    let body = "";
-    req.setEncoding("utf8");
-    req.on("data", (chunk: string) => {
-      body += chunk;
-    });
-    req.on("end", () => handler(req, res, body));
-  });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  try {
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Missing loopback server address");
-    }
-    await run(`http://127.0.0.1:${address.port}/v1`);
-  } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
-}
+  collectStream as captureStream,
+  replyContext,
+  startSse,
+  streamFixture,
+  withServer,
+  writeSse,
+} from "./openai-completions-suite.test-support.js";
+import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
+import { makeCompletionsChunk, makeCompletionsModel } from "./openai-completions.test-support.js";
 
 describe("openai completions stream", () => {
   afterAll(() => {
@@ -164,31 +127,18 @@ describe("openai completions stream", () => {
       async (baseUrl) => {
         const model = makeCompletionsModel({
           id: "qwen3.5-32b",
-          name: "Qwen 3.5 32B",
+
           provider: "qwen",
           baseUrl,
-          contextWindow: 131072,
+
           compat: { thinkingFormat: "qwen", supportsReasoningEffort: false },
         });
         const stream = createOpenAICompletionsTransportStreamFn()(
           model,
-          {
-            systemPrompt: "system",
-            messages: [{ role: "user", content: "Reply qwen-ok", timestamp: Date.now() }],
-            tools: [],
-          } as never,
+          replyContext("Reply qwen-ok"),
           { apiKey: "test-key", reasoning: "medium" } as never,
         );
-        let thinking = "";
-        let text = "";
-        for await (const event of stream as AsyncIterable<{ type: string; delta?: string }>) {
-          if (event.type === "thinking_delta") {
-            thinking += event.delta ?? "";
-          }
-          if (event.type === "text_delta") {
-            text += event.delta ?? "";
-          }
-        }
+        const { thinking, text } = await captureStream(stream);
         expect(capturedPayload?.enable_thinking).toBe(true);
         expect(capturedPayload).not.toHaveProperty("reasoning_effort");
         expect(thinking).toBe("Need a Qwen answer.");
@@ -331,7 +281,7 @@ describe("openai completions stream", () => {
         async (baseUrl) => {
           const model = makeCompletionsModel({
             id: "nemotron-local",
-            name: "Local Nemotron",
+
             provider: "inference",
             baseUrl,
             reasoning: false,
@@ -344,32 +294,13 @@ describe("openai completions stream", () => {
             onIdleTimeout,
             { runId },
           );
-          const stream = streamFn(
-            model,
-            {
-              systemPrompt: "system",
-              messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
-              tools: [],
-            } as never,
-            { apiKey: "test-key" } as never,
-          );
-          let text = "";
-          let thinking = "";
-          const collectStream = (async () => {
-            for await (const event of stream as AsyncIterable<{ type: string; delta?: string }>) {
-              if (event.type === "text_delta") {
-                text += event.delta ?? "";
-              }
-              if (event.type === "thinking_delta") {
-                thinking += event.delta ?? "";
-              }
-            }
-          })();
+          const stream = streamFn(model, replyContext("Reply OK"), { apiKey: "test-key" } as never);
+          const collecting = captureStream(stream);
           await sessionProgressThresholdReached;
           const activity = getDiagnosticSessionActivitySnapshot({ sessionId: runId });
           expect(activity.lastProgressAgeMs).toBeLessThan(sessionProgressStaleMs);
           expect(activity.lastProgressReason).toBe("model_call:stream_progress");
-          await collectStream;
+          const { text, thinking } = await collecting;
           expect(text).toBe("OK");
           expect(thinking).toBe("");
           expect(onIdleTimeout).not.toHaveBeenCalled();
@@ -378,9 +309,7 @@ describe("openai completions stream", () => {
       );
     },
   );
-});
 
-describe("openai completions stream", () => {
   it("promotes native tool calls through fetch wrapper when SSE terminates cleanly with [DONE] without finish_reason", async () => {
     await withServer(
       (_req, res) => {
@@ -407,44 +336,24 @@ describe("openai completions stream", () => {
       async (baseUrl) => {
         const baseModel = makeCompletionsModel({
           id: "qwen3.6-27b",
-          name: "Qwen 3.6 27B",
+
           provider: "vllm",
           baseUrl,
           reasoning: false,
-          contextWindow: 131072,
         });
         const stream = createOpenAICompletionsTransportStreamFn()(
           baseModel,
-          {
-            systemPrompt: "system",
-            messages: [{ role: "user", content: "Run a command", timestamp: Date.now() }],
-            tools: [],
-          } as never,
+          replyContext("Run a command"),
           { apiKey: "test-key" } as never,
         );
-        let doneReason: string | undefined;
-        let hasToolCallEvent = false;
-        const doneMessage: { content?: Array<{ type?: string }> } = {};
-        for await (const event of stream as AsyncIterable<{
-          type: string;
-          reason?: string;
-          message?: { content?: Array<{ type?: string }> };
-        }>) {
-          if (event.type === "toolcall_start") {
-            hasToolCallEvent = true;
-          }
-          if (event.type === "done") {
-            doneReason = event.reason;
-            if (event.message) {
-              Object.assign(doneMessage, event.message);
-            }
-          }
-        }
-        expect(doneReason).toBe("toolUse");
-        expect(hasToolCallEvent).toBe(true);
-        const toolCallBlocks =
-          doneMessage.content?.filter((block) => block.type === "toolCall") ?? [];
-        expect(toolCallBlocks).toHaveLength(1);
+        const { terminal, events } = await captureStream(stream);
+        expect(terminal).toMatchObject({ type: "done", reason: "toolUse" });
+        expect(events.some((event) => event.type === "toolcall_start")).toBe(true);
+        expect(
+          terminal?.type === "done"
+            ? terminal.message.content.filter((block) => block.type === "toolCall")
+            : [],
+        ).toHaveLength(1);
       },
     );
   });
@@ -477,31 +386,18 @@ describe("openai completions stream", () => {
         async (baseUrl) => {
           const baseModel = makeCompletionsModel({
             id: "qwen3.6-27b",
-            name: "Qwen 3.6 27B",
+
             provider: "vllm",
             baseUrl,
             reasoning: false,
-            contextWindow: 131072,
           });
           const stream = createOpenAICompletionsTransportStreamFn()(
             baseModel,
-            {
-              systemPrompt: "system",
-              messages: [{ role: "user", content: "Run a command", timestamp: Date.now() }],
-              tools: [],
-            } as never,
+            replyContext("Run a command"),
             { apiKey: "test-key" } as never,
           );
-          let terminalEvent: string | undefined;
-          for await (const event of stream as AsyncIterable<{
-            type: string;
-          }>) {
-            if (event.type === "done" || event.type === "error") {
-              terminalEvent = event.type;
-            }
-          }
-          const result = await (await stream).result();
-          expect(terminalEvent).toBe("error");
+          const { terminal, result } = await captureStream(stream);
+          expect(terminal?.type).toBe("error");
           expect(result.stopReason).toBe("error");
           expect(result.errorMessage).toContain("Stream ended without finish_reason");
           expect(result.content.filter((block) => block.type === "toolCall")).toStrictEqual([]);
@@ -513,13 +409,12 @@ describe("openai completions stream", () => {
   it("rolls back provisional tags when stop strips spurious tool calls", async () => {
     const model = makeCompletionsModel({
       id: "grok-4.5",
-      name: "Grok 4.5",
+
       provider: "xai",
       baseUrl: "https://api.x.ai/v1",
       reasoning: false,
-      contextWindow: 131072,
     });
-    const output = createAssistantOutput(model);
+    const { output, run } = streamFixture(model);
     const chunks = [
       makeCompletionsChunk({ role: "assistant" as const, content: "" }),
       makeCompletionsChunk({ content: "Here is the answer." }),
@@ -536,7 +431,7 @@ describe("openai completions stream", () => {
         "stop",
       ),
     ] as const;
-    await processCompletionsStream(streamChunks(chunks), output, model, { push() {} });
+    await run(chunks);
 
     expect(output.stopReason).toBe("stop");
     expect(output.content).toStrictEqual([{ type: "text", text: "Here is the answer." }]);
