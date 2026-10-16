@@ -5,7 +5,11 @@ import {
 } from "../../../packages/memory-host-sdk/src/host/session-files.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import { readTranscriptExportSnapshotFromDatabase } from "./session-accessor.sqlite-read.js";
+import {
+  readTranscriptExportSnapshotFromDatabase,
+  readTranscriptExportSnapshotReadOnlySync,
+  type TranscriptExportBatchHead,
+} from "./session-accessor.sqlite-read.js";
 import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
@@ -18,7 +22,10 @@ import type {
 } from "./session-transcript-worker-read.types.js";
 import type { SessionTranscriptWorkerValues } from "./session-transcript-worker.types.js";
 
-type Snapshot = ReturnType<typeof readTranscriptExportSnapshotFromDatabase>;
+type Snapshot = Exclude<
+  ReturnType<typeof readTranscriptExportSnapshotFromDatabase>,
+  { sliced: TranscriptExportBatchHead }
+>;
 const snapshots = new Map<string, Snapshot>();
 const MAX_SNAPSHOTS = 16;
 const MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024;
@@ -35,7 +42,9 @@ export async function prepareSessionMemoryEntry(request: SessionEntryWorkerInput
 export async function prepareSessionMemoryEntries(
   entries: SessionEntriesWorkerInput["entries"],
 ): Promise<SessionTranscriptWorkerValues["session-entries"]["entries"]> {
-  const prepared: (Snapshot | null | "cold")[] = entries.map(() => null);
+  const prepared: (Snapshot | TranscriptExportBatchHead | null | "cold")[] = entries.map(
+    () => null,
+  );
   const groups = new Map<
     string,
     { index: number; resolved: ReturnType<typeof resolveSqliteTranscriptReadScope> }[]
@@ -53,23 +62,22 @@ export async function prepareSessionMemoryEntries(
         runSqliteDeferredTransactionSync(
           database.db,
           () => {
+            // Transcripts the retained-snapshot cache admits (at most MAX_SNAPSHOT_BYTES) are read
+            // inside the batch transaction; larger ones, which the cache never retains, are read
+            // in slices after it.
             for (const { index, resolved } of group) {
               const request = entries[index]!;
-              const previous = snapshots.get(snapshotKey(request));
               try {
-                prepared[index] = runWithSessionTranscriptReadFence(request.admission, () =>
-                  readTranscriptExportSnapshotFromDatabase(database, resolved, request.options, {
-                    projectEvent: projectSessionEntryRecord,
-                    previous:
-                      previous?.generation != null && previous.throughSeq !== undefined
-                        ? {
-                            events: previous.events,
-                            generation: previous.generation,
-                            throughSeq: previous.throughSeq,
-                          }
-                        : null,
-                  }),
+                const snapshot = runWithSessionTranscriptReadFence(request.admission, () =>
+                  readTranscriptExportSnapshotFromDatabase(
+                    database,
+                    resolved,
+                    request.options,
+                    exportOptions(request),
+                    { sliceAboveBytes: MAX_SNAPSHOT_BYTES },
+                  ),
                 );
+                prepared[index] = "sliced" in snapshot ? snapshot.sliced : snapshot;
               } catch (error) {
                 if (!(error instanceof SessionTranscriptColdError)) {
                   throw error;
@@ -83,10 +91,34 @@ export async function prepareSessionMemoryEntries(
       toDatabaseOptions(group[0]!.resolved),
     );
   }
+  // Transcripts above the retention limit read in short slices after the batch transaction.
+  for (const [index, request] of entries.entries()) {
+    const batchHead = prepared[index];
+    if (!batchHead || batchHead === "cold" || !("head" in batchHead)) {
+      continue;
+    }
+    try {
+      // An unchanged transcript keeps the batch statistics instead of reading them again.
+      prepared[index] = runWithSessionTranscriptReadFence(
+        request.admission,
+        () =>
+          readTranscriptExportSnapshotReadOnlySync(
+            request.options,
+            exportOptions(request),
+            batchHead,
+          ) ?? null,
+      );
+    } catch (error) {
+      if (!(error instanceof SessionTranscriptColdError)) {
+        throw error;
+      }
+      prepared[index] = "cold";
+    }
+  }
   return Promise.all(
     entries.map(async (request, index) => {
       const snapshot = prepared[index]!;
-      if (snapshot === "cold") {
+      if (snapshot === "cold" || (snapshot && "head" in snapshot)) {
         return { cold: true as const };
       }
       retainSnapshot(snapshotKey(request), snapshot);
@@ -101,6 +133,21 @@ export async function prepareSessionMemoryEntries(
       };
     }),
   );
+}
+
+function exportOptions(request: SessionEntriesWorkerInput["entries"][number]) {
+  const previous = snapshots.get(snapshotKey(request));
+  return {
+    projectEvent: projectSessionEntryRecord,
+    previous:
+      previous?.generation != null && previous.throughSeq !== undefined
+        ? {
+            events: previous.events,
+            generation: previous.generation,
+            throughSeq: previous.throughSeq,
+          }
+        : null,
+  };
 }
 
 function snapshotKey({ options }: SessionEntriesWorkerInput["entries"][number]) {

@@ -30,6 +30,11 @@ import type {
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
 import {
+  readTranscriptExportHead,
+  toTranscriptExportSnapshot,
+  type TranscriptExportOptions,
+} from "./session-accessor.sqlite-export-head.js";
+import {
   getSessionKysely,
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
@@ -48,7 +53,6 @@ import {
   readTranscriptMutationStateInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
 import {
-  readTranscriptExportStatsFromDatabase,
   readTranscriptStatsBatchFromDatabase,
   readTranscriptStatsFromDatabase,
 } from "./session-accessor.sqlite-transcript-stats.js";
@@ -57,7 +61,17 @@ import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-read.js
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import type { SessionTranscriptReadSnapshot } from "./session-history-read.types.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
+import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
+import {
+  captureTranscriptPayloadChunk,
+  isSameTranscriptContextVersion,
+  readTranscriptEventsInSlices,
+  TRANSCRIPT_PAYLOAD_CHUNK_BYTES,
+  type TranscriptPayloadChunk,
+  type TranscriptSliceTransaction,
+} from "./session-transcript-payload-chunk.js";
 import { SessionTranscriptStorageUnavailableError } from "./session-transcript-projection-error.js";
+import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import {
   captureSessionTranscriptQuestionAnswers,
   resolveSqliteSessionTranscriptReadFence,
@@ -156,92 +170,83 @@ export function loadTranscriptEventsSync(scope: SessionTranscriptReadScope): Tra
   return loadTranscriptReadSnapshotSync(scope).events;
 }
 
-type TranscriptExportOptions = {
-  projection?: "reset-boundary";
-  /** Reduce each decoded event synchronously before retaining the snapshot. */
-  projectEvent?: (event: TranscriptEvent) => TranscriptEvent;
-  /** Worker-owned projection from the preceding export; null starts an incremental reader. */
-  previous?: {
-    events: TranscriptEvent[];
-    generation: string | null;
-    throughSeq: number;
-  } | null;
+/** Export head a batch transaction read for a transcript it left to a sliced read. */
+export type TranscriptExportBatchHead = {
+  head: ReturnType<typeof readTranscriptExportHead>;
+  version: SessionTranscriptContextVersion;
 };
 
-/** Snapshot export payloads and their identity without opening the writable lifecycle. */
+/**
+ * Snapshot export payloads and their identity without opening the writable lifecycle. A
+ * `batchHead` is reused while the transcript context version still matches it.
+ */
 export function readTranscriptExportSnapshotReadOnlySync(
   scope: SessionTranscriptReadScope,
   options: TranscriptExportOptions = {},
+  batchHead?: TranscriptExportBatchHead,
 ) {
   const resolved = resolveSqliteTranscriptReadScope(scope);
-  const result = withOpenClawAgentDatabaseReadOnly(
-    (database) =>
-      runSqliteDeferredTransactionSync(
-        database.db,
-        () => readTranscriptExportSnapshotFromDatabase(database, resolved, scope, options),
-        { operationLabel: "session transcript export snapshot" },
-      ),
-    toDatabaseOptions(resolved),
-  );
-  return result.found ? result.value : undefined;
+  const transaction: TranscriptReadTransaction = (read) =>
+    withOpenClawAgentDatabaseReadOnly(
+      (database) =>
+        runSqliteDeferredTransactionSync(database.db, () => read(database), {
+          operationLabel: "session transcript export snapshot",
+        }),
+      toDatabaseOptions(resolved),
+    );
+  // Reset navigation is a small native projection and stays in one transaction.
+  const result =
+    (options.projection === "reset-boundary"
+      ? undefined
+      : readTranscriptEventsInChunks({
+          sessionId: resolved.sessionId,
+          maxEventBytes: scope.maxEventBytes,
+          projectEvent: options.projectEvent,
+          transaction,
+          head: (database, version) =>
+            batchHead && isSameTranscriptContextVersion(version, batchHead.version)
+              ? batchHead.head
+              : readTranscriptExportHead(database, resolved, options),
+        })) ??
+    transaction((database) =>
+      readTranscriptExportSnapshotFromDatabase(database, resolved, scope, options),
+    );
+  if (!result.found || "sliced" in result.value) {
+    return undefined;
+  }
+  return "version" in result.value ? toTranscriptExportSnapshot(result.value) : result.value;
 }
 
-/** The memory worker shares one read transaction across its bounded source batch. */
+/**
+ * The memory worker shares one read transaction across its bounded source batch. With
+ * `sliceAboveBytes`, a transcript whose recorded size (`stats.sizeBytes`) exceeds it returns
+ * its head unread as `sliced`, for `readTranscriptExportSnapshotReadOnlySync` after that
+ * transaction.
+ */
 export function readTranscriptExportSnapshotFromDatabase(
   database: Pick<OpenClawAgentDatabase, "db" | "path">,
   resolved: ResolvedTranscriptReadScope,
   scope: SessionTranscriptReadScope,
   options: TranscriptExportOptions,
+  { sliceAboveBytes }: { sliceAboveBytes?: number } = {},
 ) {
-  const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
-  const { stats, generation, cold } =
-    options.previous !== undefined
-      ? readTranscriptExportStatsFromDatabase(database, resolved.sessionId)
-      : {
-          stats: readTranscriptStatsFromDatabase(database, resolved.sessionId),
-          generation: null,
-          cold: false,
-        };
-  // Cached rows must still enter the existing archive restoration path.
-  if (cold) {
-    throw new SessionTranscriptColdError(resolved.sessionId);
+  const head = readTranscriptExportHead(database, resolved, options);
+  if (sliceAboveBytes !== undefined && !head.skipEvents && head.stats.sizeBytes > sliceAboveBytes) {
+    const sliced: TranscriptExportBatchHead = {
+      head,
+      version: readTranscriptContextVersionInTransaction(database, resolved.sessionId),
+    };
+    return { sliced };
   }
-  const throughSeq = Math.min(
-    stats.eventCount === 0 ? -1 : stats.maxSeq,
-    fence ? fence.beforeRawSeq - 1 : Number.POSITIVE_INFINITY,
-  );
-  const previous =
-    generation !== null &&
-    options.previous?.generation === generation &&
-    options.previous.throughSeq <= throughSeq
-      ? options.previous
-      : undefined;
-  const sessionKey =
-    resolved.sessionKey ??
-    executeSqliteQueryTakeFirstSync(
-      database.db,
-      getSessionKysely(database.db)
-        .selectFrom("session_windows")
-        .select("session_key")
-        .where("session_id", "=", resolved.sessionId)
-        .limit(1),
-    )?.session_key;
-  return {
-    events: [
-      ...(previous?.events ?? []),
-      ...(previous?.throughSeq === throughSeq
-        ? []
-        : loadTranscriptEventsFromDatabase(database, resolved.sessionId, {
-            ...options,
-            beforeEventSeq: fence?.beforeRawSeq,
-            afterEventSeq: previous?.throughSeq,
-            maxEventBytes: scope.maxEventBytes,
-          })),
-    ],
-    stats,
-    sessionKey,
-    ...(options.previous !== undefined ? { generation, throughSeq } : {}),
-  };
+  const events = head.skipEvents
+    ? []
+    : loadTranscriptEventsFromDatabase(database, resolved.sessionId, {
+        ...options,
+        beforeEventSeq: head.beforeEventSeq,
+        afterEventSeq: head.afterEventSeq,
+        maxEventBytes: scope.maxEventBytes,
+      });
+  return toTranscriptExportSnapshot({ ...head, events });
 }
 
 /** Pair loaded bytes with the watermark that also fences opaque navigation edits. */
@@ -250,30 +255,39 @@ export function loadTranscriptReadSnapshotSync(
   options: { readOnly?: boolean; resolvedScope?: ResolvedTranscriptReadScope } = {},
 ): SessionTranscriptReadSnapshot {
   const resolved = options.resolvedScope ?? resolveSqliteTranscriptReadScope(scope);
-  const read = (database: Pick<OpenClawAgentDatabase, "db" | "path">) =>
-    runSqliteDeferredTransactionSync(
-      database.db,
-      () => {
-        const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
-        return {
-          events: loadTranscriptEventsFromDatabase(database, resolved.sessionId, {
-            beforeEventSeq: fence?.beforeRawSeq,
-            maxEventBytes: scope.maxEventBytes,
-          }),
-          version: readTranscriptContextVersionInTransaction(database, resolved.sessionId),
-        };
-      },
-      { databaseLabel: database.path, operationLabel: "session transcript fenced read" },
-    );
   const databaseOptions = toDatabaseOptions(resolved);
-  if (!options.readOnly) {
-    return read(openOpenClawAgentDatabase(databaseOptions));
-  }
-  const result = withOpenClawAgentDatabaseReadOnly(read, databaseOptions);
+  const transaction: TranscriptReadTransaction = (read) => {
+    const run = (database: TranscriptReadDatabase) =>
+      runSqliteDeferredTransactionSync(database.db, () => read(database), {
+        databaseLabel: database.path,
+        operationLabel: "session transcript fenced read",
+      });
+    return options.readOnly
+      ? withOpenClawAgentDatabaseReadOnly(run, databaseOptions)
+      : { found: true, value: run(openOpenClawAgentDatabase(databaseOptions)) };
+  };
+  const head = (database: TranscriptReadDatabase) => ({
+    beforeEventSeq: resolveSqliteSessionTranscriptReadFence({ database, ...resolved })
+      ?.beforeRawSeq,
+  });
+  const result =
+    readTranscriptEventsInChunks({
+      sessionId: resolved.sessionId,
+      maxEventBytes: scope.maxEventBytes,
+      transaction,
+      head,
+    }) ??
+    transaction((database) => ({
+      events: loadTranscriptEventsFromDatabase(database, resolved.sessionId, {
+        beforeEventSeq: head(database).beforeEventSeq,
+        maxEventBytes: scope.maxEventBytes,
+      }),
+      version: readTranscriptContextVersionInTransaction(database, resolved.sessionId),
+    }));
   if (!result.found) {
     throw new SessionTranscriptStorageUnavailableError(result.reason);
   }
-  return result.value;
+  return { events: result.value.events, version: result.value.version };
 }
 
 /** Reads a complete maintenance transcript and its lifecycle snapshot from one transaction. */
@@ -448,6 +462,57 @@ export function loadTranscriptEventsFromDatabase(
       const event: TranscriptEvent = JSON.parse(row.event_json);
       return options.projectEvent ? options.projectEvent(event) : event;
     });
+  });
+}
+
+type TranscriptReadDatabase = Pick<OpenClawAgentDatabase, "db" | "path">;
+type TranscriptReadTransaction = TranscriptSliceTransaction<TranscriptReadDatabase>;
+
+/** Captures fenced payload text after `afterEventSeq`, decoded by SQLite, up to the slice budget. */
+function readTranscriptPayloadChunkFromDatabase(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionId: string,
+  options: { afterEventSeq?: number; beforeEventSeq?: number; maxEventBytes?: number },
+): TranscriptPayloadChunk {
+  return readHotSessionTranscriptSnapshot(database, sessionId, "events", () =>
+    captureTranscriptPayloadChunk(
+      TRANSCRIPT_PAYLOAD_CHUNK_BYTES,
+      iterateSqliteQuerySync(
+        database.db,
+        prepareTranscriptEventReadQuery(database, sessionId, options)
+          .select([
+            "seq",
+            transcriptEventJsonSql(database.db).as("event_json"),
+            transcriptEventReadBytesSql().as("payload_bytes"),
+          ])
+          .orderBy("seq", "asc"),
+      ),
+    ),
+  );
+}
+
+/** Bounded slices of the whole transcript, each read in its own short transaction. */
+function readTranscriptEventsInChunks<
+  Head extends { beforeEventSeq?: number; afterEventSeq?: number; skipEvents?: boolean },
+>(params: {
+  sessionId: string;
+  maxEventBytes?: number;
+  projectEvent?: (event: TranscriptEvent) => TranscriptEvent;
+  transaction: TranscriptReadTransaction;
+  head: (database: TranscriptReadDatabase, version: SessionTranscriptContextVersion) => Head;
+}) {
+  const { sessionId, maxEventBytes } = params;
+  return readTranscriptEventsInSlices({
+    transaction: params.transaction,
+    head: params.head,
+    projectEvent: params.projectEvent,
+    readVersion: (database) => readTranscriptContextVersionInTransaction(database, sessionId),
+    // The byte admission check covers the whole fenced transcript once, in the first slice.
+    readSlice: (database, { first, ...range }) =>
+      readTranscriptPayloadChunkFromDatabase(database, sessionId, {
+        ...range,
+        maxEventBytes: first ? maxEventBytes : undefined,
+      }),
   });
 }
 
