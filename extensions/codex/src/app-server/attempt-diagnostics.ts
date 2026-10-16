@@ -148,7 +148,10 @@ export function createCodexModelCallDiagnosticEmitter(params: {
         result.lastAssistant ? [result.lastAssistant] : result.assistantTexts,
       );
     },
-    emitResponseObserved(response: NonNullable<ReturnType<CodexUsageProjection["record"]>>): void {
+    emitResponseObserved(
+      this: void,
+      response: NonNullable<ReturnType<CodexUsageProjection["record"]>>,
+    ): void {
       if (!started || terminalEmitted) {
         return;
       }

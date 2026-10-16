@@ -134,7 +134,7 @@ export class CodexUsageProjection {
   ): { responseId: string; usage: CodexResponseUsage | undefined } | undefined {
     const responseId = readString(params, "responseId");
     if (!responseId || this.responseIds.has(responseId)) {
-      return;
+      return undefined;
     }
     this.responseIds.add(responseId);
     const normalized = isJsonObject(params.usage)
