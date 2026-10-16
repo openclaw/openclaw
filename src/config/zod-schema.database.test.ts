@@ -98,7 +98,7 @@ describe("experimental database config", () => {
       issues: [
         {
           path: "database.families.agent.engine",
-          message: "Agent PostgreSQL is not supported by this build; select sqlite.",
+          message: "Agent PostgreSQL requires the agent routing support in R4; select sqlite.",
         },
       ],
     });

@@ -53,12 +53,12 @@ the default, override, and effective engine for each family. These are configure
 choices, not evidence that a store has opened. Doctor warns when any effective
 family uses experimental PostgreSQL.
 
-| Field                            | Default      | Meaning                                                                                                                                                                                   |
-| -------------------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `database.engine`                | `"sqlite"`   | Default `"sqlite"` or `"postgres"` for supported families. Families without PostgreSQL support remain on SQLite.                                                                          |
-| `database.families.<id>.engine`  | Inherit      | Experimental prototype override for `state`, `agent`, `workboard`, `logbook`, or `team-reports`. Each override requires `engine`; explicit unsupported PostgreSQL overrides are rejected. |
-| `database.postgres.connection`   | None         | Required when any effective family uses PostgreSQL. A shared DSN string or env/file/exec SecretRef; store-backed refs are rejected.                                                       |
-| `database.postgres.schemaPrefix` | `"openclaw"` | Prefix for new store schemas: 1–27 lowercase letters, digits, or underscores, starting with a letter or underscore. Existing anchors keep their recorded schema.                          |
+| Field                            | Default      | Meaning                                                                                                                                                                         |
+| -------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `database.engine`                | `"sqlite"`   | Default `"sqlite"` or `"postgres"` for supported families. Families without PostgreSQL support remain on SQLite.                                                                |
+| `database.families.<id>.engine`  | Inherit      | Experimental override for `state`, `agent`, `workboard`, `logbook`, or `team-reports`. Each override requires `engine`; explicit unsupported PostgreSQL overrides are rejected. |
+| `database.postgres.connection`   | None         | Required when any effective family uses PostgreSQL. A shared DSN string or env/file/exec SecretRef; store-backed refs are rejected.                                             |
+| `database.postgres.schemaPrefix` | `"openclaw"` | Prefix for new store schemas: 1–27 lowercase letters, digits, or underscores, starting with a letter or underscore. Existing anchors keep their recorded schema.                |
 
 Shared state, Workboard, Logbook, and Team Reports currently support PostgreSQL.
 Before its first shared-state read, the Gateway resolves the effective family
@@ -124,14 +124,12 @@ shared state with `openclaw doctor --fix` using a compatible binary before porti
 Agent porting is not available yet; keep existing agent stores on SQLite.
 Do not remove existing data to switch engines.
 
-### Mixed-mode prototype
+### Mixed engines (experimental)
 
-Per-family selection is a draft prototype for disposable fresh stores. Its
-configuration shape has not been approved for landing. Family-aware port,
-backup/restore, and update inventory remain separate work; do not use those
-operations on a mixed-engine installation yet. Existing shared-state migration
-also requires the state port provider and recovery/custody work. Agent PostgreSQL
-requires its own routing and mixed-pair conformance work.
+Use family overrides to choose engines for fresh stores. The five configurable
+families share one `database.postgres` connection and schema prefix; per-family
+connection and prefix options are not supported. The default still applies when
+an override is omitted.
 
 Keep agents and plugins on SQLite while fresh shared state uses PostgreSQL:
 
@@ -168,7 +166,8 @@ PostgreSQL:
 Only the five listed families accept overrides. Unknown keys, fixed-local
 families, missing `engine`, and per-family connection/prefix options are rejected.
 `agent: { engine: "sqlite" }` is valid; explicit agent PostgreSQL is rejected in
-this build even though a PostgreSQL default continues to leave agents on SQLite.
+this build until agent routing support (R4) is available. A PostgreSQL default
+continues to leave agents on SQLite.
 Quarantine, managed-update, and package-activation safety journals stay local
 SQLite. Daemon runtime pins and Matrix-root do not acquire engine overrides;
 incognito remains memory-only.
@@ -177,8 +176,29 @@ An override applies to the whole family: all shared-state fragments together,
 all agent databases together, or the named plugin store. Admission and anchors
 remain per physical store. Existing SQLite content refuses a PostgreSQL choice,
 and a PostgreSQL anchor refuses SQLite; never remove an anchor to switch engines.
-The current port command has no per-family scope, and agent/shared-state port
-providers are incomplete. Keep existing data on its current engine.
+Changing a family's engine requires a port (not yet supported for mixed installs)
+and a Gateway restart. The current port command has no per-family scope, and
+agent/shared-state port providers are incomplete. Keep existing data on its current engine.
+
+| Configuration                                                          | Runtime support                                                            |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| All SQLite, including no database config                               | Supported default; existing lifecycle behavior is unchanged.               |
+| PostgreSQL default for every capable family                            | Existing experimental behavior; agent and safety stores stay local SQLite. |
+| Fresh PostgreSQL state with SQLite agents/plugins                      | Allowed with the shared PostgreSQL configuration.                          |
+| Fresh SQLite state with PostgreSQL Workboard, Logbook, or Team Reports | Allowed with the shared PostgreSQL configuration.                          |
+| A mixture of the currently capable state/plugin families               | Allowed for runtime; lifecycle commands below refuse it.                   |
+| Explicit `agent=postgres`                                              | Refused until R4; `agent=sqlite` is valid.                                 |
+
+Until family-scoped recovery support lands, OpenClaw refuses database ports,
+database snapshot backup/restore, and updates for mixed-engine installations.
+The refusal directs you to keep one engine across PostgreSQL-capable families or
+wait for family-scoped support. An update candidate advertising PostgreSQL
+support does not bypass this guard. All-SQLite and the existing uniform
+PostgreSQL configuration keep their current behavior and existing restrictions.
+Fixed-local safety stores and the currently SQLite-only agent family do not
+count as an engine mixture. Config-only archive backups remain available for recovery.
+Do not change overrides just to bypass a refusal: configuration changes do not
+port stored data.
 
 Mixed storage still requires one Gateway per store. It does not add Team
 multi-node ownership, routing, or failover. Cross-family operations retain their

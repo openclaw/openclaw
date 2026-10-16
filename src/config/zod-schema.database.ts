@@ -5,7 +5,7 @@ import { configUiMetadata, sensitive } from "./zod-schema.sensitive.js";
 
 const DatabaseFamilyEngineSchema = z.enum(["sqlite", "postgres"]).register(configUiMetadata, {
   label: "Family Database Engine (Experimental)",
-  help: "Override database.engine for this family. Changing an engine requires a restart and does not migrate existing data. Mixed selection is a disposable prototype; family-aware port, backup, and update support is pending.",
+  help: "Override database.engine for this family. Changing an engine requires a port and a restart; it does not migrate existing data. Port, backup/restore, and update refuse mixed-engine installations until family-scoped support is available.",
 });
 
 const DatabaseFamilySchema = z.strictObject({ engine: DatabaseFamilyEngineSchema }).optional();
@@ -22,7 +22,7 @@ export const DatabaseConfigSchema = z
         agent: z
           .strictObject({
             engine: DatabaseFamilyEngineSchema.refine((engine) => engine === "sqlite", {
-              message: "Agent PostgreSQL is not supported by this build; select sqlite.",
+              message: "Agent PostgreSQL requires the agent routing support in R4; select sqlite.",
             }).register(configUiMetadata, {
               label: "Agent Database Engine (Experimental)",
               help: "Agent databases currently support sqlite only. Explicit postgres is rejected even when the default selects PostgreSQL.",
@@ -35,7 +35,7 @@ export const DatabaseConfigSchema = z
       })
       .optional()
       .register(configUiMetadata, {
-        label: "Family Database Engines (Experimental Prototype)",
+        label: "Family Database Engines (Experimental)",
         help: "Optional engine overrides for state, agent, workboard, logbook, and team-reports. Each override requires engine. Agent PostgreSQL is unavailable; local safety journals are not configurable. All PostgreSQL families share database.postgres.",
       }),
     postgres: z

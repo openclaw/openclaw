@@ -16,9 +16,12 @@ import {
   DatabasePortError,
 } from "../infra/database-engine/port-command.worker.js";
 import { databasePortProviders } from "../infra/database-engine/port-provider.js";
-import type { DatabaseEngineId } from "../infra/database-engine/registry.js";
+import type { PortVerification } from "../infra/database-engine/port.worker.js";
 import {
-  archiveDatabasePortManifest,
+  resolveDatabaseFamilyEngines,
+  type DatabaseEngineId,
+} from "../infra/database-engine/registry.js";
+import {
   assertDatabasePortRecoveryAllowed,
   databasePortManifestPath,
   prepareDatabasePortDirectory,
@@ -37,10 +40,12 @@ import {
   readBackupEngine,
 } from "../snapshot/database-backup.js";
 import {
+  assertPortSelection,
   capacity,
   configInputs,
   type Context,
   digest,
+  finalize,
   inputsSchema,
   livePath,
   manifest,
@@ -73,6 +78,7 @@ export type DatabasePortOptions = {
   resume?: string;
   rollback?: string;
 };
+
 async function preflight(ctx: Context, options: DatabasePortOptions) {
   ctx.phase = "preflight";
   const captured = await configInputs(ctx),
@@ -81,7 +87,8 @@ async function preflight(ctx: Context, options: DatabasePortOptions) {
     await assertDatabaseArtifact(input);
   }
   const config = current.snapshot.config;
-  const from = config.database?.engine ?? "sqlite",
+  assertPortSelection(config, options.to);
+  const from = resolveDatabaseFamilyEngines(config).state,
     to = options.to!;
   await prepareSharedStatePortSource(ctx, from, to, options.dryRun);
   const context = { stateDir: ctx.stateDir, config, env: ctx.env };
@@ -387,33 +394,10 @@ async function switchConfig(ctx: Context, restoring: boolean) {
     syncDatabasePortPath(path.dirname(file.path));
   }
 }
-function finalize(ctx: Context, outcome: "ported" | "rolled-back") {
-  ctx.phase = "finalize/archive";
-  const current = manifest(ctx);
-  if (current.state !== "complete") {
-    current.state = "complete";
-    current.outcome = outcome;
-    revise(ctx);
-  }
-  const archived = archiveDatabasePortManifest(
-    ctx.stateDir,
-    current.operationId,
-    ctx.assertCurrent,
-  );
-  return {
-    phase: "complete",
-    engine: outcome === "ported" ? current.direction.to : current.direction.from,
-    stores: current.targets.map(livePath),
-    backup: ctx.directory,
-    remainingSqlite: ctx.inputs?.remainingSqlite ?? [],
-    manifest: archived,
-    serverCapacity: "unknown; former PostgreSQL namespaces retained",
-    restart: "Start the Gateway through its service owner.",
-  };
-}
 async function resume(ctx: Context) {
   const current = manifest(ctx),
     config = (await readDatabasePortConfigSnapshot(ctx)).snapshot.config;
+  assertPortSelection(config, current.direction.to);
   if (current.state === "preparing") {
     for (const input of current.originalConfig) {
       await assertDatabaseArtifact(input);
@@ -432,6 +416,10 @@ async function rollback(ctx: Context) {
   return await finishPort(ctx, (await readDatabasePortConfigSnapshot(ctx)).snapshot.config, true);
 }
 async function finishPort(ctx: Context, config: OpenClawConfig, restoring: boolean) {
+  assertPortSelection(
+    config,
+    restoring ? manifest(ctx).direction.from : manifest(ctx).direction.to,
+  );
   try {
     const preparingRollback = restoring && manifest(ctx).state === "preparing";
     if (preparingRollback) {
@@ -508,6 +496,7 @@ export async function doctorDatabasePort(options: DatabasePortOptions) {
   };
   try {
     privatePaths(ctx, [stateDir, configPath]);
+    assertPortSelection((await readDatabasePortConfigSnapshot(ctx)).snapshot.config);
     if (hasActiveGatewayStateOwner(path.join(stateDir, "state", "openclaw.sqlite"))) {
       refuse(ctx, "hosted Gateway owner", "exclusive offline custody");
     }

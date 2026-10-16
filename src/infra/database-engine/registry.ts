@@ -33,6 +33,9 @@ export function selectDatabaseEngine(
       ? undefined
       : config.database?.families?.[store.id]?.engine;
   if (override === "postgres" && !store.postgres) {
+    if (store.id === "agent") {
+      throw new Error("Agent PostgreSQL requires the agent routing support in R4; select sqlite.");
+    }
     throw new Error(`database.families.${store.id}.engine does not support postgres.`);
   }
   return (
@@ -57,4 +60,19 @@ export function resolveDatabaseFamilyEngines(
     effectiveEngines[store.id] = selectDatabaseEngine(store, config);
   }
   return effectiveEngines;
+}
+
+/** Fixed-local stores do not turn the existing PostgreSQL default into a mixed installation. */
+export function assertHomogeneousDatabaseEngines(
+  config: Pick<OpenClawConfig, "database">,
+  operation: "port" | "backup" | "restore" | "update",
+): void {
+  const engines = new Set(
+    stores.filter((store) => store.postgres).map((store) => selectDatabaseEngine(store, config)),
+  );
+  if (engines.size > 1) {
+    throw new Error(
+      `${operation} for mixed-engine installs is not supported yet; use a single engine for PostgreSQL-capable families, or wait for family-scoped port, backup, and update support. Changing an engine does not migrate existing data.`,
+    );
+  }
 }

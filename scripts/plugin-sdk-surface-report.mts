@@ -275,7 +275,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: isHostNoticePayload for agent-to-agent reply filtering.
       // +1: approved jsonPathValue on the experimental database-engine worker entrypoint.
       // +11: approved experimental engine-owned search capabilities on existing entrypoints.
-      // +1: prototype boot-selected family lookup; landing still requires config approval.
+      // +1: approved boot-selected family lookup on the database-engine runtime.
       3773,
       env,
     ),
@@ -313,7 +313,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the same host-notice classifier on reply-payload.
       // +1: the same approved database-engine JSON path helper.
       // +1: the same engine-owned search admission helper.
-      // +1: the same prototype boot-selected family lookup.
+      // +1: the same boot-selected family lookup.
       2198,
       env,
     ),
