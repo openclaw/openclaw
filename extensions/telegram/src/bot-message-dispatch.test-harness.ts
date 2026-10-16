@@ -490,7 +490,7 @@ export function expectDeliveredReply(
 
 export function createContext(overrides?: Partial<TelegramMessageContext>): TelegramMessageContext {
   const base = {
-    ctxPayload: {},
+    ctxPayload: { SessionKey: "agent:default:telegram:direct:123" },
     primaryCtx: { message: { chat: { id: 123, type: "private" } } },
     msg: {
       chat: { id: 123, type: "private" },
