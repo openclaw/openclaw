@@ -12,11 +12,13 @@ import { createNestedGitEnv } from "../helpers/temp-repo.js";
 const repoRoot = process.cwd();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function diffHeader(file: string) {
+  return [`diff --git a/${file} b/${file}`, `--- a/${file}`, `+++ b/${file}`];
+}
+
 function addedDiff(file: string, lines: readonly string[], startLine = 1) {
   return [
-    `diff --git a/${file} b/${file}`,
-    `--- a/${file}`,
-    `+++ b/${file}`,
+    ...diffHeader(file),
     `@@ -1,0 +${startLine},${lines.length} @@`,
     ...lines.map((line) => `+${line}`),
   ].join("\n");
@@ -57,23 +59,16 @@ describe("report-test-temp-creations", () => {
   it("honors explicit allow comments with reasons", () => {
     const mkdtempCall = ["fs.", "mkdtemp", 'Sync("case-")'].join("");
     const tmpDirCall = ["tmp.", "dir", 'Sync({ prefix: "case-" })'].join("");
-    const allowedSource = `const allowed = ${mkdtempCall};`;
-    const inlineAllowedSource = `const inlineAllowed = ${tmpDirCall}; // openclaw-temp-dir: allow verifies tmp API behavior`;
-    const blockedSource = `const blocked = ${mkdtempCall};`;
-    const stringMarkerSource = `const stringMarker = ${mkdtempCall}; const note = "openclaw-temp-dir: allow quoted text";`;
+    const lines = [
+      "// openclaw-temp-dir: allow verifies raw fs cleanup behavior",
+      `const allowed = ${mkdtempCall};`,
+      `const inlineAllowed = ${tmpDirCall}; // openclaw-temp-dir: allow verifies tmp API behavior`,
+      `const blocked = ${mkdtempCall};`,
+      `const stringMarker = ${mkdtempCall}; const note = "openclaw-temp-dir: allow quoted text";`,
+    ] as const;
     const emptyReasonSource = `const emptyReason = ${mkdtempCall};`;
     const diff = [
-      addedDiff(
-        "test/helpers/raw-temp.test.ts",
-        [
-          "// openclaw-temp-dir: allow verifies raw fs cleanup behavior",
-          allowedSource,
-          inlineAllowedSource,
-          blockedSource,
-          stringMarkerSource,
-        ],
-        2,
-      ),
+      addedDiff("test/helpers/raw-temp.test.ts", lines, 2),
       addedDiff(
         "test/helpers/empty-allow.test.ts",
         ["// openclaw-temp-dir: allow", emptyReasonSource],
@@ -82,8 +77,8 @@ describe("report-test-temp-creations", () => {
     ].join("\n");
 
     expect(collectFindings(diff)).toEqual([
-      finding("test/helpers/raw-temp.test.ts", 5, blockedSource),
-      finding("test/helpers/raw-temp.test.ts", 6, stringMarkerSource),
+      finding("test/helpers/raw-temp.test.ts", 5, lines[3]),
+      finding("test/helpers/raw-temp.test.ts", 6, lines[4]),
       finding("test/helpers/empty-allow.test.ts", 3, emptyReasonSource),
     ]);
   });
@@ -97,10 +92,9 @@ describe("report-test-temp-creations", () => {
       "afterEach(() => cleanupTempDirs(tempDirs));",
       'const workspace = makeTempDir(tempDirs, "case-");',
     ] as const;
-    const source = lines.join("\n");
-    const diff = addedDiff(file, lines);
-
-    expect(collectFindings(diff, { fileTextByPath: { [file]: source } })).toEqual([
+    expect(
+      collectFindings(addedDiff(file, lines), { fileTextByPath: { [file]: lines.join("\n") } }),
+    ).toEqual([
       finding(file, 2, lines[1], "new manual temp-dir helper import"),
       finding(file, 4, lines[3], "new manual temp-dir helper usage"),
       finding(file, 5, lines[4], "new manual temp-dir helper usage"),
@@ -109,25 +103,20 @@ describe("report-test-temp-creations", () => {
 
   it("reports manual helpers added to existing multiline imports", () => {
     const file = "test/scripts/manual-temp.test.ts";
-    const source = [
+    const lines = [
       "import {",
       "  useAutoCleanupTempDirTracker,",
       "  makeTempDir,",
       '} from "../helpers/temp-dir.js";',
       "const tempDirs = useAutoCleanupTempDirTracker(afterEach);",
-    ].join("\n");
+    ];
     const diff = [
-      `diff --git a/${file} b/${file}`,
-      `--- a/${file}`,
-      `+++ b/${file}`,
+      ...diffHeader(file),
       "@@ -1,3 +1,4 @@",
-      " import {",
-      "   useAutoCleanupTempDirTracker,",
-      "+  makeTempDir,",
-      ' } from "../helpers/temp-dir.js";',
+      ...lines.slice(0, 4).map((line, index) => `${index === 2 ? "+" : " "}${line}`),
     ].join("\n");
 
-    expect(collectFindings(diff, { fileTextByPath: { [file]: source } })).toEqual([
+    expect(collectFindings(diff, { fileTextByPath: { [file]: lines.join("\n") } })).toEqual([
       finding(
         file,
         3,
@@ -140,14 +129,14 @@ describe("report-test-temp-creations", () => {
   it("ignores manual helper fixture strings and the helper test file", () => {
     const fixtureFile = "test/scripts/report-test-temp-creations.test.ts";
     const helperTestFile = "test/helpers/temp-dir.test.ts";
-    const fixtureSource = [
-      'import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";',
-      'const fixture = "makeTempDir(tempDirs, \\"case-\\")";',
-    ].join("\n");
-    const helperTestSource = [
-      'import { createTempDirTracker } from "./temp-dir.js";',
-      "const tempDirs = createTempDirTracker();",
-    ].join("\n");
+    const fileTextByPath = {
+      [fixtureFile]: [
+        'import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";',
+        'const fixture = "makeTempDir(tempDirs, \\"case-\\")";',
+      ].join("\n"),
+      [helperTestFile]:
+        'import { createTempDirTracker } from "./temp-dir.js";\nconst tempDirs = createTempDirTracker();',
+    };
     const diff = [
       addedDiff(fixtureFile, [
         'const importFixture = "import { makeTempDir } from \\"../helpers/temp-dir.js\\";";',
@@ -156,17 +145,10 @@ describe("report-test-temp-creations", () => {
         '  "(tempDirs, \\"case-\\")",',
         '].join("");',
       ]),
-      addedDiff(helperTestFile, helperTestSource.split("\n")),
+      addedDiff(helperTestFile, fileTextByPath[helperTestFile].split("\n")),
     ].join("\n");
 
-    expect(
-      collectFindings(diff, {
-        fileTextByPath: {
-          [fixtureFile]: fixtureSource,
-          [helperTestFile]: helperTestSource,
-        },
-      }),
-    ).toEqual([]);
+    expect(collectFindings(diff, { fileTextByPath })).toEqual([]);
   });
 
   it("formats GitHub warning annotations for CI report mode", () => {
