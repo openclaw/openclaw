@@ -33,7 +33,6 @@ import {
 } from "./native-hook-relay-events.js";
 import {
   clearNativeHookRelayPermissionsForTests,
-  hasNativeHookRelayPreToolUseApproval,
   permissionRequestContentFingerprintForTests,
   pruneNativeHookRelayPermissionAllowAlways,
   removeNativeHookRelayPermissionState,
@@ -271,8 +270,6 @@ function registerNativeHookRelayInternal(
       get deferMcpToolApprovals() {
         return deferMcpToolApprovals;
       },
-      hasPendingPreToolUseApproval: (toolUseId?: string) =>
-        hasNativeHookRelayPreToolUseApproval({ relayId, toolUseId }),
       ready,
       enableRemoteCallback: () => {
         const lifetime = readRelayLifetime(registration);

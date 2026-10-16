@@ -110,8 +110,6 @@ export type NativeHookRelayRegistrationHandle = NativeHookRelayRegistration & {
   generation?: string;
   shouldRelayEvent: (event: NativeHookRelayEvent) => boolean;
   toolMatcherForEvent: (event: NativeHookRelayEvent) => readonly string[] | undefined;
-  /** Whether a plugin approval for this native tool call is parked on the relay. */
-  hasPendingPreToolUseApproval?: (toolUseId?: string) => boolean;
   commandForEvent: (
     event: NativeHookRelayEvent,
     options?: NativeHookRelayCommandForEventOptions,

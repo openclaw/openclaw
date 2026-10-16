@@ -93,11 +93,6 @@ export async function routeCodexAppServerElicitationRequest(params: {
   autoApproveMcpTools?: boolean;
   projectedMcpServers?: NonNullable<CodexBundleMcpThreadConfig["configPatch"]>["mcp_servers"];
   getActiveMcpToolCall?: (serverName: string) => CodexActiveMcpToolCall | undefined;
-  /** Native relay owning any plugin approval deferred for this thread. */
-  nativeHookRelay?: {
-    relayId: string;
-    hasPendingPreToolUseApproval?: (toolUseId?: string) => boolean;
-  };
   signal?: AbortSignal;
 }): Promise<CodexApprovalElicitationResult> {
   const requestParams = isJsonObject(params.requestParams) ? params.requestParams : undefined;
@@ -179,16 +174,8 @@ export async function routeCodexAppServerElicitationRequest(params: {
       params.paramsForRun.hostCapabilities.assertActive();
       return handled(buildElicitationResponse(approvalPrompt, "approved-once"));
     }
-    // An OpenClaw plugin already parked this call's approval on the relay: Codex's
-    // own gate is now the human wait, so keep the decision per-call and refuse any
-    // session/always persistence that would widen the plugin's consent.
-    const deferredPluginApproval =
-      serverName !== undefined &&
-      params.nativeHookRelay?.hasPendingPreToolUseApproval?.(
-        params.getActiveMcpToolCall?.(serverName)?.id,
-      ) === true;
     // Explicit prompt is per-call consent, even if stale persistence hints arrive.
-    if (mode === "prompt" || deferredPluginApproval) {
+    if (mode === "prompt") {
       approvalPrompt.allowedDecisions = ["allow-once", "deny"];
     } else if (
       serverName &&

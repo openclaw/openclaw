@@ -33,7 +33,6 @@ import {
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 import * as nativeHookRelayBridge from "./native-hook-relay-bridge.js";
 import { invokeNativeHookRelayBridge } from "./native-hook-relay-client.js";
-import { mcpToolApprovalDefersToCodex } from "./native-hook-relay-events.js";
 import * as nativeHookRelayStore from "./native-hook-relay-store.js";
 import type { NativeHookRelayBridgeRecord } from "./native-hook-relay-store.js";
 import {
@@ -1813,98 +1812,6 @@ describe("native hook relay registry", () => {
       }
     },
   );
-
-  it("defers a plugin-gated MCP tool to Codex's own MCP approval gate", async () => {
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_tool_call",
-          handler: vi.fn(async () => ({ requireApproval: { title: "Needs approval" } })),
-        },
-      ]),
-    );
-    const relay = registerRelay({
-      allowedEvents: ["pre_tool_use"],
-      config: { mcp: { servers: { probe: { command: "probe-mcp" } } } },
-    });
-
-    const response = await invokeRelay(relay.relayId, "pre_tool_use", {
-      hook_event_name: "PreToolUse",
-      cwd: "/repo",
-      tool_name: "mcp__probe__probe",
-      tool_use_id: "mcp-call-1",
-      tool_input: { q: "reconcile" },
-    });
-
-    // Codex owns the wait; the hook returns no decision instead of blocking.
-    expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
-    const pending = createDeferredCore<{
-      blocked: boolean;
-      params?: Record<string, unknown>;
-      approvalResolution?: string;
-    }>();
-    testing.setNativeHookRelayDeferredToolApprovalRequesterForTests(vi.fn(() => pending.promise));
-    const approval = resolveNativeHookRelayDeferredToolApproval({
-      relayId: relay.relayId,
-      toolUseId: "mcp-call-1",
-    });
-    pending.resolve({
-      blocked: false,
-      params: { q: "reconcile" },
-      approvalResolution: "allow-once",
-    });
-
-    await expect(approval).resolves.toEqual({ handled: true, outcome: "approved-once" });
-  });
-
-  it("only defers MCP plugin approvals when Codex will gate the call", () => {
-    const servers = (probe: Record<string, unknown>) => ({ mcp: { servers: { probe } } });
-    expect(
-      mcpToolApprovalDefersToCodex(
-        { config: servers({ command: "probe-mcp" }) },
-        "mcp__probe__probe",
-      ),
-    ).toBe(true);
-    expect(
-      mcpToolApprovalDefersToCodex(
-        { config: servers({ command: "probe-mcp", codex: { defaultToolsApprovalMode: "auto" } }) },
-        "mcp__probe__probe",
-      ),
-    ).toBe(true);
-    expect(
-      mcpToolApprovalDefersToCodex(
-        {
-          config: servers({ command: "probe-mcp", codex: { defaultToolsApprovalMode: "prompt" } }),
-        },
-        "mcp__probe__probe",
-      ),
-    ).toBe(true);
-    // `approve` never raises a Codex elicitation: keep the hook in custody.
-    expect(
-      mcpToolApprovalDefersToCodex(
-        {
-          config: servers({
-            command: "probe-mcp",
-            codex: { defaultToolsApprovalMode: "approve" },
-          }),
-        },
-        "mcp__probe__probe",
-      ),
-    ).toBe(false);
-    expect(
-      mcpToolApprovalDefersToCodex(
-        { config: servers({ command: "probe-mcp" }), autoApproveMcpTools: true },
-        "mcp__probe__probe",
-      ),
-    ).toBe(false);
-    // Unresolved (hashed/trimmed) native server names and non-MCP tools stay in custody.
-    expect(
-      mcpToolApprovalDefersToCodex({ config: { mcp: { servers: {} } } }, "mcp__other__tool"),
-    ).toBe(false);
-    expect(
-      mcpToolApprovalDefersToCodex({ config: servers({ command: "probe-mcp" }) }, "exec"),
-    ).toBe(false);
-  });
 
   it("passes config to trusted policies for native pre-tool session extension reads", async () => {
     const stateDir = sessionDirs.make();

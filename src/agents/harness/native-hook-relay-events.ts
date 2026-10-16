@@ -68,7 +68,7 @@ type NativeHookRelayPolicy = Pick<
  * the plugin approval and let Codex's elicitation (handled in-process) own the
  * wait. Otherwise the hook keeps custody (fail-closed on its deadline).
  */
-export function mcpToolApprovalDefersToCodex(
+function mcpToolApprovalDefersToCodex(
   registration: Pick<
     NativeHookRelayPolicy,
     "config" | "autoApproveMcpTools" | "projectedMcpServers"
