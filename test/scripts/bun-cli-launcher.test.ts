@@ -42,6 +42,15 @@ vi.mock("../../scripts/preinstall-package-manager-warning.mjs", async (importOri
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const parseInstalled = (target: { path: string }) =>
+  parseBunCliLauncher(readFileSync(target.path, "utf8"));
+const execute = (target: { path: string }, args: string[] = [], input?: string, cwd?: string) =>
+  spawnSync(target.path, args, { env: { PATH: "" }, encoding: "utf8", input, cwd });
+const packageParams = (target: ReturnType<typeof fixture>) => ({
+  packageRoot: target.packageRoot,
+  bunVersion: "1.4.3",
+  env: { npm_config_user_agent: "bun/1.4.3", OPENCLAW_PACKAGE_BUN_LAUNCHER: target.bunPath },
+});
 
 const unsupportedPathCharacters = [
   ["\n", "a newline"],
@@ -89,23 +98,14 @@ describe.skipIf(process.platform === "win32")("POSIX Bun CLI launcher", () => {
       "line\nbreak",
       "--flag=value",
     ];
-    const result = spawnSync(target.path, argv, { env: { PATH: "" }, encoding: "utf8" });
+    const result = execute(target, argv);
     expect(result.error).toBeUndefined();
-    expect(result.stderr).toBe("");
+    expect(result).toMatchObject({ stderr: "", status: 23, signal: null });
     expect(JSON.parse(result.stdout)).toEqual(argv);
-    expect(result.status).toBe(23);
-    expect(result.signal).toBeNull();
-
-    const signaled = spawnSync(target.path, ["signal"], { env: { PATH: "" }, encoding: "utf8" });
+    const signaled = execute(target, ["signal"]);
     expect(signaled.error).toBeUndefined();
-    expect(signaled.status).toBeNull();
-    expect(signaled.signal).toBe("SIGTERM");
-
-    const input = spawnSync(target.path, ["stdin"], {
-      env: { PATH: "" },
-      encoding: "utf8",
-      input: "original stdin\n",
-    });
+    expect(signaled).toMatchObject({ status: null, signal: "SIGTERM" });
+    const input = execute(target, ["stdin"], "original stdin\n");
     expect(input.status, input.stderr).toBe(0);
     expect(input.stdout).toBe("original stdin\n");
   });
@@ -125,10 +125,7 @@ describe.skipIf(process.platform === "win32")("POSIX Bun CLI launcher", () => {
     });
     renameSync(target.packageRoot, liveRoot);
 
-    const result = spawnSync(target.path, ["two words", "$literal", ""], {
-      env: { PATH: "" },
-      encoding: "utf8",
-    });
+    const result = execute(target, ["two words", "$literal", ""]);
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.split("\0")).toEqual([
       join(liveRoot, "openclaw.mjs"),
@@ -140,7 +137,7 @@ describe.skipIf(process.platform === "win32")("POSIX Bun CLI launcher", () => {
     expect(content.split("\n").filter((line) => line.includes(`${target.packageRoot}/`))).toEqual([
       `#openclaw-entry=${target.entryPath}`,
     ]);
-    expect(parseBunCliLauncher(readFileSync(target.path, "utf8"))).toEqual({
+    expect(parseInstalled(target)).toEqual({
       bunPath: target.bunPath,
       entryPath: join(liveRoot, "openclaw.mjs"),
     });
@@ -165,11 +162,7 @@ describe.skipIf(process.platform === "win32")("POSIX Bun CLI launcher", () => {
     }
     writeFileSync(target.path, content, { mode: 0o755 });
 
-    const result = spawnSync(target.path, [], {
-      cwd: target.root,
-      env: { PATH: "" },
-      encoding: "utf8",
-    });
+    const result = execute(target, [], undefined, target.root);
     expect(result.status).toBe(127);
     expect(result.stderr).toContain("openclaw: Bun launcher target not found");
     expect(result.stdout).toBe("");
@@ -185,7 +178,7 @@ describe.skipIf(process.platform === "win32")("POSIX Bun CLI launcher", () => {
       unlinkSync(target.entryPath);
     }
     installBunCliLauncher(target);
-    const result = spawnSync(target.path, [], { env: { PATH: "" }, encoding: "utf8" });
+    const result = execute(target);
     expect(result.status).toBe(127);
     expect(result.stderr).toContain("openclaw: Bun launcher target not found");
     expect(result.stderr).toContain('Run "openclaw doctor" with Bun to repair.');
@@ -205,20 +198,19 @@ describe.skipIf(process.platform === "win32")("POSIX Bun CLI launcher", () => {
       expect(lstatSync(target.path).isSymbolicLink()).toBe(false);
       expect(statSync(target.path).mode & 0o777).toBe(0o755);
       expect(readFileSync(target.entryPath, "utf8")).toBe(entry);
-      expect(parseBunCliLauncher(readFileSync(target.path, "utf8"))).toEqual({
+      expect(parseInstalled(target)).toEqual({
         bunPath: target.bunPath,
         entryPath: target.entryPath,
       });
       const installed = statSync(target.path);
       installBunCliLauncher(target);
       const unchanged = statSync(target.path);
-      expect(unchanged.ino).toBe(installed.ino);
-      expect(unchanged.mtimeMs).toBe(installed.mtimeMs);
+      expect(unchanged).toMatchObject({ ino: installed.ino, mtimeMs: installed.mtimeMs });
       expect(readdirSync(target.binDir)).toEqual(["openclaw"]);
       const updated = { ...target, bunPath: join(target.root, "new-bun") };
       expect(inspectBunCliLauncher(updated).state).toBe("stale");
       installBunCliLauncher(updated);
-      expect(parseBunCliLauncher(readFileSync(target.path, "utf8"))?.bunPath).toBe(updated.bunPath);
+      expect(parseInstalled(target)?.bunPath).toBe(updated.bunPath);
       chmodSync(target.path, 0o644);
       expect(inspectBunCliLauncher(updated).state).toBe("stale");
       installBunCliLauncher(updated);
@@ -293,11 +285,7 @@ describe.skipIf(process.platform === "win32")("packaged Bun launcher lifecycle",
     const target = fixture();
     symlinkSync(target.entryPath, target.path);
     lifecycle.resolveBinDir.mockReturnValue(target.binDir);
-    const env = {
-      npm_config_user_agent: "bun/1.4.3",
-      OPENCLAW_PACKAGE_BUN_LAUNCHER: target.bunPath,
-    };
-    return { target, params: { packageRoot: target.packageRoot, env, bunVersion: "1.4.3" } };
+    return { target, params: packageParams(target) };
   }
 
   it("finishes only its existing global link and refreshes it after a Bun update", () => {
@@ -314,7 +302,7 @@ describe.skipIf(process.platform === "win32")("packaged Bun launcher lifecycle",
       ...params,
       env: { ...params.env, OPENCLAW_PACKAGE_BUN_LAUNCHER: updatedBun },
     });
-    expect(parseBunCliLauncher(readFileSync(target.path, "utf8"))?.bunPath).toBe(updatedBun);
+    expect(parseInstalled(target)?.bunPath).toBe(updatedBun);
   });
 
   it.each(unsupportedPathCharacters)(
@@ -329,16 +317,7 @@ describe.skipIf(process.platform === "win32")("packaged Bun launcher lifecycle",
         expect(() => renderBunCliLauncher(target)).toThrow(reason);
         expect(() => inspectBunCliLauncher(target)).toThrow(reason);
         expect(() => installBunCliLauncher(target)).toThrow(reason);
-        expect(() =>
-          installPackageBunCliLauncher({
-            packageRoot: target.packageRoot,
-            bunVersion: "1.4.3",
-            env: {
-              npm_config_user_agent: "bun/1.4.3",
-              OPENCLAW_PACKAGE_BUN_LAUNCHER: target.bunPath,
-            },
-          }),
-        ).not.toThrow();
+        expect(() => installPackageBunCliLauncher(packageParams(target))).not.toThrow();
         expect(readlinkSync(target.path)).toBe(target.entryPath);
         expect(readdirSync(target.binDir)).toEqual(["openclaw"]);
       }
@@ -351,11 +330,7 @@ describe.skipIf(process.platform === "win32")("packaged Bun launcher lifecycle",
       writeFileSync(target.path, "other owner");
     }
     lifecycle.resolveBinDir.mockReturnValue(target.binDir);
-    installPackageBunCliLauncher({
-      packageRoot: target.packageRoot,
-      bunVersion: "1.4.3",
-      env: { npm_config_user_agent: "bun/1.4.3", OPENCLAW_PACKAGE_BUN_LAUNCHER: target.bunPath },
-    });
+    installPackageBunCliLauncher(packageParams(target));
     expect(readdirSync(target.binDir)).toEqual(kind === "missing" ? [] : ["openclaw"]);
     if (kind === "foreign") {
       expect(readFileSync(target.path, "utf8")).toBe("other owner");

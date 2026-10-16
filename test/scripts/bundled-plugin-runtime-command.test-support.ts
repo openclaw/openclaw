@@ -50,6 +50,8 @@ async function fixtureReadyBeforeSettlement(
   filePath: string,
   operation: PromiseLike<unknown>,
   signal: AbortSignal,
+  ready = () => fs.existsSync(filePath),
+  message = `timeout waiting for ${filePath}`,
 ): Promise<void> {
   // Separate transports may deliver settlement before the receipt. The fixture
   // commits this record before reporting readiness or allowing its owner to exit.
@@ -57,8 +59,8 @@ async function fixtureReadyBeforeSettlement(
     Promise.race([
       receipts.waitFor(filePath, "ready"),
       Promise.resolve(operation).then(() => {
-        if (!fs.existsSync(filePath)) {
-          throw new Error(`timeout waiting for ${filePath}`);
+        if (!ready()) {
+          throw new Error(message);
         }
       }),
     ]),
@@ -91,16 +93,12 @@ export async function waitForPidFile(
   operation: PromiseLike<unknown>,
   signal: AbortSignal,
 ): Promise<number> {
-  await withinTest(
-    Promise.race([
-      receipts.waitFor(filePath, "ready"),
-      Promise.resolve(operation).then(() => {
-        if (readCompletedPidFile(filePath) === undefined) {
-          throw new Error(`timeout waiting for pid in ${filePath}`);
-        }
-      }),
-    ]),
+  await fixtureReadyBeforeSettlement(
+    filePath,
+    operation,
     signal,
+    () => readCompletedPidFile(filePath) !== undefined,
+    `timeout waiting for pid in ${filePath}`,
   );
   return readOwnedDescendantPid(filePath);
 }
@@ -375,23 +373,17 @@ export function registerRuntimeCommandOutputTimeoutTest(): void {
         ),
       ready: async (child, operation) => {
         const outputReady = createDeferred();
-        let stdout = "",
-          stderr = "";
-        const checkOutput = () => {
-          if (stdout.includes("partial") && stderr.includes("problem")) {
-            outputReady.resolve();
-          }
-        };
-        const onStdout = (chunk: string | Buffer) => {
-          stdout += chunk.toString();
-          checkOutput();
-        };
-        const onStderr = (chunk: string | Buffer) => {
-          stderr += chunk.toString();
-          checkOutput();
-        };
-        child.stdout!.on("data", onStdout);
-        child.stderr!.on("data", onStderr);
+        const output = { stdout: "", stderr: "" };
+        const listeners = (["stdout", "stderr"] as const).map((stream) => {
+          const listener = (chunk: string | Buffer) => {
+            output[stream] += chunk.toString();
+            if (output.stdout.includes("partial") && output.stderr.includes("problem")) {
+              outputReady.resolve();
+            }
+          };
+          child[stream]!.on("data", listener);
+          return () => child[stream]!.off("data", listener);
+        });
         try {
           await withinTest(
             awaitGateBeforeSettlement(
@@ -401,12 +393,11 @@ export function registerRuntimeCommandOutputTimeoutTest(): void {
             ),
             signal,
           );
-          expect(stdout).toContain("partial");
-          expect(stderr).toContain("problem");
+          expect(output.stdout).toContain("partial");
+          expect(output.stderr).toContain("problem");
           return [];
         } finally {
-          child.stdout!.off("data", onStdout);
-          child.stderr!.off("data", onStderr);
+          listeners.forEach((remove) => remove());
         }
       },
       timeoutMs: 200,

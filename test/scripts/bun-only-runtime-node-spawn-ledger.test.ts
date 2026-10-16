@@ -83,12 +83,11 @@ describe("Bun-only Node spawn ledger", () => {
         expect(result.failedSteps).toHaveLength(1);
       }
       if (kind === "unexpected") {
-        expect(renderMarkdownReport(result)).toContain(JSON.stringify(["node", ...sentinel.argv]));
-        expect(renderMarkdownReport(result)).toContain(
-          'ancestor 10: "bun openclaw.mjs gateway run"',
-        );
+        const report = renderMarkdownReport(result);
+        expect(report).toContain(JSON.stringify(["node", ...sentinel.argv]));
+        expect(report).toContain('ancestor 10: "bun openclaw.mjs gateway run"');
         expect(result.attempts).toMatchObject([{ ancestors: sentinel.ancestors }]);
-        expect(renderMarkdownReport(result)).toContain("spawnNodeTerminalPty");
+        expect(report).toContain("spawnNodeTerminalPty");
         expect(
           renderMarkdownReport({ ...result, bunVersion: "1.4.3", bunRevision: "test-revision" }),
         ).toContain("Bun 1.4.3 (test-revision)");
@@ -237,11 +236,7 @@ describe("Bun-only Node spawn ledger", () => {
   );
 
   it.each([null, 99])("keeps a trace with child PID %s separate from the sentinel", (childPid) => {
-    const attempts = attributeSpawns({
-      traceRecords: [{ ...trace, childPid, errorCode: "ENOENT" }],
-      sentinelRecords: [sentinel],
-      steps: [step],
-    });
+    const attempts = attribute([{ ...trace, childPid, errorCode: "ENOENT" }]);
     expect(attempts).toHaveLength(2);
     expect(attempts[0]).toMatchObject({ sentinel, stack: [] });
     expect(attempts[1]).toMatchObject({ trace: { childPid, errorCode: "ENOENT" } });

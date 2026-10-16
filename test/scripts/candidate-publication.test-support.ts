@@ -178,7 +178,7 @@ export function candidatePublicationFixture(
       time,
     );
   })();
-  const plan = Object.assign(mapped(fixture.executionPlan), {
+  const admissionFields = {
     sourceAdmissionContract: "1",
     sourceAdmission: source,
     publicationAdmissionContract: "1",
@@ -186,7 +186,8 @@ export function candidatePublicationFixture(
     qualificationCoverage: coverage,
     qualificationInputs: inputs,
     trustedWorkflow: tooling,
-  });
+  };
+  const plan = Object.assign(mapped(fixture.executionPlan), admissionFields);
   plan.children = plan.children.filter((child) => child.selected);
   const qualificationBaselines = JSON.parse(qualificationBaselinesJson);
   Object.assign(expectDefined(plan.candidateRequest, "candidate request"), {
@@ -210,13 +211,8 @@ export function candidatePublicationFixture(
     // Fresh qualification has no reused evidence or shared candidate artifact.
     candidateBinding: undefined,
     evidenceReuse: undefined,
-    sourceAdmissionContract: "1",
-    sourceAdmission: source,
-    publicationAdmissionContract: "1",
-    publicationAdmission,
+    ...admissionFields,
     qualificationCoverage: structuredClone(coverage),
-    qualificationInputs: inputs,
-    trustedWorkflow: tooling,
     targetRef: q,
     targetSha: q,
     workflowFullRef: tooling.fullRef,
@@ -266,40 +262,31 @@ export function candidatePublicationFixture(
       },
     ],
   });
-  const sealer = {
-    id: options.runId ? 10902 : 902,
-    name: "Seal release execution plan",
+  const completedJob = (id: number, name: string) => ({
+    id,
+    name,
     run_id: Number(runId),
     run_attempt: 1,
     head_sha: q,
     status: "completed",
     conclusion: "success",
-    steps: [
-      {
-        name: "Seal immutable release execution plan",
-        number: 5,
-        status: "completed",
-        conclusion: "success",
-        started_at: "2026-08-28T12:01:00.000Z",
-        completed_at: "2026-08-28T12:01:01.000Z",
-      },
-      {
-        name: "Upload immutable release execution plan",
-        number: 6,
-        status: "completed",
-        conclusion: "success",
-        started_at: "2026-08-28T12:01:01.000Z",
-        completed_at: "2026-08-28T12:01:03.000Z",
-      },
-      {
-        name: "Record immutable release execution plan digest",
-        number: 7,
-        status: "completed",
-        conclusion: "success",
-        started_at: "2026-08-28T12:01:03.000Z",
-        completed_at: "2026-08-28T12:01:03.000Z",
-      },
-    ],
+  });
+  const sealer = {
+    ...completedJob(options.runId ? 10902 : 902, "Seal release execution plan"),
+    steps: (
+      [
+        ["Seal immutable release execution plan", "00", "01"],
+        ["Upload immutable release execution plan", "01", "03"],
+        ["Record immutable release execution plan digest", "03", "03"],
+      ] as const
+    ).map(([name, start, end], index) => ({
+      name,
+      number: index + 5,
+      status: "completed",
+      conclusion: "success",
+      started_at: `2026-08-28T12:01:${start}.000Z`,
+      completed_at: `2026-08-28T12:01:${end}.000Z`,
+    })),
   };
   const originalJobs = jobsFor(runId).map((job) =>
     Object.assign(job, {
@@ -416,15 +403,7 @@ export function candidatePublicationFixture(
       runAttempt: "1",
     },
   };
-  const npmJob = {
-    id: 780,
-    run_id: Number(runId),
-    run_attempt: 1,
-    head_sha: q,
-    name: npmProducer.jobName,
-    status: "completed",
-    conclusion: "success",
-  };
+  const npmJob = completedJob(780, npmProducer.jobName);
   const artifactName = dockerReleaseArtifactName(q, "1");
   const payloadBytes = ["immutable amd64 OCI payload", "immutable arm64 OCI payload"];
   const dockerArtifacts = ["amd64", "arm64"].map((arch, i) => ({
@@ -487,15 +466,7 @@ export function candidatePublicationFixture(
       preparedManifestSha256: hash(dockerBytes),
     },
   };
-  const dockerJob = {
-    id: 800,
-    run_id: Number(runId),
-    run_attempt: 1,
-    head_sha: q,
-    name: docker.producer.jobName,
-    status: "completed",
-    conclusion: "success",
-  };
+  const dockerJob = completedJob(800, docker.producer.jobName);
   const readApi = (endpoint: string) => {
     if (endpoint.includes("/compare/")) {
       return denied();

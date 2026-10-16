@@ -48,20 +48,37 @@ function makePackageRoot(): string {
   return root;
 }
 
+function writeSource(file: string, lines: string[]): void {
+  fs.writeFileSync(file, lines.join("\n"), "utf8");
+}
+
+function writeJson(file: string, value: unknown): void {
+  fs.writeFileSync(file, JSON.stringify(value), "utf8");
+}
+
+function writeGatewayWithChild(entrypoint: string, script: string, exitOnReady = false) {
+  writeSource(entrypoint, [
+    "import childProcess from 'node:child_process';",
+    "if (process.argv[2] === 'gateway') {",
+    `  const child = childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(script)}], { stdio: ${exitOnReady ? '["ignore", "ignore", "ignore", "ipc"]' : '"ignore"'} });`,
+    ...(exitOnReady
+      ? ["  child.once('message', () => process.exit(0));"]
+      : ["  process.on('SIGTERM', () => process.exit(0));", "  setInterval(() => {}, 1000);"]),
+    "}",
+    "",
+  ]);
+}
+
 function writePluginsList(root: string, plugins: PluginListEntry[]): void {
-  fs.writeFileSync(
-    path.join(root, "dist", "index.js"),
-    [
-      `const plugins = ${JSON.stringify(plugins)};`,
-      "if (process.argv.slice(2).join(' ') !== 'plugins list --json') {",
-      "  console.error(`unexpected argv: ${process.argv.slice(2).join(' ')}`);",
-      "  process.exit(1);",
-      "}",
-      "console.log(JSON.stringify({ plugins }));",
-      "",
-    ].join("\n"),
-    "utf8",
-  );
+  writeSource(path.join(root, "dist", "index.js"), [
+    `const plugins = ${JSON.stringify(plugins)};`,
+    "if (process.argv.slice(2).join(' ') !== 'plugins list --json') {",
+    "  console.error(`unexpected argv: ${process.argv.slice(2).join(' ')}`);",
+    "  process.exit(1);",
+    "}",
+    "console.log(JSON.stringify({ plugins }));",
+    "",
+  ]);
 }
 
 function writePluginManifest(root: string, pluginRoot: string, manifest: Record<string, unknown>) {
@@ -77,18 +94,12 @@ function writePluginManifest(root: string, pluginRoot: string, manifest: Record<
 function writeInstalledPlugin(root: string, sourcePath: string): string {
   const stateDir = path.join(root, "state");
   fs.mkdirSync(path.join(stateDir, "plugins"), { recursive: true });
-  fs.writeFileSync(
-    path.join(stateDir, "openclaw.json"),
-    JSON.stringify({ plugins: { entries: { nostr: { enabled: true } } } }),
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(stateDir, "plugins", "installs.json"),
-    JSON.stringify({
-      installRecords: { nostr: { source: "path", sourcePath, installPath: sourcePath } },
-    }),
-    "utf8",
-  );
+  writeJson(path.join(stateDir, "openclaw.json"), {
+    plugins: { entries: { nostr: { enabled: true } } },
+  });
+  writeJson(path.join(stateDir, "plugins", "installs.json"), {
+    installRecords: { nostr: { source: "path", sourcePath, installPath: sourcePath } },
+  });
   writePluginsList(root, []);
   return stateDir;
 }
@@ -159,6 +170,32 @@ async function closeServer(server: HttpServer | NetServer): Promise<void> {
       }
       resolve();
     });
+  });
+}
+
+async function withServer(
+  server: HttpServer | NetServer,
+  run: (port: number) => Promise<void>,
+  beforeClose = () => {},
+) {
+  try {
+    await run(await listenOnLoopback(server));
+  } finally {
+    beforeClose();
+    await closeServer(server);
+  }
+}
+
+async function withStalledServer(run: (port: number) => Promise<void>) {
+  const sockets = new Set<Socket>();
+  const server = createNetServer((socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+  });
+  await withServer(server, run, () => {
+    for (const socket of sockets) {
+      socket.destroy();
+    }
   });
 }
 
@@ -324,17 +361,13 @@ describe("bundled plugin install/uninstall probe", () => {
     const root = createPackageRoot();
     const entrypoint = path.join(root, "dist", "noisy-gateway.js");
     const logPath = path.join(root, "gateway.log");
-    fs.writeFileSync(
-      entrypoint,
-      [
-        "if (process.argv[2] === 'gateway') {",
-        "  process.stdout.write('x'.repeat(2048));",
-        "  setInterval(() => {}, 1000);",
-        "}",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
+    writeSource(entrypoint, [
+      "if (process.argv[2] === 'gateway') {",
+      "  process.stdout.write('x'.repeat(2048));",
+      "  setInterval(() => {}, 1000);",
+      "}",
+      "",
+    ]);
 
     const child = runtimeSmoke.startGateway({
       entrypoint,
@@ -380,14 +413,10 @@ describe("bundled plugin install/uninstall probe", () => {
     const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
     const root = makePackageRoot();
     const logPath = path.join(root, "gateway.log");
-    fs.writeFileSync(
-      logPath,
-      [
-        "[gateway] ready",
-        "[plugins] cua-computer failed to load from /app/dist/extensions/cua-computer/index.js: missing libX11",
-      ].join("\n"),
-      "utf8",
-    );
+    writeSource(logPath, [
+      "[gateway] ready",
+      "[plugins] cua-computer failed to load from /app/dist/extensions/cua-computer/index.js: missing libX11",
+    ]);
 
     expect(() => runtimeSmoke.assertPluginLoaded(logPath, "cua-computer")).toThrow(
       /cua-computer failed to load/u,
@@ -561,21 +590,7 @@ describe("bundled plugin install/uninstall probe", () => {
         `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid) + "\\n");`,
         fixtureReadySource(descendantPidPath),
       ].join("\n");
-      fs.writeFileSync(
-        entrypoint,
-        [
-          "import childProcess from 'node:child_process';",
-          "if (process.argv[2] === 'gateway') {",
-          `  childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
-            descendantScript,
-          )}], { stdio: "ignore" });`,
-          "  process.on('SIGTERM', () => process.exit(0));",
-          "  setInterval(() => {}, 1000);",
-          "}",
-          "",
-        ].join("\n"),
-        "utf8",
-      );
+      writeGatewayWithChild(entrypoint, descendantScript);
 
       const child = runtimeSmoke.startGateway({
         entrypoint,
@@ -628,21 +643,7 @@ describe("bundled plugin install/uninstall probe", () => {
         "process.on('SIGTERM', () => { child.kill('SIGTERM'); process.exit(0); });",
         "setInterval(() => {}, 1000);",
       ].join("\n");
-      fs.writeFileSync(
-        entrypoint,
-        [
-          "import childProcess from 'node:child_process';",
-          "if (process.argv[2] === 'gateway') {",
-          `  childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
-            helperScript,
-          )}], { stdio: "ignore" });`,
-          "  process.on('SIGTERM', () => process.exit(0));",
-          "  setInterval(() => {}, 1000);",
-          "}",
-          "",
-        ].join("\n"),
-        "utf8",
-      );
+      writeGatewayWithChild(entrypoint, helperScript);
 
       const child = runtimeSmoke.startGateway({
         entrypoint,
@@ -691,38 +692,30 @@ describe("bundled plugin install/uninstall probe", () => {
         `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid) + "\\n");`,
         fixtureReadySource(descendantPidPath),
       ].join("\n");
-      fs.writeFileSync(
-        commandPath,
-        [
-          "import childProcess from 'node:child_process';",
-          `const child = childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
-            descendantScript,
-          )}], { stdio: "ignore" });`,
-          commandSettled ? "child.unref();" : "setInterval(() => {}, 1000);",
-          "",
-        ].join("\n"),
-        "utf8",
-      );
-      fs.writeFileSync(
-        runnerPath,
-        [
-          "import fs from 'node:fs';",
-          `const runtimeSmoke = await import(${JSON.stringify(pathToFileURL(runtimeSmokePath).href)});`,
-          `runtimeSmoke.runCommand(process.execPath, [${JSON.stringify(commandPath)}], {`,
-          "  timeoutMs: 60_000,",
-          ...(commandSettled
-            ? [
-                "}).finally(() => {",
-                `  fs.writeFileSync(${JSON.stringify(commandSettledPath)}, "1");`,
-                "  process.send('command-settled');",
-                "});",
-              ]
-            : ["}).catch(() => undefined);"]),
-          "setInterval(() => {}, 1000);",
-          "",
-        ].join("\n"),
-        "utf8",
-      );
+      writeSource(commandPath, [
+        "import childProcess from 'node:child_process';",
+        `const child = childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
+          descendantScript,
+        )}], { stdio: "ignore" });`,
+        commandSettled ? "child.unref();" : "setInterval(() => {}, 1000);",
+        "",
+      ]);
+      writeSource(runnerPath, [
+        "import fs from 'node:fs';",
+        `const runtimeSmoke = await import(${JSON.stringify(pathToFileURL(runtimeSmokePath).href)});`,
+        `runtimeSmoke.runCommand(process.execPath, [${JSON.stringify(commandPath)}], {`,
+        "  timeoutMs: 60_000,",
+        ...(commandSettled
+          ? [
+              "}).finally(() => {",
+              `  fs.writeFileSync(${JSON.stringify(commandSettledPath)}, "1");`,
+              "  process.send('command-settled');",
+              "});",
+            ]
+          : ["}).catch(() => undefined);"]),
+        "setInterval(() => {}, 1000);",
+        "",
+      ]);
 
       const runner = spawn(process.execPath, [runnerPath], {
         stdio: ["ignore", "ignore", "ignore", "ipc"],
@@ -774,37 +767,20 @@ describe("bundled plugin install/uninstall probe", () => {
         "process.send('ready');",
         "process.disconnect();",
       ].join("\n");
-      fs.writeFileSync(
-        entrypoint,
-        [
-          "import childProcess from 'node:child_process';",
-          "if (process.argv[2] === 'gateway') {",
-          `  const child = childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
-            descendantScript,
-          )}], { stdio: ["ignore", "ignore", "ignore", "ipc"] });`,
-          "  child.once('message', () => process.exit(0));",
-          "}",
-          "",
-        ].join("\n"),
-        "utf8",
-      );
-      fs.writeFileSync(
-        runnerPath,
-        [
-          `const runtimeSmoke = await import(${JSON.stringify(pathToFileURL(runtimeSmokePath).href)});`,
-          "const gateway = runtimeSmoke.startGateway({",
-          `  entrypoint: ${JSON.stringify(entrypoint)},`,
-          "  env: {},",
-          `  logPath: ${JSON.stringify(logPath)},`,
-          "  port: 19004,",
-          "  skipChannels: true,",
-          "});",
-          "gateway.once('close', () => process.send('gateway-closed'));",
-          "setInterval(() => {}, 1000);",
-          "",
-        ].join("\n"),
-        "utf8",
-      );
+      writeGatewayWithChild(entrypoint, descendantScript, true);
+      writeSource(runnerPath, [
+        `const runtimeSmoke = await import(${JSON.stringify(pathToFileURL(runtimeSmokePath).href)});`,
+        "const gateway = runtimeSmoke.startGateway({",
+        `  entrypoint: ${JSON.stringify(entrypoint)},`,
+        "  env: {},",
+        `  logPath: ${JSON.stringify(logPath)},`,
+        "  port: 19004,",
+        "  skipChannels: true,",
+        "});",
+        "gateway.once('close', () => process.send('gateway-closed'));",
+        "setInterval(() => {}, 1000);",
+        "",
+      ]);
 
       const runner = spawn(process.execPath, [runnerPath], {
         env: {
@@ -872,17 +848,13 @@ describe("bundled plugin install/uninstall probe", () => {
     const root = makePackageRoot();
     const statePath = path.join(root, "rpc-state.txt");
     const entrypoint = path.join(root, "dist", "rpc-entry.js");
-    fs.writeFileSync(
-      entrypoint,
-      [
-        "import fs from 'node:fs';",
-        "fs.writeFileSync(process.env.OPENCLAW_TEST_RPC_STATE_PATH, process.env.OPENCLAW_STATE_DIR);",
-        "console.log(JSON.stringify({ ok: true, result: { status: 'ok' } }, null, 2));",
-        "console.log(JSON.stringify({ level: 'warn', message: 'post-rpc diagnostic' }));",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
+    writeSource(entrypoint, [
+      "import fs from 'node:fs';",
+      "fs.writeFileSync(process.env.OPENCLAW_TEST_RPC_STATE_PATH, process.env.OPENCLAW_STATE_DIR);",
+      "console.log(JSON.stringify({ ok: true, result: { status: 'ok' } }, null, 2));",
+      "console.log(JSON.stringify({ level: 'warn', message: 'post-rpc diagnostic' }));",
+      "",
+    ]);
 
     await expect(
       runtimeSmoke.rpcCall(
@@ -908,13 +880,9 @@ describe("bundled plugin install/uninstall probe", () => {
       response.end();
     });
 
-    try {
-      const port = await listenOnLoopback(server);
-
+    await withServer(server, async (port) => {
       await expect(runtimeSmoke.httpOk(port, "/healthz", { timeoutMs: 1000 })).resolves.toBe(true);
-    } finally {
-      await closeServer(server);
-    }
+    });
   });
 
   it.each([
@@ -960,45 +928,29 @@ describe("bundled plugin install/uninstall probe", () => {
       });
       response.end(body);
     });
-    try {
+    await withServer(server, async (port) => {
       const probe = runtimeSmoke.assertReadyzProbe({
         allowedDegradedReadyzFailures: ["qa-channel"],
         pluginId: "qa-channel",
-        port: await listenOnLoopback(server),
+        port,
       });
       if (error) {
         await expect(probe).rejects.toThrow(error);
       } else {
         await expect(probe).resolves.toBeUndefined();
       }
-    } finally {
-      await closeServer(server);
-    }
+    });
   });
 
   it("bounds stalled runtime HTTP probes", async () => {
     const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
-    const sockets = new Set<Socket>();
-    const server = createNetServer((socket) => {
-      sockets.add(socket);
-      socket.on("close", () => {
-        sockets.delete(socket);
-      });
-    });
-
-    try {
-      const port = await listenOnLoopback(server);
+    await withStalledServer(async (port) => {
       const startedAt = Date.now();
 
       await expect(runtimeSmoke.httpOk(port, "/healthz", { timeoutMs: 100 })).resolves.toBe(false);
 
       expect(Date.now() - startedAt).toBeLessThan(2_500);
-    } finally {
-      for (const socket of sockets) {
-        socket.destroy();
-      }
-      await closeServer(server);
-    }
+    });
   });
 
   it("keeps stalled runtime readiness probes inside the ready deadline", async () => {
@@ -1006,19 +958,11 @@ describe("bundled plugin install/uninstall probe", () => {
       OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS: "1000",
       OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS: "50",
     });
-    const sockets = new Set<Socket>();
-    const server = createNetServer((socket) => {
-      sockets.add(socket);
-      socket.on("close", () => {
-        sockets.delete(socket);
-      });
-    });
     const root = makePackageRoot();
     const logPath = path.join(root, "gateway.log");
     fs.writeFileSync(logPath, "booting\n", "utf8");
 
-    try {
-      const port = await listenOnLoopback(server);
+    await withStalledServer(async (port) => {
       const startedAt = Date.now();
 
       await expect(
@@ -1030,12 +974,7 @@ describe("bundled plugin install/uninstall probe", () => {
       ).rejects.toThrow("gateway did not become ready");
 
       expect(Date.now() - startedAt).toBeLessThan(500);
-    } finally {
-      for (const socket of sockets) {
-        socket.destroy();
-      }
-      await closeServer(server);
-    }
+    });
   });
 
   it("creates runtime smoke state with OPENCLAW_HOME at the test home", async () => {
@@ -1060,22 +999,18 @@ describe("bundled plugin install/uninstall probe", () => {
       id: "admin-http-rpc",
       configSchema: { required: ["port"] },
     });
-    fs.writeFileSync(
-      path.join(root, "dist", "index.js"),
-      [
-        "if (process.argv.slice(2).join(' ') !== 'plugins list --json') {",
-        "  process.exit(1);",
-        "}",
-        `console.log(${JSON.stringify(
-          JSON.stringify({
-            plugins: [{ id: "admin-http-rpc", origin: "bundled", rootDir: pluginRoot }],
-          }),
-        )});`,
-        "console.log(JSON.stringify({ level: 'warn', message: 'post-list diagnostic' }));",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
+    writeSource(path.join(root, "dist", "index.js"), [
+      "if (process.argv.slice(2).join(' ') !== 'plugins list --json') {",
+      "  process.exit(1);",
+      "}",
+      `console.log(${JSON.stringify(
+        JSON.stringify({
+          plugins: [{ id: "admin-http-rpc", origin: "bundled", rootDir: pluginRoot }],
+        }),
+      )});`,
+      "console.log(JSON.stringify({ level: 'warn', message: 'post-list diagnostic' }));",
+      "",
+    ]);
 
     const result = runProbe(root, {
       OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS: undefined,
