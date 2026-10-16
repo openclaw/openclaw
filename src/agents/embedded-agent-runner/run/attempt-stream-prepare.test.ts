@@ -6,10 +6,7 @@ import type { Context } from "../../../llm/types.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../../sessions/user-turn-transcript.test-support.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import {
-  prepareAgentRunAdmission,
-  createOperationalRunInstanceRef,
-} from "../../admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { registerPendingAgentQuestion } from "../../harness/gateway-question.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../harness/tool-authority.runtime.js";
 import {
@@ -169,15 +166,12 @@ describe("prepareEmbeddedAttemptStream", () => {
   ] as const)(
     "checks %s during real session %s preparation before its effect",
     async (transition, route) => {
-      const admission = prepareAgentRunAdmission({
-        cfg: {},
-        operationalRunInstance: createOperationalRunInstanceRef("run-output-schema"),
-        facts: {
-          agentId: "main",
-          runId: "run-output-schema",
-          ingress: { kind: "system", state: "present", boundary: "queue-test" },
-        },
-      });
+      const admission = prepareSystemAgentRunAdmission(
+        {},
+        "run-output-schema",
+        "main",
+        "queue-test",
+      );
       try {
         const admittedRunContext = await admission.admit("embedded", "queue-test");
         await withPreparedEmbeddedRunToolAuthority(
@@ -233,7 +227,7 @@ describe("prepareEmbeddedAttemptStream", () => {
               return undefined;
             });
             const queued = vi.spyOn(session.agent, "admitSteeringMessage");
-            const prepared = prepareCatalogExecutor({
+            const { queueHandle, subscription } = prepareCatalogExecutor({
               activeSession: session,
               attempt: preparedAttempt,
             });
@@ -244,7 +238,7 @@ describe("prepareEmbeddedAttemptStream", () => {
               }
               return sourceCurrent;
             });
-            const delivery = prepared.queueHandle.messageInjectionV2!.queueMessage(
+            const delivery = queueHandle.messageInjectionV2!.queueMessage(
               "redirect the original",
               { isInboundUserMessage: true, userTurnTranscriptRecorder: recorder },
               assertCurrent,
@@ -261,7 +255,7 @@ describe("prepareEmbeddedAttemptStream", () => {
               } else if (transition === "replacement") {
                 mocks.setActiveRun(
                   sessionId,
-                  { ...prepared.queueHandle },
+                  { ...queueHandle },
                   sessionKey,
                   preparedAttempt.sessionFile,
                 );
@@ -283,18 +277,16 @@ describe("prepareEmbeddedAttemptStream", () => {
                 accepted && route === "steering" ? ["redirect the original"] : [],
               );
               if (transition.startsWith("source-")) {
-                const authority = ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(
-                  prepared.queueHandle,
-                )?.toolAuthority;
+                const authority = ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(queueHandle)?.toolAuthority;
                 expect(authority).toBeDefined();
                 authority!.assertActive();
-                expect(ACTIVE_EMBEDDED_RUNS.get(sessionId)).toBe(prepared.queueHandle);
+                expect(ACTIVE_EMBEDDED_RUNS.get(sessionId)).toBe(queueHandle);
               }
             } finally {
               release.resolve();
               await outcome;
               question?.dispose();
-              prepared.subscription.unsubscribe();
+              subscription.unsubscribe();
               vi.restoreAllMocks();
             }
           },
@@ -585,33 +577,30 @@ describe("prepareEmbeddedAttemptStream", () => {
     },
   );
 
-  it.each(["deferred lifecycle adoption"] as const)(
-    "releases acquired stream subscriptions when %s fails",
-    async (stage) => {
-      const { session, listeners, releases } = await trackPreparedStreamSubscriptions((subscribe) =>
-        mocks.subscribe.mockImplementation(subscribe),
-      );
-      const failure = new Error(`${stage} failed`);
-      const fail = () => {
-        throw failure;
-      };
-      expect(() =>
-        prepareCatalogExecutor({
-          activeSession: session,
-          attempt: {
-            deferTerminalLifecycle: true,
-            onDeferredLifecycleOwner: fail,
-          },
-        }),
-      ).toThrow(failure);
-      expect(releases).toHaveLength(2);
-      expect(listeners.size).toBe(0);
-      for (const release of releases) {
-        expect(release).toHaveBeenCalledOnce();
-      }
-      expect(ACTIVE_EMBEDDED_RUNS.has(sessionId)).toBe(false);
-    },
-  );
+  it("releases subscriptions when deferred lifecycle adoption fails", async () => {
+    const { session, listeners, releases } = await trackPreparedStreamSubscriptions((subscribe) =>
+      mocks.subscribe.mockImplementation(subscribe),
+    );
+    const failure = new Error("deferred lifecycle adoption failed");
+    const fail = () => {
+      throw failure;
+    };
+    expect(() =>
+      prepareCatalogExecutor({
+        activeSession: session,
+        attempt: {
+          deferTerminalLifecycle: true,
+          onDeferredLifecycleOwner: fail,
+        },
+      }),
+    ).toThrow(failure);
+    expect(releases).toHaveLength(2);
+    expect(listeners.size).toBe(0);
+    for (const release of releases) {
+      expect(release).toHaveBeenCalledOnce();
+    }
+    expect(ACTIVE_EMBEDDED_RUNS.has(sessionId)).toBe(false);
+  });
 
   it("releases each stream subscription once through complete cleanup", async () => {
     const { session, listeners, releases } = await trackPreparedStreamSubscriptions((subscribe) =>

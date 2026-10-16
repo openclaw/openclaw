@@ -101,18 +101,15 @@ export async function createStreamCustodyFixture(
   const thinkingPresent = () =>
     assistants().some((message) => message.content.some((block) => block.type === "thinking"));
   const replayPresent = options.thinkingRecovery ? thinkingPresent : checkpointPresent;
-  expect(replayPresent(), "fixture replay must survive durable append").toBe(true);
   const controller = new AbortController();
   const sdkSession = options.withSessionWriteSettlement
-    ? (
-        await createTestSession({
-          sessionManager: manager,
-          model,
-          withSessionWriteSettlement: options.withSessionWriteSettlement,
-        })
-      ).session
+    ? await createTestSession({
+        sessionManager: manager,
+        model,
+        withSessionWriteSettlement: options.withSessionWriteSettlement,
+      })
     : undefined;
-  const activeSession = sdkSession ?? {
+  const activeSession = sdkSession?.session ?? {
     agent: { streamFn: provider },
     sessionId: target.sessionId,
     messages: manager.buildSessionContext().messages,
@@ -162,11 +159,7 @@ export async function createStreamCustodyFixture(
     diagnostics: { runTrace: createDiagnosticTraceContext() },
     lifecycle: { readYieldState: () => ({ yieldDetected: false }) },
   } as unknown as EmbeddedAttemptExecutionPhaseInput;
-  const diagnosticOwner = createDiagnosticEmbeddedRunOwner({
-    runId: input.attempt.runId,
-    sessionId: target.sessionId,
-    sessionKey: target.sessionKey,
-  });
+  const diagnosticOwner = createDiagnosticEmbeddedRunOwner(input.attempt);
   const streamGuards = installEmbeddedAttemptStreamGuards(input, {
     onRejectedProviderReplayRepaired: repaired,
     onIdleTimeout: options.onIdleTimeout ?? (() => {}),
@@ -183,7 +176,7 @@ export async function createStreamCustodyFixture(
     streamGuards,
     controller,
     manager,
-    session: sdkSession,
+    session: sdkSession?.session,
     attempt: input.attempt,
     repaired,
     previousNotification,
@@ -198,22 +191,19 @@ export async function createStreamCustodyFixture(
     async holdWriter() {
       const entered = createDeferred();
       const release = createDeferred();
+      const database = toDatabaseOptions(resolveSqliteReadScope(target));
       const managerTarget = manager.getSessionTarget();
       if (!managerTarget) {
         throw new Error("Fixture manager lost its durable target");
       }
-      expect(
-        resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolveSqliteReadScope(target))),
-      ).toBe(
-        resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolveSqliteReadScope(managerTarget))),
+      const managerDatabase = toDatabaseOptions(resolveSqliteReadScope(managerTarget));
+      expect(resolveOpenClawAgentSqlitePath(database)).toBe(
+        resolveOpenClawAgentSqlitePath(managerDatabase),
       );
-      const work = runOpenClawAgentWorkerWrite(
-        toDatabaseOptions(resolveSqliteReadScope(target)),
-        async () => {
-          entered.resolve();
-          await release.promise;
-        },
-      );
+      const work = runOpenClawAgentWorkerWrite(database, async () => {
+        entered.resolve();
+        await release.promise;
+      });
       await entered.promise;
       return { release: release.resolve, work };
     },

@@ -35,10 +35,7 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../../state/openclaw-agent-db.js";
-import {
-  prepareAgentRunAdmission,
-  createOperationalRunInstanceRef,
-} from "../../admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import {
   mergeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
@@ -90,7 +87,19 @@ const nextTurn = () =>
     setImmediate(resolve);
   });
 
-function anthropicSse(events: Array<Record<string, unknown>>): Response {
+function anthropicTurn(inputTokens: number, blocks: Array<Record<string, unknown>> = []) {
+  const events = [
+    {
+      type: "message_start",
+      message: { id: `msg_${inputTokens}`, usage: { input_tokens: inputTokens } },
+    },
+    ...blocks.flatMap((content_block, index) => [
+      { type: "content_block_start", index, content_block },
+      { type: "content_block_stop", index },
+    ]),
+    { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+    { type: "message_stop" },
+  ];
   return new Response(
     events
       .map((event) => `event: ${String(event.type)}\ndata: ${JSON.stringify(event)}\n\n`)
@@ -116,6 +125,41 @@ function completedStream(text: string) {
   const stream = createAssistantMessageEventStream();
   stream.end(textAssistant(text));
   return stream;
+}
+
+function terminalStream(text: string) {
+  const stream = createAssistantMessageEventStream();
+  stream.push({ type: "done", reason: "stop", message: textAssistant(text) });
+  return stream;
+}
+
+function rejectingReplay(provider: StreamFn): StreamFn {
+  return (model, context, options) => {
+    (options as ReplayOptions).onCompactionRejected?.(checkpoint);
+    return provider(model, context, options);
+  };
+}
+
+async function withHeldWriter(
+  fixture: Awaited<ReturnType<typeof createFixture>>,
+  run: (
+    release: () => void,
+    pending: Promise<unknown>[],
+    close: (iterator: AsyncIterator<AssistantMessageEvent>) => void,
+  ) => Promise<void>,
+) {
+  const held = await fixture.holdWriter();
+  const pending: Promise<unknown>[] = [];
+  let iterator: AsyncIterator<AssistantMessageEvent> | undefined;
+  try {
+    await run(held.release, pending, (value) => {
+      iterator = value;
+    });
+  } finally {
+    held.release();
+    await Promise.allSettled([held.work, ...pending]);
+    await iterator?.return?.();
+  }
 }
 
 function createFixture(
@@ -209,112 +253,75 @@ describe("installed replay repair ownership", () => {
     { failureMode: "request-rejection", boundary: "return-before-next" },
     { failureMode: "stream-rejection", boundary: "concurrent-results" },
     { failureMode: "promised-stream-rejection", boundary: "event" },
+    { failureMode: "checkpoint", boundary: "result" },
+    { failureMode: "checkpoint", boundary: "completion" },
+    { failureMode: "checkpoint", boundary: "return-before-next" },
   ] as const)(
-    "keeps $boundary behind the admitted thinking repair after $failureMode",
+    "keeps $boundary behind the admitted repair after $failureMode",
     async ({ failureMode, boundary }) => {
       let requests = 0;
+      const thinking = failureMode !== "checkpoint";
       const fixture = await createFixture(
-        (model) => {
-          if (++requests === 1 && failureMode === "request-rejection") {
-            return Promise.reject(new Error("thinking signature invalid"));
-          }
-          const stream = createAssistantMessageEventStream();
-          if (requests === 1) {
-            stream.push({
-              type: "error",
-              reason: "error",
-              error: {
-                ...createAssistant(model, [], "error"),
-                errorMessage: "thinking signature invalid",
-              },
-            });
-          } else {
-            stream.push({
-              type: "done",
-              reason: "stop",
-              message: textAssistant("Synthetic recovered response", model),
-            });
-          }
-          return failureMode === "promised-stream-rejection" ? Promise.resolve(stream) : stream;
+        thinking
+          ? (model) => {
+              if (++requests === 1 && failureMode === "request-rejection") {
+                return Promise.reject(new Error("thinking signature invalid"));
+              }
+              const stream = createAssistantMessageEventStream();
+              if (requests === 1) {
+                stream.push({
+                  type: "error",
+                  reason: "error",
+                  error: {
+                    ...createAssistant(model, [], "error"),
+                    errorMessage: "thinking signature invalid",
+                  },
+                });
+              } else {
+                stream.push({
+                  type: "done",
+                  reason: "stop",
+                  message: textAssistant("Synthetic recovered response", model),
+                });
+              }
+              return failureMode === "promised-stream-rejection" ? Promise.resolve(stream) : stream;
+            }
+          : rejectingReplay(() =>
+              (boundary === "completion" ? completedStream : terminalStream)("Synthetic response"),
+            ),
+        {
+          thinkingRecovery: thinking,
+          toolNames: !thinking && boundary === "return-before-next" ? ["read"] : [],
         },
-        { thinkingRecovery: true },
       );
-      const held = await fixture.holdWriter();
-      const pending: Promise<unknown>[] = [];
-      let iterator: AsyncIterator<AssistantMessageEvent> | undefined;
-      try {
+      const replayPresent = thinking ? fixture.thinkingPresent : fixture.checkpointPresent;
+      await withHeldWriter(fixture, async (release, pending, close) => {
         const response = await fixture.open();
-        iterator = response[Symbol.asyncIterator]();
+        const iterator = response[Symbol.asyncIterator]();
+        close(iterator);
         if (boundary === "concurrent-results") {
           pending.push(response.result(), response.result());
+        } else if (boundary === "result") {
+          pending.push(response.result());
+        } else if (boundary === "return-before-next") {
+          pending.push(Promise.resolve(iterator.return?.()));
         } else {
-          pending.push(
-            boundary === "event" ? iterator.next() : Promise.resolve(iterator.return?.()),
-          );
+          pending.push(iterator.next());
         }
         const settled = pending.map(observeSettlement);
         await nextTurn();
-        expect(requests).toBe(2);
-        expect(fixture.thinkingPresent()).toBe(true);
+        if (thinking) {
+          expect(requests).toBe(2);
+        } else {
+          expect(fixture.previousNotification).toHaveBeenCalledExactlyOnceWith(checkpoint);
+        }
+        expect(replayPresent()).toBe(true);
         expect(settled.map((read) => read())).toEqual(pending.map(() => false));
-        held.release();
+        release();
         await Promise.all(pending);
-        expect(fixture.thinkingPresent()).toBe(false);
+        expect(replayPresent()).toBe(false);
         expect(fixture.repaired).toHaveBeenCalledOnce();
-      } finally {
-        held.release();
-        await Promise.allSettled([held.work, ...pending]);
-        await iterator?.return?.();
-      }
-    },
-  );
-
-  it.each([
-    { boundary: "result", tools: false },
-    { boundary: "completion", tools: false },
-    { boundary: "return-before-next", tools: true },
-  ] as const)(
-    "keeps $boundary behind the admitted transcript repair (tools=$tools)",
-    async ({ boundary, tools }) => {
-      const final = textAssistant("Synthetic response");
-      const fixture = await createFixture(
-        (_model, _context, options) => {
-          (options as ReplayOptions).onCompactionRejected?.(checkpoint);
-          const stream = createAssistantMessageEventStream();
-          if (boundary === "completion") {
-            stream.end(final);
-          } else {
-            stream.push({ type: "done", reason: "stop", message: final });
-          }
-          return stream;
-        },
-        { toolNames: tools ? ["read"] : [] },
-      );
-      const held = await fixture.holdWriter();
-      let pending: Promise<unknown> | undefined;
-      try {
-        const response = await fixture.open();
-        const iterator = response[Symbol.asyncIterator]();
-        pending =
-          boundary === "result"
-            ? response.result()
-            : boundary === "return-before-next"
-              ? Promise.resolve(iterator.return?.())
-              : iterator.next();
-        const settled = observeSettlement(pending);
-        await nextTurn();
-        expect(fixture.checkpointPresent()).toBe(true);
-        expect(fixture.previousNotification).toHaveBeenCalledExactlyOnceWith(checkpoint);
-        expect(settled()).toBe(false);
-        held.release();
-        await pending;
-        expect(fixture.checkpointPresent()).toBe(false);
-        expect(fixture.repaired).toHaveBeenCalledOnce();
-        await iterator.return?.();
-      } finally {
-        held.release();
-        await Promise.allSettled([held.work, pending]);
-      }
+      });
     },
   );
 
@@ -329,38 +336,16 @@ describe("installed replay repair ownership", () => {
     const requests: Array<{ messages: unknown }> = [];
     const responses: Array<() => Response> = [
       () =>
-        anthropicSse([
-          { type: "message_start", message: { id: "msg_1", usage: { input_tokens: 50_001 } } },
-          {
-            type: "content_block_start",
-            index: 0,
-            content_block: { type: "compaction", content: checkpoint.data },
-          },
-          { type: "content_block_stop", index: 0 },
-          { type: "content_block_start", index: 1, content_block: { type: "text", text: "Done." } },
-          { type: "content_block_stop", index: 1 },
-          {
-            type: "message_delta",
-            delta: { stop_reason: "end_turn" },
-            usage: { output_tokens: 1 },
-          },
-          { type: "message_stop" },
+        anthropicTurn(50_001, [
+          { type: "compaction", content: checkpoint.data },
+          { type: "text", text: "Done." },
         ]),
       () => {
         throw Object.assign(new Error("context_management compaction block is invalid"), {
           status: 400,
         });
       },
-      () =>
-        anthropicSse([
-          { type: "message_start", message: { id: "msg_3", usage: { input_tokens: 1 } } },
-          {
-            type: "message_delta",
-            delta: { stop_reason: "end_turn" },
-            usage: { output_tokens: 1 },
-          },
-          { type: "message_stop" },
-        ]),
+      () => anthropicTurn(1),
     ];
     const client = {
       messages: {
@@ -401,31 +386,22 @@ describe("installed replay repair ownership", () => {
 
   it("retains rejected stream setup until its notified repair settles", async () => {
     const setupError = new Error("Synthetic provider setup failed");
-    const fixture = await createFixture((_model, _context, options) => {
-      (options as ReplayOptions).onCompactionRejected?.(checkpoint);
-      return Promise.reject(setupError);
-    });
-    const held = await fixture.holdWriter();
-    const pending = Promise.resolve(fixture.open());
-    const settled = observeSettlement(pending);
-    try {
+    const fixture = await createFixture(rejectingReplay(() => Promise.reject(setupError)));
+    await withHeldWriter(fixture, async (release, tracked) => {
+      const pending = Promise.resolve(fixture.open());
+      tracked.push(pending);
+      const settled = observeSettlement(pending);
       await nextTurn();
       expect(settled()).toBe(false);
-      held.release();
+      release();
       await expect(pending).rejects.toBe(setupError);
       expect(fixture.checkpointPresent()).toBe(false);
-    } finally {
-      held.release();
-      await Promise.allSettled([held.work, pending]);
-    }
+    });
   });
 
   it("owns late stream creation after caller cancellation without publishing a repair", async () => {
     const source = createDeferred<AssistantMessageEventStream>();
-    const fixture = await createFixture((_model, _context, options) => {
-      (options as ReplayOptions).onCompactionRejected?.(checkpoint);
-      return source.promise;
-    });
+    const fixture = await createFixture(rejectingReplay(() => source.promise));
     // The tested scope must not own the blocker or raw provider promise itself.
     const held = await fixture.holdWriter();
     const work = new AsyncWorkScope();
@@ -600,31 +576,20 @@ describe("installed replay repair ownership", () => {
   });
 
   it("does not classify a completed native producer's queued repair as provider silence", async () => {
-    const final = textAssistant("Native terminal");
-    const fixture = await createFixture((_model, _context, options) => {
-      (options as ReplayOptions).onCompactionRejected?.(checkpoint);
-      const stream = createAssistantMessageEventStream();
-      stream.push({ type: "done", reason: "stop", message: final });
-      return stream;
-    });
-    const held = await fixture.holdWriter();
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    let pending: Promise<unknown> | undefined;
-    let iterator: AsyncIterator<AssistantMessageEvent> | undefined;
-    try {
+    const fixture = await createFixture(rejectingReplay(() => terminalStream("Native terminal")));
+    await withHeldWriter(fixture, async (release, tracked, close) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const response = await fixture.open();
-      iterator = response[Symbol.asyncIterator]();
-      pending = iterator.next();
+      const iterator = response[Symbol.asyncIterator]();
+      close(iterator);
+      const pending = iterator.next();
+      tracked.push(pending);
       const settled = observeSettlement(pending);
       await vi.advanceTimersByTimeAsync(120_001);
       expect(settled()).toBe(false);
-      held.release();
+      release();
       await expect(pending).resolves.toMatchObject({ done: false, value: { type: "done" } });
-    } finally {
-      held.release();
-      await Promise.allSettled([held.work, pending]);
-      await iterator?.return?.();
-    }
+    });
   });
 });
 
@@ -682,15 +647,12 @@ it.each(["caller cancellation", "reclamation"] as const)(
       resetTriggered: false,
     });
     operation.setPhase("running");
-    const admission = prepareAgentRunAdmission({
-      cfg: {},
-      operationalRunInstance: createOperationalRunInstanceRef(fixture.attempt.runId),
-      facts: {
-        agentId: "main",
-        runId: fixture.attempt.runId,
-        ingress: { kind: "system", state: "present", boundary: "watchdog-custody" },
-      },
-    });
+    const admission = prepareSystemAgentRunAdmission(
+      {},
+      fixture.attempt.runId,
+      "main",
+      "watchdog-custody",
+    );
     let active: Promise<void> | undefined;
     let queued: Promise<void> | undefined;
     let recovery: ReturnType<typeof recoverStuckDiagnosticSession> | undefined;
@@ -710,7 +672,6 @@ it.each(["caller cancellation", "reclamation"] as const)(
       provider: fixture.attempt.provider,
       model: fixture.attempt.modelId,
       workspaceDir: path.dirname(fixture.manager.getSessionTarget()!.storePath!),
-      // Existing lane fixtures use this logical transcript locator; no file is written.
       sessionFile: path.join(
         path.dirname(fixture.manager.getSessionTarget()!.storePath!),
         `${fixture.attempt.sessionId}.jsonl`,
@@ -733,6 +694,27 @@ it.each(["caller cancellation", "reclamation"] as const)(
         params = value;
       },
     });
+    const requestRecovery = () => {
+      const pending = recoverStuckDiagnosticSession({
+        sessionId: fixture.attempt.sessionId,
+        sessionKey: fixture.attempt.sessionKey,
+        ageMs: 5 * 60_000 + 1,
+        queueDepth: 1,
+        allowActiveAbort: true,
+      });
+      void pending.catch(() => {});
+      return pending;
+    };
+    const clearRun = () => {
+      prepared?.subscription.unsubscribe();
+      if (prepared) {
+        clearActiveEmbeddedRun(
+          fixture.attempt.sessionId,
+          prepared.queueHandle,
+          fixture.attempt.sessionKey,
+        );
+      }
+    };
     try {
       const admittedRunContext = await admission.admit("embedded", "watchdog-custody");
       await withPreparedEmbeddedRunToolAuthority(
@@ -827,14 +809,7 @@ it.each(["caller cancellation", "reclamation"] as const)(
             sessionKey: fixture.attempt.sessionKey,
             state: "processing",
           });
-          recovery = recoverStuckDiagnosticSession({
-            sessionId: fixture.attempt.sessionId,
-            sessionKey: fixture.attempt.sessionKey,
-            ageMs: 5 * 60_000 + 1,
-            queueDepth: 1,
-            allowActiveAbort: true,
-          });
-          void recovery.catch(() => {});
+          recovery = requestRecovery();
           const cancelled = await Promise.race([
             providerAborted.promise.then(() => ({ kind: "cancelled" as const })),
             recovery.then((outcome) => ({ kind: "returned" as const, outcome })),
@@ -845,28 +820,22 @@ it.each(["caller cancellation", "reclamation"] as const)(
             );
           }
           await nextTurn();
-          // Named baseline defect: current recovery expires parent/run_stalled
-          // and external abort calls onAttemptAbort, cancelling the parent lane.
-          expect.soft(operation.result).toBeNull();
-          expect.soft(operation.abortSignal.aborted).toBe(false);
-          expect.soft(lane.abortSignal.aborted).toBe(false);
-          expect.soft(controls.isCurrent()).toBe(true);
+          const expectCustody = () =>
+            expect
+              .soft([
+                operation.result,
+                operation.abortSignal.aborted,
+                lane.abortSignal.aborted,
+                controls.isCurrent(),
+              ])
+              .toEqual([null, false, false, true]);
+          expectCustody();
           expect(activeSettled()).toBe(false);
           expect(queuedStarted).not.toHaveBeenCalled();
           vi.setSystemTime(Date.now() + 5 * 60_000 + 1);
-          repeatedRecovery = recoverStuckDiagnosticSession({
-            sessionId: fixture.attempt.sessionId,
-            sessionKey: fixture.attempt.sessionKey,
-            ageMs: 5 * 60_000 + 1,
-            queueDepth: 1,
-            allowActiveAbort: true,
-          });
-          void repeatedRecovery.catch(() => {});
+          repeatedRecovery = requestRecovery();
           await nextTurn();
-          expect.soft(operation.result).toBeNull();
-          expect.soft(operation.abortSignal.aborted).toBe(false);
-          expect.soft(lane.abortSignal.aborted).toBe(false);
-          expect.soft(controls.isCurrent()).toBe(true);
+          expectCustody();
           expect(queuedStarted).not.toHaveBeenCalled();
           if (ending === "caller cancellation") {
             expect(operation.abortByUser()).toBe(true);
@@ -894,17 +863,10 @@ it.each(["caller cancellation", "reclamation"] as const)(
           await Promise.allSettled([prompt, tracker.buildAbortSettlePromise()]);
           releaseParent.resolve();
           await active.catch(() => {});
-          // Do not fake a fallback receipt here. Real outer run-loop integration
-          // must separately show its normal recovery/fallback after settlement.
           await recovery;
           await repeatedRecovery;
           await queued;
-          prepared.subscription.unsubscribe();
-          clearActiveEmbeddedRun(
-            fixture.attempt.sessionId,
-            prepared.queueHandle,
-            fixture.attempt.sessionKey,
-          );
+          clearRun();
           expect(prepared.queueHandle.recoverStalledModelCall?.()).toBe(false);
         },
       );
@@ -913,14 +875,7 @@ it.each(["caller cancellation", "reclamation"] as const)(
       releaseRawProvider?.();
       releaseParent.resolve();
       await Promise.allSettled([active, prompt, recovery, repeatedRecovery, queued]);
-      prepared?.subscription.unsubscribe();
-      if (prepared) {
-        clearActiveEmbeddedRun(
-          fixture.attempt.sessionId,
-          prepared.queueHandle,
-          fixture.attempt.sessionKey,
-        );
-      }
+      clearRun();
       operation.complete();
       admission.close();
       stopDiagnosticRunActivityTracking();
