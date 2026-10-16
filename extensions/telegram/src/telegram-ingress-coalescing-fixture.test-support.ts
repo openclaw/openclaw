@@ -96,26 +96,6 @@ export function createDownstreamTurnFixture(
     return downstreamTurns.mock.calls[0]?.[0] as MsgContext & Record<string, unknown>;
   }
 
-  async function assertAlbumTurnAndTombstones(params: {
-    stateDir: string;
-    updateIds: number[];
-    monitor: ReturnType<typeof createTelegramTransportIngressMonitor>;
-  }) {
-    await params.monitor.waitForDeferredClaims();
-    const turn = await awaitSingleDownstreamTurn();
-    expect(turn.Body).toContain("Two photo album");
-    expect(turn.media).toMatchObject([
-      { path: "/tmp/photo-1.jpg", kind: "image" },
-      { path: "/tmp/photo-2.jpg", kind: "image" },
-    ]);
-    await assertSpoolTombstoned(params);
-  }
-
-  function holdFirstDownstreamTurn() {
-    const { releaseHead, turnsDeferred } = holdDownstreamLane(true);
-    return { headDispatched: turnsDeferred[0], releaseHead };
-  }
-
   function holdDownstreamLane(firstOnly = false) {
     const releaseHead = createDeferred<void>();
     const turnsDeferred = [createDeferred<void>(), createDeferred<void>()] as const;
@@ -156,8 +136,6 @@ export function createDownstreamTurnFixture(
   return {
     captureNextDownstreamTurn,
     awaitSingleDownstreamTurn,
-    assertAlbumTurnAndTombstones,
-    holdFirstDownstreamTurn,
     holdDownstreamLane,
   };
 }
@@ -226,9 +204,7 @@ export async function createIngressMonitor(
     bot,
     accountId: "default",
     botInfo: telegramBotInfoForTest,
-    ...(options.adoptionStallTimeoutMs === undefined
-      ? {}
-      : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
+    adoptionStallTimeoutMs: options.adoptionStallTimeoutMs,
     pollIntervalMs: options.pollIntervalMs ?? 10,
   });
   return { monitor, telegramTransport, abortController, bot };
@@ -302,32 +278,22 @@ export function interceptReplayGuard(hooks: {
     .spyOn(messageDispatchDedupe, "createTelegramMessageDispatchReplayGuard")
     .mockImplementation((options) => {
       const guard = createGuard(options);
-      const forget = hooks.forget;
-      return {
-        ...guard,
-        claim: async (...args) => {
-          const claim = await guard.claim(...args);
-          if (claim.kind !== "claimed") {
-            return claim;
-          }
-          return {
-            ...claim,
-            handle: {
-              ...claim.handle,
-              commit: async (commitOptions) => {
-                commitCount += 1;
-                return await hooks.commit(commitCount, () => claim.handle.commit(commitOptions));
-              },
-            },
-          };
-        },
-        ...(forget
-          ? {
-              forget: async (...args: Parameters<typeof guard.forget>) =>
-                await forget(() => guard.forget(...args)),
-            }
-          : {}),
+      const claim = guard.claim;
+      guard.claim = async (...args) => {
+        const result = await claim(...args);
+        if (result.kind === "claimed") {
+          const commit = result.handle.commit;
+          result.handle.commit = (commitOptions) =>
+            hooks.commit(++commitCount, () => commit(commitOptions));
+        }
+        return result;
       };
+      const forgetHook = hooks.forget;
+      if (forgetHook) {
+        const forget = guard.forget;
+        guard.forget = (...args) => forgetHook(() => forget(...args));
+      }
+      return guard;
     });
   return {
     settlements,

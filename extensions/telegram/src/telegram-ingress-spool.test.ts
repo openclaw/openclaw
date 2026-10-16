@@ -109,7 +109,6 @@ describe("telegram ingress spool ordering", () => {
         accountId: "acct",
         ...pollEntry("poll-topic-order"),
       });
-      const voteUpdate = vote("poll-topic-order");
       const messageUpdate = message(10, 99, "after vote");
       const { promise: voteReleased, resolve: releaseVote } = createDeferred<void>();
       const { dispatchOrder, onError, queue, monitor } = createMonitor(stateDir, voteReleased);
@@ -118,29 +117,25 @@ describe("telegram ingress spool ordering", () => {
       try {
         await monitor.waitForIdle();
         const admissions = await Promise.all([
-          monitor.admit(voteUpdate),
+          monitor.admit(vote("poll-topic-order")),
           monitor.admit(messageUpdate),
         ]);
         expect(admissions.map((result) => result.kind)).toEqual(["durable", "durable"]);
         await monitor.waitForPumpIdle();
         await vi.waitFor(() => expect(dispatchOrder).toEqual([9]));
         expect(onError).not.toHaveBeenCalled();
+        const preparedPollAnswer = {
+          entry: expect.objectContaining({ threadSpec: { scope: "forum", id: 99 } }),
+        };
         expect(await queue.listClaims()).toEqual([
           expect.objectContaining({
             id: "0000000000000009",
             laneKey: "telegram:-100123:topic:99",
-            payload: expect.objectContaining({
-              preparedPollAnswer: {
-                entry: expect.objectContaining({ threadSpec: { scope: "forum", id: 99 } }),
-              },
-            }),
+            payload: expect.objectContaining({ preparedPollAnswer }),
           }),
         ]);
-        expect(await queue.listPending({ limit: "all" })).toEqual([
-          expect.objectContaining({
-            id: "0000000000000010",
-            laneKey: "telegram:-100123:topic:99",
-          }),
+        expect(await queue.listPending({ limit: "all" })).toMatchObject([
+          { id: "0000000000000010", laneKey: "telegram:-100123:topic:99" },
         ]);
         releaseVote();
         await monitor.waitForIdle();
@@ -156,7 +151,6 @@ describe("telegram ingress spool ordering", () => {
     await withTempState(async (stateDir) => {
       const entry = pollEntry("poll-pending-topic");
       const registration = beginTelegramPollRegistration({ accountId: "acct", entry });
-      const voteUpdate = vote(entry.pollId);
       const unrelatedUpdate = message(10, 100, "unrelated topic");
       const sameTopicUpdate = message(11, 99, "after vote");
       const { dispatchOrder, queue, monitor } = createMonitor(stateDir);
@@ -165,7 +159,7 @@ describe("telegram ingress spool ordering", () => {
       await monitor.waitForIdle();
       await expect(
         Promise.all([
-          monitor.admit(voteUpdate),
+          monitor.admit(vote(entry.pollId)),
           monitor.admit(unrelatedUpdate),
           monitor.admit(sameTopicUpdate),
         ]),
@@ -173,9 +167,7 @@ describe("telegram ingress spool ordering", () => {
       await vi.waitFor(() => expect(dispatchOrder).toContain(10));
       expect(dispatchOrder).not.toContain(9);
       expect(dispatchOrder).not.toContain(11);
-      expect(await queue.listClaims()).toEqual([
-        expect.objectContaining({ laneKey: "telegram:-100123:topic:99" }),
-      ]);
+      expect(await queue.listClaims()).toMatchObject([{ laneKey: "telegram:-100123:topic:99" }]);
 
       registration.complete(entry);
       await monitor.waitForIdle();

@@ -1,4 +1,3 @@
-// Telegram ingress drain adapter: dispatch result propagation.
 import { GrammyError } from "grammy";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -41,12 +40,7 @@ function createFixture(stateDir: string) {
     stateDir,
     queue,
     monitor: (options: Parameters<MakeMonitor>[0]) =>
-      createTelegramIngressMonitor({
-        queue,
-        getConfig: () => cfg,
-        accountId: "default",
-        ...options,
-      }),
+      createTelegramIngressMonitor({ queue, ...monitorDefaults, ...options }),
     enqueue: async (updateId: number) => {
       const payload = updatePayload(updateId);
       const eventId = String(updateId).padStart(16, "0");
@@ -63,29 +57,21 @@ async function withTempState<T>(fn: (fixture: ReturnType<typeof createFixture>) 
   );
 }
 
-const cfg = {
-  channels: {
-    telegram: {
-      allowFrom: ["111"],
-      dmPolicy: "allowlist",
-    },
-  },
-} as OpenClawConfig;
+const cfg: OpenClawConfig = {
+  channels: { telegram: { allowFrom: ["111"], dmPolicy: "allowlist" } },
+};
+const monitorDefaults = { getConfig: () => cfg, accountId: "default" };
 
-function updatePayload(updateId: number): TelegramSpooledUpdatePayload {
+function updatePayload(updateId: number) {
   return {
     version: 1,
     updateId,
     receivedAt: updateId,
     update: {
       update_id: updateId,
-      message: {
-        text: "hello",
-        from: { id: 111 },
-        chat: { id: 111, type: "private" },
-      },
+      message: { text: "hello", from: { id: 111 }, chat: { id: 111, type: "private" } },
     },
-  };
+  } satisfies TelegramSpooledUpdatePayload;
 }
 
 function telegramSendError(errorCode: number, description: string): GrammyError {
@@ -117,11 +103,7 @@ async function createTelegramMessageDispatchReplayForgetError(): Promise<unknown
     release: () => undefined,
   }));
   try {
-    await commitTelegramMessageDispatchReplay({
-      guard,
-      claims,
-      requirePersistent: true,
-    });
+    await commitTelegramMessageDispatchReplay({ guard, claims, requirePersistent: true });
   } catch (error) {
     return error;
   }
@@ -186,47 +168,26 @@ describe("createTelegramIngressMonitor", () => {
   ])("dead-letters a $name without retrying it", async ({ error, reason, message }) => {
     await withTempState(async ({ queue, monitor: makeMonitor, enqueue }) => {
       const { eventId } = await enqueue(3);
-
       const dispatch = vi.fn(async () => ({ kind: "failed-retryable" as const, error }));
-      const monitor = makeMonitor({
-        dispatch,
-      });
+      const monitor = makeMonitor({ dispatch });
 
       monitor.start();
       await monitor.waitForIdle();
 
       expect(dispatch).toHaveBeenCalledOnce();
       expect(await queue.listFailed?.({ limit: "all" })).toEqual([
-        expect.objectContaining({
-          id: eventId,
-          reason,
-          message: expect.stringContaining(message),
-        }),
+        expect.objectContaining({ id: eventId, reason, message: expect.stringContaining(message) }),
       ]);
       expect(await queue.listPending({ limit: "all" })).toEqual([]);
-
       await monitor.stop();
     });
   });
 
   it("reconciles a cached General topic when private bot topics are disabled", async () => {
     await withTempState(async ({ queue, monitor: makeMonitor }) => {
-      const updateId = 9;
-      const eventId = String(updateId).padStart(16, "0");
-      const update = {
-        update_id: updateId,
-        message: {
-          text: "hello",
-          from: { id: 111 },
-          chat: { id: -9003, type: "supergroup" },
-        },
-      };
-      const payload: TelegramSpooledUpdatePayload = {
-        version: 1,
-        updateId,
-        receivedAt: updateId,
-        update,
-      };
+      const eventId = "9".padStart(16, "0");
+      const payload = updatePayload(9);
+      payload.update.message.chat = { id: -9003, type: "supergroup" };
       await resolveTelegramForumFlag({
         chatId: -9003,
         chatType: "supergroup",
@@ -294,12 +255,7 @@ describe("createTelegramIngressMonitor", () => {
         },
       };
       const eventId = String(update.update_id).padStart(16, "0");
-      const payload: TelegramSpooledUpdatePayload = {
-        version: 1,
-        updateId: update.update_id,
-        receivedAt: 1_736_382_000_123,
-        update,
-      };
+      const payload = { ...updatePayload(136), receivedAt: 1_736_382_000_123, update };
       await createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>(queueOptions).enqueue(
         eventId,
         payload,
@@ -317,8 +273,7 @@ describe("createTelegramIngressMonitor", () => {
       });
       const monitor = createTelegramIngressMonitor({
         queue,
-        getConfig: () => cfg,
-        accountId: "default",
+        ...monitorDefaults,
         botInfo: {
           ...telegramBotInfoForTest,
           has_topics_enabled: true,
@@ -336,9 +291,8 @@ describe("createTelegramIngressMonitor", () => {
         } else {
           expect(dispatch).toHaveBeenCalledExactlyOnceWith(update, expect.any(Object));
           expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
-          expect(await queue.enqueue(eventId, payload, { laneKey: controlLaneKey })).toMatchObject({
-            kind: "completed",
-          });
+          const replay = await queue.enqueue(eventId, payload, { laneKey: controlLaneKey });
+          expect(replay.kind).toBe("completed");
         }
         expect(await queue.listPending()).toEqual([]);
       } finally {
@@ -360,10 +314,7 @@ describe("createTelegramIngressMonitor", () => {
       const { eventId } = await enqueue(4);
       const { monitor, participant } = await startDeferred(makeMonitor, "test:late-retry");
       expect(await queue.listClaims()).toHaveLength(1);
-      participant.current?.settle({
-        kind: "failed-retryable",
-        error,
-      });
+      participant.current?.settle({ kind: "failed-retryable", error });
 
       await waitPending(queue, [{ id: eventId, attempts: 1, lastError: error.message }]);
       await monitor.stop();

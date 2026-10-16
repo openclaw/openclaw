@@ -41,7 +41,9 @@ function createShouldSupersedeTelegramSpooledPending(
 const OWNER_ID = "111";
 const STRANGER_ID = "999";
 
-function authFor(telegram: NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>) {
+function authFor(
+  telegram: NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>,
+): Parameters<typeof isTelegramSpooledUpdateSenderAuthorized>[1] {
   return { cfg: { channels: { telegram } }, accountId: "default" };
 }
 
@@ -130,8 +132,7 @@ describe("telegram ingress supersede policy", () => {
         telegram: { accounts: { default: { dmPolicy: "allowlist", allowFrom } } },
       },
     });
-    const initial = policy([]);
-    setRuntimeConfigSnapshot(initial);
+    setRuntimeConfigSnapshot(policy([]));
     const predicate = createSupersedePredicate({
       getConfig: getRuntimeConfig,
       accountId: "default",
@@ -162,11 +163,7 @@ describe("telegram ingress supersede policy", () => {
       groupPolicy: "open" as const,
       groups: { "-1001": groupConfig },
     };
-    const cfg: OpenClawConfig = {
-      channels: {
-        telegram: { accounts: { default: account } },
-      },
-    };
+    const topicAuth = authFor({ accounts: { default: account } });
     expect(
       await isTelegramSpooledUpdateSenderAuthorized(
         messageUpdate({
@@ -175,7 +172,7 @@ describe("telegram ingress supersede policy", () => {
           senderId: OWNER_ID,
           ...topic,
         }),
-        { cfg, accountId: "default" },
+        topicAuth,
       ),
     ).toBe(false);
   });
@@ -201,7 +198,6 @@ describe("telegram ingress supersede policy", () => {
         data: "/new",
         from: { id: Number(entry.senderId) },
         message: messageUpdate({
-          updateId: 2,
           text: "controls",
           senderId: entry.messageSenderId,
         }).message,
@@ -231,17 +227,15 @@ describe("telegram ingress supersede policy", () => {
       ...auth,
       botUsername: "mybot",
     });
-    const [command, ...args] = text.split(" ");
     for (const target of ["", "@mybot", "@otherbot"]) {
-      const commandText = `${command}${target}`;
-      const body = [commandText, ...args].join(" ");
+      const commandText = `${text}${target}`;
       for (const entities of [
         undefined,
         [{ type: "bot_command", offset: 0, length: commandText.length }],
       ]) {
         expect(
           await predicate(
-            candidate(body, OWNER_ID, { entities }),
+            candidate(commandText, OWNER_ID, { entities }),
             pending(OWNER_ID, { text: "prior question" }),
           ),
         ).toBe(expected && target !== "@otherbot");
@@ -252,14 +246,11 @@ describe("telegram ingress supersede policy", () => {
   it("keeps identityless targeted aborts pessimistic", async () => {
     const text = "/stop@OtherBot!";
     const entityText = "/stop@OtherBot";
-    const update = messageUpdate({
-      updateId: 2,
-      text,
-      senderId: OWNER_ID,
+    const update = candidate(text, OWNER_ID, {
       entities: [{ type: "bot_command", offset: 0, length: entityText.length }],
     });
 
-    expect(await shouldSupersede(record("2", update), pending())).toBe(true);
+    expect(await shouldSupersede(update, pending())).toBe(true);
   });
 
   it("does not supersede when a bot_command entity appears inside ordinary text", async () => {
@@ -313,30 +304,19 @@ describe("telegram ingress supersede policy", () => {
     ).toBe(true);
   });
 
-  it.each([
-    {
-      name: "denies the topic sender when the base chat allows them",
-      baseAllowFrom: [OWNER_ID],
-      topicAllowFrom: [STRANGER_ID],
-      expected: false,
-    },
-  ])("uses channel-DM topic authorization: $name", async (testCase) => {
+  it("uses channel-DM topic authorization to deny a sender allowed by the base chat", async () => {
     const channelDmAuth = authFor({
       groupPolicy: "allowlist",
-      groupAllowFrom: testCase.baseAllowFrom,
+      groupAllowFrom: [OWNER_ID],
       groups: {
         "-1001": {
-          allowFrom: testCase.baseAllowFrom,
-          topics: { "77": { allowFrom: testCase.topicAllowFrom } },
+          allowFrom: [OWNER_ID],
+          topics: { "77": { allowFrom: [STRANGER_ID] } },
         },
       },
     });
     const update = messageUpdate({
-      updateId: 2,
-      text: "stop",
-      senderId: OWNER_ID,
-      chatId: -1001,
-      chatType: "supergroup",
+      ...group,
       isDirectMessages: true,
       directMessagesTopicId: 77,
       messageThreadId: 999,
@@ -347,7 +327,7 @@ describe("telegram ingress supersede policy", () => {
         record("2", update),
         pending(),
       ),
-    ).toBe(testCase.expected);
+    ).toBe(false);
   });
 
   it("authorizes paired DM senders via the pairing store under dmPolicy pairing", async () => {
@@ -364,9 +344,7 @@ describe("telegram ingress supersede policy", () => {
     const pairingAuth = authFor({ dmPolicy: "pairing" });
     const shouldSupersedePaired = createShouldSupersedeTelegramSpooledPending(pairingAuth);
 
-    expect(
-      await shouldSupersedePaired(candidate("stop", pairedId, { updateId: 2 }), pending(pairedId)),
-    ).toBe(true);
+    expect(await shouldSupersedePaired(candidate("stop", pairedId), pending(pairedId))).toBe(true);
 
     expect(
       await shouldSupersedePaired(
@@ -378,23 +356,10 @@ describe("telegram ingress supersede policy", () => {
 
   it("authorizes commands.ownerAllowFrom senders for supersede", async () => {
     const ownerId = "777001";
-    const ownerAuth = {
-      cfg: {
-        channels: {
-          telegram: {
-            dmPolicy: "pairing",
-          },
-        },
-        commands: {
-          ownerAllowFrom: [ownerId],
-        },
-      } as OpenClawConfig,
-      accountId: "default",
-    };
+    const ownerAuth = authFor({ dmPolicy: "pairing" });
+    ownerAuth.cfg.commands = { ownerAllowFrom: [ownerId] };
     const shouldSupersedeOwner = createShouldSupersedeTelegramSpooledPending(ownerAuth);
 
-    expect(
-      await shouldSupersedeOwner(candidate("/stop", ownerId, { updateId: 2 }), pending(ownerId)),
-    ).toBe(true);
+    expect(await shouldSupersedeOwner(candidate("/stop", ownerId), pending(ownerId))).toBe(true);
   });
 });

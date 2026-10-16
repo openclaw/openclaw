@@ -35,11 +35,8 @@ describe("telegram thread bindings", () => {
     accountId,
     conversationId,
   });
-  const bind = (
-    accountId: string,
-    targetSessionKey: string,
-    options: Partial<Parameters<ReturnType<typeof getSessionBindingService>["bind"]>[0]> = {},
-  ) =>
+  type BindOptions = Partial<Parameters<ReturnType<typeof getSessionBindingService>["bind"]>[0]>;
+  const bind = (accountId: string, targetSessionKey: string, options: BindOptions = {}) =>
     getSessionBindingService().bind({
       targetSessionKey,
       targetKind: "subagent",
@@ -265,17 +262,12 @@ describe("telegram thread bindings", () => {
     await setIdleTimeout({ ...target, idleTimeoutMs: 321 });
     getSessionBindingService().touch(bound.bindingId, 42, bound.conversation);
     expect(await storedBindings()).toMatchObject([{ idleTimeoutMs: 321, lastActivityAt: 42 }]);
-    expect(setLegacyIdleTimeout({ ...target, idleTimeoutMs: 123 })).toMatchObject([
-      { idleTimeoutMs: 123 },
-    ]);
-    expect(setLegacyMaxAge({ ...target, maxAgeMs: 456 })).toMatchObject([
-      { idleTimeoutMs: 123, maxAgeMs: 456 },
-    ]);
-    expect(manager.getByConversationId("thread")).toMatchObject({
-      idleTimeoutMs: 123,
-      maxAgeMs: 456,
-    });
-    expect(await storedBindings()).toMatchObject([{ idleTimeoutMs: 123, maxAgeMs: 456 }]);
+    const idle = setLegacyIdleTimeout({ ...target, idleTimeoutMs: 123 });
+    expect(idle).toMatchObject([{ idleTimeoutMs: 123 }]);
+    const lifecycle = { idleTimeoutMs: 123, maxAgeMs: 456 };
+    expect(setLegacyMaxAge({ ...target, maxAgeMs: 456 })).toMatchObject([lifecycle]);
+    expect(manager.getByConversationId("thread")).toMatchObject(lifecycle);
+    expect(await storedBindings()).toMatchObject([lifecycle]);
   });
 
   it("rechecks later expiry candidates after a synchronous SDK touch", async () => {
@@ -312,46 +304,42 @@ describe("telegram thread bindings", () => {
     ]);
   });
 
-  it.each(["before-create", "after-create"] as const)(
-    "settles forum-topic binding only after native create admission (%s revocation)",
-    async (revokeAt) => {
-      const manager = await createManager({ accountId: "default", persist: false });
-      let ownerCurrent = true;
-      let nativeCreates = 0;
-      createForumTopicMock.mockImplementationOnce(async (_chatId, _name, options) => {
-        if (revokeAt === "before-create") {
-          ownerCurrent = false;
-        }
-        options.assertPlatformSendAuthorized?.();
-        nativeCreates += 1;
-        ownerCurrent = false;
-        return { chatId: "-100200300", topicId: 88, name: "Bound topic" };
-      });
-      const result = bind("default", "agent:main:created-topic", {
-        targetKind: "session",
-        conversation: conversationFor("default", "-100200300"),
-        placement: "child",
-        assertCurrent: () => {
-          if (!ownerCurrent) {
-            throw new Error("Command owner was revoked");
-          }
-        },
-      });
+  it.each(["before-create", "after-create"] as const)("topic admission: %s", async (revokeAt) => {
+    const manager = await createManager({ accountId: "default", persist: false });
+    const targetSessionKey = "agent:main:created-topic";
+    let ownerCurrent = true;
+    let nativeCreates = 0;
+    createForumTopicMock.mockImplementationOnce(async (_chatId, _name, options) => {
       if (revokeAt === "before-create") {
-        await expect(result).rejects.toThrow("failed to bind");
-        expect(nativeCreates).toBe(0);
-        expect(manager.getByConversationId("-100200300:topic:88")).toBeUndefined();
-      } else {
-        await expect(result).resolves.toMatchObject({
-          targetSessionKey: "agent:main:created-topic",
-        });
-        expect(nativeCreates).toBe(1);
-        expect(manager.getByConversationId("-100200300:topic:88")).toMatchObject({
-          targetSessionKey: "agent:main:created-topic",
-        });
+        ownerCurrent = false;
       }
-    },
-  );
+      options.assertPlatformSendAuthorized?.();
+      nativeCreates += 1;
+      ownerCurrent = false;
+      return { chatId: "-100200300", topicId: 88, name: "Bound topic" };
+    });
+    const result = bind("default", targetSessionKey, {
+      targetKind: "session",
+      conversation: conversationFor("default", "-100200300"),
+      placement: "child",
+      assertCurrent: () => {
+        if (!ownerCurrent) {
+          throw new Error("Command owner was revoked");
+        }
+      },
+    });
+    if (revokeAt === "before-create") {
+      await expect(result).rejects.toThrow("failed to bind");
+      expect(nativeCreates).toBe(0);
+      expect(manager.getByConversationId("-100200300:topic:88")).toBeUndefined();
+    } else {
+      await expect(result).resolves.toMatchObject({ targetSessionKey });
+      expect(nativeCreates).toBe(1);
+      expect(manager.getByConversationId("-100200300:topic:88")).toMatchObject({
+        targetSessionKey,
+      });
+    }
+  });
 
   it("drops stopped-manager bindings without clearing a replacement generation", async () => {
     const stopped = await createTelegramThreadBindingManager({
@@ -399,13 +387,11 @@ describe("telegram thread bindings", () => {
     const entries = vi.spyOn(fixture.store, "entries");
     const register = vi.spyOn(fixture.store, "register");
     const remove = vi.spyOn(fixture.store, "delete");
-
     const first = await bind(manager.accountId, "agent:main:subagent:first-row", {
       conversation: conversationFor(manager.accountId, "first-thread"),
     });
     expect(register).toHaveBeenCalledTimes(1);
     expect(entries).not.toHaveBeenCalled();
-
     register.mockClear();
     await bind(manager.accountId, "agent:main:subagent:second-row", {
       conversation: conversationFor(manager.accountId, "second-thread"),
@@ -413,13 +399,11 @@ describe("telegram thread bindings", () => {
     expect(register).toHaveBeenCalledTimes(1);
     expect(register.mock.calls[0]?.[1].conversationId).toBe("second-thread");
     expect(entries).not.toHaveBeenCalled();
-
     register.mockClear();
     await manager.touchConversation("first-thread");
     expect(register).toHaveBeenCalledTimes(1);
     expect(register.mock.calls[0]?.[1].conversationId).toBe("first-thread");
     expect(entries).not.toHaveBeenCalled();
-
     register.mockClear();
     await getSessionBindingService().unbind({
       bindingId: first.bindingId,
@@ -435,52 +419,41 @@ describe("telegram thread bindings", () => {
     expect(reloaded.getByConversationId("second-thread")).toBeDefined();
   });
 
-  it.each([false, true])(
-    "inherits runtime metadata only when refreshing the same target (replace=%s)",
-    async (replace) => {
-      const manager = await createManager({ accountId: "replacement-owner" });
-      const service = getSessionBindingService();
-      const conversation = conversationFor(manager.accountId, "replacement-thread");
-      const originalTarget = "plugin-binding:owner-plugin:original";
-      const metadata = {
-        pluginBindingOwner: "plugin",
-        pluginId: "owner-plugin",
-        pluginRoot: "/plugins/owner-plugin",
-        agentId: "previous-agent",
-        boundBy: "previous-user",
-        idleTimeoutMs: 90_000,
-        opaque: { runtimeId: "original" },
-      };
-      await bind(manager.accountId, originalTarget, {
-        targetKind: "session",
-        conversation,
-        metadata,
-      });
-      const targetSessionKey = replace ? "agent:main:subagent:replacement" : originalTarget;
+  it.each([false, true])("refreshes same-target metadata (replace=%s)", async (replace) => {
+    const manager = await createManager({ accountId: "replacement-owner" });
+    const service = getSessionBindingService();
+    const conversation = conversationFor(manager.accountId, "replacement-thread");
+    const originalTarget = "plugin-binding:owner-plugin:original";
+    const runtimeMetadata = {
+      pluginBindingOwner: "plugin",
+      pluginId: "owner-plugin",
+      pluginRoot: "/plugins/owner-plugin",
+      agentId: "previous-agent",
+      boundBy: "previous-user",
+      opaque: { runtimeId: "original" },
+    };
+    await bind(manager.accountId, originalTarget, {
+      targetKind: "session",
+      conversation,
+      metadata: { ...runtimeMetadata, idleTimeoutMs: 90_000 },
+    });
+    const targetSessionKey = replace ? "agent:main:subagent:replacement" : originalTarget;
 
-      await bind(manager.accountId, targetSessionKey, {
-        targetKind: replace ? "subagent" : "session",
-        conversation,
-        metadata: { label: "updated" },
-      });
-      await manager.stop();
-      await createManager({ accountId: manager.accountId });
+    await bind(manager.accountId, targetSessionKey, {
+      targetKind: replace ? "subagent" : "session",
+      conversation,
+      metadata: { label: "updated" },
+    });
+    await manager.stop();
+    await createManager({ accountId: manager.accountId });
 
-      const binding = service.resolveByConversation(conversation);
-      expect(binding?.targetSessionKey).toBe(targetSessionKey);
-      expect(binding?.metadata).toMatchObject({ label: "updated", idleTimeoutMs: 90_000 });
-      for (const key of [
-        "pluginBindingOwner",
-        "pluginId",
-        "pluginRoot",
-        "agentId",
-        "boundBy",
-        "opaque",
-      ] as const) {
-        expect(binding?.metadata?.[key]).toEqual(replace ? undefined : metadata[key]);
-      }
-    },
-  );
+    const binding = service.resolveByConversation(conversation);
+    expect(binding?.targetSessionKey).toBe(targetSessionKey);
+    expect(binding?.metadata).toMatchObject({ label: "updated", idleTimeoutMs: 90_000 });
+    for (const [key, value] of Object.entries(runtimeMetadata)) {
+      expect(binding?.metadata?.[key]).toEqual(replace ? undefined : value);
+    }
+  });
 
   it("starts with empty bindings when the plugin-state store cannot be read", async () => {
     installThreadBindingStore({
@@ -489,51 +462,42 @@ describe("telegram thread bindings", () => {
         throw new Error("state unavailable");
       },
     });
-
     const manager = await createManager({ accountId: "read-failure" });
-
     expect(manager.listBindings()).toStrictEqual([]);
   });
 
   it.each([
     { persist: false, idleTimeoutMs: 60 * 60 * 1000, maxAgeMs: 2 * 60 * 60 * 1000 },
     { persist: true, idleTimeoutMs: 90_000, maxAgeMs: 6 * 60 * 60 * 1000 },
-  ])(
-    "keeps lifecycle updates and clean metadata across restart only with persist=$persist",
-    async ({ persist, idleTimeoutMs, maxAgeMs }) => {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date("2026-03-06T10:00:00.000Z"));
-      const options = { accountId: "lifecycle", persist, enableSweeper: false };
-      const manager = await createManager(options);
-      const targetSessionKey = "agent:main:subagent:child";
-      const target = { accountId: manager.accountId, targetSessionKey };
-      await bind(manager.accountId, targetSessionKey, {
-        metadata: { retained: "yes", omitted: undefined },
+  ])("durable lifecycle (persist=$persist)", async ({ persist, idleTimeoutMs, maxAgeMs }) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-06T10:00:00.000Z"));
+    const options = { accountId: "lifecycle", persist, enableSweeper: false };
+    const manager = await createManager(options);
+    const targetSessionKey = "agent:main:subagent:child";
+    const target = { accountId: manager.accountId, targetSessionKey };
+    await bind(manager.accountId, targetSessionKey, {
+      metadata: { retained: "yes", omitted: undefined },
+    });
+    await setIdleTimeout({ ...target, idleTimeoutMs });
+    vi.setSystemTime(new Date("2026-03-06T12:00:00.000Z"));
+    await setMaxAge({ ...target, maxAgeMs });
+    await manager.stop();
+    const reloaded = await createManager(options);
+    const stored = (await storedBindings()).filter((row) => row.accountId === manager.accountId);
+    if (persist) {
+      expect(reloaded.getByConversationId("thread")).toMatchObject({
+        idleTimeoutMs,
+        maxAgeMs,
+        boundAt: Date.parse("2026-03-06T10:00:00.000Z"),
+        lastActivityAt: Date.parse("2026-03-06T12:00:00.000Z"),
       });
-      await setIdleTimeout({ ...target, idleTimeoutMs });
-      vi.setSystemTime(new Date("2026-03-06T12:00:00.000Z"));
-      await setMaxAge({ ...target, maxAgeMs });
-      await manager.stop();
-      const reloaded = await createManager(options);
-      if (persist) {
-        expect(reloaded.getByConversationId("thread")).toMatchObject({
-          idleTimeoutMs,
-          maxAgeMs,
-          boundAt: Date.parse("2026-03-06T10:00:00.000Z"),
-          lastActivityAt: Date.parse("2026-03-06T12:00:00.000Z"),
-        });
-        expect(reloaded.getByConversationId("thread")?.metadata).toStrictEqual({ retained: "yes" });
-        const stored = (await storedBindings()).find(
-          (binding) => binding.accountId === manager.accountId,
-        );
-        expect(stored?.idleTimeoutMs).toBe(90_000);
-        expect(stored?.metadata).toStrictEqual({ retained: "yes" });
-      } else {
-        expect(reloaded.getByConversationId("thread")).toBeUndefined();
-        expect(
-          (await storedBindings()).filter((binding) => binding.accountId === manager.accountId),
-        ).toStrictEqual([]);
-      }
-    },
-  );
+      expect(reloaded.getByConversationId("thread")?.metadata).toStrictEqual({ retained: "yes" });
+      expect(stored[0]?.idleTimeoutMs).toBe(90_000);
+      expect(stored[0]?.metadata).toStrictEqual({ retained: "yes" });
+    } else {
+      expect(reloaded.getByConversationId("thread")).toBeUndefined();
+      expect(stored).toStrictEqual([]);
+    }
+  });
 });
