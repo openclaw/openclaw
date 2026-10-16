@@ -34,7 +34,16 @@ describe("memory index", () => {
   const acquire = async (
     cfg: ReturnType<typeof createCfg>,
     options: Partial<Parameters<typeof getMemorySearchManager>[0]> = {},
-  ) => requireManager(await request(cfg, options));
+  ) => {
+    const manager = requireManager(await request(cfg, options));
+    trackManager(manager);
+    return manager;
+  };
+  const initialized = async (cfg: ReturnType<typeof createCfg>) => {
+    const manager = await acquire(cfg);
+    await manager.probeEmbeddingAvailability();
+    return manager;
+  };
   function holdProviderClose() {
     const gate = Promise.withResolvers<void>();
     providerFixture.providerCloseGate = gate.promise;
@@ -47,9 +56,7 @@ describe("memory index", () => {
   it("waits for scoped manager close before initializing a replacement", async () => {
     const releaseProviderClose = holdProviderClose();
     const cfg = createCfg({});
-    const first = await acquire(cfg);
-    trackManager(first);
-    await first.probeEmbeddingAvailability();
+    const first = await initialized(cfg);
     const closePromise = closeMemoryIndexManagersForAgent({ agentId: "main" });
     const callsBeforeReplacement = providerFixture.providerCalls.length;
     const secondPromise = acquire(cfg);
@@ -73,21 +80,17 @@ describe("memory index", () => {
     const second = await secondPromise;
     const concurrentSecond = await concurrentSecondPromise;
     await secondProbe;
-    trackManager(second);
     expect(second === first).toBe(false);
     expect(concurrentSecond).toBe(second);
 
     const third = await acquire(cfg);
-    trackManager(third);
     expect(third).toBe(second);
   });
 
   it("does not reuse a cached manager after direct close starts", async () => {
     const releaseProviderClose = holdProviderClose();
     const cfg = createCfg({});
-    const first = await acquire(cfg);
-    trackManager(first);
-    await first.probeEmbeddingAvailability();
+    const first = await initialized(cfg);
 
     const closePromise = first.close();
     const replacementPromise = acquire(cfg);
@@ -103,15 +106,12 @@ describe("memory index", () => {
 
     await closePromise;
     const replacement = await replacementPromise;
-    trackManager(replacement);
     expect(replacement === first).toBe(false);
   });
 
   it("serializes concurrent acquisitions with different cache identities", async () => {
     const firstCfg = createCfg({ model: "first-model" });
-    const first = await acquire(firstCfg);
-    trackManager(first);
-    await first.probeEmbeddingAvailability();
+    const first = await initialized(firstCfg);
     const releaseProviderClose = holdProviderClose();
 
     const secondPromise = acquire(createCfg({ model: "second-model" }));
@@ -125,8 +125,6 @@ describe("memory index", () => {
     }
 
     const [second, third] = await Promise.all([secondPromise, thirdPromise]);
-    trackManager(second);
-    trackManager(third);
     expect(second === first).toBe(false);
     expect(third === second).toBe(false);
     expect((second as unknown as { closed: boolean }).closed).toBe(true);
@@ -183,9 +181,7 @@ describe("memory index", () => {
 
   it("does not block another agent while one scope retires its manager", async ({ signal }) => {
     const firstCfg = createCfg({ model: "first-model" });
-    const first = await acquire(firstCfg);
-    trackManager(first);
-    await first.probeEmbeddingAvailability();
+    await initialized(firstCfg);
     const releaseProviderClose = holdProviderClose();
 
     const replacementPromise = request(createCfg({ model: "second-model" }));
@@ -243,9 +239,7 @@ describe("memory index", () => {
 
   it("declines a maintenance manager that arrives during global teardown", async () => {
     const cfg = createCfg({});
-    const manager = await acquire(cfg);
-    trackManager(manager);
-    await manager.probeEmbeddingAvailability();
+    await initialized(cfg);
     const releaseProviderClose = holdProviderClose();
 
     const globalClose = closeAllMemoryIndexManagers();
@@ -267,9 +261,7 @@ describe("memory index", () => {
 
   it("retains failed reload retirement through healthy acquisition and final close", async () => {
     const cfg = createCfg({});
-    const first = await acquire(cfg);
-    trackManager(first);
-    await first.probeEmbeddingAvailability();
+    const first = await initialized(cfg);
     providerFixture.providerCloseFailuresRemaining = 1;
     const retirement = createMemoryRuntime({
       runInBackgroundContext: runInMemoryTestBackgroundContext,
@@ -284,7 +276,6 @@ describe("memory index", () => {
     }
 
     const replacement = await acquire(cfg);
-    trackManager(replacement);
     expect(replacement).not.toBe(first);
     expect(providerFixture.providerCloseCalls).toBe(1);
     await replacement.probeEmbeddingAvailability();
@@ -298,9 +289,7 @@ describe("memory index", () => {
 
   it("retains a failed scoped close owner until provider retirement succeeds", async () => {
     const cfg = createCfg({});
-    const first = await acquire(cfg);
-    trackManager(first);
-    await first.probeEmbeddingAvailability();
+    const first = await initialized(cfg);
     providerFixture.providerCloseFailuresRemaining = 1;
 
     await expect(closeMemoryIndexManagersForAgent({ agentId: "main" })).rejects.toThrow(
@@ -325,9 +314,7 @@ describe("memory index", () => {
 
   it("reports failed global cleanup until an explicit close succeeds", async () => {
     const cfg = createCfg({});
-    const first = await acquire(cfg);
-    trackManager(first);
-    await first.probeEmbeddingAvailability();
+    const first = await initialized(cfg);
     providerFixture.providerCloseFailuresRemaining = 1;
     providerFixture.providerCloseFailure = undefined;
 
@@ -358,7 +345,6 @@ describe("memory index", () => {
 
     const replacement = await replacementPromise;
     await retryGlobalClose;
-    trackManager(replacement);
     expect(replacement === first).toBe(false);
     expect((replacement as unknown as { closed: boolean }).closed).toBe(false);
   });
@@ -368,10 +354,8 @@ describe("memory index", () => {
     const firstAcquire = vi.fn(async () => undefined);
     const secondAcquire = vi.fn(async () => undefined);
     const first = await acquire(cfg, { acquireLocalService: firstAcquire });
-    trackManager(first);
 
     const second = await acquire(cfg, { acquireLocalService: secondAcquire });
-    trackManager(second);
     const secondAgain = await acquire(cfg, { acquireLocalService: secondAcquire });
 
     expect(Object.is(second, first)).toBe(false);

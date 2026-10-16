@@ -54,6 +54,15 @@ describe("memory manager reads", () => {
     getMemorySearchManager,
     closeAllMemorySearchManagers,
   });
+  const sessionConfig = () =>
+    fixture.createConfig({ provider: "none", sources: ["sessions"], sessionMemory: true });
+  const seedSession = (sessionId: string, content: string, senderIsOwner?: boolean) =>
+    fixture.seedSessionTranscript({
+      sessionId,
+      messages: [{ role: "user", timestamp: Date.now(), content, senderIsOwner }],
+    });
+  const sync = (manager: Awaited<ReturnType<typeof fixture.getFreshManager>>) =>
+    manager.sync({ reason: "cli", force: true });
 
   it("reports source eligibility before the index exists", async () => {
     const diagnostic = await fixture.getFreshManager(
@@ -70,16 +79,10 @@ describe("memory manager reads", () => {
     const activeId = "active-read-target";
     const archivedId = "archived-read-target";
     for (const sessionId of [activeId, archivedId]) {
-      await fixture.seedSessionTranscript({
-        sessionId,
-        messages: [{ role: "user", timestamp: Date.now(), content: `${sessionId} violet memory.` }],
-      });
+      await seedSession(sessionId, `${sessionId} violet memory.`);
     }
-    const manager = await fixture.getFreshManager(
-      fixture.createConfig({ provider: "none", sources: ["sessions"], sessionMemory: true }),
-      "cli",
-    );
-    await manager.sync({ reason: "cli", force: true });
+    const manager = await fixture.getFreshManager(sessionConfig(), "cli");
+    await sync(manager);
     await expect(
       deleteSessionEntry({
         agentId: "main",
@@ -109,7 +112,6 @@ describe("memory manager reads", () => {
       throw new Error("Expected the fixture's file-backed memory index");
     }
     {
-      // Observe the worker-published schema before seeding through a fixture writer.
       using writer = new DatabaseSync(databasePath);
       writer.exec("BEGIN IMMEDIATE");
       const insert = writer.prepare(
@@ -165,49 +167,30 @@ describe("memory manager reads", () => {
 
   it("inspects readonly session corpus diagnostics without changing the published index", async () => {
     const sessionId = "diagnostic-corpus";
-    await fixture.seedSessionTranscript({
-      sessionId,
-      messages: [
-        {
-          role: "user",
-          timestamp: Date.now(),
-          content: "Violet diagnostic preference remains indexed.",
-          senderIsOwner: true,
-        },
-      ],
-    });
-    const cfg = fixture.createConfig({
-      provider: "none",
-      sources: ["sessions"],
-      sessionMemory: true,
-    });
+    const content = "Violet diagnostic preference remains indexed.";
+    await seedSession(sessionId, content, true);
+    const cfg = sessionConfig();
     const writer = await fixture.getFreshManager(cfg, "cli");
     await writer.sync({ reason: "diagnostic-baseline", force: true });
     const database: unknown = Reflect.get(writer, "db");
     if (!(database instanceof DatabaseSync)) {
       throw new Error("Expected the fixture's actual published database");
     }
+    const rows = (table: string, key: string) =>
+      database.prepare(`SELECT * FROM ${table} ORDER BY ${key}`).all();
     const snapshot = () => ({
-      sources: database.prepare("SELECT * FROM memory_index_sources ORDER BY id").all(),
-      chunks: database.prepare("SELECT * FROM memory_index_chunks ORDER BY id").all(),
-      provenance: database
-        .prepare("SELECT * FROM memory_index_chunk_provenance ORDER BY chunk_id")
-        .all(),
-      metadata: database.prepare("SELECT * FROM memory_index_meta ORDER BY key").all(),
+      sources: rows("memory_index_sources", "id"),
+      chunks: rows("memory_index_chunks", "id"),
+      provenance: rows("memory_index_chunk_provenance", "chunk_id"),
+      metadata: rows("memory_index_meta", "key"),
       revision: database.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get(),
-      nodes: database.prepare("SELECT * FROM session_nodes ORDER BY session_key").all(),
-      windows: database.prepare("SELECT * FROM session_windows ORDER BY session_id").all(),
+      nodes: rows("session_nodes", "session_key"),
+      windows: rows("session_windows", "session_id"),
     });
     const before = snapshot();
-    expect(before.sources).toHaveLength(1);
-    expect(before.sources[0]).toMatchObject({
-      path: sessionPathForSessionIdentity("main", sessionId),
-      source: "sessions",
-    });
-    expect(before.chunks).toHaveLength(1);
-    expect(before.chunks[0]).toMatchObject({
-      source: "sessions",
-      text: expect.stringContaining("Violet diagnostic preference remains indexed."),
+    expect(before).toMatchObject({
+      sources: [{ path: sessionPathForSessionIdentity("main", sessionId), source: "sessions" }],
+      chunks: [{ source: "sessions", text: expect.stringContaining(content) }],
     });
 
     const diagnostic = await fixture.getFreshManager(cfg, "status", true);
@@ -228,7 +211,7 @@ describe("memory manager reads", () => {
   it("reuses diagnostic cache totals", async () => {
     const cfg = fixture.createConfig({ provider: "none", cacheEnabled: true });
     const manager = await fixture.getFreshManager(cfg, "cli");
-    await manager.sync({ reason: "cli", force: true });
+    await sync(manager);
     memoryIndexFixtureWriter(manager)
       .prepare(`INSERT INTO memory_embedding_cache
       (provider, model, provider_key, hash, embedding, dims, updated_at)
@@ -240,11 +223,9 @@ describe("memory manager reads", () => {
     const diagnostic = await fixture.getFreshManager(cfg, "status", true);
     const diagnosticReads = observeReads(Reflect.get(diagnostic, "db") as DatabaseSync);
     try {
-      const inspected = diagnostic.status();
-      expect(inspected.cache?.entries).toBe(1);
-      expect(inspected.storage).toMatchObject({
-        embeddingCacheEntries: 1,
-        embeddingCacheBytes: 16,
+      expect(diagnostic.status()).toMatchObject({
+        cache: { entries: 1 },
+        storage: { embeddingCacheEntries: 1, embeddingCacheBytes: 16 },
       });
       expect(
         diagnosticReads.reads.filter(({ sql }) => /\bmemory_embedding_cache\b/i.test(sql)),
