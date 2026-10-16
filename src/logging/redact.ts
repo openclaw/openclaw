@@ -42,6 +42,7 @@ import {
   type ResolvedRedactPattern,
 } from "./redact-pattern-runtime.js";
 import {
+  AUTH_REFERENCE_PRESERVING_PATTERN_SOURCES,
   AWS_SECRET_ACCESS_KEY_FIELD_KEYS,
   AWS_SECRET_ACCESS_KEY_MATCHER,
   BASE64_SAFE_TOKEN_BOUNDARY,
@@ -81,6 +82,7 @@ const DEFAULT_REDACT_KEEP_END = 4;
 // Diagnostic log surfaces keep the compact `***` marker.
 export { containsModelVisibleRedaction } from "./redact-model-visible.js";
 const shellReferencePreservingPatterns = new WeakSet<ResolvedRedactPattern>();
+const authReferencePreservingPatterns = new WeakSet<ResolvedRedactPattern>();
 // Patterns whose left-context assertions or complete token can cross a chunk boundary must run
 // against the full string; chunking can invent a `^` boundary or split the secret itself.
 const chunkUnsafePatterns = new WeakSet<ResolvedRedactPattern>();
@@ -225,6 +227,9 @@ function parsePattern(raw: RedactPattern): ResolvedRedactPattern | null {
   }
   if (pattern && typeof raw === "string" && TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS.has(raw)) {
     sourceAssignmentPatterns.add(pattern);
+  }
+  if (pattern && typeof raw === "string" && AUTH_REFERENCE_PRESERVING_PATTERN_SOURCES.has(raw)) {
+    authReferencePreservingPatterns.add(pattern);
   }
   if (pattern && typeof raw === "string" && FORM_AWARE_EQUALS_ASSIGNMENT_PATTERN_SOURCES.has(raw)) {
     formAwareEqualsAssignmentPatterns.add(pattern);
@@ -713,7 +718,7 @@ function prepareRedactionCapture(
         return undefined;
       }
       if (
-        isAssignmentFamilyPattern(pattern) &&
+        (isAssignmentFamilyPattern(pattern) || authReferencePreservingPatterns.has(pattern)) &&
         isNonSecretReferenceValue(splitSecretValueForMask(token).maskable)
       ) {
         return undefined;
@@ -869,7 +874,7 @@ function markPatternMatchRedaction(
     return;
   }
   if (
-    isAssignmentFamilyPattern(pattern) &&
+    (isAssignmentFamilyPattern(pattern) || authReferencePreservingPatterns.has(pattern)) &&
     isNonSecretReferenceValue(splitSecretValueForMask(selected.value).maskable)
   ) {
     return;
