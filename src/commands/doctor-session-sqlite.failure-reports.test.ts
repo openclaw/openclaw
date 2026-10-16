@@ -70,60 +70,53 @@ function failureManifest(
   };
 }
 
-it.each([false, true])(
-  "records a rejected SQLite import (journal failure=%s)",
-  async (journalFailure) => {
-    const store = createLegacyStore();
-    const failure = "attempt to write a readonly database";
-    const importError = new Error(failure);
-    const recordError = new Error("fixture migration journal write failed");
-    const importSpy = vi
-      .spyOn(sqliteImport, "importSqliteSessionRowsBatch")
-      .mockRejectedValueOnce(importError);
-    const journalSpy = journalFailure
-      ? vi.spyOn(migrationRun, "updateMigrationManifestTarget").mockImplementationOnce(() => {
-          throw recordError;
-        })
+it.each([false, true])("records import rejection (journal failure=%s)", async (journalFailure) => {
+  const store = createLegacyStore();
+  const failure = "attempt to write a readonly database";
+  const importError = new Error(failure);
+  const recordError = new Error("fixture migration journal write failed");
+  {
+    using importSpy = vi.spyOn(sqliteImport, "importSqliteSessionRowsBatch");
+    importSpy.mockRejectedValueOnce(importError);
+    using journalSpy = journalFailure
+      ? vi.spyOn(migrationRun, "updateMigrationManifestTarget")
       : undefined;
-    try {
-      const imported = importLegacyStore(store);
-      if (journalFailure) {
-        await expect(imported).rejects.toMatchObject({
-          cause: importError,
-          errors: [importError, recordError],
-          message: `${failure}; could not record session SQLite migration failure: ${recordError.message}`,
-        });
-      } else {
-        await expect(imported).rejects.toBe(importError);
-      }
-    } finally {
-      importSpy.mockRestore();
-      journalSpy?.mockRestore();
-    }
-    expect(fs.existsSync(store.transcriptPath)).toBe(true);
-    if (journalFailure) {
-      return;
-    }
-    const manifests = migrationRun.listSessionSqliteMigrationManifestPaths(store.env);
-    expect(manifests).toHaveLength(1);
-    const manifestPath = requireMigrationManifestPath(manifests[0]);
-    const manifest = readMigrationManifest(manifestPath);
-    expect(manifest.failedAt).toEqual(expect.any(String));
-    expect(manifest.targets[0]?.issues).toContainEqual({
-      code: "sqlite_import_failed",
-      message: failure,
+    journalSpy?.mockImplementationOnce(() => {
+      throw recordError;
     });
-    expect(manifest.targets[0]?.completedMoves).toEqual([]);
-    expect(fs.existsSync(store.transcriptPath)).toBe(true);
-    expect(manifest.completedAt).toBeUndefined();
-    const recovered = await runDoctorSessionSqlite({ cfg: {}, env: store.env, mode: "recover" });
-    expect(recovered.supportIssue?.body).toContain(`[sqlite_import_failed] ${failure}`);
-    expect(recovered.supportIssue?.body).toContain(`- Failed: ${manifest.failedAt}`);
-  },
-);
+    const imported = importLegacyStore(store);
+    if (journalFailure) {
+      await expect(imported).rejects.toMatchObject({
+        cause: importError,
+        errors: [importError, recordError],
+        message: `${failure}; could not record session SQLite migration failure: ${recordError.message}`,
+      });
+    } else {
+      await expect(imported).rejects.toBe(importError);
+    }
+  }
+  expect(fs.existsSync(store.transcriptPath)).toBe(true);
+  if (journalFailure) {
+    return;
+  }
+  const manifests = migrationRun.listSessionSqliteMigrationManifestPaths(store.env);
+  expect(manifests).toHaveLength(1);
+  const manifestPath = requireMigrationManifestPath(manifests[0]);
+  const manifest = readMigrationManifest(manifestPath);
+  expect(manifest.failedAt).toEqual(expect.any(String));
+  expect(manifest.targets[0]?.issues).toContainEqual({
+    code: "sqlite_import_failed",
+    message: failure,
+  });
+  expect(manifest.targets[0]?.completedMoves).toEqual([]);
+  expect(manifest.completedAt).toBeUndefined();
+  const recovered = await runDoctorSessionSqlite({ cfg: {}, env: store.env, mode: "recover" });
+  expect(recovered.supportIssue?.body).toContain(`[sqlite_import_failed] ${failure}`);
+  expect(recovered.supportIssue?.body).toContain(`- Failed: ${manifest.failedAt}`);
+});
 
 it.each([false, true])(
-  "recovers the latest matching failed run and reports only current issues (explicit store=%s)",
+  "recovers latest matching failure (explicit store=%s)",
   async (explicitStore) => {
     const store = createLegacyStore(explicitStore ? {} : { agentDirName: "token=supersecret" });
     const importReport = await importLegacyStore(store);
@@ -201,9 +194,9 @@ it.each([false, true])(
     ]);
     expect(fs.readFileSync(store.transcriptPath, "utf8")).toBe(conflictingTranscript);
     expect(recover.supportIssue?.title).toContain(manifest.runId);
-    expect(recover.supportIssue?.body).toContain("startup_failure");
-    expect(recover.supportIssue?.body).toContain("restore_conflict");
-    expect(recover.supportIssue?.body).toContain(`- Failed: ${manifest.failedAt}`);
+    for (const text of ["startup_failure", "restore_conflict", `- Failed: ${manifest.failedAt}`]) {
+      expect(recover.supportIssue?.body).toContain(text);
+    }
     expectPrivate(recover.supportIssue?.body, [
       "agent:main:main",
       "supersecret",
@@ -216,7 +209,7 @@ it.each([false, true])(
 );
 
 it.each(["empty-report", "restored", "completed"] as const)(
-  "keeps clean recovery out of support reports despite previous evidence or work (%s)",
+  "omits support reports for clean recovery (%s)",
   async (evidence) => {
     const store = createLegacyStore();
     for (const file of [
@@ -233,28 +226,17 @@ it.each(["empty-report", "restored", "completed"] as const)(
     const manifest = failureManifest(
       store,
       "clean-recovery",
-      evidence === "completed"
-        ? { completedAt: "2030-01-01T00:00:00.000Z", failedAt: undefined }
-        : {},
+      evidence === "completed" ? { completedAt: failureTime, failedAt: undefined } : {},
     );
     const target = manifest.targets[0]!;
     target.validationBeforeArchive = "not_run";
     target.issues = [];
     if (evidence === "restored") {
-      const archivePath = path.join(
-        store.stateDir,
-        "agents",
-        "main",
-        "session-sqlite-import-archive",
-        "legacy-store.sessions.json.imported-1",
-      );
+      const archiveDir = path.join(store.stateDir, "agents/main/session-sqlite-import-archive");
+      const archivePath = path.join(archiveDir, "legacy-store.sessions.json.imported-1");
       fs.mkdirSync(path.dirname(archivePath), { recursive: true });
       fs.writeFileSync(archivePath, "{}\n");
-      const move = {
-        archivePath,
-        kind: "legacy-store" as const,
-        sourcePath: target.storePath,
-      };
+      const move = { archivePath, kind: "legacy-store" as const, sourcePath: target.storePath };
       target.plannedMoves.push(move);
       target.completedMoves.push(move);
     }
@@ -288,114 +270,94 @@ it.each(["empty-report", "restored", "completed"] as const)(
   },
 );
 
-it.each(["replaced", "missing"] as const)(
-  "refuses a support claim when the saved report is %s during consent",
-  (change) => {
-    const store = createLegacyStore();
-    writeFailedManifest(store, "consent-race.json", "2030-01-01T00:00:00.000Z");
-    const manifestPath = path.join(
-      store.stateDir,
-      "session-sqlite-migration-runs",
-      "consent-race.json",
-    );
-    const { markdownPath } = writeReports(manifestPath, {
-      reason: "recovery before consent",
-    });
-    const approved = preparedIssue(manifestPath);
-    if (change === "replaced") {
-      writeReports(manifestPath, {
-        reason: "another recovery during consent",
-      });
-    } else {
-      fs.unlinkSync(markdownPath);
-    }
-    const manifestBefore = fs.readFileSync(manifestPath);
+it.each(["replaced", "missing"] as const)("rechecks saved support consent (%s)", (change) => {
+  const store = createLegacyStore();
+  writeFailedManifest(store, "consent-race.json", "2030-01-01T00:00:00.000Z");
+  const manifestPath = path.join(store.stateDir, "session-sqlite-migration-runs/consent-race.json");
+  const { markdownPath } = writeReports(manifestPath, { reason: "recovery before consent" });
+  const approved = preparedIssue(manifestPath);
+  if (change === "replaced") {
+    writeReports(manifestPath, { reason: "another recovery during consent" });
+  } else {
+    fs.unlinkSync(markdownPath);
+  }
+  const manifestBefore = fs.readFileSync(manifestPath);
 
-    expect(claimIssue(manifestPath, approved, { assertCurrent: vi.fn() })).toBeUndefined();
-    expect(fs.readFileSync(manifestPath)).toEqual(manifestBefore);
-    if (change === "missing") {
-      expect(createIssue(manifestPath)).toBeUndefined();
-      expect(fs.existsSync(markdownPath)).toBe(false);
-      return;
-    }
+  expect(claimIssue(manifestPath, approved, { assertCurrent: vi.fn() })).toBeUndefined();
+  expect(fs.readFileSync(manifestPath)).toEqual(manifestBefore);
+  if (change === "missing") {
+    expect(createIssue(manifestPath)).toBeUndefined();
+    expect(fs.existsSync(markdownPath)).toBe(false);
+    return;
+  }
 
-    const current = preparedIssue(manifestPath);
-    expect(current.marker).not.toBe(approved.marker);
-    expect(claimIssue(manifestPath, current, { assertCurrent: vi.fn() })).toMatchObject({
-      issue: { marker: current.marker },
-      status: "claimed",
-    });
-    expect(readMigrationManifest(manifestPath).failureReports?.githubIssue?.marker).toBe(
-      current.marker,
-    );
-  },
-);
+  const current = preparedIssue(manifestPath);
+  expect(current.marker).not.toBe(approved.marker);
+  expect(claimIssue(manifestPath, current, { assertCurrent: vi.fn() })).toMatchObject({
+    issue: { marker: current.marker },
+    status: "claimed",
+  });
+  expect(readMigrationManifest(manifestPath).failureReports?.githubIssue?.marker).toBe(
+    current.marker,
+  );
+});
 
 it("persists one support issue receipt on a historical v3 manifest", () => {
-  const manifestVersion = 3;
   const store = createLegacyStore();
-  const manifestPath = path.join(store.tempDir, `historical-v${manifestVersion}.json`);
+  const manifestPath = path.join(store.tempDir, "historical-v3.json");
   const failureJsonPath = manifestPath.replace(/\.json$/u, ".failure.json");
   const failureMarkdownPath = manifestPath.replace(/\.json$/u, ".failure.md");
-  const manifest = failureManifest(store, `historical-v${manifestVersion}`, {
+  const manifest = failureManifest(store, "historical-v3", {
     failureReports: { jsonPath: failureJsonPath, markdownPath: failureMarkdownPath },
-    manifestVersion,
+    manifestVersion: 3,
     openClawVersion: "historical",
   });
   writeJson(manifestPath, manifest);
   const authority = { assertCurrent: vi.fn() };
-  fs.writeFileSync(failureMarkdownPath, `stable sanitized report v${manifestVersion}\n`, {
-    mode: 0o600,
-  });
+  const savedReport = "stable sanitized report v3\n";
+  fs.writeFileSync(failureMarkdownPath, savedReport, { mode: 0o600 });
   const { marker, title } = preparedIssue(manifestPath);
   const issue = { marker, title };
 
+  const receipt = { ...issue, status: "attempted" };
   expect(claimIssue(manifestPath, issue, authority)).toMatchObject({
-    issue: { ...issue, status: "attempted" },
+    issue: receipt,
     status: "claimed",
   });
-  expect(
-    claimIssue(
-      manifestPath,
-      { ...issue, title: "regenerated title must not replace the claim" },
-      authority,
-    ),
-  ).toMatchObject({ issue: { ...issue, status: "attempted" }, status: "existing" });
+  const claim = (candidate: typeof issue) => claimIssue(manifestPath, candidate, authority);
+  expect(claim({ ...issue, title: "regenerated title must not replace the claim" })).toMatchObject({
+    issue: receipt,
+    status: "existing",
+  });
 
   writeReports(manifestPath, { reason: "retry" });
   expect(createIssue(manifestPath)).toMatchObject({
-    body: expect.stringContaining(`stable sanitized report v${manifestVersion}`),
+    body: expect.stringContaining(savedReport.trimEnd()),
     title: issue.title,
   });
   const receiptManifest = readMigrationManifest(manifestPath);
   expect(receiptManifest).toMatchObject({
-    failureReports: { githubIssue: { ...issue, status: "attempted" } },
+    failureReports: { githubIssue: receipt },
     manifestVersion: 4,
   });
-  writeJson(manifestPath, { ...receiptManifest, manifestVersion });
+  writeJson(manifestPath, { ...receiptManifest, manifestVersion: 3 });
   expect(migrationRun.readSessionSqliteMigrationManifest(manifestPath)).toBeUndefined();
   writeJson(manifestPath, receiptManifest);
   expect(
-    claimIssue(
-      manifestPath,
-      {
-        marker: `openclaw-report:${"c".repeat(64)}`,
-        title: "regenerated process must not replace the claim",
-      },
-      authority,
-    ),
-  ).toMatchObject({ issue: { ...issue, status: "attempted" }, status: "existing" });
+    claim({
+      marker: `openclaw-report:${"c".repeat(64)}`,
+      title: "regenerated process must not replace the claim",
+    }),
+  ).toMatchObject({ issue: receipt, status: "existing" });
   const receiptJson = fs.readFileSync(manifestPath, "utf8");
   expectPrivate(receiptJson, [
-    `stable sanitized report v${manifestVersion}`,
+    savedReport.trimEnd(),
     "github.com/openclaw/openclaw/issues/",
     "openclaw doctor",
     '"body"',
     "?body=",
   ]);
-  expect(fs.readFileSync(failureMarkdownPath, "utf8")).toBe(
-    `stable sanitized report v${manifestVersion}\n`,
-  );
+  expect(fs.readFileSync(failureMarkdownPath, "utf8")).toBe(savedReport);
   expect(clearClaim(manifestPath, issue.marker, authority)).toBe(true);
   const clearedManifest = readMigrationManifest(manifestPath);
   expect(clearedManifest.manifestVersion).toBe(4);
@@ -417,20 +379,15 @@ it("derives private report paths instead of trusting persisted destinations", ()
   fs.writeFileSync(untrustedJsonPath, "private json sentinel\n", { mode: 0o600 });
   fs.writeFileSync(untrustedMarkdownPath, "private markdown sentinel\n", { mode: 0o600 });
 
-  expect(writeReports(manifestPath, { reason: "failed" })).toEqual({
-    jsonPath: expectedJsonPath,
-    markdownPath: expectedMarkdownPath,
-  });
+  const expectedPaths = { jsonPath: expectedJsonPath, markdownPath: expectedMarkdownPath };
+  expect(writeReports(manifestPath, { reason: "failed" })).toEqual(expectedPaths);
   expect(createIssue(manifestPath)).toMatchObject({
     body: expect.not.stringContaining("private markdown sentinel"),
     bodyPath: expectedMarkdownPath,
   });
   expect(fs.readFileSync(untrustedJsonPath, "utf8")).toBe("private json sentinel\n");
   expect(fs.readFileSync(untrustedMarkdownPath, "utf8")).toBe("private markdown sentinel\n");
-  expect(readMigrationManifest(manifestPath).failureReports).toEqual({
-    jsonPath: expectedJsonPath,
-    markdownPath: expectedMarkdownPath,
-  });
+  expect(readMigrationManifest(manifestPath).failureReports).toEqual(expectedPaths);
 });
 
 it("keeps bounded GitHub issue bodies on a valid UTF-16 boundary", () => {
@@ -438,25 +395,24 @@ it("keeps bounded GitHub issue bodies on a valid UTF-16 boundary", () => {
   const manifestPath = path.join(store.tempDir, "failed-migration.json");
   const unpairedSurrogate =
     /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
-  const writeManifest = (messages: string[]) => {
+  const render = (messages: string[]) => {
     const manifest = failureManifest(store, "utf16-boundary", {
       manifestVersion: 2,
       targets: Array.from({ length: Math.ceil(messages.length / 10) }, (_, index) =>
         failureTarget(store, {
           agentId: `agent-${index}`,
-          issues: messages.slice(index * 10, (index + 1) * 10).map((message) => ({
-            code: "startup_failure",
-            message,
-          })),
+          issues: messages
+            .slice(index * 10, (index + 1) * 10)
+            .map((message) => ({ code: "startup_failure", message })),
           sqlitePath: path.join(store.tempDir, "openclaw-agent.sqlite"),
         }),
       ),
     });
     writeJson(manifestPath, manifest);
+    return createIssue(manifestPath);
   };
 
-  writeManifest([`${"x".repeat(499)}🎉tail`]);
-  const fieldIssue = createIssue(manifestPath);
+  const fieldIssue = render([`${"x".repeat(499)}🎉tail`]);
   expect(fieldIssue?.body).toContain(`${"x".repeat(499)}\n`);
   expect(fieldIssue?.body).not.toContain("🎉tail");
   expect(fieldIssue?.body).not.toMatch(unpairedSurrogate);
@@ -466,8 +422,7 @@ it("keeps bounded GitHub issue bodies on a valid UTF-16 boundary", () => {
   const messageCount = 50;
   const marker = "BOUNDARY";
   const messages = Array.from({ length: messageCount - 1 }, () => "");
-  writeManifest([...messages, `${marker}!!tail`]);
-  const probe = createIssue(manifestPath);
+  const probe = render([...messages, `${marker}!!tail`]);
   const markerOffset = probe?.body.indexOf(marker) ?? -1;
   expect(markerOffset).toBeGreaterThanOrEqual(0);
   let padding = limit - 1 - markerOffset - marker.length;
@@ -480,12 +435,10 @@ it("keeps bounded GitHub issue bodies on a valid UTF-16 boundary", () => {
     padding -= length;
   }
   expect(padding).toBe(0);
-  writeManifest([...messages, `${marker}!!tail`]);
-  const aligned = createIssue(manifestPath);
+  const aligned = render([...messages, `${marker}!!tail`]);
   expect(aligned?.body.slice(limit - 1 - marker.length, limit)).toBe(`${marker}!`);
 
-  writeManifest([...messages, `${marker}🎉tail`]);
-  const issue = createIssue(manifestPath);
+  const issue = render([...messages, `${marker}🎉tail`]);
   expect(issue?.body).not.toMatch(unpairedSurrogate);
   expect(issue).not.toHaveProperty("url");
   expect(issue?.body).toHaveLength(limit - 1);

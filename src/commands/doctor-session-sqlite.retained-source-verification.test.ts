@@ -152,9 +152,7 @@ it("preserves an empty-index receipt with unindexed history for an existing data
     );
     const report = await importSessions(cfg, state.env);
     expect(report.totals.importedEntries).toBe(1);
-    expect(allIssues(report)).toEqual([
-      expect.objectContaining({ code: "plugin_migration_source_retained" }),
-    ]);
+    expectIssueCodes(report, "plugin_migration_source_retained");
     for (const mode of ["import", "inspect", "validate", "dry-run"] as const) {
       const runtime = {
         log: vi.fn(),
@@ -174,9 +172,7 @@ it("preserves an empty-index receipt with unindexed history for an existing data
         String(runtime.log.mock.calls.at(-1)?.[0]),
       ) as DoctorSessionSqliteReport;
       expect(retried.totals.importedEntries).toBe(0);
-      expect(allIssues(retried)).toEqual([
-        expect.objectContaining({ code: "plugin_migration_source_retained" }),
-      ]);
+      expectIssueCodes(retried, "plugin_migration_source_retained");
     }
     for (const manifestPath of listManifests(state.env)) {
       const manifest = readManifest(manifestPath);
@@ -195,9 +191,7 @@ it("preserves an empty-index receipt with unindexed history for an existing data
     const bytes = JSON.stringify({ type: "session", version: 3, id: "current" }) + "\n";
     fs.writeFileSync(uncaptured, bytes);
     const unexpected = await importSessions(cfg, state.env);
-    expect(allIssues(unexpected).map((issue) => issue.code)).toEqual([
-      "plugin_migration_source_retained",
-    ]);
+    expectIssueCodes(unexpected, "plugin_migration_source_retained");
     expect(fs.existsSync(uncaptured)).toBe(false);
     expect(unexpected.targets[0]?.archivedTranscriptFiles).toHaveLength(1);
     expect(fs.readFileSync(unexpected.targets[0]!.archivedTranscriptFiles[0]!, "utf8")).toBe(bytes);
@@ -257,23 +251,19 @@ it.each(["none", "archived", "conflicting-archives", "live", "missing-index"] as
               originals.delete(move.archivePath);
             }
           }
-          if (history === "archived" || history === "conflicting-archives") {
-            for (const move of [...target.plannedMoves, ...target.completedMoves]) {
-              if (move.kind !== "transcript") {
-                continue;
-              }
+          for (const move of [...target.plannedMoves, ...target.completedMoves]) {
+            if (
+              (history === "archived" || history === "conflicting-archives") &&
+              move.kind === "transcript"
+            ) {
               // An older import retained primary history as a protected archive.
               move.kind = "unreferenced-jsonl";
               move.artifact!.classification = "protected";
               move.artifact!.reason = "unreferenced-history";
             }
-          }
-          if (history === "missing-index") {
-            for (const move of [...target.plannedMoves, ...target.completedMoves]) {
-              if (move.kind === "legacy-store") {
-                move.artifact!.classification = "protected";
-                move.artifact!.reason = "incomplete-index-import";
-              }
+            if (history === "missing-index" && move.kind === "legacy-store") {
+              move.artifact!.classification = "protected";
+              move.artifact!.reason = "incomplete-index-import";
             }
           }
         }
@@ -402,32 +392,33 @@ it.each(["none", "archived", "conflicting-archives", "live", "missing-index"] as
           expect(fs.readFileSync(file)).toEqual(bytes);
         }
         if (history === "missing-index" || history === "live") {
+          const completedMoves = listManifests(state.env)
+            .flatMap((file) => readManifest(file)?.targets ?? [])
+            .flatMap((owner) => owner.completedMoves);
           for (const target of manifest.targets) {
             expect(fs.existsSync(target.storePath)).toBe(false);
             for (const move of target.completedMoves) {
-              if (move.kind === "transcript") {
-                if (history === "missing-index") {
-                  expect(fs.readFileSync(move.sourcePath)).toEqual(originals.get(move.archivePath));
-                } else {
-                  expect(fs.existsSync(move.sourcePath)).toBe(false);
-                  const settledMoves = listManifests(state.env)
-                    .flatMap((file) => readManifest(file)?.targets ?? [])
-                    .flatMap((owner) => owner.completedMoves)
-                    .filter(
-                      (settled) =>
-                        settled.sourcePath === move.sourcePath &&
-                        settled.archivePath !== move.archivePath,
-                    );
-                  expect(settledMoves).toHaveLength(1);
-                  expect(settledMoves[0]!.artifact).toMatchObject({
-                    classification: "protected",
-                    reason: "indexed-historical-primary",
-                    disposal: { state: "retained" },
-                  });
-                  expect(fs.readFileSync(settledMoves[0]!.archivePath)).toEqual(
-                    originals.get(move.archivePath),
-                  );
-                }
+              if (move.kind !== "transcript") {
+                continue;
+              }
+              if (history === "missing-index") {
+                expect(fs.readFileSync(move.sourcePath)).toEqual(originals.get(move.archivePath));
+              } else {
+                expect(fs.existsSync(move.sourcePath)).toBe(false);
+                const settledMoves = completedMoves.filter(
+                  (settled) =>
+                    settled.sourcePath === move.sourcePath &&
+                    settled.archivePath !== move.archivePath,
+                );
+                expect(settledMoves).toHaveLength(1);
+                expect(settledMoves[0]!.artifact).toMatchObject({
+                  classification: "protected",
+                  reason: "indexed-historical-primary",
+                  disposal: { state: "retained" },
+                });
+                expect(fs.readFileSync(settledMoves[0]!.archivePath)).toEqual(
+                  originals.get(move.archivePath),
+                );
               }
             }
           }
@@ -486,14 +477,16 @@ it("reads each archive manifest once when verifying 32 retained transcripts", as
         sqlitePath: resolveSqliteTargetFromSessionStorePath(storePath, scope).path,
       });
     const reads = vi.spyOn(fs, "readFileSync");
+    const manifestsRead = () =>
+      reads.mock.calls.flatMap(([file]) =>
+        typeof file === "string" && manifestPaths.includes(file) ? [file] : [],
+      );
     for (let pass = 0; pass < 2; pass++) {
       reads.mockClear();
       expect(read()?.sources).toHaveLength(32 + 1);
-      const manifestsRead = reads.mock.calls.flatMap(([file]) =>
-        typeof file === "string" && manifestPaths.includes(file) ? [file] : [],
-      );
-      expect(manifestsRead.length).toBeGreaterThan(0);
-      expect(manifestsRead.length).toBe(new Set(manifestsRead).size);
+      const readPaths = manifestsRead();
+      expect(readPaths.length).toBeGreaterThan(0);
+      expect(readPaths.length).toBe(new Set(readPaths).size);
     }
     // A retained index can coexist with archived transcripts after interrupted archival.
     const moves = manifest.targets.flatMap((target) => target.plannedMoves);
@@ -518,13 +511,11 @@ it("reads each archive manifest once when verifying 32 retained transcripts", as
         .map(([file]) => file)
         .filter((file) => transcriptArchives.includes(file));
       expect(verifiedArchives.toSorted()).toEqual(transcriptArchives.toSorted());
-      const manifestsRead = reads.mock.calls.flatMap(([file]) =>
-        typeof file === "string" && manifestPaths.includes(file) ? [file] : [],
-      );
-      expect(manifestsRead.length).toBeGreaterThan(0);
+      const readPaths = manifestsRead();
+      expect(readPaths.length).toBeGreaterThan(0);
       // History discovery and receipt verification each read one copy per run.
       for (const file of manifestPaths) {
-        expect(manifestsRead.filter((readPath) => readPath === file)).toHaveLength(2);
+        expect(readPaths.filter((readPath) => readPath === file)).toHaveLength(2);
       }
     }
     hashes.mockRestore();
@@ -540,8 +531,8 @@ it("reads each archive manifest once when verifying 32 retained transcripts", as
       sqlitePath: resolveSqliteTargetFromSessionStorePath(storePath, scope).path,
     };
     const verification: SessionSourceVerification = new Map();
-    const resolveSource = (target = sourceTarget, env = state.env) =>
-      resolveVerifiedSessionSource(source, target, env, verification);
+    const resolveSource = (target = sourceTarget, sourceEnv = state.env) =>
+      resolveVerifiedSessionSource(source, target, sourceEnv, verification);
     expect(resolveSource()).toBe(transcriptMove.archivePath);
     source.identity.sha256 = "0".repeat(64);
     expect(resolveSource()).toBeUndefined();
@@ -572,6 +563,10 @@ it("reads each archive manifest once when verifying 32 retained transcripts", as
 
 function allIssues(report: DoctorSessionSqliteReport) {
   return report.targets.flatMap((target) => target.issues);
+}
+
+function expectIssueCodes(report: DoctorSessionSqliteReport, ...codes: string[]) {
+  expect(allIssues(report).map((issue) => issue.code)).toEqual(codes);
 }
 
 function writeJson(file: string, value: unknown) {

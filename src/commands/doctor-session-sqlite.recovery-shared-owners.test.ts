@@ -8,20 +8,20 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeSessionSqliteMigrationManifest } from "../infra/session-sqlite-migration-manifest.js";
 import * as sqliteReaders from "../infra/session-sqlite-migration-readers.js";
 import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabasesAsync as drainDatabases,
+  closeOpenClawAgentDatabasesForTest as closeDatabases,
 } from "../state/openclaw-agent-db.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import {
-  readMigrationManifest,
+  readMigrationManifest as readManifest,
   useDoctorSessionSqliteTestFixture,
 } from "./doctor-session-sqlite.test-support.js";
 
 const { createLegacyStore } = useDoctorSessionSqliteTestFixture();
 type SharedFixture = ReturnType<typeof createSharedRecoveryFixture>;
-type Manifest = ReturnType<typeof readMigrationManifest>;
+type Manifest = ReturnType<typeof readManifest>;
 type Report = Awaited<ReturnType<typeof run>>;
 type Cleanup = Awaited<ReturnType<typeof retireRecovery>>;
 type FixtureScope = Pick<SharedFixture, "cfg" | "env">;
@@ -135,9 +135,9 @@ describe("runDoctorSessionSqlite", () => {
         }
       });
       expect(disappeared).toBe(true);
-      closeOpenClawAgentDatabasesForTest();
+      closeDatabases();
       const retired = await retireRecovery(cfg, env);
-      const manifest = readMigrationManifest(imported.migrationRun?.manifestPath);
+      const manifest = readManifest(imported.migrationRun?.manifestPath);
       for (const original of originals) {
         expectRetained(manifest, original.file, original.bytes);
       }
@@ -172,7 +172,7 @@ describe("runDoctorSessionSqlite", () => {
       expect(imported.targets.flatMap((target) => target.issues)).toEqual([]);
       if (!sharedTranscript) {
         expectOwners(imported, indexes, reverse);
-        const manifest = readMigrationManifest(imported.migrationRun?.manifestPath);
+        const manifest = readManifest(imported.migrationRun?.manifestPath);
         for (const target of manifest.targets.filter((candidate) =>
           indexes.includes(candidate.storePath),
         )) {
@@ -186,7 +186,7 @@ describe("runDoctorSessionSqlite", () => {
             }),
           );
         }
-        closeOpenClawAgentDatabasesForTest();
+        closeDatabases();
         expect((await retireRecovery(cfg, env)).totals.removedFiles).toBe(6);
         return;
       }
@@ -206,7 +206,7 @@ describe("runDoctorSessionSqlite", () => {
         expect(entry.label).toBe(`Current ${owner} metadata`);
         current.push({ scope, entry: structuredClone(entry) });
       }
-      await closeOpenClawAgentDatabasesAsync();
+      await drainDatabases();
       const restored = await run({ cfg, env }, "restore");
       expect(restored.targets.flatMap((target) => target.issues)).toEqual([]);
       for (const original of originals) {
@@ -215,27 +215,27 @@ describe("runDoctorSessionSqlite", () => {
       }
       if (missingOwner) {
         const manifestPath = expectDefined(imported.migrationRun, "import run").manifestPath;
-        const manifest = readMigrationManifest(manifestPath);
+        const manifest = readManifest(manifestPath);
         manifest.targets = manifest.targets.filter((target) => target.agentId !== "main");
         writeSessionSqliteMigrationManifest({ manifestPath, manifest });
-        const deferred = await run({ cfg, env }, "import", "main");
-        expect(deferred.targets.flatMap((target) => target.issues)).toContainEqual(
+      }
+      const reimported = await run({ cfg, env }, "import", missingOwner ? "main" : undefined);
+      if (missingOwner) {
+        expect(reimported.targets.flatMap((target) => target.issues)).toContainEqual(
           expect.objectContaining({
             code: "legacy_import_deferred",
             message: expect.stringContaining("Restored session index evidence cannot be verified"),
           }),
         );
-        for (const { scope, entry } of current) {
-          expect(loadSessionEntry(scope)).toEqual(entry);
-        }
         expect(fs.readFileSync(indexes[0]!)).toEqual(originals[1]!.bytes);
       } else {
-        const reimported = await run({ cfg, env }, "import");
         expect(reimported.targets.flatMap((target) => target.issues)).toEqual([]);
-        for (const { scope, entry } of current) {
-          expect(loadSessionEntry(scope)).toEqual(entry);
-        }
-        closeOpenClawAgentDatabasesForTest();
+      }
+      for (const { scope, entry } of current) {
+        expect(loadSessionEntry(scope)).toEqual(entry);
+      }
+      if (!missingOwner) {
+        closeDatabases();
         expect((await retireRecovery(cfg, env)).totals.removedFiles).toBe(separateIndexes ? 5 : 4);
       }
     },
@@ -267,7 +267,7 @@ describe("runDoctorSessionSqlite", () => {
       const original = fs.readFileSync(workSource);
       const indexBytes = fs.readFileSync(workIndex);
       const report = await run({ cfg, env }, "import", "main");
-      closeOpenClawAgentDatabasesForTest();
+      closeDatabases();
       const cleanup = await retireRecovery(cfg, env);
       expect(fs.existsSync(workSource)).toBe(true);
       expect(fs.readFileSync(workSource)).toEqual(original);
@@ -286,9 +286,9 @@ describe("runDoctorSessionSqlite", () => {
       if (coverage === "shared") {
         const retry = await run({ cfg, env }, "import");
         expect(retry.targets.flatMap((target) => target.issues)).toEqual([]);
-        closeOpenClawAgentDatabasesForTest();
+        closeDatabases();
         const retired = await retireRecovery(cfg, env);
-        const current = readMigrationManifest(retry.migrationRun?.manifestPath);
+        const current = readManifest(retry.migrationRun?.manifestPath);
         for (const move of current.targets
           .flatMap((target) => target.completedMoves)
           .filter(
@@ -324,34 +324,30 @@ describe("runDoctorSessionSqlite", () => {
       });
       expect(injected).toBe(true);
       expectOwners(report, indexes, reverse);
-      const manifest = readMigrationManifest(report.migrationRun?.manifestPath);
+      const manifest = readManifest(report.migrationRun?.manifestPath);
       expect(
         manifest.targets.find((target) => target.agentId === "work")?.validationBeforeArchive,
       ).toBe("failed");
-      closeOpenClawAgentDatabasesForTest();
+      closeDatabases();
       const cleanup = await retireRecovery(cfg, env);
       expectRetained(manifest, transcriptPath, original);
       const independentMoves = manifest.targets.find(
         (target) => target.storePath === independent.storePath,
       )!.completedMoves;
-      expect(
-        independentMoves
-          .filter((move) => move.kind === "transcript" || move.kind === "legacy-store")
-          .every((move) =>
-            cleanup.artifacts.some(
-              (item) => item.path === move.archivePath && item.outcome === "removed",
-            ),
-          ),
-      ).toBe(true);
+      for (const move of independentMoves.filter(
+        (item) => item.kind === "transcript" || item.kind === "legacy-store",
+      )) {
+        expectOutcome(cleanup, move.archivePath, "removed");
+      }
       // Recovery and retry must remain usable with the failed owner's original index and bytes.
       await run({ cfg, env }, "restore");
       expect(fs.readFileSync(transcriptPath)).toEqual(original);
       expect(indexes.every((index) => fs.existsSync(index))).toBe(true);
       const retried = await run({ cfg, env }, "import");
       expect(retried.targets.flatMap((target) => target.issues)).toEqual([]);
-      closeOpenClawAgentDatabasesForTest();
+      closeDatabases();
       const retired = await retireRecovery(cfg, env);
-      const latest = readMigrationManifest(retried.migrationRun?.manifestPath);
+      const latest = readManifest(retried.migrationRun?.manifestPath);
       const protectedSources = new Set<string>();
       for (const move of latest.targets.flatMap((target) => target.completedMoves)) {
         const supportBytes = supportOriginals.get(move.sourcePath);

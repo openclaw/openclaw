@@ -96,7 +96,7 @@ it.each([
   "unlink-later",
   "recreated",
   "shared-receipt",
-])("resumes retirement after a %s failure without overclaiming removed bytes", async (phase) => {
+])("resumes %s disposal without overclaiming bytes", async (phase) => {
   const { store, imported, archivePath } = await createVerifiedRecoveryStore();
   const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
   const manifestDir = path.dirname(manifestPath);
@@ -114,50 +114,52 @@ it.each([
   const write = replaceFile.replaceFileAtomicSync;
   const unlink = fs.unlinkSync;
   const fsync = fs.fsyncSync;
-  const syncSpy = vi.spyOn(fs, "fsyncSync").mockImplementation((fd) => {
-    if (!injected && phase === "intent-sync" && isDirectoryDescriptor(fd, manifestDir)) {
-      injected = true;
-      throw new Error("injected intent-sync");
-    }
-    fsync(fd);
-  });
-  const writeSpy = vi.spyOn(replaceFile, "replaceFileAtomicSync").mockImplementation((options) => {
-    const text = String(options.content);
-    const shouldFail =
-      phase === "intent"
-        ? text.includes('"pending-disposal"')
-        : duplicate && options.filePath === manifestPath && text.includes('"disposed"');
-    if (!injected && shouldFail) {
-      injected = true;
-      if (duplicate) {
-        expect(disposalState(duplicate.manifestPath, archivePath, true)).toBe("disposed");
+  {
+    using syncSpy = vi.spyOn(fs, "fsyncSync");
+    syncSpy.mockImplementation((fd) => {
+      if (!injected && phase === "intent-sync" && isDirectoryDescriptor(fd, manifestDir)) {
+        injected = true;
+        throw new Error("injected intent-sync");
       }
-      throw new Error(`injected ${phase}`);
-    }
-    return write(options);
-  });
-  const unlinkSpy = vi.spyOn(fs, "unlinkSync").mockImplementation((file) => {
-    if (String(file).includes(".cleanup-")) {
-      claimUnlinks += 1;
-    }
-    if (
-      !injected &&
-      (((phase === "unlink" || phase === "recreated") && String(file).includes(".cleanup-")) ||
-        (phase === "unlink-later" && claimUnlinks === 2) ||
-        (phase === "claim" && String(file) === archivePath))
-    ) {
-      injected = true;
-      throw new Error(`injected ${phase}`);
-    }
-    return unlink(file);
-  });
-  const invoke = () => retire(store);
-  try {
+      fsync(fd);
+    });
+    using writeSpy = vi.spyOn(replaceFile, "replaceFileAtomicSync");
+    writeSpy.mockImplementation((options) => {
+      const text = String(options.content);
+      const shouldFail =
+        phase === "intent"
+          ? text.includes('"pending-disposal"')
+          : duplicate && options.filePath === manifestPath && text.includes('"disposed"');
+      if (!injected && shouldFail) {
+        injected = true;
+        if (duplicate) {
+          expect(disposalState(duplicate.manifestPath, archivePath, true)).toBe("disposed");
+        }
+        throw new Error(`injected ${phase}`);
+      }
+      return write(options);
+    });
+    using unlinkSpy = vi.spyOn(fs, "unlinkSync");
+    unlinkSpy.mockImplementation((file) => {
+      if (String(file).includes(".cleanup-")) {
+        claimUnlinks += 1;
+      }
+      if (
+        !injected &&
+        (((phase === "unlink" || phase === "recreated") && String(file).includes(".cleanup-")) ||
+          (phase === "unlink-later" && claimUnlinks === 2) ||
+          (phase === "claim" && String(file) === archivePath))
+      ) {
+        injected = true;
+        throw new Error(`injected ${phase}`);
+      }
+      return unlink(file);
+    });
     if (phase === "intent" || phase === "intent-sync") {
-      await expect(invoke()).rejects.toThrow(`injected ${phase}`);
+      await expect(retire(store)).rejects.toThrow(`injected ${phase}`);
       expect(fs.readFileSync(archivePath)).toEqual(original);
     } else {
-      const first = await invoke();
+      const first = await retire(store);
       expect(first.status).toBe("blocked");
       if (phase === "unlink-later") {
         expect(first.totals.removedFiles).toBe(1);
@@ -168,16 +170,12 @@ it.each([
         );
       }
     }
-  } finally {
-    writeSpy.mockRestore();
-    unlinkSpy.mockRestore();
-    syncSpy.mockRestore();
   }
   expect(injected).toBe(true);
   if (phase === "recreated") {
     fs.writeFileSync(archivePath, "replacement after interrupted cleanup");
   }
-  const resumed = await invoke();
+  const resumed = await retire(store);
   if (phase === "recreated") {
     expect(resumed.status).toBe("blocked");
     expect(fs.readFileSync(archivePath, "utf8")).toBe("replacement after interrupted cleanup");
@@ -203,7 +201,7 @@ it.each([
   { platform: "linux", syncFailure: "unsupported", retires: false },
   { platform: "win32", syncFailure: "EIO", retires: false },
 ] as const)(
-  "applies the manifest directory-sync policy for $platform $syncFailure",
+  "applies directory-sync policy for $platform $syncFailure",
   async ({ platform, syncFailure, retires }) => {
     const { store, imported, archivePath } = await createVerifiedRecoveryStore();
     const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
@@ -283,10 +281,7 @@ it.each([
     name: "duplicate divergent ID",
     rows: [message("duplicate", "first"), message("duplicate", "unique second")],
   },
-  {
-    name: "missing ancestor",
-    rows: [message("child", "history", "missing")],
-  },
+  { name: "missing ancestor", rows: [message("child", "history", "missing")] },
 ])("protects $name and its recovery index", async ({ rows, name }) => {
   const store = transcriptStore(...rows);
   const original = fs.readFileSync(store.transcriptPath);
@@ -312,9 +307,10 @@ it.each([
 it("retains complete recovery when durable transcript verification is short", async () => {
   const store = transcriptStore(message("root", "root"));
   const snapshot = sqliteReaders.readOnlySqliteValidationSnapshot;
-  const spy = vi
-    .spyOn(sqliteReaders, "readOnlySqliteValidationSnapshot")
-    .mockImplementation((target) => {
+  let imported;
+  {
+    using spy = vi.spyOn(sqliteReaders, "readOnlySqliteValidationSnapshot");
+    spy.mockImplementation((target) => {
       const result = snapshot(target);
       if (!result.ok) {
         return result;
@@ -326,11 +322,7 @@ it("retains complete recovery when durable transcript verification is short", as
         snapshot: { ...result.snapshot, transcriptEventCountsBySessionId: counts },
       };
     });
-  let imported;
-  try {
     imported = await importLegacyStore(store);
-  } finally {
-    spy.mockRestore();
   }
 
   expect(hasCountMismatch(imported)).toBe(true);
@@ -339,7 +331,7 @@ it("retains complete recovery when durable transcript verification is short", as
 });
 
 it.each(["fresh", "identical", "divergent"] as const)(
-  "verifies duplicate replay history against a %s destination",
+  "verifies duplicate replays against %s destinations",
   async (kind) => {
     const fresh = kind === "fresh";
     const archived = kind !== "divergent";
