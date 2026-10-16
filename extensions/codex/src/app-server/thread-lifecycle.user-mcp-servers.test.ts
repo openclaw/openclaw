@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import { promisify } from "node:util";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
@@ -47,45 +49,29 @@ function createRequest(startThreadId: string) {
   });
 }
 
-function lifecycleOptions(
-  sessionFile: string,
-  cwd: string,
-  config?: EmbeddedRunAttemptParams["config"],
-) {
-  return {
-    params: { ...createParams(sessionFile, cwd, config), disableTools: false },
-    cwd,
-    dynamicTools: [],
-    appServer: createAppServerOptions(),
-  };
+type Config = NonNullable<EmbeddedRunAttemptParams["config"]>;
+function mcpConfig(
+  servers: NonNullable<Config["mcp"]>["servers"],
+  tools?: Config["tools"],
+): Config {
+  return { mcp: { servers }, tools };
 }
 
-function bearerConfig(url: string, authorization: string): EmbeddedRunAttemptParams["config"] {
-  return {
-    mcp: {
-      servers: {
-        ducktape: {
-          transport: "streamable-http",
-          url,
-          headers: { Authorization: authorization, "x-tenant": "keep" },
-        },
-      },
+function bearerConfig(url: string, authorization: string) {
+  return mcpConfig({
+    ducktape: {
+      transport: "streamable-http",
+      url,
+      headers: { Authorization: authorization, "x-tenant": "keep" },
     },
-  } as unknown as EmbeddedRunAttemptParams["config"];
+  });
 }
 
 function projectedServers(request: ReturnType<typeof createRequest>, method = "thread/start") {
   const params = request.mock.calls.find(([candidate]) => candidate === method)?.[1] as
     | {
         config?: {
-          mcp_servers?: Record<
-            string,
-            {
-              enabled_tools?: string[];
-              disabled_tools?: string[];
-              http_headers?: Record<string, string>;
-            }
-          >;
+          mcp_servers?: Record<string, { http_headers?: Record<string, string> }>;
         };
       }
     | undefined;
@@ -101,53 +87,80 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     workspaceDir = path.join(tempDir, "workspace");
   });
 
+  function expectMethods(request: ReturnType<typeof createRequest>, ...methods: string[]) {
+    expect(request.mock.calls.map(([method]) => method)).toEqual(methods);
+  }
+
+  function run(
+    request: ReturnType<typeof createRequest>,
+    config?: EmbeddedRunAttemptParams["config"],
+    overrides: Partial<Parameters<typeof startOrResumeThread>[0]> = {},
+  ) {
+    return startOrResumeThread({
+      client: { request } as never,
+      params: overrides.params ?? {
+        ...createParams(sessionFile, workspaceDir, config),
+        disableTools: false,
+      },
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+      ...overrides,
+    });
+  }
+
+  async function session(startThreadId: string, config: EmbeddedRunAttemptParams["config"]) {
+    const request = createRequest(startThreadId);
+    const connect = (persistedThreads?: string[]) =>
+      createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        respond: request,
+        persistedThreads,
+      });
+    let wire = await connect();
+    return {
+      request,
+      get wire() {
+        return wire;
+      },
+      run: () => run(request, config, { client: wire.client }),
+      reconnect: async (threadId: string) => {
+        await wire.client.closeAndWait();
+        wire = await connect([threadId]);
+      },
+    };
+  }
+
   it("projects wildcard filters as exact names before thread/start and thread/resume", async () => {
     sessionFile = path.join(tempDir, "policy-session.jsonl");
     registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
     const serverPath = await writePolicyProbeServer(tempDir);
-    const config: EmbeddedRunAttemptParams["config"] = {
-      tools: { allow: ["docs__*"] },
-      mcp: {
-        servers: {
-          docs: {
-            transport: "stdio",
-            command: process.execPath,
-            args: [serverPath],
-            toolFilter: { exclude: ["delete_*"] },
-          },
+    const config = mcpConfig(
+      {
+        docs: {
+          transport: "stdio",
+          command: process.execPath,
+          args: [serverPath],
+          toolFilter: { exclude: ["delete_*"] },
         },
       },
-    };
-    const request = createRequest("thread-policy");
-    let wire = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
-      respond: request,
-    });
-    const run = async () =>
-      await startOrResumeThread({
-        client: wire.client,
-        ...lifecycleOptions(sessionFile, workspaceDir, config),
-      });
-
-    await run();
-    await wire.client.closeAndWait();
-    wire = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
-      respond: request,
-      persistedThreads: ["thread-policy"],
-    });
-    await run();
-
-    expect(wire.request.mock.calls.map(([method]) => method)).toEqual([
+      { allow: ["docs__*"] },
+    );
+    const fixture = await session("thread-policy", config);
+    await fixture.run();
+    await fixture.reconnect("thread-policy");
+    await fixture.run();
+    expectMethods(
+      fixture.wire.request,
       "config/read",
       "configRequirements/read",
       "thread/read",
       "thread/resume",
       "thread/inject_items",
-    ]);
+    );
 
     for (const method of ["thread/start", "thread/resume"]) {
-      const docs = projectedServers(request, method)?.docs;
+      const docs = projectedServers(fixture.request, method)?.docs;
       expect(docs).toMatchObject({
         command: process.execPath,
         args: [serverPath],
@@ -167,27 +180,17 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     );
     workspaceDir = path.join(tempDir, "workspace-override");
     const serverPath = await writePolicyProbeServer(tempDir);
-    const config: EmbeddedRunAttemptParams["config"] = {
-      tools: { allow: ["docs__*"] },
-      mcp: {
-        servers: {
-          docs: { transport: "stdio", command: process.execPath, args: [serverPath] },
-        },
-      },
-    };
+    const config = mcpConfig(
+      { docs: { transport: "stdio", command: process.execPath, args: [serverPath] } },
+      { allow: ["docs__*"] },
+    );
     const request = createRequest("thread-session-override");
-    const run: EmbeddedRunAttemptParams = {
+    const params: EmbeddedRunAttemptParams = {
       ...createParams(sessionFile, workspaceDir, config),
       toolOverrides: { mcpToolsDeny: { docs: ["delete_docs"] } },
     };
 
-    await startOrResumeThread({
-      client: { request } as never,
-      params: run,
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createAppServerOptions(),
-    });
+    await run(request, config, { params });
 
     expect(projectedServers(request)?.docs).toMatchObject({
       enabled_tools: ["read_docs"],
@@ -202,37 +205,31 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     const serverPath = await writePolicyProbeServer(tempDir);
     const startedPath = path.join(tempDir, "excluded-server-started");
     const url = await startPolicyHttpServer();
-    const config: EmbeddedRunAttemptParams["config"] = {
-      tools: { deny: ["docs__delete_docs"] },
-      mcp: {
-        servers: {
-          atlas: {
-            transport: "streamable-http",
-            url,
-            codex: { agents: ["atlas"], defaultToolsApprovalMode: "approve" },
-          },
-          docs: {
-            transport: "stdio",
-            command: process.execPath,
-            args: [serverPath],
-            env: { OPENCLAW_POLICY_PROBE_STARTED: startedPath },
-            codex: { agents: ["worker"] },
-          },
+    const config = mcpConfig(
+      {
+        atlas: {
+          transport: "streamable-http",
+          url,
+          codex: { agents: ["atlas"], defaultToolsApprovalMode: "approve" },
+        },
+        docs: {
+          transport: "stdio",
+          command: process.execPath,
+          args: [serverPath],
+          env: { OPENCLAW_POLICY_PROBE_STARTED: startedPath },
+          codex: { agents: ["worker"] },
         },
       },
-    };
+      { deny: ["docs__delete_docs"] },
+    );
     const request = createRequest("thread-agent-scope");
 
-    await startOrResumeThread({
-      client: { request } as never,
+    await run(request, config, {
       params: {
         ...createParams(sessionFile, workspaceDir, config),
         sessionKey: "agent:atlas:session-1",
       },
       agentId: "atlas",
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createAppServerOptions(),
     });
 
     await expect(fs.access(startedPath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -246,21 +243,11 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     const authorization = "Bearer beta5-access-token";
     const url = await startPolicyHttpServer();
     const config = bearerConfig(url, authorization);
-    const request = createRequest("thread-beta5");
-    let wire = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
-      respond: request,
-    });
-    const run = () =>
-      startOrResumeThread({
-        client: wire.client,
-        ...lifecycleOptions(sessionFile, workspaceDir, config),
-      });
-
-    await run();
+    const fixture = await session("thread-beta5", config);
+    const { request, run: runSession } = fixture;
+    await runSession();
     const currentBinding = await readCodexAppServerBinding(sessionFile);
-    expect(currentBinding).toBeDefined();
-    expect(currentBinding?.threadId).toBe("thread-beta5");
+    expect(currentBinding).toMatchObject({ threadId: "thread-beta5" });
 
     const legacyFingerprint = JSON.stringify({
       mcp_servers: {
@@ -279,12 +266,8 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     });
 
     request.mockClear();
-    await run();
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "configRequirements/read",
-      "thread/start",
-    ]);
+    await runSession();
+    expectMethods(request, "config/read", "configRequirements/read", "thread/start");
     const convergedBinding = await readCodexAppServerBinding(sessionFile);
     expect(convergedBinding?.threadId).toBe("thread-beta5-2");
     expect(convergedBinding?.threadId).not.toBe(currentBinding?.threadId);
@@ -295,26 +278,18 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       hashCodexAppServerBindingFingerprint(legacyFingerprint),
     );
 
-    await wire.client.closeAndWait();
-    wire = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
-      respond: request,
-      persistedThreads: ["thread-beta5-2"],
-    });
+    await fixture.reconnect("thread-beta5-2");
     request.mockClear();
-    await run();
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "configRequirements/read",
-      "thread/resume",
-    ]);
-    expect(wire.request.mock.calls.map(([method]) => method)).toEqual([
+    await runSession();
+    expectMethods(request, "config/read", "configRequirements/read", "thread/resume");
+    expectMethods(
+      fixture.wire.request,
       "config/read",
       "configRequirements/read",
       "thread/read",
       "thread/resume",
       "thread/inject_items",
-    ]);
+    );
     expect(request).toHaveBeenCalledWith(
       "thread/resume",
       expect.objectContaining({ threadId: convergedBinding?.threadId }),
@@ -335,19 +310,13 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       webSearchThreadConfigFingerprint: "web-search-v1",
     });
     const request = createRequest("thread-transient");
-    await startOrResumeThread({
-      client: { request } as never,
-      ...lifecycleOptions(sessionFile, workspaceDir),
+    await run(request, undefined, {
       mcpServersFingerprint: undefined,
       mcpServersFingerprintEvaluated: true,
       userMcpServersEnabled: false,
       nativeProviderWebSearchSupport: "unknown",
     });
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "configRequirements/read",
-      "thread/start",
-    ]);
+    expectMethods(request, "config/read", "configRequirements/read", "thread/start");
     expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
       threadId: "thread-native",
       mcpServersFingerprint: "mcp-v1",
@@ -358,28 +327,15 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
     const url = await startPolicyHttpServer();
     const request = createRequest("thread-with-current-bearer");
-
-    await startOrResumeThread({
-      client: { request } as never,
-      ...lifecycleOptions(sessionFile, workspaceDir, bearerConfig(url, "Bearer access-token-one")),
-    });
+    await run(request, bearerConfig(url, "Bearer access-token-one"));
     const firstBinding = await readCodexAppServerBinding(sessionFile);
     expect(firstBinding?.threadId).toBe("thread-with-current-bearer");
     expect(firstBinding?.userMcpServersFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(firstBinding?.userMcpServersFingerprint).not.toContain("access-token-one");
 
     request.mockClear();
-
-    await startOrResumeThread({
-      client: { request } as never,
-      ...lifecycleOptions(sessionFile, workspaceDir, bearerConfig(url, "Bearer access-token-two")),
-    });
-
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "configRequirements/read",
-      "thread/start",
-    ]);
+    await run(request, bearerConfig(url, "Bearer access-token-two"));
+    expectMethods(request, "config/read", "configRequirements/read", "thread/start");
     expect(projectedServers(request)?.ducktape?.http_headers?.Authorization).toBe(
       "Bearer access-token-two",
     );
@@ -399,9 +355,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       mcpRequestCount += 1;
       response.writeHead(401).end();
     });
-    await new Promise<void>((resolve) => {
-      mcpServer.listen(0, "127.0.0.1", resolve);
-    });
+    await once(mcpServer.listen(0, "127.0.0.1"), "listening");
     const address = mcpServer.address();
     if (!address || typeof address === "string") {
       throw new Error("expected loopback MCP server address");
@@ -409,37 +363,28 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     const request = createRequest("thread-without-oauth-mcp");
 
     try {
-      await startOrResumeThread({
-        client: { request } as never,
-        params: createParams(sessionFile, workspaceDir, {
-          tools: { deny: ["ducktape__restricted"] },
-          mcp: {
-            servers: {
+      await run(request, undefined, {
+        params: createParams(
+          sessionFile,
+          workspaceDir,
+          mcpConfig(
+            {
               ducktape: {
                 transport: "streamable-http",
                 url: `http://127.0.0.1:${address.port}/mcp`,
                 auth: "oauth",
               },
             },
-          },
-        } as unknown as EmbeddedRunAttemptParams["config"]),
-        cwd: workspaceDir,
-        dynamicTools: [],
+            { deny: ["ducktape__restricted"] },
+          ),
+        ),
         appServer: {
           ...createAppServerOptions(),
           connectionClass: "remote",
         },
       });
     } finally {
-      await new Promise<void>((resolve, reject) => {
-        mcpServer.close((error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve();
-        });
-      });
+      await promisify(mcpServer.close.bind(mcpServer))();
     }
 
     expect(projectedServers(request)).toBeUndefined();

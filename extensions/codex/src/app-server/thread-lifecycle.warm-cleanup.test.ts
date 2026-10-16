@@ -1,19 +1,16 @@
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   claimCodexAppServerLiveThread,
   isCodexAppServerLiveThreadClaimed,
   protectCodexAppServerLiveThread,
-  retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
-import type { CodexDynamicToolFunctionSpec } from "./protocol.js";
 import {
   createParams as createRunAttemptParams,
   setupRunAttemptTestHooks,
   tempDir,
   threadStartResult,
 } from "./run-attempt-test-harness.js";
-import * as sessionBinding from "./session-binding.js";
 import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
 import {
   createAppServerOptions,
@@ -22,30 +19,23 @@ import {
   startOrResumeAttemptThreadWithoutSkills as startOrResumeAttemptThread,
   type CodexAttemptThreadInput as LifecycleInput,
 } from "./thread-lifecycle.test-fixtures.js";
+import {
+  failNextWarmPublication,
+  retainWarmThread,
+  warmPluginConfig,
+} from "./thread-lifecycle.warm-cleanup.test-support.js";
 
-function startOrResumeThread(input: Pick<LifecycleInput, "client"> & Partial<LifecycleInput>) {
+function startOrResumeThread(
+  input: Pick<LifecycleInput, "client" | "params"> & Partial<LifecycleInput>,
+) {
   const cwd = input.cwd ?? input.params?.workspaceDir ?? path.join(tempDir, "workspace");
-  const params = input.params ?? createParams(path.join(tempDir, "session.jsonl"), cwd);
   return startOrResumeAttemptThread({
     signal: new AbortController().signal,
     dynamicTools: [],
     appServer: { ...createAppServerOptions(), connectionClass: "local-loopback" },
     ...input,
-    params,
     cwd,
   });
-}
-
-function retainThread(
-  client: LifecycleInput["client"],
-  binding: Awaited<ReturnType<typeof startOrResumeThread>>,
-) {
-  return retainCodexAppServerLiveThread(
-    client,
-    binding.threadId,
-    undefined,
-    binding.liveThreadConfigFingerprint,
-  );
 }
 
 function createParams(sessionFile: string, workspaceDir: string) {
@@ -55,64 +45,16 @@ function createParams(sessionFile: string, workspaceDir: string) {
   return params;
 }
 
-function createNamedDynamicTool(name: string): CodexDynamicToolFunctionSpec {
-  return {
-    type: "function",
-    name,
-    description: `${name} test tool`,
-    inputSchema: {
-      type: "object",
-      properties: {},
-      additionalProperties: false,
-    },
-  };
-}
-
-function createPluginAppConfigPatch() {
-  return {
-    apps: {
-      _default: {
-        enabled: false,
-        destructive_enabled: false,
-        open_world_enabled: false,
-      },
-      "google-calendar-app": {
-        enabled: true,
-        destructive_enabled: true,
-        open_world_enabled: true,
-        default_tools_approval_mode: "auto",
-      },
-    },
-  };
-}
-
-function createPluginAppPolicyContext() {
-  return {
-    fingerprint: "plugin-policy-1",
-    apps: {
-      "google-calendar-app": {
-        configKey: "google-calendar",
-        marketplaceName: "openai-curated" as const,
-        pluginName: "google-calendar",
-        allowDestructiveActions: true,
-        mcpServerNames: ["google-calendar"],
-      },
-    },
-    pluginAppIds: {
-      "google-calendar": ["google-calendar-app"],
-    },
-  };
-}
-
 setupRunAttemptTestHooks({ isolateNativeSkillHome: true });
 
 describe("Codex warm subscription cleanup", () => {
   it.for([false, true])(
     "recovers warm publication failure with background protection=%s",
     async (backgroundWork) => {
-      const sessionFile = path.join(tempDir, "warm-publication-release.jsonl");
-      const workspaceDir = path.join(tempDir, "workspace");
-      const params = createParams(sessionFile, workspaceDir);
+      const params = createParams(
+        path.join(tempDir, "warm.jsonl"),
+        path.join(tempDir, "workspace"),
+      );
       const threadId = "warm-publication-thread";
       let starts = 0;
       const fixture = await createLeasedCodexLifecycleHarness({
@@ -135,7 +77,7 @@ describe("Codex warm subscription cleanup", () => {
         developerInstructions: "original policy",
       };
       const started = await startOrResumeThread(common);
-      expect(await retainThread(fixture.client, started)).toBe(true);
+      expect(await retainWarmThread(fixture.client, started)).toBe(true);
       const releaseProtection = backgroundWork
         ? protectCodexAppServerLiveThread(fixture.client, threadId)
         : undefined;
@@ -143,33 +85,7 @@ describe("Codex warm subscription cleanup", () => {
       const sibling = await claimCodexAppServerLiveThread(fixture.client, "active-sibling");
       expect(sibling).toBeDefined();
       const readerFailure = new Error("warm publication reader release failed");
-      const resolveBinding = sessionBinding.resolveCodexSessionBinding;
-      const failedPublication = vi
-        .spyOn(sessionBinding, "resolveCodexSessionBinding")
-        .mockImplementationOnce(async (input) => {
-          const resolved = await resolveBinding(input);
-          const withCurrent = resolved.authority.withCurrent;
-          return {
-            ...resolved,
-            authority: {
-              ...resolved.authority,
-              withCurrent: async (consume) => {
-                const result = await withCurrent(consume);
-                // Model a reader failing to release after the lifecycle published
-                // its prepared binding; all earlier admissions use the real owner.
-                if (
-                  result !== null &&
-                  typeof result === "object" &&
-                  "liveThreadOwnership" in result &&
-                  result.liveThreadOwnership
-                ) {
-                  throw readerFailure;
-                }
-                return result;
-              },
-            },
-          };
-        });
+      const failedPublication = failNextWarmPublication(readerFailure);
       try {
         await expect(startOrResumeThread(common)).rejects.toBe(readerFailure);
         failedPublication.mockRestore();
@@ -182,7 +98,14 @@ describe("Codex warm subscription cleanup", () => {
               : {
                   ...common,
                   developerInstructions: "updated policy",
-                  dynamicTools: [createNamedDynamicTool("updated_tool")],
+                  dynamicTools: [
+                    {
+                      type: "function",
+                      name: "updated_tool",
+                      description: "updated_tool test tool",
+                      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+                    },
+                  ],
                 },
           ),
         ).resolves.toMatchObject({
@@ -221,26 +144,11 @@ describe("Codex warm subscription cleanup", () => {
       client: fixture.client,
       params,
       userMcpServersEnabled: false,
-      pluginThreadConfig: {
-        enabled: true,
-        requiresCurrentPolicyCheck: true,
-        inputFingerprint: "stable-plugin-input",
-        build: async () => ({
-          enabled: true,
-          fingerprint: pluginFingerprint,
-          inputFingerprint: "stable-plugin-input",
-          diagnostics: [],
-          configPatch: createPluginAppConfigPatch(),
-          policyContext: createPluginAppPolicyContext(),
-          provisionalAppIds: ["fixture-app"],
-        }),
-      },
+      pluginThreadConfig: warmPluginConfig(() => pluginFingerprint, ["fixture-app"]),
     };
     const started = await startOrResumeThread(common);
-    expect(await retainThread(fixture.client, started)).toBe(true);
+    expect(await retainWarmThread(fixture.client, started)).toBe(true);
     const bindingBefore = await readCodexAppServerBinding(sessionFile);
-    // Native commands keep the original physical subscription protected after
-    // its foreground turn finishes; policy refusal must not steal its idle owner.
     const releaseProtection = protectCodexAppServerLiveThread(fixture.client, threadId);
     fixture.request.mockClear();
     try {
