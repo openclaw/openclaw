@@ -251,12 +251,15 @@ private-QA output variants. Checkout already fetches depth-one selected source;
 historical test prerequisites and revision-comparison inputs stay with their
 existing owners.
 
-Current-target UI E2E jobs use a blobless sparse checkout that omits only the
-mobile and macOS app trees. Linux/shared app resources, docs, and the complete
-Node workspace remain available. Frozen or unclassified targets retain full
-checkouts, as do jobs with historical reader or comparison-base prerequisites.
-Sparse materialization retains checkout-scoped authentication and the fetch
-deadline; it must finish before credentials expire.
+Keep the full source checkout for UI E2E jobs. An October 16 blobless sparse
+checkout trial excluded 48.31 MiB of logical mobile/macOS app content, but its
+Blacksmith UI checkout took 56s and its hosted browser checkout 58s in
+[run 38866595993](https://github.com/openclaw/openclaw/actions/runs/38866595993).
+Full UI checkouts in that run took 22–38s. These small, unpaired samples did
+not qualify the trial for rollout and do not establish a billing delta.
+Future trials must include filtered fetch, lazy materialization, and harness
+export in complete checkout timing; omitted logical bytes are not transfer or
+cost savings.
 
 A Linux Testbox check on four CPUs, 15.4 GiB RAM, and Node 24.19.0 measured
 preparation plus joined cleanup at 8.43/9.44 seconds without reuse and 3.21/3.17

@@ -26,20 +26,6 @@ function workflowScript(file: string, job: string, name: string) {
   return expectDefined(script, "workflow script");
 }
 
-it.skipIf(process.platform === "win32").each(["ui-sparse", "ui-harness", "ui-full"])(
-  "preserves UI source and trusted harness without transferring omitted app blobs (%s)",
-  async (mode) => {
-    expect(await runAuthFixture(mode)).toEqual({
-      mode,
-      sparse: mode !== "ui-full",
-      sourceAndHarnessVerified: true,
-      credentialPersisted: false,
-      postCheckoutRequests: 0,
-    });
-  },
-  50_000,
-);
-
 it.skipIf(process.platform === "win32").each([
   { mode: "qa-main", code: 0, reason: "main-ancestor" },
   { mode: "qa-main-no-dotgit", code: 0, reason: "main-ancestor" },
