@@ -1,3 +1,4 @@
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -36,6 +37,7 @@ afterEach(async () => {
   await Promise.all([...providers].map((provider) => provider.dispose()));
   providers.clear();
   vi.restoreAllMocks();
+  syncBuiltinESMExports();
 });
 
 describe("Crabbox provider binary resolution", () => {

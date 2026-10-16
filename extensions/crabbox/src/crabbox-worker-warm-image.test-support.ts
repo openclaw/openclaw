@@ -1,3 +1,4 @@
+import { syncBuiltinESMExports } from "node:module";
 import type { WorkerProfile, WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
@@ -52,6 +53,7 @@ afterEach(async () => {
   providers.clear();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
+  syncBuiltinESMExports();
   await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
 });

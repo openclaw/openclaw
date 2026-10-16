@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -76,6 +77,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
       resetPluginStateStoreForTests();
       vi.unstubAllEnvs();
       vi.restoreAllMocks();
+      syncBuiltinESMExports();
       cleanup();
     }
   }),

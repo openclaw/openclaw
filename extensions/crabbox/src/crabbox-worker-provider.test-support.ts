@@ -1,5 +1,6 @@
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
-import * as timers from "node:timers/promises";
+import timers from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
@@ -55,6 +56,7 @@ export function createProviderFixtures(defaults: ProviderFixtureDependencies = {
             return value;
           },
         );
+        syncBuiltinESMExports();
       }
       const sibling = path.resolve(OPENCLAW_ROOT, "../crabbox/bin/crabbox");
       vi.spyOn(binaryDiscovery, "resolveCrabboxBinary").mockReturnValue(

@@ -1,4 +1,5 @@
-import * as timers from "node:timers/promises";
+import { syncBuiltinESMExports } from "node:module";
+import timers from "node:timers/promises";
 import { inspect as inspectValue } from "node:util";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -26,7 +27,10 @@ const absentResult: SpawnResult = {
 const leaseTimeout = `Get "https://coordinator.example/v1/leases/${LEASE_ID}?providerMetadata=authoritative": context deadline exceeded`;
 const transportFailure = { ...absentResult, stderr: leaseTimeout };
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  syncBuiltinESMExports();
+});
 
 describe("Crabbox coordinator timeouts", () => {
   it.each([
@@ -84,6 +88,7 @@ describe("Crabbox coordinator timeouts", () => {
       .mockResolvedValue({ ...absentResult, code: 0, stderr: "" });
     vi.spyOn(processRunner, "runCrabboxProcess").mockImplementation(runCommand);
     vi.spyOn(timers, "setTimeout").mockResolvedValue(undefined);
+    syncBuiltinESMExports();
     const stopped = stopCrabboxLease({
       binary: "crabbox",
       id: LEASE_ID,
@@ -117,6 +122,7 @@ describe("Crabbox coordinator timeouts", () => {
       await sleep(milliseconds ?? 1);
       return value;
     });
+    syncBuiltinESMExports();
     const stopped = stopCrabboxLease({
       binary: "crabbox",
       id: LEASE_ID,
@@ -146,6 +152,7 @@ describe("Crabbox coordinator timeouts", () => {
         await sleep(milliseconds ?? 1);
         return value;
       });
+      syncBuiltinESMExports();
       vi.spyOn(processRunner, "runCrabboxProcess").mockImplementation(async (_argv, options) => {
         timeouts.push(options.timeoutMs);
         elapsedMs += timeouts.length === 1 ? 60_000 : options.timeoutMs;
@@ -186,6 +193,7 @@ describe("Crabbox coordinator timeouts", () => {
         await sleep(milliseconds ?? 1);
         return value;
       });
+      syncBuiltinESMExports();
       vi.spyOn(processRunner, "runCrabboxProcess").mockImplementation(async (_argv, options) => {
         timeouts.push(options.timeoutMs);
         monotonicMs += 1_000;
@@ -218,6 +226,7 @@ describe("Crabbox coordinator timeouts", () => {
       controller.abort(reason);
       return value;
     });
+    syncBuiltinESMExports();
     await expect(
       runCrabboxCommandWithCoordinatorRetry({
         action: "stop",
