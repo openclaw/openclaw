@@ -1,20 +1,28 @@
+// Codex tests cover native execution policy plugin behavior.
+import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   prepareCodexNativeExecutionPolicy,
   resolveCodexNativeExecutionPolicy,
 } from "./native-execution-policy.js";
 
-const { capture } = vi.hoisted(() => ({ capture: vi.fn() }));
-
-vi.mock("openclaw/plugin-sdk/session-binding-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/session-binding-runtime")>()),
-  captureSessionEntryCurrentCheckAsync: capture,
+const sessionStoreMocks = vi.hoisted(() => ({
+  captureSessionEntryCurrentCheckAsync: vi.fn(),
 }));
 
-function mockSelectedEntry(execNode: string) {
+vi.mock("openclaw/plugin-sdk/session-binding-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/session-binding-runtime")>();
+  return {
+    ...actual,
+    captureSessionEntryCurrentCheckAsync: sessionStoreMocks.captureSessionEntryCurrentCheckAsync,
+  };
+});
+
+function mockSelectedEntry(entry: SessionEntry) {
   const release = vi.fn();
-  capture.mockResolvedValue({
-    entry: { sessionId: "session-1", updatedAt: 1, execHost: "node", execNode },
+  sessionStoreMocks.captureSessionEntryCurrentCheckAsync.mockResolvedValue({
+    entry,
     isCurrent: async () => true,
     async assertCurrent() {},
     release,
@@ -22,112 +30,161 @@ function mockSelectedEntry(execNode: string) {
   onTestFinished(release);
 }
 
-function resolvePolicy(
-  overrides: Partial<Parameters<typeof resolveCodexNativeExecutionPolicy>[0]>,
-) {
-  return resolveCodexNativeExecutionPolicy({
-    sessionEntry: null,
-    config: { tools: { exec: { host: "auto" } } },
-    sessionKey: "session-1",
-    ...overrides,
-  });
-}
-
-function preparePolicy(
-  overrides: Partial<Parameters<typeof prepareCodexNativeExecutionPolicy>[0]>,
-) {
-  return prepareCodexNativeExecutionPolicy({
-    config: { tools: { exec: { host: "gateway" } } },
-    readRuntimeSessionEntry: true,
-    ...overrides,
-  }).then(({ policy }) => policy);
-}
-
-const gatewayPolicy = {
-  nativeToolSurfaceAllowed: true,
-  requestedExecHost: "gateway",
-  effectiveExecHost: "gateway",
-};
-function nodePolicy(node: string) {
-  return {
-    nativeToolSurfaceAllowed: false,
-    requestedExecHost: "node",
-    effectiveExecHost: "node",
-    node,
-  };
-}
-const multiAgentConfig = {
-  tools: { exec: { host: "gateway" as const } },
-  agents: { entries: { alpha: {}, beta: {} } },
-};
-
 describe("resolveCodexNativeExecutionPolicy", () => {
-  beforeEach(() => capture.mockReset());
+  beforeEach(() => {
+    sessionStoreMocks.captureSessionEntryCurrentCheckAsync.mockReset();
+  });
 
-  it.each([
-    ["gateway", false],
-    ["sandbox", true],
-  ] as const)(
-    "resolves auto to %s with sandbox available=%s",
-    (effectiveExecHost, sandboxAvailable) => {
-      expect(resolvePolicy({ sandboxAvailable })).toMatchObject({
-        nativeToolSurfaceAllowed: true,
-        requestedExecHost: "auto",
-        effectiveExecHost,
-      });
-    },
-  );
+  it("resolves auto to gateway when no sandbox is active", () => {
+    expect(
+      resolveCodexNativeExecutionPolicy({
+        sessionEntry: null,
+        config: { tools: { exec: { host: "auto" } } },
+        sessionKey: "session-1",
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      nativeToolSurfaceAllowed: true,
+      requestedExecHost: "auto",
+      effectiveExecHost: "gateway",
+    });
+  });
+
+  it("resolves auto to sandbox when a sandbox is active", () => {
+    expect(
+      resolveCodexNativeExecutionPolicy({
+        sessionEntry: null,
+        config: { tools: { exec: { host: "auto" } } },
+        sessionKey: "session-1",
+        sandboxAvailable: true,
+      }),
+    ).toMatchObject({
+      nativeToolSurfaceAllowed: true,
+      requestedExecHost: "auto",
+      effectiveExecHost: "sandbox",
+    });
+  });
 
   it("honors per-attempt node exec overrides before config defaults", () => {
     expect(
-      resolvePolicy({
+      resolveCodexNativeExecutionPolicy({
+        sessionEntry: null,
         config: { tools: { exec: { host: "gateway" } } },
+        sessionKey: "session-1",
         execOverrides: { host: "node", node: "worker-2" },
       }),
-    ).toMatchObject(nodePolicy("worker-2"));
+    ).toMatchObject({
+      nativeToolSurfaceAllowed: false,
+      requestedExecHost: "node",
+      effectiveExecHost: "node",
+      node: "worker-2",
+    });
   });
 
   it("preserves a storage refusal instead of falling back to gateway execution", async () => {
     const refusal = new Error("The selected session is no longer current");
-    capture.mockImplementation(() => {
+    sessionStoreMocks.captureSessionEntryCurrentCheckAsync.mockImplementation(() => {
       throw refusal;
     });
     await expect(
-      preparePolicy({
+      prepareCodexNativeExecutionPolicy({
+        config: { tools: { exec: { host: "gateway" } } },
         sessionKey: "agent:main:dashboard:incognito-refused",
+        readRuntimeSessionEntry: true,
       }),
     ).rejects.toThrow(refusal);
   });
 
   it("honors persisted default-session exec hosts with explicit main agent policy", async () => {
-    mockSelectedEntry("worker-5");
+    mockSelectedEntry({
+      sessionId: "session-1",
+      updatedAt: 1,
+      execHost: "node",
+      execNode: "worker-5",
+    });
 
-    expect(await preparePolicy({ sessionKey: "main", agentId: "main" })).toMatchObject(
-      nodePolicy("worker-5"),
-    );
-    expect(capture).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionKey: "main", agentId: "main" }),
+    expect(
+      (
+        await prepareCodexNativeExecutionPolicy({
+          config: { tools: { exec: { host: "gateway" } } },
+          sessionKey: "main",
+          agentId: "main",
+          readRuntimeSessionEntry: true,
+        })
+      ).policy,
+    ).toMatchObject({
+      nativeToolSurfaceAllowed: false,
+      requestedExecHost: "node",
+      effectiveExecHost: "node",
+      node: "worker-5",
+    });
+    expect(sessionStoreMocks.captureSessionEntryCurrentCheckAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "main",
+        agentId: "main",
+      }),
     );
   });
 
-  it.each(["alpha", undefined])(
-    "uses global policy without an unscoped roster read (agent=%s)",
-    async (agentId) => {
-      mockSelectedEntry("worker-6");
-      expect(
-        await preparePolicy({
-          config: multiAgentConfig,
+  it("does not read an unscoped session entry for an explicit multi-agent roster", async () => {
+    mockSelectedEntry({
+      sessionId: "session-1",
+      updatedAt: 1,
+      execHost: "node",
+      execNode: "worker-6",
+    });
+
+    expect(
+      (
+        await prepareCodexNativeExecutionPolicy({
+          config: {
+            tools: { exec: { host: "gateway" } },
+            agents: { entries: { alpha: {}, beta: {} } },
+          },
           sessionKey: "node-session",
-          agentId,
-        }),
-      ).toMatchObject(gatewayPolicy);
-      expect(capture).not.toHaveBeenCalled();
-    },
-  );
+          agentId: "alpha",
+          readRuntimeSessionEntry: true,
+        })
+      ).policy,
+    ).toMatchObject({
+      nativeToolSurfaceAllowed: true,
+      requestedExecHost: "gateway",
+      effectiveExecHost: "gateway",
+    });
+    expect(sessionStoreMocks.captureSessionEntryCurrentCheckAsync).not.toHaveBeenCalled();
+  });
+
+  it("uses global policy when an explicit multi-agent roster has no selected agent", async () => {
+    mockSelectedEntry({
+      sessionId: "session-1",
+      updatedAt: 1,
+      execHost: "node",
+      execNode: "worker-6",
+    });
+
+    expect(
+      (
+        await prepareCodexNativeExecutionPolicy({
+          config: {
+            tools: { exec: { host: "gateway" } },
+            agents: { entries: { alpha: {}, beta: {} } },
+          },
+          sessionKey: "node-session",
+          readRuntimeSessionEntry: true,
+        })
+      ).policy,
+    ).toMatchObject({
+      nativeToolSurfaceAllowed: true,
+      requestedExecHost: "gateway",
+      effectiveExecHost: "gateway",
+    });
+    expect(sessionStoreMocks.captureSessionEntryCurrentCheckAsync).not.toHaveBeenCalled();
+  });
 
   it("honors agent exec config before global exec config", () => {
     expect(
-      resolvePolicy({
+      resolveCodexNativeExecutionPolicy({
+        sessionEntry: null,
         config: {
           tools: { exec: { host: "gateway" } },
           agents: {
@@ -136,6 +193,11 @@ describe("resolveCodexNativeExecutionPolicy", () => {
         },
         sessionKey: "agent:main:session-1",
       }),
-    ).toMatchObject(nodePolicy("worker-4"));
+    ).toMatchObject({
+      nativeToolSurfaceAllowed: false,
+      requestedExecHost: "node",
+      effectiveExecHost: "node",
+      node: "worker-4",
+    });
   });
 });

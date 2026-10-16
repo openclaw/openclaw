@@ -7,43 +7,45 @@ import { installedPluginRoot } from "../plugin-sdk/test-helpers/bundled-plugin-p
 import { recordInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import * as cli from "./plugins-cli-test-helpers.js";
+import {
+  applyPluginUninstallDirectoryRemovalMock,
+  buildPluginSnapshotReportMock,
+  configWriteMock,
+  planPluginUninstallMock,
+  pluginCliConfigMock,
+  pluginLifecycleGatewayMock,
+  pluginsCliRuntimeLogs,
+  PromptInputClosedError,
+  promptYesNoMock,
+  resetPluginsCliTestState,
+  resolvePluginLifecycleGatewayMock,
+  runPluginsCommand,
+  setInstalledPluginIndexInstallRecords,
+} from "./plugins-cli-test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let readInstallRecords: (typeof import("../plugins/installed-plugin-index-record-reader.js"))["loadInstalledPluginIndexInstallRecordsSync"];
 
 function uninstall(...args: string[]) {
-  return cli.runPluginsCommand(["plugins", "uninstall", ...args]);
+  return runPluginsCommand(["plugins", "uninstall", ...args]);
 }
 
 function expectRuntimeLogIncludes(fragment: string) {
-  expect(cli.pluginsCliRuntimeLogs.join("\n")).toContain(fragment);
-}
-
-const owners = ["alpha", "beta", "gamma"];
-function setPlugins(
-  plugins: { id: string; name: string; channelIds?: string[] }[],
-  records: Parameters<typeof cli.setInstalledPluginIndexInstallRecords>[0],
-  channels?: OpenClawConfig["channels"],
-) {
-  cli.pluginCliConfigMock.mockReturnValue({
-    plugins: { entries: Object.fromEntries(plugins.map(({ id }) => [id, { enabled: true }])) },
-    ...(channels && { channels }),
-  });
-  cli.setInstalledPluginIndexInstallRecords(records);
-  cli.buildPluginSnapshotReportMock.mockReturnValue({ plugins, diagnostics: [] });
+  expect(pluginsCliRuntimeLogs.join("\n")).toContain(fragment);
 }
 
 describe("plugins cli multi-package uninstall", () => {
   beforeEach(async () => {
-    cli.resetPluginsCliTestState();
+    resetPluginsCliTestState();
     ({ loadInstalledPluginIndexInstallRecordsSync: readInstallRecords } =
       await import("../plugins/installed-plugin-index-record-reader.js"));
     const actual =
       await vi.importActual<typeof import("../plugins/uninstall.js")>("../plugins/uninstall.js");
-    cli.planPluginUninstallMock.mockImplementation(actual.planPluginUninstall);
-    cli.configWriteMock.mockImplementation(async (config) => {
-      cli.pluginCliConfigMock.mockReturnValue(config as OpenClawConfig);
+    planPluginUninstallMock.mockImplementation((params) =>
+      actual.planPluginUninstall(params as Parameters<typeof actual.planPluginUninstall>[0]),
+    );
+    configWriteMock.mockImplementation(async (config) => {
+      pluginCliConfigMock.mockReturnValue(config as OpenClawConfig);
     });
   });
 
@@ -54,9 +56,8 @@ describe("plugins cli multi-package uninstall", () => {
       tempDirs.make("openclaw-cli-uninstall-multi-"),
       "pack",
     );
-    const keepFile = path.join(packageInstallPath, "keep.txt");
     await fs.mkdir(packageInstallPath, { recursive: true });
-    await fs.writeFile(keepFile, "owned plugin files");
+    await fs.writeFile(path.join(packageInstallPath, "keep.txt"), "owned plugin files");
     const installRecords = {
       pack: {
         source: "path" as const,
@@ -64,18 +65,21 @@ describe("plugins cli multi-package uninstall", () => {
         installPath: packageInstallPath,
       },
     };
-    const plugins = [
-      { id: "pack/one", name: "One", channelIds: ["first"] },
-      { id: "pack/two", name: "Two", channelIds: ["second"] },
-    ];
-    setPlugins(plugins, installRecords, {
-      first: { enabled: true },
-      second: { enabled: true },
-      unrelated: {},
+    pluginCliConfigMock.mockReturnValue({
+      plugins: { entries: { "pack/one": { enabled: true }, "pack/two": { enabled: true } } },
+      channels: { first: { enabled: true }, second: { enabled: true }, unrelated: {} },
+    } as OpenClawConfig);
+    setInstalledPluginIndexInstallRecords(installRecords);
+    buildPluginSnapshotReportMock.mockReturnValue({
+      plugins: [
+        { id: "pack/one", name: "One", channelIds: ["first"] },
+        { id: "pack/two", name: "Two", channelIds: ["second"] },
+      ],
+      diagnostics: [],
     });
     const installedIndexModule = await import("../plugins/installed-plugin-index.js");
     const { index } = createPluginMetadataSnapshotFixture({
-      plugins: plugins.map(({ id }) => ({
+      plugins: ["pack/one", "pack/two"].map((id) => ({
         id,
         rootDir: packageInstallPath,
         origin: "global",
@@ -90,22 +94,22 @@ describe("plugins cli multi-package uninstall", () => {
       .mockReturnValue(index);
     try {
       await uninstall("pack/one", "pack/two", "pack", "One", "pack/one", "--force", "--keep-files");
-      expect(cli.pluginsCliRuntimeLogs.filter((line) => line.startsWith("Plugin:"))).toHaveLength(
-        1,
-      );
+      expect(pluginsCliRuntimeLogs.filter((line) => line.startsWith("Plugin:"))).toHaveLength(1);
       expectRuntimeLogIncludes("all entries will be removed: pack/one, pack/two");
       expectRuntimeLogIncludes("channels.first");
       expectRuntimeLogIncludes("channels.second");
-      expect(cli.promptYesNoMock).not.toHaveBeenCalled();
-      expect(cli.applyPluginUninstallDirectoryRemovalMock).not.toHaveBeenCalled();
-      expect(await fs.readFile(keepFile, "utf8")).toBe("owned plugin files");
+      expect(promptYesNoMock).not.toHaveBeenCalled();
+      expect(applyPluginUninstallDirectoryRemovalMock).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(packageInstallPath, "keep.txt"), "utf8")).toBe(
+        "owned plugin files",
+      );
       expect(readInstallRecords()).toEqual({});
-      expect(cli.pluginCliConfigMock().plugins?.entries).toEqual({
+      expect(pluginCliConfigMock().plugins?.entries).toEqual({
         "pack/one": { enabled: false },
         "pack/two": { enabled: false },
       });
-      expect(cli.pluginCliConfigMock().channels).toEqual({ unrelated: {} });
-      expect(cli.configWriteMock).toHaveBeenCalledOnce();
+      expect(pluginCliConfigMock().channels).toEqual({ unrelated: {} });
+      expect(configWriteMock).toHaveBeenCalledOnce();
     } finally {
       indexSpy.mockRestore();
     }
@@ -113,41 +117,50 @@ describe("plugins cli multi-package uninstall", () => {
 
   describe("multiple package owners", () => {
     beforeEach(() => {
-      setPlugins(
-        owners.map((id) => ({ id, name: id })),
-        Object.fromEntries(owners.map((id) => [id, { source: "npm", spec: `${id}@1.0.0` }])),
+      const ids = ["alpha", "beta", "gamma"];
+      pluginCliConfigMock.mockReturnValue({
+        plugins: { entries: Object.fromEntries(ids.map((id) => [id, { enabled: true }])) },
+      });
+      setInstalledPluginIndexInstallRecords(
+        Object.fromEntries(ids.map((id) => [id, { source: "npm", spec: `${id}@1.0.0` }])),
       );
+      buildPluginSnapshotReportMock.mockReturnValue({
+        plugins: ids.map((id) => ({ id, name: id })),
+        diagnostics: [],
+      });
     });
 
-    it("rejects a later invalid target before online removal", async () => {
-      cli.resolvePluginLifecycleGatewayMock.mockResolvedValue(cli.pluginLifecycleGatewayMock);
+    it.each([true])("rejects a later invalid target before removal (online=%s)", async (online) => {
+      if (online) {
+        resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
+      }
       await expect(uninstall("alpha", "missing", "--force", "--keep-files")).rejects.toThrow(
         "is not associated with a tracked package install",
       );
-      expect(Object.keys(readInstallRecords())).toEqual(owners);
-      expect(cli.configWriteMock).not.toHaveBeenCalled();
-      expect(cli.pluginLifecycleGatewayMock).not.toHaveBeenCalled();
+      expect(Object.keys(readInstallRecords())).toEqual(["alpha", "beta", "gamma"]);
+      expect(configWriteMock).not.toHaveBeenCalled();
+      expect(pluginLifecycleGatewayMock).not.toHaveBeenCalled();
     });
 
     it("previews every dry-run package without prompting or mutating", async () => {
       await uninstall("beta", "alpha", "--dry-run");
-      expect(cli.pluginsCliRuntimeLogs.filter((line) => line.startsWith("Plugin:"))).toEqual([
+      expect(pluginsCliRuntimeLogs.filter((line) => line.startsWith("Plugin:"))).toEqual([
         "Plugin: beta",
         "Plugin: alpha",
       ]);
-      expect(cli.promptYesNoMock).not.toHaveBeenCalled();
-      expect(cli.configWriteMock).not.toHaveBeenCalled();
-      expect(Object.keys(readInstallRecords())).toEqual(owners);
+      expect(promptYesNoMock).not.toHaveBeenCalled();
+      expect(configWriteMock).not.toHaveBeenCalled();
+      expect(Object.keys(readInstallRecords())).toEqual(["alpha", "beta", "gamma"]);
     });
 
     it.each(["declined", "closed"])(
       "stops at a %s confirmation and retains earlier removals",
       async (answer) => {
-        cli.promptYesNoMock.mockResolvedValueOnce(true);
+        promptYesNoMock.mockResolvedValueOnce(true);
         if (answer === "closed") {
-          cli.promptYesNoMock.mockRejectedValueOnce(new cli.PromptInputClosedError());
+          promptYesNoMock.mockRejectedValueOnce(new PromptInputClosedError());
         } else {
-          cli.promptYesNoMock.mockResolvedValueOnce(false);
+          promptYesNoMock.mockResolvedValueOnce(false);
         }
         const command = uninstall("alpha", "beta", "gamma", "--keep-files");
         if (answer === "closed") {
@@ -156,30 +169,33 @@ describe("plugins cli multi-package uninstall", () => {
           await command;
           expectRuntimeLogIncludes("Cancelled.");
         }
-        expect(cli.promptYesNoMock.mock.calls.map(([question]) => question)).toEqual(
-          ["alpha", "beta"].map((id) => `Uninstall plugin "${id}"?`),
-        );
+        expect(promptYesNoMock.mock.calls.map(([question]) => question)).toEqual([
+          'Uninstall plugin "alpha"?',
+          'Uninstall plugin "beta"?',
+        ]);
         expect(Object.keys(readInstallRecords())).toEqual(["beta", "gamma"]);
-        expect(cli.pluginCliConfigMock().plugins?.entries).toEqual(
-          Object.fromEntries(owners.map((id) => [id, { enabled: id !== "alpha" }])),
-        );
+        expect(pluginCliConfigMock().plugins?.entries).toEqual({
+          alpha: { enabled: false },
+          beta: { enabled: true },
+          gamma: { enabled: true },
+        });
       },
     );
 
     it("routes each package in order to the Gateway and stops when runtime drain fails", async () => {
-      cli.resolvePluginLifecycleGatewayMock.mockResolvedValue(cli.pluginLifecycleGatewayMock);
-      cli.pluginLifecycleGatewayMock
+      resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
+      pluginLifecycleGatewayMock
         .mockResolvedValueOnce({ pluginId: "beta", removed: ["install record"] })
         .mockRejectedValueOnce(new Error("runtime drain failed"));
       await expect(uninstall("beta", "alpha", "gamma", "--force", "--keep-files")).rejects.toThrow(
         "runtime drain failed",
       );
-      expect(cli.pluginLifecycleGatewayMock.mock.calls).toEqual([
+      expect(pluginLifecycleGatewayMock.mock.calls).toEqual([
         ["plugins.uninstall", { pluginId: "beta", keepFiles: true }],
         ["plugins.uninstall", { pluginId: "alpha", keepFiles: true }],
       ]);
-      expect(cli.configWriteMock).not.toHaveBeenCalled();
-      expect(cli.applyPluginUninstallDirectoryRemovalMock).not.toHaveBeenCalled();
+      expect(configWriteMock).not.toHaveBeenCalled();
+      expect(applyPluginUninstallDirectoryRemovalMock).not.toHaveBeenCalled();
       expectRuntimeLogIncludes('Uninstalled plugin "beta"');
     });
   });
