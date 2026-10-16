@@ -333,13 +333,9 @@ it.skipIf(process.platform !== "linux")(
           throw new Error("Restart proof cannot identify its Gateway artifact version");
         }
         // The seal binds the running artifact's version to the production seal policy.
-        const artifactSchema = sqliteDatabaseSealSchemaFor(version);
-        const seal = readSqliteCleanCloseSeal(
-          agentPath,
-          artifactSchema,
-          statSync(agentPath, { bigint: true }),
-        );
-        expect(seal).toBeDefined();
+        const artifactSchema = sqliteDatabaseSealSchemaFor("agent", version);
+        const seal = readSqliteCleanCloseSeal(agentPath, statSync(agentPath, { bigint: true }));
+        expect(seal).toMatchObject({ schemaIdentity: artifactSchema });
         const shared = openNodeSqliteDatabase(
           instance.state.statePath("state", "openclaw.sqlite"),
           { readOnly: true },

@@ -14,12 +14,14 @@ const inputs = vi.hoisted(() => ({
   agent: "CREATE TABLE session_nodes (session_key TEXT);",
   state: "CREATE TABLE user_profiles (id TEXT);",
 }));
-vi.mock("./openclaw-agent-schema.js", () => ({
+vi.mock("./openclaw-agent-schema.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./openclaw-agent-schema.js")>()),
   get OPENCLAW_AGENT_SCHEMA_SQL() {
     return inputs.agent;
   },
 }));
-vi.mock("./openclaw-state-schema.js", () => ({
+vi.mock("./openclaw-state-schema.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./openclaw-state-schema.js")>()),
   get OPENCLAW_STATE_SCHEMA_SQL() {
     return inputs.state;
   },
