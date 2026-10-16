@@ -30,7 +30,7 @@ describe("registered Control UI chat text fidelity", () => {
     reset: resetSecretRedactionRegistryForTest,
   });
   beforeAll(() => fixture.start(), 90_000);
-  afterAll(fixture.close);
+  afterAll(() => fixture.close());
 
   async function expectStoredAndSent(message: string): Promise<void> {
     const sessionKey = `agent:main:redaction-${randomUUID()}`;

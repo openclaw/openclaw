@@ -28,7 +28,7 @@ const fixture = createChatFixture("prompt-cache", {
         1,
         1,
       );
-      return;
+      return undefined;
     }
     const isChild =
       body.includes("Return the synthetic child cache-prefix result.") &&
@@ -80,7 +80,7 @@ const fixture = createChatFixture("prompt-cache", {
 });
 const { requests, sessionIds: requestSessionIds, errors: providerErrors } = fixture;
 beforeAll(() => fixture.start(), 90_000);
-afterAll(fixture.close);
+afterAll(() => fixture.close());
 
 it("preserves the provider prefix across chat.send, completion and Gateway restart", async ({
   signal,

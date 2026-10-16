@@ -296,7 +296,7 @@ export class ComposedGatewayHarness {
     const plan = {
       kind: "pending" as const,
       release: createDeferred<WorkerInferenceTerminalOutcome>(),
-      started: createDeferred<void>(),
+      started: createDeferred(),
     };
     this.providerPlan = plan;
     return plan;

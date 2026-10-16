@@ -18,9 +18,11 @@ const mocks = vi.hoisted(() => ({
   smokeCheck: vi.fn(),
 }));
 
+// mock-isolation: Exercise convergence without installing real plugin packages.
 vi.mock("./missing-configured-plugin-install.js", () => ({
   repairMissingConfiguredPluginInstalls: mocks.repairInstalls,
 }));
+// mock-isolation: Control repair results without mutating installed plugin state.
 vi.mock("../../doctor-plugin-registry.js", () => ({
   maybeRepairStaleManagedNpmBundledPlugins: mocks.repairBundled,
 }));
@@ -35,6 +37,7 @@ vi.mock("../../../plugins/npm-project-roots.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../plugins/npm-project-roots.js")>();
   return { ...actual, listManagedPluginNpmRoots: mocks.managedRoots };
 });
+// mock-isolation: Script payload checks without launching installed plugin code.
 vi.mock("../../../plugins/payload-verification.js", () => ({
   runPluginPayloadSmokeCheck: mocks.smokeCheck,
 }));

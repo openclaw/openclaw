@@ -37,7 +37,7 @@ vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
     captureOpenClawAgentDatabaseExecution: Object.assign(
       (...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>) => {
         const owner = actual.captureOpenClawAgentDatabaseExecution(...args);
-        const runExisting = owner.runExisting;
+        const runExisting = owner.runExisting.bind(owner);
         owner.runExisting = (source, operation, options) =>
           runExisting(
             source,

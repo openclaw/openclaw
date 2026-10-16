@@ -91,6 +91,7 @@ export function createChatFixture(
     },
     async start() {
       resetGatewayTestState();
+      options.reset?.();
       home = await setupGatewayTempHome({ prefix: `openclaw-${name}-` });
       const model = buildMockOpenAiResponsesProvider(
         await listenProvider(provider),
