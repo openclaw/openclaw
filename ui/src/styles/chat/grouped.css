@@ -797,7 +797,7 @@
   padding: 6px 10px;
   list-style: none;
   border-radius: inherit;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .chat-notice-inline > summary::-webkit-details-marker {
@@ -850,6 +850,17 @@
   color: var(--text);
   font-size: var(--control-ui-text-sm);
   line-height: 1.5;
+}
+
+/* Avatar-less layouts (direct threads, narrow screens) start groups at the column edge. */
+.chat-thread--direct .chat-notice-inline {
+  margin-inline-start: 0;
+}
+
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .chat-notice-inline {
+    margin-inline-start: 0;
+  }
 }
 
 .chat-notice--danger {

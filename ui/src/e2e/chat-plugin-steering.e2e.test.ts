@@ -156,7 +156,7 @@ suite.define(() => {
             await notice.evaluate((element) => {
               const label = element.querySelector(".chat-notice-inline__label");
               const assistant = document.querySelector(
-                ".chat-group:not(.user) .chat-group-messages",
+                ".chat-group:not(.user):not(.tool) .chat-group-messages",
               );
               if (!label || !assistant) {
                 throw new Error("Expected a guidance label and an assistant column");
