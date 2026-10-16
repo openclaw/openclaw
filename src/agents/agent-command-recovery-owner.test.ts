@@ -18,6 +18,7 @@ import { claimMainSessionRecoveryOwner } from "./main-session-recovery/main-sess
 const recoveryOwnerMocks = vi.hoisted(() => ({
   scheduleMainSessionRecoveryPendingTarget: vi.fn(),
 }));
+const scheduleRecovery = recoveryOwnerMocks.scheduleMainSessionRecoveryPendingTarget;
 
 vi.mock("./main-session-recovery/main-session-recovery-owner-release.js", () => ({
   scheduleMainSessionRecoveryPendingTarget:
@@ -84,6 +85,55 @@ describe("agent command restart recovery ownership", () => {
     };
   }
 
+  function requesterOpts(
+    sourceTool = "subagent_settle",
+    overrides: Partial<AgentCommandOpts> = {},
+  ): AgentCommandOpts {
+    return {
+      message: "settle requester",
+      runId: "settle-turn",
+      inputProvenance: { kind: "inter_session", sourceTool },
+      ...overrides,
+    };
+  }
+
+  function pendingTarget(target: ReturnType<typeof createTarget>) {
+    return { sessionId: target.sessionId, sessionKey, storePath: target.storePath };
+  }
+
+  async function seedTarget(entry: Partial<SessionEntry>) {
+    const target = createTarget();
+    await write(target, entry);
+    return target;
+  }
+
+  async function workingTarget() {
+    const base = createTarget();
+    const sessionEntry: SessionEntry = {
+      sessionId: base.sessionId,
+      updatedAt: 100,
+      ...interruptedRecovery(),
+    };
+    await write(base, sessionEntry);
+    return { ...base, sessionEntry };
+  }
+
+  async function failPreparation(): Promise<never> {
+    throw new Error("model preparation failed");
+  }
+
+  function prepareAfterWrite<T extends ReturnType<typeof createTarget>>(
+    target: T,
+    entry?: Partial<SessionEntry>,
+  ) {
+    return async () => {
+      if (entry) {
+        await write(target, entry);
+      }
+      return target;
+    };
+  }
+
   function startOwner(target: ReturnType<typeof createTarget>) {
     return beginSessionWorkAdmission({
       scope: target.storePath,
@@ -93,62 +143,61 @@ describe("agent command restart recovery ownership", () => {
     });
   }
 
-  it.each<{
-    name: string;
+  type Scenario = {
     target?: Partial<ReturnType<typeof createTarget>> & { previousSessionId?: string };
     before?: Partial<SessionEntry>;
     duringPreparation?: Partial<SessionEntry>;
     explicitSession?: boolean;
-  }>([
-    {
-      name: "interruption appears during preparation",
-      before: {},
-      duringPreparation: interruptedRecovery(),
-    },
-    {
-      name: "an admitted recovery is still running",
-      before: {
-        abortedLastRun: false,
-        restartRecoveryRuns: [{ runId: "recovery-run", lifecycleGeneration: "gateway-generation" }],
-        mainRestartRecovery: { cycleId: "cycle-1", revision: 3, chargedAttempts: 1 },
+  };
+  it.each<[string, Scenario]>([
+    ["interruption during preparation", { before: {}, duringPreparation: interruptedRecovery() }],
+    [
+      "an admitted recovery is still running",
+      { before: { ...runningRecovery("gateway-generation"), updatedAt: 100 } },
+    ],
+    [
+      "freshness rollover with interrupted predecessor",
+      {
+        target: { isNewSession: true, previousSessionId: "session-1", sessionId: "session-2" },
+        before: interruptedRecovery(),
       },
-    },
-    {
-      name: "freshness rollover still has an interrupted predecessor",
-      target: { isNewSession: true, previousSessionId: "session-1", sessionId: "session-2" },
-      before: interruptedRecovery(),
-    },
-    {
-      name: "an explicit replacement still has an interrupted predecessor",
-      target: { isNewSession: true, previousSessionId: "session-1", sessionId: "fresh-session" },
-      before: interruptedRecovery(),
-      explicitSession: true,
-    },
-    {
-      name: "an explicit session is tombstoned",
-      before: {
-        status: "failed",
-        abortedLastRun: false,
-        mainRestartRecovery: {
-          cycleId: "cycle-1",
-          revision: 4,
-          chargedAttempts: 3,
-          tombstone: { reason: "automatic recovery exhausted" },
+    ],
+    [
+      "explicit replacement with interrupted predecessor",
+      {
+        target: { isNewSession: true, previousSessionId: "session-1", sessionId: "fresh-session" },
+        before: interruptedRecovery(),
+        explicitSession: true,
+      },
+    ],
+    [
+      "an explicit session is tombstoned",
+      {
+        before: {
+          status: "failed",
+          abortedLastRun: false,
+          mainRestartRecovery: {
+            cycleId: "cycle-1",
+            revision: 4,
+            chargedAttempts: 3,
+            tombstone: { reason: "automatic recovery exhausted" },
+          },
         },
+        explicitSession: true,
       },
-      explicitSession: true,
-    },
-    {
-      name: "a fresh key acquires an interruption during preparation",
-      target: { isNewSession: true, sessionId: "fresh-session" },
-      duringPreparation: interruptedRecovery(),
-    },
-  ])("rejects standalone work when $name", async (scenario) => {
+    ],
+    [
+      "a fresh key acquires an interruption during preparation",
+      {
+        target: { isNewSession: true, sessionId: "fresh-session" },
+        duringPreparation: interruptedRecovery(),
+      },
+    ],
+  ])("rejects standalone work when %s", async (_name, scenario) => {
     const target = { ...createTarget(), ...scenario.target };
     if (scenario.before) {
       await write(target, {
         sessionId: target.previousSessionId ?? target.sessionId,
-        updatedAt: 100,
         ...scenario.before,
       });
     }
@@ -157,16 +206,13 @@ describe("agent command restart recovery ownership", () => {
       execute(target, {
         mode: "reject_uncoordinated",
         opts: (scenario.explicitSession ? { sessionId: target.sessionId } : {}) as AgentCommandOpts,
-        prepare: async () => {
-          if (scenario.duringPreparation) {
-            await write(target, {
-              sessionId: target.sessionId,
-              updatedAt: 200,
-              ...scenario.duringPreparation,
-            });
-          }
-          return target;
-        },
+        prepare: prepareAfterWrite(
+          target,
+          scenario.duringPreparation && {
+            updatedAt: 200,
+            ...scenario.duringPreparation,
+          },
+        ),
         run,
       }),
     ).rejects.toThrow("interrupted work pending restart recovery");
@@ -175,18 +221,8 @@ describe("agent command restart recovery ownership", () => {
   });
 
   it("refreshes the prepared working copy after claiming a recovery owner", async () => {
-    const base = createTarget();
-    const staleEntry: SessionEntry = {
-      sessionId: base.sessionId,
-      updatedAt: 100,
-      ...interruptedRecovery(),
-    };
-    const target = {
-      ...base,
-      sessionEntry: { ...staleEntry },
-      sessionStore: { [sessionKey]: { ...staleEntry } },
-    };
-    await write(target, staleEntry);
+    const base = await workingTarget();
+    const target = { ...base, sessionStore: { [sessionKey]: { ...base.sessionEntry } } };
 
     await execute(target, {
       opts: { runId: "foreground-run" } as AgentCommandOpts,
@@ -195,21 +231,17 @@ describe("agent command restart recovery ownership", () => {
         expect(claims?.tokens).toEqual([expect.any(String)]);
         expect(Object.values(claims?.runIdsByClaimId ?? {})).toContain("foreground-run");
         expect(prepared.sessionStore[sessionKey]).toEqual(prepared.sessionEntry);
-        const completed: SessionEntry = {
+        await write(target, {
           ...prepared.sessionEntry,
           status: "done",
           abortedLastRun: false,
-        };
-        await write(target, completed);
+        });
       },
     });
 
-    const completed = read(target) as SessionEntry | undefined;
-    expect(completed?.abortedLastRun).toBe(false);
-    expect(completed?.mainRestartRecovery).toBeUndefined();
-    expect(recoveryOwnerMocks.scheduleMainSessionRecoveryPendingTarget).toHaveBeenLastCalledWith(
-      undefined,
-    );
+    expect(read(target)?.abortedLastRun).toBe(false);
+    expect(read(target)?.mainRestartRecovery).toBeUndefined();
+    expect(scheduleRecovery).toHaveBeenLastCalledWith(undefined);
   });
 
   it.each([undefined, "done"] as const)(
@@ -227,10 +259,7 @@ describe("agent command restart recovery ownership", () => {
       const run = vi.fn(async () => requesterResult);
       await expect(
         execute(target, {
-          opts: {
-            runId: "settle-turn",
-            inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
-          } as AgentCommandOpts,
+          opts: requesterOpts(),
           run,
         }),
       ).resolves.toBe(requesterResult);
@@ -243,28 +272,18 @@ describe("agent command restart recovery ownership", () => {
   );
 
   it("preserves persisted interrupted recovery custody during requester settle", async () => {
-    const base = createTarget();
-    const interruptedEntry: SessionEntry = {
-      sessionId: base.sessionId,
-      updatedAt: 100,
-      ...interruptedRecovery(),
-    };
-    const target = { ...base, sessionEntry: { ...interruptedEntry } };
-    await write(target, interruptedEntry);
+    const target = await workingTarget();
 
     const run = vi.fn(async (prepared: typeof target) => {
-      expect(prepared.sessionEntry.mainRestartRecovery?.foregroundClaims?.tokens).toEqual([
-        expect.any(String),
-      ]);
-      expect(prepared.sessionEntry.abortedLastRun).toBe(true);
+      expect(prepared.sessionEntry).toMatchObject({
+        mainRestartRecovery: { foregroundClaims: { tokens: [expect.any(String)] } },
+        abortedLastRun: true,
+      });
       return "The requester settled while recovery custody remained.";
     });
     await expect(
       execute(target, {
-        opts: {
-          runId: "settle-turn",
-          inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
-        } as AgentCommandOpts,
+        opts: requesterOpts(),
         prepare: async () => ({ ...target, sessionEntry: read(target) ?? target.sessionEntry }),
         run,
       }),
@@ -277,12 +296,8 @@ describe("agent command restart recovery ownership", () => {
       mainRestartRecovery: { cycleId: "cycle-1", chargedAttempts: 0 },
     });
     expect(read(target)?.mainRestartRecovery?.foregroundClaims).toBeUndefined();
-    expect(recoveryOwnerMocks.scheduleMainSessionRecoveryPendingTarget).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        sessionId: target.sessionId,
-        sessionKey,
-        storePath: target.storePath,
-      }),
+    expect(scheduleRecovery).toHaveBeenLastCalledWith(
+      expect.objectContaining(pendingTarget(target)),
     );
   });
 
@@ -354,12 +369,7 @@ describe("agent command restart recovery ownership", () => {
       execute(target, {
         mode,
         opts: (opts ?? {}) as AgentCommandOpts,
-        prepare: async () => {
-          if (duringPreparation) {
-            await write(target, duringPreparation);
-          }
-          return target;
-        },
+        prepare: prepareAfterWrite(target, duringPreparation),
         run,
       }),
     ).resolves.toBe(result);
@@ -367,14 +377,9 @@ describe("agent command restart recovery ownership", () => {
   });
 
   it("restores a Gateway-admitted recovery when command preparation fails", async () => {
-    const target = createTarget();
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    await write(target, runningRecovery(lifecycleGeneration));
-    const restoredTarget = {
-      sessionId: target.sessionId,
-      sessionKey,
-      storePath: target.storePath,
-    };
+    const target = await seedTarget(runningRecovery(lifecycleGeneration));
+    const restoredTarget = pendingTarget(target);
     const restoreAdmittedRecovery = vi.fn(async () => {
       const entry = read(target) as SessionEntry;
       entry.abortedLastRun = true;
@@ -388,33 +393,23 @@ describe("agent command restart recovery ownership", () => {
       execute(target, {
         lifecycleGeneration,
         opts: { mainRestartRecoveryAdmitted: true } as AgentCommandOpts,
-        prepare: async () => {
-          throw new Error("model preparation failed");
-        },
+        prepare: failPreparation,
         restoreAdmittedRecovery,
         run,
       }),
     ).rejects.toThrow("model preparation failed");
 
     expect(restoreAdmittedRecovery).toHaveBeenCalledOnce();
-    expect(recoveryOwnerMocks.scheduleMainSessionRecoveryPendingTarget).toHaveBeenCalledWith(
-      restoredTarget,
-    );
+    expect(scheduleRecovery).toHaveBeenCalledWith(restoredTarget);
     expect(run).not.toHaveBeenCalled();
-    expect(read(target)).toMatchObject({
-      abortedLastRun: true,
-    });
+    expect(read(target)).toMatchObject({ abortedLastRun: true });
   });
 
   it("keeps retrying admitted recovery restoration after immediate store failures", async () => {
     vi.useFakeTimers();
     try {
       const target = createTarget();
-      const restoredTarget = {
-        sessionId: target.sessionId,
-        sessionKey,
-        storePath: target.storePath,
-      };
+      const restoredTarget = pendingTarget(target);
       let failures = 0;
       const restoreAdmittedRecovery = vi.fn(async () => {
         if (failures < 3) {
@@ -425,9 +420,7 @@ describe("agent command restart recovery ownership", () => {
       });
       const recovery = execute(target, {
         opts: { mainRestartRecoveryAdmitted: true } as AgentCommandOpts,
-        prepare: async () => {
-          throw new Error("model preparation failed");
-        },
+        prepare: failPreparation,
         restoreAdmittedRecovery,
         run: vi.fn(),
       });
@@ -436,15 +429,11 @@ describe("agent command restart recovery ownership", () => {
       await vi.advanceTimersByTimeAsync(100);
       await rejected;
       expect(restoreAdmittedRecovery).toHaveBeenCalledTimes(3);
-      expect(recoveryOwnerMocks.scheduleMainSessionRecoveryPendingTarget).toHaveBeenCalledWith(
-        undefined,
-      );
+      expect(scheduleRecovery).toHaveBeenCalledWith(undefined);
 
       await vi.advanceTimersByTimeAsync(1_000);
       expect(restoreAdmittedRecovery).toHaveBeenCalledTimes(4);
-      expect(recoveryOwnerMocks.scheduleMainSessionRecoveryPendingTarget).toHaveBeenCalledWith(
-        restoredTarget,
-      );
+      expect(scheduleRecovery).toHaveBeenCalledWith(restoredTarget);
     } finally {
       vi.useRealTimers();
     }
@@ -460,9 +449,8 @@ describe("agent command restart recovery ownership", () => {
   ] as const)(
     "keeps a requester %s turn pending when recovery starts %s (same source: %s)",
     async (sourceTool, timing, sameSource) => {
-      const target = createTarget();
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
-      await write(target, runningRecovery(lifecycleGeneration));
+      const target = await seedTarget(runningRecovery(lifecycleGeneration));
       // This is the production failure, not a mocked admission rejection.
       await expect(
         claimMainSessionRecoveryOwner({
@@ -496,10 +484,7 @@ describe("agent command restart recovery ownership", () => {
       let settled = false;
       const wake = execute(target, {
         lifecycleGeneration,
-        opts: {
-          runId: "settle-turn",
-          inputProvenance: { kind: "inter_session", sourceTool },
-        } as AgentCommandOpts,
+        opts: requesterOpts(sourceTool),
         prepare,
         run,
       }).finally(() => {
@@ -541,9 +526,8 @@ describe("agent command restart recovery ownership", () => {
   );
 
   it("rejects an ordinary claim while a live recovery owner holds the requester", async () => {
-    const target = createTarget();
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    await write(target, runningRecovery(lifecycleGeneration));
+    const target = await seedTarget(runningRecovery(lifecycleGeneration));
     const owner = await startOwner(target);
     const run = vi.fn();
     try {
@@ -609,11 +593,7 @@ describe("agent command restart recovery ownership", () => {
     const run = vi.fn();
     const wake = execute(target, {
       lifecycleGeneration,
-      opts: {
-        runId: "settle-turn",
-        abortSignal: controller.signal,
-        inputProvenance: { kind: "inter_session", sourceTool },
-      } as AgentCommandOpts,
+      opts: requesterOpts(sourceTool, { abortSignal: controller.signal }),
       prepare: async () => {
         preparationCount += 1;
         prepared.resolve();
@@ -728,18 +708,14 @@ describe("agent command restart recovery ownership", () => {
   );
 
   it("invalidates an explicit session replaced during preparation", async () => {
-    const target = createTarget();
-    await write(target, {});
+    const target = await seedTarget({});
     const run = vi.fn();
 
     await expect(
       execute(target, {
         mode: "reject_uncoordinated",
         opts: { sessionId: target.sessionId } as AgentCommandOpts,
-        prepare: async () => {
-          await write(target, { sessionId: "replacement-session", updatedAt: 200 });
-          return target;
-        },
+        prepare: prepareAfterWrite(target, { sessionId: "replacement-session", updatedAt: 200 }),
         run,
       }),
     ).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });

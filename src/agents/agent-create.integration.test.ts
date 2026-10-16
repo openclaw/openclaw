@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
@@ -82,7 +83,11 @@ async function createState(
     closeOpenClawStateDatabaseForTest();
     await state.cleanup();
   });
-  return state;
+  const readConfig = () => fs.readFile(state.configPath, "utf8");
+  return Object.assign(state, {
+    readConfig,
+    readJsonConfig: async (): Promise<OpenClawConfig> => JSON.parse(await readConfig()),
+  });
 }
 
 function completeDeletion(
@@ -107,6 +112,18 @@ function assertAuthority(authority: Parameters<typeof validateAgentRunDelegatedA
   if (!validateAgentRunDelegatedAuthority(authority)) {
     throw new Error("creation authority closed");
   }
+}
+
+function authBatch(
+  agentDir: string,
+  profileId: string,
+  key: string,
+): Parameters<typeof stageProviderAuthProfileBatch>[0] {
+  return {
+    agentDir,
+    config: {},
+    profiles: [{ profileId, credential: { type: "api_key", provider: "openai", key } }],
+  };
 }
 
 it("restores only the configured held store after explicit creation, never through bootstrap or retargeting", async () => {
@@ -197,7 +214,7 @@ it.each(["added", "removed"] as const)(
       sessionsDir: state.sessionsDir(),
       deleteFiles: false,
     });
-    const originalConfig = await fs.readFile(state.configPath, "utf8");
+    const originalConfig = await state.readConfig();
     const foreign = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath(state.env));
     try {
       const update = foreign.prepare(
@@ -244,7 +261,7 @@ it.each(["added", "removed"] as const)(
     } finally {
       foreign.close();
     }
-    expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
+    expect(await state.readConfig()).toBe(originalConfig);
   },
 );
 
@@ -255,7 +272,7 @@ it("restores a held custom filename only after its session store configuration s
   await state.writeConfig(config);
   const target = { agentId: "restored", path: state.path("custom", "history.sqlite") };
   const recovery = await prepareRecoveryHolds(state, target.agentId, [target]);
-  const originalConfig = await fs.readFile(state.configPath, "utf8");
+  const originalConfig = await state.readConfig();
   const params = {
     name: target.agentId,
     workspace: state.path("restored-workspace"),
@@ -266,7 +283,7 @@ it("restores a held custom filename only after its session store configuration s
     reason: "already-exists",
     message: expect.stringContaining("session.store"),
   });
-  expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
+  expect(await state.readConfig()).toBe(originalConfig);
   await expect(fs.stat(path.join(params.agentDir, "openclaw-agent.sqlite"))).rejects.toMatchObject({
     code: "ENOENT",
   });
@@ -288,7 +305,7 @@ it.each(["missing", "un-authored"] as const)(
     });
     const target = { agentId: "main", path: state.path("custom", "history.sqlite") };
     const recovery = await prepareRecoveryHolds(state, target.agentId, [target]);
-    const originalConfig = await fs.readFile(state.configPath, "utf8");
+    const originalConfig = await state.readConfig();
     if (configState === "missing") {
       await fs.rm(state.configPath);
     }
@@ -308,7 +325,7 @@ it.each(["missing", "un-authored"] as const)(
     if (configState === "missing") {
       await expect(fs.stat(state.configPath)).rejects.toMatchObject({ code: "ENOENT" });
     } else {
-      expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
+      expect(await state.readConfig()).toBe(originalConfig);
     }
     await expect(fs.stat(workspace)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.stat(state.agentDir())).rejects.toMatchObject({ code: "ENOENT" });
@@ -324,7 +341,7 @@ it.each(["bootstrap", "explicit"])(
 
     await state.writeConfig({ gateway: { mode: "local" } });
     openOpenClawStateDatabase({ env: state.env });
-    const originalConfig = await fs.readFile(state.configPath, "utf8");
+    const originalConfig = await state.readConfig();
     const target = {
       agentId: mode === "bootstrap" ? "main" : "restored",
       path: state.path("custom", "history.sqlite"),
@@ -353,7 +370,7 @@ it.each(["bootstrap", "explicit"])(
       reason: "already-exists",
       message: expect.stringContaining("held databases"),
     });
-    expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
+    expect(await state.readConfig()).toBe(originalConfig);
     expect(rollback).toHaveBeenCalledOnce();
     expect(commit).not.toHaveBeenCalled();
     await expect(fs.stat(stagedFile)).rejects.toMatchObject({ code: "ENOENT" });
@@ -378,7 +395,7 @@ it.each([
   });
   const target = { agentId: "main", path: path.join(state.agentDir(), "openclaw-agent.sqlite") };
   const recovery = await prepareRecoveryHolds(state, target.agentId, [target]);
-  const originalConfig = await fs.readFile(state.configPath, "utf8");
+  const originalConfig = await state.readConfig();
   const moved = state.path("preserved.sqlite");
   const replaceStore = async () => {
     await fs.rename(target.path, moved);
@@ -411,12 +428,10 @@ it.each([
   expect(recovery.readHolds()).toEqual([target]);
   expect(await fs.readFile(moved)).toEqual(recovery.bytes[0]);
   if (change.endsWith("after publication")) {
-    expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toHaveProperty(
-      "agents.entries.main",
-    );
+    expect(await state.readJsonConfig()).toHaveProperty("agents.entries.main");
     expect(rollback).not.toHaveBeenCalled();
   } else {
-    expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
+    expect(await state.readConfig()).toBe(originalConfig);
   }
   if (change.endsWith("before publication")) {
     expect(rollback).toHaveBeenCalledOnce();
@@ -435,7 +450,7 @@ it("keeps a restored main agent held until its new config entry is published", a
   });
   const recovery = await prepareRecoveryHolds(state, "main");
   const params = { name: "main", workspace: state.path("restored-workspace") };
-  const originalConfig = await fs.readFile(state.configPath, "utf8");
+  const originalConfig = await state.readConfig();
   await expect(
     createAgent({
       ...params,
@@ -444,7 +459,7 @@ it("keeps a restored main agent held until its new config entry is published", a
       },
     }),
   ).rejects.toThrow("publication failed");
-  expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
+  expect(await state.readConfig()).toBe(originalConfig);
   expect(recovery.readHolds()).toEqual(recovery.held);
   const created = await createAgent({
     ...params,
@@ -454,9 +469,7 @@ it("keeps a restored main agent held until its new config entry is published", a
     },
   });
   expect(created).toMatchObject({ status: "created", agentId: "main" });
-  expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toHaveProperty(
-    "agents.entries.main",
-  );
+  expect(await state.readJsonConfig()).toHaveProperty("agents.entries.main");
   expect(recovery.readHolds()).toEqual(recovery.held.slice(1));
   expect(await Promise.all(recovery.held.map((target) => fs.readFile(target.path)))).toEqual(
     recovery.bytes,
@@ -474,7 +487,7 @@ it("does not create an agent after delegated authority closes while awaiting the
   const creationEntered = createDeferred();
   const { runtime, lines } = createSystemAgentTestRuntime();
   const workspace = state.path("delegated-workspace");
-  const originalConfig = await fs.readFile(state.configPath, "utf8");
+  const originalConfig = await state.readConfig();
   const lock = withConfigMutationExclusive(async () => {
     lockEntered.resolve();
     await releaseLock.promise;
@@ -507,7 +520,7 @@ it("does not create an agent after delegated authority closes while awaiting the
     expect.soft(await outcome).toMatchObject({
       error: new Error("system-agent approval authority is no longer active"),
     });
-    expect.soft(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
+    expect.soft(await state.readConfig()).toBe(originalConfig);
     expect.soft(await fs.stat(workspace).catch(() => null)).toBeNull();
     expect.soft(await fs.stat(state.sessionsDir("delegated")).catch(() => null)).toBeNull();
     expect.soft(readAgentProvenance("delegated", { env: state.env })).toBeUndefined();
@@ -532,7 +545,7 @@ it.for(["workspace", "workspace-write", "config"] as const)(
     const resume = createDeferred();
     const workspace = state.path("prepared-workspace");
     const stagedFile = state.path("staged-effect");
-    const originalConfig = await fs.readFile(state.configPath, "utf8");
+    const originalConfig = await state.readConfig();
     const pause = async (pausedPhase: typeof phase) => {
       entered.resolve(pausedPhase);
       await resume.promise;
@@ -571,7 +584,7 @@ it.for(["workspace", "workspace-write", "config"] as const)(
       resume.resolve();
 
       expect.soft(await outcome).toMatchObject({ error: new Error("creation authority closed") });
-      expect.soft(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
+      expect.soft(await state.readConfig()).toBe(originalConfig);
       expect.soft(readAgentProvenance("prepared")).toBeUndefined();
       expect.soft(rollback).toHaveBeenCalledTimes(phase === "config" ? 1 : 0);
       expect.soft(commit).not.toHaveBeenCalled();
@@ -619,9 +632,7 @@ it("finishes creation bookkeeping when delegated authority closes after successf
     });
 
     expect(created).toMatchObject({ status: "created", agentId: "published" });
-    expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toHaveProperty(
-      "agents.entries.published",
-    );
+    expect(await state.readJsonConfig()).toHaveProperty("agents.entries.published");
     expect(readAgentDeletionJournal("published")).toBeUndefined();
     expect(commit).toHaveBeenCalledOnce();
     expect(rollback).not.toHaveBeenCalled();
@@ -638,7 +649,7 @@ it.each(["commit", "rollback", "close-failure"] as const)(
     const workspace = state.path("work-workspace");
     const agentDir = state.agentDir("work");
     completeDeletion(state, "work", workspace);
-    const originalConfig = await fs.readFile(state.configPath, "utf8");
+    const originalConfig = await state.readConfig();
     const readProfiles = () =>
       ensureAuthProfileStore(agentDir, { readOnly: true, syncExternalCli: false }).profiles;
     let staged = false;
@@ -661,16 +672,7 @@ it.each(["commit", "rollback", "close-failure"] as const)(
     const settlement: string[] = [];
     // An ordinary writer outside the creation lifecycle, through the same wizard path.
     const writeOutsideCreation = () =>
-      persistProviderAuthProfileBatch({
-        profiles: [
-          {
-            profileId: "openai:after",
-            credential: { type: "api_key", provider: "openai", key: "sk-test-after" },
-          },
-        ],
-        config: {},
-        agentDir,
-      });
+      persistProviderAuthProfileBatch(authBatch(agentDir, "openai:after", "sk-test-after"));
     const isWorkDatabaseOpen = () =>
       isOpenClawAgentDatabaseOpen(resolveAuthProfileDatabasePath(agentDir));
     try {
@@ -684,16 +686,9 @@ it.each(["commit", "rollback", "close-failure"] as const)(
         },
         prepareConfigCommit: async () => {
           // The guided wizard's staged auth write opens the recreated agent's own database.
-          const receipt = await stageProviderAuthProfileBatch({
-            profiles: [
-              {
-                profileId: "openai:default",
-                credential: { type: "api_key", provider: "openai", key: "sk-test-recreated" },
-              },
-            ],
-            config: {},
-            agentDir,
-          });
+          const receipt = await stageProviderAuthProfileBatch(
+            authBatch(agentDir, "openai:default", "sk-test-recreated"),
+          );
           staged = true;
           retainedCreation = AsyncLocalStorage.snapshot();
           if (phase === "close-failure") {
@@ -725,9 +720,7 @@ it.each(["commit", "rollback", "close-failure"] as const)(
       });
       if (phase === "commit") {
         expect(await creation).toMatchObject({ status: "created", agentId: "work" });
-        expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toHaveProperty(
-          "agents.entries.work",
-        );
+        expect(await state.readJsonConfig()).toHaveProperty("agents.entries.work");
         expect(readAgentDeletionJournal("work")).toBeUndefined();
         expect(readProfiles()["openai:default"]).toMatchObject({
           type: "api_key",
@@ -749,7 +742,7 @@ it.each(["commit", "rollback", "close-failure"] as const)(
         if (phase === "close-failure") {
           expect(settlement).toEqual(["close-failed", "close-retried", "rollback"]);
         }
-        expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
+        expect(await state.readConfig()).toBe(originalConfig);
         expect(readAgentDeletionJournal("work")).toMatchObject({ cleanupCompleted: true });
         expect(readProfiles()["openai:default"]).toBeUndefined();
         // The retained tombstone must fence the same process: no warm handle survives
@@ -786,14 +779,16 @@ describe("agent roster persistence", () => {
       agentId: "worker",
       configPath: state.configPath,
     });
-    return JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
+    return await state.readJsonConfig();
   }
 
   it("writes injected main and a new worker as one complete keyed roster", async () => {
     const persisted = await addWorkerToConfig({ gateway: { mode: "local" } });
 
-    expect(persisted.agents?.entries?.main).toMatchObject({ workspace: expect.any(String) });
-    expect(persisted.agents?.entries?.worker).toMatchObject({ workspace: expect.any(String) });
+    expect(persisted.agents?.entries).toMatchObject({
+      main: { workspace: expect.any(String) },
+      worker: { workspace: expect.any(String) },
+    });
     expect(Object.values(persisted.agents?.entries ?? {})).not.toContainEqual(
       expect.objectContaining({ default: expect.anything() }),
     );
@@ -809,15 +804,13 @@ describe("agent roster persistence", () => {
       },
     };
     const migrated = migrateLegacyConfig(legacy, { sourceConfigBeforeMigrations: legacy });
-    expect(migrated.config).not.toBeNull();
-    if (!migrated.config) {
-      throw new Error("Doctor did not migrate the legacy roster");
-    }
-    const persisted = await addWorkerToConfig(migrated.config);
+    const persisted = await addWorkerToConfig(
+      expectDefined(migrated.config, "Doctor migrated roster"),
+    );
 
     expect(persisted.agents).not.toHaveProperty("list");
-    expect(persisted.agents?.entries?.main).toMatchObject({ workspace: expect.any(String) });
     expect(persisted.agents?.entries).toMatchObject({
+      main: { workspace: expect.any(String) },
       ops: { workspace: "/srv/ops" },
       worker: { workspace: expect.any(String) },
     });
@@ -838,7 +831,7 @@ describe("agent roster persistence", () => {
     };
 
     await state.writeConfig(legacy);
-    const original = await fs.readFile(state.configPath, "utf8");
+    const original = await state.readConfig();
     await expect(
       mutateConfigFileWithRetry({
         mutate: (config) => {
@@ -847,10 +840,8 @@ describe("agent roster persistence", () => {
       }),
     ).rejects.toThrow("doctor --fix");
 
-    expect(await fs.readFile(state.configPath, "utf8")).toBe(original);
-    const persisted: OpenClawConfigWithLegacyRoster = JSON.parse(
-      await fs.readFile(state.configPath, "utf8"),
-    );
+    expect(await state.readConfig()).toBe(original);
+    const persisted: OpenClawConfigWithLegacyRoster = JSON.parse(await state.readConfig());
     expect(persisted.agents).toEqual({ list });
     expect(persisted.agents).not.toHaveProperty("entries");
     expect(persisted.gateway).toEqual({ port: 18789 });
@@ -867,48 +858,38 @@ it("creates main as an ordinary fresh agent after doctor completes both ownershi
   };
   const legacyDatabasePath = path.join(state.agentDir("main"), "openclaw-agent.sqlite");
   const ownerDatabasePath = path.join(state.agentDir("robby"), "openclaw-agent.sqlite");
-  const legacyKey = "agent:main:main";
-  const canonicalKey = "agent:robby:main";
-  const lateLegacyKey = "agent:main:late";
-  const lateCanonicalKey = "agent:robby:late";
+  const legacyTarget = { agentId: "main", env: state.env, path: legacyDatabasePath };
+  const writeLegacy = (key: string, sessionId: string, updatedAt: number) =>
+    runOpenClawAgentWriteTransaction(
+      (database) =>
+        writeSessionEntry(
+          database,
+          key,
+          { sessionId, updatedAt },
+          { allowStoredAliases: true, previousEntry: null },
+        ),
+      legacyTarget,
+    );
+  const readSession = (key: string, agentId = "robby", databasePath = ownerDatabasePath) =>
+    runOpenClawAgentWriteTransaction(
+      (database) => readExactSessionEntryRowForCanonicalRepair(database, key)?.entry,
+      { agentId, env: state.env, path: databasePath },
+    );
 
   await state.writeConfig(cfg);
-  runOpenClawAgentWriteTransaction(
-    (database) => {
-      writeSessionEntry(
-        database,
-        legacyKey,
-        { sessionId: "legacy-before-main-reuse", updatedAt: 100 },
-        { allowStoredAliases: true, previousEntry: null },
-      );
-    },
-    { agentId: "main", env: state.env, path: legacyDatabasePath },
-  );
+  writeLegacy("agent:main:main", "legacy-before-main-reuse", 100);
   await migrateLegacyMainSessionKeys({ cfg, env: state.env, mode: "doctor-fix" });
   writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env: state.env });
-  runOpenClawAgentWriteTransaction(
-    (database) => {
-      writeSessionEntry(
-        database,
-        lateLegacyKey,
-        { sessionId: "late-legacy-before-main-reuse", updatedAt: 200 },
-        { allowStoredAliases: true, previousEntry: null },
-      );
-    },
-    { agentId: "main", env: state.env, path: legacyDatabasePath },
-  );
+  writeLegacy("agent:main:late", "late-legacy-before-main-reuse", 200);
 
   const blocked = await createAgent({ name: "main", workspace: state.path("workspace-main") });
   expect(blocked).toMatchObject({
     status: "error",
     reason: "legacy-session-migration-required",
   });
-  expect(
-    runOpenClawAgentWriteTransaction(
-      (database) => readExactSessionEntryRowForCanonicalRepair(database, lateLegacyKey)?.entry,
-      { agentId: "main", env: state.env, path: legacyDatabasePath },
-    ),
-  ).toMatchObject({ sessionId: "late-legacy-before-main-reuse" });
+  expect(readSession("agent:main:late", "main", legacyDatabasePath)).toMatchObject({
+    sessionId: "late-legacy-before-main-reuse",
+  });
 
   await migrateLegacyMainSessionKeys({ cfg, env: state.env, mode: "doctor-fix" });
 
@@ -918,7 +899,7 @@ it("creates main as an ordinary fresh agent after doctor completes both ownershi
   if (created.status !== "created") {
     throw new Error(`expected main creation, got ${JSON.stringify(created)}`);
   }
-  const persisted = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
+  const persisted = await state.readJsonConfig();
   const mainSessionTarget = resolveSqliteTargetFromSessionStorePath(
     resolveSessionStorePathCore(persisted.session?.store, { agentId: "main", env: state.env }),
     { agentId: "main", env: state.env },
@@ -936,16 +917,8 @@ it("creates main as an ordinary fresh agent after doctor completes both ownershi
       storePath: legacyDatabasePath,
     }).filter((entry) => entry.sessionKey.startsWith("agent:main:")),
   ).toEqual([]);
-  expect(
-    runOpenClawAgentWriteTransaction(
-      (database) => readExactSessionEntryRowForCanonicalRepair(database, canonicalKey)?.entry,
-      { agentId: "robby", env: state.env, path: ownerDatabasePath },
-    ),
-  ).toMatchObject({ sessionId: "legacy-before-main-reuse" });
-  expect(
-    runOpenClawAgentWriteTransaction(
-      (database) => readExactSessionEntryRowForCanonicalRepair(database, lateCanonicalKey)?.entry,
-      { agentId: "robby", env: state.env, path: ownerDatabasePath },
-    ),
-  ).toMatchObject({ sessionId: "late-legacy-before-main-reuse" });
+  expect(readSession("agent:robby:main")).toMatchObject({ sessionId: "legacy-before-main-reuse" });
+  expect(readSession("agent:robby:late")).toMatchObject({
+    sessionId: "late-legacy-before-main-reuse",
+  });
 });

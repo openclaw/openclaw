@@ -33,7 +33,7 @@ function prepareIdentity(
   opts: Parameters<typeof prepareAgentCommandExecutionIdentity>[0]["opts"],
   audit = true,
 ) {
-  return prepareAgentCommandExecutionIdentity({
+  const identity = prepareAgentCommandExecutionIdentity({
     opts,
     prepared: {
       cfg: { logging: { audit: { enabled: true, executionIdentity: audit } } },
@@ -44,6 +44,8 @@ function prepareIdentity(
     ingress: { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
     lifecycleGeneration: "generation-1",
   });
+  onTestFinished(identity.close);
+  return identity;
 }
 
 describe("sanitizePublicAgentCommandIngressOpts", () => {
@@ -116,97 +118,93 @@ describe("Gateway agent command execution identity", () => {
         mainRestartRecovery: { cycleId: "recovery-cycle", revision: 4, chargedAttempts: 3 },
       };
       cleanupSink = configureExecutionIdentityAdmissionSink(() => true);
-      let prepared: ReturnType<typeof prepareAgentCommandExecutionIdentity> | undefined;
-      try {
-        await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-          await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
-          const recovery = () => loadSessionEntry({ sessionKey, storePath })?.mainRestartRecovery;
-          prepared = prepareAgentCommandExecutionIdentity({
-            opts: {
-              message: "continue interrupted work",
-              mainRestartRecoveryAdmitted: true,
-              mainRestartRecoveryAttempt: 3,
-              onAdmittedRunContext: async () => {
-                admittedCallback.resolve();
-                await releaseCallback.promise;
-              },
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
+        const recovery = () => loadSessionEntry({ sessionKey, storePath })?.mainRestartRecovery;
+        const prepared = prepareAgentCommandExecutionIdentity({
+          opts: {
+            message: "continue interrupted work",
+            mainRestartRecoveryAdmitted: true,
+            mainRestartRecoveryAttempt: 3,
+            onAdmittedRunContext: async () => {
+              admittedCallback.resolve();
+              await releaseCallback.promise;
             },
-            prepared: {
-              cfg: { logging: { audit: { enabled: audit, executionIdentity: audit } } },
-              runId: "recovery-run",
-              sessionAgentId: "main",
-              sessionId: sessionEntry.sessionId,
-              sessionKey,
-              storePath,
-              sessionEntry,
-            },
-            ingress: { kind: "system", boundary: "restart-recovery", state: "present" },
-            lifecycleGeneration,
-          });
-          const callbacks = createAgentAttemptLifecycleCallbacks(
-            {
-              currentTurnUserMessagePersisted: false,
-              lifecycleFinishing: false,
-              lifecycleEnded: false,
-            },
-            prepared.onRuntimeTurnStarted,
-          );
-          const admission = prepared.admit("embedded");
-          const settled = admission.catch(() => undefined);
-          await admittedCallback.promise;
-          expect(recovery()).toMatchObject({ chargedAttempts: 3 });
-          expect(recovery()).not.toHaveProperty("startedAttempt");
-          if (outcome === "closed-before-admission") {
-            prepared.close();
-          }
-          releaseCallback.resolve();
-          await settled;
-          if (outcome === "closed-before-admission") {
-            await expect(admission).rejects.toThrow("closed during admission");
-            await callbacks.onAgentEvent({ stream: "lifecycle", data: { phase: "start" } });
-            expect(recovery()).toMatchObject(sessionEntry.mainRestartRecovery);
-            expect(recovery()).not.toHaveProperty("startedAttempt");
-            return;
-          }
-          const context = await admission;
-          await expect(prepared.admit("embedded")).resolves.toBe(context);
-          // A selected/authenticated runtime can still stall before turn/start.
-          expect(recovery()).not.toHaveProperty("startedAttempt");
-          if (audit) {
-            expect(recovery()).toHaveProperty("executionIdentity", context.executionIdentityToken);
-          }
-          if (outcome === "closed-before-start") {
-            prepared.close();
-          } else if (outcome === "stale-attempt") {
-            await replaceSessionEntry(
-              { sessionKey, storePath },
-              {
-                ...sessionEntry,
-                mainRestartRecovery: { ...sessionEntry.mainRestartRecovery, chargedAttempts: 4 },
-              },
-            );
-          }
-          await callbacks.onAgentEvent({
-            stream: "lifecycle",
-            data: {
-              phase: outcome === "startup-failed" ? "error" : "start",
-            },
-          });
-          if (outcome !== "started") {
-            expect(recovery()).not.toHaveProperty("startedAttempt");
-            return;
-          }
-          await callbacks.onAgentEvent({ stream: "lifecycle", data: { phase: "start" } });
-          expect(recovery()).toMatchObject({
-            chargedAttempts: 3,
-            startedAttempt: 3,
-            ...(audit ? { executionIdentity: context.executionIdentityToken } : {}),
-          });
+          },
+          prepared: {
+            cfg: { logging: { audit: { enabled: audit, executionIdentity: audit } } },
+            runId: "recovery-run",
+            sessionAgentId: "main",
+            sessionId: sessionEntry.sessionId,
+            sessionKey,
+            storePath,
+            sessionEntry,
+          },
+          ingress: { kind: "system", boundary: "restart-recovery", state: "present" },
+          lifecycleGeneration,
         });
-      } finally {
-        prepared?.close();
+        onTestFinished(() => {
+          prepared.close();
+          releaseCallback.resolve();
+        });
+        const callbacks = createAgentAttemptLifecycleCallbacks(
+          {
+            currentTurnUserMessagePersisted: false,
+            lifecycleFinishing: false,
+            lifecycleEnded: false,
+          },
+          prepared.onRuntimeTurnStarted,
+        );
+        const admission = prepared.admit("embedded");
+        const settled = admission.catch(() => undefined);
+        await admittedCallback.promise;
+        expect(recovery()).toMatchObject({ chargedAttempts: 3 });
+        expect(recovery()).not.toHaveProperty("startedAttempt");
+        if (outcome === "closed-before-admission") {
+          prepared.close();
+        }
         releaseCallback.resolve();
-      }
+        await settled;
+        if (outcome === "closed-before-admission") {
+          await expect(admission).rejects.toThrow("closed during admission");
+          await callbacks.onAgentEvent({ stream: "lifecycle", data: { phase: "start" } });
+          expect(recovery()).toMatchObject(sessionEntry.mainRestartRecovery);
+          expect(recovery()).not.toHaveProperty("startedAttempt");
+          return;
+        }
+        const context = await admission;
+        await expect(prepared.admit("embedded")).resolves.toBe(context);
+        // A selected/authenticated runtime can still stall before turn/start.
+        expect(recovery()).not.toHaveProperty("startedAttempt");
+        if (audit) {
+          expect(recovery()).toHaveProperty("executionIdentity", context.executionIdentityToken);
+        }
+        if (outcome === "closed-before-start") {
+          prepared.close();
+        } else if (outcome === "stale-attempt") {
+          await replaceSessionEntry(
+            { sessionKey, storePath },
+            {
+              ...sessionEntry,
+              mainRestartRecovery: { ...sessionEntry.mainRestartRecovery, chargedAttempts: 4 },
+            },
+          );
+        }
+        await callbacks.onAgentEvent({
+          stream: "lifecycle",
+          data: { phase: outcome === "startup-failed" ? "error" : "start" },
+        });
+        if (outcome !== "started") {
+          expect(recovery()).not.toHaveProperty("startedAttempt");
+          return;
+        }
+        await callbacks.onAgentEvent({ stream: "lifecycle", data: { phase: "start" } });
+        expect(recovery()).toMatchObject({
+          chargedAttempts: 3,
+          startedAttempt: 3,
+          ...(audit ? { executionIdentity: context.executionIdentityToken } : {}),
+        });
+      });
     },
   );
 
@@ -222,7 +220,6 @@ describe("Gateway agent command execution identity", () => {
         events.push("owner-bound");
       },
     });
-    onTestFinished(prepared.close);
 
     const admitted = await prepared.admit("embedded");
     await prepared.admit("embedded");
@@ -254,98 +251,72 @@ describe("Gateway agent command execution identity", () => {
     expect(readAgentCommandExecutionIdentitySpawnFacts(prepared)).toBe(facts);
   });
 
-  it("carries only the prepared bounded, redacted label into opt-in run admission", async () => {
-    let work: ExecutionIdentityAdmissionWork | undefined;
-    const displayLabel = "Operator OPENAI_API_KEY=***".padEnd(128, "x");
-    cleanupSink = configureExecutionIdentityAdmissionSink((candidate) => {
-      work = candidate;
-      return true;
-    });
+  it.each([false, true])(
+    "retains the bounded, redacted profile label only with audit=%s",
+    async (audit) => {
+      let work: ExecutionIdentityAdmissionWork | undefined;
+      const displayLabel = "Operator OPENAI_API_KEY=***".padEnd(128, "x");
+      cleanupSink = configureExecutionIdentityAdmissionSink((candidate) => {
+        work = candidate;
+        return true;
+      });
 
-    const opts: AgentCommandIngressOpts = {
-      message: "attribute this run",
-      allowModelOverride: false,
-    };
-    attachAgentCommandAdmissionFacts(opts, {
-      ingress: {
-        kind: "gateway-client",
-        boundary: "gateway.ws.authenticated-connect",
-        state: "present",
-        rawSourceRef: "profile-ada",
-      },
-      invoker: {
-        state: "present",
-        kind: "person",
-        rawPrincipalRef: "profile-ada",
-        displayLabel,
-      },
-      assurance: [
-        {
-          kind: "durable-profile",
-          rawEvidenceRef: "profile-ada",
-          strength: "boundary-verified",
-        },
-      ],
-    });
-    const prepared = prepareIdentity(opts);
-    onTestFinished(prepared.close);
-
-    await prepared.admit("embedded");
-
-    expect(work).toMatchObject({
-      kind: "capture",
-      envelope: {
+      const opts: AgentCommandIngressOpts = {
+        message: "attribute this run",
+        allowModelOverride: false,
+      };
+      const facts = {
         ingress: {
-          kind: "gateway-client",
+          kind: "gateway-client" as const,
           boundary: "gateway.ws.authenticated-connect",
-          state: "present",
+          state: "present" as const,
+          rawSourceRef: "profile-ada",
         },
         invoker: {
-          state: "present",
-          kind: "person",
+          state: "present" as const,
+          kind: "person" as const,
           rawPrincipalRef: "profile-ada",
-          displayLabel: "Operator OPENAI_API_KEY=***",
+          displayLabel,
         },
         assurance: [
           {
-            kind: "durable-profile",
+            kind: "durable-profile" as const,
             rawEvidenceRef: "profile-ada",
-            strength: "boundary-verified",
+            strength: "boundary-verified" as const,
           },
         ],
-      },
-    });
-  });
+      };
+      attachAgentCommandAdmissionFacts(opts, facts);
+      const prepared = prepareIdentity(opts, audit);
 
-  it("does not offer the prepared profile label to storage without execution audit opt-in", async () => {
-    let work: ExecutionIdentityAdmissionWork | undefined;
-    cleanupSink = configureExecutionIdentityAdmissionSink((candidate) => {
-      work = candidate;
-      return true;
-    });
-
-    const opts: AgentCommandIngressOpts = {
-      message: "do not retain this label",
-      allowModelOverride: false,
-    };
-    attachAgentCommandAdmissionFacts(opts, {
-      ingress: {
-        kind: "gateway-client",
-        boundary: "gateway.ws.authenticated-connect",
-        state: "present",
-      },
-      invoker: {
-        state: "present",
-        kind: "person",
-        rawPrincipalRef: "profile-ada",
-        displayLabel: "Ada",
-      },
-    });
-    const prepared = prepareIdentity(opts, false);
-    onTestFinished(prepared.close);
-
-    await prepared.admit("embedded");
-
-    expect(work).toBeUndefined();
-  });
+      await prepared.admit("embedded");
+      if (!audit) {
+        expect(work).toBeUndefined();
+        return;
+      }
+      expect(work).toMatchObject({
+        kind: "capture",
+        envelope: {
+          ingress: {
+            kind: "gateway-client",
+            boundary: "gateway.ws.authenticated-connect",
+            state: "present",
+          },
+          invoker: {
+            state: "present",
+            kind: "person",
+            rawPrincipalRef: "profile-ada",
+            displayLabel: "Operator OPENAI_API_KEY=***",
+          },
+          assurance: [
+            {
+              kind: "durable-profile",
+              rawEvidenceRef: "profile-ada",
+              strength: "boundary-verified",
+            },
+          ],
+        },
+      });
+    },
+  );
 });
