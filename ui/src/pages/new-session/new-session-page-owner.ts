@@ -47,7 +47,6 @@ export type PageHost = SolidBridgeElement<
   { data: NewSessionRouteData | undefined },
   {
     focusComposer(): void;
-    requestUpdate(): void;
   }
 >;
 
@@ -129,7 +128,7 @@ export class NewSessionPageOwner {
     this.draft = new NewSessionDraft(
       () => ({ context: this.context, data: this.data, isConnected: this.isConnected }),
       {
-        requestUpdate: this.changed,
+        changed: this.changed,
         querySelector: (selector) => this.querySelector(selector),
         activeElement: () => this.ownerDocument.activeElement,
         body: () => this.ownerDocument.body,
@@ -189,7 +188,7 @@ export class NewSessionPageOwner {
       onMessage: (message) => this.setMessageFromUser(message),
       onError: (message) => this.submission.setError(message),
       onSubmit: () => void this.submission.submit(),
-      requestUpdate: this.changed,
+      onChange: this.changed,
     });
   }
 
@@ -291,7 +290,7 @@ export class NewSessionPageOwner {
       this.openedFor = openKey;
       this.openedGroupDefaults = groupDefaults;
       this.openedAgentId = resolvedAgentId;
-      this.place.setAgentsHydrated(agentsReady);
+      this.place.agentsHydrated = agentsReady;
       this.resetDraft();
       this.messageOwnerKey = restoreDraft(
         this.context,
@@ -309,7 +308,7 @@ export class NewSessionPageOwner {
     }
     if (this.openedAgentId !== resolvedAgentId) {
       this.openedAgentId = resolvedAgentId;
-      this.place.setAgentsHydrated(false);
+      this.place.agentsHydrated = false;
     }
     this.draft.synchronizeSelections();
     activateDraft(this.submission, openKey);
@@ -382,7 +381,7 @@ export class NewSessionPageOwner {
       ...capabilities.composerProps(context, gateway, place.agentId),
       modelControl: place.modelControl,
       requiresModifier: preferences?.chatSendShortcut === "modifier-enter",
-      requestUpdate: this.changed,
+      onChange: this.changed,
       get submitting() {
         return submission.submitting;
       },
