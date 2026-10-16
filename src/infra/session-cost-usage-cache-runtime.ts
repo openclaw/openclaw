@@ -463,6 +463,7 @@ async function runQueuedUsageCostRefresh(
 ): Promise<void> {
   let busyRetryDelayMs = USAGE_COST_REFRESH_RETRY_MIN_MS;
   let retryAt = 0;
+  let recoveredPartialFailure = false;
   const offActivity = observeAgentRunActivity(state.agentId, (busy) => {
     state.agentBusy = busy;
     if (!busy) {
@@ -483,10 +484,12 @@ async function runQueuedUsageCostRefresh(
       if (Date.now() < retryAt || usageCostRefreshDelay(state, Date.now()) > 0) {
         continue;
       }
+      let partialBatch = false;
       try {
         if (state.fullRefreshRequested || state.pendingSessionFiles.size > 0) {
           const priorityFiles = [...state.readingSessionFiles.keys()];
           const fullRefreshRequested = state.fullRefreshRequested && priorityFiles.length === 0;
+          partialBatch = !fullRefreshRequested;
           const sessionFiles: string[] = [];
           if (fullRefreshRequested) {
             // Keep dirty publications explicit: discovery may leave them beyond its batch.
@@ -579,8 +582,16 @@ async function runQueuedUsageCostRefresh(
           return;
         }
         logger.warn(`background refresh failed: ${formatErrorMessage(error)}`, { error });
-        // Failed projections wait for the next publication or read instead of rediscovering.
-        return;
+        if (signal?.aborted || !partialBatch || recoveredPartialFailure) {
+          return;
+        }
+        // A queued identity can disappear on reset or deletion. Rediscover once;
+        // persistent failures wait for the next publication instead of spinning.
+        recoveredPartialFailure = true;
+        state.fullRefreshRequested = true;
+        for (const file of state.readingSessionFiles.keys()) {
+          state.pendingSessionFiles.set(file, null);
+        }
       }
     } while (state.fullRefreshRequested || state.pendingSessionFiles.size > 0);
   } finally {

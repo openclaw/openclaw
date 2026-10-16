@@ -523,7 +523,7 @@ export class DiscordVoiceSessions {
         return "Discord realtime voice session stopped before startup completed.";
       }
       entry.realtimeLifecycle = { status: "active", instance: realtime };
-      return;
+      return undefined;
     } catch (err) {
       await realtime.close();
       if (
