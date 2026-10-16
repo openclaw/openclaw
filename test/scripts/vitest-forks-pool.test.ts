@@ -19,6 +19,8 @@ const exitMarker = (pid: number) => ({
   pid,
   enteredAt: expect.any(Number),
 });
+const containingObject = (value: object) =>
+  expect.arrayContaining([expect.objectContaining(value)]);
 
 nodeReportIt.for([
   "normal",
@@ -34,19 +36,16 @@ nodeReportIt.for([
     fixture.run(async () => {
       signal.throwIfAborted();
       const root = fixture.createTempDir("openclaw-pool-diagnostics-");
-      const home = path.join(root, "home");
-      const tmp = path.join(root, "tmp");
+      const file = (name: string) => path.join(root, name);
+      const home = file("home");
+      const tmp = file("tmp");
       fs.mkdirSync(home);
       fs.mkdirSync(tmp);
-      fs.symlinkSync(
-        path.join(repoRoot, "node_modules"),
-        path.join(root, "node_modules"),
-        "junction",
-      );
-      fs.writeFileSync(path.join(root, "package.json"), '{"type":"module","private":true}');
-      const receipt = path.join(root, "deadline.json");
-      const diagnosticReceipt = path.join(root, "diagnostic-deadline.json");
-      const preload = path.join(root, "hold-teardown.cjs");
+      fs.symlinkSync(path.join(repoRoot, "node_modules"), file("node_modules"), "junction");
+      fs.writeFileSync(file("package.json"), '{"type":"module","private":true}');
+      const receipt = file("deadline.json");
+      const diagnosticReceipt = file("diagnostic-deadline.json");
+      const preload = file("hold-teardown.cjs");
       fs.writeFileSync(
         preload,
         `
@@ -160,7 +159,7 @@ subscribe("child_process", ({ process: child }) => {
       const exitReceipt = path.join(root, "exit.json");
       for (const filename of ["first.test.ts", "second.test.ts"]) {
         fs.writeFileSync(
-          path.join(root, filename),
+          file(filename),
           `
 import fs from "node:fs";
 import { once } from "node:events";
@@ -194,13 +193,13 @@ it("runs on the fork main thread with ready native handles", async () => {
 `,
         );
       }
-      const config = path.join(root, "vitest.config.ts");
-      const outcomeFile = path.join(root, "outcome.json");
+      const config = file("vitest.config.ts");
+      const outcomeFile = file("outcome.json");
       const outcomes: unknown[] = [];
       for (const useAdapter of [false, true]) {
         fs.writeFileSync(workerReceipts, "");
-        for (const file of [receipt, diagnosticReceipt, outcomeFile, exitReceipt]) {
-          fs.rmSync(file, { force: true });
+        for (const receiptPath of [receipt, diagnosticReceipt, outcomeFile, exitReceipt]) {
+          fs.rmSync(receiptPath, { force: true });
         }
         fs.writeFileSync(
           config,
@@ -249,7 +248,7 @@ export default {
             TEMP: tmp,
             CI: "1",
             NODE_OPTIONS: `--require=${preload}`,
-            OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(root, "cache"),
+            OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: file("cache"),
             POOL_DIAGNOSTIC_FIXTURE_SECRET: "fixture-env-value-do-not-print",
           }),
           signal,
@@ -290,10 +289,7 @@ export default {
           continue;
         }
         expect(result.code, output).toBe(1);
-        expect(readJson(receipt)).toEqual({
-          liveDeadlines: 1,
-          delay: 60_000,
-        });
+        expect(readJson(receipt)).toEqual({ liveDeadlines: 1, delay: 60_000 });
         expect(output).toContain(teardownTimeoutError);
         if (!useAdapter) {
           expect(output).not.toContain("vitest-pool-diagnostics");
@@ -320,11 +316,7 @@ export default {
         if (mode === "blocked-after-ack") {
           expect(report).toBe("No complete Node diagnostic report captured within 2000ms.");
           expect(output).toContain('"operation":"Atomics.wait"');
-          expect(readJson(diagnosticReceipt)).toEqual({
-            delay: 2_000,
-            scheduled: 1,
-            fired: 1,
-          });
+          expect(readJson(diagnosticReceipt)).toEqual({ delay: 2_000, scheduled: 1, fired: 1 });
           continue;
         }
         expect(output).toContain('"resources":');
@@ -332,15 +324,11 @@ export default {
         expect(output).toContain('"workers":[{"threadId":');
         expect(JSON.parse(report!)).toMatchObject({
           nativeStack: expect.any(Array),
-          libuv: expect.arrayContaining([
-            expect.objectContaining({ type: "tcp", is_active: true, is_referenced: true }),
-          ]),
-          workers: expect.arrayContaining([
-            expect.objectContaining({
-              threadId: expect.any(Number),
-              libuv: expect.arrayContaining([expect.objectContaining({ type: "timer" })]),
-            }),
-          ]),
+          libuv: containingObject({ type: "tcp", is_active: true, is_referenced: true }),
+          workers: containingObject({
+            threadId: expect.any(Number),
+            libuv: containingObject({ type: "timer" }),
+          }),
         });
       }
       expect(outcomes[1]).toEqual(outcomes[0]);

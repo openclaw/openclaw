@@ -19,6 +19,12 @@ describe("vitest process group helpers", () => {
   function procStat(pid: number, state: string, ppid: number, pgid: number, comm = "node") {
     return `${pid} (${comm}) ${state} ${ppid} ${pgid} 0`;
   }
+  const procError = (code: string) => Object.assign(new Error(code), { code });
+  async function rejectAtDeadline(completion: Promise<unknown>, message: string) {
+    const rejected = expect(completion).rejects.toThrow(message);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await rejected;
+  }
 
   function mockLinuxProc(
     pids: string[],
@@ -119,14 +125,12 @@ describe("vitest process group helpers", () => {
     expect(shouldUseDetachedVitestProcessGroup("win32")).toBe(false);
   });
 
-  it("targets the process group on Unix and the direct pid on Windows", () => {
-    expect(resolveVitestProcessGroupSignalTarget({ childPid: 4200, platform: "darwin" })).toBe(
-      -4200,
-    );
-    expect(resolveVitestProcessGroupSignalTarget({ childPid: 4200, platform: "win32" })).toBe(4200);
-    expect(resolveVitestProcessGroupSignalTarget({ childPid: undefined, platform: "darwin" })).toBe(
-      null,
-    );
+  it.each([
+    [4200, "darwin", -4200],
+    [4200, "win32", 4200],
+    [undefined, "darwin", null],
+  ] as const)("targets pid %s on %s", (childPid, platform, target) => {
+    expect(resolveVitestProcessGroupSignalTarget({ childPid, platform })).toBe(target);
   });
 
   it("formats bounded process-group diagnostics without command arguments", () => {
@@ -145,7 +149,7 @@ describe("vitest process group helpers", () => {
     );
   });
 
-  const missingTask = Object.assign(new Error("gone"), { code: "ENOENT" });
+  const missingTask = procError("ENOENT");
   const taskCases: [
     string,
     (string[] | NodeJS.ErrnoException)[],
@@ -154,12 +158,7 @@ describe("vitest process group helpers", () => {
   ][] = [
     ["runnable worker", [["4200", "4201"]], procStat(4201, "S", 1, 4200), "tid=4201"],
     ["mismatched TID", [["4200", "4201"]], procStat(4202, "Z", 1, 4200), "unavailable"],
-    [
-      "inaccessible task dir",
-      [Object.assign(new Error("denied"), { code: "EACCES" })],
-      undefined,
-      "unavailable",
-    ],
+    ["inaccessible task dir", [procError("EACCES")], undefined, "unavailable"],
     ["missing task dir with leader", [missingTask], undefined, "unavailable"],
     ["disappeared TID", [["4200", "4201"], ["4200"]], missingTask, undefined],
     ["still-present TID", [["4200", "4201"]], missingTask, "unavailable"],
@@ -186,10 +185,7 @@ describe("vitest process group helpers", () => {
       await expect(completion).resolves.toEqual({ code: 0, signal: null });
       return;
     }
-    const rejected = expect(completion).rejects.toThrow(failure);
-
-    await vi.advanceTimersByTimeAsync(1_000);
-    await rejected;
+    await rejectAtDeadline(completion, failure);
   });
 
   it("fails closed before PID scans for a missing proc mount", async () => {
@@ -200,19 +196,14 @@ describe("vitest process group helpers", () => {
       undefined,
       "tmpfs /tmp tmpfs rw 0 0\n",
     );
-    const rejected = expect(startLinuxCompletion().completion).rejects.toThrow(
-      "members: unavailable",
-    );
-
-    await vi.advanceTimersByTimeAsync(1_000);
-    await rejected;
+    await rejectAtDeadline(startLinuxCompletion().completion, "members: unavailable");
     expect(fs.readdirSync).not.toHaveBeenCalled();
   });
 
   it("accepts a Linux process group gone during deadline inspection", async () => {
     vi.useFakeTimers();
     mockLinuxProc([], {});
-    const missing = Object.assign(new Error("gone"), { code: "ESRCH" });
+    const missing = procError("ESRCH");
     const kill = vi.fn((_target: number, signal?: NodeJS.Signals | 0) => {
       const scans = vi
         .mocked(fs.readdirSync)
@@ -234,10 +225,9 @@ describe("vitest process group helpers", () => {
   });
 
   it("skips ENOENT races and accepts PID/PGID 1 with PPID 0", async () => {
-    const missing = Object.assign(new Error("gone"), { code: "ENOENT" });
     mockLinuxProc(["2", "1"], {
       "1": procStat(1, "Z", 0, 1, "init"),
-      "2": missing,
+      "2": missingTask,
     });
 
     const { completion } = startLinuxCompletion(1);
@@ -247,21 +237,13 @@ describe("vitest process group helpers", () => {
 
   it.each([
     ["a mismatched stat PID", ["4200"], { "4200": procStat(4201, "Z", 1, 4200) }, undefined],
-    [
-      "a non-ENOENT read failure",
-      ["4200"],
-      { "4200": Object.assign(new Error("denied"), { code: "EACCES" }) },
-      undefined,
-    ],
-    ["unavailable proc", [], {}, Object.assign(new Error("missing"), { code: "EACCES" })],
+    ["a non-ENOENT read failure", ["4200"], { "4200": procError("EACCES") }, undefined],
+    ["unavailable proc", [], {}, procError("EACCES")],
   ])("fails closed for %s", async (_label, pids, stats, listError) => {
     vi.useFakeTimers();
     mockLinuxProc(pids, stats, listError);
     const { completion } = startLinuxCompletion();
-    const rejected = expect(completion).rejects.toThrow("process group 4200 remained alive 1000ms");
-
-    await vi.advanceTimersByTimeAsync(1_000);
-    await rejected;
+    await rejectAtDeadline(completion, "process group 4200 remained alive 1000ms");
   });
 
   it("sorts and bounds classified Linux process-group diagnostics", async () => {
@@ -273,19 +255,13 @@ describe("vitest process group helpers", () => {
       Object.fromEntries(pids.map((pid) => [pid, procStat(Number(pid), "S", 1, 4200, comm)])),
     );
     const { completion } = startLinuxCompletion();
-    const error = await (async () => {
-      const rejected = completion.catch((failure: unknown) => failure);
-      await vi.advanceTimersByTimeAsync(1_000);
-      return rejected;
-    })();
-
-    const message = (error as Error).message;
+    const rejected = completion.catch((failure: unknown) => failure);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const message = ((await rejected) as Error).message;
     expect(message.indexOf("pid=4200")).toBeLessThan(message.indexOf("pid=4201"));
     expect(message).toContain("pid=4219");
-    expect(message).not.toContain("pid=4220");
     expect(message).toContain("comm=other");
-    expect(message).not.toContain("internal.example");
-    expect(message).not.toContain("\n");
+    expect(message).not.toMatch(/pid=4220|internal\.example|\n/);
   });
 
   it("forwards signals to the computed target and ignores cleanup races", () => {
@@ -300,19 +276,12 @@ describe("vitest process group helpers", () => {
     expect(forward()).toBe(true);
     expect(kill).toHaveBeenCalledWith(-4200, "SIGTERM");
 
-    kill.mockImplementationOnce(() => {
-      const error = new Error("gone") as NodeJS.ErrnoException;
-      error.code = "ESRCH";
-      throw error;
-    });
-    expect(forward()).toBe(false);
-
-    kill.mockImplementationOnce(() => {
-      const error = new Error("permission race") as NodeJS.ErrnoException;
-      error.code = "EPERM";
-      throw error;
-    });
-    expect(forward()).toBe(false);
+    for (const code of ["ESRCH", "EPERM"]) {
+      kill.mockImplementationOnce(() => {
+        throw procError(code);
+      });
+      expect(forward()).toBe(false);
+    }
   });
 
   it.each([

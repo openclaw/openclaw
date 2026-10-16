@@ -50,6 +50,7 @@ async function waitForDescendantReap(pid: number, signal: AbortSignal): Promise<
 const deadlineFixtureLifetime = createFixtureLifetime();
 afterEach(() => deadlineFixtureLifetime.cleanup());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const itUnix = it.runIf(process.platform !== "win32");
 const packageManager = {
   executable: "/opt/vitest-pair/pnpm",
   resolvedExecutable: "/opt/vitest-pair/pnpm",
@@ -103,17 +104,12 @@ type BenchmarkDurations = {
 };
 
 function recordsFor(
-  durations:
-    | number
-    | BenchmarkDurations
-    | ((lane: string, round: number | null) => BenchmarkDurations),
+  durations: number | ((lane: string, round: number | null) => BenchmarkDurations),
 ): BenchmarkRunRecord[] {
   const durationsFor =
     typeof durations === "function"
       ? durations
-      : typeof durations === "number"
-        ? () => ({ baselineMs: 100, candidateMs: 100 * durations })
-        : () => durations;
+      : () => ({ baselineMs: 100, candidateMs: 100 * durations });
   const records: BenchmarkRunRecord[] = [];
   for (const lane of manifest.lanes) {
     for (const round of [...Array.from({ length: manifest.rounds }, (_, i) => i + 1), null]) {
@@ -147,12 +143,6 @@ function inventoryPaths(lane: BenchmarkManifest["lanes"][number]): string[] {
   return [...(lane.config ? [lane.config] : []), ...lane.files];
 }
 
-function gatewayRegressionDurations(lane: string): BenchmarkDurations {
-  return lane === "gateway"
-    ? { baselineMs: 10_000, candidateMs: 13_000 }
-    : { baselineMs: 10_000, candidateMs: 10_000 };
-}
-
 function writeExecutable(file: string, contents: string): void {
   writeFileSync(file, contents);
   chmodSync(file, 0o755);
@@ -161,9 +151,8 @@ function writeExecutable(file: string, contents: string): void {
 type ReportAssertion = {
   fullName: string;
   status: "passed" | "skipped";
-  location?: unknown;
+  location: unknown;
 };
-type ReportFile = { path: string; assertions: ReportAssertion[] };
 
 function writeSelectedFiles(root: string, files: string[]): void {
   for (const relative of files) {
@@ -171,42 +160,6 @@ function writeSelectedFiles(root: string, files: string[]): void {
     mkdirSync(path.dirname(file), { recursive: true });
     writeFileSync(file, `${relative}\n`);
   }
-}
-
-function writeVitestReport(
-  reportFile: string,
-  root: string,
-  files: ReportFile[],
-  success = true,
-): void {
-  const assertions = files.flatMap((file) => file.assertions);
-  const passed = assertions.filter((assertion) => assertion.status === "passed").length;
-  const pending = assertions.filter((assertion) => assertion.status === "skipped").length;
-  writeFileSync(
-    reportFile,
-    JSON.stringify({
-      numTotalTestSuites: files.length,
-      numPassedTestSuites: success ? files.length : 0,
-      numFailedTestSuites: success ? 0 : files.length,
-      numPendingTestSuites: 0,
-      numTotalTests: assertions.length,
-      numPassedTests: success ? passed : 0,
-      numFailedTests: success ? 0 : assertions.length,
-      numPendingTests: success ? pending : 0,
-      numTodoTests: 0,
-      success,
-      testResults: files.map((file) => ({
-        name: path.join(root, file.path),
-        status: success ? "passed" : "failed",
-        assertionResults: file.assertions.map((assertion, index) => ({
-          ...assertion,
-          location: Object.hasOwn(assertion, "location")
-            ? assertion.location
-            : { line: index + 1, column: 1 },
-        })),
-      })),
-    }),
-  );
 }
 
 function reportAssertion(
@@ -221,14 +174,33 @@ function reportFixture(id: string, files = ["src/example.test.ts"]) {
   const root = tempDirs.make(`vitest-pair-${id}-`);
   const lane = { id, critical: true, files };
   writeSelectedFiles(root, files);
-  return {
-    root,
-    lane,
-    read(assertions: ReportAssertion[], name = "report.json") {
-      const file = path.join(root, name);
-      writeVitestReport(file, root, [{ path: files[0]!, assertions }]);
-      return parseVitestExecutionReport(file, root, lane);
-    },
+  return (assertions: ReportAssertion[], success = true, selectedFiles = files) => {
+    const file = path.join(root, "report.json");
+    const count = assertions.length * selectedFiles.length;
+    const countStatus = (status: ReportAssertion["status"]) =>
+      success
+        ? assertions.filter((entry) => entry.status === status).length * selectedFiles.length
+        : 0;
+    writeFileSync(
+      file,
+      JSON.stringify({
+        ...execution.counts,
+        numTotalTestSuites: selectedFiles.length,
+        numPassedTestSuites: success ? selectedFiles.length : 0,
+        numFailedTestSuites: success ? 0 : selectedFiles.length,
+        numTotalTests: count,
+        numPassedTests: countStatus("passed"),
+        numFailedTests: success ? 0 : count,
+        numPendingTests: countStatus("skipped"),
+        success,
+        testResults: selectedFiles.map((relative) => ({
+          name: path.join(root, relative),
+          status: success ? "passed" : "failed",
+          assertionResults: assertions,
+        })),
+      }),
+    );
+    return parseVitestExecutionReport(file, root, lane);
   };
 }
 
@@ -248,7 +220,12 @@ function runScript(
   });
 }
 
-describe("Vitest pair benchmark contract", () => {
+function expectTerminalFailure(root: string, error: string) {
+  const file = path.join(root, "terminal-manifest.json");
+  expect(JSON.parse(readFileSync(file, "utf8"))).toMatchObject({ status: "failure", error });
+}
+
+describe("Vitest pair benchmark", () => {
   it("keeps the committed representative inventory valid and available", () => {
     const committed = loadBenchmarkManifest("scripts/vitest-pair-benchmark-lanes.json");
     expect(committed.lanes.map((lane) => lane.id)).toStrictEqual([
@@ -263,21 +240,21 @@ describe("Vitest pair benchmark contract", () => {
   });
 
   it("rejects malformed and duplicate inventories", () => {
-    expect(() => validateBenchmarkManifest({ ...manifest, rounds: 6 })).toThrow(
-      "exactly seven measured rounds",
-    );
-    expect(() =>
-      validateBenchmarkManifest({
-        ...manifest,
-        lanes: [...manifest.lanes, manifest.lanes[0]],
-      }),
-    ).toThrow("duplicate benchmark lane id");
-    expect(() =>
-      validateBenchmarkManifest({
-        ...manifest,
-        lanes: [{ ...manifest.lanes[0], files: ["../escape.test.ts"] }, ...manifest.lanes.slice(1)],
-      }),
-    ).toThrow("normalized repository-relative path");
+    for (const [override, error] of [
+      [{ rounds: 6 }, "exactly seven measured rounds"],
+      [{ lanes: [...manifest.lanes, manifest.lanes[0]] }, "duplicate benchmark lane id"],
+      [
+        {
+          lanes: [
+            { ...manifest.lanes[0], files: ["../escape.test.ts"] },
+            ...manifest.lanes.slice(1),
+          ],
+        },
+        "normalized repository-relative path",
+      ],
+    ] as const) {
+      expect(() => validateBenchmarkManifest({ ...manifest, ...override })).toThrow(error);
+    }
   });
 
   it("rejects selected workload byte mismatches between sides", () => {
@@ -297,79 +274,54 @@ describe("Vitest pair benchmark contract", () => {
   });
 
   it("requires successful JSON execution reports with the exact selected file set", () => {
-    const { root, lane, read } = reportFixture("report-files", [
-      "src/first.test.ts",
-      "src/second.test.ts",
-    ]);
-    const reportFile = path.join(root, "report.json");
-    expect(() => read([{ fullName: "first test", status: "passed" }])).toThrow(
+    const read = reportFixture("report-files", ["src/first.test.ts", "src/second.test.ts"]);
+    expect(() => read([reportAssertion("first test")], true, ["src/first.test.ts"])).toThrow(
       "executed files differ",
     );
-
-    writeVitestReport(
-      reportFile,
-      root,
-      lane.files.map((file) => ({
-        path: file,
-        assertions: [{ fullName: `${file} test`, status: "passed" }],
-      })),
-      false,
-    );
-    expect(() => parseVitestExecutionReport(reportFile, root, lane)).toThrow(
-      "did not report success",
-    );
+    expect(() => read([reportAssertion()], false)).toThrow("did not report success");
   });
 
   it("uses source locations instead of version-specific rendered names", () => {
-    const { read } = reportFixture("report-digest");
-    const baseline = read(
-      [
-        reportAssertion("mime detection maps 'avif' image format"),
-        reportAssertion("mime detection maps 'jpg' image format"),
-        reportAssertion("mime detection 'detects docx from buffer'", { line: 79, column: 14 }),
-      ],
-      "baseline.json",
-    );
-    const candidate = read(
-      [
-        reportAssertion("mime detection maps avif image format"),
-        reportAssertion("mime detection maps jpg image format"),
-        reportAssertion("mime detection detects docx from buffer", { line: 79, column: 14 }),
-      ],
-      "candidate.json",
-    );
+    const read = reportFixture("report-digest");
+    const baseline = read([
+      reportAssertion("mime detection maps 'avif' image format"),
+      reportAssertion("mime detection maps 'jpg' image format"),
+      reportAssertion("mime detection 'detects docx from buffer'", { line: 79, column: 14 }),
+    ]);
+    const candidate = read([
+      reportAssertion("mime detection maps avif image format"),
+      reportAssertion("mime detection maps jpg image format"),
+      reportAssertion("mime detection detects docx from buffer", { line: 79, column: 14 }),
+    ]);
 
     expect(candidate.digest).toBe(baseline.digest);
     expect(candidate.assertionCount).toBe(3);
   });
 
   it("fails closed when assertion locations are missing or malformed", () => {
-    const { read } = reportFixture("report-location");
+    const read = reportFixture("report-location");
 
-    for (const [label, location] of [
-      ["missing", undefined],
-      ["zero", { line: 0, column: 5 }],
-      ["fractional", { line: 62, column: 5.5 }],
-      ["string", { line: 62, column: "5" }],
+    for (const location of [
+      undefined,
+      { line: 0, column: 5 },
+      { line: 62, column: 5.5 },
+      { line: 62, column: "5" },
     ] as const) {
-      expect(() =>
-        read(
-          [{ fullName: "suite stable test", status: "passed", location }],
-          `candidate-${label}.json`,
-        ),
-      ).toThrow("location must contain positive integer line and column");
+      expect(() => read([{ fullName: "suite stable test", status: "passed", location }])).toThrow(
+        "location must contain positive integer line and column",
+      );
     }
   });
 
   it("fails closed when assertion status or source location diverges", () => {
-    const { read } = reportFixture("report-divergence");
-    const baseline = read([reportAssertion()], "baseline.json");
+    const read = reportFixture("report-divergence");
+    const baseline = read([reportAssertion()]);
 
     for (const [label, assertion] of [
       ["status", reportAssertion("suite stable test", { line: 62, column: 5 }, "skipped")],
       ["location", reportAssertion("suite stable test", { line: 63, column: 5 })],
     ] as const) {
-      const candidate = read([assertion], `candidate-${label}.json`);
+      const candidate = read([assertion]);
       expect(() =>
         assertExecutionDigest(candidate, baseline.digest, `${label} timing run`),
       ).toThrow("execution digest differs");
@@ -379,25 +331,11 @@ describe("Vitest pair benchmark contract", () => {
   it("rotates lane order and alternates paired side order", () => {
     const schedule = buildBenchmarkSchedule(manifest);
     const measured = schedule.filter((entry) => entry.phase === "measured");
-    expect(measured.slice(0, 8).map((entry) => `${entry.lane.id}:${entry.side}`)).toStrictEqual([
-      "core:baseline",
-      "core:candidate",
-      "gateway:baseline",
-      "gateway:candidate",
-      "ui:baseline",
-      "ui:candidate",
-      "lifecycle:baseline",
-      "lifecycle:candidate",
-    ]);
-    expect(measured.slice(8, 16).map((entry) => `${entry.lane.id}:${entry.side}`)).toStrictEqual([
-      "gateway:candidate",
-      "gateway:baseline",
-      "ui:candidate",
-      "ui:baseline",
-      "lifecycle:candidate",
-      "lifecycle:baseline",
-      "core:candidate",
-      "core:baseline",
+    const pairs = (lanes: string[], ...sides: string[]) =>
+      lanes.flatMap((lane) => sides.map((side) => `${lane}:${side}`));
+    expect(measured.slice(0, 16).map((entry) => `${entry.lane.id}:${entry.side}`)).toStrictEqual([
+      ...pairs(["core", "gateway", "ui", "lifecycle"], "baseline", "candidate"),
+      ...pairs(["gateway", "ui", "lifecycle", "core"], "candidate", "baseline"),
     ]);
     expect(schedule.filter((entry) => entry.phase === "warmup")).toHaveLength(8);
     expect(schedule.filter((entry) => entry.phase === "cold")).toHaveLength(8);
@@ -409,7 +347,13 @@ describe("Vitest pair benchmark contract", () => {
   });
 
   it("fails critical regressions and avoids noisy improvement claims", () => {
-    const regression = analyzeBenchmark(recordsFor(gatewayRegressionDurations), manifest);
+    const regression = analyzeBenchmark(
+      recordsFor((lane) => ({
+        baselineMs: 10_000,
+        candidateMs: lane === "gateway" ? 13_000 : 10_000,
+      })),
+      manifest,
+    );
     expect(regression.verdict).toBe("regression");
     expect(regression.regressions).toStrictEqual(
       expect.arrayContaining([expect.stringContaining("gateway median paired wall ratio")]),
@@ -433,63 +377,52 @@ describe("Vitest pair benchmark contract", () => {
     expect(noisyFaster.lanes.every((lane) => lane.candidateImprovedPairs === 4)).toBe(true);
   });
 
-  it.runIf(process.platform !== "win32")(
-    "pins pnpm despite poisoned ambient pnpm and Corepack state",
-    () => {
-      const root = tempDirs.make("vitest-pair-pnpm-");
-      const bin = path.join(root, "bin");
-      const marker = path.join(root, "invocations.txt");
-      const pinnedDir = path.join(root, "pinned");
-      mkdirSync(bin);
-      mkdirSync(pinnedDir);
-      for (const name of ["pnpm", "corepack"]) {
-        writeExecutable(
-          path.join(bin, name),
-          `#!/bin/sh\nprintf 'poison:${name}\\n' >> ${JSON.stringify(marker)}\nexit 97\n`,
-        );
-      }
-      const pinned = path.join(pinnedDir, "pnpm");
+  itUnix("pins pnpm despite poisoned ambient pnpm and Corepack state", () => {
+    const root = tempDirs.make("vitest-pair-pnpm-");
+    const bin = path.join(root, "bin");
+    const marker = path.join(root, "invocations.txt");
+    const pinnedDir = path.join(root, "pinned");
+    mkdirSync(bin);
+    mkdirSync(pinnedDir);
+    for (const name of ["pnpm", "corepack"]) {
       writeExecutable(
-        pinned,
-        `#!/bin/sh\nprintf 'pinned\\n' >> ${JSON.stringify(marker)}\nprintf '12.1.0\\n'\n`,
+        path.join(bin, name),
+        `#!/bin/sh\nprintf 'poison:${name}\\n' >> ${JSON.stringify(marker)}\nexit 97\n`,
       );
-      const ambientEnv = {
-        ...process.env,
-        COREPACK_HOME: path.join(root, "poison-corepack"),
-        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
-        npm_execpath: path.join(bin, "pnpm"),
-      };
-      const identity = resolvePackageManagerIdentity(pinned, path.join(root, "probe"), ambientEnv);
-      const cacheRoot = path.join(root, "run-cache");
-      const env = buildBenchmarkCommandEnv(
-        path.join(root, "home"),
-        cacheRoot,
-        identity,
-        ambientEnv,
-      );
-      const runner = resolvePnpmRunner({ env, pnpmArgs: ["--version"] });
-      const result = spawnSync(runner.command, runner.args, {
-        encoding: "utf8",
-        env,
-        shell: runner.shell,
-        windowsVerbatimArguments: runner.windowsVerbatimArguments,
-      });
+    }
+    const pinned = path.join(pinnedDir, "pnpm");
+    writeExecutable(
+      pinned,
+      `#!/bin/sh\nprintf 'pinned\\n' >> ${JSON.stringify(marker)}\nprintf '12.1.0\\n'\n`,
+    );
+    const ambientEnv = {
+      ...process.env,
+      COREPACK_HOME: path.join(root, "poison-corepack"),
+      PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+      npm_execpath: path.join(bin, "pnpm"),
+    };
+    const identity = resolvePackageManagerIdentity(pinned, path.join(root, "probe"), ambientEnv);
+    const cacheRoot = path.join(root, "run-cache");
+    const env = buildBenchmarkCommandEnv(path.join(root, "home"), cacheRoot, identity, ambientEnv);
+    const runner = resolvePnpmRunner({ env, pnpmArgs: ["--version"] });
+    const result = spawnSync(runner.command, runner.args, {
+      encoding: "utf8",
+      env,
+      shell: runner.shell,
+      windowsVerbatimArguments: runner.windowsVerbatimArguments,
+    });
 
-      expect(result.status).toBe(0);
-      expect(result.stdout.trim()).toBe("12.1.0");
-      expect(identity).toStrictEqual({
-        executable: pinned,
-        resolvedExecutable: pinned,
-        version: "12.1.0",
-      });
-      expect(env.npm_execpath).toBe(pinned);
-      expect(env.COREPACK_HOME).toBe(path.join(cacheRoot, "corepack"));
-      expect(readFileSync(marker, "utf8")).toBe("pinned\npinned\n");
-    },
-  );
-});
-
-describe("Vitest pair benchmark lifecycle", () => {
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("12.1.0");
+    expect(identity).toStrictEqual({
+      executable: pinned,
+      resolvedExecutable: pinned,
+      version: "12.1.0",
+    });
+    expect(env.npm_execpath).toBe(pinned);
+    expect(env.COREPACK_HOME).toBe(path.join(cacheRoot, "corepack"));
+    expect(readFileSync(marker, "utf8")).toBe("pinned\npinned\n");
+  });
   it("persists terminal failure and atomically replaces JSON state", async () => {
     const root = tempDirs.make("vitest-pair-terminal-");
     const state = path.join(root, "state.json");
@@ -502,15 +435,10 @@ describe("Vitest pair benchmark lifecycle", () => {
         throw new Error("injected benchmark failure");
       }),
     ).rejects.toThrow("injected benchmark failure");
-    expect(
-      JSON.parse(readFileSync(path.join(root, "terminal-manifest.json"), "utf8")),
-    ).toMatchObject({
-      status: "failure",
-      error: "injected benchmark failure",
-    });
+    expectTerminalFailure(root, "injected benchmark failure");
   });
 
-  it.runIf(process.platform !== "win32")(
+  itUnix(
     "aborts the active child at the aggregate deadline and starts no successor",
     ({ signal }) =>
       deadlineFixtureLifetime.run(async () => {
@@ -552,15 +480,19 @@ describe("Vitest pair benchmark lifecycle", () => {
         const commands: Array<ReturnType<typeof runOwnedCommand>> = [];
         try {
           await expect(
-            withTerminalManifest(output, async () => {
-              await withVitestPairDeadline(async (deadline) => {
-                const active = deadlineFixtureLifetime.track(
-                  runScript(root, ["--input-type=module", "-e", activeScript], {
-                    logPath: path.join(root, "active.log"),
-                    deadline,
-                  }),
-                );
-                commands.push(active);
+            withTerminalManifest(output, () =>
+              withVitestPairDeadline(async (deadline) => {
+                const start = (name: string, args: string[]) => {
+                  const command = deadlineFixtureLifetime.track(
+                    runScript(root, args, {
+                      logPath: path.join(root, `${name}.log`),
+                      deadline,
+                    }),
+                  );
+                  commands.push(command);
+                  return command;
+                };
+                const active = start("active", ["--input-type=module", "-e", activeScript]);
                 await withinTest(
                   awaitGateBeforeSettlement(
                     ready,
@@ -576,23 +508,13 @@ describe("Vitest pair benchmark lifecycle", () => {
                 }
                 fireDeadline();
                 await Promise.allSettled([active]);
-                const next = deadlineFixtureLifetime.track(
-                  runScript(
-                    root,
-                    [
-                      "-e",
-                      `require("node:fs").writeFileSync(${JSON.stringify(successor)}, "started")`,
-                    ],
-                    {
-                      logPath: path.join(root, "successor.log"),
-                      deadline,
-                    },
-                  ),
-                );
-                commands.push(next);
+                const next = start("successor", [
+                  "-e",
+                  `require("node:fs").writeFileSync(${JSON.stringify(successor)}, "started")`,
+                ]);
                 await Promise.allSettled([next]);
-              }, 500);
-            }),
+              }, 500),
+            ),
           ).rejects.toThrow("Vitest pair aggregate deadline exceeded");
 
           // Assert outside the deadline owner, which normalizes task errors after cancellation.
@@ -609,12 +531,7 @@ describe("Vitest pair benchmark lifecycle", () => {
           });
           expect(isProcessAlive(Number.parseInt(readFileSync(pidFile, "utf8"), 10))).toBe(false);
           expect(existsSync(successor)).toBe(false);
-          expect(
-            JSON.parse(readFileSync(path.join(output, "terminal-manifest.json"), "utf8")),
-          ).toMatchObject({
-            status: "failure",
-            error: "Vitest pair aggregate deadline exceeded after 500ms",
-          });
+          expectTerminalFailure(output, "Vitest pair aggregate deadline exceeded after 500ms");
         } finally {
           timerSpy.mockRestore();
           clock.mockRestore();
@@ -625,7 +542,7 @@ describe("Vitest pair benchmark lifecycle", () => {
       }),
   );
 
-  it.runIf(process.platform !== "win32")("does not retry a failed benchmark child", async () => {
+  itUnix("does not retry a failed benchmark child", async () => {
     const root = tempDirs.make("vitest-pair-no-retry-");
     const attempts = path.join(root, "attempts.txt");
     const script = [
@@ -640,25 +557,22 @@ describe("Vitest pair benchmark lifecycle", () => {
     expect(readFileSync(attempts, "utf8")).toBe("attempt\n");
   });
 
-  it.runIf(process.platform !== "win32")(
-    "fails closed and cleans a leaked descendant process",
-    async ({ signal }) => {
-      const root = tempDirs.make("vitest-pair-leak-");
-      const pidFile = path.join(root, "child.pid");
-      const script = [
-        'const { spawn } = require("node:child_process");',
-        'const { writeFileSync } = require("node:fs");',
-        `const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });`,
-        `writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));`,
-        "child.unref();",
-      ].join("\n");
+  itUnix("fails closed and cleans a leaked descendant process", async ({ signal }) => {
+    const root = tempDirs.make("vitest-pair-leak-");
+    const pidFile = path.join(root, "child.pid");
+    const script = [
+      'const { spawn } = require("node:child_process");',
+      'const { writeFileSync } = require("node:fs");',
+      `const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });`,
+      `writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));`,
+      "child.unref();",
+    ].join("\n");
 
-      await expect(runScript(root, ["-e", script])).rejects.toThrow(
-        /process group remained active|cleanup could not verify/u,
-      );
+    await expect(runScript(root, ["-e", script])).rejects.toThrow(
+      /process group remained active|cleanup could not verify/u,
+    );
 
-      const pid = Number.parseInt(readFileSync(pidFile, "utf8"), 10);
-      await waitForDescendantReap(pid, signal);
-    },
-  );
+    const pid = Number.parseInt(readFileSync(pidFile, "utf8"), 10);
+    await waitForDescendantReap(pid, signal);
+  });
 });

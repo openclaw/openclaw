@@ -25,6 +25,7 @@ const file = "test/example.test.ts";
 const config = "test/vitest/example.config.ts";
 const name = "openclaw-vitest-fixture";
 const label = "io.openclaw.vitest-isolated";
+const selector = "--isolated-image";
 function write(root: string, relative: string, content = "fixture") {
   fs.mkdirSync(path.dirname(path.join(root, relative)), { recursive: true });
   fs.writeFileSync(path.join(root, relative), content);
@@ -85,29 +86,22 @@ describe("isolated Vitest admission", () => {
       run.mockRestore();
     }
   });
-  const originalArgs = [
-    "run",
-    file,
-    "--config",
-    config,
-    "-t",
-    "literal shell ; $()",
-    "--maxWorkers=1",
-  ];
+  const testName = "literal shell ; $()";
+  const originalArgs = ["run", file, "--config", config, "-t", testName, "--maxWorkers=1"];
   it.each([
-    { args: ["--isolated-image", image, ...originalArgs], expected: { image, args: originalArgs } },
+    { args: [selector, image, ...originalArgs], expected: { image, args: originalArgs } },
     {
       args: ["run", `--isolated-image=repo@sha256:${image}`, file],
       expected: { image: `repo@sha256:${image}`, args: ["run", file] },
     },
     { args: originalArgs, expected: null },
-    { args: ["run", "--", "--isolated-image", image], expected: null },
+    { args: ["run", "--", selector, image], expected: null },
     { args: ["run", "-t", `--isolated-image=${image}`], expected: { image, args: ["run", "-t"] } },
     ...["repo:tag", "sha256:1234", ""].map((value) => ({
-      args: ["--isolated-image", value, "run", file],
+      args: [selector, value, "run", file],
       error: "full local sha256",
     })),
-    { args: ["--isolated-image", image, "--isolated-image", image], error: "once" },
+    { args: [selector, image, selector, image], error: "once" },
   ])("parses only an unambiguous image selector: $args", (scenario) => {
     if ("error" in scenario) {
       expect(() => parseArgs(scenario.args)).toThrow(scenario.error);
@@ -196,28 +190,31 @@ describe("isolated Vitest admission", () => {
     expect(() => verifyHost({ rootless: true })).toThrow("SELinux");
   });
   it("refuses inherited image environment, host networking and unexpected engine mounts", () => {
-    const verify =
-      (value = containerInspection()) =>
-      () =>
-        verifyContainer(value, name, ["/owned/source:/workspace:rw"]);
-    expect(verify()).not.toThrow();
-    const poisoned = containerInspection();
-    poisoned.Config.Env.push("HTTP_PROXY=http://credential-proxy");
-    expect(verify(poisoned)).toThrow("environment");
-    const network = containerInspection();
-    network.HostConfig.NetworkMode = "host";
-    expect(verify(network)).toThrow("isolation settings");
-    const noInit = containerInspection();
-    noInit.HostConfig.Init = false;
-    expect(verify(noInit)).toThrow("isolation settings");
-    const mount = containerInspection();
-    mount.Mounts.push({
-      Type: "bind",
-      Source: "/run/podman.sock",
-      Destination: "/engine",
-      RW: true,
-    });
-    expect(verify(mount)).toThrow("unexpected host/default mounts");
+    type Inspection = ReturnType<typeof containerInspection>;
+    const checked = (value: Inspection) =>
+      verifyContainer(value, name, ["/owned/source:/workspace:rw"]);
+    expect(() => checked(containerInspection())).not.toThrow();
+    const rejects = (mutate: (value: Inspection) => unknown, error: string) => {
+      const value = containerInspection();
+      mutate(value);
+      expect(() => checked(value)).toThrow(error);
+    };
+    rejects((value) => value.Config.Env.push("HTTP_PROXY=http://credential-proxy"), "environment");
+    rejects(
+      (value) => Object.assign(value.HostConfig, { NetworkMode: "host" }),
+      "isolation settings",
+    );
+    rejects((value) => Object.assign(value.HostConfig, { Init: false }), "isolation settings");
+    rejects(
+      (value) =>
+        value.Mounts.push({
+          Type: "bind",
+          Source: "/run/podman.sock",
+          Destination: "/engine",
+          RW: true,
+        }),
+      "unexpected host/default mounts",
+    );
   });
 });
 
@@ -309,18 +306,14 @@ NODE_PATH='${source.root}/node_modules'
 function lifecycle(
   options: {
     exit?: number;
-    failCreate?: boolean;
-    failStart?: boolean;
-    failRemove?: boolean;
-    label?: string;
-    failVerify?: boolean;
+    failure?: "create" | "verify" | "start" | "remove" | "ownership";
     unjoined?: Error;
   } = {},
 ) {
   const calls: string[][] = [];
+  const { failure, exit = 0 } = options;
   let present = false;
-  let running = false;
-  let started = false;
+  let state = "created";
   const command: IsolatedPodmanCommand = async (args) => {
     calls.push(args);
     if (args[0] === "container" && args[1] === "exists") {
@@ -331,34 +324,33 @@ function lifecycle(
         throw options.unjoined;
       }
       present = true;
-      return { code: options.failCreate ? 125 : 0, stdout: "id" };
+      return { code: failure === "create" || failure === "ownership" ? 125 : 0, stdout: "id" };
     }
     if (args[0] === "container" && args[1] === "inspect") {
       const inspected = containerInspection();
-      inspected.Config.Labels[label] = options.label ?? name;
+      inspected.Config.Labels[label] = failure === "ownership" ? "another-invocation" : name;
       inspected.State = {
-        Running: running,
-        Status: running ? "running" : started ? "exited" : "created",
-        ExitCode: options.exit ?? 0,
+        Running: state === "running",
+        Status: state,
+        ExitCode: exit,
       };
       return { code: 0, stdout: JSON.stringify([inspected]) };
     }
     if (args[0] === "start") {
-      started = true;
-      running = options.failStart === true;
-      if (options.failStart) {
+      state = failure === "start" ? "running" : "exited";
+      if (failure === "start") {
         throw new Error("attach interrupted");
       }
-      return { code: options.exit ?? 0, stdout: "" };
+      return { code: exit, stdout: "" };
     }
     if (args[0] === "stop") {
-      running = false;
+      state = "exited";
     }
     if (args[0] === "wait") {
-      return { code: 0, stdout: String(options.exit ?? 0) };
+      return { code: 0, stdout: String(exit) };
     }
     if (args[0] === "rm") {
-      if (options.failRemove) {
+      if (failure === "remove") {
         return { code: 125, stdout: "" };
       }
       present = false;
@@ -373,7 +365,7 @@ function lifecycle(
       createArgs: ["create"],
       onAbsent,
       verify: () => {
-        if (options.failVerify) {
+        if (failure === "verify") {
           throw new Error("unexpected mounts");
         }
       },
@@ -407,19 +399,15 @@ describe("isolated container lifecycle", () => {
     },
   );
   it.each([
-    { options: { failCreate: true }, error: "create failed", absent: true },
-    { options: { failVerify: true }, error: "unexpected mounts", absent: true },
-    { options: { failStart: true }, error: "attach interrupted", absent: true },
-    { options: { failRemove: true }, error: "cleanup failed", absent: false },
-    {
-      options: { failCreate: true, label: "another-invocation" },
-      error: "cleanup failed",
-      absent: false,
-    },
-  ])("reconciles $options with $error", async ({ options, error, absent }) => {
-    const fixture = lifecycle(options);
+    ["create", "create failed", true],
+    ["verify", "unexpected mounts", true],
+    ["start", "attach interrupted", true],
+    ["remove", "cleanup failed", false],
+    ["ownership", "cleanup failed", false],
+  ] as const)("reconciles %s failure", async (failure, error, absent) => {
+    const fixture = lifecycle({ failure });
     const result = fixture.run();
-    if ("label" in options) {
+    if (failure === "ownership") {
       await expect(result).rejects.toMatchObject({
         message: expect.stringContaining("cleanup failed"),
         errors: [
@@ -430,17 +418,13 @@ describe("isolated container lifecycle", () => {
       expect(fixture.calls.some((args) => args[0] === "rm")).toBe(false);
     } else {
       await expect(result).rejects.toThrow(error);
-      if ("failStart" in options) {
+      if (failure === "start") {
         expect(fixture.calls).toContainEqual(["stop", "--time", "5", name]);
         expect(fixture.calls).toContainEqual(["wait", name]);
-      } else if (!("failRemove" in options)) {
+      } else if (failure !== "remove") {
         expect(fixture.calls.some((args) => args[0] === "start")).toBe(false);
       }
     }
-    if (absent) {
-      expect(fixture.onAbsent).toHaveBeenCalledOnce();
-    } else {
-      expect(fixture.onAbsent).not.toHaveBeenCalled();
-    }
+    expect(fixture.onAbsent).toHaveBeenCalledTimes(absent ? 1 : 0);
   });
 });
