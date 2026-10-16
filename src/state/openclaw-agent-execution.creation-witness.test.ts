@@ -69,7 +69,7 @@ function isPreparing(request: SqliteWorkerAdmissionRequest, kind: string) {
   );
 }
 function releaseAll(...executions: (Execution | undefined)[]) {
-  return Promise.allSettled(executions.map((execution) => execution?.release()));
+  return Promise.allSettled(executions.map(async (execution) => execution?.release()));
 }
 function initialized(sessionKey: string, sessionId: string) {
   return {

@@ -48,7 +48,9 @@ class FixtureSocket extends EventEmitter {
     this.readyState = 3;
     this.emit("close", code, Buffer.from(reason));
   }
-  terminate = this.close;
+  terminate() {
+    this.close();
+  }
 }
 vi.mock("../../packages/gateway-client/src/websocket.js", () => ({ WebSocket: FixtureSocket }));
 beforeEach(() => {
