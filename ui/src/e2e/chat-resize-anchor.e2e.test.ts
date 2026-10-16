@@ -17,18 +17,7 @@ const filler =
   "The quick brown fox jumps over the lazy dog while the virtualized transcript keeps every " +
   "row height honest across pane widths. ";
 
-function messageContent(index: number): string {
-  // Vary paragraph counts so re-wrapping changes heights non-uniformly.
-  return `Message number ${index}: ${filler.repeat((index % 4) + 1)}`;
-}
-
-type AnchorSample = {
-  key: string | null;
-  topDelta: number;
-  contentVisible: boolean;
-};
-
-async function sampleAnchor(page: Page, anchorKey: string | null): Promise<AnchorSample> {
+async function sampleAnchor(page: Page, anchorKey: string | null) {
   return await page.evaluate((key) => {
     const inner = document.querySelector<HTMLElement>(".chat-thread-inner--virtual");
     const scroller = inner?.parentElement;
@@ -56,6 +45,13 @@ async function sampleAnchor(page: Page, anchorKey: string | null): Promise<Ancho
   }, anchorKey);
 }
 
+function distanceFromEnd(page: Page) {
+  return page
+    .locator(".chat-thread-inner--virtual")
+    .locator("..")
+    .evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop);
+}
+
 async function settleFrames(page: Page, frames: number): Promise<void> {
   await page.evaluate(async (count) => {
     for (let frame = 0; frame < count; frame++) {
@@ -75,7 +71,8 @@ suite.define(() => {
       sessionKey: "agent:main:main",
       historyMessages: Array.from({ length: MESSAGE_COUNT }, (_, index) => ({
         role: index % 2 === 0 ? "user" : "assistant",
-        content: messageContent(index),
+        // Unequal paragraph counts make rewrap change row heights non-uniformly.
+        content: `Message number ${index}: ${filler.repeat((index % 4) + 1)}`,
         timestamp: now - (MESSAGE_COUNT - index) * 60_000,
       })),
     });
@@ -91,13 +88,7 @@ suite.define(() => {
   it("keeps the anchor row stable across pane width changes", async () => {
     const page = await openTranscript();
     const scroller = page.locator(".chat-thread");
-    await expect
-      .poll(() =>
-        scroller.evaluate(
-          (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
-        ),
-      )
-      .toBeLessThanOrEqual(2);
+    await expect.poll(() => distanceFromEnd(page)).toBeLessThanOrEqual(2);
 
     // Native reader input interrupts initial end anchoring; assigning scrollTop
     // alone can race that owner and leave this case pinned to the latest message.
@@ -157,23 +148,17 @@ suite.define(() => {
     // Fresh sessions open pinned to the end; leave the scroll untouched.
     await settleFrames(page, 30);
 
-    const distanceFromEnd = () =>
-      page.evaluate(() => {
-        const scroller = document.querySelector<HTMLElement>(
-          ".chat-thread-inner--virtual",
-        )?.parentElement;
-        return scroller
-          ? scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop
-          : Number.NaN;
-      });
-    expect(await distanceFromEnd()).toBeLessThanOrEqual(2);
+    expect(await distanceFromEnd(page)).toBeLessThanOrEqual(2);
 
     // Width-only changes re-wrap every row; the end anchor must follow the
     // new total size (virtualizer wasAtEnd compensation), not drift upward.
     for (const width of [1000, 820, 1280]) {
       await page.setViewportSize({ width, height: 900 });
       await settleFrames(page, 30);
-      expect(await distanceFromEnd(), `distance from end at width ${width}`).toBeLessThanOrEqual(2);
+      expect(
+        await distanceFromEnd(page),
+        `distance from end at width ${width}`,
+      ).toBeLessThanOrEqual(2);
       await page
         .getByText(`Message number ${MESSAGE_COUNT - 1}:`)
         .first()

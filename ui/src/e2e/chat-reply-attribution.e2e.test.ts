@@ -1,4 +1,4 @@
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -6,16 +6,11 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({ name: "Reply attribution" });
 const sessionKey = "agent:main:reply-attribution";
-const self = {
-  senderId: "alice",
-  senderName: "Alice Chen",
-  senderIdentity: { type: "profile", id: "alice" },
-} as const;
-const peer = {
-  senderId: "jordan",
-  senderName: "Jordan Lee",
-  senderIdentity: { type: "profile", id: "jordan" },
-} as const;
+function participant(id: string, senderName: string) {
+  return { senderId: id, senderName, senderIdentity: { type: "profile" as const, id } };
+}
+const self = participant("alice", "Alice Chen");
+const peer = participant("jordan", "Jordan Lee");
 function message(
   id: string,
   role: string,
@@ -42,12 +37,6 @@ const history = sequence([
   message("answer-one", "assistant", "The first answer."),
   message("answer-two", "assistant", "The second answer."),
 ]);
-const selfPresence = {
-  self: true,
-  id: "alice",
-  identity: self.senderIdentity,
-  name: self.senderName,
-};
 async function preparePage(
   page: Page,
   key: string,
@@ -58,12 +47,12 @@ async function preparePage(
   await installMockGateway(page, {
     sessionKey: key,
     historyMessages,
-    presenceUsers: [
-      selfPresence,
-      ...(includePeer
-        ? [{ id: "jordan", identity: peer.senderIdentity, name: peer.senderName }]
-        : []),
-    ],
+    presenceUsers: (includePeer ? [self, peer] : [self]).map((person, index) => ({
+      id: person.senderId,
+      name: person.senderName,
+      identity: person.senderIdentity,
+      self: index === 0,
+    })),
   });
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
   await page.evaluate(async (value) => {
@@ -77,22 +66,22 @@ const viewports = [
   { width: 390, height: 1000, touch: true, theme: "dark" },
   { width: 820, height: 1180, touch: true, theme: "light" },
 ];
+const replyButton = (root: Page | Locator, name: string) =>
+  root.getByRole("button", { name, exact: true });
 
 suite.define(() => {
   it("keeps the reply line above completed work across an automatic resumption", async () => {
     const resumedSession = "agent:main:dashboard:reply-strip-resumed-work";
     const messages = sequence([
-      message("earlier-prompt", "user", "Please review the release checklist.", self),
-      message(
-        "review-prompt",
-        "user",
-        "Check the release notes and test results before we share it.",
-        { idempotencyKey: "review-run:user", ...peer },
-      ),
+      message("earlier-prompt", "user", "Review the checklist.", self),
+      message("review-prompt", "user", "Check notes and tests.", {
+        idempotencyKey: "review-run:user",
+        ...peer,
+      }),
       message(
         "first-run-work",
         "toolResult",
-        "The release notes describe the updated controls.",
+        "Updated controls.",
         { runId: "review-run" },
         { toolName: "read", toolCallId: "read-release-notes" },
       ),
@@ -106,7 +95,7 @@ suite.define(() => {
       message(
         "resumed-answer",
         "assistant",
-        "The release checklist is ready. I checked the notes and test results; the controls are consistent across desktop and mobile.",
+        "The checklist is ready to share.",
         { runId: "announce:review-complete" },
         { phase: "final_answer", stopReason: "stop" },
       ),
@@ -119,10 +108,7 @@ suite.define(() => {
         const answerGroup = page.locator(
           '.chat-group.assistant:has([data-entry-id="resumed-answer"])',
         );
-        const line = answerGroup.getByRole("button", {
-          name: "Replying to Jordan Lee",
-          exact: true,
-        });
+        const line = replyButton(answerGroup, "Replying to Jordan Lee");
         const work = page.locator(".chat-work-group");
         await line.waitFor();
         await work.waitFor();
@@ -165,33 +151,24 @@ suite.define(() => {
           const reply = page.locator('[data-entry-id="peer-reply"]');
           const last = page.locator('[data-entry-id="peer-last"]');
           await reply.waitFor();
-          expect(await own.locator(":scope > .chat-reply-attribution--inline").count()).toBe(1);
-          expect(await reply.locator(".chat-reply-attribution").count()).toBe(0);
-          expect(
-            await reply
-              .locator("..")
-              .getByRole("button", { name: "Replying to You", exact: true })
-              .count(),
-          ).toBe(1);
+          expect({
+            inline: await own.locator(":scope > .chat-reply-attribution--inline").count(),
+            nested: await reply.locator(".chat-reply-attribution").count(),
+            group: await replyButton(reply.locator(".."), "Replying to You").count(),
+          }).toEqual({ inline: 1, nested: 0, group: 1 });
           const group = page.locator('.chat-group--peer:has([data-entry-id="peer-reply"])');
-          const actionFor = async (id: string) => {
-            const key = await page
-              .locator('[data-entry-id="' + id + '"]')
-              .getAttribute("data-message-id");
+          const actionFor = async (bubble: Locator) => {
+            const key = await bubble.getAttribute("data-message-id");
             const owner = group.locator('[data-message-actions-for="' + key + '"]');
             expect(await owner.count()).toBe(1);
-            return owner.getByRole("button", { name: "Reply to message", exact: true });
+            return replyButton(owner, "Reply to message");
           };
           const geometry = () =>
             group.evaluate((element) => {
               const thread = element.closest(".chat-thread")!;
               return [...element.querySelectorAll(".chat-bubble")].map((bubble) => {
                 const bounds = bubble.getBoundingClientRect();
-                return {
-                  top: bounds.top + thread.scrollTop,
-                  height: bounds.height,
-                  width: bounds.width,
-                };
+                return [bounds.top + thread.scrollTop, bounds.height, bounds.width];
               });
             });
           const interactiveOwners = () =>
@@ -208,6 +185,13 @@ suite.define(() => {
               );
           await first.scrollIntoViewIfNeeded();
           const resting = await geometry();
+          const expectRevealed = async (action: Locator, key: string | null) => {
+            await expect
+              .poll(() => action.evaluate((element) => Number(getComputedStyle(element).opacity)))
+              .toBeGreaterThan(0.5);
+            await expect.poll(interactiveOwners).toEqual([key]);
+            expect(await geometry()).toEqual(resting);
+          };
           const messages = [
             ["peer-first", first, "The desktop controls work."],
             ["peer-reply", reply, "The checklist is ready."],
@@ -215,14 +199,10 @@ suite.define(() => {
           ] as const;
           // Focus must reveal every native owner without a preceding hover/tap.
           for (const [id, bubble, content] of messages) {
-            const action = await actionFor(id);
+            const action = await actionFor(bubble);
             const key = await bubble.getAttribute("data-message-id");
             await action.focus();
-            await expect
-              .poll(() => action.evaluate((button) => Number(getComputedStyle(button).opacity)))
-              .toBeGreaterThan(0.5);
-            await expect.poll(interactiveOwners).toEqual([key]);
-            expect(await geometry()).toEqual(resting);
+            await expectRevealed(action, key);
             // Earlier message rows align to their bubble; the final group footer
             // keeps its native metadata/action layout.
             if (!touch && id !== "peer-last") {
@@ -262,22 +242,17 @@ suite.define(() => {
           await expect.poll(interactiveOwners).toEqual([]);
           // Transfer directly between ordinary, reply-wrapped, and final bubbles.
           // No intervening dismiss or action may reset the previous reveal.
-          for (const [id, bubble] of messages) {
-            const action = await actionFor(id);
+          for (const [, bubble] of messages) {
+            const action = await actionFor(bubble);
             const key = await bubble.getAttribute("data-message-id");
             if (touch) {
               await bubble.locator(".chat-text").tap();
             } else {
               await bubble.hover();
             }
-            await expect
-              .poll(() => action.evaluate((button) => Number(getComputedStyle(button).opacity)))
-              .toBeGreaterThan(0.5);
-            await expect.poll(interactiveOwners).toEqual([key]);
-            expect(await geometry()).toEqual(resting);
+            await expectRevealed(action, key);
           }
           if (touch) {
-            // Tapping the same final message still dismisses its controls.
             await last.locator(".chat-text").tap();
           } else {
             await page.mouse.move(0, 0);

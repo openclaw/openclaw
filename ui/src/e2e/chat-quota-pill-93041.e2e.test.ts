@@ -1,5 +1,4 @@
-// Real-browser proof + regression for #93041: provider usage from models.authStatus remains
-// available in the desktop composer's context popover. Screenshots go to the ignored artifacts tree.
+// Regression #93041: provider usage stays in the desktop composer's context popover.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
@@ -27,29 +26,37 @@ const captureOwnershipProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const ownershipProofPhase = process.env.OPENCLAW_UI_PROOF_PHASE?.trim() || "candidate";
 let ownershipProofDir: string;
 
+function providerStatus<Usage>(
+  provider: string,
+  displayName: string,
+  usage: Usage,
+  type = "oauth",
+) {
+  return {
+    provider,
+    displayName,
+    status: "ok",
+    profiles: [{ profileId: provider, type, status: "ok" }],
+    usage,
+  };
+}
+
 const authStatusWithUsage = {
   ts: baseTime,
   providers: [
-    {
-      provider: "openai",
-      displayName: "OpenAI",
-      status: "ok",
-      profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
-      usage: {
-        providerId: "openai",
-        windows: [{ label: "Week", usedPercent: 71, resetAt: Date.now() + 4 * 86_400_000 }],
-      },
-    },
-    {
-      provider: "github-copilot",
-      displayName: "Copilot",
-      status: "ok",
-      profiles: [{ profileId: "github-copilot", type: "token", status: "ok" }],
-      usage: {
+    providerStatus("openai", "OpenAI", {
+      providerId: "openai",
+      windows: [{ label: "Week", usedPercent: 71, resetAt: Date.now() + 4 * 86_400_000 }],
+    }),
+    providerStatus(
+      "github-copilot",
+      "Copilot",
+      {
         providerId: "github-copilot",
         windows: [{ label: "Day", usedPercent: 41 }],
       },
-    },
+      "token",
+    ),
   ],
 };
 
@@ -60,14 +67,10 @@ const gatewayInjectedSessions = {
   sessions: [
     {
       contextTokens: 200_000,
-      displayName: "Main",
-      hasActiveRun: false,
       key: "main",
       kind: "direct",
-      label: "Main",
       model: "gateway-injected",
       modelProvider: "openai",
-      status: "done",
       totalTokens: 46_000,
       totalTokensFresh: true,
       updatedAt: Date.now(),
@@ -96,24 +99,18 @@ function agentAuthStatus(agentId: "main" | "work") {
   return {
     ts: baseTime + (isMain ? 1 : 2),
     providers: [
-      {
-        provider: "openai",
-        displayName: isMain ? "Main OpenAI" : "Work OpenAI",
-        status: "ok",
-        profiles: [{ profileId: `${agentId}-codex`, type: "oauth", status: "ok" }],
-        usage: {
-          providerId: "openai",
-          plan: isMain ? "Main Pro" : "Work Team",
-          accountEmail: `${agentId}@example.test`,
-          windows: [
-            {
-              label: "Week",
-              usedPercent: isMain ? 81 : 24,
-              resetAt: Date.now() + 4 * 86_400_000,
-            },
-          ],
-        },
-      },
+      providerStatus("openai", isMain ? "Main OpenAI" : "Work OpenAI", {
+        providerId: "openai",
+        plan: isMain ? "Main Pro" : "Work Team",
+        accountEmail: `${agentId}@example.test`,
+        windows: [
+          {
+            label: "Week",
+            usedPercent: isMain ? 81 : 24,
+            resetAt: Date.now() + 4 * 86_400_000,
+          },
+        ],
+      }),
     ],
   };
 }
@@ -123,11 +120,8 @@ const selectedGlobalSessions = {
   sessions: [
     {
       ...gatewayInjectedSessions.sessions[0],
-      displayName: "Selected global",
       key: "global",
       kind: "global",
-      label: "Selected global",
-      modelProvider: "openai",
     },
   ],
 };
@@ -143,22 +137,16 @@ const workGlobalSession = {
 const claudeSubscriptionAuthStatus = {
   ts: baseTime,
   providers: [
-    {
-      provider: "claude-cli",
-      displayName: "Claude",
-      status: "ok",
-      profiles: [{ profileId: "claude-cli", type: "oauth", status: "ok" }],
-      usage: {
-        providerId: "anthropic",
-        plan: "Max (20x)",
-        windows: [
-          { label: "5h", usedPercent: 22, resetAt: Date.now() + 4 * 3_600_000 + 48 * 60_000 },
-          { label: "Week", usedPercent: 25, resetAt: Date.now() + 2 * 86_400_000 },
-          { label: "Fable", usedPercent: 45 },
-        ],
-        billing: [{ type: "budget", used: 157.85, limit: 400, unit: "USD", period: "month" }],
-      },
-    },
+    providerStatus("claude-cli", "Claude", {
+      providerId: "anthropic",
+      plan: "Max (20x)",
+      windows: [
+        { label: "5h", usedPercent: 22, resetAt: Date.now() + 4 * 3_600_000 + 48 * 60_000 },
+        { label: "Week", usedPercent: 25, resetAt: Date.now() + 2 * 86_400_000 },
+        { label: "Fable", usedPercent: 45 },
+      ],
+      billing: [{ type: "budget", used: 157.85, limit: 400, unit: "USD", period: "month" }],
+    }),
   ],
 };
 
@@ -190,21 +178,14 @@ async function withChat(
   sessions: unknown,
   run: (page: Page) => Promise<void>,
 ) {
-  const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-  let page: Page | undefined;
-  try {
-    page = await context.newPage();
-    page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
+  await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
     const gateway = await installMockGateway(page, {
       methodResponses: { "models.authStatus": authStatus, "sessions.list": sessions },
     });
     await page.goto(`${suite.server.baseUrl}chat`);
     await gateway.waitForRequest("models.authStatus");
     await run(page);
-  } finally {
-    await page?.close().catch(() => {});
-    await context.close().catch(() => {});
-  }
+  });
 }
 
 function expectTextExcludes(text: string, ...excluded: string[]) {
@@ -300,39 +281,8 @@ async function visibleAuthState(page: Page) {
   }, visiblePaneSelector);
 }
 
-async function setOwnershipProofCue(page: Page, text: string): Promise<void> {
-  await page.evaluate((label) => {
-    let cue = document.querySelector<HTMLElement>("[data-auth-ownership-proof-cue]");
-    if (!cue) {
-      cue = document.createElement("div");
-      cue.dataset.authOwnershipProofCue = "true";
-      Object.assign(cue.style, {
-        background: "#171717",
-        border: "1px solid #fafafa",
-        borderRadius: "4px",
-        color: "#fafafa",
-        font: "600 13px/1.4 system-ui, sans-serif",
-        maxWidth: "420px",
-        padding: "8px 10px",
-        position: "fixed",
-        right: "16px",
-        top: "16px",
-        zIndex: "2147483647",
-      });
-      document.body.append(cue);
-    }
-    cue.textContent = label;
-  }, text);
-}
-
-async function pauseForOwnershipProof(page: Page): Promise<void> {
-  if (captureOwnershipProof) {
-    await page.waitForTimeout(2_200);
-  }
-}
-
 async function openVisibleQuotaPopover(page: Page) {
-  const visiblePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
+  const visiblePane = page.locator(visiblePaneSelector);
   const popover = visiblePane.locator(".context-usage__popover");
   if (!(await popover.isVisible())) {
     await visiblePane.locator(".context-ring").click();
@@ -402,11 +352,8 @@ suite.define(() => {
 
   it("shows plan bars, credits, and no dollar estimates for subscription sessions", async () => {
     await withChat(claudeSubscriptionAuthStatus, claudeSubscriptionSessions, async (page) => {
-      const contextRing = page.locator(".context-ring");
-      await contextRing.waitFor({ state: "visible" });
-      await contextRing.click();
-      await page.locator(".context-usage__popover").waitFor({ state: "visible" });
-      await page.locator(".context-usage__popover").screenshot({
+      const popover = await openVisibleQuotaPopover(page);
+      await popover.screenshot({
         path: path.join(artifactDir, "03-claude-subscription-popover.png"),
       });
 
@@ -429,11 +376,7 @@ suite.define(() => {
       const contextRing = page.locator(".context-ring");
       await contextRing.waitFor({ state: "visible" });
       await page.waitForFunction(() => {
-        const pane = document.querySelector("openclaw-chat-pane") as
-          | (HTMLElement & {
-              state?: { modelAuthStatusResult?: { providers?: unknown[] } | null };
-            })
-          | null;
+        const pane = document.querySelector<ChatPane>("openclaw-chat-pane");
         return Array.isArray(pane?.state?.modelAuthStatusResult?.providers);
       });
       await contextRing.click();
@@ -448,9 +391,7 @@ suite.define(() => {
 
   it("binds delayed auth and quota presentation to the selected global agent", async () => {
     const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
+      ...createControlUiE2eContextOptions(),
       ...(captureOwnershipProof
         ? { recordVideo: { dir: ownershipProofDir, size: { height: 900, width: 1280 } } }
         : {}),
@@ -527,14 +468,8 @@ suite.define(() => {
         agentId: "main",
       });
       let popover = await openVisibleQuotaPopover(page);
-      expect(
-        await page
-          .locator("openclaw-chat-pane.chat-pane-cache__pane--visible")
-          .locator('[data-chat-provider-usage="true"]')
-          .count(),
-      ).toBe(0);
-      await setOwnershipProofCue(page, "Selected agent: Main | Main auth request delayed");
-      await pauseForOwnershipProof(page);
+      const visiblePane = page.locator(visiblePaneSelector);
+      expect(await visiblePane.locator('[data-chat-provider-usage="true"]').count()).toBe(0);
 
       await page.evaluate((selector) => {
         const pane = document.querySelector<ChatPane>(selector);
@@ -571,19 +506,12 @@ suite.define(() => {
         ],
       });
       await expect.poll(() => visibleAuthState(page)).toEqual(loadingWorkAuth);
-      await setOwnershipProofCue(page, "Selected agent: Work | Work auth loading");
-      await pauseForOwnershipProof(page);
       await captureOwnership(page, "01-work-loading");
 
       await replyToAgentMetadata(gateway, "main");
       await page.waitForTimeout(100);
       const delayedMainState = await visibleAuthState(page);
       expect(delayedMainState).toEqual(loadingWorkAuth);
-      await setOwnershipProofCue(
-        page,
-        "Visible agent: work | Delayed Main ignored | Work auth loading",
-      );
-      await pauseForOwnershipProof(page);
       await captureOwnership(page, "02-after-delayed-main");
 
       await replyToAgentMetadata(gateway, "work");
@@ -597,13 +525,10 @@ suite.define(() => {
           plan: "Work Team",
           ts: baseTime + 2,
         });
-      await setOwnershipProofCue(page, "Selected agent: Work | Work account and plan loaded");
       await captureOwnership(page, "03-work-settled");
       popover = await openVisibleQuotaPopover(page);
       expect(
-        await page
-          .locator("openclaw-chat-pane.chat-pane-cache__pane--visible .context-ring")
-          .getAttribute("aria-label"),
+        await page.locator(`${visiblePaneSelector} .context-ring`).getAttribute("aria-label"),
       ).toBe("Session context usage: 90k of 300k (30%)");
       expect((await gateway.getRequests("chat.startup")).at(-1)?.params).toMatchObject({
         sessionKey: "agent:work:main",
@@ -614,11 +539,6 @@ suite.define(() => {
       expect(settledText).toContain("work@example.test");
       expect(settledText).toContain("24%");
       expectTextExcludes(settledText, "Main Pro", "main@example.test");
-      await setOwnershipProofCue(
-        page,
-        "Selected agent: Work | Account: work@example.test | Plan: Work Team | Quota: 24%",
-      );
-      await pauseForOwnershipProof(page);
       await captureOwnership(
         page,
         "04-work-quota-popover",

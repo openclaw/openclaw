@@ -51,6 +51,13 @@ function assistantMessage(content: unknown, minute: number) {
   return { content, role: "assistant", timestamp: Date.UTC(2026, 6, 9, 10, minute) };
 }
 
+function documentAttachment(label: string, fields: Record<string, string>, failed = true) {
+  return {
+    type: failed ? "attachment_error" : "attachment",
+    attachment: { kind: "document", label, ...fields },
+  };
+}
+
 function attachmentLayout(card: Element) {
   const part = (name: string) =>
     card.querySelector<HTMLElement>(`.chat-assistant-attachment-card__status-${name}`)!;
@@ -81,6 +88,29 @@ function contextLayout(node: Element, includeOverlay = false) {
     groupHeight: node.getBoundingClientRect().height,
     contextBottom: includeOverlay ? rect(".msg-meta__details").bottom : 0,
     summaryTop: includeOverlay ? rect(".msg-meta__summary").top : 0,
+  };
+}
+
+function messageContextState(group: Element) {
+  const footer = group.querySelector(".chat-group-footer")!;
+  const summary = group.querySelector(".msg-meta__summary")!;
+  const details = group.querySelector(".msg-meta__details")!;
+  const popup = group
+    .querySelector("openclaw-tooltip.msg-meta")!
+    .shadowRoot?.querySelector(".tooltip-surface[popover]");
+  const rect = details.getBoundingClientRect();
+  const target = document.elementFromPoint(rect.left + 8, rect.top + rect.height / 2);
+  const summaryStyle = getComputedStyle(summary);
+  return {
+    rowContainment: getComputedStyle(group.closest(".chat-virtual-row")!).contentVisibility,
+    topLayer: popup?.matches(":popover-open") ?? false,
+    painted: target !== null && details.contains(target),
+    footerOpacity: getComputedStyle(footer).opacity,
+    summaryOpacity: summaryStyle.opacity,
+    pointerEvents: summaryStyle.pointerEvents,
+    summaryFocused: document.activeElement === summary,
+    hovered: group.matches(":hover"),
+    focused: group.matches(":focus-within"),
   };
 }
 
@@ -163,34 +193,21 @@ async function createSharedAppPage(): Promise<Page> {
         assistantMessage(
           [
             { text: SHARED_APP_ATTACHMENT_OUTCOME_TEXT, type: "text" },
-            {
-              type: "attachment",
-              attachment: {
+            documentAttachment(
+              "deploy.yaml",
+              {
                 url: "https://files.example/deploy.yaml",
-                kind: "document",
-                label: "deploy.yaml",
                 mimeType: "application/yaml",
               },
-            },
-            ...["settings.toml", "schema.sql", "events.ndjson", "font.ttf", "font.woff2"].map(
-              (label) => ({
-                type: "attachment_error",
-                attachment: {
-                  code: "unsupported-format",
-                  kind: "document",
-                  label,
-                },
-              }),
+              false,
             ),
-            {
-              type: "attachment_error",
-              attachment: {
-                code: "delivery-failed",
-                kind: "document",
-                label: "bundle.7z",
-                mimeType: "application/x-7z-compressed",
-              },
-            },
+            ...["settings.toml", "schema.sql", "events.ndjson", "font.ttf", "font.woff2"].map(
+              (label) => documentAttachment(label, { code: "unsupported-format" }),
+            ),
+            documentAttachment("bundle.7z", {
+              code: "delivery-failed",
+              mimeType: "application/x-7z-compressed",
+            }),
           ],
           3,
         ),
@@ -297,23 +314,8 @@ suite.define(() => {
         // Real top-layer placement replaces the old per-row containment escape.
         // Hit-test rendered content, not just the popup's open flag.
         await expect
-          .poll(() =>
-            context.evaluate((node) => {
-              const row = node.closest<HTMLElement>(".chat-virtual-row")!;
-              const tooltipNode = node.closest("openclaw-tooltip")!;
-              const popup = tooltipNode.shadowRoot?.querySelector<HTMLElement>(
-                ".tooltip-surface[popover]",
-              );
-              const rect = node.getBoundingClientRect();
-              const target = document.elementFromPoint(rect.left + 8, rect.top + rect.height / 2);
-              return {
-                rowContainment: getComputedStyle(row).contentVisibility,
-                topLayer: popup?.matches(":popover-open") ?? false,
-                painted: target !== null && node.contains(target),
-              };
-            }),
-          )
-          .toEqual({ rowContainment: "auto", topLayer: true, painted: true });
+          .poll(() => group.evaluate(messageContextState))
+          .toMatchObject({ rowContainment: "auto", topLayer: true, painted: true });
 
         await page.mouse.move(0, 0);
         await context.waitFor({ state: "hidden", timeout: 10_000 });
@@ -325,22 +327,12 @@ suite.define(() => {
         // Settle the footer reveal independently of the headless compositor clock.
         await group.locator(".chat-group-footer").evaluate(finishElementAnimations);
         await expect
-          .poll(() =>
-            summary.evaluate((node) => {
-              const footer = node.closest<HTMLElement>(".chat-group-footer")!;
-              return {
-                footerOpacity: getComputedStyle(footer).opacity,
-                summaryOpacity: getComputedStyle(node).opacity,
-                pointerEvents: getComputedStyle(node).pointerEvents,
-                focused: document.activeElement === node,
-              };
-            }),
-          )
-          .toEqual({
+          .poll(() => group.evaluate(messageContextState))
+          .toMatchObject({
             footerOpacity: "1",
             summaryOpacity: "1",
             pointerEvents: "auto",
-            focused: true,
+            summaryFocused: true,
           });
         await page.keyboard.press("Escape");
         await context.waitFor({ state: "hidden", timeout: 10_000 });
@@ -352,16 +344,8 @@ suite.define(() => {
         // retain this disclosure, even in browsers that do not focus on click.
         await summary.evaluate((node) => (node as HTMLElement).blur());
         await expect
-          .poll(() =>
-            group.evaluate((node) => ({
-              hovered: node.matches(":hover"),
-              focused: node.matches(":focus-within"),
-              footerOpacity: getComputedStyle(
-                node.querySelector<HTMLElement>(".chat-group-footer")!,
-              ).opacity,
-            })),
-          )
-          .toEqual({ hovered: false, focused: false, footerOpacity: "1" });
+          .poll(() => group.evaluate(messageContextState))
+          .toMatchObject({ hovered: false, focused: false, footerOpacity: "1" });
         expect(await tooltip.getAttribute("open")).toBe("");
         expect(await context.isVisible()).toBe(true);
 
@@ -549,46 +533,43 @@ suite.define(() => {
       for (let index = 0; index < initiallyHidden.index; index += 1) {
         await page.keyboard.press("ArrowDown");
       }
-      await page.waitForFunction((expectedId) => {
-        const input = document.querySelector<HTMLTextAreaElement>(
-          ".agent-chat__composer-combobox > textarea",
-        );
-        return input?.getAttribute("aria-activedescendant") === expectedId;
-      }, initiallyHidden.id);
-      await page.waitForFunction((expectedId) => {
-        const active = document.getElementById(expectedId);
-        const scrollRegion = active?.closest<HTMLElement>(".slash-menu__scroll");
-        if (!active || !scrollRegion) {
-          return false;
-        }
-        const menuRect = scrollRegion.getBoundingClientRect();
-        const activeRect = active.getBoundingClientRect();
-        return activeRect.top >= menuRect.top - 1 && activeRect.bottom <= menuRect.bottom + 1;
-      }, initiallyHidden.id);
-
-      const result = await page.evaluate(() => {
-        const input = document.querySelector<HTMLTextAreaElement>(
-          ".agent-chat__composer-combobox > textarea",
-        );
-        const scrollRegion = document.querySelector<HTMLElement>(".slash-menu__scroll");
-        const active = document.querySelector<HTMLElement>(".slash-menu-item--active");
-        if (!input || !scrollRegion || !active) {
-          throw new Error("Expected active slash option after keyboard navigation");
-        }
-        const menuRect = scrollRegion.getBoundingClientRect();
-        const activeRect = active.getBoundingClientRect();
-        return {
-          activeDescendant: input.getAttribute("aria-activedescendant"),
-          focusedTag: document.activeElement?.tagName,
-          scrollTop: scrollRegion.scrollTop,
-          visible: activeRect.top >= menuRect.top - 1 && activeRect.bottom <= menuRect.bottom + 1,
-        };
+      const state = await page.waitForFunction(
+        ({ expectedId, composer }) => {
+          const input = document.querySelector(composer);
+          const target = document.getElementById(expectedId);
+          const menu = target?.closest<HTMLElement>(".slash-menu__scroll");
+          const active = document.querySelector(".slash-menu-item--active");
+          if (
+            !input ||
+            !target ||
+            !menu ||
+            !active ||
+            input.getAttribute("aria-activedescendant") !== expectedId
+          ) {
+            return null;
+          }
+          const menuRect = menu.getBoundingClientRect();
+          const targetRect = target.getBoundingClientRect();
+          if (targetRect.top < menuRect.top - 1 || targetRect.bottom > menuRect.bottom + 1) {
+            return null;
+          }
+          const activeRect = active.getBoundingClientRect();
+          return {
+            activeDescendant: input.getAttribute("aria-activedescendant"),
+            focusedTag: document.activeElement?.tagName,
+            scrollTop: menu.scrollTop,
+            visible: activeRect.top >= menuRect.top - 1 && activeRect.bottom <= menuRect.bottom + 1,
+          };
+        },
+        { expectedId: initiallyHidden.id, composer: COMPOSER },
+      );
+      const result = (await state.jsonValue())!;
+      expect(result).toMatchObject({
+        focusedTag: "TEXTAREA",
+        activeDescendant: initiallyHidden.id,
+        visible: true,
       });
-
-      expect(result.focusedTag).toBe("TEXTAREA");
-      expect(result.activeDescendant).toBe(initiallyHidden.id);
       expect(result.scrollTop).toBeGreaterThan(0);
-      expect(result.visible).toBe(true);
     });
   });
 });

@@ -1,9 +1,12 @@
-// Control UI tests cover session pull request actions in user-opened Details.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { BrowserContextOptions, Locator } from "playwright";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
-import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
+import {
+  CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
+  type ControlUiSessionPullRequest,
+} from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -63,6 +66,22 @@ const terminalFailure = {
   nextAction: "Check repository write access and retry.",
 };
 
+function pullRequest(
+  number: number,
+  fields: Partial<ControlUiSessionPullRequest> = {},
+): ControlUiSessionPullRequest {
+  return {
+    number,
+    owner: "openclaw",
+    repo: "openclaw",
+    branch: "fix/example",
+    title: `Example ${number}`,
+    url: `https://github.com/openclaw/openclaw/pull/${number}`,
+    state: "merged",
+    ...fields,
+  };
+}
+
 function publicationState(
   branch: string,
   details: { additions?: number; deletions?: number; createUrl?: string } = {},
@@ -108,15 +127,21 @@ const pollCount = (item: Locator) => expect.poll(() => item.count());
 const pollAttr = (item: Locator, name: string) => expect.poll(() => item.getAttribute(name));
 
 function publicationRequestKey(params: unknown): string {
-  if (
-    !params ||
-    typeof params !== "object" ||
-    !("idempotencyKey" in params) ||
-    typeof params.idempotencyKey !== "string"
-  ) {
+  const key = asNullableRecord(params)?.idempotencyKey;
+  if (typeof key !== "string") {
     throw new Error("Expected publication request to carry an idempotency key");
   }
-  return params.idempotencyKey;
+  return key;
+}
+
+async function capturePublication(page: Page, name: string) {
+  if (captureUiProof) {
+    await page.screenshot({
+      animations: "disabled",
+      fullPage: true,
+      path: path.join(publicationProofDir, name),
+    });
+  }
 }
 
 suite.define(() => {
@@ -134,37 +159,21 @@ suite.define(() => {
     }
     await emitPullRequests(gateway, watchedKey, {
       pullRequests: [
-        {
-          number: 103469,
-          owner: "openclaw",
-          repo: "openclaw",
+        pullRequest(103469, {
           branch: "claude/browser-tabs-tighter-header",
           title: "fix(macos): tighten the link-browser tab header",
-          url: "https://github.com/openclaw/openclaw/pull/103469",
           state: "open",
           additions: 4,
           deletions: 3,
           checks: { state: "passing", passed: 65, failed: 0, skipped: 31, running: 0 },
           checksUrl: "https://github.com/openclaw/openclaw/pull/103469/checks",
-        },
-        {
-          number: 103438,
-          owner: "openclaw",
-          repo: "openclaw",
+        }),
+        pullRequest(103438, {
           branch: "claude/browser-tabs-web-ui-756a64",
-          title: "feat(ui): link browser tabs into the web UI",
-          url: "https://github.com/openclaw/openclaw/pull/103438",
-          state: "merged",
-        },
-        {
-          number: 103200,
-          owner: "openclaw",
-          repo: "openclaw",
+        }),
+        pullRequest(103200, {
           branch: "claude/browser-tabs-web-ui-756a64",
-          title: "feat(ui): earlier landing on the same branch",
-          url: "https://github.com/openclaw/openclaw/pull/103200",
-          state: "merged",
-        },
+        }),
       ],
       rateLimited: true,
       status: "rate-limited",
@@ -197,7 +206,6 @@ suite.define(() => {
     if (captureUiProof) {
       await page.screenshot({ path: path.join(stackingProofDir, "ci-closed.png") });
     }
-    // The CI control opens the monitoring popover with per-state counts.
     await checksControl.click();
     const menu = openChip.locator(".chat-pr__checks-menu");
     await pollText(menu.locator(".chat-pr__checks-row--passed")).toContain("65");
@@ -208,13 +216,11 @@ suite.define(() => {
     if (captureUiProof) {
       await page.screenshot({ path: path.join(stackingProofDir, "ci-open.png") });
     }
-    // The visible disclosure cue tracks the native details state.
     const chevron = checksControl.locator("svg");
     expect(await chevron.count()).toBe(1);
     expect(await chevron.isVisible()).toBe(true);
     const openTransform = await chevron.evaluate((node) => getComputedStyle(node).transform);
     expect(await checksControl.isVisible()).toBe(true);
-    // The composer remains outside both popovers even at narrow sizes.
     await page.locator(".agent-chat__input textarea").click();
     await pollCount(openChip.locator(".chat-pr__checks[open]")).toBe(0);
     await expect
@@ -223,7 +229,6 @@ suite.define(() => {
     // Reopening Details does not reopen its dismissed CI popup.
     await openChatDetails(page);
     expect(await menu.isVisible()).toBe(false);
-    // Keyboard activation keeps the same disclosure behavior.
     await checksControl.focus();
     await page.keyboard.press("Enter");
     await expect.poll(() => menu.isVisible()).toBe(true);
@@ -235,7 +240,6 @@ suite.define(() => {
     await pollText(mergedChip.locator(".chat-pr__state")).toContain("Merged");
     await pollCount(mergedChip.locator(".chat-pr__warning")).toBe(0);
 
-    // PRs belong to the user-opened Details surface, never the composer stack.
     await page.locator(".chat").evaluate(finishElementAnimations);
     expect(await page.locator(".chat-footer .chat-prs").count()).toBe(0);
     expect(await page.locator(".chat-details .chat-pr").count()).toBe(3);
@@ -248,7 +252,6 @@ suite.define(() => {
       await page.screenshot({ path: path.join(stackingProofDir, "after-pr-discovery.png") });
     }
 
-    // Dismissal hides the chip for this session without a gateway round trip.
     await mergedChip.locator(".chat-pr__dismiss").click();
     await pollCount(chips).toBe(2);
     await pollText(chips.first().locator(".chat-pr__number")).toBe("openclaw/openclaw#103469");
@@ -286,15 +289,7 @@ suite.define(() => {
       const chips = stack.locator(".chat-pr");
       for (const count of [1, 2, 3]) {
         await emitPullRequests(gateway, watchedKey, {
-          pullRequests: Array.from({ length: count }, (_, index) => ({
-            number: index + 1,
-            owner: "openclaw",
-            repo: "openclaw",
-            branch: "fix/example",
-            title: `Example ${index + 1}`,
-            url: `https://github.com/openclaw/openclaw/pull/${index + 1}`,
-            state: "merged",
-          })),
+          pullRequests: Array.from({ length: count }, (_, index) => pullRequest(index + 1)),
           rateLimited: false,
           status: "ready",
         });
@@ -363,7 +358,6 @@ suite.define(() => {
       await pollCount(row).toBe(1);
       await pollText(row.locator(".chat-pr__repo")).toBe("openclaw");
       await pollText(row.locator(".chat-pr__branch")).toBe("claude/cloud-workers-live-events");
-      // Locale-formatted diff stats, sized like the PR the branch would open.
       await pollText(row.locator(".chat-pr__additions")).toBe("+2,819");
       await pollText(row.locator(".chat-pr__deletions")).toBe("−205");
       // While rate limited "no PR found" is unreliable, so the warning shows.
@@ -377,7 +371,6 @@ suite.define(() => {
       });
       await expect.poll(() => dismiss.isEnabled()).toBe(true);
 
-      // The compact offer stays inside Details at both viewport sizes.
       await page.setViewportSize(viewport);
       await page.locator(".chat").evaluate(finishElementAnimations);
       if (captureUiProof) {
@@ -473,15 +466,9 @@ suite.define(() => {
 
     await emitPullRequests(gateway, watchedKey, {
       pullRequests: [
-        {
-          number: 125200,
-          owner: "openclaw",
-          repo: "openclaw",
+        pullRequest(125200, {
           branch: "openclaw/reconciled-publication",
-          title: "Publish reconciled work",
-          url: "https://github.com/openclaw/openclaw/pull/125200",
-          state: "merged",
-        },
+        }),
       ],
       branch: {
         owner: "openclaw",
@@ -600,13 +587,7 @@ suite.define(() => {
         .getByRole("link", { name: "Create a pull request for openclaw/rejected-publication" })
         .count(),
     ).toBe(0);
-    if (captureUiProof) {
-      await page.screenshot({
-        animations: "disabled",
-        fullPage: true,
-        path: path.join(publicationProofDir, "03-publication-failed.png"),
-      });
-    }
+    await capturePublication(page, "03-publication-failed.png");
   });
 
   it("reuses the publication key after an unknown outcome and rotates it after failure", async () => {
@@ -659,13 +640,9 @@ suite.define(() => {
         sessions: [
           {
             contextTokens: null,
-            displayName: "Main",
             hasActiveRun: false,
             key: "main",
             kind: "direct",
-            label: "Main",
-            model: "gpt-5.5",
-            modelProvider: "openai",
             placement: { state: "active" },
             status: "done",
             totalTokens: 0,
@@ -693,12 +670,6 @@ suite.define(() => {
     await pollText(page.locator(".chat-pr__publication-outcome")).toContain(
       "Publication requested after workspace reconciliation.",
     );
-    if (captureUiProof) {
-      await page.screenshot({
-        animations: "disabled",
-        fullPage: true,
-        path: path.join(publicationProofDir, "04-cloud-idle-guidance.png"),
-      });
-    }
+    await capturePublication(page, "04-cloud-idle-guidance.png");
   });
 });
