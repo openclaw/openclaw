@@ -22,6 +22,7 @@ import {
 import {
   admitSqliteSchema,
   getAdmittedSqliteSchemaFacts,
+  invalidateSqliteSchemaFacts,
   isSqliteSchemaAdmissionCold,
 } from "../infra/sqlite-schema-facts.js";
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
@@ -281,41 +282,6 @@ function ensureAgentSchema(
 ): void {
   const warnings: string[] = [];
   const schemaSql = getOpenClawAgentMigrationSchema(targetVersion);
-  const metadata = readExistingAgentSchemaMeta(db);
-  assertExistingAgentSchemaOwner(metadata, agentId, pathname);
-  const originalVersion = assertSupportedAgentSchemaVersion(db, pathname);
-  const isEmptyDatabase = originalVersion === 0 && !hasAgentDatabaseApplicationSchema(db);
-  const schemaMigration =
-    originalVersion < targetVersion && (originalVersion > 0 || metadata !== null);
-  const identityMigration = targetVersion >= 18 && schemaMigration;
-  if (identityMigration && metadata?.schemaVersion !== originalVersion) {
-    throw new Error(
-      `Agent schema markers disagree for ${pathname}; repair ownership metadata before migration.`,
-    );
-  }
-  if (originalVersion > targetVersion) {
-    throw new Error(
-      `OpenClaw agent database ${pathname} uses schema version ${originalVersion}; expected at most ${targetVersion} for this migration.`,
-    );
-  }
-  if (!isEmptyDatabase && originalVersion < targetVersion) {
-    assertSupportedAgentMigrationSchemas(db, pathname, originalVersion);
-  }
-  const assertMigration = () => {
-    if (!schemaMigration) {
-      return;
-    }
-    if (identityMigration) {
-      maintenanceAuthority.assertAgentDatabaseMaintenanceAuthority();
-    }
-    getOpenClawDatabaseMaintenanceScope()?.assertAgentSchemaMigration({
-      agentId,
-      path: pathname,
-      foundVersion: originalVersion,
-      supportedVersion: targetVersion,
-    });
-  };
-  assertMigration();
   // FK enforcement must be off before BEGIN: PRAGMA foreign_keys is a silent
   // no-op inside a transaction, and legacy owner-table rebuilds would otherwise
   // cascade-delete their children. Steady-state enforcement is restored below.
@@ -323,8 +289,44 @@ function ensureAgentSchema(
   let created = false;
   try {
     const mutate = () => {
-      // Gateway or offline maintenance owns this store throughout schema preparation.
-      const previousVersion = originalVersion;
+      // A competing initializer may claim an unowned file while BEGIN waits.
+      // Read its authoritative owner and schema only after acquiring the writer lock.
+      invalidateSqliteSchemaFacts(db);
+      const metadata = readExistingAgentSchemaMeta(db);
+      assertExistingAgentSchemaOwner(metadata, agentId, pathname);
+      const previousVersion = assertSupportedAgentSchemaVersion(db, pathname);
+      const isEmptyDatabase = previousVersion === 0 && !hasAgentDatabaseApplicationSchema(db);
+      const schemaMigration =
+        previousVersion < targetVersion && (previousVersion > 0 || metadata !== null);
+      const identityMigration = targetVersion >= 18 && schemaMigration;
+      if (identityMigration && metadata?.schemaVersion !== previousVersion) {
+        throw new Error(
+          `Agent schema markers disagree for ${pathname}; repair ownership metadata before migration.`,
+        );
+      }
+      if (previousVersion > targetVersion) {
+        throw new Error(
+          `OpenClaw agent database ${pathname} uses schema version ${previousVersion}; expected at most ${targetVersion} for this migration.`,
+        );
+      }
+      if (!isEmptyDatabase && previousVersion < targetVersion) {
+        assertSupportedAgentMigrationSchemas(db, pathname, previousVersion);
+      }
+      const assertMigration = () => {
+        if (!schemaMigration) {
+          return;
+        }
+        if (identityMigration) {
+          maintenanceAuthority.assertAgentDatabaseMaintenanceAuthority();
+        }
+        getOpenClawDatabaseMaintenanceScope()?.assertAgentSchemaMigration({
+          agentId,
+          path: pathname,
+          foundVersion: previousVersion,
+          supportedVersion: targetVersion,
+        });
+      };
+      assertMigration();
       if (isEmptyDatabase && targetVersion === OPENCLAW_AGENT_SCHEMA_VERSION) {
         // Canonical creation has no legacy rows or definitions to converge or repair.
         db.exec(schemaSql);

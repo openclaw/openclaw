@@ -2305,6 +2305,50 @@ describe("openclaw agent database", () => {
     });
   });
 
+  it("preserves ownership when another initializer wins before the schema transaction", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    openOpenClawStateDatabase({ env });
+    const databasePath = path.join(stateDir, "shared.sqlite");
+    const { DatabaseSync } = requireNodeSqlite();
+    using pending = new DatabaseSync(databasePath);
+    using winner = new DatabaseSync(databasePath);
+    const exec = pending.exec.bind(pending);
+    let preparingSchema = false;
+    vi.spyOn(pending, "exec").mockImplementation((sql) => {
+      if (sql.includes("PRAGMA foreign_keys = OFF")) {
+        preparingSchema = true;
+      }
+      if (preparingSchema && sql.trimStart().startsWith("BEGIN IMMEDIATE")) {
+        preparingSchema = false;
+        // Commit a real competing initialization after preparation, before the writer lock.
+        ensureOpenClawAgentDatabaseSchema(winner, {
+          agentId: "worker-b",
+          env,
+          path: databasePath,
+          register: true,
+        });
+      }
+      return exec(sql);
+    });
+
+    expect(() =>
+      ensureOpenClawAgentDatabaseSchema(pending, {
+        agentId: "worker-a",
+        env,
+        path: databasePath,
+        register: true,
+      }),
+    ).toThrow("belongs to agent worker-b");
+    expect(inspectOpenClawAgentDatabaseOwner(databasePath)).toEqual({
+      status: "owned",
+      agentId: "worker-b",
+    });
+    expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([
+      expect.objectContaining({ agentId: "worker-b", path: databasePath }),
+    ]);
+  });
+
   it("serializes concurrent ownership claims for one unowned database", async () => {
     const stateDir = createTempStateDir();
     openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
