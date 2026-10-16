@@ -3,8 +3,8 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createNativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createNativeDeviceSettingsSnapshot } from "../../test-helpers/native-device-settings.ts";
-import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import { buildItems } from "./chat-thread.test-support.ts";
 import { createMessageGroupHarness } from "./components/chat-message-native.test-support.tsx";
@@ -75,14 +75,14 @@ it("renders a persisted standalone tool result as a Grant card without expanding
   };
   const [group] = groupMessages([{ kind: "message", key: "capture", message: result }]);
   // SAFETY: this transcript leaf consumes only the native settings owner.
-  const provider = createSolidApplicationContextProvider({
-    nativeDeviceSettings,
-  } as ApplicationContext);
-  const container = document.createElement("div");
+  const container = document.body.appendChild(
+    createApplicationContextProvider({ nativeDeviceSettings } as ApplicationContext),
+  );
+  onTestFinished(() => container.remove());
   if (!group || group.kind !== "group") {
     throw new Error("Expected a tool message group");
   }
-  const view = createMessageGroupHarness(container, { wrapper: provider.wrapper });
+  const view = createMessageGroupHarness(container);
   view.render(group, { assistantName: "OpenClaw", showReasoning: false });
   await settleToolBridges(container);
   expect(container.querySelector(".chat-permission-card")?.textContent).toContain(

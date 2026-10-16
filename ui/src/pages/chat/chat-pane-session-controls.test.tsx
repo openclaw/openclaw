@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, createSignal, merge, Show } from "solid-js";
+import { createComponent, createSignal, Show } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   ChatAccountSelection,
@@ -41,6 +41,7 @@ import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
 import { adoptStartedChatRun, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
 type ComposerControlsParams = Parameters<typeof renderChatPaneComposerControls>[0];
+type AccountSection = NonNullable<ReturnType<typeof renderChatModelAccountControl>>;
 
 function renderControls(
   state: ChatPageHost,
@@ -72,25 +73,23 @@ describe("chat account selection", () => {
       chatAccountSelection: selection,
       requestUpdate: () => draw(),
     };
-    const [section, setSection] = createSignal<ReturnType<typeof renderChatModelAccountControl>>();
+    let updateSection!: (section: AccountSection | undefined) => void;
     mountSolid(
-      () =>
-        createComponent(Show, {
-          get when() {
-            return section();
-          },
-          children: (activeSection) =>
-            createComponent(
-              ChatModelAccountSectionView,
-              merge(() => activeSection().viewProps(0)),
-            ),
-        }),
+      () => {
+        const [section, setSection] = createSignal<AccountSection>();
+        updateSection = setSection;
+        return (
+          <Show when={section()}>
+            {(activeSection) => <ChatModelAccountSectionView {...activeSection().viewProps(0)} />}
+          </Show>
+        );
+      },
       { container },
     );
     const onSelect = vi.fn(async () => true);
     const onManage = vi.fn();
     const draw = () => {
-      setSection(
+      updateSection(
         renderChatModelAccountControl({
           owner: state,
           client: state.client,
