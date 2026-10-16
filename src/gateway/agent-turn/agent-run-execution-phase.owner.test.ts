@@ -68,6 +68,25 @@ vi.mock("./agent-run-dispatch.js", () => ({
   dispatchAgentRunFromGateway,
 }));
 
+function createGate() {
+  const entered = createDeferred();
+  const finish = createDeferred();
+  return {
+    entered: entered.promise,
+    resolve: finish.resolve,
+    wait: () => {
+      entered.resolve();
+      return finish.promise;
+    },
+  };
+}
+
+function expectUncalled(...spies: unknown[]) {
+  for (const spy of spies) {
+    expect(spy).not.toHaveBeenCalled();
+  }
+}
+
 function createExecution(
   options: {
     aborted?: boolean;
@@ -156,6 +175,32 @@ function createExecution(
       releaseCronContinuationClaimWithRecovery: async () => true,
     } as unknown as Parameters<typeof startAgentRunExecution>[0],
   };
+}
+
+function registerExecution(
+  execution: ReturnType<typeof createExecution>,
+  identity: string,
+  overrides: Pick<Parameters<typeof registerChatAbortController>[0], "sessionId" | "agentId"> = {
+    sessionId: `${identity}-session`,
+    agentId: "main",
+  },
+) {
+  const controllers = new Map<string, ChatAbortControllerEntry>();
+  const registration = registerChatAbortController({
+    chatAbortControllers: controllers,
+    runId: execution.params.runId,
+    sessionKey: `agent:main:${identity}`,
+    ...overrides,
+    kind: "agent",
+    operationalRunInstance: execution.params.prepared.operationalRunInstance,
+    timeoutMs: 60_000,
+  });
+  if (!registration.registered) {
+    throw new Error("Expected an owned execution registration");
+  }
+  execution.params.prepared.activeRunAbort = registration;
+  execution.params.context.chatAbortControllers = controllers;
+  return { controllers, registration, entry: registration.entry };
 }
 
 function createVisibleExecution() {
@@ -258,23 +303,13 @@ describe("startAgentRunExecution Gateway ownership", () => {
     "retains raw disposal after its real terminal producer settles %s",
     async (outcome) => {
       const execution = createExecution();
-      const controllers = new Map<string, ChatAbortControllerEntry>();
       const instance = createOperationalRunInstanceRef(execution.params.runId);
-      const registration = registerChatAbortController({
-        chatAbortControllers: controllers,
-        runId: execution.params.runId,
-        sessionKey: "agent:main:composed-terminal-disposal",
-        sessionId: "composed-terminal-disposal",
-        operationalRunInstance: instance,
-        kind: "agent",
-        timeoutMs: 60_000,
-      });
-      if (!registration.entry) {
-        throw new Error("Expected the composed execution registration");
-      }
-      const entry = registration.entry;
-      execution.params.prepared.activeRunAbort = registration;
       execution.params.prepared.operationalRunInstance = instance;
+      const { controllers, registration, entry } = registerExecution(
+        execution,
+        "composed-terminal-disposal",
+        { sessionId: "composed-terminal-disposal" },
+      );
       execution.params.lifecycleGeneration = getAgentEventLifecycleGeneration();
       Object.assign(
         execution.params.context,
@@ -288,10 +323,8 @@ describe("startAgentRunExecution Gateway ownership", () => {
       execution.params.prepared.activeGatewayWorkAdmission = admission;
       const commandEntered = createDeferred();
       const finishCommand = createDeferred();
-      const saveEntered = createDeferred();
-      const finishSave = createDeferred();
-      const disposalEntered = createDeferred();
-      const finishDisposal = createDeferred();
+      const save = createGate();
+      const disposal = createGate();
       agentCommand.mockImplementationOnce(async () => {
         commandEntered.resolve();
         await finishCommand.promise;
@@ -307,8 +340,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
       );
       const cleanupFault = new Error("Synthetic unfinished runtime cleanup");
       execution.runtimeRelease.mockImplementation(async () => {
-        disposalEntered.resolve();
-        await finishDisposal.promise;
+        await disposal.wait();
         if (outcome === "cleanup failure") {
           throw cleanupFault;
         }
@@ -323,7 +355,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
         const native = (database = new DatabaseSync(":memory:"));
         let releaseGeneration: (() => Promise<void>) | undefined = undefined;
         onTestFinished(async () => {
-          finishDisposal.resolve();
+          disposal.resolve();
           await releaseGeneration?.().catch(() => {});
           await resources.release().catch(() => {});
           if (native.isOpen) {
@@ -332,8 +364,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
         });
         const nativeDispose = async () => {
           nativeDisposals++;
-          disposalEntered.resolve();
-          await finishDisposal.promise;
+          await disposal.wait();
           native.close();
           throw callbackFault;
         };
@@ -386,7 +417,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
       try {
         await Promise.race([
           commandEntered.promise,
-          disposalEntered.promise.then(() => {
+          disposal.entered.then(() => {
             throw new Error("Execution entered disposal before command dispatch");
           }),
         ]);
@@ -394,33 +425,31 @@ describe("startAgentRunExecution Gateway ownership", () => {
         expect(
           producer?.handoff(async (producerCompleted) => {
             await producerCompleted;
-            saveEntered.resolve();
-            await finishSave.promise;
+            await save.wait();
           }),
         ).toBe(true);
         finishCommand.resolve();
         await Promise.race([
-          saveEntered.promise,
-          disposalEntered.promise.then(() => {
+          save.entered,
+          disposal.entered.then(() => {
             throw new Error("Execution entered disposal before its terminal save");
           }),
         ]);
         expect(execution.runtimeRelease).not.toHaveBeenCalled();
         expect(entry.executionSettlement?.status).toBe("pending");
-        finishSave.resolve();
-        await disposalEntered.promise;
-        expect(entry.resolveTerminalProducer?.()).toBeUndefined();
+        save.resolve();
+        await disposal.entered;
         expect(entry.registrationCleanupRequested).toBe(true);
         expect(entry.projectSessionActive).toBe(false);
+        expect(entry.executionSettlement?.status).toBe("pending");
+        expect(entry.resolveTerminalProducer?.()).toBeUndefined();
         expect(registration.markExecutionStarted()).toBe(false);
         expect(controllers.get(execution.params.runId)).toBe(entry);
-        expect(entry.executionSettlement?.status).toBe("pending");
-        expect(execution.callerRelease).not.toHaveBeenCalled();
-        expect(finished).not.toHaveBeenCalled();
+        expectUncalled(execution.callerRelease, finished);
         if (database) {
           expect(database.isOpen).toBe(true);
         }
-        finishDisposal.resolve();
+        disposal.resolve();
         if (outcome === "completed cleanup failure") {
           expect(collectNestedErrorCandidates(await observed)).toContain(callbackFault);
           expect(database?.isOpen).toBe(false);
@@ -439,8 +468,8 @@ describe("startAgentRunExecution Gateway ownership", () => {
         expect(execution.callerRelease).toHaveBeenCalledOnce();
       } finally {
         finishCommand.resolve();
-        finishSave.resolve();
-        finishDisposal.resolve();
+        save.resolve();
+        disposal.resolve();
         await observed;
         admission.release();
         controllers.clear();
@@ -450,51 +479,31 @@ describe("startAgentRunExecution Gateway ownership", () => {
 
   it("retains an inactive exact run owner after prewriter cleanup until disposal settles", async () => {
     const execution = createExecution();
-    const controllers = new Map<string, ChatAbortControllerEntry>();
-    const registration = registerChatAbortController({
-      chatAbortControllers: controllers,
-      runId: execution.params.runId,
-      sessionId: "retained-disposal-session",
-      sessionKey: "agent:main:retained-disposal",
-      agentId: "main",
-      kind: "agent",
-      operationalRunInstance: execution.params.prepared.operationalRunInstance,
-      timeoutMs: 60_000,
-    });
-    if (!registration.registered) {
-      throw new Error("Expected an owned execution registration");
-    }
+    const { controllers, registration } = registerExecution(execution, "retained-disposal");
     registration.controller.abort();
-    execution.params.prepared.activeRunAbort = registration;
-    execution.params.context.chatAbortControllers = controllers;
     const admission = await beginSessionWorkAdmission({
       scope: "gateway-retained-disposal",
       identities: [registration.entry.sessionKey, registration.entry.sessionId],
       assertAllowed: () => {},
     });
     execution.params.prepared.activeGatewayWorkAdmission = admission;
-    const disposalEntered = createDeferred();
-    const allowDisposal = createDeferred();
-    execution.runtimeRelease.mockImplementation(async () => {
-      disposalEntered.resolve();
-      await allowDisposal.promise;
-    });
+    const disposal = createGate();
+    execution.runtimeRelease.mockImplementation(disposal.wait);
     const completion = startAgentRunExecution(execution.params);
     try {
-      await disposalEntered.promise;
+      await disposal.entered;
       expect(registration.entry.registrationCleanupRequested).toBe(true);
+      expect(registration.entry.projectSessionActive).toBe(false);
       expect(admission.isActive()).toBe(false);
       expect(controllers.get(execution.params.runId)).toBe(registration.entry);
-      expect(registration.entry.projectSessionActive).toBe(false);
       expect(isChatAbortControllerEntryAbortable(registration.entry)).toBe(false);
       expect(registration.markExecutionStarted()).toBe(false);
-      expect(dispatchAgentRunFromGateway).not.toHaveBeenCalled();
-      expect(execution.callerRelease).not.toHaveBeenCalled();
-      allowDisposal.resolve();
+      expectUncalled(dispatchAgentRunFromGateway, execution.callerRelease);
+      disposal.resolve();
       await completion;
       expect(controllers.has(execution.params.runId)).toBe(false);
     } finally {
-      allowDisposal.resolve();
+      disposal.resolve();
       await completion;
       admission.release();
     }
@@ -504,22 +513,8 @@ describe("startAgentRunExecution Gateway ownership", () => {
     const execution = createExecution();
     setRuntimeConfigSnapshot(execution.params.cfg);
     onTestFinished(() => clearRuntimeConfigSnapshot());
-    const controllers = new Map<string, ChatAbortControllerEntry>();
-    const registration = registerChatAbortController({
-      chatAbortControllers: controllers,
-      runId: execution.params.runId,
-      sessionId: "self-disposal-session",
-      sessionKey: "agent:main:self-disposal",
-      agentId: "main",
-      kind: "agent",
-      operationalRunInstance: execution.params.prepared.operationalRunInstance,
-      timeoutMs: 60_000,
-    });
-    if (!registration.registered) {
-      throw new Error("Expected an owned execution registration");
-    }
+    const { controllers, registration } = registerExecution(execution, "self-disposal");
     registration.controller.abort();
-    execution.params.prepared.activeRunAbort = registration;
     const context = createChatAbortContext({
       ...execution.params.context,
       chatAbortControllers: controllers,
@@ -586,46 +581,41 @@ describe("startAgentRunExecution Gateway ownership", () => {
     }
   });
 
-  it.each([true])(
-    "preserves access across liveness and invalidates creation (new session: %s)",
-    async (isNewSession) => {
-      const execution = createVisibleExecution();
-      execution.params.isNewSession = isNewSession;
-      const publish = sessionChange.emitSessionsChanged;
-      const notices: Array<{ reason: string; accessChanges: number }> = [];
-      const publisher = vi
-        .spyOn(sessionChange, "emitSessionsChanged")
-        .mockImplementation((...args) => {
-          const before = readGatewayAccessRevision();
-          publish(...args);
-          notices.push({
-            reason: args[1].reason,
-            accessChanges: readGatewayAccessRevision() - before,
-          });
+  it("preserves access across liveness and invalidates creation", async () => {
+    const execution = createVisibleExecution();
+    execution.params.isNewSession = true;
+    const publish = sessionChange.emitSessionsChanged;
+    const notices: Array<{ reason: string; accessChanges: number }> = [];
+    const publisher = vi
+      .spyOn(sessionChange, "emitSessionsChanged")
+      .mockImplementation((...args) => {
+        const before = readGatewayAccessRevision();
+        publish(...args);
+        notices.push({
+          reason: args[1].reason,
+          accessChanges: readGatewayAccessRevision() - before,
         });
-      dispatchAgentRunFromGateway.mockImplementationOnce(async (dispatch) => {
-        await dispatch.ingressOpts.onExecutionStarted();
-        dispatch.cleanupAbortController();
       });
+    dispatchAgentRunFromGateway.mockImplementationOnce(async (dispatch) => {
+      await dispatch.ingressOpts.onExecutionStarted();
+      dispatch.cleanupAbortController();
+    });
 
-      try {
-        await startAgentRunExecution(execution.params);
+    try {
+      await startAgentRunExecution(execution.params);
 
-        expect(dispatchAgentRunFromGateway).toHaveBeenCalledOnce();
-        expect(notices).toEqual([
-          ...(isNewSession ? [{ reason: "create", accessChanges: expect.any(Number) }] : []),
-          { reason: "send", accessChanges: 0 },
-          { reason: "agent.run.started", accessChanges: 0 },
-          { reason: "agent.input.settled", accessChanges: 0 },
-        ]);
-        if (isNewSession) {
-          expect(notices[0]?.accessChanges).toBeGreaterThan(0);
-        }
-      } finally {
-        publisher.mockRestore();
-      }
-    },
-  );
+      expect(dispatchAgentRunFromGateway).toHaveBeenCalledOnce();
+      expect(notices).toEqual([
+        { reason: "create", accessChanges: expect.any(Number) },
+        { reason: "send", accessChanges: 0 },
+        { reason: "agent.run.started", accessChanges: 0 },
+        { reason: "agent.input.settled", accessChanges: 0 },
+      ]);
+      expect(notices[0]?.accessChanges).toBeGreaterThan(0);
+    } finally {
+      publisher.mockRestore();
+    }
+  });
 
   it.each<{
     name: string;
@@ -825,13 +815,9 @@ describe("startAgentRunExecution Gateway ownership", () => {
   ] as const)(
     "settles an undispatched $ending followup only after cleanup (registration: $registration)",
     async ({ ending, registration }) => {
-      const settlementEntered = createDeferred();
-      const finishSettlement = createDeferred();
+      const settlement = createGate();
       const execution = createExecution({
-        pendingInputSettlement: async () => {
-          settlementEntered.resolve();
-          await finishSettlement.promise;
-        },
+        pendingInputSettlement: settlement.wait,
         aborted: ending === "aborted",
         ...(ending === "failed"
           ? {
@@ -871,19 +857,13 @@ describe("startAgentRunExecution Gateway ownership", () => {
         }
         return await run();
       };
-      const recoveryEntered = createDeferred();
-      const releaseRecovery = createDeferred();
-      const disposalEntered = createDeferred();
-      const finishDisposal = createDeferred();
+      const recovery = createGate();
+      const disposal = createGate();
       execution.params.releaseCronContinuationClaimWithRecovery = async () => {
-        recoveryEntered.resolve();
-        await releaseRecovery.promise;
+        await recovery.wait();
         return true;
       };
-      execution.runtimeRelease.mockImplementation(async () => {
-        disposalEntered.resolve();
-        await finishDisposal.promise;
-      });
+      execution.runtimeRelease.mockImplementation(disposal.wait);
       const finishExecution = vi.spyOn(owner, "finishExecution");
       const replyObserved = vi.fn();
       const reply = owner.take().then((result) => {
@@ -894,30 +874,23 @@ describe("startAgentRunExecution Gateway ownership", () => {
       const finished = vi.fn();
       const completion = startAgentRunExecution(execution.params).then(finished);
       try {
-        await Promise.race([recoveryEntered.promise, completion]);
-        expect(dispatchAgentRunFromGateway).not.toHaveBeenCalled();
-        expect(execution.params.io.emitFinal).not.toHaveBeenCalled();
+        await Promise.race([recovery.entered, completion]);
+        expectUncalled(dispatchAgentRunFromGateway, execution.params.io.emitFinal);
         expect(execution.params.context.dedupe.size).toBe(0);
-        expect(finishExecution).not.toHaveBeenCalled();
-        expect(replyObserved).not.toHaveBeenCalled();
-        expect(execution.abortCleanup).not.toHaveBeenCalled();
-        releaseRecovery.resolve();
-        await Promise.race([settlementEntered.promise, completion]);
-        expect(execution.params.io.emitFinal).not.toHaveBeenCalled();
+        expectUncalled(finishExecution, replyObserved, execution.abortCleanup);
+        recovery.resolve();
+        await Promise.race([settlement.entered, completion]);
+        expectUncalled(execution.params.io.emitFinal, execution.abortCleanup);
         expect(execution.params.context.dedupe.size).toBe(0);
-        expect(execution.abortCleanup).not.toHaveBeenCalled();
-        finishSettlement.resolve();
-        await Promise.race([disposalEntered.promise, completion]);
+        settlement.resolve();
+        await Promise.race([disposal.entered, completion]);
         expect(execution.params.io.emitFinal).toHaveBeenCalledOnce();
         expect(execution.params.context.dedupe.size).toBe(1);
         expect(execution.abortCleanup).toHaveBeenCalledOnce();
         expect(execution.gatewayRelease).toHaveBeenCalledOnce();
         expect(execution.runtimeRelease).toHaveBeenCalledOnce();
-        expect(execution.callerRelease).not.toHaveBeenCalled();
-        expect(finishExecution).not.toHaveBeenCalled();
-        expect(replyObserved).not.toHaveBeenCalled();
-        expect(finished).not.toHaveBeenCalled();
-        finishDisposal.resolve();
+        expectUncalled(execution.callerRelease, finishExecution, replyObserved, finished);
+        disposal.resolve();
         await completion;
         expect(finished).toHaveBeenCalledOnce();
         expect(execution.callerRelease).toHaveBeenCalledOnce();
@@ -937,9 +910,9 @@ describe("startAgentRunExecution Gateway ownership", () => {
           );
         }
       } finally {
-        releaseRecovery.resolve();
-        finishSettlement.resolve();
-        finishDisposal.resolve();
+        recovery.resolve();
+        settlement.resolve();
+        disposal.resolve();
         await completion.catch(() => {});
         owner.close();
       }

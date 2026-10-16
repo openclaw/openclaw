@@ -9,17 +9,45 @@ import type { DedupeEntry } from "../server-shared.js";
 import { getAgentJobSession, setGatewayDedupeEntry, waitForAgentJob } from "./agent-job.js";
 
 let runSequence = 0;
+const originalSession = {
+  sessionKey: "agent:main:original",
+  sessionId: "original-session",
+  agentId: "main",
+};
+type DedupeOptions = Partial<Omit<Parameters<typeof setGatewayDedupeEntry>[0], "key" | "entry">> & {
+  ts?: number;
+  ok?: boolean;
+};
+
+function publish(
+  runId: string,
+  source: "agent" | "chat",
+  payload: Record<string, unknown>,
+  {
+    ts = Date.now(),
+    ok = true,
+    dedupe = new Map<string, DedupeEntry>(),
+    ...options
+  }: DedupeOptions = {},
+) {
+  setGatewayDedupeEntry({
+    dedupe,
+    key: `${source}:${runId}`,
+    entry: { ts, ok, payload: { runId, ...payload } },
+    ...options,
+  });
+}
+
+function emitLifecycle(runId: string, data: Record<string, unknown>) {
+  emitAgentEvent({ runId, stream: "lifecycle", data });
+}
 
 describe("waitForAgentJob settled execution", () => {
   it("observes completed hidden refreshes without treating acceptance as completion", async () => {
     const runId = `progress-card-refresh:completed-${runSequence++}`;
     const dedupe = new Map<string, DedupeEntry>();
     for (const status of ["accepted", "completed"] as const) {
-      setGatewayDedupeEntry({
-        dedupe,
-        key: `chat:${runId}`,
-        entry: { ts: Date.now(), ok: true, payload: { runId, status } },
-      });
+      publish(runId, "chat", { status }, { dedupe });
       const result = await waitForAgentJob({ runId, source: "chat", timeoutMs: 0 });
       if (status === "accepted") {
         expect(result).toBeNull();
@@ -107,17 +135,13 @@ describe("waitForAgentJob settled execution", () => {
         ? waitForAgentJob({ runId, source, timeoutMs: 60_000 })
         : undefined;
       const recordLifecycle = () =>
-        emitAgentEvent({
-          runId,
-          stream: "lifecycle",
-          data: {
-            phase: "end",
-            executionSettled: true,
-            startedAt: 100,
-            endedAt: 200,
-            terminalReply,
-            terminalReceipt,
-          },
+        emitLifecycle(runId, {
+          phase: "end",
+          executionSettled: true,
+          startedAt: 100,
+          endedAt: 200,
+          terminalReply,
+          terminalReceipt,
         });
       if (lifecycleFirst) {
         recordLifecycle();
@@ -173,12 +197,7 @@ describe("waitForAgentJob settled execution", () => {
       data: { phase: "end", executionSettled: true, startedAt: 100, endedAt: 200 },
     });
     if (change === "new attempt") {
-      setGatewayDedupeEntry({
-        dedupe,
-        key: `agent:${runId}`,
-        startNewAttempt: true,
-        entry: { ts: Date.now(), ok: true, payload: { runId, status: "accepted" } },
-      });
+      publish(runId, "agent", { status: "accepted" }, { dedupe, startNewAttempt: true });
     } else if (change === "expired lifecycle") {
       await vi.advanceTimersByTimeAsync(10 * 60_000 + 1);
     }
@@ -189,12 +208,7 @@ describe("waitForAgentJob settled execution", () => {
           ? { ...original, lifecycleGeneration: "replacement-generation" }
           : original;
     const publishedAt = Date.now();
-    setGatewayDedupeEntry({
-      dedupe,
-      key: `agent:${runId}`,
-      session,
-      entry: { ts: publishedAt, ok: true, payload: { runId, status: "ok" } },
-    });
+    publish(runId, "agent", { status: "ok" }, { dedupe, session, ts: publishedAt });
     await expect(waitForAgentJob({ runId, source: "agent", timeoutMs: 0 })).resolves.toMatchObject({
       status: "ok",
       startedAt: undefined,
@@ -213,9 +227,7 @@ describe("waitForAgentJob settled execution", () => {
         emitAgentEvent({
           runId,
           stream: "lifecycle",
-          sessionKey: "agent:main:original",
-          sessionId: "original-session",
-          agentId: "main",
+          ...originalSession,
           data: { phase: "end", executionSettled: true, endedAt: 100, ...outcome, terminalReply },
         });
       const waiter = lifecycleFirst
@@ -230,11 +242,7 @@ describe("waitForAgentJob settled execution", () => {
         agentId: "main",
       });
       try {
-        setGatewayDedupeEntry({
-          dedupe: new Map<string, DedupeEntry>(),
-          key: `chat:${runId}`,
-          entry: { ts: Date.now(), ok: true, payload: { runId, status: "ok", endedAt: 200 } },
-        });
+        publish(runId, "chat", { status: "ok", endedAt: 200 });
       } finally {
         clearAgentRunContext(runId);
       }
@@ -263,28 +271,16 @@ describe("waitForAgentJob settled execution", () => {
       const runId = `chat-yielded-execution-${runSequence++}`;
       await waitForAgentJob({ runId, source: "chat", timeoutMs: 0 });
       emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 100 } });
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: {
-          phase: "end",
-          startedAt: 100,
-          endedAt: 200,
-          yielded: true,
-          livenessState: "paused",
-          executionSettled: true,
-        },
+      emitLifecycle(runId, {
+        phase: "end",
+        startedAt: 100,
+        endedAt: 200,
+        yielded: true,
+        livenessState: "paused",
+        executionSettled: true,
       });
       await expect(waitForAgentJob({ runId, source: "chat", timeoutMs: 0 })).resolves.toBeNull();
-      setGatewayDedupeEntry({
-        dedupe: new Map<string, DedupeEntry>(),
-        key: `chat:${runId}`,
-        entry: {
-          ts: Date.now(),
-          ok: status === "ok",
-          payload: { runId, status, startedAt: 100, endedAt: 300 },
-        },
-      });
+      publish(runId, "chat", { status, startedAt: 100, endedAt: 300 }, { ok: status === "ok" });
       await expect(waitForAgentJob({ runId, source: "chat", timeoutMs: 0 })).resolves.toMatchObject(
         {
           status,
@@ -301,39 +297,32 @@ describe("waitForAgentJob settled execution", () => {
     async (otherBinding) => {
       const runId = `terminal-companion-binding-${runSequence++}`;
       const session = {
-        sessionKey: "agent:main:original",
-        sessionId: "original-session",
-        agentId: "main",
+        ...originalSession,
         lifecycleGeneration: getAgentEventLifecycleGeneration(),
       };
       const dedupe = new Map<string, DedupeEntry>();
-      setGatewayDedupeEntry({
-        dedupe,
-        key: `agent:${runId}`,
-        session,
-        entry: {
-          ts: 100,
-          ok: false,
-          payload: { runId, status: "timeout", stopReason: "timeout", timeoutPhase: "provider" },
+      publish(
+        runId,
+        "agent",
+        { status: "timeout", stopReason: "timeout", timeoutPhase: "provider" },
+        { dedupe, session, ts: 100, ok: false },
+      );
+      publish(
+        runId,
+        "chat",
+        {
+          status: "ok",
+          terminalReply: { disposition: "visible", text: "Other producer's reply" },
         },
-      });
-      setGatewayDedupeEntry({
-        dedupe,
-        key: `chat:${runId}`,
-        session:
-          otherBinding === "unbound"
-            ? undefined
-            : { ...session, sessionKey: "agent:main:other", sessionId: "other-session" },
-        entry: {
+        {
+          dedupe,
           ts: 200,
-          ok: true,
-          payload: {
-            runId,
-            status: "ok",
-            terminalReply: { disposition: "visible", text: "Other producer's reply" },
-          },
+          session:
+            otherBinding === "unbound"
+              ? undefined
+              : { ...session, sessionKey: "agent:main:other", sessionId: "other-session" },
         },
-      });
+      );
       const selected = await waitForAgentJob({ runId, timeoutMs: 0 });
       expect(selected).toMatchObject({ status: "timeout", session });
       expect(selected?.terminalReply).toBeUndefined();
@@ -345,9 +334,7 @@ describe("waitForAgentJob settled execution", () => {
     async (replacement) => {
       const runId = `terminal-session-binding-${runSequence++}`;
       const original = {
-        sessionKey: "agent:main:original",
-        sessionId: "original-session",
-        agentId: "main",
+        ...originalSession,
         lifecycleGeneration: getAgentEventLifecycleGeneration(),
       };
       const successor = {
@@ -356,34 +343,18 @@ describe("waitForAgentJob settled execution", () => {
         sessionId: "successor-session",
       };
       const dedupe = new Map<string, DedupeEntry>();
-      const key = `agent:${runId}`;
       const session = { ...original };
       registerAgentRunContext(runId, replacement === "live registration" ? successor : original);
       try {
-        setGatewayDedupeEntry({
-          dedupe,
-          key,
-          session,
-          entry: { ts: Date.now(), ok: true, payload: { runId, status: "ok", endedAt: 100 } },
-        });
+        publish(runId, "agent", { status: "ok", endedAt: 100 }, { dedupe, session });
         if (replacement === "live registration") {
           expect(getAgentJobSession(runId)).toEqual(original);
         }
         const selected = waitForAgentJob({ runId, timeoutMs: 0 });
         if (replacement === "selected cache entry") {
           registerAgentRunContext(runId, successor);
-          setGatewayDedupeEntry({
-            dedupe,
-            key,
-            startNewAttempt: true,
-            entry: { ts: Date.now(), ok: true, payload: { runId, status: "accepted" } },
-          });
-          setGatewayDedupeEntry({
-            dedupe,
-            key,
-            session: successor,
-            entry: { ts: Date.now(), ok: true, payload: { runId, status: "ok", endedAt: 200 } },
-          });
+          publish(runId, "agent", { status: "accepted" }, { dedupe, startNewAttempt: true });
+          publish(runId, "agent", { status: "ok", endedAt: 200 }, { dedupe, session: successor });
           expect(getAgentJobSession(runId)).toEqual(successor);
         }
         await expect(selected).resolves.toMatchObject({
@@ -398,31 +369,31 @@ describe("waitForAgentJob settled execution", () => {
   );
 
   it.each([
-    {
-      label: "preflight failure",
-      phase: "error",
-      result: new AgentHarnessPreflightError("execution preparation failed"),
-      termination: {},
-      expected: { status: "error", error: "execution preparation failed" },
-    },
-    {
-      label: "explicit cancellation",
-      phase: "error",
-      result: new Error("execution cancelled"),
-      termination: { aborted: true, stopReason: "rpc" },
-      expected: { status: "error", stopReason: "rpc" },
-    },
-    {
-      label: "bare abort from a settled backend",
-      phase: "end",
-      result: { meta: { aborted: true } },
-      termination: {},
-      expected: { status: "error", stopReason: "aborted" },
-    },
-    {
-      label: "provider timeout",
-      phase: "end",
-      result: {
+    [
+      "preflight failure",
+      "error",
+      new AgentHarnessPreflightError("execution preparation failed"),
+      {},
+      { status: "error", error: "execution preparation failed" },
+    ],
+    [
+      "explicit cancellation",
+      "error",
+      new Error("execution cancelled"),
+      { aborted: true, stopReason: "rpc" },
+      { status: "error", stopReason: "rpc" },
+    ],
+    [
+      "bare abort from a settled backend",
+      "end",
+      { meta: { aborted: true } },
+      {},
+      { status: "error", stopReason: "aborted" },
+    ],
+    [
+      "provider timeout",
+      "end",
+      {
         meta: {
           aborted: true,
           stopReason: "timeout",
@@ -430,19 +401,13 @@ describe("waitForAgentJob settled execution", () => {
           providerStarted: true,
         },
       },
-      termination: {},
-      expected: { status: "timeout", stopReason: "timeout", timeoutPhase: "provider" },
-    },
-    {
-      label: "yielded execution",
-      phase: "end",
-      result: { meta: { yielded: true } },
-      termination: {},
-      expected: { status: "ok", yielded: true },
-    },
+      {},
+      { status: "timeout", stopReason: "timeout", timeoutPhase: "provider" },
+    ],
+    ["yielded execution", "end", { meta: { yielded: true } }, {}, { status: "ok", yielded: true }],
   ] as const)(
-    "publishes $label without retry grace",
-    async ({ phase, result, termination, expected }) => {
+    "publishes %s without retry grace",
+    async (_label, phase, result, termination, expected) => {
       const runId = `settled-execution-${runSequence++}`;
       const waiter = waitForAgentJob({ runId, timeoutMs: 60_000 });
       const lifecycle = createAgentLifecycleTerminalBackstop({

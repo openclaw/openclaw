@@ -18,6 +18,52 @@ import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
 import { createAgentTurnService } from "./agent-turn-service.js";
 import { createAgentTurnIo } from "./io.js";
 
+type PreflightParams = Parameters<typeof prepareAgentRequestPreflight>[0];
+async function runRequest(
+  request: PreflightParams["request"],
+  getRuntimeConfig: PreflightParams["context"]["getRuntimeConfig"] = () => ({}),
+  backend?: boolean,
+) {
+  const respond = vi.fn();
+  const result = await prepareAgentRequestPreflight({
+    request,
+    context: { getRuntimeConfig, dedupe: new Map() },
+    client: backend
+      ? { connect: { client: { mode: "backend" }, scopes: ["operator.write"] } }
+      : backend === false
+        ? undefined
+        : null,
+    io: createAgentTurnIo(respond),
+  } as never);
+  return { respond, result };
+}
+
+function expectRejected(
+  { result, respond }: { result: unknown; respond: ReturnType<typeof vi.fn> },
+  details: Record<string, unknown> = { code: "INVALID_REQUEST" },
+) {
+  expect(result).toBeUndefined();
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(details));
+}
+
+async function expectCachedReplay(
+  replayed: Awaited<ReturnType<typeof runPreflight>>,
+  pending = false,
+) {
+  expect(replayed.result).toBeDefined();
+  await replayed.replay();
+  expect(replayed.respond).toHaveBeenCalledWith(
+    true,
+    expect.objectContaining({
+      runId: "gateway-run",
+      status: "in_flight",
+      ...(pending ? { admissionPending: true } : {}),
+    }),
+    undefined,
+    expect.objectContaining({ cached: true, runId: "gateway-run" }),
+  );
+}
+
 describe("agent database admission preflight", () => {
   afterEach(() => recordAgentDatabaseAdmissions([]));
 
@@ -38,17 +84,11 @@ describe("agent database admission preflight", () => {
               pending: state === "pending",
             });
       recordAgentDatabaseAdmissions([refusal]);
-      const respond = vi.fn();
-      const result = await prepareAgentRequestPreflight({
-        request: {
-          message: "continue",
-          agentId: "worker",
-          idempotencyKey: "inspection-retry",
-        },
-        context: { getRuntimeConfig: () => ({}), dedupe: new Map() },
-        client: null,
-        io: createAgentTurnIo(respond),
-      } as never);
+      const { respond, result } = await runRequest({
+        message: "continue",
+        agentId: "worker",
+        idempotencyKey: "inspection-retry",
+      });
 
       expect(result).toBeUndefined();
       expect(respond).toHaveBeenCalledWith(false, undefined, {
@@ -167,6 +207,15 @@ async function runPreflight(
   return { respond, result, replay };
 }
 
+function runCollector(options: Parameters<typeof runPreflight>[2] = {}) {
+  return runPreflight({ type: "object" }, true, {
+    enabled: true,
+    backend: true,
+    register: true,
+    ...options,
+  });
+}
+
 describe("agent request Swarm preflight", () => {
   afterEach(async () => {
     await closeSwarmScheduler();
@@ -247,22 +296,17 @@ describe("agent request Swarm preflight", () => {
           ),
       );
       vi.mocked(acpSessionMeta.readAcpSessionMetaForEntries).mockResolvedValue([sourceAcp ?? null]);
-      const result = await prepareAgentRequestPreflight({
-        request: {
-          message: "Worker progress",
-          sessionKey: "agent:main:root",
-          idempotencyKey: "coordination-run",
-          inputProvenance: {
-            kind: "inter_session",
-            sourceSessionKey: sourceKey,
-            sourceTool: "sessions_send",
-            sourceRole: "subagent",
-          },
+      const { result } = await runRequest({
+        message: "Worker progress",
+        sessionKey: "agent:main:root",
+        idempotencyKey: "coordination-run",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: sourceKey,
+          sourceTool: "sessions_send",
+          sourceRole: "subagent",
         },
-        context: { getRuntimeConfig: () => ({}), dedupe: new Map() },
-        client: null,
-        io: createAgentTurnIo(vi.fn()),
-      } as never);
+      });
       expect(result?.inputProvenance?.sourceRole).toBe(expectedRole);
     },
   );
@@ -272,30 +316,20 @@ describe("agent request Swarm preflight", () => {
       { type: "array", items: { type: "string" } },
       { type: "object", properties: "invalid" },
     ]) {
-      const { respond, result } = await runPreflight(schema);
-      expect(result).toBeUndefined();
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
-      );
+      expectRejected(await runPreflight(schema));
     }
   });
 
   it("rejects collector flags while Swarm is disabled", async () => {
-    const { respond, result } = await runPreflight(undefined, true, {
-      enabled: false,
-      backend: true,
-      register: true,
-    });
-
-    expect(result).toBeUndefined();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: "swarm collector fields require an enabled, host-registered collector run",
+    expectRejected(
+      await runPreflight(undefined, true, {
+        enabled: false,
+        backend: true,
+        register: true,
       }),
+      {
+        message: "swarm collector fields require an enabled, host-registered collector run",
+      },
     );
   });
 
@@ -305,13 +339,7 @@ describe("agent request Swarm preflight", () => {
       { enabled: true, backend: true, register: false },
       { enabled: true, backend: false, register: true },
     ]) {
-      const { respond, result } = await runPreflight(schema, true, options);
-      expect(result).toBeUndefined();
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
-      );
+      expectRejected(await runPreflight(schema, true, options));
       subagentRuns.clear();
     }
   });
@@ -321,19 +349,7 @@ describe("agent request Swarm preflight", () => {
       { includeCollectorFields: false },
       { idempotencyKey: "different-launch" },
     ]) {
-      const { respond, result } = await runPreflight({ type: "object" }, true, {
-        enabled: true,
-        backend: true,
-        register: true,
-        ...options,
-      });
-
-      expect(result).toBeUndefined();
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
-      );
+      expectRejected(await runCollector(options));
       subagentRuns.clear();
     }
   });
@@ -344,35 +360,22 @@ describe("agent request Swarm preflight", () => {
       updatedAt: 1,
       swarmCollector: true,
     });
-    const { respond, result } = await runPreflight({ type: "object" }, true, {
-      enabled: true,
-      backend: true,
-      includeCollectorFields: false,
-    });
-    expect(result).toBeUndefined();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    expectRejected(
+      await runPreflight({ type: "object" }, true, {
+        enabled: true,
+        backend: true,
+        includeCollectorFields: false,
+      }),
     );
   });
 
   it("allows an exact cached collector replay after Swarm is disabled", async () => {
-    const replayed = await runPreflight({ type: "object" }, true, {
+    const replayed = await runCollector({
       enabled: false,
-      backend: true,
-      register: true,
       launchPending: false,
       cached: true,
     });
-    expect(replayed.result).toBeDefined();
-    await replayed.replay();
-    expect(replayed.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ runId: "gateway-run", status: "in_flight" }),
-      undefined,
-      expect.objectContaining({ cached: true, runId: "gateway-run" }),
-    );
+    await expectCachedReplay(replayed);
   });
 
   it("marks a provisional cached replay as admission pending without exposing its reservation", async () => {
@@ -383,76 +386,35 @@ describe("agent request Swarm preflight", () => {
       cached: true,
       admissionPending: true,
     });
-    expect(replayed.result).toBeDefined();
-    await replayed.replay();
-    expect(replayed.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        runId: "gateway-run",
-        status: "in_flight",
-        admissionPending: true,
-      }),
-      undefined,
-      expect.objectContaining({ cached: true, runId: "gateway-run" }),
-    );
+    await expectCachedReplay(replayed, true);
     expect(replayed.respond.mock.calls[0]?.[1]).not.toHaveProperty("reservationId");
   });
 
   it("rejects a terminal collector even when its pending launch flag remains set", async () => {
-    const { respond, result } = await runPreflight({ type: "object" }, true, {
-      enabled: true,
-      backend: true,
-      register: true,
-      ended: true,
-    });
-    expect(result).toBeUndefined();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+    expectRejected(await runCollector({ ended: true }));
   });
 
   it("keeps completed collector sessions closed while allowing their exact cached replay", async () => {
-    const ordinary = await runPreflight({ type: "object" }, true, {
-      enabled: true,
-      backend: true,
-      register: true,
+    const ordinary = await runCollector({
       includeCollectorFields: false,
       launchPending: false,
       completed: true,
     });
-    expect(ordinary.result).toBeUndefined();
-    expect(ordinary.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+    expectRejected(ordinary);
 
     subagentRuns.clear();
-    const replayed = await runPreflight({ type: "object" }, true, {
-      enabled: true,
-      backend: true,
-      register: true,
+    const replayed = await runCollector({
       launchPending: false,
       completed: true,
       cached: true,
     });
-    expect(replayed.result).toBeDefined();
-    await replayed.replay();
-    expect(replayed.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ runId: "gateway-run", status: "in_flight" }),
-      undefined,
-      expect.objectContaining({ cached: true, runId: "gateway-run" }),
-    );
+    await expectCachedReplay(replayed);
   });
 
   it("uses the effective requester override when its session key names another agent", async () => {
-    const { respond, result } = await runPreflight({ type: "object" }, true, {
+    const { respond, result } = await runCollector({
       requesterOnlyEnabled: true,
-      backend: true,
-      register: true,
+      enabled: undefined,
       requesterAgentId: "main",
       requesterSessionKey: "agent:cron:main",
     });
@@ -469,9 +431,8 @@ describe("agent request restart recovery preflight", () => {
     internalExecutionIdentityRetry?: boolean,
     internalExecutionIdentityRecoveryAttempt?: number,
   ) {
-    const respond = vi.fn();
-    const result = await prepareAgentRequestPreflight({
-      request: {
+    return runRequest(
+      {
         message: "continue",
         idempotencyKey: "restart-recovery-run",
         forceRestartSafeTools: true,
@@ -486,16 +447,9 @@ describe("agent request restart recovery preflight", () => {
           sourceTool,
         },
       },
-      io: createAgentTurnIo(respond),
-      context: {
-        getRuntimeConfig: () => ({}),
-        dedupe: new Map(),
-      },
-      client: backend
-        ? { connect: { client: { mode: "backend" }, scopes: ["operator.write"] } }
-        : undefined,
-    } as never);
-    return { respond, result };
+      undefined,
+      backend,
+    );
   }
 
   it("accepts the Code Mode override only for backend restart recovery", async () => {
@@ -518,15 +472,10 @@ describe("agent request restart recovery preflight", () => {
       1,
     );
 
-    expect(rejected.result).toBeUndefined();
-    expect(rejected.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: expect.stringContaining("execution identity recovery fields"),
-      }),
-    );
+    expectRejected(rejected, {
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("execution identity recovery fields"),
+    });
   });
 
   it.each([
@@ -535,42 +484,30 @@ describe("agent request restart recovery preflight", () => {
   ])("rejects an untrusted Code Mode override", async ({ backend, sourceTool }) => {
     const rejected = await runRestartRecoveryPreflight(backend, sourceTool);
 
-    expect(rejected.result).toBeUndefined();
-    expect(rejected.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: "forceCodeModeTools is reserved for main-session restart recovery.",
-      }),
-    );
+    expectRejected(rejected, {
+      code: "INVALID_REQUEST",
+      message: "forceCodeModeTools is reserved for main-session restart recovery.",
+    });
   });
 });
 
 describe("agent request session ownership preflight", () => {
   async function runBareSessionPreflight(owner?: string) {
-    const respond = vi.fn();
-    const result = await prepareAgentRequestPreflight({
-      request: {
+    return runRequest(
+      {
         message: "continue",
         sessionKey: "global",
         idempotencyKey: "bare-session-run",
       },
-      io: createAgentTurnIo(respond),
-      context: {
-        getRuntimeConfig: () => ({
-          session: { store: "/tmp/shared.sqlite" },
-          agents: {
-            ownership: "explicit",
-            defaults: owner ? { sessionStore: { agentId: owner } } : undefined,
-            entries: { ops: {}, research: {} },
-          },
-        }),
-        dedupe: new Map(),
-      },
-      client: null,
-    } as never);
-    return { respond, result };
+      () => ({
+        session: { store: "/tmp/shared.sqlite" },
+        agents: {
+          ownership: "explicit",
+          defaults: owner ? { sessionStore: { agentId: owner } } : undefined,
+          entries: { ops: {}, research: {} },
+        },
+      }),
+    );
   }
 
   it("admits a bare key owned by the configured fixed store", async () => {
@@ -581,16 +518,9 @@ describe("agent request session ownership preflight", () => {
   });
 
   it("rejects an ownerless bare key with a typed selection error", async () => {
-    const { respond, result } = await runBareSessionPreflight();
-
-    expect(result).toBeUndefined();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: expect.stringContaining("has no explicit owner"),
-      }),
-    );
+    expectRejected(await runBareSessionPreflight(), {
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("has no explicit owner"),
+    });
   });
 });
