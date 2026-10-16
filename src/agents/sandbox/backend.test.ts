@@ -13,11 +13,17 @@ function expectHooks(id: string, expected: ReturnType<typeof hooks>, api = backe
   hooks(id, api).forEach((value, index) => expect(value).toBe(expected[index]));
 }
 
+const paramsFor = (cfg = resolveTestSandboxConfig(), scopeKey = "test") => ({
+  cfg,
+  sessionKey: scopeKey,
+  scopeKey,
+  workspaceDir: "/workspace",
+  agentWorkspaceDir: "/workspace",
+});
+
 function createGenerationRegistration(label: string) {
   return {
-    factory: async () => {
-      throw new Error(`unused sandbox backend ${label}`);
-    },
+    factory: () => Promise.reject(new Error(`unused sandbox backend ${label}`)),
     manager: {
       describeRuntime: async () => ({ running: true, configLabelMatch: true }),
       removeRuntime: async () => {},
@@ -36,17 +42,8 @@ describe("sandbox backend registry", () => {
       reserveRuntimeId: () => "reserved-runtime",
     });
     try {
-      const invoke = getSandboxBackendFactory("reserved-authority");
-      if (!invoke) {
-        throw new Error("Expected the registered backend factory.");
-      }
-      const params = {
-        cfg: resolveTestSandboxConfig(),
-        sessionKey: "test",
-        scopeKey: "test",
-        workspaceDir: "/workspace",
-        agentWorkspaceDir: "/workspace",
-      };
+      const invoke = getSandboxBackendFactory("reserved-authority")!;
+      const params = paramsFor();
       const assertRuntimeCurrent = vi.fn(() => {});
       for (const incomplete of [
         params,
@@ -87,9 +84,7 @@ describe("sandbox backend registry", () => {
     expect(getSandboxBackendCapabilities("ssh")?.readOnlyResourceMounts).not.toBe(true);
 
     const restore = registerSandboxBackend("test-capabilities", {
-      factory: async () => {
-        throw new Error("not used");
-      },
+      factory: createGenerationRegistration("capabilities").factory,
       capabilities: { readOnlyResourceMounts: true },
     });
     try {
@@ -108,14 +103,11 @@ describe("sandbox backend registry", () => {
       const restore = registerSandboxBackend(backendId, registration);
 
       try {
+        const { factory, manager, resolveWorkdir } = registration;
         for (let reload = 0; reload < 2; reload++) {
           vi.resetModules();
           const fresh = await import("./backend.js");
-          expectHooks(
-            backendId,
-            [registration.factory, registration.manager, registration.resolveWorkdir],
-            fresh,
-          );
+          expectHooks(backendId, [factory, manager, resolveWorkdir], fresh);
         }
       } finally {
         restore();
@@ -136,13 +128,7 @@ describe("sandbox backend registry", () => {
       expect(fresh.getSandboxBackendManager(backendId)).toBe(manager);
       const cfg = resolveSandboxConfigForAgent();
       const scopeKey = "agent:registry-test:main";
-      const workdir = fresh.getSandboxBackendWorkdirResolver(backendId)?.({
-        cfg,
-        sessionKey: scopeKey,
-        scopeKey,
-        workspaceDir: "/workspace",
-        agentWorkspaceDir: "/workspace",
-      });
+      const workdir = fresh.getSandboxBackendWorkdirResolver(backendId)?.(paramsFor(cfg, scopeKey));
       expect(workdir).toBe(
         backendId === "ssh"
           ? ssh.resolveSshRuntimePaths(cfg.ssh.workspaceRoot, scopeKey).remoteWorkspaceDir

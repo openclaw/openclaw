@@ -31,6 +31,7 @@ const fixture = vi.hoisted(() => ({
       Paused: paused,
       Pid: container.running || paused ? pid : 0,
     }),
+  result: (stdout = "", code = 0, stderr = "") => ({ code, stdout, stderr }),
   save: (entry: SandboxRegistryEntry): void => {
     fixture.registry.set(entry.containerName, {
       ...fixture.registry.get(entry.containerName),
@@ -44,9 +45,7 @@ vi.mock("../../logging/subsystem.js", () => ({
 }));
 vi.mock("./registry.js", () => ({
   readRegistryEntry: vi.fn(async (name: string) => fixture.registry.get(name) ?? null),
-  updateRegistry: vi.fn(async (entry: SandboxRegistryEntry) => {
-    fixture.save(entry);
-  }),
+  updateRegistry: vi.fn(async (entry: SandboxRegistryEntry) => fixture.save(entry)),
   completeSandboxRegistryReservation: vi.fn(async (entry: SandboxRegistryEntry) => {
     fixture.save({ ...entry, runtimeState: "ready" });
   }),
@@ -54,12 +53,11 @@ vi.mock("./registry.js", () => ({
     async (name: string, options?: { preserveRemovalIntent?: boolean }) => {
       const state = fixture.registry.get(name)?.runtimeState;
       if (
-        options?.preserveRemovalIntent &&
-        (state === "removing" || state === "removing-pending")
+        !options?.preserveRemovalIntent ||
+        !["removing", "removing-pending"].includes(state ?? "")
       ) {
-        return;
+        fixture.registry.delete(name);
       }
-      fixture.registry.delete(name);
     },
   ),
 }));
@@ -74,12 +72,12 @@ vi.mock("./container-engine.js", () => ({
   execContainerRaw: vi.fn(),
   execContainer: vi.fn(async (_engine: unknown, args: string[], opts?: ExecContainerRawOptions) => {
     fixture.calls.push(args);
-    const ok = (stdout = "") => ({ code: 0, stdout, stderr: "" });
+    const { result } = fixture;
     if (args[0] === "image") {
       if (fixture.imageFails) {
         throw new Error("image unavailable");
       }
-      return ok();
+      return result();
     }
     if (args[0] === "create") {
       const name = args[args.indexOf("--name") + 1];
@@ -91,32 +89,31 @@ vi.mock("./container-engine.js", () => ({
         throw new Error("Container fixture requires its name and config hash");
       }
       fixture.containers.set(name, { id, name, hash, running: false });
-      return ok(id);
+      return result(id);
     }
     const target = args[0] === "exec" ? args[2] : args.at(-1);
     const container = [...fixture.containers.values()].find(
       (entry) => entry.name === target || entry.id === target,
     );
     if (!container) {
-      return { code: 1, stdout: "", stderr: `No such container: ${target}` };
+      return result("", 1, `No such container: ${target}`);
     }
     if (args[0] === "inspect") {
       if (fixture.inspectState && args.at(-1) === container.id) {
         return fixture.inspectState(container, args[2] ?? "");
       }
-      if (args[2] === "{{.Id}}") {
-        return ok(container.id);
-      }
-      if (args[2] === "{{.State.Running}}") {
-        return ok(String(container.running));
-      }
       if (args[2] === "{{json .State}}") {
-        if (fixture.terminalState === "unreachable") {
-          return { code: 125, stdout: "", stderr: "engine connection refused" };
-        }
-        return ok(fixture.inspect(container, fixture.terminalState === "paused"));
+        return fixture.terminalState === "unreachable"
+          ? result("", 125, "engine connection refused")
+          : result(fixture.inspect(container, fixture.terminalState === "paused"));
       }
-      return ok(container.hash);
+      return result(
+        args[2] === "{{.Id}}"
+          ? container.id
+          : args[2] === "{{.State.Running}}"
+            ? String(container.running)
+            : container.hash,
+      );
     }
     if (args[0] === "start") {
       container.running = true;
@@ -126,11 +123,11 @@ vi.mock("./container-engine.js", () => ({
       await fixture.setup?.(opts?.signal);
     } else if (args[0] === "rm") {
       if (fixture.removalFails) {
-        return { code: 1, stdout: "", stderr: "permission denied" };
+        return result("", 1, "permission denied");
       }
       fixture.containers.delete(container.name);
     }
-    return ok();
+    return result();
   }),
 }));
 
@@ -318,8 +315,7 @@ it("does not let a revoked queued caller discard another grant's private custody
 });
 
 it("retains a same-grant new source through cold replacement of the old generation", async () => {
-  const first = source();
-  const { containerName, containerId: oldId } = await ensure(first);
+  const { name: containerName, id: oldId } = await start();
   fixture.containers.get(containerName)!.running = false;
   const second = source();
   const params = provision(second);
@@ -336,33 +332,16 @@ it("retains a same-grant new source through cold replacement of the old generati
   expect(calls("kill")).toEqual([["kill", containerId]]);
 });
 
-it.each(["staff", "different-grant", "unclassified"] as const)(
-  "permanently protects a generation reused by %s",
-  async (kind) => {
-    const { owner, name } = await start();
-    const other =
-      kind === "unclassified"
-        ? undefined
-        : source({ grantId: kind === "different-grant" ? "other" : "original" });
-    const otherParams = provision(other);
-    if (kind === "staff" && other) {
-      otherParams.operatorAuthority = createAdmittedRunOperatorAuthority({
-        ...other.authority,
-        gatewayAccessGrant: null,
-      });
-    }
-    await ensureSandboxContainer(otherParams);
-    owner.controller.abort();
-    await ensureSandboxContainer(otherParams);
-    expectProtected(name);
-    expect(owner.release).toHaveBeenCalledOnce();
-    await restartAndRevoke(name);
-    expectProtected(name);
-  },
-);
-
-it.each(["preexisting", "shared", "no-signal", "no-retain"] as const)(
-  "does not infer exclusive custody for %s environments",
+it.each([
+  "staff",
+  "different-grant",
+  "unclassified",
+  "preexisting",
+  "shared",
+  "no-signal",
+  "no-retain",
+] as const)(
+  "permanently protects %s custody from revocation and later private reuse",
   async (kind) => {
     const owner = source({ signal: kind !== "no-signal", retain: kind !== "no-retain" });
     const params = provision(owner);
@@ -373,9 +352,24 @@ it.each(["preexisting", "shared", "no-signal", "no-retain"] as const)(
       await ensureSandboxContainer({ ...params, operatorAuthority: undefined });
     }
     const { containerName: name } = await ensureSandboxContainer(params);
+    const mixed = ["staff", "different-grant", "unclassified"].includes(kind);
+    const reuse: ReturnType<typeof provision> = { ...params, operatorAuthority: undefined };
+    if (kind === "staff" || kind === "different-grant") {
+      const other = source({ grantId: kind === "different-grant" ? "other" : "original" });
+      reuse.operatorAuthority =
+        kind === "staff"
+          ? createAdmittedRunOperatorAuthority({ ...other.authority, gatewayAccessGrant: null })
+          : other.authority;
+    }
+    if (mixed) {
+      await ensureSandboxContainer(reuse);
+    }
     owner.controller.abort();
-    await ensureSandboxContainer({ ...params, operatorAuthority: undefined });
+    await ensureSandboxContainer(reuse);
     expectProtected(name);
+    if (mixed) {
+      expect(owner.release).toHaveBeenCalledOnce();
+    }
     await restartAndRevoke(name, params);
     expectProtected(name);
   },
@@ -441,13 +435,8 @@ it("retains interrupted setup and rejects queued or later reuse before restart",
 
   const later = provision(source());
   later.cfg.docker.image = "changed:image";
-  const beforeReuse = fixture.calls.length;
   await expect(ensureSandboxContainer(later)).rejects.toThrow("setup did not complete");
-  expect(
-    fixture.calls
-      .slice(beforeReuse)
-      .some(([operation]) => ["create", "start", "exec", "rm"].includes(operation ?? "")),
-  ).toBe(false);
+  expectCounts({ create: 1, start: 1, exec: 1, rm: 0 });
 });
 
 it("recovers a pending unallocated attempt when setup is removed", async () => {
@@ -511,11 +500,9 @@ it("settles old targeted cleanup from its own termination receipt after same-ID 
     if (++inspections === 1) {
       await inspection.wait();
     }
-    return {
-      code: 0,
-      stdout: format === "{{.Id}}" ? container.id : fixture.inspect(container, false, 234),
-      stderr: "",
-    };
+    return fixture.result(
+      format === "{{.Id}}" ? container.id : fixture.inspect(container, false, 234),
+    );
   };
   vi.mocked(execContainerRaw).mockResolvedValue({
     code: 125,

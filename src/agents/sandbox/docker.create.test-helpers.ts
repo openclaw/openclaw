@@ -13,14 +13,11 @@ type SpawnCall = {
   envFileContents?: string;
 };
 
-const namespaceMocks = vi.hoisted(() => ({
-  resolveDockerSourceNamespace: vi
-    .fn<typeof import("./docker-mount-source.js").resolveDockerSourceNamespace>()
-    .mockResolvedValue(undefined),
-}));
+const resolveDockerSourceNamespace =
+  vi.fn<typeof import("./docker-mount-source.js").resolveDockerSourceNamespace>();
 
-const { spawnState, freshSpawnState } = vi.hoisted(() => {
-  const fresh = () => ({
+function freshSpawnState() {
+  return {
     calls: [] as SpawnCall[],
     containerExists: true,
     inspectRunning: true,
@@ -32,9 +29,9 @@ const { spawnState, freshSpawnState } = vi.hoisted(() => {
     podmanInfo: "true\tfalse\t\t5.0.0\n",
     podmanConnections: "[]\n",
     podmanMachines: "[]\n",
-  });
-  return { spawnState: fresh(), freshSpawnState: fresh };
-});
+  };
+}
+const spawnState = freshSpawnState();
 
 const registryMocks = vi.hoisted(() => ({
   readRegistryEntry: vi.fn(),
@@ -43,34 +40,27 @@ const registryMocks = vi.hoisted(() => ({
   completeSandboxRegistryReservation: vi.fn(),
 }));
 
-const runtimeMocks = vi.hoisted(() => ({
-  log: vi.fn(),
-}));
+const runtimeMocks = vi.hoisted(() => ({ log: vi.fn() }));
 
 function usePodmanMachine() {
+  const machine = {
+    Name: "podman-machine-default",
+    Running: true,
+    IdentityPath: "/tmp/podman-machine-default",
+    Port: 60000,
+    RemoteUsername: "core",
+  };
   spawnState.podmanInfo = "true\ttrue\t\t5.0.0\n";
   spawnState.podmanConnections = JSON.stringify([
     {
-      Name: "podman-machine-default",
+      Name: machine.Name,
       URI: "ssh://core@127.0.0.1:60000/run/user/501/podman/podman.sock",
-      Identity: "/tmp/podman-machine-default",
+      Identity: machine.IdentityPath,
       Default: true,
     },
   ]);
-  spawnState.podmanMachines = JSON.stringify([
-    {
-      Name: "podman-machine-default",
-      Running: true,
-      IdentityPath: "/tmp/podman-machine-default",
-      Port: 60000,
-      RemoteUsername: "core",
-    },
-  ]);
+  spawnState.podmanMachines = JSON.stringify([machine]);
 }
-
-vi.mock("./registry.js", () => registryMocks);
-
-vi.mock("../../runtime.js", () => ({ defaultRuntime: runtimeMocks }));
 
 async function createNamespaceMock() {
   const actual = await vi.importActual<typeof import("./docker-mount-source.js")>(
@@ -79,11 +69,9 @@ async function createNamespaceMock() {
   return {
     parseInspectedSandboxMounts: actual.parseInspectedSandboxMounts,
     translateSandboxMountSources: actual.translateSandboxMountSources,
-    resolveDockerSourceNamespace: namespaceMocks.resolveDockerSourceNamespace,
+    resolveDockerSourceNamespace,
   };
 }
-
-vi.mock("./docker-mount-source.js", createNamespaceMock);
 
 async function spawnDockerProcess(commandAndArgs: string[]) {
   const [command = "", ...rawArgs] = commandAndArgs;
@@ -95,8 +83,6 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
       args = args.slice(2);
     }
   }
-  // The tests assert docker CLI arguments without requiring Docker; this mock
-  // implements only the inspect/create/start/rm calls used by ensureSandboxContainer.
   const envFileIndex = args.indexOf("--env-file");
   const envFile = envFileIndex === -1 ? undefined : args[envFileIndex + 1];
   const call: SpawnCall = { command, args, globalArgs };
@@ -116,42 +102,35 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
   if (command !== "docker" && command !== "podman") {
     return result(1, "", `unexpected command: ${command}`);
   }
-  if (args[0] === "inspect" && args[1] === "-f" && args[2] === "{{.State.Running}}") {
-    if (spawnState.inspectError) {
-      return result(125, "", spawnState.inspectError);
+  if (args[0] === "inspect") {
+    const format = args[2];
+    if (args[1] === "-f" && format === "{{.State.Running}}") {
+      if (spawnState.inspectError) {
+        return result(125, "", spawnState.inspectError);
+      }
+      return spawnState.containerExists ? result(0, `${spawnState.inspectRunning}\n`) : missing();
     }
-    return spawnState.containerExists
-      ? result(0, spawnState.inspectRunning ? "true\n" : "false\n")
-      : missing();
-  }
-  if (args[0] === "inspect" && args[2] === "{{.Id}}") {
-    return result(0, "c".repeat(64));
-  }
-  if (
-    args[0] === "inspect" &&
-    args[1] === "-f" &&
-    args[2]?.includes('index .Config.Labels "openclaw.configHash"')
-  ) {
-    return spawnState.containerExists ? result(0, `${spawnState.labelHash}\n`) : missing();
-  }
-  if (
-    args[0] === "inspect" &&
-    args[2] === '{"Mounts":{{json .Mounts}},"Tmpfs":{{json .HostConfig.Tmpfs}}}'
-  ) {
-    return result(
-      0,
-      JSON.stringify({ Mounts: JSON.parse(spawnState.mounts), Tmpfs: spawnState.tmpfs }),
-    );
+    if (format === "{{.Id}}") {
+      return result(0, "c".repeat(64));
+    }
+    if (args[1] === "-f" && format?.includes('index .Config.Labels "openclaw.configHash"')) {
+      return spawnState.containerExists ? result(0, `${spawnState.labelHash}\n`) : missing();
+    }
+    if (format === '{"Mounts":{{json .Mounts}},"Tmpfs":{{json .HostConfig.Tmpfs}}}') {
+      return result(
+        0,
+        JSON.stringify({ Mounts: JSON.parse(spawnState.mounts), Tmpfs: spawnState.tmpfs }),
+      );
+    }
   }
   if (command === "podman") {
-    if (args[0] === "info") {
-      return result(0, spawnState.podmanInfo);
-    }
-    if (args[0] === "system") {
-      return result(0, spawnState.podmanConnections);
-    }
-    if (args[0] === "machine") {
-      return result(0, spawnState.podmanMachines);
+    const output = new Map([
+      ["info", spawnState.podmanInfo],
+      ["system", spawnState.podmanConnections],
+      ["machine", spawnState.podmanMachines],
+    ]).get(args[0] ?? "");
+    if (output !== undefined) {
+      return result(0, output);
     }
   }
   if (args[0] === "rm" && args[1] === "-f") {
@@ -165,10 +144,8 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
     }
     spawnState.containerExists = true;
     spawnState.inspectRunning = false;
-    spawnState.labelHash =
-      args
-        .find((arg) => arg.startsWith("openclaw.configHash="))
-        ?.slice("openclaw.configHash=".length) ?? "";
+    const label = args.find((arg) => arg.startsWith("openclaw.configHash="));
+    spawnState.labelHash = label?.slice("openclaw.configHash=".length) ?? "";
     return result(0, "c".repeat(64));
   } else if (args[0] === "start") {
     spawnState.inspectRunning = true;
@@ -177,15 +154,6 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
   }
   return result();
 }
-
-async function createProcessMock() {
-  return {
-    ...(await vi.importActual<typeof import("../../process/exec.js")>("../../process/exec.js")),
-    spawnCommand: spawnDockerProcess,
-  };
-}
-
-vi.mock("../../process/exec.js", createProcessMock);
 
 function createSandboxConfig(
   dns: string[],
@@ -212,9 +180,7 @@ function createSandboxConfig(
 }
 
 export function createSandboxContainerTestHarness() {
-  let ensureSandboxContainer: typeof import("./docker.js").ensureSandboxContainer;
-  let resolveDockerEnvPolicyEpoch: typeof import("./docker.js").resolveDockerEnvPolicyEpoch;
-  let PODMAN_SANDBOX_ENGINE: typeof import("./docker.js").PODMAN_SANDBOX_ENGINE;
+  let docker: typeof import("./docker.js");
   let prepareSandboxMountPlan: typeof import("./mount-plan.js").prepareSandboxMountPlan;
 
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -224,10 +190,12 @@ export function createSandboxContainerTestHarness() {
     vi.doMock("./registry.js", () => registryMocks);
     vi.doMock("../../runtime.js", () => ({ defaultRuntime: runtimeMocks }));
     vi.doMock("./docker-mount-source.js", createNamespaceMock);
-    vi.doMock("../../process/exec.js", createProcessMock);
+    vi.doMock("../../process/exec.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../../process/exec.js")>()),
+      spawnCommand: spawnDockerProcess,
+    }));
     ({ prepareSandboxMountPlan } = await import("./mount-plan.js"));
-    ({ ensureSandboxContainer, resolveDockerEnvPolicyEpoch, PODMAN_SANDBOX_ENGINE } =
-      await import("./docker.js"));
+    docker = await import("./docker.js");
   });
 
   async function computeTestSandboxHash(input: Parameters<typeof computeSandboxConfigHash>[0]) {
@@ -249,7 +217,7 @@ export function createSandboxContainerTestHarness() {
     engine?: import("./docker.js").SandboxContainerEngine;
   }): Promise<SpawnCall> {
     const workspaceDir = params.workspaceDir ?? "/tmp/workspace";
-    await ensureSandboxContainer({
+    await docker.ensureSandboxContainer({
       scopeKey: params.scopeKey ?? "shared",
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
@@ -268,39 +236,35 @@ export function createSandboxContainerTestHarness() {
 
   beforeEach(() => {
     Object.assign(spawnState, freshSpawnState());
-    namespaceMocks.resolveDockerSourceNamespace.mockResolvedValue(undefined);
+    resolveDockerSourceNamespace.mockResolvedValue(undefined);
     registryMocks.readRegistryEntry.mockClear();
-    registryMocks.removeRegistryEntry.mockClear();
-    registryMocks.removeRegistryEntry.mockResolvedValue(undefined);
-    registryMocks.updateRegistry.mockClear();
-    registryMocks.updateRegistry.mockResolvedValue(undefined);
-    registryMocks.completeSandboxRegistryReservation.mockClear();
-    registryMocks.completeSandboxRegistryReservation.mockResolvedValue(undefined);
+    registryMocks.removeRegistryEntry.mockClear().mockResolvedValue(undefined);
+    registryMocks.updateRegistry.mockClear().mockResolvedValue(undefined);
+    registryMocks.completeSandboxRegistryReservation.mockClear().mockResolvedValue(undefined);
     runtimeMocks.log.mockClear();
   });
 
   return {
-    resolveDockerSourceNamespace: namespaceMocks.resolveDockerSourceNamespace,
+    resolveDockerSourceNamespace,
     spawnState,
     registryMocks,
-    runtimeMocks,
     tempDirs,
     usePodmanMachine,
     createSandboxConfig,
     computeTestSandboxHash,
     ensureSandboxCreateCallForTest,
     ensureSandboxContainer(
-      params: Omit<Parameters<typeof ensureSandboxContainer>[0], "engine"> & {
+      params: Omit<Parameters<typeof docker.ensureSandboxContainer>[0], "engine"> & {
         engine?: import("./docker.js").SandboxContainerEngine;
       },
     ) {
-      return ensureSandboxContainer({ engine: DOCKER_SANDBOX_ENGINE, ...params });
+      return docker.ensureSandboxContainer({ engine: DOCKER_SANDBOX_ENGINE, ...params });
     },
     get resolveDockerEnvPolicyEpoch() {
-      return resolveDockerEnvPolicyEpoch;
+      return docker.resolveDockerEnvPolicyEpoch;
     },
     get PODMAN_SANDBOX_ENGINE() {
-      return PODMAN_SANDBOX_ENGINE;
+      return docker.PODMAN_SANDBOX_ENGINE;
     },
   };
 }

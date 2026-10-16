@@ -37,19 +37,12 @@ const bridgeMocks = vi.hoisted(() => ({
   stopBrowserBridgeServer: vi.fn(),
 }));
 
-const runtimeMocks = vi.hoisted(() => ({
-  log: vi.fn(),
-}));
+const runtimeMocks = vi.hoisted(() => ({ log: vi.fn() }));
 
 async function createDockerMock() {
   const actual = await vi.importActual<typeof import("./docker.js")>("./docker.js");
-  return {
-    ...actual,
-    ...dockerMocks,
-  };
+  return { ...actual, ...dockerMocks };
 }
-
-vi.mock("./docker.js", createDockerMock);
 
 async function createNamespaceMock() {
   const actual = await vi.importActual<typeof import("./docker-mount-source.js")>(
@@ -62,20 +55,11 @@ async function createNamespaceMock() {
   };
 }
 
-vi.mock("./docker-mount-source.js", createNamespaceMock);
 async function createEngineMock() {
   const actual =
     await vi.importActual<typeof import("./container-engine.js")>("./container-engine.js");
   return { ...actual, execContainer: namespaceMocks.execContainer };
 }
-
-vi.mock("./container-engine.js", createEngineMock);
-
-vi.mock("./registry.js", () => registryMocks);
-
-vi.mock("../../plugin-sdk/browser-bridge.js", () => bridgeMocks);
-
-vi.mock("../../runtime.js", () => ({ defaultRuntime: runtimeMocks }));
 
 async function createProfilesMock() {
   const actual = await vi.importActual<typeof import("../../plugin-sdk/browser-profiles.js")>(
@@ -102,9 +86,7 @@ async function createProfilesMock() {
   };
 }
 
-vi.mock("../../plugin-sdk/browser-profiles.js", createProfilesMock);
-
-export function createSandboxBrowserTestHarness() {
+export function createSandboxBrowserTestHarness(scopeKey = "session:test") {
   let BROWSER_BRIDGES: Map<string, unknown>;
   let ensureSandboxBrowser: typeof import("./browser.js").ensureSandboxBrowser;
   let prepareSandboxMountPlan: typeof import("./mount-plan.js").prepareSandboxMountPlan;
@@ -113,7 +95,7 @@ export function createSandboxBrowserTestHarness() {
 
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  async function loadFreshBrowserModulesForTest() {
+  beforeAll(async () => {
     vi.resetModules();
     vi.doMock("./docker.js", createDockerMock);
     vi.doMock("./docker-mount-source.js", createNamespaceMock);
@@ -125,7 +107,7 @@ export function createSandboxBrowserTestHarness() {
     ({ prepareSandboxMountPlan } = await import("./mount-plan.js"));
     ({ BROWSER_BRIDGES } = await import("./browser-bridges.js"));
     ({ ensureSandboxBrowser } = await import("./browser.js"));
-  }
+  });
 
   function buildConfig(noVncEnabled: boolean): SandboxConfig {
     const defaults = resolveSandboxConfigForAgent();
@@ -141,12 +123,12 @@ export function createSandboxBrowserTestHarness() {
     cfg: SandboxConfig;
     createArgsEpoch: string;
   }): Promise<string> {
-    const workspaceDir = testWorkspaceDir;
-    const agentWorkspaceDir = workspaceDir;
-    const browserDockerCfg = resolveSandboxBrowserDockerCreateConfig({
-      docker: params.cfg.docker,
-      browser: params.cfg.browser,
-    });
+    const workspace = {
+      workspaceDir: testWorkspaceDir,
+      agentWorkspaceDir: testWorkspaceDir,
+      workspaceAccess: params.cfg.workspaceAccess,
+    };
+    const browserDockerCfg = resolveSandboxBrowserDockerCreateConfig(params.cfg);
     return computeSandboxBrowserConfigHash({
       docker: browserDockerCfg,
       browser: {
@@ -159,34 +141,31 @@ export function createSandboxBrowserTestHarness() {
         autoStartTimeoutMs: params.cfg.browser.autoStartTimeoutMs,
       },
       securityEpoch: SANDBOX_BROWSER_SECURITY_HASH_EPOCH,
-      workspaceAccess: params.cfg.workspaceAccess,
-      workspaceDir,
-      agentWorkspaceDir,
+      ...workspace,
       mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
       createArgsEpoch: params.createArgsEpoch,
       managedMounts: (
         await prepareSandboxMountPlan({
           engine: DOCKER_SANDBOX_ENGINE,
-          workspaceDir,
-          agentWorkspaceDir,
+          ...workspace,
           workdir: params.cfg.docker.workdir,
-          workspaceAccess: params.cfg.workspaceAccess,
           binds: browserDockerCfg.binds,
         })
       ).binds,
     });
   }
 
-  type EnsureSandboxBrowserParams = Parameters<
-    typeof import("./browser.js").ensureSandboxBrowser
-  >[0];
+  type EnsureSandboxBrowserParams = Parameters<typeof ensureSandboxBrowser>[0];
 
   async function ensureTestSandboxBrowser(
-    params: Omit<EnsureSandboxBrowserParams, "bridgeAuth" | "evaluateEnabled"> & {
-      evaluateEnabled?: boolean;
-    },
+    params: Partial<Omit<EnsureSandboxBrowserParams, "bridgeAuth">> = {},
   ) {
+    const workspaceDir = params.workspaceDir ?? testWorkspaceDir;
     return await ensureSandboxBrowser({
+      scopeKey,
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      cfg: buildConfig(false),
       evaluateEnabled: true,
       ...params,
       bridgeAuth: { token: "test-bridge-token" },
@@ -206,10 +185,7 @@ export function createSandboxBrowserTestHarness() {
   }
 
   function requireDockerCreateEnvEntries(): string[] {
-    return requireValue(
-      capturedDockerCreateEnvEntries,
-      "the docker create environment file to exist during create",
-    );
+    return requireValue(capturedDockerCreateEnvEntries, "docker create environment file");
   }
 
   function requireValue<T>(value: T | null | undefined, label: string): T {
@@ -220,10 +196,23 @@ export function createSandboxBrowserTestHarness() {
   }
 
   function envValue(key: string, entries = requireDockerCreateEnvEntries()) {
-    return requireValue(
+    const value = requireValue(
       entries.find((entry) => entry.startsWith(`${key}=`)),
       key,
-    ).slice(key.length + 1);
+    );
+    return value.slice(key.length + 1);
+  }
+
+  function reuseCreatedBrowser() {
+    const entry = requireValue(
+      registryMocks.updateBrowserRegistry.mock.calls.at(-1)?.[0],
+      "browser registry entry",
+    );
+    dockerMocks.dockerContainerState.mockResolvedValue({ exists: true, running: true });
+    const token = envValue("OPENCLAW_BROWSER_CDP_AUTH_TOKEN");
+    dockerMocks.readDockerContainerEnvVar.mockResolvedValue(token);
+    dockerMocks.readDockerContainerLabel.mockResolvedValue(entry.configHash);
+    registryMocks.readBrowserRegistry.mockResolvedValue({ entries: [entry] });
   }
 
   function bridgeFixture(resolved: unknown = { profiles: {} }) {
@@ -242,8 +231,6 @@ export function createSandboxBrowserTestHarness() {
     );
   }
 
-  beforeAll(loadFreshBrowserModulesForTest);
-
   beforeEach(() => {
     testWorkspaceDir = tempDirs.make("openclaw-browser-workspace-");
     vi.restoreAllMocks();
@@ -257,12 +244,9 @@ export function createSandboxBrowserTestHarness() {
       stderr: "",
       code: 0,
     });
-    for (const mock of Object.values({
-      ...dockerMocks,
-      ...registryMocks,
-      ...bridgeMocks,
-      ...runtimeMocks,
-    })) {
+    for (const mock of [dockerMocks, registryMocks, bridgeMocks, runtimeMocks].flatMap(
+      Object.values,
+    )) {
       mock.mockClear();
     }
     capturedDockerCreateEnvEntries = undefined;
@@ -279,15 +263,9 @@ export function createSandboxBrowserTestHarness() {
     });
     dockerMocks.readDockerContainerLabel.mockResolvedValue(null);
     dockerMocks.readDockerContainerEnvVar.mockResolvedValue(null);
-    dockerMocks.readDockerPort.mockImplementation(async (_containerName: string, port: number) => {
-      if (port === 9222) {
-        return 49100;
-      }
-      if (port === 6080) {
-        return 49101;
-      }
-      return null;
-    });
+    dockerMocks.readDockerPort.mockImplementation(async (_containerName: string, port: number) =>
+      port === 9222 ? 49100 : port === 6080 ? 49101 : null,
+    );
     registryMocks.readBrowserRegistry.mockResolvedValue({ entries: [] });
     registryMocks.updateBrowserRegistry.mockResolvedValue(undefined);
     bridgeMocks.startBrowserBridgeServer.mockResolvedValue(bridgeFixture());
@@ -310,6 +288,7 @@ export function createSandboxBrowserTestHarness() {
     requireValue,
     latestBridgeResolved,
     envValue,
+    reuseCreatedBrowser,
     bridgeFixture,
     get BROWSER_BRIDGES() {
       return BROWSER_BRIDGES;
