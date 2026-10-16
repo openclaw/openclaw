@@ -348,11 +348,11 @@ async function maintain(directory) {
 }
 
 if (
-  process.argv[1] === fileURLToPath(import.meta.url) &&
   process.argv[2] === "--maintain" &&
+  process.argv[1] === fileURLToPath(import.meta.url) &&
   process.argv[3]
 ) {
-  await maintain(process.argv[3]).catch(() => {
+  void maintain(process.argv[3]).catch(() => {
     // Disposable bytecode cleanup is best-effort in the detached process too.
   });
 }

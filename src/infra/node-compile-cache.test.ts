@@ -4,12 +4,29 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
+import { build } from "esbuild";
 import { afterEach, expect, it } from "vitest";
 import { resolveOpenClawCompileCacheDirectory } from "../../node-compile-cache.mjs";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const MiB = 1024 * 1024;
+
+it("remains synchronously importable from CommonJS bundles", async () => {
+  const root = tempDirs.make("openclaw-cache-commonjs-");
+  const outfile = path.join(root, "cache.cjs");
+  await build({
+    entryPoints: [fileURLToPath(new URL("../../node-compile-cache.mjs", import.meta.url))],
+    outfile,
+    bundle: true,
+    platform: "node",
+    format: "cjs",
+    logLevel: "silent",
+  });
+  await promisify(execFile)(process.execPath, ["-e", `require(${JSON.stringify(outfile)})`], {
+    env: {},
+  });
+});
 
 it("prewarms the release graph, respecting the disabled cache policy", async () => {
   const root = tempDirs.make("openclaw-cache-prewarm-");
@@ -262,11 +279,16 @@ it("makes bounded progress through tiny entries without claiming an incomplete p
       }
     }});
     fs.unlink = async target => { files.delete(path.basename(target)); };
+    const rmdir = fs.rmdir;
+    let finished;
+    fs.rmdir = async target => { await rmdir(target); finished(); };
     process.argv = [process.execPath, ${JSON.stringify(modulePath)}, "--maintain", ${JSON.stringify(directory)}];
     const results = [];
     for (let pass = 0; pass < 2; pass++) {
       visited = 0;
+      const completion = new Promise(resolve => { finished = resolve; });
       await import(${JSON.stringify(new URL("../../node-compile-cache.mjs", import.meta.url).href)} + "?pass=" + pass);
+      await completion;
       results.push({ visited, remaining: files.size, mtimeMs: (await fs.stat(cache)).mtimeMs });
     }
     process.stdout.write(JSON.stringify(results));

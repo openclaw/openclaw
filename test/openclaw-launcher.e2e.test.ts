@@ -1736,11 +1736,13 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
       if (process.argv[2] === "--maintain") {
         process.send("started");
         await fixtureOnce(process, "disconnect");
+        const rmdir = fixtureFs.rmdir;
+        fixtureFs.rmdir = async target => {
+          await rmdir(target);
+          await fixtureFs.writeFile(${JSON.stringify(path.join(fixtureRoot, "completed"))}, "done");
+        };
       }
       ${original}
-      if (process.argv[2] === "--maintain") {
-        await fixtureFs.writeFile(${JSON.stringify(path.join(fixtureRoot, "completed"))}, "done");
-      }
     `,
     );
     const preload = path.join(fixtureRoot, "observe-detached.mjs");
