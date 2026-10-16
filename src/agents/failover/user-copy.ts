@@ -42,7 +42,9 @@ const SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT =
 export const renderFailoverCodeUserCopy = (code: unknown): string | undefined =>
   code === "selected_auth_profile_unavailable"
     ? SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT
-    : undefined;
+    : code === AUTH_PROFILE_COOLDOWN_ERROR_CODE
+      ? RATE_LIMIT_ERROR_USER_MESSAGE
+      : undefined;
 const MODEL_CAPACITY_ERROR_USER_MESSAGE =
   "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
 const OVERLOADED_ERROR_USER_MESSAGE =
