@@ -112,40 +112,20 @@ export function createDownstreamTurnFixture(
   }
 
   function holdFirstDownstreamTurn() {
-    const headDispatched = createDeferred<void>();
-    const releaseHead = createDeferred<void>();
-    downstreamTurns.mockImplementation(async (_ctx, abortSignal, lifecycle) => {
-      if (downstreamTurns.mock.calls.length === 1) {
-        if (!lifecycle?.deferredHeartbeatIntervalMs) {
-          throw new Error("Expected the deferred turn's heartbeat cadence");
-        }
-        lifecycle.onDeferred?.();
-        const heartbeat = setInterval(
-          () => lifecycle.onDeferredHeartbeat?.(),
-          lifecycle.deferredHeartbeatIntervalMs,
-        );
-        headDispatched.resolve();
-        try {
-          await releaseHead.promise;
-          if (!abortSignal?.aborted) {
-            await lifecycle.onAdopted();
-          }
-        } finally {
-          clearInterval(heartbeat);
-        }
-      }
-      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
-    });
-    return { headDispatched, releaseHead };
+    const { releaseHead, turnsDeferred } = holdDownstreamLane(true);
+    return { headDispatched: turnsDeferred[0], releaseHead };
   }
 
-  function holdDownstreamLane() {
+  function holdDownstreamLane(firstOnly = false) {
     const releaseHead = createDeferred<void>();
     const turnsDeferred = [createDeferred<void>(), createDeferred<void>()] as const;
     let turnIndex = 0;
-    // Session-lane stand-in: every turn defers, heartbeats, and adopts after the turn ahead.
+    // Held turns heartbeat and adopt in order, like a session lane.
     let laneTail: Promise<void> = releaseHead.promise;
     downstreamTurns.mockImplementation(async (_ctx, abortSignal, lifecycle) => {
+      if (firstOnly && downstreamTurns.mock.calls.length > 1) {
+        return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+      }
       if (!lifecycle?.deferredHeartbeatIntervalMs) {
         throw new Error("Expected the deferred turn's heartbeat cadence");
       }
@@ -251,8 +231,7 @@ export async function createIngressMonitor(
       : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
     pollIntervalMs: options.pollIntervalMs ?? 10,
   });
-  const resources = { monitor, telegramTransport, abortController, bot };
-  return resources;
+  return { monitor, telegramTransport, abortController, bot };
 }
 
 export async function admitAlbum(
