@@ -3,13 +3,16 @@ import { createServer } from "node:http";
 import { expect, it, vi } from "vitest";
 import type { ChatPendingInputsPage } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { acquireGatewayTestClient } from "../../test/helpers/gateway-client.js";
-import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "../../test/helpers/openai-responses-sse.js";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  closeProvider,
+  listenProvider,
+  readProviderBody,
+  writeToolCall,
+} from "./gateway-provider-fixture.test-support.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 // Real public sessions_send, real provider socket, cold Gateway process restart.
@@ -27,15 +30,11 @@ it(
       let held = false;
       const providerServer = createServer((request, response) => {
         void (async () => {
-          const chunks: Buffer[] = [];
-          for await (const chunk of request) {
-            chunks.push(Buffer.from(chunk));
-          }
+          const raw = await readProviderBody(request);
           if (request.method !== "POST") {
             response.writeHead(200).end('{"data":[]}');
             return;
           }
-          const raw = Buffer.concat(chunks).toString("utf8");
           const body = JSON.parse(raw) as {
             input?: Array<{ role?: string; content?: unknown; type?: string; output?: string }>;
             tools?: Array<{ name?: string }>;
@@ -69,43 +68,11 @@ it(
               });
             } else {
               expect(body.tools?.some((tool) => tool.name === "sessions_send")).toBe(true);
-              const id = randomUUID();
-              const args = JSON.stringify({
+              writeToolCall(response, "sessions_send", {
                 sessionKey: target,
                 message: sendMarker,
                 timeoutSeconds: 0,
               });
-              const item = {
-                type: "function_call",
-                id: "fc_" + id,
-                call_id: "call_" + id,
-                name: "sessions_send",
-                arguments: args,
-                status: "completed",
-              };
-              writeOpenAiResponsesSse(response, [
-                {
-                  type: "response.output_item.added",
-                  output_index: 0,
-                  item: { ...item, arguments: "", status: "in_progress" },
-                },
-                {
-                  type: "response.function_call_arguments.done",
-                  item_id: item.id,
-                  output_index: 0,
-                  arguments: args,
-                },
-                { type: "response.output_item.done", output_index: 0, item },
-                {
-                  type: "response.completed",
-                  response: {
-                    id: "resp_" + id,
-                    status: "completed",
-                    output: [item],
-                    usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-                  },
-                },
-              ]);
             }
             return;
           }
@@ -137,13 +104,7 @@ it(
           }
         });
       });
-      await new Promise<void>((resolve) => {
-        providerServer.listen(0, "127.0.0.1", resolve);
-      });
-      const address = providerServer.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Provider did not bind");
-      }
+      const baseUrl = await listenProvider(providerServer);
       const profile = `peer-recovery-${randomUUID()}`;
       const gateway = await createOpenClawTestInstance({
         name: "peer-input-recovery",
@@ -184,7 +145,7 @@ it(
       const revokedSource = "agent:main:dashboard:revoked-source";
       const archivedSource = "agent:main:dashboard:archived-source";
       try {
-        const provider = buildMockOpenAiResponsesProvider(`http://127.0.0.1:${address.port}/v1`);
+        const provider = buildMockOpenAiResponsesProvider(baseUrl);
         const config = {
           logging: { file: gateway.state.path("gateway.log") },
           gateway: {
@@ -416,10 +377,7 @@ it(
       } finally {
         await client?.stopAndWait();
         await gateway.cleanup();
-        providerServer.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          providerServer.close(() => resolve());
-        });
+        await closeProvider(providerServer);
       }
     });
   },

@@ -6,19 +6,23 @@ import {
   assertStableProviderPrefix,
   snapshotProviderPrefix,
 } from "../../scripts/e2e/lib/anthropic-cache/prefix-stability.mts";
-import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "../../test/helpers/openai-responses-sse.js";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentAuditEvent, onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { setTestEnvValue } from "../test-utils/env.js";
-import { acquireTestPortBlock } from "../test-utils/port-claims.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  closeChatFixture,
+  sendChatAndWait,
+  startControlUiGateway,
+} from "./gateway-chat-fixture.test-support.js";
+import {
+  listenProvider,
+  readProviderBody,
+  writeToolCall,
+} from "./gateway-provider-fixture.test-support.js";
 import {
   createGatewayConfigPath,
-  removeGatewayTempHome,
   resetGatewayTestState,
   setupGatewayTempHome,
 } from "./gateway.test-support.js";
@@ -33,53 +37,25 @@ describe("Gateway prompt-cache stability", () => {
   let spawnRequested = false;
   const provider = createServer((request, response) => {
     void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      }
-      const body = Buffer.concat(chunks).toString("utf8");
+      const body = await readProviderBody(request);
       requests.push(body);
       const sessionHeader = request.headers.session_id;
       const sessionId = typeof sessionHeader === "string" ? sessionHeader : undefined;
       requestSessionIds.push(sessionId);
       if (!spawnRequested && body.includes("Start the synthetic cache-prefix child.")) {
         spawnRequested = true;
-        const item = {
-          type: "function_call",
-          id: `fc_${randomUUID()}`,
-          call_id: `call_${randomUUID()}`,
-          name: "sessions_spawn",
-          arguments: JSON.stringify({
+        writeToolCall(
+          response,
+          "sessions_spawn",
+          {
             task: "Return the synthetic child cache-prefix result.",
             agentId: "main",
             context: "isolated",
             completionTarget: "parent",
-          }),
-          status: "completed",
-        };
-        writeOpenAiResponsesSse(response, [
-          {
-            type: "response.output_item.added",
-            output_index: 0,
-            item: { ...item, status: "in_progress", arguments: "" },
           },
-          {
-            type: "response.function_call_arguments.done",
-            item_id: item.id,
-            output_index: 0,
-            arguments: item.arguments,
-          },
-          { type: "response.output_item.done", output_index: 0, item },
-          {
-            type: "response.completed",
-            response: {
-              id: `resp_${randomUUID()}`,
-              status: "completed",
-              output: [item],
-              usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-            },
-          },
-        ]);
+          1,
+          1,
+        );
         return;
       }
       const isChildRequest =
@@ -107,16 +83,8 @@ describe("Gateway prompt-cache stability", () => {
   beforeAll(async () => {
     resetGatewayTestState();
     home = await setupGatewayTempHome({ prefix: "openclaw-prompt-cache-" });
-    await new Promise<void>((resolve, reject) => {
-      provider.once("error", reject);
-      provider.listen(0, "127.0.0.1", resolve);
-    });
-    const address = provider.address();
-    if (!address || typeof address === "string") {
-      throw new Error("fixture provider did not bind");
-    }
     const model = buildMockOpenAiResponsesProvider(
-      `http://127.0.0.1:${address.port}/v1`,
+      await listenProvider(provider),
       "prompt-cache-fixture",
     );
     const providerId = "openai";
@@ -162,13 +130,8 @@ describe("Gateway prompt-cache stability", () => {
     } satisfies OpenClawConfig;
     const configPath = await createGatewayConfigPath(home.tempHome);
     startGatewayFixture = async () => {
-      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-      gateway = await startGatewayWithClient({
+      gateway = await startControlUiGateway({
         cfg,
-        portClaim,
-        clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-        origin: `http://127.0.0.1:${portClaim.port}`,
         configPath,
         token,
         clientDisplayName: "prompt-cache-test",
@@ -178,44 +141,7 @@ describe("Gateway prompt-cache stability", () => {
     await startGatewayFixture();
   }, 90_000);
 
-  afterAll(async () => {
-    try {
-      if (gateway) {
-        try {
-          await disconnectGatewayClient(gateway.client);
-        } finally {
-          await gateway.server.close({ reason: "prompt cache test complete" });
-        }
-      }
-    } finally {
-      provider.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        provider.close(() => resolve());
-      });
-      resetGatewayTestState();
-      if (home) {
-        await removeGatewayTempHome(home.tempHome);
-        home.envSnapshot.restore();
-      }
-    }
-  });
-
-  async function send(sessionKey: string, message: string, timeoutMs = 30_000): Promise<string> {
-    const accepted = await gateway.client.request<{ runId: string; status: string }>("chat.send", {
-      sessionKey,
-      message,
-      deliver: false,
-      idempotencyKey: randomUUID(),
-    });
-    expect(accepted.status).toBe("started");
-    const completed = await gateway.client.request<{ status: string }>(
-      "agent.wait",
-      { runId: accepted.runId, timeoutMs },
-      { timeoutMs: timeoutMs + 5_000 },
-    );
-    expect(completed.status).toBe("ok");
-    return accepted.runId;
-  }
+  afterAll(() => closeChatFixture(gateway, provider, home, "prompt cache test complete"));
 
   it("preserves the provider prefix across chat.send, completion and Gateway restart", async ({
     signal,
@@ -223,7 +149,8 @@ describe("Gateway prompt-cache stability", () => {
     const sessionKey = `agent:main:cache-prefix-${randomUUID()}`;
     const requestStart = requests.length;
     // The real first send establishes the conversation metadata used by command continuations.
-    const initializedRunId = await send(
+    const initializedRunId = await sendChatAndWait(
+      gateway.client,
       sessionKey,
       "Remember this synthetic conversation for the completion update.",
       60_000,
@@ -247,7 +174,7 @@ describe("Gateway prompt-cache stability", () => {
     const stopObservingPrivate = onAgentAuditEvent(observeCompletion);
     try {
       // The real spawn owns child lineage and the completion's one-use tool grant.
-      await send(sessionKey, "Start the synthetic cache-prefix child.");
+      await sendChatAndWait(gateway.client, sessionKey, "Start the synthetic cache-prefix child.");
       const outputs = requests.slice(requestStart).flatMap((body) => {
         const payload = JSON.parse(body) as {
           input: Array<{ type?: string; output?: string }>;
@@ -280,7 +207,11 @@ describe("Gateway prompt-cache stability", () => {
     await disconnectGatewayClient(gateway.client);
     await gateway.server.close({ reason: "prompt-prefix restart proof" });
     await startGatewayFixture();
-    await send(sessionKey, "Continue the same synthetic conversation after the child completion.");
+    await sendChatAndWait(
+      gateway.client,
+      sessionKey,
+      "Continue the same synthetic conversation after the child completion.",
+    );
     expect(providerErrors.length).toBe(0);
     expect(
       requests.slice(requestStart).some((body) => {
@@ -295,19 +226,7 @@ describe("Gateway prompt-cache stability", () => {
     const turnRequests = requests
       .slice(requestStart)
       .filter((_body, index) => requestSessionIds[requestStart + index] === parentSessionId);
-    const requestShapes = requests.slice(requestStart).map((body, index) => {
-      const payload = JSON.parse(body) as {
-        input: Array<{ role?: string; type?: string }>;
-      };
-      return {
-        parent: requestSessionIds[requestStart + index] === parentSessionId,
-        input: payload.input.map(({ role, type }) => ({ role, type })),
-      };
-    });
-    expect(
-      turnRequests.length,
-      `parent requests include the tool loop and completion: ${JSON.stringify(requestShapes)}`,
-    ).toBe(5);
+    expect(turnRequests, "parent requests include the tool loop and completion").toHaveLength(5);
     const prefixes = turnRequests.map((body) => {
       const payload = JSON.parse(body) as { prompt_cache_key?: unknown };
       expect(

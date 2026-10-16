@@ -60,6 +60,27 @@ function createPersistentManager() {
   return { manager, dir, databaseOptions, onExpired, onLifecycle };
 }
 
+function observeSettlement(promise: Promise<unknown> | null) {
+  const settled = vi.fn();
+  void promise?.then(settled, settled);
+  return settled;
+}
+
+function holdResolutionReply() {
+  const resolve = operatorApprovalStore.resolveOperatorApproval;
+  const committed = createDeferredCore<Awaited<ReturnType<typeof resolve>>>();
+  const reply = createDeferredCore();
+  const delayedReply = vi
+    .spyOn(operatorApprovalStore, "resolveOperatorApproval")
+    .mockImplementationOnce(async (params) => {
+      const result = await resolve(params);
+      committed.resolve(result);
+      await reply.promise;
+      return result;
+    });
+  return { committed, reply, delayedReply };
+}
+
 describe("ExecApprovalManager lifetime", () => {
   it.for(["authority", "signal", "retirement"] as const)(
     "refuses insertion when %s closes during audience preparation",
@@ -133,31 +154,20 @@ describe("ExecApprovalManager lifetime", () => {
     const secondRecord = second.create({ command: "printf second" }, 60_000, "same-id");
     const authority = (await first.register(firstRecord, 60_000)).decision;
     await second.register(secondRecord, 60_000);
-    let authoritySettled = false;
-    void authority.then(
-      () => {
-        authoritySettled = true;
-      },
-      () => {
-        authoritySettled = true;
-      },
-    );
+    const authoritySettled = observeSettlement(authority);
     const rejected = expect(first.awaitDecision(firstRecord.id)).rejects.toBeInstanceOf(
       ApprovalObserverClosedError,
     );
     const secondWait = second.awaitDecision(secondRecord.id);
-    let secondSettled = false;
-    void secondWait?.then(() => {
-      secondSettled = true;
-    });
+    const secondSettled = observeSettlement(secondWait);
 
     first.beginClose();
     await rejected;
     expect(first.getLiveSnapshot(firstRecord.id)?.resolvedAtMs).toBeUndefined();
-    expect(authoritySettled).toBe(false);
-    expect(secondSettled).toBe(false);
+    expect(authoritySettled).not.toHaveBeenCalled();
+    expect(secondSettled).not.toHaveBeenCalled();
     await first.drain();
-    expect(authoritySettled).toBe(false);
+    expect(authoritySettled).not.toHaveBeenCalled();
     expect(await second.resolve(secondRecord.id, "allow-once")).toBe(true);
     await expect(secondWait).resolves.toBe("allow-once");
   });
@@ -187,15 +197,7 @@ describe("ExecApprovalManager lifetime", () => {
     const originalDatabaseOptions = { ...databaseOptions };
     const record = manager.create({ command: "printf untouched" }, 60_000, "pending-on-close");
     const authority = (await manager.register(record, 60_000)).decision;
-    let authoritySettled = false;
-    void authority.then(
-      () => {
-        authoritySettled = true;
-      },
-      () => {
-        authoritySettled = true;
-      },
-    );
+    const authoritySettled = observeSettlement(authority);
     const before = await getOperatorApprovalDetailed({ id: record.id, databaseOptions });
     if (before.outcome !== "found") {
       throw new Error("expected the registered durable approval");
@@ -206,7 +208,7 @@ describe("ExecApprovalManager lifetime", () => {
     manager.retire();
     await Promise.all([rejected, manager.drain()]);
     await vi.advanceTimersByTimeAsync(60_001);
-    expect(authoritySettled).toBe(false);
+    expect(authoritySettled).not.toHaveBeenCalled();
     expect(onExpired).not.toHaveBeenCalled();
     expect(onLifecycle).toHaveBeenCalledOnce();
     // A past read time inspects the stored row without letting the lookup itself expire it.
@@ -257,22 +259,12 @@ describe("ExecApprovalManager lifetime", () => {
     const { manager, databaseOptions } = createPersistentManager();
     const record = manager.create({ command: "printf committed" }, 60_000, "delayed-reply");
     const { decision } = await manager.register(record, 60_000);
-    const committed = createDeferredCore();
-    const reply = createDeferredCore();
+    const { committed, reply, delayedReply } = holdResolutionReply();
     const effectStarted = createDeferredCore();
     const finishEffect = createDeferredCore();
     const decisions: unknown[] = [];
     let consumed: boolean | undefined;
     let drained = false;
-    const resolve = operatorApprovalStore.resolveOperatorApproval;
-    const delayedReply = vi
-      .spyOn(operatorApprovalStore, "resolveOperatorApproval")
-      .mockImplementationOnce(async (params) => {
-        const result = await resolve(params);
-        committed.resolve();
-        await reply.promise;
-        return result;
-      });
     const handoff = manager.registerDecisionHandoff(record.id, async (answer) => {
       decisions.push(answer);
       effectStarted.resolve();
@@ -318,18 +310,8 @@ describe("ExecApprovalManager lifetime", () => {
     const { manager } = createPersistentManager();
     const record = manager.create({ command: "printf reviewed" }, 60_000, "auto-review-reply");
     const { decision } = await manager.register(record, 60_000);
-    const resolve = operatorApprovalStore.resolveOperatorApproval;
-    const committed = createDeferredCore<Awaited<ReturnType<typeof resolve>>>();
-    const reply = createDeferredCore();
+    const { committed, reply, delayedReply } = holdResolutionReply();
     const handoffResults: unknown[] = [];
-    const delayedReply = vi
-      .spyOn(operatorApprovalStore, "resolveOperatorApproval")
-      .mockImplementationOnce(async (params) => {
-        const result = await resolve(params);
-        committed.resolve(result);
-        await reply.promise;
-        return result;
-      });
     const handoff = manager.registerDecisionHandoff(record.id, async (answer) => {
       handoffResults.push({
         decision: answer,

@@ -6,15 +6,18 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { setTestEnvValue } from "../test-utils/env.js";
-import { acquireTestPortBlock } from "../test-utils/port-claims.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  closeChatFixture,
+  sendChatAndWait,
+  startControlUiGateway,
+} from "./gateway-chat-fixture.test-support.js";
+import { listenProvider, readProviderBody } from "./gateway-provider-fixture.test-support.js";
 import {
   createGatewayConfigPath,
-  removeGatewayTempHome,
   resetGatewayTestState,
   setupGatewayTempHome,
 } from "./gateway.test-support.js";
-import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import type { startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 type TextMessage = {
@@ -43,11 +46,7 @@ describe("registered Control UI chat text fidelity", () => {
   const providerErrors: unknown[] = [];
   const provider = createServer((request, response) => {
     void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      }
-      requests.push(Buffer.concat(chunks).toString("utf8"));
+      requests.push(await readProviderBody(request));
       writeOpenAiResponsesText(response, {
         text: "Fixture reply complete.",
         messageId: `msg_${randomUUID()}`,
@@ -64,16 +63,8 @@ describe("registered Control UI chat text fidelity", () => {
   beforeAll(async () => {
     resetGatewayTestState();
     home = await setupGatewayTempHome({ prefix: "openclaw-chat-redaction-" });
-    await new Promise<void>((resolve, reject) => {
-      provider.once("error", reject);
-      provider.listen(0, "127.0.0.1", resolve);
-    });
-    const address = provider.address();
-    if (!address || typeof address === "string") {
-      throw new Error("fixture provider did not bind");
-    }
     const model = buildMockOpenAiResponsesProvider(
-      `http://127.0.0.1:${address.port}/v1`,
+      await listenProvider(provider),
       "redaction-fixture",
     );
     const token = randomUUID();
@@ -92,14 +83,8 @@ describe("registered Control UI chat text fidelity", () => {
       hooks: { enabled: false },
     } satisfies OpenClawConfig;
     const configPath = await createGatewayConfigPath(home.tempHome);
-    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-    const { port } = portClaim;
-    gateway = await startGatewayWithClient({
+    gateway = await startControlUiGateway({
       cfg,
-      portClaim,
-      clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-      mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-      origin: `http://127.0.0.1:${port}`,
       configPath,
       token,
       clientDisplayName: "chat-redaction-test",
@@ -107,51 +92,22 @@ describe("registered Control UI chat text fidelity", () => {
     await gateway.server.startupSettled;
   }, 90_000);
 
-  afterAll(async () => {
-    try {
-      if (gateway) {
-        try {
-          await disconnectGatewayClient(gateway.client);
-        } finally {
-          await gateway.server.close({ reason: "chat redaction tests complete" });
-        }
-      }
-    } finally {
-      provider.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        provider.close(() => resolve());
-      });
-      resetSecretRedactionRegistryForTest();
-      resetGatewayTestState();
-      if (home) {
-        await removeGatewayTempHome(home.tempHome);
-        home.envSnapshot.restore();
-      }
-    }
-  });
-
-  async function send(sessionKey: string, message: string): Promise<void> {
-    const accepted = await gateway.client.request<{ runId: string; status: string }>("chat.send", {
-      sessionKey,
-      message,
-      deliver: false,
-      idempotencyKey: randomUUID(),
-    });
-    expect(accepted.status).toBe("started");
-    const completed = await gateway.client.request<{ status: string }>(
-      "agent.wait",
-      { runId: accepted.runId, timeoutMs: 30_000 },
-      { timeoutMs: 35_000 },
-    );
-    expect(completed.status).toBe("ok");
-  }
+  afterAll(() =>
+    closeChatFixture(
+      gateway,
+      provider,
+      home,
+      "chat redaction tests complete",
+      resetSecretRedactionRegistryForTest,
+    ),
+  );
 
   async function expectStoredAndSent(message: string): Promise<void> {
     const sessionKey = `agent:main:redaction-${randomUUID()}`;
     // The first turn creates the session; the regression affects subsequent admission.
-    await send(sessionKey, "Initialize this fixture conversation.");
+    await sendChatAndWait(gateway.client, sessionKey, "Initialize this fixture conversation.");
     const requestStart = requests.length;
-    await send(sessionKey, message);
+    await sendChatAndWait(gateway.client, sessionKey, message);
     const history = await gateway.client.request<{ messages: TextMessage[] }>("chat.history", {
       sessionKey,
     });
@@ -164,19 +120,10 @@ describe("registered Control UI chat text fidelity", () => {
   }
 
   it.each([
-    publicUrl,
-    `https://example.test/${secret}@latest`,
-    `https://example.test/path-${secret}?foo=@`,
-    JSON.stringify(JSON.stringify([`${publicUrl}?safe=1`, publicUrl])),
-  ])(
-    "chat.send preserves %s in chat.history and recorded model input",
-    async (url) => {
-      await expectStoredAndSent(url);
-    },
-    90_000,
-  );
-
-  it.each([
+    ["public URL", publicUrl],
+    ["URL path with at sign", `https://example.test/${secret}@latest`],
+    ["URL path with query", `https://example.test/path-${secret}?foo=@`],
+    ["nested JSON URLs", JSON.stringify(JSON.stringify([`${publicUrl}?safe=1`, publicUrl]))],
     ["bare credential", secret],
     ["unknown URL query", `https://example.test/?foo=.${secret}`],
     [
@@ -192,9 +139,7 @@ describe("registered Control UI chat text fidelity", () => {
     ["credential after Markdown link", `[docs](${publicUrl})${secret}`],
   ])(
     "chat.send preserves the %s in chat.history and recorded model input",
-    async (_label, input) => {
-      await expectStoredAndSent(input);
-    },
+    (_label, input) => expectStoredAndSent(input),
     90_000,
   );
 

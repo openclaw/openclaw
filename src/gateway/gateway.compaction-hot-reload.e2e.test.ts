@@ -1,7 +1,5 @@
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentWaitResult } from "../agents/run-wait.types.js";
 import {
@@ -22,27 +20,15 @@ import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-s
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { redactSensitiveText } from "../logging/redact.js";
-import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { setTestEnvValue } from "../test-utils/env.js";
+import {
+  closeProvider,
+  listenProvider,
+  readProviderBody,
+} from "./gateway-provider-fixture.test-support.js";
+import { createGatewayConfigPath, setupGatewayTempHome } from "./gateway.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
-
-const ISOLATED_GATEWAY_ENV_KEYS = [
-  "HOME",
-  "OPENCLAW_STATE_DIR",
-  "OPENCLAW_CONFIG_PATH",
-  "OPENCLAW_GATEWAY_TOKEN",
-  "OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN",
-  "OPENCLAW_TEST_RUNTIME_OVERRIDE_TOKEN",
-  "OPENCLAW_TEST_MINIMAL_GATEWAY",
-  "OPENCLAW_SKIP_CHANNELS",
-  "OPENCLAW_SKIP_GMAIL_WATCHER",
-  "OPENCLAW_SKIP_CRON",
-  "OPENCLAW_SKIP_CANVAS_HOST",
-  "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-  "OPENCLAW_SKIP_PROVIDERS",
-  "OPENCLAW_BUNDLED_PLUGINS_DIR",
-  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-] as const;
 
 let sequence = 0;
 
@@ -66,51 +52,24 @@ describe("gateway compaction hot reload", () => {
     "applies hot-reloaded tool policy, context budgets, and compaction models without restarting",
     { timeout: 90_000 },
     async () => {
-      const envSnapshot = captureEnv([...ISOLATED_GATEWAY_ENV_KEYS]);
-      const tempHome = await fs.mkdtemp(
-        path.join(os.tmpdir(), "openclaw-gw-compaction-hot-reload-"),
-      );
-      const workspaceDir = path.join(tempHome, "openclaw");
-      const bundledPluginsDir = path.join(tempHome, "openclaw-test-empty-bundled-plugins");
-      const configPath = path.join(tempHome, ".openclaw", "openclaw.json");
-      await Promise.all([
-        fs.mkdir(workspaceDir, { recursive: true }),
-        fs.mkdir(bundledPluginsDir, { recursive: true }),
-        fs.mkdir(path.dirname(configPath), { recursive: true }),
-      ]);
+      const { envSnapshot, tempHome, workspaceDir } = await setupGatewayTempHome({
+        prefix: "openclaw-gw-compaction-hot-reload-",
+      });
+      const configPath = await createGatewayConfigPath(tempHome);
       const token = nextId("compaction-hot-reload-token");
-      for (const [key, value] of Object.entries({
-        HOME: tempHome,
-        OPENCLAW_STATE_DIR: path.join(tempHome, ".openclaw"),
-        OPENCLAW_GATEWAY_TOKEN: token,
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      })) {
-        setTestEnvValue(key, value);
-      }
-      deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
-      deleteTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY");
+      setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
 
       const providerRequests: string[] = [];
       const providerRequestToolNames: string[][] = [];
       const summaryByModel = new Map<string, string>();
       const providerServer = createServer((request, response) => {
         void (async () => {
-          const chunks: Buffer[] = [];
-          for await (const chunk of request) {
-            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-          }
+          const raw = await readProviderBody(request);
           if (request.method !== "POST" || request.url !== "/v1/responses") {
             response.writeHead(404).end();
             return;
           }
-          const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+          const body = JSON.parse(raw) as {
             model?: string;
             tools?: Array<{ name?: string; function?: { name?: string } }>;
           };
@@ -152,15 +111,7 @@ describe("gateway compaction hot reload", () => {
 
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
       try {
-        await new Promise<void>((resolve, reject) => {
-          providerServer.once("error", reject);
-          providerServer.listen(0, "127.0.0.1", resolve);
-        });
-        const providerAddress = providerServer.address();
-        if (!providerAddress || typeof providerAddress === "string") {
-          throw new Error("mock OpenAI Responses server did not bind a loopback port");
-        }
-        const baseUrl = `http://127.0.0.1:${providerAddress.port}/v1`;
+        const baseUrl = await listenProvider(providerServer);
         const primaryModel = buildMockOpenAiResponsesProvider(baseUrl, "gpt-primary");
         const oldCompactionModel = buildMockOpenAiResponsesProvider(baseUrl, "gpt-old-summary");
         const newCompactionModel = buildMockOpenAiResponsesProvider(baseUrl, "gpt-new-summary");
@@ -334,10 +285,7 @@ describe("gateway compaction hot reload", () => {
           await disconnectGatewayClient(gateway.client);
           await gateway.server.close({ reason: "compaction hot reload integration test complete" });
         }
-        providerServer.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          providerServer.close(() => resolve());
-        });
+        await closeProvider(providerServer);
         await fs.rm(tempHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
         envSnapshot.restore();
       }
