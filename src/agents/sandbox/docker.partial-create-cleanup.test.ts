@@ -150,12 +150,6 @@ describe("fresh sandbox container cleanup", () => {
 
   it("preserves readiness when inspection fails", async () => {
     registryMocks.readRegistryEntry.mockResolvedValue({
-      containerName: "oc-test-shared",
-      backendId: "docker",
-      sessionKey: "partial-create",
-      createdAtMs: 1,
-      lastUsedAtMs: 1,
-      image: "openclaw-sandbox:test",
       runtimeState: "ready",
     });
     containerMocks.execContainer.mockResolvedValue({

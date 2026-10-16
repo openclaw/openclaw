@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -83,13 +83,9 @@ async function createDockerExecBackend() {
   return createDockerSandboxBackend(backendParams({ scopeKey, readOnlyResourceMounts }));
 }
 
-function finalize(backend: SandboxBackendHandle, token: unknown) {
-  return backend.finalizeExec?.({ ...completed, token });
-}
-
-function envFile(spec: { argv: string[] }) {
-  return spec.argv[spec.argv.indexOf("--env-file") + 1]!;
-}
+const finalize = (backend: SandboxBackendHandle, token: unknown) =>
+  backend.finalizeExec?.({ ...completed, token });
+const envFile = (spec: { argv: string[] }) => spec.argv[spec.argv.indexOf("--env-file") + 1]!;
 
 function assertStaged(staged: string, expected: Record<string, string>) {
   for (const [key, value] of Object.entries(expected)) {
@@ -97,9 +93,12 @@ function assertStaged(staged: string, expected: Record<string, string>) {
   }
 }
 
-function mount(type: string, source: string, destination: string, writable = true) {
-  return { Type: type, Source: source, Destination: destination, RW: writable };
-}
+const mount = (type: string, source: string, destination: string, writable = true) => ({
+  Type: type,
+  Source: source,
+  Destination: destination,
+  RW: writable,
+});
 
 function assertMasked(
   bridge: { resolvePath: (input: { filePath: string }) => unknown },
@@ -111,24 +110,38 @@ function assertMasked(
 }
 
 function provision(containerName = "sandbox-container") {
-  mocks.ensureSandboxContainer.mockResolvedValueOnce({
-    containerName,
-    containerId,
+  mocks.ensureSandboxContainer.mockResolvedValueOnce({ containerName, containerId });
+}
+
+const bind = (source: string, target: string, writable: boolean) => ({ source, target, writable });
+const engineResult = (stdout: string) => ({ code: 0, stdout, stderr: "" });
+const rawResult = (code = 0, stderr = "") => ({
+  code,
+  stdout: Buffer.alloc(0),
+  stderr: Buffer.from(stderr),
+});
+
+function launch(spec: { argv: string[]; env?: NodeJS.ProcessEnv }, cwd: string) {
+  const {
+    status: code,
+    stdout,
+    stderr,
+    error,
+  } = spawnSync(spec.argv[0]!, spec.argv.slice(1), {
+    cwd,
+    env: { ...spec.env, PATH: `${cwd}${path.delimiter}${process.env.PATH}` },
+    encoding: "utf8",
   });
-}
-
-function bind(source: string, target: string, writable: boolean) {
-  return { source, target, writable };
-}
-
-function engineResult(stdout: string) {
-  return { code: 0, stdout, stderr: "" };
+  if (error) {
+    throw error;
+  }
+  return { code, stdout, stderr };
 }
 
 async function mountedBridge(
   binds: ReturnType<typeof bind>[],
   tmpfs: Partial<Record<string, string>>,
-  table: string[],
+  table: string,
   extraMounts: { Type: string; Source: string; Destination: string; RW: boolean }[] = [],
 ) {
   mocks.execContainer
@@ -146,11 +159,8 @@ async function mountedBridge(
     )
     .mockResolvedValueOnce(
       engineResult(
-        [
-          "1 1 0:1 / / rw - overlay overlay rw",
-          "2 1 8:1 /project /workspace rw - ext4 /dev/root rw",
-          ...table,
-        ].join("\n"),
+        "1 1 0:1 / / rw - overlay overlay rw\n2 1 8:1 /project /workspace rw - ext4 /dev/root rw\n" +
+          table,
       ),
     );
   const backend = await createDockerExecBackend();
@@ -261,16 +271,12 @@ it.each(["cleanup", "filesystem"])("pins %s to the allocated generation", async 
   const execute = mocks.execContainer.getMockImplementation()!;
   mocks.execContainer.mockImplementation(async (engine, args, options) => {
     if (args.includes("{{.Id}}") && args.at(-1) === "sandbox-container") {
-      return { code: 0, stdout: "b".repeat(64), stderr: "" };
+      return engineResult("b".repeat(64));
     }
     return execute(engine, args, options);
   });
   const backend = await createDockerExecBackend();
-  mocks.execContainerRaw.mockResolvedValueOnce({
-    code: 0,
-    stdout: Buffer.alloc(0),
-    stderr: Buffer.alloc(0),
-  });
+  mocks.execContainerRaw.mockResolvedValueOnce(rawResult());
   if (operation === "cleanup") {
     await backend.prepareProcessCleanup!({}).terminate();
   } else {
@@ -284,11 +290,7 @@ it.each(["removed", "stopped", "paused", "unreachable", "still present"] as cons
   async (state) => {
     const backend = await createDockerExecBackend();
     const cleanup = backend.prepareProcessCleanup!({});
-    mocks.execContainerRaw.mockResolvedValueOnce({
-      code: 125,
-      stdout: Buffer.alloc(0),
-      stderr: Buffer.from("exec failed"),
-    });
+    mocks.execContainerRaw.mockResolvedValueOnce(rawResult(125, "exec failed"));
     mocks.execContainer.mockResolvedValueOnce({
       code: state === "removed" || state === "unreachable" ? 1 : 0,
       stdout: JSON.stringify({
@@ -318,10 +320,7 @@ it("captures volume masks once after provisioning", async () => {
   const bridge = await mountedBridge(
     [bind("/host/export", "/workspace/cache/export", false)],
     { "/tmp": "rw" },
-    [
-      "3 2 8:1 /volume /workspace/cache rw - ext4 /dev/root rw",
-      "4 3 8:1 /export /workspace/cache/export ro - ext4 /dev/root rw",
-    ],
+    "3 2 8:1 /volume /workspace/cache rw - ext4 /dev/root rw\n4 3 8:1 /export /workspace/cache/export ro - ext4 /dev/root rw",
     [mount("volume", "/engine/volume", "/workspace/cache")],
   );
   assertMasked(bridge, ["cache/marker", "/workspace/cache/marker"]);
@@ -334,12 +333,19 @@ it("captures volume masks once after provisioning", async () => {
   );
 });
 
-it.each([
+type MaskFixture = {
+  name: string;
+  binds?: ReturnType<typeof bind>[];
+  tmpfs?: Partial<Record<string, string>>;
+  table: string;
+  masked?: string[];
+  readable?: string[];
+};
+it.each<MaskFixture>([
   {
     name: "tmpfs destination alias and retained retarget",
-    binds: [],
     tmpfs: { "/workspace/link": "rw" },
-    table: ["3 2 0:9 / /workspace/cache rw - tmpfs tmpfs rw"],
+    table: "3 2 0:9 / /workspace/cache rw - tmpfs tmpfs rw",
     masked: ["/workspace/link/marker", "/workspace/cache/marker"],
     readable: ["/workspace/other/marker"],
   },
@@ -351,12 +357,10 @@ it.each([
       bind("/host/live", "/workspace/cache/live", true),
     ],
     tmpfs: { "/workspace/aliases/link": "rw" },
-    table: [
-      "3 2 8:1 /cache /workspace/cache rw - ext4 /dev/root rw",
-      "4 3 8:1 /hidden /workspace/cache/hidden rw - ext4 /dev/root rw",
-      "5 3 0:9 / /workspace/cache rw - tmpfs tmpfs rw",
-      "6 5 8:1 /live /workspace/cache/live rw - ext4 /dev/root rw",
-    ],
+    table: `3 2 8:1 /cache /workspace/cache rw - ext4 /dev/root rw
+4 3 8:1 /hidden /workspace/cache/hidden rw - ext4 /dev/root rw
+5 3 0:9 / /workspace/cache rw - tmpfs tmpfs rw
+6 5 8:1 /live /workspace/cache/live rw - ext4 /dev/root rw`,
     masked: ["/workspace/cache/marker", "/workspace/cache/hidden/marker"],
     readable: ["/workspace/cache/live/marker"],
   },
@@ -364,10 +368,8 @@ it.each([
     name: "intervening tmpfs hides an older sibling bind",
     binds: [bind("/host/export", "/workspace/cache/export", true)],
     tmpfs: { "/workspace/aliases/deep/link": "rw" },
-    table: [
-      "3 2 8:1 /export /workspace/cache/export rw - ext4 /dev/root rw",
-      "4 2 0:9 / /workspace/cache rw - tmpfs tmpfs rw",
-    ],
+    table: `3 2 8:1 /export /workspace/cache/export rw - ext4 /dev/root rw
+4 2 0:9 / /workspace/cache rw - tmpfs tmpfs rw`,
     masked: ["/workspace/cache/marker", "/workspace/cache/export/marker"],
     readable: ["/workspace/other/marker"],
   },
@@ -375,83 +377,67 @@ it.each([
     name: "bind attached inside the intervening tmpfs remains visible",
     binds: [bind("/host/export", "/workspace/cache/export", true)],
     tmpfs: { "/workspace/aliases/deep/link": "rw" },
-    table: [
-      "3 2 0:9 / /workspace/cache rw - tmpfs tmpfs rw",
-      "4 3 8:1 /export /workspace/cache/export rw - ext4 /dev/root rw",
-    ],
+    table: `3 2 0:9 / /workspace/cache rw - tmpfs tmpfs rw
+4 3 8:1 /export /workspace/cache/export rw - ext4 /dev/root rw`,
     masked: ["/workspace/cache/marker"],
     readable: ["/workspace/cache/export/marker"],
   },
   {
     name: "identical recursive bind backing with a readonly top",
     binds: [bind("/host/export", "/workspace/export", false)],
-    tmpfs: {},
-    table: [
-      "3 2 8:1 /export /workspace/export rw - ext4 /dev/root rw",
-      "4 3 8:1 /export /workspace/export ro - ext4 /dev/root rw",
-    ],
-    masked: [],
+    table: `3 2 8:1 /export /workspace/export rw - ext4 /dev/root rw
+4 3 8:1 /export /workspace/export ro - ext4 /dev/root rw`,
     readable: ["/workspace/export/marker"],
   },
   {
     name: "readonly bind with mismatched realized access",
     binds: [bind("/host/export", "/workspace/export", false)],
-    tmpfs: {},
-    table: ["3 2 8:1 /export /workspace/export rw - ext4 /dev/root rw"],
+    table: "3 2 8:1 /export /workspace/export rw - ext4 /dev/root rw",
     masked: ["/workspace/export/marker"],
-    readable: [],
   },
   {
     name: "escaped whitespace in realized bind paths",
     binds: [bind("/host/export ", "/workspace/export ", false)],
-    tmpfs: {},
-    table: ["3 2 8:1 /export\\040 /workspace/export\\040 ro - ext4 /dev/root rw"],
-    masked: [],
+    table: "3 2 8:1 /export\\040 /workspace/export\\040 ro - ext4 /dev/root rw",
     readable: ["/workspace/export /marker"],
   },
   {
     name: "visible recursive child above a hidden older child",
     binds: [bind("/host/export", "/workspace/export", false)],
-    tmpfs: {},
-    table: [
-      "3 2 8:1 /export /workspace/export rw - ext4 /dev/root rw",
-      "4 2 8:1 /project /workspace rw - ext4 /dev/root rw",
-      "5 4 8:1 /export /workspace/export rw - ext4 /dev/root rw",
-      "6 5 8:1 /export /workspace/export ro - ext4 /dev/root rw",
-    ],
-    masked: [],
+    table: `3 2 8:1 /export /workspace/export rw - ext4 /dev/root rw
+4 2 8:1 /project /workspace rw - ext4 /dev/root rw
+5 4 8:1 /export /workspace/export rw - ext4 /dev/root rw
+6 5 8:1 /export /workspace/export ro - ext4 /dev/root rw`,
     readable: ["/workspace/export/marker"],
   },
   {
     name: "different backing above a hidden older bind",
     binds: [bind("/host/cache", "/workspace/cache", true)],
     tmpfs: { "/workspace/aliases/link": "rw" },
-    table: [
-      "3 2 8:1 /cache /workspace/cache rw - ext4 /dev/root rw",
-      "4 2 8:1 /project /workspace rw - ext4 /dev/root rw",
-      "5 4 0:9 / /workspace/cache rw - tmpfs tmpfs rw",
-    ],
+    table: `3 2 8:1 /cache /workspace/cache rw - ext4 /dev/root rw
+4 2 8:1 /project /workspace rw - ext4 /dev/root rw
+5 4 0:9 / /workspace/cache rw - tmpfs tmpfs rw`,
     masked: ["/workspace/cache/marker"],
     readable: ["/workspace/other/marker"],
   },
   {
     name: "bind destination alias without a realized lexical mount",
     binds: [bind("/host/export", "/workspace/link", true)],
-    tmpfs: {},
-    table: ["3 2 8:1 /export /workspace/cache rw - ext4 /dev/root rw"],
+    table: "3 2 8:1 /export /workspace/cache rw - ext4 /dev/root rw",
     masked: ["/workspace/link/marker", "/workspace/cache/marker"],
     readable: ["/workspace/other/marker"],
   },
-])("captures realized masks for $name", async ({ binds, tmpfs, table, masked, readable }) => {
-  const bridge = await mountedBridge(binds, tmpfs, table);
-  for (const filePath of masked) {
-    expect(() => bridge.resolvePath({ filePath })).toThrow("container-only");
-  }
-  for (const filePath of readable) {
-    expect(bridge.resolvePath({ filePath }).containerPath).toBe(filePath);
-  }
-  expect(mocks.execContainer).toHaveBeenCalledTimes(2);
-});
+])(
+  "captures realized masks for $name",
+  async ({ binds = [], tmpfs = {}, table, masked = [], readable = [] }) => {
+    const bridge = await mountedBridge(binds, tmpfs, table);
+    assertMasked(bridge, masked);
+    for (const filePath of readable) {
+      expect(bridge.resolvePath({ filePath }).containerPath).toBe(filePath);
+    }
+    expect(mocks.execContainer).toHaveBeenCalledTimes(2);
+  },
+);
 
 it("rejects an unreadable filesystem snapshot", async () => {
   mocks.execContainer.mockRejectedValueOnce(new Error("inspect failed"));
@@ -479,11 +465,7 @@ it("binds Podman provisioning and later execs to the resolved target", async () 
       cfg: resolveSandboxConfigForAgent(createConfig("podman", false)),
     }),
   );
-  const execSpec = await backend.buildExecSpec({
-    command: "true",
-    env: {},
-    usePty: false,
-  });
+  const execSpec = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
 
   expect(mocks.ensureSandboxContainer).toHaveBeenCalledWith(
     expect.objectContaining({ podmanTarget }),
@@ -551,12 +533,7 @@ it("stages exec environment privately until finalization", async () => {
 
 it("admits explicit piped input without enabling a PTY", async () => {
   const backend = await createDockerExecBackend();
-  const spec = await backend.buildExecSpec({
-    command: "cat",
-    env: {},
-    usePty: false,
-    stdin: true,
-  });
+  const spec = await backend.buildExecSpec({ command: "cat", env: {}, usePty: false, stdin: true });
   expect(spec.stdinMode).toBe("pipe-open");
   expect(spec.argv).toContain("-i");
   expect(spec.argv).not.toContain("-t");
@@ -626,29 +603,9 @@ process.stdout.write(JSON.stringify({
       },
       usePty: false,
     });
-    const execute = async () => {
-      const child = spawn(spec.argv[0]!, spec.argv.slice(1), {
-        cwd: root,
-        env: { ...spec.env, PATH: `${root}${path.delimiter}${process.env.PATH}` },
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      let stdout = "";
-      let stderr = "";
-      child.stdout.on("data", (chunk) => {
-        stdout += String(chunk);
-      });
-      child.stderr.on("data", (chunk) => {
-        stderr += String(chunk);
-      });
-      const code = await new Promise<number | null>((resolve, reject) => {
-        child.once("error", reject);
-        child.once("close", resolve);
-      });
-      return { code, stdout, stderr };
-    };
     try {
       fs.writeFileSync(hosts, `${host}:\n  oauth_token: synthetic-after-preparation\n`);
-      const result = await execute();
+      const result = launch(spec, root);
       expect(result).toMatchObject({ code: 0, stderr: "" });
       const delivered = JSON.parse(result.stdout);
       expect(delivered).toMatchObject({ selected: true, cleared: true });
@@ -670,7 +627,7 @@ process.stdout.write(JSON.stringify({
         "synthetic-",
       );
       fs.unlinkSync(hosts);
-      const refused = await execute();
+      const refused = launch(spec, root);
       expect(refused).toMatchObject({ code: 1, stdout: "" });
       expect(refused.stderr).toContain("GitHub Identity credential is unavailable or insecure");
     } finally {
@@ -774,16 +731,13 @@ it("matches canonical Podman identity for an expanded image name", async () => {
     )
     .mockResolvedValueOnce(engineResult("abc123\n"));
 
-  const result = await podmanSandboxBackendManager.describeRuntime({
-    entry: {
-      ...runtimeEntry("podman"),
-      configLabelKind: "Image",
-    },
-    config: createConfig(),
-    agentId: "coder",
-  });
-
-  expect(result).toEqual({
+  await expect(
+    podmanSandboxBackendManager.describeRuntime({
+      entry: { ...runtimeEntry("podman"), configLabelKind: "Image" },
+      config: createConfig(),
+      agentId: "coder",
+    }),
+  ).resolves.toEqual({
     running: true,
     actualConfigLabel: "localhost/openclaw-sandbox:bookworm-slim",
     configLabelMatch: true,

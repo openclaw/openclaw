@@ -25,22 +25,21 @@ async function createPathSafetyRuntimeMock() {
   return {
     ...actual,
     openRootFile: hoisted.openRootFile,
-    ...(beforeRead
-      ? {
-          readFileDescriptorBounded: async (
-            ...args: Parameters<typeof actual.readFileDescriptorBounded>
-          ) => {
-            await beforeRead(args[0]);
-            return actual.readFileDescriptorBounded(...args);
-          },
+    readFileDescriptorBounded: beforeRead
+      ? async (...args: Parameters<typeof actual.readFileDescriptorBounded>) => {
+          await beforeRead(args[0]);
+          return actual.readFileDescriptorBounded(...args);
         }
-      : {}),
+      : actual.readFileDescriptorBounded,
   };
 }
 
 vi.mock("../../infra/boundary-file-read.js", createPathSafetyRuntimeMock);
 
-import type { SandboxFsBridgeContext } from "./backend-handle.types.js";
+import type {
+  SandboxBackendCommandParams,
+  SandboxFsBridgeContext,
+} from "./backend-handle.types.js";
 import { createSandboxTestContext } from "./test-fixtures.js";
 import type { SandboxContext } from "./types.js";
 
@@ -80,50 +79,32 @@ export function createSandboxFsBridge(
     sandbox: SandboxFsBridgeContext;
   },
 ) {
-  if (!createSandboxFsBridgeImpl) {
-    throw new Error("fs-bridge test harness not initialized");
-  }
   const sandbox = params.sandbox;
+  const { containerName } = sandbox;
+  const runShellCommand = ({
+    script,
+    args = [],
+    stdin,
+    allowFailure,
+    signal,
+  }: SandboxBackendCommandParams) =>
+    hoisted.execDockerRaw(
+      ["exec", "-i", containerName, "sh", "-c", script, "openclaw-sandbox-fs", ...args],
+      { input: stdin, allowFailure, signal },
+    );
   return createSandboxFsBridgeImpl({
     ...params,
-    sandbox: {
-      ...sandbox,
-      backend: sandbox.backend ?? {
-        runShellCommand: ({ script, args, stdin, allowFailure, signal }) =>
-          hoisted.execDockerRaw(
-            [
-              "exec",
-              "-i",
-              sandbox.containerName,
-              "sh",
-              "-c",
-              script,
-              "openclaw-sandbox-fs",
-              ...(args ?? []),
-            ],
-            { input: stdin, allowFailure, signal },
-          ),
-      },
-    },
+    sandbox: { ...sandbox, backend: sandbox.backend ?? { runShellCommand } },
   });
 }
 
 export const mockedExecDockerRaw = hoisted.execDockerRaw;
 export const mockedOpenRootFile = hoisted.openRootFile;
-const DOCKER_SCRIPT_INDEX = 5;
-const DOCKER_FIRST_SCRIPT_ARG_INDEX = 7;
-
-export function getDockerScript(args: string[]): string {
-  return args[DOCKER_SCRIPT_INDEX] ?? "";
-}
-
-export function getDockerArg(args: string[], position: number): string {
-  return args[DOCKER_FIRST_SCRIPT_ARG_INDEX + position - 1] ?? "";
-}
-
-export function getScriptsFromCalls(): string[] {
-  return mockedExecDockerRaw.mock.calls.map(([args]) => getDockerScript(args));
-}
+// docker exec -i <name> sh -c <script> <argv0> <script arguments...>
+export const getDockerScript = (args: string[]): string => args[5] ?? "";
+export const getDockerArg = (args: string[], position: number): string => args[6 + position] ?? "";
+export const getScriptsFromCalls = (): string[] =>
+  mockedExecDockerRaw.mock.calls.map(([args]) => getDockerScript(args));
 
 export function expectOnlyCanonicalPathCommands() {
   for (const script of getScriptsFromCalls()) {
@@ -151,11 +132,7 @@ export function findCallByDockerArg(position: number, value: string) {
 }
 
 export function dockerExecResult(stdout: string) {
-  return {
-    stdout: Buffer.from(stdout),
-    stderr: Buffer.alloc(0),
-    code: 0,
-  };
+  return { stdout: Buffer.from(stdout), stderr: Buffer.alloc(0), code: 0 };
 }
 
 export function createSandbox(overrides?: Partial<SandboxContext>): SandboxContext {
@@ -190,16 +167,13 @@ export async function withTempDir<T>(
 function installDockerReadMock() {
   mockedExecDockerRaw.mockImplementation(async (args) => {
     const script = getDockerScript(args);
-    const stdout = script.includes('readlink -n -f -- "$cursor"')
-      ? `${getDockerArg(args, 1)}\n`
-      : script.includes('stat -c "%F|%s|%y"')
-        ? "regular file|1|2"
-        : script.includes('cat -- "$1"')
-          ? "content"
-          : script.includes("mktemp")
-            ? "/workspace/.openclaw-write-b.txt.ABC123\n"
-            : "";
-    return dockerExecResult(stdout);
+    const responses: [string, string][] = [
+      ['readlink -n -f -- "$cursor"', `${getDockerArg(args, 1)}\n`],
+      ['stat -c "%F|%s|%y"', "regular file|1|2"],
+      ['cat -- "$1"', "content"],
+      ["mktemp", "/workspace/.openclaw-write-b.txt.ABC123\n"],
+    ];
+    return dockerExecResult(responses.find(([token]) => script.includes(token))?.[1] ?? "");
   });
 }
 
