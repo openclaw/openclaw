@@ -50,19 +50,17 @@ describe("scripts/test-live", () => {
         // Intercept both old and new leaf entrypoints before any provider code loads.
         writeFileSync(
           preload,
-          [
-            'import fs from "node:fs";',
-            'import path from "node:path";',
-            'const bootstrap = path.basename(process.argv[1] ?? "") === "vitest-worker-bootstrap.mts";',
-            'if (bootstrap || ["check-live-cache.ts", "vitest.mjs"].includes(path.basename(process.argv[1] ?? ""))) {',
-            "  fs.writeFileSync(process.env.OPENCLAW_CACHE_RUNTIME_RECEIPT, JSON.stringify({",
-            '    runtime: process.versions.bun ? "bun" : "node", args: process.argv.slice(bootstrap ? 4 : 2),',
-            "    live: process.env.OPENCLAW_LIVE_TEST, cache: process.env.OPENCLAW_LIVE_CACHE_TEST,",
-            "    selectedRuntime: process.env.OPENCLAW_VITEST_RUNTIME,",
-            "  }));",
-            "  process.exit(Number(process.env.OPENCLAW_FAKE_BUN_EXIT));",
-            "}",
-          ].join("\n"),
+          `import fs from "node:fs";
+import path from "node:path";
+const bootstrap = path.basename(process.argv[1] ?? "") === "vitest-worker-bootstrap.mts";
+if (bootstrap || ["check-live-cache.ts", "vitest.mjs"].includes(path.basename(process.argv[1] ?? ""))) {
+  fs.writeFileSync(process.env.OPENCLAW_CACHE_RUNTIME_RECEIPT, JSON.stringify({
+    runtime: process.versions.bun ? "bun" : "node", args: process.argv.slice(bootstrap ? 4 : 2),
+    live: process.env.OPENCLAW_LIVE_TEST, cache: process.env.OPENCLAW_LIVE_CACHE_TEST,
+    selectedRuntime: process.env.OPENCLAW_VITEST_RUNTIME,
+  }));
+  process.exit(Number(process.env.OPENCLAW_FAKE_BUN_EXIT));
+}`,
         );
         writeFakeBun(join(root, "bun"));
         const script = JSON.parse(readFileSync("package.json", "utf8")).scripts["test:live:cache"];
@@ -235,16 +233,14 @@ describe("scripts/test-live", () => {
             "tsx",
             "--input-type=module",
             "--eval",
-            [
-              'import { mock } from "node:test";',
-              'import { main } from "./scripts/test-live.mts";',
-              'mock.timers.enable({ apis: ["Date", "setInterval"], now: 0 });',
-              'process.once("message", () => {',
-              "  mock.timers.tick(25);",
-              "  mock.timers.tick(75);",
-              "});",
-              'main(["--", "fake.live.test.ts"]);',
-            ].join("\n"),
+            `import { mock } from "node:test";
+import { main } from "./scripts/test-live.mts";
+mock.timers.enable({ apis: ["Date", "setInterval"], now: 0 });
+process.once("message", () => {
+  mock.timers.tick(25);
+  mock.timers.tick(75);
+});
+main(["--", "fake.live.test.ts"]);`,
           ],
           {
             env: {

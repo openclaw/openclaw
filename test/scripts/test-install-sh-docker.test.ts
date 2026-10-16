@@ -53,31 +53,48 @@ afterEach(() => {
   tempDirs.cleanup();
 });
 
+function runBash(source: string, env?: NodeJS.ProcessEnv) {
+  return spawnSync("bash", ["--noprofile", "--norc", "-c", source], {
+    encoding: "utf8",
+    ...(env ? { env } : {}),
+  });
+}
+
+function writeExecutable(file: string, source: string) {
+  writeFileSync(file, source, { mode: 0o755 });
+}
+
 class ScriptExit extends Error {
   constructor(readonly status: number) {
     super(`script exited ${String(status)}`);
   }
 }
 
-function extractNonrootNodePreflight(): string {
-  const script = readFileSync(NONROOT_RUNNER_PATH, "utf8");
-  const match = script.match(/node -e '\n([\s\S]*?)\n'\ncommand -v npm/u);
-  if (!match) {
-    throw new Error("non-root smoke Node preflight was not found");
-  }
-  return expectDefined(match[1], "non-root smoke Node preflight capture");
+function extractScript(file: string, pattern: RegExp): string {
+  const match = readFileSync(file, "utf8").match(pattern);
+  return expectDefined(match?.[1], `script fragment in ${file}: ${pattern}`);
 }
 
-function extractInstallE2eInstallerFunction(): string {
-  const script = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
-  const startMarker = "run_official_installer() (\n";
-  const endMarker = "\n\nverify_installed_version()";
+function extractBetween(file: string, startMarker: string, endMarker: string): string {
+  const script = readFileSync(file, "utf8");
   const start = script.indexOf(startMarker);
   const end = script.indexOf(endMarker, start + startMarker.length);
   if (start < 0 || end <= start) {
-    throw new Error("install E2E installer function was not found");
+    throw new Error(`script fragment not found in ${file}`);
   }
   return script.slice(start, end);
+}
+
+function extractNonrootNodePreflight() {
+  return extractScript(NONROOT_RUNNER_PATH, /node -e '\n([\s\S]*?)\n'\ncommand -v npm/u);
+}
+
+function extractInstallE2eInstallerFunction() {
+  return extractBetween(
+    INSTALL_E2E_RUNNER_PATH,
+    "run_official_installer() (\n",
+    "\n\nverify_installed_version()",
+  );
 }
 
 function scanInstallE2eTranscript(text: string, limits: Record<string, string> = {}) {
@@ -111,27 +128,19 @@ function scanInstallE2eTranscript(text: string, limits: Record<string, string> =
   }
 }
 
-function extractNonrootInstallerStep(): string {
-  const script = readFileSync(NONROOT_RUNNER_PATH, "utf8");
-  const startMarker = 'echo "==> Run installer (non-root user)"';
-  const endMarker = "\n\n# Ensure PATH";
-  const start = script.indexOf(startMarker);
-  const end = script.indexOf(endMarker, start + startMarker.length);
-  if (start < 0 || end <= start) {
-    throw new Error("non-root installer step was not found");
-  }
-  return script.slice(start, end);
+function extractNonrootInstallerStep() {
+  return extractBetween(
+    NONROOT_RUNNER_PATH,
+    'echo "==> Run installer (non-root user)"',
+    "\n\n# Ensure PATH",
+  );
 }
 
-function extractDockerTimezoneValidator(): string {
-  const script = readFileSync(DOCKER_SETUP_PATH, "utf8");
-  const match = script.match(
+function extractDockerTimezoneValidator() {
+  return extractScript(
+    DOCKER_SETUP_PATH,
     /(is_valid_timezone_in_image\(\) \{[\s\S]*?\n\})\n\nvalidate_mount_path_value/u,
   );
-  if (!match) {
-    throw new Error("Docker timezone validator was not found");
-  }
-  return expectDefined(match[1], "Docker timezone validator capture");
 }
 
 function runDockerTimezoneValidator(timezone: string) {
@@ -139,34 +148,22 @@ function runDockerTimezoneValidator(timezone: string) {
   const binDir = join(root, "bin");
   const dockerPath = join(binDir, "docker");
   mkdirSync(binDir, { recursive: true });
-  writeFileSync(
+  writeExecutable(
     dockerPath,
-    [
-      "#!/bin/bash",
-      "set -euo pipefail",
-      'while [[ "$#" -gt 0 && "$1" != "-e" ]]; do shift; done',
-      'exec "$HOST_NODE" "$@"',
-      "",
-    ].join("\n"),
-    { mode: 0o755 },
+    `#!/bin/bash
+set -euo pipefail
+while [[ "$#" -gt 0 && "$1" != "-e" ]]; do shift; done
+exec "$HOST_NODE" "$@"
+`,
   );
 
-  return spawnSync(
-    "bash",
-    [
-      "--noprofile",
-      "--norc",
-      "-c",
-      `${extractDockerTimezoneValidator()}\nIMAGE_NAME=openclaw:test\nis_valid_timezone_in_image "$TIMEZONE"`,
-    ],
+  return runBash(
+    `${extractDockerTimezoneValidator()}\nIMAGE_NAME=openclaw:test\nis_valid_timezone_in_image "$TIMEZONE"`,
     {
-      encoding: "utf8",
-      env: {
-        HOME: root,
-        HOST_NODE: testNodeExecPath,
-        PATH: `${binDir}:${process.env.PATH ?? ""}`,
-        TIMEZONE: timezone,
-      },
+      HOME: root,
+      HOST_NODE: testNodeExecPath,
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      TIMEZONE: timezone,
     },
   );
 }
@@ -185,26 +182,23 @@ function runInstallE2eInstallerFixture(params: {
   const outputPathCapture = join(root, "curl-output-path.txt");
   mkdirSync(binDir, { recursive: true });
   writeFileSync(installerSourcePath, params.installerBody);
-  writeFileSync(
+  writeExecutable(
     curlPath,
-    [
-      "#!/bin/sh",
-      "set -eu",
-      'printf \'%s\\n\' "$*" >"$CURL_ARGS_PATH"',
-      'output=""',
-      'while [ "$#" -gt 0 ]; do',
-      '  if [ "$1" = "-o" ]; then',
-      "    shift",
-      '    output="$1"',
-      "  fi",
-      "  shift",
-      "done",
-      'cp "$FAKE_INSTALLER_SOURCE" "$output"',
-      'printf "%s" "$output" >"$OUTPUT_PATH_CAPTURE"',
-      'exit "$FAKE_CURL_EXIT"',
-      "",
-    ].join("\n"),
-    { mode: 0o755 },
+    `#!/bin/sh
+set -eu
+printf '%s\\n' "$*" >"$CURL_ARGS_PATH"
+output=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then
+    shift
+    output="$1"
+  fi
+  shift
+done
+cp "$FAKE_INSTALLER_SOURCE" "$output"
+printf "%s" "$output" >"$OUTPUT_PATH_CAPTURE"
+exit "$FAKE_CURL_EXIT"
+`,
   );
 
   const env: NodeJS.ProcessEnv = {
@@ -247,7 +241,7 @@ function runNonrootInstallerFixture(curlExitCode: number) {
   const markerPath = join(root, "installer-marker.txt");
   const outputPathCapture = join(root, "curl-output-path.txt");
   mkdirSync(binDir, { recursive: true });
-  writeFileSync(
+  writeExecutable(
     join(binDir, "curl"),
     [
       "#!/bin/sh",
@@ -267,7 +261,6 @@ function runNonrootInstallerFixture(curlExitCode: number) {
       'exit "$FAKE_CURL_EXIT"',
       "",
     ].join("\n"),
-    { mode: 0o755 },
   );
 
   const result = spawnSync(
@@ -342,15 +335,11 @@ function runNonrootNodePreflight(
   }
 }
 
-function extractInstallE2eAgentJsonParser(): string {
-  const script = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
-  const match = script.match(
+function extractInstallE2eAgentJsonParser() {
+  return extractScript(
+    INSTALL_E2E_RUNNER_PATH,
     /node - <<'NODE' "\$out_json"\n([\s\S]*?)\nNODE\n\}\n\nRUN_AGENT_TURN_BG_PID/u,
   );
-  if (!match) {
-    throw new Error("install E2E agent JSON parser was not found");
-  }
-  return expectDefined(match[1], "install E2E agent JSON parser capture");
 }
 
 function normalizeInstallE2eAgentOutput(output: string) {
@@ -411,13 +400,11 @@ function validateInstallSmokeUpdateJson(doctorStep?: Record<string, unknown>) {
   });
 }
 
-function extractInstallSmokeInstallerPipeline(): string {
-  const script = readFileSync(SMOKE_RUNNER_PATH, "utf8");
-  const match = script.match(/(run_installer_pipeline\(\) \{[\s\S]*?\n\})\n\nrun_install_smoke/u);
-  if (!match) {
-    throw new Error("install smoke installer pipeline helper was not found");
-  }
-  return expectDefined(match[1], "install smoke installer pipeline helper capture");
+function extractInstallSmokeInstallerPipeline() {
+  return extractScript(
+    SMOKE_RUNNER_PATH,
+    /(run_installer_pipeline\(\) \{[\s\S]*?\n\})\n\nrun_install_smoke/u,
+  );
 }
 
 function readNulSeparatedArgs(filePath: string): string[] {
@@ -437,7 +424,7 @@ function runInstallSmokeInstallerPipelineFixture(params: {
   const timeoutArgsPath = join(root, "timeout-args.txt");
   const installUrl = "https://installer.example.test/install.sh?channel=beta&trace=1";
   mkdirSync(binDir, { recursive: true });
-  writeFileSync(
+  writeExecutable(
     join(binDir, "timeout"),
     [
       "#!/usr/bin/env bash",
@@ -447,9 +434,8 @@ function runInstallSmokeInstallerPipelineFixture(params: {
       'exec "$@"',
       "",
     ].join("\n"),
-    { mode: 0o755 },
   );
-  writeFileSync(
+  writeExecutable(
     join(binDir, "curl"),
     [
       "#!/usr/bin/env bash",
@@ -459,7 +445,6 @@ function runInstallSmokeInstallerPipelineFixture(params: {
       'exit "$FAKE_CURL_EXIT"',
       "",
     ].join("\n"),
-    { mode: 0o755 },
   );
   writeFileSync(
     installerSourcePath,
@@ -520,23 +505,15 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-function extractReadPackTarballFilename(): string {
-  const script = readFileSync(SCRIPT_PATH, "utf8");
-  const match = script.match(/(read_pack_tarball_filename\(\) \{[\s\S]*?\n\})\n\nSMOKE_IMAGE/u);
-  if (!match) {
-    throw new Error("read_pack_tarball_filename helper was not found");
-  }
-  return expectDefined(match[1], "pack tarball filename helper capture");
+function extractReadPackTarballFilename() {
+  return extractScript(
+    SCRIPT_PATH,
+    /(read_pack_tarball_filename\(\) \{[\s\S]*?\n\})\n\nSMOKE_IMAGE/u,
+  );
 }
 
-function extractInstallSmokePackHelper(name: string, nextName: string): string {
-  const script = readFileSync(SCRIPT_PATH, "utf8");
-  const start = script.indexOf(`${name}() {`);
-  const end = script.indexOf(`\n\n${nextName}() {`, start);
-  if (start < 0 || end <= start) {
-    throw new Error(`${name} helper was not found`);
-  }
-  return script.slice(start, end);
+function extractInstallSmokePackHelper(name: string, nextName: string) {
+  return extractBetween(SCRIPT_PATH, `${name}() {`, `\n\n${nextName}() {`);
 }
 
 function runInstallSmokePackHelpers(packJson: unknown, budgetBytes?: number) {
@@ -553,22 +530,13 @@ function runInstallSmokePackHelpers(packJson: unknown, budgetBytes?: number) {
   if (budgetBytes !== undefined) {
     env.OPENCLAW_INSTALL_SMOKE_PACK_UNPACKED_BUDGET_BYTES = String(budgetBytes);
   }
-  const result = spawnSync(
-    "bash",
-    [
-      "--noprofile",
-      "--norc",
-      "-c",
-      `set -euo pipefail
+  const result = runBash(
+    `set -euo pipefail
 ${extractInstallSmokePackHelper("normalize_npm_pack_json_file", "run_install_smoke_container")}
 ${extractInstallSmokePackHelper("assert_pack_unpacked_size_budget", "print_pack_delta_audit")}
 normalize_npm_pack_json_file "$PACK_JSON_PATH"
 assert_pack_unpacked_size_budget "fixture" "$PACK_JSON_PATH"`,
-    ],
-    {
-      encoding: "utf8",
-      env,
-    },
+    env,
   );
   return {
     normalized: JSON.parse(readFileSync(packJsonPath, "utf8")),
@@ -577,38 +545,25 @@ assert_pack_unpacked_size_budget "fixture" "$PACK_JSON_PATH"`,
 }
 
 function runReadPackTarballFilename(filename: string) {
-  return spawnSync(
-    "bash",
-    [
-      "--noprofile",
-      "--norc",
-      "-c",
-      `${extractReadPackTarballFilename()}
+  return runBash(
+    `${extractReadPackTarballFilename()}
 pack_json_file="$(mktemp)"
 trap 'rm -f "$pack_json_file"' EXIT
 printf '%s' "$PACK_JSON" >"$pack_json_file"
 read_pack_tarball_filename "$pack_json_file"`,
-    ],
     {
-      encoding: "utf8",
-      env: {
-        HOME: "/tmp",
-        PACK_JSON: JSON.stringify([{ filename }]),
-        PATH: process.env.PATH ?? "",
-      },
+      HOME: "/tmp",
+      PACK_JSON: JSON.stringify([{ filename }]),
+      PATH: process.env.PATH ?? "",
     },
   );
 }
 
-function extractEnsureLocalUpdateDistImportClosure(): string {
-  const script = readFileSync(SCRIPT_PATH, "utf8");
-  const match = script.match(
+function extractEnsureLocalUpdateDistImportClosure() {
+  return extractScript(
+    SCRIPT_PATH,
     /(ensure_local_update_dist_import_closure\(\) \{[\s\S]*?\n\})\n\nread_candidate_version/u,
   );
-  if (!match) {
-    throw new Error("ensure_local_update_dist_import_closure helper was not found");
-  }
-  return expectDefined(match[1], "local update import closure helper capture");
 }
 
 type RestorePathEscape = "packages" | "ai";
@@ -654,13 +609,8 @@ function runRestoreLocalDistFixture(
     }
   }
 
-  return spawnSync(
-    "bash",
-    [
-      "--noprofile",
-      "--norc",
-      "-c",
-      `set -euo pipefail
+  return runBash(
+    `set -euo pipefail
 REPO_ROOT="$FIXTURE_REPO"
 ROOT_DIR="$FIXTURE_ROOT"
 IMAGE_ROOT="$FIXTURE_IMAGE"
@@ -700,17 +650,13 @@ if [[ -n "$EXTERNAL_SENTINEL" ]]; then
   printf 'external=%s\\n' "$(cat "$EXTERNAL_SENTINEL")"
 fi
 `,
-    ],
     {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        FAIL_AI_SWAP: options.failAiSwap ? "1" : "0",
-        EXTERNAL_SENTINEL: externalSentinel,
-        FIXTURE_IMAGE: imageRoot,
-        FIXTURE_REPO: process.cwd(),
-        FIXTURE_ROOT: fixtureRoot,
-      },
+      ...process.env,
+      FAIL_AI_SWAP: options.failAiSwap ? "1" : "0",
+      EXTERNAL_SENTINEL: externalSentinel,
+      FIXTURE_IMAGE: imageRoot,
+      FIXTURE_REPO: process.cwd(),
+      FIXTURE_ROOT: fixtureRoot,
     },
   );
 }
@@ -727,7 +673,7 @@ describe("test-install-sh-docker", () => {
       symlinkSync(testNodeExecPath, join(bin, "node"));
       expect(spawnSync("mkfifo", [ready]).status).toBe(0);
       const writeCommand = (name: string, source: string) =>
-        writeFileSync(join(bin, name), source, { mode: 0o755 });
+        writeExecutable(join(bin, name), source);
       writeCommand(
         "npm",
         `#!/usr/bin/env node
@@ -852,10 +798,9 @@ for (let index = 0; index < args.length; index++) {
     const root = tempDirs.make("openclaw-install-npm-policy-");
     const binDir = join(root, "bin");
     mkdirSync(binDir, { recursive: true });
-    writeFileSync(
+    writeExecutable(
       join(binDir, "npm"),
       `#!${process.execPath}\nprocess.stdout.write(JSON.stringify({ args: process.argv.slice(2), policy: Object.fromEntries(Object.entries(process.env).filter(([key]) => ["npm_config_before", "npm_config_min_release_age", "npm_config_min-release-age"].includes(key.toLowerCase()))) }));\n`,
-      { mode: 0o755 },
     );
 
     const runNpmFixture = (source: string, cwd: string, env: NodeJS.ProcessEnv) =>
@@ -980,12 +925,10 @@ for (let index = 0; index < args.length; index++) {
     writeFileSync(projectGlobalConfigPath, "min-release-age=7\nfetch-retries=17\n");
     writeFileSync(
       join(root, ".npmrc"),
-      [
-        "before=2026-09-17T23:07:28.000Z",
-        "globalconfig=${HOME}/global.npmrc",
-        "registry=https://user-registry.example.test/",
-        "ca[]=user-ca",
-      ].join("\n"),
+      `before=2026-09-17T23:07:28.000Z
+globalconfig=\${HOME}/global.npmrc
+registry=https://user-registry.example.test/
+ca[]=user-ca`,
     );
     writeFileSync(
       selectedUserConfigPath,
@@ -1099,13 +1042,7 @@ for (let index = 0; index < args.length; index++) {
   );
 
   it("fails closed when exact image artifacts fail import closure", () => {
-    const result = spawnSync(
-      "bash",
-      [
-        "--noprofile",
-        "--norc",
-        "-c",
-        `set -euo pipefail
+    const result = runBash(`set -euo pipefail
 HARNESS_ROOT=/trusted
 ROOT_DIR=/candidate
 UPDATE_SKIP_LOCAL_BUILD=1
@@ -1119,10 +1056,7 @@ ${extractEnsureLocalUpdateDistImportClosure()}
 status=0
 ensure_local_update_dist_import_closure || status=$?
 printf 'status=%s\\n' "$status"
-`,
-      ],
-      { encoding: "utf8" },
-    );
+`);
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("status=1");
@@ -1572,10 +1506,9 @@ describe("install-sh smoke runner", () => {
       const pidFile = join(root, "timer.pid");
       const readyPipe = join(root, "timer-ready");
       mkdirSync(bin);
-      writeFileSync(
+      writeExecutable(
         join(bin, "sleep"),
         '#!/bin/bash\nexec >/dev/null 2>&1\nprintf "%s" "$$" >"$SLEEP_PID_FILE"\nprintf "%s\\n" "$$" >&3\nexec /bin/sleep "$@"\n',
-        { mode: 0o755 },
       );
       const runner = readFileSync(SMOKE_RUNNER_PATH, "utf8");
       const heartbeat = runner.slice(
@@ -1687,13 +1620,12 @@ printf 'command-status=%s\\n' "$command_result"
       writeFileSync(versionFile, "2026.8.2");
       writeFileSync(callsFile, "");
       symlinkSync(testNodeExecPath, join(bin, "node"));
-      writeFileSync(
+      writeExecutable(
         join(bin, "npm"),
         '#!/bin/bash\nif [[ " $* " == *" root -g "* ]]; then printf "%s\\n" "$FAKE_GLOBAL_ROOT"; fi\n',
-        { mode: 0o755 },
       );
-      writeFileSync(join(bin, "timeout"), '#!/bin/bash\nshift 2\nexec "$@"\n', { mode: 0o755 });
-      writeFileSync(
+      writeExecutable(join(bin, "timeout"), '#!/bin/bash\nshift 2\nexec "$@"\n');
+      writeExecutable(
         join(bin, "openclaw"),
         `#!${testNodeExecPath}
 const fs = require("node:fs");
@@ -1717,7 +1649,6 @@ if (args[0] === "--version") {
   }));
 }
 `,
-        { mode: 0o755 },
       );
       // Simulate native /proc and service files; execute the complete shell runner and CLI boundary.
       writeFileSync(
@@ -2094,36 +2025,31 @@ syncBuiltinESMExports();
   it.runIf(process.platform !== "win32").each([
     {
       name: "uses bundled AI bytes when a prebuilt tarball is provided",
-      bundledAi: true,
       bunRuntime: "supported",
       statusExit: 0,
     },
     {
       name: "rejects a mismatched bundled AI candidate before installation",
-      bundledAi: true,
       bunRuntime: "supported",
       statusExit: 0,
       aiVersion: "2026.6.18",
     },
     {
       name: "preserves redirected Bun command diagnostics and exit status",
-      bundledAi: true,
       bunRuntime: "supported",
       statusExit: 23,
     },
     {
       name: "uses Node for a Bun-installed package that explicitly rejects the Bun runtime",
-      bundledAi: true,
       bunRuntime: "unsupported",
       statusExit: 0,
     },
     {
       name: "does not hide an unexpected direct Bun runtime failure",
-      bundledAi: true,
       bunRuntime: "unexpected-failure",
       statusExit: 0,
     },
-  ])("$name", ({ bundledAi, bunRuntime, statusExit, aiVersion = "2026.6.17" }) => {
+  ])("$name", ({ bunRuntime, statusExit, aiVersion = "2026.6.17" }) => {
     const tempDir = tempDirs.make("openclaw-bun-prebuilt-");
     const packageDir = join(tempDir, "fixture", "package");
     const aiDir = join(packageDir, "node_modules", "@openclaw", "ai");
@@ -2137,21 +2063,15 @@ syncBuiltinESMExports();
       JSON.stringify({
         name: "openclaw",
         version: "2026.6.17",
-        ...(bundledAi
-          ? {
-              dependencies: { "@openclaw/ai": "2026.6.17" },
-              bundleDependencies: ["@openclaw/ai"],
-            }
-          : {}),
+        dependencies: { "@openclaw/ai": "2026.6.17" },
+        bundleDependencies: ["@openclaw/ai"],
       }),
     );
-    if (bundledAi) {
-      mkdirSync(aiDir, { recursive: true });
-      writeFileSync(
-        join(aiDir, "package.json"),
-        JSON.stringify({ name: "@openclaw/ai", version: aiVersion }),
-      );
-    }
+    mkdirSync(aiDir, { recursive: true });
+    writeFileSync(
+      join(aiDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/ai", version: aiVersion }),
+    );
     const packed = spawnSync(
       "tar",
       ["-czf", packageTgz, "-C", join(tempDir, "fixture"), "package"],
@@ -2278,7 +2198,7 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
       env: {
         ...process.env,
         BUN_BIN: bunPath,
-        EXPECT_AI_OVERRIDE: bundledAi ? "1" : "0",
+        EXPECT_AI_OVERRIDE: "1",
         FAKE_BUN_RUNTIME: bunRuntime,
         FAKE_STATUS_EXIT: String(statusExit),
         FAKE_STATE_PATH: statePath,
@@ -2301,9 +2221,7 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
     const expectedExit = bunRuntime === "unexpected-failure" ? 42 : statusExit;
     expect(result.status, result.stderr).toBe(expectedExit);
     expect(existsSync(path.dirname(readFileSync(statePath, "utf8").trim()))).toBe(false);
-    if (bundledAi) {
-      expect(existsSync(path.dirname(readFileSync(aiTarballPath, "utf8").trim()))).toBe(false);
-    }
+    expect(existsSync(path.dirname(readFileSync(aiTarballPath, "utf8").trim()))).toBe(false);
     if (bunRuntime !== "unexpected-failure") {
       expect(result.stdout).toContain("bun-global-install-smoke: image providers OK (3 providers)");
     }
@@ -2328,17 +2246,15 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
       const tempDir = tempDirs.make("openclaw-bun-global-timeout-grace-");
       const readyPath = path.join(tempDir, "ready");
       const drainedPath = path.join(tempDir, "drained");
-      const childScript = [
-        "const fs = require('node:fs');",
-        "process.on('SIGTERM', () => {",
-        "  setTimeout(() => {",
-        "    fs.writeFileSync(process.argv[2], 'drained');",
-        "    process.exit(0);",
-        "  }, 50);",
-        "});",
-        "fs.writeFileSync(process.argv[1], 'ready');",
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
+      const childScript = `const fs = require('node:fs');
+process.on('SIGTERM', () => {
+  setTimeout(() => {
+    fs.writeFileSync(process.argv[2], 'drained');
+    process.exit(0);
+  }, 50);
+});
+fs.writeFileSync(process.argv[1], 'ready');
+setInterval(() => {}, 1000);`;
 
       const result = spawnSync(
         testNodeExecPath,

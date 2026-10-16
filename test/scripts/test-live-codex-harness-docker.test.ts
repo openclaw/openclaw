@@ -196,34 +196,23 @@ esac
       ?.split('openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"')[0];
     expect(selection).toBeDefined();
 
-    const root = fs.mkdtempSync(
-      path.join(process.env.TMPDIR ?? "/tmp", "openclaw-codex-plugin-roots-"),
+    const root = createTempDir("openclaw-codex-plugin-roots-");
+    const stagedRoot = path.join(root, "staged");
+    const stagedPlugin = path.join(stagedRoot, "extensions", "codex");
+    fs.mkdirSync(stagedPlugin, { recursive: true });
+    fs.writeFileSync(path.join(stagedPlugin, "openclaw.plugin.json"), "{}");
+    fs.mkdirSync(path.join(root, "dist-runtime", "extensions", "codex"), { recursive: true });
+    const executableSelection = selection!
+      .replaceAll("/app/dist-runtime", path.join(root, "dist-runtime"))
+      .replaceAll("/app/dist", path.join(root, "dist"));
+    const result = spawnSync(
+      "bash",
+      ["-c", `${executableSelection}\nprintf '%s' "$OPENCLAW_BUNDLED_PLUGINS_DIR"`],
+      { encoding: "utf8", env: { ...process.env, tmp_dir: stagedRoot } },
     );
-    try {
-      const stagedRoot = path.join(root, "staged");
-      const stagedPlugin = path.join(stagedRoot, "extensions", "codex");
-      fs.mkdirSync(stagedPlugin, { recursive: true });
-      fs.writeFileSync(path.join(stagedPlugin, "openclaw.plugin.json"), "{}");
-      fs.mkdirSync(path.join(root, "dist-runtime", "extensions", "codex"), {
-        recursive: true,
-      });
-      const executableSelection = selection!
-        .replaceAll("/app/dist-runtime", path.join(root, "dist-runtime"))
-        .replaceAll("/app/dist", path.join(root, "dist"));
-      const result = spawnSync(
-        "bash",
-        ["-c", `${executableSelection}\nprintf '%s' "$OPENCLAW_BUNDLED_PLUGINS_DIR"`],
-        {
-          encoding: "utf8",
-          env: { ...process.env, tmp_dir: stagedRoot },
-        },
-      );
 
-      expect(result.status).toBe(0);
-      expect(result.stdout).toBe(path.join(stagedRoot, "extensions"));
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(path.join(stagedRoot, "extensions"));
   });
 
   it("rejects invalid setup timeout values before auth or Docker setup", () => {

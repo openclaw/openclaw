@@ -35,8 +35,32 @@ import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertio
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
 
+const ACP_FILE = "src/gateway/gateway-acp-bind.live.test.ts";
+const BACKEND_FILE = "src/gateway/gateway-cli-backend.live.test.ts";
+const CODEX_FILE = "src/gateway/gateway-codex-harness.live.test.ts";
+const REASONING_FILE = "src/agents/openai-reasoning-compat.live.test.ts";
+const runtimeEnv = {
+  OPENCLAW_DISABLE_BONJOUR: "1",
+  OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
+  OPENCLAW_LIVE_TEST_QUIET: "0",
+  OPENCLAW_LOG_LEVEL: "info",
+  OPENCLAW_PLUGIN_LIFECYCLE_TRACE: "1",
+};
+
+function expectReport(payload: unknown, reason?: string, files?: string[], env = process.env) {
+  expect(validateLiveShardReportPayload(payload, files, process.cwd(), env)).toEqual(
+    reason ? { ok: false, reason } : { ok: true },
+  );
+}
+
+function reportFile(file: string, status: string) {
+  return { name: path.join(process.cwd(), file), assertionResults: [{ status }] };
+}
+
 describe("scripts/test-live-shard", () => {
   const allFiles = collectAllLiveTestFiles();
+  const preparation = (shard: string) =>
+    resolveLiveShardPreparation(selectLiveShardFiles(shard, allFiles));
 
   it("drops release-waived single-case live files only for the waived candidate version", () => {
     const files = [
@@ -175,35 +199,17 @@ describe("scripts/test-live-shard", () => {
       requiredArtifact: "dist/extensions/qa-lab/runtime-api.js",
     };
 
-    expect(
-      resolveLiveShardPreparation(
-        selectLiveShardFiles("native-live-extensions-o-z-other", allFiles),
-      ),
-    ).toEqual(expected);
-    expect(
-      resolveLiveShardPreparation(selectLiveShardFiles("native-live-extensions-o-z", allFiles)),
-    ).toEqual(expected);
-    expect(
-      resolveLiveShardPreparation(selectLiveShardFiles("native-live-extensions-xai", allFiles)),
-    ).toBeNull();
+    expect(preparation("native-live-extensions-o-z-other")).toEqual(expected);
+    expect(preparation("native-live-extensions-o-z")).toEqual(expected);
+    expect(preparation("native-live-extensions-xai")).toBeNull();
   });
 
   it("prepares gateway profile shards with observable source-runtime diagnostics", () => {
-    const preparation = resolveLiveShardPreparation(
-      selectLiveShardFiles("native-live-src-gateway-profiles", allFiles),
-    );
-
-    expect(preparation).toEqual({
+    expect(preparation("native-live-src-gateway-profiles")).toEqual({
       env: {},
       profile: "sourcePerformance",
       requiredArtifact: "dist/.runtime-postbuildstamp",
-      runtimeEnv: {
-        OPENCLAW_DISABLE_BONJOUR: "1",
-        OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
-        OPENCLAW_LIVE_TEST_QUIET: "0",
-        OPENCLAW_LOG_LEVEL: "info",
-        OPENCLAW_PLUGIN_LIFECYCLE_TRACE: "1",
-      },
+      runtimeEnv,
     });
   });
 
@@ -226,9 +232,7 @@ describe("scripts/test-live-shard", () => {
   });
 
   it("prepares executable runtime artifacts before OpenAI exercises live vision", () => {
-    expect(
-      resolveLiveShardPreparation(selectLiveShardFiles("native-live-extensions-openai", allFiles)),
-    ).toEqual({
+    expect(preparation("native-live-extensions-openai")).toEqual({
       env: {},
       profile: "sourcePerformance",
       requiredArtifact: "dist/.runtime-postbuildstamp",
@@ -236,60 +240,43 @@ describe("scripts/test-live-shard", () => {
   });
 
   it("fails live shard reports with no passing tests", () => {
-    expect(validateLiveShardReportPayload({ numPassedTests: 1, numTotalTests: 3 })).toEqual({
-      ok: true,
-    });
-    expect(validateLiveShardReportPayload({ numPassedTests: 4, numTotalTests: 3 })).toEqual({
-      ok: false,
-      reason: "Vitest report numPassedTests exceeds numTotalTests.",
-    });
-    expect(validateLiveShardReportPayload({ numPassedTests: 0, numTotalTests: 3 })).toEqual({
-      ok: false,
-      reason: "Vitest report has no passing live tests.",
-    });
-    expect(validateLiveShardReportPayload({ numPassedTests: 0, numTotalTests: 0 })).toEqual({
-      ok: false,
-      reason: "Vitest report has no passing live tests.",
-    });
-    expect(validateLiveShardReportPayload({ numPassedTests: 0 })).toEqual({
-      ok: false,
-      reason: "Vitest report numTotalTests must be a non-negative integer.",
-    });
+    expectReport({ numPassedTests: 1, numTotalTests: 3 });
+    expectReport(
+      { numPassedTests: 4, numTotalTests: 3 },
+      "Vitest report numPassedTests exceeds numTotalTests.",
+    );
+    expectReport(
+      { numPassedTests: 0, numTotalTests: 3 },
+      "Vitest report has no passing live tests.",
+    );
+    expectReport(
+      { numPassedTests: 0, numTotalTests: 0 },
+      "Vitest report has no passing live tests.",
+    );
+    expectReport(
+      { numPassedTests: 0 },
+      "Vitest report numTotalTests must be a non-negative integer.",
+    );
   });
 
   it("requires live shard report evidence for each selected file", () => {
     const payload = {
       numPassedTests: 1,
       numTotalTests: 2,
-      testResults: [
-        {
-          name: path.join(process.cwd(), "src/gateway/gateway-acp-bind.live.test.ts"),
-          assertionResults: [{ status: "passed" }],
-        },
-      ],
+      testResults: [reportFile(ACP_FILE, "passed")],
     };
 
-    expect(
-      validateLiveShardReportPayload(payload, ["src/gateway/gateway-acp-bind.live.test.ts"]),
-    ).toEqual({ ok: true });
-    expect(
-      validateLiveShardReportPayload(payload, [
-        "src/gateway/gateway-acp-bind.live.test.ts",
-        "src/gateway/gateway-cli-backend.live.test.ts",
-      ]),
-    ).toEqual({
-      ok: false,
-      reason:
-        "Vitest report missing selected live test file evidence: src/gateway/gateway-cli-backend.live.test.ts",
-    });
-    expect(
-      validateLiveShardReportPayload({ numPassedTests: 1, numTotalTests: 1 }, [
-        "src/gateway/gateway-acp-bind.live.test.ts",
-      ]),
-    ).toEqual({
-      ok: false,
-      reason: "Vitest report is missing testResults file evidence.",
-    });
+    expectReport(payload, undefined, [ACP_FILE]);
+    expectReport(
+      payload,
+      `Vitest report missing selected live test file evidence: ${BACKEND_FILE}`,
+      [ACP_FILE, BACKEND_FILE],
+    );
+    expectReport(
+      { numPassedTests: 1, numTotalTests: 1 },
+      "Vitest report is missing testResults file evidence.",
+      [ACP_FILE],
+    );
   });
 
   it("respects explicit opt-in and pass evidence", () => {
@@ -298,30 +285,17 @@ describe("scripts/test-live-shard", () => {
     const payload = {
       numPassedTests: 1,
       numTotalTests: 2,
-      testResults: [
-        {
-          name: path.join(process.cwd(), "src/agents/openai-reasoning-compat.live.test.ts"),
-          assertionResults: [{ status: "passed" }],
-        },
-        {
-          name: path.join(process.cwd(), reviewFile),
-          assertionResults: [{ status: "skipped" }],
-        },
-      ],
+      testResults: [reportFile(REASONING_FILE, "passed"), reportFile(reviewFile, "skipped")],
     };
-    const expectedFiles = ["src/agents/openai-reasoning-compat.live.test.ts", reviewFile];
+    const expectedFiles = [REASONING_FILE, reviewFile];
 
-    expect(validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {})).toEqual({
-      ok: true,
-    });
-    expect(
-      validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {
-        [optInEnv]: "1",
-      }),
-    ).toEqual({
-      ok: false,
-      reason: `Vitest report selected live test files had no passing assertions: ${reviewFile}`,
-    });
+    expectReport(payload, undefined, expectedFiles, {});
+    expectReport(
+      payload,
+      `Vitest report selected live test files had no passing assertions: ${reviewFile}`,
+      expectedFiles,
+      { [optInEnv]: "1" },
+    );
     const passingPayload = {
       ...payload,
       numPassedTests: 2,
@@ -330,11 +304,7 @@ describe("scripts/test-live-shard", () => {
         assertionResults: [{ status: "passed" }],
       })),
     };
-    expect(
-      validateLiveShardReportPayload(passingPayload, expectedFiles, process.cwd(), {
-        [optInEnv]: "1",
-      }),
-    ).toEqual({ ok: true });
+    expectReport(passingPayload, undefined, expectedFiles, { [optInEnv]: "1" });
   });
 
   it("does not count disabled opt-in sentinel assertions as live shard proof", () => {
@@ -343,7 +313,7 @@ describe("scripts/test-live-shard", () => {
       numTotalTests: 2,
       testResults: [
         {
-          name: path.join(process.cwd(), "src/gateway/gateway-codex-harness.live.test.ts"),
+          name: path.join(process.cwd(), CODEX_FILE),
           assertionResults: [
             {
               ancestorTitles: ["gateway live (Codex harness disabled)"],
@@ -352,27 +322,16 @@ describe("scripts/test-live-shard", () => {
             },
           ],
         },
-        {
-          name: path.join(process.cwd(), "src/gateway/gateway-cli-backend.live.test.ts"),
-          assertionResults: [{ status: "skipped" }],
-        },
+        reportFile(BACKEND_FILE, "skipped"),
       ],
     };
 
-    expect(
-      validateLiveShardReportPayload(
-        payload,
-        [
-          "src/gateway/gateway-codex-harness.live.test.ts",
-          "src/gateway/gateway-cli-backend.live.test.ts",
-        ],
-        process.cwd(),
-        {},
-      ),
-    ).toEqual({
-      ok: false,
-      reason: "Vitest report has no enabled selected live test files with passing assertions.",
-    });
+    expectReport(
+      payload,
+      "Vitest report has no enabled selected live test files with passing assertions.",
+      [CODEX_FILE, BACKEND_FILE],
+      {},
+    );
   });
 
   it("removes stale live shard reports before running a shard", () => {
@@ -402,23 +361,14 @@ describe("scripts/test-live-shard", () => {
       stdio: "inherit",
     });
     expect(
-      buildLiveShardSpawnParams({ OPENCLAW_LOG_LEVEL: "warn", PATH: "/usr/bin" }, "darwin", {
-        OPENCLAW_DISABLE_BONJOUR: "1",
-        OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
-        OPENCLAW_LIVE_TEST_QUIET: "0",
-        OPENCLAW_LOG_LEVEL: "info",
-        OPENCLAW_PLUGIN_LIFECYCLE_TRACE: "1",
-      }),
+      buildLiveShardSpawnParams(
+        { OPENCLAW_LOG_LEVEL: "warn", PATH: "/usr/bin" },
+        "darwin",
+        runtimeEnv,
+      ),
     ).toEqual({
       detached: true,
-      env: {
-        OPENCLAW_DISABLE_BONJOUR: "1",
-        OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
-        OPENCLAW_LIVE_TEST_QUIET: "0",
-        OPENCLAW_LOG_LEVEL: "info",
-        OPENCLAW_PLUGIN_LIFECYCLE_TRACE: "1",
-        PATH: "/usr/bin",
-      },
+      env: { ...runtimeEnv, PATH: "/usr/bin" },
       stdio: "inherit",
     });
   });
@@ -549,26 +499,24 @@ describe("scripts/test-live-shard", () => {
 function writeFakePnpm(filePath: string): void {
   writeFileSync(
     filePath,
-    [
-      "#!/usr/bin/env node",
-      'const { spawn } = require("node:child_process");',
-      'const fs = require("node:fs");',
-      'if (process.argv[2] !== "test:live") throw new Error("Expected the live-test invocation");',
-      "fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_ARGS_PATH, JSON.stringify(process.argv.slice(2)));",
-      "const child = spawn(process.execPath, [",
-      '  "-e",',
-      "  \"process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.send('ready');\",",
-      "], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });",
-      'process.on("SIGTERM", () => {',
-      '  fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_SIGNALED_PATH, "SIGTERM");',
-      "  process.exit(0);",
-      "});",
-      "fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH, String(child.pid));",
-      "fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_PID_PATH, String(process.pid));",
-      'child.once("message", () => process.stdout.write("fixture pnpm tree ready\\n"));',
-      "setInterval(() => {}, 1000);",
-      "",
-    ].join("\n"),
+    `#!/usr/bin/env node
+const { spawn } = require("node:child_process");
+const fs = require("node:fs");
+if (process.argv[2] !== "test:live") throw new Error("Expected the live-test invocation");
+fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_ARGS_PATH, JSON.stringify(process.argv.slice(2)));
+const child = spawn(process.execPath, [
+  "-e",
+  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.send('ready');",
+], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+process.on("SIGTERM", () => {
+  fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_SIGNALED_PATH, "SIGTERM");
+  process.exit(0);
+});
+fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH, String(child.pid));
+fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_PID_PATH, String(process.pid));
+child.once("message", () => process.stdout.write("fixture pnpm tree ready\\n"));
+setInterval(() => {}, 1000);
+`,
   );
   chmodSync(filePath, 0o755);
 }
