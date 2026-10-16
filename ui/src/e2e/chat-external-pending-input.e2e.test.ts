@@ -47,6 +47,12 @@ suite.define(() => {
               timestamp: 200,
             },
             {
+              role: "user",
+              content: "[System] Continue the interrupted turn.",
+              provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
+              timestamp: 400,
+            },
+            {
               role: "custom",
               customType: "session-send-recovery-blocked",
               content: blockedReason,
@@ -60,6 +66,17 @@ suite.define(() => {
           pendingInputs: {
             items: [
               {
+                id: "queued-update",
+                runId: "queued-verification-update",
+                acceptedAt: 900,
+                state: "queued",
+                message: {
+                  ...update,
+                  content: "The desktop checks passed.",
+                  __openclaw: { id: "pending:queued-update" },
+                },
+              },
+              {
                 id: "agent-update",
                 runId: "verification-update",
                 acceptedAt: 1_000,
@@ -67,7 +84,7 @@ suite.define(() => {
                 message: update,
               },
             ],
-            total: 1,
+            total: 2,
           },
         };
         const gateway = await installMockGateway(page, {
@@ -88,6 +105,13 @@ suite.define(() => {
           })
           .waitFor();
         await page.getByText(blockedReason, { exact: true }).waitFor();
+        const restart = page.locator(".chat-notice", { hasText: "System · restart recovery" });
+        await restart.waitFor();
+        await page.getByText("The desktop checks passed.", { exact: true }).waitFor();
+        expect(await restart.locator(".chat-notice__body").count()).toBe(0);
+        expect(await page.getByText("Agent update received · waiting for delivery.").count()).toBe(
+          0,
+        );
         await captureUiProof(suite, page, "agent-update-recovery", "retained-update.png");
         await page
           .getByText("Delivery interrupted. This saved agent update is not scheduled to retry.", {
@@ -97,6 +121,12 @@ suite.define(() => {
         expect(await page.getByText(/copy it and send again/u).count()).toBe(0);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         await page.reload();
+        await restart.waitFor();
+        await page.getByText("The desktop checks passed.", { exact: true }).waitFor();
+        expect(await restart.locator(".chat-notice__body").count()).toBe(0);
+        expect(await page.getByText("Agent update received · waiting for delivery.").count()).toBe(
+          0,
+        );
         await page
           .getByText("Delivery interrupted. This saved agent update is not scheduled to retry.", {
             exact: true,

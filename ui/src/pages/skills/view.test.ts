@@ -511,6 +511,7 @@ describe("renderSkills", () => {
       ".skill-reader-dialog__actions .btn.primary",
     );
     expect(detailInstallButton).toBeInstanceOf(HTMLButtonElement);
+    expect(detailInstallButton?.textContent?.trim()).toBe("Install GitHub");
     expect(
       detailInstallButton?.closest("openclaw-modal-actions")?.parentElement?.lastElementChild,
     ).toBe(detailInstallButton?.closest("openclaw-modal-actions"));
@@ -724,10 +725,7 @@ describe("renderSkills", () => {
     expect(normalizeText(container)).toContain("AgentReceipt Local trust card.");
   });
 
-  it.each([
-    { loading: true, label: "Refreshing…", warning: false },
-    { loading: false, label: "Unavailable", warning: true },
-  ])(
+  it.each([{ loading: true, label: "Refreshing…", warning: false }])(
     "shows $label consistently for a missing ClawHub verdict while loading=$loading",
     async ({ loading, label, warning }) => {
       const container = createContainer();

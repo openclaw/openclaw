@@ -9,6 +9,7 @@ import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -17,7 +18,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import * as stateWorkerStore from "../state/openclaw-state-worker-store.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { ExecApprovalManager, type ExecApprovalRecord } from "./exec-approval-manager.js";
 import { installTestApprovalClock } from "./exec-approval-manager.test-support.js";
@@ -433,9 +434,10 @@ describe("operator approval session events", () => {
     });
     const writerContext = captureOpenClawStateWorkerContext(databaseOptions);
     // Use the physical writer independently of the approval API's logical FIFO.
-    const writing = runOpenClawStateWorkerOperation(
+    const writing = stateWorkerStore.runOpenClawStateWorkerOperation(
       writerContext,
-      (scope) => scope.execute({ type: "operatorApprovals.expire", input: { nowMs: 5_000 } }),
+      (scope) =>
+        scope.execute({ type: "operatorApprovals.prepareReplay", input: { nowMs: 5_000 } }),
       {
         createAdmission: createSqliteWorkerWriteAdmission(writerContext.admission.assertCurrent, [
           writerContext.admission.databasePath,
@@ -459,6 +461,50 @@ describe("operator approval session events", () => {
     }
   });
 
+  it("uses one store admission and read per independent no-expiry replay", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const audienceSessionKeys = Array.from(
+      { length: 64 },
+      (_, index) => `agent:main:replay-${index}`,
+    );
+    await insertPendingApproval({
+      databaseOptions,
+      id: "replay-admission",
+      audienceSessionKeys,
+      createdAtMs: 1_000,
+      expiresAtMs: 10_000,
+    });
+    const reviewer = createClient({ connId: "reviewer", scopes: ["operator.admin"] });
+    const { runtime } = createRuntime({ clients: [reviewer], databaseOptions, now: () => 5_000 });
+    (await runtime.replay(audienceSessionKeys[0]!, reviewer)).release();
+    const admissions = vi.spyOn(stateWorkerStore, "runOpenClawStateWorkerOperation");
+    const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    const measured: { replays: number; admissions: number; reads: number }[] = [];
+    for (const count of [1, 12, 64]) {
+      admissions.mockClear();
+      reads.mockClear();
+      const prepared = await Promise.all(
+        audienceSessionKeys.slice(0, count).map((key) => runtime.replay(key, reviewer)),
+      );
+      expect(prepared.map(({ replay }) => replay.approvals.map(({ id }) => id))).toEqual(
+        Array.from({ length: count }, () => ["replay-admission"]),
+      );
+      measured.push({
+        replays: count,
+        admissions: admissions.mock.calls.length,
+        reads: reads.mock.calls.length,
+      });
+      for (const replay of prepared) {
+        replay.release();
+      }
+    }
+    expect(measured).toEqual([
+      { replays: 1, admissions: 1, reads: 1 },
+      { replays: 12, admissions: 12, reads: 12 },
+      { replays: 64, admissions: 64, reads: 64 },
+    ]);
+  });
+
   it("shares only matching audiences and reviewers while checking each waiting client", async () => {
     const databaseOptions = createDatabaseOptions();
     await insertPendingApproval({
@@ -478,9 +524,9 @@ describe("operator approval session events", () => {
     const { runtime } = createRuntime({ clients, databaseOptions, now: () => 5_000 });
     const selected = createDeferredCore();
     const reply = createDeferredCore();
-    const list = operatorApprovalStore.listPendingOperatorApprovals;
+    const list = operatorApprovalStore.prepareOperatorApprovalReplay;
     const delayed = vi
-      .spyOn(operatorApprovalStore, "listPendingOperatorApprovals")
+      .spyOn(operatorApprovalStore, "prepareOperatorApprovalReplay")
       .mockImplementationOnce(async (params) => {
         const records = await list(params);
         selected.resolve();
@@ -552,9 +598,9 @@ describe("operator approval session events", () => {
     subscribers.subscribe("reviewer", SOURCE_SESSION_KEY, { includeApprovals: true });
     const selected = createDeferredCore();
     const reply = createDeferredCore();
-    const list = operatorApprovalStore.listPendingOperatorApprovals;
+    const list = operatorApprovalStore.prepareOperatorApprovalReplay;
     const delayedReply = vi
-      .spyOn(operatorApprovalStore, "listPendingOperatorApprovals")
+      .spyOn(operatorApprovalStore, "prepareOperatorApprovalReplay")
       .mockImplementationOnce(async (params) => {
         const records = await list(params);
         selected.resolve();
@@ -623,10 +669,10 @@ describe("operator approval session events", () => {
       subscribers.subscribe("observer", PARENT_SESSION_KEY, { includeApprovals: true });
       const committed = createDeferredCore();
       const reply = createDeferredCore();
-      const expire = operatorApprovalStore.expireDueOperatorApprovals;
+      const expire = operatorApprovalStore.prepareOperatorApprovalReplay;
       const delayedReply = revoked
         ? vi
-            .spyOn(operatorApprovalStore, "expireDueOperatorApprovals")
+            .spyOn(operatorApprovalStore, "prepareOperatorApprovalReplay")
             .mockImplementationOnce(async (params) => {
               const result = await expire(params);
               committed.resolve();
@@ -713,10 +759,10 @@ describe("operator approval session events", () => {
     const releaseSweep = createDeferredCore();
     const mutationCommitted = createDeferredCore();
     const releaseMutation = createDeferredCore();
-    const sweep = operatorApprovalStore.expireDueOperatorApprovals;
+    const sweep = operatorApprovalStore.prepareOperatorApprovalReplay;
     const forceDeny = operatorApprovalStore.forceDenyOperatorApproval;
     const delayedSweep = vi
-      .spyOn(operatorApprovalStore, "expireDueOperatorApprovals")
+      .spyOn(operatorApprovalStore, "prepareOperatorApprovalReplay")
       .mockImplementationOnce(async (params) => {
         const result = await sweep(params);
         sweepCommitted.resolve();

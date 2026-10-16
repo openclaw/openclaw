@@ -112,7 +112,7 @@ describe("Codex catalog resident home sharing", () => {
     expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
   });
 
-  it("bounds fleet config snapshots across agents and homes until config identity changes", async () => {
+  it("captures the current config for requests across agents and homes", async () => {
     let runtimeConfig: OpenClawConfig = {
       agents: { defaults: { workspace: "/workspace/a" } },
     };
@@ -127,22 +127,27 @@ describe("Codex catalog resident home sharing", () => {
         factory.forRequest(agentId, { ...home, sourceHomeId }),
       ),
     );
-    const cloneSpy = vi.spyOn(globalThis, "structuredClone");
     const initialConfig = runtimeConfig;
 
     for (const control of controls) {
       await control.readThread("thread-1");
       await control.readThread("thread-1");
     }
-    expect(cloneSpy.mock.calls.filter(([value]) => value === initialConfig)).toHaveLength(1);
+    expect(commandRpcMocks.codexControlRequest.mock.calls).toHaveLength(8);
+    for (const call of commandRpcMocks.codexControlRequest.mock.calls) {
+      expect(call[3]?.config).toEqual(initialConfig);
+    }
 
     runtimeConfig = { agents: { defaults: { workspace: "/workspace/b" } } };
     const reloadedControls = ["main", "another"].map((agentId) => factory.forRequest(agentId));
     for (const control of reloadedControls) {
       await control.readThread("thread-1");
     }
-    expect(cloneSpy.mock.calls.filter(([value]) => value === runtimeConfig)).toHaveLength(1);
-    expect(cloneSpy.mock.calls.filter(([value]) => value === initialConfig)).toHaveLength(1);
+    expect(commandRpcMocks.codexControlRequest.mock.calls).toHaveLength(10);
+    for (const call of commandRpcMocks.codexControlRequest.mock.calls.slice(8)) {
+      expect(call[3]?.config).toEqual(runtimeConfig);
+    }
+    expect(commandRpcMocks.codexControlRequest.mock.calls[0]?.[3]?.config).toEqual(initialConfig);
   });
 
   it("reports a failed initializer and permits its immediate retry", async () => {
@@ -246,7 +251,7 @@ describe("Codex catalog resident home sharing", () => {
     });
 
     await expect(control.initialize()).rejects.toThrow(
-      `invalid Codex session catalog ${cursorField === "nextCursor" ? "next" : "backwards"} response cursor`,
+      "Codex catalog response contains an invalid cursor",
     );
   });
 });

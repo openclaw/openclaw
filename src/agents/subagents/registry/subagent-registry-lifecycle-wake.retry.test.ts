@@ -35,12 +35,6 @@ vi.mock("./subagent-registry-requester-yield.js", () => ({
 vi.mock("./subagent-registry-lifecycle-delivery.js", () => ({
   refreshFrozenResultFromSession: vi.fn(),
 }));
-vi.mock("./subagent-registry-lifecycle-log.js", () => ({
-  buildSafeLifecycleErrorMeta: (error: unknown) => ({
-    message: error instanceof Error ? error.message : String(error),
-  }),
-  maskLifecycleIdentifier: () => "synthetic",
-}));
 vi.mock("../completion/subagent-completion-admission.store.js", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("../completion/subagent-completion-admission.store.js")

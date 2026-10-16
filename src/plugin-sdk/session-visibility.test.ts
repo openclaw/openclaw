@@ -441,6 +441,18 @@ describe("channel-scoped session visibility", () => {
     expect(
       resolveSessionChannelScope(
         storedRow({
+          origin: {
+            provider: "slack",
+            accountId: "default",
+            chatType: "channel",
+            to: "C1",
+          },
+        }),
+      ),
+    ).toEqual(scope);
+    expect(
+      resolveSessionChannelScope(
+        storedRow({
           key: "agent:main:matrix:channel:!opaque:thread:room:thread:event",
           origin: { provider: "matrix", accountId: "default", chatType: "channel" },
           deliveryContext: {
@@ -473,7 +485,16 @@ describe("channel-scoped session visibility", () => {
     { origin: { provider: "discord", accountId: "default", chatType: "channel" } },
     { origin: { provider: "slack", accountId: "other", chatType: "channel" } },
     { origin: { provider: "slack", accountId: "default", chatType: "direct" } },
+    {
+      origin: {
+        provider: "slack",
+        accountId: "default",
+        chatType: "channel",
+        to: "channel:C2",
+      },
+    },
     { origin: {} },
+    { space: undefined },
     { deliveryContext: { channel: "slack", to: "channel:C1" } },
     { deliveryContext: { channel: "slack", accountId: "default" } },
     { deliveryContext: { accountId: "default", to: "channel:C1" } },
@@ -487,6 +508,9 @@ describe("channel-scoped session visibility", () => {
     for (const key of [requester, sibling, "agent:main:slack:channel:C1"]) {
       expect(checker.check({ key, channelScope: scope })).toEqual({ allowed: true });
     }
+    expect(checker.check({ key: sibling, channelScope: { ...scope, to: "C1" } }).allowed).toBe(
+      true,
+    );
   });
 
   it.each(["send", "status"] as const)(
@@ -518,6 +542,15 @@ describe("channel-scoped session visibility", () => {
   ])("denies mismatched or missing scope even with requester ownership %j", (row) => {
     const checker = createSessionVisibilityRowChecker(params);
     expect(checker.check({ key: sibling, spawnedBy: requester, ...row }).allowed).toBe(false);
+  });
+
+  it("denies channel visibility when both scopes omit workspace identity", () => {
+    const incompleteScope = { ...scope, space: undefined };
+    const checker = createSessionVisibilityRowChecker({
+      ...params,
+      requesterChannelScope: incompleteScope,
+    });
+    expect(checker.check({ key: sibling, channelScope: incompleteScope }).allowed).toBe(false);
   });
 
   it("keeps main and DM callers self-only when they have no verified channel", () => {

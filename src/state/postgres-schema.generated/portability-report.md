@@ -4,7 +4,7 @@
 - Agent runtime DDL represents one admitted store UUID per owner-supplied namespace. Agent PostgreSQL enablement remains blocked on the pending search capability and runtime cutover.
 - Text uses C collation. PostgreSQL text rejects NUL; SQLite length(text) stops at NUL. Data validation and numeric/JSON representation differences need a separate migration contract.
 - STRICT and WITHOUT ROWID options are removed. Identity sequences do not reproduce SQLite rowid/AUTOINCREMENT/sqlite_sequence allocation or rollback semantics; each rowid alias adds a PostgreSQL PK index absent from SQLite's index_list.
-- Not covered: runtime-created memory FTS5 in packages/memory-host-sdk/src/host/memory-schema-fts.ts; vec0 in extensions/memory-core/src/memory/manager-sync-base.ts and src/migration/doctor-memory-sidecar-import.ts.
+- Not covered: runtime-created memory FTS5 in src/infra/database-engine/sqlite-search-schema.ts; vec0 in src/infra/database-engine/sqlite-vector.ts.
 - Not covered: plugin-owned databases, including extensions/workboard/src/sqlite-store-schema.ts, extensions/logbook/src/store-schema.ts and extensions/team-reports/src/store-schema.ts.
 - Not covered: additive/startup repair DDL in src/state/*-schema.ts and _migration_.ts, including openclaw-agent-transcript-fts-schema.ts, openclaw-agent-board-schema.ts and openclaw-agent-canonical-validation-migration.ts.
 
@@ -13,8 +13,8 @@
 | Database | Object        | Total | Translated | Reported |
 | -------- | ------------- | ----: | ---------: | -------: |
 | state    | table         |   134 |        134 |        0 |
-| state    | column        |  1394 |       1392 |        2 |
-| state    | index         |   296 |        296 |        0 |
+| state    | column        |  1395 |       1393 |        2 |
+| state    | index         |   289 |        289 |        0 |
 | state    | foreignKey    |    32 |         32 |        0 |
 | state    | check         |   293 |        293 |        0 |
 | state    | trigger       |     0 |          0 |        0 |

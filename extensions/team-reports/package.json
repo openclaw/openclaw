@@ -44,6 +44,10 @@
       ],
       "staticAssets": [
         {
+          "source": "./src/team-reports-schema.postgres.sql",
+          "output": "./src/team-reports-schema.postgres.sql"
+        },
+        {
           "source": "./assets/crab.avif",
           "output": "assets/crab.avif"
         }

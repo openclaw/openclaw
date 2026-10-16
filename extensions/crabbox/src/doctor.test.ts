@@ -195,10 +195,13 @@ describe("Crabbox worker doctor", () => {
     vi.spyOn(managedBinary, "resolveManagedCrabboxBinaryPath").mockReturnValue("/managed/crabbox");
     const install = vi
       .spyOn(managedBinary, "ensureManagedCrabboxBinary")
-      .mockImplementation(async ({ binary } = {}) => ({
-        binary: binary ?? "crabbox",
-        version: managedBinary.CRABBOX_MIN_VERSION,
-      }));
+      .mockImplementation(async (options = {}) => {
+        const { binary } = options;
+        return {
+          binary: binary ?? "crabbox",
+          version: managedBinary.CRABBOX_MIN_VERSION,
+        };
+      });
     const check = captureCrabboxDoctorCheck();
     const findings = [{ checkId: CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID }] as never;
     const ctx = context();

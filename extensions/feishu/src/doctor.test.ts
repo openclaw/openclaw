@@ -322,43 +322,42 @@ describe("Feishu doctor state repair", () => {
     await expect(readSessionTranscriptEvents(session)).resolves.toEqual([]);
   });
 
-  it.each([
-    { agentId: "main", custom: false },
-    { agentId: "support", custom: true },
-  ])(
-    "backs up and repairs the $agentId SQLite store (custom: $custom)",
-    async ({ agentId, custom }) => {
-      const target = custom
-        ? path.join(stateDir(), "custom-sessions", "sessions.json")
-        : storePath();
-      const cfg: OpenClawConfig = custom
-        ? {
-            ...feishuConfig(),
-            agents: { entries: { [agentId]: {} } },
-            session: { store: target },
-          }
-        : feishuConfig();
-      const session = await seedSession({
-        agentId,
-        sessionId: "sess-migrated-bad",
-        sessionKey: `agent:${agentId}:feishu:direct:ou_migrated`,
-        storePath: target,
-        contents: blankUserMessages,
+  it("backs up a live custom SQLite store without sidecars before repairing it", async () => {
+    const agentId = "support";
+    const target = path.join(stateDir(), "custom-sessions", "sessions.json");
+    const cfg: OpenClawConfig = {
+      ...feishuConfig(),
+      agents: { entries: { [agentId]: {} } },
+      session: { store: target },
+    };
+    const session = await seedSession({
+      agentId,
+      sessionId: "sess-migrated-bad",
+      sessionKey: `agent:${agentId}:feishu:direct:ou_migrated`,
+      storePath: target,
+      contents: blankUserMessages,
+    });
+    const healthy = await seedSession({
+      agentId,
+      sessionId: "sess-healthy",
+      sessionKey: `agent:${agentId}:feishu:direct:ou_healthy`,
+      storePath: target,
+      contents: ["hello"],
+    });
+    const sqlitePath = path.join(path.dirname(target), "openclaw-agent.support.sqlite");
+    expect(fs.existsSync(session.storePath)).toBe(false);
+    expect(fs.existsSync(sqlitePath)).toBe(true);
+
+    const walUpdatedAt = Date.now() - 1_000;
+    const writer = new DatabaseSync(sqlitePath);
+    try {
+      writer.exec("PRAGMA wal_autocheckpoint = 0; PRAGMA wal_checkpoint(TRUNCATE);");
+      await upsertSessionEntry({
+        ...healthy,
+        entry: { sessionId: healthy.sessionId, updatedAt: walUpdatedAt },
       });
-      const healthy = custom
-        ? await seedSession({
-            agentId,
-            sessionId: "sess-healthy",
-            sessionKey: `agent:${agentId}:feishu:direct:ou_healthy`,
-            storePath: target,
-            contents: ["hello"],
-          })
-        : undefined;
-      const sqlitePath = custom
-        ? path.join(path.dirname(target), "openclaw-agent.support.sqlite")
-        : sqliteStorePath();
-      expect(fs.existsSync(session.storePath)).toBe(false);
-      expect(fs.existsSync(sqlitePath)).toBe(true);
+      expect(fs.statSync(`${sqlitePath}-wal`).size).toBeGreaterThan(0);
+      expect(fs.existsSync(`${sqlitePath}-shm`)).toBe(true);
 
       const result = await runDoctor(true, cfg);
 
@@ -367,26 +366,43 @@ describe("Feishu doctor state repair", () => {
 
       const backups = listBackupDirs();
       expect(backups).toHaveLength(1);
-      const backupDir = path.join(stateDir(), "backups", backups[0] ?? "");
-      expect(
-        fs.existsSync(path.join(backupDir, "session-stores", session.agentId, "sessions.json")),
-      ).toBe(false);
-      expect(
-        fs.existsSync(
-          path.join(backupDir, "session-stores", session.agentId, path.basename(sqlitePath)),
-        ),
-      ).toBe(true);
-
-      expect(
-        readStoreEntries(session.storePath, session.agentId)[session.sessionKey],
-      ).toBeUndefined();
-      if (healthy) {
-        await expect(readSessionTranscriptEvents(session)).resolves.toEqual([]);
-        expect(readStoreEntries(target, agentId)[healthy.sessionKey]).toBeDefined();
-        await expect(readSessionTranscriptEvents(healthy)).resolves.toHaveLength(2);
+      const backupDir = path.join(
+        stateDir(),
+        "backups",
+        backups[0]!,
+        "session-stores",
+        session.agentId,
+      );
+      expect(fs.readdirSync(backupDir)).toEqual([path.basename(sqlitePath)]);
+      const snapshot = new DatabaseSync(path.join(backupDir, path.basename(sqlitePath)), {
+        readOnly: true,
+      });
+      try {
+        expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+        expect(
+          snapshot
+            .prepare("SELECT updated_at FROM session_nodes WHERE session_key = ?")
+            .get(healthy.sessionKey),
+        ).toEqual({ updated_at: walUpdatedAt });
+        expect(
+          snapshot
+            .prepare("SELECT current_session_id FROM session_nodes WHERE session_key = ?")
+            .get(session.sessionKey),
+        ).toEqual({ current_session_id: session.sessionId });
+      } finally {
+        snapshot.close();
       }
-    },
-  );
+    } finally {
+      writer.close();
+    }
+
+    expect(
+      readStoreEntries(session.storePath, session.agentId)[session.sessionKey],
+    ).toBeUndefined();
+    await expect(readSessionTranscriptEvents(session)).resolves.toEqual([]);
+    expect(readStoreEntries(target, agentId)[healthy.sessionKey]).toBeDefined();
+    await expect(readSessionTranscriptEvents(healthy)).resolves.toHaveLength(2);
+  });
 
   it("archives unhealthy default-scope sessions when metadata identifies Feishu", async () => {
     const session = await seedSession({

@@ -28,7 +28,6 @@ import {
 } from "../../config/sessions/session-work-start.js";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
-import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -65,6 +64,7 @@ import {
 import {
   expireVisibleStaleOperation,
   getAttachedBackend,
+  isReplyOperationAbortedForRestart,
   lifecycleAdmissionByOperation,
   resolveVisibleActiveWaitMs,
 } from "./reply-run-registry.state.js";
@@ -72,10 +72,8 @@ import { REPLY_WORK_ADMISSION_OWNER } from "./reply-turn-admission-owner.js";
 import type { ReplyTurnAdmission, ReplyTurnAdmissionParams } from "./reply-turn-admission.types.js";
 import { bindReplyOperationDatabaseAdmission } from "./reply-turn-database-admission.js";
 import { waitForRestartRecoveryProgress } from "./reply-turn-recovery-wait.js";
-import { createReplyTurnRotationEvidence } from "./reply-turn-rotation.js";
 
 class QueuedFollowupLifecycleInvalidatedError extends Error {}
-class ReplyOperationChangedDuringAdmissionError extends Error {}
 
 const log = createSubsystemLogger("auto-reply/reply-turn-admission");
 
@@ -142,7 +140,13 @@ export async function admitReplyTurn(
       : undefined;
   let foregroundTransferred = false;
   // Maintenance may finish after the observed reply rotates and clears its slot.
-  let sessionId = activeAtAdmission?.result ? activeAtAdmission.sessionId : params.sessionId;
+  let sessionId =
+    activeAtAdmission?.result &&
+    !isReplyOperationAbortedForRestart(activeAtAdmission) &&
+    ((!params.storePath && !params.expectedSessionId) ||
+      activeAtAdmission.captureOwnedSessionIds().has(params.expectedSessionId ?? params.sessionId))
+      ? activeAtAdmission.sessionId
+      : params.sessionId;
   const resolveGatewayContext = params.adoptOperation
     ? getGatewayContextResolver(params.adoptOperation)
     : Object.hasOwn(params, "resolveGatewayContext")
@@ -151,11 +155,10 @@ export async function admitReplyTurn(
   let expectedSessionId = params.expectedSessionId;
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   let recoveryDispatchOutcome: "deferred" | "failed" | undefined;
-  const rotations = createReplyTurnRotationEvidence({
-    sessionKey: params.sessionKey,
-    expectedActiveOperations: params.expectedActiveOperations,
-    activeAtAdmission,
-  });
+  const predecessors = new Set(params.expectedActiveOperations);
+  if (activeAtAdmission) {
+    predecessors.add(activeAtAdmission);
+  }
 
   const waitTimeoutMs =
     params.waitTimeoutMs ??
@@ -186,29 +189,13 @@ export async function admitReplyTurn(
       );
     }
   };
-  const assertRecoveryOwnerCurrent = (
-    recoveryRuntime: GatewayRecoveryRuntime | undefined,
-    action: "starting" | "waiting for",
-  ) => {
-    assertDatabaseOwnerCurrent();
-    if (
-      lifecycleGeneration !== getAgentEventLifecycleGeneration() ||
-      resolveGatewayContext?.()?.recoveryRuntime !== recoveryRuntime
-    ) {
-      rejectSessionChange(
-        `Session "${params.sessionKey}" changed while ${action} recovery. Retry.`,
-      );
-    }
-  };
   const waitForRecovery = async (ownerRelease?: Promise<void>) => {
-    const recoveryRuntime = resolveGatewayContext?.()?.recoveryRuntime;
     await waitForRestartRecoveryProgress({
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       ownerRelease,
       signal: params.upstreamAbortSignal,
     });
-    assertRecoveryOwnerCurrent(recoveryRuntime, "waiting for");
   };
   // Retries may release a lifecycle lease, but cannot replace the first physical
   // database owner after waiting for an active turn, delivery, or writer.
@@ -216,14 +203,6 @@ export async function admitReplyTurn(
     while (true) {
       if (params.upstreamAbortSignal?.aborted) {
         return { status: "skipped", reason: "aborted" };
-      }
-      const storelessRotation = !params.storePath ? rotations.takeStorelessRotation() : undefined;
-      if (storelessRotation) {
-        if (expectedSessionId && !storelessRotation.sessionIds.has(expectedSessionId)) {
-          return { status: "skipped", reason: "lifecycle-invalidated" };
-        }
-        sessionId = storelessRotation.sessionId;
-        expectedSessionId = expectedSessionId ? storelessRotation.sessionId : undefined;
       }
       if (isReplyRunSuccessorAdmissionBlocked(params.sessionKey)) {
         if (params.kind === "heartbeat") {
@@ -240,17 +219,14 @@ export async function admitReplyTurn(
             reason: params.upstreamAbortSignal?.aborted ? "aborted" : "active-run",
           };
         }
-        rotations.recordBarrierSources(successorAdmission.sources);
         continue;
       }
-      const rotationObservation = params.storePath ? rotations.observeAdmission() : undefined;
       try {
         const storePath = params.storePath;
         let operation: ReplyOperation | undefined;
         let admittedSessionEntry: InternalSessionEntry | undefined;
         let recoveryOwnerLease: MainSessionRecoveryOwnerLease | undefined;
         let interruptedBeforeOperation = false;
-        let recoveryClaimStarted = false;
         const admission = storePath
           ? await beginSessionWorkAdmission({
               agentId: params.agentId,
@@ -334,12 +310,23 @@ export async function admitReplyTurn(
                     `Session "${params.sessionKey}" was deleted while starting work. Retry.`,
                   );
                 }
-                rotationObservation?.recordCompletions();
-                const activeOperationRotatedExpectedSession = rotations.hasExpectedSessionRotation({
-                  expectedSessionId,
-                  sessionId: currentEntry?.sessionId,
-                  databaseIdentity: admittedDatabaseClaim?.identity,
-                });
+                // Follow only predecessors this request observed, in capture order.
+                let predecessorSessionId = expectedSessionId;
+                for (const previous of predecessors) {
+                  if (
+                    predecessorSessionId !== undefined &&
+                    previous.key === params.sessionKey &&
+                    !isReplyOperationAbortedForRestart(previous) &&
+                    previous.captureOwnedSessionIds().has(predecessorSessionId) &&
+                    lifecycleAdmissionByOperation.get(previous)?.databaseIdentity ===
+                      admittedDatabaseClaim?.identity
+                  ) {
+                    predecessorSessionId = previous.sessionId;
+                  }
+                }
+                const activeOperationRotatedExpectedSession =
+                  expectedSessionId !== undefined &&
+                  predecessorSessionId === currentEntry?.sessionId;
                 if (
                   expectedSessionId &&
                   currentEntry?.sessionId !== expectedSessionId &&
@@ -466,7 +453,6 @@ export async function admitReplyTurn(
             }
             const { retryRestartAbortedMainSessionRecovery } =
               await import("../../agents/main-session-recovery/main-session-restart-recovery.js");
-            assertRecoveryOwnerCurrent(recoveryRuntime, "starting");
             params.upstreamAbortSignal?.throwIfAborted();
             const recovery = await retryRestartAbortedMainSessionRecovery({
               agentId: params.agentId,
@@ -478,16 +464,12 @@ export async function admitReplyTurn(
               sessionKey: params.sessionKey,
               storePath,
             });
-            assertRecoveryOwnerCurrent(recoveryRuntime, "starting");
             recoveryDispatchOutcome = recovery.failed > 0 ? "failed" : "deferred";
             // Recovery may have completed or another owner may have won. Reload
             // the exact session and its live owner instead of using this snapshot.
             continue;
           }
           if (shouldClaimRecoveryOwner && recoveryOwnerRelease === undefined) {
-            // A claim can durably clear recovery state. Once it starts, a later
-            // preparation change must fail this admission instead of replaying it.
-            recoveryClaimStarted = true;
             const ownerClaim = await claimMainSessionRecoveryOwner({
               lifecycleGeneration: getAgentEventLifecycleGeneration(),
               sessionId,
@@ -503,14 +485,6 @@ export async function admitReplyTurn(
             rejectSessionChange();
           }
           assertDatabaseOwnerCurrent();
-          if (rotationObservation?.changed()) {
-            if (recoveryClaimStarted) {
-              rejectSessionChange();
-            }
-            // A predecessor can rotate after the final row read but before this handoff.
-            // Reacquire the full admission; its session ID alone grants no authority.
-            throw new ReplyOperationChangedDuringAdmissionError();
-          }
           if (!storePath) {
             params.captureRunSelection?.();
           }
@@ -657,9 +631,6 @@ export async function admitReplyTurn(
         if (error instanceof QueuedFollowupLifecycleInvalidatedError) {
           return { status: "skipped", reason: "lifecycle-invalidated", error: error.cause };
         }
-        if (error instanceof ReplyOperationChangedDuringAdmissionError) {
-          continue;
-        }
         if (error instanceof ReplyRunSuccessorAdmissionBlockedError) {
           if (params.kind === "heartbeat") {
             return { status: "skipped", reason: "active-run" };
@@ -681,7 +652,6 @@ export async function admitReplyTurn(
               reason: params.upstreamAbortSignal?.aborted ? "aborted" : "active-run",
             };
           }
-          rotations.recordBarrierSources(followupAdmission.sources);
           continue;
         }
         if (!(error instanceof ReplyRunAlreadyActiveError)) {
@@ -702,9 +672,9 @@ export async function admitReplyTurn(
         }
         const activeWaitTimeoutMs =
           params.kind === "visible" ? resolveVisibleActiveWaitMs(activeOperation) : waitTimeoutMs;
-        const activeDatabaseIdentity = activeOperation
-          ? lifecycleAdmissionByOperation.get(activeOperation)?.databaseIdentity
-          : undefined;
+        if (activeOperation) {
+          predecessors.add(activeOperation);
+        }
         const ended = await replyRunRegistry.waitForIdle(params.sessionKey, activeWaitTimeoutMs, {
           signal: params.upstreamAbortSignal,
         });
@@ -723,11 +693,16 @@ export async function admitReplyTurn(
             activeOperation,
           };
         }
-        if (activeOperation) {
-          rotations.recordCompletedOperation(activeOperation, activeDatabaseIdentity);
+        if (!params.storePath && activeOperation?.result?.kind === "completed") {
+          if (
+            expectedSessionId &&
+            !activeOperation.captureOwnedSessionIds().has(expectedSessionId)
+          ) {
+            rejectSessionChange();
+          }
+          sessionId = activeOperation.sessionId;
+          expectedSessionId = expectedSessionId ? sessionId : undefined;
         }
-      } finally {
-        rotationObservation?.dispose();
       }
     }
   } finally {

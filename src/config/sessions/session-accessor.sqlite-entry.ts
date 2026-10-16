@@ -597,14 +597,13 @@ async function patchSqliteSessionEntrySnapshot(
             );
             try {
               if (next && result) {
-                const entry = structuredClone(result);
                 if (transcriptPredicate) {
-                  options.onCommitted?.(entry, transcriptPredicate);
+                  options.onCommitted?.(result, transcriptPredicate);
                 } else {
-                  options.onCommitted?.(entry);
+                  options.onCommitted?.(result);
                 }
                 if (committedSource) {
-                  options.onCommittedSource?.(committedSource, structuredClone(result));
+                  options.onCommittedSource?.(committedSource, result);
                 }
               }
             } finally {

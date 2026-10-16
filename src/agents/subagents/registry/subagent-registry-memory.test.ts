@@ -1,14 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  bindGatewayContextResolver,
+  getGatewayContextResolver,
+} from "../../../plugins/runtime/gateway-request-scope.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import {
   findAuthorizedSwarmCollectorRequest,
+  compactSubagentRunForMemory,
   getSubagentChildSessionCandidates,
   getSubagentRunsForChildSession,
   getSubagentRunsForCollectorGroup,
   getSubagentSessionReadLookup,
+  immutableSubagentRun,
+  isSubagentRunPayloadEvicted,
+  restoreSubagentRunPayload,
   subagentRuns,
 } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 function createRun(runId: string, childSessionKey: string): SubagentRunRecord {
   return {
@@ -25,6 +34,75 @@ function createRun(runId: string, childSessionKey: string): SubagentRunRecord {
 
 afterEach(() => {
   subagentRuns.clear();
+});
+
+describe("completed subagent payload residency", () => {
+  function completedRun(): SubagentRunRecord {
+    return {
+      ...createRun("completed", "agent:main:subagent:completed"),
+      task: "Assigned task ".repeat(100),
+      execution: { status: "terminal", endedAt: 2, outcome: { status: "ok" } },
+      cleanupCompletedAt: 3,
+      delivery: { status: "delivered" },
+      completion: {
+        required: true,
+        resultText: "Complete result ".repeat(100),
+        fallbackResultText: "Prior result",
+        capturedAt: 2,
+        terminalReply: { disposition: "visible", text: "Final reply evidence" },
+      },
+    };
+  }
+
+  it("releases finished payloads and hydrates text without replacing current ownership facts", () => {
+    const original = completedRun();
+    const resolver = () => undefined;
+    bindGatewayContextResolver(original, resolver);
+    immutableSubagentRun(original);
+    const resident = compactSubagentRunForMemory(original);
+    expect(resident.task).toHaveLength(160);
+    expect(resident.task).toBe(original.task.slice(0, 160));
+    expect(resident.completion?.resultText).toBeUndefined();
+    expect(resident.completion?.fallbackResultText).toBeUndefined();
+    expect(resident.completion?.terminalReply).toEqual({
+      disposition: "visible",
+      text: "Final reply evidence",
+    });
+    expect(isSubagentRunPayloadEvicted(resident)).toBe(true);
+    expect(compactSubagentRunForMemory(resident)).toBe(resident);
+
+    const restored = restoreSubagentRunPayload(resident, {
+      ...original,
+      cleanupCompletedAt: 0,
+      delivery: { status: "pending" },
+    });
+    expect(restored.task).toBe(original.task);
+    expect(restored.completion).toEqual(original.completion);
+    expect(restored.cleanupCompletedAt).toBe(3);
+    expect(restored.delivery?.status).toBe("delivered");
+    expect(isSubagentRunPayloadEvicted(restored)).toBe(false);
+    expect(isSameSubagentRunOwner(restored, original)).toBe(true);
+    expect(getGatewayContextResolver(restored)).toBe(resolver);
+    expect(getGatewayContextResolver(resident)).toBe(resolver);
+  });
+
+  it.each<[string, Partial<SubagentRunRecord>]>([
+    ["running", { execution: { status: "running" } }],
+    ["unfinished cleanup", { cleanupCompletedAt: undefined }],
+    ["spawning parent turn", { requesterTurnRunId: "parent-turn" }],
+    ["requester wake", { requesterSettleWake: { status: "pending", attemptCount: 0 } }],
+    ["yielded child", { pauseReason: "sessions_yield" }],
+    ["kill intent", { killIntent: { requestedAt: 2, reason: "cancel" } }],
+    ["kill reconciliation", { killReconciliation: { killedAt: 2 } }],
+    ["collector cleanup", { collectorLaunchCleanupPending: true }],
+    ["pending delivery", { delivery: { status: "pending" } }],
+    ["in-flight delivery", { delivery: { status: "in_progress" } }],
+    ["suspended delivery", { delivery: { status: "suspended", suspendedAt: 2 } }],
+  ])("keeps payloads while %s owns unfinished work", (_name, unfinished) => {
+    const entry = { ...completedRun(), ...unfinished };
+    expect(compactSubagentRunForMemory(entry)).toBe(entry);
+    expect(isSubagentRunPayloadEvicted(entry)).toBe(false);
+  });
 });
 
 describe("subagent run memory indexes", () => {

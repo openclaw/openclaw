@@ -1,9 +1,9 @@
-import { render } from "lit";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
-import { renderAssistantAttachments } from "./chat-message-attachments.ts";
+import { AssistantAttachments } from "./chat-message-attachments-solid.tsx";
 import { releaseChatMediaResourceSubscriber, type AttachmentItem } from "./chat-message-media.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
@@ -51,19 +51,14 @@ describe.runIf(browserMode)("history text chip keyboard admission", () => {
           url: `/tmp/openclaw/${crypto.randomUUID()}/text-chip.txt`,
         },
       };
-      const update = () =>
-        render(
-          renderAssistantAttachments(
-            [item],
-            { onRequestUpdate: update },
-            undefined,
-            undefined,
-            false,
-          ),
-          target,
-        );
+      const props = (): Parameters<typeof AssistantAttachments>[0] => ({
+        attachments: [item],
+        options: { onRequestUpdate: update },
+        inlinePlayback: false,
+      });
+      const update = () => view.update(props());
+      const view = mountSolid(AssistantAttachments, props(), target);
       try {
-        update();
         await expect
           .poll(() => target.querySelector(".chat-selection-annotations__chip"))
           .not.toBeNull();
@@ -95,7 +90,7 @@ describe.runIf(browserMode)("history text chip keyboard admission", () => {
         expect(document.activeElement).toBe(chip);
       } finally {
         metadata.resolve(Response.json({ available: false }));
-        render(null, target);
+        view.dispose();
         scroller.remove();
         releaseChatMediaResourceSubscriber(update);
         vi.unstubAllGlobals();

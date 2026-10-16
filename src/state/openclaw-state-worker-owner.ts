@@ -30,6 +30,7 @@ import {
   registerOpenClawStateDatabaseAsyncResource,
   registerOpenClawStateDatabaseLifecycleListener,
 } from "./openclaw-state-db-cache.js";
+import type { OpenClawDatabaseMaintenanceScope } from "./openclaw-state-maintenance-context.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import type {
   OpenClawStateWorkerCleanupOperations,
@@ -70,10 +71,8 @@ function createSharedStateWorkerOwner() {
       entry.actor ? active.actor === entry.actor : active === entry,
     );
   const clearIdleRetirement = (entry: Entry) => {
-    if (entry.idleTimer) {
-      clearTimeout(entry.idleTimer);
-      entry.idleTimer = undefined;
-    }
+    clearTimeout(entry.idleTimer);
+    entry.idleTimer = undefined;
   };
   const hasPendingCleanup = (entry: Entry) =>
     entry.cleanup?.pending ??
@@ -405,21 +404,22 @@ function createSharedStateWorkerOwner() {
   });
   function retireIdleWorkers() {
     for (const entry of stores) {
-      if (
-        entry.idleTimer &&
-        entry.store &&
-        !entry.context.maintenanceScope &&
-        !hasActiveActorOperations(entry)
-      ) {
-        void runInDetachedAsyncContext(() => retire(entry)).catch((error: unknown) => {
-          log.warn("Idle shared-state worker retirement failed", {
-            path: entry.context.admission.databasePath,
-            error,
-          });
+      void runInDetachedAsyncContext(() => retireIdle(entry))?.catch((error: unknown) => {
+        log.warn("Idle shared-state worker retirement failed", {
+          path: entry.context.admission.databasePath,
+          error,
         });
-      }
+      });
     }
   }
+  const retireIdle = (entry: Entry) =>
+    entry.idleTimer &&
+    entry.store &&
+    stores.has(entry) &&
+    !entry.context.maintenanceScope &&
+    !hasActiveActorOperations(entry)
+      ? retire(entry)
+      : undefined;
   return {
     close,
     retainOperation,
@@ -429,6 +429,7 @@ function createSharedStateWorkerOwner() {
       context: SqliteWorkerStateContext,
       assertOwned: () => void,
       identity: DatabasePathIdentity,
+      maintenanceScope?: OpenClawDatabaseMaintenanceScope,
     ) {
       const expectedIdentity = { ...identity };
       assertOwned();
@@ -480,6 +481,11 @@ function createSharedStateWorkerOwner() {
         { ...captureRuntimeWorkerSource(moduleUrl), databasePath, existingOnly: true },
         context,
         assertCurrent,
+        {
+          cleanupAccess: maintenanceScope && {
+            assertDatabaseAccess: maintenanceScope.assertCleanupDatabaseAccess,
+          },
+        },
       );
     },
     async open(
@@ -607,6 +613,7 @@ function createSharedStateWorkerOwner() {
                 maintenanceScope: context.maintenanceScope,
                 preparation,
                 signal,
+                retireIdle: retireIdle.bind(undefined, admitted),
                 retainCleanup: (cleanup) => {
                   admitted.cleanup = cleanup;
                 },
@@ -620,10 +627,11 @@ function createSharedStateWorkerOwner() {
           openingAdmission: openingGuard.admission,
           existingOnly,
           activeOperations: 0,
-          // Maintenance may already be draining an accepted callback; its native
-          // opening must retain that callback's live admission through settlement.
-          opening: context.maintenanceScope ? open() : runInDetachedAsyncContext(open),
+          opening: Promise.resolve(undefined),
         };
+        // Initialize the entry before binding retirement without retaining the opening caller.
+        // Maintenance may already be draining an accepted callback, so keep its live admission.
+        admitted.opening = context.maintenanceScope ? open() : runInDetachedAsyncContext(open);
         entry = admitted;
         admitted.opening = admitted.opening.then((store) => {
           if (store) {

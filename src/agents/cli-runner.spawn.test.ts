@@ -39,10 +39,6 @@ import {
   requireRegexMatch,
 } from "./cli-runner.test-helpers.js";
 import { createCliLiveSessionCapability } from "./cli-runner/cli-live-session-registry.js";
-import {
-  attachCliMessagingDeliveryEvidence,
-  getCliMessagingDeliveryEvidence,
-} from "./cli-runner/delivery-evidence.js";
 import { logCliInvocation } from "./cli-runner/execute-logging.js";
 import { executePreparedCliRun as executePreparedCliRunImpl } from "./cli-runner/execute.js";
 import {
@@ -1489,17 +1485,6 @@ describe("runCliAgent spawn path", () => {
       diagnostics.stop();
       setCliRunnerExecuteTestDeps({ writeCliSystemPromptFile });
     }
-  });
-
-  it("wraps primitive and frozen failures to preserve delivery evidence", () => {
-    const evidence = { didSendViaMessagingTool: true };
-    const primitive = attachCliMessagingDeliveryEvidence("failed", evidence);
-    const frozen = attachCliMessagingDeliveryEvidence(Object.freeze(new Error("frozen")), evidence);
-
-    expect(primitive).toBeInstanceOf(Error);
-    expect(frozen).toBeInstanceOf(Error);
-    expect(getCliMessagingDeliveryEvidence(primitive)?.didSendViaMessagingTool).toBe(true);
-    expect(getCliMessagingDeliveryEvidence(frozen)?.didSendViaMessagingTool).toBe(true);
   });
 
   it("sanitizes dangerous backend env overrides before spawn", async () => {

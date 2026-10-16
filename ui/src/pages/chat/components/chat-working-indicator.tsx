@@ -14,14 +14,14 @@ import { formatDurationLong } from "../../../lib/format-duration.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { projectSource } from "../../../lib/reactive/projection.ts";
-import { LitContent, type LegacyTemplateResult } from "../../../lit/solid-content.tsx";
+import { LitContent } from "../../../lit/solid-content.tsx";
 import type { TurnRecap } from "../chat-progress.ts";
 import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
 import "./chat-retry-status.tsx";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
 
 type ReadingIndicator = Extract<ChatItem, { kind: "reading-indicator" }>;
-export type ChatWorkingIndicatorOptions = {
+type ChatWorkingIndicatorOptions = {
   bubbleMode?: boolean;
   mascot?: ThemeMascot;
   workingIndicator?: ThemeWorkingIndicator;
@@ -29,7 +29,7 @@ export type ChatWorkingIndicatorOptions = {
   waitingApproval?: boolean;
   waitingSubagents?: ChatSubagentWait;
   runningSubagents?: number;
-  subagentActivity?: LegacyTemplateResult;
+  subagentActivity?: unknown;
   onOpenSubagents?: () => void;
   startupLabel?: string;
   retryAt?: number;
@@ -250,10 +250,10 @@ export function TurnRecapRow(props: {
         </span>
       </Show>
       <Show when={typeof props.recap.outputTokens === "number"}>
-        <span>{outputTokensLabel(props.recap.outputTokens!)}</span>
+        <span>{outputTokensLabel(props.recap.outputTokens!)}</span>{" "}
         <span class="chat-turn-recap__sep" aria-hidden="true">
           ·
-        </span>
+        </span>{" "}
       </Show>
       <span>{t("chat.turnRecap.doneIn", { duration: duration() })}</span>
     </div>

@@ -44,7 +44,7 @@ describe("session roster refresh", () => {
       await sessions.refreshList({ ...query, force: true });
       expect(request).toHaveBeenLastCalledWith(
         "sessions.list",
-        expect.objectContaining({ ifRowsRevision: "first" }),
+        expect.objectContaining({ ifRowsRevision: "delta:first" }),
       );
       expect(sessions.listSnapshot(query).result).toMatchObject({
         sessions: [row],

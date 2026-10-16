@@ -68,7 +68,7 @@ export class SystemPackageOwnershipError extends UpdatePreMutationError {
           ? `This installation contains files installed by ${owner.label}. ${owner.guidance}; openclaw update will not replace package-owned files.`
           : source === "paths"
             ? `${owner.label} paths could not be inspected completely. Check access to the registered package directories and installation paths, and resolve any inspection timeout before retrying.`
-            : `${owner.label} ownership could not be verified. Restore access to the active ${owner.manager} database and configuration, then retry.`),
+            : `${owner.label} ${code === "ENOENT" ? "executable was not found. Package ownership could not be verified." : `ownership could not be verified. Restore access to the active ${owner.manager} database and configuration, then retry.`}`),
     );
     this.owned = kind === "owned-install";
   }

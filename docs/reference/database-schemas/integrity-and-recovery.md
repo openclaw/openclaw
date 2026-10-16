@@ -122,6 +122,12 @@ old adjacent seal survives. The deployment controller delegates migration and
 restore to these native update owners, so it does not independently preserve
 or validate seals. No database schema change is required for this seal format.
 
+After an agent schema migration, the schema owner registers the database while
+its verified connection is still open. Later opens in the same Doctor process
+can reuse that admission instead of repeating its full integrity scan. The
+pre-migration integrity check, recovery backups, and restart seal requirements
+remain unchanged.
+
 | When                                             | Check                                                                                                                        |
 | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
 | Startup with a matching, recent clean-close seal | Match checksum, schema identity, file metadata, and empty journals; reuse admitted facts without startup or post-ready scans |
@@ -206,6 +212,9 @@ still owns pending work. Each path still joins its accepted writers, pending ope
 and WAL maintenance before native close. The selected root refuses fresh native
 opens and new resource admission until every path settles, including failed closes;
 accepted cleanup can still use its existing admitted connection.
+Offline maintenance can release an already-owned lease after operation policy is
+revoked while its original physical database custody remains held. That cleanup
+authority does not admit new ordinary work or a replacement database.
 After shutdown grace, cached native handles also retire through their normal idle
 eviction path as soon as their final borrower releases them. They do not wait for
 the restart marker or the ordinary 30-minute idle window. Accepted cleanup can
@@ -673,7 +682,9 @@ The shared-state writer maintains SQLite planner statistics once during its
 `PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;` under the existing writer
 admission and transaction authority, with no busy wait. SQLite analyzes only
 tables with missing or stale statistics, including tables this maintenance
-connection has not queried. Contention skips that attempt;
+connection has not queried. On supported SQLite versions before 3.46, the cached
+native admission version selects bounded `ANALYZE main` because their optimizer
+cannot discover all missing or stale statistics. Contention skips that attempt;
 later periodic maintenance retries. Checkpoint-only ticks, database admission,
 opens, and ordinary writes do not analyze tables. Vacuum continuation units do
 not repeat the analysis. Shutdown joins accepted maintenance before native close.
@@ -796,6 +807,13 @@ artifact-preserving reader. Retirement closes the native database borrow before
 a later request opens a replacement actor. An actor that returns from an
 operation with a tracked reader still active fails settlement and retires
 immediately.
+
+At the broker's 64-client limit, new opens can retire an owner-confirmed idle
+shared-state client before its normal deadline. Accepted scopes, pending commands,
+maintenance clients, and clients from another runtime generation are protected.
+Retirement joins native cleanup before admission resumes, and later use reopens
+the retired client transparently. If no client is eligible, the capacity refusal
+remains; the limit and stored data do not change.
 
 Observations belong to the open database handle in the Gateway process. They
 reset when that handle is replaced or the Gateway restarts. Status and Doctor

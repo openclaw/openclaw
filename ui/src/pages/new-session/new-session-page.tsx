@@ -1,21 +1,18 @@
 import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
 import type { SolidRouteProps } from "../../app-route-types.ts";
 import { ImageLightbox } from "../../components/image-lightbox.tsx";
-import { renderLazyViewError } from "../../components/lazy-view-error.ts";
-import { renderSessionBackground } from "../../components/session-background-view.ts";
+import { SessionBackgroundView } from "../../components/session-background-view.ts";
+import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
-import { LitContent, solidContent } from "../../lit/solid-content.tsx";
 import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-surface.css";
 import "../../styles/new-session.css";
 import "../../styles/new-session-attachment-panel.css";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { chatStartupStatusLabel } from "../chat/chat-run-startup.ts";
 import { ChatPermissionPicker } from "../chat/components/chat-permission-picker.tsx";
-import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
-import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import { CatalogBar } from "./catalog-target-view.tsx";
 import * as catalog from "./catalog-target.ts";
 import { NewSessionDictationStatus, NewSessionDictationView } from "./composer-dictation-view.tsx";
@@ -25,6 +22,7 @@ import { isWorktreeNameValid } from "./create-params.ts";
 import { CreationComposer } from "./creation-composer-render.tsx";
 import { DraftError, NewSessionBody } from "./draft-body.solid.tsx";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
+import { DraftWelcome } from "./draft-welcome.tsx";
 import {
   NewSessionIncognitoControl,
   NewSessionIncognitoNotice,
@@ -189,9 +187,6 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
   };
   // Both draft presentations share one preparation per revision, not one per binding.
   const options = createMemo(() => page().composerOptions());
-  // The retained Lit slot must not republish identical Solid inputs on each
-  // draft edit; the revision accessor already carries the changed state.
-  const draftProps = { page, revision, options };
   createEffect(revision, () =>
     untrack(() => {
       owner.updated();
@@ -243,6 +238,10 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
     };
   };
   const panel = () => page().attachmentPanel;
+  const panelError = () => {
+    const state = page().attachmentPanelLoader.visibleState;
+    return state?.status === "error" ? state : undefined;
+  };
   const lightbox = () => page().imageLightbox;
   const panelContent = () => {
     const attachment = panel();
@@ -251,9 +250,15 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
   return (
     <>
       <div
-        class={`new-session-page ${page().submission.pendingMessage ? "chat" : ""} ${page().submission.visibility === "incognito" ? "new-session-page--incognito" : ""}`}
+        class={[
+          "new-session-page",
+          {
+            chat: Boolean(page().submission.pendingMessage),
+            "new-session-page--incognito": page().submission.visibility === "incognito",
+          },
+        ]}
       >
-        <LitContent value={renderSessionBackground(page().context, "new-session")} />
+        <SessionBackgroundView context={page().context} surface="new-session" />
         <Show when={!catalog.isTarget(page().data)}>
           <NewSessionIncognitoControl
             submission={visibilityControl}
@@ -276,11 +281,10 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
             <Show
               when={Boolean(completed())}
               fallback={
-                <LitContent
-                  value={renderWelcomeState({
-                    ...page().welcomeOptions(),
-                    composer: solidContent(DraftBlock, draftProps),
-                  })}
+                <DraftWelcome
+                  sessions={page().context?.sessions}
+                  options={page().welcomeOptions()}
+                  composer={<DraftBlock page={page} revision={revision} options={options} />}
                 />
               }
             >
@@ -306,7 +310,8 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
               mediaKind={item().kind ?? "image"}
               gallery={item().gallery}
               connectVideo={item().connectVideo}
-              loadFullResolution={item().loadFullResolution}
+              loadDisplayImage={item().loadDisplayImage}
+              readOriginalBlob={item().readOriginalBlob}
               src={item().src}
               originalSrc={item().originalSrc ?? ""}
               imageTitle={item().title}
@@ -320,26 +325,21 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
       <Show when={panel()}>
         <aside class="new-session-attachment-panel">
           <Show
-            when={page().attachmentPanelLoader.visibleState?.status === "error"}
+            when={panelError()}
             fallback={
               <Show when={page().attachmentPanelLoader.visibleState}>
                 <div role="status">{t("common.loading")}</div>
               </Show>
             }
           >
-            <LitContent
-              value={(() => {
-                const state = page().attachmentPanelLoader.visibleState;
-                return state?.status === "error"
-                  ? renderLazyViewError({
-                      error: state.error,
-                      stale: state.stale,
-                      onRetry: () => owner.attachmentPanelLoader.retry(),
-                      onClose: owner.closeAttachmentPanel,
-                    })
-                  : undefined;
-              })()}
-            />
+            {(state) => (
+              <LazyViewError
+                error={state().error}
+                stale={state().stale}
+                onRetry={() => owner.attachmentPanelLoader.retry()}
+                onClose={owner.closeAttachmentPanel}
+              />
+            )}
           </Show>
           <openclaw-chat-detail-panel
             prop:content={panelContent()}
@@ -373,17 +373,11 @@ defineSolidBridge<
   },
 });
 
-// These hosts remain custom elements so the detail panel keeps its lazy registration.
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
       "openclaw-new-session-page": HTMLAttributes<PageHost> & {
         "prop:data"?: NewSessionRouteData | undefined;
-      };
-      "openclaw-chat-detail-panel": HTMLAttributes<
-        HTMLElementTagNameMap["openclaw-chat-detail-panel"]
-      > & {
-        "prop:content"?: SidebarContent | null;
       };
     }
   }

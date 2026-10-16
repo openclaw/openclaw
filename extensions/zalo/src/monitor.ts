@@ -289,8 +289,8 @@ async function handleImageMessage(
       });
       mediaPath = saved.path;
       mediaType = saved.contentType;
-    } catch (err) {
-      runtime.error?.(`[${account.accountId}] Failed to download Zalo image: ${String(err)}`);
+    } catch {
+      runtime.error?.(`[${account.accountId}] Failed to download Zalo image`);
     }
   }
 

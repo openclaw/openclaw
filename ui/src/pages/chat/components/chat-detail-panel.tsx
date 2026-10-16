@@ -745,3 +745,13 @@ declare global {
     "openclaw-chat-detail-panel": ChatDetailPanel;
   }
 }
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-chat-detail-panel": HTMLAttributes<ChatDetailPanel> & {
+        [Key in keyof ChatDetailPanelProps as `prop:${Key}`]?: ChatDetailPanelProps[Key];
+      };
+    }
+  }
+}

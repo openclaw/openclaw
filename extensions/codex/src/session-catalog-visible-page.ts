@@ -81,6 +81,7 @@ export class CodexCatalogVisiblePage {
     let excludedFromPage = false;
     for (const managed of rawPage.managedThreads ?? []) {
       excludedFromPage = true;
+      this.request.assertActive();
       params.signal?.throwIfAborted();
       await params.onExcludedThread?.(managed);
     }
@@ -90,6 +91,7 @@ export class CodexCatalogVisiblePage {
         continue;
       }
       excludedFromPage = true;
+      this.request.assertActive();
       params.signal?.throwIfAborted();
       await params.onExcludedThread?.({ threadId: session.threadId });
     }

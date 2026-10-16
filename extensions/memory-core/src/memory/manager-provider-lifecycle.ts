@@ -97,7 +97,6 @@ export function resolveMemoryEmbeddingProviderRequirement(params: {
 
 export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps {
   protected abstract getEmbeddingProbeOwners(): readonly MemoryEmbeddingProviderAdapter[];
-  protected abstract canPublishEmbeddingProbe(): boolean;
   protected abstract readonly embeddingProbeCache: Map<string, MemoryEmbeddingProbeCacheEntry>;
   protected abstract readonly cacheKey: string;
   protected abstract readonly purpose: MemoryIndexManagerPurpose;
@@ -649,9 +648,6 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   }
 
   protected cacheProbeResult(result: MemoryEmbeddingProbeResult): MemoryEmbeddingProbeResult {
-    if (!this.canPublishEmbeddingProbe()) {
-      return result;
-    }
     const checkedAtMs = Date.now();
     this.embeddingProbeCache.set(this.cacheKey, {
       result,

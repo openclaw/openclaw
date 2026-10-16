@@ -39,6 +39,30 @@ export type SessionChannelScope = {
   kind: "channel" | "group";
   space?: string;
 };
+type SessionChannelDestination = Pick<SessionChannelScope, "provider" | "to" | "kind">;
+
+function channelScopeDestinationCandidates(scope: SessionChannelDestination): string[] {
+  return [
+    scope.to,
+    scope.to.toLowerCase().startsWith(scope.provider + ":")
+      ? scope.to.slice(scope.provider.length + 1)
+      : scope.to,
+    scope.to.toLowerCase().startsWith(scope.kind + ":")
+      ? scope.to.slice(scope.kind.length + 1)
+      : scope.to,
+  ];
+}
+
+function channelScopeDestinationsMatch(
+  left: SessionChannelDestination,
+  right: SessionChannelDestination,
+): boolean {
+  if (left.provider !== right.provider || left.kind !== right.kind) {
+    return false;
+  }
+  const rightPeerIds = new Set(channelScopeDestinationCandidates(right));
+  return channelScopeDestinationCandidates(left).some((candidate) => rightPeerIds.has(candidate));
+}
 
 /** Read channel identity from a host-projected row, not the opaque peer in its key. */
 export function resolveSessionChannelScope(value: unknown): SessionChannelScope | undefined {
@@ -58,6 +82,7 @@ export function resolveSessionChannelScope(value: unknown): SessionChannelScope 
   );
   const to = normalizeOptionalString(delivery?.to);
   const kind = row.chatType ?? origin?.chatType;
+  const space = normalizeOptionalString(row.space);
   if (
     !provider ||
     provider !== route.channel ||
@@ -65,6 +90,7 @@ export function resolveSessionChannelScope(value: unknown): SessionChannelScope 
     !to ||
     (kind !== "channel" && kind !== "group") ||
     kind !== route.peerKind ||
+    !space ||
     (origin?.chatType !== undefined && origin.chatType !== kind) ||
     (origin?.provider !== undefined &&
       normalizeLowercaseStringOrEmpty(origin.provider) !== provider) ||
@@ -75,8 +101,15 @@ export function resolveSessionChannelScope(value: unknown): SessionChannelScope 
   ) {
     return undefined;
   }
-  const space = normalizeOptionalString(row.space);
-  return { provider, accountId, to, kind, ...(space ? { space } : {}) };
+  const scope: SessionChannelScope = { provider, accountId, to, kind, space };
+  const originTo = normalizeOptionalString(origin?.to);
+  if (
+    origin?.to !== undefined &&
+    (!originTo || !channelScopeDestinationsMatch(scope, { ...scope, to: originTo }))
+  ) {
+    return undefined;
+  }
+  return scope;
 }
 
 function channelScopeMatchesSessionKey(
@@ -84,17 +117,7 @@ function channelScopeMatchesSessionKey(
   key: string,
 ): boolean {
   const route = parseSessionDeliveryRoute(key);
-  const destinationCandidates = scope
-    ? [
-        scope.to,
-        scope.to.toLowerCase().startsWith(scope.provider + ":")
-          ? scope.to.slice(scope.provider.length + 1)
-          : scope.to,
-        scope.to.toLowerCase().startsWith(scope.kind + ":")
-          ? scope.to.slice(scope.kind.length + 1)
-          : scope.to,
-      ]
-    : [];
+  const destinationCandidates = scope ? channelScopeDestinationCandidates(scope) : [];
   return Boolean(
     scope &&
     route &&
@@ -121,13 +144,15 @@ function sameChannelScope(left?: SessionChannelScope, right?: SessionChannelScop
   return Boolean(
     left?.provider &&
     left.accountId &&
+    left.space &&
     left.to &&
     (left.kind === "channel" || left.kind === "group") &&
     right &&
     left.provider === right.provider &&
     left.accountId === right.accountId &&
-    left.to === right.to &&
+    channelScopeDestinationsMatch(left, right) &&
     left.kind === right.kind &&
+    right.space &&
     left.space === right.space,
   );
 }

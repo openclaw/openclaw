@@ -1,5 +1,8 @@
 import type { SessionRow } from "./schema/sessions-row.js";
 
+/** Older Gateways treat this optional conditional token as a revision miss. */
+export const SESSION_ROWS_DELTA_PREFIX = "delta:";
+
 /** Compact list omissions are unknown detail facts, never deletion receipts. */
 export const SESSION_ROW_DETAIL_FIELDS = [
   "contextWindows",
@@ -25,6 +28,7 @@ export const SESSION_DASHBOARD_ROW_FIELDS: ReadonlySet<string> = new Set([
   "agentId",
   "label",
   "displayName",
+  "titlePending",
   "derivedTitle",
   "lastMessagePreview",
   "accountId",

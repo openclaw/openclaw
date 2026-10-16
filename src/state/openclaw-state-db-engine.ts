@@ -1,4 +1,5 @@
 import { getEnvironmentData } from "node:worker_threads";
+import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import type { PostgresSchemaFragment } from "../infra/database-engine/contract.js";
 import { openEngineStore } from "../infra/database-engine/open.js";
 import {
@@ -36,6 +37,10 @@ const recovery =
   "Use the matching OpenClaw version or restore the matching PostgreSQL schema and anchor.";
 
 export function stateEngineInput() {
+  const selected = getDatabaseEngineSelection()?.input;
+  if (selected) {
+    return selected;
+  }
   const connection: unknown =
     process.env.NODE_ENV === "test"
       ? getEnvironmentData("openclaw.test.state.connection")
@@ -145,6 +150,12 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
   }
   const fragment = runtime.fragments.find((item) => item.tables.includes(table));
   if (!fragment) {
+    const eager = runtime.expectedCatalog.some(
+      (fact) => fact.kind === "table" && fact.table === table,
+    );
+    if (eager && facts.catalog.some((fact) => fact.kind === "table" && fact.table === table)) {
+      return;
+    }
     throw new Error(`No PostgreSQL state fragment owns ${table}`);
   }
   if (

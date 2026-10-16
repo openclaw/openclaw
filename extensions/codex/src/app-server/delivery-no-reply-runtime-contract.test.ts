@@ -10,6 +10,8 @@ import {
 import { isSilentReplyPayloadText } from "openclaw/plugin-sdk/reply-chunking";
 import { afterEach, describe, expect, it } from "vitest";
 import { CodexAppServerEventProjector } from "./event-projector.js";
+import { prepareCodexServerNotification } from "./protocol-validators.js";
+import type { CodexServerNotification } from "./protocol.js";
 import { createCodexTestModel } from "./test-support.js";
 
 const THREAD_ID = "thread-delivery-contract";
@@ -41,10 +43,10 @@ function forCurrentTurn(
   method: ProjectorNotification["method"],
   params: Record<string, unknown>,
 ): ProjectorNotification {
-  return {
+  return prepareCodexServerNotification({
     method,
     params: { threadId: THREAD_ID, turnId: TURN_ID, ...params },
-  } as ProjectorNotification;
+  } as CodexServerNotification);
 }
 
 afterEach(async () => {

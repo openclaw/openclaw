@@ -22,7 +22,6 @@ import { installSqliteNativeRuntimeAdmission } from "./node-sqlite.js";
 import {
   captureSqliteDatabaseAdmissions,
   createSqliteDatabaseAdmissionCursor,
-  type SqliteDatabaseAdmissionCursor,
 } from "./sqlite-database-admission.js";
 import { retainSqliteWriteAdmissionService } from "./sqlite-transaction.js";
 import { prepareSqliteWorkerActorContext } from "./sqlite-worker-broker-admission.js";
@@ -36,6 +35,7 @@ import {
   type SqliteWorkerRequest,
 } from "./sqlite-worker-contract.js";
 import {
+  bindSqliteWorkerDatabaseAdmissionCursor,
   createSqliteWorkerOperationAdmission,
   readSqliteWorkerExecutionAuthority,
 } from "./sqlite-worker-operation-admission.js";
@@ -48,8 +48,6 @@ import {
   type SqliteWorkerTransferHandle,
 } from "./sqlite-worker-transfer.js";
 import { ownedWorkerBytes } from "./worker-transfer-bytes.js";
-
-const databaseAdmissionCursors = new WeakMap<Slot, SqliteDatabaseAdmissionCursor>();
 
 export async function dispatchSqliteWorkerJob(
   slot: Slot,
@@ -74,7 +72,7 @@ export async function dispatchSqliteWorkerJob(
   try {
     job.signal?.throwIfAborted();
     assertCurrentJob();
-    prepareSqliteWorkerActorContext(actor, job);
+    const deliveredStateContext = prepareSqliteWorkerActorContext(actor, job);
     const stateAccess = actor?.stateAccess;
     const databasePath = stateAccess?.canonicalPath;
     // Retirement must drain even after ordinary database access is revoked.
@@ -84,6 +82,7 @@ export async function dispatchSqliteWorkerJob(
         assertCurrentJob();
         stateAccess.assertAccessAllowed({
           maintenanceScope: job.maintenanceScope,
+          schemaLease: job.cleanupAccess,
         });
       };
       const isPending = (error: unknown) =>
@@ -105,18 +104,17 @@ export async function dispatchSqliteWorkerJob(
       }
     }
     job.request.operationAdmission = prepareSqliteWorkerOperationAdmission(
+      slot,
       job,
       actor,
       databasePath,
       assertDispatchable,
       assertCurrentJob,
     );
-    let admissionCursor = databaseAdmissionCursors.get(slot);
-    if (!admissionCursor) {
-      admissionCursor = createSqliteDatabaseAdmissionCursor();
-      databaseAdmissionCursors.set(slot, admissionCursor);
+    const databaseAdmissions = captureSqliteDatabaseAdmissions(slot.databaseAdmissionCursor);
+    if (databaseAdmissions.length > 0) {
+      job.request.databaseAdmissions = databaseAdmissions;
     }
-    job.request.databaseAdmissions = captureSqliteDatabaseAdmissions(admissionCursor);
     job.request.timing = job.observation.timing;
     job.request.requestCustody = job.custody.descriptor;
     const request = prepareSqliteWorkerRequest(job);
@@ -133,17 +131,21 @@ export async function dispatchSqliteWorkerJob(
       ...("input" in request ? [request.input.buffer] : []),
       ...(request.type === "open" && request.preparation ? [request.preparation.buffer] : []),
     ]);
+    if (actor && deliveredStateContext) {
+      actor.deliveredStateContext = deliveredStateContext;
+    }
     if (request.timing) {
       request.timing.postFinished = performance.now();
     }
   } catch (error) {
     // A refused dispatch may have captured a publication without delivering it.
-    databaseAdmissionCursors.delete(slot);
+    slot.databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
     onRejected(error, job.custody.postAttempted);
   }
 }
 
 function prepareSqliteWorkerOperationAdmission(
+  slot: Slot,
   job: Job,
   actor: Actor | undefined,
   databasePath: string | undefined,
@@ -167,6 +169,11 @@ function prepareSqliteWorkerOperationAdmission(
         nativeLocations: databasePath ? [databasePath] : [],
       };
   try {
+    bindSqliteWorkerDatabaseAdmissionCursor(
+      retained.admission,
+      slot.databaseAdmissionCursor,
+      () => (slot.databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor()),
+    );
     if (databasePath) {
       const assertCreate = (location: string) => {
         const creationPaths = new Set<string>();
@@ -202,7 +209,7 @@ function prepareSqliteWorkerOperationAdmission(
         job.maintenanceScope?.assertAdmission();
         actor?.stateAccess.assertReadAllowed({
           maintenanceScope: job.maintenanceScope,
-          schemaLease,
+          schemaLease: schemaLease ?? job.cleanupAccess,
         });
       };
       retained.admission.bindDatabaseAuthority({

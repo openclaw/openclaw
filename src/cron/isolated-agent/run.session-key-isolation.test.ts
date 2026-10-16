@@ -362,6 +362,9 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       }),
     );
     expect(result).toMatchObject({ status: "error", error: expected });
+    expect(result.diagnostics?.entries).toEqual([
+      expect.objectContaining({ source: "cron-preflight", severity: "error", message: expected }),
+    ]);
     expect(logWarnMock).not.toHaveBeenCalled();
     expect(runWithModelFallbackMock).not.toHaveBeenCalled();
   });

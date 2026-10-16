@@ -1365,9 +1365,9 @@ AFTER_CD
       const run = expectDefined(installStep.run, `Install opengrep script in ${workflowPath}`);
 
       expect(installStep.env, workflowPath).toMatchObject({
-        OPENGREP_VERSION: "v1.30.0",
+        OPENGREP_VERSION: "v1.30.2",
         OPENGREP_LINUX_X64_SHA256:
-          "35779bdd72e92129c8df2a77f0c55e8c08356801ea92591ef32108d6b28d564c",
+          "a66aa3278457f02b287b985a45b6762aebcaba5000f2689245fd1ed86d1456c7",
       });
       expect(run, workflowPath).toContain('binary="$(mktemp "${RUNNER_TEMP}/opengrep.XXXXXX")"');
       expect(run, workflowPath).toContain("trap 'rm -f \"$binary\"' EXIT");
@@ -2176,10 +2176,10 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     );
 
     expect(sdkRestoreStep.with?.key).toBe(
-      "${{ runner.os }}-android-sdk-v2-cmdline-15859902-platform-37.0-build-tools-36.0.0-${{ inputs.install-screenshot-emulators == 'true' && 'screenshot-emulators' || 'base' }}",
+      "${{ runner.os }}-android-sdk-v2-cmdline-15859902-platform-37.0-build-tools-37.0.0-${{ inputs.install-screenshot-emulators == 'true' && 'screenshot-emulators' || 'base' }}",
     );
     expect(String(sdkRestoreStep.with?.["restore-keys"]).trim().split("\n")).toEqual([
-      "${{ inputs.install-screenshot-emulators == 'true' && format('{0}-android-sdk-v2-cmdline-15859902-platform-37.0-build-tools-36.0.0-base', runner.os) || '' }}",
+      "${{ inputs.install-screenshot-emulators == 'true' && format('{0}-android-sdk-v2-cmdline-15859902-platform-37.0-build-tools-37.0.0-base', runner.os) || '' }}",
     ]);
     expect(setupStep.run).toContain('CMDLINE_TOOLS_VERSION="15859902"');
     expect(setupStep.run).toContain(
@@ -2404,7 +2404,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     expect(actionCheckoutIndex).toBeLessThan(setupIndex);
   });
 
-  it("keeps trusted hybrid controls on Blacksmith when optional hosted admission is closed", () => {
+  it("keeps tiny hybrid controls hosted without moving security or fork first attempts", () => {
     const workflow = readCiWorkflow();
     const context = {
       eventName: "pull_request",
@@ -2416,7 +2416,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       const expression = workflow.jobs[jobName]["runs-on"];
       for (const eventName of ["pull_request", "push"] as const) {
         expect(evaluateWorkflowExpression(expression, { ...context, eventName }), jobName).toBe(
-          "blacksmith-4vcpu-ubuntu-2404",
+          jobName === "security-fast" ? "blacksmith-4vcpu-ubuntu-2404" : "ubuntu-24.04",
         );
       }
       expect(
@@ -2426,7 +2426,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           headRepository: "contributor/openclaw",
         }),
         `${jobName}: untrusted fork first attempt`,
-      ).toBe(evaluateWorkflowExpression(expression, context));
+      ).toBe("blacksmith-4vcpu-ubuntu-2404");
       for (const override of [
         { runAttempt: 0 },
         { runAttempt: 2 },
@@ -2449,7 +2449,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       }
     }
     for (const [jobName, task, expected] of [
-      ["preflight", undefined, "blacksmith-4vcpu-ubuntu-2404"],
+      ["preflight", undefined, "ubuntu-24.04"],
       ["security-fast", undefined, "ubuntu-24.04"],
       ["checks-ui", undefined, "blacksmith-8vcpu-ubuntu-2404"],
       ["checks-ui-e2e", "browser-extension", "ubuntu-24.04"],
@@ -2484,7 +2484,11 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
               runnerBackend,
             }),
             `${runnerBackend}: ${authorAssociation}: ${headRepository}`,
-          ).toBe("blacksmith-4vcpu-ubuntu-2404");
+          ).toBe(
+            runnerBackend === "hybrid" && headRepository === "openclaw/openclaw"
+              ? "ubuntu-24.04"
+              : "blacksmith-4vcpu-ubuntu-2404",
+          );
         }
       }
     }
@@ -2603,12 +2607,12 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
   );
 
   it.each([
-    ["current shard 1", {}, 24],
-    ["current shard 2", { matrix: { shard: 2 } }, 25],
-    ["frozen shard 1", { frozenTarget: true }, 20],
-    ["frozen shard 2", { frozenTarget: true, matrix: { shard: 2 } }, 20],
-    ["unclassified shard 1", { preflightOutputs: { frozen_target: "" } }, 20],
-    ["unclassified shard 2", { preflightOutputs: { frozen_target: "" }, matrix: { shard: 2 } }, 20],
+    ["current shard 1", {}, 30],
+    ["current shard 2", { matrix: { shard: 2 } }, 30],
+    ["frozen shard 1", { frozenTarget: true }, 30],
+    ["frozen shard 2", { frozenTarget: true, matrix: { shard: 2 } }, 30],
+    ["unclassified shard 1", { preflightOutputs: { frozen_target: "" } }, 30],
+    ["unclassified shard 2", { preflightOutputs: { frozen_target: "" }, matrix: { shard: 2 } }, 30],
     ["hosted override", { runnerBackend: "github" }, 40],
     ["hybrid retry", { runnerBackend: "hybrid", runAttempt: 2 }, 40],
     ["manual fallback", { eventName: "workflow_dispatch" }, 40],
@@ -2638,16 +2642,16 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       repository: "openclaw/openclaw",
       runAttempt: 1,
     } as const;
-    for (const [jobName, hostedTimeout] of [
-      ["android", 35],
-      ["build-artifacts", 35],
-      ["checks-ui", 35],
-      ["checks-ui-e2e-real-gateway", 40],
+    for (const [jobName, hostedTimeout, blacksmithTimeout] of [
+      ["android", 35, 20],
+      ["build-artifacts", 35, 20],
+      ["checks-ui", 35, 20],
+      ["checks-ui-e2e-real-gateway", 40, 30],
     ] as const) {
       const timeout = workflow.jobs[jobName]["timeout-minutes"];
       for (const [overrides, expected] of [
         [{ runnerBackend: "github" }, hostedTimeout],
-        [{ runnerBackend: "blacksmith" }, 20],
+        [{ runnerBackend: "blacksmith" }, blacksmithTimeout],
         [{ runnerBackend: "hybrid", runAttempt: 2 }, hostedTimeout],
       ] as const) {
         expect(
@@ -2700,7 +2704,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
         for (const [jobName, timeout] of [
           ["build-artifacts", 20],
           ["android", 20],
-          ["checks-ui-e2e-real-gateway", 20],
+          ["checks-ui-e2e-real-gateway", 30],
           ["checks-ui", 20],
         ] as const) {
           expect(
@@ -5875,12 +5879,15 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           .toSorted(),
       );
       if (releaseTier === false) {
-        expect(selectedFiles).toHaveLength(uiE2eRealGatewayTestFiles.length - 12);
+        expect(selectedFiles).toHaveLength(uiE2eRealGatewayTestFiles.length - 13);
         expect(selectedFiles).not.toContain(
           "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
         );
         expect(selectedFiles).not.toContain(
           "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
+        );
+        expect(selectedFiles).not.toContain(
+          "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts",
         );
         expect(selectedFiles).not.toContain(
           "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
@@ -6231,7 +6238,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(runStep.env.OPENCLAW_NODE_TEST_ENV_JSON).toBe("${{ toJson(matrix.env) }}");
     expect(runStep.env.OPENCLAW_NODE_TEST_TARGETS_JSON).toBe("${{ toJson(matrix.targets) }}");
     expect(runStep.env.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64).toBe(
-      "${{ matrix.groups_gzip_base64 || '' }}",
+      "${{ matrix.groups_pool && steps.node-test-groups.outputs.groups_gzip_base64 || matrix.groups_gzip_base64 || '' }}",
     );
     expect(runStep.env.OPENCLAW_NODE_TEST_GROUPS_JSON).toBe(
       "${{ matrix.groups && toJson(matrix.groups) || '' }}",

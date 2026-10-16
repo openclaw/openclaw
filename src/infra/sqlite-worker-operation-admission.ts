@@ -14,6 +14,7 @@ import {
   prepareSqliteDatabaseAdmission,
   readSqliteDatabaseAdmissions,
   retainSqliteDatabaseAdmissionLocation,
+  type SqliteDatabaseAdmissionCursor,
   withSqliteDatabaseAdmissionExchange,
 } from "./sqlite-database-admission.js";
 import {
@@ -90,6 +91,18 @@ const executionAuthorities = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteWorkerExecutionAuthorities"),
   () => new WeakMap<SqliteWorkerOperationAdmission, SqliteWorkerExecutionAuthority>(),
 );
+const databaseAdmissionCursors = new WeakMap<
+  SqliteWorkerOperationAdmission,
+  { cursor: SqliteDatabaseAdmissionCursor; reset(): SqliteDatabaseAdmissionCursor }
+>();
+
+export function bindSqliteWorkerDatabaseAdmissionCursor(
+  admission: SqliteWorkerOperationAdmission,
+  cursor: SqliteDatabaseAdmissionCursor,
+  reset: () => SqliteDatabaseAdmissionCursor,
+): void {
+  databaseAdmissionCursors.set(admission, { cursor, reset });
+}
 
 export function bindSqliteWorkerExecutionAuthority(
   admission: SqliteWorkerOperationAdmission,
@@ -151,7 +164,7 @@ function createOperationAdmission(
   const { port1, port2 } = new MessageChannel();
   const inOwnerContext = AsyncLocalStorage.snapshot();
   const decisions = new Set<Int32Array>();
-  const databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
+  let databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
   const cleanupFailures: unknown[] = [];
   let closed = false;
   let started = false;
@@ -318,11 +331,21 @@ function createOperationAdmission(
         }
         const scope =
           message.location === undefined ? undefined : { location: message.location, admissions };
-        const reply = captureSqliteDatabaseAdmissions(databaseAdmissionCursor, scope);
+        const cursor = databaseAdmissionCursors.get(admission);
+        const reply = captureSqliteDatabaseAdmissions(
+          cursor?.cursor ?? databaseAdmissionCursor,
+          scope,
+        );
         message.port.postMessage(reply, []);
         recordWorkerMessage("admission", "to_worker");
         Atomics.store(decision, 0, GRANTED);
       } catch (error) {
+        const cursor = databaseAdmissionCursors.get(admission);
+        if (cursor) {
+          cursor.cursor = cursor.reset();
+        } else {
+          databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
+        }
         if (
           error instanceof StateDatabaseAdmissionPendingError &&
           error.databasePath === coldOpenPath

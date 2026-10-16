@@ -44,7 +44,6 @@ import {
   resolveLiveToolResultAggregateMaxChars,
   resolveLiveToolResultMaxChars,
   reconcileToolResultPromptProjectionState,
-  toolResultWarningDedupe,
   truncateOversizedToolResultsInMessages,
 } from "../tool-result-truncation.js";
 import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
@@ -435,7 +434,7 @@ type PromptContextAttempt = Pick<
   | "sessionTarget"
   | "suppressNextUserMessagePersistence"
   | "operation"
->;
+> & { runId?: string };
 
 type PromptAssemblyContext = {
   effectivePrompt: string;
@@ -502,10 +501,9 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
     promptToolResultAggregateMaxChars,
     createToolResultPromptProjectionState(input.toolResultPromptProjectionState),
   );
-  const promptHistoryChanged = promptToolResultTruncation.messages !== sessionMessages;
   const { aggregatePressureEngaged } = promptToolResultTruncation;
   sessionMessages = promptToolResultTruncation.messages;
-  if (promptHistoryChanged || aggregatePressureEngaged) {
+  if (promptToolResultTruncation.truncatedCount > 0) {
     const sessionLogKey = attempt.sessionKey ?? attempt.sessionId ?? "unknown";
     const truncationLog =
       `[tool-result-truncation] Truncated ${promptToolResultTruncation.truncatedCount} ` +
@@ -514,15 +512,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
       `aggregateBudgetChars=${promptToolResultAggregateMaxChars} ` +
       `aggregate=${promptToolResultTruncation.aggregateTruncatedCount}) ` +
       `sessionKey=${sessionLogKey}`;
-    if (aggregatePressureEngaged) {
-      if (!toolResultWarningDedupe.promptPressure.check(sessionLogKey)) {
-        log.warn(
-          `${truncationLog}; aggregate tool-result pressure detected; final provider-bound projection will determine whether recovery is needed`,
-        );
-      }
-    } else {
-      log.info(truncationLog);
-    }
+    log.info(truncationLog);
   }
 
   const escapedProjection = !input.isRawModelRun && usesEscapedRuntimeContext(input.sessionVersion);
@@ -569,6 +559,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
           sessionKey: attempt.sessionKey,
           sessionId: attempt.sessionId,
           sessionTarget: attempt.sessionTarget,
+          runId: attempt.runId,
           agentId: input.sessionAgentId,
           includeEmptySnapshots: input.appendOnlyRuntimeContext === true,
         });

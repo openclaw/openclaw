@@ -1,5 +1,5 @@
-import { flush } from "solid-js";
 // Channels page view tests.
+import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelsStatusSnapshot, WhatsAppStatus } from "../../api/types.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
@@ -123,15 +123,38 @@ describe("channels plugin presentation metadata", () => {
       "blob:slack-plugin-icon",
     );
     expect(container.textContent).not.toContain("Legacy channel subtitle");
-    for (const selector of [".channels-item", ".channels-detail__header", ".channels-wizard"]) {
-      const icon = container.querySelector(`${selector} img`)!;
+    const selectors = [".channels-item", ".channels-detail__header", ".channels-wizard"];
+    const originalIcons = selectors.map((selector) => container.querySelector(`${selector} img`)!);
+    for (const [index, selector] of selectors.entries()) {
+      const icon = originalIcons[index]!;
       icon.dispatchEvent(new Event("error"));
+      flush();
       expect(container.querySelector(`${selector} img`)).toBeNull();
       expect(
         container.querySelector(
           `${selector} .channels-tile--fallback, ${selector} .channels-cover--fallback`,
         )?.textContent,
       ).toContain("SL");
+    }
+    renderChannelView(ChannelsView, props, container);
+    for (const selector of selectors) {
+      expect(container.querySelector(`${selector} img`)).toBeNull();
+    }
+    Object.assign(props.presentation, { pluginIconUrls: { slack: "blob:replacement-slack-icon" } });
+    renderChannelView(ChannelsView, props, container);
+    for (const [index, selector] of selectors.entries()) {
+      const replacement = container.querySelector(`${selector} img`)!;
+      expect(replacement.getAttribute("src")).toBe("blob:replacement-slack-icon");
+      originalIcons[index]!.dispatchEvent(new Event("error"));
+      flush();
+      expect(container.querySelector(`${selector} img`)).toBe(replacement);
+    }
+    Object.assign(props.presentation, { pluginIconUrls: { slack: "blob:slack-plugin-icon" } });
+    renderChannelView(ChannelsView, props, container);
+    for (const selector of selectors) {
+      expect(container.querySelector(`${selector} img`)?.getAttribute("src")).toBe(
+        "blob:slack-plugin-icon",
+      );
     }
     Object.assign(props.presentation, { pluginIconUrls: {} });
     Object.assign(props.presentation, {

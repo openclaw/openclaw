@@ -13,6 +13,7 @@ import {
   retireSqliteDatabaseAdmissionForPath,
 } from "../infra/sqlite-database-admission.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -78,7 +79,9 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
       const restart = await run("restart");
       expect(restart.namespace).toBe(cold.namespace);
       expect(restart.admissionId).not.toBe(cold.admissionId);
-      await client.query(`UPDATE "${namespace}".schema_meta SET schema_version = 23`);
+      await client.query(`UPDATE "${namespace}".schema_meta SET schema_version = $1`, [
+        OPENCLAW_STATE_SCHEMA_VERSION + 1,
+      ]);
       await expect(run("restart")).rejects.toThrow("PostgreSQL state metadata mismatch");
       await client.query(`DROP TABLE "${namespace}".secret_store_entries`);
       await expect(run("restart")).rejects.toThrow("PostgreSQL schema drift detected");

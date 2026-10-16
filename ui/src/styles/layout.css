@@ -203,12 +203,6 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
   display: none;
 }
 
-/* Native-nav hosts provide the expanded sidebar toggle in AppKit, while the
-   in-sidebar search remains the only pointer path to the palette. */
-html.openclaw-native-nav .sidebar-brand__collapse {
-  display: none;
-}
-
 html.openclaw-native-web-chrome .shell--mobile-nav .sidebar-brand__desktop-control {
   display: none;
 }
@@ -2017,30 +2011,6 @@ openclaw-settings-save-indicator:empty {
   color: var(--muted);
 }
 
-/* Expanded parents already show their children below, so the collapse control
-   is quiet until row hover; collapsed toggles stay visible because the count
-   and status tint are the only signal that hidden children exist. */
-.sidebar-child-session-toggle[aria-expanded="true"] {
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity var(--duration-fast) ease;
-}
-
-.session-row-host:hover .sidebar-child-session-toggle[aria-expanded="true"],
-.session-row-host:focus-within .sidebar-child-session-toggle[aria-expanded="true"] {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-/* Touch has no hover: keep the collapse control usable, matching the
-   session-action touch override in components.css. */
-@media (hover: none), (pointer: coarse) {
-  .sidebar-child-session-toggle[aria-expanded="true"] {
-    opacity: 1;
-    pointer-events: auto;
-  }
-}
-
 .sidebar-child-session-toggle:hover,
 .sidebar-child-session-toggle:focus-visible {
   background: color-mix(in srgb, var(--bg-hover) 88%, transparent);
@@ -2272,11 +2242,6 @@ openclaw-settings-save-indicator:empty {
   color: inherit;
 }
 
-.nav-section__items {
-  display: grid;
-  gap: 2px;
-}
-
 .sidebar-online {
   gap: 4px;
   padding-top: 12px;
@@ -2301,13 +2266,6 @@ openclaw-settings-save-indicator:empty {
     opacity: 1;
     pointer-events: auto;
   }
-}
-
-.sidebar-online__facepile {
-  display: inline-flex;
-  min-width: 0;
-  margin-left: auto;
-  overflow: hidden;
 }
 
 .sidebar-online__row {
@@ -2601,26 +2559,6 @@ openclaw-settings-save-indicator:empty {
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
-.sidebar-customize-menu__item--active {
-  color: var(--text-strong);
-  background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
-}
-
-.sidebar-customize-menu__item--active .nav-item__icon {
-  color: var(--accent);
-}
-
-wa-dropdown.session-menu,
-wa-dropdown.sidebar-session-sort-menu {
-  position: fixed;
-  z-index: 121;
-}
-
-wa-dropdown.session-menu::part(menu) {
-  min-width: 224px;
-  max-width: 264px;
-}
-
 /* Popover hosts live in the top layer so menus escape in-page stacking
    contexts (e.g. the sidebar resizer above the nav); the host itself must
    stay a zero-size shell around its fixed-position menu. */
@@ -2636,8 +2574,7 @@ openclaw-session-menu[popover] {
   background: transparent;
 }
 
-.sidebar-session-sort-menu:not(wa-dropdown),
-wa-dropdown.sidebar-session-sort-menu::part(menu) {
+.sidebar-session-sort-menu {
   min-width: 176px;
   max-width: 220px;
   padding: var(--menu-padding);
@@ -2645,9 +2582,6 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
-}
-
-.sidebar-session-sort-menu:not(wa-dropdown) {
   position: fixed;
   z-index: 121;
   animation: menu-in 140ms var(--ease-out);

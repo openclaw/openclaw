@@ -133,7 +133,6 @@ export async function withAgentTurnCompletion<T>(
                   lifecycleRevision: expected.lifecycleRevision ?? null,
                   writerRunId: expected.writerRunId,
                   expectedState: buildRestartRecoveryExpectedState(snapshot.entry!),
-                  ...(pendingFinalDelivery ? { lifecycle: { updatedAt: Date.now() } } : {}),
                 },
                 pendingFinalDelivery,
                 restartClaimCleanup: restartClaimCleanup?.operation,

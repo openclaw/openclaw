@@ -46,7 +46,9 @@ export function readIdempotencyKeyOwner(
     const row = [...actor.transcript.identities.values()].findLast(
       (candidate) => candidate.message_idempotency_key === idempotencyKey,
     );
-    return row ? { eventId: row.event_id, seq: row.seq } : undefined;
+    if (row || actor.transcript.complete) {
+      return row ? { eventId: row.event_id, seq: row.seq } : undefined;
+    }
   }
   const db = getSessionKysely(database.db);
   const row = executeSqliteQueryTakeFirstSync(

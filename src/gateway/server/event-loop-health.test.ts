@@ -5,6 +5,7 @@ import {
   getInternalDiagnosticEventSequence,
   onDiagnosticEvent,
   onInternalDiagnosticEvent,
+  onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
@@ -355,6 +356,43 @@ describe("event-loop measurement telemetry", () => {
   afterEach(() => {
     stopDiagnosticStabilityRecorder();
     resetDiagnosticEventsForTest();
+  });
+
+  it("advances an idle window when telemetry gains interest without resetting or replaying it", async () => {
+    const harness = createMonitorHarness({ isIdle: () => true });
+    await harness.samples(50);
+    const first = harness.monitor.snapshot();
+    expect(first).toMatchObject({ intervalMs: 1_000 });
+    expect(harness.clock.armedAtMs).toBe(20_000);
+    await harness.samples(25);
+
+    const events: DiagnosticEventPayload[] = [];
+    const subscribe = () =>
+      onTrustedInternalDiagnosticEvent((event) => events.push(event), {
+        exclude: ["log.record"],
+      });
+    const stop = subscribe();
+    expect(harness.monitor.snapshot()).toBe(first);
+    expect(harness.clock.armedAtMs).toBe(12_000);
+    await waitForDiagnosticEventsDrained();
+    expect(events).toEqual([]);
+
+    await harness.samples(24);
+    expect(harness.monitor.snapshot()).toBe(first);
+    await harness.sample();
+    await waitForDiagnosticEventsDrained();
+    expect(events).toMatchObject([{ type: "gateway.event_loop.sample", intervalMs: 1_000 }]);
+    expect(harness.clock.armedAtMs).toBe(13_000);
+
+    stop();
+    await harness.samples(50);
+    expect(harness.clock.armedAtMs).toBe(20_000);
+    expect(events).toHaveLength(1);
+    harness.monitor.stop();
+    expect(harness.clock.armedAtMs).toBeNull();
+    const stopAfterClose = subscribe();
+    expect(harness.clock.armedAtMs).toBeNull();
+    stopAfterClose();
   });
 
   it("records each sampling window once without needing a reader or inheriting reader context", async () => {

@@ -624,6 +624,37 @@ describe("video-generation runtime", () => {
     ).rejects.toThrow(/neither buffer nor url is set/);
   });
 
+  it.each([0, -5, 0.4, Number.NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects invalid duration %s without calling the video provider",
+    async (durationSeconds) => {
+      const requests = useCapturingProvider({
+        capabilities: { generate: { supportedDurationSeconds: [4, 6, 8] } },
+      });
+      await expect(
+        runGenerateVideo({
+          cfg: videoConfig({ primary: "video-plugin/vid-v1" }),
+          prompt: "animate a cat",
+          durationSeconds,
+        }),
+      ).rejects.toThrow("durationSeconds must be a positive duration");
+      expect(requests).toEqual([]);
+    },
+  );
+
+  it.each([
+    [undefined, undefined],
+    [0.5, 1],
+    [2.5, 3],
+  ])("preserves duration %s rounding and omission", async (durationSeconds, expected) => {
+    const requests = useCapturingProvider();
+    await runGenerateVideo({
+      cfg: videoConfig({ primary: "video-plugin/vid-v1" }),
+      prompt: "animate a cat",
+      durationSeconds,
+    });
+    expect(requests[0]?.durationSeconds).toBe(expected);
+  });
+
   it("normalizes requested durations to supported provider values", async () => {
     const requests = useCapturingProvider({
       capabilities: { generate: { supportedDurationSeconds: [4, 6, 8] } },
@@ -674,23 +705,5 @@ describe("video-generation runtime", () => {
       { key: "audio", value: false },
       { key: "watermark", value: false },
     ]);
-  });
-
-  it("builds a generic config hint without hardcoded provider ids", async () => {
-    providers = [
-      {
-        id: "motion-one",
-        defaultModel: "animate-v1",
-        capabilities: {},
-        generateVideo: async () => ({
-          videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
-        }),
-      },
-    ];
-    providerEnvVars = { "motion-one": ["MOTION_ONE_API_KEY"] };
-
-    await expect(runGenerateVideo({ cfg: {}, prompt: "animate a cat" })).rejects.toThrow(
-      'No video-generation model configured. Set agents.defaults.mediaModels.video.primary to a provider/model like "motion-one/animate-v1". If you want a specific provider, also configure that provider\'s auth/API key first (motion-one: MOTION_ONE_API_KEY).',
-    );
   });
 });

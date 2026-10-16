@@ -6,6 +6,7 @@ export type TestSessionEntry = {
   updatedAt: number;
   sessionFile: string;
   chatType?: "direct" | "group" | "channel";
+  space?: string;
   delivery?: ReturnType<typeof normalizeSessionDeliveryState>;
   origin?: { chatType?: "direct" | "group" | "channel" };
 };
@@ -14,7 +15,7 @@ export function sessionEntry(
   sessionId: string,
   updatedAt: number,
   sessionFile: string,
-  metadata?: Pick<TestSessionEntry, "chatType" | "delivery" | "origin">,
+  metadata?: Pick<TestSessionEntry, "chatType" | "delivery" | "origin" | "space">,
 ): TestSessionEntry {
   return { sessionId, updatedAt, sessionFile, ...metadata };
 }

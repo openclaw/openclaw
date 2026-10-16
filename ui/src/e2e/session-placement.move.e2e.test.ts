@@ -630,16 +630,46 @@ suite.define(() => {
         ],
       });
       await gateway.deferNext("sessions.describe", descriptorMatch);
+      // Delay presentation frames while both Gateway receipts reach their data owners.
+      const releaseFrames = await page.evaluateHandle(() => {
+        const request = window.requestAnimationFrame;
+        const cancel = window.cancelAnimationFrame;
+        const queued = new Map<number, FrameRequestCallback>();
+        let held = true;
+        window.requestAnimationFrame = (callback) => {
+          const id = request.call(window, (time) => {
+            if (held) {
+              queued.set(id, callback);
+            } else {
+              callback(time);
+            }
+          });
+          return id;
+        };
+        window.cancelAnimationFrame = (id) => {
+          queued.delete(id);
+          cancel.call(window, id);
+        };
+        return () => {
+          held = false;
+          window.requestAnimationFrame = request;
+          window.cancelAnimationFrame = cancel;
+          for (const callback of queued.values()) {
+            request.call(window, callback);
+          }
+          queued.clear();
+        };
+      });
       await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
       await gateway.waitForRequest("sessions.describe", {
         after: descriptorCount,
         match: descriptorMatch,
       });
-      await page.getByRole("button", { name: "Runs on device" }).waitFor();
       await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
       expect(await gateway.getRequests("sessions.describe", descriptorMatch)).toHaveLength(
         descriptorCount + 1,
       );
+      await releaseFrames.evaluate((release) => release());
       await gateway.resolveDeferred("sessions.describe", { session: available });
       await gateway.waitForRequest("sessions.describe", {
         after: descriptorCount + 1,
@@ -647,6 +677,9 @@ suite.define(() => {
       });
       await page.getByRole("button", { name: "Device offline" }).waitFor();
       expect(await observedRunnerStatus(page, available.key)).toBe("offline");
+      expect(await gateway.getRequests("sessions.describe", descriptorMatch)).toHaveLength(
+        descriptorCount + 2,
+      );
       expect(await gateway.getSocketCount()).toBe(1);
 
       await selectChatLayoutAction(page, "Open split view");

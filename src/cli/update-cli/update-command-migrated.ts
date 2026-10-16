@@ -16,6 +16,7 @@ import {
   updateStateSchemaVersionsMatch,
 } from "../../infra/update-candidate-state.js";
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
+import { unsafeUpdateRecovery } from "../../infra/update-recovery.js";
 import type { UpdateRunStep } from "../../infra/update-run-record.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
 import { createUpdateTimeoutHandoff } from "../../infra/update-timeout-provenance.js";
@@ -61,6 +62,7 @@ export async function inspectActivatedUpdateState(
   if (!schemaVersions) {
     return undefined;
   }
+  let blocked: FinishUpdateParams["rollbackBlockedReason"];
   try {
     const current = await readUpdateStateSchemaVersions({
       stateDir: resolveStateDir(env),
@@ -69,6 +71,7 @@ export async function inspectActivatedUpdateState(
       root: result.root ?? null,
       nodeRunner: params.packageUpdateNodeRunner,
       timeoutMs: params.timeoutMs,
+      includeRetainedAgentPaths: true,
     });
     const shared = current.find((entry) => entry.path === resolveOpenClawStateSqlitePath(env));
     const sharedVersion = shared ? resolveUpdateStateContentVersion(shared) : undefined;
@@ -76,6 +79,7 @@ export async function inspectActivatedUpdateState(
       ? current.filter(
           (entry) =>
             entry !== shared &&
+            !shared?.retainedAgentPaths?.includes(entry.path) &&
             entry.userVersion !== null &&
             entry.userVersion !== candidateSchemaVersions.agent,
         )
@@ -108,7 +112,7 @@ export async function inspectActivatedUpdateState(
         ].join("\n"),
       });
     }
-    return updateStateSchemaVersionsMatch(schemaVersions, current, {
+    blocked = updateStateSchemaVersionsMatch(schemaVersions, current, {
       sharedPath: resolveOpenClawStateSqlitePath(env),
       candidateSchemaVersions,
     })
@@ -125,8 +129,12 @@ export async function inspectActivatedUpdateState(
       exitCode: 1,
       stderrTail: formatErrorMessage(error),
     });
-    return "rollback-state-unverified";
+    blocked = "rollback-state-unverified";
   }
+  if (blocked && result.status === "error") {
+    result.recovery = unsafeUpdateRecovery(result.recovery, blocked);
+  }
+  return blocked;
 }
 
 /** After migration, only candidate code may reopen state or finish the run. */

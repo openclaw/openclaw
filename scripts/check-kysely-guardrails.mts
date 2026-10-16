@@ -44,6 +44,16 @@ const rawSqliteAllowPathGroups = {
     "src/infra/kysely-sync-cache-state.ts",
     "src/infra/kysely-sync.ts",
   ],
+  "admitted search indexes own native FTS schema, triggers, and rebuilds": [
+    "src/infra/database-engine/sqlite-search-schema.ts",
+  ],
+  "sqlite-vec native extension probe, candidate queries, and index writes": [
+    "src/infra/database-engine/sqlite-vec.ts",
+    "src/infra/database-engine/sqlite-vector.ts",
+  ],
+  "isolated vector reader owns connection-local query-only and busy-timeout pragmas": [
+    "src/infra/database-engine/sqlite-vector.child.ts",
+  ],
   "SQLite database lifecycle, schema, transactions, and pragmas": [
     // Engine admission owns anchor metadata and schema bootstrap, not application queries.
     "src/infra/database-engine/adapters.ts",
@@ -83,6 +93,7 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-state-db-delivery-queue-backfill.ts",
     "src/state/openclaw-state-db-legacy-backfills.ts",
     "src/state/openclaw-state-db-maintenance.ts",
+    "src/state/openclaw-state-db-meeting-chronology-migration.ts",
     "src/state/openclaw-state-db-operator-approval-migration.ts",
     "src/state/openclaw-state-db-schema-additive.ts",
     "src/state/openclaw-state-db-schema-helpers.ts",

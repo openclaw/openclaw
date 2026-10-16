@@ -10,7 +10,7 @@ import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { setManagedCodexPluginRoot } from "./managed-binary.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
-import { codexNativeSubagentNotifications } from "./native-subagent-notification.js";
+import { readCodexNativeSubagentNotification } from "./native-subagent-notification.js";
 import type { JsonObject } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 import { createIsolatedCodexAppServerClient } from "./shared-client.js";
@@ -313,7 +313,9 @@ describeLive("codex native subagent monitor live", () => {
             item?.type === "function_call_output" &&
             typeof item.call_id === "string" &&
             waitCalls.has(item.call_id);
-          const receipts = codexNativeSubagentNotifications.deliveredAgentPaths(notification);
+          const receipts = readCodexNativeSubagentNotification(notification).receipts.map(
+            (receipt) => receipt.agentPath,
+          );
           if (
             notification.method === "turn/started" ||
             notification.method === "turn/completed" ||

@@ -558,14 +558,14 @@ export const en: TranslationMap & {
     stylesFailed: "Styles failed to load, so the page may look broken.",
   },
   communityInvite: {
-    title: "Pull up a chair.",
-    body: "There’s a place for you in the AI future. Join the Community on Reddit, Discord, and X.",
-    join: "Join",
-    follow: "Follow",
+    title: "Community",
+    body: "Connect, ask questions, share what you build.",
+    discord: "Chat with the community",
+    reddit: "Discussions and ideas",
+    x: "News and updates",
+    opensNewTab: "Links open in a new tab.",
     joinPlatform: "Join the OpenClaw community on {platform}",
     followPlatform: "Follow OpenClaw on {platform}",
-    dismissForever: "Dismiss and don't show again",
-    dismissFailed: "Invitation dismissed, but your preference couldn't be saved.",
   },
   updates: {
     adminRequired: "Administrator access is required to change update settings or start an update.",
@@ -787,7 +787,6 @@ export const en: TranslationMap & {
     advanced: "Advanced",
     copyDetails: "Copy details",
     copyLink: "Copy link",
-    archiveSessionOnly: "Session only",
     communication: {
       title: "Cross-session messaging",
       send: "Send messages",
@@ -1782,6 +1781,7 @@ export const en: TranslationMap & {
     plugins: "Plugins",
     skillWorkshop: "Skill workshop",
     devices: "Devices",
+    claws: "Claws",
     cloudWorkers: "Cloud environments",
     chat: "Chat",
     dashboards: "Dashboards",
@@ -1830,6 +1830,7 @@ export const en: TranslationMap & {
     plugins: "Extend your Claw with tools",
     skillWorkshop: "Skills your agent learned, recent changes, and undo.",
     devices: "Paired devices, pairing approvals, and exec bindings.",
+    claws: "Explore and add official Claws.",
     cloudWorkers: "Repository snapshots and machines for cloud sessions.",
     chat: "Gateway chat for quick interventions.",
     dashboards: "Tasks with saved dashboards.",
@@ -2064,7 +2065,10 @@ export const en: TranslationMap & {
     connectionChanged: "The Gateway connection changed. Retry to continue this setup.",
     sessionRestarted:
       "{error} OpenClaw started a fresh session; earlier messages remain for context.",
-    unsupportedGateway: "Update the Gateway to continue setup with OpenClaw.",
+    unsupportedGateway:
+      "This Gateway does not offer openclaw.chat. Update the Gateway and reconnect to continue setup.",
+    accessRequired:
+      "Setup requires openclaw.chat with operator.admin access. Pair this browser with operator.admin scope, then reconnect.",
     autoSetup: {
       title: "AI setup",
       connecting: "Connecting your AI...",
@@ -2890,6 +2894,8 @@ export const en: TranslationMap & {
       preparingContext: "Preparing this turn…",
       memoryFlushing: "Saving conversation memory…",
       startingModel: "Waiting for a response",
+      waitingForLocalModel: "Waiting for the local model to respond",
+      waitingForModelSlot: "Waiting for a free model slot",
       waitingForState: "Temporarily busy—retrying…",
     },
     archivedSessionDisabled: "This session is archived. Unarchive it to continue the conversation.",
@@ -3355,7 +3361,6 @@ export const en: TranslationMap & {
       },
       restartRecovery: {
         label: "System · restart recovery",
-        summary: "Gateway restarted. Resuming your interrupted request.",
         interrupted:
           "The Gateway restarted. Automatic recovery was interrupted before the agent could resume. Send a message to continue.",
         cancelled:
@@ -3374,7 +3379,11 @@ export const en: TranslationMap & {
       claudeCliTaskNotification: {
         label: "System · background task",
       },
+      pluginSteering: {
+        label: "{plugin} guidance",
+      },
       showContent: "Show content",
+      hideContent: "Hide content",
     },
     skillLearned: {
       label: "Learned",
@@ -3587,6 +3596,8 @@ export const en: TranslationMap & {
       loadFailed: "Could not load this question. Try again.",
     },
     imageLightbox: {
+      loadingDetail: "Loading sharper image…",
+      detailFailed: "Preview shown. Sharper image could not load.",
       actions: "Image actions",
       previous: "Previous image",
       next: "Next image",
@@ -3759,7 +3770,6 @@ export const en: TranslationMap & {
     },
     pendingInputs: {
       agentUpdate: {
-        queued: "Agent update received · waiting for delivery.",
         cancelled: "This agent update was cancelled before delivery.",
         interrupted: "Delivery interrupted. This saved agent update is not scheduled to retry.",
       },
@@ -3946,6 +3956,8 @@ export const en: TranslationMap & {
         "No transcription provider is configured for dictation. Choose one in Settings to dictate.",
       realtimeTalkCancellationRejected: "Realtime output cancellation was not accepted.",
       realtimeTalkMissingTurnIdentity: "Realtime output is missing its turn identity.",
+      realtimeTalkRelayUnresponsive:
+        "Talk ended because the Gateway has not acknowledged microphone audio for 30 seconds. Check the connection and start Talk again.",
       realtimeTalkRequiresMicrophone: "Realtime voice input requires browser microphone access.",
       selectedMicrophoneUnavailable:
         "The selected microphone is unavailable. Choose another input or System default.",
@@ -3978,6 +3990,16 @@ export const en: TranslationMap & {
       readFailed: "Could not attach: {names}{more}",
       imagesOnly: "Side chat accepts image attachments only.",
       tooLarge: "Too large to send: {names}{more}",
+      openOriginal: "Open original",
+      retryHelp: "Choose a smaller file, remove other attachments, or try attaching it again.",
+      compressToFit: "Compress to fit",
+      compressionHint:
+        "Video is too large. Compress a copy on this device; the original stays unchanged.",
+      compressing: "Compressing… {progress}%",
+      compressionUnsupported:
+        "This browser cannot compress this video with its audio. Try another browser or a smaller file.",
+      compressionTooLarge: "This video could not fit. Trim it or choose a smaller file.",
+      compressionFailed: "Could not compress this video. Try again or choose a smaller file.",
       showInTextField: "Show in text field",
       pastedText: "Pasted text",
       outsideAllowedFolders: "Outside allowed folders",
@@ -3998,6 +4020,8 @@ export const en: TranslationMap & {
     voice: {
       asking: "Asking OpenClaw...",
       replyFailed: "The voice reply was interrupted. Start Talk again to retry.",
+      replyTimedOut:
+        "Talk stopped waiting. The agent's answer will appear in chat when it finishes.",
       preparing: "Preparing voice session...",
       connecting: "Connecting voice input...",
       listening: "Listening...",

@@ -313,9 +313,20 @@ export function createCrabboxWarmImageManager(dependencies: {
     }
   };
 
-  const verifyImage = async (context: LeaseContext, checkpointId: string) => {
+  const verifyImage = async (
+    context: LeaseContext,
+    checkpointId: string,
+    timeoutMs = WARM_IMAGE_COMMAND_TIMEOUT_MS,
+  ) => {
     const args = ["checkpoint", "inspect", checkpointId, "--verify", "--json"];
-    return parseCheckpointAvailability(await checkpointCommand(context, "inspect", args));
+    return parseCheckpointAvailability(
+      await checkpointCommand(
+        context,
+        "inspect",
+        args,
+        Math.min(timeoutMs, WARM_IMAGE_COMMAND_TIMEOUT_MS),
+      ),
+    );
   };
 
   const selectAllocation = async (
@@ -450,7 +461,7 @@ export function createCrabboxWarmImageManager(dependencies: {
         machineClass: profile.class,
         os: profile.target,
         phase: "pending",
-        runtimeIdentity: structuredClone(context.nodeRuntimeIdentity),
+        runtimeIdentity: context.nodeRuntimeIdentity,
         preparationKey,
         cacheKey,
         purpose,

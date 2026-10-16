@@ -1,8 +1,8 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { SessionsListResult } from "../api/types.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import type { SessionListSnapshot } from "../lib/sessions/session-capability.ts";
+import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
 import {
   loadStoredSidebarSessionOwnerFilter,
   storeSidebarSessionOwnerFilter,
@@ -14,7 +14,7 @@ type SessionOwnerFilterContext = {
 };
 
 /** Owns the saved owner filter and invalidates changes to the effective list query. */
-export class SessionOwnerFilterController implements ReactiveController {
+export class SessionOwnerFilterController implements SolidController {
   ownerId: string | null = null;
   involvingMe = false;
   private scope: string | null = null;
@@ -24,7 +24,7 @@ export class SessionOwnerFilterController implements ReactiveController {
   private ownerFacet: { agentId: string; multiple: boolean } | null = null;
 
   constructor(
-    private readonly host: ReactiveControllerHost & {
+    private readonly host: SolidControllerHost & {
       isConnected: boolean;
       sidebarSessionOwnerFilter(): SidebarSessionOwnerFilter;
       sessionData: {

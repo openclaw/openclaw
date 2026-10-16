@@ -31,6 +31,9 @@ import { resolveGlobalMap } from "../shared/global-singleton.js";
 import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
 import type { CronCreatorAuthorityGrant } from "./cron-creator-authority-grant.types.js";
 
+/** Set by MCP authentication; caller-token conversation headers cannot select a binding. */
+export type McpCurrentConversationOrigin = "run-bound-grant" | "server-session" | "caller-token";
+
 export type McpLoopbackRequestContext = {
   /** Recorded requester boundary captured by the host; never read from request headers. */
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
@@ -62,6 +65,7 @@ export type McpLoopbackRequestContext = {
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string;
+  currentConversationOrigin?: McpCurrentConversationOrigin;
   replyToMode?: "off" | "first" | "all" | "batched";
   currentInboundAudio?: boolean;
   accountId?: string;

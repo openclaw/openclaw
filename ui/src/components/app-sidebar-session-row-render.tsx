@@ -9,26 +9,14 @@ import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import type { CatalogBackingSessionDisplay } from "./app-sidebar-session-catalogs.ts";
 import { renderSidebarSessionIndicators } from "./app-sidebar-session-indicators.tsx";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
+import { visibleSessionChildren } from "./app-sidebar-session-types.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-import { rowDemandsVisibility } from "./app-sidebar-session-types.ts";
 import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
 import { Icon } from "./solid/icon.tsx";
 import { SidebarSessionSubtitle } from "./solid/session-presentation.tsx";
+import { SessionTitlePlaceholder } from "./solid/session-title-placeholder.tsx";
 import "./elapsed-time.tsx";
 import "./tooltip.ts";
-const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
-export function visibleSessionChildren(params: {
-  session: SidebarRecentSession;
-  fullyShown: boolean;
-}): readonly SidebarRecentSession[] {
-  // Active, running, and attention-bearing branches must bypass the quiet-child cap.
-  return params.fullyShown
-    ? params.session.children
-    : params.session.children.filter(
-        (child, index) =>
-          index < SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT || rowDemandsVisibility(child),
-      );
-}
 
 /** Compose independently owned session state and context indicators. */
 
@@ -248,7 +236,11 @@ function renderRecentSessionRow(params: RecentSessionParams) {
       >
         {persistentIndicator()}
         <span class="sidebar-recent-session__text">
-          <span class="sidebar-recent-session__title-row">{marqueeLabel()}</span>
+          <span class="sidebar-recent-session__title-row">
+            <Show when={session().titlePending} fallback={marqueeLabel()}>
+              <SessionTitlePlaceholder />
+            </Show>
+          </span>
           <span class="sidebar-recent-session__details">
             <Show when={session().channelPresentation}>
               {(channel) => (
@@ -298,7 +290,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
           <span class="sidebar-child-session-toggle__icon" aria-hidden="true">
             {childrenExpanded() ? <Icon name="chevronDown" /> : <Icon name="chevronRight" />}
           </span>
-          {childrenExpanded() || team() ? undefined : (
+          {team() ? undefined : (
             <span class="sidebar-child-session-toggle__count">
               {session().childSessionKeys.length}
             </span>

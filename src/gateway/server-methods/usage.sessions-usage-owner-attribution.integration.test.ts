@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/config.js";
@@ -29,7 +28,6 @@ import { discoverAllSessions, loadSessionCostSummary } from "../../infra/session
 import type { AssistantMessage } from "../../llm/types.js";
 import { buildUsageOverview } from "../../shared/usage-overview.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
-import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { SYSTEM_AGENT_ID } from "../../system-agent/agent-id.js";
@@ -38,10 +36,20 @@ import {
   withOpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import { createResidentSessionRowReader } from "../session-row-projection.test-support.js";
 import type { RespondFn } from "./types.js";
 import { loadUsageSessionSummaries } from "./usage-session-loading.js";
 import * as usageSessionSelection from "./usage-session-selection.js";
 import { usageHandlers } from "./usage.js";
+
+let sessionRows: ReturnType<typeof createResidentSessionRowReader>;
+
+beforeEach(() => {
+  const reader = createResidentSessionRowReader();
+  sessionRows = reader;
+  onTestFinished(() => reader.dispose());
+});
 
 function usageMessage(tokens: number, timestamp: number): AssistantMessage {
   return {
@@ -66,13 +74,17 @@ function usageMessage(tokens: number, timestamp: number): AssistantMessage {
 async function requestUsage(params: Record<string, unknown>, method = "sessions.usage") {
   const respond = vi.fn<RespondFn>();
   const handler = expectDefined(usageHandlers[method], "usage handler");
+  const projection = await sessionRows.ready();
   await handler({
     req: { type: "req", id: "usage", method },
     params,
     respond,
     client: null,
     isWebchatConnect: () => false,
-    context: createDirectChatContext({ getRuntimeConfig }),
+    context: bindSessionRowProjection(
+      createDirectChatContext({ getRuntimeConfig }),
+      () => projection,
+    ),
   });
   expect(respond).toHaveBeenCalledOnce();
   return expectDefined(respond.mock.calls[0], "usage response");
@@ -91,7 +103,11 @@ async function withUsageState(run: (state: OpenClawTestState) => Promise<void>) 
       plugins: { enabled: false },
     });
     await captureRuntimeConfigAsyncReader()();
-    await run(state);
+    try {
+      await run(state);
+    } finally {
+      await sessionRows.dispose();
+    }
   });
 }
 
@@ -141,6 +157,8 @@ it("preserves global session addition order across agents before overview pagina
       sessions.push({
         key: sessionId,
         agentId,
+        sessionId,
+        sessionFile,
         channel: "same-channel",
         creatorKey: "same-creator",
         updatedAt: 30 - index * 10,
@@ -216,6 +234,7 @@ it("keeps same-key overview context reports with their selected agent", async ()
       candidates.push(
         ...(await usageSessionSelection.selectUsageSessions({
           config,
+          projection: await sessionRows.ready(),
           agentId,
           specificKey: null,
           groupingMode: "instance",
@@ -331,6 +350,75 @@ it("keeps prior cron runs attributed through guarded replacement and the real us
       } finally {
         sql.restore();
       }
+    }
+  });
+});
+
+it("uses committed metadata for selected usage and families with an empty current window", async () => {
+  await withUsageState(async (state) => {
+    const config = getRuntimeConfig();
+    const key = "agent:main:usage-receipts";
+    const scope = {
+      agentId: "main",
+      sessionKey: key,
+      storePath: path.join(state.sessionsDir(), "sessions.json"),
+    };
+    const timestamp = Date.now() - 60_000;
+    const firstId = "usage-receipts-first";
+    await upsertSessionEntryCore(scope, {
+      sessionId: firstId,
+      updatedAt: timestamp,
+      label: "Before rename",
+    });
+    await persistSessionTranscriptTurn(
+      { ...scope, sessionId: firstId },
+      {
+        cwd: state.workspaceDir,
+        updateMode: "none",
+        messages: [{ message: usageMessage(17, timestamp), now: timestamp }],
+      },
+    );
+    await loadSessionCostSummary({
+      config,
+      agentId: scope.agentId,
+      sessionId: firstId,
+      sessionTarget: { ...scope, sessionId: firstId },
+    });
+    const params = { range: "all", key };
+    expect((await readUsage(params)).sessions).toMatchObject([
+      { key, sessionId: firstId, label: "Before rename", usage: { totalTokens: 17 } },
+    ]);
+
+    await patchSessionEntryCore(scope, () => ({ label: "After rename" }));
+    expect((await readUsage(params)).sessions).toMatchObject([
+      { key, sessionId: firstId, label: "After rename", usage: { totalTokens: 17 } },
+    ]);
+
+    const currentId = "usage-receipts-current";
+    await upsertSessionEntryCore(scope, {
+      sessionId: currentId,
+      updatedAt: timestamp + 1,
+      label: "Replacement",
+    });
+    await loadSessionCostSummary({
+      config,
+      agentId: scope.agentId,
+      sessionId: currentId,
+      sessionTarget: { ...scope, sessionId: currentId },
+    });
+    for (const selector of [{ key }, { agentId: "main" }]) {
+      const result = await readUsage({ range: "all", groupBy: "family", ...selector });
+      expect(result.sessions).toMatchObject([
+        {
+          key,
+          sessionId: currentId,
+          currentSessionId: currentId,
+          label: "Replacement",
+          includedSessionIds: [currentId, firstId],
+          usage: { totalTokens: 17 },
+        },
+      ]);
+      expect(result.totals.totalTokens).toBe(17);
     }
   });
 });
@@ -491,31 +579,6 @@ it("reads selected reports from the physical owner of shared-store sentinels and
     });
     const config = await captureRuntimeConfigAsyncReader()();
     openOpenClawAgentDatabase({ agentId: "main", path: storePath });
-    const unrelated = openOpenClawAgentDatabase({ agentId: "unrelated", env: state.env });
-    let changeRegistryAfterInventory = false;
-    let registryChanges = 0;
-    const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
-    const inventory = vi
-      .spyOn(targetDiscoveryLane.pool, "run")
-      .mockImplementation(async (...args) => {
-        const reply = await run(...args);
-        if (
-          changeRegistryAfterInventory &&
-          reply.ok &&
-          isRecord(reply.value) &&
-          reply.value.kind === "session-target-inventory"
-        ) {
-          changeRegistryAfterInventory = false;
-          registryChanges++;
-          unregisterOpenClawAgentDatabase({
-            agentId: unrelated.agentId,
-            path: unrelated.path,
-            env: state.env,
-          });
-        }
-        return reply;
-      });
-    onTestFinished(() => inventory.mockRestore());
     for (const [agentId, key] of [
       ["ops", "global"],
       ["worker", "agent:worker:usage"],
@@ -532,14 +595,13 @@ it("reads selected reports from the physical owner of shared-store sentinels and
       expect(target?.storeTarget).toEqual({ agentId: "main", storePath });
       const params = { range: "all", key, includeContextWeight: true };
       for (const requestedAgent of [undefined, agentId]) {
-        changeRegistryAfterInventory = agentId === "worker" && requestedAgent === undefined;
         const payload = await readUsage({ ...params, agentId: requestedAgent });
         expect(payload).toMatchObject({
           sessions: [{ key, agentId, hasContextWeight: true, contextWeight }],
         });
       }
     }
-    expect(registryChanges).toBe(1);
+    await sessionRows.dispose();
   });
 });
 

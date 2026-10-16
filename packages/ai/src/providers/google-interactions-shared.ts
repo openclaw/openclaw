@@ -20,6 +20,7 @@ import {
   parseTerminalToolCallArguments,
   transportAbortError,
 } from "../transports/transport-stream-shared.js";
+import { streamFragmentError } from "../transports/transport-utils.js";
 import type {
   AssistantMessage,
   Context,
@@ -278,20 +279,27 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
     let sawCompletion = false;
     while (!streamDone) {
       const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      const frames = buffer.split(/(?:\r\n|\r(?!\n)|\n)(?:\r\n|\r(?!\n)|\n)/);
+      buffer = frames.pop() ?? "";
       if (done) {
-        break;
+        // Preserve the existing newline-terminated final event at EOF.
+        if (/[\r\n]$/.test(buffer)) {
+          frames.push(buffer);
+        }
+        streamDone = true;
       }
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith("data:")) {
+      for (const frame of frames) {
+        const dataStr = frame
+          .split(/\r\n|\r|\n/)
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5))
+          .join("\n")
+          .trim();
+        if (!dataStr) {
           continue;
         }
-        const dataStr = trimmed.slice(5).trim();
         if (dataStr === "[DONE]") {
           streamDone = true;
           break;
@@ -300,8 +308,8 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
         let event: Record<string, unknown>;
         try {
           event = asRecord(parseJsonPreservingUnsafeIntegers(dataStr));
-        } catch {
-          continue;
+        } catch (error) {
+          throw streamFragmentError(error);
         }
 
         const eventType = event.event_type || event.type;

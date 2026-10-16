@@ -405,7 +405,7 @@ describe("Logbook service disposal", () => {
       vi.spyOn(activeStore, "saveStandup").mockImplementation(async (...args) => {
         entered.resolve();
         await release.promise;
-        await saveStandup(...args);
+        return await saveStandup(...args);
       });
     }
     if (kind === "status-read") {
@@ -479,7 +479,8 @@ describe("Logbook service disposal", () => {
           expect(await reopened.countUnbatchedActiveFrames()).toBe(1);
           expect(runtime.nodes.invoke).toHaveBeenCalledTimes(1);
         } else if (kind.startsWith("standup")) {
-          expect((await reopened.getStandup(day))?.text).toBe("Synthetic standup");
+          expect(result).toEqual({ day, text: "Synthetic standup", updatedMs: expect.any(Number) });
+          expect(await reopened.getStandup(day)).toEqual(result);
         } else if (kind.endsWith("-read")) {
           expect(await reopened.latestBatch()).toBeNull();
         } else {

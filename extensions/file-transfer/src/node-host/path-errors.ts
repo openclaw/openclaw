@@ -2,6 +2,7 @@ import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { FsSafeError, resolveAbsolutePathForRead } from "openclaw/plugin-sdk/security-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fileIdentity, readPathBinding, type FileIdentity } from "../shared/path-binding.js";
 
 type InvalidPathResult = {
@@ -29,6 +30,18 @@ export function classifyFsSafeReadError(err: unknown): FsSafeReadErrorCode | und
     return "INVALID_PATH";
   }
   return undefined;
+}
+
+export function createReadErrorClassifier<Code extends string>(codes: Record<string, Code>) {
+  const mappedCodes = new Map(Object.entries(codes));
+  return (error: unknown): FsSafeReadErrorCode | Code | "READ_ERROR" => {
+    const safeCode = classifyFsSafeReadError(error);
+    if (safeCode) {
+      return safeCode;
+    }
+    const code = asOptionalRecord(error)?.code;
+    return typeof code === "string" ? (mappedCodes.get(code) ?? "READ_ERROR") : "READ_ERROR";
+  };
 }
 
 export function readAbsolutePath(input: unknown): string | InvalidPathResult {

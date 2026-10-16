@@ -462,6 +462,7 @@ struct GatewayProcessManagerTests {
     private func makeGatewayReadinessFixture(
         url: URL,
         clock: any Clock<Duration> = ContinuousClock(),
+        childSupervisor: GatewayChildSupervisor = GatewayChildSupervisor(),
         taskFactory: @escaping GatewayTestWebSocketSession.TaskFactory)
         -> (session: GatewayTestWebSocketSession, connection: GatewayConnection, manager: GatewayProcessManager)
     {
@@ -471,7 +472,7 @@ struct GatewayProcessManagerTests {
             sessionBox: WebSocketSessionBox(session: session))
         // Keep fixture dependencies private for the manager's whole lifetime;
         // late probe cleanup must not fall back to shared app services.
-        let manager = GatewayProcessManager(readinessClock: clock)
+        let manager = GatewayProcessManager(readinessClock: clock, childSupervisor: childSupervisor)
         manager.setTestingConnection(connection)
         manager.setTestingSkipControlChannelRefresh(true)
         return (session, connection, manager)
@@ -629,7 +630,7 @@ struct GatewayProcessManagerTests {
                 let expectedPrefix = [node, entry].map { $0.resolvingSymlinksInPath().path }
                 #expect(cli.prefix == expectedPrefix)
                 #expect(!cli.hadRuntimePin)
-                #expect(await resumed._testEnableLaunchAgentIfNeededInstalled(port: 29871))
+                #expect(await resumed.enableLaunchAgentIfNeeded(port: 29871).installed)
                 let install = try #require(GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
                     .first { $0.contains("install") })
                 #expect(Array(install.prefix(2)) == expectedPrefix)
@@ -740,7 +741,7 @@ struct GatewayProcessManagerTests {
                     } catch { Issue.record(error) }
                 }
             })
-            let error = await manager._testEnableLaunchAgentIfNeeded(port: port)
+            let error = await manager.enableLaunchAgentIfNeeded(port: port).error
             #expect(error?.contains("legacy Gateway installation changed") == true)
             #expect(!GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().contains { $0.first == "install" })
             if change == "runtime-alias" {
@@ -878,7 +879,7 @@ struct GatewayProcessManagerTests {
             let receipt = try #require(AppDefaults.standard.data(forKey: GatewayLaunchAgentManager.resumeCommandKey))
             #expect(!String(decoding: receipt, as: UTF8.self).contains("synthetic"))
             let resumed = relaunch ? GatewayProcessManager() : manager
-            #expect(await resumed._testEnableLaunchAgentIfNeededInstalled(port: 29871))
+            #expect(await resumed.enableLaunchAgentIfNeeded(port: 29871).installed)
             #expect(resumed.gatewayHosting == .service)
             #expect(resumed.retainedServiceCLI?.environment["CHANNEL_FIXTURE"] == "synthetic")
             #expect(resumed.retainedServiceCLI?.sqliteLibrary == sqlite)
@@ -950,7 +951,7 @@ struct GatewayProcessManagerTests {
             }
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
             let resumed = GatewayProcessManager()
-            #expect(await resumed._testEnableLaunchAgentIfNeededInstalled(port: 29871))
+            #expect(await resumed.enableLaunchAgentIfNeeded(port: 29871).installed)
             let command = try #require(GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
                 .first { $0.contains("install") })
             let expected = operatorRuntime ? original : GatewayLaunchAgentManager.InstalledServiceCLI(
@@ -986,7 +987,7 @@ struct GatewayProcessManagerTests {
                 "/operator/openclaw.mjs",
             ]])
             AppDefaults.standard.set(data, forKey: GatewayLaunchAgentManager.resumeCommandKey)
-            let error = await self.manager._testEnableLaunchAgentIfNeeded(port: 29871)
+            let error = await self.manager.enableLaunchAgentIfNeeded(port: 29871).error
             #expect(error?.contains("retained Gateway command is invalid") == true)
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
         }
@@ -998,10 +999,8 @@ struct GatewayProcessManagerTests {
             statusPayload: #"{"ok":true,"service":{"loaded":false}}"#)
         {
             let manager = self.manager
-            async let first: String? = manager._testEnableLaunchAgentIfNeeded(
-                port: port)
-            async let second: String? = manager._testEnableLaunchAgentIfNeeded(
-                port: port)
+            async let first: String? = manager.enableLaunchAgentIfNeeded(port: port).error
+            async let second: String? = manager.enableLaunchAgentIfNeeded(port: port).error
             _ = await (first, second)
 
             let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
@@ -1021,7 +1020,7 @@ struct GatewayProcessManagerTests {
             manager.stop()
             manager.desiredActive = true
             #expect(manager.nodeMigrationFailure == nil)
-            #expect(await manager._testEnableLaunchAgentIfNeededInstalled(port: 29871))
+            #expect(await manager.enableLaunchAgentIfNeeded(port: 29871).installed)
             let installs = GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
                 .filter { $0.contains("install") }
             #expect(installs.count == 1)
@@ -1537,8 +1536,7 @@ struct GatewayProcessManagerTests {
         {
             let manager = self.manager
             let first = Task { @MainActor in
-                await manager._testEnableLaunchAgentIfNeeded(
-                    port: firstPort)
+                await manager.enableLaunchAgentIfNeeded(port: firstPort).error
             }
             await self.waitForCondition {
                 !GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty
@@ -1546,8 +1544,7 @@ struct GatewayProcessManagerTests {
             #expect(!GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
 
             let second = Task { @MainActor in
-                await manager._testEnableLaunchAgentIfNeeded(
-                    port: secondPort)
+                await manager.enableLaunchAgentIfNeeded(port: secondPort).error
             }
             #expect(await first.value == nil)
             #expect(await second.value == nil)
@@ -1568,23 +1565,20 @@ struct GatewayProcessManagerTests {
             let newestPort = 19093
             let stalePort = 19094
             let current = Task { @MainActor in
-                await manager._testEnableLaunchAgentIfNeeded(
-                    port: newestPort)
+                await manager.enableLaunchAgentIfNeeded(port: newestPort).error
             }
             await self.waitForCondition {
                 !GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty
             }
             let stale = Task { @MainActor in
-                await manager._testEnableLaunchAgentIfNeededInstalled(
-                    port: stalePort)
+                await manager.enableLaunchAgentIfNeeded(port: stalePort).installed
             }
             await self.waitForCondition {
                 manager._testPendingLaunchAgentPort() == stalePort
             }
             #expect(manager._testPendingLaunchAgentPort() == stalePort)
             let newest = Task { @MainActor in
-                await manager._testEnableLaunchAgentIfNeeded(
-                    port: newestPort)
+                await manager.enableLaunchAgentIfNeeded(port: newestPort).error
             }
             #expect(await current.value == nil)
             #expect(await stale.value == false)
@@ -1624,8 +1618,7 @@ struct GatewayProcessManagerTests {
             }, {
                 let manager = self.manager
                 let first = Task { @MainActor in
-                    await manager._testEnableLaunchAgentIfNeededInstalled(
-                        port: firstPort)
+                    await manager.enableLaunchAgentIfNeeded(port: firstPort).installed
                 }
                 await installStarted.wait()
                 withObservationTracking {
@@ -1635,8 +1628,7 @@ struct GatewayProcessManagerTests {
                 }
 
                 let second = Task { @MainActor in
-                    await manager._testEnableLaunchAgentIfNeededInstalled(
-                        port: secondPort)
+                    await manager.enableLaunchAgentIfNeeded(port: secondPort).installed
                 }
                 await secondQueued.wait()
                 #expect(manager._testPendingLaunchAgentPort() == secondPort)
@@ -1661,15 +1653,13 @@ struct GatewayProcessManagerTests {
             defer { manager.retainedServiceCLI = nil }
             manager.desiredActive = true
             let first = Task { @MainActor in
-                await manager._testEnableLaunchAgentIfNeeded(
-                    port: firstPort)
+                await manager.enableLaunchAgentIfNeeded(port: firstPort).error
             }
             await self.waitForCondition {
                 !GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty
             }
             let second = Task { @MainActor in
-                await manager._testEnableLaunchAgentIfNeeded(
-                    port: secondPort)
+                await manager.enableLaunchAgentIfNeeded(port: secondPort).error
             }
             await self.waitForCondition {
                 manager._testPendingLaunchAgentPort() == secondPort
@@ -1722,8 +1712,7 @@ struct GatewayProcessManagerTests {
                     .contains(where: { $0.first == "uninstall" }))
 
                 manager._testBeginGatewayStartGeneration()
-                _ = await manager._testEnableLaunchAgentIfNeeded(
-                    port: port)
+                _ = await manager.enableLaunchAgentIfNeeded(port: port).error
 
                 let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
                 #expect(calls.map(\.first) == ["uninstall", "status", "install"])
@@ -1893,6 +1882,7 @@ struct GatewayProcessManagerTests {
         let port = try self.availableGatewayPort()
         let url = try #require(URL(string: "ws://example.invalid"))
         let inspectedService = Mutex(false)
+        let inspection = AsyncTestGate()
         let inspectionError = "launchctl inspection failed"
         let guidance = "openclaw gateway status --deep"
         let healthError = "fixture health rejected"
@@ -1906,6 +1896,7 @@ struct GatewayProcessManagerTests {
             commandHook: { arguments in
                 if arguments.first == "status" {
                     inspectedService.withLock { $0 = true }
+                    inspection.open()
                 }
             }) {
                 try #require(GatewayEnvironment.gatewayPort() == port)
@@ -1935,13 +1926,23 @@ struct GatewayProcessManagerTests {
                         return (url: url, token: nil, password: nil)
                     },
                     sessionBox: WebSocketSessionBox(session: session))
-                let manager = GatewayProcessManager()
+                let clock = ManualTestClock()
+                let manager = GatewayProcessManager(readinessClock: clock)
                 manager.setTestingConnection(connection)
                 manager.setTestingSkipControlChannelRefresh(true)
                 manager.desiredActive = true
                 defer { manager.desiredActive = false }
 
                 manager.startIfNeeded()
+                // Initial attachment must expire before service inspection starts the separate startup budget.
+                // Either the probe timeout or retry sleep can register first.
+                await clock.waitForSleep()
+                clock.advance(by: .seconds(2))
+                await inspection.wait()
+                if outcome == "unresolved" {
+                    await clock.waitForSleep()
+                    clock.advance(by: .seconds(GatewayLaunchAgentManager.reusedLaunchdColdStartTolerance))
+                }
                 await manager.waitForStartupAttempt()
                 await connection.shutdown()
 
@@ -1999,8 +2000,7 @@ struct GatewayProcessManagerTests {
                     self.loadedGatewayStatus(port: port, configAudit: configAudit))
                 GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
 
-                _ = await self.manager._testEnableLaunchAgentIfNeeded(
-                    port: port)
+                _ = await self.manager.enableLaunchAgentIfNeeded(port: port).error
 
                 let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
                 #expect(calls.filter { $0.first == "status" }.count == 1)
@@ -2013,8 +2013,7 @@ struct GatewayProcessManagerTests {
         let port = 19085
         try await self.withLaunchAgentEnvironment(statusPayload: self.loadedGatewayStatus(port: port)) {
             let manager = self.manager
-            _ = await manager._testEnableLaunchAgentIfNeeded(
-                port: port)
+            _ = await manager.enableLaunchAgentIfNeeded(port: port).error
             var calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
             #expect(calls.filter { $0.first == "install" }.isEmpty)
 
@@ -2022,8 +2021,7 @@ struct GatewayProcessManagerTests {
             await manager._testRecordLaunchAgentReadinessFailure(port: port, startingPID: 4242)
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
 
-            _ = await manager._testEnableLaunchAgentIfNeeded(
-                port: port)
+            _ = await manager.enableLaunchAgentIfNeeded(port: port).error
 
             calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
             #expect(calls.filter { $0.first == "status" }.count == 1)
@@ -2041,8 +2039,7 @@ struct GatewayProcessManagerTests {
             await manager._testRecordLaunchAgentReadinessFailure(port: port, startingPID: 4242)
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
 
-            _ = await manager._testEnableLaunchAgentIfNeeded(
-                port: port)
+            _ = await manager.enableLaunchAgentIfNeeded(port: port).error
 
             let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
             #expect(calls.filter { $0.first == "status" }.count == 1)
@@ -2123,8 +2120,7 @@ struct GatewayProcessManagerTests {
             await manager._testRecordLaunchAgentReadinessFailure(port: port, startingPID: 4242)
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
 
-            _ = await manager._testEnableLaunchAgentIfNeeded(
-                port: port)
+            _ = await manager.enableLaunchAgentIfNeeded(port: port).error
 
             let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
             #expect(calls.filter { $0.first == "status" }.count == 1)
@@ -2145,8 +2141,7 @@ struct GatewayProcessManagerTests {
             await PortGuardian.shared.setTestingDescriptor(listener, forPort: port)
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
 
-            _ = await manager._testEnableLaunchAgentIfNeeded(
-                port: port)
+            _ = await manager.enableLaunchAgentIfNeeded(port: port).error
 
             let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
             #expect(calls.filter { $0.first == "status" }.count == 1)
@@ -2166,8 +2161,7 @@ struct GatewayProcessManagerTests {
                 executablePath: "/tmp/manual-gateway")
             await PortGuardian.shared.setTestingDescriptor(listener, forPort: port)
 
-            _ = await self.manager._testEnableLaunchAgentIfNeeded(
-                port: port)
+            _ = await self.manager.enableLaunchAgentIfNeeded(port: port).error
 
             let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
             #expect(calls.filter { $0.first == "status" }.count == 1)
@@ -2186,8 +2180,7 @@ struct GatewayProcessManagerTests {
             let listener = self.gatewayDescriptor(pid: 4242)
             await PortGuardian.shared.setTestingDescriptor(listener, forPort: port)
 
-            _ = await self.manager._testEnableLaunchAgentIfNeeded(
-                port: port)
+            _ = await self.manager.enableLaunchAgentIfNeeded(port: port).error
 
             let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
             #expect(calls.filter { $0.first == "status" }.count == 1)
@@ -2230,8 +2223,7 @@ struct GatewayProcessManagerTests {
                 GatewayLaunchAgentManager.setTestingDaemonStatusPayload(status)
                 GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
 
-                _ = await self.manager._testEnableLaunchAgentIfNeeded(
-                    port: port)
+                _ = await self.manager.enableLaunchAgentIfNeeded(port: port).error
 
                 let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
                 #expect(calls.filter { $0.first == "status" }.count == 1)
@@ -2344,8 +2336,7 @@ struct GatewayProcessManagerTests {
                 manager._testClearLaunchAgentReadinessFailure()
             }
 
-            #expect(await manager._testEnableLaunchAgentIfNeededInstalled(
-                port: port))
+            #expect(await manager.enableLaunchAgentIfNeeded(port: port).installed)
             let descriptor = self.gatewayDescriptor(pid: 4242)
             await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
 
@@ -2355,6 +2346,118 @@ struct GatewayProcessManagerTests {
 
             await connection.shutdown()
             await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+        }
+    }
+
+    @Test(arguments: ["ready", "failed", "cancelled"])
+    func `first-run handoff survives supervised startup retries`(outcome: String) async throws {
+        try await self.withLaunchAgentEnvironment {
+            let retryClock = ManualTestClock()
+            let waiterClock = ManualTestClock()
+            let exits = (0..<3).map { _ in AsyncTestGate() }
+            let started = (0..<3).map { _ in AsyncTestGate() }
+            let restarting = (0..<2).map { _ in AsyncTestGate() }
+            var launchCount = 0
+            let supervisor = GatewayChildSupervisor(clock: retryClock) { _ in
+                let index = launchCount
+                launchCount += 1
+                return .init(
+                    waitUntilStarted: {
+                        started[index].open()
+                        return Int32(4200 + index)
+                    },
+                    wait: {
+                        await exits[index].wait()
+                        return "fixture startup failed"
+                    },
+                    terminate: { exits[index].open() })
+            }
+            let url = try #require(URL(string: "ws://example.invalid"))
+            let (session, connection, manager) = self.makeGatewayReadinessFixture(
+                url: url, clock: waiterClock, childSupervisor: supervisor)
+            {
+                GatewayTestWebSocketTask()
+            }
+            var firstRun: Task<OnboardingFirstRun.Fallback?, Never>?
+            let cleanup = {
+                firstRun?.cancel()
+                manager.desiredActive = false
+                await supervisor.stop()
+                await manager.waitForStartupAttempt()
+                _ = await firstRun?.value
+                await connection.shutdown()
+            }
+            do {
+                manager.desiredActive = true
+                manager.setTestingStatus(.starting)
+                let generation = manager.gatewayStartGeneration
+                var restartCount = 0
+                _ = try await supervisor.start(configuration: .init(
+                    bun: URL(fileURLWithPath: "/fixture/bun"),
+                    packageRoot: URL(fileURLWithPath: "/fixture/package"), environment: [:],
+                    logPath: "/unused/gateway.log", port: GatewayEnvironment.gatewayPort(),
+                    allowUnconfigured: false))
+                { event in
+                    if case .restarting = event {
+                        manager.handleChildEvent(event, port: GatewayEnvironment.gatewayPort())
+                        restarting[restartCount].open()
+                        restartCount += 1
+                    }
+                }
+                manager.beginGatewayStartTask(generation: generation) { await exits[0].wait() }
+                let waiting = AsyncTestGate()
+                var configWritten = false
+                var handoffs = 0
+                var completed = 0
+                var settled = false
+                let run = Task {
+                    let fallback = await OnboardingFirstRun.run(
+                        selectLocal: { configWritten = true }, prepareRuntime: {},
+                        startGateway: {
+                            waiting.open()
+                            guard await manager.waitForGatewayReady(timeout: 0.01) else {
+                                throw CancellationError()
+                            }
+                        },
+                        supportsAutomaticSetup: { true },
+                        openDashboard: { handoffs += 1 },
+                        markComplete: { completed += 1 })
+                    settled = true
+                    return fallback
+                }
+                firstRun = run
+                await waiting.wait()
+                await waiterClock.waitForSleep(until: waiterClock.now.advanced(by: .milliseconds(100)))
+                for attempt in 0..<2 {
+                    exits[attempt].open()
+                    await restarting[attempt].wait()
+                    await manager.waitForStartupAttempt()
+                    let registration = waiterClock.sleepRegistrations
+                    waiterClock.advance(by: .milliseconds(100))
+                    await waiterClock.waitForSleep(
+                        until: waiterClock.now.advanced(by: .milliseconds(100)), after: registration)
+                    #expect(configWritten)
+                    #expect(!settled)
+                    #expect(handoffs == 0)
+                    retryClock.advance(by: .seconds(1 << attempt))
+                    await started[attempt + 1].wait()
+                }
+                switch outcome {
+                case "ready": manager.setTestingStatus(.running(details: "fixture healthy"))
+                case "failed": manager.handleChildEvent(.failed("fixture terminal failure"), port: 0)
+                default: run.cancel()
+                }
+                waiterClock.advance(by: .milliseconds(100))
+                let fallback = await run.value
+                #expect((fallback == nil) == (outcome == "ready"))
+                #expect(handoffs == (outcome == "ready" ? 1 : 0))
+                #expect(completed == handoffs)
+                #expect(session.snapshotMakeCount() == 0)
+            } catch {
+                await cleanup()
+                throw error
+            }
+            await cleanup()
         }
     }
 
@@ -2482,8 +2585,7 @@ struct GatewayProcessManagerTests {
             #expect(reason.contains("health rejected"))
 
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            _ = await manager._testEnableLaunchAgentIfNeeded(
-                port: port)
+            _ = await manager.enableLaunchAgentIfNeeded(port: port).error
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
                 .filter { $0.first == "install" }.isEmpty)
 
@@ -2809,8 +2911,7 @@ struct GatewayProcessManagerTests {
             #expect(manager._testHasLaunchAgentReadinessFailure())
 
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            _ = await manager._testEnableLaunchAgentIfNeeded(
-                port: port)
+            _ = await manager.enableLaunchAgentIfNeeded(port: port).error
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
                 .filter { $0.first == "install" }.count == 1)
 
@@ -2864,8 +2965,7 @@ struct GatewayProcessManagerTests {
             #expect(!manager._testHasLaunchAgentReadinessFailure())
 
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            _ = await manager._testEnableLaunchAgentIfNeeded(
-                port: port)
+            _ = await manager.enableLaunchAgentIfNeeded(port: port).error
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
                 .filter { $0.first == "install" }.isEmpty)
 
@@ -2908,8 +3008,7 @@ struct GatewayProcessManagerTests {
             #expect(manager._testHasLaunchAgentReadinessFailure())
 
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            _ = await manager._testEnableLaunchAgentIfNeeded(
-                port: port)
+            _ = await manager.enableLaunchAgentIfNeeded(port: port).error
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
                 .filter { $0.first == "install" }.count == 1)
 
@@ -3232,8 +3331,7 @@ struct GatewayProcessManagerTests {
             let listener = self.gatewayDescriptor(pid: 4242)
             await PortGuardian.shared.setTestingDescriptor(listener, forPort: port)
 
-            _ = await manager._testEnableLaunchAgentIfNeeded(
-                port: port)
+            _ = await manager.enableLaunchAgentIfNeeded(port: port).error
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
                 .filter { $0.first == "install" }.isEmpty)
             #expect(manager._testHasLaunchAgentReadinessCandidate())
@@ -3242,8 +3340,7 @@ struct GatewayProcessManagerTests {
             #expect(manager._testHasLaunchAgentReadinessFailure())
 
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-            _ = await manager._testEnableLaunchAgentIfNeeded(
-                port: port)
+            _ = await manager.enableLaunchAgentIfNeeded(port: port).error
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
                 .filter { $0.first == "install" }.count == 1)
 

@@ -115,7 +115,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       };
       assignOtelToolIdentityAttributes(spanAttrs, evt);
       return runtime
-        .trackTrustedSpan(
+        .trackInternalOrTrustedSpan(
           evt,
           metadata,
           runtime.spanWithDuration("openclaw.tool.execution", spanAttrs, undefined, {

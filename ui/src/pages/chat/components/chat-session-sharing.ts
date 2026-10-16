@@ -18,12 +18,12 @@ export function renderChatSessionPublicIndicator(props: ChatSessionSharingProps)
   return solidContent(ChatSessionPublicIndicator, props);
 }
 
-export function renderChatSessionSharing(props: ChatSessionSharingProps, inline = false) {
+export function renderChatSessionSharing(props: ChatSessionSharingProps) {
   if (
     !props.session ||
     (!canManageChatSessionSharing(props.session) && props.session.visibility !== "draft")
   ) {
     return emptyLegacyContent;
   }
-  return solidContent(ChatSessionSharing, { ...props, inline });
+  return solidContent(ChatSessionSharing, props);
 }

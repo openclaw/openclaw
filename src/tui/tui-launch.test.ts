@@ -59,6 +59,7 @@ describe("launchTuiCli", () => {
     process.execArgv.length = 0;
     process.execArgv.push(...originalExecArgv);
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("filters inherited inspector flags when relaunching TUI", async () => {
@@ -125,7 +126,9 @@ describe("launchTuiCli", () => {
   });
 
   it("launches compiled CLI shapes without repeating the current command", async () => {
-    process.argv[1] = "setup";
+    vi.stubGlobal("__openclawStandaloneRootUrl", "file:///standalone/runtime/");
+    process.argv[1] = "/standalone/runtime/openclaw.mjs";
+    process.execArgv.push("--trace-warnings");
     await launchTuiCli({ deliver: false });
 
     const options = expectSpawned(["tui"]);

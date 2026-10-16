@@ -18,6 +18,8 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  // The prepublish registry executes this shared build-and-pack lifetime by path.
+  "scripts/lib/plugin-npm-build-and-pack.mts!",
   // Package scripts execute the PostgreSQL schema generator, which consumes state declarations.
   "scripts/generate-postgres-schema.mts!",
   // Immutable activation and release deployment launch this packaged entry by path.
@@ -52,6 +54,8 @@ const repositoryScriptEntries = [
   ".github/workflows/plugin-prerelease.yml!",
   // Labeler steps import their shared helper through workspace file URLs.
   ".github/workflows/labeler.yml!",
+  // Prepared publication imports its verifier from the frozen release harness.
+  ".github/workflows/openclaw-release-publish.yml!",
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
   ".github/actions/setup-node-env/seed-bun-from-image.mjs!",
@@ -335,6 +339,17 @@ function listScriptShimEntries(dir = "scripts"): string[] {
 }
 
 function compileWorkflowConsumers(source: string, filePath: string): string {
+  if (path.resolve(filePath) === path.resolve(".github/workflows/openclaw-release-publish.yml")) {
+    return [
+      ...source.matchAll(
+        /\bimport\s*\{([^}]+)\}\s*from\s*["']\.\/\.release-harness\/(scripts\/[^"'\r\n]+)["']/gu,
+      ),
+    ]
+      .map(
+        ([, names, specifier]) => `import {${names}} from ${JSON.stringify(`../../${specifier}`)};`,
+      )
+      .join("\n");
+  }
   if (path.resolve(filePath) === path.resolve(".github/workflows/labeler.yml")) {
     return [
       ...new Set(
@@ -433,6 +448,9 @@ const rootEntries = [
   "security/opengrep/rules/ghsa-fv94-qvg8-xqpw/ssh-sandbox-upload.js!",
   "security/opengrep/rules/ghsa-fv94-qvg8-xqpw/ssh-sandbox-upload.ts!",
   "{openclaw,docker-entrypoint}.mjs!",
+  // Desktop service integration consumes this API in the staged builder/app cutover (#172569).
+  // Remove this audit root after those in-tree callers land.
+  "cli-invocation.mjs!",
   // update-command-node-runtime-resolution loads this package-root module by absolute URL.
   "node-runtime-recovery.mjs!",
   "src/index.ts!",
@@ -821,7 +839,6 @@ const config = {
     // The Lit/Solid presentation fixture and focused UI tests consume these seams;
     // the full-tree companion scan continues to audit their actual consumers.
     "ui/src/components/provider-icon.ts": ["exports"],
-    "ui/src/components/settings-ui.ts": ["exports"],
     "ui/src/components/terminal/terminal-panel.ts": ["types"],
     "ui/src/pages/chat/components/chat-attachment-card-solid.tsx": ["exports"],
     "ui/src/pages/chat/components/chat-camera-capture.tsx": ["types"],
