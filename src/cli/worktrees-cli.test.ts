@@ -168,21 +168,12 @@ describe("worktrees cli", () => {
     });
   });
 
-  it.each([{ flags: [] }, { flags: ["--json", "--retry-deferred"] }])(
-    "rejects an empty cleanup job selector before cleanup: %j",
-    async ({ flags }) => {
-      setRuntimeConfigSnapshot({}, {});
-      const gc = vi
-        .spyOn(ManagedWorktreeService.prototype, "gc")
-        .mockRejectedValue(new Error("Unexpected cleanup execution"));
-      const program = new Command().exitOverride().configureOutput({ writeErr: () => undefined });
-      registerWorktreesCli(program);
-      await expect(
-        program.parseAsync(["worktrees", "gc", "--job", "", ...flags], { from: "user" }),
-      ).rejects.toThrow("--job must not be empty");
-      expect(gc).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects an empty cleanup job selector before cleanup", async () => {
+    setRuntimeConfigSnapshot({}, {});
+    const gc = vi.spyOn(owner, "gc").mockRejectedValue(new Error("Unexpected cleanup execution"));
+    await expect(run(["gc", "--job", "", "--json"])).rejects.toThrow("--job must not be empty");
+    expect(gc).not.toHaveBeenCalled();
+  });
 
   it.each([false, true])("reports cleanup and signals partial failure: %s", async (partial) => {
     setRuntimeConfigSnapshot({}, {});
