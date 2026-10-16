@@ -136,40 +136,29 @@ describe("transcript capture accepted append drainage", () => {
         ? { ok: true, sessionId }
         : { ok: false, error: "Provider cleanup unavailable" };
     };
-    let startupSettled = false;
-    let lateSettled = false;
-    const startup = f.start({ ...room, sessionId: "failed-title-drain" }).then(
-      () => {
-        startupSettled = true;
-        return undefined;
-      },
-      (error: unknown) => {
-        startupSettled = true;
+    const startupSettled = vi.fn();
+    const lateSettled = vi.fn();
+    const startup = f
+      .start({ ...room, sessionId: "failed-title-drain" })
+      .then(startupSettled, (error: unknown) => {
+        startupSettled();
         return error;
-      },
-    );
+      });
     const request = await started.promise;
     try {
       await Promise.all([firstEntered.promise, titleFailed.promise]);
       // Let the failed-start catch reach its drain while accepted speech remains held.
       await setImmediate();
       late = Promise.resolve(request.onUtterance({ text: "Speech after title failure" }));
-      void late.then(
-        () => {
-          lateSettled = true;
-        },
-        () => {
-          lateSettled = true;
-        },
-      );
+      void late.then(lateSettled, lateSettled);
       await setImmediate();
-      expect.soft(lateSettled).toBe(true);
+      expect.soft(lateSettled).toHaveBeenCalledOnce();
       releaseFirst.resolve();
       await first;
       await stopAttempted.promise;
       await setImmediate();
-      expect.soft(startupSettled).toBe(true);
-      expect.soft(lateSettled).toBe(true);
+      expect.soft(startupSettled).toHaveBeenCalledOnce();
+      expect.soft(lateSettled).toHaveBeenCalledOnce();
     } finally {
       releaseFirst.resolve();
       releaseLate.resolve();

@@ -51,7 +51,30 @@ afterEach(async () => {
 });
 
 function fixture() {
-  return createTranscriptLibraryStoreFixture(tempDirs.make("transcript-library-query-budget-"));
+  const context = createTranscriptLibraryStoreFixture(
+    tempDirs.make("transcript-library-query-budget-"),
+  );
+  const { store } = context;
+  return {
+    ...context,
+    get: (
+      target: Parameters<typeof transcriptSessionSelector>[0],
+      options: Omit<Parameters<typeof getTranscriptLibrary>[1], "selector"> = {},
+    ) => getTranscriptLibrary(store, { selector: transcriptSessionSelector(target), ...options }),
+    download: (
+      target: Parameters<typeof transcriptSessionSelector>[0],
+      format: "markdown" | "jsonl",
+    ) => exportTranscriptLibrary(store, { selector: transcriptSessionSelector(target), format }),
+  };
+}
+
+function expectResultTooLarge(result: Promise<unknown>, maxBytes?: number) {
+  return expect(result).rejects.toThrow(
+    expect.objectContaining({
+      type: "transcript_result_too_large",
+      ...(maxBytes === undefined ? {} : { maxBytes }),
+    }),
+  );
 }
 
 function seedExportBookkeeping(db: EngineConnection) {
@@ -265,9 +288,7 @@ describe("transcript library SQLite query budgets", () => {
       });
     }
     const reads = observeArchiveReads(store, database());
-    await expect(readTranscriptLibraryStatus(store, {})).rejects.toThrow(
-      expect.objectContaining({ type: "transcript_result_too_large" }),
-    );
+    await expectResultTooLarge(readTranscriptLibraryStatus(store, {}));
     expect(
       reads.filter((read) => read.sql.includes('from "meeting_transcript_sessions"')).length,
     ).toBeLessThanOrEqual(3);
@@ -276,7 +297,7 @@ describe("transcript library SQLite query budgets", () => {
   it.each(["text", "combined speaker fields", "source and metadata", "last timestamp"])(
     "bounds %s before SQLite returns an oversized row without limiting full-store reads",
     async (field) => {
-      const { store, database } = fixture();
+      const { store, database, get } = fixture();
       const descriptor = field === "source and metadata" || field === "last timestamp";
       const target = session(
         "allocation",
@@ -309,18 +330,12 @@ describe("transcript library SQLite query budgets", () => {
           () => store.readLatestEntry(),
           () => store.readEntry(selector),
         ]) {
-          await expect(read()).rejects.toThrow(
-            expect.objectContaining({ type: "transcript_result_too_large" }),
-          );
+          await expectResultTooLarge(read());
         }
       } else {
-        await expect(
-          getTranscriptLibrary(store, { selector, includeUtterances: true, limit: 1 }),
-        ).rejects.toThrow(
-          expect.objectContaining({
-            type: "transcript_result_too_large",
-            maxBytes: TRANSCRIPTS_RESULT_MAX_BYTES,
-          }),
+        await expectResultTooLarge(
+          get(target, { includeUtterances: true, limit: 1 }),
+          TRANSCRIPTS_RESULT_MAX_BYTES,
         );
         expect(reads.length).toBeGreaterThan(0);
         expect(reads.every((read) => read.closed)).toBe(true);
@@ -338,7 +353,7 @@ describe("transcript library SQLite query budgets", () => {
   );
 
   it("stops a cumulative page before consuming the remaining rows and releases its iterator", async () => {
-    const { store, database } = fixture();
+    const { store, database, get } = fixture();
     const target = session("cumulative");
     const selector = transcriptSessionSelector(target);
     await store.writeSession(target);
@@ -348,9 +363,7 @@ describe("transcript library SQLite query budgets", () => {
       });
     }
     const reads = observeArchiveReads(store, database());
-    await expect(
-      getTranscriptLibrary(store, { selector, includeUtterances: true, limit: 6 }),
-    ).rejects.toThrow(expect.objectContaining({ type: "transcript_result_too_large" }));
+    await expectResultTooLarge(get(target, { includeUtterances: true, limit: 6 }));
     const page = reads.find(
       (read) =>
         read.sql.includes("meeting_transcript_utterances") &&
@@ -360,8 +373,7 @@ describe("transcript library SQLite query budgets", () => {
     expect(page.bytes).toBeLessThanOrEqual(2 * TRANSCRIPTS_RESULT_MAX_BYTES);
     expect(page.closed).toBe(true);
     await store.appendUtteranceForSession(target, { text: "after rejection" });
-    const recovered = await getTranscriptLibrary(store, {
-      selector,
+    const recovered = await get(target, {
       includeUtterances: true,
       cursor: encodeCursor(cursorScope(["get", selector, undefined]), [5]),
     });
@@ -403,17 +415,13 @@ describe("transcript library SQLite query budgets", () => {
       expect(Math.max(...reads.map((read) => read.maxRowBytes))).toBeLessThanOrEqual(
         TRANSCRIPTS_RESULT_MAX_BYTES,
       );
-      await expect(readPage(page.nextCursor!)).rejects.toThrow(
-        expect.objectContaining({ type: "transcript_result_too_large" }),
-      );
+      await expectResultTooLarge(readPage(page.nextCursor!));
       if (kind === "list") {
         for (const id of ["b", "c", "d"]) {
           await store.writeSession(session(id, { title: "x".repeat(600_000) }));
         }
         reads.length = 0;
-        await expect(listTranscriptLibrary(store, { query: "x" })).rejects.toThrow(
-          expect.objectContaining({ type: "transcript_result_too_large" }),
-        );
+        await expectResultTooLarge(listTranscriptLibrary(store, { query: "x" }));
         expect(reads[0]?.rows).toBe(2);
         expect(reads.every((read) => read.closed)).toBe(true);
         for (const id of ["b", "c", "d"]) {
@@ -452,16 +460,14 @@ describe("transcript library SQLite query budgets", () => {
     expect(JSON.stringify(page)).not.toContain("synthetic-");
     expect(reads).toHaveLength(1);
     expect(reads[0]).toMatchObject({ executions: 1, rows: 3, closed: true });
-    await expect(store.listReadEntries({ limit: 2 })).rejects.toThrow(
-      expect.objectContaining({ type: "transcript_result_too_large" }),
-    );
-    await expect(
+    await expectResultTooLarge(store.listReadEntries({ limit: 2 }));
+    await expectResultTooLarge(
       listTranscriptLibrary(store, { limit: 1 }, () => "x".repeat(TRANSCRIPTS_RESULT_MAX_BYTES)),
-    ).rejects.toThrow(expect.objectContaining({ type: "transcript_result_too_large" }));
+    );
   });
 
   it("bounds summary transfer after omitting duplicated history and keeps the larger export budget", async () => {
-    const { store, database } = fixture();
+    const { store, database, get, download } = fixture();
     const target = session("summary-bound");
     await store.writeSession(target);
     await store.appendUtteranceForSession(target, { text: "saved note" });
@@ -481,10 +487,7 @@ describe("transcript library SQLite query budgets", () => {
         .where("session_started_at", "=", target.startedAt),
     );
     const reads = observeArchiveReads(store, database());
-    expect(
-      (await getTranscriptLibrary(store, { selector: transcriptSessionSelector(target) })).summary
-        ?.overview,
-    ).toBe(summary.overview);
+    expect((await get(target)).summary?.overview).toBe(summary.overview);
     expect(Math.max(...reads.map((read) => read.maxRowBytes))).toBeLessThanOrEqual(
       TRANSCRIPTS_RESULT_MAX_BYTES,
     );
@@ -493,44 +496,28 @@ describe("transcript library SQLite query budgets", () => {
       target,
     );
     reads.length = 0;
-    await expect(
-      getTranscriptLibrary(store, { selector: transcriptSessionSelector(target), limit: 50 }),
-    ).rejects.toThrow(expect.objectContaining({ type: "transcript_result_too_large" }));
+    await expectResultTooLarge(get(target, { limit: 50 }));
     expect(Math.max(...reads.map((read) => read.maxRowBytes))).toBeLessThanOrEqual(
       TRANSCRIPTS_RESULT_MAX_BYTES,
     );
-    const legacy = await getTranscriptLibrary(store, {
-      selector: transcriptSessionSelector(target),
-    });
+    const legacy = await get(target);
     expect(Buffer.byteLength(JSON.stringify(legacy))).toBeGreaterThan(TRANSCRIPTS_RESULT_MAX_BYTES);
     expect(legacy.summary?.overview).toBe("é".repeat(TRANSCRIPTS_RESULT_MAX_BYTES / 2 + 1));
-    const exported = await exportTranscriptLibrary(store, {
-      selector: transcriptSessionSelector(target),
-      format: "markdown",
-    });
+    const exported = await download(target, "markdown");
     expect(exported.sizeBytes).toBeGreaterThan(TRANSCRIPTS_RESULT_MAX_BYTES);
     expect(exported.sizeBytes).toBeLessThan(TRANSCRIPTS_EXPORT_MAX_BYTES);
     expect(Buffer.from(exported.data, "base64").toString("utf8")).toContain("saved note");
   });
 
   it("keeps exact JSON escaping checks and exports valid content above the reader limit", async () => {
-    const { store, database } = fixture();
+    const { store, database, get, download } = fixture();
     const target = session("escaping");
     await store.writeSession(target);
     const text = '"'.repeat(600_000) + "é🦞";
     await store.appendUtteranceForSession(target, { text });
     const reads = observeArchiveReads(store, database());
-    await expect(
-      getTranscriptLibrary(store, {
-        selector: transcriptSessionSelector(target),
-        includeUtterances: true,
-        limit: 1,
-      }),
-    ).rejects.toThrow(expect.objectContaining({ type: "transcript_result_too_large" }));
-    const exported = await exportTranscriptLibrary(store, {
-      selector: transcriptSessionSelector(target),
-      format: "jsonl",
-    });
+    await expectResultTooLarge(get(target, { includeUtterances: true, limit: 1 }));
+    const exported = await download(target, "jsonl");
     expect(exported.sizeBytes).toBeGreaterThan(TRANSCRIPTS_RESULT_MAX_BYTES);
     expect(exported.sizeBytes).toBeLessThan(TRANSCRIPTS_EXPORT_MAX_BYTES);
     expect(JSON.parse(Buffer.from(exported.data, "base64").toString("utf8"))).toEqual({
@@ -541,12 +528,7 @@ describe("transcript library SQLite query budgets", () => {
       text: "x".repeat(TRANSCRIPTS_EXPORT_MAX_BYTES + 1),
     });
     reads.length = 0;
-    await expect(
-      exportTranscriptLibrary(store, {
-        selector: transcriptSessionSelector(target),
-        format: "jsonl",
-      }),
-    ).rejects.toThrow(
+    await expect(download(target, "jsonl")).rejects.toThrow(
       expect.objectContaining({
         type: "transcript_export_too_large",
         maxBytes: TRANSCRIPTS_EXPORT_MAX_BYTES,

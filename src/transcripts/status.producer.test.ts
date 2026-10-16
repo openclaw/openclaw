@@ -26,6 +26,13 @@ import {
 import { transcriptSessionSelector, TranscriptsStore } from "./store.js";
 
 const fixture = useTranscriptStatusFixture();
+type Fixture = ReturnType<typeof fixture>;
+const unknownSource = { state: "unknown", activeSelectors: [] };
+const inactiveSource = { state: "not-active", activeSelectors: [] };
+
+function startDiagnostic(f: Fixture, index = 0) {
+  return readConfiguredTranscriptStarts(f.ctx.config.transcripts)?.get(index)?.diagnostic;
+}
 
 describe("configured transcript source provenance", () => {
   it.each(["reorder", "title"] as const)(
@@ -137,9 +144,7 @@ describe("configured transcript source provenance", () => {
       );
       try {
         await service.start().settled;
-        expect(readConfiguredTranscriptStarts(f.ctx.config.transcripts)?.get(0)?.diagnostic).toBe(
-          "retrying",
-        );
+        expect(startDiagnostic(f)).toBe("retrying");
         expect((await f.read()).configuredSources[0]?.startDiagnostic).toBe("retrying");
         expect(await f.store.listSessionEntries()).toHaveLength(0);
         for (const [index, title] of titles.entries()) {
@@ -203,9 +208,7 @@ describe("configured transcript source provenance", () => {
       const service = createTranscriptsAutoStartService(f.ctx, () => current);
       try {
         await service.start().settled;
-        expect(readConfiguredTranscriptStarts(f.ctx.config.transcripts)?.get(0)?.diagnostic).toBe(
-          "retrying",
-        );
+        expect(startDiagnostic(f)).toBe("retrying");
         expect((await f.read()).configuredSources[0]?.startDiagnostic).toBe("retrying");
         current = { transcripts: { autoStart: [{ ...source, ...changed, title: "Ineligible" }] } };
         f.setProviders([f.provider]);
@@ -227,16 +230,14 @@ describe("configured transcript source provenance", () => {
     },
   );
   it.each([
-    { outcome: "throw", fixed: false, title: undefined, failures: 1 },
-    { outcome: "reject", fixed: false, title: undefined, failures: 12 },
+    { outcome: "throw", failures: 1 },
+    { outcome: "reject", failures: 12 },
   ])(
-    "retains admission and notes after $outcome (fixed=$fixed, title=$title, failures=$failures)",
-    async ({ outcome, fixed, title, failures }) => {
+    "retains admission and notes after $outcome ($failures failures)",
+    async ({ outcome, failures }) => {
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      const source = { ...room, sessionId: fixed ? "failed-admission" : undefined, title };
-      const f = fixture({
-        transcripts: { autoStart: [source] },
-      });
+      const source = { ...room, sessionId: undefined, title: undefined };
+      const f = fixture({ transcripts: { autoStart: [source] } });
       let current = f.ctx.config;
       const entered = createDeferred<TranscriptStartRequest>();
       const start = vi.fn(async (candidate: TranscriptStartRequest) => {
@@ -261,9 +262,7 @@ describe("configured transcript source provenance", () => {
       try {
         await service.start().settled;
         const request = await entered.promise;
-        expect(readConfiguredTranscriptStarts(f.ctx.config.transcripts)?.get(0)?.diagnostic).toBe(
-          "retrying",
-        );
+        expect(startDiagnostic(f)).toBe("retrying");
         expect((await f.read()).configuredSources[0]).toMatchObject({
           startDiagnostic: "retrying",
           state: "unknown",
@@ -277,9 +276,9 @@ describe("configured transcript source provenance", () => {
           await vi.waitFor(
             () => {
               expect(start).toHaveBeenCalledTimes(attempt);
-              expect(
-                readConfiguredTranscriptStarts(f.ctx.config.transcripts)?.get(0)?.diagnostic,
-              ).toBe(attempt > failures ? undefined : attempt === 12 ? "start-failed" : "retrying");
+              expect(startDiagnostic(f)).toBe(
+                attempt > failures ? undefined : attempt === 12 ? "start-failed" : "retrying",
+              );
             },
             { interval: 0 },
           );
@@ -319,11 +318,7 @@ describe("configured transcript source provenance", () => {
     "retains failed startup cleanup custody after %s",
     async (fault) => {
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      const f = fixture({
-        transcripts: {
-          autoStart: [room],
-        },
-      });
+      const f = fixture();
       const start = vi.fn(async (request: TranscriptStartRequest) => {
         await request.onUtterance({ text: "Admitted note", final: true });
         return { ok: true as const, session: { ...request.session, title: "Room title" } };
@@ -358,13 +353,9 @@ describe("configured transcript source provenance", () => {
       const service = createTranscriptsAutoStartService(f.ctx);
       try {
         await service.start().settled;
-        expect(readConfiguredTranscriptStarts(f.ctx.config.transcripts)?.get(0)?.diagnostic).toBe(
-          "admitted-start-failed",
-        );
+        expect(startDiagnostic(f)).toBe("admitted-start-failed");
         await vi.advanceTimersByTimeAsync(65_000);
-        expect(readConfiguredTranscriptStarts(f.ctx.config.transcripts)?.get(0)?.diagnostic).toBe(
-          "admitted-start-failed",
-        );
+        expect(startDiagnostic(f)).toBe("admitted-start-failed");
         expect.soft(start).toHaveBeenCalledOnce();
         expect.soft(await f.store.listSessionEntries()).toHaveLength(1);
         expect
@@ -441,9 +432,7 @@ describe("configured transcript source provenance", () => {
       const service = createTranscriptsAutoStartService(f.ctx);
       try {
         await service.start().settled;
-        expect(readConfiguredTranscriptStarts(f.ctx.config.transcripts)?.get(0)?.diagnostic).toBe(
-          "retrying",
-        );
+        expect(startDiagnostic(f)).toBe("retrying");
         expect((await f.read()).configuredSources[0]?.startDiagnostic).toBe("retrying");
         if (pending) {
           await vi.advanceTimersByTimeAsync(5_000);
@@ -533,11 +522,7 @@ describe("configured transcript source provenance", () => {
       const revision = await f.store.readSummaryInputRevision(session);
       f.setProviders([f.provider, delayedProvider]);
       await vi.advanceTimersByTimeAsync(5_000);
-      await vi.waitFor(() =>
-        expect(readConfiguredTranscriptStarts(f.ctx.config.transcripts)?.get(1)?.diagnostic).toBe(
-          "id-conflict",
-        ),
-      );
+      await vi.waitFor(() => expect(startDiagnostic(f, 1)).toBe("id-conflict"));
       expect.soft((await f.read()).configuredSources[1]).toMatchObject({
         state: "not-active",
         startDiagnostic: "id-conflict",
@@ -606,10 +591,7 @@ describe("configured transcript source provenance", () => {
     const sessionId = "configured";
     await f.start({ ...source, sessionId }, true);
     const result = await f.read();
-    expect(result.configuredSources[0]).toMatchObject({
-      state: "not-active",
-      activeSelectors: [],
-    });
+    expect(result.configuredSources[0]).toMatchObject(inactiveSource);
     expect(result.active).toMatchObject([{ sessionId, activeSubscription: true }]);
     await f.tool.execute("stop", { action: "stop", sessionId });
   });
@@ -628,10 +610,7 @@ describe("configured transcript source provenance", () => {
         const other = await readTranscriptLibraryStatus(f.store, {
           transcripts: { autoStart: [{ ...room, [key]: "other" }] },
         });
-        expect(other.configuredSources[0]).toMatchObject({
-          state: "not-active",
-          activeSelectors: [],
-        });
+        expect(other.configuredSources[0]).toMatchObject(inactiveSource);
       }
       await f.tool.execute("stop", { action: "stop", sessionId });
     }
@@ -644,7 +623,7 @@ describe("configured transcript source provenance", () => {
     const result = await readTranscriptLibraryStatus(f.store, {
       transcripts: { autoStart: [{ ...room, accountId: undefined }] },
     });
-    expect(result.configuredSources[0]).toMatchObject({ state: "unknown", activeSelectors: [] });
+    expect(result.configuredSources[0]).toMatchObject(unknownSource);
   });
 
   it("reports only its exact configured URL attempt and keeps changed invitations uncertain", async () => {
@@ -686,10 +665,7 @@ describe("configured transcript source provenance", () => {
     const result = await f.read();
     expect(
       result.configuredSources.map(({ state, activeSelectors }) => ({ state, activeSelectors })),
-    ).toEqual([
-      { state: "unknown", activeSelectors: [] },
-      { state: "unknown", activeSelectors: [] },
-    ]);
+    ).toEqual([unknownSource, unknownSource]);
     expect(result.active[0]?.activeSubscription).toBe(true);
     const snapshot = readTranscriptCaptureSnapshot();
     expect(snapshot[0]).toHaveProperty("configuredSource.meetingUrl", true);
@@ -722,10 +698,7 @@ describe("configured transcript source provenance", () => {
       "configuredSource.accountId",
       undefined,
     );
-    expect((await f.read()).configuredSources[0]).toMatchObject({
-      state: "unknown",
-      activeSelectors: [],
-    });
+    expect((await f.read()).configuredSources[0]).toMatchObject(unknownSource);
     const stopGate = createDeferred();
     const stopping = createDeferred();
     f.provider.stop = async ({ sessionId }) => {
@@ -737,7 +710,7 @@ describe("configured transcript source provenance", () => {
     await stopping.promise;
     try {
       const result = await f.read();
-      expect(result.configuredSources[0]).toMatchObject({ state: "unknown", activeSelectors: [] });
+      expect(result.configuredSources[0]).toMatchObject(unknownSource);
       expect(result.active[0]?.activeSubscription).toBe(false);
     } finally {
       stopGate.resolve();
@@ -747,10 +720,7 @@ describe("configured transcript source provenance", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date(Date.parse(retainedSession!.startedAt) + 86_400_000));
     await f.start({ ...room, sessionId: "retained" });
-    expect((await f.read()).configuredSources[0]).toMatchObject({
-      state: "unknown",
-      activeSelectors: [],
-    });
+    expect((await f.read()).configuredSources[0]).toMatchObject(unknownSource);
   });
 });
 

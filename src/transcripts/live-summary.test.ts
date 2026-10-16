@@ -146,6 +146,20 @@ function execute(
   );
 }
 
+async function expectLibraryState(
+  store: TranscriptsStore,
+  selector: string,
+  active: boolean,
+  hasSummary?: boolean,
+) {
+  const expected = { active, ...(hasSummary === undefined ? {} : { hasSummary }) };
+  expect((await getTranscriptLibrary(store, { selector })).session).toMatchObject({
+    ...expected,
+    activeSubscription: active,
+  });
+  expect((await listTranscriptLibrary(store, {})).sessions[0]).toMatchObject(expected);
+}
+
 describe("live meeting summaries", () => {
   it.each(["restart-drain", "capture-policy"] as const)(
     "persists final speech without loading inference after %s closes admission",
@@ -462,13 +476,7 @@ describe("live meeting summaries", () => {
       await bridge.start(session, async () => {});
       try {
         const descriptor = (await store.listSessionEntries())[0]!;
-        expect(
-          (await getTranscriptLibrary(store, { selector: descriptor.selector })).session,
-        ).toMatchObject({ active: true, activeSubscription: true, hasSummary: restored });
-        expect((await listTranscriptLibrary(store, {})).sessions[0]).toMatchObject({
-          active: true,
-          hasSummary: restored,
-        });
+        await expectLibraryState(store, descriptor.selector, true, restored);
         if (!restored) {
           await bridge.ingest(session, [
             { at: new Date().toISOString(), speaker: "Ada", text: "We agreed to simplify setup." },
@@ -484,22 +492,11 @@ describe("live meeting summaries", () => {
             "Speech saved after the previous summary",
           ]);
         }
-        expect(
-          (await getTranscriptLibrary(store, { selector: descriptor.selector })).session,
-        ).toMatchObject({ active: true, hasSummary: true });
-        expect((await listTranscriptLibrary(store, {})).sessions[0]).toMatchObject({
-          active: true,
-          hasSummary: true,
-        });
+        await expectLibraryState(store, descriptor.selector, true, true);
         await bridge.stop(session, async () => {});
         expect(complete).toHaveBeenCalledTimes(2);
         expect((await store.readSession(session.id))?.stoppedAt).toBeTruthy();
-        expect(
-          (await getTranscriptLibrary(store, { selector: descriptor.selector })).session,
-        ).toMatchObject({ active: false, activeSubscription: false });
-        expect((await listTranscriptLibrary(store, {})).sessions[0]).toMatchObject({
-          active: false,
-        });
+        await expectLibraryState(store, descriptor.selector, false);
       } finally {
         await bridge.stop(session, async () => {});
       }
