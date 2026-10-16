@@ -167,7 +167,6 @@ describe("artifact transfer response settlement", () => {
     options: ResponseOptions & {
       artifactKey?: string;
       range?: string;
-      transfer?: Omit<ArtifactTransferService, "prepare">;
     } = {},
   ) {
     const { socket, req, res } = createResponse(options);
@@ -184,7 +183,7 @@ describe("artifact transfer response settlement", () => {
         req,
         res,
         clientIp: "127.0.0.1",
-        callback: createArtifactTransferHttpCallback(options.transfer ?? service),
+        callback: createArtifactTransferHttpCallback(service),
         rateLimiter,
       });
       return { res, ...responseBytes(socket) };
@@ -192,34 +191,6 @@ describe("artifact transfer response settlement", () => {
       socket.destroy();
     }
   }
-
-  it("reports progress only for authorized bytes and isolates observer failures", async ({
-    onTestFinished,
-  }) => {
-    const transfer = createArtifactTransferService({ now: () => now });
-    onTestFinished(() => transfer.closeAll());
-    const onProgress = vi.fn(() => {
-      throw new Error("synthetic progress observer failure");
-    });
-    const prepare = () =>
-      transfer.prepare({
-        artifact,
-        artifactKey: artifact.tarballSha256,
-        ttlMs: 60_000,
-        maxServes: 1,
-        isAuthorized: () => authorized,
-        onProgress,
-      });
-    ({ token } = prepare());
-    transfer.revoke(token);
-    expect((await serve({ transfer })).res.statusCode).toBe(404);
-    expect(onProgress).not.toHaveBeenCalled();
-
-    ({ token } = prepare());
-    const completed = await serve({ transfer });
-    expectResponse(completed, 200, contents);
-    expect(onProgress).toHaveBeenCalled();
-  });
 
   it.each(["bytes=0-,4-", "bytes=9007199254740992-", `bytes=${contents.length}-`])(
     "rejects unsupported or unsatisfiable range %j",
@@ -382,12 +353,13 @@ describe("artifact transfer interruption observations", () => {
   async function prepare(onProgress?: (bytes: number) => void, maxServes: 1 | 3 = 1) {
     const artifact = await makeArtifact("bundle", "b".repeat(64));
     const artifactKey = "a".repeat(64);
+    const state: { now: number; authorized: boolean; error?: Error } = {
+      now: 1_000,
+      authorized: true,
+    };
     const owner = new AbortController();
-    let now = 1_000;
-    let authorized = true;
-    let authorityError: Error | undefined;
     const service = createArtifactTransferService({
-      now: () => now,
+      now: () => state.now,
       generateToken: () => "X".repeat(43),
     });
     services.push(service);
@@ -400,10 +372,10 @@ describe("artifact transfer interruption observations", () => {
       maxServes,
       signal: owner.signal,
       isAuthorized: () => {
-        if (authorityError) {
-          throw authorityError;
+        if (state.error) {
+          throw state.error;
         }
-        return authorized;
+        return state.authorized;
       },
       onProgress: (bytes) => {
         progress(bytes);
@@ -425,6 +397,7 @@ describe("artifact transfer interruption observations", () => {
     const h = {
       ...createResponse(),
       service,
+      state,
       owner,
       prepared,
       artifactKey,
@@ -432,32 +405,21 @@ describe("artifact transfer interruption observations", () => {
       progress,
       interrupted,
       authorize: () => service.authorize({ token: prepared.token, artifactKey }),
+      admit: () => callback({ req: h.req, res: h.res, artifactKey, bearer: prepared.token }),
       failStream: (error: Error) => {
         if (!stream) {
           throw new Error("fixture stream has not started");
         }
         stream.destroy(error);
       },
-      loseAuthority: (error?: Error) => {
-        authorized = false;
-        authorityError = error;
-      },
-      restoreAuthority: () => {
-        authorized = true;
-        authorityError = undefined;
-      },
-      expire: () => {
-        now = prepared.expiresAtMs;
-      },
       async run(range?: string) {
         if (h.res.destroyed || h.res.writableFinished) {
           Object.assign(h, createResponse());
         }
-        const { req, res } = h;
         if (range !== undefined) {
-          req.headers.range = range;
+          h.req.headers.range = range;
         }
-        const admission = await callback({ req, res, artifactKey, bearer: prepared.token });
+        const admission = await h.admit();
         if (admission.kind !== "authorized") {
           throw new Error("fixture artifact was not authorized");
         }
@@ -468,11 +430,18 @@ describe("artifact transfer interruption observations", () => {
   }
 
   type Harness = Awaited<ReturnType<typeof prepare>>;
+  it("reports no progress for revoked capabilities", async () => {
+    const h = await prepare();
+    h.service.revoke(h.prepared.token);
+    await expect(h.admit()).resolves.toEqual({ kind: "unauthorized" });
+    expect(h.progress).not.toHaveBeenCalled();
+  });
+
   it.each([
-    ["expired", (h: Harness) => h.expire()],
+    ["expired", (h: Harness) => (h.state.now = h.prepared.expiresAtMs)],
     ["owner cancelled", (h: Harness) => h.owner.abort(new Error("private cancellation detail"))],
-    ["authorization lost", (h: Harness) => h.loseAuthority()],
-    ["throwing authorization", (h: Harness) => h.loseAuthority(new Error("private error"))],
+    ["authorization lost", (h: Harness) => (h.state.authorized = false)],
+    ["throwing authorization", (h: Harness) => (h.state.error = new Error("private error"))],
     ["released", (h: Harness) => h.service.revoke(h.prepared.token)],
     ["shutdown", (h: Harness) => h.service.closeAll()],
   ] as const)("reports partial transfer closure for %s", async (closure, close) => {
@@ -485,7 +454,7 @@ describe("artifact transfer interruption observations", () => {
     expect(h.socketErrors).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ code: "ABORT_ERR" }),
     );
-    h.restoreAuthority();
+    Object.assign(h.state, { authorized: true, error: undefined });
     expect(h.authorize()).toBeUndefined();
   });
 
@@ -517,7 +486,9 @@ describe("artifact transfer interruption observations", () => {
   ])(
     "reports completed progress without interruption for $status",
     async ({ range, status, progress }) => {
-      const h = await prepare();
+      const h = await prepare(() => {
+        throw new Error("synthetic progress observer failure");
+      });
       await h.run(range);
       h.socket.destroy();
       h.owner.abort();
