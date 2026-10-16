@@ -443,7 +443,7 @@ export function Menu(props: BranchProps): JSX.Element {
               return (
                 <Show when={item().children} fallback={<Leaf />}>
                   {(children) => {
-                    const entries = createMemo(
+                    const childEntries = createMemo(
                       () => {
                         const value = children();
                         return typeof value === "function" ? value() : value;
@@ -455,7 +455,7 @@ export function Menu(props: BranchProps): JSX.Element {
                         id={`${identity.id}-${item().id}`}
                         label={item().label}
                         lazy={lazy}
-                        items={entries()}
+                        items={childEntries()}
                         trigger={
                           item().trigger ?? (
                             <>

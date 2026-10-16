@@ -152,12 +152,16 @@ async function materializeSubmenus(menu: HeaderMenuElement): Promise<void> {
     for (const trigger of root.querySelectorAll<HTMLButtonElement>(
       'button[aria-haspopup="menu"]',
     )) {
-      if (trigger.closest('[role="menu"]') !== root || trigger.disabled) continue;
+      if (trigger.closest('[role="menu"]') !== root || trigger.disabled) {
+        continue;
+      }
       trigger.click();
       flush();
       await menu.updateComplete;
       const branch = document.getElementById(trigger.getAttribute("aria-controls") ?? "");
-      if (!branch) throw new Error("Expected submenu panel");
+      if (!branch) {
+        throw new Error("Expected submenu panel");
+      }
       await visit(branch);
       if (branch.matches(":popover-open")) {
         trigger.click();
@@ -378,7 +382,9 @@ describe("chat header session menu", () => {
       expect(menu?.openMenu()).toBe(true);
       flush();
       await menu?.updateComplete;
-      if (!menu) throw new Error("Expected chat header session menu");
+      if (!menu) {
+        throw new Error("Expected chat header session menu");
+      }
       await materializeSubmenus(menu);
 
       expect(menu?.textContent?.includes("Open in")).toBe(true);
