@@ -582,7 +582,7 @@ suite.define(() => {
       await page.locator('.sidebar-region__primary[data-region="side"] .chat-thread').waitFor();
       await page.locator('[data-panel-slot="dashboard"][data-region="main"]').waitFor();
       expect(await widget.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe(
-        "1px",
+        "0px",
       );
       expect(await frame.evaluate((element, previous) => element === previous, frameHandle)).toBe(
         true,
