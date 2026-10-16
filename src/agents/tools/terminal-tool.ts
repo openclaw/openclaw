@@ -141,7 +141,7 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
     label: "Terminal",
     name: "terminal",
     description:
-      "Manage terminals the operator opened from this chat's Control UI panel. list discovers shared terminals; read returns a page of buffered output plus cursors — recent output by default, passing the returned cursor back reads only what arrived since, an earlier cursor pages back, startCursor above zero means older output exists, truncated means that cursor was evicted, and hasMore means output followed the page; resize and close manage an existing terminal; input requires one-time operator approval unless the execution policy permits unrestricted access.",
+      "Manage terminals the operator opened from this chat's Control UI panel. list discovers shared terminals; read returns a page of buffered output plus cursors — recent output by default, passing the returned cursor back reads only what arrived since, and an earlier cursor pages back while it is still retained: startCursor is that page's absolute offset in the stream (zero only at the very start, not proof that older output survives), truncated means the requested cursor predates retained output and that output cannot be recovered, and hasMore means output followed the page; resize and close manage an existing terminal; input requires one-time operator approval unless the execution policy permits unrestricted access.",
     parameters: TerminalToolSchema,
     outputSchema: TerminalToolOutputSchema,
     execute: async (toolCallId, rawArgs, signal) => {
