@@ -603,24 +603,50 @@ describe("nextcloud-talk inbound authz", () => {
     expect(saveRemoteMedia).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { senderId: "users/trusted-user", admitted: true },
-    { senderId: "guests/trusted-user", admitted: false },
-    { senderId: "federated_users/trusted-user", admitted: false },
-  ])("matches Talk actor $senderId against bare allowlisted user ids", async (params) => {
-    const readAllowFromStore = vi.fn(async () => []);
-    const buildMentionRegexes = vi.fn(() => [/@openclaw/i]);
-
-    installInboundAuthzRuntime({ readAllowFromStore, buildMentionRegexes });
-
-    const account = createAccount({ groupAllowFrom: ["trusted-user"] });
-    await handleNextcloudTalkInbound({
-      message: createMessage({ senderId: params.senderId }),
-      account,
-      config: { channels: { "nextcloud-talk": account.config } },
-      runtime: createRuntimeSpies(),
+  it("admits a Talk users/ actor listed by bare user id and keeps the raw sender id", async () => {
+    const coreRuntime = createPluginRuntimeMock();
+    coreRuntime.channel.pairing.readAllowFromStore = vi.fn(async () => []);
+    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
+    const account = createAccount({
+      groupAllowFrom: ["trusted-user"],
+      rooms: { "room-1": { requireMention: false } },
     });
 
-    expect(buildMentionRegexes).toHaveBeenCalledTimes(params.admitted ? 1 : 0);
+    await handleNextcloudTalkInbound({
+      message: createMessage({ senderId: "users/trusted-user" }),
+      account,
+      config: { channels: { "nextcloud-talk": account.config } },
+      runtime: createTestRuntimeEnv(),
+    });
+
+    expect(coreRuntime.channel.inbound.dispatch).toHaveBeenCalledOnce();
+    const [dispatchParams] = vi.mocked(coreRuntime.channel.inbound.dispatch).mock.calls[0] ?? [];
+    expect(dispatchParams?.ctxPayload).toMatchObject({ SenderId: "users/trusted-user" });
   });
+
+  it.each(["guests/trusted-user", "federated_users/trusted-user"])(
+    "drops Talk actor %s whose id equals a bare allowlisted user id",
+    async (senderId) => {
+      const coreRuntime = createPluginRuntimeMock();
+      coreRuntime.channel.pairing.readAllowFromStore = vi.fn(async () => []);
+      setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
+      const runtime = createTestRuntimeEnv();
+      const account = createAccount({
+        groupAllowFrom: ["trusted-user"],
+        rooms: { "room-1": { requireMention: false } },
+      });
+
+      await handleNextcloudTalkInbound({
+        message: createMessage({ senderId }),
+        account,
+        config: { channels: { "nextcloud-talk": account.config } },
+        runtime,
+      });
+
+      expect(coreRuntime.channel.inbound.dispatch).not.toHaveBeenCalled();
+      expect(runtime.log).toHaveBeenCalledWith(
+        `nextcloud-talk: drop group sender ${senderId} (reason=group_policy_not_allowlisted)`,
+      );
+    },
+  );
 });
