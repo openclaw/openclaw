@@ -57,6 +57,10 @@ const targets =
         "src/infra/database-engine",
         "src/state/openclaw-state-db.postgres.test.ts",
         "src/state/openclaw-agent-db.postgres.test.ts",
+        "src/state/openclaw-agent-db-engine.postgres.test.ts",
+        "extensions/memory-core/src/memory/manager-embedding-cache.postgres.test.ts",
+        "extensions/memory-core/src/memory/manager-source-index-kernel.postgres.test.ts",
+        "extensions/memory-core/src/memory/manager-publication.postgres.test.ts",
         "src/gateway/server-database-engine.postgres.test.ts",
         "src/transcripts/meeting-chronology.postgres.test.ts",
       ];

@@ -1,10 +1,11 @@
-import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
+import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   encodeMemoryEmbedding,
   hashText,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
+import { isPostgresSqlConnection } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -110,7 +111,7 @@ export function memoryChunkRowId(
 }
 
 /** Indexed row ids of one source and whether each row stores an embedding. */
-export function readMemorySourceChunks(db: DatabaseSync, source: MemorySource, path: string) {
+export function readMemorySourceChunks(db: EngineConnection, source: MemorySource, path: string) {
   return executeSqliteQuerySync(
     db,
     getNodeSqliteKysely<SourceIndexDatabase>(db)
@@ -142,7 +143,7 @@ export function readMemorySourceChunks(db: DatabaseSync, source: MemorySource, p
 }
 
 export function readMemorySourceHash(
-  db: DatabaseSync,
+  db: EngineConnection,
   source: MemorySource,
   path: string,
 ): string | undefined {
@@ -159,12 +160,14 @@ export function readMemorySourceHash(
 // The caller retains transaction admission and repeats file validation before
 // each BEGIN attempt. This kernel runs only inside that admitted native transaction.
 export class MemorySourceIndexKernel {
-  private readonly search: ReturnType<typeof admitMemoryVectorIndex>;
+  private readonly search: ReturnType<typeof admitMemoryVectorIndex> | undefined;
   constructor(
-    private readonly database: DatabaseSync,
+    private readonly database: EngineConnection,
     private readonly state: SourceIndexState,
   ) {
-    this.search = admitMemoryVectorIndex(database);
+    // PostgreSQL admission installs projections on the canonical source rows.
+    // Only SQLite needs explicit vector writes and cleanup beside those rows.
+    this.search = isPostgresSqlConnection(database) ? undefined : admitMemoryVectorIndex(database);
   }
 
   replaceRows(params: MemorySourceIndexHeader, rows: Iterable<MemorySourceIndexRow>): void {
@@ -224,8 +227,10 @@ export class MemorySourceIndexKernel {
         if (!reuse) {
           return row.embedding.length > 0;
         }
-        findVector ??= this.search.capability.prepareExists(this.search.index);
-        if (!findVector(row.id)) {
+        if (this.search) {
+          findVector ??= this.search.capability.prepareExists(this.search.index);
+        }
+        if (findVector && !findVector(row.id)) {
           return row.embedding.length > 0;
         }
         if (row.embedding.length === 0) {
@@ -260,7 +265,7 @@ export class MemorySourceIndexKernel {
         },
         batch,
       );
-      if (vectorReady) {
+      if (vectorReady && this.search) {
         this.search.capability.write(this.search.index, vectors);
       }
       batch = [];
@@ -356,6 +361,10 @@ export class MemorySourceIndexKernel {
     ids?: readonly string[],
     cleanup: "session-delta" | "complete-replacement" = "session-delta",
   ): void {
+    const search = this.search;
+    if (!search) {
+      return;
+    }
     if (!(this.state.hasVectorTable ?? this.state.vector.available === true)) {
       return;
     }
@@ -384,15 +393,15 @@ export class MemorySourceIndexKernel {
           // Dense complete replacements may scan once, restricted to stale IDs:
           // retained and newly written rows are already present in this source.
           // Session deltas always keep indexed scalar deletes, at every size.
-          this.search.capability.remove(
-            this.search.index,
+          search.capability.remove(
+            search.index,
             ids === undefined
               ? sql`SELECT id FROM memory_index_chunks WHERE path = ${pathname} AND source = ${source}`
-              : sql`SELECT id FROM memory_index_chunks WHERE path = ${pathname} AND source = ${source} AND id IN (${this.search.capability.idSet(this.search.index, ids)})`,
+              : sql`SELECT id FROM memory_index_chunks WHERE path = ${pathname} AND source = ${source} AND id IN (${search.capability.idSet(search.index, ids)})`,
           );
           return;
         }
-        this.search.capability.remove(this.search.index, sparse);
+        search.capability.remove(search.index, sparse);
       });
     } catch {
       markMemoryVectorRebuildRequired(this.database);
