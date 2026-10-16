@@ -1,24 +1,18 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openMeetingWithBrowser, recoverMeetingBrowserTab } from "./browser-controller.js";
 import { isMeetingBrowserTransientNavigationError } from "./browser-navigation-errors.js";
 import type { MeetingBrowserRequestCaller } from "./platform-adapter-contract.js";
 
+beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
-
-type Adapter = Parameters<typeof openMeetingWithBrowser>[0]["adapter"];
 const meetingUrl = "https://meet.test/meeting";
-const captions = {
-  buildTranscriptScript: () => "",
-  enabled: () => false,
-  parseTranscript: () => ({ droppedLines: 0, lines: [] }),
-};
 
 function createBrowser(onFirstEvaluation: () => void) {
   const adoption: boolean[] = [];
   const captureCaptions: boolean[] = [];
   const timeouts: number[] = [];
   const state = { evaluations: 0, adoption, captions: captureCaptions, timeouts };
-  const adapter: Adapter = {
+  const adapter: Parameters<typeof openMeetingWithBrowser>[0]["adapter"] = {
     browserLabel: "Test meeting",
     urls: {
       accountHint: () => undefined,
@@ -38,7 +32,11 @@ function createBrowser(onFirstEvaluation: () => void) {
         message: "Browser unavailable.",
       }),
       buildLeaveScript: () => "",
-      captions,
+      captions: {
+        buildTranscriptScript: () => "",
+        enabled: () => false,
+        parseTranscript: () => ({ droppedLines: 0, lines: [] }),
+      },
       classifyManualAction: () => undefined,
       parseLeaveResult: () => ({ departed: false }),
       parseStatus: () => ({ status: "browser-control", inCall: true }),
@@ -85,26 +83,21 @@ describe("meeting browser", () => {
     expect(isMeetingBrowserTransientNavigationError(new Error(message))).toBe(transient);
   });
   it("retries a platform-owned transient in-call status across a wall-clock jump", async () => {
-    vi.useFakeTimers();
     const { adapter, callBrowser, state } = createBrowser(() =>
       vi.setSystemTime(Date.now() + 60_000),
     );
+    const manualAction = { reason: "audio-choice", message: "Wait." };
     adapter.browser = {
       ...adapter.browser,
       allowsMicrophone: () => true,
-      captions: { ...captions, enabled: () => true },
+      captions: { ...adapter.browser.captions, enabled: () => true },
       classifyManualAction: (health) =>
-        health.manualAction
-          ? { category: "audio-choice-required", reason: "audio-choice", message: "Wait." }
-          : undefined,
-      parseStatus: () =>
-        state.evaluations === 1
-          ? {
-              inCall: true,
-              manualAction: { reason: "audio-choice", message: "Wait." },
-              micMuted: false,
-            }
-          : { inCall: true, micMuted: false },
+        health.manualAction && { category: "audio-choice-required", ...manualAction },
+      parseStatus: () => ({
+        inCall: true,
+        micMuted: false,
+        ...(state.evaluations === 1 ? { manualAction } : {}),
+      }),
       shouldRetryJoinStatus: (health) => health.manualAction?.reason === "audio-choice",
     };
     const joining = openMeetingWithBrowser({
@@ -127,7 +120,6 @@ describe("meeting browser", () => {
     expect(result.browser).toMatchObject({ inCall: true, micMuted: false });
   });
   it("keeps navigation recovery within its budget across a wall-clock rollback", async () => {
-    vi.useFakeTimers();
     const { adapter, callBrowser, state } = createBrowser(() => {
       vi.setSystemTime(Date.now() - 60_000);
       throw new Error("page.evaluate: Execution context was destroyed because of navigation");

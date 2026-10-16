@@ -52,49 +52,37 @@ function startLeaving(
 }
 
 describe("meeting browser leave ownership", () => {
-  async function leaveWithStep(step: MeetingBrowserLeaveStep, openedByPlugin = true) {
-    const { leaving, buildLeaveScript, deletedTabs } = startLeaving(() => step, { openedByPlugin });
-    const result = await leaving;
-    expect(buildLeaveScript).toHaveBeenCalledWith("https://meet.test/meeting");
-    expect(deletedTabs).toEqual([]);
-    return result;
-  }
-
-  it("does not close a tab whose page belongs to another session", async () => {
-    const result = await leaveWithStep({
-      departed: false,
-      sessionConflict: true,
-      sessionMatched: false,
-      urlMatched: true,
-    });
-
-    expect(result).toEqual({
-      left: true,
-      note: "Test meeting tab belongs to another OpenClaw meeting session; left its current call untouched.",
-    });
-  });
-
-  it("does not report success when page ownership is unverified", async () => {
-    const result = await leaveWithStep({
-      departed: false,
-      sessionMatched: false,
-      urlMatched: true,
-    });
-
-    expect(result).toEqual({
-      left: false,
-      note: "Browser control could not verify that the Test meeting tab still belongs to this OpenClaw meeting session.",
-    });
-  });
-
-  it("reports departure while keeping a reused tab open", async () => {
-    const result = await leaveWithStep({ departed: true, urlMatched: true }, false);
-
-    expect(result).toEqual({
-      left: true,
-      note: "Clicked Test meeting's Leave call button; kept the reused browser tab open.",
-    });
-  });
+  it.each([
+    [
+      { departed: false, sessionConflict: true, sessionMatched: false },
+      true,
+      true,
+      "Test meeting tab belongs to another OpenClaw meeting session; left its current call untouched.",
+    ],
+    [
+      { departed: false, sessionMatched: false },
+      true,
+      false,
+      "Browser control could not verify that the Test meeting tab still belongs to this OpenClaw meeting session.",
+    ],
+    [
+      { departed: true },
+      false,
+      true,
+      "Clicked Test meeting's Leave call button; kept the reused browser tab open.",
+    ],
+  ] as const)(
+    "keeps tab ownership for %j (plugin=%s, left=%s)",
+    async (step, openedByPlugin, left, note) => {
+      const { leaving, buildLeaveScript, deletedTabs } = startLeaving(
+        () => ({ ...step, urlMatched: true }),
+        { openedByPlugin },
+      );
+      await expect(leaving).resolves.toEqual({ left, note });
+      expect(buildLeaveScript).toHaveBeenCalledWith("https://meet.test/meeting");
+      expect(deletedTabs).toEqual([]);
+    },
+  );
 
   it("carries initiated-leave evidence into the next page evaluation", async () => {
     const leaveInitiated: boolean[] = [];
