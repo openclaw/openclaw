@@ -11,7 +11,8 @@ const mocks = vi.hoisted(() => ({
   credentials: vi.fn<typeof resolveGatewayCredentialsWithSecretInputs>(),
 }));
 
-vi.mock("../infra/tls/gateway.js", () => ({
+vi.mock("../infra/tls/gateway.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/tls/gateway.js")>()),
   inspectGatewayTlsCertificate: mocks.certificate,
 }));
 
@@ -20,7 +21,8 @@ vi.mock("./connection-details.js", async (importOriginal) => ({
   buildGatewayConnectionDetailsWithResolvers: mocks.details,
 }));
 
-vi.mock("./credentials-secret-inputs.js", () => ({
+vi.mock("./credentials-secret-inputs.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./credentials-secret-inputs.js")>()),
   resolveGatewayCredentialsWithSecretInputs: mocks.credentials,
 }));
 const { resolveGatewayClientBootstrap: bootstrap } = await import("./client-bootstrap.js");
