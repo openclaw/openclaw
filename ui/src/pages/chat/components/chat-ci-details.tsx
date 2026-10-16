@@ -144,10 +144,10 @@ function createCiDetails(
       props.pullRequest?.headSha,
     ]),
   );
-  const sessionKey = createMemo(() => props.sessionKey);
+  const currentSessionKey = createMemo(() => props.sessionKey);
   const presented = createMemo(() => props.presented);
   createEffect(
-    () => [sessionKey(), targetKey(), presented()] as const,
+    () => [currentSessionKey(), targetKey(), presented()] as const,
     ([sessionKey, nextTarget], previous) => {
       if (target !== nextTarget) {
         // Head changes refresh the same open monitor; session changes dismiss it.

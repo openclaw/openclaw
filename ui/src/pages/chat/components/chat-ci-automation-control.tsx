@@ -44,7 +44,7 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
   });
   const saving = createMemo(() => Object.keys(state.pending).length > 0);
   const connection = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
-  const gateway = projectSource<
+  const gatewayProjection = projectSource<
     ApplicationGateway | undefined,
     ApplicationGatewaySnapshot | undefined
   >(undefined, {
@@ -70,9 +70,9 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
   createEffect(
     () => props.gateway,
     (source) => {
-      gateway.replaceSource(source);
+      gatewayProjection.replaceSource(source);
       reset();
-      const stopGateway = gateway.subscribe(() => {
+      const stopGateway = gatewayProjection.subscribe(() => {
         syncConnection();
         queueRefresh();
       });
@@ -335,7 +335,7 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
   }
 
   const view = createMemo<ChatCiAutomationProps>(() => {
-    const snapshot = gateway.read();
+    const snapshot = gatewayProjection.read();
     const unavailable = !automationTarget(props)
       ? t("chat.pullRequests.automationSessionRequired")
       : !canRead(snapshot)
