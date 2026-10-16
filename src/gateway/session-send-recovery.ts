@@ -7,7 +7,7 @@ import {
 } from "../agents/tools/sessions-send-communication.js";
 import { appendSessionTranscriptReport } from "../config/sessions/session-accessor.js";
 import { readPendingInputRecoveryEntriesInWorker } from "../config/sessions/session-entry-read-maintenance.js";
-import { listSessionPendingInputs } from "../config/sessions/session-pending-input-history.js";
+import { readSessionSendRecoveryPage } from "../config/sessions/session-pending-input-history.js";
 import { readPendingInputSource } from "../config/sessions/session-pending-input-source.js";
 import type { SessionPendingInput } from "../config/sessions/session-pending-input.types.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
@@ -103,7 +103,7 @@ export async function recoverSessionSendDeliveries(
       let before: number | undefined;
       do {
         assertCurrent();
-        const page = await retry(() => listSessionPendingInputs(scope, { limit: 20, before }));
+        const page = await retry(() => readSessionSendRecoveryPage(scope, { before }));
         pending.unshift(...page.items);
         before = page.nextBefore;
       } while (before !== undefined);
@@ -132,6 +132,22 @@ export async function recoverSessionSendDeliveries(
               | Awaited<ReturnType<typeof prepareSessionsSendCommunication>>
               | undefined;
             try {
+              const retained = await readPendingInputSource(
+                scope,
+                input.message.idempotencyKey!,
+                true,
+              );
+              const row = retained?.snapshot.pending;
+              if (
+                !retained?.snapshot.current ||
+                !row ||
+                row.input_id !== input.id ||
+                row.state !== "interrupted" ||
+                row.consumed_event_id != null ||
+                row.message_json !== JSON.stringify(input.message)
+              ) {
+                return;
+              }
               const load = async (
                 endpoint: SessionSendDeliveryEndpoint,
               ): Promise<CommunicationEndpoint> => {
@@ -186,22 +202,6 @@ export async function recoverSessionSendDeliveries(
                 callGateway,
                 signal,
               });
-              const retained = await readPendingInputSource(
-                scope,
-                input.message.idempotencyKey!,
-                true,
-              );
-              const row = retained?.snapshot.pending;
-              if (
-                !retained?.snapshot.current ||
-                !row ||
-                row.input_id !== input.id ||
-                row.state !== "interrupted" ||
-                row.consumed_event_id != null ||
-                row.message_json !== JSON.stringify(input.message)
-              ) {
-                return;
-              }
               await communication.refresh();
               const guard = () => {
                 assertCurrent();

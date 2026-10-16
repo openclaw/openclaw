@@ -951,6 +951,15 @@ describe("channel detail presentation CI selection", () => {
   });
 });
 
+describe("curated plugin settings CI selection", () => {
+  it("selects the actual consumer proof for a presentation-only change", () => {
+    expect(
+      detectChangedScope(["extensions/memory-core/control-ui.settings-presentation.json"])
+        .runUiTests,
+    ).toBe(true);
+  });
+});
+
 describe("changed-path transport", () => {
   it("plans current PR tests from the complete manifest above the output size limit", () => {
     const changedPaths = [
@@ -2546,7 +2555,11 @@ describe("ci workflow guards", () => {
         runAttempt: 1,
         preflightOutputs: manifest.outputs,
       };
-      for (const job of ["ios-screenshot-shard", "ios-screenshot-evidence", "checks-node-compat"]) {
+      for (const job of [
+        "ios-screenshot-capture",
+        "ios-screenshot-evidence",
+        "checks-node-compat",
+      ]) {
         const expression = workflow.jobs[job].if;
         expect(
           evaluateWorkflowExpression(
@@ -3522,7 +3535,7 @@ describe("ci workflow guards", () => {
       expect(base.filter((name) => name === "macos-node")).toHaveLength(
         eventName === "pull_request" ? 0 : 3,
       );
-      expect(base.filter((name) => name === "ios-screenshot-shard")).toHaveLength(2);
+      expect(base.filter((name) => name === "ios-screenshot-capture")).toHaveLength(1);
       expect(base.filter((name) => name === "ios-screenshot-evidence")).toHaveLength(1);
       expect(base.filter((name) => name === "android-screenshots")).toHaveLength(
         eventName === "pull_request" ? 0 : 1,
@@ -8757,7 +8770,7 @@ describe("ci workflow guards", () => {
           jobName,
         ).toBe(selectedJobs.includes(jobName));
       }
-      for (const jobName of ["ios-screenshot-shard", "ios-screenshot-evidence"]) {
+      for (const jobName of ["ios-screenshot-capture", "ios-screenshot-evidence"]) {
         expect(
           evaluateWorkflowExpression(workflow.jobs[jobName].if, {
             ...context,
@@ -8877,7 +8890,7 @@ describe("ci workflow guards", () => {
       ]) {
         expect(qualification.outputs[output], output).toBe("true");
       }
-      for (const jobName of ["ios-screenshot-shard", "ios-screenshot-evidence"]) {
+      for (const jobName of ["ios-screenshot-capture", "ios-screenshot-evidence"]) {
         expect(
           evaluateWorkflowExpression(readCiWorkflow().jobs[jobName].if, {
             eventName: "workflow_dispatch",
@@ -9827,10 +9840,34 @@ describe("ci workflow guards", () => {
         "compatibility-target": "${{ needs.preflight.outputs.compatibility_target }}",
       },
     });
-    expect(uiTest.run).toContain('if [[ "$COMPATIBILITY_TARGET" == "true" ]]');
-    expect(uiTest.run).toContain("pnpm --dir ui test --testTimeout=30000 --isolate");
-    expect(uiTest.run).not.toContain("--retry");
-    expect(uiTest.run).toContain("pnpm --dir ui test");
+    const commandRoot = tempDirs.make("openclaw-ui-runtime-command-");
+    for (const command of ["node", "pnpm"]) {
+      writeExecutable(path.join(commandRoot, command), [
+        "#!/bin/sh",
+        `printf '%s' '${command}'`,
+        'printf " %s" "$@"',
+        'printf "\\n"',
+      ]);
+    }
+    for (const compatibilityTarget of [false, true]) {
+      for (const policy of ["node", "bun-compatible", "dual", "bun-all", "dual-all"]) {
+        const result = runWorkflowShellScript(uiTest.run, {
+          cwd: commandRoot,
+          env: {
+            ...process.env,
+            PATH: `${commandRoot}${path.delimiter}${process.env.PATH ?? ""}`,
+            COMPATIBILITY_TARGET: String(compatibilityTarget),
+            OPENCLAW_CI_TEST_RUNTIME_POLICY: policy,
+          },
+        });
+        expect(result.status, result.stdout + result.stderr).toBe(0);
+        expect(result.stdout).toBe(
+          compatibilityTarget && policy !== "bun-all" && policy !== "dual-all"
+            ? "pnpm --dir ui test --testTimeout=30000 --isolate\n"
+            : "node --import tsx scripts/ci-run-node-test-shard.mts\n",
+        );
+      }
+    }
   });
 
   it.each<
@@ -12024,7 +12061,7 @@ describe("ci workflow guards", () => {
       "macos-swift",
       "ios-build",
       "ios-release-e2e",
-      "ios-screenshot-shard",
+      "ios-screenshot-capture",
       "ios-screenshot-evidence",
       "android",
       "android-release-e2e",
@@ -12142,11 +12179,26 @@ describe("ci workflow guards", () => {
     },
   );
 
-  it("reduces iOS screenshots only after every shard's latest attempt succeeded", () => {
+  it("captures all iOS families in one native job and retains phase timings", () => {
+    const capture = readCiWorkflow().jobs["ios-screenshot-capture"];
+    expect(capture.strategy).toBeUndefined();
+    const step = capture.steps.find(
+      (candidate: WorkflowStep) => candidate.id === "device_screenshots",
+    );
+    expect(step.run).toBe("pnpm ios:screenshots");
+    expect(step.env).toEqual({ OPENCLAW_SNAPSHOT_DIAGNOSTICS: "1" });
+    const diagnostics = capture.steps.find(
+      (candidate: WorkflowStep) => candidate.name === "Upload iOS screenshot timing diagnostics",
+    );
+    expect(diagnostics.if).toBe("always()");
+    expect(diagnostics.with.path).toBe("apps/ios/build/screenshot-diagnostics.json");
+  });
+
+  it("reduces iOS screenshots only after the combined capture succeeded", () => {
     const reducer = readCiWorkflow().jobs["ios-screenshot-evidence"];
-    // The reducer accepts shard evidence retained from earlier attempts. The implicit
-    // success() gate keeps such an artifact from standing in for a failed shard rerun.
-    expect(reducer.needs).toContain("ios-screenshot-shard");
+    // The reducer accepts capture evidence retained from earlier attempts. The implicit
+    // success() gate keeps such an artifact from standing in for a failed capture rerun.
+    expect(reducer.needs).toContain("ios-screenshot-capture");
     expect(reducer.if).not.toMatch(/\b(?:always|cancelled|failure|success)\(\)/u);
   });
 
@@ -12161,7 +12213,7 @@ describe("ci workflow guards", () => {
       expected: {
         "checks-node-compat": false,
         "ios-build": true,
-        "ios-screenshot-shard": true,
+        "ios-screenshot-capture": true,
       },
     },
     {
@@ -12170,7 +12222,7 @@ describe("ci workflow guards", () => {
       expected: {
         "checks-node-compat": false,
         "ios-build": true,
-        "ios-screenshot-shard": true,
+        "ios-screenshot-capture": true,
       },
     },
     {
@@ -12268,7 +12320,7 @@ describe("ci workflow guards", () => {
         "checks-ui": true,
         "checks-ui-e2e": false,
         "checks-ui-e2e-real-gateway": false,
-        "ios-screenshot-shard": false,
+        "ios-screenshot-capture": false,
       },
     },
     {
@@ -12277,7 +12329,7 @@ describe("ci workflow guards", () => {
       expected: {
         "checks-ui-e2e": true,
         "checks-ui-e2e-real-gateway": true,
-        "ios-screenshot-shard": true,
+        "ios-screenshot-capture": true,
         "checks-node-compat": true,
       },
     },
@@ -12371,47 +12423,47 @@ describe("ci workflow guards", () => {
     {
       label: "hourly main excludes screenshots even with screenshot scope",
       context: { eventName: "schedule", preflightOutputs: { validation_tier: "main" } },
-      expected: { "ios-build": true, "ios-screenshot-shard": false },
+      expected: { "ios-build": true, "ios-screenshot-capture": false },
     },
     {
       label: "ordinary manual screenshot override",
       context: { preflightOutputs: { run_ios_screenshots: "false" } },
-      expected: { "ios-screenshot-shard": true },
+      expected: { "ios-screenshot-capture": true },
     },
     {
       label: "release gate without screenshot scope",
       context: { releaseGate: true, preflightOutputs: { run_ios_screenshots: "false" } },
-      expected: { "ios-screenshot-shard": false },
+      expected: { "ios-screenshot-capture": false },
     },
     {
       label: "release gate retains changed-input screenshots",
       context: { releaseGate: true },
-      expected: { "ios-build": true, "ios-screenshot-shard": true },
+      expected: { "ios-build": true, "ios-screenshot-capture": true },
     },
     {
       label: "npm-beta excludes manual screenshots",
       context: { preflightOutputs: { release_scope: "npm-beta" } },
-      expected: { "ios-screenshot-shard": false },
+      expected: { "ios-screenshot-capture": false },
     },
     {
       label: "npm-beta excludes PR screenshots",
       context: { eventName: "pull_request", preflightOutputs: { release_scope: "npm-beta" } },
-      expected: { "ios-screenshot-shard": false },
+      expected: { "ios-screenshot-capture": false },
     },
     {
       label: "npm-stable excludes manual screenshots",
       context: { preflightOutputs: { release_scope: "npm-stable" } },
-      expected: { "ios-screenshot-shard": false },
+      expected: { "ios-screenshot-capture": false },
     },
     {
       label: "npm-stable excludes PR screenshots",
       context: { eventName: "pull_request", preflightOutputs: { release_scope: "npm-stable" } },
-      expected: { "ios-screenshot-shard": false },
+      expected: { "ios-screenshot-capture": false },
     },
     {
       label: "PR screenshot scope off",
       context: { eventName: "pull_request", preflightOutputs: { run_ios_screenshots: "false" } },
-      expected: { "ios-screenshot-shard": false },
+      expected: { "ios-screenshot-capture": false },
     },
   ])("ci-gate preserves eligibility: $label", ({ context, expected }) => {
     const jobResults = renderCiGateEnvironment(context);
@@ -12427,7 +12479,7 @@ describe("ci workflow guards", () => {
     for (const [job, selected] of Object.entries(expected)) {
       expect(selections[job], job).toBe(String(selected));
     }
-    expect(selections["ios-screenshot-evidence"]).toBe(selections["ios-screenshot-shard"]);
+    expect(selections["ios-screenshot-evidence"]).toBe(selections["ios-screenshot-capture"]);
     const results = Object.fromEntries(
       Object.entries(selections).map(([job, selected]) => [
         job,
@@ -12651,14 +12703,14 @@ describe("ci workflow guards", () => {
       const jobResults = renderCiGateEnvironment(
         {},
         {
-          "ios-screenshot-shard": "failure",
+          "ios-screenshot-capture": "failure",
           "ios-screenshot-evidence": "skipped",
         },
       );
       const outcome = runCiGateFixture(jobResults);
       expect(outcome.status, outcome.stdout).toBe(1);
       expect(outcome.stdout).toContain(
-        "ios-screenshot-shard finished with failure (selected=true)",
+        "ios-screenshot-capture finished with failure (selected=true)",
       );
       expect(outcome.stdout).toContain(
         "ios-screenshot-evidence finished with skipped (selected=true)",

@@ -141,6 +141,51 @@ describe("cron show pagination (#83856)", () => {
   });
 });
 
+describe("cron show legacy rows without state (#173631)", () => {
+  it("renders a version-skewed job row that omits state instead of crashing", async () => {
+    // Protocol-v4 Gateways lack cron.get; the CLI falls back to raw legacy
+    // cron.list pages. Older/malformed rows can omit state entirely, which
+    // used to crash printCronShow on the first job.state access.
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.get") {
+        throw Object.assign(new Error("unknown method: cron.get"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+        });
+      }
+      if (method === "cron.list") {
+        return {
+          jobs: [
+            {
+              id: "legacy-job",
+              name: "Legacy job",
+              enabled: true,
+              schedule: undefined,
+              payload: undefined,
+              sessionTarget: undefined,
+              agentId: undefined,
+              state: undefined,
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected cron method: ${method}`);
+    });
+    const logs: string[] = [];
+    vi.spyOn(defaultRuntime, "log").mockImplementation((...args: unknown[]) => {
+      for (const arg of args) {
+        logs.push(String(arg));
+      }
+    });
+    await run(["show", "legacy-job"]);
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.get", expect.anything(), {
+      id: "legacy-job",
+    });
+    expect(logs.join("\n")).toContain("id: legacy-job");
+    expect(logs.join("\n")).toContain("name: Legacy job");
+  });
+});
+
 it("emits the hidden-job hint when disabling from a terminal", async () => {
   Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });
   const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);

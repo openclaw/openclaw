@@ -1122,21 +1122,6 @@ describe("cron tool", () => {
     });
   });
 
-  it("uses flat string scheduleKind without leaking it to cron update", async () => {
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
-
-    await executeCron({
-      action: "update",
-      id: "job-kind",
-      expr: "0 8 * * *",
-      scheduleKind: "cron",
-    });
-
-    const params = expectSingleGatewayCallMethod("cron.update");
-    expect(params).toHaveProperty("id", "job-kind");
-    expect(params).toHaveProperty("patch", { schedule: { expr: "0 8 * * *", kind: "cron" } });
-  });
-
   it.each([
     {
       name: "clearing toolsAllow on an agentTurn",

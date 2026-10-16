@@ -278,7 +278,6 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
           id="control-ui-main"
           class={[
             "content",
-            (props.host.shellRevision(), props.host.shellLayout.className),
             {
               "content--chat": view().chatLikeRoute,
               "content--workbench": view().workbenchRoute,

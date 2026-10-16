@@ -583,13 +583,17 @@ export async function prepareSessionsSendCommunication(params: {
                 agentId: sender.agentId,
                 sessionKey: sender.sessionKey,
                 sessionId: sender.entry.sessionId,
-                lifecycleRevision: sender.entry.lifecycleRevision,
+                ...(sender.entry.lifecycleRevision === undefined
+                  ? {}
+                  : { lifecycleRevision: sender.entry.lifecycleRevision }),
               },
               target: {
                 agentId: endpoint.agentId,
                 sessionKey: endpoint.sessionKey,
                 sessionId: endpoint.entry.sessionId,
-                lifecycleRevision: endpoint.entry.lifecycleRevision,
+                ...(endpoint.entry.lifecycleRevision === undefined
+                  ? {}
+                  : { lifecycleRevision: endpoint.entry.lifecycleRevision }),
               },
               sandboxed,
               message: dispatchMessage,

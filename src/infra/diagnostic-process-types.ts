@@ -14,6 +14,11 @@ export type DiagnosticRuntimeMeasurementFields =
       delayMaxMs: number;
     }
   | {
+      type: "gateway.main_thread.stall";
+      stalls: { task: string; durationMs: number }[];
+      dropped: number;
+    }
+  | {
       type: "diagnostic.gc";
       durationMs: number;
       /** Optional for existing SDK event producers; native observers always supply attribution. */

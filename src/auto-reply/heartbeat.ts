@@ -151,12 +151,10 @@ export function stripHeartbeatToken(
 
   const mode: StripHeartbeatMode = opts.mode ?? "message";
   const maxAckCharsRaw = opts.maxAckChars;
-  const parsedAckChars =
-    typeof maxAckCharsRaw === "string" ? Number(maxAckCharsRaw) : maxAckCharsRaw;
   const maxAckChars = Math.max(
     0,
-    typeof parsedAckChars === "number" && Number.isFinite(parsedAckChars)
-      ? parsedAckChars
+    maxAckCharsRaw !== undefined && Number.isFinite(maxAckCharsRaw)
+      ? maxAckCharsRaw
       : DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   );
 

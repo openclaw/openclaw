@@ -31,15 +31,12 @@ import {
 } from "./queue.test-helpers.js";
 import { resolveFollowupDeliveryStorageKey } from "./queue/delivery-context.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
-import { isFollowupRunAborted, type QueuedFollowupReplyBatch } from "./queue/types.js";
+import {
+  isFollowupRunAborted,
+  type InternalFollowupRun,
+  type QueuedFollowupReplyBatch,
+} from "./queue/types.js";
 import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
-type InternalFollowupRun = FollowupRun & {
-  currentTurnImagesPrepared?: true;
-  mediaImageLayout?: {
-    slots: Array<{ kind: "inline" | "offloaded"; factIndex?: number }>;
-    suppressedFactIndexes: number[];
-  };
-};
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-overflow-session-");
 installQueueRuntimeErrorSilencer();
 describe("followup queue collect routing", () => {

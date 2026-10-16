@@ -22,7 +22,6 @@ import {
   resolveInternalEventPromptBody,
 } from "../../internal-events.js";
 import type { RuntimeContextFragment } from "../../internal-runtime-context.js";
-import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import { buildRuntimeFactsContext } from "../../runtime-facts-prompt.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
@@ -303,16 +302,13 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
 
   if (promptBuildPrependContext) {
     effectivePrompt = `${promptBuildPrependContext}\n\n${effectivePrompt}`;
-    log.debug(`hooks: prepended context to prompt (${promptBuildPrependContext.length} chars)`);
   }
   if (promptBuildAppendContext) {
     effectivePrompt = `${effectivePrompt}\n\n${promptBuildAppendContext}`;
-    log.debug(`hooks: appended context to prompt (${promptBuildAppendContext.length} chars)`);
   }
   const legacySystemPrompt = normalizeOptionalString(hookResult?.systemPrompt) ?? "";
   if (legacySystemPrompt) {
     setSystemPrompt(legacySystemPrompt);
-    log.debug(`hooks: applied systemPrompt (${legacySystemPrompt.length} chars)`);
   }
   const composedSystemPrompt = composeSystemPromptWithHookContext({
     baseSystemPrompt: systemPromptText,
@@ -321,10 +317,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   });
   if (composedSystemPrompt) {
     setSystemPrompt(composedSystemPrompt);
-    log.debug(
-      `hooks: applied prependSystemContext/appendSystemContext ` +
-        `(${hookResult?.prependSystemContext?.trim().length ?? 0}+${hookResult?.appendSystemContext?.trim().length ?? 0} chars)`,
-    );
   }
   // Keep current model identity after the stable system cache boundary.
   const modelAwareSystemPrompt = isSettledTurnFinalization
@@ -339,17 +331,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   if (modelAwareSystemPrompt !== systemPromptText) {
     setSystemPrompt(modelAwareSystemPrompt);
   }
-
-  const routingSummary = describeProviderRequestRoutingSummary({
-    provider: attempt.provider,
-    api: attempt.model.api,
-    baseUrl: attempt.model.baseUrl,
-    capability: "llm",
-    transport: "stream",
-  });
-  log.debug(
-    `embedded run prompt start: runId=${attempt.runId} sessionId=${attempt.sessionId} ${routingSummary}`,
-  );
 
   const leafEntry = input.orphanRepair?.messageEntry;
   if (leafEntry && input.orphanRepair) {
@@ -386,10 +367,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
       steeringPrompt: leasedSteeringPrompt,
       prompt: effectiveTranscriptPrompt,
     });
-    log.debug(
-      `agent steering: injected ${leasedSteering.runIds.length} queued item(s) into parent turn ` +
-        `runId=${attempt.runId} sessionKey=${attempt.sessionKey}`,
-    );
   }
 
   const currentUserAdmission =

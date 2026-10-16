@@ -148,11 +148,11 @@ export async function isOpenClawManagedCodexThread(
     diagnostics.fields.provenanceChecks++;
   }
   try {
-    const rolloutPath = typeof thread.path === "string" ? thread.path.trim() : "";
+    const rolloutPath = thread.path?.trim();
     if (!localSessionsRoot || !rolloutPath) {
       return false;
     }
-    if (typeof thread.originator === "string" && thread.originator.length > 0) {
+    if (thread.originator) {
       return thread.originator === "openclaw";
     }
     const cacheKey = `${localSessionsRoot}\0${rolloutPath}`;
