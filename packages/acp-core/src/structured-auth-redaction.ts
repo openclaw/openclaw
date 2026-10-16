@@ -27,14 +27,17 @@ function skipHorizontalWhitespace(value: string, start: number): number {
   return cursor;
 }
 
-function readSerializedLineEnd(value: string, start: number): number | null {
+function skipSerializedBackslashes(value: string, start: number): number {
   let cursor = start;
-  let slashCount = 0;
-  while (slashCount < 64 && value[cursor] === "\\") {
-    slashCount += 1;
+  while (cursor - start < 64 && value[cursor] === "\\") {
     cursor += 1;
   }
-  if (slashCount === 0) {
+  return cursor;
+}
+
+function readSerializedLineEnd(value: string, start: number): number | null {
+  const cursor = skipSerializedBackslashes(value, start);
+  if (cursor === start) {
     return null;
   }
   if (value[cursor] === "n") {
@@ -43,23 +46,13 @@ function readSerializedLineEnd(value: string, start: number): number | null {
   if (value[cursor] !== "r") {
     return null;
   }
-  cursor += 1;
-  slashCount = 0;
-  while (slashCount < 64 && value[cursor] === "\\") {
-    slashCount += 1;
-    cursor += 1;
-  }
-  return slashCount > 0 && value[cursor] === "n" ? cursor + 1 : null;
+  const lineEnd = skipSerializedBackslashes(value, cursor + 1);
+  return lineEnd > cursor + 1 && value[lineEnd] === "n" ? lineEnd + 1 : null;
 }
 
 function readSerializedTabEnd(value: string, start: number): number | null {
-  let cursor = start;
-  let slashCount = 0;
-  while (slashCount < 64 && value[cursor] === "\\") {
-    slashCount += 1;
-    cursor += 1;
-  }
-  return slashCount > 0 && value[cursor] === "t" ? cursor + 1 : null;
+  const cursor = skipSerializedBackslashes(value, start);
+  return cursor > start && value[cursor] === "t" ? cursor + 1 : null;
 }
 
 function skipAuthWhitespace(value: string, start: number): number {
@@ -96,16 +89,8 @@ function readAuthParamName(value: string, start: number): { name: string; end: n
 
 function isAuthHeaderStart(value: string, index: number): boolean {
   const previous = value[index - 1];
-  let serializedLineBoundary = false;
-  if (previous === "n" || previous === "r") {
-    let slashCursor = index - 2;
-    let slashCount = 0;
-    while (slashCount < 64 && value[slashCursor] === "\\") {
-      slashCount += 1;
-      slashCursor -= 1;
-    }
-    serializedLineBoundary = slashCount > 0;
-  }
+  const serializedLineBoundary =
+    (previous === "n" || previous === "r") && value[index - 2] === "\\";
   if (!serializedLineBoundary && previous !== undefined && /[A-Za-z0-9_-]/u.test(previous)) {
     return false;
   }
@@ -118,15 +103,11 @@ function isAuthHeaderStart(value: string, index: number): boolean {
     return false;
   }
 
-  let cursor = index + name.length;
-  let slashCount = 0;
-  while (slashCount < 64 && value[cursor] === "\\") {
-    slashCount += 1;
-    cursor += 1;
-  }
+  const quoteStart = index + name.length;
+  let cursor = skipSerializedBackslashes(value, quoteStart);
   if (value[cursor] === '"' || value[cursor] === "'") {
     cursor += 1;
-  } else if (slashCount > 0) {
+  } else if (cursor > quoteStart) {
     return false;
   }
   cursor = skipHorizontalWhitespace(value, cursor);
@@ -377,18 +358,10 @@ export function findStructuredAuthParamRanges(value: string): StructuredAuthPara
   return ranges;
 }
 
-const AUTH_COMPLETE_REFERENCE_VALUE_RE = /^(?:[a-z][a-z\d_-]*[ \t]+)?(?:\$\{[A-Za-z_$][\w$]*[^{}]*\}|\$[A-Za-z_$][\w$]*|process\.env\.[A-Za-z_$][\w$.]*|os\.environ(?:\.get)?\(\s*["']?[A-Za-z_$][\w$.]*["']?\s*\)?|os\.environ\[\s*["'][A-Za-z_$][\w$.]*["']\s*\]|os\.getenv\(\s*["'][A-Za-z_$][\w$.]*["']\s*\))$/i;
-
 export function redactStructuredAuthHeaders(value: string, replacement: string): string {
   const parts: string[] = [];
   let cursor = 0;
   for (const range of findStructuredAuthParamRanges(value)) {
-    // An auth parameter whose entire value is an environment/language reference is not a
-    // credential (e.g. `Authorization: Bearer $TOKEN`); keep it readable. Values that merely
-    // start with a reference keep masking (the complete-value rule from the review).
-    if (AUTH_COMPLETE_REFERENCE_VALUE_RE.test(value.slice(range.start, range.end))) {
-      continue;
-    }
     // Ranges follow header order; overlapping credentials share one replacement.
     if (parts.length === 0 || range.start > cursor) {
       parts.push(value.slice(cursor, range.start), replacement);
