@@ -185,7 +185,9 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     }
   };
   assertRequester();
-  const receipt = await service.latestShared(session);
+  const receipt = await service.latestShared(session, undefined, undefined, () =>
+    target.selected.readCurrent(),
+  );
   assertRequester();
   if (receipt?.result.status !== "published") {
     throw new Error(

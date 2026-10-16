@@ -87,6 +87,66 @@ it("caps commentary captions across an intervening image as one message", () => 
   expect(source.content[2]).toMatchObject({ text: "B".repeat(20) });
 });
 
+it("preserves nontext content beside control-looking text", () => {
+  const source = assistant({ content: [text("NO_REPLY"), image] });
+  expect(project([source])).toEqual([source]);
+});
+
+it("prepares a raw phased prefix once across nontext content", () => {
+  const suffix = "NO_REPLY\nREADY";
+  const source = assistant({
+    phase: "final_answer",
+    stopReason: "stop",
+    content: [
+      phased("Private commentary", "commentary"),
+      phased("NO_", "final_answer"),
+      image,
+      phased(`REPLY\n${suffix}`, "final_answer"),
+    ],
+    __openclaw: { id: "raw-prefixed-answer", runId: "native-run", media },
+  });
+  const before = structuredClone(source);
+  const expected = {
+    ...source,
+    display: true,
+    content: [phased("", "final_answer"), image, phased(suffix, "final_answer")],
+  };
+  const projected = project([source]);
+  expect(projected).toEqual([expected]);
+  expect(project(projected)).toEqual([expected]);
+  expect(source).toEqual(before);
+});
+
+it("prepares raw prefixes before the display cap and preserves prepared or forwarded text", () => {
+  const source = assistant({ content: [text("NO_REPLY\nREADY")] });
+  expect(project([source], { maxChars: 5 })).toEqual([
+    { ...source, display: true, content: [text("READY")] },
+  ]);
+  for (const fields of [
+    { display: true },
+    {
+      openclawDeliveryMirror: {
+        kind: "message-tool-source-reply",
+        sourceTurnId: "source-run",
+        final: true,
+      },
+    },
+    {
+      provenance: {
+        kind: "inter_session",
+        sourceTool: "sessions_send",
+        sourceSessionKey: "agent:peer:main",
+      },
+    },
+  ]) {
+    const prepared = assistant({
+      ...fields,
+      content: [text("NO_REPLY"), text("\nexample")],
+    });
+    expect(project([prepared])).toEqual([prepared]);
+  }
+});
+
 describe("commentary group visibility", () => {
   const progress = "Visible progress";
   const keyed = phased(progress, "commentary", "progress");
@@ -100,7 +160,8 @@ describe("commentary group visibility", () => {
   type Visibility = [string, unknown[], string[], number, number, string?, typeof facts?];
   it.each<Visibility>([
     ["visible siblings", [control, image, tool, final], [controls, "Final reply"], 1, 1],
-    ["media facts", [control], [""], 0, 0, undefined, facts],
+    ["media facts", [control], [controls], 0, 0, undefined, facts],
+    ["unkeyed media", [text("Image caption"), image], ["Image caption"], 1, 0, "commentary"],
     ["another group's image", [unkeyed, keyed, image], [progress], 1, 0],
     ["inherited phases", inheritedContent, [progress], 1, 1, "commentary"],
   ])("keeps visibility scoped to %s", (_name, content, texts, images, tools, phase, mediaFacts) => {

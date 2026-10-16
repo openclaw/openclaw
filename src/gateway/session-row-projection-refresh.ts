@@ -36,6 +36,7 @@ export function createSessionRowRefresh(
     catalog: { needsInitialRead: boolean; isRefreshing: boolean; refresh: () => Promise<unknown> };
     placementFacts: { prepare: () => Promise<void>; needsPreparation: boolean };
     membership: { prepare: () => Promise<void>; needsPreparation: boolean };
+    metadataReady: () => boolean;
   },
 ) {
   const materializer = createSessionRowMaterializer({
@@ -198,7 +199,10 @@ export function createSessionRowRefresh(
       },
     );
   }
-  function selectionNeedsPreparation(options: SessionRowSelectionPreparationOptions = {}) {
+  function selectionNeedsPreparation(
+    options: SessionRowSelectionPreparationOptions = {},
+    candidateIds?: () => Iterable<string>,
+  ) {
     const metadataOnly = options.metadataOnly === true;
     const includeCatalog = !metadataOnly || options.includeCatalog === true;
     const state = owner.state();
@@ -214,7 +218,7 @@ export function createSessionRowRefresh(
       return true;
     }
     // Accepted database facts already own selection metadata, even while display is dirty.
-    for (const id of owner.dirty) {
+    for (const id of candidateIds?.() ?? owner.dirty) {
       if (rowNeedsDatabaseRead(id, metadataOnly)) {
         return true;
       }
@@ -257,6 +261,7 @@ export function createSessionRowRefresh(
   }
   function prepareSelection(
     options: SessionRowSelectionPreparationOptions & { yieldForCatalog?: boolean } = {},
+    candidateIds?: () => Iterable<string>,
   ): Promise<void> | undefined {
     const metadataOnly = options.metadataOnly === true;
     const includeCatalog = !metadataOnly || options.includeCatalog === true;
@@ -265,10 +270,12 @@ export function createSessionRowRefresh(
     }
     if (options.yieldForCatalog && owner.catalog.isRefreshing) {
       // Adopt completed catalog publications without waiting for a pending renewal.
-      return yieldSessionListWork().then(() => prepareSelection({ metadataOnly, includeCatalog }));
+      return yieldSessionListWork().then(() =>
+        prepareSelection({ metadataOnly, includeCatalog }, candidateIds),
+      );
     }
     // Committed metadata can serve a picker while full-row readiness is still pending.
-    if (!selectionNeedsPreparation(options)) {
+    if (!selectionNeedsPreparation(options, candidateIds)) {
       if (!owner.state().disposed) {
         owner.prepare();
       }
@@ -279,7 +286,7 @@ export function createSessionRowRefresh(
         ? "metadata-catalog"
         : "metadata"
       : "full";
-    const selectionPending = selectionPreparations.get(preparationKey);
+    const selectionPending = !candidateIds && selectionPreparations.get(preparationKey);
     if (selectionPending) {
       return selectionPending;
     }
@@ -314,7 +321,7 @@ export function createSessionRowRefresh(
             // Acquire lineage before any batch; keep the dirty cursor across accepted batches.
             // Restart only when another preparation owner or a joined read changes readiness.
             if (owner.state().registryPrepared) {
-              for (const id of owner.dirty) {
+              for (const id of candidateIds?.() ?? owner.dirty) {
                 const row = owner.rows.get(id);
                 if (
                   row?.entryAcquisitionPending &&
@@ -326,7 +333,7 @@ export function createSessionRowRefresh(
                 }
               }
             }
-            candidates = owner.dirty.values();
+            candidates = (candidateIds?.() ?? owner.dirty)[Symbol.iterator]();
           }
           if (includeCatalog && owner.catalog.needsInitialRead) {
             await owner.catalog.refresh();
@@ -374,11 +381,15 @@ export function createSessionRowRefresh(
           owner.prepare();
         }
       } finally {
-        selectionPreparations.delete(preparationKey);
+        if (!candidateIds) {
+          selectionPreparations.delete(preparationKey);
+        }
         release();
       }
     });
-    selectionPreparations.set(preparationKey, preparation);
+    if (!candidateIds) {
+      selectionPreparations.set(preparationKey, preparation);
+    }
     return preparation;
   }
   async function refreshBatch() {
@@ -478,6 +489,18 @@ export function createSessionRowRefresh(
     }
   }
   return {
+    needsMaterialization(this: void) {
+      const state = owner.state();
+      return (
+        !state.disposed &&
+        (state.topologyDirty ||
+          owner.catalog.needsInitialRead ||
+          owner.dirty.size > 0 ||
+          owner.membership.needsPreparation ||
+          owner.placementFacts.needsPreparation ||
+          !owner.metadataReady())
+      );
+    },
     refresh: materializer.refresh,
     refreshBatch(this: void) {
       return (refreshing ??= refreshBatch().finally(() => {

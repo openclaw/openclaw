@@ -19,17 +19,6 @@ import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.type
 
 const ttsRuntimeLoader = createLazyImportLoader(() => import("../../tts/tts.runtime.js"));
 
-const NO_VISIBLE_REPLY_FALLBACK_TEXT =
-  "⚠️ OpenClaw couldn't produce or deliver a reply. Please try again. If this keeps happening, ask the operator to check the gateway logs.";
-
-export function buildNoVisibleReplyFallbackText(runId?: string): string {
-  const reference = normalizeOptionalString(runId);
-  // Caller-supplied IDs must not inject markup, mentions, or unbounded text into a channel.
-  return reference && /^[a-z0-9][a-z0-9_-]{0,127}$/iu.test(reference)
-    ? `${NO_VISIBLE_REPLY_FALLBACK_TEXT} Reference: ${reference}.`
-    : NO_VISIBLE_REPLY_FALLBACK_TEXT;
-}
-
 export const QUEUE_CAP_REJECTION_TEXT =
   "This message was not queued because the session queue is full. Please try again after the current response finishes.";
 

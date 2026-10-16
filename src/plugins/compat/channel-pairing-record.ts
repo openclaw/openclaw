@@ -17,7 +17,7 @@ export const CHANNEL_PAIRING_COMPAT_RECORD = {
   ],
   tests: [
     "src/plugins/compat/registry.test.ts",
-    "src/plugin-sdk/channel-pairing-allowlist.test.ts",
+    "test/type-contracts/channel-pairing-allowlist.ts",
     "src/pairing/pairing-allowlist.worker.test.ts",
   ],
   releaseNote:

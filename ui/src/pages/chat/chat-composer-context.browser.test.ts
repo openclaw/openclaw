@@ -6,7 +6,6 @@ import {
   disposeComposer,
   renderComposerInto,
 } from "./chat-composer.test-support.ts";
-import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "../../styles.css";
 import "../../styles/chat.ts";
 import "../../styles/chat/composer.css";

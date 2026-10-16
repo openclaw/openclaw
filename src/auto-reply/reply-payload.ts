@@ -272,6 +272,8 @@ export type ReplyPayloadMetadata = {
   assistantMediaFailures?: ReplyMediaFailure[];
   /** The runtime owns the transcript decision for this assistant payload. */
   assistantTranscriptOwned?: boolean;
+  /** The local source observer confirmed this model reply in committed chat history. */
+  localTranscriptDeliveryConfirmed?: true;
   /** Exact decoration added by normalization, not model-authored text. */
   responsePrefix?: string;
   /** Exact usage footer appended by the host. */
@@ -512,6 +514,18 @@ export function isReplyPayloadNonTerminalToolErrorWarning(payload: object): bool
 export function copyReplyPayloadMetadata<T extends object>(source: object, payload: T): T {
   const metadata = getReplyPayloadMetadata(source);
   return metadata ? setReplyPayloadMetadata(payload, metadata) : payload;
+}
+
+export function retainSilentFinalPayloads(payloads: readonly ReplyPayload[]): ReplyPayload[] {
+  return payloads.flatMap((payload) => {
+    if (payload.isError) {
+      return [payload];
+    }
+    const nonTextPayload = { ...payload, text: undefined };
+    return hasReplyPayloadContent(nonTextPayload)
+      ? [copyReplyPayloadMetadata(payload, nonTextPayload)]
+      : [];
+  });
 }
 
 /** Marks a host-owned payload as deliverable even when normal source replies are suppressed. */

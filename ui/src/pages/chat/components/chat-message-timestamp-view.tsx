@@ -1,4 +1,4 @@
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { asNullableRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
@@ -147,7 +147,13 @@ export function extractGroupMeta(
       output += callOutput;
       cacheRead += callCacheRead;
       cacheWrite += callCacheWrite;
-      maxPromptTokens = Math.max(maxPromptTokens, callInput + callCacheRead + callCacheWrite);
+      // A context marker holds the latest call; the counters may cover a whole multi-call turn.
+      const context = asOptionalRecord(asOptionalRecord(m.usage)?.contextUsage);
+      const callPromptTokens =
+        context?.state === "available" && typeof context.promptTokens === "number"
+          ? context.promptTokens
+          : callInput + callCacheRead + callCacheWrite;
+      maxPromptTokens = Math.max(maxPromptTokens, callPromptTokens);
     }
     // Producers write cost nested under usage.cost (the AssistantMessage
     // shape); a bare message.cost never exists, so reading only it left the

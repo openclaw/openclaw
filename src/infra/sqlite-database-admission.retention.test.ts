@@ -1,4 +1,4 @@
-import { EventEmitter, once } from "node:events";
+import { once } from "node:events";
 import { fstatSync, renameSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -7,6 +7,7 @@ import type { WorkerLifecycle } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
 import { withEngineStoreAdmission } from "./database-engine/admission-scope.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { PostgresSyncConnection } from "./postgres-sync/connection.js";
@@ -14,7 +15,6 @@ import { runPostgresTransactionSync } from "./postgres-sync/transaction.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import type { PostgresSqlConnection } from "./sql-connection.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
-import { readSqliteDatabaseGeneration } from "./sqlite-database-admission-record.js";
 import {
   beginSqliteDatabaseAdmissionOperation,
   discardSqliteDatabaseTransactionAdmissions,
@@ -61,61 +61,6 @@ function createDatabase(location: string) {
 function recordsFor(location: string) {
   return captureSqliteDatabaseAdmissions().filter((record) => record.location === location);
 }
-
-it.each([
-  { code: 0, references: 0, invalidates: false },
-  { code: 0, references: 1, invalidates: true },
-  { code: 1, references: 1, invalidates: true },
-  { code: undefined, references: 1, invalidates: true },
-])(
-  "settles worker exit $code with $references references without releasing siblings",
-  ({ code, references, invalidates }) => {
-    const location = path.join(tempDirs.make("sqlite-admission-worker-exit-"), "proof.sqlite");
-    const database = createDatabase(location);
-    const events = new EventEmitter<{ exit: [number | undefined] }>();
-    const worker: Pick<WorkerLifecycle, "threadId" | "once"> = Object.assign(events, {
-      threadId: 12345,
-    });
-    const reference = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
-    const sibling = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
-    sibling[0] = 1;
-    try {
-      const scopedToken = readSqliteDatabaseScopedWriteToken(database, "proof");
-      const record = recordsFor(location)[0]!;
-      const transferred = new Map(record.references);
-      reference[0] = references;
-      transferred.set(worker.threadId, reference.buffer);
-      transferred.set(worker.threadId + 1, sibling.buffer);
-      installSqliteDatabaseAdmissions([{ ...record, references: transferred }]);
-      const writeRevision = readSqliteDatabaseGeneration(record, "writeRevision");
-      const unscopedRevision = readSqliteDatabaseGeneration(record, "unscopedWriteRevision");
-      expect(scopedToken).toBeDefined();
-
-      trackSqliteDatabaseAdmissionWorker(worker);
-      events.emit("exit", code);
-
-      expect(readSqliteDatabaseGeneration(record, "writeRevision")).toBe(
-        writeRevision + Number(invalidates),
-      );
-      expect(readSqliteDatabaseGeneration(record, "unscopedWriteRevision")).toBe(
-        unscopedRevision + Number(invalidates),
-      );
-      expect(readSqliteDatabaseScopedWriteToken(database, "proof") === scopedToken).toBe(
-        !invalidates,
-      );
-      const remaining = recordsFor(location)[0]!;
-      expect(remaining.references.has(worker.threadId)).toBe(false);
-      expect(remaining.references.get(worker.threadId + 1)).toBe(sibling.buffer);
-      expect(Atomics.load(sibling, 0)).toBe(1);
-      expect(Atomics.load(reference, 0)).toBe(-1);
-      expect(database.prepare("SELECT value FROM proof").get()).toEqual({ value: 42 });
-    } finally {
-      Atomics.store(sibling, 0, 0);
-      database.close();
-      retireSqliteDatabaseAdmissionForPath(location);
-    }
-  },
-);
 
 it("retires the final closed handle's facts while preserving open siblings and descriptor custody", () => {
   const location = path.join(tempDirs.make("sqlite-admission-retention-"), "proof.sqlite");
@@ -381,7 +326,7 @@ it.each(["reference-first", "close-first", "explicit-retirement", "path-replaced
 );
 
 it.each([false, true])(
-  "retains later worker siblings until final close or exit (retained: %s)",
+  "retains sibling facts across worker exit but invalidates committed writes (retained: %s)",
   async (retained) => {
     const root = tempDirs.make("sqlite-admission-worker-retention-");
     const location = path.join(root, "proof.sqlite");
@@ -422,6 +367,8 @@ it.each([false, true])(
              const closed = openNodeSqliteDatabase(workerData.closedLocation);
              admitSqliteSchema(closed);
              closed.close();
+           } else if (command === "write") {
+             database.prepare("UPDATE proof SET value = 43").run();
            } else if (command === "close") {
              database.close();
            } else if (command === "retire") {
@@ -511,24 +458,30 @@ it.each([false, true])(
         value: 42,
         admissionId: getAdmittedSqliteSchemaFacts(database)?.admissionId,
       });
+      const beforeWrite = readSqliteDatabaseWriteTokenForPath(location);
+      const scopedBeforeWrite = readSqliteDatabaseScopedWriteToken(database, "proof");
+      expect(await command("write")).toEqual({
+        value: 43,
+        admissionId: getAdmittedSqliteSchemaFacts(database)?.admissionId,
+      });
+      expect(readSqliteDatabaseWriteTokenForPath(location)).not.toBe(beforeWrite);
+      expect(readSqliteDatabaseScopedWriteToken(database, "proof")).not.toBe(scopedBeforeWrite);
+      expect(database.prepare("SELECT value FROM proof").get()).toEqual({ value: 43 });
       const retiredOwner = worker.threadId;
       const stale = structuredClone(recordsFor(location));
       expect(stale[0]!.references.has(retiredOwner)).toBe(true);
       const beforeExit = readSqliteDatabaseWriteTokenForPath(location);
+      const scopedBeforeExit = readSqliteDatabaseScopedWriteToken(database, "proof");
       const closedBeforeExit = readSqliteDatabaseWriteTokenForPath(closedLocation);
       const unrelatedBeforeExit = readSqliteDatabaseWriteTokenForPath(unrelatedLocation);
       expect(beforeExit).toBeTypeOf("string");
       expect(closedBeforeExit).toBeTypeOf("string");
       expect(unrelatedBeforeExit).toBeTypeOf("string");
       await worker.terminate();
-      // Only a still-open handle can leave an unsettled receipt when its worker stops.
-      expect(readSqliteDatabaseWriteTokenForPath(location)).not.toBe(beforeExit);
+      expect(readSqliteDatabaseWriteTokenForPath(location)).toBe(beforeExit);
+      expect(readSqliteDatabaseScopedWriteToken(database, "proof")).toBe(scopedBeforeExit);
       expect(readSqliteDatabaseWriteTokenForPath(closedLocation)).toBe(closedBeforeExit);
       expect(readSqliteDatabaseWriteTokenForPath(unrelatedLocation)).toBe(unrelatedBeforeExit);
-      const scopedToken = readSqliteDatabaseScopedWriteToken(closedDatabase, "proof");
-      closedDatabase.prepare("UPDATE proof SET value = 43").run();
-      expect(readSqliteDatabaseScopedWriteToken(closedDatabase, "proof")).not.toBe(scopedToken);
-      expect(closedDatabase.prepare("SELECT value FROM proof").get()).toEqual({ value: 43 });
       const inherited = readSqliteDatabaseAdmissions(
         getEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY),
       )?.find((record) => record.location === location);
@@ -557,6 +510,28 @@ it.each([false, true])(
     }
   },
 );
+
+it("quarantine invalidates scoped receipts and admission facts with a live handle", () => {
+  const root = tempDirs.make("sqlite-admission-quarantine-");
+  const location = path.join(root, "proof.sqlite");
+  using database = createDatabase(location);
+  const beforeQuarantine = readSqliteDatabaseScopedWriteToken(database, "proof");
+  publishSqliteDatabaseAdmission(database, key, "healthy");
+  publishSqliteDatabaseAdmission(database, schemaKey, "admitted");
+
+  expect(
+    recordOpenClawDatabaseQuarantine({
+      env: { OPENCLAW_STATE_DIR: root },
+      path: location,
+      kind: "agent",
+      reason: "synthetic verified damage",
+    }),
+  ).toBe(true);
+
+  expect(readSqliteDatabaseScopedWriteToken(database, "proof")).not.toBe(beforeQuarantine);
+  expect(getSqliteDatabaseAdmission(database, key)).toBeUndefined();
+  expect(getSqliteDatabaseAdmission(database, schemaKey)).toBeUndefined();
+});
 
 const key = { name: "test.engine-admission", read: (value: unknown) => value };
 const schemaKey = { ...key, name: "test.engine-schema-admission", schemaDependent: true };

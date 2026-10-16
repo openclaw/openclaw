@@ -118,6 +118,11 @@ export async function buildClawProject(
     const clawMarkdown = await readSelectedProjectFile(project.root, "CLAW.md");
     assertValidatedBytes("CLAW.md", clawMarkdown, project.claw.snapshot.manifest);
     files.set("CLAW.md", clawMarkdown);
+    if (project.license) {
+      const license = await readSelectedProjectFile(project.root, "LICENSE");
+      assertValidatedBytes("LICENSE", license, project.license);
+      files.set("LICENSE", license);
+    }
     if (project.claw.packageBootstrap) {
       const bootstrap = await readSelectedProjectFile(project.root, "BOOTSTRAP.md");
       assertValidatedBytes("BOOTSTRAP.md", bootstrap, project.claw.packageBootstrap);

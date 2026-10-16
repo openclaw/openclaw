@@ -18,21 +18,25 @@ export function SkillLibrary(props: {
   library: SkillLibraryController;
   navigationActions: JSX.Element;
 }) {
+  // List receipts replace the snapshot; mutable editor drafts and feedback do not.
+  const list = createMemo(() => props.library.list);
+  const query = createMemo(() => props.library.query.toLowerCase().trim());
+  const scope = createMemo(() => props.library.view);
   const entries = createMemo(() => {
-    const library = props.library;
-    const list = library.list;
-    const query = library.query.toLowerCase().trim();
-    return (list?.entries ?? []).filter((entry) => {
+    const current = list();
+    const search = query();
+    const view = scope();
+    return (current?.entries ?? []).filter((entry) => {
       const scopeMatches =
-        library.view === "mine"
-          ? entry.ownerProfileId === list?.profileId
-          : library.view !== "team" || entry.shared || entry.ownerProfileId === null;
+        view === "mine"
+          ? entry.ownerProfileId === current?.profileId
+          : view !== "team" || entry.shared || entry.ownerProfileId === null;
       return (
         scopeMatches &&
-        (!query ||
+        (!search ||
           `${entry.slug} ${entry.name} ${entry.description} ${entry.ownerLabel}`
             .toLowerCase()
-            .includes(query))
+            .includes(search))
       );
     });
   });
@@ -222,12 +226,13 @@ function LibraryEditor(props: { library: SkillLibraryController }) {
   const draft = () => props.library.draft!;
   const disabled = () => !props.library.canEdit || props.library.busy || props.library.loading;
   const support = () => draft().files.find((file) => file.path === draft().selectedFile);
-  const text = () =>
+  const text = createMemo(() =>
     draft().selectedFile === "SKILL.md"
       ? draft().content
       : support()
         ? libraryFileText(support()!)
-        : null;
+        : null,
+  );
   const mutationLocked = () => disabled() || draft().dirty;
   const changeText = (value: string) => {
     if (disabled()) {

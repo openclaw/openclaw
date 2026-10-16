@@ -12,7 +12,7 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
+import { normalizeVoiceCallConfig, type VoiceCallConfig } from "./config.js";
 import { CallManager } from "./manager.js";
 import {
   createTestStorePath,
@@ -28,7 +28,7 @@ import type { CallRecord, WebhookContext, WebhookParseOptions } from "./types.js
 import { VoiceCallWebhookServer } from "./webhook.js";
 
 const createConfig = (overrides: Partial<VoiceCallConfig> = {}): VoiceCallConfig => {
-  const base = VoiceCallConfigSchema.parse({
+  const base = normalizeVoiceCallConfig({
     enabled: true,
     provider: "plivo",
     fromNumber: "+15550000000",

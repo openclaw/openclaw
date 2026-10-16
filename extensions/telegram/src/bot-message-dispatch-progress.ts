@@ -394,7 +394,9 @@ export async function handleItemEvent(
       turn.progressCompositor.resetActivity();
     }
     rendered =
-      (payload.kind === "preamble" || (await canPushToolProgress(turn))) &&
+      (payload.kind === "preamble" ||
+        payload.kind === "model-wait" ||
+        (await canPushToolProgress(turn))) &&
       (await turn.progressCompositor.pushItemEvent(payload));
   });
   return rendered;

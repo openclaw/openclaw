@@ -10,15 +10,13 @@ import type {
 } from "../../api/types.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { AgentEmojiPicker } from "../../components/agent-emoji-picker.tsx";
-import {
-  renderDecisionModelPicker,
-  type DecisionModelEntry,
-} from "../../components/decision-model-picker.ts";
-import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
-import { renderModelPicker } from "../../components/model-picker.ts";
+import type { DecisionModelEntry } from "../../components/model-picker-options.ts";
 import { MultiSelect } from "../../components/multi-select.tsx";
-import "../../components/tooltip.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status-state.ts";
+import "../../components/tooltip.ts";
+import { DecisionModelPicker } from "../../components/solid/decision-model-picker.tsx";
+import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
+import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { PanelRefreshStatus as PanelRefreshNotice } from "../../components/solid/panel-refresh-status.tsx";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import {
@@ -37,9 +35,8 @@ import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { IdentityAvatarController } from "../../lib/identity-avatar-loader.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
+import { ControllerHost } from "../../lib/subscriptions-controller.ts";
 import { uploadsEnabled } from "../../lib/uploads.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
-import { ControllerHost } from "../../lit/subscriptions-controller.ts";
 import { AgentConfigButtons, type AgentConfigActions } from "./config-actions.tsx";
 import { renderAgentPanelFacts } from "./panel-ui.tsx";
 
@@ -130,6 +127,33 @@ export function AgentOverview(
   );
   const effectivePrimary = createMemo(() => entryPrimary() ?? defaultPrimary() ?? null);
   const selectedPrimary = createMemo(() => (isDefault() ? effectivePrimary() : entryPrimary()));
+  const primaryModelOptions = createMemo(() => {
+    const inherited = defaultPrimary();
+    return [
+      {
+        value: "",
+        label: isDefault()
+          ? t("agents.overview.notSet")
+          : inherited
+            ? t("agents.overview.inheritDefaultModel", { model: inherited })
+            : t("agents.overview.inheritDefault"),
+      },
+      ...buildModelOptions(
+        configForm(),
+        effectivePrimary() ?? undefined,
+        params.modelCatalog,
+        params.agent.id,
+      ),
+    ];
+  });
+  const decisionModel = createMemo(() => {
+    const value = config().entry?.decisionModel;
+    return typeof value === "string" ? value : undefined;
+  });
+  const inheritedDecisionModel = createMemo(() => {
+    const value = config().defaults?.decisionModel;
+    return typeof value === "string" ? value : undefined;
+  });
   const modelFallbacks = createMemo(
     () =>
       resolveEffectiveModelFallbacks(config().entry?.model, config().defaults?.model) ??
@@ -228,20 +252,15 @@ export function AgentOverview(
         <div class="settings-row settings-row--stacked">
           <div class="agent-identity-editor">
             <span class="agent-identity-editor__avatar" aria-hidden="true">
-              <LitContent
-                render={() =>
-                  renderAgentIdentityAvatar(
-                    {
-                      id: params.agent.id,
-                      avatar: identityAvatarUrl(),
-                      textAvatar:
-                        identityDraft().emoji ??
-                        resolveAgentTextAvatar(params.agent, params.agentIdentity),
-                    },
-                    "",
-                    identityImageError(),
-                  )
-                }
+              <AgentIdentityAvatar
+                agent={{
+                  id: params.agent.id,
+                  avatar: identityAvatarUrl(),
+                  textAvatar:
+                    identityDraft().emoji ??
+                    resolveAgentTextAvatar(params.agent, params.agentIdentity),
+                }}
+                onImageError={identityImageError()}
               />
             </span>
             <div class="agent-identity-editor__content">
@@ -381,35 +400,13 @@ export function AgentOverview(
         <SettingsRow
           title={primaryModelLabel()}
           control={
-            <LitContent
-              render={() => {
-                const inherited = defaultPrimary();
-                return renderModelPicker({
-                  label: primaryModelLabel(),
-                  value: selectedPrimary() ?? "",
-                  options: [
-                    {
-                      value: "",
-                      label: isDefault()
-                        ? t("agents.overview.notSet")
-                        : inherited
-                          ? t("agents.overview.inheritDefaultModel", {
-                              model: inherited,
-                            })
-                          : t("agents.overview.inheritDefault"),
-                    },
-                    ...buildModelOptions(
-                      configForm(),
-                      effectivePrimary() ?? undefined,
-                      params.modelCatalog,
-                      params.agent.id,
-                    ),
-                  ],
-                  disabled: disabled(),
-                  onChange: (value) => params.onModelChange(params.agent.id, value || null),
-                  onOpen: params.onModelCatalogOpen,
-                });
-              }}
+            <ModelPicker
+              label={primaryModelLabel()}
+              value={selectedPrimary() ?? ""}
+              options={primaryModelOptions()}
+              disabled={disabled()}
+              onChange={(value) => params.onModelChange(params.agent.id, value || null)}
+              onOpen={params.onModelCatalogOpen}
             />
           }
         />
@@ -417,26 +414,14 @@ export function AgentOverview(
           title={t("chat.modelControls.decisionLabel")}
           description={t("chat.modelControls.decisionAgentHelp")}
           control={
-            <LitContent
-              render={() => {
-                const agentConfig = config();
-                const decisionModel = agentConfig.entry?.decisionModel;
-                const inheritedDecisionModel = agentConfig.defaults?.decisionModel;
-                return renderDecisionModelPicker({
-                  id: "agent-decision-model",
-                  models: params.decisionModels,
-                  value: typeof decisionModel === "string" ? decisionModel : undefined,
-                  inherit: {
-                    model:
-                      typeof inheritedDecisionModel === "string"
-                        ? inheritedDecisionModel
-                        : undefined,
-                  },
-                  disabled: disabled(),
-                  onChange: (value) => params.onDecisionModelChange(params.agent.id, value),
-                  onOpen: params.onModelCatalogOpen,
-                });
-              }}
+            <DecisionModelPicker
+              id="agent-decision-model"
+              models={params.decisionModels}
+              value={decisionModel()}
+              inherit={{ model: inheritedDecisionModel() }}
+              disabled={disabled()}
+              onChange={(value) => params.onDecisionModelChange(params.agent.id, value)}
+              onOpen={params.onModelCatalogOpen}
             />
           }
         />

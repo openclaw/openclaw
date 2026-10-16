@@ -125,7 +125,8 @@ function toolSchemaHook<K extends "normalizeToolSchemas" | "inspectToolSchemas">
         : ensureProviderRuntimePluginHandle(params).plugin;
     // SAFETY: Hook derives both argument and result from the selected tool-schema method.
     const hook = plugin?.[name] as ((context: Parameters<Hook>[0]) => ReturnType<Hook>) | undefined;
-    return hook?.call(plugin, params.context) ?? undefined;
+    // Avoid invoking the managed function's own call wrapper.
+    return hook ? (Reflect.apply(hook, plugin, [params.context]) ?? undefined) : undefined;
   };
 }
 

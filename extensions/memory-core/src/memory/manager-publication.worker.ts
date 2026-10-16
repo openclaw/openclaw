@@ -13,7 +13,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { readOpenClawAgentDatabaseIdentity } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
-  assertTransactionUsable,
+  bindSqliteWorkerDatabase,
   admitSqliteSchema,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -54,6 +54,7 @@ import {
   MEMORY_INDEX_WRITE_SCOPE,
 } from "./manager-publication-task.js";
 import { MEMORY_INDEX_META_KEY, readMemoryDatabaseFacts } from "./manager-retrieval-read.js";
+import { admitMemoryVectorIndex } from "./manager-search-knn.js";
 import {
   assertMemoryShadowIdentity,
   readMemoryShadowIdentity,
@@ -201,6 +202,7 @@ function createPublicationBackend(
   ownsConnection: boolean,
   admit: (stage: "transaction" | "commit") => void,
 ) {
+  const vectorIndex = admitMemoryVectorIndex(db);
   // Agent handles are admitted by the database owner; private shadows are checked once on open.
   if (!("kind" in input)) {
     assertMemoryShadowIdentity(databasePath, input.fileIdentity);
@@ -355,7 +357,7 @@ function createPublicationBackend(
         .onConflict((conflict) => conflict.column("key").doUpdateSet({ value })),
     );
   };
-  return {
+  return bindSqliteWorkerDatabase<MemoryPublicationOperations>(db, {
     async prepare(command) {
       if (command.type !== "vector.prepare") {
         return;
@@ -372,12 +374,6 @@ function createPublicationBackend(
         throw new Error(loaded.error ?? "unknown sqlite-vec load error");
       }
       loadedExtensions.set(db, loaded.extensionPath);
-    },
-    assertSettled() {
-      assertTransactionUsable(db);
-      if (!db.isOpen || db.isTransaction) {
-        throw new Error("Memory publication left an unsettled native connection");
-      }
     },
     execute(command) {
       if (command.type === "connection.inspect") {
@@ -540,11 +536,8 @@ function createPublicationBackend(
           write(() => {
             stageMemoryIndexSchemaExtension(db);
             stageOpenClawAgentDatabaseSchemaExtension(db);
-            db.exec(`DROP TABLE IF EXISTS ${MEMORY_INDEX_VECTOR_TABLE}`);
-            db.exec(
-              `CREATE VIRTUAL TABLE ${MEMORY_INDEX_VECTOR_TABLE} USING vec0(\n` +
-                `  id TEXT PRIMARY KEY,\n  embedding FLOAT[${dimensions}]\n)`,
-            );
+            vectorIndex.capability.drop(vectorIndex.index);
+            vectorIndex.capability.create(vectorIndex.index, dimensions);
             if (meta && !meta.vectorDims && !hasIndexedChunks) {
               writeMeta(JSON.stringify({ ...meta, vectorDims: dimensions }));
             }
@@ -628,7 +621,7 @@ function createPublicationBackend(
     close() {
       discard();
     },
-  } satisfies SqliteWorkerBackend<MemoryPublicationOperations>;
+  });
 }
 
 function* readPublicationRows<Row extends MemorySourceIndexRow | MemoryEmbeddingCacheEntry>(

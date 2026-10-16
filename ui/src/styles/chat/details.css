@@ -536,11 +536,11 @@ openclaw-chat-details-progress {
 }
 .chat-details__meter::-webkit-meter-optimum-value {
   border-radius: 4px;
-  background: var(--accent);
+  background: currentColor;
 }
 .chat-details__meter::-moz-meter-bar {
   border-radius: 4px;
-  background: var(--accent);
+  background: currentColor;
 }
 .chat-details__context-budget {
   display: flex;

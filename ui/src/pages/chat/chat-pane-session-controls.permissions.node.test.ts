@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { createOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports";
-import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import type { Model } from "../../../../src/llm/types.js";
@@ -9,6 +8,7 @@ import { buildProviderStreamFamilyHooks } from "../../../../src/plugin-sdk/provi
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
+import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import {
@@ -181,7 +181,7 @@ function createControlsFixture(
     canSelectFull: scope === "operator.admin",
   });
   const container = document.createElement("div");
-  render(controls.composerControls, container);
+  renderPaneLegacyContent(controls.composerControls, container);
   return { state, selectedSession, access, controls, container };
 }
 
@@ -198,7 +198,7 @@ describe("chat pane model-setting permissions", () => {
           defaults: { models: { "openai/gpt-test-a": { params: { serviceTier: tier } } } },
         },
       };
-      render(renderControls(state).composerControls, container);
+      renderPaneLegacyContent(renderControls(state).composerControls, container);
       const standard = container.querySelector<HTMLButtonElement>(
         '[data-chat-speed-option="off"]',
       )!;
@@ -235,7 +235,7 @@ describe("chat pane model-setting permissions", () => {
         service_tier: "default",
       });
       state.request.mockClear();
-      render(renderControls(state).composerControls, container);
+      renderPaneLegacyContent(renderControls(state).composerControls, container);
       container.querySelector<HTMLButtonElement>('[data-chat-speed-option="off"]')!.click();
       expect(state.request).not.toHaveBeenCalled();
     },
@@ -258,7 +258,7 @@ describe("chat pane model-setting permissions", () => {
         available: true,
         serviceTiers: ["default", "priority", "ultrafast"],
       };
-      render(renderControls(state).composerControls, container);
+      renderPaneLegacyContent(renderControls(state).composerControls, container);
       container
         .querySelector<HTMLButtonElement>('[data-chat-speed-option="' + value + '"]')!
         .click();

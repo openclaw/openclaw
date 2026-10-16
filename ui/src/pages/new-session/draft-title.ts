@@ -2,7 +2,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import type { ControllerHost } from "../../lit/subscriptions-controller.ts";
+import type { ControllerHost } from "../../lib/subscriptions-controller.ts";
 import { isTarget, routeKey } from "./catalog-target.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";

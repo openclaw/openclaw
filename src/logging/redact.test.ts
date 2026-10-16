@@ -800,12 +800,12 @@ describe("redactSensitiveLines", () => {
     expect(redactSensitiveLines(lines, resolved)).toEqual(lines);
   });
 
-  it("redactSensitiveLines keeps registered secrets when custom regexes are rejected", () => {
+  it("redactSensitiveLines keeps registered and default protection when custom regexes are rejected", () => {
     const resolved = resolveRedactOptions({ mode: "tools", patterns: ["/(a+)+$/"] });
     const secret = "opaque-registry-value-1234567890";
     registerSecretValueForRedaction(secret);
     expect(redactSensitiveLines([`TOKEN=abcdef1234567890ghij ${secret}`], resolved)).toEqual([
-      "TOKEN=abcdef1234567890ghij opaque…7890",
+      "TOKEN=*** opaque…7890",
     ]);
   });
 

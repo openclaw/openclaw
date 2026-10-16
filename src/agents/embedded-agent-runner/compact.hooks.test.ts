@@ -815,22 +815,28 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   );
 
   it.each([
-    { execMode: "deny", permissionMode: "read-only", expectedExecMode: "deny" },
-    { execMode: "allowlist", permissionMode: "guarded", expectedExecMode: "ask" },
-    { execMode: "full", permissionMode: "full", expectedExecMode: "full" },
+    { execMode: "deny", permissionMode: "read-only", expectedExecMode: "deny", rootless: false },
+    { execMode: "allowlist", permissionMode: "guarded", expectedExecMode: "ask", rootless: false },
+    { execMode: "full", permissionMode: "full", expectedExecMode: "full", rootless: false },
+    { execMode: undefined, permissionMode: "workspace", expectedExecMode: "auto", rootless: true },
   ] as const)(
     "uses the final $permissionMode permission policy for compaction tools",
-    async ({ execMode, permissionMode, expectedExecMode }) => {
+    async ({ execMode, permissionMode, expectedExecMode, rootless }) => {
+      const workspaceDir = rootless
+        ? compactionFixture.makeTempDir("openclaw-rootless-compaction-permission-")
+        : join(TEST_WORKSPACE_DIR, "workspace");
+      const root = rootless ? await realpath(workspaceDir) : workspaceDir;
       await compactEmbeddedAgentSessionDirect(
         wrappedCompactionArgs({
-          workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
-          permissionMode: "full",
-          sessionRoot: join(TEST_WORKSPACE_DIR, "workspace"),
-          execOverrides: { mode: execMode },
+          workspaceDir,
+          requireWorkspaceOnly: rootless || undefined,
+          permissionMode: rootless ? "workspace" : "full",
+          sessionRoot: rootless ? undefined : root,
+          execOverrides: execMode ? { mode: execMode } : undefined,
           sessionEntry: {
             sessionId: TEST_SESSION_ID,
-            permissionMode: "full",
-            sessionRoot: join(TEST_WORKSPACE_DIR, "workspace"),
+            permissionMode: rootless ? "workspace" : "full",
+            sessionRoot: rootless ? undefined : root,
           },
         }),
       );
@@ -838,32 +844,15 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       const toolOptions = expectRecordFields(mockCallArg(createOpenClawCodingToolsMock), {
         sessionPermissionPolicy: {
           mode: permissionMode,
-          root: join(TEST_WORKSPACE_DIR, "workspace"),
+          root,
         },
       });
       expect(toolOptions.exec).toEqual(expect.objectContaining({ mode: expectedExecMode }));
+      if (rootless) {
+        expect(toolOptions.requireWorkspaceOnly).toBe(true);
+      }
     },
   );
-
-  it("defaults rootless compaction permissions to the canonical agent workspace", async () => {
-    const workspaceDir = compactionFixture.makeTempDir("openclaw-rootless-compaction-permission-");
-    const canonicalWorkspace = await realpath(workspaceDir);
-
-    await compactEmbeddedAgentSessionDirect(
-      wrappedCompactionArgs({
-        workspaceDir,
-        requireWorkspaceOnly: true,
-        permissionMode: "workspace",
-        sessionEntry: { sessionId: TEST_SESSION_ID, permissionMode: "workspace" },
-      }),
-    );
-
-    const toolOptions = expectRecordFields(mockCallArg(createOpenClawCodingToolsMock), {
-      sessionPermissionPolicy: { mode: "workspace", root: canonicalWorkspace },
-      requireWorkspaceOnly: true,
-    });
-    expect(toolOptions.exec).toEqual(expect.objectContaining({ mode: "auto" }));
-  });
 
   it("keeps manifest-profiled plugin tools executable during compaction", async () => {
     const toolName = "profiled_plugin_tool";
@@ -1219,25 +1208,24 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       expect(run.stream).toHaveBeenCalledOnce();
     });
 
-    it("stops a request one window after its last output delta despite empty keepalives", async () => {
-      const run = await compactWhileStreaming(5, "keepalive");
-      await vi.advanceTimersByTimeAsync(5 * deltaEveryMs + windowMs - 1);
-      expect(run.settled()).toBe(false);
-      await vi.advanceTimersByTimeAsync(1);
-
-      await expect(run.pending).resolves.toMatchObject({
-        ok: false,
-        compacted: false,
-        reason: expect.stringContaining("timed out"),
-      });
-      expect(run.stream).toHaveBeenCalledOnce();
-    });
-
-    it("stops a stream that never goes silent one window before the operation ceiling", async () => {
-      // After 5 s of setup, the last delta before the cutoff (265 s) leaves less than a window.
-      const prepMs = 5_000;
-      const run = await compactWhileStreaming(Number.POSITIVE_INFINITY, "done", { prepMs });
-      await vi.advanceTimersByTimeAsync(summaryCutoffMs - prepMs - 1);
+    it.each([
+      {
+        boundary: "inactivity despite empty keepalives",
+        deltas: 5,
+        end: "keepalive",
+        prepMs: 0,
+        elapsed: 5 * deltaEveryMs + windowMs,
+      },
+      {
+        boundary: "operation ceiling despite continuous output",
+        deltas: Number.POSITIVE_INFINITY,
+        end: "done",
+        prepMs: 5_000,
+        elapsed: summaryCutoffMs - 5_000,
+      },
+    ] as const)("stops at the $boundary boundary", async ({ deltas, end, prepMs, elapsed }) => {
+      const run = await compactWhileStreaming(deltas, end, { prepMs });
+      await vi.advanceTimersByTimeAsync(elapsed - 1);
       expect(run.settled()).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
 

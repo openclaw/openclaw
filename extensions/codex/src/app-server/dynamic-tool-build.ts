@@ -251,10 +251,7 @@ export async function buildDynamicTools(
       emitBeforeToolCallDiagnostics: false,
       modelProvider: params.model.provider,
       modelId: params.modelId,
-      modelCompat:
-        params.model.compat && typeof params.model.compat === "object"
-          ? (params.model.compat as OpenClawCodingToolsOptions["modelCompat"])
-          : undefined,
+      modelCompat: params.model.compat,
       modelApi: params.model.api,
       modelContextWindowTokens: params.model.contextWindow,
       delegationCapability: params.delegationCapability,
@@ -518,6 +515,9 @@ export function shouldEnableCodexAppServerNativeToolSurface(
     params.pluginHarnessToolPolicyRestricted === true ||
     isCodexMemoryFlushRun(params) ||
     params.disableTools ||
+    // Strict one-shots need the host tool owner's joined process cleanup.
+    // Native command completion cannot certify retired descendant settlement.
+    params.oneShotCliRun === true ||
     // Codex's environment policy is a serialized overlay, not a launch binding.
     // Let the common host tools own credentials, approvals, and process lifetime.
     params.hostCapabilities.preparedEnvironment?.().hostExecutionRequired === true

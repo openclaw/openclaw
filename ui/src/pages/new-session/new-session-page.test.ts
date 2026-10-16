@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n/index.ts";
-import { settleWebAwesome } from "../../test-helpers/web-awesome.ts";
 import * as attachmentInputs from "../chat/components/chat-attachment-inputs.tsx";
 import type { ChatDetailPanel } from "../chat/components/chat-detail-panel.tsx";
 import { NewSessionDictationControl } from "./composer-dictation-control.ts";
@@ -296,7 +295,7 @@ describe("new session draft route ownership", () => {
       targets: HTMLElement[];
       expected: readonly Destination[];
       openDialog?: boolean;
-      openDropdown?: boolean;
+      openMenu?: boolean;
     };
     const append = <T extends HTMLElement>(element: T): T => page.appendChild(element);
     const main = append(document.createElement("main"));
@@ -304,10 +303,10 @@ describe("new session draft route ownership", () => {
     const button = append(document.createElement("button"));
     const link = append(document.createElement("a"));
     link.href = "#target";
-    const menu = append(document.createElement("wa-dropdown")) as HTMLElement & { open: boolean };
-    const menuTrigger = menu.appendChild(document.createElement("button"));
-    menuTrigger.slot = "trigger";
-    const menuItem = menu.appendChild(document.createElement("wa-dropdown-item"));
+    const menu = append(document.createElement("div"));
+    menu.setAttribute("role", "menu");
+    menu.popover = "manual";
+    const menuItem = menu.appendChild(document.createElement("button"));
     menuItem.setAttribute("role", "menuitemradio");
     menuItem.tabIndex = -1;
     const dialog = append(document.createElement("dialog"));
@@ -338,13 +337,13 @@ describe("new session draft route ownership", () => {
         name: "menuitem",
         targets: [menuItem],
         expected: ["composer", "overlay", "overlay", "overlay", "overlay"],
-        openDropdown: true,
+        openMenu: true,
       },
       {
-        name: "open wa-dropdown",
+        name: "open native menu",
         targets: [main],
         expected: ["composer", "overlay", "overlay", "overlay", "overlay"],
-        openDropdown: true,
+        openMenu: true,
       },
       { name: "dialog", targets: [dialogButton], expected: overlay, openDialog: true },
       {
@@ -358,9 +357,8 @@ describe("new session draft route ownership", () => {
     for (const row of routing) {
       for (const target of row.targets) {
         for (const [index, key] of keys.entries()) {
-          menu.open = row.openDropdown === true;
+          menu.togglePopover(row.openMenu === true);
           dialog.open = row.openDialog === true;
-          await settleWebAwesome(menu.parentElement!);
           target.focus();
           target.dispatchEvent(
             new KeyboardEvent("keydown", { key, bubbles: true, composed: true }),

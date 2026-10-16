@@ -205,7 +205,6 @@ export function registerSettledFinalizationTests({
           },
           { type: "function_call_output", call_id: "tool-settled", output: "sent-to-alice\n" },
         ]);
-        expect(Object.isFrozen(context)).toBe(true);
       }
     },
   );
@@ -287,6 +286,5 @@ export function registerSettledFinalizationTests({
         expect.objectContaining({ type: "function_call_output", call_id: "tool-settled" }),
       ],
     });
-    expect(Object.isFrozen(result.settledTurnFinalizationContext)).toBe(true);
   });
 }

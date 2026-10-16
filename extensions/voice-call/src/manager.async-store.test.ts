@@ -18,7 +18,7 @@ import type { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import plugin from "../index.js";
-import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
+import { normalizeVoiceCallConfig, type VoiceCallConfig } from "./config.js";
 import { CallManager } from "./manager.js";
 import { createTestStorePath, FakeProvider, makePersistedCall } from "./manager.test-harness.js";
 import { findCallInStore } from "./manager/store.js";
@@ -162,7 +162,7 @@ async function withDelayedStore(
     },
   });
   const provider = fixtureOptions.provider ?? new FakeProvider();
-  const config = VoiceCallConfigSchema.parse({
+  const config = normalizeVoiceCallConfig({
     provider: provider.name,
     realtime: { enabled: fixtureOptions.realtime ?? false },
     fromNumber: "+15550000000",

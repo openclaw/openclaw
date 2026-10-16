@@ -1,6 +1,13 @@
 // Mirrors successful outbound payloads into the configured session transcript.
-import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
+import { resolveSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
+import {
+  getOwnedSessionTranscriptWriterFence,
+  runWithoutOwnedSessionTranscriptWrites,
+} from "../../config/sessions/transcript-write-context.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
+import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { formatErrorMessage } from "../errors.js";
 import type { DeliverOutboundPayloadsCoreParams } from "./deliver-contracts.js";
@@ -36,28 +43,46 @@ export async function mirrorDeliveredPayloads(params: {
     );
   // Transcript mirroring is best-effort bookkeeping after platform send.
   // Keep mirror failures non-fatal so callers do not retry an already-sent payload.
-  try {
-    const { appendAssistantMessageToSessionTranscript } = await loadTranscriptRuntime();
-    // Fence against the session this mirror lands in, not whichever run is delivering:
-    // a cross-session delivery would otherwise carry the sending run's writer claim.
-    const writerFence = getOwnedSessionTranscriptWriterFence({ sessionKey: mirror.sessionKey });
-    const mirrorResult = await appendAssistantMessageToSessionTranscript({
-      agentId: mirror.agentId,
-      sessionKey: mirror.sessionKey,
-      expectedSessionId: mirror.expectedSessionId,
-      ...(writerFence?.expectedLifecycleRevision !== undefined
-        ? { expectedLifecycleRevision: writerFence.expectedLifecycleRevision }
-        : {}),
-      ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
-      ...mirrorContent,
-      idempotencyKey: mirror.idempotencyKey,
-      deliveryMirror: mirror.deliveryMirror,
-      config: params.delivery.cfg,
-    });
-    if (!mirrorResult.ok) {
-      warnFailure(mirrorResult.reason);
+  const append = async () => {
+    try {
+      const { appendAssistantMessageToSessionTranscript } = await loadTranscriptRuntime();
+      // Fence against the session this mirror lands in, not whichever run is delivering:
+      // a cross-session delivery would otherwise carry the sending run's writer claim.
+      const writerFence = getOwnedSessionTranscriptWriterFence({ sessionKey: mirror.sessionKey });
+      const mirrorResult = await appendAssistantMessageToSessionTranscript({
+        agentId: mirror.agentId,
+        sessionKey: mirror.sessionKey,
+        expectedSessionId: mirror.expectedSessionId,
+        ...(writerFence?.expectedLifecycleRevision !== undefined
+          ? { expectedLifecycleRevision: writerFence.expectedLifecycleRevision }
+          : {}),
+        ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
+        ...mirrorContent,
+        idempotencyKey: mirror.idempotencyKey,
+        deliveryMirror: mirror.deliveryMirror,
+        config: params.delivery.cfg,
+      });
+      if (!mirrorResult.ok) {
+        warnFailure(mirrorResult.reason);
+      }
+    } catch (err) {
+      warnFailure(formatErrorMessage(err));
     }
-  } catch (err) {
-    warnFailure(formatErrorMessage(err));
+  };
+  if (mirror.deferToSessionLane) {
+    // Do not await the requester lane: its turn can be waiting for this delivery.
+    // Keep shutdown custody, but discard the sender's work scope and writer claim.
+    const releaseRootWork = retainGatewayRootWorkAdmissionContinuation();
+    void runOutsideAsyncWorkScope(() =>
+      enqueueCommandInLane(
+        resolveSessionLane(mirror.sessionKey),
+        () => runWithoutOwnedSessionTranscriptWrites(append),
+        { taskIdentity: { taskKind: "delivery-mirror", sessionKey: mirror.sessionKey } },
+      ),
+    )
+      .catch((error: unknown) => warnFailure(formatErrorMessage(error)))
+      .finally(() => releaseRootWork?.());
+    return;
   }
+  await append();
 }

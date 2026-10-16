@@ -15,6 +15,16 @@ resume them. Recovery is always on. Exhausted infrastructure retries, or a
 missing durable message-action authority claim, may tombstone one session
 until you inspect or replace it.
 
+Every Gateway process shutdown preserves eligible unfinished turns, including a
+plain `SIGTERM`, a systemd or launchd service stop/restart, and
+`openclaw gateway stop`. A Gateway stopped today resumes that work when it starts
+tomorrow, without a new user message. Shutdown uses the same interruption and
+recovery marking as a managed restart, with the existing drain deadlines.
+Explicit session Stop/cancel remains terminal. The crash-loop breaker, recovery
+retry budgets, current-authority checks, and archived/reset exclusions still apply.
+In-flight cron occurrences keep their existing restart treatment; this does not
+add automatic continuation of an interrupted occurrence.
+
 Inter-session steering updates remain context for the executing turn. When that
 turn retains a Control UI, channel, or authenticated operator source claim,
 recovery uses the claim rather than treating the latest steering message as a new
@@ -45,16 +55,17 @@ that scan.
 
 ## What survives a restart
 
-| State                          | Storage                                            | Behavior across restart                                                 |
-| ------------------------------ | -------------------------------------------------- | ----------------------------------------------------------------------- |
-| Conversation history           | Per-agent SQLite database                          | Untouched; sessions continue from the stored transcript                 |
-| Accepted Control UI follow-ups | Per-agent SQLite pending inputs and browser outbox | Matching interrupted inputs are re-admitted when the browser reconnects |
-| Interrupted main-session turn  | Per-agent SQLite session row and transcript        | Automatically resumed or reconciled a few seconds after startup         |
-| Subagent runs                  | SQLite (shared state database)                     | Interrupted runs settle; the parent decides how to continue             |
-| Queued outbound deliveries     | SQLite delivery queue                              | Drained after restart; undelivered replies are retried                  |
-| Scheduled (cron) jobs          | SQLite cron store                                  | Schedules persist; the scheduler re-arms on boot                        |
-| Restart continuation           | SQLite restart sentinel                            | One-shot follow-up dispatched to the session that asked for the restart |
-| Gateway terminal PTYs          | Process memory                                     | End with the old process; terminal sessions are not recovered           |
+| State                          | Storage                                                | Behavior across restart                                                   |
+| ------------------------------ | ------------------------------------------------------ | ------------------------------------------------------------------------- |
+| Conversation history           | Per-agent SQLite database                              | Untouched; sessions continue from the stored transcript                   |
+| Accepted Control UI follow-ups | Per-agent SQLite pending inputs and browser outbox     | Matching interrupted inputs are re-admitted when the browser reconnects   |
+| Interrupted main-session turn  | Per-agent SQLite session row and transcript            | Automatically resumed or reconciled a few seconds after startup           |
+| Subagent runs                  | SQLite (shared state database)                         | Interrupted runs settle; the parent decides how to continue               |
+| Queued outbound deliveries     | SQLite delivery queue                                  | Drained after restart; undelivered replies are retried                    |
+| Scheduled (cron) jobs          | SQLite cron store                                      | Schedules persist; the scheduler re-arms on boot                          |
+| Restart continuation           | SQLite restart sentinel                                | One-shot follow-up dispatched to the session that asked for the restart   |
+| Background exec processes      | Process memory; notification obligation in session row | Processes end; eligible owning sessions wake once with an unknown outcome |
+| Gateway terminal PTYs          | Process memory                                         | End with the old process; terminal sessions are not recovered             |
 
 The Control UI retains accepted text and attachments in its outbox until the
 Gateway confirms transcript consumption. After reconnecting, it checks the saved
@@ -62,6 +73,19 @@ receipt before resubmitting an interrupted input through normal authentication
 and session admission. The old queue and execution authority are never reused.
 This preserves each browser outbox's order without submitting already-consumed
 messages again. Different browsers can reconnect in a different order.
+
+Requests refused before dispatch and chat sends interrupted while waiting for
+session admission return a retryable `UNAVAILABLE` error with
+`details.reason: "gateway-restarting"`. A restart does not turn an unstarted
+message into a terminal Stop result. The Control UI and native chat outboxes
+retain the original message ID and retry after the Gateway becomes available.
+Native Apple live sends with attachments restore the draft for manual retry;
+already queued attachments retain their outbox recovery.
+
+A disconnected RPC may already have performed its work. Clients reconcile
+accepted or uncertain sends through their existing receipts and history rather
+than automatically replaying every pending RPC. Already running main-session
+turns use the recovery owner described below; the drain budget is unchanged.
 
 Accepted Control UI input is committed to its admitted source session before ACP
 execution or question consumption. If the conversation routes to a bound ACP
@@ -310,7 +334,8 @@ and up to another 5 seconds before systemd's deadline. For a requested restart, 
 shutdown deadline. A shorter supervisor timeout also caps requested restart waits.
 
 An ordinary stop (including `systemctl restart` without a managed restart intent)
-gives active runs at most 20 seconds to finish before cancelling execution. Final
+gives active runs at most 20 seconds to finish before recording recovery and
+interrupting execution. Unfinished tasks remain eligible for the next startup. Final
 chat writes, worktree lease release, checkpointing, and database close retain the
 remaining native shutdown budget. Shutdown settles received work and stop hooks
 before full harness disposal, then joins worktree leases before worker retirement,
@@ -889,16 +914,20 @@ clear this residue from older sessions, so it cannot block a completed subagent'
 requester turn. Interrupted work and pending delivery keep their recovery custody.
 
 After the durable budget is exhausted, the session is tombstoned instead of
-looping forever. Inspect the failed session and use `/new` or `/reset` to start a
-replacement. `openclaw doctor --fix` can repair a stale aborted flag that
-conflicts with a tombstone, but it does not re-enable that recovery cycle.
+looping forever. The unfinished task remains available: inspect the failed
+session and use **Resume** in WebChat to continue in place with current operator
+authority. In other channels, `/new` or `/reset` starts a replacement.
+`openclaw doctor --fix` can repair a stale aborted flag that conflicts with a
+tombstone, but it does not re-enable that automatic recovery cycle. See
+[Session recovery](/concepts/session#gateway-restart-recovery) for tool-safety restrictions
+and the CLI-runtime replacement fallback.
 
 If you message the failed session again in a channel, OpenClaw sends a short
 recovery reminder through that channel and logs each rejected message at warn
 level with the session key, recovery reason, and recovery command. Repeated
 reminders are suppressed in a bounded memory cache. Resetting or deleting the
 session, or restarting the Gateway, clears that suppression. Sessions with locked
-model selection instead direct you to **Resume in new session** in WebChat.
+model selection instead direct you to **Resume** in WebChat.
 
 Every retry reuses one durable dispatch identifier, so an ambiguous connection
 failure cannot start the same recovery twice. Completed Control UI turns also
@@ -944,7 +973,7 @@ and device presentation still require their normal client capabilities.
 Before resuming, the gateway classifies the transcript tail to choose the tool
 restriction for the continuation. An aborted turn is the interruption itself,
 so it resumes on a best-effort basis whatever abort detail the provider or worker recorded with it:
-partial streamed text stays in the transcript and the continuation picks up from
+already-recorded partial text stays in the transcript and the continuation picks up from
 the message beneath it, while a tool call left dangling is dropped from the next
 provider payload. Provider failures, completed assistant tails, empty transcripts,
 and stale pending approvals also continue from the existing transcript. States

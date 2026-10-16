@@ -24,14 +24,13 @@ import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
-import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
-import { renderPluginSurface } from "../../../plugins/control-ui-view.ts";
+import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
 import { resolveSpawnedSubagent, type SpawnedSubagent } from "../chat-spawned-subagent.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import { BrowserTabCardHost } from "./browser-tab-card.tsx";
 import { HighlightedCommand } from "./chat-command-highlight.solid.tsx";
 import { DiffStatChips } from "./chat-diff-render.solid.tsx";
-import { renderChatPermissionCard } from "./chat-divider.ts";
+import { ChatPermissionCard } from "./chat-divider.tsx";
 import type { BrowserTabPreview } from "./chat-tool-cards.ts";
 import { ExpandedToolCardContent } from "./chat-tool-content.solid.tsx";
 import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
@@ -572,7 +571,7 @@ function ToolCardView(props: ToolCardProps) {
       }
     >
       {(request) => (
-        <LitContent value={renderChatPermissionCard(request(), props.options.onPermissionRetry)} />
+        <ChatPermissionCard request={request()} onRetry={props.options.onPermissionRetry} />
       )}
     </Show>
   );
@@ -620,28 +619,20 @@ export const ChatToolApprovalReviews = defineSolidBridge<{ card: ToolCard | null
 );
 
 export function ChatToolCard(props: ToolCardProps) {
-  const fallback = solidContent(ToolCardHost, {
-    style: { display: "contents" },
-    get card() {
-      return props.card;
-    },
-    get options() {
-      return props.options;
-    },
-    get hasChildren() {
-      return props.hasChildren ?? Boolean(props.children);
-    },
-    get children() {
-      return props.children;
-    },
-  });
   return (
-    <LitContent
-      value={renderPluginSurface(
-        "tool-result",
-        toolResultSurfaceProps(props.card, props.options),
-        fallback,
-        props.options.presented ?? true,
+    <PluginSurface
+      surface="tool-result"
+      props={toolResultSurfaceProps(props.card, props.options)}
+      presented={props.options.presented ?? true}
+      renderDefault={() => (
+        <ToolCardHost
+          style={{ display: "contents" }}
+          card={props.card}
+          options={props.options}
+          hasChildren={props.hasChildren ?? Boolean(props.children)}
+        >
+          {props.children}
+        </ToolCardHost>
       )}
     />
   );

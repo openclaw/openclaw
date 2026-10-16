@@ -85,7 +85,10 @@ import { createRuntimeConfigVitestConfig } from "../vitest/vitest.runtime-config
 import { startupCorpusTestFiles } from "../vitest/vitest.startup-corpus-paths.mjs";
 import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
 import { createToolingVitestConfig } from "../vitest/vitest.tooling.config.ts";
-import { uiE2eRealGatewayTestFiles } from "../vitest/vitest.ui-paths.mjs";
+import {
+  uiE2ePrebuiltParallelTestFiles,
+  uiE2eRealGatewayTestFiles,
+} from "../vitest/vitest.ui-paths.mjs";
 import {
   getUnitFastIsolatedTestFiles,
   getUnitFastTimerTestFiles,
@@ -115,6 +118,7 @@ describe("Control UI release-only inventories", () => {
   const teamScale = "ui/src/e2e/team-scale-cold-load.e2e.test.ts";
   const automationManagement =
     "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts";
+  const reconnectContinuity = "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts";
   const releaseOnlyRealGateway = new Set([
     "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
     "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
@@ -123,6 +127,7 @@ describe("Control UI release-only inventories", () => {
     "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
     "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
+    reconnectContinuity,
     "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
     "ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts",
     "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
@@ -157,6 +162,10 @@ describe("Control UI release-only inventories", () => {
     );
     // Array equality also catches duplicate ownership between jobs or desktop proof.
     expect(files.toSorted()).toEqual(expectedFiles.toSorted());
+    // Desktop and serial proof must not acquire a second parallel-fixture phase.
+    expect(shards[1]?.groups[0]?.includePatterns.toSorted()).toEqual(
+      expectedFiles.filter((file) => uiE2ePrebuiltParallelTestFiles.includes(file)).toSorted(),
+    );
   }
 
   it("retains PR-exempt entries while omitting release-only UI matrices", () => {

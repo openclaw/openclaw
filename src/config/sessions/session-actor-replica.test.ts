@@ -76,12 +76,13 @@ async function withReplica(
     reacquire: () => ReturnType<typeof createSessionActorReplica>;
     retireGeneration: () => void;
   }) => void | Promise<void>,
+  sessionKey = "agent:main:actor-replica",
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const scope = {
       agentId: "main",
-      sessionKey: "agent:main:actor-replica",
+      sessionKey,
       storePath: database.path,
       env,
     };
@@ -208,11 +209,22 @@ it("keeps transcript replacement charges within the shared byte and entry budget
       const first = create(false, true);
       const second = create(true);
       const third = create();
-      retain(first, 1024 * 1024);
+      const firstTranscript = retain(first, 1024 * 1024);
       retain(second, 1024 * 1024);
       const thirdTranscript = retain(third, 1024 * 1024);
       // Three 2 MiB charges fit; growing and touching the oldest evicts the next oldest.
-      const grown = retain(first, 2 * 1024 * 1024);
+      // Shared payloads still count at each occurrence after a copy-on-write append.
+      const grown: SessionActorTranscriptReplica = {
+        ...firstTranscript,
+        tail: {
+          ...firstTranscript.tail,
+          events: [
+            ...firstTranscript.tail.events,
+            { ...firstTranscript.tail.events[0]!, rawSeq: 1 },
+          ],
+        },
+      };
+      retainSessionActorTranscriptReplica(first.state, grown);
       expect(readSessionActorTranscriptReplica(second.state)).toBeUndefined();
       expect(readSessionActorTranscriptReplica(third.state)).toBe(thirdTranscript);
       expect(readSessionActorTranscriptReplica(first.state)).toBe(grown);
@@ -327,14 +339,7 @@ it("keeps actor facts after usage cache writes and pruning", async () => {
       expect(await usage.acquire()).toBe(true);
       const snapshot = hydrate(fixture);
       const valueJson = new TextEncoder().encode("{}");
-      expect(
-        await usage.writeRollup({
-          rollupId: "usage-rollup",
-          valueJson,
-          blob: null,
-          updatedAt: 1,
-        }),
-      ).toBe(true);
+      await usage.writeRollup([{ rollupId: "usage-rollup", valueJson, blob: null, updatedAt: 1 }]);
       expect(replica.read()).toEqual(snapshot);
       await usage.pruneRows([{ key: "usage-rollup", valueJson, updatedAt: 1 }]);
       expect(replica.read()).toEqual(snapshot);
@@ -465,6 +470,13 @@ it("returns a newer committed replica when a receipt arrives during a worker rea
 
 it("shares committed facts across released handles and retires them for writes and worker loss", async () => {
   await withReplica((fixture) => {
+    hydrate(fixture);
+    const change = { ...fixture.scope, sessionKey: fixture.scope.sessionKey.toLowerCase() };
+    sessionChanges.invalidate({ ...change, factsInvalidated: true });
+    expect(fixture.replica.read()).toBeUndefined();
+    hydrate(fixture);
+    sessionChanges.invalidate({ all: true, scope: { storePath: change.storePath } });
+    expect(fixture.replica.read()).toBeUndefined();
     const first = hydrate(fixture);
     const replacement = fixture.reacquire();
     fixture.replica.close();
@@ -504,7 +516,7 @@ it("shares committed facts across released handles and retires them for writes a
     } finally {
       replacement.close();
     }
-  });
+  }, "agent:main:matrix:group:!Room:server");
 });
 
 it("retains unrelated session postimages but invalidates a shared physical session window", async () => {

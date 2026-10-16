@@ -132,9 +132,10 @@ guest code or nested tool calls; earlier actions in the cell may have completed.
 Node worker heap exhaustion reports `runtime_unavailable` with the configured
 heap allowance and guidance to paginate results or retain less guest data.
 Check completed actions before retrying: worker termination does not undo
-dispatched tools. Worker lifecycle retirement reason `failure` records native
-worker failure, including heap exhaustion; it is separate from an ordinary
-tool rejection reported with `failurePhase: "bridge"`.
+dispatched tools. Worker lifecycle retirement reason `crash` records native
+worker errors, including heap exhaustion; `gc-thrash` identifies retirement by
+the near-limit GC watchdog. Both are separate from an ordinary tool rejection
+reported with `failurePhase: "bridge"`.
 
 JavaScript failure frames labeled `openclaw-code-mode:user.js` use line numbers
 from the submitted JavaScript, excluding internal wrappers and headless setup,

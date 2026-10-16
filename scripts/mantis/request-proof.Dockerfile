@@ -3,6 +3,7 @@ FROM mcr.microsoft.com/playwright:v1.63.0-noble@sha256:bc6ab0d6d44ff4826e4cb8c1e
 WORKDIR /harness
 COPY . .
 RUN chmod -R a+rX /harness && corepack enable && corepack pnpm install --frozen-lockfile \
+    && node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium \
     && mkdir /candidate /out \
     && find . -type d -name node_modules -prune -exec cp -a --parents {} /candidate \; \
     && chown pwuser:pwuser /out

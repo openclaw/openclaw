@@ -118,7 +118,11 @@ describe("requester pause notices", () => {
       runId: "run-b",
       outcome: { status: "error", error: "interrupted before pausing" },
       delivery: { status: "pending" },
-      completion: { required: true, resultText: "Final interruption result" },
+      completion: {
+        required: true,
+        resultText: "Final interruption result",
+        terminalReply: { disposition: "visible", text: "Final interruption result" },
+      },
       requesterSettleWake: {
         status: "pending",
         attemptCount: 0,
@@ -221,7 +225,11 @@ describe("requester pause notices", () => {
     expect(await maybeWakeRequesterAfterAllChildrenSettled(params)).toBe(false);
     for (const entry of children) {
       entry.execution = { status: "terminal", endedAt: 5_000, outcome: { status: "ok" } };
-      entry.completion = { required: true, resultText: `completed ${entry.runId}` };
+      entry.completion = {
+        required: true,
+        resultText: `completed ${entry.runId}`,
+        terminalReply: { disposition: "visible", text: `completed ${entry.runId}` },
+      };
     }
     expect(await maybeWakeRequesterAfterAllChildrenSettled(params)).toBe(true);
     expect(deliverSpy).toHaveBeenCalledTimes(2);
@@ -261,7 +269,16 @@ describe("requester pause notices", () => {
       delivery: { status: "pending" },
       ...(paused
         ? { pauseReason: "sessions_yield" as const }
-        : { completion: { required: true, resultText: "Completed before follow-up" } }),
+        : {
+            completion: {
+              required: true,
+              resultText: "Completed before follow-up",
+              terminalReply: {
+                disposition: "visible" as const,
+                text: "Completed before follow-up",
+              },
+            },
+          }),
       requesterSettleWake: {
         status: "pending",
         attemptCount: 0,

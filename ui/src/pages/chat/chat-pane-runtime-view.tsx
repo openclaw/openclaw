@@ -7,7 +7,6 @@ import {
   Show,
   untrack,
 } from "solid-js";
-import { shellLayoutOwnerForHost, type ShellLayoutOwner } from "../../app/shell-layout-owner.ts";
 import { LitContent } from "../../lit/solid-content.tsx";
 import { ChatComposerCapabilityDialogs } from "./chat-composer-capability-host.tsx";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
@@ -56,11 +55,7 @@ function MountedChatPaneRuntime(props: { runtime: ChatPaneRuntime }) {
 export function ChatPaneRuntimeView(props: { runtime: ChatPaneRuntime }) {
   const [ready, setReady] = createSignal(false);
   let initialized = false;
-  let layout: ShellLayoutOwner | undefined;
   onSettled(() => {
-    // Solid-owned route bridges have no layout provider; the connected host identifies its owner.
-    layout = shellLayoutOwnerForHost(props.runtime.element);
-    layout?.record(props.runtime, props.runtime.element, { workbench: true });
     if (!props.runtime.isConnected) {
       props.runtime.connectedCallback();
     }
@@ -72,7 +67,6 @@ export function ChatPaneRuntimeView(props: { runtime: ChatPaneRuntime }) {
     if (initialized) {
       props.runtime.disconnectedCallback();
     }
-    layout?.clear(props.runtime);
   });
   return (
     <Show when={ready()}>

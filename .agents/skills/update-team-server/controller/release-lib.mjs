@@ -2355,6 +2355,11 @@ function policy(pathname) {
   if (typeof model !== "string" || !model.includes("/") || model.trim() !== model) {
     reject("configured deployment model is invalid");
   }
+  const fallbacks = typeof modelValue === "object" ? modelValue?.fallbacks ?? [] : [];
+  if (!Array.isArray(fallbacks) || fallbacks.some(value =>
+    typeof value !== "string" || !value.includes("/") || value.trim() !== value)) {
+    reject("configured deployment model fallbacks are invalid");
+  }
   return {
     mode: config.tools.exec.mode,
     appServer: server,
@@ -2362,6 +2367,7 @@ function policy(pathname) {
     updateAuto: config.update.auto.enabled,
     clickclackCommandMenu: config.channels?.clickclack?.commandMenu,
     model,
+    fallbacks,
   };
 }
 
@@ -4554,10 +4560,19 @@ try {
         result = "RECOVERING";
         break;
       }
-      if (readinessCode !== "200" || readiness.ready !== true ||
-          !Array.isArray(readiness.failing) || readiness.failing.length ||
+      if (!Array.isArray(readiness.failing) ||
+          readiness.failing.some(value => typeof value !== "string" || !value) ||
           !Number.isFinite(readiness.uptimeMs) || readiness.uptimeMs < 0) {
-        reject("Gateway marker readyz is not ready");
+        reject("Gateway marker readyz is malformed");
+      }
+      // Convergence is a snapshot, not a promise that channel readiness stays
+      // green. Wait for native readiness again within the same startup deadline.
+      if (readinessCode === "503" && readiness.ready === false && readiness.failing.length) {
+        result = "RECOVERING";
+        break;
+      }
+      if (readinessCode !== "200" || readiness.ready !== true || readiness.failing.length) {
+        reject("Gateway marker readyz is inconsistent");
       }
       // CPU/utilization alone can reflect useful startup work. Native delay evidence
       // and a bounded system.info response determine whether dispatch may proceed.
