@@ -36,14 +36,10 @@ export async function readActionTapArea(control: Locator) {
     const height = extension.content === "none" ? rect.height : Number.parseFloat(extension.height);
     const left = rect.left + (rect.width - width) / 2;
     const top = rect.top + (extension.content === "none" ? 0 : Number.parseFloat(extension.top));
-    // Mobile hit testing rounds fractional CSS edges; probe 2px inside them.
-    // Target dimensions and containment are checked separately.
-    const corners: Array<[number, number]> = [
-      [left + 2, top + 2],
-      [left + width - 2, top + 2],
-      [left + 2, top + height - 2],
-      [left + width - 2, top + height - 2],
-    ];
+    // Probe 2px inside fractional CSS edges; dimensions/containment are checked separately.
+    const corners = [left + 2, left + width - 2].flatMap((x) =>
+      [top + 2, top + height - 2].map((y) => [x, y] as const),
+    );
     return {
       left,
       top,
@@ -56,7 +52,6 @@ export async function readActionTapArea(control: Locator) {
   });
 }
 
-/** Samples a group's geometry for 12 frames after revealing its metadata. */
 export function sampleMetadataReveal(group: Locator, gesture: "touch" | "focus") {
   return group.evaluate(async (element, interaction) => {
     if (document.activeElement instanceof HTMLElement) {
@@ -64,8 +59,7 @@ export function sampleMetadataReveal(group: Locator, gesture: "touch" | "focus")
     }
     element.classList.remove("chat-group--meta-revealed");
     const thread = element.closest<HTMLElement>(".chat-thread")!;
-    const lastMessage = element.querySelectorAll<HTMLElement>(".chat-bubble");
-    const last = lastMessage[lastMessage.length - 1];
+    const last = Array.from(element.querySelectorAll<HTMLElement>(".chat-bubble")).at(-1);
     if (!last) {
       throw new Error("Expected a message in the metadata disclosure fixture");
     }
@@ -115,25 +109,18 @@ export function defineMobileFooterActionCases(suite: ReturnType<typeof createCon
         await installMockGateway(page, {
           assistantName: "RoboClaw Frontend Engineer",
           historyMessages: [
-            { role: "user", content: "Check the mobile controls.", timestamp },
+            { role: "user", content: "Check the mobile controls." },
             {
               role: "assistant",
               content: reply,
-              timestamp: timestamp + 1000,
               model: "gpt-5.5",
               usage: { input: 4231, output: 217 },
             },
-            {
-              role: "user",
-              content: "Keep the default visibility unchanged.",
-              timestamp: timestamp + 2000,
-            },
-            {
-              role: "assistant",
-              content: "I will inspect the earlier reply by tapping it.",
-              timestamp: timestamp + 3000,
-            },
-          ],
+            { role: "user", content: "Keep the default visibility unchanged." },
+            { role: "assistant", content: "I will inspect the earlier reply by tapping it." },
+          ].map((message, index) =>
+            Object.assign(message, { timestamp: timestamp + index * 1000 }),
+          ),
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const agent = page.locator(".chat-group.assistant").first();
@@ -160,19 +147,16 @@ export function defineMobileFooterActionCases(suite: ReturnType<typeof createCon
         expect((await agent.boundingBox())?.height).toBe(restingHeight);
         const copy = agent.locator(".chat-copy-btn");
         const target = await copy.boundingBox();
-        expect(target?.width).toBe(24);
-        expect(target?.height).toBe(24);
+        expect(target).toMatchObject({ width: 24, height: 24 });
         const tapArea = await readActionTapArea(copy);
         expect(tapArea.width).toBeGreaterThanOrEqual(44);
         expect(tapArea.height).toBeGreaterThanOrEqual(44);
         expect(tapArea.hitCorners).toBe(4);
         const groupBox = await agent.boundingBox();
-        // The tap area grows up over the group's own message and ends at the
-        // painted button's bottom edge, never inside the following turn gap.
+        // The target grows into its own message, never the following turn gap.
         expect(tapArea.top + tapArea.height).toBeCloseTo(target!.y + target!.height, 0);
         expect(tapArea.top).toBeGreaterThanOrEqual(groupBox!.y);
         expect(tapArea.top + tapArea.height).toBeLessThanOrEqual(groupBox!.y + groupBox!.height);
-        // This point is above and outside the painted button, inside its real tap area.
         await page.touchscreen.tap(tapArea.left + 2, tapArea.top + 2);
         await expect(copy).toHaveAttribute("data-copy-state", "copied");
         await copy.evaluate(finishElementAnimations);
@@ -194,8 +178,7 @@ export function defineMobileFooterActionCases(suite: ReturnType<typeof createCon
             y: Math.abs(box.y + box.height / 2 - icon.y - icon.height / 2),
           };
         });
-        expect(centered.x).toBeLessThanOrEqual(1);
-        expect(centered.y).toBeLessThanOrEqual(1);
+        expect(Math.max(centered.x, centered.y)).toBeLessThanOrEqual(1);
         expect(await copy.boundingBox()).toEqual(target);
         await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(reply);
         await page.clock.fastForward(1_500);

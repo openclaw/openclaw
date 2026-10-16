@@ -1,6 +1,7 @@
 import { type Page, type Locator, expect as expectBrowser } from "playwright/test";
 import { expect, it } from "vitest";
 import {
+  type ControlUiMockGatewayScenario,
   reconnectMockGateway,
   defaultControlUiFeatureMethods,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -16,13 +17,30 @@ import { readOutboxQueue } from "./chat-outbox-payloads.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
-const withPage = (run: Parameters<typeof suite.withPage>[1]) =>
-  suite.withPage(createControlUiE2eContextOptions(), run);
+const withPage = <T>(
+  run: (fixture: Parameters<Parameters<typeof suite.withPage>[1]>[0]) => Promise<T>,
+) => suite.withPage(createControlUiE2eContextOptions(), run);
 const questionPanel = (page: Page) =>
   page.locator(".agent-chat__question-dock openclaw-chat-question-panel");
 const summaryFor = (page: Page) =>
   page.locator(".chat-thread .chat-question-summary").filter({ hasText: title });
 const button = (owner: Locator, name: string) => owner.getByRole("button", { name, exact: true });
+type MessageIdentity = { id: string; seq: number };
+
+function emitMessage(
+  gateway: Awaited<ReturnType<typeof installMockGateway>>,
+  message: { __openclaw: MessageIdentity },
+  fields: Record<string, unknown> = {},
+) {
+  const { __openclaw: identity } = message;
+  return gateway.emitGatewayEvent("session.message", {
+    sessionKey: "agent:main:main",
+    messageId: identity.id,
+    messageSeq: identity.seq,
+    message,
+    ...fields,
+  });
+}
 const title = "Which audience should the summary address?";
 const questionMessage = {
   role: "assistant",
@@ -34,12 +52,48 @@ const questionMessage = {
   },
 };
 
+function withFollowUp(followUpTitle: string) {
+  return {
+    ...questionMessage,
+    content: `${questionMessage.content}\n\n${followUpTitle}`,
+    openclawAsyncDelivery: {
+      ...questionMessage.openclawAsyncDelivery,
+      questions: [...questionMessage.openclawAsyncDelivery.questions, { title: followUpTitle }],
+    },
+  };
+}
+
+function terminalMessage(content: string, id: string, seq: number, runId: string, phase?: string) {
+  return {
+    role: "assistant",
+    content,
+    __openclaw: { id, seq, runId, runTerminal: true, mirrorOrigin: "codex-app-server" },
+    stopReason: "stop",
+    ...(phase ? { phase } : {}),
+  };
+}
+
+async function openChat(page: Page, options: ControlUiMockGatewayScenario = {}) {
+  const gateway = await installMockGateway(page, options);
+  await page.goto(
+    options.sessionKey
+      ? controlUiSessionUrl(suite.server.baseUrl, options.sessionKey)
+      : `${suite.server.baseUrl}chat`,
+  );
+  const card = questionPanel(page);
+  return {
+    gateway,
+    card,
+    summary: summaryFor(page),
+    composer: page.locator(".agent-chat__composer-combobox textarea"),
+    custom: card.getByRole("textbox", { name: `Your own answer for ${title}` }),
+  };
+}
+
 suite.define(() => {
   it("keeps an admitted optional answer with its original outbox owner after reconnect", async () => {
     await withPage(async ({ page }) => {
-      const gateway = await installMockGateway(page, { historyMessages: [questionMessage] });
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const card = questionPanel(page);
+      const { gateway, card } = await openChat(page, { historyMessages: [questionMessage] });
       const answer = "The customer support team";
       await card.getByRole("textbox", { name: `Your own answer for ${title}` }).fill(answer);
       await gateway.deferNext("chat.send");
@@ -53,7 +107,7 @@ suite.define(() => {
         .poll(async () => (await readOutboxQueue(page))[0]?.sendState)
         .toBe("unconfirmed");
       await expectBrowser(card).toHaveCount(0);
-      const summary = page.locator(".chat-question-summary").filter({ hasText: title });
+      const summary = summaryFor(page);
       await expectBrowser(summary).toContainText(answer);
       const unconfirmed = page.locator('.chat-send-status[data-send-state="unconfirmed"]');
       const retry = unconfirmed.getByRole("button", { name: "Retry queued message" });
@@ -65,12 +119,11 @@ suite.define(() => {
       await gateway.deferNext("chat.send");
       await retry.click();
       const retried = await gateway.waitForRequest("chat.send", { after: 1 });
-      expect(requireRecord(retried.params).message).toBe(
-        requireRecord(firstRequest.params).message,
-      );
-      expect(requireRecord(retried.params).idempotencyKey).toBe(
-        requireRecord(firstRequest.params).idempotencyKey,
-      );
+      const firstParams = requireRecord(firstRequest.params);
+      expect(requireRecord(retried.params)).toMatchObject({
+        message: firstParams.message,
+        idempotencyKey: firstParams.idempotencyKey,
+      });
       expect((await readOutboxQueue(page)).map((item) => item.id)).toEqual(
         admitted.map((item) => item.id),
       );
@@ -98,50 +151,39 @@ suite.define(() => {
               mirrorOrigin: "codex-app-server",
             },
           };
-          const ownFinal = {
-            role: "assistant",
-            content: "The draft is ready; you can still choose an audience.",
-            phase: "final_answer",
-            stopReason: "stop",
-            __openclaw: {
-              id: "draft-ready",
-              seq: 3,
-              runId: "question-run",
-              runTerminal: true,
-              mirrorOrigin: "codex-app-server",
-            },
-          };
+          const ownFinal = terminalMessage(
+            "Draft ready; choose an audience.",
+            "draft-ready",
+            3,
+            "question-run",
+            "final_answer",
+          );
           const history = [
             {
               role: "user",
               content: "Prepare a project summary.",
-              __openclaw: { id: "initial-request", seq: 1, runId: "question-run" },
+              __openclaw: {
+                id: "initial-request",
+                seq: 1,
+                runId: "question-run",
+              },
             },
             prompt,
             ...(recovery ? [] : [ownFinal]),
           ];
-          const gateway = await installMockGateway(page, { historyMessages: history });
-          await page.goto(`${suite.server.baseUrl}chat`);
+          const { gateway } = await openChat(page, { historyMessages: history });
           const dock = page.locator(".agent-chat__question-dock");
           await expectBrowser(dock).toBeVisible();
           const draft = dock.getByRole("textbox", { name: `Your own answer for ${title}` });
-          const nextFinal = {
-            role: "assistant",
-            content: "The summary is finalized and the task is complete.",
-            stopReason: "stop",
-            __openclaw: {
-              id: "summary-finalized",
-              seq: 5,
-              runId: "finishing-run",
-              runTerminal: true,
-              mirrorOrigin: "codex-app-server",
-            },
-          };
+          const nextFinal = terminalMessage(
+            "Summary complete.",
+            "summary-finalized",
+            5,
+            "finishing-run",
+          );
           const nextRequest = {
             role: "user",
-            content: recovery
-              ? "Resume work after the Gateway restart."
-              : "Use your best judgment and finalize it.",
+            content: recovery ? "Resume after restart." : "Finalize the summary.",
             ...(recovery
               ? {
                   provenance: {
@@ -154,12 +196,7 @@ suite.define(() => {
           };
           const finalHistory = [...history, nextRequest, nextFinal];
           await gateway.setHistoryMessages([...history, nextRequest]);
-          await gateway.emitGatewayEvent("session.message", {
-            sessionKey: "agent:main:main",
-            messageId: "follow-up",
-            messageSeq: 4,
-            message: nextRequest,
-          });
+          await emitMessage(gateway, nextRequest);
           if (recovery) {
             await page.locator(".chat-system-events__summary").click();
           }
@@ -172,14 +209,9 @@ suite.define(() => {
           ).toBeVisible();
           await expectBrowser(dock).toBeVisible();
           await gateway.setHistoryMessages(finalHistory);
-          await gateway.emitGatewayEvent("session.message", {
-            sessionKey: "agent:main:main",
-            messageId: "summary-finalized",
-            messageSeq: 5,
-            message: nextFinal,
-          });
+          await emitMessage(gateway, nextFinal);
           await expectBrowser(dock).toHaveCount(0);
-          const summary = page.locator(".chat-question-summary").filter({ hasText: title });
+          const summary = summaryFor(page);
           await expectBrowser(summary).toContainText("No longer pending");
           await button(summary, "Answer").click();
           await expectBrowser(dock).toBeVisible();
@@ -194,14 +226,11 @@ suite.define(() => {
       // A fresh tab reconstructs archival from the saved transcript, not a
       // remembered dismissal or the first tab's reopened draft.
       await withPage(async ({ page }) => {
-        const gateway = await installMockGateway(page, { historyMessages: completedHistory });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        const { gateway } = await openChat(page, { historyMessages: completedHistory });
         const dock = page.locator(".agent-chat__question-dock");
-        const summary = page.locator(".chat-question-summary").filter({ hasText: title });
+        const summary = summaryFor(page);
         await expectBrowser(
-          page
-            .locator(".chat-thread-inner")
-            .getByText("The summary is finalized and the task is complete.", { exact: true }),
+          page.locator(".chat-thread-inner").getByText("Summary complete.", { exact: true }),
         ).toBeVisible();
         await expectBrowser(dock).toHaveCount(0);
         await expectBrowser(summary).toContainText("No longer pending");
@@ -227,34 +256,27 @@ suite.define(() => {
         __openclaw: { id: "draft-question", seq: 1 },
       };
       const history = [prompt];
-      const gateway = await installMockGateway(page, { historyMessages: history });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      const { gateway } = await openChat(page, { historyMessages: history });
       const dock = page.locator(".agent-chat__question-dock");
       const draft = dock.getByRole("textbox", { name: `Your own answer for ${title}` });
       await draft.fill("New contributors and maintainers");
       const ownFinal = {
         role: "assistant",
         content: "Draft ready.",
+        __openclaw: { id: "draft-final", seq: 2, runTerminal: true },
         runId: "draft-run",
         phase: "final_answer",
-        __openclaw: { id: "draft-final", seq: 2, runTerminal: true },
       };
       const laterFinal = {
         role: "assistant",
         content: "Other work finished.",
+        __openclaw: { id: "later-final", seq: 3, runTerminal: true },
         runId: "later-run",
         phase: "final_answer",
-        __openclaw: { id: "later-final", seq: 3, runTerminal: true },
       };
       await gateway.setHistoryMessages([...history, ownFinal, laterFinal]);
       for (const message of [ownFinal, laterFinal]) {
-        const { __openclaw: identity } = message;
-        await gateway.emitGatewayEvent("session.message", {
-          sessionKey: "agent:main:main",
-          messageId: identity.id,
-          messageSeq: identity.seq,
-          message,
-        });
+        await emitMessage(gateway, message);
       }
       await expectBrowser(
         page.locator(".chat-thread-inner").getByText("Other work finished.", { exact: true }),
@@ -329,40 +351,32 @@ suite.define(() => {
   it.each([false, true])(
     "submits an async answer as ordinary chat with an active run=%s",
     async (active) => {
-      const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-      const page = await context.newPage();
-      const sessionKey = "agent:main:dashboard:async-question-proof";
-      const followUpTitle = "What should I emphasize?";
-      const multipleQuestions = {
-        ...questionMessage,
-        runId: "working-run",
-        __openclaw: { id: "audience-prompt", seq: 2 },
-        content: `${questionMessage.content}\n\n${followUpTitle}`,
-        openclawAsyncDelivery: {
-          ...questionMessage.openclawAsyncDelivery,
-          questions: [...questionMessage.openclawAsyncDelivery.questions, { title: followUpTitle }],
-        },
-      };
-      const replyMessage = {
-        role: "user",
-        content: "A separate discussion for later.",
-        timestamp: questionMessage.timestamp - 1_000,
-        __openclaw: {
-          id: "composer-reply-target",
-          seq: 1,
-          idempotencyKey: "working-run:user",
-        },
-      };
-      const gateway = await installMockGateway(page, {
-        sessionKey,
-        historyMessages: [replyMessage, multipleQuestions],
-        inFlightRun: { runId: "working-run", startedAt: Date.now(), text: "" },
-        sessionInfo: { hasActiveRun: true, activeRunIds: ["working-run"] },
-      });
-      try {
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await withPage(async ({ page }) => {
+        const sessionKey = "agent:main:dashboard:async-question-proof";
+        const followUpTitle = "What should I emphasize?";
+        const multipleQuestions = {
+          ...withFollowUp(followUpTitle),
+          runId: "working-run",
+          __openclaw: { id: "audience-prompt", seq: 2 },
+        };
+        const replyMessage = {
+          role: "user",
+          content: "A separate discussion for later.",
+          __openclaw: {
+            id: "composer-reply-target",
+            seq: 1,
+            idempotencyKey: "working-run:user",
+          },
+          timestamp: questionMessage.timestamp - 1_000,
+        };
+        const { gateway, card, composer, custom, summary } = await openChat(page, {
+          sessionKey,
+          historyMessages: [replyMessage, multipleQuestions],
+          inFlightRun: { runId: "working-run", startedAt: Date.now(), text: "" },
+          sessionInfo: { hasActiveRun: true, activeRunIds: ["working-run"] },
+        });
         await page.locator(".chat-thread").getByText(title, { exact: true }).waitFor();
-        const card = questionPanel(page);
+
         await expect.poll(() => card.count()).toBe(1);
         await card.getByRole("radio", { name: /Engineers/ }).waitFor();
         expect(
@@ -378,9 +392,9 @@ suite.define(() => {
           has: page.getByRole("button", { name: "Cancel reply" }),
         });
         await expect.poll(() => composerReply.textContent()).toContain(replyMessage.content);
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
+
         await composer.fill("Keep this separate composer draft.");
-        const custom = card.getByRole("textbox", { name: `Your own answer for ${title}` });
+
         await custom.fill("/stop is an example for the whole team");
         expect(
           await card.getByRole("radio", { name: /Engineers/ }).getAttribute("aria-checked"),
@@ -423,12 +437,12 @@ suite.define(() => {
         if (!active) {
           const finalMessage = {
             role: "assistant",
-            content: "I finished the draft.",
+            content: "Draft finished.",
+            __openclaw: { id: "draft-complete", seq: 3 },
             runId: "working-run",
             phase: "final_answer",
             stopReason: "stop",
             timestamp: questionMessage.timestamp + 1_000,
-            __openclaw: { id: "draft-complete", seq: 3 },
           };
           await gateway.setMethodResponse("chat.history", {
             messages: [replyMessage, multipleQuestions, finalMessage],
@@ -473,7 +487,7 @@ suite.define(() => {
         if (!active) {
           await page.locator(".chat-work-group button").click();
         }
-        const summary = summaryFor(page);
+
         await summary.waitFor();
         expect(await summary.textContent()).toContain("Include one practical example.");
         await expectRequestCountStable(gateway, "chat.send", 1);
@@ -492,41 +506,35 @@ suite.define(() => {
           ).toHaveCount(1);
           await expectRequestCountStable(gateway, "chat.send", 0);
         }
-      } finally {
-        await suite.closeBrowserContext(context);
-      }
+      });
     },
   );
 
   it("keeps async arrivals nonblocking and preserves their queue through a blocking question", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const initial = {
-      role: "assistant",
-      content: "Ready to prepare the summary.",
-      timestamp: questionMessage.timestamp - 1_000,
-      __openclaw: { id: "summary-ready", seq: 1 },
-    };
-    const secondTitle = "How detailed should the summary be?";
-    const secondQuestion = {
-      ...questionMessage,
-      content: secondTitle,
-      timestamp: questionMessage.timestamp + 1_000,
-      openclawAsyncDelivery: {
-        itemId: "detail-question",
-        questions: [{ title: secondTitle, options: ["Concise", "Detailed"] }],
-      },
-    };
-    const gateway = await installMockGateway(page, {
-      featureMethods: [...defaultControlUiFeatureMethods, "question.list", "question.resolve"],
-      historyMessages: [initial],
-      methodResponses: { "question.list": { questions: [] } },
-    });
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+    await withPage(async ({ page }) => {
+      const initial = {
+        role: "assistant",
+        content: "Ready for summary.",
+        __openclaw: { id: "summary-ready", seq: 1 },
+        timestamp: questionMessage.timestamp - 1_000,
+      };
+      const secondTitle = "How detailed should the summary be?";
+      const secondQuestion = {
+        ...questionMessage,
+        content: secondTitle,
+        timestamp: questionMessage.timestamp + 1_000,
+        openclawAsyncDelivery: {
+          itemId: "detail-question",
+          questions: [{ title: secondTitle, options: ["Concise", "Detailed"] }],
+        },
+      };
+      const { gateway, composer, card, custom } = await openChat(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "question.list", "question.resolve"],
+        historyMessages: [initial],
+        methodResponses: { "question.list": { questions: [] } },
+      });
       await composer.fill("Continue researching while I decide.");
-      const card = questionPanel(page);
+
       const messages: unknown[] = [initial];
       const arrive = async (question: typeof questionMessage, seq: number) => {
         const message = {
@@ -535,12 +543,7 @@ suite.define(() => {
         };
         messages.push(message);
         await gateway.setHistoryMessages(messages);
-        await gateway.emitGatewayEvent("session.message", {
-          sessionKey: "agent:main:main",
-          messageId: message["__openclaw"].id,
-          messageSeq: seq,
-          message,
-        });
+        await emitMessage(gateway, message);
       };
       await arrive(questionMessage, 2);
       const initialExpand = button(card, "Expand question");
@@ -551,7 +554,7 @@ suite.define(() => {
       await initialExpand.click();
       await card.getByText(title, { exact: true }).waitFor();
       expect(await composer.inputValue()).toBe("Continue researching while I decide.");
-      const custom = card.getByRole("textbox", { name: `Your own answer for ${title}` });
+
       await custom.fill("Readers new to the project");
       await button(card, "Collapse question").click();
       const expand = button(card, "Expand question");
@@ -561,7 +564,6 @@ suite.define(() => {
       expect(await expand.textContent()).toContain(title);
       expect(await card.getByRole("textbox").count()).toBe(0);
       expect(await composer.evaluate((element) => element === document.activeElement)).toBe(true);
-
       const blockingTitle = "Where should I save the completed summary?";
       const createdAtMs = Date.now();
       await gateway.emitGatewayEvent("question.requested", {
@@ -610,28 +612,22 @@ suite.define(() => {
       expect(await skipped.filter({ hasText: title }).textContent()).toContain("Dismissed");
       expect(await skipped.filter({ hasText: secondTitle }).textContent()).toContain("Dismissed");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    });
   });
 
   it.each(["receipt", "reload", "discard", "legacy"] as const)(
     "recovers rejected answers for retry or explicit discard without another submission (%s)",
     async (confirmation) => {
-      const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-      const page = await context.newPage();
-      const deliveryQuestion = {
-        ...questionMessage,
-        __openclaw: { id: "delivery-question", seq: 1 },
-      };
-      const gateway = await installMockGateway(page, {
-        historyMessages: [deliveryQuestion],
-      });
-      const answer = confirmation === "discard" ? "Engineers" : "The customer support team";
-      try {
-        await page.goto(`${suite.server.baseUrl}chat`);
-        const card = questionPanel(page);
-        const custom = card.getByRole("textbox", { name: `Your own answer for ${title}` });
+      await withPage(async ({ page }) => {
+        const deliveryQuestion = {
+          ...questionMessage,
+          __openclaw: { id: "delivery-question", seq: 1 },
+        };
+        const { gateway, card, custom, summary } = await openChat(page, {
+          historyMessages: [deliveryQuestion],
+        });
+        const answer = confirmation === "discard" ? "Engineers" : "The customer support team";
+
         if (confirmation !== "discard") {
           await custom.fill(answer);
         }
@@ -642,7 +638,6 @@ suite.define(() => {
           message: `> ${title}\n\n${answer}`,
           replyToId: "delivery-question",
         });
-        const summary = summaryFor(page);
         await expectBrowser(summary).toContainText("Sending answer");
         await gateway.resolveDeferred("chat.send", {
           __mockError: { code: "UNAVAILABLE", message: "Synthetic send rejection" },
@@ -700,29 +695,22 @@ suite.define(() => {
         if (confirmation === "discard") {
           const laterRequest = {
             role: "user",
-            content: "Use your best judgment and finish the summary.",
-            __openclaw: { id: "delivery-follow-up", seq: 2, runId: "delivery-finishing-run" },
-          };
-          const laterFinal = {
-            role: "assistant",
-            content: "The summary is finished.",
-            stopReason: "stop",
+            content: "Finish the summary.",
             __openclaw: {
-              id: "delivery-completed",
-              seq: 3,
+              id: "delivery-follow-up",
+              seq: 2,
               runId: "delivery-finishing-run",
-              runTerminal: true,
-              mirrorOrigin: "codex-app-server",
             },
           };
+          const laterFinal = terminalMessage(
+            "Summary finished.",
+            "delivery-completed",
+            3,
+            "delivery-finishing-run",
+          );
           await gateway.setHistoryMessages([deliveryQuestion, laterRequest, laterFinal]);
           for (const message of [laterRequest, laterFinal]) {
-            await gateway.emitGatewayEvent("session.message", {
-              sessionKey: "agent:main:main",
-              messageId: message["__openclaw"].id,
-              messageSeq: message["__openclaw"].seq,
-              message,
-            });
+            await emitMessage(gateway, message);
           }
           await expectBrowser(
             page.locator(".chat-thread-inner").getByText(laterFinal.content, { exact: true }),
@@ -791,74 +779,55 @@ suite.define(() => {
           return;
         }
         const runId = String(requireRecord(retried.params).idempotencyKey);
-        // The plain-text mock ACK commits canonical source but does not emit its
-        // receipt. Deliver that separate Gateway event after proving the ACK gap.
+        // The ACK commits history without emitting a receipt; prove that gap before delivery.
         const savedAnswer = {
           role: "user",
           content: requireRecord(retried.params).message,
-          idempotencyKey: `${runId}:user`,
           __openclaw: { id: `mock-user:${runId}`, seq: 2, replyToId: "delivery-question" },
+          idempotencyKey: `${runId}:user`,
         };
-        const { __openclaw: savedAnswerIdentity } = savedAnswer;
-        await gateway.emitGatewayEvent("session.message", {
-          sessionKey: "agent:main:main",
-          clientRunId: runId,
-          messageId: savedAnswerIdentity.id,
-          messageSeq: savedAnswerIdentity.seq,
-          message: savedAnswer,
-        });
+        await emitMessage(gateway, savedAnswer, { clientRunId: runId });
         await expectBrowser(summary).toContainText("Answer sent");
         await failedSend.waitFor({ state: "detached" });
         expect(await userMessages.count()).toBe(1);
         expect(await button(card, "Submit").count()).toBe(0);
         await expectRequestCountStable(gateway, "chat.send", 1);
-      } finally {
-        await suite.closeBrowserContext(context);
-      }
+      });
     },
   );
 
   it("does not resurrect a saved async answer after reload or remount", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const sessionKey = "agent:main:dashboard:async-question-answer-persistence";
-    const savedQuestion = {
-      ...questionMessage,
-      __openclaw: { id: "saved-audience-question", seq: 1 },
-    };
-    const savedAnswer = {
-      role: "user",
-      content: `> ${title}\n\nEveryone`,
-      timestamp: questionMessage.timestamp + 1_000,
-      __openclaw: { id: "saved-audience-answer", seq: 2 },
-    };
-    const gateway = await installMockGateway(page, {
-      sessionKey,
-      historyMessages: [savedQuestion],
-    });
-    try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      const card = questionPanel(page);
+    await withPage(async ({ page }) => {
+      const sessionKey = "agent:main:dashboard:async-question-answer-persistence";
+      const savedQuestion = {
+        ...questionMessage,
+        __openclaw: { id: "saved-audience-question", seq: 1 },
+      };
+      const savedAnswer = {
+        role: "user",
+        content: `> ${title}\n\nEveryone`,
+        __openclaw: { id: "saved-audience-answer", seq: 2 },
+        timestamp: questionMessage.timestamp + 1_000,
+      };
+      const { gateway, card, summary } = await openChat(page, {
+        sessionKey,
+        historyMessages: [savedQuestion],
+      });
       await card.getByRole("radio", { name: /Engineers/ }).waitFor();
-
       await gateway.setMethodResponse("chat.history", {
         messages: [savedQuestion, savedAnswer],
         sessionInfo: { hasActiveRun: false, activeRunIds: [] },
       });
       await page.reload();
       await expectBrowser(card).toHaveCount(0);
-      const summary = summaryFor(page);
+
       await summary.waitFor();
       await expectBrowser(summary).toContainText("Everyone");
-
-      // A second navigation must derive the same completed state from history rather than
-      // relying on the first mount's local draft map.
+      // Remount must derive completion from history, not the prior mount's draft map.
       await page.reload();
       await expectBrowser(card).toHaveCount(0);
       await expectBrowser(summaryFor(page)).toContainText("Everyone");
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    });
   });
 
   it.each(["offline", "malformed"] as const)(
@@ -866,24 +835,13 @@ suite.define(() => {
     async (fallback) => {
       await withPage(async ({ page }) => {
         const followUpTitle = "What should I emphasize?";
-        const gateway = await installMockGateway(page, {
+        const { gateway } = await openChat(page, {
           historyMessages: [
             fallback === "offline"
-              ? {
-                  ...questionMessage,
-                  content: `${questionMessage.content}\n\n${followUpTitle}`,
-                  openclawAsyncDelivery: {
-                    ...questionMessage.openclawAsyncDelivery,
-                    questions: [
-                      ...questionMessage.openclawAsyncDelivery.questions,
-                      { title: followUpTitle },
-                    ],
-                  },
-                }
+              ? withFollowUp(followUpTitle)
               : { ...questionMessage, openclawAsyncDelivery: undefined },
           ],
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
         const transcript = page.locator(".chat-text");
         if (fallback === "offline") {
           const card = questionPanel(page);

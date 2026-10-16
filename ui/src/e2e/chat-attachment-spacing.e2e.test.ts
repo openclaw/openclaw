@@ -1,4 +1,4 @@
-import type { Locator } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -16,6 +16,21 @@ const neighbors = [
   { name: "table", markdown: "| Item | Status |\n| --- | --- |\n| Report | Ready |" },
   { name: "quote", markdown: "> A quotation after the file." },
 ];
+const referenceText = "Reference one.\n\nReference two.";
+const textBlock = (value: string) => ({ type: "text", text: value });
+const message = (role: string, value: string, attachments: unknown[] = []) => ({
+  role,
+  content: [...attachments, textBlock(value)],
+});
+
+function withChat(width: number, ...historyMessages: unknown[]) {
+  return (check: (page: Page) => Promise<void>) =>
+    suite.withPage({ viewport: { width, height: 900 } }, async ({ page }) => {
+      await installMockGateway(page, { historyMessages });
+      await page.goto(`${suite.server.baseUrl}chat/main`);
+      await check(page);
+    });
+}
 
 function attachment(index = 0) {
   return {
@@ -48,19 +63,10 @@ suite.define(() => {
     it.each(neighbors)(
       `preserves attachment spacing around $name at ${width}px`,
       async ({ name, markdown }) => {
-        await suite.withPage({ viewport: { width, height: 900 } }, async ({ page }) => {
-          await installMockGateway(page, {
-            historyMessages: [
-              {
-                role: "assistant",
-                content: [
-                  attachment(),
-                  { type: "text", text: `${markdown}\n\nReference one.\n\nReference two.` },
-                ],
-              },
-            ],
-          });
-          await page.goto(`${suite.server.baseUrl}chat/main`);
+        await withChat(
+          width,
+          message("assistant", `${markdown}\n\n${referenceText}`, [attachment()]),
+        )(async (page) => {
           const bubble = page.locator(".chat-bubble").filter({ hasText: "Reference one." });
           const card = bubble.locator(".chat-assistant-attachment-card");
           const blocks = bubble
@@ -87,19 +93,14 @@ suite.define(() => {
 
   it("keeps user files outside the painted text and preserves column rhythm", async () => {
     const count = 5;
-    await suite.withPage({ viewport: { width: 390, height: 900 } }, async ({ page }) => {
-      await installMockGateway(page, {
-        historyMessages: [
-          {
-            role: "user",
-            content: [
-              ...Array.from({ length: count }, (_, index) => attachment(index)),
-              { type: "text", text: "Reference one.\n\nReference two." },
-            ],
-          },
-        ],
-      });
-      await page.goto(`${suite.server.baseUrl}chat/main`);
+    await withChat(
+      390,
+      message(
+        "user",
+        referenceText,
+        Array.from({ length: count }, (_, index) => attachment(index)),
+      ),
+    )(async (page) => {
       const cards = page.locator(".chat-assistant-attachment-card");
       const paragraphs = page.locator(".chat-text > p");
       await paragraphs.last().waitFor();
@@ -148,10 +149,9 @@ suite.define(() => {
             content: [
               { type: "image", url },
               attachment(),
-              {
-                type: "text",
-                text: "Please compare the screenshot and attached logs with the expected release notes.",
-              },
+              textBlock(
+                "Please compare the screenshot and attached logs with the expected release notes.",
+              ),
             ],
             __openclaw: {
               senderId: sender.id,
@@ -194,22 +194,14 @@ suite.define(() => {
   });
 
   it("preserves nested user fences while sharing the top-level attachment rhythm", async () => {
-    await suite.withPage({ viewport: { width: 390, height: 900 } }, async ({ page }) => {
-      await installMockGateway(page, {
-        historyMessages: [
-          {
-            role: "user",
-            content: [
-              attachment(),
-              {
-                type: "text",
-                text: "```txt\ntop level\n```\n\nReference one.\n\nReference two.\n\n> Before code.\n>\n> ```txt\n> nested code\n> ```\n>\n> After code.",
-              },
-            ],
-          },
-        ],
-      });
-      await page.goto(`${suite.server.baseUrl}chat/main`);
+    await withChat(
+      390,
+      message(
+        "user",
+        `\`\`\`txt\ntop level\n\`\`\`\n\n${referenceText}\n\n> Before code.\n>\n> \`\`\`txt\n> nested code\n> \`\`\`\n>\n> After code.`,
+        [attachment()],
+      ),
+    )(async (page) => {
       const text = page.locator(".chat-text");
       const nestedCode = text.locator("blockquote pre");
       await nestedCode.waitFor();
@@ -229,30 +221,20 @@ suite.define(() => {
   });
 
   it("shares the block rhythm inside expanded tool output", async () => {
-    await suite.withPage({ viewport: { width: 390, height: 900 } }, async ({ page }) => {
-      await installMockGateway(page, {
-        historyMessages: [
-          {
-            role: "user",
-            content: [{ type: "text", text: "Reference one.\n\nReference two." }],
-          },
-          {
-            role: "toolResult",
-            toolCallId: "spacing-preview",
-            toolName: "image",
-            content: [
-              attachment(),
-              {
-                type: "image",
-                url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
-                alt: "Generated preview",
-              },
-              { type: "text", text: "Generated output." },
-            ],
-          },
-        ],
-      });
-      await page.goto(`${suite.server.baseUrl}chat/main`);
+    await withChat(390, message("user", referenceText), {
+      role: "toolResult",
+      toolCallId: "spacing-preview",
+      toolName: "image",
+      content: [
+        attachment(),
+        {
+          type: "image",
+          url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
+          alt: "Generated preview",
+        },
+        textBlock("Generated output."),
+      ],
+    })(async (page) => {
       await page.locator(".chat-tool-msg-summary").first().click();
       const body = page.locator(".chat-tool-msg-body");
       const text = body.locator(":scope > .chat-text");
