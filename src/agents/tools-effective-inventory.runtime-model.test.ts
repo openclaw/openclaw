@@ -1,34 +1,34 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import {
   makeModel,
   makeOpenClawConfigFixture,
 } from "./embedded-agent-runner/model.test-harness.js";
 import {
-  acquireEffectiveToolInventoryRuntimeModelContext,
+  acquireEffectiveToolInventoryRuntimeModelContext as acquireContext,
   resolveConfiguredModelCompat,
 } from "./tools-effective-inventory.js";
 
 const runtimeMocks = vi.hoisted(() => {
   const authStorage = { owner: "request" };
   const modelRegistry = { owner: "request" };
+  const model = (id: string) => ({
+    id,
+    name: id,
+    provider: "openai",
+    api: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+  });
   const requestLease = {
     authStorage,
     modelRegistry,
-    snapshot: { createStores: vi.fn(() => ({ authStorage, modelRegistry })) },
+    snapshot: { createStores: () => ({ authStorage, modelRegistry }) },
     [Symbol.asyncDispose]: vi.fn(async () => {}),
   };
   return {
     acquire: vi.fn(async () => requestLease),
     requestLease,
-    resolveModelAsync: vi.fn(async () => ({
-      model: {
-        id: "chat-latest",
-        name: "chat-latest",
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-      },
-    })),
+    model,
+    resolveModelAsync: vi.fn(async () => ({ model: model("chat-latest") })),
     staticCatalogModel: vi.fn(),
   };
 });
@@ -60,14 +60,13 @@ vi.mock("./agent-scope.js", () => ({
   resolveSessionAgentId: () => "main",
 }));
 
-const agentId = "main";
-const agentDir = "/tmp/agents/main/agent";
-const workspaceDir = "/tmp/workspace-main";
-function acquire(
-  modelId: string,
-  overrides: Partial<Parameters<typeof acquireEffectiveToolInventoryRuntimeModelContext>[0]> = {},
-) {
-  return acquireEffectiveToolInventoryRuntimeModelContext({
+const location = {
+  agentId: "main",
+  agentDir: "/tmp/agents/main/agent",
+  workspaceDir: "/tmp/workspace-main",
+};
+function acquire(modelId: string, overrides: Partial<Parameters<typeof acquireContext>[0]> = {}) {
+  return acquireContext({
     cfg: {},
     modelProvider: "openai",
     modelId,
@@ -81,128 +80,115 @@ async function expectNoRuntimeLease(acquired: Awaited<ReturnType<typeof acquire>
   expect(runtimeMocks.requestLease[Symbol.asyncDispose]).not.toHaveBeenCalled();
 }
 
-describe("acquireEffectiveToolInventoryRuntimeModelContext", () => {
-  beforeEach(() => {
-    runtimeMocks.acquire.mockReset().mockResolvedValue(runtimeMocks.requestLease);
-    runtimeMocks.requestLease.snapshot.createStores.mockClear();
-    runtimeMocks.resolveModelAsync.mockClear();
-    runtimeMocks.requestLease[Symbol.asyncDispose].mockClear();
-    runtimeMocks.staticCatalogModel.mockReset();
+beforeEach(() => {
+  runtimeMocks.acquire.mockReset().mockResolvedValue(runtimeMocks.requestLease);
+  runtimeMocks.resolveModelAsync.mockClear();
+  runtimeMocks.requestLease[Symbol.asyncDispose].mockClear();
+  runtimeMocks.staticCatalogModel.mockReset();
+});
+
+it("prepares dynamic model context with a runtime lease", async () => {
+  const lease = runtimeMocks.requestLease;
+  const cfg = makeOpenClawConfigFixture();
+
+  const acquired = await acquire(" chat-latest ", {
+    cfg,
+    ...location,
+    modelProvider: " OpenAI ",
   });
+  expect(acquired.run((context) => context)).toMatchObject({
+    modelApi: "openai-responses",
+    runtimeModel: { id: "chat-latest", provider: "openai" },
+  });
+  expect(runtimeMocks.resolveModelAsync).toHaveBeenCalledWith(
+    "openai",
+    "chat-latest",
+    location.agentDir,
+    cfg,
+    {
+      agentId: location.agentId,
+      workspaceDir: location.workspaceDir,
+      authStorage: lease.authStorage,
+      modelRegistry: lease.modelRegistry,
+      preparedModelRuntime: lease.snapshot,
+    },
+  );
+  expect(runtimeMocks.acquire).toHaveBeenCalledWith(
+    {
+      ...location,
+      config: cfg,
+      loadRuntimePlugins: true,
+      runtimePluginSelections: [
+        { provider: "openai", modelId: "chat-latest", agentId: location.agentId },
+      ],
+      allowGatewaySubagentBinding: true,
+    },
+    { catalogMode: "static" },
+  );
+  expect(lease[Symbol.asyncDispose]).not.toHaveBeenCalled();
+  await acquired[Symbol.asyncDispose]();
+  await acquired[Symbol.asyncDispose]();
+  expect(lease[Symbol.asyncDispose]).toHaveBeenCalledTimes(1);
+  expect(() => acquired.run(() => undefined)).toThrow("has been released");
+});
 
-  it("prepares dynamic model context with a runtime lease", async () => {
-    const lease = runtimeMocks.requestLease;
-    const cfg = makeOpenClawConfigFixture();
-
-    const acquired = await acquire(" chat-latest ", {
-      cfg,
-      agentId,
-      agentDir,
-      workspaceDir,
-      modelProvider: " OpenAI ",
-    });
-    expect(acquired.run((context) => context)).toMatchObject({
+it.each([" ", "bundled"])("uses static context without a runtime lease for %j", async (modelId) => {
+  if (modelId === "bundled") {
+    runtimeMocks.staticCatalogModel.mockReturnValue(runtimeMocks.model(modelId));
+  }
+  const acquired = await acquire(modelId);
+  const context = acquired.run((value) => value);
+  if (modelId === "bundled") {
+    expect(context).toMatchObject({
       modelApi: "openai-responses",
-      runtimeModel: { id: "chat-latest", provider: "openai" },
+      runtimeModel: { id: modelId, provider: "openai" },
     });
-    expect(runtimeMocks.resolveModelAsync).toHaveBeenCalledWith(
-      "openai",
-      "chat-latest",
-      agentDir,
-      cfg,
-      {
-        agentId,
-        workspaceDir,
-        authStorage: lease.authStorage,
-        modelRegistry: lease.modelRegistry,
-        preparedModelRuntime: lease.snapshot,
-      },
-    );
-    expect(runtimeMocks.acquire).toHaveBeenCalledWith(
-      {
-        agentId,
-        agentDir,
-        config: cfg,
-        workspaceDir,
-        loadRuntimePlugins: true,
-        runtimePluginSelections: [{ provider: "openai", modelId: "chat-latest", agentId }],
-        allowGatewaySubagentBinding: true,
-      },
-      { catalogMode: "static" },
-    );
-    expect(lease[Symbol.asyncDispose]).not.toHaveBeenCalled();
-    await acquired[Symbol.asyncDispose]();
-    await acquired[Symbol.asyncDispose]();
-    expect(lease[Symbol.asyncDispose]).toHaveBeenCalledTimes(1);
-    expect(() => acquired.run(() => undefined)).toThrow("has been released");
-  });
+  } else {
+    expect(context).toEqual({});
+  }
+  await expectNoRuntimeLease(acquired);
+});
 
-  it("skips runtime preparation for a blank model id", async () => {
-    const acquired = await acquire(" ");
-    expect(acquired.run((context) => context)).toEqual({});
-    await expectNoRuntimeLease(acquired);
-  });
-
-  it("uses configured static-alias context without acquiring a runtime lease", async () => {
-    const provider = "xai";
-    const modelId = "grok-4.3-latest";
-    const configuredModel = {
-      ...makeModel("grok-4.3"),
-      name: "Configured",
-      contextWindow: 8192,
-      maxTokens: 1024,
-      compat: { supportsTools: true },
-    };
-    const cfg = makeOpenClawConfigFixture({
-      models: {
-        providers: {
-          [provider]: {
-            baseUrl: "https://configured.example.invalid",
-            api: "anthropic-messages",
-            models: [configuredModel],
-          },
+it("uses configured static-alias context without acquiring a runtime lease", async () => {
+  const provider = "xai";
+  const modelId = "grok-4.3-latest";
+  const configuredModel = {
+    ...makeModel("grok-4.3"),
+    name: "Configured",
+    compat: { supportsTools: true },
+  };
+  const cfg = makeOpenClawConfigFixture({
+    models: {
+      providers: {
+        [provider]: {
+          baseUrl: "https://configured.example.invalid",
+          api: "anthropic-messages",
+          models: [configuredModel],
         },
       },
-    });
-
-    const acquired = await acquire(modelId, { cfg, modelProvider: provider });
-    expect(acquired.run((context) => context)).toMatchObject({
-      modelApi: "anthropic-messages",
-      runtimeModel: {
-        id: modelId,
-        name: "Configured",
-        provider,
-        compat: { supportsTools: true },
-      },
-    });
-    expect(resolveConfiguredModelCompat({ cfg, modelProvider: provider, modelId })).toEqual({
-      supportsTools: true,
-    });
-    await expectNoRuntimeLease(acquired);
+    },
   });
 
-  it("uses bundled model context without acquiring a runtime lease", async () => {
-    runtimeMocks.staticCatalogModel.mockReturnValue({
-      id: "bundled",
-      name: "Bundled",
-      provider: "openai",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-    });
-
-    const acquired = await acquire("bundled");
-    expect(acquired.run((context) => context)).toMatchObject({
-      modelApi: "openai-responses",
-      runtimeModel: { id: "bundled", provider: "openai" },
-    });
-    await expectNoRuntimeLease(acquired);
+  const acquired = await acquire(modelId, { cfg, modelProvider: provider });
+  expect(acquired.run((context) => context)).toMatchObject({
+    modelApi: "anthropic-messages",
+    runtimeModel: {
+      id: modelId,
+      name: "Configured",
+      provider,
+      compat: { supportsTools: true },
+    },
   });
-
-  it("releases the runtime lease when dynamic model resolution fails", async () => {
-    const failure = new Error("dynamic model failed");
-    runtimeMocks.resolveModelAsync.mockRejectedValueOnce(failure);
-
-    await expect(acquire("chat-latest")).rejects.toBe(failure);
-    expect(runtimeMocks.requestLease[Symbol.asyncDispose]).toHaveBeenCalledTimes(1);
+  expect(resolveConfiguredModelCompat({ cfg, modelProvider: provider, modelId })).toEqual({
+    supportsTools: true,
   });
+  await expectNoRuntimeLease(acquired);
+});
+
+it("releases the runtime lease when dynamic model resolution fails", async () => {
+  const failure = new Error("dynamic model failed");
+  runtimeMocks.resolveModelAsync.mockRejectedValueOnce(failure);
+
+  await expect(acquire("chat-latest")).rejects.toBe(failure);
+  expect(runtimeMocks.requestLease[Symbol.asyncDispose]).toHaveBeenCalledTimes(1);
 });

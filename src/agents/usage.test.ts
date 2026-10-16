@@ -27,12 +27,13 @@ const billingUsage = {
   total: 927_907,
 };
 
+const contextUsage = {
+  state: "available",
+  promptTokens: 148_874,
+  totalTokens: 163_978,
+} as const;
+
 it("preserves only complete context snapshots", () => {
-  const contextUsage = {
-    state: "available",
-    promptTokens: 148_874,
-    totalTokens: 163_978,
-  } as const;
   expect(normalizeUsage({ input: 12, contextUsage })).toMatchObject({ input: 12, contextUsage });
   expectNormalized(
     {
@@ -89,7 +90,7 @@ it("preserves reasoning token details", () => {
     completion_tokens_details: { reasoning_tokens: 6 },
     total_tokens: 18,
   };
-  expect(toOpenAiChatCompletionsUsage(normalizeUsage(usage))).toEqual(usage);
+  expect(toOpenAiChatCompletionsUsage(normalizeUsage(structuredClone(usage)))).toEqual(usage);
 });
 
 it("returns zeros for undefined usage", () => {
@@ -124,48 +125,33 @@ it("does not treat total-only usage as a prompt snapshot", () => {
   expect(deriveContextPromptTokens({ lastCallUsage: { total: 1_200 } })).toBeUndefined();
   expect(deriveContextPromptTokens({ lastCallUsage: { output: 200, total: 1_200 } })).toBe(1_000);
 });
-it("prefers last-call usage over aggregate billing usage", () => {
-  expect(
-    deriveSessionTotalTokens({
+it.each([
+  [
+    "last-call usage",
+    {
       lastCallUsage: { input: 38_333, output: 66, cacheRead: 120_320, total: 158_719 },
-      usage: {
-        input: 497_720,
-        output: 7_485,
-        cacheRead: 1_323_520,
-        total: 1_828_725,
-      },
-    }),
-  ).toBe(158_653);
-});
-
-it("prefers the explicit context snapshot over aggregate billing buckets", () => {
-  expect(
-    deriveSessionTotalTokens({
-      usage: {
-        ...billingUsage,
-        contextUsage: {
-          state: "available",
-          promptTokens: 148_874,
-          totalTokens: 163_978,
-        },
-      },
-    }),
-  ).toBe(148_874);
-});
-
-it("does not store aggregate billing as session context when the snapshot is unavailable", () => {
-  expect(
-    deriveSessionTotalTokens({
-      usage: { ...billingUsage, contextUsage: { state: "unavailable" } },
-    }),
-  ).toBeUndefined();
-});
-
-it("prefers promptTokens override over derived total", () => {
-  const totalTokens = deriveSessionTotalTokens({
-    usage: { input: 1000, cacheRead: 500, cacheWrite: 200 },
-    contextTokens: 4000,
-    promptTokens: 2500,
-  });
-  expect(totalTokens).toBe(2500);
-});
+      usage: { input: 497_720, output: 7_485, cacheRead: 1_323_520, total: 1_828_725 },
+    },
+    158_653,
+  ],
+  ["explicit context", { usage: { ...billingUsage, contextUsage } }, 148_874],
+  [
+    "unavailable context",
+    { usage: { ...billingUsage, contextUsage: { state: "unavailable" } } },
+    undefined,
+  ],
+  [
+    "prompt override",
+    {
+      usage: { input: 1000, cacheRead: 500, cacheWrite: 200 },
+      contextTokens: 4000,
+      promptTokens: 2500,
+    },
+    2500,
+  ],
+] satisfies Array<[string, Parameters<typeof deriveSessionTotalTokens>[0], number | undefined]>)(
+  "uses %s for session context",
+  (_name, input, expected) => {
+    expect(deriveSessionTotalTokens(input)).toBe(expected);
+  },
+);
