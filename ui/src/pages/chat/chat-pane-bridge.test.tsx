@@ -56,6 +56,11 @@ it("exposes the current navigation face through the real pane host without a gat
 it("applies a route draft and its focus cue to an already mounted native pane", async () => {
   installTranscriptDomMocks();
   onTestFinished(resetTranscriptTestDom);
+  const renderProbe = vi.fn<(host: object, phase: "invalidate" | "commit") => void>();
+  vi.stubGlobal("openclawRenderLifecycleTestHook", renderProbe);
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
   const sessionKey = "agent:main:bridge-draft";
   const fixture = createMountedPanes([
     { key: sessionKey, kind: "direct", sessionId: "bridge-draft", updatedAt: 1 },
@@ -90,13 +95,72 @@ it("applies a route draft and its focus cue to an already mounted native pane", 
     view.container.querySelector<ChatPaneElement>("openclaw-chat-pane"),
     "mounted native pane",
   );
+  const runtime = await waitForSolid(() =>
+    expectDefined(
+      renderProbe.mock.calls.find(
+        ([host, phase]) => phase === "commit" && Reflect.get(host, "element") === pane,
+      )?.[0],
+      "reported pane runtime",
+    ),
+  );
+  expect(Reflect.get(runtime, "state")).toMatchObject({ sessionKey });
+  expect(renderProbe).toHaveBeenCalledWith(pane, "commit");
   setDraft("What can you do?");
   setFocusComposer(true);
   await pane.updateComplete;
+  expect(renderProbe).toHaveBeenCalledWith(runtime, "invalidate");
   expect(textarea.value).toBe("What can you do?");
   expect(document.activeElement).toBe(textarea);
   expect(textarea.closest(".agent-chat__input")?.classList).toContain(
     "agent-chat__input--prefill-attention",
   );
   view.unmount();
+});
+
+it("opens provider findings through the mounted pane's first rendered frame", async () => {
+  installTranscriptDomMocks();
+  onTestFinished(resetTranscriptTestDom);
+  const sessionKey = "agent:main:bridge-provider-review";
+  const review = {
+    id: "bridge-review",
+    runId: "bridge-paused-run",
+    canContinue: true,
+    explanation: "The agent tried to modify a synthetic file outside the selected project.",
+    continuationMessage: "Continue only inside the selected project.",
+  };
+  const fixture = createMountedPanes([
+    {
+      key: sessionKey,
+      agentId: "main",
+      kind: "direct",
+      sessionId: "bridge-provider-review",
+      updatedAt: 1,
+      providerReview: review,
+    },
+  ]);
+  const container = document.body.appendChild(createApplicationContextProvider(fixture.context));
+  onTestFinished(() => container.remove());
+  const view = mountSolid(
+    () => (
+      <ApplicationProvider value={fixture.context}>
+        <ChatPaneView paneId="bridge-provider-review" sessionKey={sessionKey} active />
+      </ApplicationProvider>
+    ),
+    { container },
+  );
+  onTestFinished(view.unmount);
+  const reviewButton = await waitForSolid(() =>
+    expectDefined(
+      view.container.querySelector<HTMLButtonElement>(".chat-provider-review button"),
+      "mounted provider review action",
+    ),
+  );
+  expect(reviewButton.textContent).toContain("Review findings");
+  reviewButton.click();
+  await vi.dynamicImportSettled();
+  await waitForSolid(() => {
+    const dialog = view.container.querySelector("openclaw-modal-dialog");
+    expect(dialog?.textContent).toContain(review.explanation);
+    expect(dialog?.querySelector("blockquote")?.textContent).toBe(review.continuationMessage);
+  });
 });

@@ -52,6 +52,7 @@ import { loadExpectedRestartRecoveryTarget } from "./main-session-restart-recove
 import { tombstoneMainRestartRecoveryWithNotice } from "./main-session-restart-recovery-failure.js";
 import {
   hasReplaySafeCodeModeCheckpointInCurrentTurn,
+  requiresDelegatedRecoverySource,
   resolveMainSessionResumePolicy,
 } from "./main-session-restart-recovery-resume-policy.js";
 import {
@@ -62,28 +63,6 @@ import {
   resolveRestartRecoveryTerminalClientRunId,
 } from "./main-session-restart-recovery-shared.js";
 import { resolveRestartRecoveryDispatchTarget } from "./main-session-restart-recovery-target.js";
-
-function requiresDelegatedRecoverySource(
-  entry: SessionEntry,
-  source: Awaited<ReturnType<typeof readMainSessionRecoveryCheckpoint>>["source"],
-): boolean {
-  // Steering is context, not a new admission. A non-browser operator can have
-  // internal ingress too; its durable source goes through the Gateway's exact
-  // claim and current-policy restoration before any recovery turn executes.
-  if (
-    entry.restartRecoveryDeliverySourceRunId &&
-    (entry.restartRecoveryOperatorSource ||
-      entry.restartRecoverySourceIngress === "control-ui" ||
-      entry.restartRecoverySourceIngress === "channel")
-  ) {
-    return false;
-  }
-  return (
-    source === "inter_session" ||
-    (entry.restartRecoverySourceIngress === "internal" &&
-      (source === undefined || source === "internal_system" || source === "harness_completion"))
-  );
-}
 
 async function pendingFinalRecoveryAction(
   pending: NonNullable<SessionEntry["pendingFinalDelivery"]>,
@@ -177,6 +156,7 @@ async function completePendingFinalRecoveryWithNotice(
 
 export async function recoverStore(params: {
   storeAgentId?: string;
+  preparedEntries?: readonly { sessionKey: string; entry: SessionEntry }[];
   cfg?: OpenClawConfig;
   observationOnly?: boolean;
   onExhaustedTarget?: (target: ExhaustedRestartRecoveryTarget) => void;
@@ -199,9 +179,11 @@ export async function recoverStore(params: {
   const passId = params.passId ?? randomUUID();
   const lifecycleGeneration = params.lifecycleGeneration ?? getAgentEventLifecycleGeneration();
   const hasCurrentProcessOwner = createCurrentProcessOwnerLookup(params);
-  let entries: Array<{ sessionKey: string; entry: SessionEntry }>;
+  let entries: readonly { sessionKey: string; entry: SessionEntry }[];
   try {
-    if (params.expectedTarget) {
+    if (params.preparedEntries) {
+      entries = params.preparedEntries;
+    } else if (params.expectedTarget) {
       const entry = await loadExpectedRestartRecoveryTarget({
         expected: params.expectedTarget,
         storePath: params.storePath,
@@ -219,9 +201,7 @@ export async function recoverStore(params: {
     return result;
   }
 
-  for (const { sessionKey, entry: loadedEntry } of entries.toSorted((a, b) =>
-    a.sessionKey.localeCompare(b.sessionKey),
-  )) {
+  for (const { sessionKey, entry: loadedEntry } of entries) {
     let entry = loadedEntry;
     let completionSource: SessionSourceAssertion | undefined;
     const isRecoveryCandidate =
@@ -667,7 +647,7 @@ export async function recoverStore(params: {
         reason: `dispatch_${resumeResult}`,
         nextOwner:
           resumeResult === "started"
-            ? "background-lane"
+            ? `${params.recoveryAdmission?.lane ?? "restart-recovery"}-lane`
             : resumeResult === "settled"
               ? "none"
               : "main-session-recovery",
@@ -695,6 +675,14 @@ export async function recoverStore(params: {
           });
         }
       }
+    } catch (error) {
+      if (params.shouldContinue?.() === false) {
+        throw error;
+      }
+      mainSessionRecoveryLog.warn(
+        `failed to prepare restart recovery for ${sessionKey}: ${String(error)}`,
+      );
+      result.failed++;
     } finally {
       if (isRecoveryCandidate && isMainRestartRecoveryCandidate(loadedEntry, sessionKey)) {
         mainSessionRecoveryLog.info(

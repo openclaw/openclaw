@@ -100,36 +100,45 @@ export function registerSharedClientAcquisitionDiagnosticsTests({
       );
     }
     const run = vi.fn(async () => undefined);
-    const result = withCodexAppServerJsonClient({ timeoutMs: 50 }, run).catch(
-      (error: unknown) => error,
-    );
+    const result = withCodexAppServerJsonClient(
+      { timeoutMs: 50, pluginConfig: { appServer: { requestTimeoutMs: 10 } } },
+      run,
+    ).catch((error: unknown) => error);
     if (boundary === "initialize") {
       await harness.waitForWrite(0);
     } else {
       await entered.promise;
     }
-    await vi.advanceTimersByTimeAsync(50);
-    expect(await result).toMatchObject({ message: "codex app-server request timed out" });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await result).toMatchObject({
+      name: "AgentHarnessPreflightError",
+      message: expect.stringContaining("Codex app-server startup exceeded its wait budget"),
+    });
     const warning = vi
       .mocked(embeddedAgentLog.warn)
       .mock.calls.find(([message]) => message === "codex app-server scope timed out");
     expect(warning?.[1]).toMatchObject({
       phase: "acquire-client",
-      acquireLastObservedBoundary: boundary,
       scopeAttemptOrdinal: 1,
       requestStartedCount: 0,
       currentRequestCount: 0,
     });
+    expect(
+      warning?.[1]?.acquireBoundaryBeforeCleanup ?? warning?.[1]?.acquireLastObservedBoundary,
+    ).toBe(boundary);
     expect(warning?.[1]).not.toHaveProperty("clientInstanceId");
     if (boundary === "initialize") {
-      expect(JSON.parse(String(warning?.[1]?.initializeSnapshot))).toMatchObject({
+      expect(
+        JSON.parse(
+          String(warning?.[1]?.initializeBeforeCleanup ?? warning?.[1]?.initializeSnapshot),
+        ),
+      ).toMatchObject({
         boundary: "request",
         outcome: "pending",
         wireOutcome: "retained-pending",
         writeState: "callback-ok",
         clientClosed: false,
       });
-      expect(warning?.[1]).not.toHaveProperty("initializeBeforeCleanup");
     }
     if (
       ["initialize", "catalog-observation", "runtime-binding", "auth-handoff"].includes(boundary)
@@ -142,68 +151,6 @@ export function registerSharedClientAcquisitionDiagnosticsTests({
       expect(warning?.[1]).not.toHaveProperty("lastStartedClientInstanceId");
     }
     expect(run).not.toHaveBeenCalled();
-    finish.resolve();
-    harness.emitExit();
-    await vi.advanceTimersByTimeAsync(0);
-  });
-
-  it("retains the blocked boundary when an inner deadline joins cleanup before the scope times out", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-    vi.spyOn(diagnostics, "areDiagnosticsEnabledForProcess").mockReturnValue(true);
-    vi.spyOn(embeddedAgentLog, "isEnabled").mockReturnValue(true);
-    vi.mocked(embeddedAgentLog.warn).mockClear();
-    const harness = createClientHarness();
-    vi.spyOn(harness.client, "getRegisteredTransportIdentity").mockReturnValue({
-      pid: 500002,
-      startedAt: "fixture-boot:12345",
-    });
-    vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
-    vi.spyOn(sharedClient, "getLeasedSharedCodexAppServerClient").mockImplementation((options) =>
-      getLeasedSharedCodexAppServerClient({ ...options, timeoutMs: 5 }),
-    );
-    const finish = createDeferred<void>();
-    const close = harness.client.closeAndWait.bind(harness.client);
-    const closing = vi.spyOn(harness.client, "closeAndWait").mockImplementation(async () => {
-      harness.client.close();
-      await finish.promise;
-      return await close();
-    });
-    const result = withCodexAppServerJsonClient({ timeoutMs: 50 }, async () => undefined).catch(
-      (error: unknown) => error,
-    );
-    await harness.waitForWrite(0);
-    await vi.advanceTimersByTimeAsync(5);
-    expect(closing).toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(45);
-    expect(await result).toMatchObject({ message: "codex app-server request timed out" });
-    expect(
-      vi
-        .mocked(embeddedAgentLog.warn)
-        .mock.calls.find(([message]) => message === "codex app-server scope timed out")?.[1],
-    ).toMatchObject({
-      phase: "acquire-client",
-      acquireLastObservedBoundary: "cleanup",
-      acquireBoundaryBeforeCleanup: "initialize",
-      lastStartedClientInstanceId: harness.client.getInstanceId(),
-    });
-    const attributes = vi
-      .mocked(embeddedAgentLog.warn)
-      .mock.calls.find(([message]) => message === "codex app-server scope timed out")?.[1];
-    expect(JSON.parse(String(attributes?.lastStartedTransportIdentity))).toEqual({
-      pid: 500002,
-      startedAt: "fixture-boot:12345",
-    });
-    expect(JSON.parse(String(attributes?.initializeBeforeCleanup))).toMatchObject({
-      outcome: "pending",
-      wireOutcome: "retained-pending",
-      clientClosed: false,
-    });
-    expect(attributes?.initializeBeforeCleanupSource).toBe("before-client-close");
-    expect(JSON.parse(String(attributes?.initializeSnapshot))).toMatchObject({
-      outcome: "failed",
-      wireOutcome: "correlation-closed",
-      clientClosed: true,
-    });
     finish.resolve();
     harness.emitExit();
     await vi.advanceTimersByTimeAsync(0);

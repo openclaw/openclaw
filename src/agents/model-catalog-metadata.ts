@@ -47,9 +47,11 @@ function clearRouteBoundCatalogMetadata(
     params: _params,
     compat: _compat,
     mediaInput: _mediaInput,
+    inference: _inference,
     ...routeNeutral
   } = entry;
-  return routeNeutral;
+  // Losing route provenance must not promote a declared typed route to legacy chat.
+  return { ...routeNeutral, ...(entry.inference ? { inference: { chat: false } } : {}) };
 }
 
 export function overlayCatalogMetadata(
@@ -88,6 +90,12 @@ export function overlayCatalogMetadata(
     ? overlay.contextWindowDefault
     : (overlay.contextWindowDefault ?? routeBase.contextWindowDefault) || undefined;
   const applyRoute = !options?.preserveBaseRoute;
+  const inferenceRouteChanged = !modelTransportRoutesMatch(base, overlay);
+  const inference =
+    !applyRoute && inferenceRouteChanged
+      ? base.inference
+      : (overlay.inference ??
+        (inferenceRouteChanged && base.inference ? { chat: false } : base.inference));
   return {
     ...selectionNeutralBase,
     ...(contextWindows !== undefined ? { contextWindows } : {}),
@@ -111,6 +119,7 @@ export function overlayCatalogMetadata(
     ...(overlay.input !== undefined ? { input: overlay.input } : {}),
     ...(params ? { params } : {}),
     ...(overlay.mediaInput !== undefined ? { mediaInput: overlay.mediaInput } : {}),
+    ...(inference !== undefined ? { inference } : {}),
     ...(overlay.providerOrder !== undefined ? { providerOrder: overlay.providerOrder } : {}),
     ...(overlay.status !== undefined ? { status: overlay.status } : {}),
     ...(overlay.statusReason !== undefined ? { statusReason: overlay.statusReason } : {}),

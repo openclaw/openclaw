@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import type { Server as HttpServer } from "node:http";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -7,6 +8,7 @@ import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { buildBoardWidgetSandboxPath } from "../../../src/gateway/board-sandbox.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
@@ -68,6 +70,152 @@ async function expectPaneHeaderGeometry(page: Page, dock: "left" | "right" | "bo
 }
 
 suite.define(() => {
+  it("opens this dashboard's chat and details independently without losing either draft", async () => {
+    await suite.withPage(
+      { viewport: { width: 1440, height: 960 }, permissions: ["local-network-access"] },
+      async ({ page }) => {
+        const html = buildWidgetDocument(
+          "Release overview",
+          '<style>body{font:16px system-ui;padding:32px;background:#101820;color:#e5edf5}h1{font-size:36px;color:inherit}section{display:flex;gap:16px;flex-wrap:wrap}article{background:#1b2935;padding:24px;border-radius:12px;min-width:140px}strong{display:block;font-size:36px;color:#61d9ad}label{display:block;margin-top:32px}input{display:block;margin-top:12px;padding:12px;width:80%;background:#1b2935;color:inherit;border:1px solid #395165;border-radius:8px}</style><p>OPENCLAW / RELEASE OVERVIEW</p><h1>Good work. In view.</h1><p>Review the release, then discuss it in this conversation.</p><section><article><strong>24</strong>Merged changes</article><article><strong>8</strong>Ready for review</article><article><strong>92%</strong>Checks passing</article></section><label>Release note<input id="widget-note"></label><script>globalThis.documentIdentity=crypto.randomUUID();</script>',
+        );
+        await page.route("**/__openclaw__/board/**", (route) =>
+          route.fulfill({ status: 200, contentType: "text/html", body: html }),
+        );
+        const gateway = await installMockGateway(page, {
+          sessionKey,
+          sessions: [
+            {
+              key: sessionKey,
+              sessionId: "page-chat-session",
+              kind: "direct",
+              displayName: "Release overview",
+              boardFace: "dashboard",
+              boardPresentation: "expanded",
+              updatedAt: Date.now(),
+            },
+          ],
+          featureMethods: [
+            "board.get",
+            "chat.metadata",
+            "chat.startup",
+            "sessions.list",
+            "sessions.describe",
+            "sessions.resolve",
+          ],
+          historyMessages: [
+            { role: "user", content: "Show me the release overview." },
+            {
+              role: "assistant",
+              content: "The release overview is ready. We can review the remaining changes here.",
+            },
+          ],
+          methodResponses: {
+            "cron.list": { jobs: [], total: 0, hasMore: false },
+            "board.get": {
+              sessionKey,
+              revision: 1,
+              tabs: [{ tabId: "main", title: "Overview", position: 0 }],
+              widgets: [
+                {
+                  name: "overview",
+                  tabId: "main",
+                  title: "Release overview",
+                  contentKind: "html",
+                  sizeW: 12,
+                  sizeH: 6,
+                  heightMode: "fixed",
+                  position: 0,
+                  grantState: "none",
+                  revision: 1,
+                  instanceId: "overview-instance",
+                  frameUrl: new URL(
+                    "/__openclaw__/board/overview/index.html?bt=ticket",
+                    suite.server.baseUrl,
+                  ).href,
+                  viewTicket: "ticket",
+                  viewTicketTtlMs: 1_200_000,
+                  viewGeneration: "0123456789abcdef0123456789abcdef",
+                  sandboxUrl: buildBoardWidgetSandboxPath({ grantState: "none" }),
+                  sandboxPort,
+                },
+              ],
+            },
+          },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
+        const input = widgetInput(page);
+        await input.fill("Keep the release note while discussing changes");
+        const identity = await input.evaluate((element) =>
+          Reflect.get(element.ownerDocument.defaultView!, "documentIdentity"),
+        );
+        const header = page.locator(".chat-pane__header");
+        const chat = header.getByRole("button", { name: "Chat", exact: true });
+        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        const capture = async (name: string) => {
+          const frame = await takeControlUiScreenshotFrame(page, header, [header], {
+            animations: "disabled",
+          });
+          await writeFile(path.join(suite.artifactDir, name + ".png"), frame.png);
+        };
+        await capture("page-chat-closed");
+        await chat.waitFor();
+        expect(await chat.getAttribute("aria-pressed")).toBe("false");
+        expect(await composer.isVisible()).toBe(false);
+        // Details is session context, not a shortcut that reveals the transcript.
+        await header.locator(".chat-header-session-menu__trigger").click();
+        await page.getByRole("menuitem", { name: "Session details", exact: true }).click();
+        const details = page.getByRole("dialog", { name: "Details", exact: true });
+        await details.waitFor();
+        expect(await composer.isVisible()).toBe(false);
+        await capture("page-details-open");
+        await details.getByRole("button", { name: "Close details", exact: true }).click();
+        await chat.click();
+        await composer.fill("Let's review the eight remaining changes.");
+        await page.getByText("The release overview is ready.", { exact: false }).waitFor();
+        expect(await chat.getAttribute("aria-pressed")).toBe("true");
+        expect(await input.isVisible()).toBe(true);
+        // Opening Chat must not demote the main page to a fixed-height grid card.
+        const pageHeight = await regionSize(
+          page.locator('[data-region="main"]:not([hidden])'),
+          "height",
+        );
+        // Allow the card presentation's content inset, but not a fixed-height grid row.
+        expect(await regionSize(page.locator(".board-widget__frame"), "height")).toBeGreaterThan(
+          pageHeight - 32,
+        );
+        await capture("page-chat-open");
+        await chat.click();
+        await composer.waitFor({ state: "hidden" });
+        await chat.click();
+        expect(await composer.inputValue()).toBe("Let's review the eight remaining changes.");
+        // Mobile presents one surface at a time without changing the saved desktop layout.
+        await page.setViewportSize({ width: 390, height: 844 });
+        await composer.waitFor();
+        await expect.poll(() => input.isVisible()).toBe(false);
+        await capture("mobile-chat-open");
+        await chat.click();
+        await input.waitFor();
+        await composer.waitFor({ state: "hidden" });
+        await capture("mobile-page");
+        await chat.click();
+        await page.setViewportSize({ width: 1440, height: 960 });
+        await input.waitFor();
+        expect(await composer.inputValue()).toBe("Let's review the eight remaining changes.");
+        expect(await input.inputValue()).toBe("Keep the release note while discussing changes");
+        expect(
+          await input.evaluate((element) =>
+            Reflect.get(element.ownerDocument.defaultView!, "documentIdentity"),
+          ),
+        ).toBe(identity);
+        expect(
+          (await gateway.getRequests()).some(
+            (request) => request.method === "chat.send" || request.method === "sessions.create",
+          ),
+        ).toBe(false);
+      },
+    );
+  });
+
   beforeAll(async () => {
     sandbox = createSandboxHostHttpServer();
     await new Promise<void>((resolve) => {

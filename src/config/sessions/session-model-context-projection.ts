@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { sql, type Expression, type RawBuilder } from "kysely";
 import {
   LEGACY_MISSING_TOOL_RESULT_TEXT,
@@ -17,6 +16,7 @@ import {
   jsonValid,
 } from "../../infra/database-engine/json-values.js";
 import { supportsNodeSqliteJsonb } from "../../infra/node-sqlite.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { MODEL_CONTEXT_PRIVATE_METADATA_KEYS } from "../../shared/model-context-message.js";
 import {
@@ -27,7 +27,7 @@ import {
 
 /** Exclude storage-only fields in SQLite, before a row's JSON crosses into JavaScript. */
 export function projectModelContextEventSql(
-  db: DatabaseSync,
+  db: EngineConnection,
   event: Expression<string | Uint8Array>,
   omitCheckpoint: Expression<number>,
   toolResultOmission?: Expression<string | null>,
@@ -90,7 +90,7 @@ function jsonMemberValue(alias: JsonMemberAlias): RawBuilder<unknown> {
 
 /** Stored navigation serves SQL's first-key lookup and JavaScript's last-key parse. */
 export function projectTranscriptPayloadNavigationSql(
-  db: DatabaseSync,
+  db: EngineConnection,
   event: Expression<string | Uint8Array>,
 ): RawBuilder<string> {
   const memberValue =
@@ -116,7 +116,7 @@ export function projectTranscriptPayloadNavigationSql(
 
 /** Cursor resolution needs only tree facts, even when a row has an opaque body. */
 export function projectTranscriptNavigationSql(
-  db: DatabaseSync,
+  db: EngineConnection,
   event: Expression<string>,
 ): RawBuilder<string> {
   return jsonPickObject(db, event, TRANSCRIPT_NAVIGATION_KEYS);
@@ -124,7 +124,7 @@ export function projectTranscriptNavigationSql(
 
 /** Reset boundaries select ancestry and replay roles without loading message bodies. */
 export function projectResetBoundaryNavigationSql(
-  db: DatabaseSync,
+  db: EngineConnection,
   event: Expression<string>,
 ): RawBuilder<string> {
   const entry = jsonPickObject(db, event, [
@@ -151,7 +151,7 @@ export function projectResetBoundaryNavigationSql(
 }
 
 function systemUpdateKindSql(
-  db: DatabaseSync,
+  db: EngineConnection,
   event: Expression<unknown>,
 ): RawBuilder<string | null> {
   return /* kysely-allow-raw: only bounded operator kinds cross the navigation boundary. */ sql<
@@ -164,7 +164,7 @@ function systemUpdateKindSql(
 
 /** Lightweight tree/state records; these never serve as persisted transcript evidence. */
 export function projectModelContextNavigationSql(
-  db: DatabaseSync,
+  db: EngineConnection,
   event: Expression<string | Uint8Array>,
   entryType: Expression<unknown> = jsonPathValue(db, event, sql.lit("$.type")),
 ): RawBuilder<string> {
@@ -206,7 +206,7 @@ export function projectModelContextNavigationSql(
 }
 
 function postgresModelNavigationSql(
-  db: DatabaseSync,
+  db: EngineConnection,
   event: Expression<unknown>,
   entryType: Expression<unknown>,
 ): RawBuilder<string> {

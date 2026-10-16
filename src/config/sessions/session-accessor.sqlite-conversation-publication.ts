@@ -1,7 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import {
   createSqliteCommitReceipt,
@@ -87,7 +87,7 @@ export const conversationPublication = {
 };
 
 function stageConversationRows(
-  database: { db: DatabaseSync },
+  database: { db: EngineConnection },
   rows: {
     catalogues?: readonly ConversationCatalogRow[];
     associations?: readonly ConversationAssociationRow[];
@@ -135,7 +135,7 @@ function stageConversationRows(
 
 /** Large JSON postimages may outgrow a valid input; retain the commit and retire coverage. */
 export function deferConversationWorkerReceipt(
-  database: DatabaseSync,
+  database: EngineConnection,
   receipt: ConversationPublication,
 ): void {
   deferSqliteWorkerCommitReceipt(

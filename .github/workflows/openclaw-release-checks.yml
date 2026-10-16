@@ -1924,11 +1924,6 @@ jobs:
             --validated-file "$validated_file"
           jq -e 'length == 2 and all(.[]; .status == "success")' "$validated_file" >/dev/null
 
-      - name: Build private QA runtime
-        env:
-          NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build qaRuntime
-
       - name: Generate parity report
         id: generate_report
         run: |

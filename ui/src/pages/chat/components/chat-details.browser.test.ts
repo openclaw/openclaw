@@ -35,7 +35,7 @@ function props(overrides: Partial<ChatDetailsProps> = {}): ChatDetailsProps {
     ...overrides,
   };
 }
-async function fixture(value = props(), width = 600) {
+async function fixture(value = props(), width = 600, fullscreen = false) {
   const styles = document.createElement("style");
   styles.textContent = [baseStyles, progressStyles, detailsStyles].join("\n");
   document.head.append(styles);
@@ -49,27 +49,44 @@ async function fixture(value = props(), width = 600) {
   const footer = document.createElement("div");
   footer.className = "chat-footer";
   footer.style.cssText = "position:absolute;bottom:0;width:100%;height:100px";
-  document.body.append(frame);
-  const view = mountSolid(() => createComponent(ChatDetails, { props: value, presented: true }), {
-    container: frame,
-  });
+  const pane = document.createElement("openclaw-chat-pane");
+  pane.className = "sidebar-region";
+  pane.style.cssText = `display:block;position:relative;width:${width}px;height:640px;margin:30px 20px`;
+  pane.append(frame);
+  frame.hidden = fullscreen;
+  const header = document.createElement("div");
+  if (fullscreen) {
+    pane.prepend(header);
+  }
+  document.body.append(pane);
+  const view = mountSolid(
+    () =>
+      createComponent(ChatDetails, {
+        props: value,
+        presented: true,
+        conversationVisible: !fullscreen,
+        externalTrigger: fullscreen,
+      }),
+    { container: fullscreen ? header : frame },
+  );
   const element = view.container.querySelector("openclaw-chat-details")!;
   conversation.append(footer);
   frame.append(conversation);
-  mounted.push(frame, styles);
+  mounted.push(pane, styles);
   await element.updateComplete;
-  const session = frame.querySelector<ChatDetailsSession>("openclaw-chat-details-session")!;
-  const progress = frame.querySelector<HTMLElement>("openclaw-chat-details-progress")!;
+  const session = pane.querySelector<ChatDetailsSession>("openclaw-chat-details-session")!;
+  const progress = pane.querySelector<HTMLElement>("openclaw-chat-details-progress")!;
   await session.updateComplete;
   flush();
   return {
     element,
     frame,
+    pane,
     footer,
     session,
     progress,
     conversation,
-    panel: frame.querySelector<HTMLElement>(".chat-details")!,
+    panel: pane.querySelector<HTMLElement>(".chat-details")!,
     trigger: element.querySelector<HTMLButtonElement>(".chat-details-toggle")!,
   };
 }
@@ -234,6 +251,49 @@ describe("chat Details presentation", () => {
     element.open(source);
     await element.updateComplete;
     expect(panel.matches(":popover-open")).toBe(false);
+  });
+
+  it("opens fullscreen Details within the visible pane and returns focus to its external trigger", async () => {
+    await page.viewport(1700, 900);
+    const { element, pane, frame, trigger, panel } = await fixture(props(), 1320, true);
+    const source = document.createElement("button");
+    source.textContent = "Session actions";
+    pane.prepend(source);
+    expect(frame.checkVisibility()).toBe(false);
+    expect(trigger.hidden).toBe(true);
+    expect(panel.matches(":popover-open")).toBe(false);
+    element.open(source);
+    await element.updateComplete;
+    expect(panel.matches(":popover-open")).toBe(true);
+    expect(panel.checkVisibility()).toBe(true);
+    expect(frame.contains(panel)).toBe(false);
+    expect(pane.contains(panel)).toBe(true);
+    expect(panel.getAttribute("role")).toBe("dialog");
+    const bounds = panel.getBoundingClientRect();
+    const paneBounds = pane.getBoundingClientRect();
+    expect(bounds.width).toBe(352);
+    expect(bounds.height).toBeGreaterThan(40);
+    expect(bounds.left).toBeGreaterThanOrEqual(paneBounds.left);
+    expect(bounds.right).toBeLessThanOrEqual(paneBounds.right);
+    expect(bounds.top).toBeGreaterThanOrEqual(source.getBoundingClientRect().bottom);
+    expect(bounds.bottom).toBeLessThanOrEqual(paneBounds.bottom);
+    const close = panel.querySelector<HTMLButtonElement>(".chat-details__toolbar button")!;
+    expect(close.checkVisibility()).toBe(true);
+    expect(close.getAttribute("aria-label")).toBe("Close details");
+    close.focus();
+    close.click();
+    await element.updateComplete;
+    expect(panel.matches(":popover-open")).toBe(false);
+    expect(document.activeElement).toBe(source);
+    element.open(source);
+    await element.updateComplete;
+    close.focus();
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    await element.updateComplete;
+    expect(panel.matches(":popover-open")).toBe(false);
+    expect(document.activeElement).toBe(source);
   });
 
   it("closes Details after its child menu closes", async () => {

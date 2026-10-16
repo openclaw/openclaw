@@ -1,6 +1,8 @@
 /* @vitest-environment jsdom */
+import { createComponent, createSignal, flush } from "solid-js";
 import { describe, expect, it } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { CapacityMeter } from "./solid/capacity-meter.tsx";
 import { workerCapacityPresentation } from "./solid/worker-capacity.tsx";
 
 function renderCapacity(params: Parameters<typeof workerCapacityPresentation>[0]) {
@@ -8,6 +10,35 @@ function renderCapacity(params: Parameters<typeof workerCapacityPresentation>[0]
 }
 
 describe("worker capacity meter", () => {
+  it("resizes filled pips while preserving retained slots", () => {
+    const [capacity, setCapacity] = createSignal({ total: 2, used: 1 });
+    const view = mountSolid(() =>
+      createComponent(CapacityMeter, {
+        mode: "discrete",
+        label: "Workers",
+        get total() {
+          return capacity().total;
+        },
+        get used() {
+          return capacity().used;
+        },
+        tone: "accent",
+      }),
+    );
+    const pips = () => view.container.querySelectorAll(".capacity-meter-pips__pip");
+    const first = pips()[0];
+    setCapacity({ total: 4, used: 3 });
+    flush();
+    expect(pips()).toHaveLength(4);
+    expect(pips()[0]).toBe(first);
+    expect(view.container.querySelectorAll(".capacity-meter-pips__pip--filled")).toHaveLength(3);
+    setCapacity({ total: 1, used: 0 });
+    flush();
+    expect(pips()).toHaveLength(1);
+    expect(pips()[0]).toBe(first);
+    expect(view.container.querySelectorAll(".capacity-meter-pips__pip--filled")).toHaveLength(0);
+  });
+
   it.each([
     {
       name: "idle",

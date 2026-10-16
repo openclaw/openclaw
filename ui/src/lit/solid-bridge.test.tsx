@@ -1,5 +1,4 @@
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
-import { LitElement, html, render as renderLit } from "lit";
 import { createEffect, createMemo, createSignal, flush, onCleanup } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
@@ -110,37 +109,32 @@ afterEach(async () => {
   await Promise.resolve();
 });
 
-it.each([true])(
-  "mounts once and preserves setup reads with application provider: %s",
-  async (withProvider) => {
-    const host = createHost();
-    host.setAttribute("label", "attribute");
-    host.setAttribute("item-count", "4");
-    host.show();
-    const payload = {};
-    expect(host.setPayload(payload)).toBe(payload);
-    expect(host.enabled).toBe(true);
-    // SAFETY: this bridge test transports context without reading any capabilities.
-    const container = withProvider
-      ? createApplicationContextProvider({} as ApplicationContext)
-      : document.createElement("div");
-    container.append(host);
-    document.body.append(container);
-    await host.updateComplete;
-    expect(host.querySelector("output")?.textContent).toBe("attribute:4:true");
-    expect(host.payload).toBe(payload);
-    expect(host.hasAttribute("payload")).toBe(false);
-    expect(mounted).toHaveBeenCalledTimes(1);
+it("mounts once and preserves setup reads with an application provider", async () => {
+  const host = createHost();
+  host.setAttribute("label", "attribute");
+  host.setAttribute("item-count", "4");
+  host.show();
+  const payload = {};
+  expect(host.setPayload(payload)).toBe(payload);
+  expect(host.enabled).toBe(true);
+  // SAFETY: this bridge test transports context without reading any capabilities.
+  const container = createApplicationContextProvider({} as ApplicationContext);
+  container.append(host);
+  document.body.append(container);
+  await host.updateComplete;
+  expect(host.querySelector("output")?.textContent).toBe("attribute:4:true");
+  expect(host.payload).toBe(payload);
+  expect(host.hasAttribute("payload")).toBe(false);
+  expect(mounted).toHaveBeenCalledTimes(1);
 
-    host.label = "property";
-    host.removeAttribute("enabled");
-    host.close();
-    await host.updateComplete;
-    expect(host.querySelector("output")?.textContent).toBe("property:4:false");
-    expect(host.querySelector("section")?.getAttribute("data-owned")).toBe("attribute");
-    expect(mounted).toHaveBeenCalledTimes(1);
-  },
-);
+  host.label = "property";
+  host.removeAttribute("enabled");
+  host.close();
+  await host.updateComplete;
+  expect(host.querySelector("output")?.textContent).toBe("property:4:false");
+  expect(host.querySelector("section")?.getAttribute("data-owned")).toBe("attribute");
+  expect(mounted).toHaveBeenCalledTimes(1);
+});
 
 it("publishes changed properties synchronously before rendering and suppresses equal assignments", async () => {
   const host = createHost();
@@ -160,28 +154,7 @@ it("publishes changed properties synchronously before rendering and suppresses e
   changed.mockReset();
 });
 
-it("commits Solid DOM before a Lit parent updateComplete resumes", async () => {
-  class Parent extends LitElement {
-    static override properties = { label: {} };
-    label = "first";
-    override createRenderRoot() {
-      return this;
-    }
-    override render() {
-      return html`<openclaw-solid-bridge-test .label=${this.label}></openclaw-solid-bridge-test>`;
-    }
-  }
-  customElements.define("openclaw-solid-bridge-parent", Parent);
-  const parent = new Parent();
-  document.body.append(parent);
-  await parent.updateComplete;
-  expect(parent.querySelector("output")?.textContent).toBe("first:0:false");
-  parent.label = "next";
-  await parent.updateComplete;
-  expect(parent.querySelector("output")?.textContent).toBe("next:0:false");
-});
-
-it("batches Lit property bursts without invalidating unrelated Solid computations", async () => {
+it("batches property bursts without invalidating unrelated Solid computations", async () => {
   const labels = vi.fn((value: string) => value);
   const counts = vi.fn((value: number) => value);
   const mount = vi.fn();
@@ -292,23 +265,23 @@ it("preserves caller content through updates and reconnects", async () => {
   expect(host.querySelectorAll("input")).toHaveLength(1);
 });
 
-it("keeps a tooltip's named caller slots live through Lit updates and reconnect", async () => {
+it("keeps a tooltip's named caller slots live through DOM updates and reconnect", async () => {
   await import("../components/tooltip.ts");
   const container = document.createElement("div");
   document.body.append(container);
-  const update = (label: string) =>
-    renderLit(
-      html`<openclaw-tooltip content="Details">
-        <button>${label}</button>
-        <div slot="content">Rich ${label}</div>
-      </openclaw-tooltip>`,
-      container,
-    );
+  const host = document.createElement("openclaw-tooltip");
+  host.setAttribute("content", "Details");
+  const trigger = document.createElement("button");
+  const content = document.createElement("div");
+  content.slot = "content";
+  const update = (label: string) => {
+    trigger.textContent = label;
+    content.textContent = `Rich ${label}`;
+  };
   update("first");
-  const host = container.querySelector("openclaw-tooltip")!;
+  host.append(trigger, content);
+  container.append(host);
   await host.updateComplete;
-  const trigger = host.querySelector("button")!;
-  const content = host.querySelector('[slot="content"]')!;
   const assigned = () =>
     host.shadowRoot!.querySelector<HTMLSlotElement>('slot[name="content"]')!.assignedElements();
   expect(assigned()).toEqual([content]);
@@ -494,7 +467,7 @@ it("releases the old provider when a nearer provider takes over without moving t
   expect(seen).not.toHaveBeenCalled();
 });
 
-it("publishes a Lit-hosted page's layout traits to the existing shell owner", async () => {
+it("publishes an imperatively mounted page's layout traits to the existing shell owner", async () => {
   defineSolidBridge(
     "openclaw-solid-lit-layout-test",
     (props: { active: boolean }) => (

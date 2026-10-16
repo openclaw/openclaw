@@ -384,8 +384,8 @@ async function runEmbeddedAgentForSession(
             ) {
               throw new Error("prepared model runtime replaced the admitted plugin generation");
             }
-            // A reload may complete while admission waits. The committed generation owns config,
-            // directories, model selection, hooks, fallbacks, and every later run projection.
+            // Admission follows committed config, directories, model selection, hooks, and fallbacks.
+            // Connection recovery may refresh transport while retaining this admitted run policy.
             const rebound = bindRunToPreparedModelRuntime({
               runParams: params,
               requestedWorkspaceResolution,

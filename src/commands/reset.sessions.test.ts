@@ -26,6 +26,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { handleReset } from "./onboard-helpers.js";
 import { resetCommand } from "./reset.js";
@@ -332,7 +333,7 @@ describe("reset canonical sessions", () => {
       const options = { agentId: "main", path: scope.storePath };
       const database = openOpenClawAgentDatabase(options);
       database.db.exec("DROP TABLE session_transcript_archives");
-      assertOpenClawAgentCurrentRuntimeSchema(database.db, {
+      assertOpenClawAgentCurrentRuntimeSchema(requireNativeSqliteDatabase(database.db), {
         agentId: "main",
         pathname: scope.storePath,
       });

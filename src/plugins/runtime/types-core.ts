@@ -566,7 +566,7 @@ export type PluginRuntimeCore = {
     resolveStateDir: typeof import("../../config/paths.js").resolveStateDir;
     openBlobStore: <TMetadata>(
       options: import("../../plugin-state/plugin-blob-store.types.js").OpenBlobStoreOptions,
-    ) => import("../../plugin-state/plugin-blob-store.types.js").PluginBlobStore<TMetadata>;
+    ) => import("../../plugin-state/plugin-blob-store.types.js").PluginBlobStoreWithReceipts<TMetadata>;
     openKeyedStore: <T>(
       options: OpenAsyncKeyedStoreOptions,
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateKeyedStore<T>;

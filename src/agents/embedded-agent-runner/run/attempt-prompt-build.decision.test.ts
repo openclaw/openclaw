@@ -144,7 +144,6 @@ async function fixture(
         };
   const policy = createPromptBuildToolPolicy({
     session,
-    readModelTools: () => session.agent.state.tools,
     effectiveTools: mode === "structured" ? tools : [...controlTools, tools[1]!],
     uncompactedEffectiveTools: tools,
     tools,

@@ -1,3 +1,4 @@
+import { PROVIDER_MODEL_INPUT } from "@openclaw/ai/provider-types";
 import {
   isAnthropicServerToolClearingEnabled,
   resolveCompactionReplayEligibility,
@@ -13,6 +14,7 @@ import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js
 import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import { resolveSelectedModelCredential } from "../../model-auth-selected-credential.js";
+import { configuredModelSupportsNativeVideo } from "../../model-input.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
 import { resolveModelCallUrgency } from "../../run-trigger.js";
@@ -441,6 +443,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     resolvePreparedExtraParams({
       ...extraParamsContext,
       cfg: attempt.config,
+      transportConfig: attempt.transportConfig,
       provider: attempt.provider,
       modelId: attempt.modelId,
       providerRuntimeHandle: input.getProviderRuntimeHandle(),
@@ -449,7 +452,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     });
   const providerStreamFn = registerProviderStreamForModel({
     model: attempt.model,
-    cfg: attempt.config,
+    cfg: attempt.transportConfig ?? attempt.config,
     agentDir: input.agentDir,
     workspaceDir: input.workspaceDir,
     auth,
@@ -459,32 +462,6 @@ export async function prepareEmbeddedAttemptTransport(input: {
     sessionId: attempt.sessionId,
     agentId: input.sessionAgentId,
   };
-  const directProviderStreamFn = providerStreamFn
-    ? wrapStreamFnWithMessageTransform(
-        wrapStreamFnWithSessionFork(providerStreamFn, sessionFork),
-        (messages) => messages,
-        async ({ context, ...provider }) => {
-          assertRunCurrent?.();
-          const prepared = await materializeProviderContext({
-            ...provider,
-            context,
-            workspaceDir: input.workspaceDir,
-            agentWorkspaceDir: attempt.workspaceDir,
-            workspaceOnly: input.workspaceOnly,
-            localRoots: input.workspaceOnly
-              ? undefined
-              : getAgentScopedMediaLocalRoots(attempt.config ?? {}, input.sessionAgentId),
-            onCurrentTurnImageFailure: input.onCurrentTurnImageFailure,
-            sandbox:
-              input.sandbox?.enabled && input.sandbox.fsBridge
-                ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
-                : undefined,
-          });
-          assertRunCurrent?.();
-          return prepared;
-        },
-      )
-    : undefined;
   const transportApiKey = await resolveEmbeddedAgentApiKey({
     provider: attempt.model.provider,
     resolvedApiKey: attempt.resolvedApiKey,
@@ -496,7 +473,9 @@ export async function prepareEmbeddedAttemptTransport(input: {
     wrapApiKey,
   } = selectEmbeddedAgentStream({
     currentStreamFn: defaultSessionStreamFn,
-    providerStreamFn: directProviderStreamFn,
+    providerStreamFn: providerStreamFn
+      ? wrapStreamFnWithSessionFork(providerStreamFn, sessionFork)
+      : undefined,
     sessionId: attempt.sessionId,
     promptCacheKey: attempt.promptCacheKey,
     signal: input.abortSignal,
@@ -508,14 +487,47 @@ export async function prepareEmbeddedAttemptTransport(input: {
     assertCurrent: assertRunCurrent,
     sessionFork,
   });
+  const boundaryStreamFn = wrapStreamFnWithMessageTransform(
+    streamFn,
+    (messages) => messages,
+    async ({ context, ...provider }) => {
+      assertRunCurrent?.();
+      const prepared = await materializeProviderContext({
+        ...provider,
+        context,
+        workspaceDir: input.workspaceDir,
+        agentWorkspaceDir: attempt.workspaceDir,
+        workspaceOnly: input.workspaceOnly,
+        localRoots: input.workspaceOnly
+          ? undefined
+          : getAgentScopedMediaLocalRoots(attempt.config ?? {}, input.sessionAgentId),
+        onCurrentTurnImageFailure: input.onCurrentTurnImageFailure,
+        sandbox:
+          input.sandbox?.enabled && input.sandbox.fsBridge
+            ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
+            : undefined,
+      });
+      assertRunCurrent?.();
+      return prepared;
+    },
+  );
+  const providerInput = configuredModelSupportsNativeVideo({
+    cfg: attempt.config,
+    provider: attempt.model.provider,
+    modelId: attempt.model.id,
+    api: attempt.model.api,
+  })
+    ? [...attempt.model.input, "video" as const]
+    : undefined;
   // A direct provider transport replaces the session SDK stream, so attach
   // turn-owned thinking provenance to the selected transport as well.
   session.agent.streamFn = (model, context, options) => {
     const providerOptions = {
       ...options,
       openclawThinkingExplicit: attempt.thinkingExplicit,
+      ...(providerInput ? { [PROVIDER_MODEL_INPUT]: providerInput } : {}),
     };
-    return streamFn(model, context, providerOptions);
+    return boundaryStreamFn(model, context, providerOptions);
   };
   // Install inside provider/config wrappers so their full onPayload chain runs
   // before admission hashes the request body that the built-in transport sends.
@@ -583,6 +595,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
       resolvedTransport,
       {
         preparedExtraParams: effectiveExtraParams,
+        transportConfig: attempt.transportConfig,
         modelCallUrgency: resolveModelCallUrgency(attempt),
         auth,
         nativeWebSearchPolicyContext,
@@ -610,13 +623,6 @@ export async function prepareEmbeddedAttemptTransport(input: {
     effectiveExtraParams,
   });
   const effectiveAgentTransport = agentTransportOverride ?? session.agent.transport;
-  if (agentTransportOverride && session.agent.transport !== agentTransportOverride) {
-    const previousTransport = session.agent.transport;
-    log.debug(
-      `embedded agent transport override: ${previousTransport} -> ${agentTransportOverride} ` +
-        `(${attempt.provider}/${attempt.modelId})`,
-    );
-  }
   session.agent.transport = effectiveAgentTransport;
   const contextPruning = attempt.config?.agents?.defaults?.contextPruning;
   const serverToolClearingEnabled =

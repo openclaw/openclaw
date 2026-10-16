@@ -268,6 +268,8 @@ describe("resolveTranscriptPolicy", () => {
   });
 
   it.each([
+    "deepseek-v4-pro",
+    "deepseek/deepseek-v4-flash",
     "kimi-for-coding",
     "moonshotai/kimi-k2.6",
     "moonshot/kimi-k2.7-code",

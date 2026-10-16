@@ -169,7 +169,7 @@ describe("matrix monitor handler reply presentation", () => {
     ).toMatchObject({ type: "message.presentation", version: 1 });
   });
 
-  it("edits a matching live preview to attach the final reply's controls", async () => {
+  it.each(["controls", "answer"] as const)("edits a live preview for %s", async (kind) => {
     const context = {
       cfg: { channels: { matrix: {} } },
       client: {} as MatrixClient,
@@ -202,14 +202,18 @@ describe("matrix monitor handler reply presentation", () => {
       ],
     };
     try {
-      const payload = await prepareMatrixReplyPayload({ presentation });
+      const payload =
+        kind === "controls"
+          ? await prepareMatrixReplyPayload({ presentation })
+          : { text: "answer" };
       if (typeof payload.text !== "string") {
-        throw new Error("prepared controls must have visible fallback text");
+        throw new Error("prepared reply must have visible text");
       }
-      draftController.onPartialReply(payload.text);
+      const previewText = kind === "controls" ? payload.text : "answer\n\nNO_REPLY";
+      draftController.onPartialReply(previewText);
       await draftStream.flush();
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-      expect(draftStream.matchesPreparedText(payload.text)).toBe(true);
+      expect(draftStream.matchesPreparedText(previewText)).toBe(true);
 
       const { deliverReply } = createMatrixReplyDispatcher({
         ...context,
@@ -227,15 +231,19 @@ describe("matrix monitor handler reply presentation", () => {
         context.roomId,
         "$draft1",
         payload.text,
-        expect.objectContaining({
-          extraContent: {
-            "com.openclaw.presentation": expect.objectContaining({
-              type: "message.presentation",
-              version: 1,
-              blocks: presentation.blocks,
-            }),
-          },
-        }),
+        expect.objectContaining(
+          kind === "controls"
+            ? {
+                extraContent: {
+                  "com.openclaw.presentation": expect.objectContaining({
+                    type: "message.presentation",
+                    version: 1,
+                    blocks: presentation.blocks,
+                  }),
+                },
+              }
+            : {},
+        ),
       );
       expect(finalizeLive).not.toHaveBeenCalled();
       expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();

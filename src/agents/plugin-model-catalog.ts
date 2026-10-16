@@ -38,6 +38,7 @@ import {
   readPluginModelCatalogEntries,
   replacePluginModelCatalogEntriesInDatabase,
   type PersistedPluginModelCatalog,
+  type PluginModelCatalogReplacement,
 } from "./plugin-model-catalog.kernel.js";
 
 export { isGeneratedPluginModelCatalog };
@@ -91,15 +92,16 @@ export function loadPersistedPluginModelCatalogsReadOnly(
 export function repairPersistedPluginModelCatalogs(params: {
   agentDir: string;
   catalogs: readonly PersistedPluginModelCatalog[];
-}): Array<{ pluginId: string; removedModelCount: number }> {
+}): Array<{ pluginId: string; removedModelCount: number; completedCostModelCount: number }> {
   const repairs = params.catalogs.flatMap((catalog) => {
     const repaired = repairPluginModelCatalogTransportMetadata(catalog.contents);
-    return repaired.removedModelCount > 0
+    return repaired.contents !== catalog.contents
       ? [
           {
             ...catalog,
             repairedContents: repaired.contents,
             removedModelCount: repaired.removedModelCount,
+            completedCostModelCount: repaired.completedCostModelCount,
           },
         ]
       : [];
@@ -130,7 +132,11 @@ export function repairPersistedPluginModelCatalogs(params: {
     pluginModelCatalogDatabaseOptions(params.agentDir),
     { operationLabel: "plugin-model-catalog.repair" },
   );
-  return applied.map(({ pluginId, removedModelCount }) => ({ pluginId, removedModelCount }));
+  return applied.map(({ pluginId, removedModelCount, completedCostModelCount }) => ({
+    pluginId,
+    removedModelCount,
+    completedCostModelCount,
+  }));
 }
 
 function readPersistedPluginModelCatalogMigrationPayloads(
@@ -158,7 +164,7 @@ function replacePersistedPluginModelCatalogEntries(
         migrationPayloads,
         deleteMissing: false,
         updatedAt: Date.now(),
-      }),
+      }).changed,
     pluginModelCatalogDatabaseOptions(agentDir),
     { operationLabel: "plugin-model-catalog.migrate" },
   );
@@ -539,7 +545,7 @@ export async function replacePersistedPluginModelCatalogs(params: {
   pluginCatalogWrites: Readonly<Record<string, string>>;
   authSnapshot?: PluginModelCatalogAuthSnapshot;
   env?: NodeJS.ProcessEnv;
-}): Promise<boolean> {
+}): Promise<PluginModelCatalogReplacement> {
   const options = {
     ...pluginModelCatalogDatabaseOptions(params.agentDir),
     env: cloneEnvWithPlatformSemantics(params.env ?? process.env),
@@ -559,7 +565,7 @@ export async function replacePersistedPluginModelCatalogs(params: {
       await stat(options.path);
     } catch (error) {
       if (hasErrnoCode(error, "ENOENT")) {
-        return false;
+        return { changed: false, catalogs: [] };
       }
       throw error;
     }

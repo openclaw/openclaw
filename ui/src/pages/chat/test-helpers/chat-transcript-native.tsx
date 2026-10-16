@@ -55,6 +55,7 @@ function Content(props: { value: NativeContent }) {
       <Show when={search()}>
         {(value) => (
           <TranscriptSearch
+            revision={value()}
             state={getTranscriptState(value().paneId)}
             requestUpdate={value().requestUpdate}
             onClose={() =>

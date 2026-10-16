@@ -164,11 +164,9 @@ export async function captureSessionEventTargetForHost(
       deliveryContext: structuredClone(deliveryContextFromSession(entry)),
       chatType: resolveEffectiveReplyRoute({ ctx: { InternalTurnSource: "event" }, entry })
         .chatType,
-      settings: structuredClone(
-        producerSettings
-          ? narrowSessionEventSettings(producerSettings, destinationSettings)
-          : destinationSettings,
-      ),
+      settings: producerSettings
+        ? narrowSessionEventSettings(producerSettings, destinationSettings)
+        : structuredClone(destinationSettings),
     };
     targetScopes.set(target, { env });
     return target;

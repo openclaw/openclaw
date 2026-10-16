@@ -16,6 +16,7 @@ import { withEngineStoreAdmission } from "../infra/database-engine/admission-sco
 import { installDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
+import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   resolveRuntimeWorkerThreadExecArgv,
@@ -39,9 +40,9 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type Result = { namespace: string; admissionId: string; catalogReads: number; threadId: number };
 
 describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
-  it("bootstraps, installs lazy fragments atomically, reuses admission, reads snapshots and closes paired handles", async () => {
+  it("bootstraps, migrates authority metadata, retains lazy fragments, reuses admission and closes paired handles", async () => {
     const pathname = path.join(tempDirs.make("state-postgres-"), "state.sqlite");
-    const run = async (mode: "bootstrap" | "restart") => {
+    const run = async (mode: "bootstrap" | "restart" | "migrate") => {
       const anchor = openNodeSqliteDatabase(pathname);
       admitSqliteSchema(anchor);
       const url = resolveRuntimeWorkerUrl({
@@ -94,6 +95,27 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
       const cold = await run("bootstrap");
       namespace = cold.namespace;
       expect(cold.threadId).not.toBe(0);
+      await client.query(`SET search_path = "${namespace}"`);
+      await client.query(`BEGIN;
+        UPDATE openclaw_schema_meta SET version = 24 WHERE store = 'state';
+        UPDATE schema_meta SET schema_version = 24 WHERE meta_key = 'primary';
+        UPDATE config_machine_state SET value_json = '24'
+          WHERE state_key = 'state.schema.contentVersion';
+        INSERT INTO subagent_runs
+          (run_id, child_session_key, requester_session_key, created_at, payload_json)
+          VALUES ('retained-child', 'agent:main:subagent:retained', 'agent:main:main', 1,
+            '{"completion":{"resultText":"Interrupted by Gateway restart"}}');
+        COMMIT;`);
+      const retained = (await client.query("SELECT * FROM subagent_runs")).rows;
+      expect((await run("migrate")).namespace).toBe(namespace);
+      expect((await client.query("SELECT * FROM subagent_runs")).rows).toEqual(retained);
+      expect(
+        (
+          await client.query(
+            "SELECT version::int AS version FROM openclaw_schema_meta WHERE store = 'state'",
+          )
+        ).rows,
+      ).toEqual([{ version: 25 }]);
       const restart = await run("restart");
       expect(restart.namespace).toBe(cold.namespace);
       expect(restart.admissionId).not.toBe(cold.admissionId);
@@ -138,7 +160,8 @@ describe.skipIf(!connection)("PostgreSQL local runtime pins", () => {
     await client.connect();
     env = { ...process.env, OPENCLAW_STATE_DIR: directories.make("pin-postgres-") };
     installDatabaseEngineSelection({
-      input: { connection: connection!, schemaPrefix: "pin_conformance" },
+      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
+      postgres: { connection: connection!, schemaPrefix: "pin_conformance" },
     });
     namespace = withEngineStoreAdmission(() =>
       runOpenClawStateWriteTransaction(

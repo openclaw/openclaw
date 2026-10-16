@@ -1,4 +1,4 @@
-import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
+import { scopePreparedModelRuntimeLease } from "../../agents/prepared-model-runtime-generation-scope.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import type { ReplyPayload } from "../types.js";
 import { prepareReplyRunAdmission } from "./get-reply-run-admission.js";
@@ -27,35 +27,28 @@ export async function runPreparedReply(
 
   const { acquireAgentRunPreparedModelRuntime } =
     await import("../../agents/prepared-model-runtime.js");
-  await using lease = await acquireAgentRunPreparedModelRuntime(
-    {
-      config: dispatchRuntime.config,
-      agentId: dispatchRuntime.agentId,
-      agentDir: dispatchRuntime.agentDir,
-      allowGatewaySubagentBinding: true,
-      workspaceDir: context.workspaceDir,
-      runtimePluginSelections: [
-        {
-          provider: params.provider,
-          modelId: params.model,
-          runtime: context.thinkingRuntime,
-        },
-      ],
-    },
-    {
-      catalogMode: "static",
-      pluginGeneration: dispatchRuntime.pluginGeneration,
-      abortSignal: params.opts?.abortSignal,
-    },
+  await using lease = scopePreparedModelRuntimeLease(
+    await acquireAgentRunPreparedModelRuntime(
+      {
+        config: dispatchRuntime.config,
+        agentId: dispatchRuntime.agentId,
+        agentDir: dispatchRuntime.agentDir,
+        allowGatewaySubagentBinding: true,
+        workspaceDir: context.workspaceDir,
+        runtimePluginSelections: [
+          {
+            provider: params.provider,
+            modelId: params.model,
+            runtime: context.thinkingRuntime,
+          },
+        ],
+      },
+      {
+        catalogMode: "static",
+        pluginGeneration: dispatchRuntime.pluginGeneration,
+        abortSignal: params.opts?.abortSignal,
+      },
+    ),
   );
-  let leaseActive = true;
-  try {
-    return await withPreparedModelRuntimePluginGenerationScope(
-      lease.pluginGeneration,
-      () => withPluginRuntimeGenerationScope(lease.snapshot, execute),
-      () => (leaseActive ? lease.snapshot : undefined),
-    );
-  } finally {
-    leaseActive = false;
-  }
+  return await lease.run(() => withPluginRuntimeGenerationScope(lease.snapshot, execute));
 }

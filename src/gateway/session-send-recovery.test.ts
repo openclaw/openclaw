@@ -41,7 +41,7 @@ vi.mock("../config/sessions/session-entry-read-maintenance.js", async (importOri
 }));
 vi.mock("../config/sessions/session-pending-input-history.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/sessions/session-pending-input-history.js")>()),
-  listSessionPendingInputs: io.pending,
+  readSessionSendRecoveryPage: io.pending,
 }));
 vi.mock("../config/sessions/session-pending-input-source.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/sessions/session-pending-input-source.js")>()),
@@ -339,6 +339,34 @@ it("retries discovery without losing the saved delivery", async () => {
   expect(dispatch).toHaveBeenCalledOnce();
   expect(io.report).not.toHaveBeenCalled();
 });
+
+it.each(["removed", "retained"] as const)(
+  "ignores an already consumed %s input before checking a replaced endpoint",
+  async (consumed) => {
+    sourceEntry = { ...sourceEntry, sessionId: "replacement" };
+    io.source.mockResolvedValue(
+      consumed === "removed"
+        ? undefined
+        : {
+            snapshot: {
+              current: true,
+              pending: {
+                input_id: input.id,
+                state: "queued",
+                consumed_event_id: "collected-event",
+                message_json: JSON.stringify(input.message),
+              },
+            },
+            assertCurrent() {},
+          },
+    );
+    await recoverSessionSendDeliveries(context, controller().signal);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(io.load).not.toHaveBeenCalled();
+    expect(io.report).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  },
+);
 
 it.each([
   new SessionStoreUnavailableError("main", "schema-missing"),

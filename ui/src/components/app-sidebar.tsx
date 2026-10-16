@@ -17,6 +17,8 @@ import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.
 import { PluginView } from "../plugins/control-ui-view.solid.tsx";
 import { appSidebarProperties, type AppSidebarProps } from "./app-sidebar-base.ts";
 import { AppSidebarOwner } from "./app-sidebar-owner.tsx";
+import { createSidebarScroll } from "./sidebar-context-controller.ts";
+import { createSidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
 
 export { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 
@@ -48,8 +50,11 @@ function disconnectSidebarOwner(host: HTMLElement): void {
 function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Element {
   host.style.display = "contents";
   const context = useApplication();
-  const owner = sidebarOwners.get(host) ?? new AppSidebarOwner(props, context, host);
+  const catalog = createSidebarNavigationCatalog(context, () => props.navigationView, host);
+  const owner = sidebarOwners.get(host) ?? new AppSidebarOwner(catalog, props, context, host);
+  owner.navigationCatalog = catalog;
   owner.bindInputs(props, context);
+  const scroll = createSidebarScroll(owner);
   const projection = projectSource(owner, {
     read: (current) => current,
     subscribe: (current, notify) => current.subscribe(notify),
@@ -83,7 +88,6 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
     owner.sessionData,
     owner.sessionOrganizer,
     owner.people,
-    owner.navigationCatalog,
   ].forEach(observe);
   const solidOwner = getOwner();
   const mountDefaultView = (target: HTMLElement) =>
@@ -114,15 +118,22 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
       />
     </Show>
   );
-  const content = hostView.renderSidebar(Sessions);
+  const content = hostView.renderSidebar(Sessions, scroll);
   createEffect(
     () => {
       projection.revision();
       // Props remain on the bridge's live object; source changes refresh its subscriptions.
       Object.values(props);
+      // Snapshot capture keeps observing Pages after its navigation view closes.
+      void catalog.dashboards;
       owner.prepareRender();
+      scroll.capture();
     },
-    () => untrack(() => owner.commitRender()),
+    () =>
+      untrack(() => {
+        owner.commitRender();
+        scroll.restore();
+      }),
   );
   onSettled(() => {
     sidebarOwners.set(host, owner);

@@ -8,7 +8,7 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runt
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { createLaneQueue, type LaneState } from "./command-queue.state.js";
+import { getLaneState } from "./command-queue.state.js";
 import { resetCommandQueueStateForTest } from "./command-queue.test-support.js";
 import type { CommandQueueTaskDeadline } from "./command-queue.types.js";
 import {
@@ -979,16 +979,8 @@ describe("command queue", () => {
         await staleGate.promise;
         return "stale";
       });
-      const replacementState = {
-        lane,
-        queue: createLaneQueue(),
-        activeTasks: new Map(),
-        maxConcurrent: 1,
-        draining: false,
-        generation: 0,
-      } satisfies LaneState;
-
-      lanes.set(lane, replacementState);
+      lanes.delete(lane);
+      const replacementState = getLaneState(lane);
       staleGate.resolve();
       await expect(staleRun).resolves.toBe("stale");
 

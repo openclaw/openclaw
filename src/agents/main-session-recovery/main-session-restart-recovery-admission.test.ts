@@ -508,31 +508,23 @@ describe("startup recovery admission", () => {
           expect(waitSpy).not.toHaveBeenCalled();
           const lines = info.mock.calls.map(([line]) => line);
           expect(lines).toContainEqual(
-            expect.stringMatching(
-              /startup complete: started=2 .*skipReasons=.*archived:1.*not_main_session:1/,
-            ),
+            expect.stringMatching(/startup complete: started=2 .*skipReasons=.*not_main_session:1/),
           );
           const decisions = lines
             .filter((line) => line.startsWith("main-session restart recovery candidate "))
             .map((line) =>
               JSON.parse(line.slice("main-session restart recovery candidate ".length)),
             );
-          expect(decisions).toHaveLength(3);
+          expect(decisions).toHaveLength(2);
           expect(decisions).toEqual(
             expect.arrayContaining([
               expect.objectContaining({
                 sessionKey: first.sessionKey,
                 sourceRunId: "interrupted-main",
                 decision: "started",
-                nextOwner: "background-lane",
+                nextOwner: "restart-recovery-lane",
                 boot: expect.any(String),
                 pass: expect.any(String),
-              }),
-              expect.objectContaining({
-                sessionKey: "agent:main:archived",
-                reason: "archived",
-                decision: "deferred",
-                nextOwner: "none",
               }),
             ]),
           );

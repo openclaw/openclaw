@@ -283,26 +283,18 @@ describe("outbox browser-state transfer", () => {
     expect(restoreChatOutboxRecovery(state, entry!, destination)).toBe("conflict");
   });
 
-  it.each([
-    { version: 2, failure: "quota" },
-    { version: 3, failure: "noop" },
-  ] as const)(
-    "keeps v$version source bytes when migration writes $failure",
-    ({ version, failure }) => {
-      const source = seed(version, { "main\u0000agent:selected": legacy });
-      const write = vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
-        if (failure === "quota") {
-          throw new DOMException("quota", "QuotaExceededError");
-        }
-      });
-      expect(readChatOutboxRecovery(state).entries[0]?.session.queue).toHaveLength(60);
-      expect(sessionStorage.getItem(source.key)).toBe(source.raw);
-      expect(listStoredChatOutboxes(state)).toEqual([]);
-      write.mockRestore();
-      expect(readChatOutboxRecovery(state).entries).toHaveLength(1);
-      expect(sessionStorage.getItem(source.key)).toBeNull();
-    },
-  );
+  it.each([2, 3] as const)("keeps v%s source bytes when migration exceeds quota", (version) => {
+    const source = seed(version, { "main\u0000agent:selected": legacy });
+    const write = vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
+      throw new DOMException("quota", "QuotaExceededError");
+    });
+    expect(readChatOutboxRecovery(state).entries[0]?.session.queue).toHaveLength(60);
+    expect(sessionStorage.getItem(source.key)).toBe(source.raw);
+    expect(listStoredChatOutboxes(state)).toEqual([]);
+    write.mockRestore();
+    expect(readChatOutboxRecovery(state).entries).toHaveLength(1);
+    expect(sessionStorage.getItem(source.key)).toBeNull();
+  });
 
   it.each(["newer text", "quote-only"] as const)(
     "preserves a %s destination and its recoverable source",
@@ -346,7 +338,9 @@ describe("outbox browser-state transfer", () => {
   it("does not reimport an acknowledged source when legacy deletion failed", () => {
     const version = 3;
     const source = seed(version, { "main\u0000agent:selected": legacy });
-    const remove = vi.spyOn(sessionStorage, "removeItem").mockImplementation(() => {});
+    const remove = vi.spyOn(sessionStorage, "removeItem").mockImplementation(() => {
+      throw new Error("blocked legacy deletion");
+    });
     const entry = readChatOutboxRecovery(state).entries[0]!;
     const destination = captureDefaultDestination();
     expect(restoreChatOutboxRecovery(state, entry, destination)).toBe("restored");

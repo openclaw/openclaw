@@ -106,7 +106,7 @@ export function recordReplyOperationAgentTurn(
       outcome ?? (owner?.result?.kind === "aborted" ? owner.result : undefined),
     );
     if (outcome?.kind === "settled") {
-      state.messagingToolSentTargets = outcome.result.messagingToolSentTargets?.slice();
+      state.messagingToolSentTargets = outcome.result.messagingToolSentTargets;
       state.backgroundWorkStarted = Boolean(
         outcome.result.asyncWorkStarted || outcome.result.acceptedSessionSpawns?.length,
       );

@@ -16,6 +16,14 @@ schema edges or rehearse migrations on copied databases. See the
 
 ## Schema updates and recovery
 
+Ordinary deployments wait up to 180 seconds when the canonical deployment lock
+is busy, allowing routine health checks and disk maintenance to finish without
+discarding the update request. The controller retains the same exclusive lock
+and post-lock maintenance-idle admission. A wait timeout exits `75` (deferred),
+not a successful `SKIP`; other lock errors retain their failure status. Bound
+maintenance and recovery actions retain their immediate contention refusal.
+This change requires complete-pair adoption; landing it does not deploy it.
+
 The incumbent keeps serving while the controller builds and seals the candidate.
 For a schema crossing, the controller takes its ordinary maintenance suspension,
 drains and stops the Gateway, then invokes the candidate:

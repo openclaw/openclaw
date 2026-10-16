@@ -66,7 +66,7 @@ export class DraftPreferenceState {
   constructor(
     private readonly read: () => DraftPreferenceSnapshot,
     private readonly callbacks: DraftPreferenceOptions & {
-      requestUpdate: () => void;
+      changed: () => void;
       onAdoptAgentDefaults: () => void;
     },
   ) {}
@@ -113,7 +113,7 @@ export class DraftPreferenceState {
         if (consumed) {
           this.adoptPreferences();
         } else {
-          this.callbacks.requestUpdate();
+          this.callbacks.changed();
         }
       };
       listeners.add(listener);
@@ -141,7 +141,7 @@ export class DraftPreferenceState {
     if (this.read().agentsHydrated) {
       this.callbacks.onAdoptAgentDefaults();
     }
-    this.callbacks.requestUpdate();
+    this.callbacks.changed();
   }
 
   readPreference(agentId: string): NewSessionPreference | null {
@@ -326,7 +326,7 @@ export class DraftPreferenceState {
             }
             if (current && this.preferenceScope === scope) {
               this.identityPreferences = { ...this.identityPreferences, [agentId]: next };
-              this.callbacks.requestUpdate();
+              this.callbacks.changed();
             }
             return true;
           }
@@ -430,7 +430,7 @@ export class DraftPreferenceState {
     } catch {
       if (this.preferenceScope === params.scope) {
         this.preferenceModeValue = conflicts > 0 ? "remote" : "local";
-        this.callbacks.requestUpdate();
+        this.callbacks.changed();
       }
     }
   }

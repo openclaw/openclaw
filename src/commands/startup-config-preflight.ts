@@ -259,7 +259,7 @@ async function prepareStartupConfig(
 function result(read: ConfigPreflightSnapshotRead) {
   const selection = read.databaseEngineSelection ?? getDatabaseEngineSelection();
   return {
-    ...(selection?.input ? { databaseEngineSelection: selection } : {}),
+    ...(selection ? { databaseEngineSelection: selection } : {}),
     snapshot: read.snapshot,
     baseConfig: read.snapshot.sourceConfig,
     ...(read.pluginMetadataSnapshot ? { pluginMetadataSnapshot: read.pluginMetadataSnapshot } : {}),

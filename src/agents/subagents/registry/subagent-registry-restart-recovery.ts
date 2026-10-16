@@ -4,10 +4,7 @@ import { prepareSqliteTargetFromSessionStorePath } from "../../../config/session
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import * as agentEvents from "../../../infra/agent-events.js";
 import { listAgentRunsForSession } from "../../../infra/agent-run-registry.js";
-import {
-  bindGatewayContextResolver,
-  getGatewayContextResolver,
-} from "../../../plugins/runtime/gateway-request-scope.js";
+import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { isSessionWorkAdmissionActive } from "../../../sessions/session-lifecycle-admission.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
@@ -387,12 +384,6 @@ export async function recoverInterruptedSubagentRow(
       (receipt !== undefined && !isRestartRecoveryLifecycleCurrent(receipt)) ||
       (sessionEntry?.lifecycleRunId !== undefined &&
         !ownsSubagentSessionExecution(entry, sessionEntry));
-    const resolveGatewayContext = params.gatewayRuntime
-      ? getGatewayContextResolver(params.gatewayRuntime)
-      : undefined;
-    if (resolveGatewayContext) {
-      bindGatewayContextResolver(entry, resolveGatewayContext);
-    }
     const isRecoveryHostCurrent = () => {
       if (!isCurrent() || (!replayTerminal && hasPendingRequesterSettleWake())) {
         return false;

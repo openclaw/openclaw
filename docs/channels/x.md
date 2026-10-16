@@ -118,10 +118,16 @@ URL, author handle, and sender tier. The session's system instructions include
 that origin and require manual approval before replying to X. This applies
 whether or not automatic public sharing is enabled.
 
+Visible descendants retain the same origin and approval instructions, including
+when the work is delegated through a hidden helper. They cannot widen the X reply
+target beyond the original conversation.
+
 When the session has a finding, fix, PR, or a clear "can't reproduce" result, it
 drafts a reply of at most 280 characters and asks whether to post it. Tell the
-session explicitly to post the draft; it uses the message tool with channel `x`
-and the origin post URL as its target. Without an answer, it reminds you once in
+session explicitly to post the draft; after approval, the visible session uses
+tool `message` with `action: "send"`,
+`channel: "x"`, the origin post URL as `target`, the recorded `accountId`, and
+the approved reply as `message`. Without an answer, it reminds you once in
 its final summary. The send adapter restricts work sessions to their origin post
 or another bot mention in the same X conversation. The host does not yet expose
 user-turn provenance to this adapter, so the approval rule is enforced through

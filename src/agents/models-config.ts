@@ -80,7 +80,10 @@ async function readFileMtimeMs(pathname: string): Promise<number | null> {
   }
 }
 
-async function buildModelsJsonFingerprint(context: PreparedModelsConfigContext): Promise<string> {
+async function buildModelsJsonFingerprint(
+  context: PreparedModelsConfigContext,
+  publishedCatalogs?: readonly PersistedPluginModelCatalog[],
+): Promise<string> {
   const authProfilesSqlitePath = resolveAuthProfileDatabasePath(context.agentDir);
   const authProfilesMtimeMs = await readFileMtimeMs(authProfilesSqlitePath);
   const authProfilesWalMtimeMs = await readFileMtimeMs(`${authProfilesSqlitePath}-wal`);
@@ -88,7 +91,8 @@ async function buildModelsJsonFingerprint(context: PreparedModelsConfigContext):
   const pluginCatalogFingerprint = createHash("sha256")
     .update(
       stableStringify(
-        await loadPersistedPluginModelCatalogs(context.agentDir, undefined, context.env),
+        publishedCatalogs ??
+          (await loadPersistedPluginModelCatalogs(context.agentDir, undefined, context.env)),
       ),
     )
     .digest("base64url");
@@ -124,15 +128,16 @@ async function readExistingModelsFile(pathname: string): Promise<{
   raw: string;
   parsed: unknown;
 }> {
+  const raw = await privateFileStore(path.dirname(pathname)).readTextIfExists(
+    path.basename(pathname),
+  );
   try {
-    const raw = await privateFileStore(path.dirname(pathname)).readTextIfExists(
-      path.basename(pathname),
-    );
     return {
       raw: raw ?? "",
       parsed: raw === null ? null : (JSON.parse(raw) as unknown),
     };
   } catch {
+    // Malformed JSON cannot supply usable providers; rebuild it from config.
     return {
       raw: "",
       parsed: null,
@@ -253,7 +258,11 @@ export async function ensureOpenClawModelsJson(
   config?: OpenClawConfig,
   agentDirOverride?: string,
   options: EnsureOpenClawModelsJsonOptions = {},
-): Promise<ModelsJsonReadyResult> {
+): Promise<
+  ModelsJsonReadyResult & {
+    publishedSource?: Omit<PlannedOpenClawModelsJsonSource, "agentDir">;
+  }
+> {
   const context = await prepareModelsConfigContext(config, agentDirOverride, options);
   const { agentDir } = context;
   const targetPath = path.join(agentDir, "models.json");
@@ -266,6 +275,8 @@ export async function ensureOpenClawModelsJson(
     return { ...settled };
   }
 
+  // Keep publication payloads local; ready-cache promises retain only the small result.
+  let publishedSource: Omit<PlannedOpenClawModelsJsonSource, "agentDir"> | undefined;
   const pending = MODELS_JSON_STATE.writeQueue.enqueue(targetPath, async () => {
     const existingModelsFile = await readExistingModelsFile(targetPath);
     const authSnapshot = await capturePluginModelCatalogAuth(agentDir, context.env);
@@ -288,29 +299,39 @@ export async function ensureOpenClawModelsJson(
       }
       await ensureModelsFileModeForModelsJson(targetPath);
     }
-    const wrotePluginCatalog = plan.pluginCatalogWrites
+    const publication = plan.pluginCatalogWrites
       ? await replacePersistedPluginModelCatalogs({
           agentDir,
           pluginCatalogWrites: plan.pluginCatalogWrites,
           authSnapshot,
           env: context.env,
         })
-      : false;
+      : undefined;
+    if (publication) {
+      publishedSource = {
+        modelsJsonContents:
+          plan.action === "write" ? plan.contents : existingModelsFile.raw || null,
+        pluginCatalogs: publication.catalogs,
+      };
+    }
     if (plan.action === "noop") {
       await ensureModelsFileModeForModelsJson(targetPath);
     }
-    return { agentDir, wrote: wroteRoot || wrotePluginCatalog };
+    return { agentDir, wrote: wroteRoot || (publication?.changed ?? false) };
   });
   MODELS_JSON_STATE.readyCache.set(cacheKey, pending);
   try {
     const settled = await pending;
-    const refreshedFingerprint = await buildModelsJsonFingerprint(context);
+    const refreshedFingerprint = await buildModelsJsonFingerprint(
+      context,
+      publishedSource?.pluginCatalogs,
+    );
     const refreshedCacheKey = modelsJsonReadyCacheKey(targetPath, refreshedFingerprint);
     if (refreshedCacheKey !== cacheKey) {
       MODELS_JSON_STATE.readyCache.delete(cacheKey);
       MODELS_JSON_STATE.readyCache.set(refreshedCacheKey, Promise.resolve(settled));
     }
-    return { ...settled };
+    return { ...settled, ...(publishedSource ? { publishedSource } : {}) };
   } catch (error) {
     if (MODELS_JSON_STATE.readyCache.get(cacheKey) === pending) {
       MODELS_JSON_STATE.readyCache.delete(cacheKey);

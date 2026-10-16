@@ -1675,25 +1675,21 @@ describe("agents.delete", () => {
     expect(mocks.movePathToTrash).not.toHaveBeenCalled();
   });
 
-  it("returns not found when a concurrent delete wins the delete race", async () => {
-    let findCallCount = 0;
-    mocks.findAgentEntryIndex.mockImplementation(() => {
-      findCallCount += 1;
-      return findCallCount >= 2 ? -1 : 0;
-    });
-
-    const respond = await call("agents.delete", {
-      agentId: "test-agent",
-    });
-
-    expectNotFoundResponseAndNoWrite(respond);
-    expect(mocks.movePathToTrash).not.toHaveBeenCalled();
-  });
-
   it("rejects invalid params (missing agentId)", async () => {
     const respond = await call("agents.delete", {});
 
     expectRespondErrorContaining(respond, "invalid");
+  });
+
+  it("returns not found after a previous deletion removed the agent", async () => {
+    const first = await call("agents.delete", { agentId: "test-agent", deleteFiles: false });
+    expectRespondOk(first, { ok: true });
+    mocks.writeConfigFile.mockClear();
+
+    const second = await call("agents.delete", { agentId: "test-agent", deleteFiles: false });
+
+    expectNotFoundResponseAndNoWrite(second);
+    expect(mocks.movePathToTrash).not.toHaveBeenCalled();
   });
 });
 

@@ -81,7 +81,7 @@ const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
     "resolveLivePluginConfigObject(",
     "resolveEffectiveEnableState(",
     '"onepassword"',
-    "api.runtime.config?.current",
+    "api.runtime.config.current()",
   ],
 } as const satisfies Record<string, readonly string[]>;
 const BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS = {

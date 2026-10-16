@@ -9,7 +9,13 @@ it("keeps controlled selection authoritative through rejection, acceptance, and 
   const [active, setActive] = createSignal<string | null>("a");
   const [items, setItems] = createSignal([
     { value: "a", id: "a-tab", panelId: "a-panel", label: "Alpha" },
-    { value: "b", id: "b-tab", panelId: "b-panel", label: "Beta" },
+    {
+      value: "b",
+      id: "b-tab",
+      panelId: "b-panel",
+      label: "Beta",
+      className: ["custom-tab", { emphasized: true }],
+    },
   ]);
   let reject = true;
   const onSelect = vi.fn((value: string): boolean => {
@@ -32,6 +38,8 @@ it("keeps controlled selection authoritative through rejection, acceptance, and 
   ));
   flush();
   const beta = view.getByRole("tab", { name: "Beta" });
+  expect(beta.classList.contains("custom-tab")).toBe(true);
+  expect(beta.classList.contains("emphasized")).toBe(true);
   fireEvent.click(beta);
   expect(view.getByRole("tab", { selected: true })).toHaveProperty("id", "a-tab");
   expect(view.getByRole("tabpanel")).toHaveProperty("id", "a-panel");
@@ -40,9 +48,15 @@ it("keeps controlled selection authoritative through rejection, acceptance, and 
   flush();
   expect(view.getByRole("tab", { selected: true })).toBe(beta);
   expect(view.getByRole("tabpanel")).toHaveProperty("id", "b-panel");
-  setItems((current) => current.toReversed());
+  setItems((current) =>
+    current
+      .toReversed()
+      .map((item) => Object.assign({}, item, { className: ["custom-tab", { emphasized: false }] })),
+  );
   flush();
   expect(view.getAllByRole("tab")[0]).toBe(beta);
+  expect(beta.classList.contains("custom-tab")).toBe(true);
+  expect(beta.classList.contains("emphasized")).toBe(false);
   expect(onSelect).toHaveBeenCalledTimes(2);
   view.unmount();
   fireEvent.click(beta);

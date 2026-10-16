@@ -1,20 +1,27 @@
 /* @vitest-environment jsdom */
+import { createComponent } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { normalizeSidebarEntries } from "../app-navigation.ts";
+import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
+import { ApplicationProvider } from "../lib/reactive/context.ts";
 import * as toast from "../lib/toast.ts";
 import {
+  createContext,
   createGatewayHarness,
   createSessionsHarness,
   mountSidebar,
   TWO_AGENTS,
 } from "../test-helpers/app-sidebar.ts";
 import "../test-helpers/app-sidebar-suite.ts";
+import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { createDataTransferStub } from "../test-helpers/drag-data.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
-import { getAppSidebarOwner } from "./app-sidebar.tsx";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import { AppSidebar, getAppSidebarOwner } from "./app-sidebar.tsx";
 import { installTitleTooltips } from "./tooltip-title.ts";
 import { dispatchMousePointer, settleTooltip } from "./tooltip.test-support.ts";
 
@@ -491,6 +498,61 @@ describe("personal navigation rail", () => {
     expect(sidebar.querySelector(".sidebar-brand")).toBeNull();
   });
 
+  it("settles retained menu avatars through a sidebar view-root replacement", async () => {
+    setAvatarGatewayOrigin(globalThis.location.origin, ["avatar-token"]);
+    onTestFinished(() => setAvatarGatewayOrigin(null));
+    const response = createDeferred<Response>();
+    onTestFinished(() => response.resolve(new Response(null, { status: 404 })));
+    const nativeFetch = globalThis.fetch;
+    const fetchAvatar = vi.fn<typeof fetch>().mockReturnValue(response.promise);
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input), location.href);
+      return url.pathname === "/avatar/research"
+        ? fetchAvatar(input, init)
+        : nativeFetch(input, init);
+    });
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = vi.fn(() => "blob:retained-menu-avatar");
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    const gateway = createGatewayHarness({} as GatewayBrowserClient);
+    const sessions = createSessionsHarness("main", ["agent:main:main"]);
+    const agents = {
+      ...TWO_AGENTS,
+      agents: TWO_AGENTS.agents.map((agent) =>
+        agent.id === "research"
+          ? Object.assign({}, agent, { identity: { avatar: "/avatar/research?v=1" } })
+          : agent,
+      ),
+    };
+    const { sidebar, provider, context } = await mountSidebar(
+      gateway.gateway,
+      sessions.sessions,
+      "panel",
+      agents,
+    );
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")!.click();
+    await vi.dynamicImportSettled();
+    await waitForSolid(() => expect(fetchAvatar).toHaveBeenCalledOnce());
+    provider.setContext({ ...context, basePath: "/control" });
+    await sidebar.updateComplete;
+    await vi.dynamicImportSettled();
+    response.resolve(
+      new Response(new Uint8Array([1, 2, 3]), {
+        headers: { "content-type": "image/png" },
+      }),
+    );
+    await waitForSolid(() =>
+      expect(sidebar.querySelector('[data-value="agent:research"] img')?.getAttribute("src")).toBe(
+        "blob:retained-menu-avatar",
+      ),
+    );
+    expect(fetchAvatar).toHaveBeenCalledOnce();
+  });
+
   it("pins a person with native drag and retains a safe destination after they go offline", async () => {
     const { sidebar } = await fixture();
     sidebar.querySelector<HTMLButtonElement>('[data-navigation-view="online"]')!.click();
@@ -762,13 +824,29 @@ describe("personal navigation rail", () => {
   );
 
   it("does not recreate catalog observations in an update queued before removal", async () => {
-    const { sidebar, sessions } = await fixture();
+    const { sidebar, sessions, gateway } = await fixture();
     const parent = sidebar.parentElement!;
-    const observe = vi.spyOn(sessions.sessions, "observeList");
+    const observeList = sessions.sessions.observeList;
+    const dispose = vi.fn();
+    const observe = vi
+      .spyOn(sessions.sessions, "observeList")
+      .mockImplementation((query, listener) => {
+        const observation = observeList(query, listener);
+        return query.source === "dashboard"
+          ? {
+              ...observation,
+              dispose: () => {
+                dispose();
+                observation.dispose();
+              },
+            }
+          : observation;
+      });
     const catalogQueries = () =>
       observe.mock.calls.filter(
         ([query]) => query.includeOwnerSessionCounts || query.source === "dashboard",
       );
+    expect(catalogQueries()).toHaveLength(0);
     sidebar.navigationView = "pages";
     sidebar.remove();
     await sidebar.updateComplete;
@@ -777,6 +855,82 @@ describe("personal navigation rail", () => {
     await sidebar.updateComplete;
     expect(catalogQueries()).toHaveLength(1);
     expect(sidebar.querySelector(".sidebar-pages")).not.toBeNull();
+    sidebar.navigationView = "sessions";
+    await sidebar.updateComplete;
+    expect(catalogQueries()).toHaveLength(1);
+    expect(dispose).not.toHaveBeenCalled();
+    gateway.publish({ phase: "reconnecting" });
+    await sidebar.updateComplete;
+    expect(dispose).toHaveBeenCalledOnce();
+    gateway.publish({ phase: "connected" });
+    await sidebar.updateComplete;
+    expect(catalogQueries()).toHaveLength(1);
+    sidebar.navigationView = "pages";
+    await sidebar.updateComplete;
+    expect(catalogQueries()).toHaveLength(2);
+  });
+
+  it("observes Pages when Solid mounts the sidebar into a connected application", async () => {
+    const gateway = createGatewayHarness({} as GatewayBrowserClient);
+    const sessions = createSessionsHarness("main", ["agent:main:dashboard"]);
+    sessions.sessions.state.result!.sessions[0]!.label = "Team board";
+    const context = createContext(gateway.gateway, sessions.sessions);
+    const provider = createApplicationContextProvider(context);
+    document.body.append(provider);
+    const view = mountSolid(
+      () =>
+        createComponent(ApplicationProvider, {
+          value: context,
+          get children() {
+            return createComponent(AppSidebar, { navigationView: "pages" });
+          },
+        }),
+      { container: provider },
+    );
+    await waitForSolid(() => {
+      expect(
+        view.container.querySelector(
+          '.sidebar-pages [data-sidebar-entry="session:agent:main:dashboard"]',
+        )?.textContent,
+      ).toContain("Team board");
+    });
+  });
+
+  it("renders and paginates the current managed dashboard catalog", async () => {
+    const { sidebar, sessions, result } = await fixture();
+    const dashboard = { ...result.sessions[1]!, key: "agent:main:dashboard", label: "Team board" };
+    sessions.list.mockResolvedValue({
+      ...result,
+      sessions: [dashboard],
+      hasMore: true,
+      nextOffset: 7,
+    });
+    sidebar.navigationView = "pages";
+    await settleLitElement(sidebar);
+    expect(
+      sidebar.querySelector('.sidebar-pages [data-sidebar-entry="session:agent:main:dashboard"]')
+        ?.textContent,
+    ).toContain("Team board");
+    const pending = createDeferred<typeof result>();
+    sessions.list.mockClear().mockReturnValueOnce(pending.promise);
+    const more = sidebar.querySelector<HTMLButtonElement>(".sidebar-pages > .btn")!;
+    more.click();
+    more.click();
+    expect(sessions.list).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ source: "dashboard", offset: 7 }),
+    );
+    pending.resolve({
+      ...result,
+      sessions: [{ ...dashboard, key: "agent:main:second", label: "Second board" }],
+      hasMore: false,
+    });
+    await pending.promise;
+    await settleLitElement(sidebar);
+    expect(
+      sidebar.querySelector('.sidebar-pages [data-sidebar-entry="session:agent:main:second"]')
+        ?.textContent,
+    ).toContain("Second board");
+    expect(sidebar.querySelector(".sidebar-pages > .btn")).toBeNull();
   });
 
   it("stores only stable person references", () => {

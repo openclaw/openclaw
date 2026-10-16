@@ -7,6 +7,7 @@ import {
   type MemoryOriginReadInput,
   type MemoryOriginReadOutput,
 } from "./memory-entry-origins-task.js";
+import { requireMemorySearchDatabase } from "./memory-search-database.js";
 import { hasMemorySessionTombstone } from "./memory-session-tombstones.js";
 
 function queryOrigins(
@@ -39,10 +40,13 @@ function queryOrigins(
 }
 
 export function readMemoryOriginsInWorker(request: MemoryOriginReadInput): MemoryOriginReadOutput {
-  const result = withOpenClawAgentDatabaseReadOnly(({ db }) => queryOrigins(db, request), {
-    agentId: request.agentId,
-    path: request.databasePath,
-    env: { OPENCLAW_STATE_DIR: request.stateDir },
-  });
+  const result = withOpenClawAgentDatabaseReadOnly(
+    ({ db }) => queryOrigins(requireMemorySearchDatabase(db), request),
+    {
+      agentId: request.agentId,
+      path: request.databasePath,
+      env: { OPENCLAW_STATE_DIR: request.stateDir },
+    },
+  );
   return result.found ? result.value : queryOrigins(undefined, request);
 }

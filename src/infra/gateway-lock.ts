@@ -510,7 +510,6 @@ export async function acquireGatewayLock(
       (await acquireWithWait({
         deadlineMs,
         pollIntervalMs: resolvePositiveTimerTimeoutMs(opts.pollIntervalMs, 250),
-        maxPollIntervalMs: 2000,
         now,
         sleep: opts.sleep,
         acquire: async () => {
@@ -524,7 +523,7 @@ export async function acquireGatewayLock(
           });
           try {
             if (opts.databasePortRecovery) {
-              if (role !== "agent-embedded") {
+              if (role !== "agent-embedded" && role !== "sqlite-maintenance") {
                 throw new Error("Database port recovery requires exclusive offline ownership");
               }
               assertDatabasePortRecoveryAllowed(paths.stateDir, opts.databasePortRecovery);

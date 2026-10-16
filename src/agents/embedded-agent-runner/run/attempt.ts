@@ -215,11 +215,6 @@ async function runEmbeddedAttemptOwned(
     prepStages.mark("skills");
 
     const isRawModelRun = params.modelRun === true || params.promptMode === "none";
-    if (isRawModelRun && log.isEnabled("debug")) {
-      log.debug(
-        `raw model run enabled: modelRun=${params.modelRun === true} promptMode=${params.promptMode ?? "unset"}`,
-      );
-    }
     const activeContextEngine = isRawModelRun ? undefined : params.contextEngine;
     if (activeContextEngine && activeContextEngine.info.id !== "legacy") {
       assertContextEngineHostSupport({
@@ -385,7 +380,6 @@ async function runEmbeddedAttemptOwned(
       );
       const promptToolPolicy = createPromptBuildToolPolicy({
         session: preparedSessionRuntime.agentSession.activeSession,
-        readModelTools: () => preparedSessionRuntime.agentSession.activeSession.agent.state.tools,
         effectiveTools,
         uncompactedEffectiveTools,
         tools: preparedBundleTools.tools,

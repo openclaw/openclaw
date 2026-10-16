@@ -74,7 +74,7 @@ export async function withAgentTurnCompletion<T>(
       const prepared: Parameters<AgentTurnCompletion["patch"]>[0][] = [];
       let finished = false;
       const project = () => {
-        let next = structuredClone(snapshot.entry!);
+        let next = snapshot.entry!;
         const reducers: SessionActorReducer[] = [];
         for (const preparation of prepared) {
           const reducer = typeof preparation === "function" ? preparation(next) : preparation;

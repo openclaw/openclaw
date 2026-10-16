@@ -145,7 +145,7 @@ export function startOpenClawStateLeaseHeartbeat(
     | "completedRequest"
     | "deferActivation"
     | "databaseAdmissionPort"
-    | "databaseEngineInput"
+    | "databaseEngineSelection"
   > & {
     /** The caller retains its shared-state actor through startup and failure teardown. */
     startupContext?: OpenClawStateWorkerContext;
@@ -447,8 +447,8 @@ export function startOpenClawStateLeaseHeartbeat(
     const sourceTsconfig = execArgv.length > 0 ? process.env.TSX_TSCONFIG_PATH : undefined;
     startupContext?.admission.assertCurrent();
     const data = {
-      databaseEngineInput:
-        startupContext?.databaseEngineInput ?? getDatabaseEngineSelection()?.input,
+      databaseEngineSelection:
+        startupContext?.databaseEngineSelection ?? getDatabaseEngineSelection(),
       databaseAdmissionPort: databaseAdmission.port,
       path: databasePath,
       expectedIdentity,

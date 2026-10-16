@@ -16,6 +16,7 @@ import {
   CUSTOM_LOCAL_AUTH_MARKER,
   isNonSecretApiKeyMarker,
   isSecretRefHeaderValueMarker,
+  resolveExplicitProviderNoAuth,
 } from "./model-auth-markers.js";
 import { isAuthModeAllowedForModel } from "./model-auth-policy.js";
 import * as authConfig from "./model-auth-provider-config.js";
@@ -149,6 +150,9 @@ function resolveRuntimeAvailableProviderAuth<T>(
   const authOverride = authConfig.resolveProviderAuthOverride(params.cfg, provider);
   if (authOverride === "aws-sdk") {
     return true;
+  }
+  if (authOverride === "none") {
+    return authConfig.hasSyntheticLocalProviderAuthConfig({ ...params, cfg: params.cfg, provider });
   }
 
   // Callers that supply the auth store get inline provider keys hidden while
@@ -360,6 +364,14 @@ function resolveProviderSyntheticRuntimeAuth(
 export async function prepareSyntheticLocalProviderAuth(
   params: SyntheticProviderAuthParams & { signal?: AbortSignal },
 ): Promise<ResolvedProviderAuth | null> {
+  const noAuth = resolveExplicitProviderNoAuth({
+    provider: params.provider,
+    providerConfig: resolveMergedModelProviderConfig(params.cfg, params.provider),
+    modelApi: params.modelApi,
+  });
+  if (noAuth) {
+    return noAuth;
+  }
   if (
     params.allowPluginSyntheticAuth === false ||
     authConfig.hasSecretRefProviderApiKey(params.cfg, params.provider)

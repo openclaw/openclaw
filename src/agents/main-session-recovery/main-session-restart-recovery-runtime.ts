@@ -1,6 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { resolveStateDir } from "../../config/paths.js";
+import { readSessionEntrySummariesInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { waitForAbortSignal } from "../../infra/abort-signal.js";
@@ -19,7 +21,10 @@ import {
   listAgentDatabaseAdmissionRefusals,
   readAgentDatabaseAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
-import { runWithMainSessionRecoveryAdmission } from "./main-session-recovery-admission.js";
+import {
+  runWithMainSessionRecoveryAdmission,
+  type MainSessionRecoveryAdmission,
+} from "./main-session-recovery-admission.js";
 import { getMainSessionRecoveryRetryCount } from "./main-session-recovery-state.js";
 import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-store.js";
 import {
@@ -114,6 +119,12 @@ export async function recoverRestartAbortedMainSessions(params: {
   const skipReasons = new Map<MainSessionRecoverySkipReason, number>();
   const handledSessionKeys = params.handledSessionKeys ?? new Set<string>();
 
+  const candidates: Array<{
+    storePath: string;
+    storeAgentId?: string;
+    sessionKey: string;
+    entry: SessionEntry;
+  }> = [];
   for (const target of await discoverRestartRecoveryStoreTargets(params)) {
     if (params.shouldContinue?.() === false) {
       break;
@@ -121,11 +132,39 @@ export async function recoverRestartAbortedMainSessions(params: {
     if (params.excludedStoreTargets?.has(restartRecoveryStoreTargetKey(target))) {
       continue;
     }
+    try {
+      const entries = await readSessionEntrySummariesInWorker({
+        agentId: target.agentId,
+        storePath: target.storePath,
+        mainSessionRecovery: true,
+      });
+      for (const entry of entries) {
+        candidates.push({ ...entry, storePath: target.storePath, storeAgentId: target.agentId });
+      }
+    } catch (error) {
+      mainSessionRecoveryLog.warn(
+        `failed to load session store ${target.storePath}: ${String(error)}`,
+      );
+      result.failed++;
+    }
+  }
+  // Preparation writes update updatedAt; the interruption's endedAt retains its FIFO position.
+  candidates.sort(
+    (a, b) =>
+      (a.entry.endedAt ?? a.entry.updatedAt) - (b.entry.endedAt ?? b.entry.updatedAt) ||
+      a.storePath.localeCompare(b.storePath) ||
+      a.sessionKey.localeCompare(b.sessionKey),
+  );
+  for (const candidate of candidates) {
+    if (params.shouldContinue?.() === false) {
+      break;
+    }
     const storeResult = await recoverStore({
       ...params,
       passId,
-      storePath: target.storePath,
-      storeAgentId: target.agentId,
+      storePath: candidate.storePath,
+      storeAgentId: candidate.storeAgentId,
+      preparedEntries: [candidate],
       handledSessionKeys,
       onSkipped: (reason) => {
         skipReasons.set(reason, (skipReasons.get(reason) ?? 0) + 1);
@@ -160,6 +199,7 @@ export async function retryRestartAbortedMainSessionRecovery(
     expectedRecoveryRunId?: string;
     expectedRecoverySourceRunId?: string;
     expectedSessionId: string;
+    lane?: MainSessionRecoveryAdmission["lane"];
     stateDir?: string;
     gatewayRuntime: GatewayRecoveryRuntime;
   },
@@ -183,6 +223,7 @@ async function recoverExpectedRestartRecovery(
   params: MainSessionRecoveryStoreTarget & {
     cfg?: OpenClawConfig;
     expectedTarget: ExpectedRestartRecoveryTarget;
+    lane?: MainSessionRecoveryAdmission["lane"];
     lifecycleGeneration?: string;
     observationOnly?: boolean;
     onPreparationPending?: (target: ExhaustedRestartRecoveryTarget) => void;

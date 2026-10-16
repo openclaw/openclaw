@@ -86,6 +86,7 @@ export type SessionActorMemoryReportsWrites = {
     input: SessionActorMemoryReportsReads["session.rewrite.prepare"]["input"] & {
       expected: SessionMessageRewriteSnapshot;
       message: unknown;
+      returnUnchanged?: boolean;
     };
     output: SessionMessageRewriteCommitted;
   };

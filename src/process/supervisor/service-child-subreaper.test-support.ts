@@ -48,7 +48,7 @@ const cooperative = spawn(
   { stdio: ["ignore", "ignore", "inherit", "ipc"] },
 );
 assert.ok(cooperative.pid);
-signalOwner.retainLibuvChild(cooperative.pid, cooperative);
+signalOwner.retainSpawnedChild(cooperative.pid, cooperative);
 const messages: unknown[] = [];
 cooperative.on("message", (message: unknown) => messages.push(message));
 const cooperativeClosed = once(cooperative, "close");
@@ -90,7 +90,7 @@ const realtimeRoot = spawn(
   { stdio: ["ignore", "pipe", "inherit"] },
 );
 assert.ok(realtimeRoot.pid);
-realtimeOwner.retainLibuvChild(realtimeRoot.pid, realtimeRoot);
+realtimeOwner.retainSpawnedChild(realtimeRoot.pid, realtimeRoot);
 const realtimeRootExit = once(realtimeRoot, "exit");
 const realtimeRootClosed = once(realtimeRoot, "close");
 const realtimePid = await new Promise<number>((resolve) => {

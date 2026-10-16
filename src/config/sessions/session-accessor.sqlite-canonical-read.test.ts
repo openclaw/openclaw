@@ -12,6 +12,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
@@ -85,8 +86,10 @@ describe("canonical SQLite metadata reads", () => {
     delete expected.skillsSnapshot;
     delete expected.systemPromptReport;
     const database = openOpenClawAgentDatabase(scope);
-    const queries = trackSqliteStatementExecutions(database.db, ["entries"], (sql) =>
-      /from\s+"session_nodes"/i.test(sql) ? "entries" : null,
+    const queries = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["entries"],
+      (sql) => (/from\s+"session_nodes"/i.test(sql) ? "entries" : null),
     );
     try {
       expect(loadSessionEntryReadOnly({ ...scope, projection: "list" })).toEqual(expected);
@@ -334,7 +337,8 @@ describe("exact SQLite session batch availability", () => {
         agentId: "main",
         env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-exact-unavailable-") },
       };
-      const { db, path: databasePath } = openOpenClawAgentDatabase(scope);
+      const { db: connection, path: databasePath } = openOpenClawAgentDatabase(scope);
+      const db = requireNativeSqliteDatabase(connection);
       clearNodeSqliteKyselyCacheForDatabase(db);
       const prepare = db.prepare.bind(db);
       const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sql) => {

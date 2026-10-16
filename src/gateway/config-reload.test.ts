@@ -2278,9 +2278,6 @@ describe("startGatewayConfigReloader", () => {
       expect(onHotReload).not.toHaveBeenCalled();
       expect(onRestart).toHaveBeenCalledTimes(1);
       expect(log.info).toHaveBeenCalledWith(
-        "config restart superseded: GatewayConfigReloadSupersededError: config reload superseded by a newer runtime config source",
-      );
-      expect(log.info).toHaveBeenCalledWith(
         "config reload superseded: GatewayConfigReloadSupersededError: config reload superseded by a newer runtime config source",
       );
       expect(log.error).not.toHaveBeenCalled();
@@ -2985,6 +2982,9 @@ describe("startGatewayConfigReloader", () => {
       });
       await flushWatcherChange(harness);
 
+      expect(harness.log.error).toHaveBeenCalledExactlyOnceWith(
+        "config reload failed: Error: restart admission failed",
+      );
       if (retry === "new write") {
         const newer: ConfigWriteNotification = {
           ...makeZeroDebounceHookWrite("replay-retry-new"),

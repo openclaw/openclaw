@@ -22,7 +22,7 @@ Every server start uses the same admission, including the temporary Gateway star
 2. **Compatibility projection** publishes the owner's PID, process start identity, role, and runtime port in the historical state-local lock. Supported older Gateways use it to detect the current process. It is metadata under the process owner, not an independent lifecycle owner.
 3. **Socket bind** binds the HTTP/WebSocket listener (default `ws://127.0.0.1:18789`) as an exclusive TCP listener.
 
-During startup or restart, the Gateway waits up to five minutes for another OpenClaw process to release state ownership. It logs when waiting starts and when ownership is acquired or the wait expires.
+During startup or restart, the Gateway waits up to five minutes for another OpenClaw process to release state ownership. It checks ordinary contention every 250 ms so a prolonged shutdown does not leave the replacement sleeping after ownership is released. Unverifiable process namespaces retain their separate heartbeat-expiry wait. It logs when waiting starts and when ownership is acquired or the wait expires.
 
 ### State and config locks
 

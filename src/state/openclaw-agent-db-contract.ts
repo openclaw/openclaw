@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import type {
   DatabaseFileIdentity,
@@ -22,7 +22,7 @@ export const AGENT_DATABASE_PREPARATION_CONCURRENCY = 4;
 
 export type OpenClawAgentDatabase = {
   agentId: string;
-  db: DatabaseSync;
+  db: EngineConnection;
   path: string;
   walMaintenance: SqliteWalMaintenance;
 };

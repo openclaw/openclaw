@@ -20,7 +20,7 @@ function group(
     timestamp: 1,
     ...overrides,
   };
-  const [prepared] = groupMessages([{ kind: "message", key, message }]);
+  const [prepared] = groupMessages([{ kind: "message", key, message }], {}, undefined, true);
   if (prepared?.kind !== "group") {
     throw new Error("expected a prepared message group");
   }

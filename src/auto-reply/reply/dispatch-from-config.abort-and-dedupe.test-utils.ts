@@ -588,7 +588,7 @@ describe("dispatchReplyFromConfig", () => {
         state: "idle",
         lastActivityAt: Date.now(),
       },
-    };
+    } satisfies NonNullable<ReturnType<typeof acpMocks.readAcpSessionEntry>>;
     acpMocks.readAcpSessionEntry.mockImplementation(() => currentAcpEntry);
     acpMocks.upsertAcpSessionMeta.mockImplementation(async (paramsUnknown: unknown) => {
       const params = paramsUnknown as {

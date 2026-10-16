@@ -118,13 +118,12 @@ vi.mock("./scenario-catalog.js", async (importOriginal) => {
 });
 
 import { resolveRepoRelativeOutputDir } from "./cli-paths.js";
+import { runQaCoverageReportCommand, runQaParityReportCommand } from "./cli-report.runtime.js";
 import { registerQaLabCli } from "./cli.js";
 import {
   runQaDockerScaffoldCommand,
   runQaDockerUpCommand,
   runQaCharacterEvalCommand,
-  runQaCoverageReportCommand,
-  runQaParityReportCommand,
   runQaProfileCommand,
   runQaManualLaneCommand,
   resolveQaHarnessRepoRoot,
@@ -652,6 +651,9 @@ describe("qa cli", () => {
         category: "telegram.native-controls-and-approvals",
         scenario: ["telegram-commands-command"],
         transport: "qa-channel",
+        "provider-mode": "mock-openai",
+        model: "openai/gpt-5.6-luna",
+        "alt-model": "anthropic/claude-sonnet-4-6",
         fast: true,
         concurrency: 2,
         "allow-failures": true,
@@ -664,6 +666,8 @@ describe("qa cli", () => {
         transportId: "qa-channel",
         channelDriver: "crabline",
         providerMode: "mock-openai",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "anthropic/claude-sonnet-4-6",
         fastMode: true,
         concurrency: 2,
       });
@@ -1388,6 +1392,7 @@ describe("qa cli", () => {
       transcripts: path.resolve("qa/scenarios/jsonl-replay"),
       "output-dir": "jsonl-output",
       "runtime-pair": "openclaw,codex",
+      "provider-mode": "mock-openai",
     });
 
     const report = await fs.readFile(
@@ -1553,6 +1558,7 @@ describe("qa cli", () => {
       "output-dir": ".artifacts/qa-multipass",
       runner: "multipass",
       "provider-mode": "mock-openai",
+      "fail-fast": true,
       scenario: ["channel-chat-baseline"],
       "allow-failures": true,
       concurrency: 3,
@@ -1576,6 +1582,7 @@ describe("qa cli", () => {
       fastMode: undefined,
       allowFailures: true,
       scenarioIds: ["channel-chat-baseline"],
+      failFast: true,
       concurrency: 3,
       runtimePair: ["openclaw", "codex"],
       channelDriver: "crabline",
@@ -1702,68 +1709,5 @@ describe("qa cli", () => {
       skipUiBuild: true,
     });
   });
-  it.each([
-    {
-      command: "run",
-      flags: {
-        transport: "discord",
-        scenario: "discord-status-reactions-tool-only",
-        baseline: "origin/main",
-        candidate: "HEAD",
-        "skip-install": true,
-        "skip-build": true,
-      },
-      mock: runMantisBeforeAfterCommand,
-      expected: {
-        baseline: "origin/main",
-        candidate: "HEAD",
-        transport: "discord",
-        scenario: "discord-status-reactions-tool-only",
-        credentialSource: "convex",
-        credentialRole: "ci",
-        fastMode: true,
-        providerMode: "live-frontier",
-        signal: expect.any(AbortSignal),
-        skipBuild: true,
-        skipInstall: true,
-      },
-    },
-    {
-      command: "desktop-browser-smoke",
-      flags: { class: "beast", "keep-lease": true },
-      mock: runMantisDesktopBrowserSmokeCommand,
-      expected: { machineClass: "beast", keepLease: true },
-    },
-    {
-      command: "slack-desktop-smoke",
-      flags: {
-        "machine-class": "beast",
-        model: "openai/gpt-5.6-luna",
-        "alt-model": "openai/gpt-5.6-terra",
-        scenario: "slack-canary",
-        fast: true,
-      },
-      mock: runMantisSlackDesktopSmokeCommand,
-      expected: {
-        machineClass: "beast",
-        primaryModel: "openai/gpt-5.6-luna",
-        alternateModel: "openai/gpt-5.6-terra",
-        scenarioIds: ["slack-canary"],
-        fastMode: true,
-        gatewaySetup: undefined,
-      },
-    },
-  ] satisfies Array<{
-    command: string;
-    flags: Parameters<typeof parseQa>[1];
-    mock: typeof runMantisBeforeAfterCommand;
-    expected: Record<string, unknown>;
-  }>)(
-    "routes Mantis $command options and authority",
-    async ({ command, flags, mock, expected }) => {
-      await parseQa(["mantis", command], flags);
-      expect(mock).toHaveBeenCalledWith(expected);
-    },
-  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

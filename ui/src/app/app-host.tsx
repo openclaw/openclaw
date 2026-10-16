@@ -65,7 +65,7 @@ import {
   COMMAND_PALETTE_ELEMENT,
   DESKTOP_PANEL_ELEMENT,
   EXEC_APPROVAL_ELEMENT,
-  LazyCustomElementRequestController,
+  createLazyCustomElementRequests,
   LINK_READER_PANEL_ELEMENT,
   type OptionalCustomElement,
   TERMINAL_PANEL_ELEMENT,
@@ -92,7 +92,7 @@ export class ShellOwner
   readiness: ControlUiReadiness | undefined;
   onboarding = false;
   private readonly cleanups: Array<() => void> = [];
-  readonly shellLayout = new ShellLayoutOwner(() => this.invalidate());
+  readonly shellLayout = new ShellLayoutOwner();
   readonly commandPaletteElement = COMMAND_PALETTE_ELEMENT;
   readonly terminalPanelElement = TERMINAL_PANEL_ELEMENT;
   readonly browserPanelElement = BROWSER_PANEL_ELEMENT;
@@ -104,7 +104,7 @@ export class ShellOwner
     label: t("onboarding.memoryImport.title"),
     loadModule: () => import("../components/onboarding-memory-import.ts"),
   } satisfies OptionalCustomElement;
-  readonly lazyCustomElements = new LazyCustomElementRequestController(
+  readonly lazyCustomElements = createLazyCustomElementRequests(
     this,
     () => this.shellChrome.cancelPendingLazyAction(),
     (canReload) => this.shellChrome.retryPendingLazyAction(canReload),
@@ -254,7 +254,7 @@ export class ShellOwner
   get isConnected() {
     return this.element.isConnected;
   }
-  // Temporary callback ABI used by unported lazy-element and layout owners.
+  // Temporary callback ABI used by unported lazy-element and chrome owners.
   readonly requestUpdate = () => this.invalidate();
 
   replaceRuntime(runtime: ApplicationRuntime): void {
@@ -273,6 +273,7 @@ export class ShellOwner
   connect(): void {
     const context = this.context;
     this.resumePresentation();
+    this.cleanups.push(this.lazyCustomElements.subscribe(() => this.invalidate()));
     const runtime = this.runtime;
     if (context && runtime) {
       const watch = (

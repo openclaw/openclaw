@@ -76,13 +76,11 @@ export async function replaceNodeWorkerDirectory(
     signal?.throwIfAborted();
     await fsp.rename(staging, destination);
   } catch (error) {
-    if (movedOld && kind === "bundle") {
-      await fsp.rename(backup, destination).catch(() => undefined);
-    } else if (movedOld) {
+    if (movedOld) {
       try {
         await fsp.rename(backup, destination);
       } catch (rollbackError) {
-        const recoveryError = new Error(`workspace transfer rollback failed; recover ${backup}`, {
+        const recoveryError = new Error(`${kind} transfer rollback failed; recover ${backup}`, {
           cause: error,
         });
         Object.defineProperty(recoveryError, "rollbackError", {

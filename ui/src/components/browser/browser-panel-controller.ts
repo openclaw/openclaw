@@ -29,10 +29,10 @@ import {
   type BrowserPanelControllerHost,
 } from "./browser-panel-operation-ownership.ts";
 import { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
-import { BrowserPanelSnapshotController } from "./browser-panel-snapshot-controller.ts";
+import { createBrowserPanelSnapshot } from "./browser-panel-snapshot.ts";
 import { BrowserPanelStream } from "./browser-panel-stream.ts";
 import type { BrowserPanelView } from "./browser-panel-surface.ts";
-import { BrowserPanelViewportController } from "./browser-panel-viewport-controller.ts";
+import { BrowserPanelViewportOwner } from "./browser-panel-viewport-owner.ts";
 import { browserRouteKey, type BrowserRoute } from "./browser-target.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
@@ -67,8 +67,8 @@ export class BrowserPanelController implements PanelLifecycleController {
   readonly stream: BrowserPanelStream;
   private activeClient: GatewayBrowserClient | null = null;
   urlDraftEditing = false;
-  private readonly viewport = new BrowserPanelViewportController(this);
-  private readonly snapshot = new BrowserPanelSnapshotController(this);
+  private readonly viewport = new BrowserPanelViewportOwner(this);
+  private readonly snapshot = createBrowserPanelSnapshot(this);
 
   constructor(readonly host: BrowserPanelControllerHost) {
     this.operations = new BrowserPanelOperationOwnership(host);

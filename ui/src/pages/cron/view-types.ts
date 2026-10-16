@@ -83,7 +83,7 @@ export type CronProps = {
   onClone: (job: CronJob) => void;
   onToggle: (job: CronJob, enabled: boolean) => void;
   onRun: (job: CronJob, mode?: "force" | "due") => void;
-  onRemove: (job: CronJob) => void;
+  onRemove: (job: CronJob) => void | Promise<void>;
   onLoadMoreJobs: () => void;
   onJobsFiltersChange: (patch: Parameters<typeof updateCronJobsFilter>[1]) => void | Promise<void>;
   onJobsFiltersReset: () => void | Promise<void>;
@@ -95,6 +95,7 @@ export type CronProps = {
     cronRunsQuery?: string;
     cronRunsSortDir?: CronSortDir;
   }) => void | Promise<void>;
+  onHighlightedRun?: (element: HTMLElement, link: string) => () => void;
   onViewRunTranscript?: (entry: CronRunLogEntry, trigger: HTMLButtonElement) => void;
 };
 

@@ -2,15 +2,15 @@
 
 UI ownership rules here; repo-global architecture, proof, Git rules in root `AGENTS.md`.
 
-## Solid migration
+## Solid
 
-- Lit 3/Web Awesome ports + Solid 2 components/projections: follow [Solid skill](../.agents/skills/solid/SKILL.md) + assigned migration order for conversion, lifecycle, interop, proof. State ownership below still applies.
+- Before writing, reviewing, or refactoring any Solid code here, read the [Solid skill](../.agents/skills/solid/SKILL.md) in full, the installed `node_modules/solid-js/CHEATSHEET.md` it points to, and the references it routes you to; for existing code, the [refactor checklist](../.agents/skills/solid/references/refactor-checklist.md). State ownership below still applies.
 - Final Lit sweep: remove Lit-specific guidance.
 
 Solid route modules expose `renderSolid(props)` from the existing lazy page import.
 The outlet mounts that renderer once and supplies live `data`, `loaderPending`, and
-`presented` props; loader updates must preserve page-local state. Unported route
-modules keep `render`. Keep page imports inside their route's `component` loader.
+`presented` props; loader updates must preserve page-local state. Keep page
+imports inside their route's `component` loader.
 
 ## State Ownership And Async Results
 

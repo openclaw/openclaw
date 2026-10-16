@@ -389,12 +389,14 @@ describe("model provider configuration data", () => {
     const selectable = defaultModelChoices(models, {
       primary: "openai/gpt-saved",
       fallbacks: ["openai/gpt-disabled"],
-      utilityModel: null,
+      utilityModel: { primary: "openai/utility", fallbacks: ["openai/utility-backup"] },
     });
     expect(selectable.map((model) => `${model.provider}/${model.id}`)).toEqual([
       "openai/gpt-ready",
       "openai/gpt-disabled",
       "openai/gpt-saved",
+      "openai/utility",
+      "openai/utility-backup",
     ]);
   });
 

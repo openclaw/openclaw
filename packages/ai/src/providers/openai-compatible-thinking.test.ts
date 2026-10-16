@@ -25,6 +25,19 @@ type ReasoningCase = {
   | { requested: ModelThinkingLevel | "none"; raw: true }
 );
 
+function mapped(
+  name: string,
+  requested: ModelThinkingLevel,
+  expected: string | undefined,
+  overrides: Partial<Omit<ReasoningCase, "requested" | "raw">> = {},
+): ReasoningCase {
+  return { name, requested, expected, ...overrides };
+}
+
+const nativeEfforts = ["low", "medium", "high", "xhigh", "max"];
+const offEfforts = ["none", "low", "high"];
+const providerEfforts = ["ProviderLow", "ProviderHigh"];
+
 const mappingCases: ReasoningCase[] = [
   ...[
     { name: "default", compat: undefined, expected: "medium" },
@@ -46,28 +59,19 @@ const mappingCases: ReasoningCase[] = [
     compat,
     expected,
   })),
-  {
-    name: "explicit compat max for a known model",
+  mapped("explicit compat max for a known model", "max", "max", {
     modelId: "gpt-5.6-sol",
-    requested: "max",
-    compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
-    expected: "max",
-  },
-  {
-    name: "declared native max",
-    requested: "max",
-    compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+    compat: { supportedReasoningEfforts: nativeEfforts },
+  }),
+  mapped("declared native max", "max", "max", {
+    compat: { supportedReasoningEfforts: nativeEfforts },
     thinkingLevelMap: { off: null, minimal: null },
-    expected: "max",
-  },
-  {
-    name: "declared xhigh",
-    requested: "xhigh",
-    compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
-    expected: "xhigh",
-  },
-  { name: "undeclared max", requested: "max", expected: "high" },
-  { name: "plain minimal", requested: "minimal", expected: "minimal" },
+  }),
+  mapped("declared xhigh", "xhigh", "xhigh", {
+    compat: { supportedReasoningEfforts: nativeEfforts.slice(0, -1) },
+  }),
+  mapped("undeclared max", "max", "high"),
+  mapped("plain minimal", "minimal", "minimal"),
   ...[
     { name: "model off mapping", thinkingLevelMap: { off: "low" } },
     { name: "compat off mapping", reasoningEffortMap: { off: "low" } },
@@ -79,15 +83,10 @@ const mappingCases: ReasoningCase[] = [
   ].flatMap<ReasoningCase>(({ name, thinkingLevelMap, reasoningEffortMap }) => {
     const mapping = {
       thinkingLevelMap,
-      compat: { supportedReasoningEfforts: ["none", "low", "high"], reasoningEffortMap },
+      compat: { supportedReasoningEfforts: offEfforts, reasoningEffortMap },
     };
     return [
-      {
-        ...mapping,
-        name: `logical off follows ${name}`,
-        requested: "off",
-        expected: "low",
-      },
+      mapped(`logical off follows ${name}`, "off", "low", mapping),
       {
         ...mapping,
         name: `native none bypasses ${name}`,
@@ -97,80 +96,53 @@ const mappingCases: ReasoningCase[] = [
       },
     ];
   }),
-  {
-    name: "mapped max alias",
-    requested: "max",
+  mapped("mapped max alias", "max", "xhigh", {
     thinkingLevelMap: { xhigh: "xhigh", max: "xhigh" },
-    expected: "xhigh",
-  },
-  {
-    name: "model-mapped low effort",
-    requested: "low",
+  }),
+  mapped("model-mapped low effort", "low", "medium", {
     thinkingLevelMap: { low: "medium" },
-    expected: "medium",
-  },
-  {
-    name: "provider-native compatibility mapping",
-    requested: "high",
+  }),
+  mapped("provider-native compatibility mapping", "high", "ProviderHigh", {
     compat: {
-      supportedReasoningEfforts: ["ProviderLow", "ProviderHigh"],
+      supportedReasoningEfforts: providerEfforts,
       reasoningEffortMap: { high: "ProviderHigh" },
     },
-    expected: "ProviderHigh",
-  },
-  {
-    name: "mapped xhigh below native max",
-    requested: "xhigh",
+  }),
+  mapped("mapped xhigh below native max", "xhigh", "high", {
     compat: {
       supportedReasoningEfforts: ["none", "high", "max"],
       reasoningEffortMap: { xhigh: "high" },
     },
-    expected: "high",
-  },
-  {
-    name: "null xhigh cap overrides a max mapping",
-    requested: "xhigh",
+  }),
+  mapped("null xhigh cap overrides a max mapping", "xhigh", "high", {
     compat: {
       supportedReasoningEfforts: ["none", "high", "max"],
       reasoningEffortMap: { xhigh: "max" },
     },
     thinkingLevelMap: { xhigh: null },
-    expected: "high",
-  },
-  {
-    name: "sparse canonical efforts cap max at high",
-    requested: "max",
+  }),
+  mapped("sparse canonical efforts cap max at high", "max", "high", {
     compat: { supportedReasoningEfforts: ["low", "high"] },
-    expected: "high",
-  },
+  }),
 ];
 
 const adapterCases: ReasoningCase[] = [
-  {
-    name: "known model API max default",
+  mapped("known model API max default", "max", "xhigh", {
     modelId: "gpt-5.6-sol",
-    requested: "max",
-    expected: "xhigh",
     expectedResponses: "max",
-  },
-  {
-    name: "off map hole",
-    requested: "off",
+  }),
+  mapped("off map hole", "off", "minimal", {
     thinkingLevelMap: { off: null },
-    expected: "minimal",
-  },
-  {
-    name: "explicit off from advertised none without a map",
-    requested: "off",
-    compat: { supportedReasoningEfforts: ["none", "low", "high"] },
-    expected: "none",
-  },
+  }),
+  mapped("explicit off from advertised none without a map", "off", "none", {
+    compat: { supportedReasoningEfforts: offEfforts },
+  }),
   {
     name: "native none keeps its explicit compat mapping",
     requested: "none",
     raw: true,
     compat: {
-      supportedReasoningEfforts: ["none", "low", "high"],
+      supportedReasoningEfforts: offEfforts,
       reasoningEffortMap: { none: "low", off: "high" },
     },
     expected: "low",
@@ -181,27 +153,21 @@ const adapterCases: ReasoningCase[] = [
       requested: "max",
       raw,
       compat: {
-        supportedReasoningEfforts: ["ProviderLow", "ProviderHigh"],
+        supportedReasoningEfforts: providerEfforts,
         reasoningEffortMap: { high: "ProviderLow", MAX: "ProviderHigh" },
       },
       thinkingLevelMap: cap === null ? { max: null } : undefined,
       expected: cap === null ? (raw ? undefined : "ProviderLow") : "ProviderHigh",
     })),
   ),
-  {
-    name: "serialization opt-out overrides a model mapping",
-    requested: "high",
+  mapped("serialization opt-out overrides a model mapping", "high", undefined, {
     compat: { supportsReasoningEffort: false },
     thinkingLevelMap: { high: "HIGH" },
-    expected: undefined,
-  },
-  {
-    name: "empty effort metadata overrides known model defaults",
+  }),
+  mapped("empty effort metadata overrides known model defaults", "max", undefined, {
     modelId: "gpt-5.6-sol",
-    requested: "max",
     compat: { supportedReasoningEfforts: [] },
-    expected: undefined,
-  },
+  }),
   ...[
     { modelId: "gpt-5.6-luna", expected: "none" },
     { modelId: "gpt-5.4-mini", expected: undefined },
@@ -214,14 +180,11 @@ const adapterCases: ReasoningCase[] = [
     expected,
     expectedResponses: "low",
   })),
-  {
-    name: "proxy model retains its own tool reasoning contract",
+  mapped("proxy model retains its own tool reasoning contract", "low", "low", {
     modelId: "gpt-5.4-mini",
     toolRoute: "proxy",
-    requested: "low",
     compat: { supportsReasoningEffort: true },
-    expected: "low",
-  },
+  }),
 ];
 
 describe.each([

@@ -4,7 +4,6 @@ import {
   encodeMemoryEmbedding,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
-  compileSqliteQueryBindings,
   executeSqliteQuerySync,
   type Generated,
   getNodeSqliteKysely,
@@ -205,19 +204,17 @@ export function upsertMemoryEmbeddingCache(params: {
     }
   }
   const now = params.now ?? Date.now();
-  const { compiled, bind } = compileSqliteQueryBindings<{ hash: string; embedding: number[] }>(
-    (parameter) =>
-      getNodeSqliteKysely<EmbeddingCacheDatabase>(params.db)
+  const db = getNodeSqliteKysely<EmbeddingCacheDatabase>(params.db);
+  let batch: MemoryEmbeddingCacheRow[] = [];
+  const flush = () => {
+    if (batch.length === 0) {
+      return;
+    }
+    executeSqliteQuerySync(
+      params.db,
+      db
         .insertInto("memory_embedding_cache")
-        .values({
-          provider: provider.id,
-          model: provider.model,
-          provider_key: params.providerKey,
-          hash: parameter((entry) => entry.hash),
-          embedding: parameter((entry) => encodeMemoryEmbedding(entry.embedding)),
-          dims: parameter((entry) => entry.embedding.length),
-          updated_at: now,
-        })
+        .values(batch)
         .onConflict((conflict) =>
           conflict.columns(["provider", "model", "provider_key", "hash"]).doUpdateSet((eb) => ({
             embedding: eb.ref("excluded.embedding"),
@@ -225,20 +222,32 @@ export function upsertMemoryEmbeddingCache(params: {
             updated_at: eb.ref("excluded.updated_at"),
           })),
         ),
-  );
-  const statement = params.db.prepare(compiled.sql);
-  statement.setReadBigInts(true);
+    );
+    batch = [];
+  };
   const retained = new Set(retainedRows.map(([, index]) => index));
   row = 0;
   for (const entry of params.entries()) {
     if (!retained.has(row++)) {
       continue;
     }
-    statement.run(...bind(entry));
-    // Unbounded upserts may replace a row: the retained count is a safe upper bound.
-    cacheSize += 1;
+    batch.push({
+      provider: provider.id,
+      model: provider.model,
+      provider_key: params.providerKey,
+      hash: entry.hash,
+      embedding: encodeMemoryEmbedding(entry.embedding),
+      dims: entry.embedding.length,
+      updated_at: now,
+    });
+    // Bound encoded vectors and stay below SQLite's portable binding limit.
+    if (batch.length === 128) {
+      flush();
+    }
   }
-  return cacheSize;
+  flush();
+  // Unbounded upserts may replace a row: the retained count is a safe upper bound.
+  return cacheSize + retainedRows.length;
 }
 
 export function collectMemoryCachedEmbeddings(params: {

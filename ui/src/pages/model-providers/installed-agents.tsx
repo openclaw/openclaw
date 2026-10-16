@@ -1,5 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, For, onCleanup, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasProviderBrandIcon } from "../../components/provider-icon-data.ts";
@@ -11,12 +11,14 @@ import {
   SettingsStatus,
   SettingsToggleRow,
 } from "../../components/solid/settings-ui.tsx";
-import { WizardLogin, WizardLoginController } from "../../components/wizard-login-controller.tsx";
+import { createWizardLogin, WizardLogin } from "../../components/wizard-login-controller.tsx";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
-import { t } from "../../lib/reactive/i18n.ts";
-import type { SolidControllerHost as ControllerHost } from "../../lit/solid-controller-host.ts";
+import { projectGateway } from "../../lib/reactive/application.ts";
+import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
+import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
+import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import {
   modelProviderConfigBusy,
   modelProviderConfigMutationBlockedReason,
@@ -44,20 +46,25 @@ const INSTALLATION_STATUS = {
 
 type InstalledAgentsOptions = {
   gateway: GatewayPageBinding;
-  getContext: () => ApplicationContext;
+  context: ApplicationContext;
 };
 
-export class InstalledAgentsController {
-  private agents: InstalledAgent[] | null = null;
-  private request: AbortController | null = null;
-  private listClient: GatewayBrowserClient | null | undefined;
-  private listEpoch = -1;
-  private error: string | null = null;
+export function createInstalledAgents(options: InstalledAgentsOptions) {
+  const context = options.context;
+  const gatewayState = projectGateway(context.gateway);
+  const config = projectRuntimeConfig(context.runtimeConfig);
+  const overlays = projectOwner(context.overlays, (source) => source.snapshot);
+  const listeners = new Set<() => void>();
+  const notify = () => listeners.forEach((listener) => listener());
+  let installed: InstalledAgent[] | null = null;
+  let listRequest: AbortController | null = null;
+  let listClient: GatewayBrowserClient | null | undefined;
+  let listEpoch = -1;
+  let loadError: string | null = null;
   /** Requested enabled state per agent while its config write is unsettled. */
-  private readonly pending = new Map<string, boolean>();
-  private readonly messages = new Map<string, ModelProviderRowMessage>();
-  private readonly wizard: WizardLoginController;
-  private enablement: {
+  const pending = new Map<string, boolean>();
+  const messages = new Map<string, ModelProviderRowMessage>();
+  let enablement: {
     client: GatewayBrowserClient;
     epoch: number;
     agentId: string;
@@ -65,205 +72,198 @@ export class InstalledAgentsController {
     agent: InstalledAgent;
   } | null = null;
 
-  constructor(
-    private readonly host: ControllerHost,
-    private readonly options: InstalledAgentsOptions,
-  ) {
-    host.addController(this);
-    this.wizard = new WizardLoginController(host, {
-      getClient: () => this.enablement?.client ?? null,
-      getAgentId: () => this.enablement?.agentId ?? null,
-      onClose: () => this.closeEnablement(),
-      onAnswer: (value, includeValue) => {
-        const target = this.enablement;
-        if (target && this.isCurrentEnablement(target)) {
-          void this.wizard.runner
-            .answer(value, includeValue)
-            .then(() => this.reconcileEnablement(target));
-        }
-      },
-      onBackgroundCompletion: async () => {
-        const target = this.enablement;
-        if (target) {
-          await this.reconcileEnablement(target);
-        }
-      },
-      requestFailedMessage: () => t("modelProviders.requestFailed"),
-      sessionExpiredMessage: () => t("modelProviders.installedAgents.sessionExpired"),
-      finishingMessage: () => t("modelProviders.saving"),
-    });
-  }
+  const wizard = createWizardLogin({
+    getClient: () => enablement?.client ?? null,
+    getAgentId: () => enablement?.agentId ?? null,
+    onClose: () => closeEnablement(),
+    onAnswer: (value, includeValue) => {
+      const target = enablement;
+      if (target && isCurrentEnablement(target)) {
+        void wizard.runner.answer(value, includeValue).then(() => reconcileEnablement(target));
+      }
+    },
+    onBackgroundCompletion: async () => {
+      const target = enablement;
+      if (target) {
+        await reconcileEnablement(target);
+      }
+    },
+    requestFailedMessage: () => t("modelProviders.requestFailed"),
+    sessionExpiredMessage: () => t("modelProviders.installedAgents.sessionExpired"),
+    finishingMessage: () => t("modelProviders.saving"),
+  });
+  const projection = projectSource(null, {
+    read: () => ({
+      agents: installed,
+      error: loadError,
+      loading: listRequest !== null,
+      pending,
+      messages,
+      enablement,
+    }),
+    subscribe: (_, listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    equality: "revision",
+  });
 
-  private get loading(): boolean {
-    return this.request !== null;
-  }
-
-  get initialized(): boolean {
-    return !this.available() || this.agents !== null || this.error !== null;
-  }
-
-  hostUpdate(): void {
-    const gateway = this.options.gateway;
-    if (this.enablement && !this.isCurrentEnablement(this.enablement)) {
-      this.closeEnablement();
+  function synchronize(): void {
+    const gateway = options.gateway;
+    if (enablement && !isCurrentEnablement(enablement)) {
+      closeEnablement();
     }
-    const client = gateway.connected && this.available() ? gateway.client : null;
-    if (client !== this.listClient || gateway.epoch !== this.listEpoch) {
-      void this.load(client, gateway.epoch);
+    const client = gateway.connected && available() ? gateway.client : null;
+    if (client !== listClient || gateway.epoch !== listEpoch) {
+      void load(client, gateway.epoch);
     }
   }
 
-  hostDisconnected(): void {
-    this.closeEnablement();
-    this.cancel();
-    this.listClient = undefined;
-  }
-
-  private cancel(): void {
-    const request = this.request;
-    this.request = null;
+  function cancel(): void {
+    const request = listRequest;
+    listRequest = null;
     request?.abort();
-    this.error = null;
+    loadError = null;
   }
 
-  private async load(
-    client = this.options.gateway.connected && this.available()
-      ? this.options.gateway.client
-      : null,
-    epoch = this.options.gateway.epoch,
+  async function load(
+    client = options.gateway.connected && available() ? options.gateway.client : null,
+    epoch = options.gateway.epoch,
   ): Promise<void> {
-    this.cancel();
-    this.listClient = client;
-    this.listEpoch = epoch;
+    cancel();
+    listClient = client;
+    listEpoch = epoch;
     if (!client) {
-      this.host.requestUpdate();
+      notify();
       return;
     }
     const request = new AbortController();
-    this.request = request;
-    this.host.requestUpdate();
+    listRequest = request;
+    notify();
     try {
       const result = await client.request<{ agents: InstalledAgent[] }>(
         INSTALLED_AGENTS_METHOD,
         {},
         { signal: request.signal },
       );
-      if (this.request === request && this.options.gateway.isCurrent({ client, epoch })) {
-        this.agents = result.agents;
+      if (listRequest === request && options.gateway.isCurrent({ client, epoch })) {
+        installed = result.agents;
       }
     } catch (error) {
-      if (this.request === request && this.options.gateway.isCurrent({ client, epoch })) {
-        this.error = modelProviderErrorMessage(error);
+      if (listRequest === request && options.gateway.isCurrent({ client, epoch })) {
+        loadError = modelProviderErrorMessage(error);
       }
     } finally {
-      if (this.request === request) {
-        this.request = null;
-        this.host.requestUpdate();
+      if (listRequest === request) {
+        listRequest = null;
+        notify();
       }
     }
   }
 
-  subscribe(gateway: ApplicationContext["gateway"]): () => void {
+  function subscribe(gateway: ApplicationContext["gateway"]): () => void {
     return gateway.subscribeEvents((event) => {
-      if (event.event === "config.changed" && this.agents !== null && this.pending.size === 0) {
-        void this.load();
+      if (event.event === "config.changed" && installed !== null && pending.size === 0) {
+        void load();
       }
     });
   }
 
   /** Writes from a previous connection cannot settle here, so their state goes too. */
-  reset(options: { preserveVisibleData?: boolean } = {}): void {
-    this.closeEnablement();
-    this.cancel();
-    this.listClient = null;
-    this.listEpoch = this.options.gateway.epoch;
-    this.pending.clear();
-    this.messages.clear();
-    if (!options.preserveVisibleData) {
-      this.agents = null;
+  function reset(resetOptions: { preserveVisibleData?: boolean } = {}): void {
+    closeEnablement();
+    cancel();
+    listClient = null;
+    listEpoch = options.gateway.epoch;
+    pending.clear();
+    messages.clear();
+    if (!resetOptions.preserveVisibleData) {
+      installed = null;
     }
-    this.host.requestUpdate();
+    notify();
   }
 
-  filterProviders(cards: ModelProviderCard[]): ModelProviderCard[] {
-    return cards.filter((card) => !this.agents?.some((agent) => agent.runtimeId === card.id));
+  function filterProviders(cards: ModelProviderCard[]): ModelProviderCard[] {
+    return cards.filter(
+      (card) => !projection.read().agents?.some((agent) => agent.runtimeId === card.id),
+    );
   }
 
-  available(): boolean {
+  function available(): boolean {
     return canCallGatewayMethod(
-      this.options.getContext().gateway.snapshot,
+      gatewayState.read().snapshot,
       INSTALLED_AGENTS_METHOD,
       "operator.read",
     );
   }
 
-  private blockedReason(): string | null {
-    return modelProviderConfigMutationBlockedReason(this.options.getContext());
+  function blockedReason(): string | null {
+    i18nRevision();
+    config.read();
+    gatewayState.read();
+    overlays.read();
+    return modelProviderConfigMutationBlockedReason(context);
   }
 
-  private isCurrentEnablement(
-    target: NonNullable<InstalledAgentsController["enablement"]>,
-  ): boolean {
-    const selection = this.options.getContext().settingsAgentSelection;
+  function isCurrentEnablement(target: NonNullable<typeof enablement>): boolean {
+    const selection = context.settingsAgentSelection;
     return (
-      this.enablement === target &&
-      this.options.gateway.isCurrent(target) &&
+      enablement === target &&
+      options.gateway.isCurrent(target) &&
       selection.state.selectedId === target.agentId &&
       selection.intentRevision === target.selectionRevision
     );
   }
 
-  private closeEnablement(): void {
-    const pending = this.enablement;
-    this.enablement = null;
-    this.wizard.reset();
-    if (pending) {
-      this.pending.delete(pending.agent.id);
+  function closeEnablement(): void {
+    const target = enablement;
+    enablement = null;
+    wizard.reset();
+    if (target) {
+      pending.delete(target.agent.id);
     }
-    this.host.requestUpdate();
+    notify();
   }
 
-  private async reconcileEnablement(
-    target: NonNullable<InstalledAgentsController["enablement"]>,
-  ): Promise<void> {
-    const phase = this.wizard.runner.state.phase;
+  async function reconcileEnablement(target: NonNullable<typeof enablement>): Promise<void> {
+    const phase = wizard.runner.state.phase;
     if (
-      !this.isCurrentEnablement(target) ||
+      !isCurrentEnablement(target) ||
       (phase !== "done" && phase !== "error" && phase !== "cancelled")
     ) {
       return;
     }
     try {
-      await this.options.getContext().runtimeConfig.refresh();
-      if (this.isCurrentEnablement(target)) {
-        await this.load(target.client, target.epoch);
+      await context.runtimeConfig.refresh();
+      if (isCurrentEnablement(target)) {
+        await load(target.client, target.epoch);
       }
     } catch (error) {
-      if (this.isCurrentEnablement(target)) {
-        this.messages.set(target.agent.id, {
+      if (isCurrentEnablement(target)) {
+        messages.set(target.agent.id, {
           kind: "warning",
           text: modelProviderErrorMessage(error),
         });
       }
     } finally {
-      if (this.isCurrentEnablement(target)) {
-        this.pending.delete(target.agent.id);
-        this.host.requestUpdate();
+      if (isCurrentEnablement(target)) {
+        pending.delete(target.agent.id);
+        notify();
       }
     }
   }
 
-  private setEnabled(agent: InstalledAgent, enabled: boolean): boolean {
-    const scope = this.options.gateway.capture();
-    const selection = this.options.getContext().settingsAgentSelection;
+  function setEnabled(agent: InstalledAgent, enabled: boolean): boolean {
+    const scope = options.gateway.capture();
+    const selection = context.settingsAgentSelection;
     const agentId = selection.state.selectedId;
     const selectionRevision = selection.intentRevision;
     if (
       !scope ||
-      this.blockedReason() ||
-      modelProviderConfigBusy(this.options.getContext()) ||
-      this.pending.has(agent.id) ||
-      this.enablement !== null ||
+      blockedReason() ||
+      modelProviderConfigBusy(context) ||
+      pending.has(agent.id) ||
+      enablement !== null ||
       !agentId
     ) {
       return false;
@@ -275,10 +275,10 @@ export class InstalledAgentsController {
         selectionRevision,
         agent,
       };
-      this.enablement = target;
-      this.pending.set(agent.id, true);
-      this.messages.delete(agent.id);
-      void this.wizard.runner
+      enablement = target;
+      pending.set(agent.id, true);
+      messages.delete(agent.id);
+      void wizard.runner
         .startRuntime(
           {
             agentId,
@@ -289,32 +289,32 @@ export class InstalledAgentsController {
           },
           agent.name,
         )
-        .then(() => this.reconcileEnablement(target));
-      this.host.requestUpdate();
+        .then(() => reconcileEnablement(target));
+      notify();
       return true;
     }
     // The post-write read retires any list request started before this mutation.
-    this.pending.set(agent.id, enabled);
-    const isCurrent = () => this.options.gateway.isCurrent(scope);
+    pending.set(agent.id, enabled);
+    const isCurrent = () => options.gateway.isCurrent(scope);
     void runModelProviderConfigMutation(
       {
-        runtimeConfig: this.options.getContext().runtimeConfig,
+        runtimeConfig: context.runtimeConfig,
         isCurrentClient: isCurrent,
         isCurrentAgent: () =>
           selection.state.selectedId === agentId && selection.intentRevision === selectionRevision,
         setBusy: (busy) => {
           if (!busy) {
-            this.pending.delete(agent.id);
+            pending.delete(agent.id);
           }
-          this.host.requestUpdate();
+          notify();
         },
         setMessage: (message) => {
           if (message) {
-            this.messages.set(agent.id, message);
+            messages.set(agent.id, message);
           } else {
-            this.messages.delete(agent.id);
+            messages.delete(agent.id);
           }
-          this.host.requestUpdate();
+          notify();
         },
       },
       {
@@ -325,28 +325,27 @@ export class InstalledAgentsController {
       },
     ).then(() => {
       if (isCurrent()) {
-        this.pending.delete(agent.id);
-        void this.load();
+        pending.delete(agent.id);
+        void load();
       }
     });
     return true;
   }
 
-  private renderAgent(
+  function renderAgent(
     props: { agent: InstalledAgent },
     getCards: () => readonly ModelProviderCard[],
-    revision: () => unknown,
   ) {
     const view = createMemo(() => {
-      revision();
+      const snapshot = projection.read();
       const agent = props.agent;
-      const pending = this.pending.get(agent.id);
-      const config = currentConfigObject(this.options.getContext().runtimeConfig.state);
-      const entries = asRecord(asRecord(config?.plugins)?.entries);
+      const requested = snapshot.pending.get(agent.id);
+      const configObject = currentConfigObject(config.read().state);
+      const entries = asRecord(asRecord(configObject?.plugins)?.entries);
       const nativeConfig = asRecord(asRecord(entries?.acpx)?.config);
       const configuredEnabled = asRecord(nativeConfig?.nativeAgents)?.[agent.id];
       const enabled =
-        pending ?? (typeof configuredEnabled === "boolean" ? configuredEnabled : agent.enabled);
+        requested ?? (typeof configuredEnabled === "boolean" ? configuredEnabled : agent.enabled);
       const card = getCards().find((entry) => entry.id === agent.runtimeId);
       let status: { kind: "ok" | "muted" | "warn" | "danger"; labelKey: string } =
         INSTALLATION_STATUS[agent.installation];
@@ -372,15 +371,13 @@ export class InstalledAgentsController {
       }
       return {
         agent,
-        pending,
+        pending: requested,
         enabled,
         status,
         hint,
         blocked:
-          this.blockedReason() !== null ||
-          modelProviderConfigBusy(this.options.getContext()) ||
-          this.enablement !== null,
-        message: this.messages.get(agent.id),
+          blockedReason() !== null || modelProviderConfigBusy(context) || enablement !== null,
+        message: snapshot.messages.get(agent.id),
       };
     });
     return (
@@ -414,12 +411,12 @@ export class InstalledAgentsController {
           }
           checked={view().enabled}
           disabled={view().blocked || view().pending !== undefined}
-          onChange={(checked) => this.setEnabled(props.agent, checked)}
+          onChange={(checked) => setEnabled(props.agent, checked)}
         />
         <Show when={view().message}>
           {(message) => (
             <div
-              class={`callout ${message().kind} model-providers__installed-agent-message`}
+              class={["callout", message().kind, "model-providers__installed-agent-message"]}
               role={message().kind === "error" ? "alert" : "status"}
             >
               {message().text}
@@ -430,26 +427,14 @@ export class InstalledAgentsController {
     );
   }
 
-  render(
-    getCards: () => readonly ModelProviderCard[],
-    retryDiscovery: () => void,
-    revision: () => unknown,
-  ) {
-    const AgentRow = (props: { agent: InstalledAgent }) =>
-      this.renderAgent(props, getCards, revision);
+  function render(getCards: () => readonly ModelProviderCard[], retryDiscovery: () => void) {
+    const AgentRow = (props: { agent: InstalledAgent }) => renderAgent(props, getCards);
     const InstalledAgents = () => {
-      const view = createMemo(() => {
-        revision();
-        return {
-          available: this.available(),
-          agents: this.agents,
-          error: this.error,
-          loading: this.loading,
-          pending: this.pending.size > 0,
-          enablement: this.enablement,
-          blockedReason: this.blockedReason(),
-        };
-      });
+      const view = createMemo(() => ({
+        ...projection.read(),
+        available: available(),
+        blockedReason: blockedReason(),
+      }));
       const checkLabel = () =>
         t(
           view().loading
@@ -476,9 +461,9 @@ export class InstalledAgentsController {
                     type="button"
                     class="btn btn--icon btn--ghost btn--xs model-providers__refresh-button"
                     aria-label={checkLabel()}
-                    disabled={view().loading || view().pending}
+                    disabled={view().loading || view().pending.size > 0}
                     onClick={() => {
-                      void this.load();
+                      void load();
                       retryDiscovery();
                     }}
                   >
@@ -498,7 +483,7 @@ export class InstalledAgentsController {
                     <button
                       class="btn btn--sm"
                       disabled={view().loading}
-                      onClick={() => void this.load()}
+                      onClick={() => void load()}
                     >
                       {t("common.retry")}
                     </button>
@@ -518,11 +503,7 @@ export class InstalledAgentsController {
           </div>
           <Show when={view().enablement}>
             <WizardLogin
-              controller={this.wizard}
-              revision={() => {
-                revision();
-                return 0;
-              }}
+              controller={wizard}
               options={{
                 mode: "prepare",
                 doneMessage: t("modelProviders.installedAgents.enabled", {
@@ -536,4 +517,22 @@ export class InstalledAgentsController {
     };
     return <InstalledAgents />;
   }
+  onCleanup(() => {
+    listeners.clear();
+    enablement = null;
+    cancel();
+    listClient = undefined;
+  });
+  return {
+    get initialized() {
+      const snapshot = projection.read();
+      return !available() || snapshot.agents !== null || snapshot.error !== null;
+    },
+    synchronize,
+    subscribe,
+    reset,
+    filterProviders,
+    available,
+    render,
+  };
 }
