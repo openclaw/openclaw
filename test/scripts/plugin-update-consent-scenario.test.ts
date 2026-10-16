@@ -66,12 +66,14 @@ let mutateDenial: ((result: Denial, repair: boolean, child: FixtureChild) => voi
 const packages = new Map<number, { code: string; integrity: string }>();
 const coreVersions = new Map<string, string>();
 const tagUpdates: string[][] = [];
+const writeJson = (file: string, value: unknown) => fs.writeFileSync(file, JSON.stringify(value));
+const readJson = (file: string) => JSON.parse(fs.readFileSync(file, "utf8"));
+const hostPackagePath = () => path.resolve(path.dirname(entry), "..", "package.json");
+const toolsFor = (version: number) =>
+  Array.from({ length: version }, (_, i) => `consent_tool_${i + 1}`);
 
 function saveConfig() {
-  fs.writeFileSync(
-    configPath,
-    JSON.stringify({ plugins: { entries: { [pluginId]: { enabled } } } }),
-  );
+  writeJson(configPath, { plugins: { entries: { [pluginId]: { enabled } } } });
 }
 
 function install(version: number) {
@@ -79,7 +81,7 @@ function install(version: number) {
   if (!artifact) {
     throw new Error(`unprepared fixture ${version}`);
   }
-  const tools = Array.from({ length: version }, (_, i) => `consent_tool_${i + 1}`);
+  const tools = toolsFor(version);
   const surface = {
     channels: [],
     providers: [],
@@ -105,10 +107,7 @@ function install(version: number) {
   installed = version;
   fs.mkdirSync(installPath, { recursive: true });
   fs.writeFileSync(path.join(installPath, "index.js"), artifact.code);
-  fs.writeFileSync(
-    path.join(installPath, "package.json"),
-    JSON.stringify({ version: `${version}.0.0` }),
-  );
+  writeJson(path.join(installPath, "package.json"), { version: `${version}.0.0` });
   saveConfig();
 }
 
@@ -123,13 +122,7 @@ function cliReply(args: string[], child: FixtureChild): string {
       return JSON.stringify({
         plugin: { status: enabled ? "loaded" : "disabled", enabled },
         install: record,
-        tools: [
-          {
-            names: enabled
-              ? Array.from({ length: installed }, (_, i) => `consent_tool_${i + 1}`)
-              : [],
-          },
-        ],
+        tools: [{ names: enabled ? toolsFor(installed) : [] }],
       });
     }
     if (args[1] === "disable" || args[1] === "enable") {
@@ -155,18 +148,14 @@ function cliReply(args: string[], child: FixtureChild): string {
   }
   const repair = args[1] === "repair";
   const coreVersion: string | undefined = repair
-    ? JSON.parse(fs.readFileSync(path.resolve(path.dirname(entry), "..", "package.json"), "utf8"))
-        .version
+    ? readJson(hostPackagePath()).version
     : coreVersions.get(args[args.indexOf("--tag") + 1] ?? "");
   if (!coreVersion) {
     throw new Error("unprepared core update");
   }
   if (!repair) {
     tagUpdates.push(args);
-    fs.writeFileSync(
-      path.resolve(path.dirname(entry), "..", "package.json"),
-      JSON.stringify({ version: coreVersion }),
-    );
+    writeJson(hostPackagePath(), { version: coreVersion });
     child.observation.children.push({ argv: ["node", "update", "post-core"], postCore: true });
   }
   if (args.includes("--accept-capabilities")) {
@@ -204,10 +193,7 @@ beforeEach(() => {
   roots.push(root);
   entry = path.join(root, "host", "dist", "entry.js");
   fs.mkdirSync(path.dirname(entry), { recursive: true });
-  fs.writeFileSync(
-    path.join(root, "host", "package.json"),
-    JSON.stringify({ version: "2026.9.5" }),
-  );
+  writeJson(hostPackagePath(), { version: "2026.9.5" });
   coreTarball = path.join(root, "core.tgz");
   fs.writeFileSync(coreTarball, "core artifact placeholder; no archive reader is exercised");
   const stateDir = path.join(root, "state");
@@ -231,11 +217,7 @@ beforeEach(() => {
   adapters.pack.mockImplementation((command: string, args: string[], options: { cwd: string }) => {
     expect(command).toBe("npm");
     expect(args.slice(0, 2)).toEqual(["pack", "--pack-destination"]);
-    const version = Number(
-      JSON.parse(fs.readFileSync(path.join(options.cwd, "package.json"), "utf8")).version.split(
-        ".",
-      )[0],
-    );
+    const version = Number(readJson(path.join(options.cwd, "package.json")).version.split(".")[0]);
     const artifactRoot = args[2];
     if (!artifactRoot || path.dirname(artifactRoot) !== os.tmpdir()) {
       throw new Error("expected isolated scenario artifact root");
@@ -308,31 +290,25 @@ describe("installed-CLI consent scenario report contract", () => {
     expect(fs.existsSync(path.join(installPath, "index.js"))).toBe(true);
   });
 
-  it.each([124])(
-    "reports a core update timeout (exit %s) with retained diagnostics",
-    async (code) => {
-      timeoutExit = code;
-      await expect(runConsentScenario(entry, coreTarball)).rejects.toThrow(
-        /update-denied timed out after 900s .*ledger: .*runs\.json\n\npackage replacement still running/,
-      );
-      const scenarioRoot = roots.find((root) =>
-        path.basename(root).startsWith("openclaw-update-consent-"),
-      );
-      if (!scenarioRoot) {
-        throw new Error("missing scenario evidence root");
-      }
-      const runs = JSON.parse(fs.readFileSync(path.join(scenarioRoot, "runs.json"), "utf8"));
-      expect(runs.at(-1)).toMatchObject({ label: "update-denied", code });
-      const updateSpawn = adapters.spawn.mock.calls.find(([, args]) => args.includes("--tag"));
-      expect(updateSpawn?.[2].env.OPENCLAW_E2E_COMMAND_TIMEOUT).toBe("900s");
-    },
-  );
+  it("reports a core update timeout (exit 124) with retained diagnostics", async () => {
+    timeoutExit = 124;
+    await expect(runConsentScenario(entry, coreTarball)).rejects.toThrow(
+      /update-denied timed out after 900s .*ledger: .*runs\.json\n\npackage replacement still running/,
+    );
+    const scenarioRoot = roots.find((root) =>
+      path.basename(root).startsWith("openclaw-update-consent-"),
+    );
+    if (!scenarioRoot) {
+      throw new Error("missing scenario evidence root");
+    }
+    const runs = readJson(path.join(scenarioRoot, "runs.json"));
+    expect(runs.at(-1)).toMatchObject({ label: "update-denied", code: 124 });
+    const updateSpawn = adapters.spawn.mock.calls.find(([, args]) => args.includes("--tag"));
+    expect(updateSpawn?.[2].env.OPENCLAW_E2E_COMMAND_TIMEOUT).toBe("900s");
+  });
 
   it("selects stable before tag updates only from an extended-stable host", async () => {
-    fs.writeFileSync(
-      path.resolve(path.dirname(entry), "..", "package.json"),
-      JSON.stringify({ version: "2026.9.33" }),
-    );
+    writeJson(hostPackagePath(), { version: "2026.9.33" });
 
     await expect(runConsentScenario(entry, coreTarball)).resolves.toBeUndefined();
     expect(tagUpdates.map((args) => args.includes("--channel"))).toEqual([true, false]);

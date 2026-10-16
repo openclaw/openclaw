@@ -1,4 +1,3 @@
-// Pnpm Audit Prod tests cover pnpm audit prod script behavior.
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -17,6 +16,39 @@ import {
 } from "../../scripts/pre-commit/pnpm-audit-prod.mjs";
 
 vi.mock("node:timers/promises", () => ({ setTimeout: vi.fn(async () => {}) }));
+const mistralAdvisory = {
+  id: "1118204",
+  severity: "critical",
+  title: "Malware in @mistralai/mistralai",
+  vulnerable_versions: ">=0",
+  url: "https://github.com/advisories/GHSA-3q49-cfcf-g5fm",
+};
+function captureOutput(chunks: string[]) {
+  return {
+    write: (chunk: string) => {
+      chunks.push(chunk);
+      return true;
+    },
+  };
+}
+async function auditFixture(packageNames: string[]) {
+  const root = await mkdtemp(path.join(tmpdir(), "openclaw-audit-"));
+  await writeFile(
+    path.join(root, "pnpm-lock.yaml"),
+    [
+      "lockfileVersion: '9.0'",
+      "importers:",
+      "  .:",
+      "    dependencies:",
+      ...packageNames.map((name) => `      ${name}: {version: 1.0.0}`),
+      "snapshots:",
+      ...packageNames.map((name) => `  ${name}@1.0.0: {}`),
+    ].join("\n"),
+  );
+  return root;
+}
+const fetchAdvisories = (options: Omit<Parameters<typeof fetchBulkAdvisories>[0], "payload">) =>
+  fetchBulkAdvisories({ payload: { axios: ["1.0.0"] }, ...options });
 
 describe("pnpm-audit-prod", () => {
   it("keeps toolchain snapshots separate from production while auditing both documents", () => {
@@ -223,17 +255,7 @@ snapshots:
   it("suppresses the overbroad Mistral malware advisory for the pre-compromise locked version", () => {
     const versionsByPackage = new Map([["@mistralai/mistralai", new Set(["2.2.1"])]]);
     const findings = filterFindingsBySeverity(
-      {
-        "@mistralai/mistralai": [
-          {
-            id: "1118204",
-            severity: "critical",
-            title: "Malware in @mistralai/mistralai",
-            vulnerable_versions: ">=0",
-            url: "https://github.com/advisories/GHSA-3q49-cfcf-g5fm",
-          },
-        ],
-      },
+      { "@mistralai/mistralai": [mistralAdvisory] },
       "high",
       versionsByPackage,
     );
@@ -244,17 +266,7 @@ snapshots:
   it("keeps the Mistral malware advisory blocking for compromised resolved versions", () => {
     const versionsByPackage = new Map([["@mistralai/mistralai", new Set(["2.2.4"])]]);
     const findings = filterFindingsBySeverity(
-      {
-        "@mistralai/mistralai": [
-          {
-            id: "1118204",
-            severity: "critical",
-            title: "Malware in @mistralai/mistralai",
-            vulnerable_versions: ">=0",
-            url: "https://github.com/advisories/GHSA-3q49-cfcf-g5fm",
-          },
-        ],
-      },
+      { "@mistralai/mistralai": [mistralAdvisory] },
       "high",
       versionsByPackage,
     );
@@ -271,20 +283,12 @@ snapshots:
     ]);
   });
 
-  it.each([
-    {
-      caseName: "preserves a complete surrogate pair",
-      responseBody: `ab\u{1f600}tail`,
-      expectedText: `ab\u{1f600}\n[truncated]`,
-    },
-  ])(
-    "keeps bulk advisory error truncation UTF-16 safe: $caseName",
-    async ({ responseBody, expectedText }) => {
-      const response = new Response(responseBody, { status: 500 });
-
-      await expect(readBoundedBulkAdvisoryErrorText(response, 4)).resolves.toBe(expectedText);
-    },
-  );
+  it("preserves a complete surrogate pair when truncating bulk advisory errors", async () => {
+    const response = new Response(`ab\u{1f600}tail`, { status: 500 });
+    await expect(readBoundedBulkAdvisoryErrorText(response, 4)).resolves.toBe(
+      `ab\u{1f600}\n[truncated]`,
+    );
+  });
 
   it.each([[503, "timeout", 503, 200]])(
     "recovers a flapping registry in order: %j",
@@ -318,16 +322,10 @@ snapshots:
       });
       try {
         await expect(
-          fetchBulkAdvisories({
-            payload: { axios: ["1.0.0"] },
+          fetchAdvisories({
             fetchImpl,
             timeoutMs: 5,
-            stderr: {
-              write: (line) => {
-                logs.push(line);
-                return true;
-              },
-            },
+            stderr: captureOutput(logs),
           }),
         ).resolves.toEqual({});
         expect(events).toEqual(
@@ -361,9 +359,7 @@ snapshots:
         new Response("rate limited", { status: 429, headers: { "retry-after": retryAfter } }),
       );
     try {
-      await expect(
-        fetchBulkAdvisories({ payload: { axios: ["1.0.0"] }, fetchImpl }),
-      ).resolves.toEqual({});
+      await expect(fetchAdvisories({ fetchImpl })).resolves.toEqual({});
       expect(fetchImpl).toHaveBeenCalledTimes(2);
       expect(delay).toHaveBeenCalledExactlyOnceWith(10_000);
     } finally {
@@ -372,23 +368,11 @@ snapshots:
     }
   });
 
-  it.each([
-    {
-      caseName: "empty bodies",
-      responseBodyMaxBytes: undefined,
-      response: () => new Response("", { status: 200 }),
-      expectedError: /Bulk advisory response body was empty/u,
-    },
-  ])("does not retry $caseName", async ({ responseBodyMaxBytes, response, expectedError }) => {
-    const fetchImpl = vi.fn(async () => response());
-
-    await expect(
-      fetchBulkAdvisories({
-        payload: { axios: ["1.0.0"] },
-        ...(responseBodyMaxBytes ? { responseBodyMaxBytes } : {}),
-        fetchImpl,
-      }),
-    ).rejects.toThrow(expectedError);
+  it("does not retry empty bodies", async () => {
+    const fetchImpl = vi.fn(async () => new Response("", { status: 200 }));
+    await expect(fetchAdvisories({ fetchImpl })).rejects.toThrow(
+      /Bulk advisory response body was empty/u,
+    );
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
@@ -402,8 +386,7 @@ snapshots:
         cancelled = true;
       },
     });
-    const request = fetchBulkAdvisories({
-      payload: { axios: ["1.0.0"] },
+    const request = fetchAdvisories({
       responseBodyMaxBytes: 4,
       fetchImpl: async () =>
         new Response(body, {
@@ -428,8 +411,7 @@ snapshots:
         cancelled = true;
       },
     });
-    const request = fetchBulkAdvisories({
-      payload: { axios: ["1.0.0"] },
+    const request = fetchAdvisories({
       responseBodyMaxBytes: 4,
       fetchImpl: async () =>
         new Response(body, {
@@ -451,9 +433,7 @@ snapshots:
     ].map((body) => ({ body })),
   )("rejects malformed advisory data without retry: $body", async ({ body }) => {
     const fetchImpl = vi.fn(async () => Response.json(body));
-    await expect(fetchBulkAdvisories({ payload: { axios: ["1.0.0"] }, fetchImpl })).rejects.toThrow(
-      "Invalid bulk advisory response",
-    );
+    await expect(fetchAdvisories({ fetchImpl })).rejects.toThrow("Invalid bulk advisory response");
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
@@ -476,8 +456,7 @@ snapshots:
       );
       try {
         const request = expect(
-          fetchBulkAdvisories({
-            payload: { axios: ["1.0.0"] },
+          fetchAdvisories({
             fetchImpl,
             timeoutMs,
             budgetMs: 20,
@@ -508,9 +487,7 @@ snapshots:
       elapsed = 2501;
     });
     try {
-      await expect(
-        fetchBulkAdvisories({ payload: { axios: ["1.0.0"] }, fetchImpl, budgetMs: 2500 }),
-      ).rejects.toBe(failure);
+      await expect(fetchAdvisories({ fetchImpl, budgetMs: 2500 })).rejects.toBe(failure);
       expect(fetchImpl).toHaveBeenCalledOnce();
     } finally {
       clock.mockRestore();
@@ -564,20 +541,8 @@ snapshots:
   ])(
     "preserves whole-graph audit failure outcomes: $name",
     async ({ name, response, exit, attempts = 1 }) => {
-      const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-audit-partial-"));
       const packages = Array.from({ length: 401 }, (_, index) => `pkg-${index}`);
-      await writeFile(
-        path.join(tempDir, "pnpm-lock.yaml"),
-        [
-          "lockfileVersion: '9.0'",
-          "importers:",
-          "  .:",
-          "    dependencies:",
-          ...packages.map((pkg) => `      ${pkg}: {version: 1.0.0}`),
-          "snapshots:",
-          ...packages.map((pkg) => `  ${pkg}@1.0.0: {}`),
-        ].join("\n"),
-      );
+      const tempDir = await auditFixture(packages);
       const stdout: string[] = [];
       const stderr: string[] = [];
       const summaryPath = path.join(tempDir, "summary.md");
@@ -598,18 +563,8 @@ snapshots:
               cancellations += 1;
             });
           },
-          stdout: {
-            write: (chunk: string) => {
-              stdout.push(chunk);
-              return true;
-            },
-          },
-          stderr: {
-            write: (chunk: string) => {
-              stderr.push(chunk);
-              return true;
-            },
-          },
+          stdout: captureOutput(stdout),
+          stderr: captureOutput(stderr),
         });
         if (exit === null) {
           await expect(audit).rejects.toThrow(
@@ -641,25 +596,11 @@ snapshots:
   it.each([false, true])(
     "submits one complete graph and reports npm-only coverage (blocked %s)",
     async (blocked) => {
-      const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-audit-prod-"));
       const packageNames = [
         "axios",
         ...Array.from({ length: 400 }, (_, index) => `fixture-${index}`),
       ];
-      await writeFile(
-        path.join(tempDir, "pnpm-lock.yaml"),
-        `lockfileVersion: '9.0'
-
-importers:
-  .:
-    dependencies:
-${packageNames.map((name) => `      ${name}: {version: 1.0.0}`).join("\n")}
-
-snapshots:
-${packageNames.map((name) => `  ${name}@1.0.0: {}`).join("\n")}
-`,
-        "utf8",
-      );
+      const tempDir = await auditFixture(packageNames);
 
       try {
         const summaryPath = path.join(tempDir, "summary.md");
@@ -677,42 +618,24 @@ ${packageNames.map((name) => `  ${name}@1.0.0: {}`).join("\n")}
             const url =
               input instanceof URL ? input.href : input instanceof Request ? input.url : input;
             expect(url).toMatch(/\/-\/npm\/v1\/security\/advisories\/bulk$/u);
-            return new Response(
-              JSON.stringify(
-                blocked
-                  ? {
-                      axios: [
-                        {
-                          id: "GHSA-test",
-                          severity: "high",
-                          title: "test issue",
-                          vulnerable_versions: "<=1.0.0",
-                          url: "https://github.com/advisories/GHSA-test",
-                        },
-                      ],
-                    }
-                  : {},
-              ),
-              {
-                status: 200,
-                headers: {
-                  "content-type": "application/json",
-                },
-              },
+            return Response.json(
+              blocked
+                ? {
+                    axios: [
+                      {
+                        id: "GHSA-test",
+                        severity: "high",
+                        title: "test issue",
+                        vulnerable_versions: "<=1.0.0",
+                        url: "https://github.com/advisories/GHSA-test",
+                      },
+                    ],
+                  }
+                : {},
             );
           },
-          stdout: {
-            write(chunk: string) {
-              stdoutChunks.push(chunk);
-              return true;
-            },
-          } as NodeJS.WriteStream,
-          stderr: {
-            write(chunk: string) {
-              stderrChunks.push(chunk);
-              return true;
-            },
-          } as NodeJS.WriteStream,
+          stdout: captureOutput(stdoutChunks),
+          stderr: captureOutput(stderrChunks),
         });
 
         expect(exitCode).toBe(blocked ? 1 : 0);

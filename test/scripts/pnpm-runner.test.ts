@@ -6,6 +6,24 @@ import { createPnpmRunnerSpawnSpec, resolvePnpmRunner } from "../../scripts/pnpm
 import { buildCmdExeCommandLine } from "../../scripts/windows-cmd-helpers.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
+const pnpmArgs = ["exec", "vitest", "run"];
+const nodeExecPath = "C:\\Program Files\\nodejs\\node.exe";
+const comSpec = "C:\\Windows\\System32\\cmd.exe";
+function expectRunner(
+  params: Parameters<typeof resolvePnpmRunner>[0],
+  command: string,
+  args = pnpmArgs,
+  windowsVerbatimArguments?: true,
+) {
+  const expectedArgs = [...args];
+  expect(resolvePnpmRunner({ pnpmArgs, ...params })).toEqual({
+    shell: false,
+    command,
+    args: expectedArgs,
+    ...(windowsVerbatimArguments ? { windowsVerbatimArguments } : {}),
+  });
+}
+
 describe("resolvePnpmRunner", () => {
   const posixIt = process.platform === "win32" ? it.skip : it;
 
@@ -41,22 +59,12 @@ describe("resolvePnpmRunner", () => {
 
   afterEach(() => vi.unstubAllEnvs());
 
-  it.each(["pnpm.exe"])("executes %s directly on Windows", (basename) => {
-    const npmExecPath = `C:\\Users\\test\\AppData\\Local\\pnpm\\${basename}`;
-
-    expect(
-      resolvePnpmRunner({
-        npmExecPath,
-        nodeArgs: ["--no-maglev"],
-        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-        pnpmArgs: ["exec", "vitest", "run"],
-        platform: "win32",
-      }),
-    ).toEqual({
-      command: npmExecPath,
-      args: ["exec", "vitest", "run"],
-      shell: false,
-    });
+  it("executes pnpm.exe directly on Windows", () => {
+    const npmExecPath = "C:\\Users\\test\\AppData\\Local\\pnpm\\pnpm.exe";
+    expectRunner(
+      { npmExecPath, nodeArgs: ["--no-maglev"], nodeExecPath, platform: "win32" },
+      npmExecPath,
+    );
   });
 
   posixIt("executes a shell npm_execpath with its own interpreter", () => {
@@ -73,43 +81,31 @@ describe("resolvePnpmRunner", () => {
   });
 
   it("uses pnpm.cjs through node for Windows-style paths", () => {
-    const tempDir = path.join(fixturesRoot, "js");
-    const npmExecPath = path.join(tempDir, "pnpm.cjs");
-
-    expect(
-      resolvePnpmRunner({
-        npmExecPath,
-        nodeArgs: ["--no-maglev"],
-        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-        pnpmArgs: ["exec", "vitest", "run"],
-        platform: "win32",
-      }),
-    ).toEqual({
-      command: "C:\\Program Files\\nodejs\\node.exe",
-      args: ["--no-maglev", npmExecPath, "exec", "vitest", "run"],
-      shell: false,
-    });
+    const npmExecPath = path.join(fixturesRoot, "js/pnpm.cjs");
+    expectRunner(
+      { npmExecPath, nodeArgs: ["--no-maglev"], nodeExecPath, platform: "win32" },
+      nodeExecPath,
+      ["--no-maglev", npmExecPath, ...pnpmArgs],
+    );
   });
 
   it("wraps an explicit pnpm.cmd path via cmd.exe on Windows", () => {
-    expect(
-      resolvePnpmRunner({
-        comSpec: "C:\\Windows\\System32\\cmd.exe",
+    expectRunner(
+      {
+        comSpec,
         npmExecPath: "C:\\Program Files\\pnpm\\pnpm.cmd",
         pnpmArgs: ["exec", "vitest", "run", "-t", "path with spaces"],
         platform: "win32",
-      }),
-    ).toEqual({
-      command: "C:\\Windows\\System32\\cmd.exe",
-      args: [
+      },
+      comSpec,
+      [
         "/d",
         "/s",
         "/c",
         '""C:\\Program Files\\pnpm\\pnpm.cmd" exec vitest run -t "path with spaces""',
       ],
-      shell: false,
-      windowsVerbatimArguments: true,
-    });
+      true,
+    );
   });
 
   posixIt("does not resolve parent npm_execpath or PATH for an explicit empty env", () => {
@@ -117,31 +113,17 @@ describe("resolvePnpmRunner", () => {
     const npmExecPath = path.join(tempDir, "pnpm");
     vi.stubEnv("npm_execpath", npmExecPath);
     vi.stubEnv("PATH", tempDir);
-    expect(
-      resolvePnpmRunner({
-        env: {},
-        pnpmArgs: ["exec", "vitest", "run"],
-        platform: "linux",
-      }),
-    ).toEqual({
-      command: "pnpm",
-      args: ["exec", "vitest", "run"],
-      shell: false,
-    });
+    expectRunner({ env: {}, platform: "linux" }, "pnpm");
   });
 
-  posixIt.each([
-    { name: "trailing empty", segments: ["corepack-only", ""], marker: "cwd", exitCode: 7 },
-  ])("preserves native PATH selection for $name", ({ segments, marker, exitCode }) => {
+  posixIt("preserves native PATH selection for trailing empty segments", () => {
     const root = path.join(fixturesRoot, "empty-path");
     const cwd = path.join(root, "cwd");
     const env = {
-      PATH: segments
-        .map((entry) => (entry === "" || entry === "." ? entry : path.join(root, entry)))
-        .join(":"),
+      PATH: `${path.join(root, "corepack-only")}:`,
     };
     const args = ["run", "build", "literal & argument", ""];
-    const expectedOutput = [marker, ...args, ""].join("\n");
+    const expectedOutput = ["cwd", ...args, ""].join("\n");
     const spec = createPnpmRunnerSpawnSpec({
       cwd,
       env,
@@ -155,72 +137,57 @@ describe("resolvePnpmRunner", () => {
       timeout: 5_000,
     });
     expect(wrapped.error).toBeUndefined();
-    expect(wrapped.status, wrapped.stderr).toBe(exitCode);
+    expect(wrapped.status, wrapped.stderr).toBe(7);
     expect(wrapped.stdout).toBe(expectedOutput);
     expect(wrapped.stderr).toBe("");
   });
 
   posixIt("uses Corepack when pnpm is not directly available on PATH", () => {
     const tempDir = path.join(fixturesRoot, "corepack");
-    const corepackPath = path.join(tempDir, "corepack");
-
-    expect(
-      resolvePnpmRunner({
+    expectRunner(
+      {
         npmExecPath: "",
         env: { PATH: tempDir },
         pnpmArgs: ["exec", "tsdown"],
         platform: "darwin",
-      }),
-    ).toEqual({
-      command: corepackPath,
-      args: ["pnpm", "exec", "tsdown"],
-      shell: false,
-    });
+      },
+      path.join(tempDir, "corepack"),
+      ["pnpm", "exec", "tsdown"],
+    );
   });
 
   it("ignores ambient ComSpec when defaulting the Windows cmd shim launcher", () => {
-    expect(
-      resolvePnpmRunner({
+    expectRunner(
+      {
         env: {
           ComSpec: "C:\\Users\\test\\bin\\cmd.exe",
           PATH: "",
           SystemRoot: "D:\\Windows",
         },
         npmExecPath: "",
-        pnpmArgs: ["exec", "vitest", "run"],
         platform: "win32",
-      }),
-    ).toEqual({
-      command: "D:\\Windows\\System32\\cmd.exe",
-      args: ["/d", "/s", "/c", "pnpm.cmd exec vitest run"],
-      shell: false,
-      windowsVerbatimArguments: true,
-    });
+      },
+      "D:\\Windows\\System32\\cmd.exe",
+      ["/d", "/s", "/c", "pnpm.cmd exec vitest run"],
+      true,
+    );
   });
 
   it("uses Corepack on Windows when no pnpm shim is available", () => {
     const tempDir = path.join(fixturesRoot, "windows");
     const corepackPath = path.join(tempDir, "corepack.cmd");
 
-    expect(
-      resolvePnpmRunner({
-        comSpec: "C:\\Windows\\System32\\cmd.exe",
+    expectRunner(
+      {
+        comSpec,
         npmExecPath: "",
         env: { Path: tempDir, PATHEXT: ".CMD;.EXE" },
-        pnpmArgs: ["exec", "vitest", "run"],
         platform: "win32",
-      }),
-    ).toEqual({
-      command: "C:\\Windows\\System32\\cmd.exe",
-      args: [
-        "/d",
-        "/s",
-        "/c",
-        buildCmdExeCommandLine(corepackPath, ["pnpm", "exec", "vitest", "run"]),
-      ],
-      shell: false,
-      windowsVerbatimArguments: true,
-    });
+      },
+      comSpec,
+      ["/d", "/s", "/c", buildCmdExeCommandLine(corepackPath, ["pnpm", "exec", "vitest", "run"])],
+      true,
+    );
   });
 
   it("builds a shared spawn spec with inherited stdio and env overrides", () => {

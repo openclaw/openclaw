@@ -1,4 +1,3 @@
-// Plugins Assertions tests cover plugins assertions script behavior.
 import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -13,7 +12,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { createServer, request as httpRequest } from "node:http";
+import { createServer, request as httpRequest, type Server, type RequestListener } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -42,6 +41,52 @@ function shellQuote(value: string): string {
 function writeJson(filePath: string, value: unknown) {
   mkdirSync(path.dirname(filePath), { recursive: true });
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+async function listen(server: Server) {
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("expected TCP server address");
+  }
+  return `http://127.0.0.1:${address.port}`;
+}
+
+async function closeServer(server: Server, force = false) {
+  if (force) {
+    server.closeAllConnections();
+  }
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
+}
+
+function registryFiles(prefix: string) {
+  const root = autoCleanupTempDirs.make(prefix);
+  const tarballPath = path.join(root, "demo-plugin.tgz");
+  writeFileSync(tarballPath, "fixture package archive", "utf8");
+  return { root, tarballPath, portFile: path.join(root, "port") };
+}
+
+async function clawhubPreflight(
+  signal: AbortSignal,
+  listener: RequestListener,
+  env: NodeJS.ProcessEnv,
+) {
+  const server = createServer(listener);
+  const origin = await listen(server);
+  try {
+    return await runAssertionAsync(signal, ["clawhub-preflight"], {
+      CLAWHUB_PLUGIN_ID: "openclaw-kitchen-sink-fixture",
+      CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
+      OPENCLAW_CLAWHUB_URL: origin,
+      ...env,
+    });
+  } finally {
+    await closeServer(server);
+  }
 }
 
 async function runAssertionAsync(signal: AbortSignal, args: string[], env: NodeJS.ProcessEnv) {
@@ -187,9 +232,12 @@ function startFixtureRegistry(
   if (stderr === null) {
     throw new Error("expected fixture registry stderr pipe");
   }
+  const diagnostic = createBoundedChildOutput();
+  stderr.setEncoding("utf8");
+  stderr.on("data", diagnostic.append);
   return {
     child,
-    stderr,
+    diagnostic,
     closed,
     ready: awaitGateBeforeSettlement(listening, closed, `timed out waiting for ${portFile}`).then(
       (port) => {
@@ -272,9 +320,7 @@ export OPENCLAW_ENTRY=fixture-entry
 source scripts/e2e/lib/plugins/sweep.sh
 ${
   testCase.changeAfterSource
-    ? testCase.traceValue === undefined
-      ? "unset OPENCLAW_PLUGIN_LIFECYCLE_TRACE"
-      : `export OPENCLAW_PLUGIN_LIFECYCLE_TRACE=${shellQuote(testCase.traceValue)}`
+    ? `export OPENCLAW_PLUGIN_LIFECYCLE_TRACE=${shellQuote(testCase.traceValue)}`
     : ""
 }
 umask 000
@@ -337,20 +383,18 @@ ${command}
           ),
         ).toEqual([]);
 
-        const printsDiagnostics =
-          testCase.mode === "capture" || testCase.status !== 0 || testCase.traceEnabled;
-        if (printsDiagnostics) {
-          expect(result.stderr).toContain("truncated: showing last 192");
-          expect(result.stderr).toContain("PLUGIN_STDERR_TAIL_MARKER");
-          expect(result.stderr).toContain("task-runner");
-          expect(result.stderr).toContain("risk-score");
-          expect(result.stderr).toContain("disk-space");
-          expect(result.stderr).toContain("Authorization: Bearer [REDACTED]");
-          expect(result.stderr).toContain("OPENAI_API_KEY=[REDACTED]");
-          expect(result.stderr).toContain("[[REDACTED]]");
-          expect(result.stderr).toContain("[REDACTED]");
-        } else {
-          expect(result.stderr).toBe("");
+        for (const fragment of [
+          "truncated: showing last 192",
+          "PLUGIN_STDERR_TAIL_MARKER",
+          "task-runner",
+          "risk-score",
+          "disk-space",
+          "Authorization: Bearer [REDACTED]",
+          "OPENAI_API_KEY=[REDACTED]",
+          "[[REDACTED]]",
+          "[REDACTED]",
+        ]) {
+          expect(result.stderr).toContain(fragment);
         }
         if (testCase.traceValue === "1") {
           expect(result.stderr).toContain("[plugins:lifecycle]");
@@ -358,13 +402,9 @@ ${command}
           expect(result.stderr).not.toContain("[plugins:lifecycle]");
         }
         if (testCase.status !== 0) {
-          const label = testCase.mode === "capture" ? "plugins-git-inspect.json" : "install-git";
-          const noun = testCase.mode === "capture" ? "capture" : "command";
-          const detail =
-            testCase.status === 124
-              ? `timed out after 1s: ${label}`
-              : `failed with status ${testCase.status}: ${label}`;
-          expect(result.stderr).toContain(`Plugin sweep ${noun} ${detail}`);
+          expect(result.stderr).toContain(
+            `Plugin sweep command failed with status ${testCase.status}: install-git`,
+          );
         }
       } finally {
         rmSync(root, { force: true, recursive: true });
@@ -642,18 +682,11 @@ fs.renameSync = (source, destination) => {
 
   it("keeps npm fixture registry alive after malformed package paths", ({ signal }) =>
     fixtures.run(async () => {
-      const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-request-");
-      const portFile = path.join(root, "port");
-      const tarballPath = path.join(root, "demo-plugin.tgz");
-      writeFileSync(tarballPath, "fixture package archive", "utf8");
+      const { portFile, tarballPath } = registryFiles("openclaw-plugin-npm-fixture-request-");
 
       const registry = startFixtureRegistry(portFile, tarballPath);
       const { child } = registry;
-      const stderr = createBoundedChildOutput();
-      registry.stderr.setEncoding("utf8");
-      registry.stderr.on("data", (chunk) => {
-        stderr.append(chunk);
-      });
+      const { diagnostic: stderr } = registry;
 
       try {
         const port = await withinTest(registry.ready, signal);
@@ -687,9 +720,7 @@ fs.renameSync = (source, destination) => {
         packageName: "@openclaw/ai",
         version: "2026.7.34",
       });
-      const stderr = createBoundedChildOutput();
-      registry.stderr.setEncoding("utf8");
-      registry.stderr.on("data", stderr.append);
+      const { diagnostic: stderr } = registry;
       try {
         const port = await withinTest(registry.ready, signal);
         for (const pathname of [
@@ -815,16 +846,10 @@ fs.renameSync = (source, destination) => {
           });
           response.end(compressedBody);
         });
-        await new Promise<void>((resolve) => {
-          upstream.listen(0, "127.0.0.1", resolve);
-        });
-        const upstreamAddress = upstream.address();
-        if (!upstreamAddress || typeof upstreamAddress === "string") {
-          throw new Error("expected upstream registry address");
-        }
+        const upstreamOrigin = await listen(upstream);
 
         const registry = startFixtureRegistry(portFile, tarballPath, {
-          OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
+          OPENCLAW_NPM_REGISTRY_UPSTREAM: upstreamOrigin,
           OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM: merged ? "1" : "",
         });
 
@@ -855,36 +880,25 @@ fs.renameSync = (source, destination) => {
           expect(upstreamRequests).toBe(merged ? 1 : 2);
         } finally {
           await stopFixtureRegistry(registry);
-          await new Promise<void>((resolve) => {
-            upstream.close(() => resolve());
-          });
+          await closeServer(upstream);
         }
       }),
   );
 
   it("streams proxied npm tarballs without buffering a content length", ({ signal }) =>
     fixtures.run(async () => {
-      const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-tarball-proxy-");
-      const portFile = path.join(root, "port");
-      const tarballPath = path.join(root, "demo-plugin.tgz");
+      const { portFile, tarballPath } = registryFiles("openclaw-plugin-npm-fixture-tarball-proxy-");
       const upstreamBody = "x".repeat(1024 * 1024);
-      writeFileSync(tarballPath, "fixture package archive", "utf8");
 
       const upstream = createServer((_request, response) => {
         response.writeHead(200, { "content-type": "application/octet-stream" });
         response.write(upstreamBody.slice(0, upstreamBody.length / 2));
         response.end(upstreamBody.slice(upstreamBody.length / 2));
       });
-      await new Promise<void>((resolve) => {
-        upstream.listen(0, "127.0.0.1", resolve);
-      });
-      const upstreamAddress = upstream.address();
-      if (!upstreamAddress || typeof upstreamAddress === "string") {
-        throw new Error("expected upstream registry address");
-      }
+      const upstreamOrigin = await listen(upstream);
 
       const registry = startFixtureRegistry(portFile, tarballPath, {
-        OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
+        OPENCLAW_NPM_REGISTRY_UPSTREAM: upstreamOrigin,
       });
 
       try {
@@ -899,18 +913,13 @@ fs.renameSync = (source, destination) => {
         expect(response.body).toBe(upstreamBody);
       } finally {
         await stopFixtureRegistry(registry);
-        await new Promise<void>((resolve) => {
-          upstream.close(() => resolve());
-        });
+        await closeServer(upstream);
       }
     }));
 
   it("rejects oversized upstream bodies without stopping the fixture registry", ({ signal }) =>
     fixtures.run(async () => {
-      const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-proxy-limit-");
-      const portFile = path.join(root, "port");
-      const tarballPath = path.join(root, "demo-plugin.tgz");
-      writeFileSync(tarballPath, "fixture package archive", "utf8");
+      const { portFile, tarballPath } = registryFiles("openclaw-plugin-npm-fixture-proxy-limit-");
 
       const upstream = createServer((_request, response) => {
         response.writeHead(200, {
@@ -919,23 +928,13 @@ fs.renameSync = (source, destination) => {
         });
         response.end("oversized");
       });
-      await new Promise<void>((resolve) => {
-        upstream.listen(0, "127.0.0.1", resolve);
-      });
-      const upstreamAddress = upstream.address();
-      if (!upstreamAddress || typeof upstreamAddress === "string") {
-        throw new Error("expected upstream registry address");
-      }
+      const upstreamOrigin = await listen(upstream);
 
       const registry = startFixtureRegistry(portFile, tarballPath, {
-        OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
+        OPENCLAW_NPM_REGISTRY_UPSTREAM: upstreamOrigin,
       });
       const { child } = registry;
-      const stderr = createBoundedChildOutput();
-      registry.stderr.setEncoding("utf8");
-      registry.stderr.on("data", (chunk) => {
-        stderr.append(chunk);
-      });
+      const { diagnostic: stderr } = registry;
 
       try {
         const port = await withinTest(registry.ready, signal);
@@ -952,10 +951,7 @@ fs.renameSync = (source, destination) => {
         expect(child.exitCode, stderr.text()).toBeNull();
       } finally {
         await stopFixtureRegistry(registry);
-        upstream.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          upstream.close(() => resolve());
-        });
+        await closeServer(upstream, true);
       }
     }));
 
@@ -1011,28 +1007,18 @@ fs.renameSync = (source, destination) => {
         });
         response.write('{"partial":');
       });
-      await new Promise<void>((resolve) => {
-        upstream.listen(0, "127.0.0.1", resolve);
-      });
-      const upstreamAddress = upstream.address();
-      if (!upstreamAddress || typeof upstreamAddress === "string") {
-        throw new Error("expected upstream registry address");
-      }
+      const upstreamOrigin = await listen(upstream);
 
       const registry = startFixtureRegistry(
         portFile,
         tarballPath,
         {
-          OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
+          OPENCLAW_NPM_REGISTRY_UPSTREAM: upstreamOrigin,
         },
         preloadPath,
       );
       const { child } = registry;
-      const stderr = createBoundedChildOutput();
-      registry.stderr.setEncoding("utf8");
-      registry.stderr.on("data", (chunk) => {
-        stderr.append(chunk);
-      });
+      const { diagnostic: stderr } = registry;
 
       try {
         const port = await withinTest(registry.ready, signal);
@@ -1048,10 +1034,7 @@ fs.renameSync = (source, destination) => {
         expect(child.exitCode, stderr.text()).toBeNull();
       } finally {
         await stopFixtureRegistry(registry);
-        upstream.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          upstream.close(() => resolve());
-        });
+        await closeServer(upstream, true);
       }
     }));
 
@@ -1298,103 +1281,57 @@ fs.renameSync = (source, destination) => {
 
   it("times out stalled ClawHub package metadata requests", ({ signal }) =>
     fixtures.run(async () => {
-      const server = createServer((_request, _response) => {});
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
+      const result = await clawhubPreflight(signal, (_request, _response) => {}, {
+        OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: "25",
       });
 
-      try {
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          throw new Error("expected TCP server address");
-        }
-        const result = await runAssertionAsync(signal, ["clawhub-preflight"], {
-          CLAWHUB_PLUGIN_ID: "openclaw-kitchen-sink-fixture",
-          CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
-          OPENCLAW_CLAWHUB_URL: `http://127.0.0.1:${address.port}`,
-          OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: "25",
-        });
-
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(
-          "ClawHub package preflight for @openclaw/kitchen-sink timed out after 25ms",
-        );
-      } finally {
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        });
-      }
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        "ClawHub package preflight for @openclaw/kitchen-sink timed out after 25ms",
+      );
     }));
 
   it("times out stalled ClawHub package metadata bodies", ({ signal }) =>
     fixtures.run(async () => {
-      const server = createServer((_request, response) => {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.flushHeaders();
-        response.write("{");
-      });
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-
-      try {
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          throw new Error("expected TCP server address");
-        }
-        const result = await runAssertionAsync(signal, ["clawhub-preflight"], {
-          CLAWHUB_PLUGIN_ID: "openclaw-kitchen-sink-fixture",
-          CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
+      const result = await clawhubPreflight(
+        signal,
+        (_request, response) => {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.flushHeaders();
+          response.write("{");
+        },
+        {
           NODE_OPTIONS: `--import=data:text/javascript,${encodeURIComponent(
             "const response = await fetch(process.env.OPENCLAW_CLAWHUB_URL); globalThis.fetch = async () => response;",
           )}`,
-          OPENCLAW_CLAWHUB_URL: `http://127.0.0.1:${address.port}`,
           OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: "75",
-        });
+        },
+      );
 
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(
-          "ClawHub package preflight response for @openclaw/kitchen-sink timed out after 75ms",
-        );
-      } finally {
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        });
-      }
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        "ClawHub package preflight response for @openclaw/kitchen-sink timed out after 75ms",
+      );
     }));
 
   it("bounds ClawHub package metadata response bodies", ({ signal }) =>
     fixtures.run(async () => {
-      const server = createServer((_request, response) => {
-        response.writeHead(500, { "content-type": "text/plain" });
-        response.end("x".repeat(128));
-      });
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-
-      try {
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          throw new Error("expected TCP server address");
-        }
-        const result = await runAssertionAsync(signal, ["clawhub-preflight"], {
-          CLAWHUB_PLUGIN_ID: "openclaw-kitchen-sink-fixture",
-          CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
-          OPENCLAW_CLAWHUB_URL: `http://127.0.0.1:${address.port}`,
+      const result = await clawhubPreflight(
+        signal,
+        (_request, response) => {
+          response.writeHead(500, { "content-type": "text/plain" });
+          response.end("x".repeat(128));
+        },
+        {
           OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_BODY_MAX_BYTES: "16",
           OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: "1000",
-        });
+        },
+      );
 
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(
-          "ClawHub package preflight response for @openclaw/kitchen-sink response body exceeded 16 bytes",
-        );
-        expect(result.stderr).not.toContain("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
-      } finally {
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        });
-      }
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        "ClawHub package preflight response for @openclaw/kitchen-sink response body exceeded 16 bytes",
+      );
+      expect(result.stderr).not.toContain("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
     }));
 });
