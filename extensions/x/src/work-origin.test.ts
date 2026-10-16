@@ -138,7 +138,7 @@ describe("X work-session origin", () => {
     ) => Promise<{ appendSystemContext: string } | undefined>;
     expect(await handler({ prompt: "continue", messages: [] }, { sessionKey: descendant })).toEqual(
       {
-        appendSystemContext: `${expectedGuidance}\nUse accountId "default" for that message-tool reply.`,
+        appendSystemContext: expectedGuidance,
       },
     );
     expect(await openXWorkOrigins(test.runtime).lookup(descendant)).toEqual(origin);
