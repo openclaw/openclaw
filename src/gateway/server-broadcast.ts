@@ -286,7 +286,10 @@ export function createGatewayBroadcaster(params: {
     let skipSourcePayload = false;
     let sessionProjectionPrepared = false;
     let outboundEventLogged = false;
-    const encodedFrames = new Map<FramePayload, Map<string, string | Buffer>>();
+    const encodedFrames = new Map<
+      FramePayload,
+      Map<string | undefined, Map<number, string | Buffer>>
+    >();
     const frames: PreparedFrames = retained?.frames ?? {};
     // Private coalescers preserve inputs; identical pending histories can share this merge.
     let mergedFrames: Map<unknown, { payload: unknown; frames: PreparedFrames }> | undefined;
@@ -627,11 +630,14 @@ export function createGatewayBroadcaster(params: {
         if (!audienceFrames) {
           encodedFrames.set(payloadFragment, (audienceFrames = new Map()));
         }
-        const audience = JSON.stringify([nextSeq, recipientProfileId]);
-        const cached = audienceFrames.get(audience);
+        let sequenceFrames = audienceFrames.get(recipientProfileId);
+        if (!sequenceFrames) {
+          audienceFrames.set(recipientProfileId, (sequenceFrames = new Map()));
+        }
+        const cached = sequenceFrames.get(nextSeq);
         if (cached === undefined) {
           frame = frameWithSequence(base, nextSeq, payloadFragment, recipientProfileId);
-          audienceFrames.set(audience, frame);
+          sequenceFrames.set(nextSeq, frame);
         } else {
           frame = cached;
         }
