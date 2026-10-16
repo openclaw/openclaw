@@ -20,11 +20,7 @@ function privateGenerationEntry(): InternalSessionEntry {
     activeWriterRunId: "writer-run",
     lifecycleRevision: "generation-1",
     lifecycleRunId: "lifecycle-run",
-    sessionDiffBaselineCapture: {
-      version: 1,
-      captureId: "capture-1",
-      status: "pending",
-    },
+    sessionDiffBaselineCapture: { version: 1, captureId: "capture-1", status: "pending" },
     transcriptByteCompactionLatch: {
       activeBytes: 60_000,
       sessionId: "session-1",
@@ -59,17 +55,11 @@ describe("plugin session writer claim projection", () => {
   it.each(["patch", "upsert"] as const)(
     "preserves server publication through %s lifecycle changes while rejecting forged grants",
     async (method) => {
-      const scope = {
-        sessionKey: "agent:main:plugin-publication",
-        storePath: path.join(sessionDirs.make(), "sessions.json"),
-      };
+      const storePath = path.join(sessionDirs.make(), "sessions.json");
+      const scope = { sessionKey: "agent:main:plugin-publication", storePath };
       const publicShare = { id: "a".repeat(48), sessionId: "session-1", createdAt: 1 };
       const updatedAt = Date.now();
-      await replaceSessionEntry(scope, {
-        ...privateGenerationEntry(),
-        publicShare,
-        updatedAt,
-      });
+      await replaceSessionEntry(scope, { ...privateGenerationEntry(), publicShare, updatedAt });
       const mutate = (entry: InternalSessionEntry) =>
         method === "patch"
           ? patchSessionEntry({ ...scope, replaceEntry: true, update: () => entry })
@@ -130,21 +120,12 @@ describe("plugin session writer claim projection", () => {
     };
     await replaceSessionEntry(scope, privateGenerationEntry());
 
-    await patchSessionEntry({
-      ...scope,
-      update: () => ({ model: "gpt-5.6" }),
-    });
+    await patchSessionEntry({ ...scope, update: () => ({ model: "gpt-5.6" }) });
 
     const { updatedAt: _updatedAt, ...generation } = privateGenerationEntry();
-    expect(loadSessionEntry(scope)).toMatchObject({
-      ...generation,
-      model: "gpt-5.6",
-    });
+    expect(loadSessionEntry(scope)).toMatchObject({ ...generation, model: "gpt-5.6" });
 
-    await upsertSessionEntry({
-      entry: { sessionId: "session-1", updatedAt: 20 },
-      ...scope,
-    });
+    await upsertSessionEntry({ entry: { sessionId: "session-1", updatedAt: 20 }, ...scope });
     expect(loadSessionEntry(scope)).toMatchObject(generation);
   });
 });

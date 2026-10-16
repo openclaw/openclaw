@@ -6,16 +6,16 @@ import {
 } from "../config/runtime-snapshot.js";
 import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import {
-  replaceSessionEntry,
-  replaceSessionEntrySync,
+  replaceSessionEntry as replaceEntry,
+  replaceSessionEntrySync as replaceEntrySync,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readTranscriptEventRows } from "../config/sessions/session-accessor.sqlite-read.js";
-import { appendExpectedSessionTranscriptTurn } from "../config/sessions/session-accessor.sqlite-transcript-turn.js";
+import { appendExpectedSessionTranscriptTurn as appendTurn } from "../config/sessions/session-accessor.sqlite-transcript-turn.js";
 import { appendTranscriptMessageSnapshotSync } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { captureSessionEntryReadSource } from "../config/sessions/session-entry-read-source.js";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
-import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import {
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
@@ -23,7 +23,7 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withCodexSessionTranscriptMirrorWriteLock } from "./codex-session-transcript-runtime.js";
 import {
-  appendSessionTranscriptMessageByIdentity,
+  appendSessionTranscriptMessageByIdentity as appendMessage,
   appendSessionTranscriptMessageByIdentityStrict as appendStrict,
   withSessionTranscriptWrite,
   withSessionTranscriptWriteLock,
@@ -67,16 +67,13 @@ afterEach(() => {
 it("retains durable callback ordering and warns once per plugin across legacy writes and reloads", async () => {
   await withSeed(async (f) => {
     const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-    const instances = [
-      new PluginInstance("transcript-compat-first"),
-      new PluginInstance("transcript-compat-second"),
-      new PluginInstance("transcript-compat-first"),
-    ];
+    const instances = ["first", "second", "first"].map(
+      (id) => new PluginInstance(`transcript-compat-${id}`),
+    );
     const guard = vi.fn(() => {
       expect(f.database.db.isTransaction).toBe(true);
-      expect(readExactSessionEntryRow(f.database, f.scope.sessionKey)?.entry.sessionId).toBe(
-        f.scope.sessionId,
-      );
+      const row = readExactSessionEntryRow(f.database, f.scope.sessionKey);
+      expect(row?.entry.sessionId).toBe(f.scope.sessionId);
     });
     try {
       for (const instance of instances) {
@@ -91,8 +88,7 @@ it("retains durable callback ordering and warns once per plugin across legacy wr
           await withSessionTranscriptWriteLock(f.scope, () => undefined);
         });
       }
-      expect(guard).toHaveBeenCalledTimes(3);
-      expect(warning).toHaveBeenCalledTimes(2);
+      expect([guard.mock.calls.length, warning.mock.calls.length]).toEqual([3, 2]);
       for (const plugin of ["transcript-compat-first", "transcript-compat-second"]) {
         expect(warning).toHaveBeenCalledWith(expect.stringContaining(`Plugin ${plugin}:`), {
           code: "DEP_SESSION_PERSISTENCE",
@@ -112,50 +108,32 @@ it("retains durable callback ordering and warns once per plugin across legacy wr
 
 it("refuses legacy incognito callbacks while prepared unbound writes use the memory owner", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const target = {
-      agentId: "main",
-      sessionId: "private",
-      sessionKey: "agent:main:dashboard:incognito-private",
-      env,
-    };
+    const sessionKey = "agent:main:dashboard:incognito-private";
+    const target = { agentId: "main", sessionId: "private", sessionKey, env };
     const prepare = vi.fn((message: unknown) => message);
     const guard = vi.fn();
     const locked = vi.fn();
     const message = { role: "assistant", content: "private" };
-    const expected = /preparation\.prepareMessage \/ preparation\.source/u;
+    const expectedError = /preparation\.prepareMessage \/ preparation\.source/u;
     for (const operation of [
-      () =>
-        appendStrict({
-          ...target,
-          message,
-          prepareMessageAfterIdempotencyCheck: prepare,
-        }),
-      () =>
-        appendSessionTranscriptMessageByIdentity({
-          ...target,
-          message,
-          beforeFreshMessageCommit: guard,
-        }),
+      () => appendStrict({ ...target, message, prepareMessageAfterIdempotencyCheck: prepare }),
+      () => appendMessage({ ...target, message, beforeFreshMessageCommit: guard }),
       () => withSessionTranscriptWriteLock(target, locked),
       () => withCodexSessionTranscriptMirrorWriteLock(target, locked),
     ]) {
-      await expect(operation()).rejects.toThrow(expected);
+      await expect(operation()).rejects.toThrow(expectedError);
     }
-    for (const callback of [prepare, guard, locked]) {
-      expect(callback).not.toHaveBeenCalled();
-    }
-    const location = {
-      agentId: target.agentId,
-      path: resolveIncognitoOpenClawAgentSqlitePath(target),
-    };
+    expect([prepare, guard, locked].map((callback) => callback.mock.calls)).toEqual([[], [], []]);
+    const path = resolveIncognitoOpenClawAgentSqlitePath(target);
+    const location = { agentId: target.agentId, path };
     setRuntimeConfigSnapshot({});
     const sql = observeHostDataSql();
     try {
-      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+      await replaceEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
       const candidate = { ...message, idempotencyKey: "memory-private" };
       const prepareMemory = vi.fn(async (value: typeof candidate) => ({
         ...value,
-        content: "memory prepared",
+        content: "prepared",
       }));
       const events = await withSessionTranscriptWrite(target, async (transcript) => {
         const options = {
@@ -164,12 +142,9 @@ it("refuses legacy incognito callbacks while prepared unbound writes use the mem
           idempotencyLookup: "scan" as const,
           preparation: { prepareMessage: prepareMemory },
         };
+        const expected = { messageId: "memory-private", message: { content: "prepared" } };
         for (const appended of [true, false]) {
-          await expect(transcript.appendMessage(options)).resolves.toMatchObject({
-            appended,
-            messageId: "memory-private",
-            message: { content: "memory prepared" },
-          });
+          expect(await transcript.appendMessage(options)).toMatchObject({ ...expected, appended });
         }
         await expect(
           transcript.appendMessage({
@@ -182,7 +157,7 @@ it("refuses legacy incognito callbacks while prepared unbound writes use the mem
       expect(prepareMemory).toHaveBeenCalledOnce();
       expect(events).toMatchObject([
         {},
-        { type: "message", id: "memory-private", message: { content: "memory prepared" } },
+        { type: "message", id: "memory-private", message: { content: "prepared" } },
       ]);
       expect(sql.queries).toEqual([]);
     } finally {
@@ -193,23 +168,25 @@ it("refuses legacy incognito callbacks while prepared unbound writes use the mem
   });
 });
 
+type Prepare = (value: unknown) => Promise<unknown>;
 async function seed(env: NodeJS.ProcessEnv) {
   setRuntimeConfigSnapshot({});
-  const target = {
-    agentId: "main",
-    sessionId: "append-session",
-    sessionKey: "agent:main:append",
-    env,
-  };
-  await replaceSessionEntry(target, {
-    sessionId: target.sessionId,
-    updatedAt: 1,
-    label: "initial",
-  });
+  const sessionKey = "agent:main:append";
+  const target = { agentId: "main", sessionId: "append-session", sessionKey, env };
+  await replaceEntry(target, { sessionId: target.sessionId, updatedAt: 1, label: "initial" });
   const database = openOpenClawAgentDatabase(target);
+  const scope = { ...target, storePath: database.path };
   return {
     database,
-    scope: { ...target, storePath: database.path },
+    scope,
+    appendTurn: (message: unknown, prepare: Prepare, eventId?: string) => {
+      const workerPreparation = { prepareMessageAfterIdempotencyCheckAsync: prepare };
+      return appendTurn(scope, {
+        expectedSessionId: scope.sessionId,
+        sessionFile: "synthetic-session.jsonl",
+        messages: [{ eventId, message, workerPreparation }],
+      });
+    },
     messages: () =>
       readTranscriptEventRows(database, target.sessionId)
         .map((row) => JSON.parse(row.eventJson))
@@ -236,15 +213,11 @@ it("prepares strict appends without caller-thread SQL and retains the released s
     const prepare = vi.fn(async (message: Message) => ({ ...message, content: "prepared" }));
     const sql = observeHostDataSql();
     try {
-      const result = await appendStrict({
-        ...scope,
-        message: { role: "assistant", content: "original", idempotencyKey: "strict-key" },
-        preparation: { prepareMessage: prepare },
-      });
-      expect(result).toMatchObject({
-        kind: "result",
-        result: { appended: true, message: { content: "prepared" } },
-      });
+      const message = { role: "assistant", content: "original", idempotencyKey: "strict-key" };
+      const preparation = { prepareMessage: prepare };
+      const result = await appendStrict({ ...scope, message, preparation });
+      const expected = { appended: true, message: { content: "prepared" } };
+      expect(result).toMatchObject({ kind: "result", result: expected });
       expect(prepare).toHaveBeenCalledOnce();
       expect(sql.queries).toEqual([]);
     } finally {
@@ -254,67 +227,49 @@ it("prepares strict appends without caller-thread SQL and retains the released s
   });
 });
 
-it.each([false, true])(
-  "checks fresh sources after a foreign replay decision (foreignReplay=%s)",
-  async (foreignReplay) => {
-    await withSeed(async ({ database, scope, messages }) => {
-      const message = { role: "assistant", content: "accepted", idempotencyKey: "foreign-key" };
-      const identity = readOpenClawAgentDatabaseIdentity(database);
-      const legacyGuard = vi.fn(() => {
-        throw new Error("Legacy guard should use its prepared source");
-      });
-      const beforeFreshMessageCommit: SessionSourceAssertion = Object.assign(legacyGuard, {
-        async prepareSessionSource() {
-          // This separate native connection commits after the worker's first duplicate check.
-          if (foreignReplay) {
-            appendExternal(scope, "foreign-message", message);
-          }
-          replaceSessionEntrySync(scope, {
-            sessionId: scope.sessionId,
-            updatedAt: 2,
-            label: "foreign",
-          });
-          return {
-            assertCurrent() {},
-            checks: [
-              {
-                predicate: {
-                  source: {
-                    agentId: scope.agentId,
-                    path: database.path,
-                    databaseIdentity: identity.identity,
-                    databaseBirthtime: identity.birthtime,
-                  },
-                  sessionKey: scope.sessionKey,
-                  fields: ["label" as const],
-                  expected: { sessionId: scope.sessionId, label: "initial" },
-                },
-                refuse(): never {
-                  throw new Error("Prepared transcript source changed");
-                },
-              },
-            ],
-          };
-        },
-      });
-      const appending = appendStrict({
-        ...scope,
-        message,
-        preparation: { source: beforeFreshMessageCommit },
-      });
-      if (foreignReplay) {
-        await expect(appending).resolves.toMatchObject({
-          kind: "result",
-          result: { appended: false, messageId: "foreign-message", message },
-        });
-      } else {
-        await expect(appending).rejects.toThrow("Prepared transcript source changed");
-      }
-      expect(legacyGuard).not.toHaveBeenCalled();
-      expect(messages()).toHaveLength(foreignReplay ? 1 : 0);
+it.each([false, true])("rechecks sources after foreign replay=%s", async (foreignReplay) => {
+  await withSeed(async ({ database, scope, messages }) => {
+    const message = { role: "assistant", content: "accepted", idempotencyKey: "foreign-key" };
+    const source = captureSessionEntryReadSource(database, undefined);
+    const legacyGuard = vi.fn(() => {
+      throw new Error("Legacy guard should use its prepared source");
     });
-  },
-);
+    const assertion: SessionSourceAssertion = Object.assign(legacyGuard, {
+      async prepareSessionSource() {
+        // This separate native connection commits after the worker's first duplicate check.
+        if (foreignReplay) {
+          appendExternal(scope, "foreign-message", message);
+        }
+        replaceEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 2, label: "foreign" });
+        return {
+          assertCurrent() {},
+          checks: [
+            {
+              predicate: {
+                source,
+                sessionKey: scope.sessionKey,
+                fields: ["label" as const],
+                expected: { sessionId: scope.sessionId, label: "initial" },
+              },
+              refuse(): never {
+                throw new Error("Prepared transcript source changed");
+              },
+            },
+          ],
+        };
+      },
+    });
+    const appending = appendStrict({ ...scope, message, preparation: { source: assertion } });
+    if (foreignReplay) {
+      const result = { appended: false, messageId: "foreign-message", message };
+      expect(await appending).toMatchObject({ kind: "result", result });
+    } else {
+      await expect(appending).rejects.toThrow("Prepared transcript source changed");
+    }
+    expect(legacyGuard).not.toHaveBeenCalled();
+    expect(messages()).toHaveLength(foreignReplay ? 1 : 0);
+  });
+});
 
 it("rejects an async prepared message after a foreign transcript write", async () => {
   await withSeed(async (f) => {
@@ -324,17 +279,8 @@ it("rejects an async prepared message after a foreign transcript write", async (
       }
       return message;
     });
-    const appending = appendExpectedSessionTranscriptTurn(f.scope, {
-      expectedSessionId: f.scope.sessionId,
-      sessionFile: "synthetic-session.jsonl",
-      messages: [
-        {
-          eventId: "prepared",
-          message: { role: "assistant", content: "prepared", idempotencyKey: "prepared" },
-          workerPreparation: { prepareMessageAfterIdempotencyCheckAsync: prepare },
-        },
-      ],
-    });
+    const message = { role: "assistant", content: "prepared", idempotencyKey: "prepared" };
+    const appending = f.appendTurn(message, prepare, "prepared");
     await expect(appending).rejects.toThrow("SQLite transcript changed while preparing rewrite");
     expect(f.messages().map((event) => event.id)).toEqual(["foreign"]);
   });
@@ -349,15 +295,9 @@ it("replays a skipped async preparation after a foreign transcript append", asyn
       appendExternal(f.scope, "foreign", { role: "assistant", content: "foreign" });
     };
     const prepare = vi.fn(async (value: unknown) => value);
-    await expect(
-      appendExpectedSessionTranscriptTurn(f.scope, {
-        expectedSessionId: f.scope.sessionId,
-        sessionFile: "synthetic-session.jsonl",
-        messages: [
-          { message, workerPreparation: { prepareMessageAfterIdempotencyCheckAsync: prepare } },
-        ],
-      }),
-    ).resolves.toMatchObject({ appendedMessages: [{ appended: false, messageId: "existing" }] });
+    await expect(f.appendTurn(message, prepare)).resolves.toMatchObject({
+      appendedMessages: [{ appended: false, messageId: "existing" }],
+    });
     expect(prepare).not.toHaveBeenCalled();
     expect(f.messages().map((event) => event.id)).toEqual(["existing", "foreign"]);
   });
