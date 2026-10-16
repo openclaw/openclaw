@@ -91,16 +91,17 @@ function summarizeSubagentOutputHistory(
     if (role === "assistant") {
       previousAssistantCalledYield = assistantCallsSessionsYield(message);
       snapshot.waitingForContinuation = previousAssistantCalledYield;
+      if (isSilentAssistantTranscriptMessage(message)) {
+        snapshot.latestText = undefined;
+        continue;
+      }
       if (previousAssistantCalledYield) {
         // A completed collector cannot resume: its yield closes this execution.
         // Ordinary subagents still wait rather than treating commentary as a result.
+        // An empty yield is not permission to reuse an earlier assistant reply.
         snapshot.latestText = completedCollectorTurn
-          ? extractStoredAssistantText(message)?.trim() || snapshot.latestText
+          ? extractStoredAssistantText(message)?.trim() || undefined
           : undefined;
-        continue;
-      }
-      if (isSilentAssistantTranscriptMessage(message)) {
-        snapshot.latestText = undefined;
         continue;
       }
       const toolCalls = record.toolCalls ?? record.tool_calls;

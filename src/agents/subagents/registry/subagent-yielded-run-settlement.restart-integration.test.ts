@@ -56,7 +56,11 @@ describe("yielded run settlement", () => {
 
   const useRealCapture = () =>
     vi.mocked(captureSubagentCompletionReply).mockImplementation(readCompletionReply);
-  const writeYieldedTranscript = async (text = YIELDED_REPLY, laterReplies = 0) => {
+  const writeYieldedTranscript = async (
+    text = YIELDED_REPLY,
+    laterReplies = 0,
+    visibility?: { display?: false; earlierReply: string },
+  ) => {
     const sessionId = "sess-legacy-collector";
     const storePath = await writeSubagentSessionEntry({
       stateDir: fixture.stateDir,
@@ -79,10 +83,17 @@ describe("yielded run settlement", () => {
       now: T0 - 5 * MINUTE_MS,
       message: { role: "user", content: "Collect the findings" },
     });
+    if (visibility) {
+      await appendTranscriptMessage(target, {
+        now: T0 - 5 * MINUTE_MS + 1,
+        message: { role: "assistant", content: visibility.earlierReply },
+      });
+    }
     await appendTranscriptMessage(target, {
       now: T0 - 4 * MINUTE_MS - 1,
       message: {
         role: "assistant",
+        ...(visibility ? { display: visibility.display } : {}),
         content: [
           { type: "text", text },
           { type: "toolCall", id: "yield-1", name: "sessions_yield", arguments: {} },
@@ -343,6 +354,32 @@ describe("yielded run settlement", () => {
     expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
     expect(fixture.gatewayRuntime.sendRecoveryNotice).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { name: "explicitly hidden", text: "Hidden collector text", display: false as const },
+    { name: "empty", text: "" },
+    { name: "whitespace-only", text: "  \n  " },
+  ])(
+    "does not resurrect earlier output when the completed collector yield is $name",
+    async ({ text, display }) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(T0);
+      await writeYieldedTranscript(text, 1, {
+        display,
+        earlierReply: "Earlier progress is not the final result",
+      });
+      await addSubagentRunForTests(legacyYieldedCollector({ status: "ok" }));
+      await restartRegistry();
+      await testing.sweepOnceForTests();
+      await fixture.settle();
+      expect(persisted("legacy-yielded-collector")?.completion?.resultText).toBeNull();
+      expect((await waitSurface("legacy-yielded-collector")).completed).toMatchObject([
+        { status: "done", result: "" },
+      ]);
+      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      expect(fixture.gatewayRuntime.sendRecoveryNotice).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["", "NO_REPLY", "HEARTBEAT_OK"])(
     "preserves intentional empty or silent collector output (%j)",
