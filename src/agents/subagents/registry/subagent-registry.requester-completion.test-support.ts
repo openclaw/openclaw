@@ -89,7 +89,7 @@ export function registerRequesterCompletionCustodyTests({
         const sessionId = "restart-requester";
         const lifecycleRevision = "restart-requester-lifecycle";
         const requesterTurnRunId = "restart-parent-turn";
-        const runIds = ["restart-child-a", "restart-child-b"];
+        const runIds: [string, string] = ["restart-child-a", "restart-child-b"];
         await upsertSessionEntryCore(
           { storePath: cfg.session.store, sessionKey: requesterSessionKey, agentId: "main" },
           { sessionId, lifecycleRevision, updatedAt: 1 },
@@ -298,9 +298,10 @@ export function registerRequesterCompletionCustodyTests({
             },
             completeBatch,
           });
-          expect(delivered, subagentRuns.get(runIds[0])?.requesterSettleWake?.lastError).toBe(
-            recovery === "current",
-          );
+          expect(
+            delivered,
+            subagentRuns.get(runIds[0])?.requesterSettleWake?.lastError ?? "requester dispatch",
+          ).toBe(recovery === "current");
           expect(deliver).toHaveBeenCalledTimes(recovery === "current" ? 1 : 0);
           if (recovery === "current") {
             expect(completeBatch).toHaveBeenCalledOnce();
