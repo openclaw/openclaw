@@ -1,5 +1,9 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/gateway/server-methods.workshop-contract.test.ts",
+  "src/cli/skills-cli.workshop-contract.test.ts",
+  "src/auto-reply/reply/commands.workshop-contract.test.ts",
+  "src/agents/openclaw-tools.workshop-contract.test.ts",
   "src/channels/message/ingress-drain.handoff.test.ts",
   "src/channels/message/ingress-queue.authority.test.ts",
   "src/agents/mcp-oauth-authorization.test.ts",
