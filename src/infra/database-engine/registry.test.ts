@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertHomogeneousDatabaseEngines,
   listDatabaseEngineStores,
+  resolveDatabaseFamilyEngines,
   selectDatabaseEngine,
 } from "./registry.js";
 
@@ -43,6 +44,38 @@ describe("database engine selection", () => {
         { database: { engine: "postgres", families: { agent: { engine: "sqlite" } } } },
         "update",
       ),
-    ).not.toThrow();
+    ).toThrow("update for mixed-engine installs is not supported yet");
+  });
+
+  it.each([
+    { engine: "postgres" },
+    { engine: "postgres", families: { agent: { engine: "postgres" } } },
+  ] as const)("selects PostgreSQL agents for a homogeneous configuration: %j", (database) => {
+    expect(resolveDatabaseFamilyEngines({ database })).toMatchObject({
+      state: "postgres",
+      agent: "postgres",
+      workboard: "postgres",
+      logbook: "postgres",
+      "team-reports": "postgres",
+      quarantine: "sqlite",
+    });
+  });
+
+  it.each([
+    { families: { agent: { engine: "postgres" } } },
+    { engine: "postgres", families: { state: { engine: "sqlite" } } },
+    { engine: "postgres", families: { logbook: { engine: "sqlite" } } },
+  ] as const)("refuses mixed PostgreSQL agents before runtime selection: %j", (database) => {
+    expect(() => resolveDatabaseFamilyEngines({ database })).toThrow(
+      "DATABASE_AGENT_MIXED_POSTGRES_UNSUPPORTED",
+    );
+  });
+
+  it("allows explicit SQLite agents alongside PostgreSQL families", () => {
+    expect(
+      resolveDatabaseFamilyEngines({
+        database: { engine: "postgres", families: { agent: { engine: "sqlite" } } },
+      }),
+    ).toMatchObject({ state: "postgres", agent: "sqlite", workboard: "postgres" });
   });
 });

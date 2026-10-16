@@ -519,7 +519,7 @@ export async function preflightOpenClawDatabaseSchemas(
         // artifact preservation must use the WAL-aware private snapshot below.
         if (
           !schemaInspection &&
-          (getDatabaseEngineSelection()?.input ||
+          (getDatabaseEngineInput("agent") ||
             options.preserveSourceArtifacts !== true ||
             (purpose === "runtime" && readSqliteDatabaseCleanClose(realAgentPath)))
         ) {

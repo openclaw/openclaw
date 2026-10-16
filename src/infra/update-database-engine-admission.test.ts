@@ -102,6 +102,7 @@ it.each([
     engine: "sqlite",
     families: {
       state: { engine: "postgres" },
+      agent: { engine: "postgres" },
       workboard: { engine: "postgres" },
       logbook: { engine: "postgres" },
       "team-reports": { engine: "postgres" },
@@ -111,6 +112,7 @@ it.each([
     engine: "postgres",
     families: {
       state: { engine: "sqlite" },
+      agent: { engine: "sqlite" },
       workboard: { engine: "sqlite" },
       logbook: { engine: "sqlite" },
       "team-reports": { engine: "sqlite" },

@@ -36,7 +36,7 @@ describe("Doctor database engines", () => {
     );
     const output = String(vi.mocked(note).mock.calls[0]?.[0]);
     expect(output).toContain(
-      "Agent data: default=postgres, override=inherit, effective=sqlite (configured)",
+      "Agent data: default=postgres, override=inherit, effective=postgres (configured)",
     );
     expect(output).toContain(
       "Logbook: default=postgres, override=inherit, effective=postgres (configured)",
@@ -56,13 +56,20 @@ describe("Doctor database engines", () => {
     const cfg = {
       database: {
         engine: "sqlite" as const,
-        families: { workboard: { engine: "postgres" as const } },
+        families: {
+          state: { engine: "postgres" as const },
+          agent: { engine: "sqlite" as const },
+          workboard: { engine: "postgres" as const },
+        },
       },
     };
     noteDatabaseEngines(cfg);
     const output = String(vi.mocked(note).mock.calls[0]?.[0]);
     expect(output).toContain(
       "Workboard: default=sqlite, override=postgres, effective=postgres (configured)",
+    );
+    expect(output).toContain(
+      "Agent data: default=sqlite, override=sqlite, effective=sqlite (configured)",
     );
     expect(output).toContain(
       "Database quarantine: default=sqlite, override=fixed local, effective=sqlite (configured)",

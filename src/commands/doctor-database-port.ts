@@ -16,7 +16,6 @@ import {
   DatabasePortError,
 } from "../infra/database-engine/port-command.worker.js";
 import { databasePortProviders } from "../infra/database-engine/port-provider.js";
-import type { PortVerification } from "../infra/database-engine/port.worker.js";
 import {
   resolveDatabaseFamilyEngines,
   type DatabaseEngineId,
@@ -487,7 +486,7 @@ export async function doctorDatabasePort(options: DatabasePortOptions) {
     stateDir,
     configPath,
     env: process.env,
-    engineSelection: { input: undefined },
+    engineSelection: { effectiveEngines: resolveDatabaseFamilyEngines({}) },
     assertCurrent: () => {},
     phase: "preflight",
     target: stateDir,

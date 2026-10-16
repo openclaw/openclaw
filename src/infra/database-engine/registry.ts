@@ -33,9 +33,6 @@ export function selectDatabaseEngine(
       ? undefined
       : config.database?.families?.[store.id]?.engine;
   if (override === "postgres" && !store.postgres) {
-    if (store.id === "agent") {
-      throw new Error("Agent PostgreSQL requires the agent routing support in R4; select sqlite.");
-    }
     throw new Error(`database.families.${store.id}.engine does not support postgres.`);
   }
   return (
@@ -43,9 +40,25 @@ export function selectDatabaseEngine(
   );
 }
 
+export function getMixedPostgresAgentError(
+  config: Pick<OpenClawConfig, "database">,
+): string | undefined {
+  if (
+    (config.database?.families?.agent?.engine ?? config.database?.engine) === "postgres" &&
+    stores.some((store) => store.postgres && selectDatabaseEngine(store, config) !== "postgres")
+  ) {
+    return "DATABASE_AGENT_MIXED_POSTGRES_UNSUPPORTED: Agent PostgreSQL with mixed engines requires the mixed-pair conformance in PR3; select SQLite for agents or use PostgreSQL for every configurable family.";
+  }
+  return undefined;
+}
+
 export function resolveDatabaseFamilyEngines(
   config: Pick<OpenClawConfig, "database">,
 ): Record<DatabaseEngineFamily, DatabaseEngineId> {
+  const agentError = getMixedPostgresAgentError(config);
+  if (agentError) {
+    throw new Error(agentError);
+  }
   const effectiveEngines: Record<DatabaseEngineFamily, DatabaseEngineId> = {
     state: "sqlite",
     agent: "sqlite",

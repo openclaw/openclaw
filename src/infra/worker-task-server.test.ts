@@ -190,7 +190,7 @@ it("keeps ordinary task errors reusable", async () => {
   expect(process.exitCode).toBe(exitCode);
 });
 
-it("retains the complete boot selection across generic worker tasks", async () => {
+it("scopes the complete selection to each generic worker task", async () => {
   let result = createDeferred();
   const port = Object.assign(new EventEmitter(), {
     postMessage: vi.fn(() => result.resolve()),
@@ -231,7 +231,7 @@ it("retains the complete boot selection across generic worker tasks", async () =
   });
   await result.promise;
   expect(port.postMessage).toHaveBeenLastCalledWith(
-    { status: "ok", value: selection, taskId: 2 },
+    { status: "ok", value: undefined, taskId: 2 },
     [],
   );
 });

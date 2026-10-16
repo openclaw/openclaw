@@ -33,9 +33,7 @@ export function withDatabaseEngineSelection<T>(
 /** Each store consumes its boot-selected family without resolving configuration again. */
 export function getDatabaseEngineInput(family: DatabaseEngineFamily): DatabaseEngineInput {
   const selection = getDatabaseEngineSelection();
-  return selection?.effectiveEngines[family] === "postgres"
-    ? selection.postgres
-    : undefined;
+  return selection?.effectiveEngines[family] === "postgres" ? selection.postgres : undefined;
 }
 
 /** Boot owns this process-lifetime fact; asynchronous callers never change it. */

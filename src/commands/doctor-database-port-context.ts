@@ -8,12 +8,12 @@ import { readConfigFileSnapshotForWrite } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { DatabasePortError } from "../infra/database-engine/port-command.worker.js";
 import type { PortVerification } from "../infra/database-engine/port.worker.js";
-import type { DatabaseEngineInput } from "../infra/database-engine/types.js";
 import {
   assertHomogeneousDatabaseEngines,
   resolveDatabaseFamilyEngines,
   type DatabaseEngineId,
 } from "../infra/database-engine/registry.js";
+import type { DatabaseEngineSelection } from "../infra/database-engine/types.js";
 import {
   archiveDatabasePortManifest,
   databasePortManifestPath,
@@ -65,7 +65,7 @@ export type Context = {
   stateDir: string;
   configPath: string;
   env: NodeJS.ProcessEnv;
-  engineSelection: { input: DatabaseEngineInput };
+  engineSelection: DatabaseEngineSelection;
   stateReceipt?: {
     path: string;
     engine: "sqlite" | "postgres";

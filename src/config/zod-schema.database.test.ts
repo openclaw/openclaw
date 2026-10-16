@@ -56,6 +56,16 @@ describe("experimental database config", () => {
     {},
     { engine: "sqlite" },
     { engine: "postgres" },
+    { engine: "postgres", families: { agent: { engine: "postgres" } } },
+    {
+      families: {
+        state: { engine: "postgres" },
+        agent: { engine: "postgres" },
+        workboard: { engine: "postgres" },
+        logbook: { engine: "postgres" },
+        "team-reports": { engine: "postgres" },
+      },
+    },
     { families: {} },
     { families: { state: { engine: "postgres" }, agent: { engine: "sqlite" } } },
     {
@@ -90,15 +100,17 @@ describe("experimental database config", () => {
     expect(OpenClawSchema.safeParse({ database }).success).toBe(false);
   });
 
-  it("reports the unsupported agent override at its config path", () => {
-    expect(
-      validateConfigObjectRaw({ database: { families: { agent: { engine: "postgres" } } } }),
-    ).toMatchObject({
+  it.each([
+    { families: { agent: { engine: "postgres" } } },
+    { engine: "postgres", families: { state: { engine: "sqlite" } } },
+    { engine: "postgres", families: { workboard: { engine: "sqlite" } } },
+  ])("reports unproven mixed PostgreSQL agents at their config path: %j", (database) => {
+    expect(validateConfigObjectRaw({ database })).toMatchObject({
       ok: false,
       issues: [
         {
           path: "database.families.agent.engine",
-          message: "Agent PostgreSQL requires the agent routing support in R4; select sqlite.",
+          message: expect.stringContaining("DATABASE_AGENT_MIXED_POSTGRES_UNSUPPORTED"),
         },
       ],
     });

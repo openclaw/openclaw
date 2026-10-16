@@ -2,7 +2,7 @@ import { fork } from "node:child_process";
 import type { FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { createSessionWorkerExecutionSource } from "../config/sessions/session-worker-execution-source.js";
-import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import {
@@ -114,7 +114,7 @@ export function createAgentSchemaInspectionWorker() {
       }
       busy = true;
       try {
-        if (kind === "agent" && getDatabaseEngineSelection()?.input) {
+        if (kind === "agent" && getDatabaseEngineInput("agent")) {
           if (snapshotPath) {
             throw new Error(
               "PostgreSQL agent inspection requires its live engine owner, not a SQLite snapshot.",

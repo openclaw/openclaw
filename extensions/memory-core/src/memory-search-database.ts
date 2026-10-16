@@ -11,7 +11,7 @@ const memoryPostgresDiagnostic =
 
 /** Reject unavailable search before a missing store can become an empty native index. */
 export function requireMemorySearchCapability(): void {
-  if (getDatabaseEngineSelection()?.input !== undefined) {
+  if (getDatabaseEngineSelection()?.effectiveEngines.agent === "postgres") {
     throw new DatabaseSearchCapabilityUnavailableError("fullText", memoryPostgresDiagnostic);
   }
 }

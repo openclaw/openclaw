@@ -91,11 +91,14 @@ it("refuses swapping PostgreSQL families while keeping the same DSN", () => {
 it("scopes the full family map across awaits without replacing the boot selection", async () => {
   const boot = { effectiveEngines: { ...sqliteEngines, state: "postgres" as const }, postgres };
   installDatabaseEngineSelection(boot);
-  await withDatabaseEngineSelection({ effectiveEngines: { ...sqliteEngines, agent: "postgres" }, postgres }, async () => {
-    await Promise.resolve();
-    expect(getDatabaseEngineInput("state")).toBeUndefined();
-    expect(getDatabaseEngineInput("agent")).toEqual(postgres);
-  });
+  await withDatabaseEngineSelection(
+    { effectiveEngines: { ...sqliteEngines, agent: "postgres" }, postgres },
+    async () => {
+      await Promise.resolve();
+      expect(getDatabaseEngineInput("state")).toBeUndefined();
+      expect(getDatabaseEngineInput("agent")).toEqual(postgres);
+    },
+  );
   expect(getDatabaseEngineSelection()).toBe(boot);
   expect(getDatabaseEngineInput("state")).toEqual(postgres);
   expect(getDatabaseEngineInput("agent")).toBeUndefined();

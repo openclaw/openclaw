@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { getMixedPostgresAgentError } from "../infra/database-engine/registry.js";
 import { projectConfigFieldMetadata } from "./schema.field-metadata.js";
 import { SecretInputSchema } from "./zod-schema.secret-input.js";
 import { configUiMetadata, sensitive } from "./zod-schema.sensitive.js";
@@ -21,11 +22,9 @@ export const DatabaseConfigSchema = z
         state: DatabaseFamilySchema,
         agent: z
           .strictObject({
-            engine: DatabaseFamilyEngineSchema.refine((engine) => engine === "sqlite", {
-              message: "Agent PostgreSQL requires the agent routing support in R4; select sqlite.",
-            }).register(configUiMetadata, {
+            engine: DatabaseFamilyEngineSchema.clone().register(configUiMetadata, {
               label: "Agent Database Engine (Experimental)",
-              help: "Agent databases currently support sqlite only. Explicit postgres is rejected even when the default selects PostgreSQL.",
+              help: "Agent databases support sqlite in mixed-engine installations. PostgreSQL agents require PostgreSQL for every configurable family until mixed-pair conformance is available.",
             }),
           })
           .optional(),
@@ -36,7 +35,7 @@ export const DatabaseConfigSchema = z
       .optional()
       .register(configUiMetadata, {
         label: "Family Database Engines (Experimental)",
-        help: "Optional engine overrides for state, agent, workboard, logbook, and team-reports. Each override requires engine. Agent PostgreSQL is unavailable; local safety journals are not configurable. All PostgreSQL families share database.postgres.",
+        help: "Optional engine overrides for state, agent, workboard, logbook, and team-reports. Each override requires engine. PostgreSQL agents require PostgreSQL for every configurable family; local safety journals are not configurable. All PostgreSQL families share database.postgres.",
       }),
     postgres: z
       .strictObject({
@@ -64,6 +63,12 @@ export const DatabaseConfigSchema = z
         label: "PostgreSQL (Experimental)",
         help: "Experimental PostgreSQL connection and schema naming. Back up each PostgreSQL store schema together with its SQLite anchor.",
       }),
+  })
+  .superRefine((database, ctx) => {
+    const message = getMixedPostgresAgentError({ database });
+    if (message) {
+      ctx.addIssue({ code: "custom", path: ["families", "agent", "engine"], message });
+    }
   })
   .optional()
   .register(configUiMetadata, {

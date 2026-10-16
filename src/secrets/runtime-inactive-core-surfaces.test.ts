@@ -30,6 +30,7 @@ describe("secrets runtime snapshot inactive core surfaces", () => {
         engine: "postgres",
         families: {
           state: { engine: "sqlite" },
+          agent: { engine: "sqlite" },
           workboard: { engine: "sqlite" },
           logbook: { engine: "sqlite" },
           "team-reports": { engine: "sqlite" },

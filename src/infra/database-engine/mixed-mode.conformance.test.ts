@@ -200,6 +200,7 @@ describe.skipIf(!connection)("mixed-mode boot conformance", () => {
           engine: "sqlite",
           families: {
             state: { engine: "postgres" },
+            agent: { engine: "postgres" },
             workboard: { engine: "postgres" },
             logbook: { engine: "postgres" },
             "team-reports": { engine: "postgres" },
