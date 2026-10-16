@@ -456,10 +456,9 @@ test("child sessions use an empty .git workspace without Git features", async ()
   const child = await createChild({ worktree: false });
   expect(child.ok, JSON.stringify(child.error)).toBe(true);
   expect(child.payload?.entry.worktree).toBeUndefined();
-  expect(child.payload?.entry.pendingWorktree).toBeUndefined();
-  expect(
-    loadSessionEntry({ agentId: "main", sessionKey: child.payload!.key, storePath }),
-  ).toMatchObject({ parentSessionKey: parentKey });
+  const stored = loadSessionEntry({ agentId: "main", sessionKey: child.payload!.key, storePath });
+  expect(stored).toMatchObject({ parentSessionKey: parentKey });
+  expect(stored?.pendingWorktree).toBeUndefined();
   expect(await fs.readdir(metadata)).toEqual([]);
 
   await expect(managedWorktrees.resolveRepositoryPaths(workspace)).rejects.toThrow(
