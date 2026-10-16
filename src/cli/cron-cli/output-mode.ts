@@ -29,6 +29,7 @@ const CRON_OUTPUT_COMMANDS = {
   disable: [],
   get: [],
   runs: [],
+  history: [],
   run: [],
   edit: [],
   scratch: [],
