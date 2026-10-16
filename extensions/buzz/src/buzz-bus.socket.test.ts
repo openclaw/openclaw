@@ -77,12 +77,27 @@ async function startBus(
   return cleanupBus;
 }
 
-it("delivers live messages on the room-scoped roster subscription", async () => {
-  const bus = await startBus();
-  fixture.sendMessage("live after roster subscription");
-  await vi.waitFor(() => expect(messages).toEqual(["live after roster subscription"]));
-  const initial = fixture.events.find((event) => event.kind === 39002)!;
-  const roster = {
+function member(bus: BuzzBus, id = fixture.senderPublicKey) {
+  return bus.directory
+    .listGroupMembers({ groupId: fixture.roomId })
+    .find((entry) => entry.id === id);
+}
+
+function membershipChange(
+  type: "member_joined" | "member_removed",
+  createdAt: number,
+  target = fixture.senderPublicKey,
+) {
+  return fixture.signRelay({
+    kind: 40099,
+    created_at: createdAt,
+    content: JSON.stringify({ type, target }),
+    tags: [["h", fixture.roomId]],
+  });
+}
+
+function promotedRoster(initial: (typeof fixture.events)[number]) {
+  return {
     kind: 39002,
     created_at: initial.created_at + 1,
     content: "",
@@ -92,6 +107,14 @@ it("delivers live messages on the room-scoped roster subscription", async () => 
         : tag,
     ),
   };
+}
+
+it("delivers live messages on the room-scoped roster subscription", async () => {
+  const bus = await startBus();
+  fixture.sendMessage("live after roster subscription");
+  await vi.waitFor(() => expect(messages).toEqual(["live after roster subscription"]));
+  const initial = fixture.events.find((event) => event.kind === 39002)!;
+  const roster = promotedRoster(initial);
   const valid = fixture.signRelay(roster);
   fixture.sendUnchecked({ ...valid, sig: "0".repeat(128) });
   fixture.sendUnchecked(
@@ -101,19 +124,9 @@ it("delivers live messages on the room-scoped roster subscription", async () => 
     }),
   );
   await bus.sendText({ channelId: fixture.roomId, text: "invalid roster ordering barrier" });
-  expect(
-    bus.directory
-      .listGroupMembers({ groupId: fixture.roomId })
-      .find((member) => member.id === fixture.senderPublicKey)?.raw,
-  ).toMatchObject({ role: "member" });
+  expect(member(bus)?.raw).toMatchObject({ role: "member" });
   fixture.broadcast(valid);
-  await vi.waitFor(() =>
-    expect(
-      bus.directory
-        .listGroupMembers({ groupId: fixture.roomId })
-        .find((member) => member.id === fixture.senderPublicKey)?.raw,
-    ).toMatchObject({ role: "bot" }),
-  );
+  await vi.waitFor(() => expect(member(bus)?.raw).toMatchObject({ role: "bot" }));
 });
 
 it("keeps removal denied through stale snapshots and accepts a confirmed rejoin", async () => {
@@ -121,34 +134,16 @@ it("keeps removal denied through stale snapshots and accepts a confirmed rejoin"
   const bus = await startBus({ onFatalError: (error) => fatal.push(error) });
   const initial = fixture.events.find((event) => event.kind === 39002)!;
   const query = fixture.pauseNextMembershipQuery();
-  fixture.broadcast(
-    fixture.signRelay({
-      kind: 40099,
-      created_at: Math.floor(Date.now() / 1000),
-      content: JSON.stringify({ type: "member_removed", target: fixture.senderPublicKey }),
-      tags: [["h", fixture.roomId]],
-    }),
-  );
+  fixture.broadcast(membershipChange("member_removed", Math.floor(Date.now() / 1000)));
   await query.started;
   fixture.broadcast(initial);
   fixture.sendMessage("removed sender");
   query.release();
   await bus.sendText({ channelId: fixture.roomId, text: "removal ordering barrier" });
   expect(messages).toEqual([]);
-  expect(
-    bus.directory
-      .listGroupMembers({ groupId: fixture.roomId })
-      .some((entry) => entry.id === fixture.senderPublicKey),
-  ).toBe(false);
+  expect(member(bus)).toBeUndefined();
 
-  fixture.broadcast(
-    fixture.signRelay({
-      kind: 40099,
-      created_at: initial.created_at + 1,
-      content: JSON.stringify({ type: "member_joined", target: fixture.senderPublicKey }),
-      tags: [["h", fixture.roomId]],
-    }),
-  );
+  fixture.broadcast(membershipChange("member_joined", initial.created_at + 1));
   fixture.broadcast(
     fixture.signRelay({
       kind: 39002,
@@ -157,15 +152,7 @@ it("keeps removal denied through stale snapshots and accepts a confirmed rejoin"
       tags: initial.tags,
     }),
   );
-  await vi.waitFor(
-    () =>
-      expect(
-        bus.directory
-          .listGroupMembers({ groupId: fixture.roomId })
-          .some((entry) => entry.id === fixture.senderPublicKey),
-      ).toBe(true),
-    { timeout: 6000 },
-  );
+  await vi.waitFor(() => expect(member(bus)).toBeDefined(), { timeout: 6000 });
   fixture.sendMessage("confirmed rejoin");
   await vi.waitFor(() => expect(messages).toEqual(["confirmed rejoin"]));
   expect(fatal).toEqual([]);
@@ -277,26 +264,15 @@ it("accepts a startup bot-join notification already reflected in the signed rost
   const initial = fixture.events.find((event) => event.kind === 39002)!;
   vi.spyOn(Date, "now").mockReturnValue(initial.created_at * 1000);
   fixture.events.push(
-    fixture.signRelay({
-      kind: 40099,
-      created_at: Math.floor(Date.now() / 1000),
-      content: JSON.stringify({ type: "member_joined", target: fixture.botPublicKey }),
-      tags: [["h", fixture.roomId]],
-    }),
+    membershipChange("member_joined", Math.floor(Date.now() / 1000), fixture.botPublicKey),
   );
   const fatal: Error[] = [];
   const bus = await startBus({ onFatalError: (error) => fatal.push(error) });
   // Restoring the directory proves the pending self-membership refresh settled,
   // rather than silently retrying until the existing bounded refresh times out.
-  await vi.waitFor(
-    () =>
-      expect(
-        bus.directory
-          .listGroupMembers({ groupId: fixture.roomId })
-          .some((entry) => entry.id === fixture.botPublicKey),
-      ).toBe(true),
-    { timeout: 6500 },
-  );
+  await vi.waitFor(() => expect(member(bus, fixture.botPublicKey)).toBeDefined(), {
+    timeout: 6500,
+  });
   expect(fatal).toEqual([]);
 }, 10000);
 
@@ -329,40 +305,16 @@ it("keeps explicit presence rejection nonfatal over a real socket", async () => 
 it("keeps the signed role when an older query completes after the push", async () => {
   const bus = await startBus();
   const initial = fixture.events.find((event) => event.kind === 39002)!;
-  const change = fixture.signRelay({
-    kind: 40099,
-    created_at: Math.floor(Date.now() / 1000),
-    content: JSON.stringify({ type: "member_joined", target: fixture.senderPublicKey }),
-    tags: [["h", fixture.roomId]],
-  });
+  const change = membershipChange("member_joined", Math.floor(Date.now() / 1000));
   const query = fixture.pauseNextMembershipQuery();
   fixture.broadcast(change);
-  const updated = fixture.signRelay({
-    kind: 39002,
-    created_at: initial.created_at + 1,
-    content: "",
-    tags: initial.tags.map((tag) =>
-      tag[0] === "p" && tag[1] === fixture.senderPublicKey
-        ? ["p", fixture.senderPublicKey, "", "bot"]
-        : tag,
-    ),
-  });
+  const updated = fixture.signRelay(promotedRoster(initial));
   await query.started;
   fixture.broadcast(updated);
   fixture.broadcast(change);
-  await vi.waitFor(() =>
-    expect(
-      bus.directory
-        .listGroupMembers({ groupId: fixture.roomId })
-        .find((member) => member.id === fixture.senderPublicKey)?.raw,
-    ).toMatchObject({ role: "bot" }),
-  );
+  await vi.waitFor(() => expect(member(bus)?.raw).toMatchObject({ role: "bot" }));
   query.release();
   // A publish acknowledgement follows the old query frames on this socket.
   await bus.sendText({ channelId: fixture.roomId, text: "query ordering barrier" });
-  expect(
-    bus.directory
-      .listGroupMembers({ groupId: fixture.roomId })
-      .find((member) => member.id === fixture.senderPublicKey)?.raw,
-  ).toMatchObject({ role: "bot" });
+  expect(member(bus)?.raw).toMatchObject({ role: "bot" });
 });

@@ -2,7 +2,7 @@ import { finalizeEvent, getPublicKey, verifyEvent, type Event } from "nostr-tool
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("nostr-tools", async (importOriginal) => {
   const { mockBuzzRelay } = await import("./buzz-bus.test-helpers.js");
@@ -23,16 +23,33 @@ const {
   CHANNEL_ID,
   BOT_PUBLIC_KEY,
   SENDER_PUBLIC_KEY,
-  RELAY_PUBLIC_KEY,
   startTestBus,
   sendTestTextOneShot,
-  signSenderEvent,
-  subscriptionIncludesKind,
+  senderMessage,
+  relayEvent,
+  findSubscription,
 } = useBuzzBusLifecycleFixture();
 
 function abortReasonAsError(signal: AbortSignal | undefined): Error {
   const reason = signal?.reason;
   return reason instanceof Error ? reason : new Error("aborted", { cause: reason });
+}
+
+function stallDiscovery() {
+  let signal: AbortSignal | undefined;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof fetch>(
+      async (_input, init) =>
+        await new Promise<Response>((_resolve, reject) => {
+          signal = init?.signal ?? undefined;
+          signal?.addEventListener("abort", () => reject(abortReasonAsError(signal)), {
+            once: true,
+          });
+        }),
+    ),
+  );
+  return () => signal;
 }
 
 describe("Buzz bus lifecycle", () => {
@@ -129,7 +146,7 @@ describe("Buzz bus lifecycle", () => {
 
   it("joins the active presence publish before bus close settles", async () => {
     vi.useFakeTimers();
-    relayMocks.auth.mockResolvedValue("ok");
+
     const publication = createDeferred<string>();
     relayMocks.publish.mockImplementation((event) =>
       event.kind === 20_001 ? publication.promise : Promise.resolve(""),
@@ -156,57 +173,32 @@ describe("Buzz bus lifecycle", () => {
   });
 
   it("closes the relay and aborts NIP-11 discovery when authentication fails", async () => {
-    let fetchSignal: AbortSignal | undefined;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(
-        async (_input, init) =>
-          await new Promise<Response>((_resolve, reject) => {
-            fetchSignal = init?.signal ?? undefined;
-            fetchSignal?.addEventListener("abort", () => reject(abortReasonAsError(fetchSignal)), {
-              once: true,
-            });
-          }),
-      ),
-    );
+    relayMocks.auth.mockRejectedValue(new Error("auth rejected"));
+    const fetchSignal = stallDiscovery();
 
     await expect(startTestBus()).rejects.toThrow("auth rejected");
 
     expect(relayMocks.connect).toHaveBeenCalledOnce();
     expect(relayMocks.close).toHaveBeenCalledOnce();
-    expect(fetchSignal?.aborted).toBe(true);
+    expect(fetchSignal()?.aborted).toBe(true);
   });
 
   it("bounds stalled Buzz relay session setup", async () => {
     vi.useFakeTimers();
-    relayMocks.auth.mockResolvedValue("ok");
-    let fetchSignal: AbortSignal | undefined;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(
-        async (_input, init) =>
-          await new Promise<Response>((_resolve, reject) => {
-            fetchSignal = init?.signal ?? undefined;
-            fetchSignal?.addEventListener("abort", () => reject(abortReasonAsError(fetchSignal)), {
-              once: true,
-            });
-          }),
-      ),
-    );
+
+    const fetchSignal = stallDiscovery();
     const start = startTestBus();
     const rejection = expect(start).rejects.toThrow("Timed out setting up Buzz relay session");
 
     await vi.advanceTimersByTimeAsync(20_000);
     await rejection;
 
-    expect(fetchSignal?.aborted).toBe(true);
+    expect(fetchSignal()?.aborted).toBe(true);
     expect(relayMocks.close).toHaveBeenCalledOnce();
     vi.useRealTimers();
   });
 
   it("publishes and closes a standalone authenticated send", async () => {
-    relayMocks.auth.mockResolvedValue("ok");
-
     const messageId = await sendTestTextOneShot({
       threadId: "root-id",
       replyToId: "parent-id",
@@ -227,7 +219,6 @@ describe("Buzz bus lifecycle", () => {
   });
 
   it("sends room and thread typing without waiting for a relay acknowledgement", async () => {
-    relayMocks.auth.mockResolvedValue("ok");
     const bus = await startTestBus();
 
     await bus.sendTyping({
@@ -267,7 +258,6 @@ describe("Buzz bus lifecycle", () => {
   it.for(["all", "off"] as const)(
     "signs %s-mode replies and typing without changing inbound threads",
     async (replyToMode, { signal }) => {
-      relayMocks.auth.mockResolvedValue("ok");
       const runtime = createPluginRuntimeMock();
       setBuzzRuntime(runtime);
       const account: ResolvedBuzzAccount = {
@@ -311,14 +301,10 @@ describe("Buzz bus lifecycle", () => {
       signal.addEventListener("abort", onAbort, { once: true });
       try {
         const rootId = "a".repeat(64);
-        const messageSubscription = relayMocks.subscriptions.find((entry) =>
-          subscriptionIncludesKind(entry, 9),
-        );
+        const messageSubscription = findSubscription(9);
         for (const [index, parentId] of ["b".repeat(64), undefined].entries()) {
-          const inbound = signSenderEvent({
-            kind: 9,
+          const inbound = senderMessage(`follow-up ${index + 1}`, {
             created_at: 1_700_000_000 + index,
-            content: `follow-up ${index + 1}`,
             tags: [
               ["h", CHANNEL_ID],
               ...(parentId
@@ -370,7 +356,6 @@ describe("Buzz bus lifecycle", () => {
   );
 
   it("dispatches room history without buffering behind another room EOSE", async () => {
-    relayMocks.auth.mockResolvedValue("ok");
     relayMocks.membershipEvents.push({
       ...relayMocks.membershipEvents[0]!,
       id: "membership-2",
@@ -380,14 +365,7 @@ describe("Buzz bus lifecycle", () => {
         ["p", SENDER_PUBLIC_KEY, "", "member"],
       ],
     });
-    relayMocks.roomHistoryEvents = [
-      signSenderEvent({
-        kind: 9,
-        created_at: 1_700_000_000,
-        content: "historical message",
-        tags: [["h", CHANNEL_ID]],
-      }),
-    ];
+    relayMocks.roomHistoryEvents = [senderMessage("historical message")];
     relayMocks.stallRoomEoseChannelId = SECOND_CHANNEL_ID;
     const onMessage = vi.fn(async (_message: BuzzInboundMessage) => {});
 
@@ -406,7 +384,6 @@ describe("Buzz bus lifecycle", () => {
   });
 
   it("bounds replay dispatch when a relay ignores the historical limit", async () => {
-    relayMocks.auth.mockResolvedValue("ok");
     relayMocks.roomHistoryEvents = Array.from({ length: 1_033 }, (_, index) => ({
       id: index.toString(16).padStart(64, "0"),
       kind: 9,
@@ -435,7 +412,6 @@ describe("Buzz bus lifecycle", () => {
   it.each(["queue", "dedupe claim"] as const)(
     "rejects revoked membership across the %s",
     async (boundary) => {
-      relayMocks.auth.mockResolvedValue("ok");
       const remainingSecret = Uint8Array.from(Buffer.from("02".repeat(32), "hex"));
       const remainingPublicKey = getPublicKey(remainingSecret);
       relayMocks.membershipEvents[0]!.tags.push(["p", remainingPublicKey, "", "member"]);
@@ -454,40 +430,27 @@ describe("Buzz bus lifecycle", () => {
         },
         onMessageError,
       });
-      const subscription = relayMocks.subscriptions.find((entry) =>
-        subscriptionIncludesKind(entry, 9),
-      );
+      const subscription = findSubscription(9);
       try {
         const runningCount = boundary === "queue" ? 8 : 0;
         for (let index = 0; index < runningCount; index += 1) {
           subscription?.handlers.onevent(
-            signSenderEvent({
-              kind: 9,
-              created_at: 1_700_000_000 + index,
-              content: `running-${index}`,
-              tags: [["h", CHANNEL_ID]],
-            }),
+            senderMessage(`running-${index}`, { created_at: 1_700_000_000 + index }),
           );
         }
         await vi.waitFor(() => expect(handled).toHaveLength(runningCount));
         subscription?.handlers.onevent(
-          signSenderEvent({
-            kind: 9,
-            created_at: 1_700_000_010,
-            content: "queued-before-removal",
-            tags: [["h", CHANNEL_ID]],
-          }),
+          senderMessage("queued-before-removal", { created_at: 1_700_000_010 }),
         );
         const removeSender = () =>
-          subscription?.handlers.onevent({
-            id: "remove-queued-sender",
-            kind: 40_099,
-            pubkey: RELAY_PUBLIC_KEY,
-            created_at: 1_700_000_011,
-            content: JSON.stringify({ type: "member_removed", target: SENDER_PUBLIC_KEY }),
-            sig: "e".repeat(128),
-            tags: [["h", CHANNEL_ID]],
-          });
+          subscription?.handlers.onevent(
+            relayEvent(40_099, {
+              id: "remove-queued-sender",
+              created_at: 1_700_000_011,
+              content: JSON.stringify({ type: "member_removed", target: SENDER_PUBLIC_KEY }),
+              tags: [["h", CHANNEL_ID]],
+            }),
+          );
         if (boundary === "dedupe claim") {
           queueMicrotask(removeSender);
         } else {
@@ -518,21 +481,15 @@ describe("Buzz bus lifecycle", () => {
   );
 
   it("refreshes relay-signed room metadata after a live edit", async () => {
-    relayMocks.auth.mockResolvedValue("ok");
     const onRoomDirectoryChanged = vi.fn();
     relayMocks.roomMetadataEvents = [
-      {
+      relayEvent(39_000, {
         id: "room-metadata-1",
-        kind: 39_000,
-        pubkey: "f".repeat(64),
-        created_at: 1_700_000_000,
-        content: "",
-        sig: "e".repeat(128),
         tags: [
           ["d", CHANNEL_ID],
           ["name", "Engineering"],
         ],
-      },
+      }),
     ];
     const bus = await startTestBus({
       onRoomDirectoryChanged,
@@ -550,20 +507,18 @@ describe("Buzz bus lifecycle", () => {
         ],
       },
     ];
-    relayMocks.subscriptions
-      .find((entry) => subscriptionIncludesKind(entry, 9_002))
-      ?.handlers.onevent({
-        id: "edit-metadata-1",
-        kind: 9_002,
-        pubkey: SENDER_PUBLIC_KEY,
-        created_at: 1_700_000_001,
-        content: "",
-        sig: "e".repeat(128),
-        tags: [
-          ["h", CHANNEL_ID],
-          ["name", "Untrusted event name"],
-        ],
-      });
+    findSubscription(9_002)?.handlers.onevent({
+      id: "edit-metadata-1",
+      kind: 9_002,
+      pubkey: SENDER_PUBLIC_KEY,
+      created_at: 1_700_000_001,
+      content: "",
+      sig: "e".repeat(128),
+      tags: [
+        ["h", CHANNEL_ID],
+        ["name", "Untrusted event name"],
+      ],
+    });
 
     await vi.waitFor(() => expect(bus.directory.listGroups({})[0]?.name).toBe("Platform"));
     expect(onRoomDirectoryChanged).toHaveBeenCalledOnce();
@@ -571,20 +526,14 @@ describe("Buzz bus lifecycle", () => {
   });
 
   it("refreshes room metadata edits replayed during startup", async () => {
-    relayMocks.auth.mockResolvedValue("ok");
     relayMocks.roomMetadataEvents = [
-      {
+      relayEvent(39_000, {
         id: "room-metadata-active",
-        kind: 39_000,
-        pubkey: RELAY_PUBLIC_KEY,
-        created_at: 1_700_000_000,
-        content: "",
-        sig: "e".repeat(128),
         tags: [
           ["d", CHANNEL_ID],
           ["name", "Engineering"],
         ],
-      },
+      }),
     ];
     relayMocks.roomHistoryEvents = [
       {
@@ -599,19 +548,15 @@ describe("Buzz bus lifecycle", () => {
     ];
     relayMocks.beforeRoomHistoryEvent = () => {
       relayMocks.roomMetadataEvents = [
-        {
+        relayEvent(39_000, {
           id: "room-metadata-archived",
-          kind: 39_000,
-          pubkey: RELAY_PUBLIC_KEY,
           created_at: 1_700_000_001,
-          content: "",
-          sig: "e".repeat(128),
           tags: [
             ["d", CHANNEL_ID],
             ["name", "Engineering"],
             ["archived", "true"],
           ],
-        },
+        }),
       ];
     };
     const onFatalError = vi.fn();

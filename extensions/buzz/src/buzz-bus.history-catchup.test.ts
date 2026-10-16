@@ -184,6 +184,34 @@ async function waitForSettled(predicate: () => boolean): Promise<void> {
   }
 }
 
+async function collectHistory(count: number, reportErrors = false) {
+  const received: string[] = [];
+  const historyErrors: string[] = [];
+  const bus = await startHistoryBus({
+    onMessage: async (message) => {
+      received.push(message.text);
+    },
+    ...(reportErrors
+      ? {
+          onHistoryError: (error: Error) => {
+            historyErrors.push(error.message);
+          },
+        }
+      : {}),
+  });
+  await waitForSettled(() => received.length >= count);
+  await bus.close();
+  return { received, historyErrors };
+}
+
+function startFailingHistoryBus(fatalErrors: string[]) {
+  return startHistoryBus({
+    onFatalError: (error) => {
+      fatalErrors.push(error.message);
+    },
+  });
+}
+
 describe("Buzz reconnect history catch-up", () => {
   beforeEach(() => {
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -244,15 +272,7 @@ describe("Buzz reconnect history catch-up", () => {
   it("pages a backlog spanning several history windows", async () => {
     const backlogSize = 250;
     seedOfflineBacklog(backlogSize, (index) => BASE_TIMESTAMP + index);
-    const received: string[] = [];
-
-    const bus = await startHistoryBus({
-      onMessage: async (message) => {
-        received.push(message.text);
-      },
-    });
-    await waitForSettled(() => received.length >= backlogSize);
-    await bus.close();
+    const { received } = await collectHistory(backlogSize);
 
     expect(new Set(received).size).toBe(backlogSize);
     expect(received).toContain("offline-message-000");
@@ -263,19 +283,7 @@ describe("Buzz reconnect history catch-up", () => {
 
   it("drains a backlog that exceeds one page at the same timestamp", async () => {
     seedOfflineBacklog(HISTORY_LIMIT + 1, () => BASE_TIMESTAMP);
-    const historyErrors: string[] = [];
-    const received: string[] = [];
-
-    const bus = await startHistoryBus({
-      onMessage: async (message) => {
-        received.push(message.text);
-      },
-      onHistoryError: (error) => {
-        historyErrors.push(error.message);
-      },
-    });
-    await waitForSettled(() => received.length >= HISTORY_LIMIT + 1);
-    await bus.close();
+    const { received, historyErrors } = await collectHistory(HISTORY_LIMIT + 1, true);
 
     expect(historyErrors).toEqual([]);
     expect(new Set(received).size).toBe(HISTORY_LIMIT + 1);
@@ -287,19 +295,7 @@ describe("Buzz reconnect history catch-up", () => {
     const backlogSize = 1_300;
     seedOfflineBacklog(backlogSize, (index) => BASE_TIMESTAMP + index);
     relayMocks.overReturnHistoryPages = true;
-    const historyErrors: string[] = [];
-    const received: string[] = [];
-
-    const bus = await startHistoryBus({
-      onMessage: async (message) => {
-        received.push(message.text);
-      },
-      onHistoryError: (error) => {
-        historyErrors.push(error.message);
-      },
-    });
-    await waitForSettled(() => received.length >= backlogSize);
-    await bus.close();
+    const { received, historyErrors } = await collectHistory(backlogSize, true);
 
     expect(historyErrors).toEqual([]);
     expect(new Set(received).size).toBe(backlogSize);
@@ -315,12 +311,7 @@ describe("Buzz reconnect history catch-up", () => {
     relayMocks.stallHistoryPages = true;
     const fatalErrors: string[] = [];
 
-    const bus = await startHistoryBus({
-      onMessage: async () => {},
-      onFatalError: (error) => {
-        fatalErrors.push(error.message);
-      },
-    });
+    const bus = await startFailingHistoryBus(fatalErrors);
     try {
       await vi.advanceTimersByTimeAsync(10_000);
       expect(fatalErrors).toEqual([`Timed out loading Buzz room history for ${CHANNEL_ID}`]);
@@ -336,12 +327,7 @@ describe("Buzz reconnect history catch-up", () => {
     relayMocks.closeHistoryPagesReason = "relay rejected subscription";
     const fatalErrors: string[] = [];
 
-    const bus = await startHistoryBus({
-      onMessage: async () => {},
-      onFatalError: (error) => {
-        fatalErrors.push(error.message);
-      },
-    });
+    const bus = await startFailingHistoryBus(fatalErrors);
     await waitForSettled(() => fatalErrors.length > 0);
     await bus.close();
 

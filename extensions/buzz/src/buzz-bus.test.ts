@@ -28,11 +28,13 @@ const {
   CHANNEL_ID,
   BOT_PUBLIC_KEY,
   SENDER_PUBLIC_KEY,
-  RELAY_PUBLIC_KEY,
   startTestBus,
   sendTestTextOneShot,
   signSenderEvent,
-  subscriptionIncludesKind,
+  relayEvent,
+  senderMessage,
+  hasSubscription,
+  findSubscription,
 } = useBuzzBusLifecycleFixture();
 
 const BUZZ_RICH_MESSAGE_KIND = 40_002;
@@ -200,10 +202,8 @@ describe("Buzz mention delivery", () => {
         ["p", SENDER_PUBLIC_KEY],
       ],
     });
-    expect(relayMocks.subscriptions.some((entry) => subscriptionIncludesKind(entry, 39002))).toBe(
-      true,
-    );
-    expect(relayMocks.subscriptions.some((entry) => subscriptionIncludesKind(entry, 0))).toBe(true);
+    expect(hasSubscription(39002)).toBe(true);
+    expect(hasSubscription(0)).toBe(true);
     expect(relayMocks.close).toHaveBeenCalledOnce();
   });
 
@@ -219,12 +219,8 @@ describe("Buzz mention delivery", () => {
         ["p", SENDER_PUBLIC_KEY],
       ],
     });
-    expect(relayMocks.subscriptions.some((entry) => subscriptionIncludesKind(entry, 39002))).toBe(
-      true,
-    );
-    expect(relayMocks.subscriptions.some((entry) => subscriptionIncludesKind(entry, 0))).toBe(
-      false,
-    );
+    expect(hasSubscription(39002)).toBe(true);
+    expect(hasSubscription(0)).toBe(false);
     expect(relayMocks.close).toHaveBeenCalledOnce();
   });
 
@@ -245,17 +241,14 @@ describe("Buzz mention delivery", () => {
 
     await bus.sendText({ channelId: CHANNEL_ID, text: explicitSender });
     relayMocks.publish.mockClear();
-    relayMocks.subscriptions
-      .find((entry) => subscriptionIncludesKind(entry, 40_099))
-      ?.handlers.onevent({
+    findSubscription(40_099)?.handlers.onevent(
+      relayEvent(40_099, {
         id: "member-removed-1",
-        kind: 40_099,
-        pubkey: RELAY_PUBLIC_KEY,
         created_at: 1_700_000_001,
         content: JSON.stringify({ type: "member_removed", target: SENDER_PUBLIC_KEY }),
-        sig: "e".repeat(128),
         tags: [["h", CHANNEL_ID]],
-      });
+      }),
+    );
 
     expect(bus.directory.mentionMembers(CHANNEL_ID)).toEqual([
       expect.objectContaining({ publicKey: BOT_PUBLIC_KEY }),
@@ -279,42 +272,32 @@ describe("Buzz archived room lifecycle", () => {
 
   it("rebuilds room subscriptions when an archived room becomes active", async () => {
     relayMocks.roomMetadataEvents = [
-      {
+      relayEvent(39_000, {
         id: "room-metadata-archived",
-        kind: 39_000,
-        pubkey: RELAY_PUBLIC_KEY,
-        created_at: 1_700_000_000,
-        content: "",
-        sig: "e".repeat(128),
         tags: [
           ["d", CHANNEL_ID],
           ["archived", "true"],
         ],
-      },
+      }),
     ];
     const onFatalError = vi.fn();
     const bus = await startTestBus({
       onFatalError,
     });
-    expect(relayMocks.subscriptions.some((entry) => subscriptionIncludesKind(entry, 9))).toBe(
-      false,
-    );
+    expect(hasSubscription(9)).toBe(false);
     expect(bus.directory.activeRoomIds()).toEqual([]);
     expect(bus.directory.listGroups({})).toEqual([]);
-    relayMocks.subscriptions
-      .find((entry) => subscriptionIncludesKind(entry, BUZZ_MEMBER_ADDED_NOTIFICATION_KIND))
-      ?.handlers.onevent({
+    findSubscription(BUZZ_MEMBER_ADDED_NOTIFICATION_KIND)?.handlers.onevent(
+      relayEvent(BUZZ_MEMBER_ADDED_NOTIFICATION_KIND, {
         id: "restore-room",
-        kind: BUZZ_MEMBER_ADDED_NOTIFICATION_KIND,
-        pubkey: RELAY_PUBLIC_KEY,
         created_at: 1_700_000_001,
         content: JSON.stringify({ type: "member_added", channel_id: CHANNEL_ID }),
-        sig: "e".repeat(128),
         tags: [
           ["p", BOT_PUBLIC_KEY],
           ["h", CHANNEL_ID],
         ],
-      });
+      }),
+    );
 
     expect(onFatalError).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -414,25 +397,14 @@ describe("Buzz profile lifecycle", () => {
         if (gatedKind !== undefined) {
           await vi.waitFor(() => expect(profileKinds()).toContain(gatedKind));
         }
-        const messageSubscription = relayMocks.subscriptions.find((entry) =>
-          subscriptionIncludesKind(entry, 9),
-        );
+        const messageSubscription = findSubscription(9);
         if (!messageSubscription) {
           throw new Error("Buzz live room subscription is missing");
         }
-        messageSubscription.handlers.onevent(
-          signSenderEvent({
-            kind: 9,
-            created_at: 1_700_000_000,
-            content: "hold admitted cleanup",
-            tags: [["h", CHANNEL_ID]],
-          }),
-        );
+        messageSubscription.handlers.onevent(senderMessage("hold admitted cleanup"));
         await vi.waitFor(() => expect(onMessage).toHaveBeenCalledOnce());
         if (phase === "query EOSE") {
-          const query = relayMocks.subscriptions.find((entry) =>
-            subscriptionIncludesKind(entry, 10_100),
-          );
+          const query = findSubscription(10_100);
           if (!query?.handlers.oneose) {
             throw new Error("Buzz profile query is missing its EOSE handler");
           }
@@ -561,9 +533,7 @@ describe("Buzz bot-owned thread mentions", () => {
         }
       },
     });
-    const roomSubscription = relayMocks.subscriptions.find((entry) =>
-      subscriptionIncludesKind(entry, 9),
-    );
+    const roomSubscription = findSubscription(9);
     expect(roomSubscription).toBeDefined();
     const root = (content: string, tags: string[][] = [["h", CHANNEL_ID]]) =>
       structuredClone(
@@ -573,19 +543,14 @@ describe("Buzz bot-owned thread mentions", () => {
         ),
       );
     const botRoot = root("bot root");
-    const foreignRoot = signSenderEvent({
-      kind: 9,
-      created_at: 1_700_000_000,
-      content: "human root",
-      tags: [["h", CHANNEL_ID]],
-    });
+    const foreignRoot = senderMessage("human root");
     const wrongRoomRoot = root("other room", [["h", "45cedd86-f853-45b7-8fea-812b7fe63d7a"]]);
     const botReply = root("reply inside human thread", [
       ["h", CHANNEL_ID],
       ["e", foreignRoot.id, "", "reply"],
     ]);
     const invalidRoot = { ...root("invalid signature"), sig: "0".repeat(128) };
-    const cases: Array<{
+    type ThreadCase = {
       name: string;
       root?: Event;
       threadId?: string;
@@ -593,84 +558,42 @@ describe("Buzz bot-owned thread mentions", () => {
       requireMentionInBotThreads?: boolean;
       denySender?: boolean;
       dispatches: boolean;
-    }> = [
-      { name: "unset", root: botRoot, threadId: botRoot.id, dispatches: false },
-      {
-        name: "bot-owned",
-        root: botRoot,
-        threadId: botRoot.id,
-        requireMentionInBotThreads: false,
-        dispatches: true,
-      },
-      {
-        name: "cached root",
-        threadId: botRoot.id,
-        requireMentionInBotThreads: false,
-        dispatches: true,
-      },
-      {
-        name: "forced mention",
+    };
+    const threadCase = (
+      name: string,
+      rootEvent?: Event,
+      overrides: Partial<ThreadCase> = {},
+    ): ThreadCase => ({
+      name,
+      root: rootEvent,
+      threadId: rootEvent?.id,
+      requireMentionInBotThreads: false,
+      dispatches: false,
+      ...overrides,
+    });
+    const cases = [
+      threadCase("unset", botRoot, { requireMentionInBotThreads: undefined }),
+      threadCase("bot-owned", botRoot, { dispatches: true }),
+      threadCase("cached root", undefined, { threadId: botRoot.id, dispatches: true }),
+      threadCase("forced mention", undefined, {
         threadId: botRoot.id,
         requireMention: false,
         requireMentionInBotThreads: true,
-        dispatches: false,
-      },
-      {
-        name: "foreign root",
-        root: foreignRoot,
-        threadId: foreignRoot.id,
-        requireMentionInBotThreads: false,
-        dispatches: false,
-      },
-      {
-        name: "unknown root",
-        threadId: "f".repeat(64),
-        requireMentionInBotThreads: false,
-        dispatches: false,
-      },
-      {
-        name: "wrong returned ID",
-        root: botRoot,
-        threadId: "e".repeat(64),
-        requireMentionInBotThreads: false,
-        dispatches: false,
-      },
-      {
-        name: "other room",
-        root: wrongRoomRoot,
-        threadId: wrongRoomRoot.id,
-        requireMentionInBotThreads: false,
-        dispatches: false,
-      },
-      {
-        name: "bot reply is not a root",
-        root: botReply,
-        threadId: botReply.id,
-        requireMentionInBotThreads: false,
-        dispatches: false,
-      },
-      {
-        name: "invalid signature",
-        root: invalidRoot,
-        threadId: invalidRoot.id,
-        requireMentionInBotThreads: false,
-        dispatches: false,
-      },
-      {
-        name: "sender denied",
-        threadId: botRoot.id,
-        requireMentionInBotThreads: false,
-        denySender: true,
-        dispatches: false,
-      },
-      { name: "top-level message", requireMentionInBotThreads: false, dispatches: false },
-      {
-        name: "unknown owner keeps open room",
+      }),
+      threadCase("foreign root", foreignRoot),
+      threadCase("unknown root", undefined, { threadId: "f".repeat(64) }),
+      threadCase("wrong returned ID", botRoot, { threadId: "e".repeat(64) }),
+      threadCase("other room", wrongRoomRoot),
+      threadCase("bot reply is not a root", botReply),
+      threadCase("invalid signature", invalidRoot),
+      threadCase("sender denied", undefined, { threadId: botRoot.id, denySender: true }),
+      threadCase("top-level message"),
+      threadCase("unknown owner keeps open room", undefined, {
         threadId: "d".repeat(64),
         requireMention: false,
         requireMentionInBotThreads: true,
         dispatches: true,
-      },
+      }),
     ];
     try {
       for (const scenario of cases) {
@@ -688,10 +611,8 @@ describe("Buzz bot-owned thread mentions", () => {
           },
         };
         roomSubscription?.handlers.onevent(
-          signSenderEvent({
-            kind: 9,
+          senderMessage(scenario.name, {
             created_at: Math.floor(Date.now() / 1000),
-            content: scenario.name,
             tags: [
               ["h", CHANNEL_ID],
               ...(scenario.threadId ? [["e", scenario.threadId, "", "reply"]] : []),

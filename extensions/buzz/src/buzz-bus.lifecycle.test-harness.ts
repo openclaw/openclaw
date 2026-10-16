@@ -49,6 +49,40 @@ function signSenderEvent(template: Parameters<typeof finalizeEvent>[0]): Event {
   return finalizeEvent(template, SENDER_SECRET_KEY);
 }
 
+function senderMessage(
+  content: string,
+  overrides: Partial<Parameters<typeof finalizeEvent>[0]> = {},
+) {
+  return signSenderEvent({
+    kind: 9,
+    created_at: 1_700_000_000,
+    tags: [["h", CHANNEL_ID]],
+    content,
+    ...overrides,
+  });
+}
+
+function relayEvent(kind: number, overrides: Partial<Event>): Event {
+  return {
+    id: `event-${kind}`,
+    kind,
+    pubkey: RELAY_PUBLIC_KEY,
+    created_at: 1_700_000_000,
+    content: "",
+    sig: "e".repeat(128),
+    tags: [],
+    ...overrides,
+  };
+}
+
+function findSubscription(kind: number) {
+  return relayMocks.subscriptions.find((entry) => subscriptionIncludesKind(entry, kind));
+}
+
+function hasSubscription(kind: number) {
+  return relayMocks.subscriptions.some((entry) => subscriptionIncludesKind(entry, kind));
+}
+
 function subscriptionIncludesKind(
   subscription: (typeof relayMocks.subscriptions)[number],
   kind: number,
@@ -127,5 +161,9 @@ export function useBuzzBusLifecycleFixture() {
     sendTestTextOneShot,
     signSenderEvent,
     subscriptionIncludesKind,
+    senderMessage,
+    relayEvent,
+    findSubscription,
+    hasSubscription,
   };
 }
