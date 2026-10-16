@@ -22,9 +22,11 @@ const recoveryIo = vi.hoisted(() => ({
     >(),
 }));
 
+// mock-isolation: Defer confirmation to test retirement while keeping recovery storage real.
 vi.mock("../../components/confirm-dialog.ts", () => ({
   showConfirmDialog: recoveryIo.confirm,
 }));
+// mock-isolation: Keep durable I/O separate from real session-storage recovery and retirement.
 vi.mock("../../lib/chat/composer-draft-store.runtime.ts", () => ({
   prepareDurableComposerRecovery: recoveryIo.prepare,
   readDurableComposerDraft: recoveryIo.readDraft,
