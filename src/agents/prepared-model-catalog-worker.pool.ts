@@ -13,7 +13,7 @@ export type PreparedModelCatalogWorkerData = {
 
 export const GATEWAY_CATALOG_WORKERS = resolveWorkerPoolSize("singleton");
 // Leave room for source loaders and overlapping generations without inheriting the host heap budget.
-const CATALOG_WORKER_HEAP_LIMIT_MB = 512;
+const CATALOG_WORKER_HEAP_LIMITS = { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 32 };
 
 /**
  * Without crash restart, the pool closes itself when its worker fails, exits or times out, even
@@ -28,7 +28,7 @@ export class CatalogWorkerTaskPool<Input, Output> extends WorkerTaskPool<Input, 
   ) {
     super({
       workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog),
-      workerOptions: { resourceLimits: { maxOldGenerationSizeMb: CATALOG_WORKER_HEAP_LIMIT_MB } },
+      workerOptions: { resourceLimits: CATALOG_WORKER_HEAP_LIMITS },
       workerClass: "singleton",
       // Only the inventory owner can replace captured code; idle retirement or crash restart
       // would import a different source generation into an existing publication.
