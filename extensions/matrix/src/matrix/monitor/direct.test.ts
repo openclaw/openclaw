@@ -118,27 +118,22 @@ describe("createDirectRoomTracker", () => {
     expect(client.dms.update).toHaveBeenCalledTimes(1);
   });
 
-  it("does not treat sender is_direct member state as a DM signal", async () => {
-    const { tracker } = setup({
-      stateEvents: { "!room:example.org|m.room.member|@alice:example.org": { is_direct: true } },
-    });
-    await expect(checkDefaultRoom(tracker)).resolves.toBe(false);
-  });
-
-  it("treats self is_direct member state as a DM signal", async () => {
-    const { tracker } = setup({
-      stateEvents: { "!room:example.org|m.room.member|@bot:example.org": { is_direct: true } },
-    });
-    await expect(checkDefaultRoom(tracker)).resolves.toBe(true);
-  });
-
-  it("still rejects recent invite candidates when self member state is_direct is false", async () => {
-    const { tracker } = setup({
-      stateEvents: { "!room:example.org|m.room.member|@bot:example.org": { is_direct: false } },
-    });
-    tracker.rememberInvite("!room:example.org", "@alice:example.org");
-    await expect(checkDefaultRoom(tracker)).resolves.toBe(false);
-  });
+  it.each([
+    ["@alice:example.org", true, false, false],
+    ["@bot:example.org", true, false, true],
+    ["@bot:example.org", false, true, false],
+  ] as const)(
+    "uses only authoritative self member flags: %s direct=%s invite=%s",
+    async (user, direct, invite, expected) => {
+      const { tracker } = setup({
+        stateEvents: { [`!room:example.org|m.room.member|${user}`]: { is_direct: direct } },
+      });
+      if (invite) {
+        tracker.rememberInvite("!room:example.org", "@alice:example.org");
+      }
+      await expect(checkDefaultRoom(tracker)).resolves.toBe(expected);
+    },
+  );
 
   it("does not promote recent invite candidates when local vetoes mark the room as non-DM", async () => {
     const { client, tracker } = setup({}, { canPromoteRecentInvite: () => false });

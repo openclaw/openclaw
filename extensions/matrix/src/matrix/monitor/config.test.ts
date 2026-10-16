@@ -1,4 +1,3 @@
-// Matrix tests cover config plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../../../test-support/runtime-spies.js";
 import type { CoreConfig, MatrixRoomConfig } from "../../types.js";
@@ -211,21 +210,6 @@ describe("resolveMatrixMonitorConfig", () => {
     expect(resolveTargets).not.toHaveBeenCalled();
   });
 
-  it("does not resolve mutable live allowlist entries by default", async () => {
-    const resolveTargets = vi.fn(async () => [
-      { input: "Alice", resolved: true, id: "@alice:example.org" },
-    ]);
-
-    const result = await resolveLive({
-      entries: ["Alice", "matrix:@Bob:Example.org", "*"],
-      startupResolvedEntries: [{ input: "Alice", id: "@startup-alice:example.org" }],
-      resolveTargets,
-    });
-
-    expect(result).toEqual(["@Bob:Example.org", "*"]);
-    expect(resolveTargets).not.toHaveBeenCalled();
-  });
-
   it("keeps case-distinct qualified user ids in live allowlists", async () => {
     const resolveTargets = vi.fn(async () => []);
     const caseDistinctIds = ["@alice:Example.org", "@alice:example.org"];
@@ -236,34 +220,44 @@ describe("resolveMatrixMonitorConfig", () => {
     expect(resolveTargets).not.toHaveBeenCalled();
   });
 
-  it("keeps unresolved live group allowlist entries configured for fail-closed matching", async () => {
-    const resolveTargets = vi.fn(async () => [
-      { input: "Alice", resolved: true, id: "@alice:example.org" },
-    ]);
-
-    const result = await resolveLive({
-      entries: ["Alice", "matrix:@Bob:Example.org"],
-      failClosedOnUnresolved: true,
-      startupResolvedEntries: [{ input: "Alice", id: "@startup-alice:example.org" }],
-      resolveTargets,
-    });
-
-    expect(result).toEqual(["Alice", "@Bob:Example.org"]);
-    expect(resolveTargets).not.toHaveBeenCalled();
-  });
-
-  it("resolves mutable live allowlist entries when name matching is enabled", async () => {
-    const resolveTargets = vi.fn(async () => [
-      { input: "Alice", resolved: true, id: "@alice:example.org" },
-    ]);
-
-    const result = await resolveLive({
-      cfg: createConfig({ dangerouslyAllowNameMatching: true }),
-      entries: ["Alice", "matrix:@Bob:Example.org", "*"],
-      resolveTargets,
-    });
-
-    expect(result).toEqual(["@Bob:Example.org", "*", "@alice:example.org"]);
-    expectResolveTargetCall(resolveTargets, 0, "user", ["Alice"]);
-  });
+  it.each([
+    {
+      name: "default",
+      nameMatching: false,
+      failClosed: false,
+      expected: ["@Bob:Example.org", "*"],
+    },
+    {
+      name: "fail-closed group",
+      nameMatching: false,
+      failClosed: true,
+      expected: ["Alice", "@Bob:Example.org"],
+    },
+    {
+      name: "name matching",
+      nameMatching: true,
+      failClosed: false,
+      expected: ["@Bob:Example.org", "*", "@alice:example.org"],
+    },
+  ])(
+    "resolves live allowlists with $name policy",
+    async ({ nameMatching, failClosed, expected }) => {
+      const resolveTargets = resolveNames({ user: { Alice: "@alice:example.org" } });
+      const result = await resolveLive({
+        cfg: createConfig({ dangerouslyAllowNameMatching: nameMatching }),
+        entries: ["Alice", "matrix:@Bob:Example.org", ...(failClosed ? [] : ["*"])],
+        failClosedOnUnresolved: failClosed,
+        ...(nameMatching
+          ? {}
+          : { startupResolvedEntries: [{ input: "Alice", id: "@startup-alice:example.org" }] }),
+        resolveTargets,
+      });
+      expect(result).toEqual(expected);
+      if (nameMatching) {
+        expectResolveTargetCall(resolveTargets, 0, "user", ["Alice"]);
+      } else {
+        expect(resolveTargets).not.toHaveBeenCalled();
+      }
+    },
+  );
 });

@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-// Matrix tests cover events plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -24,19 +23,11 @@ type VerificationFixture = Pick<MatrixVerificationSummary, "id" | "otherUserId">
 
 const giftSas: NonNullable<MatrixVerificationSummary["sas"]> = {
   decimal: [6158, 1986, 3513],
-  emoji: [
-    ["🎁", "Gift"],
-    ["🌍", "Globe"],
-    ["🐴", "Horse"],
-  ],
+  emoji: [["🎁", "Gift"]],
 };
 const rocketSas: NonNullable<MatrixVerificationSummary["sas"]> = {
   decimal: [1111, 2222, 3333],
-  emoji: [
-    ["🚀", "Rocket"],
-    ["🦋", "Butterfly"],
-    ["📕", "Book"],
-  ],
+  emoji: [["🚀", "Rocket"]],
 };
 
 function strictRooms(...roomIds: string[]) {
@@ -255,8 +246,12 @@ function createHarness(params?: {
     runDetachedTask,
     roomMessageListener: eventListener("room.message"),
     roomDecryptedEventListener: eventListener("room.decrypted_event"),
-    failedDecryptListener: (roomId: string, event: EventFixture, error: Error) =>
-      failedDecrypt(roomId, matrixEvent(event), error),
+    failedDecryptListener: (
+      roomId: string,
+      event: Pick<MatrixRawEvent, "event_id"> & Partial<MatrixRawEvent>,
+      error = new Error("The sender's device has not sent us the keys for this message."),
+    ) =>
+      failedDecrypt(roomId, matrixEvent({ type: EventType.RoomMessageEncrypted, ...event }), error),
     verificationSummaryListener: getListener<VerificationSummaryListener>("verification.summary"),
     roomInviteListener: eventListener("room.invite"),
     roomJoinListener: eventListener("room.join"),
@@ -264,6 +259,33 @@ function createHarness(params?: {
     off: (client as unknown as { off: ReturnType<typeof vi.fn> }).off,
     on: (client as unknown as { on: ReturnType<typeof vi.fn> }).on,
   };
+}
+
+function healthySyncHarness(ready = true) {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-04-10T16:21:00.000Z"));
+  const healthySync: { sinceMs: number | undefined } = {
+    sinceMs: ready ? Date.now() - 60_000 : undefined,
+  };
+  return {
+    ...createHarness({ accountId: "ops", getHealthySyncSinceMs: () => healthySync.sinceMs }),
+    healthySync,
+  };
+}
+
+async function failureWave(
+  harness: ReturnType<typeof healthySyncHarness>,
+  label: string,
+  offset = (index: number) => -index * 1_000,
+) {
+  for (const index of [1, 2, 3]) {
+    harness.failedDecryptListener(`!room-${label}-${index}:example.org`, {
+      event_id: `$enc-${label}-${index}`,
+      sender: `@alice-${label}-${index}:matrix.example.org`,
+      origin_server_ts: Date.now() + offset(index),
+    });
+    await harness.flushTasks();
+  }
 }
 
 describe("registerMatrixMonitorEvents verification routing", () => {
@@ -323,71 +345,51 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     await flushTasks();
     const roomMessageCalls = onRoomMessage.mock.calls as unknown[][];
     expect(roomMessageCalls[0]?.[0]).toBe("!room:example.org");
-    expectRecordFields(requireRecord(roomMessageCalls[0]?.[1], "reaction event"), {
+    expect(requireRecord(roomMessageCalls[0]?.[1], "reaction event")).toMatchObject({
       event_id: "$reaction1",
       type: EventType.Reaction,
     });
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("invalidates direct-room and observed member-display-name caches on room member events", () => {
-    const { invalidateRoom, invalidateMemberDisplayName, roomEventListener } = createHarness();
+  it.each(["@mallory:example.org", undefined])(
+    "invalidates only authoritative member cache keys: %s",
+    (stateKey) => {
+      const { invalidateRoom, invalidateMemberDisplayName, roomEventListener } = createHarness();
+      roomEventListener("!room:example.org", {
+        event_id: "$member",
+        type: EventType.RoomMember,
+        content: { membership: "join" },
+        ...(stateKey ? { state_key: stateKey } : {}),
+      });
+      expect(invalidateRoom).toHaveBeenCalledWith("!room:example.org");
+      if (stateKey) {
+        expect(invalidateMemberDisplayName).toHaveBeenCalledWith("!room:example.org", stateKey);
+      } else {
+        expect(invalidateMemberDisplayName).not.toHaveBeenCalled();
+      }
+    },
+  );
 
-    roomEventListener("!room:example.org", {
-      event_id: "$member1",
-      state_key: "@mallory:example.org",
-      type: EventType.RoomMember,
-      content: { membership: "join" },
-    });
-
-    expect(invalidateRoom).toHaveBeenCalledWith("!room:example.org");
-    expect(invalidateMemberDisplayName).toHaveBeenCalledWith(
-      "!room:example.org",
-      "@mallory:example.org",
-    );
-  });
-
-  it("does not invalidate a member display name without an authoritative state key", () => {
-    const { invalidateRoom, invalidateMemberDisplayName, roomEventListener } = createHarness();
-
-    roomEventListener("!room:example.org", {
-      event_id: "$member-no-state-key",
-      type: EventType.RoomMember,
-      content: { membership: "join" },
-    });
-
-    expect(invalidateRoom).toHaveBeenCalledWith("!room:example.org");
-    expect(invalidateMemberDisplayName).not.toHaveBeenCalled();
-  });
-
-  it("ignores lifecycle-only invite events emitted with self sender ids", () => {
-    const { invalidateRoom, rememberInvite, roomInviteListener } = createHarness();
-
-    roomInviteListener("!room:example.org", {
-      event_id: "$invite-self",
-      sender: "@bot:example.org",
-      type: EventType.RoomMember,
-      content: { membership: "invite" },
-      state_key: "@bot:example.org",
-    });
-
-    expect(invalidateRoom).toHaveBeenCalledWith("!room:example.org");
-    expect(rememberInvite).not.toHaveBeenCalled();
-  });
-
-  it("remembers invite provenance even when Matrix omits the direct invite hint", () => {
-    const { invalidateRoom, rememberInvite, roomInviteListener } = createHarness();
-
-    roomInviteListener("!room:example.org", {
-      event_id: "$invite-group",
-      type: EventType.RoomMember,
-      content: { membership: "invite" },
-      state_key: "@bot:example.org",
-    });
-
-    expect(invalidateRoom).toHaveBeenCalledWith("!room:example.org");
-    expect(rememberInvite).toHaveBeenCalledWith("!room:example.org", "@alice:example.org");
-  });
+  it.each(["@bot:example.org", "@alice:example.org"])(
+    "tracks invite provenance from %s",
+    (sender) => {
+      const { invalidateRoom, rememberInvite, roomInviteListener } = createHarness();
+      roomInviteListener("!room:example.org", {
+        event_id: "$invite",
+        sender,
+        type: EventType.RoomMember,
+        content: { membership: "invite" },
+        state_key: "@bot:example.org",
+      });
+      expect(invalidateRoom).toHaveBeenCalledWith("!room:example.org");
+      if (sender === "@bot:example.org") {
+        expect(rememberInvite).not.toHaveBeenCalled();
+      } else {
+        expect(rememberInvite).toHaveBeenCalledWith("!room:example.org", sender);
+      }
+    },
+  );
 
   it("routes late-decrypted room messages through the normal room handler", async () => {
     const { onRoomMessage, roomDecryptedEventListener, flushTasks } = createHarness();
@@ -458,12 +460,8 @@ describe("registerMatrixMonitorEvents verification routing", () => {
       if (blockedLog) {
         expect(logVerboseMessage).toHaveBeenCalledWith(blockedLog);
       }
-      if (storeConsulted !== undefined) {
-        if (storeConsulted) {
-          expect(readStoreAllowFrom).toHaveBeenCalled();
-        } else {
-          expect(readStoreAllowFrom).not.toHaveBeenCalled();
-        }
+      if (storeConsulted) {
+        expect(readStoreAllowFrom).toHaveBeenCalled();
       }
       if (!accepted) {
         expect(sendMessage).not.toHaveBeenCalled();
@@ -552,11 +550,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
         id: "verification-current-room",
         sas: {
           decimal: [2468, 1357, 9753],
-          emoji: [
-            ["🔔", "Bell"],
-            ["📁", "Folder"],
-            ["🐴", "Horse"],
-          ],
+          emoji: [["🔔", "Bell"]],
         },
       }),
     );
@@ -594,11 +588,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
       ...verification,
       sas: {
         decimal: [1234, 5678, 9012],
-        emoji: [
-          ["🚀", "Rocket"],
-          ["🦋", "Butterfly"],
-          ["📕", "Book"],
-        ],
+        emoji: [["🚀", "Rocket"]],
       },
     };
     await vi.advanceTimersByTimeAsync(500);
@@ -850,15 +840,10 @@ describe("registerMatrixMonitorEvents verification routing", () => {
       selfUserId: "@gumadeiras:matrix.example.org",
     });
 
-    failedDecryptListener(
-      "!room:example.org",
-      {
-        event_id: "$enc-self",
-        sender: "@gumadeiras:matrix.example.org",
-        type: EventType.RoomMessageEncrypted,
-      },
-      new Error("The sender's device has not sent us the keys for this message."),
-    );
+    failedDecryptListener("!room:example.org", {
+      event_id: "$enc-self",
+      sender: "@gumadeiras:matrix.example.org",
+    });
     await flushTasks();
 
     expectWarnContextFields(logger, 1, "Failed to decrypt message", {
@@ -879,24 +864,13 @@ describe("registerMatrixMonitorEvents verification routing", () => {
   });
 
   it("keeps decrypt failures before healthy sync on the generic warning path", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-10T16:21:00.000Z"));
-    const healthySync = { sinceMs: undefined as number | undefined };
-    const { logger, failedDecryptListener, flushTasks } = createHarness({
-      accountId: "ops",
-      getHealthySyncSinceMs: () => healthySync.sinceMs,
-    });
+    const { logger, failedDecryptListener, flushTasks, healthySync } = healthySyncHarness(false);
 
-    failedDecryptListener(
-      "!room:example.org",
-      {
-        event_id: "$enc-old",
-        sender: "@alice:matrix.example.org",
-        type: EventType.RoomMessageEncrypted,
-        origin_server_ts: Date.now() - 5 * 60_000,
-      },
-      new Error("The sender's device has not sent us the keys for this message."),
-    );
+    failedDecryptListener("!room:example.org", {
+      event_id: "$enc-old",
+      sender: "@alice:matrix.example.org",
+      origin_server_ts: Date.now() - 5 * 60_000,
+    });
     await flushTasks();
 
     expect(logger.warn).toHaveBeenCalledTimes(1);
@@ -907,16 +881,11 @@ describe("registerMatrixMonitorEvents verification routing", () => {
 
     healthySync.sinceMs = Date.now();
 
-    failedDecryptListener(
-      "!room:example.org",
-      {
-        event_id: "$enc-fresh-after-ready",
-        sender: "@alice:matrix.example.org",
-        type: EventType.RoomMessageEncrypted,
-        origin_server_ts: Date.now() + 1,
-      },
-      new Error("The sender's device has not sent us the keys for this message."),
-    );
+    failedDecryptListener("!room:example.org", {
+      event_id: "$enc-fresh-after-ready",
+      sender: "@alice:matrix.example.org",
+      origin_server_ts: Date.now() + 1,
+    });
     await flushTasks();
 
     expectWarnContextFields(logger, 2, "Failed to decrypt fresh post-healthy-sync message", {
@@ -927,28 +896,11 @@ describe("registerMatrixMonitorEvents verification routing", () => {
   });
 
   it("re-emits the aggregate warning for a new failure wave after the window clears", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-10T16:21:00.000Z"));
-    const healthySyncSinceMs = Date.now() - 60_000;
-    const { logger, failedDecryptListener, flushTasks } = createHarness({
-      accountId: "ops",
-      getHealthySyncSinceMs: () => healthySyncSinceMs,
-    });
+    const harness = healthySyncHarness();
+    const { logger } = harness;
 
     for (const wave of [1, 2]) {
-      for (const index of [1, 2, 3]) {
-        failedDecryptListener(
-          `!room-${wave}-${index}:example.org`,
-          {
-            event_id: `$enc-wave-${wave}-${index}`,
-            sender: `@alice${wave}${index}:matrix.example.org`,
-            type: EventType.RoomMessageEncrypted,
-            origin_server_ts: Date.now() - index * 1_000,
-          },
-          new Error("The sender's device has not sent us the keys for this message."),
-        );
-        await flushTasks();
-      }
+      await failureWave(harness, `wave-${wave}`);
 
       if (wave === 1) {
         await vi.advanceTimersByTimeAsync(2 * 60_000 + 1);
@@ -970,43 +922,11 @@ describe("registerMatrixMonitorEvents verification routing", () => {
   });
 
   it("resets tracked failures when healthy sync restarts before the old window expires", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-10T16:21:00.000Z"));
-    let healthySyncSinceMs = Date.now() - 60_000;
-    const { logger, failedDecryptListener, flushTasks } = createHarness({
-      accountId: "ops",
-      getHealthySyncSinceMs: () => healthySyncSinceMs,
-    });
-
-    for (const index of [1, 2, 3]) {
-      failedDecryptListener(
-        `!room-first-${index}:example.org`,
-        {
-          event_id: `$enc-first-${index}`,
-          sender: `@alice-first-${index}:matrix.example.org`,
-          type: EventType.RoomMessageEncrypted,
-          origin_server_ts: Date.now() - index * 1_000,
-        },
-        new Error("The sender's device has not sent us the keys for this message."),
-      );
-      await flushTasks();
-    }
-
-    healthySyncSinceMs = Date.now();
-
-    for (const index of [1, 2, 3]) {
-      failedDecryptListener(
-        `!room-second-${index}:example.org`,
-        {
-          event_id: `$enc-second-${index}`,
-          sender: `@alice-second-${index}:matrix.example.org`,
-          type: EventType.RoomMessageEncrypted,
-          origin_server_ts: Date.now() + index,
-        },
-        new Error("The sender's device has not sent us the keys for this message."),
-      );
-      await flushTasks();
-    }
+    const harness = healthySyncHarness();
+    const { logger, healthySync } = harness;
+    await failureWave(harness, "first");
+    healthySync.sinceMs = Date.now();
+    await failureWave(harness, "second", (index) => index);
 
     expectWarnContextFields(logger, 5, "Failed to decrypt fresh post-healthy-sync message", {
       eventId: "$enc-second-1",
@@ -1037,15 +957,10 @@ describe("registerMatrixMonitorEvents verification routing", () => {
       selfUserIdError: new Error("lookup failed"),
     });
 
-    failedDecryptListener(
-      "!room:example.org",
-      {
-        event_id: "$enc-lookup-fail",
-        sender: "@gumadeiras:matrix.example.org",
-        type: EventType.RoomMessageEncrypted,
-      },
-      new Error("The sender's device has not sent us the keys for this message."),
-    );
+    failedDecryptListener("!room:example.org", {
+      event_id: "$enc-lookup-fail",
+      sender: "@gumadeiras:matrix.example.org",
+    });
     await flushTasks();
 
     expect(logger.warn).toHaveBeenCalledTimes(1);
