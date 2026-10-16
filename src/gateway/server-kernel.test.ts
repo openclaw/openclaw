@@ -741,7 +741,8 @@ describe("createGatewayKernel", () => {
           const attributes = event.attributes as { traceName?: string } | undefined;
           return attributes?.traceName ?? event.name;
         });
-      expect(measureNames).toEqual([
+      // Optional list-worker warmup can start after mandatory kernel startup completes.
+      expect(measureNames.filter((name) => name !== "sessions.list-worker")).toEqual([
         "config.snapshot.read",
         "config.snapshot.read.file",
         "config.snapshot.read.hash",

@@ -78,6 +78,21 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   void projectionReady?.catch(() => {});
   let requestRuntimeReady: Promise<void> | undefined;
   const projectionLifetime: { closing: boolean; detach?: () => void } = { closing: false };
+  const listWorkerWarmup = projectionReady
+    ?.then(async (projection) => {
+      if (projectionLifetime.closing) {
+        return;
+      }
+      const { warmSessionListWorker } = await import("./session-list-worker.js");
+      if (!projectionLifetime.closing) {
+        await startupTrace.measure("sessions.list-worker", () => warmSessionListWorker(projection));
+      }
+    })
+    .catch((error: unknown) => {
+      if (!projectionLifetime.closing) {
+        log.warn(`Session list worker preparation failed: ${formatErrorMessage(error)}`);
+      }
+    });
   runtime.registerGatewayLifetimeSidecars({
     stop: async () => {
       projectionLifetime.closing = true;
@@ -93,6 +108,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       }
       projectionLifetime.detach?.();
       projection?.dispose();
+      await listWorkerWarmup;
     },
   });
   // An early request may initialize this while other listeners bind; keep startup ownership.

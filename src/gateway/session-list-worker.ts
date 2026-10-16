@@ -1,8 +1,10 @@
 import { performance } from "node:perf_hooks";
+import { setImmediate as yieldToLoop } from "node:timers/promises";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
-import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getAsyncWorkSignal, runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { readUserProfileVersion } from "../state/user-profile-events.js";
 import { captureResidentUserProfileDisplaySnapshot } from "../state/user-profile-list.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
@@ -16,6 +18,7 @@ import type {
   SessionListWorkerRow,
   SessionListWorkerUpdate,
 } from "./session-list-worker.types.js";
+import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { prepareSessionRowPublication } from "./session-row-presentation.js";
 import { identity, selectionRow, type SelectionRow } from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
@@ -36,26 +39,66 @@ export type SessionListWorkerReply =
   | { kind: "page"; page: SessionListWorkerResult }
   | { kind: "rows"; rows: { row: GatewaySessionRow; encoded: string }[] };
 
+const log = createSubsystemLogger("gateway");
 const owners = new WeakMap<SessionRowProjection, ReturnType<typeof createListWorker>>();
 const transferableRow = ({ generation: _generation, ...row }: SelectionRow): SessionListWorkerRow =>
   row;
+
+function captureProjectionState(projection: SessionRowProjection) {
+  const state = projection.state;
+  return {
+    ...state,
+    profilesRevision: readUserProfileVersion(),
+    subagentRevision: state.rowContext.subagentRuns.revision,
+  };
+}
+
+function capturePublication(
+  projection: SessionRowProjection,
+  audience: string,
+  state: ReturnType<typeof captureProjectionState>,
+) {
+  return {
+    cfg: state.cfg,
+    modelCatalog: state.modelCatalog,
+    isCurrent(currentAudience: string) {
+      const current = projection.state;
+      return (
+        current.revision === state.revision &&
+        current.cfg === state.cfg &&
+        current.modelCatalog === state.modelCatalog &&
+        current.policyConfig === state.policyConfig &&
+        current.rowContext.projectedAgentRuns === state.rowContext.projectedAgentRuns &&
+        current.rowContext.projectedSubagentActivity ===
+          state.rowContext.projectedSubagentActivity &&
+        current.rowContext.subagentRuns.revision === state.subagentRevision &&
+        readUserProfileVersion() === state.profilesRevision &&
+        currentAudience === audience
+      );
+    },
+  };
+}
+
+export function captureSessionListPagePublication(
+  projection: SessionRowProjection,
+  audience: string,
+) {
+  return capturePublication(projection, audience, captureProjectionState(projection));
+}
 
 /** The projection's reset/disposal publication ends this derived worker's lifetime. */
 function createListWorker(projection: SessionRowProjection) {
   let reset = true;
   let disposed = false;
+  let warmed = false;
+  let warming: Promise<void> | undefined;
   const changes = new Map<string, SessionListWorkerChange>();
-  let previous: ReturnType<typeof projectionState> | undefined;
-  const projectionState = () => ({
-    ...projection.state,
-    profilesRevision: readUserProfileVersion(),
-    subagentRevision: projection.state.rowContext.subagentRuns.revision,
-  });
+  let previous: ReturnType<typeof captureProjectionState> | undefined;
   const pool = new WorkerTaskPool<SessionListWorkerCommand, SessionListWorkerReply>({
     workerUrl: resolveRuntimeProcessEntrypointUrl("sessionList"),
     maxWorkers: 1,
     sharedCompute: true,
-    idleTimeoutMs: 60_000,
+    idleTimeoutMs: 0,
   });
   const unsubscribe = projection.onSelectionChange((change) => {
     if (change.kind === "reset") {
@@ -74,6 +117,49 @@ function createListWorker(projection: SessionRowProjection) {
   });
 
   return {
+    get warm() {
+      return warmed && !reset && !disposed && pool.getSnapshot().workers > 0;
+    },
+    warmup(): Promise<void> {
+      if (this.warm) {
+        return Promise.resolve();
+      }
+      return (warming ??= (async () => {
+        // Cold requests keep using prepared rows; serialization starts on another turn.
+        await yieldToLoop();
+        if (disposed) {
+          return;
+        }
+        reset = true;
+        await projection.prepareSelection({ metadataOnly: true });
+        if (disposed) {
+          return;
+        }
+        const page = await this.select({
+          opts: { limit: 100, rowMode: "sidebar", archived: "all" },
+        });
+        if (page && !disposed) {
+          await withReadySessionRows(
+            projection,
+            () => page.queries,
+            () => {},
+            {
+              selection: { metadataOnly: true },
+            },
+          );
+          warmed = !disposed;
+        }
+      })()
+        .catch((error: unknown) => {
+          reset = true;
+          if (!disposed) {
+            log.warn(`Session list worker preparation failed: ${String(error)}`);
+          }
+        })
+        .finally(() => {
+          warming = undefined;
+        }));
+    },
     async render(
       rows: PreparedSessionRowRender[],
       now: number,
@@ -92,6 +178,7 @@ function createListWorker(projection: SessionRowProjection) {
           { signal: getAsyncWorkSignal(), timeoutMs: 30_000 },
         );
       } catch (error) {
+        reset = true;
         if (disposed) {
           return undefined;
         }
@@ -121,7 +208,7 @@ function createListWorker(projection: SessionRowProjection) {
         if (disposed) {
           throw new Error("Session list worker owner changed; retry the request");
         }
-        const state = projectionState();
+        const state = captureProjectionState(projection);
         const now = Date.now();
         const needsActiveSelection =
           opts.activeOnly ||
@@ -220,8 +307,7 @@ function createListWorker(projection: SessionRowProjection) {
         changes.clear();
         return {
           command: { kind: "select" as const, update, request },
-          state,
-          audience: presentation.sharing.cacheKey,
+          publication: capturePublication(projection, presentation.sharing.cacheKey, state),
         };
       }
       for (;;) {
@@ -258,45 +344,41 @@ function createListWorker(projection: SessionRowProjection) {
         if (reply.kind !== "page") {
           throw new Error("Unexpected session list worker reply");
         }
-        const { state, audience, command } = captured!;
+        const { publication, command } = captured!;
         return {
           ...reply.page,
+          ...publication,
           render: (rows: PreparedSessionRowRender[]) => this.render(rows, command.request.now),
           now: command.request.now,
-          cfg: state.cfg,
-          modelCatalog: state.modelCatalog,
-          isCurrent(currentAudience: string) {
-            if (disposed) {
-              return false;
-            }
-            const current = projection.state;
-            return (
-              current.revision === state.revision &&
-              current.cfg === state.cfg &&
-              current.modelCatalog === state.modelCatalog &&
-              current.policyConfig === state.policyConfig &&
-              current.rowContext.projectedAgentRuns === state.rowContext.projectedAgentRuns &&
-              current.rowContext.projectedSubagentActivity ===
-                state.rowContext.projectedSubagentActivity &&
-              current.rowContext.subagentRuns.revision === state.subagentRevision &&
-              readUserProfileVersion() === state.profilesRevision &&
-              currentAudience === audience
-            );
-          },
+          isCurrent: (currentAudience: string) =>
+            !disposed && publication.isCurrent(currentAudience),
         };
       }
     },
   };
 }
 
-export function selectSessionListPageInWorker(
-  projection: SessionRowProjection,
-  params: Parameters<ReturnType<typeof createListWorker>["select"]>[0],
-) {
+function getListWorker(projection: SessionRowProjection) {
   let owner = owners.get(projection);
   if (!owner) {
     owner = createListWorker(projection);
     owners.set(projection, owner);
   }
-  return owner.select(params);
+  return owner;
+}
+
+export function isSessionListWorkerWarm(projection: SessionRowProjection): boolean {
+  return owners.get(projection)?.warm ?? false;
+}
+
+/** Startup overlaps this optional preparation with its existing projection materialization. */
+export function warmSessionListWorker(projection: SessionRowProjection): Promise<void> {
+  return runOutsideAsyncWorkScope(() => getListWorker(projection).warmup());
+}
+
+export function selectSessionListPageInWorker(
+  projection: SessionRowProjection,
+  params: Parameters<ReturnType<typeof createListWorker>["select"]>[0],
+) {
+  return getListWorker(projection).select(params);
 }

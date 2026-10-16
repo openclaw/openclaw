@@ -16,14 +16,21 @@ import type { GatewayClient, GatewayRequestContext } from "./server-methods/type
 import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
 import type { SessionListDiagnostics } from "./session-list-diagnostics.types.js";
 import {
+  projectSessionOwnerRunningCounts,
   resolveSessionListSearchModelIdentity,
   type SessionEntrySelection,
   type SessionListFilterParams,
+  type SessionListFilteredEntries,
 } from "./session-list-filters.js";
 import type { SessionEntryPair } from "./session-list-order.js";
 import { bindSessionListRowRead } from "./session-list-read-result.js";
 import { selectSessionEntries } from "./session-list-selection.js";
-import { selectSessionListPageInWorker } from "./session-list-worker.js";
+import {
+  captureSessionListPagePublication,
+  isSessionListWorkerWarm,
+  selectSessionListPageInWorker,
+  warmSessionListWorker,
+} from "./session-list-worker.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import {
   prepareSessionRowPublication,
@@ -36,6 +43,7 @@ import {
   type SelectionRow as SelectionTarget,
 } from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
+import { renderPreparedSessionRow, type PreparedSessionRowRender } from "./session-row-render.js";
 import { createSessionRowSelection } from "./session-row-selection.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { getSessionDefaults } from "./session-utils-model.js";
@@ -358,7 +366,62 @@ export function prepareProjectedSessionList(params: {
   return { prepared, presentation, filters, ownerRunningCandidateKeys };
 }
 
-/** Select and render in the worker; publish only under current synchronous disclosure authority. */
+/** Startup already prepares these rows; reconnects must not wait for worker initialization. */
+function selectPreparedSessionListPage(params: Parameters<typeof prepareProjectedSessionList>[0]) {
+  const { projection, opts, now } = params;
+  void warmSessionListWorker(projection);
+  const { prepared, presentation, filters, ownerRunningCandidateKeys } =
+    prepareProjectedSessionList(params);
+  const select = (retained?: WeakMap<object, SessionListFilteredEntries>) =>
+    withAgentRosterFactsBatch(prepared.cfg, () =>
+      runSynchronousWork(
+        selectSessionEntries({
+          ...filters,
+          defaultLimit: 100,
+          partitions: prepared.partitions,
+          retained,
+        }),
+      ),
+    );
+  const selected = projectSessionOwnerRunningCounts(
+    filters,
+    params.key === undefined ? presentation.select(opts, select) : select(),
+    ownerRunningCandidateKeys,
+  );
+  const { entries, ...selection } = selected;
+  const queries = [];
+  const archivedRowIds: string[] = [];
+  for (const [key] of entries) {
+    const target = prepared.getTarget(key);
+    if (!target) {
+      continue;
+    }
+    queries.push({
+      agentId: target.agentId,
+      key: target.key,
+      storePath: target.storeTarget.storePath,
+    });
+    if (target.entry.archivedAt !== undefined) {
+      archivedRowIds.push(rowIdentity(target));
+    }
+  }
+  const renderContext = { ...presentation.rowContext, now };
+  return {
+    ...captureSessionListPagePublication(projection, presentation.sharing.cacheKey),
+    now,
+    selection,
+    queries,
+    archivedRowIds,
+    storePath: prepared.storePath,
+    render: (rows: PreparedSessionRowRender[]) =>
+      rows.map((input) => {
+        const row = renderPreparedSessionRow(input, renderContext);
+        return { row, encoded: JSON.stringify(row) };
+      }),
+  };
+}
+
+/** Prefer the warm worker; publish only under current synchronous disclosure authority. */
 export async function listProjectedSessions(params: {
   projection: SessionRowProjection;
   opts: SessionsListParams;
@@ -393,42 +456,53 @@ export async function listProjectedSessions(params: {
         projection.needsSelectionPreparation(selectionPreparation) ||
         (searchIdentities && searchIdentities.cfg !== projection.state.cfg)
       );
-      const page = await selectSessionListPageInWorker(projection, {
-        opts,
-        key: exactKey,
-        context,
-        client,
-        searchIdentities,
-        // Plugin-owned model policy stays with the host preparation owner.
-        prepareSearchRows: opts.search?.trim()
-          ? (now) => {
-              const { prepared, filters } = prepareProjectedSessionList({
-                projection,
-                opts,
-                key: exactKey,
-                context,
-                client,
-                now,
-                metadataPrepared: true,
-              });
-              return new Map(
-                [...prepared.entries("all")].map(([rowKey]) => {
-                  const target = prepared.getTarget(rowKey)!;
-                  const { selectedModel, rowModelIdentity, thinkingProjection } =
-                    prepared.getModelFacts(rowKey);
-                  return [
-                    rowIdentity(target),
-                    {
-                      modelFacts: { selectedModel, rowModelIdentity, thinkingProjection },
-                      modelIdentity: resolveSessionListSearchModelIdentity(filters, rowKey),
-                    },
-                  ];
-                }),
-              );
-            }
-          : undefined,
-        diagnostics,
-      });
+      const page = isSessionListWorkerWarm(projection)
+        ? await selectSessionListPageInWorker(projection, {
+            opts,
+            key: exactKey,
+            context,
+            client,
+            searchIdentities,
+            // Plugin-owned model policy stays with the host preparation owner.
+            prepareSearchRows: opts.search?.trim()
+              ? (now) => {
+                  const { prepared, filters } = prepareProjectedSessionList({
+                    projection,
+                    opts,
+                    key: exactKey,
+                    context,
+                    client,
+                    now,
+                    metadataPrepared: true,
+                  });
+                  return new Map(
+                    [...prepared.entries("all")].map(([rowKey]) => {
+                      const target = prepared.getTarget(rowKey)!;
+                      const { selectedModel, rowModelIdentity, thinkingProjection } =
+                        prepared.getModelFacts(rowKey);
+                      return [
+                        rowIdentity(target),
+                        {
+                          modelFacts: { selectedModel, rowModelIdentity, thinkingProjection },
+                          modelIdentity: resolveSessionListSearchModelIdentity(filters, rowKey),
+                        },
+                      ];
+                    }),
+                  );
+                }
+              : undefined,
+            diagnostics,
+          })
+        : selectPreparedSessionListPage({
+            projection,
+            opts,
+            key: exactKey,
+            context,
+            client,
+            now: Date.now(),
+            metadataPrepared: true,
+            searchIdentities,
+          });
       if (!page) {
         await projection.prepareSelection(selectionPreparation);
         continue;

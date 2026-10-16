@@ -19,6 +19,7 @@ import { getFreePort } from "../test-utils/ports.js";
 import { buildControlUiSessionEntryUrl } from "./control-ui-session-entry-path.js";
 import { createGatewayKernel } from "./server-kernel.js";
 import type { GatewayServer } from "./server-public.js";
+import * as listWorker from "./session-list-worker.js";
 import * as rowReads from "./session-row-database-facts.js";
 import * as projections from "./session-row-projection.js";
 
@@ -57,6 +58,8 @@ it("overlaps startup orphan marking with projection preparation and joins both b
   const releaseEarlyRuntime = createDeferred();
   const markingEntered = createDeferred();
   const releaseMarking = createDeferred();
+  const listWarmEntered = createDeferred();
+  const releaseListWarm = createDeferred();
   const entryReceived = createDeferred<ServerResponse>();
   const secondEntryReceived = createDeferred<ServerResponse>();
   const entryClosed = createDeferred();
@@ -65,6 +68,7 @@ it("overlaps startup orphan marking with projection preparation and joins both b
   const requestSignal = AbortSignal.any([signal, requests.signal]);
   const entryPath = `${buildControlUiSessionEntryUrl(`${basePath}/chat/main/topic`, basePath)}&probe=1`;
   let startup: Promise<GatewayServer> | undefined;
+  let listWarming: Promise<void> | undefined;
   let projection: Awaited<ReturnType<typeof projections.createSessionRowProjection>> | undefined;
   let startupFinished = false;
   let earlyEntryRequest: Promise<Response> | undefined;
@@ -102,6 +106,15 @@ it("overlaps startup orphan marking with projection preparation and joins both b
       await releaseProjection.promise;
       projection = await createProjection(params);
       return projection;
+    });
+    const warmList = listWorker.warmSessionListWorker;
+    vi.spyOn(listWorker, "warmSessionListWorker").mockImplementation((warmProjection) => {
+      listWarming = (async () => {
+        await warmList(warmProjection);
+        listWarmEntered.resolve();
+        await releaseListWarm.promise;
+      })();
+      return listWarming;
     });
     const markOrphans = orphanMarking.markStartupOrphanedMainSessionsForRecovery;
     vi.spyOn(orphanMarking, "markStartupOrphanedMainSessionsForRecovery").mockImplementation(
@@ -242,8 +255,14 @@ it("overlaps startup orphan marking with projection preparation and joins both b
     await pendingReadiness.arrayBuffer();
     expect(startupFinished).toBe(false);
     releaseMarking.resolve();
+    await withinTest(listWarmEntered.promise, signal);
     const server = await startup;
     await server.startupSettled;
+    const ready = await read("/readyz");
+    expect(ready.status).toBe(200);
+    expect(await ready.json()).toMatchObject({ ready: true });
+    releaseListWarm.resolve();
+    await listWarming;
     const unauthorized = await fetch(`http://127.0.0.1:${port}${entryPath}`, {
       signal: requestSignal,
     });
@@ -255,9 +274,11 @@ it("overlaps startup orphan marking with projection preparation and joins both b
     releaseListening.resolve();
     releaseEarlyRuntime.resolve();
     releaseMarking.resolve();
+    releaseListWarm.resolve();
     requests.abort();
     try {
       const server = await startup?.catch(() => undefined);
+      await listWarming?.catch(() => undefined);
       await server?.close();
       await earlyEntryRequest?.catch(() => undefined);
       await entryRequest?.catch(() => undefined);

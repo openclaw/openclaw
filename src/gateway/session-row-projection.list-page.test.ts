@@ -12,6 +12,7 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js"
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
@@ -36,6 +37,98 @@ import * as rowInputs from "./session-utils-row.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("serves authorized session pages while the list worker warms and after it is ready", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = {
+      ...rolePolicyConfig(),
+      agents: { entries: { main: {} }, defaults: { model: "unit-test/fixture" } },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    const viewer = ensureProfileForEmail("cold-page-viewer@example.test");
+    const other = ensureProfileForEmail("cold-page-other@example.test");
+    setUserProfileRole(viewer.id, "none");
+    const client = identifiedClient(viewer.id);
+    for (const [suffix, creator, updatedAt] of [
+      ["older", viewer.id, 1],
+      ["newer", viewer.id, 2],
+      ["hidden", other.id, 3],
+    ] as const) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: `agent:main:dashboard:cold-${suffix}` },
+        {
+          sessionId: `cold-${suffix}`,
+          updatedAt,
+          visibility: "shared",
+          createdActor: { type: "human", source: "profile", id: creator },
+        },
+      );
+    }
+    const release = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({
+      cfg,
+      modelCatalog: [
+        { provider: "unit-test", id: "fixture", name: "Fixture", contextTokens: 8_192 },
+      ],
+    });
+    const entered = createDeferredCore();
+    const resume = createDeferredCore();
+    let warming: Promise<void> | undefined;
+    try {
+      await projection.ensureMaterialized();
+      // Retain the actual warm selection reply, so list requests encounter an unready owner.
+      // oxlint-disable-next-line typescript/unbound-method -- The wrapper forwards the pool receiver.
+      const run = WorkerTaskPool.prototype.run;
+      vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(async function (
+        this: WorkerTaskPool<unknown, unknown>,
+        ...args
+      ) {
+        const reply = await run.apply(this, args);
+        entered.resolve();
+        await resume.promise;
+        return reply;
+      });
+      warming = listWorker.warmSessionListWorker(projection);
+      await entered.promise;
+      const context = bindSessionRowProjection(requestContext(cfg), () => projection);
+      for (const phase of ["warming", "ready"] as const) {
+        if (phase === "ready") {
+          resume.resolve();
+          await warming;
+        }
+        const respond = vi.fn();
+        await sessionReadHandlers["sessions.list"]!({
+          req: { type: "req", id: `cold-page-${phase}`, method: "sessions.list" },
+          params: { limit: 2, rowMode: "sidebar" },
+          client,
+          context,
+          isWebchatConnect: () => false,
+          respond,
+        });
+        expect(respond).toHaveBeenCalledExactlyOnceWith(
+          true,
+          expect.objectContaining({
+            totalCount: 2,
+            sessions: [
+              expect.objectContaining({ key: "agent:main:dashboard:cold-newer" }),
+              expect.objectContaining({ key: "agent:main:dashboard:cold-older" }),
+            ],
+            defaults: expect.objectContaining({
+              modelProvider: "unit-test",
+              model: "fixture",
+              contextTokens: 8_192,
+            }),
+          }),
+        );
+      }
+    } finally {
+      resume.resolve();
+      await warming;
+      projection.dispose();
+      release();
+    }
+  });
+});
 
 it("reconciles an invalidated row while rebuilding topology for sessions.list", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -188,6 +281,7 @@ it("keeps row and default model facts current when a catalog publishes during wo
     let pending: ReturnType<(typeof sessionReadHandlers)[string]> | undefined;
     try {
       await projection.ensureMaterialized();
+      await listWorker.warmSessionListWorker(projection);
       const select = listWorker.selectSessionListPageInWorker;
       vi.spyOn(listWorker, "selectSessionListPageInWorker").mockImplementationOnce(
         async (...args) => {
@@ -523,6 +617,7 @@ it.each([
       let pending: ReturnType<(typeof sessionReadHandlers)[string]> | undefined;
       try {
         await projection.ensureMaterialized();
+        await listWorker.warmSessionListWorker(projection);
         const select = listWorker.selectSessionListPageInWorker;
         // Hold a real worker result at its transport boundary; do not fabricate selection facts.
         vi.spyOn(listWorker, "selectSessionListPageInWorker").mockImplementationOnce(
@@ -628,6 +723,7 @@ it("reselects active rows and facets when a run retires during worker selection"
     let pending: ReturnType<(typeof sessionReadHandlers)[string]> | undefined;
     try {
       await projection.ensureMaterialized();
+      await listWorker.warmSessionListWorker(projection);
       const select = listWorker.selectSessionListPageInWorker;
       vi.spyOn(listWorker, "selectSessionListPageInWorker").mockImplementationOnce(
         async (...args) => {
