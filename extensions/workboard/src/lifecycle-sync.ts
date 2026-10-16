@@ -367,7 +367,11 @@ function normalizeSession(value: unknown): WorkboardLifecycleSession | undefined
 }
 
 export async function readWorkboardLifecycleSessions(
-  gateway: Pick<OpenClawPluginApi["runtime"]["gateway"], "isAvailable" | "request">,
+  gateway: Pick<OpenClawPluginApi["runtime"]["gateway"], "isAvailable"> & {
+    request: (
+      ...args: Parameters<OpenClawPluginApi["runtime"]["gateway"]["request"]>
+    ) => Promise<unknown>;
+  },
   options: WorkboardLifecycleSessionReadOptions,
 ): Promise<WorkboardLifecycleSessionSnapshot> {
   if (!(await gateway.isAvailable())) {
