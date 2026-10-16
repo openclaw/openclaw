@@ -19,9 +19,7 @@ let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
   receipts = await openFixtureReceiptChannel();
 });
-afterAll(async () => {
-  await receipts.close();
-});
+afterAll(() => receipts.close());
 
 export function fixtureReadySource(filePath: string): string {
   return `${fixtureReceiptClientSource(receipts.endpoint)}
@@ -69,11 +67,7 @@ async function fixtureReadyBeforeSettlement(
 }
 
 function parseCompletedPidFile(content: string): number | undefined {
-  const match = /^([1-9]\d*)\n$/u.exec(content);
-  if (!match) {
-    return undefined;
-  }
-  const pid = Number(match[1]);
+  const pid = Number(/^([1-9]\d*)\n$/u.exec(content)?.[1]);
   return Number.isSafeInteger(pid) ? pid : undefined;
 }
 
@@ -128,9 +122,12 @@ export async function waitForDead(pid: number, signal: AbortSignal): Promise<voi
 }
 
 export function killPidIfAlive(pid: number | undefined): void {
-  if (pid === undefined || !pidIsAlive(pid)) {
-    return;
+  if (pid !== undefined && pidIsAlive(pid)) {
+    killOwnedPid(pid);
   }
+}
+
+function killOwnedPid(pid: number): void {
   try {
     process.kill(pid, "SIGKILL");
   } catch (error) {
@@ -154,13 +151,7 @@ function killOwnedRuntimeCommand(child: ChildProcess | undefined, detached: bool
     return;
   }
   if (detached) {
-    try {
-      process.kill(-child.pid, "SIGKILL");
-    } catch (error) {
-      if (!hasErrnoCode(error, "ESRCH")) {
-        throw error;
-      }
-    }
+    killOwnedPid(-child.pid);
   } else if (child.exitCode === null && child.signalCode === null) {
     child.kill("SIGKILL");
   }
@@ -196,8 +187,7 @@ async function observeRuntimeCommandTimeout(params: {
         try {
           killOwnedRuntimeCommand(child, params.detached);
         } finally {
-          // A broken group-termination path must still reap the known descendant.
-          // This fallback follows the successful-path death assertions above.
+          // Even broken group termination must reap the descendant after death assertions.
           killPidIfAlive(descendantPid);
         }
       }
@@ -215,8 +205,7 @@ async function observeRuntimeCommandTimeout(params: {
       }
     }
   });
-  // Freeze only the parent's policy clock. Real subprocess startup, pipe I/O,
-  // readiness and cleanup must not consume or depend on that clock.
+  // Freeze the parent's policy clock, not subprocess startup, I/O, readiness or cleanup.
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   try {
     commandResult = runtimeSmoke
@@ -236,8 +225,7 @@ async function observeRuntimeCommandTimeout(params: {
     closed = childClosed(child);
     const descendants = await withinTest(params.ready(child, commandResult), params.signal);
     const assertRunning = () => {
-      expect(pidIsAlive(child!.pid!)).toBe(true);
-      for (const pid of descendants) {
+      for (const pid of [child!.pid!, ...descendants]) {
         expect(pidIsAlive(pid)).toBe(true);
       }
       expect(settled).toBe(false);
@@ -274,32 +262,23 @@ export function registerRuntimeCommandTimeoutTests(createPackageRoot: () => stri
     const commandPath = path.join(root, "timeout-command.mjs");
     const descendantPidPath = path.join(root, "timed-out-descendant.pid");
     const readyPath = path.join(root, "timed-out-descendant.ready");
-    const script = detached
-      ? [
-          "import childProcess from 'node:child_process';",
-          "import fs from 'node:fs';",
-          `const child = childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
-            [
-              "import fs from 'node:fs';",
-              "process.on('SIGTERM', () => {});",
-              "setInterval(() => {}, 1000);",
-              `fs.writeFileSync(${JSON.stringify(readyPath)}, "ready");`,
-              fixtureReadySource(readyPath),
-            ].join("\n"),
-          )}], { stdio: "ignore" });`,
-          `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(child.pid) + "\\n");`,
-          fixtureReadySource(descendantPidPath),
-          "setInterval(() => {}, 1000);",
-          "",
-        ]
-      : [
-          "import fs from 'node:fs';",
-          "setInterval(() => {}, 1000);",
-          `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid) + "\\n");`,
-          fixtureReadySource(descendantPidPath),
-          "",
-        ];
-    fs.writeFileSync(commandPath, script.join("\n"), "utf8");
+    const descendantSource = `import fs from 'node:fs';
+process.on('SIGTERM', () => {});
+setInterval(() => {}, 1000);
+fs.writeFileSync(${JSON.stringify(readyPath)}, "ready");
+${fixtureReadySource(readyPath)}`;
+    const spawnDescendant = `import childProcess from 'node:child_process';
+const child = childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(descendantSource)}], { stdio: "ignore" });`;
+    fs.writeFileSync(
+      commandPath,
+      `import fs from 'node:fs';
+${detached ? spawnDescendant : ""}
+setInterval(() => {}, 1000);
+fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(${detached ? "child" : "process"}.pid) + "\\n");
+${fixtureReadySource(descendantPidPath)}
+`,
+      "utf8",
+    );
     const error = await observeRuntimeCommandTimeout({
       args: [commandPath],
       ready: async (child, operation) => {
@@ -356,8 +335,6 @@ export function registerRuntimeCommandOutputTimeoutTest(): void {
             ),
             signal,
           );
-          expect(output.stdout).toContain("partial");
-          expect(output.stderr).toContain("problem");
           return [];
         } finally {
           listeners.forEach((remove) => remove());

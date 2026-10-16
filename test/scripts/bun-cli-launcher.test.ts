@@ -16,15 +16,13 @@ const lifecycle = vi.hoisted(() => ({
   probeNode: vi.fn<() => { bunVersion: string | null } | null>(),
 }));
 
-vi.mock("../../scripts/lib/bun-cli-launcher.mjs", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../scripts/lib/bun-cli-launcher.mjs")>()),
+vi.mock(import("../../scripts/lib/bun-cli-launcher.mjs"), async (importOriginal) => ({
+  ...(await importOriginal()),
   resolveBunGlobalBinDir: lifecycle.resolveBinDir,
 }));
 
-vi.mock("../../scripts/preinstall-package-manager-warning.mjs", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../../scripts/preinstall-package-manager-warning.mjs")
-  >()),
+vi.mock(import("../../scripts/preinstall-package-manager-warning.mjs"), async (importOriginal) => ({
+  ...(await importOriginal()),
   probePackageCliNodeRuntime: lifecycle.probeNode,
 }));
 
@@ -73,12 +71,11 @@ describe.skipIf(process.platform === "win32")("POSIX Bun CLI launcher", () => {
     fs.symlinkSync(process.execPath, target.bunPath);
     fs.writeFileSync(
       target.entryPath,
-      [
-        'import { readFileSync } from "node:fs";',
-        'if (process.argv[2] === "signal") process.kill(process.pid, "SIGTERM");',
-        'else if (process.argv[2] === "stdin") process.stdout.write(readFileSync(0));',
-        "else { process.stdout.write(JSON.stringify(process.argv.slice(2))); process.exitCode = 23; }",
-      ].join("\n"),
+      `import { readFileSync } from "node:fs";
+if (process.argv[2] === "signal") process.kill(process.pid, "SIGTERM");
+else if (process.argv[2] === "stdin") process.stdout.write(readFileSync(0));
+else { process.stdout.write(JSON.stringify(process.argv.slice(2))); process.exitCode = 23; }
+`,
     );
     install(target);
 
@@ -119,15 +116,10 @@ describe.skipIf(process.platform === "win32")("POSIX Bun CLI launcher", () => {
     });
     fs.renameSync(target.packageRoot, liveRoot);
 
-    const result = execute(target, ["two words", "$literal", ""]);
+    const args = ["two words", "$literal", ""];
+    const result = execute(target, args);
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.split("\0")).toEqual([
-      join(liveRoot, "openclaw.mjs"),
-      "two words",
-      "$literal",
-      "",
-      "",
-    ]);
+    expect(result.stdout.split("\0")).toEqual([join(liveRoot, "openclaw.mjs"), ...args, ""]);
     expect(content.split("\n").filter((line) => line.includes(`${target.packageRoot}/`))).toEqual([
       `#openclaw-entry=${target.entryPath}`,
     ]);
@@ -149,10 +141,8 @@ describe.skipIf(process.platform === "win32")("POSIX Bun CLI launcher", () => {
       content = content.replaceAll(`${target.packageRoot}/`, `${liveRoot}/`);
       fs.renameSync(target.packageRoot, liveRoot);
     } else {
-      content = content.replace(
-        `#openclaw-entry=${target.entryPath}`,
-        `#openclaw-entry=${target.entryPath}\n#openclaw-entry=${target.entryPath}`,
-      );
+      const record = `#openclaw-entry=${target.entryPath}`;
+      content = content.replace(record, `${record}\n${record}`);
     }
     fs.writeFileSync(target.path, content, { mode: 0o755 });
 
@@ -185,17 +175,19 @@ describe.skipIf(process.platform === "win32")("POSIX Bun CLI launcher", () => {
       expect(inspect(target).state).toBe(kind === "symlink" ? "stale" : "missing");
 
       expect(install(target)).toEqual({ path: target.path, state: "current" });
-      expect(fs.lstatSync(target.path).isSymbolicLink()).toBe(false);
-      expect(fs.statSync(target.path).mode & 0o777).toBe(0o755);
+      const installed = fs.lstatSync(target.path);
+      expect(installed.isSymbolicLink()).toBe(false);
+      expect(installed.mode & 0o777).toBe(0o755);
       expect(read(target.entryPath)).toBe(entry);
       expect(parseInstalled(target)).toEqual({
         bunPath: target.bunPath,
         entryPath: target.entryPath,
       });
-      const installed = fs.statSync(target.path);
       install(target);
-      const unchanged = fs.statSync(target.path);
-      expect(unchanged).toMatchObject({ ino: installed.ino, mtimeMs: installed.mtimeMs });
+      expect(fs.statSync(target.path)).toMatchObject({
+        ino: installed.ino,
+        mtimeMs: installed.mtimeMs,
+      });
       expect(fs.readdirSync(target.binDir)).toEqual(["openclaw"]);
       const updated = { ...target, bunPath: join(target.root, "new-bun") };
       expect(inspect(updated).state).toBe("stale");
@@ -276,10 +268,8 @@ describe.skipIf(process.platform === "win32")("packaged Bun launcher lifecycle",
     });
     expect(inspect(target).state).toBe("current");
     const updatedBun = join(target.root, "updated-bun");
-    postinstall({
-      ...params,
-      env: { ...params.env, OPENCLAW_PACKAGE_BUN_LAUNCHER: updatedBun },
-    });
+    params.env.OPENCLAW_PACKAGE_BUN_LAUNCHER = updatedBun;
+    postinstall(params);
     expect(parseInstalled(target)?.bunPath).toBe(updatedBun);
   });
 

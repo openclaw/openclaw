@@ -8,14 +8,15 @@ import {
 } from "../../scripts/e2e/lib/bun-only-runtime/node-spawn-ledger.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const step = {
-  name: "terminals",
-  startMs: 100,
-  endMs: 200,
-  sentinelStart: 0,
-  sentinelEnd: 1,
+const makeStep = (name = "terminals", index = 0, startMs = 100) => ({
+  name,
+  startMs,
+  endMs: startMs + 100,
+  sentinelStart: index,
+  sentinelEnd: index + 1,
   status: "passed",
-};
+});
+const step = makeStep();
 const trace = {
   childPid: 20,
   pid: 10,
@@ -95,35 +96,23 @@ describe("Bun-only Node spawn ledger", () => {
   );
 
   it("matches node-host spawns only in the same or later steps", () => {
-    const steps = ["gateway", "node-host", "agent"].map((name, index) =>
-      Object.assign({}, step, {
-        name,
-        startMs: 100 + index * 200,
-        endMs: 200 + index * 200,
-        sentinelStart: index,
-        sentinelEnd: index + 1,
-      }),
+    const steps = ["gateway", "node-host", "agent"].map((name, i) =>
+      makeStep(name, i, 100 + i * 200),
     );
-    const nodeHostTrace = {
+    const argv = ["view", "openclaw@latest"];
+    const npm = {
       ...trace,
-      cmd: ["npm", "view", "openclaw@latest"],
-      stack: ["at fetchNpmPackageTargetStatus (update.js:1:1)"],
+      cmd: ["npm", ...argv],
+      stack: ["at fetchNpmPackageTargetStatus"],
     };
+    const probe = { ...sentinel, name: "npm", argv: npm.cmd.slice(1) };
     const attempts = attributeSpawns({
       steps,
-      traceRecords: [250, 450, 650].map((ts, index) =>
-        Object.assign({}, nodeHostTrace, {
-          childPid: sentinel.pid + index,
-          ts,
-        }),
+      traceRecords: [250, 450, 650].map((ts, i) =>
+        Object.assign({}, npm, { childPid: 20 + i, ts }),
       ),
       sentinelRecords: [0, 1, 2].map((index) =>
-        Object.assign({}, sentinel, {
-          pid: sentinel.pid + index,
-          index,
-          name: "npm",
-          argv: nodeHostTrace.cmd.slice(1),
-        }),
+        Object.assign({}, probe, { pid: 20 + index, index }),
       ),
     });
     expect(attempts.map((attempt) => attempt.step)).toEqual(["gateway", "node-host", "agent"]);
@@ -134,7 +123,7 @@ describe("Bun-only Node spawn ledger", () => {
         {
           ...blocker,
           step: "node-host",
-          match: { stack: ["fetchNpmPackageTargetStatus"], argv: ["view", "openclaw@latest"] },
+          match: { stack: ["fetchNpmPackageTargetStatus"], argv },
         },
       ],
     });

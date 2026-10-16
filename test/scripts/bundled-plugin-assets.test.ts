@@ -3,19 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { buildDiscordActivitySdk } from "../../scripts/build-discord-activity-sdk.mts";
-import {
-  listStaleGeneratedPluginAssets,
-  parseBundledPluginAssetArgs,
-  readBundledPluginAssetHooks,
-  runBundledPluginAssetHooks,
-} from "../../scripts/bundled-plugin-assets.mts";
+import * as assets from "../../scripts/bundled-plugin-assets.mts";
 import * as managedCommands from "../../scripts/lib/managed-child-process.mts";
 import { listGeneratedExtensionAssetSources } from "../../scripts/lib/static-extension-assets.mts";
-import {
-  createRunNodePathClassifier,
-  isBuildRelevantRunNodePath,
-  isRestartRelevantRunNodePath,
-} from "../../scripts/run-node-watch-paths.mts";
+import * as watch from "../../scripts/run-node-watch-paths.mts";
 import { awaitGateBeforeSettlement, createDeferred } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -51,7 +42,7 @@ function pluginAssetFixture(initialScripts: Record<string, unknown> = {}) {
 }
 
 const readHooks = (rootDir = process.cwd(), options = {}) =>
-  readBundledPluginAssetHooks({ phase: "build", rootDir, ...options });
+  assets.readBundledPluginAssetHooks({ phase: "build", rootDir, ...options });
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
 
@@ -70,12 +61,9 @@ it("reuses both Canvas dialects across candidates and invalidates changed inputs
     ]) {
       write(file, fs.readFileSync(path.resolve(file), "utf8"));
     }
-    fs.mkdirSync(path.join(root, "node_modules/@openclaw"), { recursive: true });
-    fs.symlinkSync(
-      path.resolve("node_modules/@openclaw/fs-safe"),
-      path.join(root, "node_modules/@openclaw/fs-safe"),
-      "junction",
-    );
+    const fsSafe = "node_modules/@openclaw/fs-safe";
+    fs.mkdirSync(path.dirname(path.join(root, fsSafe)), { recursive: true });
+    fs.symlinkSync(path.resolve(fsSafe), path.join(root, fsSafe), "junction");
     for (const module of [
       "@solidjs/compiler/index.js",
       "@solidjs/web/index.js",
@@ -188,28 +176,30 @@ it("keeps build-generated static assets out of the source watcher", async () => 
     const pluginPath = path.relative(rootDir, hook.pluginDir).replaceAll(path.sep, "/");
     expect(
       generatedAssetSources.some((source) => source.startsWith(`${pluginPath}/`)),
-      `${hook.pluginId} build hook must declare at least one generated output`,
+      `${hook.pluginId} generated output`,
     ).toBe(true);
   }
 
   expect(generatedAssetSources).toContain("extensions/canvas/src/host/a2ui/a2ui.bundle.js");
   expect(generatedAssetSources).toContain("extensions/discord/assets/embedded-app-sdk.mjs");
   for (const source of generatedAssetSources) {
-    expect(isBuildRelevantRunNodePath(source), source).toBe(false);
-    expect(isRestartRelevantRunNodePath(source), source).toBe(false);
+    expect(watch.isBuildRelevantRunNodePath(source), source).toBe(false);
+    expect(watch.isRestartRelevantRunNodePath(source), source).toBe(false);
   }
-  expect(isRestartRelevantRunNodePath("extensions/discord/src/activities/http.ts")).toBe(true);
+  expect(watch.isRestartRelevantRunNodePath("extensions/discord/src/activities/http.ts")).toBe(
+    true,
+  );
 });
 
 it.each(["packages/llm-core/src/types.ts"])("rebuilds the root runtime for %s", (source) => {
-  expect(isBuildRelevantRunNodePath(source)).toBe(true);
-  expect(isRestartRelevantRunNodePath(source)).toBe(true);
+  expect(watch.isBuildRelevantRunNodePath(source)).toBe(true);
+  expect(watch.isRestartRelevantRunNodePath(source)).toBe(true);
 });
 
 it("refreshes generated output metadata without recreating the watcher", async () => {
   const { rootDir, writePackage, write } = pluginAssetFixture({ buildOutputs: undefined });
 
-  const classifier = createRunNodePathClassifier({ rootDir });
+  const classifier = watch.createRunNodePathClassifier({ rootDir });
   classifier.refreshGeneratedPluginAssetPaths();
   const generatedPath = path.join("extensions", "canvas", "assets", "generated-runtime.js");
   expect(classifier.isRestartRelevantRunNodePath(generatedPath)).toBe(true);
@@ -282,22 +272,18 @@ it("awaits bounded asset execution and reports joined timeouts safely", async ()
   const { rootDir, pluginDir } = pluginAssetFixture({ build });
   const started = createDeferred<Parameters<typeof managedCommands.runManagedCommand>[0]>();
   const command = createDeferred<number>();
-  const runner = vi
-    .spyOn(managedCommands, "runManagedCommand")
-    .mockImplementationOnce((options) => {
-      started.resolve(options);
-      return command.promise;
-    });
-  const running = runBundledPluginAssetHooks({ phase: "build", rootDir });
-  const outcome = running.then(
-    () => undefined,
-    (error: unknown) => error,
-  );
+  const runner = vi.spyOn(managedCommands, "runManagedCommand");
+  runner.mockImplementationOnce((options) => {
+    started.resolve(options);
+    return command.promise;
+  });
+  const running = assets.runBundledPluginAssetHooks({ phase: "build", rootDir });
+  const outcome = running.catch((error: unknown) => error);
   try {
     const options = await awaitGateBeforeSettlement(
       started.promise,
       running,
-      "Asset hooks completed before managed execution settled",
+      "Asset hook settled before command",
     );
     expect(options).toMatchObject({
       bin: build,
@@ -305,9 +291,7 @@ it("awaits bounded asset execution and reports joined timeouts safely", async ()
       timeoutMs: 600_000,
       requireProcessTreeExit: process.platform !== "win32",
     });
-    const failure = Object.assign(new Error("Asset command cleanup completed"), {
-      code: "ETIMEDOUT",
-    });
+    const failure = Object.assign(new Error("cleanup completed"), { code: "ETIMEDOUT" });
     command.reject(failure);
     expect(await outcome).toMatchObject({
       code: "ETIMEDOUT",
@@ -327,7 +311,7 @@ it("rejects a symlinked dist root before running copy hooks", async () => {
   write("live-gateway-dist/sentinel.js", "keep\n");
   fs.symlinkSync(targetDir, path.join(rootDir, "dist"), "dir");
 
-  await expect(runBundledPluginAssetHooks({ phase: "copy", rootDir })).rejects.toThrow(
+  await expect(assets.runBundledPluginAssetHooks({ phase: "copy", rootDir })).rejects.toThrow(
     /symbolic link/u,
   );
   expect(fs.readFileSync(path.join(targetDir, "sentinel.js"), "utf8")).toBe("keep\n");
@@ -335,21 +319,19 @@ it("rejects a symlinked dist root before running copy hooks", async () => {
 });
 
 it("parses whole-repo check runs and rejects filtered or copy-phase checks", () => {
-  expect(parseBundledPluginAssetArgs(["--phase", "build", "--check"])).toEqual({
+  expect(assets.parseBundledPluginAssetArgs(["--phase", "build", "--check"])).toEqual({
     check: true,
     phase: "build",
     plugins: [],
   });
+  const deferError = "--defer-isolated requires --phase build without --check";
   for (const [args, error] of [
     ["--phase copy --check", "--check requires --phase build"],
     ["--phase build --check --plugin=canvas", "--check cannot be combined with --plugin filters"],
-    [
-      "--phase build --check --defer-isolated",
-      "--defer-isolated requires --phase build without --check",
-    ],
-    ["--phase copy --defer-isolated", "--defer-isolated requires --phase build without --check"],
+    ["--phase build --check --defer-isolated", deferError],
+    ["--phase copy --defer-isolated", deferError],
   ] as const) {
-    expect(() => parseBundledPluginAssetArgs(args.split(" "))).toThrow(error);
+    expect(() => assets.parseBundledPluginAssetArgs(args.split(" "))).toThrow(error);
   }
 });
 
@@ -361,8 +343,8 @@ it("reports declared generated outputs that differ from the committed bytes", as
   git(rootDir, "-c", "user.email=t@t", "-c", "user.name=t", "add", ".");
   git(rootDir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--quiet", "-m", "init");
 
-  expect(listStaleGeneratedPluginAssets({ rootDir })).toEqual([]);
+  expect(assets.listStaleGeneratedPluginAssets({ rootDir })).toEqual([]);
 
   write(generatedPath, "export const generated = 2;\n");
-  expect(listStaleGeneratedPluginAssets({ rootDir })).toEqual([generatedPath]);
+  expect(assets.listStaleGeneratedPluginAssets({ rootDir })).toEqual([generatedPath]);
 });

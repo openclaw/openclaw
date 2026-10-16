@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
 import { createServer as createNetServer, type Server as NetServer, type Socket } from "node:net";
@@ -193,60 +194,43 @@ function runProbeCommand(root: string, args: string[], env: Record<string, strin
       delete childEnv[key];
     }
   }
-  childEnv.OPENCLAW_ENTRY = path.join(root, "dist", "index.js");
-  return spawnSync(process.execPath, [probePath, ...args], {
+  return runScript(root, probePath, args, childEnv);
+}
+
+function runScript(root: string, script: string, args: string[], env = process.env) {
+  return spawnSync(process.execPath, [script, ...args], {
     cwd: root,
     encoding: "utf8",
-    env: childEnv as NodeJS.ProcessEnv,
+    env: { ...env, OPENCLAW_ENTRY: path.join(root, "dist", "index.js") },
   });
 }
 
 function runRuntimeSmoke(root: string, args: string[]) {
-  return spawnSync(process.execPath, [runtimeSmokePath, ...args], {
-    cwd: root,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      OPENCLAW_ENTRY: path.join(root, "dist", "index.js"),
-    },
-  });
+  return runScript(root, runtimeSmokePath, args);
 }
 
 async function importRuntimeSmokeWithEnv(env: Record<string, string | undefined>) {
-  return await withEnvAsync(env, async () => {
-    return await import(
-      `${pathToFileURL(runtimeSmokePath).href}?case=${Date.now()}-${Math.random()}`
-    );
-  });
+  return withEnvAsync(
+    env,
+    () => import(`${pathToFileURL(runtimeSmokePath).href}?case=${Date.now()}-${Math.random()}`),
+  );
 }
 
 async function listenOnLoopback(server: HttpServer | NetServer): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const onError = (error: Error) => {
-      server.off("error", onError);
-      reject(error);
-    };
-    server.once("error", onError);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", onError);
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("server did not bind to a TCP port"));
-        return;
-      }
-      resolve(address.port);
-    });
-  });
+  const listening = once(server, "listening");
+  server.listen(0, "127.0.0.1");
+  await listening;
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("server did not bind to a TCP port");
+  }
+  return address.port;
 }
 
 async function closeServer(server: HttpServer | NetServer): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     server.close((error?: Error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
+      return error ? reject(error) : resolve();
     });
   });
 }
@@ -683,36 +667,51 @@ describe("bundled plugin install/uninstall probe", () => {
   // Keep them serial so one teardown cannot signal another case's child tree.
   registerRuntimeCommandTimeoutTests(createPackageRoot);
 
-  it.runIf(process.platform !== "win32").for([false, true])(
-    "cleans runtime command groups on parent signal (command settled=%s)",
-    async (commandSettled, { signal, onTestFinished }) => {
+  it
+    .runIf(process.platform !== "win32")
+    .for(["command running", "command settled", "gateway closed"])(
+    "cleans descendant groups on parent signal after %s",
+    async (state, { signal, onTestFinished }) => {
+      const gateway = state === "gateway closed";
+      const commandSettled = state === "command settled";
       const root = createPackageRoot();
       const commandPath = path.join(root, "closed-command.mjs");
       const runnerPath = path.join(root, "run-closed-runtime-command.mjs");
-      const commandSettledPath = path.join(root, "command-settled");
       const descendantPidPath = path.join(root, "closed-command-descendant.pid");
-      const descendantScript = descendantSource(descendantPidPath);
-      writeSource(commandPath, [
-        "import childProcess from 'node:child_process';",
-        `const child = childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
-          descendantScript,
-        )}], { stdio: "ignore" });`,
-        commandSettled ? "child.unref();" : "setInterval(() => {}, 1000);",
-        "",
-      ]);
+      const descendantScript = descendantSource(descendantPidPath, gateway);
+      if (gateway) {
+        writeGatewayWithChild(commandPath, descendantScript, true);
+      } else {
+        writeSource(commandPath, [
+          "import childProcess from 'node:child_process';",
+          `const child = childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
+            descendantScript,
+          )}], { stdio: "ignore" });`,
+          commandSettled ? "child.unref();" : "setInterval(() => {}, 1000);",
+          "",
+        ]);
+      }
+      const readyMessage = gateway ? "gateway-closed" : "command-settled";
+      const operation = gateway
+        ? [
+            `const gateway = runtimeSmoke.startGateway(${JSON.stringify({
+              entrypoint: commandPath,
+              env: {},
+              logPath: path.join(root, "gateway.log"),
+              port: 19004,
+              skipChannels: true,
+            })});`,
+            "gateway.once('close', () => process.send('gateway-closed'));",
+          ]
+        : [
+            `runtimeSmoke.runCommand(process.execPath, [${JSON.stringify(commandPath)}], { timeoutMs: 60_000 })`,
+            commandSettled
+              ? ".finally(() => process.send('command-settled'));"
+              : ".catch(() => undefined);",
+          ];
       writeSource(runnerPath, [
-        "import fs from 'node:fs';",
         `const runtimeSmoke = await import(${JSON.stringify(pathToFileURL(runtimeSmokePath).href)});`,
-        `runtimeSmoke.runCommand(process.execPath, [${JSON.stringify(commandPath)}], {`,
-        "  timeoutMs: 60_000,",
-        ...(commandSettled
-          ? [
-              "}).finally(() => {",
-              `  fs.writeFileSync(${JSON.stringify(commandSettledPath)}, "1");`,
-              "  process.send('command-settled');",
-              "});",
-            ]
-          : ["}).catch(() => undefined);"]),
+        ...operation,
         "setInterval(() => {}, 1000);",
         "",
       ]);
@@ -722,66 +721,18 @@ describe("bundled plugin install/uninstall probe", () => {
         runnerPath,
         descendantPidPath,
         onTestFinished,
+        gateway ? { ...process.env, ...teardownEnv } : process.env,
       );
-      const settled = runnerMessage(runner, "command-settled");
+      const settled = runnerMessage(runner, readyMessage);
       try {
         const descendantPid = await waitForDescendant(signal);
         expect(pidIsAlive(descendantPid)).toBe(true);
-        if (commandSettled) {
+        if (commandSettled || gateway) {
           await withinTest(
-            awaitGateBeforeSettlement(settled, closed, `timeout waiting for ${commandSettledPath}`),
+            awaitGateBeforeSettlement(settled, closed, `timeout waiting for ${readyMessage}`),
             signal,
           );
         }
-
-        runner.kill("SIGTERM");
-
-        await waitForDead(descendantPid, signal);
-      } finally {
-        await cleanup();
-      }
-    },
-  );
-
-  (process.platform !== "win32" ? it : it.skip)(
-    "cleans detached runtime gateway groups when the parent is signaled",
-    async ({ signal, onTestFinished }) => {
-      const root = createPackageRoot();
-      const entrypoint = path.join(root, "dist", "gateway-with-signaled-sidecar.js");
-      const runnerPath = path.join(root, "run-runtime-smoke.mjs");
-      const logPath = path.join(root, "gateway-signal.log");
-      const descendantPidPath = path.join(root, "signaled-descendant.pid");
-      const descendantScript = descendantSource(descendantPidPath, true);
-      writeGatewayWithChild(entrypoint, descendantScript, true);
-      writeSource(runnerPath, [
-        `const runtimeSmoke = await import(${JSON.stringify(pathToFileURL(runtimeSmokePath).href)});`,
-        "const gateway = runtimeSmoke.startGateway({",
-        `  entrypoint: ${JSON.stringify(entrypoint)},`,
-        "  env: {},",
-        `  logPath: ${JSON.stringify(logPath)},`,
-        "  port: 19004,",
-        "  skipChannels: true,",
-        "});",
-        "gateway.once('close', () => process.send('gateway-closed'));",
-        "setInterval(() => {}, 1000);",
-        "",
-      ]);
-
-      const { runner, closed, cleanup, waitForDescendant } = runnerFixture(
-        root,
-        runnerPath,
-        descendantPidPath,
-        onTestFinished,
-        { ...process.env, ...teardownEnv },
-      );
-      const gatewayClosed = runnerMessage(runner, "gateway-closed");
-      try {
-        const descendantPid = await waitForDescendant(signal);
-        expect(pidIsAlive(descendantPid)).toBe(true);
-        await withinTest(
-          awaitGateBeforeSettlement(gatewayClosed, closed, "runtime gateway did not close"),
-          signal,
-        );
 
         runner.kill("SIGTERM");
 
