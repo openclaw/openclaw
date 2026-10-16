@@ -160,6 +160,11 @@ suite.define(() => {
         { featureMethods: [...defaultControlUiFeatureMethods, "openclaw.chat"] },
       );
       await page.setViewportSize({ width, height });
+      if (width <= 560) {
+        await expect
+          .poll(() => page.locator(".shell").getAttribute("class"))
+          .toContain("shell--mobile-nav");
+      }
       const header = page.locator(".agents-home__header .content-header");
       const title = header.getByRole("heading", { name: "Agents", exact: true });
       const subtitle = header.locator(".page-subtitle");
