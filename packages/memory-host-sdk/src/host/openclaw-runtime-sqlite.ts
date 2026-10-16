@@ -6,8 +6,8 @@ export {
   migrateSqliteSchemaToStrict,
   migrateSqliteSchemaToStrictInTransaction,
 } from "../../../../src/infra/sqlite-strict.js";
+export { assertDynamicSqliteSchemaContains as assertSqliteSchemaContains } from "../../../../src/infra/sqlite-schema-dynamic.js";
 export {
-  assertSqliteSchemaContains,
   createSqliteTableContractReader,
   type SqliteTableContractReader,
 } from "../../../../src/infra/sqlite-schema-contract.js";

@@ -14,7 +14,11 @@ import { databaseEngineAdapters } from "./adapters.js";
 import type { AdmittedStore, EngineConnection, StoreSchema } from "./contract.js";
 import { observeConnection } from "./observation.js";
 import { admitPostgresPhysicalFacts } from "./physical-facts.js";
-import { admitPostgresCapabilities, postgresSchemaMetadataSql } from "./postgres-schema.js";
+import {
+  admitPostgresCapabilities,
+  postgresSchemaMetadataSql,
+  getAdmittedPostgresSchema,
+} from "./postgres-schema.js";
 import { admitPostgresSearch } from "./postgres-search-schema.js";
 import type { DatabaseEngineInput } from "./types.js";
 
@@ -265,6 +269,9 @@ export function openEngineStore(ref: {
     }
     // Publish against the committed schema revision, after bootstrap/migration settles.
     publishSearch?.();
+    for (const extension of Object.values(getAdmittedPostgresSchema(db)?.searchExtensions ?? {})) {
+      admitPostgresSearch(db, extension, identity.namespace)?.();
+    }
     return db;
   } catch (error) {
     if (ref.closeOnFailure) {

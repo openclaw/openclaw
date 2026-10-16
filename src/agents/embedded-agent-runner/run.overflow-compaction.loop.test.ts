@@ -52,10 +52,6 @@ vi.mock("../../gateway/github-publication-discovery.js", () => ({
   readGitHubPublicationFact: mocks.readGitHubPublicationFact,
 }));
 
-vi.mock("../delegation-capability.js", () => ({
-  resolveDelegationCapability: vi.fn(() => undefined),
-}));
-
 // mock-isolation: Dispatch fixtures provide an empty auth store and no credential database.
 vi.mock("../auth-profiles/source-check.js", () => ({
   hasAnyAuthProfileStoreSource: () => false,

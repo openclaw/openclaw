@@ -26,9 +26,8 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
-import { withLegacySessionParticipantsSchema } from "../state/openclaw-agent-participants-migration.js";
+import { LEGACY_PARTICIPANTS_SCHEMA } from "../state/openclaw-agent-schema-history.js";
 import { seedOpenClawAgentSchemaV21 } from "../state/openclaw-agent-schema-v21.test-support.js";
-import { sessionParticipantsSchemaSql } from "../state/openclaw-agent-session-participants-schema.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -147,7 +146,7 @@ function openLegacyAgentDatabase(stateDir: string, agentId = "main") {
   removeCanonicalValidationFromHistoricalAgentFixture(database);
   database.exec(`
     DROP TABLE session_participants;
-    ${withLegacySessionParticipantsSchema(sessionParticipantsSchemaSql())}
+    ${LEGACY_PARTICIPANTS_SCHEMA}
     PRAGMA user_version = 17;
     UPDATE schema_meta SET schema_version = 17 WHERE meta_key = 'primary';
   `);

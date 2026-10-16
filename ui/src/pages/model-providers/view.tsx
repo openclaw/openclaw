@@ -177,7 +177,10 @@ function renderProbeResult(result: ModelsProbeResult | undefined) {
     result.status === "ok" && result.results.some((target) => target.status !== "ok");
   const presentation = hasWarnings ? "warning" : result.status === "ok" ? "success" : "error";
   return (
-    <div class={"model-providers__probe model-providers__probe--" + presentation} role="status">
+    <div
+      class={["model-providers__probe", `model-providers__probe--${presentation}`]}
+      role="status"
+    >
       <div class="model-providers__probe-summary">
         <strong>
           {hasWarnings

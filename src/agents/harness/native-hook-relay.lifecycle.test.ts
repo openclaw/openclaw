@@ -684,15 +684,15 @@ it("does not start transport when locator lookup consumes the caller deadline", 
     await relay.ready;
     const entered = createDeferredCore();
     const resume = createDeferredCore();
-    const read = clientStore.readNativeHookRelayClientBridgeRecord;
-    vi.spyOn(clientStore, "readNativeHookRelayClientBridgeRecord").mockImplementation(
-      async (params) => {
-        const record = await read(params);
-        entered.resolve();
-        await resume.promise;
-        return record;
-      },
-    );
+    // Start the measured lookup after the runtime's real locator reader is ready.
+    const record = await clientStore.readNativeHookRelayClientBridgeRecord({
+      relayId: relay.relayId,
+    });
+    vi.spyOn(clientStore, "readNativeHookRelayClientBridgeRecord").mockImplementation(async () => {
+      entered.resolve();
+      await resume.promise;
+      return record;
+    });
     const startedAt = performance.now();
     const clock = vi.spyOn(performance, "now").mockReturnValue(startedAt);
     const invocation = invokeNativeHookRelayBridge({

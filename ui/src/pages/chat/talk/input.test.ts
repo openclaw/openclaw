@@ -6,7 +6,7 @@ import {
   discoverRealtimeTalkInputs,
   observeRealtimeTalkDevices,
   openRealtimeTalkCamera,
-  RealtimeTalkInputController,
+  RealtimeTalkInputOwner,
 } from "./input.ts";
 
 function mediaDevice(kind: MediaDeviceKind, deviceId: string, label: string): MediaDeviceInfo {
@@ -40,13 +40,13 @@ function microphoneEndedListener(
   return listener;
 }
 
-const ownedInputs = new Set<RealtimeTalkInputController>();
+const ownedInputs = new Set<RealtimeTalkInputOwner>();
 
 function createMicrophoneInput(
   onEnded: (detail: string) => void = () => undefined,
   onConnecting?: (detail?: string) => void,
 ) {
-  const input = new RealtimeTalkInputController(onEnded, onConnecting);
+  const input = new RealtimeTalkInputOwner(onEnded, onConnecting);
   ownedInputs.add(input);
   return input;
 }

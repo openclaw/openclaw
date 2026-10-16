@@ -19,7 +19,7 @@ import type { CronRunReceiptHandle } from "../cron/store/run-receipt.types.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.test-support.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";

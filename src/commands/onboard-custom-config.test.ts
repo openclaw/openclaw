@@ -674,6 +674,27 @@ describe("parseNonInteractiveCustomApiFlags", () => {
     });
   });
 
+  it.each(["openai", "openai-responses"])(
+    "allows omitted model ids for %s discovery",
+    (compatibility) => {
+      expect(
+        parseNonInteractiveCustomApiFlags({
+          baseUrl: "https://llm.example.com/v1",
+          compatibility,
+        }),
+      ).toEqual({ baseUrl: "https://llm.example.com/v1", modelId: "", compatibility });
+    },
+  );
+
+  it("requires an explicit model id for Anthropic compatibility", () => {
+    expect(() =>
+      parseNonInteractiveCustomApiFlags({
+        baseUrl: "https://llm.example.com",
+        compatibility: "anthropic",
+      }),
+    ).toThrow("--custom-model-id");
+  });
+
   it("parses custom image input opt-in", () => {
     const result = parseNonInteractiveCustomApiFlags({
       baseUrl: "https://llm.example.com/v1",

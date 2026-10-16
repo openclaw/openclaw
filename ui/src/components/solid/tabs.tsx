@@ -11,7 +11,7 @@ export type TabOption = {
   id?: string;
   panelId?: string;
   disabled?: boolean;
-  className?: string;
+  className?: JSX.HTMLAttributes<HTMLButtonElement>["class"];
   testId?: string;
   attributes?: JSX.HTMLAttributes<HTMLButtonElement> & {
     [name: `data-${string}`]: string | number | boolean | undefined;

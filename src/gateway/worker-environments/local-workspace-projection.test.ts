@@ -229,7 +229,7 @@ describe("local sandbox workspace reconciliation", () => {
       import("../../state/openclaw-state-schema.js"),
       import("../../state/openclaw-state-db-contract.js"),
       import("../../infra/sqlite-schema-sql.js"),
-      import("../../infra/sqlite-schema-contract.js"),
+      import("../../infra/sqlite-schema-contract.test-support.js"),
     ]);
     const db = openOpenClawStateDatabase().db;
     const version = db

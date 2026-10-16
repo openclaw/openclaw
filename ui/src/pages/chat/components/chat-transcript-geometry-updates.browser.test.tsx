@@ -60,6 +60,7 @@ class GeometryPane extends ChatPaneRuntime {
       layout: solidContent(GeometryLayout, layout),
       dialog: undefined,
       capabilityDialogs: undefined,
+      providerReviewSource: undefined,
     };
   }
 }

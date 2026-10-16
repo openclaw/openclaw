@@ -219,6 +219,17 @@ literal trigram contains, and exact cosine search. Agent transcript text search
 uses this contract; agent memory still follows the support matrix above.
 It does not enable PostgreSQL for an unported store.
 
+Owning components can register additional search definitions with
+`admitStoreSearch(connection, definition, { extension: name })` on an admitted
+worker connection. PostgreSQL installs
+the derived objects and records their definitions in one writer transaction.
+Reopening the store verifies PostgreSQL's catalog fingerprint, including these
+extensions, without recreating the indexes. Changing a registered definition,
+including its vector dimension, is refused with `SearchExtensionDefinitionChangedError`;
+restore the previous definition until the owning component provides a derived-index
+rebuild. Canonical embeddings remain unchanged. SQLite registration only binds
+the existing capability and leaves its FTS5 and vec0 lifecycle unchanged.
+
 For a store that declares search indexes, install these extensions in the
 database before opening it. The default extension namespace is `public`:
 

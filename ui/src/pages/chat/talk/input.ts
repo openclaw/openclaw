@@ -1,5 +1,6 @@
 import { racePromiseWithAbortSignal } from "@openclaw/retry";
 import { t } from "../../../i18n/index.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 
 export type RealtimeTalkInputDevice = {
   deviceId: string;
@@ -101,8 +102,7 @@ export function observeRealtimeTalkDevices(onChange: () => void): () => void {
   if (!devices?.addEventListener) {
     return () => undefined;
   }
-  devices.addEventListener("devicechange", onChange);
-  return () => devices.removeEventListener("devicechange", onChange);
+  return listen(devices, "devicechange", onChange);
 }
 
 export function describeRealtimeTalkInputError(error: unknown): string {
@@ -221,7 +221,7 @@ async function openRealtimeTalkMedia(
     );
   }
   const deviceId = selectedDeviceId?.trim();
-  let acquisition: MediaStream | string;
+  let acquisition: MediaStream;
   try {
     acquisition = await awaitRealtimeTalkMediaRequest(
       () =>
@@ -254,11 +254,8 @@ async function openRealtimeTalkMedia(
         ? new RealtimeTalkSelectedMicrophoneError()
         : new Error(t("chat.composer.selectedCameraUnavailable"));
     }
-    acquisition = realtimeTalkDeviceIssueMessage(deviceIssueFromError(error), kind);
-  }
-  // A DOMException cause would append its legacy code in the shared formatter.
-  if (typeof acquisition === "string") {
-    throw new Error(acquisition);
+    // oxlint-disable-next-line preserve-caught-error -- A DOMException cause appends its legacy code in the shared formatter.
+    throw new Error(realtimeTalkDeviceIssueMessage(deviceIssueFromError(error), kind));
   }
   if (signal?.aborted) {
     acquisition.getTracks().forEach((track) => track.stop());
@@ -267,7 +264,7 @@ async function openRealtimeTalkMedia(
   return acquisition;
 }
 
-export class RealtimeTalkInputController {
+export class RealtimeTalkInputOwner {
   private controller: AbortController | null = null;
   private media: MediaStream | null = null;
 
