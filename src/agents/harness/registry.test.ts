@@ -279,7 +279,9 @@ describe("agent harness registry", () => {
         registerAgentHarness(makeHarness("shared"));
       }),
     ).toThrow("agent harness shared already registered by first-plugin");
-    expect(building.agentHarnesses).toEqual([registration]);
+    expect(building.agentHarnesses).toEqual([
+      { pluginId: "first-plugin", source: "runtime", harness: original },
+    ]);
 
     withPluginRegistrationContext(building, "builder-plugin", () => {
       registerAgentHarness(makeHarness("owned"));

@@ -274,9 +274,8 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
         ctx: { trigger: mode === "user" ? "user" : "heartbeat" },
       });
       expect(handler).toHaveBeenCalledTimes(mode === "user" ? 0 : 1);
-      expect(calls).toEqual(
-        { only: ["heartbeat"], ordered: ["heartbeat", "before_prompt_build"], user: [] }[mode],
-      );
+      const orderedCalls = ["heartbeat", ...(mode === "ordered" ? ["before_prompt_build"] : [])];
+      expect(calls).toEqual(mode === "user" ? [] : orderedCalls);
       expect(result).toMatchObject({ prompt: expected, developerInstructions: "base" });
     },
   );
@@ -294,12 +293,13 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
         chat: { id: "chat-a" },
       },
     } satisfies Parameters<typeof buildBase>[0]["ctx"];
+    const expected = structuredClone(ctx);
     const handler = vi.fn(() => undefined);
     installHooks(promptHook(handler));
 
     await buildPrompt({ ctx });
 
-    expect(handler).toHaveBeenCalledWith(expect.anything(), expect.objectContaining(ctx));
+    expect(handler).toHaveBeenCalledWith(expect.anything(), expect.objectContaining(expected));
   });
 
   it("runs authorized enrichment after restrictive hooks finalize the tool surface", async () => {
