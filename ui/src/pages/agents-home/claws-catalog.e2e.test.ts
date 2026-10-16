@@ -1,5 +1,5 @@
 import { writeFile } from "node:fs/promises";
-import { chromium, type Browser, type Locator } from "playwright";
+import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../../test-helpers/control-ui-e2e-screenshot.ts";
@@ -198,7 +198,7 @@ describe.skipIf(!browserAvailable)("Claws Add in Agents", () => {
       expect(await agent.textContent()).not.toContain("example/model-small");
       expect(await agent.locator("button, a, [tabindex]").count()).toBe(0);
 
-      const styles = (locator: Locator) =>
+      const styles = (locator: import("playwright").Locator) =>
         locator.evaluate((element) => {
           const style = getComputedStyle(element);
           return {
