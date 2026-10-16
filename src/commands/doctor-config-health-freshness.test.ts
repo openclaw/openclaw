@@ -20,24 +20,13 @@ vi.mock("@openclaw/fs-safe/atomic", async (importOriginal) => ({
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 afterEach(() => vi.restoreAllMocks());
 
-function withHealthHome(run: (home: string) => Promise<void>) {
-  return withDoctorConfigPreflightHome(async (home) => {
-    try {
-      await run(home);
-    } finally {
-      await closeOpenClawStateDatabaseAsync();
-    }
-  });
-}
+const config = (port: number) => ({
+  meta: { lastTouchedVersion: "2026.9.4" },
+  gateway: { mode: "local", port },
+});
+const configRaw = (port: number) => JSON.stringify(config(port));
 
-const configRaw = (port: number) =>
-  JSON.stringify({ meta: { lastTouchedVersion: "2026.9.4" }, gateway: { mode: "local", port } });
-
-async function createFixture(home: string) {
-  const configPath = await writeOpenClawConfig(home, {
-    meta: { lastTouchedVersion: "2026.9.4" },
-    gateway: { mode: "local", port: 19091 },
-  });
+function configIO(home: string, configPath: string) {
   const options = {
     configPath,
     env: { ...process.env, HOME: home },
@@ -46,54 +35,75 @@ async function createFixture(home: string) {
   };
   const io = createConfigIO(options);
   const read = () => createConfigIO({ ...options, observe: false }).readConfigFileSnapshot();
-  return { configPath, options, io, read };
+  const raw = (suffix = "") => fs.readFileSync(`${configPath}${suffix}`, "utf8");
+  const replace = (value: string) => {
+    fs.writeFileSync(configPath, value);
+    return read();
+  };
+  const health = () => healthState.readConfigHealthStateFromStore(options);
+  const observe = (value: string) => {
+    fs.writeFileSync(configPath, value);
+    expect(io.loadConfig().gateway?.port).toBe(19093);
+    return health();
+  };
+  const assertDurableHealth = async (expected: ConfigHealthState | undefined) => {
+    expect(health()).toEqual(expected);
+    await closeOpenClawStateDatabaseAsync();
+    expect(health()).toEqual(expected);
+  };
+  return { configPath, io, read, raw, replace, observe, assertDurableHealth };
+}
+
+function withFixture(
+  run: (
+    f: ReturnType<typeof configIO> & { goodRaw: string | null; directory: string },
+  ) => Promise<void>,
+  custom = false,
+) {
+  return withDoctorConfigPreflightHome(async (home) => {
+    try {
+      const directory = path.join(home, "custom-config");
+      let file: string;
+      if (custom) {
+        fs.mkdirSync(directory, { mode: 0o750 });
+        fs.chmodSync(directory, 0o750);
+        file = path.join(directory, "openclaw.json");
+        fs.writeFileSync(file, configRaw(19091));
+      } else {
+        file = await writeOpenClawConfig(home, config(19091));
+      }
+      const f = configIO(home, file);
+      const good = await f.read();
+      expect(await f.io.promoteConfigSnapshotToLastKnownGood(good)).toBe(true);
+      await run({ ...f, goodRaw: custom ? configRaw(19091) : good.raw, directory });
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+    }
+  });
 }
 
 it.skipIf(process.platform === "win32")(
   "preserves custom parent permissions during promotion and retains recovery hardening",
   () =>
-    withHealthHome(async (home) => {
-      const directory = path.join(home, "custom-config");
-      const configPath = path.join(directory, "openclaw.json");
-      fs.mkdirSync(directory, { mode: 0o750 });
-      fs.chmodSync(directory, 0o750);
-      const raw = configRaw(19091);
-      fs.writeFileSync(configPath, raw);
-      const options = {
-        configPath,
-        env: { ...process.env, HOME: home },
-        homedir: () => home,
-        logger: { warn: vi.fn(), error: vi.fn() },
-      };
-      const io = createConfigIO(options);
-      const good = await createConfigIO({ ...options, observe: false }).readConfigFileSnapshot();
-      expect(await io.promoteConfigSnapshotToLastKnownGood(good)).toBe(true);
-      expect(fs.readFileSync(`${configPath}.last-good`, "utf8")).toBe(raw);
+    withFixture(async ({ configPath, directory, io, replace, raw, goodRaw }) => {
+      expect(raw(".last-good")).toBe(goodRaw);
       expect(fs.statSync(`${configPath}.last-good`).mode & 0o777).toBe(0o600);
       expect(fs.statSync(directory).mode & 0o777).toBe(0o750);
 
-      fs.writeFileSync(configPath, "{ invalid json");
-      const invalid = await createConfigIO({
-        ...options,
-        observe: false,
-      }).readConfigFileSnapshot();
+      const invalid = await replace("{ invalid json");
       expect(
         await io.recoverConfigFromLastKnownGood({ snapshot: invalid, reason: "fixture" }),
       ).toBe(true);
-      expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+      expect(raw()).toBe(goodRaw);
       expect(fs.statSync(configPath).mode & 0o777).toBe(0o600);
       expect(fs.statSync(directory).mode & 0o777).toBe(0o700);
-    }),
+    }, true),
 );
 
 it("keeps the last-known-good file when a newer observation supersedes promotion", () =>
-  withHealthHome(async (home) => {
-    const { configPath, options, io, read } = await createFixture(home);
-    const good = await read();
-    expect(await io.promoteConfigSnapshotToLastKnownGood(good)).toBe(true);
+  withFixture(async ({ configPath, io, raw, replace, goodRaw, observe, assertDurableHealth }) => {
     const olderRaw = configRaw(19092);
-    fs.writeFileSync(configPath, olderRaw);
-    const older = await read();
+    const older = await replace(olderRaw);
     const newerRaw = configRaw(19093);
     let observedNewer = false;
     let expectedHealth: ConfigHealthState | undefined;
@@ -104,9 +114,7 @@ it("keeps the last-known-good file when a newer observation supersedes promotion
       directory.write = async (relativePath, data, writeOptions) => {
         if (!observedNewer && data === olderRaw) {
           observedNewer = true;
-          fs.writeFileSync(configPath, newerRaw);
-          expect(io.loadConfig().gateway?.port).toBe(19093);
-          expectedHealth = healthState.readConfigHealthStateFromStore(options);
+          expectedHealth = observe(newerRaw);
         }
         return write(relativePath, data, writeOptions);
       };
@@ -117,12 +125,10 @@ it("keeps the last-known-good file when a newer observation supersedes promotion
     expect(expectedHealth?.entries?.[configPath]?.lastKnownGood?.hash).toBe(
       hashConfigRaw(newerRaw),
     );
-    expect(fs.readFileSync(`${configPath}.last-good`, "utf8")).toBe(good.raw);
-    expect(fs.readFileSync(configPath, "utf8")).toBe(newerRaw);
-    expect(healthState.readConfigHealthStateFromStore(options)).toEqual(expectedHealth);
+    expect(raw(".last-good")).toBe(goodRaw);
+    expect(raw()).toBe(newerRaw);
     expect(promoted).toBe(false);
-    await closeOpenClawStateDatabaseAsync();
-    expect(healthState.readConfigHealthStateFromStore(options)).toEqual(expectedHealth);
+    await assertDurableHealth(expectedHealth);
   }));
 
 it.each(
@@ -132,14 +138,9 @@ it.each(
 )(
   "$operation preserves committed file truth and newer health after $metadata",
   ({ operation, metadata }) =>
-    withHealthHome(async (home) => {
-      const { configPath, options, io, read } = await createFixture(home);
-      const good = await read();
-      expect(await io.promoteConfigSnapshotToLastKnownGood(good)).toBe(true);
-      const goodRaw = fs.readFileSync(configPath, "utf8");
+    withFixture(async ({ configPath, io, raw, replace, goodRaw, observe, assertDurableHealth }) => {
       const targetRaw = operation === "promotion" ? configRaw(19092) : "{ invalid json";
-      fs.writeFileSync(configPath, targetRaw);
-      const target = await read();
+      const target = await replace(targetRaw);
       expect(target.valid).toBe(operation === "promotion");
       const newerRaw = configRaw(19093);
       const capture = healthState.captureConfigHealthStateStore;
@@ -161,9 +162,7 @@ it.each(
               expect(fs.readFileSync(committedPath, "utf8")).toBe(
                 operation === "promotion" ? targetRaw : goodRaw,
               );
-              fs.writeFileSync(configPath, newerRaw);
-              expect(io.loadConfig().gateway?.port).toBe(19093);
-              expectedHealth = healthState.readConfigHealthStateFromStore(options);
+              expectedHealth = observe(newerRaw);
               expect(expectedHealth.entries?.[configPath]?.lastKnownGood?.hash).toBe(
                 hashConfigRaw(newerRaw),
               );
@@ -177,7 +176,7 @@ it.each(
       });
       if (operation === "promotion") {
         expect(await io.promoteConfigSnapshotToLastKnownGood(target)).toBe(true);
-        expect(fs.readFileSync(`${configPath}.last-good`, "utf8")).toBe(targetRaw);
+        expect(raw(".last-good")).toBe(targetRaw);
       } else {
         const result = await withEnvAsync(
           {
@@ -193,35 +192,28 @@ it.each(
               observe: false,
             }),
         );
-        expect(result.snapshot.valid).toBe(true);
-        expect(result.snapshot.raw).toBe(newerRaw);
+        expect(result.snapshot).toMatchObject({ valid: true, raw: newerRaw });
         expect(result.snapshot.config.gateway?.port).toBe(19093);
       }
       expect(superseded).toBe(true);
       expect(expectedHealth).toBeDefined();
-      expect(fs.readFileSync(configPath, "utf8")).toBe(newerRaw);
-      expect(healthState.readConfigHealthStateFromStore(options)).toEqual(expectedHealth);
-      await closeOpenClawStateDatabaseAsync();
-      expect(healthState.readConfigHealthStateFromStore(options)).toEqual(expectedHealth);
+      expect(raw()).toBe(newerRaw);
+      await assertDurableHealth(expectedHealth);
     }),
 );
 
 it("rejects last-known-good recovery after its captured database admission closes", () =>
-  withHealthHome(async (home) => {
-    const { configPath, io, read } = await createFixture(home);
-    const good = await read();
-    expect(await io.promoteConfigSnapshotToLastKnownGood(good)).toBe(true);
+  withFixture(async ({ configPath, io, replace, raw }) => {
     const rejectedRaw = "{ invalid json";
-    fs.writeFileSync(configPath, rejectedRaw);
-    const rejected = await read();
-    const replace = fileReplacement.replaceFileAtomic;
+    const rejected = await replace(rejectedRaw);
+    const replaceAtomic = fileReplacement.replaceFileAtomic;
     let closed = false;
     vi.spyOn(fileReplacement, "replaceFileAtomic").mockImplementation(async (params) => {
       if (params.filePath === configPath && !closed) {
         closed = true;
         await closeOpenClawStateDatabaseAsync();
       }
-      return replace(params);
+      return replaceAtomic(params);
     });
     await expect(
       io.recoverConfigFromLastKnownGood({
@@ -230,5 +222,5 @@ it("rejects last-known-good recovery after its captured database admission close
       }),
     ).rejects.toThrow("read admission");
     expect(closed).toBe(true);
-    expect(fs.readFileSync(configPath, "utf8")).toBe(rejectedRaw);
+    expect(raw()).toBe(rejectedRaw);
   }));
