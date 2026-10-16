@@ -119,6 +119,11 @@ suite.define(() => {
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, native.key));
       const text = (label: string) => sidebar.getByText(label, { exact: true });
+      const expectVisible = async (...labels: string[]) => {
+        for (const label of labels) {
+          await expectBrowser(text(label)).toBeVisible();
+        }
+      };
       await selectAllSidebarSessions(page);
       await chooseSidebarMenuOption(page, "Status", "All");
       await closeSidebarMenu(page);
@@ -135,9 +140,7 @@ suite.define(() => {
           await toggle.click();
         }
       }
-      await expectBrowser(text("Remote shared conversation")).toBeVisible();
-      await expectBrowser(text("Imported meeting")).toBeVisible();
-      await expectBrowser(text(involved.label)).toBeVisible();
+      await expectVisible("Remote shared conversation", "Imported meeting", involved.label);
       await chooseSidebarOwner(page, "involving-me");
       await expect
         .poll(async () =>
@@ -146,34 +149,23 @@ suite.define(() => {
           ),
         )
         .toBe(true);
-      await expectBrowser(text(native.label)).toBeVisible();
-      await expectBrowser(text(involved.label)).toBeVisible();
+      await expectVisible(native.label, involved.label);
       const artifactParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
       if (artifactParent) {
         const directory = createControlUiE2eArtifactDir("catalog-involvement", artifactParent);
-        await writeFile(
-          path.join(directory, "involving-me.png"),
-          (
-            await takeControlUiScreenshotFrame(
-              page,
-              page.locator(".sidebar"),
-              [
-                page.locator("#sidebar-session-owner-title"),
-                text(native.label),
-                text(involved.label),
-              ],
-              { animations: "disabled" },
-            )
-          ).png,
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          sidebar,
+          [page.locator("#sidebar-session-owner-title"), text(native.label), text(involved.label)],
+          { animations: "disabled" },
         );
+        await writeFile(path.join(directory, "involving-me.png"), frame.png);
       }
       await expectBrowser(text("Remote shared conversation")).toHaveCount(0);
       await expectBrowser(text("Imported meeting")).toHaveCount(0);
       await expectBrowser(text(unrelated.label)).toHaveCount(0);
       await selectAllSidebarSessions(page);
-      await expectBrowser(text("Remote shared conversation")).toBeVisible();
-      await expectBrowser(text("Imported meeting")).toBeVisible();
-      await expectBrowser(text(unrelated.label)).toBeVisible();
+      await expectVisible("Remote shared conversation", "Imported meeting", unrelated.label);
     });
   });
 });

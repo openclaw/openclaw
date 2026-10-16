@@ -97,54 +97,30 @@ const ready = async (page: Page) => {
 };
 async function assertNoProvisioning(gateway: MockGatewayControls) {
   const requests = await gateway.getRequests();
-  expect(requests.filter((request) => request.method === "environments.list")).toEqual([]);
-  expect(
-    requests.filter((request) =>
-      ["environments.create", "desktop.launch", "sessions.dispatch"].includes(request.method),
-    ),
-  ).toEqual([]);
   expect(
     requests.filter(
       (request) =>
-        request.method === "browser.request" &&
-        ["/start", "/tabs/open", "/tabs/focus"].includes(
-          String(asNullableRecord(request.params)?.path),
-        ),
+        [
+          "environments.list",
+          "environments.create",
+          "desktop.launch",
+          "sessions.dispatch",
+        ].includes(request.method) ||
+        (request.method === "browser.request" &&
+          ["/start", "/tabs/open", "/tabs/focus"].includes(
+            String(asNullableRecord(request.params)?.path),
+          )),
     ),
   ).toEqual([]);
 }
 
 suite.define(() => {
-  it.each(
-    [
-      { width: 390 },
-      { reclaimOnReload: true },
-      { swapOnReload: true },
-      { explicitTargetOnReload: true },
-      { staleRoster: true, closeOtherPanel: true },
-    ].map((scenario) =>
-      Object.assign(
-        {
-          width: 1280,
-          staleRoster: false,
-          reclaimOnReload: false,
-          swapOnReload: false,
-          closeOtherPanel: false,
-          explicitTargetOnReload: false,
-        },
-        scenario,
-      ),
-    ),
-  )(
-    "reveals a running desktop on direct entry at width $width (stale roster: $staleRoster, reclaim: $reclaimOnReload, swap: $swapOnReload, close another: $closeOtherPanel, explicit target: $explicitTargetOnReload) and respects reload",
-    async ({
-      width,
-      staleRoster,
-      reclaimOnReload,
-      swapOnReload,
-      closeOtherPanel,
-      explicitTargetOnReload,
-    }) => {
+  it.each(["mobile", "reclaim", "swap", "explicit-target", "stale-roster"] as const)(
+    "reveals a running desktop on direct entry and respects reload (%s)",
+    async (scenario) => {
+      const width = scenario === "mobile" ? 390 : 1280;
+      const staleRoster = scenario === "stale-roster";
+      const explicitTargetOnReload = scenario === "explicit-target";
       await withPage(async ({ page }) => {
         const explicitEnvironmentId = "manual-desktop";
         const gateway = await openResources(page, {
@@ -229,10 +205,7 @@ suite.define(() => {
           await pane(page).locator(".desktop-surface canvas").waitFor();
           await expect.poll(restoredRfb.events).toEqual(["authenticated:1"]);
           expect(await desktopTab(page).count()).toBe(1);
-          await assertNoProvisioning(gateway);
-          return;
-        }
-        if (closeOtherPanel) {
+        } else if (scenario === "stale-roster") {
           await selectChatLayoutAction(pane(page), /^Swap /);
           await pane(page).locator(".desktop-surface canvas").waitFor();
           await openChatSidePanelType(page, "Browser");
@@ -243,10 +216,7 @@ suite.define(() => {
           expect(await pane(page).getByRole("tab", { name: "Browser", exact: true }).count()).toBe(
             0,
           );
-          await assertNoProvisioning(gateway);
-          return;
-        }
-        if (swapOnReload) {
+        } else if (scenario === "swap") {
           await selectChatLayoutAction(pane(page), /^Swap /);
           await page.reload();
           await ready(page);
@@ -257,10 +227,7 @@ suite.define(() => {
           await pane(page).locator(".desktop-surface canvas").waitFor();
           await screenshot(page, "desktop-swap-reload");
           expect(await desktopTab(page).count()).toBe(1);
-          await assertNoProvisioning(gateway);
-          return;
-        }
-        if (reclaimOnReload) {
+        } else if (scenario === "reclaim") {
           await dockChatSidePanel(page, "bottom");
           await gateway.setSessionsListResponse(list(false));
           await gateway.setMethodResponse("sessions.describe", {
@@ -273,16 +240,17 @@ suite.define(() => {
           expect(await desktopTab(page).count()).toBe(0);
           expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
           return;
+        } else {
+          await selectChatLayoutAction(pane(page), /^(Side panel|Minimize side panel)$/);
+          await desktopTab(page).waitFor({ state: "hidden" });
+          await gateway.emitGatewayEvent("node.runnerInventory.changed", {
+            nodeId: "worker-desktop",
+          });
+          expect(await desktopTab(page).isVisible()).toBe(false);
+          await page.reload();
+          await ready(page);
+          expect(await desktopTab(page).isVisible()).toBe(false);
         }
-        await selectChatLayoutAction(pane(page), /^(Side panel|Minimize side panel)$/);
-        await desktopTab(page).waitFor({ state: "hidden" });
-        await gateway.emitGatewayEvent("node.runnerInventory.changed", {
-          nodeId: "worker-desktop",
-        });
-        expect(await desktopTab(page).isVisible()).toBe(false);
-        await page.reload();
-        await ready(page);
-        expect(await desktopTab(page).isVisible()).toBe(false);
         await assertNoProvisioning(gateway);
       }, width);
     },

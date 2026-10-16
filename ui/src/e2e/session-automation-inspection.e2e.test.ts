@@ -26,10 +26,8 @@ const withPage = (run: Parameters<typeof suite.withPage>[1], width = 1440) =>
   );
 const openLink = (flyout: Locator) =>
   flyout.getByRole("link", { name: "Open automation", exact: true });
-const preview = (flyout: Locator) =>
-  flyout.locator(".session-hovercard__automation-preview").textContent();
-const automationName = (flyout: Locator) =>
-  flyout.locator(".session-hovercard__automation-name").textContent();
+const detail = (flyout: Locator, part: "preview" | "name") =>
+  flyout.locator(`.session-hovercard__automation-${part}`).textContent();
 function job(id = "ci", overrides: Partial<CronJob> = {}): CronJob {
   return {
     id,
@@ -63,16 +61,12 @@ function inventory(jobs: CronJob[], overrides: Partial<CronJobsListResult> = {})
     ...overrides,
   });
 }
-async function fixture(page: Page, jobs: CronJob[], width: number, deferred = false) {
+async function fixture(page: Page, jobs: CronJob[], width = 1440, deferred = false) {
   await page.clock.setFixedTime(NOW);
   const gateway = await installMockGateway(page, {
     sessionKey: key,
     featureMethods: ["progressCard.get", "cron.list"],
-    ...(deferred
-      ? {
-          deferredRequests: [{ method: "cron.list", match: { sessionKey: key } }],
-        }
-      : {}),
+    deferredRequests: deferred ? [{ method: "cron.list", match: { sessionKey: key } }] : [],
     methodResponses: {
       "progressCard.get": { card: null },
       "cron.list": inventory(jobs),
@@ -125,7 +119,7 @@ suite.define(() => {
         expect(await flyout.textContent()).toContain("Every 5m");
         expect(await flyout.textContent()).toContain("Last run succeeded");
         expect(await flyout.textContent()).toContain("Next");
-        expect(await preview(flyout)).toBe(prompt);
+        expect(await detail(flyout, "preview")).toBe(prompt);
         if (captureUiProofEnabled) {
           const frame = await takeControlUiScreenshotFrame(page, card, [trigger, flyout], {
             animations: "disabled",
@@ -180,26 +174,18 @@ suite.define(() => {
       const paused = job("merge", {
         name: "Merge when ready",
         enabled: false,
-        payload: {
-          kind: "agentTurn",
-          message: "Merge only after required checks and reviews pass.",
-        },
         state: {
           lastRunAtMs: NOW - 180_000,
           lastRunStatus: "error",
           lastError: "Required review is missing.",
         },
       });
-      const { gateway, card, trigger, flyout, setJobs } = await fixture(
-        page,
-        [job(), paused],
-        1440,
-      );
+      const { gateway, card, trigger, flyout, setJobs } = await fixture(page, [job(), paused]);
       await expect.poll(() => trigger.textContent()).toBe("2 automations");
       await trigger.hover();
       await flyout.waitFor({ state: "visible" });
       await flyout.getByRole("button", { name: "Merge when ready Paused" }).click();
-      expect(await automationName(flyout)).toBe("Merge when ready");
+      expect(await detail(flyout, "name")).toBe("Merge when ready");
       expect(await flyout.textContent()).toContain("Last run failed");
       expect(await flyout.textContent()).toContain("Required review is missing.");
       expect(await openLink(flyout).getAttribute("href")).toContain("job=merge");
@@ -210,7 +196,7 @@ suite.define(() => {
       await expect
         .poll(() => flyout.locator('[data-running="true"]').textContent())
         .toBe("Running");
-      expect(await automationName(flyout)).toBe("Merge when ready");
+      expect(await detail(flyout, "name")).toBe("Merge when ready");
       const writes = (await gateway.getRequests()).filter((r) =>
         ["cron.add", "cron.update", "cron.remove", "cron.run"].includes(r.method),
       );
@@ -239,7 +225,7 @@ suite.define(() => {
       await setJobs([command], { offset: 1, limit: 1, total: 2 });
       await flyout.getByRole("button", { name: "Load more automations" }).click();
       await flyout.getByRole("button", { name: "Run repository check Enabled" }).click();
-      expect(await preview(flyout)).toBe("git status --short");
+      expect(await detail(flyout, "preview")).toBe("git status --short");
       await setJobs([], { snapshotRevision: "empty" });
       await gateway.emitGatewayEvent("cron", { jobId: "command", action: "removed" });
       await flyout.getByText("No automations for this session").waitFor();

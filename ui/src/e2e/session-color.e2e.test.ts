@@ -20,15 +20,13 @@ const suite = createSessionManagementE2eSuite();
 const button = (scope: Page | Locator, name: string) =>
   scope.getByRole("button", { name, exact: true });
 const menuItem = (page: Page, name: string) => page.getByRole("menuitem", { name, exact: true });
+const headerPanel = (page: Page) =>
+  page.locator("openclaw-chat-header-session-menu .chat-header-session-menu__panel");
 const expectAttribute = (locator: Locator, name: string, value: string) =>
   expect.poll(() => locator.getAttribute(name)).toBe(value);
 const expectFocused = (locator: Locator) =>
   expect
-    .poll(() =>
-      locator.evaluateAll((elements) =>
-        elements.some((element) => element === document.activeElement),
-      ),
-    )
+    .poll(() => locator.evaluateAll((elements) => elements.includes(document.activeElement!)))
     .toBe(true);
 async function press(page: Page, ...keys: string[]) {
   for (const key of keys) {
@@ -38,6 +36,12 @@ async function press(page: Page, ...keys: string[]) {
 async function openAppearance(page: Page) {
   await openSessionMenuSubmenu(page, "Advanced");
   await openSessionMenuSubmenu(page, "Icon & color");
+}
+function sessionPatches(gateway: Parameters<typeof waitForPatch>[0], key: string) {
+  return (expected: Record<string, unknown>) =>
+    waitForPatch(gateway, (params) =>
+      Object.entries({ key, ...expected }).every(([field, value]) => params[field] === value),
+    );
 }
 
 suite.define(() => {
@@ -59,6 +63,7 @@ suite.define(() => {
         },
         featureMethods: ["chat.metadata", "chat.startup", "sessions.patch"],
       });
+      const patched = sessionPatches(gateway, key);
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
         const trigger =
@@ -69,13 +74,7 @@ suite.define(() => {
         await page.keyboard.press(surface === "sidebar" ? "Shift+F10" : "Enter");
         if (surface === "compact") {
           await expect
-            .poll(() =>
-              page
-                .locator(
-                  'openclaw-chat-header-session-menu .chat-header-session-menu__panel [role^="menuitem"]:focus',
-                )
-                .count(),
-            )
+            .poll(() => headerPanel(page).locator('[role^="menuitem"]:focus').count())
             .toBe(1);
           for (const name of ["Advanced", "Icon & color"]) {
             await focusSessionMenuItem(page, name);
@@ -87,28 +86,23 @@ suite.define(() => {
         const picker = page.locator(".session-menu__appearance:visible");
         await expect
           .poll(() =>
-            picker.evaluate((element) => {
-              const iconPicker = element.querySelector(".session-menu__icon-picker");
-              const iconsLabel = element.querySelectorAll(".session-menu__icon-section-label")[2];
-              return [
-                iconPicker ? getComputedStyle(iconPicker).marginTop : null,
-                iconsLabel ? getComputedStyle(iconsLabel).marginTop : null,
-              ];
-            }),
+            picker.evaluate((element) =>
+              [
+                element.querySelector(".session-menu__icon-picker"),
+                element.querySelectorAll(".session-menu__icon-section-label")[2],
+              ].map((child) => (child ? getComputedStyle(child).marginTop : null)),
+            ),
           )
           .toEqual(["4px", "4px"]);
         const focused = () =>
-          page.evaluate(
-            () =>
-              document
-                .querySelector(".session-menu__appearance :focus")
-                ?.getAttribute("aria-label") ?? null,
+          picker.evaluate(
+            (element) => element.querySelector(":focus")?.getAttribute("aria-label") ?? null,
           );
         await expect.poll(focused).toBe("No color");
         await page.keyboard.press("Tab");
         await expect.poll(focused).toBe("Red");
         await page.keyboard.press("Enter");
-        await waitForPatch(gateway, (params) => params.key === key && params.color === "red");
+        await patched({ color: "red" });
         await page.keyboard.press("Tab");
         await expect.poll(focused).toBe("Blue");
         await page.keyboard.press("Shift+Tab");
@@ -118,7 +112,7 @@ suite.define(() => {
         }
         await expect.poll(() => picker.locator(".session-menu__icon-choice:focus").count()).toBe(1);
         await press(page, "ArrowRight", "Enter");
-        await waitForPatch(gateway, (params) => params.key === key && params.icon === "🚀");
+        await patched({ icon: "🚀" });
         await page.keyboard.press("Tab");
         const reset = button(picker, "Reset to default");
         await expect
@@ -142,16 +136,13 @@ suite.define(() => {
           .toBe(true);
         await page.keyboard.insertText("✨");
         await press(page, "Tab", "Enter");
-        await waitForPatch(gateway, (params) => params.key === key && params.icon === "✨");
+        await patched({ icon: "✨" });
         await press(page, "Shift+Tab", "Escape");
         await expect.poll(focused).toBe("Custom icon…");
         await page.keyboard.press("Tab");
         await expectFocused(reset);
         await page.keyboard.press("Enter");
-        await waitForPatch(
-          gateway,
-          (params) => params.key === key && params.color === null && params.icon === null,
-        );
+        await patched({ color: null, icon: null });
         await page.keyboard.press("Tab");
         await expect.poll(() => picker.count()).toBe(0);
       } finally {
@@ -181,52 +172,40 @@ suite.define(() => {
       { ...sessionRow("agent:main:research", "Research notes", now - 60_000), color: "green" },
       { ...sessionRow("agent:main:release", "Release checklist", now - 120_000), color: "orange" },
     ];
+    const importedSession = {
+      threadId: "imported",
+      name: "Imported CLI notes",
+      status: "stored",
+      color: "cyan",
+      canContinue: false,
+      canArchive: false,
+    };
+    const catalogHost = {
+      hostId: "gateway:claude",
+      label: "Gateway",
+      kind: "gateway",
+      connected: true,
+      sessions: [importedSession],
+    };
+    const catalog = {
+      id: "claude",
+      label: "Claude Code",
+      capabilities: { continueSession: false, archive: false },
+      hosts: [catalogHost],
+    };
+    const text =
+      "The design review is ready. Use session colors to keep related conversations easy to find.";
     const gateway = await installMockGateway(page, {
       sessionKey: key,
-      historyMessages: [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: "The design review is ready. Use session colors to keep related conversations easy to find.",
-            },
-          ],
-        },
-      ],
+      historyMessages: [{ role: "assistant", content: [{ type: "text", text }] }],
       methodResponses: {
         "sessions.list": sessionsListResponse(sessions),
         "sessions.patch": {},
-        "sessions.catalog.list": {
-          catalogs: [
-            {
-              id: "claude",
-              label: "Claude Code",
-              capabilities: { continueSession: false, archive: false },
-              hosts: [
-                {
-                  hostId: "gateway:claude",
-                  label: "Gateway",
-                  kind: "gateway",
-                  connected: true,
-                  sessions: [
-                    {
-                      threadId: "imported",
-                      name: "Imported CLI notes",
-                      status: "stored",
-                      color: "cyan",
-                      canContinue: false,
-                      canArchive: false,
-                    },
-                  ],
-                },
-              ],
-            },
-          ],
-        },
+        "sessions.catalog.list": { catalogs: [catalog] },
       },
       featureMethods: ["chat.metadata", "chat.startup", "sessions.patch", "sessions.catalog.list"],
     });
+    const patched = sessionPatches(gateway, key);
     const shot = async (
       name: string,
       surface = page.locator(".shell"),
@@ -258,10 +237,7 @@ suite.define(() => {
       await row.click({ button: "right" });
       await openAppearance(page);
       await button(page, "Purple").click();
-      const set = await waitForPatch(
-        gateway,
-        (params) => params.key === key && params.color === "purple",
-      );
+      const set = await patched({ color: "purple" });
       expect(set.params).toMatchObject({ key, color: "purple" });
       await expect
         .poll(() => row.getAttribute("class"))
@@ -277,7 +253,7 @@ suite.define(() => {
       // Both choices persist in the same open picker, without reopening the menu.
       const picker = page.locator("openclaw-session-menu .session-menu__appearance");
       await button(picker, "book").click();
-      await waitForPatch(gateway, (params) => params.key === key && params.icon === "book");
+      await patched({ icon: "book" });
       await expectAttribute(button(picker, "book"), "aria-pressed", "true");
       await expectAttribute(button(picker, "Purple"), "aria-pressed", "true");
       const appearanceSubmenu = sessionMenuSubmenu(menuItem(page, "Icon & color"));
@@ -322,18 +298,11 @@ suite.define(() => {
       await menuItem(page, "Advanced").click();
       await menuItem(page, "Icon & color").click();
       await button(page, "Blue").click();
-      await waitForPatch(gateway, (params) => params.key === key && params.color === "blue");
+      await patched({ color: "blue" });
       await expectAttribute(dot, "aria-label", "Session color: Blue");
-      await shot(
-        "after-compact-menu.png",
-        page.locator("openclaw-chat-header-session-menu .chat-header-session-menu__panel"),
-        [button(page, "Blue")],
-      );
+      await shot("after-compact-menu.png", headerPanel(page), [button(page, "Blue")]);
       await button(page, "Reset to default").click();
-      await waitForPatch(
-        gateway,
-        (params) => params.key === key && params.color === null && params.icon === null,
-      );
+      await patched({ color: null, icon: null });
       await expect.poll(() => dot.count()).toBe(0);
     } finally {
       await context.close();

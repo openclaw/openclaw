@@ -29,6 +29,18 @@ suite.define(() => {
   it("opens the selected session and its app views only in the browser that asked the agent", async () => {
     const source = "agent:main:session-a";
     const destination = "agent:main:session-b";
+    const environment = (ready = false) => ({
+      id: "preview-desktop",
+      type: "worker",
+      status: ready ? "available" : "starting",
+      desktop: ready,
+    });
+    const observation = (control = false) => ({
+      transport: "rfb",
+      wsPath: `/desktop/observe?token=synthetic${control ? "-control" : ""}`,
+      expiresAtMs: 60_000,
+      control,
+    });
     const browsers = await Promise.all(
       ["requester", "other-user"].map(async (connId) => {
         const context = await suite.newBrowserContext({ viewport: { width: 1100, height: 800 } });
@@ -44,29 +56,16 @@ suite.define(() => {
           ],
           methodResponses: {
             "sessions.list": chatSessionListResponse(),
-            "environments.status": {
-              id: "preview-desktop",
-              type: "worker",
-              status: "starting",
-              desktop: false,
-            },
-            "desktop.observe": {
-              transport: "rfb",
-              wsPath: "/desktop/observe?token=synthetic",
-              expiresAtMs: 60_000,
-              control: false,
-            },
+            "environments.status": environment(),
+            "desktop.observe": observation(),
             "portal.list": {
               portals: [
                 {
                   id: "preview-web",
                   title: "Crabbox web app",
                   port: 3000,
-                  listenPort: 43210,
                   tokenQuery: "openclaw_portal=synthetic",
-                  publicUrl: "http://127.0.0.1:43210/",
                   url: "http://127.0.0.1:43210/?openclaw_portal=synthetic",
-                  createdAtMs: 1,
                 },
               ],
             },
@@ -121,10 +120,12 @@ suite.define(() => {
                     match: { requestId: payload.requestId },
                   });
                   const respond = vi.fn();
-                  await expectDefined(
-                    uiCommandHandlers["ui.command.result"],
-                    "ui.command.result",
-                  )({ params: report.params, client: browser.client, respond, context } as never);
+                  await uiCommandHandlers["ui.command.result"]!({
+                    params: report.params,
+                    client: browser.client,
+                    respond,
+                    context,
+                  } as never);
                   expect(respond).toHaveBeenCalledWith(true, { ok: true });
                 }
               })(),
@@ -141,10 +142,7 @@ suite.define(() => {
         agentSessionKey: source,
         callGateway: async <T>(_method: string, params: Record<string, unknown>): Promise<T> => {
           const respond = vi.fn();
-          await expectDefined(
-            uiCommandHandlers["ui.command"],
-            "ui.command",
-          )({ params, respond, context } as never);
+          await uiCommandHandlers["ui.command"]!({ params, respond, context } as never);
           if (!validateUiCommandParams(params)) {
             throw new Error("Screen tool emitted an invalid UI command");
           }
@@ -153,14 +151,12 @@ suite.define(() => {
             expect(respond).toHaveBeenCalledWith(true, {
               ok: true,
               delivery: "dispatched",
-              presentation:
-                "portalId" in command && command.portalId
-                  ? {
-                      portalId: command.portalId,
-                      status: "unverified",
-                      reason: "network-reachable",
-                    }
-                  : { status: "unverified", reason: "waiting-for-app" },
+              presentation: {
+                status: "unverified",
+                ...("portalId" in command && command.portalId
+                  ? { portalId: command.portalId, reason: "network-reachable" }
+                  : { reason: "waiting-for-app" }),
+              },
             });
           } else {
             expect(respond).toHaveBeenCalledWith(true, { ok: true });
@@ -178,12 +174,7 @@ suite.define(() => {
     const proof = (name: string) =>
       captureUiProof(suite, requester.page, "screen-requester-routing", `${name}.png`);
     const observe = (control: boolean) =>
-      requester.gateway.setMethodResponse("desktop.observe", {
-        transport: "rfb",
-        wsPath: `/desktop/observe?token=synthetic${control ? "-control" : ""}`,
-        expiresAtMs: 60_000,
-        control,
-      });
+      requester.gateway.setMethodResponse("desktop.observe", observation(control));
 
     await command("select", { action: "navigate" });
     await expect
@@ -205,12 +196,7 @@ suite.define(() => {
     await desktop.getByText("Starting your machine…", { exact: true }).waitFor();
     expect(await requester.gateway.getRequests("desktop.observe")).toHaveLength(0);
     await proof("pending-desktop");
-    await requester.gateway.setMethodResponse("environments.status", {
-      id: "preview-desktop",
-      type: "worker",
-      status: "available",
-      desktop: true,
-    });
+    await requester.gateway.setMethodResponse("environments.status", environment(true));
     await requester.gateway.waitForRequest("desktop.observe", {
       match: { source: { kind: "environment", environmentId: "preview-desktop" } },
     });

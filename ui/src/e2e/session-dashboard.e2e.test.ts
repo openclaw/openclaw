@@ -13,6 +13,7 @@ import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   installMockGateway,
+  type ControlUiMockGatewayScenario,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
 import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
@@ -94,33 +95,33 @@ async function createProofContext(name: string) {
   };
 }
 
-const dashboardMethods = (...methods: string[]) => [
-  "board.get",
-  "chat.metadata",
-  "chat.startup",
-  ...methods,
-];
+async function setupDashboard(page: Page, scenario: ControlUiMockGatewayScenario) {
+  const gateway = await installMockGateway(page, {
+    ...scenario,
+    sessionKey,
+    featureMethods: [
+      "board.get",
+      "chat.metadata",
+      "chat.startup",
+      ...(scenario.featureMethods ?? []),
+    ],
+    methodResponses: { "board.get": boardSnapshot, ...scenario.methodResponses },
+  });
+  await showDashboard(page);
+  return gateway;
+}
 const widgetKinds = [
   { pluginId: "workboard", kind: "workboard:card", label: "Workboard card" },
   { pluginId: "workboard", kind: "workboard:mini", label: "Workboard summary" },
 ];
-const canvasHistory = (preview: Record<string, unknown>) => [
-  {
-    role: "assistant",
-    content: [
-      {
-        type: "canvas",
-        preview: {
-          kind: "canvas",
-          surface: "assistant_message",
-          render: "url",
-          ...preview,
-        },
-      },
-    ],
-    timestamp: 1,
-  },
-];
+const assistantHistory = (content: unknown[]) => [{ role: "assistant", content, timestamp: 1 }];
+const canvasHistory = (preview: Record<string, unknown>) =>
+  assistantHistory([
+    {
+      type: "canvas",
+      preview: { kind: "canvas", surface: "assistant_message", render: "url", ...preview },
+    },
+  ]);
 const canvasDocumentHistory = (title: string, viewId: string) =>
   canvasHistory({
     title,
@@ -150,6 +151,10 @@ const expectStyle = (
   expect
     .poll(() => locator.evaluate((element, key) => getComputedStyle(element)[key], property))
     .toBe(value);
+const expectElement = (
+  locator: Locator,
+  predicate: (element: HTMLElement | SVGElement) => boolean,
+) => expect.poll(() => locator.evaluate(predicate)).toBe(true);
 const openDashboard = (page: Page) =>
   page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
 const expectBoardLink = async (link: Locator) =>
@@ -223,12 +228,18 @@ suite.define(() => {
         frame.src = sandboxUrl;
         document.body.replaceChildren(frame);
       }, `http://127.0.0.1:${sandboxAddress.port}${SANDBOX_HOST_PATH}`);
+      const probes = () =>
+        page.evaluate(
+          () =>
+            Reflect.get(globalThis, "widgetProbes") as Array<{
+              method?: string;
+              compatMode?: string;
+            }>,
+        );
       await expect
         .poll(async () =>
-          page.evaluate(() =>
-            (Reflect.get(globalThis, "widgetProbes") as Array<{ method?: string }>).some(
-              (probe) => probe?.method === "ui/notifications/sandbox-proxy-ready",
-            ),
+          (await probes()).some(
+            (probe) => probe?.method === "ui/notifications/sandbox-proxy-ready",
           ),
         )
         .toBe(true);
@@ -251,15 +262,7 @@ suite.define(() => {
         );
       }, widgetHtml);
       await expect
-        .poll(async () =>
-          page.evaluate(() =>
-            (
-              Reflect.get(globalThis, "widgetProbes") as Array<{
-                compatMode?: string;
-              }>
-            ).filter((probe) => probe?.compatMode),
-          ),
-        )
+        .poll(async () => (await probes()).filter((probe) => probe?.compatMode))
         .toEqual([{ compatMode: "CSS1Compat" }]);
       const sandboxFrame = await page
         .locator("iframe")
@@ -280,21 +283,17 @@ suite.define(() => {
 
   it("pins Canvas HTML, follows board commands, and switches dashboard panel width", async () => {
     const { page, recordProof, capture, close } = await createProofContext("workboard-pin");
-    const gateway = await installMockGateway(page, {
-      sessionKey,
+    const gateway = await setupDashboard(page, {
       featureCapabilities: [GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC],
-      featureMethods: dashboardMethods("board.update", "board.widget.grant", "board.widget.put"),
+      featureMethods: ["board.update", "board.widget.grant", "board.widget.put"],
       historyMessages: canvasDocumentHistory("Release status", "cv_release"),
       methodResponses: {
         "canvas.document.view": canvasView(
           buildWidgetDocument("Release status", "<p>Release status</p>"),
         ),
-        "board.get": boardSnapshot,
         "board.widget.put": pinnedBoardSnapshot,
       },
     });
-    await showDashboard(page);
-
     await openDashboard(page);
     await expect
       .poll(async () => (await gateway.getRequests("board.get")).length, { timeout: 30_000 })
@@ -344,11 +343,13 @@ suite.define(() => {
       };
     });
     expect(geometry.gap).toBeGreaterThan(0);
-    expect(geometry.top).toBe(0);
-    expect(geometry.actionLeftOffset).toBe(0);
     expect(geometry.actionVerticalGap).toBeGreaterThan(0);
-    expect(geometry.box).toEqual(restingBox);
-    expect(geometry.panelWidth).toBe(restingBox.width);
+    expect(geometry).toMatchObject({
+      top: 0,
+      actionLeftOffset: 0,
+      box: restingBox,
+      panelWidth: restingBox.width,
+    });
     const pinBox = (await pin.boundingBox())!;
     await page.mouse.move(pinBox.x - geometry.gap / 2, pinBox.y + pinBox.height / 2);
     await page.mouse.move(pinBox.x + pinBox.width / 2, pinBox.y + pinBox.height / 2);
@@ -356,29 +357,22 @@ suite.define(() => {
     await page.mouse.move(0, 0);
     await pin.focus();
     await page.keyboard.press("Tab");
-    await expect
-      .poll(() => more.evaluate((element) => element.matches(":focus-visible")))
-      .toBe(true);
+    await expectElement(more, (element) => element.matches(":focus-visible"));
     await expectStyle(widgetActions, "opacity", "1");
     await page.keyboard.press("Enter");
     await expect.poll(() => preview.locator(".oc-menu:popover-open").count()).toBe(1);
     await page.keyboard.press("Escape");
     for (const width of [796, 794, 390, 1440]) {
       await page.setViewportSize({ width, height: 900 });
-      await expect
-        .poll(() =>
-          preview.evaluate((element) => {
-            const box = element.getBoundingClientRect();
-            const actions = element.querySelector("[data-widget-actions]")!.getBoundingClientRect();
-            const thread = element.closest(".chat-thread")!;
-            const edge =
-              thread.getBoundingClientRect().left + thread.clientLeft + thread.clientWidth;
-            return edge - box.right >= 40
-              ? actions.left >= box.right && actions.right <= edge && actions.top === box.top
-              : actions.right <= box.right && actions.bottom === box.top;
-          }),
-        )
-        .toBe(true);
+      await expectElement(preview, (element) => {
+        const box = element.getBoundingClientRect();
+        const actions = element.querySelector("[data-widget-actions]")!.getBoundingClientRect();
+        const thread = element.closest(".chat-thread")!;
+        const edge = thread.getBoundingClientRect().left + thread.clientLeft + thread.clientWidth;
+        return edge - box.right >= 40
+          ? actions.left >= box.right && actions.right <= edge && actions.top === box.top
+          : actions.right <= box.right && actions.bottom === box.top;
+      });
     }
     await pin.focus();
     await pin.hover();
@@ -447,17 +441,15 @@ suite.define(() => {
 
   it("shows a bounded visible outcome when a Canvas dashboard pin fails", async () => {
     const { page, capture, close } = await createProofContext("workboard-pin-failure");
-    const gateway = await installMockGateway(page, {
-      sessionKey,
+    const gateway = await setupDashboard(page, {
       featureCapabilities: [GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC],
-      featureMethods: dashboardMethods("board.update", "board.widget.grant", "board.widget.put"),
+      featureMethods: ["board.update", "board.widget.grant", "board.widget.put"],
       historyMessages: canvasDocumentHistory("Stale release status", "cv_stale"),
       methodResponses: {
         // Pin failure does not depend on widget scripting; keep the visible preview deterministic.
         "canvas.document.view": canvasView(
           "<!doctype html><html><body><p>Stale release status</p></body></html>",
         ),
-        "board.get": boardSnapshot,
         "board.widget.put": {
           __mockError: {
             code: "NOT_FOUND",
@@ -466,22 +458,16 @@ suite.define(() => {
         },
       },
     });
-    await showDashboard(page);
-
     await openDashboard(page);
     await page.locator(".board-session-surface").waitFor();
     const preview = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
     const pin = preview.getByRole("button", { name: "Pin to dashboard" });
     await expectStyle(preview.locator("[data-widget-actions]"), "opacity", "0.6");
-    await expect
-      .poll(() =>
-        pin.evaluate((element) => {
-          const box = element.getBoundingClientRect();
-          const thread = element.closest(".chat-thread")!.getBoundingClientRect();
-          return box.top >= thread.top;
-        }),
-      )
-      .toBe(true);
+    await expectElement(pin, (element) => {
+      const box = element.getBoundingClientRect();
+      const thread = element.closest(".chat-thread")!.getBoundingClientRect();
+      return box.top >= thread.top;
+    });
     const detailsToggle = page.getByRole("button", { name: "Details", exact: true });
     await captureWidgetDetailsPlacement(page, suite.artifactDir, [preview, pin, detailsToggle]);
     const detailsBox = (await detailsToggle.boundingBox())!;
@@ -522,10 +508,9 @@ suite.define(() => {
   it("pins an inline MCP App using only its session-bound view identity", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      sessionKey,
+    const gateway = await setupDashboard(page, {
       featureCapabilities: [],
-      featureMethods: dashboardMethods("board.widget.appView", "board.widget.put"),
+      featureMethods: ["board.widget.appView", "board.widget.put"],
       historyMessages: canvasHistory({
         title: "Demo App",
         viewId: "outer-view-must-not-be-pinned",
@@ -539,7 +524,6 @@ suite.define(() => {
         },
       }),
       methodResponses: {
-        "board.get": boardSnapshot,
         "board.widget.appView": {
           viewId: "view-pinned-lease",
           expiresAtMs: Date.now() + 60_000,
@@ -547,8 +531,6 @@ suite.define(() => {
         "board.widget.put": pinnedMcpAppBoardSnapshot,
       },
     });
-    await showDashboard(page);
-
     await openDashboard(page);
     await page.locator(".board-session-surface").waitFor();
     const preview = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
@@ -591,23 +573,16 @@ suite.define(() => {
       status: "running",
       position: 1_000,
     };
-    const gateway = await installMockGateway(page, {
+    const gateway = await setupDashboard(page, {
       ...workboardUi,
-      sessionKey,
       controlUiWidgetKinds: widgetKinds,
-      featureMethods: dashboardMethods(
-        "sessions.patch",
-        "workboard.cards.list",
-        "workboard.cards.move",
-      ),
+      featureMethods: ["sessions.patch", "workboard.cards.list", "workboard.cards.move"],
       methodResponses: {
         "board.get": pluginWidgetBoardSnapshot,
         "workboard.cards.list": workboardCardsListResponse([readyCard, alreadyRunningCard]),
         "workboard.cards.move": { card: runningCard },
       },
     });
-    await showDashboard(page);
-
     try {
       await openDashboard(page);
       const cardWidget = page.locator('[data-test-id="workboard-card-widget"]');
@@ -699,19 +674,16 @@ suite.define(() => {
   it("keeps a read-only Workboard dashboard card visible without allowing status changes", async () => {
     await suite.withPage({ viewport: { height: 900, width: 1280 } }, async ({ page }) => {
       const card = makeCard({ title: "Read-only dashboard card", position: 1 });
-      const gateway = await installMockGateway(page, {
+      const gateway = await setupDashboard(page, {
         ...workboardUi,
         controlUiWidgetKinds: widgetKinds,
-        featureMethods: dashboardMethods("workboard.cards.list", "workboard.cards.move"),
+        featureMethods: ["workboard.cards.list", "workboard.cards.move"],
         operatorScopes: ["operator.read"],
-        sessionKey,
         methodResponses: {
           "board.get": pluginWidgetBoardSnapshot,
           "workboard.cards.list": workboardCardsListResponse([card]),
         },
       });
-      await showDashboard(page);
-
       await openDashboard(page);
       const cardWidget = page.locator('[data-test-id="workboard-card-widget"]');
       await cardWidget.waitFor();
@@ -737,18 +709,14 @@ suite.define(() => {
       sessionKey,
       runId: "run-dashboard-stitch",
     });
-    const gateway = await installMockGateway(page, {
+    const gateway = await setupDashboard(page, {
       ...workboardUi,
-      sessionKey,
-      featureMethods: dashboardMethods("config.get", "sessions.list", "workboard.cards.list"),
+      featureMethods: ["config.get", "sessions.list", "workboard.cards.list"],
       methodResponses: {
-        "board.get": boardSnapshot,
         "config.get": workboardConfigSnapshot(),
         "workboard.cards.list": workboardCardsListResponse([card]),
       },
     });
-    await showDashboard(page);
-
     try {
       await openDashboard(page);
       const chip = page.locator(".workboard-session-chip");
@@ -821,10 +789,9 @@ suite.define(() => {
 
     for (const testCase of cases) {
       await suite.withPage({ viewport: { height: 900, width: 1280 } }, async ({ page }) => {
-        const gateway = await installMockGateway(page, {
+        const gateway = await setupDashboard(page, {
           ...(testCase.native ? workboardUi : {}),
-          sessionKey,
-          featureMethods: dashboardMethods("config.get", "workboard.cards.list"),
+          featureMethods: ["config.get", "workboard.cards.list"],
           methodResponses: {
             "board.get": testCase.board,
             "config.get": testCase.config,
@@ -842,8 +809,6 @@ suite.define(() => {
             ]),
           },
         });
-        await showDashboard(page);
-
         await openDashboard(page);
         await expect
           .poll(async () => (await gateway.getRequests("board.get")).length)

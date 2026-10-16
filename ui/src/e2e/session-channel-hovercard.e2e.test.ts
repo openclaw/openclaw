@@ -48,31 +48,27 @@ suite.define(() => {
   it("distinguishes same-title channel sessions and keeps session contributors separate from chat identity", async () => {
     const now = Date.now();
     const selected = sessionRow("agent:main:selected", "Planning desk", now);
-    const group = sessionRow(
-      "agent:main:whatsapp:group:120363000001@g.us",
-      "Weekend plans",
-      now - 1,
-      {
-        kind: "group",
-        channel: "whatsapp",
-        origin: {
-          provider: "whatsapp",
-          chatType: "group",
-          label: "Weekend plans",
-          from: "120363000001@g.us",
-          accountId: "personal",
-        },
-        createdActor: {
-          type: "human",
-          id: "cli",
-          label: "cli",
-          identity: { type: "profile", id: "cli" },
-        },
-        participants: [{ identity: { type: "profile", id: "profile-ada" }, label: "Ada" }],
-        participantCount: 1,
-        lastMessagePreview: "The picnic is booked for Saturday.",
+    const groupKey = "agent:main:whatsapp:group:120363000001@g.us";
+    const group = sessionRow(groupKey, "Weekend plans", now - 1, {
+      kind: "group",
+      channel: "whatsapp",
+      origin: {
+        provider: "whatsapp",
+        chatType: "group",
+        label: "Weekend plans",
+        from: "120363000001@g.us",
+        accountId: "personal",
       },
-    );
+      createdActor: {
+        type: "human",
+        id: "cli",
+        label: "cli",
+        identity: { type: "profile", id: "cli" },
+      },
+      participants: [{ identity: { type: "profile", id: "profile-ada" }, label: "Ada" }],
+      participantCount: 1,
+      lastMessagePreview: "The picnic is booked for Saturday.",
+    });
     const imessage = sessionRow("agent:main:imessage:group:chat123", "Weekend plans", now - 2, {
       kind: "group",
       channel: "imessage",
@@ -125,21 +121,17 @@ suite.define(() => {
   it("refreshes channel details in an already-open hovercard when Gateway metadata changes", async () => {
     const now = Date.now();
     const selected = sessionRow("agent:main:selected", "Planning desk", now);
-    const linked = sessionRow(
-      "agent:main:discord:channel:123456789012345678",
-      "Launch checklist",
-      now - 1,
-      {
-        kind: "group",
-        channel: "discord",
-        origin: {
-          provider: "discord",
-          chatType: "channel",
-          label: "Example community #planning channel id:123456789012345678",
-          accountId: "community",
-        },
+    const linkedKey = "agent:main:discord:channel:123456789012345678";
+    const linked = sessionRow(linkedKey, "Launch checklist", now - 1, {
+      kind: "group",
+      channel: "discord",
+      origin: {
+        provider: "discord",
+        chatType: "channel",
+        label: "Example community #planning channel id:123456789012345678",
+        accountId: "community",
       },
-    );
+    });
     await withSessions([selected, linked], async ({ page, gateway }) => {
       await rowFor(page, linked.key).hover();
       const card = page.locator(".session-progress-hovercard");

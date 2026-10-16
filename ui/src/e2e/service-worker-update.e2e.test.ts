@@ -1,12 +1,15 @@
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, webkit, type Browser, type BrowserContextOptions, type Page } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
@@ -44,6 +47,11 @@ type InstallGate = {
   requested: Promise<void>;
   release: () => void;
   close: () => Promise<void>;
+};
+type TerminalPanel = HTMLElement & {
+  agentId: string | null;
+  available: boolean;
+  terminalPanelOpen: boolean;
 };
 
 let browser: Browser;
@@ -154,10 +162,7 @@ async function createInstallGate(expectedRequests = 1): Promise<InstallGate> {
     }
     pendingResponses.clear();
   };
-  let resolveRequested = () => {};
-  const requested = new Promise<void>((resolve) => {
-    resolveRequested = resolve;
-  });
+  const requested = createDeferred();
   const gateServer = createHttpServer((_request, response) => {
     response.setHeader("Access-Control-Allow-Origin", "*");
     // Worker installation may retry or overlap; release is permanent for this gate.
@@ -168,29 +173,22 @@ async function createInstallGate(expectedRequests = 1): Promise<InstallGate> {
       response.once("close", () => pendingResponses.delete(response));
     }
     if (++requestCount === expectedRequests) {
-      resolveRequested();
+      requested.resolve();
     }
   });
-  await new Promise<void>((resolve, reject) => {
-    gateServer.once("error", reject);
-    gateServer.listen(0, "127.0.0.1", () => {
-      gateServer.off("error", reject);
-      resolve();
-    });
-  });
+  gateServer.listen(0, "127.0.0.1");
+  await once(gateServer, "listening");
   const address = gateServer.address();
   if (!address || typeof address === "string") {
     throw new Error("Install gate did not expose a TCP port");
   }
   return {
     url: `http://127.0.0.1:${address.port}/release-install`,
-    requested,
+    requested: requested.promise,
     release,
     close: async () => {
       release();
-      await new Promise<void>((resolve, reject) => {
-        gateServer.close((error) => (error ? reject(error) : resolve()));
-      });
+      await promisify(gateServer.close.bind(gateServer))();
     },
   };
 }
@@ -396,16 +394,13 @@ describe("Control UI service-worker production update E2E", () => {
       const resume = () =>
         page.evaluate(() => {
           sessionStorage.removeItem("test-missed-activation");
-          Object.defineProperty(document, "visibilityState", {
-            configurable: true,
-            get: () => "hidden",
-          });
-          document.dispatchEvent(new Event("visibilitychange"));
-          Object.defineProperty(document, "visibilityState", {
-            configurable: true,
-            get: () => "visible",
-          });
-          document.dispatchEvent(new Event("visibilitychange"));
+          for (const visibilityState of ["hidden", "visible"]) {
+            Object.defineProperty(document, "visibilityState", {
+              configurable: true,
+              get: () => visibilityState,
+            });
+            document.dispatchEvent(new Event("visibilitychange"));
+          }
         });
       const nextDir = outDir + "-foreground";
       const previousDir = outDir + "-sleeping";
@@ -538,9 +533,7 @@ describe("Control UI service-worker production update E2E", () => {
         .poll(
           async () =>
             evaluateControlUiContext(page, (application) => {
-              const panel = document.querySelector("openclaw-terminal-panel") as
-                | (HTMLElement & { available: boolean })
-                | null;
+              const panel = document.querySelector<TerminalPanel>("openclaw-terminal-panel");
               return {
                 available: panel?.available ?? null,
                 phase: application.gateway.snapshot.phase,
@@ -583,9 +576,7 @@ describe("Control UI service-worker production update E2E", () => {
       });
       await gateway.setOnline(false);
       await page.waitForFunction(() => {
-        const panel = document.querySelector("openclaw-terminal-panel") as
-          | (HTMLElement & { available: boolean })
-          | null;
+        const panel = document.querySelector<TerminalPanel>("openclaw-terminal-panel");
         return panel?.available === false;
       });
       await server.replaceBuild(nextOutDir, previousOutDir);
@@ -604,9 +595,7 @@ describe("Control UI service-worker production update E2E", () => {
         return registration?.installing?.state === "installing";
       });
       await page.waitForFunction(() => {
-        const panel = document.querySelector("openclaw-terminal-panel") as
-          | (HTMLElement & { available: boolean; terminalPanelOpen: boolean })
-          | null;
+        const panel = document.querySelector<TerminalPanel>("openclaw-terminal-panel");
         return panel?.available === true && panel.terminalPanelOpen;
       });
       await page.evaluate(() => {
@@ -641,16 +630,8 @@ describe("Control UI service-worker production update E2E", () => {
       await expect
         .poll(() =>
           terminal.evaluate((element) => {
-            const panel = element as HTMLElement & {
-              agentId: string | null;
-              available: boolean;
-              terminalPanelOpen: boolean;
-            };
-            return {
-              agentId: panel.agentId,
-              available: panel.available,
-              open: panel.terminalPanelOpen,
-            };
+            const { agentId, available, terminalPanelOpen: open } = element as TerminalPanel;
+            return { agentId, available, open };
           }),
         )
         .toEqual({ agentId: "research", available: true, open: true });
@@ -660,11 +641,9 @@ describe("Control UI service-worker production update E2E", () => {
       await expect
         .poll(() => page.evaluate(() => sessionStorage.getItem("openclaw.terminal.actions.v1")))
         .toBeNull();
-      const terminalAttaches = await getTerminalAttaches();
-      expect(terminalAttaches).toHaveLength(1);
-      expect(terminalAttaches[0]?.params).toEqual({
-        sessionId: "terminal-after-worker-refresh",
-      });
+      expect((await getTerminalAttaches()).map(({ params }) => params)).toEqual([
+        { sessionId: "terminal-after-worker-refresh" },
+      ]);
 
       await expect.poll(() => page.evaluate(() => caches.keys())).toContain(cacheB);
       const refreshedAsset = await fetchControlledAsset(page, assetB.path);
@@ -676,7 +655,7 @@ describe("Control UI service-worker production update E2E", () => {
       await expect
         .poll(() =>
           page.evaluate(
-            async ({ assetPath, currentBuildId, previousBuildId, cacheName }) => {
+            async ({ assetPath, currentBuild, previousBuild, cacheName }) => {
               const registration = await navigator.serviceWorker.getRegistration();
               if (!registration) {
                 return null;
@@ -687,8 +666,8 @@ describe("Control UI service-worker production update E2E", () => {
               const html = shell ? await shell.text() : "";
               return {
                 currentAsset: html.includes(assetPath),
-                currentBuild: html.includes(`"buildId":${JSON.stringify(currentBuildId)}`),
-                previousBuild: html.includes(`"buildId":${JSON.stringify(previousBuildId)}`),
+                currentBuild: html.includes(currentBuild),
+                previousBuild: html.includes(previousBuild),
                 documentRootCached: Boolean(
                   await caches.match(new URL("./", registration.scope), { cacheName }),
                 ),
@@ -696,8 +675,8 @@ describe("Control UI service-worker production update E2E", () => {
             },
             {
               assetPath: assetB.path,
-              currentBuildId: buildB,
-              previousBuildId: buildA,
+              currentBuild: `"buildId":${JSON.stringify(buildB)}`,
+              previousBuild: `"buildId":${JSON.stringify(buildA)}`,
               cacheName: cacheB,
             },
           ),
