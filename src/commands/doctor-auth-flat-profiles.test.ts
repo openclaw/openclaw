@@ -66,7 +66,7 @@ import {
   withPersistedAuthProfileStoreRead,
 } from "./doctor-auth-flat-profiles.test-support.js";
 import {
-  createAuthProfileMigrationSourceReceipt,
+  prepareAuthProfileSourceReceipt,
   type AuthProfileMigrationSourceReceipt,
 } from "./doctor-auth-migration-receipts.js";
 import { maybeRepairCodexSessionRoutes } from "./doctor/shared/codex-route-session-repair.js";
@@ -418,10 +418,9 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
       "credentials/oauth.json",
       `${JSON.stringify({ openai: { access: "fake", refresh: "fake", expires: 42 } })}\n`,
     );
-    const receipt = createAuthProfileMigrationSourceReceipt({
-      sourcePath,
-      sourceBytes: fs.readFileSync(sourcePath),
-      sourceRecordCount: 1,
+    const receipt = prepareAuthProfileSourceReceipt({
+      pathname: sourcePath,
+      now: Date.now,
       targetDatabasePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
       // An out-of-union target table makes resumePendingAuthProfileMigrationArchives throw
       // "invalid pending auth profile migration receipt" — the cheapest way to reproduce one of
