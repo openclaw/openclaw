@@ -16,6 +16,8 @@ import {
 import * as sessionBinding from "./session-binding.js";
 import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
 import {
+  createAppServerOptions,
+  createLifecycleRequest,
   createLeasedCodexLifecycleHarness,
   startOrResumeAttemptThreadWithoutSkills as startOrResumeAttemptThread,
   type CodexAttemptThreadInput as LifecycleInput,
@@ -27,7 +29,7 @@ function startOrResumeThread(input: Pick<LifecycleInput, "client"> & Partial<Lif
   return startOrResumeAttemptThread({
     signal: new AbortController().signal,
     dynamicTools: [],
-    appServer: createThreadLifecycleAppServerOptions(),
+    appServer: { ...createAppServerOptions(), connectionClass: "local-loopback" },
     ...input,
     params,
     cwd,
@@ -44,24 +46,6 @@ function retainThread(
     undefined,
     binding.liveThreadConfigFingerprint,
   );
-}
-
-function createThreadLifecycleAppServerOptions(): LifecycleInput["appServer"] {
-  return {
-    start: {
-      transport: "stdio",
-      command: "codex",
-      args: ["app-server"],
-      headers: {},
-    },
-    requestTimeoutMs: 60_000,
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    sandbox: "workspace-write",
-    codeModeOnly: false,
-    loopDetectionPreToolUseRelay: true,
-    connectionClass: "local-loopback",
-  };
 }
 
 function createParams(sessionFile: string, workspaceDir: string) {
@@ -84,7 +68,7 @@ function createNamedDynamicTool(name: string): CodexDynamicToolFunctionSpec {
   };
 }
 
-function createPluginAppConfigPatch(options: { approvalsReviewer?: "user" } = {}) {
+function createPluginAppConfigPatch() {
   return {
     apps: {
       _default: {
@@ -97,7 +81,6 @@ function createPluginAppConfigPatch(options: { approvalsReviewer?: "user" } = {}
         destructive_enabled: true,
         open_world_enabled: true,
         default_tools_approval_mode: "auto",
-        ...(options.approvalsReviewer ? { approvals_reviewer: options.approvalsReviewer } : {}),
       },
     },
   };
@@ -134,13 +117,7 @@ describe("Codex warm subscription cleanup", () => {
       let starts = 0;
       const fixture = await createLeasedCodexLifecycleHarness({
         agentDir: path.join(tempDir, "agent"),
-        respond: async (method) => {
-          if (method === "config/read") {
-            return { config: {}, origins: {}, layers: [] };
-          }
-          if (method === "configRequirements/read") {
-            return { requirements: null };
-          }
+        respond: createLifecycleRequest(async (method) => {
           if (method === "thread/start") {
             starts += 1;
             return threadStartResult(starts === 1 ? threadId : "updated-policy-thread");
@@ -149,7 +126,7 @@ describe("Codex warm subscription cleanup", () => {
             return threadStartResult(threadId);
           }
           throw new Error(`unexpected method: ${method}`);
-        },
+        }),
       });
       const common = {
         client: fixture.client,
@@ -230,13 +207,7 @@ describe("Codex warm subscription cleanup", () => {
     let pluginFingerprint = "original-plugin-policy";
     const fixture = await createLeasedCodexLifecycleHarness({
       agentDir: path.join(tempDir, "agent"),
-      respond: async (method) => {
-        if (method === "config/read") {
-          return { config: {}, origins: {}, layers: [] };
-        }
-        if (method === "configRequirements/read") {
-          return { requirements: null };
-        }
+      respond: createLifecycleRequest(async (method) => {
         if (method === "thread/start") {
           return threadStartResult(threadId);
         }
@@ -244,7 +215,7 @@ describe("Codex warm subscription cleanup", () => {
           return { apps: [{ id: "fixture-app", enabled: true, callable: true }] };
         }
         throw new Error(`unexpected method: ${method}`);
-      },
+      }),
     });
     const common = {
       client: fixture.client,

@@ -52,13 +52,13 @@ type RequestScopeParams = {
     requestOptions: () => { timeoutMs: number; signal?: AbortSignal },
   ) => Promise<unknown>;
 };
-const withCodexAppServerClientRequestScopeMock = vi.fn(
-  async (params: RequestScopeParams) =>
-    await params.run(params.lease.client, () => ({
-      timeoutMs: params.options.timeoutMs ?? 60_000,
-      signal: params.signal ?? params.options.abandonSignal,
-    })),
-);
+async function runRequestScope(params: RequestScopeParams) {
+  return await params.run(params.lease.client, () => ({
+    timeoutMs: params.options.timeoutMs ?? 60_000,
+    signal: params.signal ?? params.options.abandonSignal,
+  }));
+}
+const withCodexAppServerClientRequestScopeMock = vi.fn(runRequestScope);
 
 vi.mock("./auth-profile.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./auth-profile.js")>()),
@@ -143,9 +143,6 @@ function createFakeClient(options: { completeTurn?: boolean; onTurnStart?: () =>
     if (method === "thread/fork") {
       return threadResult("side-thread");
     }
-    if (method === "thread/inject_items") {
-      return {};
-    }
     if (method === "turn/start") {
       options.onTurnStart?.();
       if (options.completeTurn !== false) {
@@ -160,7 +157,7 @@ function createFakeClient(options: { completeTurn?: boolean; onTurnStart?: () =>
       queueMicrotask(() => client.emit(turnCompleted("side-thread", "turn-1", "", "interrupted")));
       return {};
     }
-    if (method === "thread/unsubscribe") {
+    if (method === "thread/inject_items" || method === "thread/unsubscribe") {
       return {};
     }
     if (method === "thread/backgroundTerminals/list") {
@@ -376,13 +373,7 @@ export function useSideQuestionTestSetup() {
     handleCodexAppServerApprovalRequestMock.mockReset();
     resolveCodexProviderWebSearchSupportForClientMock.mockReset();
     withCodexAppServerClientRequestScopeMock.mockReset();
-    withCodexAppServerClientRequestScopeMock.mockImplementation(
-      async (params: RequestScopeParams) =>
-        await params.run(params.lease.client, () => ({
-          timeoutMs: params.options.timeoutMs ?? 60_000,
-          signal: params.signal ?? params.options.abandonSignal,
-        })),
-    );
+    withCodexAppServerClientRequestScopeMock.mockImplementation(runRequestScope);
     resolveCodexProviderWebSearchSupportForClientMock.mockResolvedValue("supported");
 
     toolExecuteMock.mockResolvedValue({

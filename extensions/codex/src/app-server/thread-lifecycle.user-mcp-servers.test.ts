@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   hashCodexAppServerBindingFingerprint,
   readCodexAppServerBinding,
@@ -13,6 +13,7 @@ import {
 } from "./session-binding.test-helpers.js";
 import {
   createAppServerOptions,
+  createLifecycleRequest,
   createLeasedCodexLifecycleHarness,
   createParams,
   startOrResumeThreadWithoutSkills as startOrResumeThread,
@@ -28,13 +29,7 @@ import {
 
 function createRequest(startThreadId: string) {
   let startCount = 0;
-  return vi.fn(async (method: string, params: unknown) => {
-    if (method === "config/read") {
-      return { config: {}, origins: {}, layers: [] };
-    }
-    if (method === "configRequirements/read") {
-      return { requirements: null };
-    }
+  return createLifecycleRequest(async (method, params) => {
     if (method === "thread/start") {
       startCount += 1;
       return threadStartResult(startCount === 1 ? startThreadId : `${startThreadId}-${startCount}`);
@@ -65,13 +60,50 @@ function lifecycleOptions(
   };
 }
 
+function bearerConfig(url: string, authorization: string): EmbeddedRunAttemptParams["config"] {
+  return {
+    mcp: {
+      servers: {
+        ducktape: {
+          transport: "streamable-http",
+          url,
+          headers: { Authorization: authorization, "x-tenant": "keep" },
+        },
+      },
+    },
+  } as unknown as EmbeddedRunAttemptParams["config"];
+}
+
+function projectedServers(request: ReturnType<typeof createRequest>, method = "thread/start") {
+  const params = request.mock.calls.find(([candidate]) => candidate === method)?.[1] as
+    | {
+        config?: {
+          mcp_servers?: Record<
+            string,
+            {
+              enabled_tools?: string[];
+              disabled_tools?: string[];
+              http_headers?: Record<string, string>;
+            }
+          >;
+        };
+      }
+    | undefined;
+  return params?.config?.mcp_servers;
+}
+
 describe("startOrResumeThread — user mcp.servers projection (regression: #80814)", () => {
   setupUserMcpServerTestHooks();
+  let sessionFile: string;
+  let workspaceDir: string;
+  beforeEach(() => {
+    sessionFile = path.join(tempDir, "session.jsonl");
+    workspaceDir = path.join(tempDir, "workspace");
+  });
 
   it("projects wildcard filters as exact names before thread/start and thread/resume", async () => {
-    const sessionFile = path.join(tempDir, "policy-session.jsonl");
+    sessionFile = path.join(tempDir, "policy-session.jsonl");
     registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
-    const workspaceDir = path.join(tempDir, "workspace");
     const serverPath = await writePolicyProbeServer(tempDir);
     const config: EmbeddedRunAttemptParams["config"] = {
       tools: { allow: ["docs__*"] },
@@ -115,30 +147,25 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     ]);
 
     for (const method of ["thread/start", "thread/resume"]) {
-      const call = request.mock.calls.find(([candidate]) => candidate === method);
-      const callParams = call?.[1] as {
-        config?: {
-          mcp_servers?: { docs?: { enabled_tools?: string[]; disabled_tools?: string[] } };
-        };
-      };
-      expect(callParams?.config?.mcp_servers?.docs).toMatchObject({
+      const docs = projectedServers(request, method)?.docs;
+      expect(docs).toMatchObject({
         command: process.execPath,
         args: [serverPath],
         enabled_tools: ["read_docs"],
         disabled_tools: ["app_docs", "delete_docs", "task_docs"],
       });
-      expect(JSON.stringify(callParams?.config?.mcp_servers?.docs)).not.toContain("delete_*");
+      expect(JSON.stringify(docs)).not.toContain("delete_*");
     }
   });
 
   it("keeps session MCP denials additive in thread/start before the turn", async () => {
-    const sessionFile = path.join(tempDir, "policy-session-override.jsonl");
+    sessionFile = path.join(tempDir, "policy-session-override.jsonl");
     registerCodexTestSessionIdentity(
       sessionFile,
       "session-override",
       "agent:main:session-override",
     );
-    const workspaceDir = path.join(tempDir, "workspace-override");
+    workspaceDir = path.join(tempDir, "workspace-override");
     const serverPath = await writePolicyProbeServer(tempDir);
     const config: EmbeddedRunAttemptParams["config"] = {
       tools: { allow: ["docs__*"] },
@@ -162,19 +189,16 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       appServer: createAppServerOptions(),
     });
 
-    const callParams = request.mock.calls.find(([method]) => method === "thread/start")?.[1] as {
-      config?: { mcp_servers?: { docs?: { enabled_tools?: string[]; disabled_tools?: string[] } } };
-    };
-    expect(callParams.config?.mcp_servers?.docs).toMatchObject({
+    expect(projectedServers(request)?.docs).toMatchObject({
       enabled_tools: ["read_docs"],
       disabled_tools: ["app_docs", "delete_docs", "task_docs"],
     });
   });
 
   it("projects only the current agent's MCP servers without starting excluded servers", async () => {
-    const sessionFile = path.join(tempDir, "agent-scope-session.jsonl");
+    sessionFile = path.join(tempDir, "agent-scope-session.jsonl");
     registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:atlas:session-1");
-    const workspaceDir = path.join(tempDir, "workspace-scope");
+    workspaceDir = path.join(tempDir, "workspace-scope");
     const serverPath = await writePolicyProbeServer(tempDir);
     const startedPath = path.join(tempDir, "excluded-server-started");
     const url = await startPolicyHttpServer();
@@ -212,34 +236,16 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     });
 
     await expect(fs.access(startedPath)).rejects.toMatchObject({ code: "ENOENT" });
-    const callParams = request.mock.calls.find(([method]) => method === "thread/start")?.[1] as {
-      config?: { mcp_servers?: Record<string, unknown> };
-    };
-    expect(callParams.config?.mcp_servers).toStrictEqual({
+    expect(projectedServers(request)).toStrictEqual({
       atlas: { url, default_tools_approval_mode: "approve", enabled_tools: ["read_docs"] },
     });
   });
 
   it("restarts a beta5 MCP binding stored as a raw fingerprint before converging", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
     registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
-    const workspaceDir = path.join(tempDir, "workspace");
     const authorization = "Bearer beta5-access-token";
     const url = await startPolicyHttpServer();
-    const config = {
-      mcp: {
-        servers: {
-          ducktape: {
-            transport: "streamable-http",
-            url,
-            headers: {
-              Authorization: authorization,
-              "x-tenant": "keep",
-            },
-          },
-        },
-      },
-    } as unknown as EmbeddedRunAttemptParams["config"];
+    const config = bearerConfig(url, authorization);
     const request = createRequest("thread-beta5");
     let wire = await createLeasedCodexLifecycleHarness({
       agentDir: path.join(tempDir, "agent"),
@@ -319,8 +325,6 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
   });
 
   it("preserves MCP-mismatched bindings for transient unknown-search-support turns", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-native",
       cwd: workspaceDir,
@@ -351,30 +355,13 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
   });
 
   it("starts a new thread when a user MCP Authorization bearer changes without storing the bearer", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
     registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
-    const workspaceDir = path.join(tempDir, "workspace");
     const url = await startPolicyHttpServer();
-    const createConfig = (authorization: string) =>
-      ({
-        mcp: {
-          servers: {
-            ducktape: {
-              transport: "streamable-http",
-              url,
-              headers: {
-                Authorization: authorization,
-                "x-tenant": "keep",
-              },
-            },
-          },
-        },
-      }) as unknown as EmbeddedRunAttemptParams["config"];
     const request = createRequest("thread-with-current-bearer");
 
     await startOrResumeThread({
       client: { request } as never,
-      ...lifecycleOptions(sessionFile, workspaceDir, createConfig("Bearer access-token-one")),
+      ...lifecycleOptions(sessionFile, workspaceDir, bearerConfig(url, "Bearer access-token-one")),
     });
     const firstBinding = await readCodexAppServerBinding(sessionFile);
     expect(firstBinding?.threadId).toBe("thread-with-current-bearer");
@@ -385,7 +372,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
 
     await startOrResumeThread({
       client: { request } as never,
-      ...lifecycleOptions(sessionFile, workspaceDir, createConfig("Bearer access-token-two")),
+      ...lifecycleOptions(sessionFile, workspaceDir, bearerConfig(url, "Bearer access-token-two")),
     });
 
     expect(request.mock.calls.map(([method]) => method)).toEqual([
@@ -393,10 +380,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       "configRequirements/read",
       "thread/start",
     ]);
-    const startParams = request.mock.calls[2]?.[1] as {
-      config?: { mcp_servers?: Record<string, { http_headers?: Record<string, string> }> };
-    };
-    expect(startParams?.config?.mcp_servers?.ducktape?.http_headers?.Authorization).toBe(
+    expect(projectedServers(request)?.ducktape?.http_headers?.Authorization).toBe(
       "Bearer access-token-two",
     );
     const secondBinding = await readCodexAppServerBinding(sessionFile);
@@ -410,8 +394,6 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
   });
 
   it("omits MCP OAuth servers before policy discovery for a remote app-server", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
     let mcpRequestCount = 0;
     const mcpServer = http.createServer((_request, response) => {
       mcpRequestCount += 1;
@@ -460,10 +442,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       });
     }
 
-    const startParams = request.mock.calls.find(([method]) => method === "thread/start")?.[1] as {
-      config?: { mcp_servers?: Record<string, unknown> };
-    };
-    expect(startParams?.config?.mcp_servers).toBeUndefined();
+    expect(projectedServers(request)).toBeUndefined();
     expect(mcpRequestCount).toBe(0);
   });
 });
