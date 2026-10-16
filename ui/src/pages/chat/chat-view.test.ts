@@ -32,7 +32,6 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { makeUiSettings } from "../../test-helpers/settings-node.ts";
-import { mountSolid as mountSolidComponent } from "../../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
@@ -75,6 +74,7 @@ import {
   renderChatInto,
   renderChatPropsInto,
   renderChatView,
+  renderChatModelControls,
   getComposerTextarea,
   requireElement,
   stubAnimationFrames,
@@ -538,26 +538,15 @@ function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelCont
   };
 }
 
-const modelControlsUpdates = new WeakMap<HTMLElement, (props: ChatModelControlsProps) => void>();
-
 function renderModelControls(
   state: ChatHeaderTestState,
   overrides: Partial<ChatModelControlsProps> = {},
   container = document.createElement("div"),
 ) {
-  const props = { ...createChatModelControlsProps(state), ...overrides };
-  const update = modelControlsUpdates.get(container);
-  if (update) {
-    update(props);
-  } else {
-    if (!container.isConnected) {
-      document.body.append(container);
-      onTestFinished(() => container.remove());
-    }
-    const view = mountSolidComponent(ChatModelControls, props, container);
-    modelControlsUpdates.set(container, (next) => view.update(next));
-  }
-  return container;
+  return renderChatModelControls(
+    { ...createChatModelControlsProps(state), ...overrides },
+    container,
+  );
 }
 
 describe("chat typing status", () => {
