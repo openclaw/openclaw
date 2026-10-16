@@ -619,6 +619,46 @@ process.exitCode = errors.length ? 1 : 0;
     },
   );
 
+  it("repairs consolidated commit provenance only with that commit's matching CLI mapping", () => {
+    const releaseCommit = "a".repeat(40);
+    const otherCommit = "b".repeat(40);
+    const body = [
+      `Release provenance: ${"c".repeat(40)} -> #1; ${"d".repeat(40)} -> #2`,
+      `Release provenance: ${otherCommit} -> #3`,
+    ].join("\n");
+    const commits = [
+      { body, hash: releaseCommit },
+      { body: "", hash: otherCommit },
+    ];
+
+    expect(() => collectReleaseProvenanceOverrides(commits)).toThrow(
+      "invalid release provenance marker",
+    );
+    expect(() => collectReleaseProvenanceOverrides(commits, [`${otherCommit} -> #1, #2`])).toThrow(
+      "invalid release provenance marker",
+    );
+    expect(() => collectReleaseProvenanceOverrides(commits, [`${releaseCommit} -> #1`])).toThrow(
+      "invalid release provenance marker",
+    );
+    for (const malformed of [
+      `Release provenance: ${otherCommit} -> #bad`,
+      `${body.split("\n")[0]}; unreadable`,
+    ]) {
+      expect(() =>
+        collectReleaseProvenanceOverrides(
+          [{ body: malformed, hash: releaseCommit }],
+          [`${releaseCommit} -> #1, #2`],
+        ),
+      ).toThrow("invalid release provenance marker");
+    }
+    expect(collectReleaseProvenanceOverrides(commits, [`${releaseCommit} -> #1, #2`])).toEqual(
+      new Map([
+        [releaseCommit, [1, 2]],
+        [otherCommit, [3]],
+      ]),
+    );
+  });
+
   it("requires release provenance PRs to be merged into current main", () => {
     const releaseCommit = "a".repeat(40);
     const mainCommit = "b".repeat(40);
