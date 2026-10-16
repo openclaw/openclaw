@@ -24,7 +24,7 @@ function setup(meta: SessionAcpMeta | undefined, sessionKey: string) {
     ...f,
     ...f.runtimeState,
     state,
-    readMeta: () => expectDefined(state.currentMeta, "session metadata"),
+    readMeta: () => state.currentMeta,
   };
 }
 
@@ -84,7 +84,10 @@ describe("AcpSessionManager accepted controls", () => {
       controls: ["session/set_config_option", "session/status"],
       configOptionKeys: ["model", "reasoning_effort"],
     });
-    return state;
+    return {
+      ...state,
+      readMeta: () => expectDefined(state.readMeta(), "session metadata"),
+    };
   }
 
   it("persists clamped thinking after an explicit model change", async () => {
@@ -227,10 +230,7 @@ it("keeps startup omission but rejects live binding changes before overwriting a
     thinking: "off",
   };
   const sessionKey = buildConfiguredAcpSessionKey(spec);
-  const { runtimeState, manager, readMeta } = setup<SessionAcpMeta | undefined>(
-    undefined,
-    sessionKey,
-  );
+  const { runtimeState, manager, readMeta } = setup(undefined, sessionKey);
   hoisted.readAcpSessionEntryMock.mockImplementation(() =>
     readMeta() ? { sessionKey, storeSessionKey: sessionKey, acp: readMeta() } : null,
   );

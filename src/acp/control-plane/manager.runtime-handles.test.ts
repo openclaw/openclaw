@@ -405,13 +405,14 @@ describe("AcpSessionManager backend failover", () => {
   it.each(["submitted", "output"] as const)("does not fail over after %s", async (phase) => {
     const f = failoverFixture();
     const events: unknown[] = [];
+    const startTurn = vi.fn<NonNullable<typeof f.primary.runtime.startTurn>>((input) =>
+      runtimeTurn(input.requestId, {
+        promptStarted: Promise.resolve(),
+        result: Promise.resolve(backendFailure()),
+      }),
+    );
     if (phase === "submitted") {
-      f.primary.runtime.startTurn = vi.fn((input) =>
-        runtimeTurn(input.requestId, {
-          promptStarted: Promise.resolve(),
-          result: Promise.resolve(backendFailure()),
-        }),
-      );
+      f.primary.runtime.startTurn = startTurn;
     } else {
       f.primary.runTurn.mockImplementation(async function* () {
         yield { type: "text_delta", text: "partial" };
@@ -426,7 +427,7 @@ describe("AcpSessionManager backend failover", () => {
       }),
     ).rejects.toMatchObject(backendFailure().error);
     if (phase === "submitted") {
-      expect(f.primary.runtime.startTurn).toHaveBeenCalledOnce();
+      expect(startTurn).toHaveBeenCalledOnce();
     } else {
       expect(events).toEqual([expect.objectContaining({ type: "text_delta", text: "partial" })]);
     }
