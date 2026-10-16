@@ -120,6 +120,8 @@ export function extractGroupMeta(
   let model: string | null = null;
   let hasUsage = false;
   let maxPromptTokens = 0;
+  let maxLegacyPromptTokens = 0;
+  let hasContextUsage = false;
   let usageUnavailable = false;
 
   for (const { message } of group.messages) {
@@ -149,11 +151,17 @@ export function extractGroupMeta(
       cacheWrite += callCacheWrite;
       // A context marker holds the latest call; the counters may cover a whole multi-call turn.
       const context = asOptionalRecord(asOptionalRecord(m.usage)?.contextUsage);
-      const callPromptTokens =
-        context?.state === "available" && typeof context.promptTokens === "number"
-          ? context.promptTokens
-          : callInput + callCacheRead + callCacheWrite;
-      maxPromptTokens = Math.max(maxPromptTokens, callPromptTokens);
+      if (context?.state === "available" && typeof context.promptTokens === "number") {
+        hasContextUsage = true;
+        maxPromptTokens = Math.max(maxPromptTokens, context.promptTokens);
+      } else if (context?.state === "unavailable") {
+        hasContextUsage = true;
+      } else {
+        maxLegacyPromptTokens = Math.max(
+          maxLegacyPromptTokens,
+          callInput + callCacheRead + callCacheWrite,
+        );
+      }
     }
     // Producers write cost nested under usage.cost (the AssistantMessage
     // shape); a bare message.cost never exists, so reading only it left the
@@ -184,9 +192,11 @@ export function extractGroupMeta(
     return null;
   }
 
+  // Legacy counters are an estimate only when the group has no explicit context snapshots.
+  const promptTokens = hasContextUsage ? maxPromptTokens : maxLegacyPromptTokens;
   const contextPercent =
-    contextWindow && maxPromptTokens > 0
-      ? Math.min(Math.round((maxPromptTokens / contextWindow) * 100), 100)
+    contextWindow && promptTokens > 0
+      ? Math.min(Math.round((promptTokens / contextWindow) * 100), 100)
       : null;
 
   return { input, output, cacheRead, cacheWrite, cost, model, contextPercent };

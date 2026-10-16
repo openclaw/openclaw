@@ -5,12 +5,9 @@ import { createOverlay, findOverlayParent } from "../../../components/overlay-li
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/solid/overlay.css";
 import { acquireNativeOverlaySurface } from "../../../lib/native-overlay-occlusion.ts";
+import { PRESENTATION_CHANGED_EVENT, type PresentationValue } from "../../../lib/presentation.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
-import {
-  PRESENTATION_CHANGED_EVENT,
-  type PresentationValue,
-} from "../../../lit/presentation-binding.ts";
 
 export function ChatPullRequestChecks(props: {
   label: string;

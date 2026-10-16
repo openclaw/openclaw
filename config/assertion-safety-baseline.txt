@@ -639,7 +639,7 @@ extensions/qa-lab/src/bus-server.ts	3
 extensions/qa-lab/src/bus-state.ts	1
 extensions/qa-lab/src/character-eval.ts	2
 extensions/qa-lab/src/ci-smoke-plan.ts	1
-extensions/qa-lab/src/cli.runtime.ts	8
+extensions/qa-lab/src/cli.runtime.ts	4
 extensions/qa-lab/src/codex-plugin.fixture.ts	2
 extensions/qa-lab/src/crabline-transport.ts	4
 extensions/qa-lab/src/cron-run-wait.ts	1
@@ -1297,7 +1297,6 @@ src/agents/media-generation-task-status-shared.ts	1
 src/agents/memory-write-provenance.ts	1
 src/agents/minimax-vlm.ts	1
 src/agents/model-auth-label.ts	1
-src/agents/model-auth-model.ts	1
 src/agents/model-fallback-attempt.ts	1
 src/agents/model-fallback-runner.ts	2
 src/agents/model-provider-auth.ts	1
