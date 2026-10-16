@@ -182,7 +182,6 @@ function PendingSessionCreateContent(props: PendingSessionCreateProps) {
         onOpenImage: openImage,
       },
       creationComposer: composer?.canDisplay() ? composer : undefined,
-      renderRevision: {},
       composer: {
         paneId: composerId,
         sessionKey: props.sessionKey,
@@ -222,19 +221,10 @@ function PendingSessionCreateContent(props: PendingSessionCreateProps) {
                     <Show
                       when={current().creationComposer}
                       keyed
-                      fallback={
-                        <ChatComposer
-                          {...current().composer}
-                          renderRevision={current().renderRevision}
-                        />
-                      }
+                      fallback={<ChatComposer {...current().composer} />}
                     >
                       {(composer) => (
-                        <CreationComposer
-                          composer={composer}
-                          onOpenImage={openImage}
-                          renderRevision={current().renderRevision}
-                        />
+                        <CreationComposer composer={composer} onOpenImage={openImage} />
                       )}
                     </Show>
                   )}

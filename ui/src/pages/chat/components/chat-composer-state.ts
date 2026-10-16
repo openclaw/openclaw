@@ -19,7 +19,6 @@ function createChatComposerState(): ChatComposerState {
     editRevision: 0,
     mentionMenu: new HumanMentionMenu(),
     emojiMenu: new ComposerEmojiMenu(),
-    composingDraft: null,
     composerInputIntentKey: null,
     pendingClearedSubmittedDraft: null,
     goalExpandedId: null,
@@ -33,13 +32,10 @@ function createChatComposerState(): ChatComposerState {
     composerInput: null,
     composerTextarea: null,
     microphonePicker: null,
-    capabilityMenuOpen: false,
-    capabilityMenuView: "root",
     textareaRef: null,
     composerInputRef: null,
     dictation: null,
     composerDraftScope: null,
-    dictationError: null,
     dictationSelection: null,
   };
 }
@@ -106,23 +102,8 @@ export function commitComposerDraft(
   if (currentDraft === value && mentions === undefined) {
     return;
   }
-  const previousMentions = props.getMentions?.() ?? props.mentions ?? [];
   getChatComposerState(props.paneId).editRevision += 1;
   props.onDraftChange(value, mentions);
-  const nextMentions = props.getMentions?.() ?? mentions ?? props.mentions ?? [];
-  // Moving a token while typing prose changes its span, not the recipient strip.
-  if (
-    previousMentions.length !== nextMentions.length ||
-    previousMentions.some((previous, index) => {
-      const next = nextMentions[index]!;
-      return (
-        previous.profileId !== next.profileId ||
-        currentDraft.slice(previous.start, previous.end) !== value.slice(next.start, next.end)
-      );
-    })
-  ) {
-    props.onRequestUpdate?.();
-  }
 }
 
 export function markComposerInputIntent(state: ChatComposerState, key: string): void {

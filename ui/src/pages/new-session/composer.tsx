@@ -11,6 +11,7 @@ import {
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
+import type { ComposerDraftSource } from "../../lib/chat/composer-draft.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import {
   clearCompositionEnd,
@@ -19,6 +20,7 @@ import {
 } from "../../lib/ime.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { refreshSlashCommands } from "../chat/chat-commands.ts";
 import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
@@ -29,12 +31,12 @@ import {
 } from "../chat/components/chat-attachments.ts";
 import { AttachmentPreview, AttachmentReadStatus } from "../chat/components/chat-attachments.tsx";
 import { adjustTextareaHeight, paneDomId } from "../chat/components/chat-composer-dom.ts";
+import "../../components/tooltip.ts";
 import { EmojiMenu } from "../chat/components/chat-composer-emoji.tsx";
 import {
   HumanMentionMenuView,
   type HumanMentionMenuHost,
 } from "../chat/components/chat-composer-mention-menu.tsx";
-import "../../components/tooltip.ts";
 import { resolveComposerMenus } from "../chat/components/chat-composer-menus.ts";
 import type { ChatComposerCapabilityMenuProps } from "../chat/components/chat-composer-plus-menu.types.ts";
 import { SelectedHumanMentions } from "../chat/components/chat-composer-selected-mentions.tsx";
@@ -71,6 +73,7 @@ export type NewSessionComposerOptions = {
   agent?: GatewayAgentRow;
   agentId: string;
   attachmentDraft: NewSessionAttachmentDraft;
+  draftSource?: ComposerDraftSource;
   context: ApplicationContext | undefined;
   draftOwnerKey: string;
   isCatalogTarget: boolean;
@@ -448,10 +451,20 @@ function createComposerPlaceholder(options: () => NewSessionComposerOptions) {
 
 /** The synchronous draft/controller owners prepare facts; Solid owns the persistent input DOM. */
 export function NewSessionComposer(props: { options: NewSessionComposerOptions }) {
-  const frame = createMemo(() => prepareNewSessionComposer(props.options));
-  const placeholder = createComposerPlaceholder(() => props.options);
+  const draft = createMemo(() => {
+    const source = props.options.draftSource;
+    return source ? projectOwner(source, (owner) => owner.read()) : undefined;
+  });
+  const options = createMemo(() => {
+    const current = draft()?.read();
+    return current
+      ? { ...props.options, message: current.draft, mentions: current.mentions }
+      : props.options;
+  });
+  const frame = createMemo(() => prepareNewSessionComposer(options()));
+  const placeholder = createComposerPlaceholder(options);
   // The input and its synchronous owner share one mounted lifetime.
-  const textarea = untrack(() => props.options.textareaController);
+  const textarea = untrack(() => options().textareaController);
   const visibleMessage = createMemo(() => frame().visibleMessage);
   const messageValue = createLiveValue(visibleMessage);
   let input: HTMLTextAreaElement;
@@ -464,9 +477,9 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
     <div
       class="agent-chat__composer-shell new-session-page__composer"
       onDrop={(event) => {
-        if (props.options.nativeTerminal && event.dataTransfer?.files.length) {
+        if (options().nativeTerminal && event.dataTransfer?.files.length) {
           event.preventDefault();
-          props.options.onUnsupportedAttachment?.();
+          options().onUnsupportedAttachment?.();
         } else {
           frame().attachmentDropHandlers.onDrop(event);
         }
@@ -479,93 +492,93 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
         class={[
           "agent-chat__input agent-chat__input--mobile-toolbar",
           {
-            "agent-chat__input--dictating": props.options.dictationActive,
+            "agent-chat__input--dictating": options().dictationActive,
           },
         ]}
         onOpenclaw-composer-dismiss-invocations={() => {
-          props.options.textareaController.mentionMenu.close();
-          props.options.textareaController.emojiMenu.dismiss(
-            props.options.textareaController.getTextarea(),
+          options().textareaController.mentionMenu.close();
+          options().textareaController.emojiMenu.dismiss(
+            options().textareaController.getTextarea(),
           );
-          props.options.onChange();
+          options().onChange();
         }}
       >
         <openclaw-lobster-pet
           prop:seed={lobsterPetSeed(
-            `${props.options.textareaController.critterVisit}:${props.options.draftOwnerKey}`,
+            `${options().textareaController.critterVisit}:${options().draftOwnerKey}`,
           )}
           prop:mode={resolveLobsterPetMode(
-            !props.options.context?.gateway.snapshot.offlineStable,
-            props.options.context?.sessions.state.result?.sessions,
+            !options().context?.gateway.snapshot.offlineStable,
+            options().context?.sessions.state.result?.sessions,
           )}
           prop:runOutcome={resolveLobsterRunOutcome(
-            props.options.context?.sessions.state.result?.sessions,
+            options().context?.sessions.state.result?.sessions,
           )}
-          prop:visitsEnabled={props.options.context?.theme.settings.lobsterPetVisits !== false}
-          prop:residentEnabled={props.options.context?.theme.branding.mascot !== "none"}
-          prop:critters={props.options.context?.theme.branding.critters}
-          prop:critterArtwork={props.options.context?.theme.branding.artwork?.critters}
-          prop:soundsEnabled={props.options.context?.theme.settings.lobsterPetSounds === true}
+          prop:visitsEnabled={options().context?.theme.settings.lobsterPetVisits !== false}
+          prop:residentEnabled={options().context?.theme.branding.mascot !== "none"}
+          prop:critters={options().context?.theme.branding.critters}
+          prop:critterArtwork={options().context?.theme.branding.artwork?.critters}
+          prop:soundsEnabled={options().context?.theme.settings.lobsterPetSounds === true}
           prop:gatewayVersion={
-            props.options.context?.config.current.serverVersion ??
-            props.options.context?.gateway.snapshot.hello?.server?.version ??
+            options().context?.config.current.serverVersion ??
+            options().context?.gateway.snapshot.hello?.server?.version ??
             null
           }
-          prop:onVisitsDisabled={() => props.options.context?.theme.refresh()}
+          prop:onVisitsDisabled={() => options().context?.theme.refresh()}
           prop:floorEnabled={
             !frame().composerLocked &&
             frame().visibleMessage.length === 0 &&
-            props.options.attachmentDraft.attachments.length === 0 &&
-            props.options.attachmentDraft.reads.pendingReads === 0 &&
+            options().attachmentDraft.attachments.length === 0 &&
+            options().attachmentDraft.reads.pendingReads === 0 &&
             !frame().menuVisible &&
-            !props.options.textareaController.capabilityMenuOpen
+            !options().textareaController.capabilityMenuOpen
           }
         />
         <HumanMentionMenuView
           args={[
-            props.options.textareaController.mentionMenu,
+            options().textareaController.mentionMenu,
             frame().mentionMenuHost,
-            props.options.onChange,
+            options().onChange,
           ]}
         />
         <EmojiMenu
           args={[
-            props.options.textareaController.emojiMenu,
+            options().textareaController.emojiMenu,
             "new-session",
-            props.options.textareaController.getTextarea(),
-            props.options.onChange,
+            options().textareaController.getTextarea(),
+            options().onChange,
           ]}
         />
-        <Show when={!props.options.nativeTerminal}>
+        <Show when={!options().nativeTerminal}>
           <ChatAttachmentInputs {...frame().attachmentProps} />
         </Show>
         <SelectedHumanMentions
-          text={props.options.message}
-          mentions={props.options.mentions}
-          onRemove={() => props.options.onInput(props.options.message, [])}
-          avatarUrls={props.options.textareaController.mentionMenu.selectedAvatarUrls}
+          text={options().message}
+          mentions={options().mentions}
+          onRemove={() => options().onInput(options().message, [])}
+          avatarUrls={options().textareaController.mentionMenu.selectedAvatarUrls}
         />
         <AttachmentPreview {...frame().attachmentProps} readRevision={frame()} />
-        <AttachmentReadStatus pendingReads={props.options.attachmentDraft.reads.pendingReads} />
-        <div class="agent-chat__composer-lede">{props.options.dictationStatus}</div>
+        <AttachmentReadStatus pendingReads={options().attachmentDraft.reads.pendingReads} />
+        <div class="agent-chat__composer-lede">{options().dictationStatus}</div>
         <div class="agent-chat__composer-input-row">
           <div class="agent-chat__composer-combobox">
             <Show when={frame().slashMenuVisible}>
               <SlashMenu
                 args={[
-                  props.options.textareaController.slashMenuState,
+                  options().textareaController.slashMenuState,
                   frame().slashMenuHost,
-                  props.options.message,
-                  props.options.onChange,
+                  options().message,
+                  options().onChange,
                 ]}
               />
             </Show>
             <Show when={frame().skillMenuVisible}>
               <SkillMenu
                 args={[
-                  props.options.textareaController.skillMenuState,
+                  options().textareaController.skillMenuState,
                   frame().skillMenuHost,
-                  props.options.onChange,
+                  options().onChange,
                 ]}
               />
             </Show>
@@ -577,8 +590,8 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
               class="new-session-page__message"
               rows="1"
               autofocus={globalThis.matchMedia?.("(max-width: 560px)")?.matches ?? false}
-              disabled={props.options.submitting || props.options.messageLocked}
-              readonly={props.options.dictationActive}
+              disabled={options().submitting || options().messageLocked}
+              readonly={options().dictationActive}
               placeholder={placeholder()}
               aria-label={frame().messagePlaceholder}
               aria-keyshortcuts={frame().keyShortcuts}
@@ -588,40 +601,40 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
               aria-activedescendant={frame().activeMenuOptionId ?? undefined}
               aria-describedby={frame().menuAnnouncementId}
               onInput={(event) => {
-                if (props.options.dictationActive) {
+                if (options().dictationActive) {
                   return;
                 }
                 const target = event.currentTarget;
                 adjustTextareaHeight(target, { nativeInput: true });
                 const mentions = frame().mentionMenuHost.getMentions();
-                props.options.onInput(
+                options().onInput(
                   target.value,
                   mentions.length
                     ? updateHumanMentions(
-                        props.options.message,
+                        options().message,
                         target.value,
                         mentions,
-                        props.options.textareaController.mentionInput,
+                        options().textareaController.mentionInput,
                       )
                     : undefined,
                 );
-                props.options.textareaController.mentionInput = undefined;
+                options().textareaController.mentionInput = undefined;
                 frame().updateMenus(target, event);
               }}
               onBeforeInput={(event) => {
                 const target = event.currentTarget;
-                props.options.textareaController.mentionInput = {
+                options().textareaController.mentionInput = {
                   value: target.value,
                   start: target.selectionStart,
                   end: target.selectionEnd,
                   inputType: event.inputType,
                 };
-                props.options.textareaController.emojiMenu.complete(
+                options().textareaController.emojiMenu.complete(
                   event,
-                  props.options.onChange,
+                  options().onChange,
                   !frame().composerLocked &&
-                    !props.options.nativeTerminal &&
-                    !props.options.textareaController.composing,
+                    !options().nativeTerminal &&
+                    !options().textareaController.composing,
                 );
               }}
               onSelect={(event) => frame().handleSelect(event)}
@@ -629,37 +642,37 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
               onPointerUp={(event) => frame().handleSelect(event)}
               onKeyUp={(event) => {
                 clearCompositionEnd(event);
-                props.options.textareaController.emojiMenu.handleKeyup(event);
+                options().textareaController.emojiMenu.handleKeyup(event);
                 if (event.key.startsWith("Arrow") || event.key === "Home" || event.key === "End") {
                   frame().handleSelect(event);
                 }
               }}
               onBlur={(event) => {
                 clearCompositionEnd(event);
-                const emojiWasOpen = props.options.textareaController.emojiMenu.open;
-                props.options.textareaController.composing = false;
-                props.options.textareaController.emojiMenu.close();
+                const emojiWasOpen = options().textareaController.emojiMenu.open;
+                options().textareaController.composing = false;
+                options().textareaController.emojiMenu.close();
                 if (emojiWasOpen) {
-                  props.options.onChange();
+                  options().onChange();
                 }
               }}
               onCompositionEnd={(event) => {
                 recordCompositionEnd(event);
-                props.options.textareaController.composing = false;
+                options().textareaController.composing = false;
                 frame().updateMenus(event.currentTarget);
               }}
               onKeyDown={(event) => frame().handleComposerKeydown(event)}
               onCompositionStart={() => {
-                props.options.textareaController.composing = true;
-                props.options.textareaController.emojiMenu.close();
-                props.options.textareaController.mentionMenu.close();
-                props.options.onChange();
+                options().textareaController.composing = true;
+                options().textareaController.emojiMenu.close();
+                options().textareaController.mentionMenu.close();
+                options().onChange();
               }}
               onPaste={(event) => {
-                if (props.options.nativeTerminal && event.clipboardData?.files.length) {
+                if (options().nativeTerminal && event.clipboardData?.files.length) {
                   event.preventDefault();
-                  props.options.onUnsupportedAttachment?.();
-                } else if (!frame().composerLocked && !props.options.nativeTerminal) {
+                  options().onUnsupportedAttachment?.();
+                } else if (!frame().composerLocked && !options().nativeTerminal) {
                   handleChatAttachmentPaste(event, frame().attachmentProps);
                 }
               }}
@@ -680,43 +693,43 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
         </div>
         <div class="agent-chat__composer-footer">
           <div class="agent-chat__composer-lead">
-            <Show when={!props.options.nativeTerminal}>
-              <NewSessionPlusMenu options={props.options} attachments={frame().attachmentProps} />
+            <Show when={!options().nativeTerminal}>
+              <NewSessionPlusMenu options={options()} attachments={frame().attachmentProps} />
             </Show>
-            {props.options.permissionControl}
-            <Show when={!props.options.nativeTerminal && props.options.draftAvailable}>
-              <NewSessionDraftVisibility options={props.options} />
+            {options().permissionControl}
+            <Show when={!options().nativeTerminal && options().draftAvailable}>
+              <NewSessionDraftVisibility options={options()} />
             </Show>
-            <Show when={!props.options.nativeTerminal}>
-              <NewSessionSelectionStatus options={props.options} />
+            <Show when={!options().nativeTerminal}>
+              <NewSessionSelectionStatus options={options()} />
             </Show>
           </div>
           <div class="agent-chat__composer-trail">
             <div class="agent-chat__composer-controls">
-              <Show when={!props.options.isCatalogTarget}>
+              <Show when={!options().isCatalogTarget}>
                 <div class="chat-composer-model-control">
                   <NewSessionModelControlView
-                    control={props.options.modelControl}
+                    control={options().modelControl}
                     options={{
-                      agent: props.options.agent,
-                      agentId: props.options.agentId,
-                      context: props.options.context,
-                      sending: props.options.submitting,
+                      agent: options().agent,
+                      agentId: options().agentId,
+                      context: options().context,
+                      sending: options().submitting,
                     }}
                   />
                 </div>
               </Show>
             </div>
             <div class="agent-chat__composer-actions">
-              {props.options.voiceControl}
-              <Show when={!props.options.dictationActive}>
-                <StartControl options={props.options} />
+              {options().voiceControl}
+              <Show when={!options().dictationActive}>
+                <StartControl options={options()} />
               </Show>
             </div>
           </div>
         </div>
       </div>
-      <Show when={props.options.blockedSubmitNotice}>
+      <Show when={options().blockedSubmitNotice}>
         <div
           class="new-session-page__blocked-submit agent-chat__composer-status"
           data-tone="info"
@@ -726,9 +739,7 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
             <span class="agent-chat__composer-status-icon" aria-hidden="true">
               <Icon name="info" />
             </span>
-            <span class="agent-chat__composer-status-text">
-              {props.options.blockedSubmitNotice}
-            </span>
+            <span class="agent-chat__composer-status-text">{options().blockedSubmitNotice}</span>
           </div>
         </div>
       </Show>

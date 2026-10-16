@@ -1,6 +1,7 @@
 import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
 import { t } from "../../i18n/index.ts";
-import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatQueueItem, HumanMention } from "../../lib/chat/chat-types.ts";
+import { createComposerDraftSource } from "../../lib/chat/composer-draft.ts";
 import { parseStoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -61,7 +62,22 @@ export function createChatState<TState extends ChatPageHost>(
   onQueuedMessageDiscarded?: (item: ChatQueueItem) => void,
 ) {
   let stateValue: TState | undefined;
-  let attachmentReadsValue = new ChatAttachmentReadLifecycle(() => stateValue?.requestUpdate?.());
+  const emptyMentions: readonly HumanMention[] = [];
+  const composerDraft = createComposerDraftSource(() => ({
+    draft: stateValue?.chatMessage ?? "",
+    mentions: stateValue?.chatMentions ?? emptyMentions,
+    attachments: stateValue?.chatAttachments ?? [],
+    pendingAttachmentReads: attachmentReadsValue.pendingReads,
+  }));
+  const attachmentChanged = () => {
+    if (disposed) return;
+    publishComposerDraft();
+    stateValue?.requestUpdate?.();
+  };
+  let attachmentReadsValue = new ChatAttachmentReadLifecycle(attachmentChanged);
+  let publishedDraft: ReturnType<typeof composerDraft.read> | undefined;
+  let publishedReadRevision = 0;
+  let publishedSessionKey: string | undefined;
   const composerPersistence = new ChatComposerPersistence(() => stateValue);
   let privateDraftReview: { controller: AbortController; isCurrent: () => boolean } | undefined;
   let previousChatLoading = false;
@@ -75,6 +91,7 @@ export function createChatState<TState extends ChatPageHost>(
 
   const api = {
     composerPersistence,
+    composerDraft,
 
     get disposed() {
       return disposed;
@@ -118,14 +135,18 @@ export function createChatState<TState extends ChatPageHost>(
 
     takeAttachmentReads(): ChatAttachmentReadLifecycle {
       const reads = attachmentReadsValue;
-      attachmentReadsValue = new ChatAttachmentReadLifecycle(() => stateValue?.requestUpdate?.());
+      attachmentReadsValue = new ChatAttachmentReadLifecycle(attachmentChanged);
       return reads;
     },
 
     adoptAttachmentReads(reads: ChatAttachmentReadLifecycle, state: TState): void {
       attachmentReadsValue.abortReads();
       attachmentReadsValue = reads;
-      reads.retarget(api.attachmentInputProps(state), () => state.requestUpdate?.());
+      reads.retarget(api.attachmentInputProps(state), () => {
+        if (disposed) return;
+        publishComposerDraft();
+        state.requestUpdate?.();
+      });
     },
 
     attachmentInputProps(state: TState) {
@@ -148,6 +169,7 @@ export function createChatState<TState extends ChatPageHost>(
         },
         onAttachmentsChange: (next: ChatPageHost["chatAttachments"]) => {
           state.chatAttachments = next;
+          publishComposerDraft();
           state.requestUpdate?.();
         },
       };
@@ -177,6 +199,7 @@ export function createChatState<TState extends ChatPageHost>(
         stopChatRealtimeTalk(stateValue);
       }
       stateValue = state;
+      publishComposerDraft();
       previousTranscriptSources = transcriptSources(state);
       state.canRestoreComposer = () => stateValue === state && composerPersistence.active;
       previousChatLoading = state.chatLoading;
@@ -237,15 +260,14 @@ export function createChatState<TState extends ChatPageHost>(
       state.handleChatDraftChange = (next, mentions) => {
         commitDraftChange(next, mentions);
         composerPersistence.schedule();
+        publishComposerDraft();
       };
       const navigateInputHistory = state.handleChatInputHistoryKey;
       state.handleChatInputHistoryKey = (input) => {
         const result = navigateInputHistory(input);
         if (result.handled) {
           composerPersistence.schedule();
-          // A history recall mutates chatMessage directly; without invalidating,
-          // the composer textarea stays empty until an unrelated event re-renders.
-          state.renderLifecycle.invalidate();
+          publishComposerDraft();
         }
         return result;
       };
@@ -293,6 +315,13 @@ export function createChatState<TState extends ChatPageHost>(
     },
   };
   return api;
+
+  function publishComposerDraft() {
+    publishedDraft = composerDraft.read();
+    publishedReadRevision = attachmentReadsValue.revision;
+    publishedSessionKey = stateValue?.sessionKey;
+    composerDraft.publish();
+  }
 
   function hasPrivateComposerInput(state: TState): boolean {
     return (
@@ -445,6 +474,21 @@ export function createChatState<TState extends ChatPageHost>(
     }
     composerPersistence.persistChangedState();
     captureRenderLifecycleChanges();
+    // Legacy restore writers still signal through the page owner. Ordinary
+    // stream updates must not invalidate the independent composer projection.
+    // Explicit mutation hooks above also cover changes within retained arrays.
+    const draft = composerDraft.read();
+    if (
+      !publishedDraft ||
+      stateValue?.sessionKey !== publishedSessionKey ||
+      draft.draft !== publishedDraft.draft ||
+      draft.mentions !== publishedDraft.mentions ||
+      draft.attachments !== publishedDraft.attachments ||
+      draft.pendingAttachmentReads !== publishedDraft.pendingAttachmentReads ||
+      attachmentReadsValue.revision !== publishedReadRevision
+    ) {
+      publishComposerDraft();
+    }
     onStateChange?.();
     notifyRenderLifecycleForTest(renderer, "invalidate");
     // Only background producers opt in. Draft persistence and scroll ownership

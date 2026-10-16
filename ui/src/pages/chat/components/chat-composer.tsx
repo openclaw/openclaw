@@ -1,28 +1,28 @@
-import { createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, merge, onCleanup, untrack } from "solid-js";
+import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { createChatComposerContext } from "./chat-composer-frame.ts";
 import { ComposerPredictionController } from "./chat-composer-prediction.ts";
-import { getChatComposerState, isChatRunWorking } from "./chat-composer-state.ts";
+import { composerDraftKey, getChatComposerState, isChatRunWorking } from "./chat-composer-state.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 import { renderChatComposerView } from "./chat-composer-view.tsx";
 
 export { isChatRunWorking, resetChatComposerState } from "./chat-composer-state.ts";
 
-type ChatComposerInput = ChatComposerProps & { renderRevision?: object };
-
-export function ChatComposer(props: ChatComposerInput) {
+export function ChatComposer(props: ChatComposerProps) {
   const state = getChatComposerState(untrack(() => props.paneId));
+  // A replacement draft retires the native input's uncommitted IME preview.
+  const [composition, setComposition] = createSignal<{ key: string; value: string } | null>(() => {
+    composerDraftKey(props);
+    return null;
+  });
+  const [error, setError] = createSignal<string | null>(null);
+  const interaction = { composition, setComposition, error, setError };
   const [revision, setRevision] = createSignal(0);
-  let inputDepth = 0;
-  let inputInvalidated = false;
   let computingFrame = false;
   let deferredInvalidation = false;
   let disposed = false;
   const requestUpdate = () => {
     if (disposed) {
-      return;
-    }
-    if (inputDepth > 0) {
-      inputInvalidated = true;
       return;
     }
     if (computingFrame) {
@@ -35,16 +35,14 @@ export function ChatComposer(props: ChatComposerInput) {
       }
       return;
     }
-    const notifyHost = untrack(() => props.onRequestUpdate);
-    if (notifyHost) {
-      notifyHost();
-    } else {
-      setRevision((value) => value + 1);
-    }
+    setRevision((value) => value + 1);
   };
-  const currentProps = new Proxy(props, {
-    get: (target, key) => (key === "onRequestUpdate" ? requestUpdate : Reflect.get(target, key)),
+  const draft = createMemo(() => {
+    const source = props.draftSource;
+    return source ? projectOwner(source, (owner) => owner.read()) : undefined;
   });
+  const draftState = createMemo(() => draft()?.read());
+  const currentProps = merge(props, () => draftState() ?? {}, { onRequestUpdate: requestUpdate });
   const prediction = new ComposerPredictionController(() => {
     const options = currentProps.composerPredictions;
     const client = currentProps.gatewayClient;
@@ -77,12 +75,11 @@ export function ChatComposer(props: ChatComposerInput) {
     };
   }, requestUpdate);
   const context = createMemo(() => {
+    draftState();
     revision();
-    // Lit owners can change local state without changing a prop's identity.
-    void props.renderRevision;
     computingFrame = true;
     try {
-      return createChatComposerContext(currentProps, prediction);
+      return createChatComposerContext(currentProps, interaction, prediction);
     } finally {
       computingFrame = false;
     }
@@ -103,41 +100,5 @@ export function ChatComposer(props: ChatComposerInput) {
     state.textareaRef?.();
     state.composerInputRef?.();
   });
-  const fields = new Map(
-    Object.keys(untrack(context)).map((key) => [
-      key,
-      createMemo(() => Reflect.get(context(), key), {
-        equals: key === "state" || key === "dictation" ? false : undefined,
-      }),
-    ]),
-  );
-  const input =
-    <E extends Event>(read: () => (event: E) => void) =>
-    (event: E) => {
-      inputDepth += 1;
-      try {
-        read()(event);
-      } finally {
-        inputDepth -= 1;
-        if (inputDepth === 0 && inputInvalidated) {
-          inputInvalidated = false;
-          requestUpdate();
-        }
-      }
-    };
-  const handlers = {
-    handleBeforeInput: input(() => context().handleBeforeInput),
-    handleInput: input(() => context().handleInput),
-    handleKeyDown: input(() => context().handleKeyDown),
-    handleSelect: input(() => context().handleSelect),
-    handleCompositionEnd: input(() => context().handleCompositionEnd),
-    handleBlur: input(() => context().handleBlur),
-  };
-  return renderChatComposerView(
-    // SAFETY: Every frame field is served by its projection; handlers are replaced explicitly.
-    new Proxy({} as ReturnType<typeof createChatComposerContext>, {
-      get: (_target, key) =>
-        Object.hasOwn(handlers, key) ? Reflect.get(handlers, key) : fields.get(String(key))?.(),
-    }),
-  );
+  return renderChatComposerView(context, currentProps);
 }

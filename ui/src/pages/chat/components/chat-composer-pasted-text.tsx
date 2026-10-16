@@ -42,7 +42,6 @@ function showPastedTextInComposer(att: ChatAttachment, props: ChatAttachmentCont
   }
   removeDraftAttachment(att, props);
   props.onDraftChange(appendPastedTextToDraft(props.getDraft?.() ?? props.draft ?? "", text));
-  props.onRequestUpdate?.();
 }
 
 export function ComposerPastedText(componentProps: {

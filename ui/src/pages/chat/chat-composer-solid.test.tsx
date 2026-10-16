@@ -12,6 +12,10 @@ import {
   renderComposerInto,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
+import { createInitializationContext } from "./chat-pane.test-support.ts";
+import { createChatState } from "./chat-state-controller.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
+import { createPageState } from "./chat-state-page.ts";
 import { ComposerDictationSendAction } from "./components/chat-composer-controls.tsx";
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
@@ -35,6 +39,63 @@ function mountComposer(initial: ChatComposerProps) {
     },
   };
 }
+
+it("updates edits and history from the draft owner without redrawing the pane", () => {
+  const requestUpdate = vi.fn();
+  const owner = createChatState<ChatPageHost>({
+    requestUpdate,
+    updateComplete: Promise.resolve(),
+  });
+  const state = createPageState(
+    createInitializationContext(),
+    owner.createRenderLifecycle(),
+    document.createElement("div"),
+  );
+  state.sessionKey = "agent:main:draft-source";
+  owner.attach(state);
+  onTestFinished(owner.dispose);
+  const view = mountComposer(
+    createComposerProps({
+      sessionKey: state.sessionKey,
+      draftSource: owner.composerDraft,
+      getDraft: () => state.chatMessage,
+      getMentions: () => state.chatMentions ?? [],
+      onDraftChange: state.handleChatDraftChange,
+    }),
+  );
+  const textarea = view.container.querySelector("textarea")!;
+  textarea.value = "An ordinary edit";
+  textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+  flush();
+  expect(state.chatMessage).toBe("An ordinary edit");
+
+  state.handleChatDraftChange("@Alex restored", [{ profileId: "alex", start: 0, end: 5 }]);
+  flush();
+  expect(textarea.value).toBe("@Alex restored");
+  state.chatLocalInputHistoryBySession[state.sessionKey] = [{ text: "Earlier input", ts: 1 }];
+  state.handleChatInputHistoryKey({
+    key: "ArrowUp",
+    selectionStart: 0,
+    selectionEnd: 0,
+    altKey: false,
+    ctrlKey: false,
+    metaKey: false,
+    shiftKey: false,
+    isComposing: false,
+    keyCode: 38,
+  });
+  flush();
+  expect(textarea.value).toBe("Earlier input");
+  expect(requestUpdate).not.toHaveBeenCalled();
+
+  const draftChanged = vi.fn();
+  onTestFinished(owner.composerDraft.subscribe(draftChanged));
+  state.chatStream = "An unrelated response";
+  state.requestUpdate?.();
+  flush();
+  expect(draftChanged).not.toHaveBeenCalled();
+  expect(view.container.querySelector("textarea")).toBe(textarea);
+});
 
 it("updates composer text on a live locale change without disturbing an IME draft", async () => {
   onTestFinished(captureI18nStateForTesting());

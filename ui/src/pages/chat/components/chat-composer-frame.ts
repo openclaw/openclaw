@@ -61,8 +61,16 @@ import type { ChatComposerProps } from "./chat-composer-types.ts";
 
 registerChatGoalsEnglish();
 
+type ComposerInteraction = {
+  composition: () => { key: string; value: string } | null;
+  setComposition: (draft: { key: string; value: string } | null) => void;
+  error: () => string | null;
+  setError: (error: string | null) => void;
+};
+
 export function createChatComposerContext(
   props: ChatComposerProps,
+  interaction: ComposerInteraction,
   prediction?: ComposerPredictionController,
 ) {
   const state = getChatComposerState(props.paneId);
@@ -96,7 +104,6 @@ export function createChatComposerContext(
     state.restoreComposerFocus ||= state.composerTextarea === document.activeElement;
     state.textareaRef?.();
     state.composerComposing = false;
-    state.composingDraft = null;
     state.emojiMenu.close();
     state.dictation?.dispose();
     state.dictation = null;
@@ -106,9 +113,10 @@ export function createChatComposerContext(
     state.composerDraftScope = { key: draftKey };
   }
   const draftScope = state.composerDraftScope;
+  const composition = interaction.composition();
   const visibleDraft =
-    state.composingDraft?.key === draftKey
-      ? state.composingDraft.value
+    state.composerComposing && composition?.key === draftKey
+      ? composition.value
       : (props.getDraft?.() ?? props.draft);
   state.composerInputRef ??= (element?: Element) => {
     state.composerInput = replaceComposerPopoverAnchor(state.composerInput, element);
@@ -226,9 +234,8 @@ export function createChatComposerContext(
   if (!state.questionTakeoverActive && questionTakeoverActive) {
     // A question can arrive mid-IME composition before compositionend commits the host draft.
     // Commit before unmounting so the detached input cannot leave a stale shadow behind.
-    if (state.composingDraft?.key === draftKey) {
-      commitComposerDraft(props, state.composingDraft.value);
-      state.composingDraft = null;
+    if (state.composerComposing && composition?.key === draftKey) {
+      commitComposerDraft(props, composition.value);
     }
     state.composerComposing = false;
   }
@@ -253,7 +260,6 @@ export function createChatComposerContext(
     !(state.skillMenuOpen && state.skillCommandRefreshPending) &&
     (props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0) === 0 &&
     (props.connected || !draft.trimStart().startsWith("/"));
-  const renderedDraftCanSubmit = canSubmitDraft(visibleDraft);
 
   const syncComposerDraftAfterSend = (target: HTMLTextAreaElement | null) => {
     state.emojiMenu.close();
@@ -285,7 +291,7 @@ export function createChatComposerContext(
       return;
     }
     state.composerComposing = false;
-    state.composingDraft = null;
+    interaction.setComposition(null);
     commitComposerDraft(props, draft);
     props.onTypingChange?.(false);
     if (goalComposer.activateDraft(draft, true)) {
@@ -358,14 +364,6 @@ export function createChatComposerContext(
       state.mentionMenu.update(target, requestUpdate, mentionIntent);
     }
     updateEmojiMenu(target);
-    // The textarea owns ordinary edits; only redraw the pane when surrounding
-    // controls change. Slash and skill menus invalidate their own presentation.
-    if (
-      Boolean(target.value.trim()) !== Boolean(visibleDraft.trim()) ||
-      canSubmitDraft(target.value) !== renderedDraftCanSubmit
-    ) {
-      requestUpdate();
-    }
     shareTypingSelection(target);
   };
   const handleBeforeInput = (event: InputEvent) => {
@@ -393,13 +391,10 @@ export function createChatComposerContext(
     }
     const hasInputIntent = consumeComposerInputIntent(state, draftKey);
     if (state.composerComposing || event.isComposing) {
-      state.composingDraft = { key: draftKey, value: target.value };
-      requestUpdate();
+      interaction.setComposition({ key: draftKey, value: target.value });
       return;
     }
-    if (state.composingDraft?.key === draftKey) {
-      state.composingDraft = null;
-    }
+    interaction.setComposition(null);
     if (
       suppressStaleSubmittedDraftReplay(
         target,
@@ -445,9 +440,7 @@ export function createChatComposerContext(
     }
     recordCompositionEnd(event);
     state.composerComposing = false;
-    if (state.composingDraft?.key === draftKey) {
-      state.composingDraft = null;
-    }
+    interaction.setComposition(null);
     // SAFETY: The identity check above requires the current composer textarea.
     syncComposerValue(event.target as HTMLTextAreaElement);
   };
@@ -467,9 +460,7 @@ export function createChatComposerContext(
     // composing flag: it persists across renders and kills Enter-send,
     // history keys, and command menus until the Send button resets it.
     state.composerComposing = false;
-    if (state.composingDraft?.key === draftKey) {
-      state.composingDraft = null;
-    }
+    interaction.setComposition(null);
     // Dictation owns the read-only preview; blur must not commit discarded speech.
     if (!state.dictation?.locksComposer) {
       const normalizedDraft = normalizeChatComposerDraft(target.value);
@@ -589,8 +580,7 @@ export function createChatComposerContext(
         failure.kind === "interrupted" && failure.preservesText
           ? t("chat.composer.dictationInterruptedRecovery")
           : t("chat.composer.dictationStartRecovery");
-      state.dictationError = `${message} ${recovery}`;
-      requestUpdate();
+      interaction.setError(`${message} ${recovery}`);
     },
     onStateChange: () => {
       // A new dictation gesture retires an earlier Talk recovery offer before
@@ -617,10 +607,7 @@ export function createChatComposerContext(
       ? state.dictation
       : undefined;
   const handleDictationStart = (event?: PointerEvent) => {
-    if (state.dictationError) {
-      state.dictationError = null;
-      requestUpdate();
-    }
+    interaction.setError(null);
     const target = state.composerTextarea;
     // Both hold and direct/mobile starts capture the draft before its preview
     // replaces the textarea value; otherwise committing appends the speech twice.
@@ -690,9 +677,6 @@ export function createChatComposerContext(
   ) {
     resetSkillMenuState(state);
   }
-  if (!props.capabilityMenu) {
-    state.capabilityMenuView = "root";
-  }
   const menus = resolveComposerMenus(
     props.paneId,
     commandsVisible,
@@ -703,6 +687,7 @@ export function createChatComposerContext(
   );
 
   return {
+    interaction,
     props,
     state,
     attachmentReadRevision: props.attachmentReads?.revision,

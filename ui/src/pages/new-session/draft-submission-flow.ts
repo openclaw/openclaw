@@ -2,6 +2,7 @@ import type { ProjectsAddResult } from "../../../../packages/gateway-protocol/sr
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
+import { createComposerDraftSource } from "../../lib/chat/composer-draft.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import {
@@ -85,6 +86,16 @@ export class DraftSubmissionFlow {
   private readonly sessionStartup: DraftSessionStartup;
   readonly pendingPlacement = new PendingSessionPlacementRecoveryState(() => this.read().context);
   readonly attachmentDraft: NewSessionAttachmentDraft;
+  readonly composerDraft = createComposerDraftSource(() => ({
+    draft: this.messageText,
+    mentions: this.mentionsValue,
+    attachments: this.attachmentDraft.attachments,
+    pendingAttachmentReads: this.attachmentDraft.reads.pendingReads,
+  }));
+  private readonly draftChanged = () => {
+    this.composerDraft.publish();
+    this.callbacks.changed();
+  };
   private creationComposerValue: CreationComposer | undefined;
 
   get creationComposer(): CreationComposer | undefined {
@@ -123,7 +134,7 @@ export class DraftSubmissionFlow {
       },
       () => this.setError(CHAT_COMPOSER_DRAFT_STORAGE_ERROR),
     );
-    this.attachmentDraft = new NewSessionAttachmentDraft(callbacks.changed, () => {
+    this.attachmentDraft = new NewSessionAttachmentDraft(this.draftChanged, () => {
       this.rejectedPromptError = null;
       this.startedSession.current = null;
       this.draftPersistence.noteUserMutation();
@@ -190,7 +201,7 @@ export class DraftSubmissionFlow {
       mentions ?? updateHumanMentions(this.messageText, message, this.mentionsValue);
     this.updateMessage(message);
     this.draftPersistence.noteUserMutation();
-    this.callbacks.changed();
+    this.draftChanged();
   }
 
   restoreMessage(message: string, mentions: readonly HumanMention[] = []) {
@@ -198,7 +209,7 @@ export class DraftSubmissionFlow {
     this.draftPersistence.noteDraftReplaced();
     this.updateMessage(message);
     this.mentionsValue = mentions;
-    this.callbacks.changed();
+    this.draftChanged();
   }
 
   restoreDraftState(state: RestoredDraftState) {
@@ -369,6 +380,7 @@ export class DraftSubmissionFlow {
       this.mentionsValue = [];
     }
     this.clearError();
+    this.composerDraft.publish();
   }
 
   clearPendingPlacementRecovery() {

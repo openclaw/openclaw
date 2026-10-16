@@ -131,9 +131,6 @@ export function createComposerKeyDownHandler({
         if (result.preventDefault) {
           event.preventDefault();
         }
-        // History navigation updates the renderer-owned draft outside a
-        // reactive property; commit it before placing the caret in the DOM.
-        requestUpdate();
         if (result.restoreCaret) {
           restoreHistoryCaret(target, result.restoreCaret);
         }
