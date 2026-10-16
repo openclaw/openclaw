@@ -32,42 +32,23 @@ const avatarUrl =
 
 async function observeShape(sidebar: Locator) {
   return sidebar.evaluateHandle((element, key) => {
-    const samples: Array<{
-      navigation: Array<string | null>;
-      rail: Array<string | null>;
-      sessions: Array<string | null>;
-      view: string | null;
-      agents: Array<string | null>;
-      agentNames: string[];
-      avatarText: string[];
-      brand: string;
-      footer: string;
-      online: string[];
-      selectedBounds: { x: number; y: number; width: number; height: number } | null;
-    }> = [];
-    const sample = () => {
+    const attributes = (selector: string, attribute: string) =>
+      [...element.querySelectorAll(selector)].map((row) => row.getAttribute(attribute));
+    const texts = (selector: string) =>
+      [...element.querySelectorAll(selector)].map((row) => row.textContent?.trim() ?? "");
+    const read = () => {
       const selected = element.querySelector(`.sidebar-rail [data-sidebar-entry="session:${key}"]`);
       const bounds = selected?.getBoundingClientRect();
-      const next = {
-        navigation: [...element.querySelectorAll("[data-sidebar-entry]")].map((row) =>
-          row.getAttribute("data-sidebar-entry"),
-        ),
-        sessions: [...element.querySelectorAll(".sidebar-session-content [data-session-key]")].map(
-          (row) => row.getAttribute("data-session-key"),
-        ),
-        rail: [...element.querySelectorAll(".sidebar-rail [data-sidebar-entry]")].map((row) =>
-          row.getAttribute("data-sidebar-entry"),
-        ),
+      return {
+        navigation: attributes("[data-sidebar-entry]", "data-sidebar-entry"),
+        sessions: attributes(".sidebar-session-content [data-session-key]", "data-session-key"),
+        rail: attributes(".sidebar-rail [data-sidebar-entry]", "data-sidebar-entry"),
         view:
           element
             .querySelector('[data-navigation-view][aria-pressed="true"]')
             ?.getAttribute("data-navigation-view") ?? null,
-        agents: [...element.querySelectorAll("[data-agent-group]")].map((row) =>
-          row.getAttribute("data-agent-group"),
-        ),
-        agentNames: [
-          ...element.querySelectorAll("[data-agent-group] .sidebar-agent-roster__copy"),
-        ].map((row) => row.textContent?.trim() ?? ""),
+        agents: attributes("[data-agent-group]", "data-agent-group"),
+        agentNames: texts("[data-agent-group] .sidebar-agent-roster__copy"),
         avatarText: [
           ...element.querySelectorAll(
             "[data-agent-group] .sidebar-agent-roster__header .sidebar-agent-roster__avatar",
@@ -75,13 +56,15 @@ async function observeShape(sidebar: Locator) {
         ].map((row) => row.querySelector("[data-avatar]")?.getAttribute("data-avatar") ?? ""),
         brand: element.querySelector(".sidebar-workspace-header__main")?.textContent?.trim() ?? "",
         footer: element.querySelector(".sidebar-identity-card__name")?.textContent?.trim() ?? "",
-        online: [...element.querySelectorAll(".sidebar-online__person-name")].map(
-          (row) => row.textContent?.trim() ?? "",
-        ),
+        online: texts(".sidebar-online__person-name"),
         selectedBounds: bounds
           ? { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height }
           : null,
       };
+    };
+    const samples: ReturnType<typeof read>[] = [];
+    const sample = () => {
+      const next = read();
       if (JSON.stringify(samples.at(-1)) !== JSON.stringify(next)) {
         samples.push(next);
       }
@@ -265,33 +248,19 @@ suite.define(() => {
             ],
             sessionKey: selectedKey,
             sessions: rosterSessions,
-            presenceUsers: [
-              {
-                self: true,
-                id: "riley",
-                identity: { type: "profile", id: "riley" },
-                name: "Riley",
-                email: "riley@example.test",
-                avatarUrl,
-                lastInputSeconds: 0,
-              },
-              {
-                id: "ada",
-                identity: { type: "profile", id: "ada" },
-                name: "Ada",
-                email: "ada@example.test",
-                avatarUrl,
-                lastInputSeconds: 0,
-              },
-              {
-                id: "zoe",
-                identity: { type: "profile", id: "zoe" },
-                name: "Zoe",
-                email: "zoe@example.test",
-                avatarUrl,
-                lastInputSeconds: 0,
-              },
-            ],
+            presenceUsers: ["Riley", "Ada", "Zoe"].map((name) =>
+              Object.assign(
+                {
+                  id: name.toLowerCase(),
+                  identity: { type: "profile", id: name.toLowerCase() },
+                  name,
+                  email: `${name.toLowerCase()}@example.test`,
+                  avatarUrl,
+                  lastInputSeconds: 0,
+                },
+                name === "Riley" ? { self: true } : {},
+              ),
+            ),
             methodResponses: {
               "users.prefs.get": { status: "ok", entries: { "ui.railShortcuts": railPins } },
               "agents.list": agents,
@@ -380,17 +349,17 @@ suite.define(() => {
           expect(settled.navigation.filter((key) => key?.startsWith("session:"))).toHaveLength(
             view === "pages" ? 12 : 1,
           );
-          expect(settled.sessions).toEqual(
-            view === "pages" ? [] : sessions.slice(0, 10).map((row) => row.key),
-          );
-          expect(settled.rail).toEqual(railPins);
-          expect(settled.view).toBe(view);
-          expect(settled.agents).toEqual(view === "pages" ? [] : ["main", "forge", "scout"]);
-          expect(settled.agentNames).toEqual(view === "pages" ? [] : ["Harbor", "Forge", "Scout"]);
-          expect(settled.avatarText).toEqual(view === "pages" ? [] : ["⚓", "🔧", "🔭"]);
-          expect(settled.brand).toBe("OpenClaw");
-          expect(settled.footer).toBe("Riley");
-          expect(settled.online).toEqual([]);
+          expect(settled).toMatchObject({
+            sessions: view === "pages" ? [] : sessions.slice(0, 10).map((row) => row.key),
+            rail: railPins,
+            view,
+            agents: view === "pages" ? [] : ["main", "forge", "scout"],
+            agentNames: view === "pages" ? [] : ["Harbor", "Forge", "Scout"],
+            avatarText: view === "pages" ? [] : ["⚓", "🔧", "🔭"],
+            brand: "OpenClaw",
+            footer: "Riley",
+            online: [],
+          });
           expect(settled.selectedBounds).not.toBeNull();
 
           if (baselineMode) {

@@ -10,6 +10,7 @@ import {
   controlUiBundledSettingsStorageKey,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expectFocused } from "./sidebar-assertions.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Personal rail pins" });
 const unloaded = [
@@ -208,113 +209,19 @@ suite.define(() => {
       await expect.poll(pinOrder).toEqual(reordered);
 
       const menu = page.locator(".sidebar-rail-pin-menu");
-      const focusTrace = await source.evaluateHandle((sourceElement) => {
-        const lifetime = new AbortController();
-        let shortcut: string | null = null;
-        const describe = (eventTarget: EventTarget | null) =>
-          eventTarget instanceof Element
-            ? {
-                tag: eventTarget.localName,
-                class: eventTarget.getAttribute("class")?.slice(0, 160) ?? null,
-                connected: eventTarget.isConnected,
-              }
-            : null;
-        const snapshot = (phase: string, event?: Event) => {
-          const dropdown = document.querySelector<HTMLElement>(".sidebar-rail-pin-menu");
-          const active: Array<ReturnType<typeof describe>> = [];
-          let element = document.activeElement;
-          while (element && active.length < 5) {
-            active.push(describe(element));
-            element = element.shadowRoot?.activeElement ?? null;
-          }
-          return {
-            shortcut,
-            phase,
-            event: event?.type ?? null,
-            key: event instanceof KeyboardEvent ? event.key : null,
-            defaultPrevented: event?.defaultPrevented ?? null,
-            target: describe(event?.composedPath()[0] ?? null),
-            source: describe(sourceElement),
-            sourceFocused: sourceElement === document.activeElement,
-            menu: dropdown
-              ? { ...describe(dropdown), open: dropdown.matches(":popover-open") }
-              : null,
-            active,
-          };
-        };
-        const events: Array<ReturnType<typeof snapshot>> = [];
-        const record = (phase: string, event: Event) => {
-          if (events.length === 100) {
-            events.shift();
-          }
-          events.push(snapshot(phase, event));
-        };
-        const keydown = (phase: string) => (event: KeyboardEvent) => {
-          if (event.key === "F10" && event.shiftKey) {
-            shortcut = "Shift+F10";
-          } else if (event.key === "ContextMenu") {
-            shortcut = "ContextMenu";
-          }
-          if (event.key === "Escape" || event.key === "ContextMenu" || event.key === "F10") {
-            record(phase, event);
-          }
-        };
-        window.addEventListener("keydown", keydown("window-capture"), {
-          capture: true,
-          signal: lifetime.signal,
-        });
-        document.addEventListener("keydown", keydown("document-bubble"), {
-          signal: lifetime.signal,
-        });
-        document.addEventListener("focusin", (event) => record("focusin", event), {
-          capture: true,
-          signal: lifetime.signal,
-        });
-        for (const type of ["overlay-hide", "overlay-after-hide"]) {
-          document.addEventListener(
-            type,
-            (event) => {
-              if (
-                event.target instanceof Element &&
-                event.target.matches(".sidebar-rail-pin-menu")
-              ) {
-                record(type, event);
-              }
-            },
-            { capture: true, signal: lifetime.signal },
-          );
-        }
-        return {
-          read: () => ({ events, final: snapshot("failure") }),
-          stop: () => lifetime.abort(),
-        };
-      });
-      try {
-        for (const key of ["Shift+F10", "ContextMenu"]) {
-          await source.focus();
-          await page.keyboard.press(key);
-          await menu.getByRole("menuitem", { name: "Move down", exact: true }).waitFor();
-          await expect
-            .poll(() =>
-              menu
-                .getByRole("menuitem", { name: "Move down", exact: true })
-                .evaluate((el) => el.matches(":focus-within")),
-            )
-            .toBe(true);
-          await page.keyboard.press("Escape");
-          await expect
-            .poll(() => source.evaluate((el) => el === document.activeElement))
-            .toBe(true);
-        }
-      } catch (error) {
-        await writeFile(
-          path.join(suite.artifactDir, "rail-keyboard-focus-failure.json"),
-          JSON.stringify(await focusTrace.evaluate((trace) => trace.read()), null, 2),
-        );
-        throw error;
-      } finally {
-        await focusTrace.evaluate((trace) => trace.stop());
-        await focusTrace.dispose();
+      for (const key of ["Shift+F10", "ContextMenu"]) {
+        await source.focus();
+        await page.keyboard.press(key);
+        await menu.getByRole("menuitem", { name: "Move down", exact: true }).waitFor();
+        await expect
+          .poll(() =>
+            menu
+              .getByRole("menuitem", { name: "Move down", exact: true })
+              .evaluate((el) => el.matches(":focus-within")),
+          )
+          .toBe(true);
+        await page.keyboard.press("Escape");
+        await expectFocused(source);
       }
       await rail
         .getByRole("link", { name: "Release notes", exact: true })

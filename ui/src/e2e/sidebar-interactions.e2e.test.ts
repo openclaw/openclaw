@@ -12,6 +12,7 @@ import {
   type ControlUiMockGatewayScenario,
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
+import { expectFocused, pressAndExpectFocus } from "./sidebar-assertions.test-support.ts";
 import {
   captureSidebarUiProof,
   createSidebarCustomizationSuite,
@@ -20,14 +21,31 @@ import {
 } from "./sidebar-customization.test-support.ts";
 
 const suite = createSidebarCustomizationSuite("Control UI sidebar interactions mocked Gateway E2E");
+const desktop = {
+  locale: "en-US",
+  serviceWorkers: "block" as const,
+  viewport: { height: 900, width: 1440 },
+};
+const pixelAvatar =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+function agentResponses(agents: Array<{ id: string; name?: string }>) {
+  const agentsList = { agents, defaultId: "main", mainKey: "main", scope: "agent" };
+  return {
+    "agents.list": agentsList,
+    "chat.startup": {
+      agentsList,
+      messages: [],
+      metadata: { models: [] },
+      sessionId: "session:agent:main:main",
+      thinkingLevel: null,
+    },
+  };
+}
 
 suite.define(() => {
   it("opens every new-session plus as a native link without creating sessions", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
+    const context = await suite.newBrowserContext(desktop);
     const agentId = "research";
     const group = "Client & ops / α";
     const catalogId = "cli-tools";
@@ -197,12 +215,7 @@ suite.define(() => {
   });
 
   async function openCapabilitiesPrompt(reducedMotion: "no-preference" | "reduce") {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      reducedMotion,
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
+    const context = await suite.newBrowserContext({ ...desktop, reducedMotion });
     const page = await context.newPage();
     await installMockGateway(page);
     await page.goto(`${suite.server.baseUrl}chat`);
@@ -327,22 +340,12 @@ suite.define(() => {
       const trigger = row.getByRole("link", { name: "Dashboards", exact: true });
       const menu = await openSidebarPinMenu(page);
       const items = menu.getByRole("menuitem");
-      await expect
-        .poll(() => items.first().evaluate((element) => element.matches(":focus-within")))
-        .toBe(true);
-      await page.keyboard.press("End");
-      await expect
-        .poll(() => items.last().evaluate((element) => element.matches(":focus-within")))
-        .toBe(true);
-      await page.keyboard.press("Home");
-      await expect
-        .poll(() => items.first().evaluate((element) => element.matches(":focus-within")))
-        .toBe(true);
+      await expectFocused(items.first(), true);
+      await pressAndExpectFocus(page, "End", items.last(), true);
+      await pressAndExpectFocus(page, "Home", items.first(), true);
       await page.keyboard.press("Escape");
       await menu.waitFor({ state: "detached" });
-      await expect
-        .poll(() => trigger.evaluate((element) => element === document.activeElement))
-        .toBe(true);
+      await expectFocused(trigger);
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -358,85 +361,33 @@ suite.define(() => {
         "Move down",
         "Unpin",
       ]);
-      await expect
-        .poll(() => items.first().evaluate((element) => element.matches(":focus-within")))
-        .toBe(true);
-      await page.keyboard.press("ArrowDown");
-      await expect
-        .poll(() => items.nth(1).evaluate((element) => element.matches(":focus-within")))
-        .toBe(true);
-      await page.keyboard.press("End");
-      await expect
-        .poll(() => items.last().evaluate((element) => element.matches(":focus-within")))
-        .toBe(true);
-      await page.keyboard.press("ArrowDown");
-      await expect
-        .poll(() => items.first().evaluate((element) => element.matches(":focus-within")))
-        .toBe(true);
+      await expectFocused(items.first(), true);
+      await pressAndExpectFocus(page, "ArrowDown", items.nth(1), true);
+      await pressAndExpectFocus(page, "End", items.last(), true);
+      await pressAndExpectFocus(page, "ArrowDown", items.first(), true);
       await page.keyboard.press("Tab");
       await menu.waitFor({ state: "detached" });
       const nextLink = page.locator('[data-sidebar-entry="route:systems"] .nav-item');
-      await expect
-        .poll(() => nextLink.evaluate((element) => element === document.activeElement))
-        .toBe(true);
+      await expectFocused(nextLink);
     } finally {
       await suite.closeBrowserContext(context);
     }
   });
 
   it("shows one row per agent plus Show all and reaches them with menu keys", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
+    const context = await suite.newBrowserContext(desktop);
     const page = await context.newPage();
-    const agentsList = {
-      agents: [{ id: "main" }, { id: "research" }, { id: "forge" }, { id: "support" }],
-      defaultId: "main",
-      mainKey: "main",
-      scope: "agent",
-    };
     await installMockGateway(page, {
       methodResponses: {
         "agent.identity.get": {
           cases: [
-            {
-              match: { agentId: "main" },
-              response: {
-                agentId: "main",
-                avatar: "",
-                emoji: "🦞",
-                name: "Scheduled Automations",
-              },
-            },
-            {
-              match: { agentId: "research" },
-              response: {
-                agentId: "research",
-                avatar:
-                  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-                name: "Research",
-              },
-            },
-            {
-              match: { agentId: "forge" },
-              response: { agentId: "forge", avatar: "", emoji: "🔧", name: "Forge" },
-            },
-            {
-              match: { agentId: "support" },
-              response: { agentId: "support", avatar: "", emoji: "🧭", name: "Support" },
-            },
-          ],
+            { agentId: "main", avatar: "", emoji: "🦞", name: "Scheduled Automations" },
+            { agentId: "research", avatar: pixelAvatar, name: "Research" },
+            { agentId: "forge", avatar: "", emoji: "🔧", name: "Forge" },
+            { agentId: "support", avatar: "", emoji: "🧭", name: "Support" },
+          ].map((response) => ({ match: { agentId: response.agentId }, response })),
         },
-        "agents.list": agentsList,
-        "chat.startup": {
-          agentsList,
-          messages: [],
-          metadata: { models: [] },
-          sessionId: "session:agent:main:main",
-          thinkingLevel: null,
-        },
+        ...agentResponses([{ id: "main" }, { id: "research" }, { id: "forge" }, { id: "support" }]),
       },
     });
 
@@ -516,9 +467,7 @@ suite.define(() => {
           }),
         )
         .toBe(0);
-      await expect
-        .poll(() => mainSwitch.evaluate((element) => element === document.activeElement))
-        .toBe(true);
+      await expectFocused(mainSwitch);
       await page.keyboard.press("End");
       await expect
         .poll(() =>
@@ -527,47 +476,24 @@ suite.define(() => {
             .evaluate((element) => element === document.activeElement),
         )
         .toBe(true);
+      await pressAndExpectFocus(page, "Home", allSwitch);
+      await pressAndExpectFocus(page, "r", researchSwitch);
       await page.keyboard.press("Home");
-      await expect
-        .poll(() => allSwitch.evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      await page.keyboard.press("r");
-      await expect
-        .poll(() => researchSwitch.evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      await page.keyboard.press("Home");
-      await page.keyboard.press("ArrowDown");
-      await expect
-        .poll(() => mainSwitch.evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      await page.keyboard.press("ArrowDown");
-      await expect
-        .poll(() => researchSwitch.evaluate((element) => element === document.activeElement))
-        .toBe(true);
+      await pressAndExpectFocus(page, "ArrowDown", mainSwitch);
+      await pressAndExpectFocus(page, "ArrowDown", researchSwitch);
       const researchPin = researchSwitch.getByRole("button");
-      await page.keyboard.press("Tab");
-      await expect
-        .poll(() => researchPin.evaluate((element) => element === document.activeElement))
-        .toBe(true);
+      await pressAndExpectFocus(page, "Tab", researchPin);
       await page.keyboard.press("Space");
       await expect.poll(() => researchPin.getAttribute("aria-pressed")).toBe("true");
-      await expect
-        .poll(() => researchPin.evaluate((element) => element === document.activeElement))
-        .toBe(true);
+      await expectFocused(researchPin);
       expect(new URL(page.url()).pathname).toBe(controlUiSessionPath("agent:main:main"));
       expect(await menu.isVisible()).toBe(true);
-      await page.keyboard.press("ArrowDown");
-      await expect
-        .poll(() => mainSwitch.evaluate((element) => element === document.activeElement))
-        .toBe(true);
+      await pressAndExpectFocus(page, "ArrowDown", mainSwitch);
       await researchSwitch.focus();
       await page.keyboard.press("Tab");
       await page.keyboard.press("Enter");
       await expect.poll(() => researchPin.getAttribute("aria-pressed")).toBe("false");
-      await page.keyboard.press("Shift+Tab");
-      await expect
-        .poll(() => researchSwitch.evaluate((element) => element === document.activeElement))
-        .toBe(true);
+      await pressAndExpectFocus(page, "Shift+Tab", researchSwitch);
       await researchSwitch.hover();
       await researchPin.click();
       await expect.poll(() => researchPin.getAttribute("aria-pressed")).toBe("true");
@@ -595,8 +521,7 @@ suite.define(() => {
 
   it("searches a crowded agent menu without losing keyboard navigation or actions", async () => {
     const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
+      ...desktop,
       viewport: { width: 1440, height: 480 },
     });
     const page = await context.newPage();
@@ -604,22 +529,14 @@ suite.define(() => {
       id: index === 0 ? "main" : `agent-${index}`,
       name: index === 1 || index === 2 ? "Support" : `Research and documentation agent ${index}`,
     }));
-    const agentsList = { agents, defaultId: "main", mainKey: "main", scope: "agent" };
     await installMockGateway(page, {
       methodResponses: {
-        "agents.list": agentsList,
+        ...agentResponses(agents),
         "agent.identity.get": {
           cases: agents.map((agent) => ({
             match: { agentId: agent.id },
             response: { agentId: agent.id, name: agent.name },
           })),
-        },
-        "chat.startup": {
-          agentsList,
-          messages: [],
-          metadata: { models: [] },
-          sessionId: "session:agent:main:main",
-          thinkingLevel: null,
         },
       },
     });
@@ -654,10 +571,7 @@ suite.define(() => {
       expect(geometry.heights.every((height) => height === 56)).toBe(true);
       await captureSidebarUiProof(suite, page, "agent-menu-40-short-window.png");
       await page.keyboard.press("Home");
-      await page.keyboard.press("ArrowUp");
-      await expect
-        .poll(() => search.evaluate((input) => input === document.activeElement))
-        .toBe(true);
+      await pressAndExpectFocus(page, "ArrowUp", search);
       await page.keyboard.type("support");
       await expect.poll(() => rows.count()).toBe(2);
       expect(await rows.locator(".agent-select__option-description").allTextContents()).toEqual([
@@ -665,9 +579,7 @@ suite.define(() => {
         "agent-2",
       ]);
       await search.press("Home");
-      await expect
-        .poll(() => search.evaluate((input) => input === document.activeElement))
-        .toBe(true);
+      await expectFocused(search);
       await search.fill("no-such-agent");
       await expect.poll(() => menu.getByRole("status").textContent()).toBe("No matching agents");
       expect(await menu.locator(':scope > [role^="menuitem"]').count()).toBe(4);
@@ -680,9 +592,7 @@ suite.define(() => {
           .count(),
       ).toBe(1);
       await search.press("ArrowDown");
-      await expect
-        .poll(() => rows.first().evaluate((row) => row === document.activeElement))
-        .toBe(true);
+      await expectFocused(rows.first());
       await page.keyboard.press("Enter");
       await expect
         .poll(() => new URL(page.url()).pathname)
@@ -701,9 +611,7 @@ suite.define(() => {
         .toBe(true);
       await page.keyboard.press("Escape");
       await expect.poll(() => menu.count()).toBe(0);
-      await expect
-        .poll(() => trigger.evaluate((element) => element === document.activeElement))
-        .toBe(true);
+      await expectFocused(trigger);
       const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
       await composer.click();
       await trigger.hover();
@@ -717,45 +625,24 @@ suite.define(() => {
           }),
         )
         .toBe(true);
-      await expect
-        .poll(() => composer.evaluate((element) => element === document.activeElement))
-        .toBe(true);
+      await expectFocused(composer);
     } finally {
       await suite.closeBrowserContext(context);
     }
   });
 
   it("shows a workspace identity avatar in the sidebar agent card", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
+    const context = await suite.newBrowserContext(desktop);
     const page = await context.newPage();
-    const agentsList = {
-      agents: [{ id: "main" }],
-      defaultId: "main",
-      mainKey: "main",
-      scope: "agent",
-    };
-    const avatar =
-      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "agent.identity.get": {
           agentId: "main",
-          avatar,
+          avatar: pixelAvatar,
           avatarStatus: "data",
           name: "Workspace Molty",
         },
-        "agents.list": agentsList,
-        "chat.startup": {
-          agentsList,
-          messages: [],
-          metadata: { models: [] },
-          sessionId: "session:agent:main:main",
-          thinkingLevel: null,
-        },
+        ...agentResponses([{ id: "main" }]),
       },
     });
 
@@ -767,7 +654,7 @@ suite.define(() => {
         .poll(() => card.locator(".sidebar-agent-card__name").textContent())
         .toContain("Workspace Molty");
       const image = card.locator(".sidebar-agent-card__avatar img");
-      await expect.poll(() => image.getAttribute("src")).toBe(avatar);
+      await expect.poll(() => image.getAttribute("src")).toBe(pixelAvatar);
       await expect
         .poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth))
         .toBe(1);

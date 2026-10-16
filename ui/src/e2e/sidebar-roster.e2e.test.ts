@@ -1,4 +1,3 @@
-import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import type {
   AgentsListResult,
@@ -18,6 +17,7 @@ import {
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForMobileSidebarDrawerOpen } from "./session-management.test-support.ts";
+import { expectFocused, pressAndExpectFocus } from "./sidebar-assertions.test-support.ts";
 import { captureSidebarUiProof } from "./sidebar-customization.test-support.ts";
 import {
   chooseSidebarOwner,
@@ -187,11 +187,8 @@ suite.define(() => {
         await expect.poll(() => allAgentsTile.isVisible()).toBe(true);
         expect(await allAgentsTile.getAttribute("aria-current")).toBeNull();
         const activeAgentTile = sidebar.locator(".sidebar-agent-menu__agent-switch--active");
-        const expectFocused = (locator: Locator) =>
-          expect.poll(() => locator.evaluate((el) => el === document.activeElement)).toBe(true);
         await expectFocused(activeAgentTile);
-        await page.keyboard.press("Home");
-        await expectFocused(allAgentsTile);
+        await pressAndExpectFocus(page, "Home", allAgentsTile);
         await page.keyboard.press("Enter");
 
         const headers = sidebar.locator(".sidebar-agent-roster__row");
@@ -336,10 +333,8 @@ suite.define(() => {
           '.sidebar-agent-menu__agent-list [role^="menuitem"]',
         );
         await expectFocused(agentTiles.first());
-        await page.keyboard.press("ArrowDown");
-        await expectFocused(agentTiles.nth(1));
-        await page.keyboard.press("End");
-        await expectFocused(workspaceMenuItems.last());
+        await pressAndExpectFocus(page, "ArrowDown", agentTiles.nth(1));
+        await pressAndExpectFocus(page, "End", workspaceMenuItems.last());
         await captureSidebarUiProof(suite, page, "sidebar-team-workspace-menu.png");
         await page.keyboard.press("Escape");
         await expect.poll(() => workspaceMenu.count()).toBe(0);
@@ -423,8 +418,7 @@ suite.define(() => {
         const forgeGroup = sidebar.locator('[data-agent-group="forge"]');
         const actions = forgeGroup.locator(".sidebar-agent-roster__actions");
         await forgeGroup.locator(".sidebar-agent-roster__row").focus();
-        await page.keyboard.press("Tab");
-        await expectFocused(actions.locator("a"));
+        await pressAndExpectFocus(page, "Tab", actions.locator("a"));
         await page.keyboard.press("Tab");
         const options = actions.getByRole("button", { name: "Options for Forge" });
         await expectFocused(options);
@@ -438,10 +432,8 @@ suite.define(() => {
         const overflowItems = actions.locator('[role^="menuitem"]');
         expect(await overflowItems.locator(".oc-menu-item__icon svg").count()).toBe(3);
         await expectFocused(overflowItems.first());
-        await page.keyboard.press("ArrowDown");
-        await expectFocused(overflowItems.nth(1));
-        await page.keyboard.press("Escape");
-        await expectFocused(options);
+        await pressAndExpectFocus(page, "ArrowDown", overflowItems.nth(1));
+        await pressAndExpectFocus(page, "Escape", options);
         await options.press("Enter");
         await actions.getByRole("menuitem", { name: "All sessions", exact: true }).click();
         await waitForControlUiRoute(page, { routeId: "sessions", pathname: "/sessions" });

@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { Locator } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
@@ -11,6 +11,20 @@ import {
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const pageOptions = {
+  viewport: { width: 1280, height: 900 },
+  locale: "en-US",
+  colorScheme: "dark",
+  serviceWorkers: "block",
+} as const;
+const modelScenario = {
+  agentModel: "openai/demo-model",
+  models: [{ id: "demo-model", name: "Demo model", provider: "openai" }],
+};
+
+function capture(page: Page, artifacts: string, filename: string) {
+  return page.screenshot({ path: path.join(artifacts, filename), animations: "disabled" });
+}
 
 async function expectCompactRow(incident: Locator) {
   const geometry = await incident.locator(".sidebar-outbox-row").evaluate((element) => {
@@ -54,206 +68,170 @@ async function expectCompactRow(incident: Locator) {
 suite.define(() => {
   it("reviews an unconfirmed submission through System without sending or deleting its draft", async () => {
     const artifacts = createControlUiE2eArtifactDir("sidebar-outbox");
-    await suite.withPage(
-      {
-        viewport: { width: 1280, height: 900 },
-        locale: "en-US",
-        colorScheme: "dark",
-        serviceWorkers: "block",
-      },
-      async ({ page }) => {
-        const sessionKey = "agent:main:release-notes";
-        const otherKey = "agent:main:planning";
-        const gateway = await installMockGateway(page, {
-          sessionKey,
-          agentModel: "openai/demo-model",
-          models: [{ id: "demo-model", name: "Demo model", provider: "openai" }],
-          sessions: [
-            {
-              key: sessionKey,
-              displayName: "Release notes",
-              kind: "direct",
-              updatedAt: 1000,
-              model: "demo-model",
-              modelProvider: "openai",
-            },
-            {
-              key: otherKey,
-              displayName: "Planning",
-              kind: "direct",
-              updatedAt: 900,
-              model: "demo-model",
-              modelProvider: "openai",
-            },
-          ],
-          methodResponses: {
-            "chat.history": {
-              messages: [],
-              sessionId: `session:${sessionKey}`,
-              sessionInfo: { hasActiveRun: false, status: "done" },
-              thinkingLevel: null,
-            },
+    await suite.withPage(pageOptions, async ({ page }) => {
+      const sessionKey = "agent:main:release-notes";
+      const otherKey = "agent:main:planning";
+      const gateway = await installMockGateway(page, {
+        sessionKey,
+        ...modelScenario,
+        sessions: [
+          {
+            key: sessionKey,
+            displayName: "Release notes",
+            kind: "direct",
+            updatedAt: 1000,
+            model: "demo-model",
+            modelProvider: "openai",
           },
-        });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
-        await composer.waitFor();
-        await gateway.deferNext("chat.send");
-        await composer.fill("Please review the release notes before publishing.");
-        await page.getByRole("button", { name: "Send message", exact: true }).click();
-        await gateway.waitForRequest("chat.send");
-        await gateway.setOnline(false);
-        await page.locator('.chat-send-status[data-send-state="waiting-reconnect"]').waitFor();
-        await gateway.setOnline(true);
-        const delivery = page.locator('.chat-send-status[data-send-state="unconfirmed"]');
-        await delivery.getByText("Delivery unconfirmed", { exact: true }).waitFor();
-        await page.screenshot({
-          path: path.join(artifacts, "01-chat-review.png"),
-          animations: "disabled",
-        });
+          {
+            key: otherKey,
+            displayName: "Planning",
+            kind: "direct",
+            updatedAt: 900,
+            model: "demo-model",
+            modelProvider: "openai",
+          },
+        ],
+        methodResponses: {
+          "chat.history": {
+            messages: [],
+            sessionId: `session:${sessionKey}`,
+            sessionInfo: { hasActiveRun: false, status: "done" },
+            thinkingLevel: null,
+          },
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.waitFor();
+      await gateway.deferNext("chat.send");
+      await composer.fill("Please review the release notes before publishing.");
+      await page.getByRole("button", { name: "Send message", exact: true }).click();
+      await gateway.waitForRequest("chat.send");
+      await gateway.setOnline(false);
+      await page.locator('.chat-send-status[data-send-state="waiting-reconnect"]').waitFor();
+      await gateway.setOnline(true);
+      const delivery = page.locator('.chat-send-status[data-send-state="unconfirmed"]');
+      await delivery.getByText("Delivery unconfirmed", { exact: true }).waitFor();
+      await capture(page, artifacts, "01-chat-review.png");
 
-        await page.locator(".sidebar-issues-button").click();
-        await page.locator("#sidebar-issues-tab-system").click();
-        const incident = page.locator('[data-attention-kind="outbox"]');
-        await incident.getByText("Your message may not have arrived", { exact: true }).waitFor();
-        expect(await incident.textContent()).toContain("Release notes");
-        expect(await incident.textContent()).not.toContain(
-          "Please review the release notes before publishing.",
-        );
-        expect(await incident.getByRole("button").count()).toBe(0);
-        expect(await page.locator(".sidebar-footer-bar").textContent()).not.toContain("in outbox");
-        await expectCompactRow(incident);
-        await page.screenshot({
-          path: path.join(artifacts, "02-system-after.png"),
-          animations: "disabled",
-        });
-        await gateway.setOnline(false);
-        await incident.locator(".sidebar-outbox-row__offline").waitFor();
-        await expectCompactRow(incident);
-        await page.locator(".sidebar-footer-bar .gateway-status--reconnecting").waitFor();
-        expect(
-          await page
-            .locator(
-              '[data-attention-kind="scopeUpgrade"], [data-attention-kind="updateAvailable"]',
-            )
-            .count(),
-        ).toBe(0);
-        await page.screenshot({
-          path: path.join(artifacts, "03-system-offline.png"),
-          animations: "disabled",
-        });
-        await incident.getByRole("link", { name: "Review in chat" }).click();
-        await delivery.waitFor();
-        expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-        // Review clears the notification but preserves the draft for explicit recovery.
-        await expect.poll(() => page.locator(".sidebar-issues-button").count()).toBe(0);
-        await delivery.getByRole("button", { name: "Discard", exact: true }).click();
-        await delivery.waitFor({ state: "detached" });
-        await expect.poll(() => page.locator(".sidebar-issues-button").count()).toBe(0);
-        expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
-        expect(await gateway.getRequests("sessions.abort")).toHaveLength(0);
-        await gateway.setOnline(true);
-        await composer.fill("An ordinary queued follow-up stays in chat.");
-        await gateway.setOnline(false);
-        await page.getByRole("button", { name: "Send message", exact: true }).click();
-        await page.locator(".chat-queue__item").waitFor();
-        await page.locator(".sidebar-footer-bar .gateway-status--reconnecting").waitFor();
-        expect(await page.locator(".sidebar-issues-button").count()).toBe(0);
-        expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-        await page.screenshot({
-          path: path.join(artifacts, "04-ordinary-queue.png"),
-          animations: "disabled",
-        });
-      },
-    );
+      await page.locator(".sidebar-issues-button").click();
+      await page.locator("#sidebar-issues-tab-system").click();
+      const incident = page.locator('[data-attention-kind="outbox"]');
+      await incident.getByText("Your message may not have arrived", { exact: true }).waitFor();
+      expect(await incident.textContent()).toContain("Release notes");
+      expect(await incident.textContent()).not.toContain(
+        "Please review the release notes before publishing.",
+      );
+      expect(await incident.getByRole("button").count()).toBe(0);
+      expect(await page.locator(".sidebar-footer-bar").textContent()).not.toContain("in outbox");
+      await expectCompactRow(incident);
+      await capture(page, artifacts, "02-system-after.png");
+      await gateway.setOnline(false);
+      await incident.locator(".sidebar-outbox-row__offline").waitFor();
+      await expectCompactRow(incident);
+      await page.locator(".sidebar-footer-bar .gateway-status--reconnecting").waitFor();
+      expect(
+        await page
+          .locator('[data-attention-kind="scopeUpgrade"], [data-attention-kind="updateAvailable"]')
+          .count(),
+      ).toBe(0);
+      await capture(page, artifacts, "03-system-offline.png");
+      await incident.getByRole("link", { name: "Review in chat" }).click();
+      await delivery.waitFor();
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      // Review clears the notification but preserves the draft for explicit recovery.
+      await expect.poll(() => page.locator(".sidebar-issues-button").count()).toBe(0);
+      await delivery.getByRole("button", { name: "Discard", exact: true }).click();
+      await delivery.waitFor({ state: "detached" });
+      await expect.poll(() => page.locator(".sidebar-issues-button").count()).toBe(0);
+      expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.abort")).toHaveLength(0);
+      await gateway.setOnline(true);
+      await composer.fill("An ordinary queued follow-up stays in chat.");
+      await gateway.setOnline(false);
+      await page.getByRole("button", { name: "Send message", exact: true }).click();
+      await page.locator(".chat-queue__item").waitFor();
+      await page.locator(".sidebar-footer-bar .gateway-status--reconnecting").waitFor();
+      expect(await page.locator(".sidebar-issues-button").count()).toBe(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      await capture(page, artifacts, "04-ordinary-queue.png");
+    });
   });
   it("keeps long-label recovery rows compact at 320px", async () => {
     const width = 320;
     const artifacts = createControlUiE2eArtifactDir(`sidebar-outbox-compact-${width}`);
-    await suite.withPage(
-      {
-        viewport: { width: 1280, height: 900 },
-        locale: "en-US",
-        colorScheme: "dark",
-        reducedMotion: "reduce",
-        serviceWorkers: "block",
-      },
-      async ({ page }) => {
-        const sessionKey = "agent:main:long-title";
-        const gateway = await installMockGateway(page, {
-          sessionKey,
-          agentModel: "openai/demo-model",
-          models: [{ id: "demo-model", name: "Demo model", provider: "openai" }],
-          sessions: [
-            {
+    await suite.withPage({ ...pageOptions, reducedMotion: "reduce" }, async ({ page }) => {
+      const sessionKey = "agent:main:long-title";
+      const gateway = await installMockGateway(page, {
+        sessionKey,
+        ...modelScenario,
+        sessions: [
+          {
+            key: sessionKey,
+            displayName:
+              "Release planning and documentation review for the upcoming milestone with a deliberately long conversation title",
+            kind: "direct",
+            updatedAt: 1000,
+            model: "demo-model",
+            modelProvider: "openai",
+          },
+        ],
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.waitFor();
+      for (const number of [1, 2]) {
+        const after = (await gateway.getRequests("chat.send")).length;
+        await gateway.deferNext("chat.send");
+        await composer.fill(`Review draft ${number}`);
+        await page.getByRole("button", { name: "Send message", exact: true }).click();
+        await gateway.waitForRequest("chat.send", { after });
+        if (number === 1) {
+          await gateway.rejectDeferred("chat.send", {
+            code: "INVALID_REQUEST",
+            message: "Synthetic delivery rejection",
+          });
+          await page.locator('.chat-send-status[data-send-state="failed"]').waitFor();
+        } else {
+          await gateway.setMethodResponse("chat.history", {
+            sessionId: `session:${sessionKey}`,
+            messages: [],
+            sessionInfo: {
               key: sessionKey,
-              displayName:
-                "Release planning and documentation review for the upcoming milestone with a deliberately long conversation title",
-              kind: "direct",
-              updatedAt: 1000,
-              model: "demo-model",
-              modelProvider: "openai",
-            },
-          ],
-        });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
-        await composer.waitFor();
-        for (const number of [1, 2]) {
-          const after = (await gateway.getRequests("chat.send")).length;
-          await gateway.deferNext("chat.send");
-          await composer.fill(`Review draft ${number}`);
-          await page.getByRole("button", { name: "Send message", exact: true }).click();
-          await gateway.waitForRequest("chat.send", { after });
-          if (number === 1) {
-            await gateway.rejectDeferred("chat.send", {
-              code: "INVALID_REQUEST",
-              message: "Synthetic delivery rejection",
-            });
-            await page.locator('.chat-send-status[data-send-state="failed"]').waitFor();
-          } else {
-            await gateway.setMethodResponse("chat.history", {
               sessionId: `session:${sessionKey}`,
-              messages: [],
-              sessionInfo: {
-                key: sessionKey,
-                sessionId: `session:${sessionKey}`,
-                status: "done",
-                hasActiveRun: false,
-              },
-            });
-            await gateway.setOnline(false);
-            await page.locator('.chat-send-status[data-send-state="waiting-reconnect"]').waitFor();
-            await gateway.setOnline(true);
-            await page.locator('.chat-send-status[data-send-state="unconfirmed"]').waitFor();
-          }
+              status: "done",
+              hasActiveRun: false,
+            },
+          });
+          await gateway.setOnline(false);
+          await page.locator('.chat-send-status[data-send-state="waiting-reconnect"]').waitFor();
+          await gateway.setOnline(true);
+          await page.locator('.chat-send-status[data-send-state="unconfirmed"]').waitFor();
         }
-        await page.setViewportSize({ width, height: 900 });
-        await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
-        await page.locator(".sidebar-issues-button:visible").click();
-        await page.locator("#sidebar-issues-tab-system").click();
-        const incidents = page.locator('[data-attention-kind="outbox"]');
-        expect(await incidents.count()).toBe(2);
-        expect(await incidents.locator(".sidebar-issues-panel__entity").allTextContents()).toEqual([
-          "Your message wasn’t sent",
-          "Your message may not have arrived",
-        ]);
-        for (const incident of await incidents.all()) {
-          await expectCompactRow(incident);
-          expect(
-            await incident
-              .locator(".sidebar-issues-panel__state")
-              .evaluate((element) => element.scrollWidth > element.clientWidth),
-          ).toBe(true);
-        }
-        await page.mouse.move(0, 0);
-        await page.screenshot({
-          path: path.join(artifacts, "compact-long-labels.png"),
-          animations: "disabled",
-        });
-        expect(await gateway.getRequests("chat.send")).toHaveLength(2);
-      },
-    );
+      }
+      await page.setViewportSize({ width, height: 900 });
+      await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+      await page.locator(".sidebar-issues-button:visible").click();
+      await page.locator("#sidebar-issues-tab-system").click();
+      const incidents = page.locator('[data-attention-kind="outbox"]');
+      expect(await incidents.count()).toBe(2);
+      expect(await incidents.locator(".sidebar-issues-panel__entity").allTextContents()).toEqual([
+        "Your message wasn’t sent",
+        "Your message may not have arrived",
+      ]);
+      for (const incident of await incidents.all()) {
+        await expectCompactRow(incident);
+        expect(
+          await incident
+            .locator(".sidebar-issues-panel__state")
+            .evaluate((element) => element.scrollWidth > element.clientWidth),
+        ).toBe(true);
+      }
+      await page.mouse.move(0, 0);
+      await capture(page, artifacts, "compact-long-labels.png");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(2);
+    });
   });
   it("clears the warning on authoritative pending custody and retires only after consumption", async () => {
     await suite.withPage(
@@ -269,8 +247,7 @@ suite.define(() => {
         };
         const gateway = await installMockGateway(page, {
           sessionKey,
-          agentModel: "openai/demo-model",
-          models: [{ id: "demo-model", name: "Demo model", provider: "openai" }],
+          ...modelScenario,
           methodResponses: { "chat.history": history },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
