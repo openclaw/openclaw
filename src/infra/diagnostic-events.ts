@@ -16,6 +16,7 @@ import {
 import {
   cloneDiagnosticValueForListener,
   createDiagnosticMetadataForListener,
+  createDiagnosticValueForListeners,
   deepFreezeDiagnosticValue,
 } from "./diagnostic-event-snapshot.js";
 import {
@@ -1038,6 +1039,8 @@ function dispatchDiagnosticEvent(
 
   state.dispatchDepth += 1;
   try {
+    const eventForListener = createDiagnosticValueForListeners(enriched);
+    let metadataForListener: DiagnosticEventMetadata | undefined;
     if (!options.trustedListenersOnly) {
       for (const [listener, interest] of state.listeners) {
         if (!isInternalDiagnosticEventInterested(interest, enriched.type, metadata.trusted)) {
@@ -1045,8 +1048,8 @@ function dispatchDiagnosticEvent(
         }
         try {
           listener(
-            cloneDiagnosticValueForListener(enriched),
-            createDiagnosticMetadataForListener(metadata),
+            eventForListener(),
+            (metadataForListener ??= createDiagnosticMetadataForListener(metadata)),
           );
         } catch (err) {
           const errorMessage = err instanceof Error ? (err.stack ?? err.message) : String(err);
@@ -1061,8 +1064,8 @@ function dispatchDiagnosticEvent(
         continue;
       }
       try {
-        const eventForListener = cloneDiagnosticValueForListener(enriched);
-        const metadataForListener = createDiagnosticMetadataForListener(metadata);
+        const event = eventForListener();
+        metadataForListener ??= createDiagnosticMetadataForListener(metadata);
         const otel = isTrustedOtelDiagnosticListener(listener);
         let privateDataForListener = EMPTY_DIAGNOSTIC_PRIVATE_DATA;
         if (interest?.includePrivateData !== false && (privateData || otel)) {
@@ -1076,7 +1079,7 @@ function dispatchDiagnosticEvent(
           }
           privateDataForListener = deepFreezeDiagnosticValue(cloned);
         }
-        listener(eventForListener, metadataForListener, privateDataForListener);
+        listener(event, metadataForListener, privateDataForListener);
       } catch (err) {
         const errorMessage = err instanceof Error ? (err.stack ?? err.message) : String(err);
         console.error(

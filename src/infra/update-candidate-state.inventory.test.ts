@@ -22,6 +22,7 @@ import {
 } from "./update-candidate-state.diagnostics.js";
 import {
   UpdateCandidateSnapshotInventorySchema,
+  collectStateDatabasePaths,
   readUpdateCandidateStateInventoryInProcess,
   snapshotUpdateCandidateState,
 } from "./update-candidate-state.js";
@@ -30,6 +31,42 @@ import { runUpdateCandidateSnapshotWorker } from "./update-candidate-state.test-
 describe("snapshot inventory", () => {
   const dirs = useAutoCleanupTempDirTracker(afterEach);
   afterEach(() => closeOpenClawStateDatabaseForTest());
+
+  it("queues retained custom shared-state roots for exact capture with plugins disabled", async () => {
+    const root = dirs.make("candidate-shared-roots-");
+    const stateDir = path.join(root, "selected");
+    const external = path.join(root, "external");
+    for (const parent of [path.join(stateDir, "voice-calls"), external]) {
+      const file = path.join(parent, "state", "openclaw.sqlite");
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, "");
+    }
+    const discovered = await collectStateDatabasePaths(
+      {
+        stateDir,
+        config: {
+          plugins: {
+            enabled: false,
+            entries: {
+              "voice-call": { enabled: false, config: { store: external } },
+              "@openclaw/voice-call": { config: { store: "~/retained-calls" } },
+            },
+          },
+        },
+        env: { HOME: root, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+      },
+      { includeUnconfiguredAgents: false },
+    );
+    const shared = path.join(stateDir, "state", "openclaw.sqlite");
+    expect(discovered.get(shared)).toEqual({ spellings: [shared], owners: [{ role: "global" }] });
+    for (const parent of [path.join(stateDir, "voice-calls"), external]) {
+      const file = path.join(parent, "state", "openclaw.sqlite");
+      expect(discovered.get(file)).toEqual({ spellings: [file] });
+    }
+    expect(discovered.has(path.join(root, "retained-calls", "state", "openclaw.sqlite"))).toBe(
+      false,
+    );
+  });
 
   it.each([
     "missing plugin dependency",

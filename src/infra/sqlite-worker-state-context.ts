@@ -28,7 +28,9 @@ export function captureSqliteWorkerStateContext(
   context: SqliteWorkerStateContext,
 ): SqliteWorkerStateContext {
   return {
-    databaseEngineInput: context.databaseEngineInput ?? getDatabaseEngineSelection()?.input,
+    databaseEngineInput: Object.hasOwn(context, "databaseEngineInput")
+      ? context.databaseEngineInput
+      : getDatabaseEngineSelection()?.input,
     environment: { ...context.environment },
     ...(context.initializationEnvironment
       ? { initializationEnvironment: { ...context.initializationEnvironment } }

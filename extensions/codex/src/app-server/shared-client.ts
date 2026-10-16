@@ -397,11 +397,11 @@ export function releaseCodexAppServerClientLease(lease: CodexAppServerClientLeas
 export type CodexAppServerLeasedRequestOptions = {
   timeoutMs: number;
   signal?: AbortSignal;
-  assertCurrent: () => void;
+  assertCurrent?: () => void;
   withCurrent?: (write: () => void) => Promise<void>;
 };
 
-/** Shares a deadline and live lease check across one operation's requests. */
+/** Shares a deadline and caller authority across one operation's requests. */
 export async function withCodexAppServerClientRequestScope<T>(params: {
   lease: CodexAppServerClientLease;
   options?: CodexAppServerClientOptions;
@@ -418,6 +418,15 @@ export async function withCodexAppServerClientRequestScope<T>(params: {
   const timeoutMs = params.options?.timeoutMs ?? 60_000;
   const deadline = performance.now() + timeoutMs;
   const signal = params.signal ?? params.options?.abandonSignal;
+  const assertCurrent = params.options?.assertCurrent;
+  const assertCurrentAsync = params.options?.assertCurrentAsync;
+  const withCurrent = assertCurrentAsync
+    ? async (write: () => void) => {
+        await assertCurrentAsync();
+        assertCurrent?.();
+        write();
+      }
+    : undefined;
   const requestOptions = () => {
     if (signal?.aborted) {
       throw new CodexAppServerStartupError("aborted", "Codex app-server request aborted");
@@ -429,35 +438,12 @@ export async function withCodexAppServerClientRequestScope<T>(params: {
     return {
       timeoutMs: remainingTimeoutMs,
       ...(signal ? { signal } : {}),
+      ...(assertCurrent ? { assertCurrent } : {}),
+      ...(withCurrent ? { withCurrent } : {}),
     };
   };
-  let scopeActive = true;
-  const assertCurrent = () => {
-    if (!scopeActive || params.lease.client !== client) {
-      throw new CodexAppServerStartupError("aborted", "Codex app-server request scope is closed");
-    }
-  };
-  try {
-    requestOptions();
-    return await params.run(client, () => {
-      assertCurrent();
-      return {
-        ...requestOptions(),
-        assertCurrent,
-        ...(params.options?.assertCurrentAsync
-          ? {
-              withCurrent: async (write: () => void) => {
-                await params.options?.assertCurrentAsync?.();
-                assertCurrent();
-                write();
-              },
-            }
-          : {}),
-      };
-    });
-  } finally {
-    scopeActive = false;
-  }
+  requestOptions();
+  return await params.run(client, requestOptions);
 }
 
 async function acquireSharedCodexAppServerClient(

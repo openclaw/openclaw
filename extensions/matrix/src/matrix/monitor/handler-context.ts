@@ -1,8 +1,12 @@
-import { toInboundMediaFactsWithMetadata } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createChannelInboundEnvelopeBuilderAsync,
+  toInboundMediaFactsWithMetadata,
+} from "openclaw/plugin-sdk/channel-inbound";
 import {
   evaluateSupplementalContextVisibility,
   resolveChannelContextVisibilityMode,
 } from "openclaw/plugin-sdk/context-visibility-runtime";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMatrixReplyToEventId } from "../relations.js";
 import { resolveMatrixAckReactionConfig } from "./ack-config.js";
@@ -46,9 +50,6 @@ export async function resolveMatrixInboundContext(config: {
     getRoomInfo,
     historyLimit,
     dmSessionScope,
-    resolveStorePath: resolveStorePathImpl,
-    createChannelInboundEnvelopeBuilderAsync: createChannelInboundEnvelopeBuilderImpl,
-    finalizeInboundContext,
   } = handler;
   const {
     cfg,
@@ -140,10 +141,10 @@ export async function resolveMatrixInboundContext(config: {
   const roomName = roomInfo?.name;
   const envelopeFrom = isDirectMessage ? senderName : (roomName ?? roomId);
   const textWithId = `${bodyText}\n[matrix event id: ${messageId} room: ${roomId}]`;
-  const storePath = resolveStorePathImpl(cfg.session?.store, {
+  const storePath = resolveStorePath(cfg.session?.store, {
     agentId: _route.agentId,
   });
-  const buildEnvelope = await createChannelInboundEnvelopeBuilderImpl({ cfg, route: _route });
+  const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({ cfg, route: _route });
   const sharedDmNoticeSessionKey = threadTarget
     ? _route.mainSessionKey || _route.sessionKey
     : _route.sessionKey;
@@ -194,7 +195,6 @@ export async function resolveMatrixInboundContext(config: {
     channelIngress,
     channel: "matrix",
     contextVisibility: contextVisibilityMode,
-    finalize: finalizeInboundContext,
     supplemental: {
       quote: replyContext
         ? {

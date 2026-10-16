@@ -1,6 +1,7 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Tests typing mode persistence across session updates and reply turns.
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTypingController } from "./typing.js";
 
 describe("typing persistence bug fix", () => {
@@ -64,6 +65,21 @@ describe("typing persistence bug fix", () => {
     // After cleanup, typing interval should not restart typing
     vi.advanceTimersByTime(6000);
     expect(onReplyStartSpy).toHaveBeenCalledTimes(1); // Still only the initial call
+  });
+
+  it("keeps timer ticks behind an unfinished initial typing request", async () => {
+    const pending = createDeferred();
+    onReplyStartSpy.mockReturnValueOnce(pending.promise);
+
+    await controller.startTypingLoop();
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
+
+    pending.resolve();
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(onReplyStartSpy).toHaveBeenCalledTimes(2);
+    controller.cleanup();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it.each(["cleanup", "run-first", "idle-first"] as const)(

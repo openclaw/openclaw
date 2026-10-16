@@ -2,17 +2,11 @@ import { nothing } from "lit";
 import { AsyncDirective, directive } from "lit/async-directive.js";
 import type { Part } from "lit/directive.js";
 import { live } from "lit/directives/live.js";
-
-export const PRESENTATION_CHANGED_EVENT = "openclaw:presentation-changed";
-
-export type PresentationBinding = {
-  owner: EventTarget;
-  isPresented: () => boolean;
-  /** Visual navigation previews can activate warmed content before the parent commits. */
-  preview?: () => boolean;
-};
-
-export type PresentationValue = boolean | PresentationBinding;
+import {
+  PRESENTATION_CHANGED_EVENT,
+  type PresentationBinding,
+  type PresentationValue,
+} from "../lib/presentation.ts";
 
 /** Owns subscriptions while a directive follows a retained surface's presentation. */
 abstract class PresentationAsyncDirective extends AsyncDirective {

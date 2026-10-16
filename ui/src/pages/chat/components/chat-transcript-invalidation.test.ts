@@ -8,7 +8,7 @@ import { resolveAvatarHat } from "../../../components/agent-avatar-hat.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import * as messageNormalizer from "../../../lib/chat/message-normalizer.ts";
 import * as videoPoster from "../../../lib/media/video-poster.ts";
-import { PRESENTATION_CHANGED_EVENT } from "../../../lit/presentation-binding.ts";
+import { PRESENTATION_CHANGED_EVENT } from "../../../lib/presentation.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createSessionCapabilityFixture, createTestChatPane } from "../chat-pane.test-support.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";

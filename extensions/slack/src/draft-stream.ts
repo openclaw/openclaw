@@ -45,7 +45,6 @@ export function createSlackDraftStream(params: {
   cfg: OpenClawConfig;
   token: string;
   accountId?: string;
-  conversationChannelId?: string;
   eventScope?: SlackEventScope;
   identity?: SlackSendIdentity;
   maxChars?: number;
@@ -54,14 +53,9 @@ export function createSlackDraftStream(params: {
   metadata?: MessageMetadata;
   log?: (message: string) => void;
   warn?: (message: string) => void;
-  send?: typeof sendMessageSlack;
-  edit?: typeof editSlackMessage;
-  remove?: typeof deleteSlackMessage;
 }) {
   const maxChars = Math.min(params.maxChars ?? SLACK_TEXT_LIMIT, SLACK_TEXT_LIMIT);
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
-  const send = params.send ?? sendMessageSlack;
-  const remove = params.remove ?? deleteSlackMessage;
 
   let streamMessage: SlackDraftMessage | undefined;
   let untrackConversationBoundary: (() => void) | undefined;
@@ -76,7 +70,7 @@ export function createSlackDraftStream(params: {
     lastSentKey = "";
   };
   const editPreview = (message: SlackDraftMessage, update: SlackVisibleDraftUpdate) =>
-    (params.edit ?? (update.textIsSlackMrkdwn ? editSlackRenderedMessage : editSlackMessage))(
+    (update.textIsSlackMrkdwn ? editSlackRenderedMessage : editSlackMessage)(
       message.channelId,
       message.messageId,
       update.text,
@@ -141,7 +135,7 @@ export function createSlackDraftStream(params: {
         });
       await lifecycle.createMessage(
         async () => {
-          const sent = await send(params.target, visibleUpdate.text, {
+          const sent = await sendMessageSlack(params.target, visibleUpdate.text, {
             cfg: params.cfg,
             token: params.token,
             accountId: params.accountId,
@@ -190,7 +184,7 @@ export function createSlackDraftStream(params: {
       typeof value === "object" && value !== null,
     deleteMessage: async (message) => {
       if (!message.retained && !(preserveHumanReplies && message.detachedByHuman)) {
-        await remove(message.channelId, message.messageId, {
+        await deleteSlackMessage(message.channelId, message.messageId, {
           token: params.token,
           accountId: params.accountId,
           ...(params.eventScope ? { client: params.eventScope.client } : {}),

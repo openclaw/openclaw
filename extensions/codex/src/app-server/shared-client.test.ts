@@ -119,7 +119,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-registration", async (importOriginal)
 }));
 
 import {
-  captureSharedCodexAppServerCatalogLifetime,
+  captureCodexAppServerClientLifetime,
   getSharedCodexAppServerClient,
   readCodexAppServerClientDesktopGeneration,
 } from "./shared-client.js";
@@ -1777,20 +1777,20 @@ describe("shared Codex app-server client", () => {
       await expect(lease).resolves.toBe(harness.client);
       const client = await lease;
       const current =
-        settlement === "release" ? captureSharedCodexAppServerCatalogLifetime(client) : undefined;
+        settlement === "release" && captureCodexAppServerClientLifetime(client, "connection");
       let releaseRetain: (() => void) | undefined;
       if (settlement === "global disposal") {
         releaseRetain = retainSharedCodexAppServerClientIfCurrent(client);
         expect(releaseRetain).toBeTypeOf("function");
         expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(true);
       } else if (current) {
-        expect(current()).toBe(true);
+        expect(current).not.toThrow();
         expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(true);
-        expect(current()).toBe(true);
+        expect(current).not.toThrow();
         await expect(getLeasedSharedCodexAppServerClient({ timeoutMs: 1000 })).resolves.toBe(
           client,
         );
-        expect(current()).toBe(true);
+        expect(current).not.toThrow();
       }
       expect(retireSharedCodexAppServerClientIfCurrent(client)).toEqual({
         activeLeases: 1,
@@ -1798,7 +1798,7 @@ describe("shared Codex app-server client", () => {
       });
       expect(harness.process.stdin.destroyed).toBe(false);
       if (current) {
-        expect(current()).toBe(false);
+        expect(current).toThrow("connection changed");
       }
       if (settlement === "suspect retirement") {
         expect(
