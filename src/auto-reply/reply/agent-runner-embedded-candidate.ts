@@ -72,12 +72,7 @@ export async function runEmbeddedFallbackCandidate(
         return source;
       },
     });
-    // Without a source observer, local transport settlement owns reply delivery.
-    return {
-      source:
-        turn.opts?.resolveReplyDeliveryFacts || turn.opts?.resolveReplyDelivery ? source : terminal,
-      terminal,
-    };
+    return { source, terminal };
   };
   let maintenanceAuthProfile: CompletedAgentAuthSelection | undefined;
   let compactionRequestBudget: CompactionRequestBudget | undefined;
