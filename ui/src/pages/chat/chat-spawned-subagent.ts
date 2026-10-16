@@ -105,7 +105,7 @@ function finishedRuntimeMs(row: GatewaySessionRow): number | null {
     : null;
 }
 
-function endedWithoutFinishing(row: GatewaySessionRow): "failed" | "stopped" | undefined {
+export function endedWithoutFinishing(row: GatewaySessionRow): "failed" | "stopped" | undefined {
   if (row.status === "failed" || row.status === "timeout") {
     return "failed";
   }
