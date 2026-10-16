@@ -49,7 +49,6 @@ function fixture(
   const paint = () => {
     renderComposerInto(container, props);
   };
-  props.onRequestUpdate = paint;
   onTestFinished(() => {
     disposeComposer(container);
   });

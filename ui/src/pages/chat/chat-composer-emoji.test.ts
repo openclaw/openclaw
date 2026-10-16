@@ -89,7 +89,6 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
     onDraftChange: (next) => {
       draft = next;
     },
-    onRequestUpdate: () => redraw(),
   });
   function redraw() {
     if (retired) {
