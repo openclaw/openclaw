@@ -104,6 +104,16 @@ A successful configured fallback remains valid when the primary
 is rate-limited. Neither a healthy probe nor a timeout becomes successful
 acceptance. A deadline expiry retains recovery evidence.
 
+Suspension drain defaults to 30 seconds even when the controller is invoked
+outside its systemd unit. Larger `OPENCLAW_TEAM_DRAIN_BUDGET` values are capped
+at 30 with a diagnostic. The controller acquires one drain lease and never
+renews it; the Gateway owns its absolute 45-second cutoff. After the drain
+budget, transient write custody receives at most five more seconds before the
+controller defers and resumes its exact lease. Final custody reads retain the
+five-second RPC bound. The remaining grace permits handoff or cleanup; pending
+writes never become permission to stop. Adopt this controller closure alongside
+the Gateway's bounded-drain change; landing either does not deploy it.
+
 During graceful suspension drain, status reads use a five-second transport and
 subprocess bound (shortened by the original drain deadline). A typed timeout,
 connection loss, or service-restart close retries after one, two, then at most

@@ -866,21 +866,20 @@ describe("Team suspension preparation failure diagnostics", () => {
     ["malformed output", 1, `{${privateText}`, "unclassified"],
     ["unknown error", 1, JSON.stringify({ ok: false, error: { type: privateText, message: privateText } }), "unclassified"],
     ["oversized output", 1, requestFailure("gateway-suspension-conflict") + " ".repeat(20_000), "unclassified"],
-    ["renewal", 1, requestFailure("gateway-suspension-conflict"), "gateway-conflict", true],
   ];
-  for (const [name, exit, stdout, category, renewal = false] of cases) {
+  for (const [name, exit, stdout, category] of cases) {
     test(`${name} retains only fixed preparation diagnostics and never cuts over`, t => {
       const f = deploymentFixture(t);
       writeFileSync(join(f.state, "prepare-failure"), JSON.stringify({
-        exit, stdout, renewal, stderr: "synthetic existing private stderr retained\n",
+        exit, stdout, stderr: "synthetic existing private stderr retained\n",
       }));
       const config = readFileSync(f.configPath);
       const result = runOwner(f);
       assert.ifError(result.error);
       assert.equal(result.status, 75, result.stderr + events(f));
-      assert.match(result.stdout, /DEFERRED renewable preserve-only drain preparation unavailable or conflicting/);
+      assert.match(result.stdout, /DEFERRED preserve-only drain preparation unavailable or conflicting/);
       const diagnostic = result.stderr.split("\n").filter(line => line.startsWith("SUSPENSION_PREPARE_FAILED"));
-      assert.deepEqual(diagnostic, [`SUSPENSION_PREPARE_FAILED stage=${renewal ? "renewal" : "initial"} exit=${exit} category=${category}`]);
+      assert.deepEqual(diagnostic, [`SUSPENSION_PREPARE_FAILED stage=initial exit=${exit} category=${category}`]);
       assert.match(result.stderr, /synthetic existing private stderr retained/);
       assert.doesNotMatch(result.stdout + result.stderr, new RegExp(privateText));
       assert.equal(readlinkSync(join(f.serving, "current")), f.initial);
@@ -888,7 +887,7 @@ describe("Team suspension preparation failure diagnostics", () => {
       assert.equal(existsSync(f.journal), false);
       assert.equal(existsSync(join(f.state, "active-lease")), false);
       assert.doesNotMatch(events(f), /service\..*\.(stop|start|restart)/);
-      assert.equal(events(f).includes("gateway gateway call gateway.suspend.resume\n"), renewal);
+      assert.equal(events(f).includes("gateway gateway call gateway.suspend.resume\n"), false);
     });
   }
 });

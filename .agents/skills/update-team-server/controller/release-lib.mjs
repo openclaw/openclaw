@@ -4745,15 +4745,12 @@ try {
     }
     case "suspension-prepare": {
       const response = jsonArgument(args[0]);
-      const expectedId = args[1];
-      const priorExpiry = args[2];
       if (!suspensionContract.validateGatewaySuspendPrepareResult(response))
         reject("Gateway suspension prepare result is malformed");
       if (response?.status === "busy") {
         const custody = suspensionWriteCustody(response);
         suspensionRetryDelay(response.retryAfterMs);
         const blockers = suspensionBlockers(response, "Gateway suspension busy result", custody);
-        if (expectedId !== undefined) reject("owned Gateway suspension renewal became busy");
         result = `BUSY - 0 ${response.activeCount} ${response.retryAfterMs} 0 ${blockers} ${custody}`;
         break;
       }
@@ -4768,15 +4765,6 @@ try {
         response.expiresAtMs <= Date.now() + 5_000
       ) {
         reject("terminal-preserving drain lease is expired or has insufficient headroom");
-      }
-      if (expectedId !== undefined && response.suspensionId !== expectedId) {
-        reject("renewed Gateway suspension identity changed");
-      }
-      if (
-        priorExpiry !== undefined &&
-        response.expiresAtMs <= integer(priorExpiry, "prior suspension expiry")
-      ) {
-        reject("renewed Gateway suspension expiry did not advance");
       }
       const blockers = suspensionBlockers(response, "Gateway suspension prepare result", custody);
       const retryAfterMs = draining ? suspensionRetryDelay(response.retryAfterMs) : 0;
