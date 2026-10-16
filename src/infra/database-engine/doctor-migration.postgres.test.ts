@@ -48,6 +48,7 @@ const reads = vi.hoisted(() => ({
   decode: vi.fn<typeof StateReadWorker.decodeOpenClawStateReadReply>(),
   retire: vi.fn<typeof StateReadWorker.retireIdleOpenClawStateReadWorkers>(),
 }));
+// mock-isolation: Install transport before cyclic state imports; load the real decoder afterward so the synthetic migration stays in-process.
 vi.mock("../../state/openclaw-state-read-worker.js", () => ({
   captureOpenClawStateReadSource: reads.capture,
   decodeOpenClawStateReadReply: reads.decode,
@@ -180,7 +181,9 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
       sqlite: descriptor.sqlite.replace(/CREATE INDEX[^;]*idx_state_leases_owner[^;]*;/, ""),
       postData: descriptor.postData.replace(indexSql, ""),
       expectedCatalog: descriptor.expectedCatalog.map((fact) =>
-        fact.table === "state_leases" && fact.kind === "indexes" ? { ...fact, value: 2 } : fact,
+        fact.table === "state_leases" && fact.kind === "indexes"
+          ? { table: "state_leases", kind: "indexes", value: 2 }
+          : fact,
       ),
     };
   });
