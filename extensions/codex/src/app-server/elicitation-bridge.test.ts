@@ -22,7 +22,7 @@ type AgentHarnessHostCapabilities = EmbeddedRunAttemptParams["hostCapabilities"]
 
 type ElicitationRequest = Parameters<typeof routeCodexAppServerElicitationRequest>[0];
 
-async function handleCodexAppServerElicitationRequest(
+async function elicit(
   params: Omit<ElicitationRequest, "paramsForRun" | "threadId" | "turnId"> &
     Partial<Pick<ElicitationRequest, "paramsForRun" | "threadId" | "turnId">>,
 ) {
@@ -34,16 +34,8 @@ async function handleCodexAppServerElicitationRequest(
   return result.kind === "handled" ? result.response : undefined;
 }
 
-function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0) {
-  return mock.mock.calls.at(index);
-}
-
-function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0) {
-  return mockCall(mock, index)?.at(argIndex);
-}
-
 function gatewayToolArg(index = 0, argIndex = 0) {
-  return mockCallArg(mockCallGatewayTool, index, argIndex);
+  return mockCallGatewayTool.mock.calls.at(index)?.at(argIndex);
 }
 
 function mockApprovalDecision(id: string, decision: "allow-once" | "allow-always" | "deny") {
@@ -63,12 +55,7 @@ function createParams(): EmbeddedRunAttemptParams {
       (await callGatewayTool(
         "plugin.approval.request",
         { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
-        {
-          pluginId: "codex",
-          ...request,
-          timeoutMs: request.timeoutMs,
-          twoPhase: true,
-        },
+        { pluginId: "codex", ...request, timeoutMs: request.timeoutMs, twoPhase: true },
         { expectFinal: false },
       )) as Awaited<ReturnType<AgentHarnessHostCapabilities["requestApproval"]>>,
     waitForApproval: async (request) => {
@@ -95,39 +82,47 @@ function createParams(): EmbeddedRunAttemptParams {
   } as unknown as EmbeddedRunAttemptParams;
 }
 
-function buildApprovalElicitation() {
+function reply(
+  action: "accept" | "decline" | "cancel",
+  content: JsonObject | null = null,
+  meta: JsonObject | null = null,
+) {
+  return { action, content, _meta: meta };
+}
+
+function objectSchema(properties: JsonObject, required?: string[]): JsonObject {
+  return { type: "object", properties, ...(required ? { required } : {}) };
+}
+
+function approvalField(title: string, description?: string): JsonObject {
+  return { type: "boolean", title, ...(description ? { description } : {}) };
+}
+
+function approvalSchema(approve: JsonObject, fields: JsonObject = {}) {
+  return objectSchema({ approve, ...fields }, ["approve"]);
+}
+
+function approvalMeta(fields: JsonObject = {}): JsonObject {
+  return { codex_approval_kind: "mcp_tool_call", ...fields };
+}
+
+function approval() {
   return {
     ...codexTestTurnIds(),
     serverName: "codex_apps__github",
     mode: "form",
     message: "Approve app tool call?",
-    _meta: {
-      codex_approval_kind: "mcp_tool_call",
-      persist: ["session", "always"],
-    },
-    requestedSchema: {
-      type: "object",
-      properties: {
-        approve: {
-          type: "boolean",
-          title: "Approve this tool call",
-        },
-        persist: {
-          type: "string",
-          title: "Persist choice",
-          enum: ["session", "always"],
-        },
-      },
-      required: ["approve"],
-    },
+    _meta: approvalMeta({ persist: ["session", "always"] }),
+    requestedSchema: approvalSchema(approvalField("Approve this tool call"), {
+      persist: { type: "string", title: "Persist choice", enum: ["session", "always"] },
+    }),
   };
 }
 
-function buildCurrentCodexApprovalElicitation() {
+function currentApproval() {
   return {
-    ...buildApprovalElicitation(),
-    _meta: {
-      codex_approval_kind: "mcp_tool_call",
+    ...approval(),
+    _meta: approvalMeta({
       persist: ["session", "always"],
       connector_name: "GitHub",
       tool_title: "Create pull request",
@@ -135,56 +130,36 @@ function buildCurrentCodexApprovalElicitation() {
       tool_params_display: [
         { name: "repo", display_name: "Repository", value: "openclaw/openclaw" },
       ],
-    },
-    requestedSchema: {
-      type: "object",
-      properties: {},
-    },
+    }),
+    requestedSchema: objectSchema({}),
   };
 }
 
-function buildComputerUseApprovalElicitation(overrides: Record<string, unknown> = {}) {
+function computerApproval(overrides: Record<string, unknown> = {}) {
   return {
     ...codexTestTurnIds(),
     serverName: "computer-use",
     mode: "form",
     message: "Allow Codex to use Notes?",
-    _meta: {
-      persist: ["always"],
-    },
-    requestedSchema: {
-      type: "object",
-      properties: {},
-    },
+    _meta: { persist: ["always"] },
+    requestedSchema: objectSchema({}),
     ...overrides,
   };
 }
 
-function buildPluginApprovalElicitation(overrides: Record<string, unknown> = {}) {
+function pluginApproval(overrides: Record<string, unknown> = {}) {
   return {
     ...codexTestTurnIds(),
     serverName: "google-calendar-mcp",
     mode: "form",
     message: "Approve app action?",
-    _meta: {
-      codex_approval_kind: "mcp_tool_call",
-      app_id: "google-calendar-app",
-    },
-    requestedSchema: {
-      type: "object",
-      properties: {
-        approve: {
-          type: "boolean",
-          title: "Approve this app action",
-        },
-      },
-      required: ["approve"],
-    },
+    _meta: approvalMeta({ app_id: "google-calendar-app" }),
+    requestedSchema: approvalSchema(approvalField("Approve this app action")),
     ...overrides,
   };
 }
 
-function createPluginAppPolicyContext(
+function pluginPolicy(
   params: {
     allowDestructiveActions?: boolean;
     destructiveApprovalMode?: "allow" | "deny" | "auto" | "ask";
@@ -221,22 +196,16 @@ function createPluginAppPolicyContext(
   };
 }
 
-function createConnectorAppPolicyContext(
-  params: Omit<NonNullable<Parameters<typeof createPluginAppPolicyContext>[0]>, "apps">,
-) {
-  return createPluginAppPolicyContext({
+function connectorPolicy(params: Omit<NonNullable<Parameters<typeof pluginPolicy>[0]>, "apps">) {
+  return pluginPolicy({
     ...params,
     apps: [
-      {
-        appId: "connector_google_calendar",
-        pluginName: "google-calendar",
-        mcpServerNames: [],
-      },
+      { appId: "connector_google_calendar", pluginName: "google-calendar", mcpServerNames: [] },
     ],
   });
 }
 
-function createAccountAppPolicyContext(params: {
+function accountPolicy(params: {
   appId: string;
   appName: string;
   allowDestructiveActions: boolean;
@@ -269,6 +238,41 @@ function appsForPlugin(
     .toSorted();
 }
 
+function pluginRequest(
+  requestParams: ElicitationRequest["requestParams"],
+  pluginAppPolicyContext: ElicitationRequest["pluginAppPolicyContext"] = pluginPolicy({
+    allowDestructiveActions: true,
+  }),
+  extra: Partial<ElicitationRequest> = {},
+) {
+  return { requestParams, pluginAppPolicyContext, ...extra };
+}
+
+function computerRequest(
+  requestParams: ElicitationRequest["requestParams"],
+  extra: Partial<ElicitationRequest> = {},
+) {
+  return {
+    requestParams,
+    pluginAppPolicyContext: pluginPolicy({ apps: [] }),
+    computerUseMcpServerName: "computer-use",
+    ...extra,
+  };
+}
+
+function scheduledParams() {
+  return {
+    ...createParams(),
+    trigger: "cron",
+    scheduledRuntimeAuthority: {
+      version: 1,
+      runtimeId: "codex",
+      namespace: "codex.apps",
+      payload: { version: 1 },
+    },
+  } as EmbeddedRunAttemptParams;
+}
+
 describe("Codex app-server elicitation bridge", () => {
   beforeEach(() => {
     mockCallGatewayTool.mockReset();
@@ -276,49 +280,24 @@ describe("Codex app-server elicitation bridge", () => {
   });
 
   it("declines app elicitations for scheduled app authority", async () => {
-    const params = {
-      ...createParams(),
-      trigger: "cron",
-      scheduledRuntimeAuthority: {
-        version: 1,
-        runtimeId: "codex",
-        namespace: "codex.apps",
-        payload: { version: 1 },
-      },
-    } as EmbeddedRunAttemptParams;
+    const result = await elicit(
+      pluginRequest(pluginApproval(), undefined, { paramsForRun: scheduledParams() }),
+    );
 
-    const result = await handleCodexAppServerElicitationRequest({
-      requestParams: buildPluginApprovalElicitation(),
-      paramsForRun: params,
-      pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
-    });
-
-    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    expect(result).toEqual(reply("decline"));
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
   it("keeps unrelated Computer Use elicitation policy unchanged", async () => {
     mockApprovalDecision("plugin:approval-computer-use", "allow-once");
-    const params = {
-      ...createParams(),
-      trigger: "cron",
-      scheduledRuntimeAuthority: {
-        version: 1,
-        runtimeId: "codex",
-        namespace: "codex.apps",
-        payload: { version: 1 },
-      },
-    } as EmbeddedRunAttemptParams;
+    const result = await elicit(
+      computerRequest(computerApproval(), {
+        paramsForRun: scheduledParams(),
+        autoApproveMcpTools: true,
+      }),
+    );
 
-    const result = await handleCodexAppServerElicitationRequest({
-      requestParams: buildComputerUseApprovalElicitation(),
-      paramsForRun: params,
-      pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
-      computerUseMcpServerName: "computer-use",
-      autoApproveMcpTools: true,
-    });
-
-    expect(result).toEqual({ action: "accept", content: null, _meta: null });
+    expect(result).toEqual(reply("accept"));
     expect(mockCallGatewayTool).toHaveBeenCalledTimes(2);
   });
 
@@ -334,8 +313,8 @@ describe("Codex app-server elicitation bridge", () => {
     "honors MCP posture and server overrides (full=$fullPermission, mode=$mode, projected=$projectedMode)",
     async ({ fullPermission, mode, projectedMode, prompts }) => {
       mockApprovalDecision("plugin:posture", "allow-once");
-      const result = await handleCodexAppServerElicitationRequest({
-        requestParams: { ...buildCurrentCodexApprovalElicitation(), serverName: "linear" },
+      const result = await elicit({
+        requestParams: { ...currentApproval(), serverName: "linear" },
         paramsForRun: {
           ...createParams(),
           config: {
@@ -355,7 +334,7 @@ describe("Codex app-server elicitation bridge", () => {
           : undefined,
       });
 
-      expect(result).toEqual({ action: "accept", content: null, _meta: null });
+      expect(result).toEqual(reply("accept"));
       expect(mockCallGatewayTool).toHaveBeenCalledTimes(prompts ? 2 : 0);
     },
   );
@@ -397,17 +376,16 @@ describe("Codex app-server elicitation bridge", () => {
       arguments: { repo: "openclaw/openclaw", limit: 3 },
     };
     let activeItem: typeof item | undefined = testCase.missingItem ? undefined : item;
-    const result = await handleCodexAppServerElicitationRequest({
+    const result = await elicit({
       requestParams: {
-        ...buildCurrentCodexApprovalElicitation(),
+        ...currentApproval(),
         serverName: server,
         ...(testCase.missingTurn ? { turnId: null } : {}),
-        _meta: {
-          codex_approval_kind: "mcp_tool_call",
+        _meta: approvalMeta({
           persist: testCase.sessionOnly ? "session" : ["session", "always"],
           tool_title: "This is not the tool identity",
           ...(testCase.display === undefined ? {} : { tool_params_display: testCase.display }),
-        },
+        }),
       },
       paramsForRun: {
         ...createParams(),
@@ -454,11 +432,9 @@ describe("Codex app-server elicitation bridge", () => {
       })
       .mockResolvedValueOnce({ id: "plugin:approval-untrusted", decision: "deny" });
 
-    const result = await handleCodexAppServerElicitationRequest({
-      requestParams: buildApprovalElicitation(),
-    });
+    const result = await elicit({ requestParams: approval() });
 
-    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    expect(result).toEqual(reply("decline"));
     expect(gatewayToolArg(0, 2)).toMatchObject({
       description: expect.stringContaining(
         "openclaw mcp configure codex_apps__github --approval approve",
@@ -479,19 +455,15 @@ describe("Codex app-server elicitation bridge", () => {
         terminalReason: "timeout",
       });
 
-    const result = await handleCodexAppServerElicitationRequest({
-      requestParams: buildApprovalElicitation(),
-    });
+    const result = await elicit({ requestParams: approval() });
 
-    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    expect(result).toEqual(reply("decline"));
   });
 
   it("does not handle non-Computer Use elicitations without approval metadata", async () => {
-    const result = await handleCodexAppServerElicitationRequest({
-      requestParams: buildComputerUseApprovalElicitation({ serverName: "desktop-control" }),
-      pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
-      computerUseMcpServerName: "computer-use",
-    });
+    const result = await elicit(
+      computerRequest(computerApproval({ serverName: "desktop-control" })),
+    );
 
     expect(result).toBeUndefined();
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
@@ -501,71 +473,47 @@ describe("Codex app-server elicitation bridge", () => {
     const warnSpy = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     mockApprovalDecision("plugin:approval-computer-use-fields", "allow-once");
 
-    const result = await handleCodexAppServerElicitationRequest({
-      requestParams: buildComputerUseApprovalElicitation({
-        requestedSchema: {
-          type: "object",
-          properties: {
-            appName: {
-              type: "string",
-              title: "App name",
-            },
-          },
-          required: ["appName"],
-        },
-      }),
-      pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
-      computerUseMcpServerName: "computer-use",
-    });
+    const result = await elicit(
+      computerRequest(
+        computerApproval({
+          requestedSchema: objectSchema({ appName: { type: "string", title: "App name" } }, [
+            "appName",
+          ]),
+        }),
+      ),
+    );
 
-    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    expect(result).toEqual(reply("decline"));
     expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
       "plugin.approval.request",
       "plugin.approval.waitDecision",
     ]);
     expect(warnSpy).toHaveBeenCalledWith(
       "codex MCP approval elicitation approved without a mappable response",
-      expect.objectContaining({
-        fields: ["appName"],
-        outcome: "approved-once",
-      }),
+      expect.objectContaining({ fields: ["appName"], outcome: "approved-once" }),
     );
   });
 
   it("normalizes missing Computer Use schemas to the empty object schema", async () => {
     mockApprovalDecision("plugin:approval-computer-use-schema", "allow-once");
 
-    const result = await handleCodexAppServerElicitationRequest({
-      requestParams: buildComputerUseApprovalElicitation({
-        requestedSchema: "not-a-schema",
-      }),
-      pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
-      computerUseMcpServerName: "computer-use",
-    });
+    const result = await elicit(
+      computerRequest(computerApproval({ requestedSchema: "not-a-schema" })),
+    );
 
-    expect(result).toEqual({
-      action: "accept",
-      content: null,
-      _meta: null,
-    });
+    expect(result).toEqual(reply("accept"));
   });
 
   it("declines Computer Use elicitations outside form mode", async () => {
-    const result = await handleCodexAppServerElicitationRequest({
-      requestParams: buildComputerUseApprovalElicitation({
-        mode: "notification",
-      }),
-      pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
-      computerUseMcpServerName: "computer-use",
-    });
+    const result = await elicit(computerRequest(computerApproval({ mode: "notification" })));
 
-    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    expect(result).toEqual(reply("decline"));
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
   it.each<{
     name: string;
-    request: Parameters<typeof handleCodexAppServerElicitationRequest>[0];
+    request: Parameters<typeof elicit>[0];
     title: string | undefined;
     contains: string[];
     excludes: string[];
@@ -573,12 +521,12 @@ describe("Codex app-server elicitation bridge", () => {
     {
       name: "falls back to a Computer Use approval title and sanitizes server names",
       request: {
-        requestParams: buildComputerUseApprovalElicitation({
+        requestParams: computerApproval({
           message: "\u001b[31m",
           serverName: "computer-use\u009b31m",
           _meta: null,
         }),
-        pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
+        pluginAppPolicyContext: pluginPolicy({ apps: [] }),
         computerUseMcpServerName: "computer-use\u009b31m",
       },
       title: "Computer Use approval",
@@ -589,11 +537,10 @@ describe("Codex app-server elicitation bridge", () => {
       name: "strips control and invisible formatting from approval display text",
       request: {
         requestParams: {
-          ...buildCurrentCodexApprovalElicitation(),
+          ...currentApproval(),
           message: "Approve\u202e hidden",
           serverName: "codex\u009b31m_apps__github",
-          _meta: {
-            codex_approval_kind: "mcp_tool_call",
+          _meta: approvalMeta({
             connector_name: "GitHub\nInjected: approve",
             tool_title: "\u001b]8;;https://evil.example\u001b\\Visible tool\u001b]8;;\u001b\\",
             tool_description: "Creates\u0000 a\u202e pull request",
@@ -604,18 +551,10 @@ describe("Codex app-server elicitation bridge", () => {
                 value: "\u001b]8;;https://evil.example\u001b\\openclaw/openclaw\u001b]8;;\u001b\\",
               },
             ],
-          },
-          requestedSchema: {
-            type: "object",
-            properties: {
-              approve: {
-                type: "boolean",
-                title: "Approve\u202e this tool call",
-                description: "Confirm\u009b31m access",
-              },
-            },
-            required: ["approve"],
-          },
+          }),
+          requestedSchema: approvalSchema(
+            approvalField("Approve\u202e this tool call", "Confirm\u009b31m access"),
+          ),
         },
       },
       title: "Approve hidden",
@@ -631,11 +570,10 @@ describe("Codex app-server elicitation bridge", () => {
       name: "escapes approval display text before forwarding approval prompts",
       request: {
         requestParams: {
-          ...buildCurrentCodexApprovalElicitation(),
+          ...currentApproval(),
           message: "Approve <@U123>",
           serverName: "server @here",
-          _meta: {
-            codex_approval_kind: "mcp_tool_call",
+          _meta: approvalMeta({
             connector_name: "GitHub [trusted](https://evil)",
             tool_title: "Create <@U123>",
             tool_description: "Use @here",
@@ -646,18 +584,8 @@ describe("Codex app-server elicitation bridge", () => {
                 value: "<@U123>",
               },
             ],
-          },
-          requestedSchema: {
-            type: "object",
-            properties: {
-              approve: {
-                type: "boolean",
-                title: "Approve <@U123>",
-                description: "Confirm @here",
-              },
-            },
-            required: ["approve"],
-          },
+          }),
+          requestedSchema: approvalSchema(approvalField("Approve <@U123>", "Confirm @here")),
         },
       },
       title: "Approve &lt;\uff20U123&gt;",
@@ -674,30 +602,15 @@ describe("Codex app-server elicitation bridge", () => {
       name: "falls back to stable names when display labels sanitize to empty",
       request: {
         requestParams: {
-          ...buildCurrentCodexApprovalElicitation(),
+          ...currentApproval(),
           message: "Approve",
-          _meta: {
-            codex_approval_kind: "mcp_tool_call",
+          _meta: approvalMeta({
             connector_name: "App",
             tool_params_display: [
-              {
-                name: "repo",
-                display_name: "\u202e",
-                value: "openclaw/openclaw",
-              },
+              { name: "repo", display_name: "\u202e", value: "openclaw/openclaw" },
             ],
-          },
-          requestedSchema: {
-            type: "object",
-            properties: {
-              approve: {
-                type: "boolean",
-                title: "\u202e",
-                description: "Confirm access",
-              },
-            },
-            required: ["approve"],
-          },
+          }),
+          requestedSchema: approvalSchema(approvalField("\u202e", "Confirm access")),
         },
       },
       title: undefined,
@@ -708,10 +621,9 @@ describe("Codex app-server elicitation bridge", () => {
       name: "bounds deep approval display parameter values before forwarding them",
       request: {
         requestParams: {
-          ...buildCurrentCodexApprovalElicitation(),
+          ...currentApproval(),
           message: "Approve",
-          _meta: {
-            codex_approval_kind: "mcp_tool_call",
+          _meta: approvalMeta({
             connector_name: "App",
             tool_title: "Tool",
             tool_params_display: [
@@ -730,7 +642,7 @@ describe("Codex app-server elicitation bridge", () => {
                 },
               },
             ],
-          },
+          }),
         },
       },
       title: undefined,
@@ -741,17 +653,16 @@ describe("Codex app-server elicitation bridge", () => {
       name: "caps approval display parameter entries before forwarding them",
       request: {
         requestParams: {
-          ...buildCurrentCodexApprovalElicitation(),
+          ...currentApproval(),
           message: "Approve",
           serverName: "",
-          _meta: {
-            codex_approval_kind: "mcp_tool_call",
+          _meta: approvalMeta({
             connector_name: "App",
             tool_params_display: Array.from({ length: 9 }, (_, index) => ({
               name: `p${index}`,
               value: index,
             })),
-          },
+          }),
         },
       },
       title: undefined,
@@ -760,10 +671,10 @@ describe("Codex app-server elicitation bridge", () => {
     },
   ])("$name", async ({ request, title, contains, excludes }) => {
     mockApprovalDecision("plugin:approval-display", "allow-once");
-    const result = await handleCodexAppServerElicitationRequest(request);
+    const result = await elicit(request);
     expect(result?.action).toBe("accept");
     if ("computerUseMcpServerName" in request) {
-      expect(result).toEqual({ action: "accept", content: null, _meta: null });
+      expect(result).toEqual(reply("accept"));
     }
     const approvalRequest = gatewayToolArg(0, 2) as { title: string; description: string };
     if (title !== undefined) {
@@ -780,71 +691,59 @@ describe("Codex app-server elicitation bridge", () => {
   it.each([
     {
       name: "declines plugin app elicitations when destructive actions are disabled",
-      request: {
-        requestParams: buildPluginApprovalElicitation(),
-        pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: false }),
+      request: pluginRequest(pluginApproval(), pluginPolicy({ allowDestructiveActions: false }), {
         autoApproveMcpTools: true,
-      },
+      }),
     },
     {
       name: "does not trust account app ids from non-connector MCP servers",
-      request: {
-        requestParams: buildPluginApprovalElicitation({
-          _meta: { codex_approval_kind: "mcp_tool_call", app_id: "chatgpt_meetings" },
-        }),
-        pluginAppPolicyContext: createAccountAppPolicyContext({
+      request: pluginRequest(
+        pluginApproval({ _meta: approvalMeta({ app_id: "chatgpt_meetings" }) }),
+        accountPolicy({
           appId: "chatgpt_meetings",
           appName: "ChatGPT Meetings",
           allowDestructiveActions: true,
           destructiveApprovalMode: "auto",
         }),
-      },
+      ),
     },
     {
       name: "declines live connector elicitations that only match display names",
-      request: {
-        requestParams: buildConnectorPluginApprovalElicitation({
-          _meta: {
-            codex_approval_kind: "mcp_tool_call",
+      request: pluginRequest(
+        buildConnectorPluginApprovalElicitation({
+          _meta: approvalMeta({
             source: "connector",
             connector_name: "Google Calendar",
             tool_title: "create_event",
-          },
+          }),
         }),
-        pluginAppPolicyContext: createConnectorAppPolicyContext({ allowDestructiveActions: true }),
-      },
+        connectorPolicy({ allowDestructiveActions: true }),
+      ),
     },
     {
       name: "declines live connector elicitations with mismatched app and connector ids",
-      request: {
-        requestParams: buildConnectorPluginApprovalElicitation({
-          _meta: {
-            codex_approval_kind: "mcp_tool_call",
+      request: pluginRequest(
+        buildConnectorPluginApprovalElicitation({
+          _meta: approvalMeta({
             source: "connector",
             app_id: "other-app",
             connector_id: "connector_google_calendar",
             connector_name: "Google Calendar",
             tool_title: "create_event",
-          },
+          }),
         }),
-        pluginAppPolicyContext: createConnectorAppPolicyContext({ allowDestructiveActions: true }),
-      },
+        connectorPolicy({ allowDestructiveActions: true }),
+      ),
     },
     {
       name: "declines plugin app elicitations that are missing active turn correlation",
-      request: {
-        requestParams: buildPluginApprovalElicitation({ turnId: null }),
-        pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
-      },
+      request: pluginRequest(pluginApproval({ turnId: null })),
     },
     {
       name: "declines plugin app elicitations with ambiguous server ownership",
-      request: {
-        requestParams: buildPluginApprovalElicitation({
-          serverName: "shared-mcp",
-          _meta: { codex_approval_kind: "mcp_tool_call" },
-        }),
-        pluginAppPolicyContext: createPluginAppPolicyContext({
+      request: pluginRequest(
+        pluginApproval({ serverName: "shared-mcp", _meta: approvalMeta({}) }),
+        pluginPolicy({
           allowDestructiveActions: true,
           apps: [
             {
@@ -859,44 +758,33 @@ describe("Codex app-server elicitation bridge", () => {
             },
           ],
         }),
-      },
+      ),
     },
     {
       name: "declines plugin-scoped elicitations when policy context is missing",
-      request: {
-        requestParams: buildPluginApprovalElicitation(),
-      },
+      request: { requestParams: pluginApproval() },
     },
     {
       name: "declines plugin app elicitations with unmappable schemas",
-      request: {
-        requestParams: buildPluginApprovalElicitation({
-          requestedSchema: {
-            type: "object",
-            properties: {
-              template: {
-                type: "string",
-                enum: ["simple", "detailed"],
-              },
-            },
-            required: ["template"],
-          },
+      request: pluginRequest(
+        pluginApproval({
+          requestedSchema: objectSchema(
+            { template: { type: "string", enum: ["simple", "detailed"] } },
+            ["template"],
+          ),
         }),
-        pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
-      },
+      ),
     },
     {
       name: "declines connector-id plugin app elicitations without object properties",
-      request: {
-        requestParams: buildConnectorPluginApprovalElicitation({
-          requestedSchema: { type: "object" },
-        }),
-        pluginAppPolicyContext: createConnectorAppPolicyContext({ allowDestructiveActions: true }),
-      },
+      request: pluginRequest(
+        buildConnectorPluginApprovalElicitation({ requestedSchema: { type: "object" } }),
+        connectorPolicy({ allowDestructiveActions: true }),
+      ),
     },
   ])("$name", async ({ request }) => {
-    const result = await handleCodexAppServerElicitationRequest(request);
-    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    const result = await elicit(request);
+    expect(result).toEqual(reply("decline"));
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
@@ -907,17 +795,13 @@ describe("Codex app-server elicitation bridge", () => {
       if (aborted) {
         controller.abort("permission-change");
       }
-      const result = await handleCodexAppServerElicitationRequest({
-        requestParams: buildPluginApprovalElicitation(),
-        pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
-        signal: controller.signal,
-      });
+      const result = await elicit(
+        pluginRequest(pluginApproval(), undefined, { signal: controller.signal }),
+      );
 
-      expect(result).toEqual({
-        action: aborted ? "cancel" : "accept",
-        content: aborted ? null : { approve: true },
-        _meta: null,
-      });
+      expect(result).toEqual(
+        reply(aborted ? "cancel" : "accept", aborted ? null : { approve: true }),
+      );
       expect(mockCallGatewayTool).not.toHaveBeenCalled();
     },
   );
@@ -925,26 +809,27 @@ describe("Codex app-server elicitation bridge", () => {
   it("routes approvals for account-connected apps through the configured policy", async () => {
     mockApprovalDecision("plugin:approval-meetings", "allow-once");
 
-    const result = await handleCodexAppServerElicitationRequest({
-      requestParams: buildConnectorPluginApprovalElicitation({
-        message: "Allow ChatGPT Meetings to import a meeting?",
-        _meta: {
-          codex_approval_kind: "mcp_tool_call",
-          source: "connector",
-          connector_id: "chatgpt_meetings",
-          connector_name: "ChatGPT Meetings",
-          tool_title: "import_meeting",
-        },
-      }),
-      pluginAppPolicyContext: createAccountAppPolicyContext({
-        appId: "chatgpt_meetings",
-        appName: "ChatGPT Meetings",
-        allowDestructiveActions: true,
-        destructiveApprovalMode: "auto",
-      }),
-    });
+    const result = await elicit(
+      pluginRequest(
+        buildConnectorPluginApprovalElicitation({
+          message: "Allow ChatGPT Meetings to import a meeting?",
+          _meta: approvalMeta({
+            source: "connector",
+            connector_id: "chatgpt_meetings",
+            connector_name: "ChatGPT Meetings",
+            tool_title: "import_meeting",
+          }),
+        }),
+        accountPolicy({
+          appId: "chatgpt_meetings",
+          appName: "ChatGPT Meetings",
+          allowDestructiveActions: true,
+          destructiveApprovalMode: "auto",
+        }),
+      ),
+    );
 
-    expect(result).toEqual({ action: "accept", content: null, _meta: null });
+    expect(result).toEqual(reply("accept"));
     expect(gatewayToolArg(0, 2)).toMatchObject({
       allowedDecisions: ["allow-once", "deny"],
       title: "Allow ChatGPT Meetings to import a meeting?",
@@ -955,78 +840,48 @@ describe("Codex app-server elicitation bridge", () => {
   it("does not expose allow-always for auto plugin session-only persistence", async () => {
     mockApprovalDecision("plugin:approval-calendar-session", "allow-once");
 
-    const result = await handleCodexAppServerElicitationRequest({
-      requestParams: buildConnectorPluginApprovalElicitation({
-        _meta: {
-          codex_approval_kind: "mcp_tool_call",
-          source: "connector",
-          connector_id: "connector_google_calendar",
-          connector_name: "Google Calendar",
-          persist: ["session"],
-          tool_title: "create_event",
-        },
-        requestedSchema: {
-          type: "object",
-          properties: {
-            approve: {
-              type: "boolean",
-              title: "Approve this app action",
-            },
-            persist: {
-              type: "string",
-              title: "Persist choice",
-              enum: ["session", "always"],
-            },
-          },
-          required: ["approve"],
-        },
-      }),
-      pluginAppPolicyContext: createConnectorAppPolicyContext({
-        allowDestructiveActions: true,
-        destructiveApprovalMode: "auto",
-      }),
-    });
+    const result = await elicit(
+      pluginRequest(
+        buildConnectorPluginApprovalElicitation({
+          _meta: approvalMeta({
+            source: "connector",
+            connector_id: "connector_google_calendar",
+            connector_name: "Google Calendar",
+            persist: ["session"],
+            tool_title: "create_event",
+          }),
+          requestedSchema: approvalSchema(approvalField("Approve this app action"), {
+            persist: { type: "string", title: "Persist choice", enum: ["session", "always"] },
+          }),
+        }),
+        connectorPolicy({ allowDestructiveActions: true, destructiveApprovalMode: "auto" }),
+      ),
+    );
 
-    expect(result).toEqual({
-      action: "accept",
-      content: {
-        approve: true,
-      },
-      _meta: null,
-    });
-    expect(gatewayToolArg(0, 2)).toMatchObject({
-      allowedDecisions: ["allow-once", "deny"],
-    });
+    expect(result).toEqual(reply("accept", { approve: true }));
+    expect(gatewayToolArg(0, 2)).toMatchObject({ allowedDecisions: ["allow-once", "deny"] });
   });
 
   it("maps unexpected allow-always decisions to one-shot for ask plugin policy", async () => {
     mockApprovalDecision("plugin:approval-calendar-unexpected-always", "allow-always");
 
-    const result = await handleCodexAppServerElicitationRequest({
-      requestParams: buildConnectorPluginApprovalElicitation({
-        _meta: {
-          codex_approval_kind: "mcp_tool_call",
-          source: "connector",
-          connector_id: "connector_google_calendar",
-          connector_name: "Google Calendar",
-          persist: ["session", "always"],
-          tool_title: "create_event",
-        },
-      }),
-      pluginAppPolicyContext: createConnectorAppPolicyContext({
-        allowDestructiveActions: true,
-        destructiveApprovalMode: "ask",
-      }),
-    });
+    const result = await elicit(
+      pluginRequest(
+        buildConnectorPluginApprovalElicitation({
+          _meta: approvalMeta({
+            source: "connector",
+            connector_id: "connector_google_calendar",
+            connector_name: "Google Calendar",
+            persist: ["session", "always"],
+            tool_title: "create_event",
+          }),
+        }),
+        connectorPolicy({ allowDestructiveActions: true, destructiveApprovalMode: "ask" }),
+      ),
+    );
 
-    expect(gatewayToolArg(0, 2)).toMatchObject({
-      allowedDecisions: ["allow-once", "deny"],
-    });
-    expect(result).toEqual({
-      action: "accept",
-      content: null,
-      _meta: null,
-    });
+    expect(gatewayToolArg(0, 2)).toMatchObject({ allowedDecisions: ["allow-once", "deny"] });
+    expect(result).toEqual(reply("accept"));
   });
 
   it("fails closed when auto plugin approval routing is unavailable", async () => {
@@ -1035,15 +890,14 @@ describe("Codex app-server elicitation bridge", () => {
       decision: null,
     });
 
-    const result = await handleCodexAppServerElicitationRequest({
-      requestParams: buildConnectorPluginApprovalElicitation(),
-      pluginAppPolicyContext: createConnectorAppPolicyContext({
-        allowDestructiveActions: true,
-        destructiveApprovalMode: "auto",
-      }),
-    });
+    const result = await elicit(
+      pluginRequest(
+        buildConnectorPluginApprovalElicitation(),
+        connectorPolicy({ allowDestructiveActions: true, destructiveApprovalMode: "auto" }),
+      ),
+    );
 
-    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    expect(result).toEqual(reply("decline"));
     expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
       "plugin.approval.request",
     ]);
@@ -1058,16 +912,15 @@ describe("Codex app-server elicitation bridge", () => {
         return new Promise(() => {});
       });
 
-    const result = await handleCodexAppServerElicitationRequest({
-      requestParams: buildConnectorPluginApprovalElicitation(),
-      pluginAppPolicyContext: createConnectorAppPolicyContext({
-        allowDestructiveActions: true,
-        destructiveApprovalMode: "auto",
-      }),
-      signal: abortController.signal,
-    });
+    const result = await elicit(
+      pluginRequest(
+        buildConnectorPluginApprovalElicitation(),
+        connectorPolicy({ allowDestructiveActions: true, destructiveApprovalMode: "auto" }),
+        { signal: abortController.signal },
+      ),
+    );
 
-    expect(result).toEqual({ action: "cancel", content: null, _meta: null });
+    expect(result).toEqual(reply("cancel"));
   });
 
   it.each(["deny"])(
@@ -1080,11 +933,11 @@ describe("Codex app-server elicitation bridge", () => {
         message: "Allow Google Calendar to read an event?",
       });
       requestParams._meta.tool_title = "read_event";
-      const result = await handleCodexAppServerElicitationRequest({
+      const result = await elicit({
         requestParams,
         paramsForRun: createParams(),
         ...codexTestTurnIds(),
-        pluginAppPolicyContext: createPluginAppPolicyContext({
+        pluginAppPolicyContext: pluginPolicy({
           allowDestructiveActions: false,
           apps: [
             {
@@ -1096,11 +949,7 @@ describe("Codex app-server elicitation bridge", () => {
         }),
       });
 
-      expect(result).toEqual({
-        action: decision === "allow-once" ? "accept" : "decline",
-        content: null,
-        _meta: null,
-      });
+      expect(result).toEqual(reply(decision === "allow-once" ? "accept" : "decline"));
       expect(gatewayToolArg(0, 2)).toMatchObject({
         title: "Allow Google Calendar to read an event?",
         allowedDecisions: ["allow-once", "deny"],
@@ -1110,33 +959,32 @@ describe("Codex app-server elicitation bridge", () => {
 
   it("matches a connector approval to the admitted Apps SDK identity", async () => {
     const suffix = "0123456789abcdef0123456789abcdef";
-    const result = await handleCodexAppServerElicitationRequest({
-      requestParams: buildConnectorPluginApprovalElicitation({
-        _meta: {
-          codex_approval_kind: "mcp_tool_call",
-          source: "connector",
-          app_id: `asdk_app_${suffix}`,
-          connector_id: `connector_${suffix}`,
-          connector_name: "Google Calendar",
-          tool_title: "create_event",
-        },
-      }),
-      paramsForRun: createParams(),
-      ...codexTestTurnIds(),
-      pluginAppPolicyContext: createPluginAppPolicyContext({
-        allowDestructiveActions: true,
-        apps: [{ appId: `connector_${suffix}`, pluginName: "google-calendar", mcpServerNames: [] }],
-      }),
-    });
+    const result = await elicit(
+      pluginRequest(
+        buildConnectorPluginApprovalElicitation({
+          _meta: approvalMeta({
+            source: "connector",
+            app_id: `asdk_app_${suffix}`,
+            connector_id: `connector_${suffix}`,
+            connector_name: "Google Calendar",
+            tool_title: "create_event",
+          }),
+        }),
+        pluginPolicy({
+          allowDestructiveActions: true,
+          apps: [
+            { appId: `connector_${suffix}`, pluginName: "google-calendar", mcpServerNames: [] },
+          ],
+        }),
+        { paramsForRun: createParams(), ...codexTestTurnIds() },
+      ),
+    );
     expect(result?.action).toBe("accept");
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
   it("does not answer plugin app elicitations for a different active turn", async () => {
-    const result = await handleCodexAppServerElicitationRequest({
-      requestParams: buildPluginApprovalElicitation({ turnId: "turn-2" }),
-      pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
-    });
+    const result = await elicit(pluginRequest(pluginApproval({ turnId: "turn-2" })));
 
     expect(result).toBeUndefined();
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
@@ -1145,16 +993,9 @@ describe("Codex app-server elicitation bridge", () => {
   it("keeps unrelated MCP approval elicitations on the existing approval bridge", async () => {
     mockApprovalDecision("plugin:approval-unrelated", "allow-once");
 
-    const result = await handleCodexAppServerElicitationRequest({
-      requestParams: buildCurrentCodexApprovalElicitation(),
-      pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
-    });
+    const result = await elicit(pluginRequest(currentApproval()));
 
-    expect(result).toEqual({
-      action: "accept",
-      content: null,
-      _meta: null,
-    });
+    expect(result).toEqual(reply("accept"));
     expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
       "plugin.approval.request",
       "plugin.approval.waitDecision",
@@ -1162,8 +1003,7 @@ describe("Codex app-server elicitation bridge", () => {
   });
 
   it("ignores unscoped approval elicitations without the active thread id", async () => {
-    const { turnId, serverName, mode, message, _meta, requestedSchema } =
-      buildCurrentCodexApprovalElicitation();
+    const { turnId, serverName, mode, message, _meta, requestedSchema } = currentApproval();
     const result = await routeCodexAppServerElicitationRequest({
       requestParams: { turnId, serverName, mode, message, _meta, requestedSchema },
       paramsForRun: createParams(),
@@ -1177,20 +1017,11 @@ describe("Codex app-server elicitation bridge", () => {
   it("maps allow-always decisions onto persistent approval metadata when offered", async () => {
     mockApprovalDecision("plugin:approval-2", "allow-always");
 
-    const result = await handleCodexAppServerElicitationRequest({
-      requestParams: buildApprovalElicitation(),
-    });
+    const result = await elicit({ requestParams: approval() });
 
-    expect(result).toEqual({
-      action: "accept",
-      content: {
-        approve: true,
-        persist: "always",
-      },
-      _meta: {
-        persist: "always",
-      },
-    });
+    expect(result).toEqual(
+      reply("accept", { approve: true, persist: "always" }, { persist: "always" }),
+    );
     expect(gatewayToolArg(0, 2)).toMatchObject({
       allowedDecisions: ["allow-once", "allow-always", "deny"],
     });
@@ -1204,96 +1035,65 @@ describe("Codex app-server elicitation bridge", () => {
     "matches the MCP approval enum to $persist persistence",
     async ({ hints, choice, persist }) => {
       mockApprovalDecision("plugin:enum", "allow-always");
-      const result = await handleCodexAppServerElicitationRequest({
+      const result = await elicit({
         requestParams: {
-          ...buildApprovalElicitation(),
-          _meta: { codex_approval_kind: "mcp_tool_call", persist: hints },
-          requestedSchema: {
-            type: "object",
-            properties: {
+          ...approval(),
+          _meta: approvalMeta({ persist: hints }),
+          requestedSchema: objectSchema(
+            {
               approval: {
                 type: "string",
                 enum: ["Allow", "Allow for this session", "Allow and don't ask me again", "Cancel"],
               },
             },
-            required: ["approval"],
-          },
+            ["approval"],
+          ),
         },
       });
-      expect(result).toEqual({
-        action: "accept",
-        content: { approval: choice },
-        _meta: persist ? { persist } : null,
-      });
+      expect(result).toEqual(reply("accept", { approval: choice }, persist ? { persist } : null));
     },
   );
 
   it("does not inherit persist defaults for one-time approvals", async () => {
     mockApprovalDecision("plugin:approval-5", "allow-once");
 
-    const result = await handleCodexAppServerElicitationRequest({
+    const result = await elicit({
       requestParams: {
-        ...buildApprovalElicitation(),
-        requestedSchema: {
-          type: "object",
-          properties: {
-            approve: {
-              type: "boolean",
-              title: "Approve this tool call",
-            },
-            persist: {
-              type: "string",
-              title: "Persist choice",
-              enum: ["session", "always"],
-              default: "always",
-            },
+        ...approval(),
+        requestedSchema: approvalSchema(approvalField("Approve this tool call"), {
+          persist: {
+            type: "string",
+            title: "Persist choice",
+            enum: ["session", "always"],
+            default: "always",
           },
-          required: ["approve"],
-        },
+        }),
       },
     });
 
-    expect(result).toEqual({
-      action: "accept",
-      content: {
-        approve: true,
-      },
-      _meta: null,
-    });
+    expect(result).toEqual(reply("accept", { approve: true }));
   });
 
-  it.each<{ name: string; request: JsonObject }>([
-    {
-      name: "an ordinary form",
-      request: {
+  it("leaves an ordinary form from a plugin-owned MCP server to the ordinary input bridge", async () => {
+    const result = await routeCodexAppServerElicitationRequest({
+      requestParams: {
+        ...codexTestTurnIds(),
+        serverName: "google-calendar-mcp",
+        _meta: { app_id: "google-calendar-app" },
         mode: "form",
         message: "Choose a calendar",
-        requestedSchema: {
-          type: "object",
-          properties: { calendar: { type: "string", enum: ["work", "personal"] } },
-          required: ["calendar"],
-        },
+        requestedSchema: objectSchema(
+          { calendar: { type: "string", enum: ["work", "personal"] } },
+          ["calendar"],
+        ),
       },
-    },
-  ])(
-    "leaves $name from a plugin-owned MCP server to the ordinary input bridge",
-    async ({ request }) => {
-      const result = await routeCodexAppServerElicitationRequest({
-        requestParams: {
-          ...codexTestTurnIds(),
-          serverName: "google-calendar-mcp",
-          _meta: { app_id: "google-calendar-app" },
-          ...request,
-        },
-        paramsForRun: createParams(),
-        ...codexTestTurnIds(),
-        pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: false }),
-      });
-
-      expect(result).toEqual({ kind: "not-mine" });
-      expect(mockCallGatewayTool).not.toHaveBeenCalled();
-    },
-  );
+      pluginAppPolicyContext: pluginPolicy({ allowDestructiveActions: false }),
+      paramsForRun: createParams(),
+      ...codexTestTurnIds(),
+    });
+    expect(result).toEqual({ kind: "not-mine" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
 
   it("does not split surrogate pairs when truncating display parameter values", async () => {
     mockApprovalDecision("plugin:approval-utf16-safe", "allow-once");
@@ -1303,13 +1103,12 @@ describe("Codex app-server elicitation bridge", () => {
     // would keep the lone high surrogate; truncateUtf16Safe backs off to 116.
     const displayValue = `${"b".repeat(116)}😀tail`;
 
-    await handleCodexAppServerElicitationRequest({
+    await elicit({
       requestParams: {
-        ...buildApprovalElicitation(),
-        _meta: {
-          codex_approval_kind: "mcp_tool_call",
+        ...approval(),
+        _meta: approvalMeta({
           tool_params_display: [{ name: "key", display_name: "Value", value: displayValue }],
-        },
+        }),
       },
     });
 
@@ -1321,9 +1120,9 @@ describe("Codex app-server elicitation bridge", () => {
   it("does not expose a split surrogate pair from the display scan cap", async () => {
     mockApprovalDecision("plugin:approval-utf16-scan", "allow-once");
 
-    await handleCodexAppServerElicitationRequest({
+    await elicit({
       requestParams: {
-        ...buildApprovalElicitation(),
+        ...approval(),
         message: `${"\u0000".repeat(4095)}😀tail`,
       },
     });

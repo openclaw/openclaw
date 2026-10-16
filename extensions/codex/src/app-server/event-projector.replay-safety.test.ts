@@ -22,6 +22,14 @@ import {
   type DiagnosticEventPayload,
 } from "./event-projector.test-harness.js";
 
+function notify(
+  projector: Awaited<ReturnType<typeof createProjector>>,
+  method: Parameters<typeof forCurrentTurn>[0],
+  item: Record<string, unknown>,
+) {
+  return projector.handleNotification(forCurrentTurn(method, { item }));
+}
+
 registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector replay safety and progress projection", () => {
@@ -42,7 +50,7 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
         arguments: { markdown: '<progress aria-label="private" value="1" max="2"></progress>' },
         status: "inProgress",
       };
-      await projector.handleNotification(forCurrentTurn("item/started", { item }));
+      await notify(projector, "item/started", item);
       expect(onToolResult).not.toHaveBeenCalled();
       projector.recordDynamicToolCall({
         callId: item.id,
@@ -66,7 +74,7 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
         success: false,
         contentItems: result.contentItems,
       };
-      await projector.handleNotification(forCurrentTurn("item/completed", { item: completedItem }));
+      await notify(projector, "item/completed", completedItem);
       await projector.handleNotification(turnCompleted([completedItem]));
 
       expect(onToolResult).toHaveBeenCalledTimes(2);
@@ -80,10 +88,7 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
 
   it("clears a prior terminal presentation after an unprojected native tool completes", async () => {
     const onToolOutcome = vi.fn();
-    const projector = await createProjector({
-      ...(await createParams()),
-      onToolOutcome,
-    });
+    const projector = await createProjector({ ...(await createParams()), onToolOutcome });
 
     await projector.handleNotification(
       turnCompleted([
@@ -129,11 +134,7 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
       path: "/workspace/reference.png",
     };
 
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: nativeItem,
-      }),
-    );
+    await notify(projector, "item/completed", nativeItem);
 
     await projector.handleNotification(
       turnCompleted([
@@ -184,26 +185,18 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
     const onAgentEvent = vi.fn();
     const projector = await createProjector({ ...(await createParams()), onAgentEvent });
 
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          id: "mcp-command-1",
-          type: "mcpToolCall",
-          server: "server",
-          tool: "exec",
-          status: "completed",
-          arguments: { command: "echo private-sentinel" },
-          result: { content: [{ type: "text", text: "done" }] },
-        },
-      }),
-    );
+    await notify(projector, "item/completed", {
+      id: "mcp-command-1",
+      type: "mcpToolCall",
+      server: "server",
+      tool: "exec",
+      status: "completed",
+      arguments: { command: "echo private-sentinel" },
+      result: { content: [{ type: "text", text: "done" }] },
+    });
 
     expect(
-      findAgentEvent(onAgentEvent, {
-        stream: "item",
-        phase: "end",
-        itemId: "mcp-command-1",
-      }).data,
+      findAgentEvent(onAgentEvent, { stream: "item", phase: "end", itemId: "mcp-command-1" }).data,
     ).toMatchObject({
       name: "server.exec",
       commandBearing: true,
@@ -244,16 +237,18 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
       error: null,
     };
     try {
-      await projector.handleNotification(
-        forCurrentTurn("item/started", {
-          item: { ...item, status: "inProgress", result: null, durationMs: null },
-        }),
-      );
-      await projector.handleNotification(
-        forCurrentTurn("item/completed", {
-          item: { ...item, status: "completed", result: { ok: true }, durationMs: 7 },
-        }),
-      );
+      await notify(projector, "item/started", {
+        ...item,
+        status: "inProgress",
+        result: null,
+        durationMs: null,
+      });
+      await notify(projector, "item/completed", {
+        ...item,
+        status: "completed",
+        result: { ok: true },
+        durationMs: 7,
+      });
       await flushDiagnosticEvents();
     } finally {
       unsubscribe();
@@ -266,27 +261,15 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
     expect(toolEvents).toHaveLength(0);
     expect(onToolResult).not.toHaveBeenCalled();
 
-    const toolDiagnosticEvents = diagnosticEvents.filter(
-      (
-        event,
-      ): event is Extract<
-        DiagnosticEventPayload,
-        {
-          type:
-            | "tool.execution.started"
-            | "tool.execution.completed"
-            | "tool.execution.error"
-            | "tool.execution.blocked";
-        }
-      > => event.type.startsWith("tool.execution."),
-    );
     expect(
-      toolDiagnosticEvents.map((event) => ({
-        type: event.type,
-        toolName: event.toolName,
-        toolCallId: event.toolCallId,
-        durationMs: "durationMs" in event ? event.durationMs : undefined,
-      })),
+      diagnosticEvents
+        .filter((event) => event.type.startsWith("tool.execution."))
+        .map((event) => ({
+          type: event.type,
+          toolName: "toolName" in event ? event.toolName : undefined,
+          toolCallId: "toolCallId" in event ? event.toolCallId : undefined,
+          durationMs: "durationMs" in event ? event.durationMs : undefined,
+        })),
     ).toEqual([
       {
         type: "tool.execution.started",
@@ -319,20 +302,13 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
     await projector.handleNotification(notification);
     await projector.handleNotification(notification);
 
-    expect(
-      findAgentEvent(onAgentEvent, {
-        stream: "item",
-        phase: "end",
-        itemId: "cmd-future-status",
-      }).data,
-    ).toMatchObject({ phase: "end", summary: "Outcome unknown" });
-    expect(
-      findAgentEvent(onAgentEvent, {
-        stream: "item",
-        phase: "end",
-        itemId: "cmd-future-status",
-      }).data.status,
-    ).toBeUndefined();
+    const itemEvent = findAgentEvent(onAgentEvent, {
+      stream: "item",
+      phase: "end",
+      itemId: "cmd-future-status",
+    }).data;
+    expect(itemEvent).toMatchObject({ phase: "end", summary: "Outcome unknown" });
+    expect(itemEvent.status).toBeUndefined();
     const toolResult = findAgentEvent(onAgentEvent, {
       stream: "tool",
       phase: "result",
@@ -343,11 +319,7 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
       "codex app-server item reported unknown status; continuing projection",
-      {
-        itemId: "cmd-future-status",
-        itemType: "commandExecution",
-        status: "pausedByProtocol",
-      },
+      { itemId: "cmd-future-status", itemType: "commandExecution", status: "pausedByProtocol" },
     );
   });
 
@@ -360,9 +332,7 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
     expect(warn).not.toHaveBeenCalled();
     const rawEventKind = "item/futureStatus/updated\nforged";
     const collidingSanitizedEventKind = "item/futureStatus/updated\\nforged";
-    const notification = forCurrentTurn(rawEventKind, {
-      itemId: "future-1",
-    });
+    const notification = forCurrentTurn(rawEventKind, { itemId: "future-1" });
 
     await projector.handleNotification(notification);
     await projector.handleNotification(notification);
@@ -375,11 +345,9 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
       phase: "final_answer",
       text: "still projects",
     };
-    await projector.handleNotification(
-      forCurrentTurn("item/started", { item: { ...item, text: "" } }),
-    );
+    await notify(projector, "item/started", { ...item, text: "" });
     await projector.handleNotification(agentMessageDelta(item.text, item.id));
-    await projector.handleNotification(forCurrentTurn("item/completed", { item }));
+    await notify(projector, "item/completed", item);
     await projector.handleNotification(turnCompleted([item]));
 
     expect(projector.buildResult(buildEmptyToolTelemetry()).assistantTexts).toEqual([
@@ -435,8 +403,8 @@ describe("subagent-progress", () => {
           agentThreadId: "child-thread",
           agentPath: "/root/research",
         };
-        await projector.handleNotification(forCurrentTurn("item/started", { item }));
-        await projector.handleNotification(forCurrentTurn("item/completed", { item }));
+        await notify(projector, "item/started", item);
+        await notify(projector, "item/completed", item);
         await progress.start();
         const latest = events.at(-1);
         expect(latest).toMatchObject({
@@ -467,16 +435,14 @@ describe("subagent-progress", () => {
       prompt: "Private delegation instructions",
       agentsStates: {},
     };
-    await projector.handleNotification(forCurrentTurn("item/started", { item }));
+    await notify(projector, "item/started", item);
     expect(onAgentEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         stream: "item",
         data: expect.objectContaining({ status: "running", name: "subagents" }),
       }),
     );
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", { item: { ...item, status: "failed" } }),
-    );
+    await notify(projector, "item/completed", { ...item, status: "failed" });
     expect(onAgentEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         stream: "item",
@@ -486,19 +452,15 @@ describe("subagent-progress", () => {
     expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain(item.prompt);
     onAgentEvent.mockClear();
     const wait = { ...item, id: "wait-1", tool: "wait" };
-    await projector.handleNotification(forCurrentTurn("item/started", { item: wait }));
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", { item: { ...wait, status: "completed" } }),
-    );
+    await notify(projector, "item/started", wait);
+    await notify(projector, "item/completed", { ...wait, status: "completed" });
     expect(
       onAgentEvent.mock.calls
         .filter(([event]) => event.stream === "item")
         .map(([event]) => event.data.hideFromChannelProgress),
     ).toEqual([true, true]);
     onAgentEvent.mockClear();
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", { item: { ...wait, id: "failed-wait", status: "failed" } }),
-    );
+    await notify(projector, "item/completed", { ...wait, id: "failed-wait", status: "failed" });
     expect(onAgentEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         stream: "item",
@@ -560,16 +522,12 @@ describe("CodexAppServerEventProjector cyber notices", () => {
   });
   it("shows the first buffering notice after commentary and retires it when the answer starts", async () => {
     const { projector, buffer, notices } = await createNoticeProjector();
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "agentMessage",
-          id: "commentary",
-          phase: "commentary",
-          text: "I will review the code.",
-        },
-      }),
-    );
+    await notify(projector, "item/completed", {
+      type: "agentMessage",
+      id: "commentary",
+      phase: "commentary",
+      text: "I will review the code.",
+    });
     await buffer();
     await projector.handleNotification(agentMessageDelta("Ready"));
     await buffer();

@@ -33,6 +33,19 @@ function notify(
   return projector.handleNotification(forCurrentTurn(method, params));
 }
 
+function toolCallOf(message: unknown) {
+  return requireRecord(
+    requireArray(requireRecord(message, "assistant").content, "content")[0],
+    "tool call",
+  );
+}
+
+async function persistedProjector(key: string) {
+  const params = await createParams();
+  await attachSqliteSessionTarget(params, path.join(params.workspaceDir, "sessions.json"), key);
+  return { params, projector: await createProjector(params) };
+}
+
 registerCodexEventProjectorTestLifecycle();
 
 const diagnosticEvents: DiagnosticEventPayload[] = [];
@@ -80,7 +93,6 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
   const workspaceRejection = {
     status: "declined",
     output: "patch rejected: writing outside of the project; rejected by user approval settings",
-    outputFirst: true,
     isError: true,
   };
 
@@ -100,31 +112,16 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
           "",
         ].join("\n"),
       },
-      {
-        path: "src/created.ts",
-        kind: { type: "add" },
-        diff: "first\nsecond\n",
-      },
-      {
-        path: "src/deleted.ts",
-        kind: { type: "delete" },
-        diff: "removed\n",
-      },
+      { path: "src/created.ts", kind: { type: "add" }, diff: "first\nsecond\n" },
+      { path: "src/deleted.ts", kind: { type: "delete" }, diff: "removed\n" },
     ];
 
     await notify(projector, "item/completed", {
-      item: {
-        type: "fileChange",
-        id: "patch-structured",
-        changes,
-        status: "completed",
-      },
+      item: { type: "fileChange", id: "patch-structured", changes, status: "completed" },
     });
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
-    const assistant = requireRecord(result.messagesSnapshot[1], "assistant tool call message");
-    const assistantContent = requireArray(assistant.content, "assistant content");
-    const toolCall = requireRecord(assistantContent[0], "file-change tool call");
+    const toolCall = toolCallOf(result.messagesSnapshot[1]);
     const expectedChanges = [
       { ...changes[0], stat: { added: 2, removed: 1 } },
       { ...changes[1], stat: { added: 2, removed: 0 } },
@@ -139,7 +136,6 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
       label: "successful patch output after its native item",
       status: "completed",
       output: "Successfully applied patch to runtime-tool-fixture-patch.txt",
-      outputFirst: false,
       isError: false,
     },
     {
@@ -172,13 +168,7 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
       omitNativeItem: true,
     },
   ])("persists the linked Codex raw $label", async (testCase) => {
-    const params = await createParams();
-    await attachSqliteSessionTarget(
-      params,
-      path.join(params.workspaceDir, "sessions.json"),
-      "patch",
-    );
-    const projector = await createProjector(params);
+    const { params, projector } = await persistedProjector("patch");
     const callId = "native-patch-raw-result";
     const patchInput =
       "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+runtime patch\n+*** End Patch\n*** End Patch\n";
@@ -199,16 +189,11 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
                 "execCommand" in testCase
                   ? {
                       cmd: `${"workingDirectoryPrefix" in testCase ? "cd /workspace && " : ""}apply_patch <<'PATCH'\n${patchInput}PATCH\n`,
-                      ...("executionWorkdir" in testCase
-                        ? { workdir: testCase.executionWorkdir }
-                        : {}),
                     }
                   : { input: patchInput },
               ),
             }
-          : {
-              input: "codeMode" in testCase ? testCase.codeMode(patchInput) : patchInput,
-            }),
+          : { input: "codeMode" in testCase ? testCase.codeMode(patchInput) : patchInput }),
       },
     });
 
@@ -239,30 +224,20 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
             : testCase.output,
       },
     });
-    const notifications =
-      "omitNativeItem" in testCase
-        ? [rawOutput]
-        : testCase.outputFirst
-          ? [rawOutput, completed]
-          : [completed, rawOutput];
+    const notifications = "omitNativeItem" in testCase ? [rawOutput] : [completed, rawOutput];
     for (const notification of notifications) {
       await projector.handleNotification(notification);
     }
 
     const messages = await readTranscriptMessagesByIdentity(params);
-    const assistant = requireRecord(messages[0], "native patch call");
-    const call = requireRecord(requireArray(assistant.content, "native patch content")[0], "call");
+    const call = toolCallOf(messages[0]);
     expect(call).toMatchObject({
       type: "toolCall",
       id: callId,
       name: "apply_patch",
       arguments: {
         input: patchInput,
-        ...("workingDirectoryPrefix" in testCase
-          ? { cwd: "/workspace" }
-          : "executionWorkdir" in testCase
-            ? { cwd: testCase.executionWorkdir }
-            : {}),
+        ...("workingDirectoryPrefix" in testCase ? { cwd: "/workspace" } : {}),
       },
     });
     const toolResult = requireRecord(messages[1], "native patch result");
@@ -286,13 +261,7 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
   it.each(["direct rejection", "code-mode nonzero exit", "code-mode input object"])(
     "mirrors raw command %s without a commandExecution item",
     async (mode) => {
-      const params = await createParams();
-      await attachSqliteSessionTarget(
-        params,
-        path.join(params.workspaceDir, "sessions.json"),
-        "command",
-      );
-      const projector = await createProjector(params);
+      const { params, projector } = await persistedProjector("command");
       const callId = "native-exec-workspace-rejection";
       const args = {
         cmd: `node -e "require('node:fs').writeFileSync('../denied.txt', 'must not change')"`,
@@ -304,21 +273,15 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
         mode === "direct rejection"
           ? rejection
           : [
+              { type: "input_text", text: "Script completed\nWall time 0.1 seconds\nOutput:\n" },
               {
                 type: "input_text",
-                text: `Script ${mode === "code-mode rejection" ? "failed" : "completed"}\nWall time 0.1 seconds\nOutput:\n`,
-              },
-              {
-                type: "input_text",
-                text:
-                  mode === "code-mode rejection"
-                    ? `Script error:\n${rejection}`
-                    : JSON.stringify({
-                        chunk_id: "denied",
-                        wall_time_seconds: 0.1,
-                        exit_code: 1,
-                        output: "Error: EPERM: operation not permitted, open '../denied.txt'",
-                      }),
+                text: JSON.stringify({
+                  chunk_id: "denied",
+                  wall_time_seconds: 0.1,
+                  exit_code: 1,
+                  output: "Error: EPERM: operation not permitted, open '../denied.txt'",
+                }),
               },
             ];
 
@@ -346,13 +309,8 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
       });
 
       const messages = await readTranscriptMessagesByIdentity(params);
-      const assistant = requireRecord(messages[0], "native exec call");
-      const call = requireRecord(requireArray(assistant.content, "native exec content")[0], "call");
-      expect(call).toMatchObject({
-        type: "toolCall",
-        id: callId,
-        name: "bash",
-      });
+      const call = toolCallOf(messages[0]);
+      expect(call).toMatchObject({ type: "toolCall", id: callId, name: "bash" });
       expect(call.arguments).toEqual({ command: args.cmd, cwd: args.workdir });
       const toolResult = requireRecord(messages[1], "native exec result");
       expect(toolResult).toMatchObject({
@@ -429,9 +387,7 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
     });
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
-    const assistant = requireRecord(result.messagesSnapshot[1], "assistant tool call message");
-    const assistantContent = requireArray(assistant.content, "assistant content");
-    const toolCall = requireRecord(assistantContent[0], "file-change tool call");
+    const toolCall = toolCallOf(result.messagesSnapshot[1]);
     const args = requireRecord(toolCall.arguments, "file-change arguments");
     const projectedChanges = requireArray(args.changes, "projected file changes");
     const projectedChange = requireRecord(projectedChanges[0], "projected file change");
@@ -495,15 +451,10 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
         action: { type: "search", query: "sensitive query", queries: null },
       };
 
-      await notify(projector, "item/started", { item, startedAtMs: 1_750_000_000_000 });
-      await notify(projector, "item/completed", { item, completedAtMs: 1_750_000_000_042 });
+      await notify(projector, "item/started", { startedAtMs: 1_750_000_000_000, item });
+      await notify(projector, "item/completed", { completedAtMs: 1_750_000_000_042, item });
       await notify(projector, "rawResponseItem/completed", {
-        item: {
-          id: item.id,
-          type: "web_search_call",
-          status,
-          action: item.action,
-        },
+        item: { id: item.id, type: "web_search_call", status, action: item.action },
       });
       await flushDiagnosticEvents();
 
@@ -688,9 +639,7 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
   it("keeps native web-search outcomes unknown at finalization when no raw terminal arrives", async () => {
     const abortController = new AbortController();
     abortController.abort("cancelled");
-    const projector = await createProjector(undefined, {
-      runAbortSignal: abortController.signal,
-    });
+    const projector = await createProjector(undefined, { runAbortSignal: abortController.signal });
     const item = {
       id: "web-search-without-raw-terminal",
       type: "webSearch",
@@ -758,10 +707,7 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
     ]);
     const finalAssistant = requireRecord(result.messagesSnapshot[3], "final assistant message");
     expect(finalAssistant.content).toEqual([
-      {
-        type: "text",
-        text: "The requested publish command was denied before execution.",
-      },
+      { type: "text", text: "The requested publish command was denied before execution." },
     ]);
     expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith(
       "tool.result",
