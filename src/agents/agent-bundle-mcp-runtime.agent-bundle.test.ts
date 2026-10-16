@@ -1,4 +1,3 @@
-/** Proves an installed Agent Plugins bundle can launch and execute a real stdio MCP tool. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -45,25 +44,19 @@ function reply(id, result) {
 }
 function handle(message) {
   if (message.method === "initialize") {
-    reply(message.id, {
+    return reply(message.id, {
         protocolVersion: message.params?.protocolVersion ?? "2025-11-25",
         capabilities: { tools: {} },
         serverInfo: { name: "agent-bundle-probe", version: "1.0.0" },
     });
-    return;
-  }
-  if (message.method === "notifications/initialized") {
-    return;
   }
   if (message.method === "tools/list") {
-    reply(message.id, {
+    return reply(message.id, {
         tools: [{
           name: "weather_probe",
-          description: "Reports the Agent Plugins subprocess contract.",
           inputSchema: { type: "object", properties: {}, additionalProperties: false },
         }],
     });
-    return;
   }
   if (message.method === "tools/call") {
     reply(message.id, {
@@ -76,21 +69,16 @@ function handle(message) {
             argv: process.argv.slice(2),
           }),
         }],
-        isError: false,
     });
   }
 }
 createInterface({ input: process.stdin, crlfDelay: Infinity }).on("line", (line) => {
   if (line.trim()) handle(JSON.parse(line));
 });
-function shutdown() {
-  process.exit(0);
-}
+const shutdown = () => process.exit(0);
 process.stdin.on("end", shutdown);
-process.on("SIGTERM", shutdown);
-process.on("SIGINT", shutdown);
+for (const event of ["SIGTERM", "SIGINT"]) process.on(event, shutdown);
 `,
-    "utf8",
   );
 }
 
@@ -109,29 +97,30 @@ it("discovers an installed Agent Plugins bundle and executes its real stdio tool
     [pluginRoot, workspaceDir, bundledPluginsDir].map((dir) => fs.mkdir(dir, { recursive: true })),
   );
   await writeProbeServer(serverPath);
-  await fs.writeFile(
-    path.join(pluginRoot, "plugin.json"),
-    JSON.stringify({ $schema: PLUGIN_SCHEMA, name: pluginId }),
-    "utf8",
-  );
-  await fs.writeFile(
-    path.join(pluginRoot, "mcp.json"),
-    JSON.stringify({
-      $schema: MCP_SCHEMA,
-      mcpServers: {
-        weatherProbe: {
-          type: "stdio",
-          command: "node",
-          args: ["${PLUGIN_ROOT}/probe-server.mjs", "${PLUGIN_ROOT}/expanded-marker.txt"],
-        },
+  const writeJson = (name: string, value: unknown) =>
+    fs.writeFile(path.join(pluginRoot, name), JSON.stringify(value), "utf8");
+  await writeJson("plugin.json", { $schema: PLUGIN_SCHEMA, name: pluginId });
+  await writeJson("mcp.json", {
+    $schema: MCP_SCHEMA,
+    mcpServers: {
+      weatherProbe: {
+        type: "stdio",
+        command: "node",
+        args: ["${PLUGIN_ROOT}/probe-server.mjs", "${PLUGIN_ROOT}/expanded-marker.txt"],
       },
-    }),
-    "utf8",
-  );
+    },
+  });
 
   const cfg: OpenClawConfig = {
     plugins: { entries: { [pluginId]: { enabled: true } } },
   };
+  const createRuntime = (sessionId: string, runtimeConfig = cfg) =>
+    getOrCreateSessionMcpRuntime({
+      sessionId,
+      sessionKey: `agent:test:${sessionId}`,
+      workspaceDir,
+      cfg: runtimeConfig,
+    });
   await withEnvAsync(
     {
       OPENCLAW_STATE_DIR: stateDir,
@@ -144,25 +133,9 @@ it("discovers an installed Agent Plugins bundle and executes its real stdio tool
       clearPluginMetadataLifecycleCaches();
       const loaded = loadEnabledBundleMcpConfig({ workspaceDir, cfg });
       expect(loaded.diagnostics).toStrictEqual([]);
-      const loadedServer = expectDefined(
-        loaded.config.mcpServers.weatherProbe,
-        "Agent Plugins weather probe server",
-      );
-      const expectedPluginRoot = await fs.realpath(pluginRoot);
       const expectedPluginData = path.join(stateDir, "plugin-data", pluginId);
       await expect(fs.stat(expectedPluginData)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(loadedServer.args).toEqual([serverPath, expandedMarkerPath]);
-      expect(loadedServer.env).toMatchObject({
-        PLUGIN_ROOT: expectedPluginRoot,
-        PLUGIN_DATA: expectedPluginData,
-      });
-
-      const runtime = await getOrCreateSessionMcpRuntime({
-        sessionId: "agent-bundle-boundary",
-        sessionKey: "agent:test:agent-bundle-boundary",
-        workspaceDir,
-        cfg,
-      });
+      const runtime = await createRuntime("agent-bundle-boundary");
       const materialized = await materializeBundleMcpToolsForRun({ runtime });
       try {
         expect(await fs.realpath(expectedPluginData)).toBe(expectedPluginData);
@@ -178,9 +151,9 @@ it("discovers an installed Agent Plugins bundle and executes its real stdio tool
 
         const result = await tool.execute("agent-bundle-boundary-call", {}, undefined, undefined);
         const text = result.content.find((entry) => entry.type === "text")?.text;
-        const payload = JSON.parse(expectDefined(text, "weather probe text result")) as unknown;
+        const payload: unknown = JSON.parse(expectDefined(text, "weather probe text result"));
         expect(payload).toEqual({
-          pluginRoot: expectedPluginRoot,
+          pluginRoot,
           pluginData: expectedPluginData,
           pluginDataExists: true,
           argv: [expandedMarkerPath],
@@ -195,19 +168,14 @@ it("discovers an installed Agent Plugins bundle and executes its real stdio tool
       const userDataPath = path.join(stateDir, "user-configured-data-file");
       await fs.writeFile(userDataPath, "user-owned path", "utf8");
       clearPluginMetadataLifecycleCaches();
-      const collisionRuntime = await getOrCreateSessionMcpRuntime({
-        sessionId: "agent-bundle-boundary-collision",
-        sessionKey: "agent:test:agent-bundle-boundary-collision",
-        workspaceDir,
-        cfg: {
-          ...cfg,
-          mcp: {
-            servers: {
-              userProbe: {
-                command: "node",
-                args: [serverPath, expandedMarkerPath],
-                env: { PLUGIN_ROOT: pluginRoot, PLUGIN_DATA: userDataPath },
-              },
+      const collisionRuntime = await createRuntime("agent-bundle-boundary-collision", {
+        ...cfg,
+        mcp: {
+          servers: {
+            userProbe: {
+              command: "node",
+              args: [serverPath, expandedMarkerPath],
+              env: { PLUGIN_ROOT: pluginRoot, PLUGIN_DATA: userDataPath },
             },
           },
         },

@@ -1,7 +1,6 @@
 /** Tests session-scoped MCP runtime catalog, transport, validation, and lifecycle behavior. */
 import fs from "node:fs/promises";
 import http from "node:http";
-import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -143,8 +142,57 @@ function stdioServer(serverPath: string, options: Partial<ConfiguredMcpServer> =
   return { command: process.execPath, args: [serverPath], ...options };
 }
 
-function mcpConfig(servers: Record<string, ConfiguredMcpServer>) {
-  return { mcp: { servers } };
+function mcpConfig(
+  servers: Record<string, ConfiguredMcpServer>,
+  options: Omit<NonNullable<NonNullable<RuntimeParams["cfg"]>["mcp"]>, "servers"> = {},
+) {
+  return { mcp: { ...options, servers } };
+}
+
+const scopedConfig = mcpConfig({ "user-mail": { transport: "streamable-http" } });
+const staticConfig = mcpConfig({ shared: { command: "true" } });
+const requesterConfig = () =>
+  mcpConfig({ ...staticConfig.mcp.servers, ...scopedConfig.mcp.servers });
+
+function catalogTool(serverName: string, toolName: string, safeServerName = serverName) {
+  return {
+    serverName,
+    safeServerName,
+    toolName,
+    inputSchema: { type: "object", properties: {} },
+    fallbackDescription: toolName,
+  };
+}
+
+function makeCatalog(serverName: string, toolName: string) {
+  return {
+    version: 1,
+    generatedAt: 0,
+    servers: { [serverName]: { serverName, launchSummary: serverName, toolCount: 1 } },
+    tools: [{ ...catalogTool(serverName, toolName), description: toolName }],
+  };
+}
+
+function expectToolNames(
+  catalog: { tools: ReadonlyArray<{ toolName: string }> },
+  names: string[],
+  sorted = false,
+) {
+  const actual = catalog.tools.map((tool) => tool.toolName);
+  expect(sorted ? actual.toSorted() : actual).toEqual(names);
+}
+
+function toolDefinition(
+  name: string,
+  overrides: Partial<NonNullable<StdioOptions["tools"]>[number]> = {},
+) {
+  return { name, inputSchema: { type: "object", properties: {} }, ...overrides };
+}
+
+function expectHealthyCall(runtime: SessionMcpRuntime, serverName: string, toolName = "slow_tool") {
+  return expect(runtime.callTool(serverName, toolName, {})).resolves.toMatchObject({
+    isError: false,
+  });
 }
 
 function sessionParams(
@@ -174,15 +222,31 @@ function createConfiguredRuntime(
   });
 }
 
-async function stdioFixture(
-  prefix: string,
-  options: Omit<Parameters<typeof writeListToolsMcpServerFixture>[0], "filePath" | "logPath"> = {},
-) {
+type StdioOptions = Omit<
+  Parameters<typeof writeListToolsMcpServerFixture>[0],
+  "filePath" | "logPath"
+>;
+
+function fixtureFiles(prefix: string) {
   const tempDir = tempDirTracker.make(prefix);
-  const serverPath = path.join(tempDir, "server.mjs");
-  const logPath = path.join(tempDir, "server.log");
-  await writeListToolsMcpServer({ filePath: serverPath, logPath, ...options });
-  return { tempDir, serverPath, logPath };
+  const file = (name: string) => path.join(tempDir, name);
+  const serverPath = file("server.mjs");
+  const logPath = file("server.log");
+  return {
+    tempDir,
+    serverPath,
+    logPath,
+    file,
+    pidPath: file("server.pid"),
+    write: (options: StdioOptions) =>
+      writeListToolsMcpServer({ filePath: serverPath, logPath, ...options }),
+  };
+}
+
+async function stdioFixture(prefix: string, options: StdioOptions = {}) {
+  const files = fixtureFiles(prefix);
+  await files.write(options);
+  return files;
 }
 
 async function withResolverRegistry(
@@ -261,6 +325,14 @@ async function fixtureEventBeforeSettlement(
   await Promise.race([receipts.waitFor(logPath, text, count), settled]);
 }
 
+function waitForInvalidation(runtime: SessionMcpRuntime, signal: AbortSignal) {
+  return waitForRuntimeState(
+    () => runtime.peekCatalog() === null,
+    "MCP catalog invalidation",
+    signal,
+  );
+}
+
 function waitForFixture(
   signal: AbortSignal,
   logPath: string,
@@ -287,6 +359,147 @@ async function makeStdioRuntime(
       ...(options.toolOverrides ? { toolOverrides: options.toolOverrides } : {}),
     }),
   );
+}
+
+async function withStdio(
+  serverName: string,
+  options: StdioOptions | ((files: ReturnType<typeof fixtureFiles>) => StdioOptions),
+  verify: (runtime: SessionMcpRuntime, files: ReturnType<typeof fixtureFiles>) => Promise<void>,
+  runtimeOptions: Parameters<typeof makeStdioRuntime>[3] & {
+    direct?: boolean;
+    inWorkspace?: boolean;
+  } = {},
+) {
+  const sessionId = `fixture-${serverName}`;
+  const files = fixtureFiles(sessionId);
+  await files.write(typeof options === "function" ? options(files) : options);
+  const workspaceDir = runtimeOptions.inWorkspace
+    ? files.tempDir
+    : (runtimeOptions.workspaceDir ?? "/workspace");
+  const runtime = runtimeOptions.direct
+    ? createConfiguredRuntime(
+        sessionId,
+        { [serverName]: stdioServer(files.serverPath, runtimeOptions.server) },
+        { workspaceDir },
+      )
+    : await makeStdioRuntime(sessionId, serverName, files.serverPath, {
+        ...runtimeOptions,
+        workspaceDir,
+      });
+  try {
+    await verify(runtime, files);
+  } finally {
+    await runtime.dispose();
+    await fs.rm(files.tempDir, { recursive: true, force: true });
+  }
+}
+
+async function startSessionExpiryServer(stateful: boolean) {
+  const state: {
+    activeServerSessionId: string | undefined;
+    initializeCount: number;
+    callAttempts: Array<{ attempt: unknown; sessionId: string | undefined }>;
+    callSessionIds: Array<string | undefined>;
+    staleTerminations: string[];
+    invalidAuthHeaders: Array<string | undefined>;
+  } = {
+    activeServerSessionId: undefined,
+    initializeCount: 0,
+    callAttempts: [],
+    callSessionIds: [],
+    staleTerminations: [],
+    invalidAuthHeaders: [],
+  };
+  const server = http.createServer((req, res) => {
+    const auth = req.headers["x-mcp-recovery"];
+    const rawSession = req.headers["mcp-session-id"];
+    const sessionId = typeof rawSession === "string" ? rawSession : undefined;
+    if (stateful && auth !== "proof") {
+      state.invalidAuthHeaders.push(Array.isArray(auth) ? auth.join(",") : auth);
+      res.writeHead(401).end();
+    } else if (stateful && req.method === "DELETE") {
+      if (sessionId && sessionId !== state.activeServerSessionId) {
+        state.staleTerminations.push(sessionId);
+        res.writeHead(404).end("Session not found");
+      } else {
+        res.writeHead(204).end();
+      }
+    } else if (req.method !== "POST") {
+      res.writeHead(405).end();
+    } else {
+      let body = "";
+      req.on("data", (chunk: Buffer) => {
+        body += chunk.toString();
+      });
+      req.on("end", () => {
+        const message = JSON.parse(body) as {
+          id?: number | string;
+          method?: string;
+          params?: { arguments?: { attempt?: unknown }; protocolVersion?: string };
+        };
+        if (message.method === "initialize") {
+          res.setHeader("content-type", "application/json");
+          state.initializeCount += 1;
+          if (stateful) {
+            state.activeServerSessionId = `server-session-${state.initializeCount}`;
+            res.setHeader("mcp-session-id", state.activeServerSessionId);
+          }
+          replyMcp(
+            res,
+            message.id,
+            initializeResult(
+              message.params?.protocolVersion,
+              stateful ? "stateful-recovery-server" : "stateless-404-server",
+            ),
+          );
+          return;
+        }
+        if (message.method === "tools/call") {
+          state.callSessionIds.push(sessionId);
+          state.callAttempts.push({ attempt: message.params?.arguments?.attempt, sessionId });
+        }
+        if (
+          (stateful && (!sessionId || sessionId !== state.activeServerSessionId)) ||
+          (!stateful && message.method === "tools/call")
+        ) {
+          res.writeHead(404).end("Session not found");
+        } else if (message.method === "notifications/initialized") {
+          res.writeHead(202).end();
+        } else {
+          res.setHeader("content-type", "application/json");
+          if (stateful && sessionId) {
+            res.setHeader("mcp-session-id", sessionId);
+          }
+          if (message.method === "tools/list") {
+            replyMcp(res, message.id, {
+              tools: [{ name: "probe", description: "probe", inputSchema: { type: "object" } }],
+            });
+          } else if (stateful && message.method === "tools/call") {
+            replyMcp(res, message.id, {
+              content: [{ type: "text", text: `recovered ${sessionId}` }],
+            });
+          } else {
+            res.writeHead(405).end();
+          }
+        }
+      });
+    }
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Expected HTTP fixture address");
+  }
+  return {
+    state,
+    url: `http://127.0.0.1:${address.port}/mcp`,
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  };
 }
 
 describe("session MCP runtime", () => {
@@ -319,14 +532,7 @@ describe("session MCP runtime", () => {
     const runtime = createSessionMcpRuntime({
       sessionId: "session-app-metadata",
       workspaceDir: "/workspace",
-      cfg: {
-        mcp: {
-          apps: { enabled: true },
-          servers: {
-            demo: stdioServer(serverPath),
-          },
-        },
-      },
+      cfg: mcpConfig({ demo: stdioServer(serverPath) }, { apps: { enabled: true } }),
     });
     try {
       const catalog = await runtime.getCatalog();
@@ -390,10 +596,7 @@ describe("session MCP runtime", () => {
         { workspaceDir: tempDir },
       );
       try {
-        expect((await runtime.getCatalog()).tools.map((entry) => entry.toolName)).toEqual([
-          "healthy",
-          "nested",
-        ]);
+        expectToolNames(await runtime.getCatalog(), ["healthy", "nested"]);
         if (valid) {
           await expect(runtime.callTool("docs", "nested", {})).resolves.toMatchObject({
             structuredContent,
@@ -415,18 +618,14 @@ describe("session MCP runtime", () => {
   it("validates an in-flight result against its dispatch-time output schema", async ({
     signal,
   }) => {
-    const tempDir = tempDirTracker.make("bundle-mcp-dispatch-schema-");
-    const serverPath = path.join(tempDir, "server.mjs");
-    const logPath = path.join(tempDir, "server.log");
+    const { tempDir, serverPath, logPath, write } = fixtureFiles("bundle-mcp-dispatch-schema-");
     const releasePath = path.join(tempDir, "release-call");
     const schema = (revision: string) => ({
       type: "object",
       properties: { revision: { const: revision } },
       required: ["revision"],
     });
-    await writeListToolsMcpServer({
-      filePath: serverPath,
-      logPath,
+    await write({
       toolsByList: [
         [{ name: "versioned", inputSchema: { type: "object" }, outputSchema: schema("a") }],
         [{ name: "versioned", inputSchema: { type: "object" }, outputSchema: schema("b") }],
@@ -441,26 +640,20 @@ describe("session MCP runtime", () => {
     });
 
     try {
-      expect((await runtime.getCatalog()).tools.map((entry) => entry.toolName)).toEqual([
-        "versioned",
-      ]);
+      expectToolNames(await runtime.getCatalog(), ["versioned"]);
       const calling = runtime.callTool("docs", "versioned", {}).then(
         (value) => ({ value, error: undefined }),
         (error: unknown) => ({ value: undefined, error }),
       );
       await waitForFixture(signal, logPath, "notify tools/list_changed during tools/call", calling);
-      await waitForRuntimeState(
-        () => runtime.peekCatalog() === null,
-        "dispatch-time catalog invalidation",
-        signal,
-      );
-      expect((await runtime.getCatalog()).tools.map((entry) => entry.toolName)).toEqual([
-        "versioned",
-      ]);
+      await waitForInvalidation(runtime, signal);
+      expectToolNames(await runtime.getCatalog(), ["versioned"]);
       await fs.writeFile(releasePath, "release", "utf8");
       const outcome = await calling;
-      expect(outcome.error).toBeUndefined();
-      expect(outcome.value).toMatchObject({ structuredContent: { revision: "a" } });
+      expect(outcome).toMatchObject({
+        error: undefined,
+        value: { structuredContent: { revision: "a" } },
+      });
     } finally {
       await fs.writeFile(releasePath, "release", "utf8").catch(() => {});
       await runtime.dispose();
@@ -489,56 +682,33 @@ describe("session MCP runtime", () => {
       }));
 
     expect(summarizeTools(materializedA)).toEqual(summarizeTools(materializedB));
-    expect(summarizeTools(materializedA)).toEqual([
-      {
-        name: "collision__alpha-",
-        description: "bang",
+    expect(summarizeTools(materializedA)).toEqual(
+      [
+        ["collision__alpha-", "bang", "alpha!"],
+        ["collision__alpha--2", "question", "alpha?"],
+      ].map(([name, description, toolName]) => ({
+        name,
+        description,
         parameters: {
           type: "object",
-          properties: {
-            toolName: { type: "string", const: "alpha!" },
-          },
+          properties: { toolName: { type: "string", const: toolName } },
         },
-      },
-      {
-        name: "collision__alpha--2",
-        description: "question",
-        parameters: {
-          type: "object",
-          properties: {
-            toolName: { type: "string", const: "alpha?" },
-          },
-        },
-      },
-    ]);
+      })),
+    );
   });
 
   it("keeps tools from a server without timeout config when tools/list takes over 1.5s", async () => {
-    const { serverPath, logPath } = await stdioFixture("bundle-mcp-default-listtools-", {
-      delayMs: 2_000,
-    });
-
-    const runtime = await makeStdioRuntime(
-      "session-default-listtools-timeout",
-      "slowListTools",
-      serverPath,
-    );
-
-    try {
+    await withStdio("slowListTools", { delayMs: 2_000 }, async (runtime, { logPath }) => {
       const catalog = await runtime.getCatalog();
-      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["slow_tool"]);
+      expectToolNames(catalog, ["slow_tool"]);
       await expect(fs.readFile(logPath, "utf8")).resolves.toContain("delay tools/list 2000");
-    } finally {
-      await runtime.dispose();
-    }
+    });
   });
 
   it("times out default-config hung bundle MCP tools/list using the internal catalog timeout", async ({
     signal,
   }) => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-listtools-timeout-"));
-    const serverPath = path.join(tempDir, "hanging-list-tools.mjs");
-    const logPath = path.join(tempDir, "server.log");
+    const { tempDir, serverPath, logPath, write } = fixtureFiles("bundle-mcp-listtools-timeout-");
     const listTools = mcpCatalogListing.listAllMcpTools;
     const listing = vi
       .spyOn(mcpCatalogListing, "listAllMcpTools")
@@ -546,7 +716,7 @@ describe("session MCP runtime", () => {
         listTools(client, 50, requestSignal),
       );
     onTestFinished(() => listing.mockRestore());
-    await writeListToolsMcpServer({ filePath: serverPath, logPath, hang: true });
+    await write({ hang: true });
 
     const runtime = await makeStdioRuntime(
       "session-listtools-server-timeout",
@@ -618,33 +788,19 @@ describe("session MCP runtime", () => {
   });
 
   it("redacts credentials from MCP catalog diagnostics", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-diagnostic-redaction-"));
-    const serverPath = path.join(tempDir, "diagnostic-redaction.mjs");
-    const logPath = path.join(tempDir, "server.log");
     const secret = "test-diagnostic-token";
-    await writeListToolsMcpServer({
-      filePath: serverPath,
-      logPath,
-      listToolsJsonRpcErrorMessage: `Authorization: Bearer ${secret}`,
-    });
-
-    const runtime = await makeStdioRuntime(
-      "session-diagnostic-redaction",
+    await withStdio(
       "diagnostic",
-      serverPath,
+      { listToolsJsonRpcErrorMessage: `Authorization: Bearer ${secret}` },
+      async (runtime) => {
+        const catalog = await runtime.getCatalog();
+        const diagnostic = catalog.diagnostics?.[0];
+        expect(diagnostic?.serverName).toBe("diagnostic");
+        expect(diagnostic?.message).toContain("Authorization: Bearer ");
+        expect(diagnostic?.message).toContain("***");
+        expect(diagnostic?.message).not.toContain(secret);
+      },
     );
-
-    try {
-      const catalog = await runtime.getCatalog();
-      const diagnostic = catalog.diagnostics?.[0];
-      expect(diagnostic?.serverName).toBe("diagnostic");
-      expect(diagnostic?.message).toContain("Authorization: Bearer ");
-      expect(diagnostic?.message).toContain("***");
-      expect(diagnostic?.message).not.toContain(secret);
-    } finally {
-      await runtime.dispose();
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
   });
 
   it("retries a failed MCP catalog without stalling healthy siblings", async ({ signal }) => {
@@ -665,12 +821,7 @@ describe("session MCP runtime", () => {
       writeListToolsMcpServer({
         filePath: healthyServerPath,
         logPath: healthyLogPath,
-        tools: [
-          {
-            name: "healthy_tool",
-            inputSchema: { type: "object", properties: {} },
-          },
-        ],
+        tools: [toolDefinition("healthy_tool")],
       }),
     ]);
 
@@ -699,10 +850,7 @@ describe("session MCP runtime", () => {
     try {
       const failedCatalog = await runtime.getCatalog();
       expect(Object.keys(failedCatalog.servers)).toEqual(["healthyServer", "scopedServer"]);
-      expect(failedCatalog.tools.map((tool) => tool.toolName)).toEqual([
-        "healthy_tool",
-        "scoped_tool",
-      ]);
+      expectToolNames(failedCatalog, ["healthy_tool", "scoped_tool"]);
       expect(failedCatalog.diagnostics?.[0]?.serverName).toBe("retryServer");
 
       await writeListToolsMcpServer({
@@ -716,20 +864,14 @@ describe("session MCP runtime", () => {
       expect(runtime.peekCatalog()).toBe(failedCatalog);
       const recovery = runtime.getCatalog();
       await waitForFixture(signal, retryLogPath, "recv tools/list", recovery, 2);
-      await expect(runtime.callTool("healthyServer", "healthy_tool", {})).resolves.toMatchObject({
-        isError: false,
-      });
+      await expectHealthyCall(runtime, "healthyServer", "healthy_tool");
       await fs.writeFile(retryReleasePath, "release", "utf8");
 
       const recoveredCatalog = await withinTest(recovery, signal);
 
       expect(recoveredCatalog.diagnostics ?? []).toEqual([]);
       expect(recoveredCatalog.servers.retryServer).toBeDefined();
-      expect(recoveredCatalog.tools.map((tool) => tool.toolName)).toEqual([
-        "healthy_tool",
-        "slow_tool",
-        "scoped_tool",
-      ]);
+      expectToolNames(recoveredCatalog, ["healthy_tool", "slow_tool", "scoped_tool"]);
       expect((await fs.readFile(healthyLogPath, "utf8")).match(/recv tools\/list/g)).toHaveLength(
         1,
       );
@@ -741,56 +883,48 @@ describe("session MCP runtime", () => {
   });
 
   it("preserves non-text structured MCP results through a real stdio server", async () => {
-    const tempDir = tempDirTracker.make("bundle-mcp-structured-content-");
-    const serverPath = path.join(tempDir, "structured-content.mjs");
-    const logPath = path.join(tempDir, "server.log");
     const structuredContent = { description: "captured screenshot" };
-    await writeListToolsMcpServer({
-      filePath: serverPath,
-      logPath,
-      callToolResult: {
-        content: [
+    await withStdio(
+      "capture",
+      {
+        callToolResult: {
+          content: [
+            { type: "text", text: "captured screenshot" },
+            { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+            {
+              type: "resource_link",
+              uri: "https://example.com/report",
+              name: "report",
+              title: "Report",
+            },
+            { type: "resource", resource: { uri: "memo://one", text: "memo body" } },
+            { type: "audio", data: "AAAA", mimeType: "audio/mpeg" },
+          ],
+          structuredContent,
+        },
+      },
+      async (runtime, { logPath }) => {
+        const materialized = await materializeBundleMcpToolsForRun({ runtime });
+        const result = await expectDefined(
+          materialized.tools[0],
+          "materialized MCP tool test invariant",
+        ).execute("call-structured-content", {}, undefined, undefined);
+
+        expect(result.content).toEqual([
+          {
+            type: "text",
+            text: `structuredContent:\n${JSON.stringify(structuredContent, null, 2)}`,
+          },
           { type: "text", text: "captured screenshot" },
           { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
-          {
-            type: "resource_link",
-            uri: "https://example.com/report",
-            name: "report",
-            title: "Report",
-          },
-          { type: "resource", resource: { uri: "memo://one", text: "memo body" } },
-          { type: "audio", data: "AAAA", mimeType: "audio/mpeg" },
-        ],
-        structuredContent,
+          { type: "text", text: "[Report] https://example.com/report" },
+          { type: "text", text: "memo body" },
+          { type: "text", text: "[audio audio/mpeg]" },
+        ]);
+        expect(await fs.readFile(logPath, "utf8")).toContain("recv tools/call");
       },
-    });
-
-    const runtime = await makeStdioRuntime("session-structured-content", "capture", serverPath, {
-      workspaceDir: tempDir,
-    });
-
-    try {
-      const materialized = await materializeBundleMcpToolsForRun({ runtime });
-      const result = await expectDefined(
-        materialized.tools[0],
-        "materialized MCP tool test invariant",
-      ).execute("call-structured-content", {}, undefined, undefined);
-
-      expect(result.content).toEqual([
-        {
-          type: "text",
-          text: `structuredContent:\n${JSON.stringify(structuredContent, null, 2)}`,
-        },
-        { type: "text", text: "captured screenshot" },
-        { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
-        { type: "text", text: "[Report] https://example.com/report" },
-        { type: "text", text: "memo body" },
-        { type: "text", text: "[audio audio/mpeg]" },
-      ]);
-      expect(await fs.readFile(logPath, "utf8")).toContain("recv tools/call");
-    } finally {
-      await runtime.dispose();
-    }
+      { inWorkspace: true },
+    );
   });
 
   it.each([
@@ -857,43 +991,31 @@ describe("session MCP runtime", () => {
   });
 
   it("does not split a surrogate pair at the MCP metadata text limit", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-utf16-metadata-"));
-    const serverPath = path.join(tempDir, "utf16-metadata.mjs");
-    const logPath = path.join(tempDir, "server.log");
     const safePrefix = "x".repeat(1_199);
-    await writeListToolsMcpServer({
-      filePath: serverPath,
-      logPath,
-      tools: [
-        {
-          name: "utf16_tool",
-          description: `${safePrefix}🚀tail`,
-          inputSchema: { type: "object", properties: {} },
-        },
-      ],
-    });
+    await withStdio(
+      "metadata",
+      {
+        tools: [
+          {
+            name: "utf16_tool",
+            description: `${safePrefix}🚀tail`,
+            inputSchema: { type: "object", properties: {} },
+          },
+        ],
+      },
+      async (runtime) => {
+        const catalog = await runtime.getCatalog();
 
-    const runtime = await makeStdioRuntime("session-utf16-metadata", "metadata", serverPath);
-
-    try {
-      const catalog = await runtime.getCatalog();
-
-      expect(catalog.tools).toHaveLength(1);
-      expect(catalog.tools[0]?.description).toBe(`${safePrefix}...`);
-    } finally {
-      await runtime.dispose();
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+        expect(catalog.tools).toHaveLength(1);
+        expect(catalog.tools[0]?.description).toBe(`${safePrefix}...`);
+      },
+    );
   });
 
   it("retires a reused MCP session that exits during catalog refresh", async ({ signal }) => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-refresh-exit-"));
-    const serverPath = path.join(tempDir, "server.mjs");
-    const logPath = path.join(tempDir, "server.log");
+    const { tempDir, serverPath, logPath, write } = fixtureFiles("bundle-mcp-refresh-exit-");
     const notifyReleasePath = path.join(tempDir, "notify.release");
-    await writeListToolsMcpServer({
-      filePath: serverPath,
-      logPath,
+    await write({
       capabilities: { tools: { listChanged: true } },
       notifyListChangedAfterFirstList: true,
       notifyListChangedReleasePath: notifyReleasePath,
@@ -906,20 +1028,14 @@ describe("session MCP runtime", () => {
       expect((await runtime.getCatalog()).tools).toHaveLength(1);
       await fs.writeFile(notifyReleasePath, "release", "utf8");
       await withinTest(receipts.waitFor(logPath, "notify tools/list_changed"), signal);
-      await waitForRuntimeState(
-        () => runtime.peekCatalog() === null,
-        "list_changed to invalidate the catalog",
-        signal,
-      );
+      await waitForInvalidation(runtime, signal);
 
       const refreshedCatalog = await runtime.getCatalog();
-      expect(refreshedCatalog.tools.map((tool) => tool.toolName)).toEqual(["slow_tool"]);
+      expectToolNames(refreshedCatalog, ["slow_tool"]);
       expect(refreshedCatalog.diagnostics ?? []).toEqual([]);
       // The failed refresh is retired before catalog loading returns, so callers
       // see only the replacement generation and never receive its stale diagnostic.
-      await expect(runtime.callTool("child", "slow_tool", {})).resolves.toMatchObject({
-        isError: false,
-      });
+      await expectHealthyCall(runtime, "child");
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -927,40 +1043,34 @@ describe("session MCP runtime", () => {
   });
 
   it("keeps prompt-only servers reporting unknown methods available for utility tools", async () => {
-    const { tempDir, serverPath, logPath } = await stdioFixture("bundle-mcp-resource-only-", {
-      capabilities: { prompts: { listChanged: true } },
-      listToolsJsonRpcErrorMessage: "Unknown method",
-    });
+    await withStdio(
+      "notes",
+      {
+        capabilities: { prompts: { listChanged: true } },
+        listToolsJsonRpcErrorMessage: "Unknown method",
+      },
+      async (runtime, { logPath }) => {
+        const catalog = await runtime.getCatalog();
 
-    const runtime = await makeStdioRuntime("session-resource-only", "notes", serverPath);
-
-    try {
-      const catalog = await runtime.getCatalog();
-
-      expect(catalog.tools).toEqual([]);
-      expect(catalog.servers.notes).toMatchObject({
-        serverName: "notes",
-        toolCount: 0,
-        prompts: { listChanged: true },
-      });
-      expect(catalog.diagnostics ?? []).toEqual([]);
-      expect(await fs.readFile(logPath, "utf8")).toContain("recv initialize");
-    } finally {
-      await runtime.dispose();
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+        expect(catalog.tools).toEqual([]);
+        expect(catalog.servers.notes).toMatchObject({
+          serverName: "notes",
+          toolCount: 0,
+          prompts: { listChanged: true },
+        });
+        expect(catalog.diagnostics ?? []).toEqual([]);
+        expect(await fs.readFile(logPath, "utf8")).toContain("recv initialize");
+      },
+    );
   });
 
   it.for(["before-start", "initialize", "tools/list", "ready"] as const)(
     "settles private MCP acquisition cancellation at %s",
     async (phase, { signal }) => {
-      const tempDir = tempDirTracker.make("bundle-mcp-private-cancel-");
-      const serverPath = path.join(tempDir, "server.mjs");
-      const logPath = path.join(tempDir, "server.log");
-      const pidPath = path.join(tempDir, "server.pid");
-      await writeListToolsMcpServer({
-        filePath: serverPath,
-        logPath,
+      const { tempDir, serverPath, logPath, write, pidPath } = fixtureFiles(
+        "bundle-mcp-private-cancel-",
+      );
+      await write({
         pidPath,
         initializeDelayMs: phase === "initialize" ? 30_000 : undefined,
         listToolsReleasePath:
@@ -1031,13 +1141,9 @@ describe("session MCP runtime", () => {
   it("cancels a combined catalog waiter without cancelling the shared producer", async ({
     signal,
   }) => {
-    const tempDir = tempDirTracker.make("bundle-mcp-catalog-cancel-");
-    const serverPath = path.join(tempDir, "server.mjs");
-    const logPath = path.join(tempDir, "server.log");
+    const { tempDir, serverPath, logPath, write } = fixtureFiles("bundle-mcp-catalog-cancel-");
     const releasePath = path.join(tempDir, "release-list");
-    await writeListToolsMcpServer({
-      filePath: serverPath,
-      logPath,
+    await write({
       listToolsReleasePath: releasePath,
     });
     const managed = createConfiguredRuntime(
@@ -1087,14 +1193,10 @@ describe("session MCP runtime", () => {
   });
 
   it("cancels materialized MCP calls without pausing the healthy server", async ({ signal }) => {
-    const tempDir = tempDirTracker.make("bundle-mcp-caller-cancel-");
-    const serverPath = path.join(tempDir, "caller-cancel.mjs");
-    const logPath = path.join(tempDir, "server.log");
+    const { tempDir, serverPath, logPath, write } = fixtureFiles("bundle-mcp-caller-cancel-");
     const releasePath = path.join(tempDir, "release-replies");
     // Hold every reply so each request is still in flight when its caller cancels it.
-    await writeListToolsMcpServer({
-      filePath: serverPath,
-      logPath,
+    await write({
       callToolReleasePath: releasePath,
       utilityListReleasePath: releasePath,
       capabilities: { tools: {}, resources: {}, prompts: {} },
@@ -1123,9 +1225,7 @@ describe("session MCP runtime", () => {
 
       await withinTest(receipts.waitFor(logPath, "recv notifications/cancelled", 3), signal);
       await fs.writeFile(releasePath, "release", "utf8");
-      await expect(runtime.callTool("healthy", "slow_tool", {})).resolves.toMatchObject({
-        isError: false,
-      });
+      await expectHealthyCall(runtime, "healthy");
       await materialized.dispose();
       await runtime.dispose();
       expect(
@@ -1138,133 +1238,107 @@ describe("session MCP runtime", () => {
   });
 
   it("does not recycle a responsive server that returns JSON-RPC code -32001", async () => {
-    const tempDir = tempDirTracker.make("bundle-mcp-remote-timeout-code-");
-    const serverPath = path.join(tempDir, "remote-timeout-code.mjs");
-    const logPath = path.join(tempDir, "server.log");
-    const pidPath = path.join(tempDir, "server.pid");
-    await writeListToolsMcpServer({
-      filePath: serverPath,
-      logPath,
-      pidPath,
-      callToolJsonRpcError: true,
-      callToolJsonRpcErrorCode: -32001,
-    });
-
-    const runtime = await makeStdioRuntime("session-remote-timeout-code", "responsive", serverPath);
-
-    try {
-      await runtime.getCatalog();
-      const pid = Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10);
-      for (let attempt = 0; attempt < 3; attempt += 1) {
+    await withStdio(
+      "responsive",
+      ({ pidPath }) => ({ pidPath, callToolJsonRpcError: true, callToolJsonRpcErrorCode: -32001 }),
+      async (runtime, { pidPath }) => {
+        await runtime.getCatalog();
+        const pid = Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10);
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          await expect(runtime.callTool("responsive", "slow_tool", {})).rejects.toThrow(
+            "tool request failed",
+          );
+        }
         await expect(runtime.callTool("responsive", "slow_tool", {})).rejects.toThrow(
-          "tool request failed",
+          'bundle-mcp server "responsive" is paused after repeated tool failures',
         );
-      }
-      await expect(runtime.callTool("responsive", "slow_tool", {})).rejects.toThrow(
-        'bundle-mcp server "responsive" is paused after repeated tool failures',
-      );
-      expect(Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10)).toBe(pid);
-      expect(runtime.peekCatalog()?.diagnostics).toBeUndefined();
-    } finally {
-      await runtime.dispose();
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+        expect(Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10)).toBe(pid);
+        expect(runtime.peekCatalog()?.diagnostics).toBeUndefined();
+      },
+    );
   });
 
   it("recycles an MCP server after repeated request timeouts", async ({ signal }) => {
-    const tempDir = tempDirTracker.make("bundle-mcp-timeout-recycle-");
-    const serverPath = path.join(tempDir, "timeout-recycle.mjs");
-    const logPath = path.join(tempDir, "server.log");
-    const pidPath = path.join(tempDir, "server.pid");
-    const markerPath = path.join(tempDir, "first-server.marker");
-    await writeListToolsMcpServer({
-      filePath: serverPath,
-      logPath,
-      pidPath,
-      hangToolCallsUntilRestartMarkerPath: markerPath,
-    });
+    await withStdio(
+      "hanging",
+      ({ pidPath, file }) => ({
+        pidPath,
+        hangToolCallsUntilRestartMarkerPath: file("first-server.marker"),
+      }),
+      async (runtime, { pidPath }) => {
+        expect((await runtime.getCatalog()).tools).toHaveLength(1);
+        const pid = Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10);
 
-    const runtime = await makeStdioRuntime("session-timeout-recycle", "hanging", serverPath, {
-      server: { requestTimeoutMs: 500 },
-    });
-
-    try {
-      expect((await runtime.getCatalog()).tools).toHaveLength(1);
-      const pid = Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10);
-
-      const results = await Promise.allSettled(
-        Array.from({ length: 6 }, () => runtime.callTool("hanging", "slow_tool", {})),
-      );
-      expect(results.every((result) => result.status === "rejected")).toBe(true);
-      expect(
-        results.filter(
-          (result) =>
-            result.status === "rejected" && String(result.reason).includes("Request timed out"),
-        ).length,
-      ).toBeGreaterThanOrEqual(3);
-      await waitForRuntimeState(
-        async () => {
-          try {
-            return (await runtime.callTool("hanging", "slow_tool", {})).isError === false;
-          } catch {
-            return false;
-          }
-        },
-        "timed-out server to recover without stale backoff",
-        signal,
-      );
-      const replacementPid = Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10);
-      expect(Number.isFinite(replacementPid)).toBe(true);
-      expect(replacementPid).not.toBe(pid);
-    } finally {
-      await runtime.dispose();
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+        const results = await Promise.allSettled(
+          Array.from({ length: 6 }, () => runtime.callTool("hanging", "slow_tool", {})),
+        );
+        expect(results.every((result) => result.status === "rejected")).toBe(true);
+        expect(
+          results.filter(
+            (result) =>
+              result.status === "rejected" && String(result.reason).includes("Request timed out"),
+          ).length,
+        ).toBeGreaterThanOrEqual(3);
+        await waitForRuntimeState(
+          async () => {
+            try {
+              return (await runtime.callTool("hanging", "slow_tool", {})).isError === false;
+            } catch {
+              return false;
+            }
+          },
+          "timed-out server to recover without stale backoff",
+          signal,
+        );
+        const replacementPid = Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10);
+        expect(Number.isFinite(replacementPid)).toBe(true);
+        expect(replacementPid).not.toBe(pid);
+      },
+      { server: { requestTimeoutMs: 500 } },
+    );
   });
 
   it("retains paginated output metadata and hides required-task tools", async () => {
-    const { serverPath } = await stdioFixture("bundle-mcp-tool-metadata-pages-", {
-      toolPageCursors: ["", null],
-      tools: [
-        {
-          name: "structured",
-          inputSchema: { type: "object", properties: {} },
-          outputSchema: {
-            type: "object",
-            properties: { count: { type: "number" } },
-            required: ["count"],
-            additionalProperties: false,
+    await withStdio(
+      "paged",
+      {
+        toolPageCursors: ["", null],
+        tools: [
+          {
+            name: "structured",
+            inputSchema: { type: "object", properties: {} },
+            outputSchema: {
+              type: "object",
+              properties: { count: { type: "number" } },
+              required: ["count"],
+              additionalProperties: false,
+            },
           },
+          {
+            name: "task_only",
+            inputSchema: { type: "object", properties: {} },
+            execution: { taskSupport: "required" },
+          },
+        ],
+        callToolResult: {
+          content: [{ type: "text", text: "invalid" }],
+          structuredContent: { count: "not-a-number" },
         },
-        {
-          name: "task_only",
-          inputSchema: { type: "object", properties: {} },
-          execution: { taskSupport: "required" },
-        },
-      ],
-      callToolResult: {
-        content: [{ type: "text", text: "invalid" }],
-        structuredContent: { count: "not-a-number" },
       },
-    });
-    const runtime = createConfiguredRuntime("session-tool-metadata-pages", {
-      paged: stdioServer(serverPath),
-    });
-
-    try {
-      const catalog = await runtime.getCatalog();
-      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["structured-1", "structured-2"]);
-      expect(
-        catalog.policyTools
-          ?.filter((tool) => tool.excludedFromOpenClawCatalog)
-          .map((tool) => tool.toolName),
-      ).toEqual(["task_only-1", "task_only-2"]);
-      await expect(runtime.callTool("paged", "structured-1", {})).rejects.toThrow(
-        "does not match the tool's output schema",
-      );
-    } finally {
-      await runtime.dispose();
-    }
+      async (runtime) => {
+        const catalog = await runtime.getCatalog();
+        expectToolNames(catalog, ["structured-1", "structured-2"]);
+        expect(
+          catalog.policyTools
+            ?.filter((tool) => tool.excludedFromOpenClawCatalog)
+            .map((tool) => tool.toolName),
+        ).toEqual(["task_only-1", "task_only-2"]);
+        await expect(runtime.callTool("paged", "structured-1", {})).rejects.toThrow(
+          "does not match the tool's output schema",
+        );
+      },
+      { direct: true },
+    );
   });
 
   it("isolates a cyclic tool catalog while a healthy bundle MCP sibling survives", async () => {
@@ -1299,64 +1373,54 @@ describe("session MCP runtime", () => {
   });
 
   it("loads resource and prompt pages after empty opaque cursors", async () => {
-    const { serverPath, logPath } = await stdioFixture("bundle-mcp-utility-empty-cursor-", {
-      capabilities: { resources: {}, prompts: {} },
-      listToolsMethodNotFound: true,
-      resourcePageCursors: ["", null],
-      promptPageCursors: ["", null],
-    });
-    const runtime = createConfiguredRuntime("session-utility-empty-cursor", {
-      paged: stdioServer(serverPath),
-    });
-
-    try {
-      await runtime.getCatalog();
-      const listResources = runtime.listResources;
-      const listPrompts = runtime.listPrompts;
-      if (!listResources || !listPrompts) {
-        throw new Error("Expected test runtime to expose resource and prompt utilities");
-      }
-      await expect(listResources("paged")).resolves.toMatchObject([
-        { uri: "memo://page-1" },
-        { uri: "memo://page-2" },
-      ]);
-      await expect(listPrompts("paged")).resolves.toMatchObject([
-        { name: "prompt-1" },
-        { name: "prompt-2" },
-      ]);
-      const log = await fs.readFile(logPath, "utf8");
-      expect(log).toContain('resources/list cursor ""');
-      expect(log).toContain('prompts/list cursor ""');
-    } finally {
-      await runtime.dispose();
-    }
+    await withStdio(
+      "paged",
+      {
+        capabilities: { resources: {}, prompts: {} },
+        listToolsMethodNotFound: true,
+        resourcePageCursors: ["", null],
+        promptPageCursors: ["", null],
+      },
+      async (runtime, { logPath }) => {
+        await runtime.getCatalog();
+        const listResources = runtime.listResources;
+        const listPrompts = runtime.listPrompts;
+        if (!listResources || !listPrompts) {
+          throw new Error("Expected test runtime to expose resource and prompt utilities");
+        }
+        await expect(listResources("paged")).resolves.toMatchObject([
+          { uri: "memo://page-1" },
+          { uri: "memo://page-2" },
+        ]);
+        await expect(listPrompts("paged")).resolves.toMatchObject([
+          { name: "prompt-1" },
+          { name: "prompt-2" },
+        ]);
+        const log = await fs.readFile(logPath, "utf8");
+        expect(log).toContain('resources/list cursor ""');
+        expect(log).toContain('prompts/list cursor ""');
+      },
+      { direct: true },
+    );
   });
 
   it("does not pause tools after optional preview read failures", async () => {
-    const { tempDir, serverPath } = await stdioFixture("bundle-mcp-preview-failure-", {
-      capabilities: { tools: {}, resources: {} },
-      resourceReadJsonRpcError: true,
-    });
-
-    const runtime = await makeStdioRuntime("session-preview-failure", "failing", serverPath);
-
-    try {
-      const readResource = runtime.readResource;
-      if (!readResource) {
-        throw new Error("Expected test runtime to expose resource utilities");
-      }
-      for (let index = 0; index < 3; index += 1) {
-        await expect(
-          readResource("failing", "ui://demo/app", { failureBackoff: "ignore" }),
-        ).rejects.toThrow("resource read failed");
-      }
-      await expect(runtime.callTool("failing", "slow_tool", {})).resolves.toMatchObject({
-        isError: false,
-      });
-    } finally {
-      await runtime.dispose();
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+    await withStdio(
+      "failing",
+      { capabilities: { tools: {}, resources: {} }, resourceReadJsonRpcError: true },
+      async (runtime) => {
+        const readResource = runtime.readResource;
+        if (!readResource) {
+          throw new Error("Expected test runtime to expose resource utilities");
+        }
+        for (let index = 0; index < 3; index += 1) {
+          await expect(
+            readResource("failing", "ui://demo/app", { failureBackoff: "ignore" }),
+          ).rejects.toThrow("resource read failed");
+        }
+        await expectHealthyCall(runtime, "failing");
+      },
+    );
   });
 
   it("preserves agentDir scope when creating and reusing session MCP runtimes", async () => {
@@ -1376,24 +1440,15 @@ describe("session MCP runtime", () => {
     };
     const manager = createSessionMcpRuntimeManager({ createRuntime });
 
-    const runtimeA = await manager.getOrCreate({
+    const params = {
       sessionId: "session-agent-dir",
       sessionKey: "agent:test:session-agent-dir",
       workspaceDir: "/workspace",
       agentDir: "/agents/one",
-    });
-    const runtimeB = await manager.getOrCreate({
-      sessionId: "session-agent-dir",
-      sessionKey: "agent:test:session-agent-dir",
-      workspaceDir: "/workspace",
-      agentDir: "/agents/one",
-    });
-    const runtimeC = await manager.getOrCreate({
-      sessionId: "session-agent-dir",
-      sessionKey: "agent:test:session-agent-dir",
-      workspaceDir: "/workspace",
-      agentDir: "/agents/two",
-    });
+    };
+    const runtimeA = await manager.getOrCreate(params);
+    const runtimeB = await manager.getOrCreate(params);
+    const runtimeC = await manager.getOrCreate({ ...params, agentDir: "/agents/two" });
 
     expect(runtimeA).toBe(runtimeB);
     expect(runtimeC).not.toBe(runtimeA);
@@ -1466,14 +1521,9 @@ describe("session MCP runtime", () => {
   it("keeps an active MCP child and database lock until its app lease retires", async ({
     signal,
   }) => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-deferred-run-"));
-    const serverPath = path.join(tempDir, "server.mjs");
-    const logPath = path.join(tempDir, "server.log");
-    const pidPath = path.join(tempDir, "server.pid");
+    const { tempDir, serverPath, write, pidPath } = fixtureFiles("bundle-mcp-deferred-run-");
     const databasePath = path.join(tempDir, "locked.sqlite");
-    await writeListToolsMcpServer({
-      filePath: serverPath,
-      logPath,
+    await write({
       pidPath,
       databasePath,
       capabilities: { tools: {}, resources: {} },
@@ -1495,14 +1545,7 @@ describe("session MCP runtime", () => {
         sessionId: "session-run-child",
         sessionKey: "agent:test:session-run-child",
         workspaceDir: "/workspace",
-        cfg: {
-          mcp: {
-            apps: { enabled: true },
-            servers: {
-              child: stdioServer(serverPath),
-            },
-          },
-        },
+        cfg: mcpConfig({ child: stdioServer(serverPath) }, { apps: { enabled: true } }),
       });
       materialized = await materializeBundleMcpToolsForRun({ runtime });
       const appView = await fetchMcpAppView({
@@ -1950,32 +1993,24 @@ describe("requester-scoped MCP connection resolution", () => {
         "user-mail": { transport: "streamable-http", url: "https://static.example.test" },
       }) satisfies NonNullable<RuntimeParams["cfg"]>;
 
-      await expectBareRuntimeParity({
-        sessionId: "session-parity-static",
-        cfg,
-        expectedServerNames: ["shared", "user-mail"],
-      });
-
-      const toolOverrides = { mcpServers: { shared: false } };
-      await expectBareRuntimeParity({
-        sessionId: "session-parity-overridden",
-        cfg,
-        expectedServerNames: ["user-mail"],
-        toolOverrides,
-      });
-
-      await expectBareRuntimeParity({
-        sessionId: "session-parity-denials",
-        cfg,
-        expectedServerNames: ["shared", "user-mail"],
-        toolOverrides: { mcpToolsDeny: { shared: ["private", "private"] } },
-      });
-
-      await expectBareRuntimeParity({
-        sessionId: "session-parity-empty",
-        cfg: {},
-        expectedServerNames: [],
-      });
+      for (const row of [
+        { sessionId: "session-parity-static", cfg, expectedServerNames: ["shared", "user-mail"] },
+        {
+          sessionId: "session-parity-overridden",
+          cfg,
+          expectedServerNames: ["user-mail"],
+          toolOverrides: { mcpServers: { shared: false } },
+        },
+        {
+          sessionId: "session-parity-denials",
+          cfg,
+          expectedServerNames: ["shared", "user-mail"],
+          toolOverrides: { mcpToolsDeny: { shared: ["private", "private"] } },
+        },
+        { sessionId: "session-parity-empty", cfg: {}, expectedServerNames: [] },
+      ]) {
+        await expectBareRuntimeParity(row);
+      }
 
       // Full-set declaration order owns safe-name collision suffixes even though
       // requester-scoped OAuth servers stay out of the bare runtime partition.
@@ -2017,23 +2052,6 @@ describe("requester-scoped MCP connection resolution", () => {
         resolve: async () => ({ url: "https://mcp.example.test/user" }),
       });
 
-      const makeCatalog = (serverName: string, toolName: string) => ({
-        version: 1,
-        generatedAt: 0,
-        servers: {
-          [serverName]: { serverName, launchSummary: serverName, toolCount: 1 },
-        },
-        tools: [
-          {
-            serverName,
-            safeServerName: serverName,
-            toolName,
-            description: toolName,
-            inputSchema: { type: "object", properties: {} },
-            fallbackDescription: toolName,
-          },
-        ],
-      });
       const swapCatalogByServer = new Map<string, (toolName: string) => void>();
       const createRuntime: RuntimeFactory = (params) => {
         const serverName = params.includeServerNames?.has("user-mail") ? "user-mail" : "shared";
@@ -2052,25 +2070,19 @@ describe("requester-scoped MCP connection resolution", () => {
       const runtime = await manager.getOrCreate({
         sessionId: "session-combined-refresh",
         workspaceDir: "/workspace",
-        cfg: mcpConfig({
-          shared: { command: "true" },
-          "user-mail": { transport: "streamable-http" },
-        }) as never,
+        cfg: requesterConfig() as never,
         requesterSenderId: "sender-a",
         messageChannel: "telegram",
       });
 
       const before = await runtime.getCatalog();
-      expect(before.tools.map((tool) => tool.toolName).toSorted()).toEqual(["send", "shared_tool"]);
+      expectToolNames(before, ["send", "shared_tool"], true);
 
       // A part replacing its catalog (tools/list_changed refresh) must invalidate
       // the merged facade cache instead of serving the stale combined catalog.
       swapCatalogByServer.get("user-mail")?.("send_v2");
       const after = await runtime.getCatalog();
-      expect(after.tools.map((tool) => tool.toolName).toSorted()).toEqual([
-        "send_v2",
-        "shared_tool",
-      ]);
+      expectToolNames(after, ["send_v2", "shared_tool"], true);
       expect(runtime.getServerRequestTimeoutMs?.("user-mail")).toBe(90_000);
       expect(
         runtime
@@ -2113,10 +2125,7 @@ describe("requester-scoped MCP connection resolution", () => {
         createRuntime,
         scheduler: createTestGatewayScheduler(clock.clock),
       });
-      const cfg = mcpConfig({
-        shared: { command: "true" },
-        "user-mail": { transport: "streamable-http" },
-      });
+      const cfg = requesterConfig();
 
       const params = makeRequesterParams("session-revoke", cfg as never, "sender-a");
       await manager.getOrCreate(params);
@@ -2244,31 +2253,10 @@ describe("requester-scoped MCP connection resolution", () => {
                 toolCount: 1,
               },
             },
-            tools: [
-              {
-                serverName,
-                safeServerName: safe,
-                toolName: "send",
-                inputSchema: { type: "object", properties: {} },
-                fallbackDescription: "send",
-              },
-            ],
+            tools: [catalogTool(serverName, "send", safe)],
             policyTools: [
-              {
-                serverName,
-                safeServerName: safe,
-                toolName: "send",
-                inputSchema: { type: "object", properties: {} },
-                fallbackDescription: "send",
-              },
-              {
-                serverName,
-                safeServerName: safe,
-                toolName: "delete",
-                inputSchema: { type: "object", properties: {} },
-                fallbackDescription: "delete",
-                excludedFromOpenClawCatalog: true,
-              },
+              catalogTool(serverName, "send", safe),
+              { ...catalogTool(serverName, "delete", safe), excludedFromOpenClawCatalog: true },
             ],
           }),
         };
@@ -2389,10 +2377,7 @@ describe("requester-scoped MCP connection resolution", () => {
         createRuntime,
         scheduler: createTestGatewayScheduler(clock.clock),
       });
-      const cfg = mcpConfig({
-        shared: { command: "true" },
-        "user-mail": { transport: "streamable-http" },
-      });
+      const cfg = requesterConfig();
 
       const sessionId = "session-scoped-only";
       const sessionKey = "agent:main:session-scoped-only";
@@ -2406,8 +2391,7 @@ describe("requester-scoped MCP connection resolution", () => {
       await vi.waitFor(() => expect(getBookkeepingSizes(manager).runtimeWorkChains).toBe(0));
       const runtimeKeys = manager.listRuntimeKeys();
       const bookkeeping = getBookkeepingSizes(manager);
-      expect(runtimeKeys).toHaveLength(1);
-      expect(runtimeKeys[0]).toMatch(/^\{/);
+      expect(runtimeKeys).toEqual([expect.stringMatching(/^\{/)]);
       expect(manager.resolveSessionId(sessionKey)).toBe(sessionId);
       expect(created).toHaveLength(1);
       expect(bookkeeping).toMatchObject({
@@ -2465,8 +2449,6 @@ describe("requester-scoped MCP connection resolution", () => {
       const createRuntime: RuntimeFactory = (params) =>
         makeManagedRuntime(params, [{ toolName: "inbox", description: "read inbox" }], "user-mail");
       const manager = createSessionMcpRuntimeManager({ createRuntime });
-      const scopedConfig = mcpConfig({ "user-mail": { transport: "streamable-http" } });
-      const staticConfig = mcpConfig({ shared: { command: "true" } });
 
       const runtime = await manager.getOrCreateRequesterScoped(
         makeRequesterParams("session-adv-senderless", scopedConfig as never, "authed"),
@@ -2486,22 +2468,16 @@ describe("requester-scoped MCP connection resolution", () => {
 
   it("rejects a late catalog publication from an older configuration", async () => {
     await withResolverRegistry(async (resolverApi) => {
-      let releaseOldResolve!: () => void;
-      const oldResolve = new Promise<void>((resolve) => {
-        releaseOldResolve = resolve;
-      });
-      let markOldStarted!: () => void;
-      const oldStarted = new Promise<void>((resolve) => {
-        markOldStarted = resolve;
-      });
+      const oldResolve = createDeferred();
+      const oldStarted = createDeferred();
       let resolveCount = 0;
       resolverApi.registerMcpServerConnectionResolver({
         serverName: "user-mail",
         resolve: async () => {
           resolveCount += 1;
           if (resolveCount === 1) {
-            markOldStarted();
-            await oldResolve;
+            oldStarted.resolve();
+            await oldResolve.promise;
           }
           return { url: "https://mcp.example.test/authed" };
         },
@@ -2521,11 +2497,11 @@ describe("requester-scoped MCP connection resolution", () => {
       const oldRequest = manager.getOrCreateRequesterScoped(
         makeRequesterParams("session-adv-race", oldConfig as never, "same-requester"),
       );
-      await oldStarted;
+      await oldStarted.promise;
       const newRequest = manager.getOrCreateRequesterScoped(
         makeRequesterParams("session-adv-race", newConfig as never, "same-requester"),
       );
-      releaseOldResolve();
+      oldResolve.resolve();
       const oldRuntime = await oldRequest;
       const newRuntime = await newRequest;
       expect(newRuntime!.runtime).toBe(oldRuntime!.runtime);
@@ -2548,8 +2524,6 @@ describe("requester-scoped MCP connection resolution", () => {
             headers: { Authorization: "Bearer proof-token" },
           }),
         });
-        const scopedConfig = mcpConfig({ "user-mail": { transport: "streamable-http" } });
-        const staticConfig = mcpConfig({ shared: { command: "true" } });
 
         try {
           const first = await materializeRequesterScopedMcpToolsForHarnessRun({
@@ -2592,7 +2566,6 @@ describe("requester-scoped MCP connection resolution", () => {
             headers: { Authorization: "Bearer proof-token" },
           }),
         });
-        const scopedConfig = mcpConfig({ "user-mail": { transport: "streamable-http" } });
 
         try {
           // Unannotated auto-mode tool: approval required; a deny must produce zero
@@ -2669,63 +2642,7 @@ describe("disposeSession timeout", () => {
     "does not recycle a stateless streamable-http server on HTTP 404",
     { timeout: 15_000 },
     async () => {
-      let initializeCount = 0;
-      const callSessionIds: Array<string | undefined> = [];
-      const server = http.createServer((req, res) => {
-        if (req.method === "GET") {
-          res.writeHead(405).end();
-          return;
-        }
-        if (req.method !== "POST") {
-          res.writeHead(405).end();
-          return;
-        }
-
-        let body = "";
-        req.on("data", (chunk: Buffer) => {
-          body += chunk.toString();
-        });
-        req.on("end", () => {
-          const message = JSON.parse(body) as {
-            id?: number | string;
-            method?: string;
-            params?: { protocolVersion?: string };
-          };
-          if (message.method === "notifications/initialized") {
-            res.writeHead(202).end();
-            return;
-          }
-          if (message.method === "tools/call") {
-            const sessionId = req.headers["mcp-session-id"];
-            callSessionIds.push(typeof sessionId === "string" ? sessionId : undefined);
-            res.writeHead(404).end("Session not found");
-            return;
-          }
-
-          res.setHeader("content-type", "application/json");
-          if (message.method === "initialize") {
-            initializeCount += 1;
-            replyMcp(
-              res,
-              message.id,
-              initializeResult(message.params?.protocolVersion, "stateless-404-server"),
-            );
-            return;
-          }
-          if (message.method === "tools/list") {
-            replyMcp(res, message.id, {
-              tools: [{ name: "probe", description: "probe", inputSchema: { type: "object" } }],
-            });
-            return;
-          }
-          res.writeHead(405).end();
-        });
-      });
-
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const address = server.address() as { port: number };
+      const server = await startSessionExpiryServer(false);
       let runtime: SessionMcpRuntime | undefined;
 
       try {
@@ -2735,7 +2652,7 @@ describe("disposeSession timeout", () => {
           workspaceDir: "/workspace",
           cfg: mcpConfig({
             stateless: {
-              url: `http://127.0.0.1:${address.port}/mcp`,
+              url: server.url,
               transport: "streamable-http",
             },
           }),
@@ -2750,14 +2667,12 @@ describe("disposeSession timeout", () => {
         await expect(runtime.callTool("stateless", "probe", {})).rejects.toThrow(
           'bundle-mcp server "stateless" is paused after repeated tool failures',
         );
-        expect(initializeCount).toBe(1);
-        expect(callSessionIds).toEqual([undefined, undefined, undefined]);
+        expect(server.state.initializeCount).toBe(1);
+        expect(server.state.callSessionIds).toEqual([undefined, undefined, undefined]);
         expect(runtime.peekCatalog()?.diagnostics).toBeUndefined();
       } finally {
         await runtime?.dispose();
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
+        await server.close();
       }
     },
   );
@@ -2766,96 +2681,7 @@ describe("disposeSession timeout", () => {
     "reconnects a stateful streamable-http server after its session expires",
     { timeout: 15_000 },
     async ({ signal }) => {
-      let activeServerSessionId: string | undefined;
-      let initializeCount = 0;
-      const callAttempts: Array<{ attempt: unknown; sessionId: string | undefined }> = [];
-      const staleTerminations: string[] = [];
-      const invalidAuthHeaders: Array<string | undefined> = [];
-
-      const server = http.createServer((req, res) => {
-        const authHeader = req.headers["x-mcp-recovery"];
-        if (authHeader !== "proof") {
-          invalidAuthHeaders.push(Array.isArray(authHeader) ? authHeader.join(",") : authHeader);
-          res.writeHead(401).end();
-          return;
-        }
-        if (req.method === "GET") {
-          res.writeHead(405).end();
-          return;
-        }
-        if (req.method === "DELETE") {
-          const sessionId = req.headers["mcp-session-id"];
-          if (typeof sessionId === "string" && sessionId !== activeServerSessionId) {
-            staleTerminations.push(sessionId);
-            res.writeHead(404).end("Session not found");
-            return;
-          }
-          res.writeHead(204).end();
-          return;
-        }
-        if (req.method !== "POST") {
-          res.writeHead(405).end();
-          return;
-        }
-
-        let body = "";
-        req.on("data", (chunk: Buffer) => {
-          body += chunk.toString();
-        });
-        req.on("end", () => {
-          const message = JSON.parse(body) as {
-            id?: number | string;
-            method?: string;
-            params?: { arguments?: { attempt?: unknown }; protocolVersion?: string };
-          };
-          if (message.method === "initialize") {
-            initializeCount += 1;
-            activeServerSessionId = `server-session-${initializeCount}`;
-            res.setHeader("mcp-session-id", activeServerSessionId);
-            res.setHeader("content-type", "application/json");
-            replyMcp(
-              res,
-              message.id,
-              initializeResult(message.params?.protocolVersion, "stateful-recovery-server"),
-            );
-            return;
-          }
-
-          const requestSessionId = req.headers["mcp-session-id"];
-          const sessionId = typeof requestSessionId === "string" ? requestSessionId : undefined;
-          if (message.method === "tools/call") {
-            callAttempts.push({ attempt: message.params?.arguments?.attempt, sessionId });
-          }
-          if (!sessionId || sessionId !== activeServerSessionId) {
-            res.writeHead(404).end("Session not found");
-            return;
-          }
-          if (message.method === "notifications/initialized") {
-            res.writeHead(202).end();
-            return;
-          }
-          res.setHeader("mcp-session-id", sessionId);
-          res.setHeader("content-type", "application/json");
-          if (message.method === "tools/list") {
-            replyMcp(res, message.id, {
-              tools: [{ name: "probe", description: "probe", inputSchema: { type: "object" } }],
-            });
-            return;
-          }
-          if (message.method === "tools/call") {
-            replyMcp(res, message.id, {
-              content: [{ type: "text", text: `recovered ${sessionId}` }],
-            });
-            return;
-          }
-          res.writeHead(405).end();
-        });
-      });
-
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const address = server.address() as { port: number };
+      const server = await startSessionExpiryServer(true);
       let runtime: SessionMcpRuntime | undefined;
 
       try {
@@ -2865,7 +2691,7 @@ describe("disposeSession timeout", () => {
           workspaceDir: "/workspace",
           cfg: mcpConfig({
             stateful: {
-              url: `http://127.0.0.1:${address.port}/mcp`,
+              url: server.url,
               transport: "streamable-http",
               headers: { "x-mcp-recovery": "proof" },
             },
@@ -2881,7 +2707,7 @@ describe("disposeSession timeout", () => {
 
         // Restart invalidates the server-side session without closing the HTTP
         // transport. A failed mutating request must never be silently replayed.
-        activeServerSessionId = undefined;
+        server.state.activeServerSessionId = undefined;
         await expect(runtime.callTool("stateful", "probe", { attempt: "expired" })).rejects.toThrow(
           "Session not found",
         );
@@ -2891,7 +2717,7 @@ describe("disposeSession timeout", () => {
 
         await runtime.getCatalog();
         await waitForRuntimeState(
-          () => initializeCount === 2 && !runtime?.peekCatalog()?.diagnostics?.length,
+          () => server.state.initializeCount === 2 && !runtime?.peekCatalog()?.diagnostics?.length,
           "stateful MCP server to replace its expired HTTP session",
           signal,
         );
@@ -2901,18 +2727,16 @@ describe("disposeSession timeout", () => {
         ).resolves.toMatchObject({
           content: [{ type: "text", text: "recovered server-session-2" }],
         });
-        expect(callAttempts).toEqual([
+        expect(server.state.callAttempts).toEqual([
           { attempt: "before", sessionId: "server-session-1" },
           { attempt: "expired", sessionId: "server-session-1" },
           { attempt: "after", sessionId: "server-session-2" },
         ]);
-        expect(staleTerminations).toEqual(["server-session-1"]);
-        expect(invalidAuthHeaders).toEqual([]);
+        expect(server.state.staleTerminations).toEqual(["server-session-1"]);
+        expect(server.state.invalidAuthHeaders).toEqual([]);
       } finally {
         await runtime?.dispose();
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
+        await server.close();
       }
     },
   );
@@ -3107,11 +2931,7 @@ describe("disposeSession timeout", () => {
         const catalog = await catalogPromise;
 
         expect(Object.keys(catalog.servers)).toHaveLength(serverPaths.length);
-        expect(catalog.tools.map((t) => t.toolName)).toEqual([
-          "slow_tool",
-          "slow_tool",
-          "slow_tool",
-        ]);
+        expectToolNames(catalog, ["slow_tool", "slow_tool", "slow_tool"]);
       } finally {
         await fs.writeFile(releasePath, "released", "utf8").catch(() => {});
         await catalogPromise.catch(() => {});
@@ -3158,11 +2978,7 @@ describe("disposeSession timeout", () => {
           "notify tools/list_changed",
           firstCatalog,
         );
-        await waitForRuntimeState(
-          () => invalidatingRuntime.peekCatalog() === null,
-          "client processed catalog invalidation while sibling initialization is held",
-          signal,
-        );
+        await waitForInvalidation(invalidatingRuntime, signal);
 
         const secondCatalogPromise = runtime.getCatalog();
         receipts.release(slowConnectServer.logPath, "finish-connecting");
@@ -3199,7 +3015,7 @@ describe("disposeSession timeout", () => {
         capabilities: { tools: { listChanged: true } },
         notifyListChangedOnInitialized: true,
         notifyListChangedOnToolCall: true,
-        tools: [{ name: "poke", inputSchema: { type: "object", properties: {} } }],
+        tools: [toolDefinition("poke")],
         callToolResult: { content: [{ type: "text", text: "poked" }], isError: false },
       });
 
@@ -3241,11 +3057,7 @@ describe("disposeSession timeout", () => {
         expect(await fs.readFile(triggerLogPath, "utf8")).toContain(
           "notify tools/list_changed during tools/call",
         );
-        await waitForRuntimeState(
-          () => runtime.peekCatalog() === null,
-          "manual list_changed to retry timed-out server",
-          signal,
-        );
+        await waitForInvalidation(runtime, signal);
 
         const now = Date.now;
         const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + 5_001);
@@ -3263,10 +3075,7 @@ describe("disposeSession timeout", () => {
         }
         expect(retriedCatalog.diagnostics ?? []).toEqual([]);
         expect(retriedCatalog.servers.slow).toBeDefined();
-        expect(retriedCatalog.tools.map((tool) => tool.toolName).toSorted()).toEqual([
-          "poke",
-          "slow_tool",
-        ]);
+        expectToolNames(retriedCatalog, ["poke", "slow_tool"], true);
         expect(await fs.readFile(slowLogPath, "utf8")).toContain("fast retry initialize");
       } finally {
         await runtime.dispose();
