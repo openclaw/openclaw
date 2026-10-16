@@ -87,6 +87,111 @@ struct ControlUIDownloadLifecycleTests {
         #expect(surface.document.webView.url == server.url())
     }
 
+    @Test(arguments: [false, true])
+    func `subframe downloads cannot obtain a native Save dialog`(_ conversation: Bool) async throws {
+        try await AppKitTestSupport.startApplication()
+        let server = try await Self.server()
+        defer { server.stop() }
+        let surface = try Self.surface(url: server.url(), conversation: conversation)
+        defer { surface.close() }
+        try await surface.waitUntilReady()
+        _ = try await surface.document.webView.evaluateJavaScript("""
+        const frame = document.createElement('iframe');
+        frame.src = '/child'; document.body.append(frame);
+        """)
+        try await TestWait.state("download subframe") {
+            try await surface.document.webView.evaluateJavaScript(
+                "document.querySelector('iframe').contentDocument?.getElementById('blank') != null") as? Bool == true
+        }
+        let original = try #require(surface.document.webView.navigationDelegate)
+        let observer = DownloadPolicyObserver(forwarding: original)
+        surface.document.webView.navigationDelegate = observer
+        defer { surface.document.webView.navigationDelegate = original }
+        _ = try await surface.document.webView.evaluateJavaScript(
+            "document.querySelector('iframe').contentDocument.getElementById('blank').click()")
+        try await TestWait.state("subframe download policy") { observer.decision != nil }
+        #expect(observer.isMainFrame == false)
+        #expect(observer.decision == .cancel)
+        #expect(surface.document.downloads.isEmpty)
+        #expect(surface.window.attachedSheet == nil)
+        #expect(surface.document.webView.url == server.url())
+        print("DOWNLOAD_AUTHORITY_SUBFRAME_REJECTED conversation=\(conversation)")
+    }
+
+    @Test(arguments: [false, true])
+    func `revoked browser session refuses a pending Save`(_ replacing: Bool) async throws {
+        try await AppKitTestSupport.startApplication()
+        let tls = try await DashboardTLSFixture()
+        let server = try await Self.server(tlsIdentity: tls.identity)
+        defer { server.stop() }
+        let store = DashboardBrowserSessionStore(dataStore: .nonPersistent())
+        let session = try GatewayBrowserSession(
+            origin: server.url(), issuer: #require(URL(string: "https://issuer.example/")),
+            audience: "download-fixture", subject: "fixture-account", token: "synthetic",
+            expiresAt: .fixtureSessionExpiry)
+        let lease = store.lease(for: session)
+        let surface = try Self.surface(
+            url: server.url(), conversation: false,
+            tlsParams: GatewayTLSParams(
+                required: true,
+                expectedFingerprint: SHA256.hash(data: tls.certificate).map { String(format: "%02x", $0) }.joined(),
+                allowTOFU: false, storeKey: nil),
+            store: store, lease: lease)
+        defer { surface.close() }
+        try await surface.waitUntilReady()
+        let proof = ProcessInfo.processInfo.environment["OPENCLAW_DOWNLOAD_AUTHORITY_PROOF"] == "1"
+        let directory = proof
+            ? URL(fileURLWithPath: "/tmp/openclaw-download-proof/saved", isDirectory: true)
+            : FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let filename = replacing ? "revoked-replace.bin" : "revoked-create.bin"
+        let destination = directory.appendingPathComponent(filename)
+        let sentinel = Data("existing file must survive".utf8)
+        try #require(!FileManager.default.fileExists(atPath: destination.path))
+        if replacing { try sentinel.write(to: destination) }
+        defer {
+            try? FileManager.default.removeItem(at: destination)
+            if !proof { try? FileManager.default.removeItem(at: directory) }
+        }
+        _ = try await surface.document.webView.evaluateJavaScript(
+            "document.getElementById('blank').download = '\(filename)'")
+        let panel = try await surface.download("blank")
+        let generation = surface.document.generation
+        try #require(lease.isCurrent)
+        // Revoke the actual account lease without closing or replacing the displayed document.
+        let retirement = store.invalidate()
+        #expect(!lease.isCurrent)
+        #expect(!surface.document.hasCurrentBrowserSession)
+        #expect(surface.document.generation == generation)
+        if proof {
+            FileHandle.standardOutput.write(Data("DOWNLOAD_AUTHORITY_READY_\(replacing ? "REPLACE" : "CREATE")\n".utf8))
+        } else {
+            panel.cancel(nil)
+        }
+        try await TestWait.state("revoked transfer reports failure") {
+            surface.document.downloads.isEmpty && surface.window.attachedSheet != nil &&
+                surface.window.attachedSheet !== panel
+        }
+        if proof {
+            let selected = try #require(panel.url)
+            #expect(selected.lastPathComponent == filename)
+            #expect(selected.deletingLastPathComponent().resolvingSymlinksInPath() == directory
+                .resolvingSymlinksInPath())
+        }
+        if replacing {
+            #expect(try Data(contentsOf: destination) == sentinel)
+        } else {
+            #expect(!FileManager.default.fileExists(atPath: destination.path))
+        }
+        #expect(surface.document.generation == generation)
+        #expect(surface.document.webView.url == server.url())
+        try await retirement.value
+        if proof {
+            FileHandle.standardOutput
+                .write(Data("DOWNLOAD_AUTHORITY_VERIFIED_\(replacing ? "REPLACE" : "CREATE")\n".utf8))
+        }
+    }
+
     @MainActor
     private struct Surface {
         let document: ControlUIDocumentHost
@@ -112,14 +217,20 @@ struct ControlUIDownloadLifecycleTests {
         }
     }
 
-    private static func surface(url: URL, conversation: Bool, tlsParams: GatewayTLSParams? = nil) throws -> Surface {
+    private static func surface(
+        url: URL, conversation: Bool, tlsParams: GatewayTLSParams? = nil,
+        store: DashboardBrowserSessionStore? = nil,
+        lease: DashboardBrowserSessionStore.Lease? = nil) throws -> Surface
+    {
+        let auth: DashboardWindowAuth = lease == nil ? .unauthenticated :
+            .browserIdentity(gatewayUrl: url.absoluteString)
         if !conversation {
             let controller = DashboardWindowController(
-                url: url, auth: .unauthenticated, websiteDataStore: .nonPersistent(), tlsParams: tlsParams,
-                windowAutosaveName: "", requestBrowserProfileImportOffer: { _ in false })
+                url: url, auth: auth, websiteDataStore: store?.dataStore ?? .nonPersistent(), tlsParams: tlsParams,
+                browserSessionLease: lease, windowAutosaveName: "", requestBrowserProfileImportOffer: { _ in false })
             // Keep loopback fixtures independent of the VM's external Safe Browsing service.
             controller.webView.configuration.preferences.isFraudulentWebsiteWarningEnabled = false
-            controller.show(url: url, auth: .unauthenticated)
+            controller.show(url: url, auth: auth)
             return try Surface(
                 document: controller.documentHost, window: #require(controller.window), bridge: nil,
                 close: { controller.closeDashboard() })
@@ -127,9 +238,10 @@ struct ControlUIDownloadLifecycleTests {
         let handler = NativeConversationMessageHandler()
         let document = ControlUIDocumentHost(
             url: url,
-            auth: .unauthenticated,
-            websiteDataStore: .nonPersistent(),
-            tlsParams: tlsParams)
+            auth: auth,
+            websiteDataStore: store?.dataStore ?? .nonPersistent(),
+            tlsParams: tlsParams,
+            browserSessionLease: lease)
         {
             $0.addScriptMessageHandler(handler, contentWorld: .page, name: NativeConversationContract.handlerName)
         }
@@ -154,7 +266,7 @@ struct ControlUIDownloadLifecycleTests {
     private static func server(tlsIdentity: sec_identity_t? = nil) async throws -> DashboardHTTPFixture {
         try await DashboardHTTPFixture.start(
             html: self.html,
-            contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'",
+            contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'; frame-src 'self'",
             tlsIdentity: tlsIdentity,
             rawResponseHandler: { request in
                 let mime: String
@@ -196,4 +308,30 @@ struct ControlUIDownloadLifecycleTests {
     window.fixtureReady = true;
     </script></body></html>
     """
+}
+
+/// Observe WebKit's actual action and the production presenter's decision without replacing policy.
+@MainActor
+private final class DownloadPolicyObserver: NSObject, WKNavigationDelegate {
+    let original: any WKNavigationDelegate
+    var decision: WKNavigationActionPolicy?
+    var isMainFrame: Bool?
+
+    init(forwarding original: any WKNavigationDelegate) {
+        self.original = original
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor action: WKNavigationAction,
+        decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void)
+    {
+        self.original.webView?(webView, decidePolicyFor: action, decisionHandler: { policy in
+            if action.shouldPerformDownload {
+                self.isMainFrame = action.sourceFrame.isMainFrame
+                self.decision = policy
+            }
+            decisionHandler(policy)
+        })
+    }
 }
