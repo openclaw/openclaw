@@ -37,18 +37,7 @@ class FixtureChild extends EventEmitter {
   }
 }
 
-type Denial = {
-  status: string;
-  reason?: string;
-  after: { version: string };
-  postUpdate: {
-    plugins: {
-      status: string;
-      warnings: Array<{ pluginId: string; reason: string }>;
-      npm: { outcomes: Array<{ pluginId: string; status: string; code: string }> };
-    };
-  };
-};
+type Denial = ReturnType<typeof makeDenial>;
 const pluginId = "update-consent-fixture";
 const packageName = `@acme/${pluginId}`;
 const consentCode = "PLUGIN_CAPABILITY_CONSENT_REQUIRED";
@@ -71,6 +60,20 @@ const readJson = (file: string) => JSON.parse(fs.readFileSync(file, "utf8"));
 const hostPackagePath = () => path.resolve(path.dirname(entry), "..", "package.json");
 const toolsFor = (version: number) =>
   Array.from({ length: version }, (_, i) => `consent_tool_${i + 1}`);
+
+function makeDenial(coreVersion: string, repair: boolean) {
+  return {
+    status: repair ? "warning" : "ok",
+    after: { version: coreVersion },
+    postUpdate: {
+      plugins: {
+        status: "warning",
+        warnings: [{ pluginId, reason: "requires capability consent" }],
+        npm: { outcomes: [{ pluginId, status: "error", code: consentCode }] },
+      },
+    },
+  };
+}
 
 function saveConfig() {
   writeJson(configPath, { plugins: { entries: { [pluginId]: { enabled } } } });
@@ -162,17 +165,7 @@ function cliReply(args: string[], child: FixtureChild): string {
     install(available);
     return JSON.stringify({ status: "ok", after: { version: coreVersion } });
   }
-  const result: Denial = {
-    status: repair ? "warning" : "ok",
-    after: { version: coreVersion },
-    postUpdate: {
-      plugins: {
-        status: "warning",
-        warnings: [{ pluginId, reason: "requires capability consent" }],
-        npm: { outcomes: [{ pluginId, status: "error", code: consentCode }] },
-      },
-    },
-  };
+  const result = makeDenial(coreVersion, repair);
   mutateDenial?.(result, repair, child);
   return JSON.stringify(result);
 }
@@ -283,16 +276,19 @@ afterEach(() => {
   }
 });
 
+const runScenario = (options?: Parameters<typeof runConsentScenario>[2]) =>
+  runConsentScenario(entry, coreTarball, options);
+
 describe("installed-CLI consent scenario report contract", () => {
   it("accepts successful core updates with explicit plugin refusal warnings and preserves consent boundaries", async () => {
-    await expect(runConsentScenario(entry, coreTarball)).resolves.toBeUndefined();
+    await expect(runScenario()).resolves.toBeUndefined();
     expect(installed).toBe(3);
     expect(fs.existsSync(path.join(installPath, "index.js"))).toBe(true);
   });
 
   it("reports a core update timeout (exit 124) with retained diagnostics", async () => {
     timeoutExit = 124;
-    await expect(runConsentScenario(entry, coreTarball)).rejects.toThrow(
+    await expect(runScenario()).rejects.toThrow(
       /update-denied timed out after 900s .*ledger: .*runs\.json\n\npackage replacement still running/,
     );
     const scenarioRoot = roots.find((root) =>
@@ -310,15 +306,13 @@ describe("installed-CLI consent scenario report contract", () => {
   it("selects stable before tag updates only from an extended-stable host", async () => {
     writeJson(hostPackagePath(), { version: "2026.9.33" });
 
-    await expect(runConsentScenario(entry, coreTarball)).resolves.toBeUndefined();
+    await expect(runScenario()).resolves.toBeUndefined();
     expect(tagUpdates.map((args) => args.includes("--channel"))).toEqual([true, false]);
     expect(tagUpdates[0]?.slice(1, 3)).toEqual(["--channel", "stable"]);
   });
 
   it("retains plugin consent proof when a frozen target predates core update consent", async () => {
-    await expect(
-      runConsentScenario(entry, coreTarball, { coreUpdateConsent: false }),
-    ).resolves.toBeUndefined();
+    await expect(runScenario({ coreUpdateConsent: false })).resolves.toBeUndefined();
     expect(installed).toBe(2);
     expect(adapters.future).not.toHaveBeenCalled();
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('"core-update-consent"'));
@@ -330,7 +324,7 @@ describe("installed-CLI consent scenario report contract", () => {
         { pluginId: "another-plugin", reason: "requires capability consent" },
       ];
     };
-    await expect(runConsentScenario(entry, coreTarball)).rejects.toThrow();
+    await expect(runScenario()).rejects.toThrow();
   });
 
   it.each([false, true])(
@@ -341,7 +335,7 @@ describe("installed-CLI consent scenario report contract", () => {
           install(available);
         }
       };
-      await expect(runConsentScenario(entry, coreTarball)).rejects.toThrow();
+      await expect(runScenario()).rejects.toThrow();
     },
   );
 
@@ -351,8 +345,6 @@ describe("installed-CLI consent scenario report contract", () => {
         child.observation.children.push({ argv: ["gateway", "restart"], postCore: false });
       }
     };
-    await expect(runConsentScenario(entry, coreTarball)).rejects.toThrow(
-      "denied update attempted a Gateway restart",
-    );
+    await expect(runScenario()).rejects.toThrow("denied update attempted a Gateway restart");
   });
 });

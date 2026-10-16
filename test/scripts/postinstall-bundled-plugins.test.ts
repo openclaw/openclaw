@@ -21,12 +21,33 @@ import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDirAsync } = createScriptTestHarness();
 const quietLog = () => ({ log: vi.fn(), warn: vi.fn() });
+function prune(
+  packageRoot: string,
+  expected: string[],
+  options: Parameters<typeof pruneInstalledPackageDist>[0] = {},
+) {
+  return pruneInstalledPackageDist({
+    packageRoot,
+    expectedFiles: new Set(expected),
+    log: quietLog(),
+    ...options,
+  });
+}
 async function writeFiles(root: string, files: Record<string, string>) {
   for (const [relative, content] of Object.entries(files)) {
     const target = path.join(root, relative);
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.writeFile(target, content);
   }
+}
+async function seedDist(
+  root: string,
+  current: Record<string, string>,
+  stale: Record<string, string> = {},
+) {
+  await writeFiles(path.join(root, "dist"), current);
+  await writePackageDistInventory(root);
+  await writeFiles(path.join(root, "dist"), stale);
 }
 function runPostinstall(packageRoot: string, env: NodeJS.ProcessEnv = {}) {
   const home = path.join(packageRoot, "home");
@@ -50,13 +71,11 @@ function runPostinstall(packageRoot: string, env: NodeJS.ProcessEnv = {}) {
   );
 }
 
-async function createInstalledDistFixture(files: string[]) {
-  const packageRoot = await createTempDirAsync("openclaw-installed-dist-");
-  await writeFiles(
-    path.join(packageRoot, "dist"),
-    Object.fromEntries(files.map((file) => [file, "keep\n"])),
-  );
-  return packageRoot;
+async function makePackage(files: string[] = []) {
+  const packageRoot = await createTempDirAsync("postinstall-");
+  const at = (...parts: string[]) => path.join(packageRoot, ...parts);
+  await writeFiles(at("dist"), Object.fromEntries(files.map((file) => [file, "keep\n"])));
+  return { packageRoot, at };
 }
 
 async function copyPostinstallFixture(packageRoot: string) {
@@ -75,8 +94,10 @@ async function copyPostinstallFixture(packageRoot: string) {
   }
 }
 
-async function expectPathExists(filePath: string) {
-  await fs.access(filePath);
+async function expectPathExists(...paths: string[]) {
+  for (const filePath of paths) {
+    await fs.access(filePath);
+  }
 }
 
 async function expectPathMissing(filePath: string) {
@@ -85,20 +106,19 @@ async function expectPathMissing(filePath: string) {
 
 describe("bundled plugin postinstall", () => {
   it("compiles source without consuming an installed runtime artifact", async () => {
-    const packageRoot = await createTempDirAsync("openclaw-postinstall-source-build-");
+    const { packageRoot, at } = await makePackage();
     await copyPostinstallFixture(packageRoot);
-    const installedGuard = path.join(packageRoot, "dist/commands/doctor-update-schema-guard.js");
-    await fs.mkdir(path.dirname(installedGuard), { recursive: true });
-    await fs.writeFile(
-      installedGuard,
-      "export async function preflightUpdatePackageLifecycle() {}\n",
-    );
+    const installedGuard = at("dist/commands/doctor-update-schema-guard.js");
+    await writeFiles(packageRoot, {
+      "dist/commands/doctor-update-schema-guard.js":
+        "export async function preflightUpdatePackageLifecycle() {}\n",
+    });
     const { bundles } = await build({
       config: false,
       cwd: packageRoot,
       root: packageRoot,
       entry: ["scripts/postinstall-bundled-plugins.mjs"],
-      outDir: path.join(packageRoot, "compiled"),
+      outDir: at("compiled"),
       unbundle: true,
       treeshake: false,
       dts: false,
@@ -108,7 +128,7 @@ describe("bundled plugin postinstall", () => {
       const inputs = bundles.flatMap(({ chunks }) =>
         chunks.flatMap((chunk) => (chunk.type === "chunk" ? chunk.moduleIds : [])),
       );
-      expect(inputs).toContain(path.join(packageRoot, "scripts/postinstall-bundled-plugins.mjs"));
+      expect(inputs).toContain(at("scripts/postinstall-bundled-plugins.mjs"));
       expect(inputs).not.toContain(installedGuard);
     } finally {
       for (const bundle of bundles) {
@@ -118,16 +138,16 @@ describe("bundled plugin postinstall", () => {
   });
 
   it("preserves lifecycle completion policy for marked Windows updates", async () => {
-    const packageRoot = await createTempDirAsync("openclaw-update-postinstall-");
+    const { packageRoot, at } = await makePackage();
     await copyPostinstallFixture(packageRoot);
     await writeFiles(packageRoot, {
       "package.json": '{"type":"module"}\n',
       "dist/commands/doctor-update-schema-guard.js":
         'export async function preflightUpdatePackageLifecycle() { throw new Error("fixture: previous Gateway data must remain readable"); }\n',
     });
-    const pending = path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
+    const pending = at(PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
     await fs.writeFile(pending, "pending\n");
-    const script = path.join(packageRoot, "scripts", "postinstall-bundled-plugins.mjs");
+    const script = at("scripts", "postinstall-bundled-plugins.mjs");
     const result = spawnSync(
       process.execPath,
       [
@@ -188,9 +208,9 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
   });
 
   it("preserves shared default and configured Node caches during packaged postinstall", async () => {
-    const packageRoot = await createTempDirAsync("openclaw-packaged-compile-cache-");
-    const temporaryRoot = path.join(packageRoot, "temporary");
-    const configuredCacheRoot = path.join(packageRoot, "configured-node-cache");
+    const { packageRoot, at } = await makePackage();
+    const temporaryRoot = at("temporary");
+    const configuredCacheRoot = at("configured-node-cache");
     const defaultCacheRoot = path.join(temporaryRoot, "node-compile-cache");
     const sentinels = [
       path.join(defaultCacheRoot, "v22.22.3-x64-another-app", "keep.txt"),
@@ -200,15 +220,20 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
     ];
 
     await copyPostinstallFixture(packageRoot);
-    await fs.mkdir(path.join(packageRoot, "home"), { recursive: true });
+    await fs.mkdir(at("home"), { recursive: true });
     await fs.writeFile(
-      path.join(packageRoot, "package.json"),
+      at("package.json"),
       '{"name":"openclaw","type":"module","version":"2026.7.2"}\n',
     );
-    for (const sentinel of sentinels) {
-      await fs.mkdir(path.dirname(sentinel), { recursive: true });
-      await fs.writeFile(sentinel, "owned by another Node application\n");
-    }
+    await writeFiles(
+      packageRoot,
+      Object.fromEntries(
+        sentinels.map((file) => [
+          path.relative(packageRoot, file),
+          "owned by another Node application\n",
+        ]),
+      ),
+    );
 
     const result = runPostinstall(packageRoot, {
       NODE_COMPILE_CACHE: configuredCacheRoot,
@@ -219,19 +244,18 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
     });
 
     expect(result.status, result.stderr).toBe(0);
-    for (const sentinel of sentinels) {
-      await expectPathExists(sentinel);
-    }
+    await expectPathExists(...sentinels);
   });
 
   it("does not classify published packages with source files as source checkouts", () => {
     const packageRoot = "/pkg";
+    const at = (...parts: string[]) => path.join(packageRoot, ...parts);
     const existingPaths = new Set([
-      path.join(packageRoot, "package.json"),
-      path.join(packageRoot, "pnpm-workspace.yaml"),
-      path.join(packageRoot, "src"),
-      path.join(packageRoot, "extensions"),
-      path.join(packageRoot, "dist", "postinstall-inventory.json"),
+      at("package.json"),
+      at("pnpm-workspace.yaml"),
+      at("src"),
+      at("extensions"),
+      at("dist", "postinstall-inventory.json"),
     ]);
 
     expect(
@@ -242,38 +266,28 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
     ).toBe(false);
   });
 
-  it("preserves importer dependency resolution during workspace snapshot postinstall", async () => {
-    const packageRoot = await createTempDirAsync("openclaw-source-resolution-");
-    const fixture = await createSourcePluginDependenciesFixture(packageRoot);
-    await copyPostinstallFixture(packageRoot);
-    fixture.assertResolution();
-    const result = runPostinstall(packageRoot);
-    expect(result.status, result.stderr).toBe(0);
-    fixture.assertResolution();
-  });
-
-  it("does not prune user-state legacy runtime deps during source-checkout postinstall", async () => {
-    const packageRoot = await createTempDirAsync("openclaw-source-checkout-state-skip-");
-    const home = await createTempDirAsync("openclaw-source-checkout-home-");
-    const legacyRuntimeRoot = path.join(home, ".openclaw", "plugin-runtime-deps");
-    await fs.mkdir(path.join(packageRoot, ".git"), { recursive: true });
-    await fs.mkdir(path.join(packageRoot, "src"), { recursive: true });
-    await fs.mkdir(path.join(packageRoot, "extensions"), { recursive: true });
-    await fs.mkdir(legacyRuntimeRoot, { recursive: true });
-    await fs.writeFile(path.join(legacyRuntimeRoot, "package.json"), "{}\n");
-
-    runBundledPluginPostinstall({
-      env: { HOME: home },
-      packageRoot,
-      log: quietLog(),
-    });
-
-    await expectPathExists(legacyRuntimeRoot);
-  });
+  it.each(["workspace snapshot", "git checkout"])(
+    "preserves source dependencies and state during %s postinstall",
+    async (kind) => {
+      const { packageRoot, at } = await makePackage();
+      const fixture = await createSourcePluginDependenciesFixture(packageRoot);
+      if (kind === "git checkout") {
+        await fs.mkdir(at(".git"));
+      }
+      const legacyRuntimeRoot = at("home/.openclaw/plugin-runtime-deps");
+      await writeFiles(legacyRuntimeRoot, { "package.json": "{}\n" });
+      await copyPostinstallFixture(packageRoot);
+      fixture.assertResolution();
+      const result = runPostinstall(packageRoot, { OPENCLAW_STATE_DIR: at("home/.openclaw") });
+      expect(result.status, result.stderr).toBe(0);
+      fixture.assertResolution();
+      await fs.access(legacyRuntimeRoot);
+    },
+  );
 
   it("honors the disable env before packaged cleanup", async () => {
-    const packageRoot = await createTempDirAsync("openclaw-postinstall-disabled-");
-    const staleFile = path.join(packageRoot, "dist", "stale.js");
+    const { packageRoot, at } = await makePackage();
+    const staleFile = at("dist", "stale.js");
     await writeFiles(packageRoot, {
       "dist/postinstall-inventory.json": "[]\n",
       "dist/stale.js": "export {};\n",
@@ -290,10 +304,11 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
   it("completes packaged lifecycle without changing operator databases", async () => {
     const fixtureRoot = await createTempDirAsync("openclaw-postinstall-state-");
     const packageRoot = path.join(fixtureRoot, "node_modules", "openclaw");
+    const at = (...parts: string[]) => path.join(packageRoot, ...parts);
     const home = path.join(fixtureRoot, "home");
     const stateDir = path.join(home, ".openclaw");
     const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
-    const markerPath = path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
+    const markerPath = at(PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
     const migrationPath = path.join(
       packageRoot,
       "dist/commands/doctor/shared/plugin-registry-migration.js",
@@ -301,7 +316,7 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
     await copyPostinstallFixture(packageRoot);
     await fs.mkdir(path.dirname(migrationPath), { recursive: true });
     await fs.mkdir(path.dirname(databasePath), { recursive: true });
-    await fs.writeFile(path.join(packageRoot, "package.json"), '{"type":"module"}\n');
+    await fs.writeFile(at("package.json"), '{"type":"module"}\n');
     const database = new DatabaseSync(databasePath);
     try {
       database.exec("PRAGMA user_version = 5; CREATE TABLE operator_state (value TEXT);");
@@ -336,14 +351,11 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
   });
 
   it("prunes from the authoritative inventory without reading dist JavaScript", async () => {
-    const packageRoot = await createTempDirAsync("openclaw-packaged-install-no-js-read-");
-    const currentFile = path.join(packageRoot, "dist", "current.js");
-    const staleFile = path.join(packageRoot, "dist", "stale.js");
-    const inventoryPath = path.join(packageRoot, "dist", "postinstall-inventory.json");
-    await fs.mkdir(path.dirname(currentFile), { recursive: true });
-    await fs.writeFile(currentFile, "export {};\n");
-    await writePackageDistInventory(packageRoot);
-    await fs.writeFile(staleFile, "export {};\n");
+    const { packageRoot, at } = await makePackage();
+    const currentFile = at("dist", "current.js");
+    const staleFile = at("dist", "stale.js");
+    const inventoryPath = at("dist", "postinstall-inventory.json");
+    await seedDist(packageRoot, { "current.js": "export {};\n" }, { "stale.js": "export {};\n" });
     const readFileSync = vi.fn((filePath: string | Buffer | URL, options?: BufferEncoding) => {
       if (String(filePath) !== inventoryPath) {
         throw new Error(`unexpected dist JavaScript read: ${String(filePath)}`);
@@ -351,13 +363,9 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
       return readFileSyncOriginal(filePath, { encoding: options });
     });
 
-    expect(
-      pruneInstalledPackageDist({
-        packageRoot,
-        readFileSync,
-        log: { log: vi.fn(), warn: vi.fn() },
-      }),
-    ).toEqual(["dist/stale.js"]);
+    expect(pruneInstalledPackageDist({ packageRoot, readFileSync, log: quietLog() })).toEqual([
+      "dist/stale.js",
+    ]);
 
     await expectPathExists(currentFile);
     await expectPathMissing(staleFile);
@@ -372,40 +380,29 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
     const home = await createTempDirAsync("openclaw-packaged-home-");
     const stateOverride = path.join(home, "custom-state");
     const systemState = path.join(home, "system-state");
-    const defaultLegacyRoot = path.join(home, ".openclaw", "plugin-runtime-deps");
-    const oldBrandLegacyRoot = path.join(home, ".clawdbot", "plugin-runtime-deps");
-    const overrideLegacyRoot = path.join(stateOverride, "plugin-runtime-deps");
-    const systemLegacyRoot = path.join(systemState, "plugin-runtime-deps");
-    const thirdPartyNodeModules = path.join(
-      home,
+    const retainedRoots = [
+      ".openclaw/plugin-runtime-deps",
+      ".clawdbot/plugin-runtime-deps",
+      "custom-state/plugin-runtime-deps",
+      "system-state/plugin-runtime-deps",
       ".openclaw/extensions/lossless-claw/node_modules",
-    );
-    const currentFile = path.join(packageRoot, "dist", "entry.js");
+    ].map((relative) => path.join(home, relative));
     const legacySymlinkTarget = path.join(
-      defaultLegacyRoot,
-      "openclaw-2026.4.29-slack/node_modules/@slack/web-api",
+      home,
+      ".openclaw/plugin-runtime-deps/openclaw-2026.4.29-slack/node_modules/@slack/web-api",
     );
     const slackScope = path.join(nodeModulesRoot, "@slack");
     const legacySymlink = path.join(slackScope, "web-api");
 
-    await fs.mkdir(path.dirname(currentFile), { recursive: true });
-    await fs.writeFile(currentFile, "export {};\n");
-    await writePackageDistInventory(packageRoot);
-    for (const root of [
-      defaultLegacyRoot,
-      oldBrandLegacyRoot,
-      overrideLegacyRoot,
-      systemLegacyRoot,
-      thirdPartyNodeModules,
-    ]) {
-      await fs.mkdir(root, { recursive: true });
-      await fs.writeFile(path.join(root, "package.json"), "{}\n");
+    await seedDist(packageRoot, { "entry.js": "export {};\n" });
+    for (const root of retainedRoots) {
+      await writeFiles(root, { "package.json": "{}\n" });
     }
     await fs.mkdir(legacySymlinkTarget, { recursive: true });
     await fs.mkdir(slackScope, { recursive: true });
     await fs.symlink(legacySymlinkTarget, legacySymlink, "dir");
 
-    const log = { log: vi.fn(), warn: vi.fn() };
+    const log = quietLog();
     runBundledPluginPostinstall({
       env: {
         HOME: home,
@@ -416,34 +413,30 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
       log,
     });
 
-    await expectPathExists(defaultLegacyRoot);
-    await expectPathExists(oldBrandLegacyRoot);
-    await expectPathExists(overrideLegacyRoot);
-    await expectPathExists(systemLegacyRoot);
-    await expectPathExists(legacySymlink);
-    await expectPathExists(thirdPartyNodeModules);
+    await expectPathExists(...retainedRoots, legacySymlink);
     expect(log.warn).not.toHaveBeenCalled();
     expect(log.log).not.toHaveBeenCalled();
   });
 
   it("prunes stale private QA files without restoring compat sidecars", async () => {
-    const packageRoot = await createTempDirAsync("openclaw-packaged-install-qa-compat-");
-    const currentFile = path.join(packageRoot, "dist", "entry.js");
-    const currentManifest = path.join(packageRoot, "dist/extensions/example/openclaw.plugin.json");
-    const stalePackage = path.join(packageRoot, "dist", "extensions", "qa-lab", "package.json");
-    const staleManifest = path.join(packageRoot, "dist/extensions/qa-lab/openclaw.plugin.json");
-    await fs.mkdir(path.dirname(stalePackage), { recursive: true });
-    await fs.mkdir(path.dirname(currentManifest), { recursive: true });
-    await fs.writeFile(currentFile, "export {};\n");
-    await fs.writeFile(currentManifest, "{}\n");
-    await writePackageDistInventory(packageRoot);
+    const { packageRoot, at } = await makePackage();
+    const currentManifest = at("dist/extensions/example/openclaw.plugin.json");
+    const stalePackage = at("dist", "extensions", "qa-lab", "package.json");
+    const staleManifest = at("dist/extensions/qa-lab/openclaw.plugin.json");
+    await seedDist(
+      packageRoot,
+      {
+        "entry.js": "export {};\n",
+        "extensions/example/openclaw.plugin.json": "{}\n",
+      },
+      {
+        "extensions/qa-lab/package.json": "{}\n",
+        "extensions/qa-lab/openclaw.plugin.json": "{}\n",
+      },
+    );
     if (process.platform !== "win32") {
-      expect(
-        (await fs.stat(path.join(packageRoot, "dist", "postinstall-inventory.json"))).mode & 0o777,
-      ).toBe(0o644);
+      expect((await fs.stat(at("dist", "postinstall-inventory.json"))).mode & 0o777).toBe(0o644);
     }
-    await fs.writeFile(stalePackage, "{}\n");
-    await fs.writeFile(staleManifest, "{}\n");
 
     runBundledPluginPostinstall({
       packageRoot,
@@ -459,23 +452,20 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
       "qa-channel/openclaw.plugin.json",
       "qa-lab/runtime-api.js",
     ]) {
-      await expectPathMissing(path.join(packageRoot, "dist/extensions", relative));
+      await expectPathMissing(at("dist/extensions", relative));
     }
   });
 
   it.each(["missing", "invalid"])(
     "keeps packaged postinstall non-fatal for %s inventory",
     async (kind) => {
-      const packageRoot = await createInstalledDistFixture(["stale.js"]);
+      const { packageRoot, at } = await makePackage(["stale.js"]);
       if (kind === "invalid") {
-        await fs.writeFile(
-          path.join(packageRoot, "dist/postinstall-inventory.json"),
-          "{not-json}\n",
-        );
+        await fs.writeFile(at("dist/postinstall-inventory.json"), "{not-json}\n");
       }
       const log = quietLog();
       expect(runBundledPluginPostinstall({ packageRoot, log })).toBeUndefined();
-      await expectPathExists(path.join(packageRoot, "dist/stale.js"));
+      await expectPathExists(at("dist/stale.js"));
       expect(log.warn).toHaveBeenCalledWith(
         `[postinstall] skipping dist prune: ${kind} dist inventory: dist/postinstall-inventory.json`,
       );
@@ -483,11 +473,11 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
   );
 
   it.each(["root", "entry"])("rejects symlinked dist %s in packaged installs", async (kind) => {
-    const packageRoot = await createInstalledDistFixture(kind === "entry" ? ["kept.js"] : []);
+    const { packageRoot, at } = await makePackage(kind === "entry" ? ["kept.js"] : []);
     const targetDir = await createTempDirAsync("openclaw-postinstall-symlink-target-");
     const sentinel = path.join(targetDir, "sentinel.js");
     await fs.writeFile(sentinel, "outside data\n");
-    const link = path.join(packageRoot, "dist", ...(kind === "entry" ? ["escape"] : []));
+    const link = at("dist", ...(kind === "entry" ? ["escape"] : []));
     // Directory junctions require no Windows symlink privilege.
     await fs.symlink(targetDir, link, "junction");
 
@@ -499,19 +489,15 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
     expect((await fs.lstat(link)).isSymbolicLink()).toBe(true);
     expect(await fs.readFile(sentinel, "utf8")).toBe("outside data\n");
     if (kind === "entry") {
-      expect(await fs.readFile(path.join(packageRoot, "dist/kept.js"), "utf8")).toBe("keep\n");
+      expect(await fs.readFile(at("dist/kept.js"), "utf8")).toBe("keep\n");
     }
   });
 
   it.each([
-    { phase: "shared listing and pruning", files: ["kept.js"], kept: ["dist/kept.js"] },
-    {
-      phase: "legacy dependency prepass",
-      files: ["extensions/slack/node_modules/sentinel.js"],
-      kept: [],
-    },
-  ])("bounds the $phase with one packaged dist scan budget", async ({ files, kept }) => {
-    const packageRoot = await createInstalledDistFixture(files);
+    ["shared listing and pruning", "kept.js", ["dist/kept.js"]],
+    ["legacy dependency prepass", "extensions/slack/node_modules/sentinel.js", []],
+  ] as const)("bounds the %s with one packaged dist scan budget", async (_phase, file, kept) => {
+    const { packageRoot, at } = await makePackage([file]);
     expect(() =>
       pruneInstalledPackageDist({
         packageRoot,
@@ -521,35 +507,14 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
     ).toThrow(
       "installed dist scan exceeded 1 filesystem entries; refusing to scan unbounded package contents",
     );
-    for (const file of files) {
-      expect(await fs.readFile(path.join(packageRoot, "dist", file), "utf8")).toBe("keep\n");
-    }
+    expect(await fs.readFile(at("dist", file), "utf8")).toBe("keep\n");
     // npm upgrades hold old+new content-hashed output; retain several-times headroom.
     expect(MAX_INSTALLED_DIST_SCAN_ENTRIES).toBeGreaterThanOrEqual(100_000);
   });
 
-  it("prunes sibling empty dist directories after closing parent scans", async () => {
-    const packageRoot = await createTempDirAsync("openclaw-packaged-install-empty-dirs-");
-    const firstEmptyDir = path.join(packageRoot, "dist", "empty-a");
-    const secondEmptyDir = path.join(packageRoot, "dist", "empty-b");
-    await fs.mkdir(firstEmptyDir, { recursive: true });
-    await fs.mkdir(secondEmptyDir, { recursive: true });
-
-    expect(
-      pruneInstalledPackageDist({
-        packageRoot,
-        expectedFiles: new Set(),
-        log: { log: vi.fn(), warn: vi.fn() },
-      }),
-    ).toEqual([]);
-
-    await expectPathMissing(firstEmptyDir);
-    await expectPathMissing(secondEmptyDir);
-  });
-
-  it("prunes stale bundled plugin dependency debris from packaged dist", async () => {
-    const packageRoot = await createTempDirAsync("openclaw-packaged-install-dist-prune-");
-    const slackRoot = path.join(packageRoot, "dist/extensions/slack");
+  it("idempotently prunes stale dependency debris and sibling empty dist directories", async () => {
+    const { packageRoot, at } = await makePackage();
+    const slackRoot = at("dist/extensions/slack");
     const binDir = path.join(slackRoot, "node_modules/.bin");
     const installStage = ".openclaw-install-stage/node_modules/typebox/build/compile/code.mjs";
     const retryStage = ".openclaw-install-stage-retry/node_modules/typebox/build/compile/code.mjs";
@@ -562,31 +527,28 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`,
     });
     await fs.mkdir(binDir, { recursive: true });
     await fs.symlink("../fxparser/bin.js", path.join(binDir, "fxparser"));
+    const emptyDirs = [at("dist/empty-a"), at("dist/empty-b")];
+    for (const directory of emptyDirs) {
+      await fs.mkdir(directory);
+    }
 
-    expect(
-      pruneInstalledPackageDist({
-        packageRoot,
-        expectedFiles: new Set(["dist/extensions/slack/package.json"]),
-        log: { log: vi.fn(), warn: vi.fn() },
-      }),
-    ).toEqual(["dist/stale-runtime.js"]);
+    expect(prune(packageRoot, ["dist/extensions/slack/package.json"])).toEqual([
+      "dist/stale-runtime.js",
+    ]);
     await expectPathMissing(path.join(slackRoot, "node_modules"));
     await expectPathMissing(path.dirname(path.join(slackRoot, installStage)));
     await expectPathMissing(path.dirname(path.join(slackRoot, retryStage)));
+    for (const directory of emptyDirs) {
+      await expectPathMissing(directory);
+    }
+    expect(prune(packageRoot, ["dist/extensions/slack/package.json"])).toEqual([]);
   });
 
   it("unlinks stale files instead of recursive pruning them", async () => {
-    const packageRoot = await createInstalledDistFixture(["stale.js"]);
+    const { packageRoot, at } = await makePackage(["stale.js"]);
     const unlinkSync = vi.fn(unlinkSyncOriginal);
-    expect(
-      pruneInstalledPackageDist({
-        packageRoot,
-        expectedFiles: new Set(),
-        unlinkSync,
-        log: { log: vi.fn(), warn: vi.fn() },
-      }),
-    ).toEqual(["dist/stale.js"]);
-    expect(unlinkSync).toHaveBeenCalledWith(path.join(packageRoot, "dist", "stale.js"));
-    await expectPathMissing(path.join(packageRoot, "dist", "stale.js"));
+    expect(prune(packageRoot, [], { unlinkSync })).toEqual(["dist/stale.js"]);
+    expect(unlinkSync).toHaveBeenCalledWith(at("dist", "stale.js"));
+    await expectPathMissing(at("dist", "stale.js"));
   });
 });

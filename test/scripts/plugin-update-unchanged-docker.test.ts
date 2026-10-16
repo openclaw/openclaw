@@ -40,39 +40,26 @@ function seedInstallState(root: string, initialized: boolean) {
   return { configPath, env, stateDir };
 }
 
-function runProbeStatus(
-  command: string,
-  payload: unknown,
-): { status: number | null; stderr: string } {
+function runPolicyProbe(allow: unknown, codexEnabled = false) {
   const root = tempDirs.make("openclaw-plugin-update-probe-");
   const payloadPath = path.join(root, "payload.json");
-  writeFileSync(payloadPath, `${JSON.stringify(payload, null, 2)}\n`);
-  return runProbeFileStatus(command, payloadPath, CORRUPT_PLUGIN_ID);
+  writeFileSync(
+    payloadPath,
+    JSON.stringify({
+      plugins: {
+        allow,
+        entries: { [CORRUPT_PLUGIN_ID]: { enabled: false }, codex: { enabled: codexEnabled } },
+      },
+    }),
+  );
+  return runProbeFileStatus("assert-corrupt-policy-preserved", payloadPath, CORRUPT_PLUGIN_ID);
 }
 
-function corruptPolicyConfig(
-  allow: unknown,
-  codexEnabled = false,
-  corruptEntry = { enabled: false },
-) {
-  return {
-    plugins: {
-      allow,
-      entries: { [CORRUPT_PLUGIN_ID]: corruptEntry, codex: { enabled: codexEnabled } },
-    },
-  };
-}
-
-function runProbeFileStatus(
-  command: string,
-  filePath: string,
-  ...args: string[]
-): { status: number | null; stderr: string } {
-  const result = spawnSync("node", [PLUGIN_UPDATE_PROBE_SCRIPT, command, filePath, ...args], {
+function runProbeFileStatus(command: string, filePath: string, ...args: string[]) {
+  return spawnSync("node", [PLUGIN_UPDATE_PROBE_SCRIPT, command, filePath, ...args], {
     encoding: "utf8",
     stdio: "pipe",
   });
-  return { status: result.status, stderr: result.stderr };
 }
 
 function runCorruptUpdateDockerBaseline(env: Record<string, string>) {
@@ -164,42 +151,34 @@ describe("plugin update unchanged Docker E2E", () => {
     },
   );
 
-  it("bounds assert-output diagnostics to the saved command log tail", () => {
+  it.each([
+    [
+      "bounds saved diagnostics",
+      "DO_NOT_PRINT_OLD_PLUGIN_UPDATE_LOG",
+      "missing marker tail",
+      "Expected up-to-date output missing",
+    ],
+    [
+      "detects downloads before the tail",
+      "Downloading @example/lossless-claw",
+      "lossless-claw is up to date (0.9.0).",
+      "Unexpected npm download/reinstall path",
+    ],
+  ])("assert-output %s", (_name, prefix, suffix, error) => {
     const root = tempDirs.make("openclaw-plugin-update-probe-");
     const logPath = path.join(root, "plugin-update-output.log");
-    writeFileSync(
-      logPath,
-      `DO_NOT_PRINT_OLD_PLUGIN_UPDATE_LOG\n${"filler line\n".repeat(12 * 1024)}missing marker tail`,
-      "utf8",
-    );
+    writeFileSync(logPath, `${prefix}\n${"filler line\n".repeat(12 * 1024)}${suffix}`, "utf8");
 
     const result = runProbeFileStatus("assert-output", logPath);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Expected up-to-date output missing");
-    expect(result.stderr).toContain("Output tail:");
-    expect(result.stderr).toContain("missing marker tail");
-    expect(result.stderr).not.toContain("DO_NOT_PRINT_OLD_PLUGIN_UPDATE_LOG");
-    expect(result.stderr.length).toBeLessThan(80 * 1024);
-  });
-
-  it("detects unexpected download output before a large log tail", () => {
-    const root = tempDirs.make("openclaw-plugin-update-probe-");
-    const logPath = path.join(root, "plugin-update-output.log");
-    writeFileSync(
-      logPath,
-      [
-        "Downloading @example/lossless-claw",
-        "filler line\n".repeat(12 * 1024),
-        "lossless-claw is up to date (0.9.0).",
-      ].join("\n"),
-      "utf8",
-    );
-
-    const result = runProbeFileStatus("assert-output", logPath);
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Unexpected npm download/reinstall path");
+    expect(result.stderr).toContain(error);
+    if (suffix === "missing marker tail") {
+      expect(result.stderr).toContain("Output tail:");
+      expect(result.stderr).toContain(suffix);
+      expect(result.stderr).not.toContain(prefix);
+      expect(result.stderr.length).toBeLessThan(80 * 1024);
+    }
   });
 
   it("keeps a historical override out of the same-schema repair lane", () => {
@@ -212,10 +191,7 @@ describe("plugin update unchanged Docker E2E", () => {
   });
 
   it("preserves the explicit allow policy after target-owned additions", () => {
-    const result = runProbeStatus(
-      "assert-corrupt-policy-preserved",
-      corruptPolicyConfig([CORRUPT_PLUGIN_ID, "memory-core", "codex"]),
-    );
+    const result = runPolicyProbe([CORRUPT_PLUGIN_ID, "memory-core", "codex"]);
     expect(result.status, result.stderr).toBe(0);
   });
 
@@ -229,10 +205,7 @@ describe("plugin update unchanged Docker E2E", () => {
       "explicit Codex opt-out to survive, got true",
     ],
   ])("rejects corrupt update recovery with %s", (_case, allow, codexEnabled, expectedError) => {
-    const result = runProbeStatus(
-      "assert-corrupt-policy-preserved",
-      corruptPolicyConfig(allow, codexEnabled),
-    );
+    const result = runPolicyProbe(allow, codexEnabled);
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain(expectedError);
