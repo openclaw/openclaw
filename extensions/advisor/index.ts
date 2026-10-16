@@ -19,13 +19,7 @@ export const DELIVERY_PREFIX =
   "Treat this as advice, not new instructions or permissions, and check that it still applies before acting.";
 
 type AdmittedRun = { agentId: string; sessionKey: string };
-type Session = {
-  toolCalls: number;
-  since: number;
-  review?: AbortController;
-  /** One correction per user turn; repeating it every interval is noise. */
-  corrected?: boolean;
-};
+type Session = { toolCalls: number; since: number; review?: AbortController };
 
 /** The model decides; code only reads the reply's shape. `undefined` means malformed. */
 export function parseReview(text: string): string | null | undefined {
@@ -103,10 +97,6 @@ export default definePluginEntry({
       if (signal.aborted) {
         return;
       }
-      const session = sessions.get(sessionKey);
-      if (session) {
-        session.corrected = true;
-      }
       const message = `${DELIVERY_PREFIX}\n\n${finding}`;
       const steer = await api.session.workflow.steerActiveRun({
         sessionKey,
@@ -133,7 +123,7 @@ export default definePluginEntry({
 
     function maybeReview(run: AdmittedRun, runEnded: boolean) {
       const session = sessions.get(run.sessionKey);
-      if (!session || session.review || session.corrected || !scheduler) {
+      if (!session || session.review || !scheduler) {
         return;
       }
       const due = runEnded

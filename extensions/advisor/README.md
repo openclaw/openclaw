@@ -33,9 +33,8 @@ tools:
   of "off course". Changes apply to the next review.
 
 Only user-triggered runs are reviewed, so follow-up turns are never reviewed
-again. Each conversation has at most one review in flight and gets at most one
-correction per user message; a new user message or an aborted run cancels a
-pending review. Gateway info logs record review token usage and
+again. Each conversation has at most one review in flight; a new user message or
+an aborted run cancels it. Gateway info logs record review token usage and
 whether a correction was steered or started a follow-up turn.
 
 Docs: https://docs.openclaw.ai/concepts/experimental-features#advisor

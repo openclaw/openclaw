@@ -278,9 +278,8 @@ Behavior and limits:
 
 - Only user-triggered runs are reviewed. Heartbeat, cron and other automatic
   runs, including Advisor's own follow-up turns, are not.
-- Each conversation has at most one review in flight and gets at most one
-  correction per user message. A new user message, an aborted run, session
-  reset, plugin disable, or service stop cancels a pending review.
+- Each conversation has at most one review in flight. A new user message, an
+  aborted run, session reset, plugin disable, or service stop cancels it.
 - Reviews use the session's model, context and credentials. The fork cannot run
   tools or send replies. Corrections are labeled as advice the agent must check
   before acting.
