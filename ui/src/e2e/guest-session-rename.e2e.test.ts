@@ -115,22 +115,14 @@ suite.define(() => {
         );
       }
     };
-    const cue = async (text: string) => {
-      if (artifactDir) {
-        await page.evaluate((message) => {
-          let caption = document.getElementById("guest-rename-proof-cue");
-          if (!caption) {
-            caption = document.createElement("aside");
-            caption.id = "guest-rename-proof-cue";
-            caption.style.cssText =
-              "position:fixed;right:16px;top:76px;z-index:10000;padding:8px 12px;" +
-              "background:#162230;color:#fff;border:1px solid #a8c8e8;font:14px sans-serif;" +
-              "pointer-events:none;max-width:320px";
-            document.body.append(caption);
-          }
-          caption.textContent = message;
-        }, text);
-      }
+    const expectPatch = async (label: string, after = 0) => {
+      const patch = await gateway.waitForRequest("sessions.patch", { after });
+      expect(patch.params).toEqual({
+        key: own.key,
+        agentId: "main",
+        label,
+        expectedSessionId: own.sessionId,
+      });
     };
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, own.key));
@@ -157,7 +149,6 @@ suite.define(() => {
         displayName: "Project summary",
         updatedAt: now + 1,
       };
-      await cue("UI fixture: Gateway publishes ‘Project summary’");
       await gateway.setSessionsListResponse({ sessions: [renamed, foreign] });
       await gateway.emitGatewayEvent("sessions.changed", {
         key: own.key,
@@ -171,9 +162,6 @@ suite.define(() => {
       expect(await observe()).toEqual(original);
       expect(page.url()).toBe(originalUrl);
       expect(await gateway.getRequests("sessions.patch")).toEqual([]);
-      await page.locator("#guest-rename-proof-cue").evaluateAll((elements) => {
-        elements.forEach((element) => element.remove());
-      });
       await screenshot("after-label-publication.png");
 
       await page.reload();
@@ -182,37 +170,22 @@ suite.define(() => {
       expect(page.url()).toBe(originalUrl);
       await screenshot("after-reload.png");
 
-      await cue("Header rename: Enter saves the edited title");
       await title.click();
       const headerInput = pane.locator(".chat-pane__session-title-input");
       await headerInput.fill("Header title");
       await headerInput.press("Enter");
       await expectName("Header title");
-      const headerPatch = await gateway.waitForRequest("sessions.patch");
-      expect(headerPatch.params).toEqual({
-        key: own.key,
-        agentId: "main",
-        label: "Header title",
-        expectedSessionId: own.sessionId,
-      });
+      await expectPatch("Header title");
 
-      await cue("Sidebar rename: Save applies the edited title");
       await ownRow.click({ button: "right" });
       await page.getByRole("menuitem", { name: "Rename…", exact: true }).click();
       const dialog = page.locator('openclaw-modal-dialog[label="Rename session"]');
       await dialog.locator("input").fill("Sidebar title");
       await dialog.getByRole("button", { name: "Save", exact: true }).click();
       await expectName("Sidebar title");
-      const sidebarPatch = await gateway.waitForRequest("sessions.patch", { after: 1 });
-      expect(sidebarPatch.params).toEqual({
-        key: own.key,
-        agentId: "main",
-        label: "Sidebar title",
-        expectedSessionId: own.sessionId,
-      });
+      await expectPatch("Sidebar title", 1);
       expect(await observe()).toEqual(original);
 
-      await cue("Read-only shared session: Rename stays unavailable");
       await foreignRow.click({ button: "right" });
       const foreignRename = page
         .locator("openclaw-session-menu")

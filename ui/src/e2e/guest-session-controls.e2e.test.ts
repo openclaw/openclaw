@@ -4,15 +4,9 @@ import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
-import type { SessionRowObservation } from "../lib/sessions/session-capability.ts";
-import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import {
-  captureControlUiE2eFailureDiagnostics,
-  controlUiSessionUrl,
-  installMockGateway,
-} from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -39,6 +33,12 @@ const models = ["model-a", "model-b"].map((id) => ({
   thinkingLevels,
   thinkingDefault: "low",
 }));
+const sharedSession = (key: string, label: string) =>
+  createControlUiSessionRow(key, label, timestamp, {
+    sharingRole: "viewer",
+    visibility: "read-only",
+    model: "model-a",
+  });
 
 suite.define(() => {
   it.each(["started", "rejected"] as const)(
@@ -54,22 +54,8 @@ suite.define(() => {
       });
       const page = await context.newPage();
       const video = page.video();
-      const foreign = createControlUiSessionRow(
-        "agent:main:shared-notes",
-        "Shared notes",
-        timestamp,
-        {
-          sharingRole: "viewer",
-          visibility: "read-only",
-          model: "model-a",
-        },
-      );
-      const otherAgentSession = createControlUiSessionRow(
-        "agent:research:other-work",
-        "Research notes",
-        timestamp,
-        { sharingRole: "viewer", visibility: "read-only", model: "model-a" },
-      );
+      const foreign = sharedSession("agent:main:shared-notes", "Shared notes");
+      const otherAgentSession = sharedSession("agent:research:other-work", "Research notes");
       const gateway = await installMockGateway(page, {
         operatorScopes: ["operator.sessions.write"],
         agentModel: "openai/model-a",
@@ -102,9 +88,7 @@ suite.define(() => {
           );
         }
       };
-      let navigationTarget = foreign.key;
       const navigate = async (row: Pick<GatewaySessionRow, "displayName" | "key">) => {
-        navigationTarget = row.key;
         const target = sessionNavigationTarget({
           face: "chat",
           sessionKey: row.key,
@@ -305,57 +289,6 @@ suite.define(() => {
         expect(await model.getAttribute("aria-disabled")).toBe("true");
         expect(await permission.isDisabled()).toBe(true);
         expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-      } catch (error) {
-        await captureControlUiE2eFailureDiagnostics(page, {
-          error: error instanceof Error ? error : new Error(String(error)),
-          label: `guest-session-${initialRun}`,
-        });
-        if (captureUiProofEnabled) {
-          const state = await page
-            .locator("openclaw-chat-pane.chat-pane-cache__pane--active")
-            .evaluate((element) => {
-              // SAFETY: This locator selects the registered chat pane in the synthetic fixture.
-              const pane = element as HTMLElement & {
-                state?: ChatPageHost;
-                sessionObservation?: { observation: SessionRowObservation | null };
-              };
-              const rowFields = (row: GatewaySessionRow | null | undefined) =>
-                row && {
-                  key: row.key,
-                  sessionId: row.sessionId,
-                  sharingRole: row.sharingRole,
-                  updatedAt: row.updatedAt,
-                };
-              const observation = pane.sessionObservation?.observation;
-              return {
-                sessionKey: pane.state?.sessionKey,
-                currentSessionId: pane.state?.currentSessionId,
-                sessionsResultAgentId: pane.state?.sessionsResultAgentId,
-                rows: pane.state?.sessionsResult?.sessions.map(rowFields),
-                observation: observation && {
-                  row: rowFields(observation.row),
-                  sessionId: observation.sessionId,
-                  hasObserved: observation.hasObserved,
-                },
-              };
-            });
-          await writeFile(
-            path.join(suite.artifactDir, `${initialRun}-scope.private.json`),
-            JSON.stringify(
-              {
-                navigationTarget,
-                url: page.url(),
-                state,
-                abortRequests: await gateway.getRequests("chat.abort"),
-                sessionResolveRequests: await gateway.getRequests("sessions.resolve"),
-                canonical: state.sessionKey ? await gateway.getSessionRow(state.sessionKey) : null,
-              },
-              null,
-              2,
-            ),
-          );
-        }
-        throw error;
       } finally {
         await suite.closeBrowserContext(context);
         if (video) {

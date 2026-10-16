@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -10,6 +11,32 @@ import {
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
+const pageOptions = {
+  colorScheme: "dark",
+  locale: "en-US",
+  serviceWorkers: "block",
+  viewport: { height: 900, width: 1440 },
+} as const;
+async function withSetupPage(
+  run: (page: Page, gateway: Awaited<ReturnType<typeof installMockGateway>>) => Promise<void>,
+  options: Parameters<typeof installMockGateway>[1] = {},
+  width = 1440,
+) {
+  const context = await suite.browser.newContext({
+    ...pageOptions,
+    viewport: { height: 900, width },
+  });
+  const page = await context.newPage();
+  try {
+    await run(page, await installMockGateway(page, { agentModel: null, ...options }));
+  } finally {
+    await context.close();
+  }
+}
+async function expectSetupRoute(page: Page) {
+  await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
+  expect(new URL(page.url()).searchParams.get("connect")).toBe("1");
+}
 let proofDir: string;
 beforeEach(() => {
   if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
@@ -17,7 +44,7 @@ beforeEach(() => {
   }
 });
 
-async function captureProof(page: import("playwright").Page, fileName: string) {
+async function captureProof(page: Page, fileName: string) {
   if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
     return;
   }
@@ -39,16 +66,7 @@ async function captureProof(page: import("playwright").Page, fileName: string) {
 
 suite.define(() => {
   it("keeps help available on empty chat home while messages require a model", async () => {
-    const context = await suite.browser.newContext({
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, { agentModel: null });
-
-    try {
+    await withSetupPage(async (page, gateway) => {
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.getByRole("heading", { name: "No AI provider configured" }).waitFor();
 
@@ -60,8 +78,7 @@ suite.define(() => {
       await expect.poll(() => setupAction.count()).toBe(1);
       await captureProof(page, "chat-home-desktop.png");
       await setupAction.click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
-      expect(new URL(page.url()).searchParams.get("connect")).toBe("1");
+      await expectSetupRoute(page);
       await page.goBack();
       const sendButton = page.getByRole("button", { name: "Send message", exact: true });
       await textarea.fill("/help");
@@ -97,29 +114,17 @@ suite.define(() => {
         .toEqual({ radiusMatches: true, shapeMatches: true, edgesMatch: true });
       await captureProof(page, "chat-help-desktop.png");
       await setupAction.click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
-      expect(new URL(page.url()).searchParams.get("connect")).toBe("1");
+      await expectSetupRoute(page);
       await page.goBack();
       await textarea.fill("Start a conversation.");
       await expect.poll(() => sendButton.isDisabled()).toBe(true);
       expect(await textarea.inputValue()).toBe("Start a conversation.");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("blocks the new-session composer until a model is connected", async () => {
-    const context = await suite.browser.newContext({
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
-    const page = await context.newPage();
-    await installMockGateway(page, { agentModel: null });
-
-    try {
+    await withSetupPage(async (page) => {
       await page.goto(`${suite.server.baseUrl}new?agent=main`);
       await page.getByRole("heading", { name: "No AI provider configured" }).waitFor();
 
@@ -127,62 +132,50 @@ suite.define(() => {
       await expect.poll(() => page.locator("textarea").count()).toBe(0);
       await captureProof(page, "new-session-desktop.png");
       await page.getByRole("button", { name: "Connect an AI provider" }).click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
-      expect(new URL(page.url()).searchParams.get("connect")).toBe("1");
-    } finally {
-      await context.close();
-    }
+      await expectSetupRoute(page);
+    });
   });
 
   it("shows the setup splash before starting custodian chat", async () => {
-    const context = await suite.browser.newContext({
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1660 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      agentModel: null,
-      featureMethods: ["chat.metadata", "chat.startup", "openclaw.chat"],
-    });
+    await withSetupPage(
+      async (page, gateway) => {
+        await page.goto(`${suite.server.baseUrl}custodian`);
+        await page.getByRole("heading", { name: "No AI provider configured" }).waitFor();
 
-    try {
-      await page.goto(`${suite.server.baseUrl}custodian`);
-      await page.getByRole("heading", { name: "No AI provider configured" }).waitFor();
+        expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
+        await expect.poll(() => page.locator(".custodian__error").count()).toBe(0);
+        await expect.poll(() => page.locator(".agent-chat__composer-shell").count()).toBe(0);
+        await expect.poll(() => page.locator("textarea").count()).toBe(0);
+        await expect
+          .poll(async () => (await page.locator(".custodian__header").boundingBox())?.width ?? 0)
+          .toBeGreaterThan(1_000);
+        await captureProof(page, "custodian-desktop.png");
 
-      expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
-      await expect.poll(() => page.locator(".custodian__error").count()).toBe(0);
-      await expect.poll(() => page.locator(".agent-chat__composer-shell").count()).toBe(0);
-      await expect.poll(() => page.locator("textarea").count()).toBe(0);
-      await expect
-        .poll(async () => (await page.locator(".custodian__header").boundingBox())?.width ?? 0)
-        .toBeGreaterThan(1_000);
-      await captureProof(page, "custodian-desktop.png");
+        await page.setViewportSize({ height: 520, width: 900 });
+        await expect
+          .poll(() => page.getByRole("button", { name: "Connect an AI provider" }).isVisible())
+          .toBe(true);
+        await expect
+          .poll(() =>
+            page.evaluate(
+              () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+            ),
+          )
+          .toBe(true);
+        await captureProof(page, "custodian-short-window.png");
 
-      await page.setViewportSize({ height: 520, width: 900 });
-      await expect
-        .poll(() => page.getByRole("button", { name: "Connect an AI provider" }).isVisible())
-        .toBe(true);
-      await expect
-        .poll(() =>
-          page.evaluate(
-            () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
-          ),
-        )
-        .toBe(true);
-      await captureProof(page, "custodian-short-window.png");
-
-      await page.setViewportSize({ height: 900, width: 1660 });
-      await page.getByRole("button", { name: "Connect an AI provider" }).click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
-      expect(new URL(page.url()).searchParams.get("connect")).toBe("1");
-      const modelsLink = page.locator('.settings-sidebar__item[href="/settings/model-providers"]');
-      await expect.poll(() => modelsLink.getAttribute("aria-current")).toBe("page");
-      await captureProof(page, "custodian-model-setup-selected.png");
-    } finally {
-      await context.close();
-    }
+        await page.setViewportSize({ height: 900, width: 1660 });
+        await page.getByRole("button", { name: "Connect an AI provider" }).click();
+        await expectSetupRoute(page);
+        const modelsLink = page.locator(
+          '.settings-sidebar__item[href="/settings/model-providers"]',
+        );
+        await expect.poll(() => modelsLink.getAttribute("aria-current")).toBe("page");
+        await captureProof(page, "custodian-model-setup-selected.png");
+      },
+      { featureMethods: ["chat.metadata", "chat.startup", "openclaw.chat"] },
+      1660,
+    );
   });
 
   it.each(["page", "panel"])(
@@ -190,9 +183,7 @@ suite.define(() => {
     async (surface) => {
       const viewport = { height: 900, width: 1660 };
       const context = await suite.browser.newContext({
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
+        ...pageOptions,
         viewport,
         ...(process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
           ? { recordVideo: { dir: proofDir, size: viewport } }

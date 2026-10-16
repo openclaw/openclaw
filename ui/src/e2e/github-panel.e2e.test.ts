@@ -1,5 +1,5 @@
 import path from "node:path";
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   buildControlUiCspHeader,
@@ -21,6 +21,13 @@ import {
 const imageUrl = "https://user-images.githubusercontent.com/1/github-sidebar-proof.png";
 const fallbackImageUrl = "https://images.example/existing-reader-image.png";
 const sha = "abcdef1234567890abcdef1234567890abcdef12";
+const comment = (id: string, url: string, body: string) => ({
+  id,
+  url,
+  body,
+  author: "reviewer",
+  createdAt: "2026-09-13T11:00:00Z",
+});
 const readers: ControlUiLinkReaderDescriptor[] = [
   {
     pluginId: "github",
@@ -44,23 +51,13 @@ const issue = {
   badge: { label: "Open", tone: "positive" },
   createdAt: "2026-09-13T10:00:00Z",
   updatedAt: "2026-09-13T11:00:00Z",
-  body:
-    "Keep the conversation visible while reviewing **issues, pull requests, and commits**.\n\n- Read the discussion\n- Inspect the patch\n- Return to chat\n\n[Related pull request](../pull/43)\n\n![Architecture screenshot](" +
-    imageUrl +
-    ")\n\n![Existing remote image](" +
-    fallbackImageUrl +
-    ")",
+  body: `Keep the conversation visible while reviewing **issues, pull requests, and commits**.\n\n- Read the discussion\n- Inspect the patch\n- Return to chat\n\n[Related pull request](../pull/43)\n\n![Architecture screenshot](${imageUrl})\n\n![Existing remote image](${fallbackImageUrl})`,
   comments: [
-    {
-      id: "issuecomment-123",
-      url: "https://github.com/openclaw/openclaw/issues/42#issuecomment-123",
-      author: "reviewer",
-      createdAt: "2026-09-13T11:00:00Z",
-      body:
-        '<!-- hidden-review-metadata -->\n\nThe sidebar keeps the review beside the conversation.\n\n<img src="' +
-        imageUrl +
-        '" alt="Comment screenshot" width="320" />',
-    },
+    comment(
+      "issuecomment-123",
+      "https://github.com/openclaw/openclaw/issues/42#issuecomment-123",
+      `<!-- hidden-review-metadata -->\n\nThe sidebar keeps the review beside the conversation.\n\n<img src="${imageUrl}" alt="Comment screenshot" width="320" />`,
+    ),
   ],
   commentsTotal: 1,
 } satisfies ControlUiLinkReaderDocument;
@@ -81,12 +78,12 @@ const pull = {
   badge: { label: "Merged", tone: "accent" },
   comments: [
     {
-      id: "discussion_r124",
-      url: "https://github.com/openclaw/openclaw/pull/43#discussion_r124",
-      author: "reviewer",
-      createdAt: "2026-09-13T11:00:00Z",
+      ...comment(
+        "discussion_r124",
+        "https://github.com/openclaw/openclaw/pull/43#discussion_r124",
+        "Keep the image beside this reviewed line.",
+      ),
       label: "Review comment",
-      body: "Keep the image beside this reviewed line.",
       context: { path: file.path, lineLabel: "2", label: "After change", diff: file.patch },
     },
   ],
@@ -102,13 +99,11 @@ const commit = {
   badge: { label: "Commit", tone: "neutral" },
   body: "Render GitHub documents beside chat\n\nPreserve native modified-click behavior.",
   comments: [
-    {
-      id: "commitcomment-125",
-      url: "https://github.com/openclaw/openclaw/commit/" + sha + "#commitcomment-125",
-      author: "reviewer",
-      createdAt: "2026-09-13T11:00:00Z",
-      body: "Commit discussion is available here too.",
-    },
+    comment(
+      "commitcomment-125",
+      `https://github.com/openclaw/openclaw/commit/${sha}#commitcomment-125`,
+      "Commit discussion is available here too.",
+    ),
   ],
   commentsTotal: 1,
   files: [file],
@@ -119,6 +114,42 @@ let server: ControlUiE2eServer;
 const artifactParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
 async function capture(page: Page, name: string, artifacts: string) {
   await page.screenshot({ animations: "disabled", path: path.join(artifacts, `${name}.png`) });
+}
+const named = (scope: Page | Locator, role: Parameters<Page["getByRole"]>[0], name: string) =>
+  scope.getByRole(role, { name, exact: true });
+const heading = (panel: Locator, name: string) => named(panel, "heading", name).waitFor();
+const clickButton = (panel: Locator, name: string) => named(panel, "button", name).click();
+const waitText = (panel: Locator, text: string) => panel.getByText(text, { exact: true }).waitFor();
+const tabCount = (header: Locator, count: number) =>
+  expect.poll(() => header.getByRole("tab").count()).toBe(count);
+function installReader(
+  page: Page,
+  text: string,
+  options: Parameters<typeof installMockGateway>[1],
+) {
+  return installMockGateway(page, {
+    controlUiLinkReaders: readers,
+    models: [{ id: "reader-demo", name: "Demo", provider: "demo" }],
+    agentModel: "demo/reader-demo",
+    sessionInfo: { model: "reader-demo", modelProvider: "demo" },
+    sessions: [{ key: "agent:main:main", model: "reader-demo", modelProvider: "demo" }],
+    historyMessages: [
+      { role: "assistant", timestamp: Date.now(), content: [{ type: "text", text }] },
+    ],
+    ...options,
+  });
+}
+async function imageCookie(context: Awaited<ReturnType<Browser["newContext"]>>, domain: string) {
+  await context.addCookies([
+    {
+      name: "reader_test_cookie",
+      value: "present",
+      domain,
+      path: "/",
+      secure: true,
+      sameSite: "None",
+    },
+  ]);
 }
 
 describe("GitHub side panel", () => {
@@ -145,16 +176,7 @@ describe("GitHub side panel", () => {
         : {}),
     });
     try {
-      await context.addCookies([
-        {
-          name: "reader_test_cookie",
-          value: "present",
-          domain: "user-images.githubusercontent.com",
-          path: "/",
-          secure: true,
-          sameSite: "None",
-        },
-      ]);
+      await imageCookie(context, "user-images.githubusercontent.com");
       await context.route("https://github.com/**", (route) =>
         route.fulfill({
           contentType: "text/html",
@@ -203,16 +225,7 @@ describe("GitHub side panel", () => {
         });
       });
       const fallbackRequests: Array<Record<string, string>> = [];
-      await context.addCookies([
-        {
-          name: "reader_test_cookie",
-          value: "present",
-          domain: "images.example",
-          path: "/",
-          secure: true,
-          sameSite: "None",
-        },
-      ]);
+      await imageCookie(context, "images.example");
       await context.route(fallbackImageUrl, (route) => {
         fallbackRequests.push(route.request().headers());
         return route.fulfill({
@@ -221,53 +234,40 @@ describe("GitHub side panel", () => {
           body: Buffer.from(png, "base64"),
         });
       });
-      const gateway = await installMockGateway(page, {
-        controlUiLinkReaders: readers,
-        models: [{ id: "reader-demo", name: "Demo", provider: "demo" }],
-        agentModel: "demo/reader-demo",
-        sessionInfo: { model: "reader-demo", modelProvider: "demo" },
-        sessions: [{ key: "agent:main:main", model: "reader-demo", modelProvider: "demo" }],
-        featureMethods: [
-          "chat.startup",
-          "chat.metadata",
-          "github.detail",
-          "github.preview",
-          "github.image",
-        ],
-        historyMessages: [
-          {
-            role: "assistant",
-            timestamp: Date.now(),
-            content: [
-              {
-                type: "text",
-                text: `Review the [issue](${issue.url}), the [pull request](${pull.url}), and the [commit](${commit.url}) without losing this conversation.`,
-              },
-            ],
-          },
-        ],
-        methodResponses: {
-          "github.image": {
-            cases: [
-              {
-                match: { url: imageUrl },
-                response: { url: imageUrl, dataUrl: `data:image/png;base64,${png}` },
-              },
-              {
-                match: { url: fallbackImageUrl },
-                response: { url: fallbackImageUrl, dataUrl: "" },
-              },
-            ],
-          },
-          "github.detail": {
-            cases: [
-              { match: { url: issue.url }, response: issue },
-              { match: { url: pull.url }, response: pull },
-              { match: { url: commit.url }, response: commit },
-            ],
+      const gateway = await installReader(
+        page,
+        `Review the [issue](${issue.url}), the [pull request](${pull.url}), and the [commit](${commit.url}) without losing this conversation.`,
+        {
+          featureMethods: [
+            "chat.startup",
+            "chat.metadata",
+            "github.detail",
+            "github.preview",
+            "github.image",
+          ],
+          methodResponses: {
+            "github.image": {
+              cases: [
+                {
+                  match: { url: imageUrl },
+                  response: { url: imageUrl, dataUrl: `data:image/png;base64,${png}` },
+                },
+                {
+                  match: { url: fallbackImageUrl },
+                  response: { url: fallbackImageUrl, dataUrl: "" },
+                },
+              ],
+            },
+            "github.detail": {
+              cases: [
+                { match: { url: issue.url }, response: issue },
+                { match: { url: pull.url }, response: pull },
+                { match: { url: commit.url }, response: commit },
+              ],
+            },
           },
         },
-      });
+      );
       await page.goto(`${server.baseUrl}chat`);
       const chat = page
         .locator(".chat-text")
@@ -286,10 +286,8 @@ describe("GitHub side panel", () => {
       const panel = page.locator("openclaw-link-reader-panel");
       const panelHeader = page.locator('[data-region-header="side"]');
       const active = panel.locator(".lr-content:not([hidden])");
-      await panel.getByRole("heading", { name: issue.title, exact: true }).waitFor();
-      await panel
-        .getByText("The sidebar keeps the review beside the conversation.", { exact: true })
-        .waitFor();
+      await heading(panel, issue.title);
+      await waitText(panel, "The sidebar keeps the review beside the conversation.");
       // The shared session region owns layout; measure chat, not its container that also holds the reader.
       await expect
         .poll(async () => {
@@ -322,42 +320,40 @@ describe("GitHub side panel", () => {
       expect(await gateway.getRequests("github.image")).toHaveLength(2);
       expect(await active.textContent()).not.toContain("hidden-review-metadata");
       expect(await page.locator("body").getAttribute("data-reader-image-csp-blocked")).toBeNull();
-      await expect.poll(() => panelHeader.getByRole("tab").count()).toBe(1);
+      await tabCount(panelHeader, 1);
       await capture(page, "github-issue-light", artifacts);
-      await active.getByRole("link", { name: "Related pull request", exact: true }).click();
-      await panel.getByRole("heading", { name: pull.title, exact: true }).waitFor();
+      await named(active, "link", "Related pull request").click();
+      await heading(panel, pull.title);
       expect(await panelHeader.getByRole("tab").count()).toBe(1);
       expect(context.pages()).toHaveLength(1);
-      await panel.getByRole("button", { name: "Back", exact: true }).click();
-      await panel.getByRole("heading", { name: issue.title, exact: true }).waitFor();
+      await clickButton(panel, "Back");
+      await heading(panel, issue.title);
 
-      await chat.getByRole("link", { name: "pull request", exact: true }).click();
-      await panel.getByRole("heading", { name: pull.title, exact: true }).waitFor();
-      await panel.getByText("Merged", { exact: true }).waitFor();
+      await named(chat, "link", "pull request").click();
+      await heading(panel, pull.title);
+      await waitText(panel, "Merged");
       await active.locator(".lr-files .lr-file summary").click();
       await active.locator(".lr-files .lr-diff").waitFor();
       expect(await active.locator(".lr-files .lr-diff").textContent()).toContain("sidebar");
-      await active
-        .getByText("Keep the image beside this reviewed line.", { exact: true })
-        .waitFor();
-      await expect.poll(() => panelHeader.getByRole("tab").count()).toBe(2);
+      await waitText(active, "Keep the image beside this reviewed line.");
+      await tabCount(panelHeader, 2);
       await capture(page, "github-pr-diff-light", artifacts);
 
-      await chat.getByRole("link", { name: "commit", exact: true }).click();
-      await panel.getByRole("heading", { name: commit.title, exact: true }).waitFor();
-      await active.getByText("Commit discussion is available here too.", { exact: true }).waitFor();
-      await expect.poll(() => panelHeader.getByRole("tab").count()).toBe(3);
-      await panelHeader.getByRole("tab", { name: pull.title, exact: true }).click();
-      await panel.getByRole("heading", { name: pull.title, exact: true }).waitFor();
+      await named(chat, "link", "commit").click();
+      await heading(panel, commit.title);
+      await waitText(active, "Commit discussion is available here too.");
+      await tabCount(panelHeader, 3);
+      await named(panelHeader, "tab", pull.title).click();
+      await heading(panel, pull.title);
       expect(
         await active
           .locator(".lr-files .lr-file")
           .evaluate((element) => (element as HTMLDetailsElement).open),
       ).toBe(true);
-      await panelHeader.getByRole("tab", { name: commit.title, exact: true }).click();
-      await panel.getByRole("heading", { name: commit.title, exact: true }).waitFor();
+      await named(panelHeader, "tab", commit.title).click();
+      await heading(panel, commit.title);
       await expect.poll(() => panelHeader.locator(".tabstrip-tab__icon svg").count()).toBe(3);
-      await panel.getByRole("button", { name: "Refresh item", exact: true }).click();
+      await clickButton(panel, "Refresh item");
       await expect
         .poll(async () =>
           (await gateway.getRequests("github.detail")).some(
@@ -365,14 +361,14 @@ describe("GitHub side panel", () => {
           ),
         )
         .toBe(true);
-      await panel.getByRole("heading", { name: commit.title, exact: true }).waitFor();
+      await heading(panel, commit.title);
       await page.emulateMedia({ colorScheme: "dark" });
       await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
       await active.locator(".lr-files .lr-file summary").click();
       await capture(page, "github-commit-dark", artifacts);
 
       const external = page.waitForEvent("popup");
-      await panel.getByRole("link", { name: "Open on GitHub", exact: true }).click();
+      await named(panel, "link", "Open on GitHub").click();
       const popup = await external;
       await popup.waitForLoadState("domcontentloaded");
       expect(popup.url()).toBe(commit.url);
@@ -380,11 +376,11 @@ describe("GitHub side panel", () => {
       const address = panel.locator(".lr-url");
       await address.fill(issue.url);
       await address.press("Enter");
-      await panel.getByRole("heading", { name: issue.title, exact: true }).waitFor();
-      await panel.getByRole("button", { name: "Back", exact: true }).click();
-      await panel.getByRole("heading", { name: commit.title, exact: true }).waitFor();
+      await heading(panel, issue.title);
+      await clickButton(panel, "Back");
+      await heading(panel, commit.title);
       await panelHeader.locator(".tabstrip-tab__close").last().click();
-      await expect.poll(() => panelHeader.getByRole("tab").count()).toBe(2);
+      await tabCount(panelHeader, 2);
       await selectChatLayoutAction(page, "Minimize side panel");
       await expect.poll(() => panel.locator(".link-reader-panel").isVisible()).toBe(false);
       expect(
@@ -395,7 +391,7 @@ describe("GitHub side panel", () => {
 
       await page.setViewportSize({ width: 390, height: 844 });
       await issueLink.click();
-      await panel.getByRole("heading", { name: issue.title, exact: true }).waitFor();
+      await heading(panel, issue.title);
       const mobileBox = await panel.locator(".link-reader-panel").boundingBox();
       expect(mobileBox!.x).toBeGreaterThanOrEqual(0);
       expect(mobileBox!.x + mobileBox!.width).toBeLessThanOrEqual(391);
@@ -430,32 +426,18 @@ describe("GitHub side panel", () => {
         body: sources
           .map(
             (src) =>
-              '<img src="' +
-              src +
-              '" alt="Blocked image" srcset="https://images.example/github-untrusted-image-srcset.png 2x" onerror="window.githubImageScriptRan=true">',
+              `<img src="${src}" alt="Blocked image" srcset="https://images.example/github-untrusted-image-srcset.png 2x" onerror="window.githubImageScriptRan=true">`,
           )
           .join("\n\n"),
       };
-      await installMockGateway(page, {
-        controlUiLinkReaders: readers,
-        models: [{ id: "reader-demo", name: "Demo", provider: "demo" }],
-        agentModel: "demo/reader-demo",
-        sessionInfo: { model: "reader-demo", modelProvider: "demo" },
-        sessions: [{ key: "agent:main:main", model: "reader-demo", modelProvider: "demo" }],
+      await installReader(page, `[Image security fixture](${issue.url})`, {
         featureMethods: ["chat.startup", "chat.metadata", "github.detail"],
-        historyMessages: [
-          {
-            role: "assistant",
-            timestamp: Date.now(),
-            content: [{ type: "text", text: "[Image security fixture](" + issue.url + ")" }],
-          },
-        ],
         methodResponses: { "github.detail": hostile },
       });
       await page.goto(server.baseUrl + "chat");
       await page.getByRole("link", { name: "Image security fixture", exact: true }).click();
       const panel = page.locator("openclaw-link-reader-panel");
-      await panel.getByRole("heading", { name: issue.title, exact: true }).waitFor();
+      await heading(panel, issue.title);
       await expect.poll(() => panel.locator(".lr-image-caption").count()).toBe(sources.length);
       expect(await panel.locator(".lr-markdown img").count()).toBe(0);
       // A paint flush also lets any parser-initiated image requests surface.

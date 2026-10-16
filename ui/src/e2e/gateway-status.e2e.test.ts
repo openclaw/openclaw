@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
@@ -9,6 +9,14 @@ import { installNativeWebChrome } from "./native-nav.test-support.ts";
 import { waitForGatewayRecoveryScope } from "./new-session-page.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Gateway status with native account identity" });
+async function capture(target: Page | Locator, name: string) {
+  if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+    await target.screenshot({
+      path: path.join(suite.artifactDir, `${name}.png`),
+      animations: "disabled",
+    });
+  }
+}
 
 async function connectionStatusOverlapsComposer(page: Page): Promise<boolean> {
   return page.evaluate(() => {
@@ -241,16 +249,12 @@ suite.define(() => {
         const footer = page.locator(".sidebar-footer-bar");
         await expect.poll(() => page.locator(".chat-queue__item").count()).toBe(2);
         await expect.poll(() => footer.textContent()).toContain("Reconnecting…");
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          await footer.screenshot({
-            path: path.join(suite.artifactDir, "native-reconnecting.png"),
-          });
-        }
+        await capture(footer, "native-reconnecting");
         const identityStatus = footer.locator(".sidebar-identity-card");
         expect(await identityStatus.isVisible()).toBe(true);
         expect(await identityStatus.getAttribute("aria-label")).toContain("Reconnecting…");
-        expect(await footer.locator(".sidebar-identity-card").textContent()).toContain("Alex");
-        expect(await footer.locator(".sidebar-identity-card [role=status]").count()).toBe(0);
+        expect(await identityStatus.textContent()).toContain("Alex");
+        expect(await identityStatus.locator("[role=status]").count()).toBe(0);
         const announcement = footer.locator(":scope > [role=status]");
         expect(await announcement.count()).toBe(1);
         expect(await announcement.textContent()).toContain("Reconnecting…");
@@ -267,16 +271,11 @@ suite.define(() => {
         await page.setViewportSize({ width: 1280, height: 900 });
         await footer.waitFor({ state: "visible" });
 
-        await footer.locator(".sidebar-identity-card").click();
+        await identityStatus.click();
         const menu = page.locator(".sidebar-identity-menu");
         await menu.getByText("Alex", { exact: true }).waitFor();
         await menu.getByText("Studio Gateway", { exact: true }).waitFor();
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "outbox-account-menu.png"),
-            animations: "disabled",
-          });
-        }
+        await capture(page, "outbox-account-menu");
         expect(await menu.locator(".sidebar-identity-menu__outbox").count()).toBe(0);
         expect(await page.locator(".chat-queue__item").count()).toBe(2);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
@@ -284,7 +283,7 @@ suite.define(() => {
         await menu.waitFor({ state: "hidden" });
         await page.setViewportSize({ width: 390, height: 844 });
         await page.getByRole("button", { name: "Expand sidebar" }).click();
-        await footer.locator(".sidebar-identity-card").click();
+        await identityStatus.click();
         await menu.getByText("Alex", { exact: true }).waitFor();
         const retry = menu.locator('[data-value="command:retry-connect"]');
         await retry.waitFor();
@@ -294,19 +293,14 @@ suite.define(() => {
         expect(bounds!.x).toBeGreaterThanOrEqual(0);
         expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
         expect(await footer.textContent()).not.toContain("in outbox");
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "outbox-account-menu-mobile.png"),
-            animations: "disabled",
-          });
-        }
+        await capture(page, "outbox-account-menu-mobile");
         const socketCount = await gateway.getSocketCount();
         await retry.click();
         await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
         await gateway.setOnline(true);
         await waitForControlUiGatewayReady(page);
         await expect.poll(() => footer.textContent()).not.toContain("Reconnecting…");
-        expect(await footer.locator(".sidebar-identity-card").textContent()).toContain("Alex");
+        expect(await identityStatus.textContent()).toContain("Alex");
       },
     );
   });

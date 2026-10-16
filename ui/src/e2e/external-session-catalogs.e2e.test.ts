@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -25,6 +26,70 @@ const SHARE_ROUTE = {
   ambiguity: "multiple-results-or-next-cursor",
 } as const;
 
+const featureMethods = [
+  "chat.metadata",
+  "chat.startup",
+  "sessions.catalog.list",
+  "sessions.catalog.read",
+];
+const visiblePane = "openclaw-chat-pane.chat-pane-cache__pane--visible";
+type CatalogPane = HTMLElement & {
+  active: boolean;
+  presented: boolean;
+  sessionKey: string;
+  state: { assistantAgentId: string; selfUser: { id: string } | null; connected: boolean };
+};
+const waitForChat = (page: Page, agent: string, search = "") =>
+  waitForControlUiRoute(page, { routeId: "chat", pathname: `/chat/${agent}`, search });
+const paneStates = (locator: Locator) =>
+  locator.evaluateAll((panes) =>
+    panes.map((pane) => {
+      const { active, presented, sessionKey, state } = pane as CatalogPane;
+      return {
+        active,
+        presented,
+        sessionKey,
+        owner: state.assistantAgentId,
+        selfId: state.selfUser?.id,
+        connected: state.connected,
+      };
+    }),
+  );
+function artifactDirectory() {
+  const root = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+  return root ? createControlUiE2eArtifactDir("external-session-catalogs", root) : undefined;
+}
+
+function makeCatalog(
+  id: string,
+  label: string,
+  threadId: string,
+  name: string,
+  host: { hostId: string; label: string; kind: string; nodeId?: string },
+  options: {
+    canContinue?: boolean;
+    status?: string;
+    archived?: boolean;
+    sourceHomeId?: string;
+    shareRoute?: typeof SHARE_ROUTE;
+  } = {},
+) {
+  const { canContinue = false, status = "stored", shareRoute, ...session } = options;
+  return {
+    id,
+    label,
+    capabilities: { continueSession: canContinue, archive: false },
+    ...(shareRoute ? { shareRoute } : {}),
+    hosts: [
+      {
+        ...host,
+        connected: true,
+        sessions: [{ threadId, name, status, canContinue, canArchive: false, ...session }],
+      },
+    ],
+  };
+}
+
 suite.define(() => {
   it.each(["Riley", "Morgan"])(
     "keeps external transcript authors independent of viewer %s",
@@ -47,36 +112,16 @@ suite.define(() => {
               avatarUrl: "/viewer-avatar.png",
             },
           ],
-          featureMethods: [
-            "chat.metadata",
-            "chat.startup",
-            "sessions.catalog.list",
-            "sessions.catalog.read",
-          ],
+          featureMethods,
           methodResponses: {
             "sessions.catalog.list": {
-              catalogs: catalogIds.map((id) => ({
-                id,
-                label: id,
-                capabilities: { continueSession: false, archive: false },
-                hosts: [
-                  {
-                    hostId: "gateway",
-                    label: "Shared transcripts",
-                    kind: "gateway",
-                    connected: true,
-                    sessions: [
-                      {
-                        threadId: "shared",
-                        name: `${id} shared transcript`,
-                        status: "stored",
-                        canContinue: false,
-                        canArchive: false,
-                      },
-                    ],
-                  },
-                ],
-              })),
+              catalogs: catalogIds.map((id) =>
+                makeCatalog(id, id, "shared", `${id} shared transcript`, {
+                  hostId: "gateway",
+                  label: "Shared transcripts",
+                  kind: "gateway",
+                }),
+              ),
             },
             "sessions.catalog.read": {
               hostId: "gateway",
@@ -105,22 +150,18 @@ suite.define(() => {
           await page.waitForFunction(
             (expectedSessionKey) =>
               [
-                ...document.querySelectorAll("openclaw-chat-pane.chat-pane-cache__pane--visible"),
-              ].some(
-                (pane) =>
-                  (pane as HTMLElement & { sessionKey?: string }).sessionKey === expectedSessionKey,
-              ),
+                ...document.querySelectorAll<CatalogPane>(
+                  "openclaw-chat-pane.chat-pane-cache__pane--visible",
+                ),
+              ].some((pane) => pane.sessionKey === expectedSessionKey),
             `agent:main:catalog:${catalogId}:gateway:shared`,
           );
-          const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
+          const pane = page.locator(visiblePane);
           const message = pane
             .locator(".chat-group.user")
             .filter({ hasText: "The imported author's question." });
           await message.waitFor();
-          const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-          const artifactDir = artifactRoot
-            ? createControlUiE2eArtifactDir("external-session-catalogs", artifactRoot)
-            : undefined;
+          const artifactDir = artifactDirectory();
           if (artifactDir && catalogId === "beam") {
             await page.screenshot({ path: path.join(artifactDir, `beam-author-${viewer}.png`) });
           }
@@ -163,13 +204,7 @@ suite.define(() => {
         const owners = ["main", "other"];
         const gateway = await installMockGateway(page, {
           agentModel: "openai/gpt-5.6-luna",
-          featureMethods: [
-            "chat.metadata",
-            "chat.startup",
-            "sessions.catalog.list",
-            "sessions.catalog.read",
-            "sessions.catalog.continue",
-          ],
+          featureMethods: [...featureMethods, "sessions.catalog.continue"],
           methodResponses: {
             "agents.list": {
               defaultId: "main",
@@ -188,29 +223,14 @@ suite.define(() => {
                 match: { agentId },
                 response: {
                   catalogs: [
-                    {
-                      id: source.catalogId,
-                      label: "Native fixture",
-                      capabilities: { continueSession: true, archive: false },
-                      hosts: [
-                        {
-                          hostId: source.hostId,
-                          label: "Dev Box",
-                          kind: "node",
-                          connected: true,
-                          sessions: [
-                            {
-                              threadId: source.threadId,
-                              name: `${agentId} native thread`,
-                              status: "stored",
-                              canContinue: true,
-                              canArchive: false,
-                              sourceHomeId: `${agentId}-home`,
-                            },
-                          ],
-                        },
-                      ],
-                    },
+                    makeCatalog(
+                      source.catalogId,
+                      "Native fixture",
+                      source.threadId,
+                      `${agentId} native thread`,
+                      { hostId: source.hostId, label: "Dev Box", kind: "node" },
+                      { canContinue: true, sourceHomeId: `${agentId}-home` },
+                    ),
                   ],
                 },
               })),
@@ -247,11 +267,7 @@ suite.define(() => {
             },
             { agentId, search: catalog ? search : "" },
           );
-          await waitForControlUiRoute(page, {
-            routeId: "chat",
-            pathname: `/chat/${agentId}`,
-            search: catalog ? search : "",
-          });
+          await waitForChat(page, agentId, catalog ? search : "");
         };
         const assertOwner = async (agentId: string) => {
           await expect
@@ -260,23 +276,8 @@ suite.define(() => {
             )
             .toBe(agentId);
           await expect
-            .poll(() =>
-              activePane.evaluateAll((panes) =>
-                panes.map((pane) => {
-                  const chat = pane as HTMLElement & {
-                    active: boolean;
-                    presented: boolean;
-                    state: { assistantAgentId: string };
-                  };
-                  return {
-                    active: chat.active,
-                    presented: chat.presented,
-                    owner: chat.state.assistantAgentId,
-                  };
-                }),
-              ),
-            )
-            .toEqual([{ active: true, presented: true, owner: agentId }]);
+            .poll(() => paneStates(activePane))
+            .toMatchObject([{ active: true, presented: true, owner: agentId }]);
         };
 
         await page.goto(
@@ -289,15 +290,11 @@ suite.define(() => {
             .locator(".sidebar-agent-menu")
             .getByRole("menuitem", { name: "Other", exact: true })
             .click();
-          await waitForControlUiRoute(page, {
-            routeId: "chat",
-            pathname: "/chat/other",
-            search: "",
-          });
+          await waitForChat(page, "other");
           await assertOwner("other");
           await sidebar.getByText("other native thread", { exact: true }).click();
         }
-        await waitForControlUiRoute(page, { routeId: "chat", pathname: "/chat/other", search });
+        await waitForChat(page, "other", search);
         expect((await gateway.waitForRequest("sessions.catalog.read")).params).toMatchObject({
           ...source,
           agentId: "other",
@@ -332,7 +329,7 @@ suite.define(() => {
         const readsBeforeReturn = (await gateway.getRequests("sessions.catalog.read")).length;
         await navigate("other", false);
         await sidebar.getByText("other native thread", { exact: true }).click();
-        await waitForControlUiRoute(page, { routeId: "chat", pathname: "/chat/other", search });
+        await waitForChat(page, "other", search);
         await assertOwner("other");
         expect(await composer().inputValue()).toBe("other retained draft");
         expect(await gateway.getRequests("sessions.catalog.read")).toHaveLength(readsBeforeReturn);
@@ -344,10 +341,10 @@ suite.define(() => {
         );
         await expect.poll(() => visiblePanes.count()).toBe(2);
         await visiblePanes.getByText("other native transcript", { exact: true }).click();
-        await waitForControlUiRoute(page, { routeId: "chat", pathname: "/chat/other", search });
+        await waitForChat(page, "other", search);
         await assertOwner("other");
         await visiblePanes.getByText("main native transcript", { exact: true }).click();
-        await waitForControlUiRoute(page, { routeId: "chat", pathname: "/chat/main", search });
+        await waitForChat(page, "main", search);
         await assertOwner("main");
 
         // Ordinary Gateway publication and transport reconnect must retain each pane's owner.
@@ -359,40 +356,22 @@ suite.define(() => {
           presence: [{ instanceId, user: { id: "fixture-user", name: "Fixture User" } }],
         });
         await expect
-          .poll(() =>
-            visiblePanes.evaluateAll((panes) =>
-              panes.map((pane) => {
-                const chat = pane as HTMLElement & {
-                  state: { selfUser: { id: string } | null; assistantAgentId: string };
-                };
-                return [chat.state.selfUser?.id, chat.state.assistantAgentId];
-              }),
-            ),
-          )
-          .toEqual([
-            ["fixture-user", "other"],
-            ["fixture-user", "main"],
+          .poll(() => paneStates(visiblePanes))
+          .toMatchObject([
+            { selfId: "fixture-user", owner: "other" },
+            { selfId: "fixture-user", owner: "main" },
           ]);
         await assertOwner("main");
         await gateway.closeLatest();
         await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(1);
         await expect
-          .poll(() =>
-            visiblePanes.evaluateAll((panes) =>
-              panes.map((pane) => {
-                const chat = pane as HTMLElement & {
-                  state: { connected: boolean; assistantAgentId: string };
-                };
-                return [chat.state.connected, chat.state.assistantAgentId];
-              }),
-            ),
-          )
-          .toEqual([
-            [true, "other"],
-            [true, "main"],
+          .poll(() => paneStates(visiblePanes))
+          .toMatchObject([
+            { connected: true, owner: "other" },
+            { connected: true, owner: "main" },
           ]);
         await visiblePanes.getByText("other native transcript", { exact: true }).click();
-        await waitForControlUiRoute(page, { routeId: "chat", pathname: "/chat/other", search });
+        await waitForChat(page, "other", search);
         await assertOwner("other");
         await composer().fill("/bt");
         await page.getByRole("option").filter({ hasText: "/btw" }).click();
@@ -410,11 +389,7 @@ suite.define(() => {
           sessionKey: "agent:other:adopted-native",
           message: "Continue under Other",
         });
-        await waitForControlUiRoute(page, {
-          routeId: "chat",
-          pathname: "/chat/other/adopted-native",
-          search: "",
-        });
+        await waitForChat(page, "other/adopted-native");
         await assertOwner("other");
         await gateway.emitChatFinal({
           runId: (sent.params as { idempotencyKey: string }).idempotencyKey,
@@ -428,11 +403,7 @@ suite.define(() => {
         const adoptedRow = sidebar.locator('[data-session-key="agent:other:adopted-native"]');
         await navigate("other", false);
         await adoptedRow.locator("a").click();
-        await waitForControlUiRoute(page, {
-          routeId: "chat",
-          pathname: "/chat/other/adopted-native",
-          search: "",
-        });
+        await waitForChat(page, "other/adopted-native");
         await assertOwner("other");
         for (const request of await gateway.getRequests("sessions.catalog.read")) {
           expect(request.params).toMatchObject(source);
@@ -456,12 +427,7 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       basePath: "/openclaw",
       defaultAgentId: "research",
-      featureMethods: [
-        "chat.metadata",
-        "chat.startup",
-        "sessions.catalog.list",
-        "sessions.catalog.read",
-      ],
+      featureMethods,
       methodResponses: {
         // Beam rows live in the plugin catalog, not the native session store.
         "sessions.describe": { session: null },
@@ -475,30 +441,14 @@ suite.define(() => {
         },
         "sessions.catalog.list": {
           catalogs: [
-            {
-              id: "beam",
-              label: "Beam",
-              capabilities: { continueSession: false, archive: false },
-              shareRoute: SHARE_ROUTE,
-              hosts: [
-                {
-                  hostId: "gateway",
-                  label: "Beamed sessions",
-                  kind: "gateway",
-                  connected: true,
-                  sessions: [
-                    {
-                      threadId: fullId,
-                      name: "Pretty Beam route",
-                      status: "live",
-                      archived: false,
-                      canContinue: false,
-                      canArchive: false,
-                    },
-                  ],
-                },
-              ],
-            },
+            makeCatalog(
+              "beam",
+              "Beam",
+              fullId,
+              "Pretty Beam route",
+              { hostId: "gateway", label: "Beamed sessions", kind: "gateway" },
+              { shareRoute: SHARE_ROUTE, status: "live", archived: false },
+            ),
           ],
         },
         "sessions.catalog.read": {
@@ -515,18 +465,10 @@ suite.define(() => {
 
     const assertCatalogOwner = async (agentId = "research") => {
       await expect
-        .poll(() =>
-          page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible").evaluateAll((panes) =>
-            panes.map((pane) => {
-              const chat = pane as HTMLElement & {
-                sessionKey: string;
-                state: { assistantAgentId: string };
-              };
-              return { sessionKey: chat.sessionKey, agentId: chat.state.assistantAgentId };
-            }),
-          ),
-        )
-        .toEqual([{ sessionKey: `agent:${agentId}:catalog:beam:gateway:${fullId}`, agentId }]);
+        .poll(() => paneStates(page.locator(visiblePane)))
+        .toMatchObject([
+          { sessionKey: `agent:${agentId}:catalog:beam:gateway:${fullId}`, owner: agentId },
+        ]);
     };
 
     try {
@@ -553,11 +495,7 @@ suite.define(() => {
       await page
         .locator(".chat-pane__session-title-text", { hasText: "Pretty Beam route" })
         .waitFor();
-      expect(
-        await page
-          .locator("openclaw-chat-pane.chat-pane-cache__pane--visible textarea")
-          .isDisabled(),
-      ).toBe(true);
+      expect(await page.locator(`${visiblePane} textarea`).isDisabled()).toBe(true);
       const resolution = (await gateway.getRequests("sessions.catalog.list")).find(
         (request) => (request.params as { search?: string } | undefined)?.search,
       );
@@ -613,83 +551,32 @@ suite.define(() => {
 
   it("shows both paired-node catalogs and opens their view-only transcripts", async () => {
     const page = await suite.browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const pairedCatalogs = [
+      { id: "opencode", label: "OpenCode", name: "OpenCode release review" },
+      { id: "pi", label: "Pi", name: "Pi architecture notes" },
+    ];
     const gateway = await installMockGateway(page, {
-      featureMethods: [
-        "chat.metadata",
-        "chat.startup",
-        "sessions.catalog.list",
-        "sessions.catalog.read",
-      ],
+      featureMethods,
       methodResponses: {
         "sessions.catalog.list": {
-          catalogs: [
-            {
-              id: "opencode",
-              label: "OpenCode",
-              capabilities: { continueSession: false, archive: false },
-              hosts: [
-                {
-                  hostId: "node:devbox",
-                  label: "Dev Box",
-                  kind: "node",
-                  connected: true,
-                  nodeId: "devbox",
-                  sessions: [
-                    {
-                      threadId: "opencode-1",
-                      name: "OpenCode release review",
-                      status: "stored",
-                      canContinue: false,
-                      canArchive: false,
-                    },
-                  ],
-                },
-              ],
-            },
-            {
-              id: "pi",
-              label: "Pi",
-              capabilities: { continueSession: false, archive: false },
-              hosts: [
-                {
-                  hostId: "node:devbox",
-                  label: "Dev Box",
-                  kind: "node",
-                  connected: true,
-                  nodeId: "devbox",
-                  sessions: [
-                    {
-                      threadId: "pi-1",
-                      name: "Pi architecture notes",
-                      status: "stored",
-                      canContinue: false,
-                      canArchive: false,
-                    },
-                  ],
-                },
-              ],
-            },
-          ],
+          catalogs: pairedCatalogs.map(({ id, label, name }) =>
+            makeCatalog(id, label, `${id}-1`, name, {
+              hostId: "node:devbox",
+              label: "Dev Box",
+              kind: "node",
+              nodeId: "devbox",
+            }),
+          ),
         },
         "sessions.catalog.read": {
-          cases: [
-            {
-              match: { catalogId: "opencode", threadId: "opencode-1" },
-              response: {
-                hostId: "node:devbox",
-                threadId: "opencode-1",
-                items: [{ type: "agentMessage", text: "OpenCode transcript loaded" }],
-              },
+          cases: pairedCatalogs.map(({ id, label }) => ({
+            match: { catalogId: id, threadId: `${id}-1` },
+            response: {
+              hostId: "node:devbox",
+              threadId: `${id}-1`,
+              items: [{ type: "agentMessage", text: `${label} transcript loaded` }],
             },
-            {
-              match: { catalogId: "pi", threadId: "pi-1" },
-              response: {
-                hostId: "node:devbox",
-                threadId: "pi-1",
-                items: [{ type: "agentMessage", text: "Pi transcript loaded" }],
-              },
-            },
-          ],
+          })),
         },
       },
     });
@@ -715,19 +602,14 @@ suite.define(() => {
     await page.getByText("OpenCode release review", { exact: true }).click();
     await expect.poll(() => page.getByText("OpenCode transcript loaded").count()).toBe(1);
     await page.getByText("Pi architecture notes", { exact: true }).click();
-    const piPane = page
-      .locator("openclaw-chat-pane.chat-pane-cache__pane--visible")
-      .filter({ hasText: "Pi transcript loaded" });
+    const piPane = page.locator(visiblePane).filter({ hasText: "Pi transcript loaded" });
     await piPane.getByText("Pi transcript loaded").waitFor();
     expect(await piPane.locator(".agent-chat__composer-combobox > textarea").isDisabled()).toBe(
       true,
     );
     expect(await gateway.getRequests("sessions.catalog.read")).toHaveLength(2);
 
-    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactRoot
-      ? createControlUiE2eArtifactDir("external-session-catalogs", artifactRoot)
-      : undefined;
+    const artifactDir = artifactDirectory();
     if (artifactDir) {
       await page.screenshot({
         path: path.join(artifactDir, "external-session-catalogs.png"),
