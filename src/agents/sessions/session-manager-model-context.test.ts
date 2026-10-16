@@ -901,3 +901,55 @@ it.each(["reset", "compaction"])(
     });
   },
 );
+
+it("keeps warmed current context after historical and smaller-window reads", async () => {
+  await withSessionState("model-anchor-retention", async ({ scope }) => {
+    const source = SessionManager.open(scope);
+    const discardedId = source.appendMessage(makeUserMessage("discarded-prefix", 0));
+    for (let index = 1; index < 6; index++) {
+      source.appendMessage(makeUserMessage(`question-${index}`, index));
+    }
+    await waitForSessionTranscriptProjection(scope);
+    const historical = source.appendMessageWithTranscriptAnchor(makeUserMessage("question-6", 6));
+    assert(historical.anchor, "missing historical anchor");
+    for (let index = 7; index < 16; index++) {
+      source.appendMessage(makeUserMessage(`question-${index}`, index));
+    }
+    await waitForSessionTranscriptProjection(scope);
+    const limits = { maxBytes: 8192, maxEvents: 4 };
+    const readCurrent = () => SessionManager.openModelContext(scope, { limits });
+    const current = readCurrent();
+    const expected = current.buildSessionContext();
+    expect(current.getBranch().some((entry) => entry.id === discardedId)).toBe(false);
+    expect(expected.messages.at(-1)).toMatchObject({ content: "question-15" });
+
+    const earlier = SessionManager.openModelContext(scope, {
+      through: historical.anchor,
+      limits: { ...limits, maxEvents: 2 },
+    });
+    expect(earlier.buildSessionContext().messages.at(-1)).toMatchObject({ content: "question-6" });
+
+    let discardedPrefixReads = 0;
+    const parse = JSON.parse;
+    const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+      if (typeof text === "string" && text.includes(JSON.stringify(discardedId))) {
+        discardedPrefixReads += 1;
+      }
+      return parse(text, reviver);
+    });
+    try {
+      expect(readCurrent().buildSessionContext()).toEqual(expected);
+      expect(
+        SessionManager.openModelContext(scope, {
+          limits: { ...limits, maxEvents: 2 },
+        })
+          .buildSessionContext()
+          .messages.at(-1),
+      ).toMatchObject({ content: "question-15" });
+      expect(readCurrent().buildSessionContext()).toEqual(expected);
+      expect(discardedPrefixReads).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
