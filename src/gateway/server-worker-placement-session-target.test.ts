@@ -15,6 +15,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { createSessionActorReplica } from "../config/sessions/session-actor-replica.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -23,7 +24,10 @@ import * as repositoryPublications from "../state/session-repository-workspaces.
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
-import { resolveWorkerPlacementSessionTarget } from "./server-worker-placement-session-target.js";
+import {
+  resolveWorkerPlacementSessionTarget,
+  type WorkerPlacementSessionRuntime,
+} from "./server-worker-placement-session-target.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store.js";
@@ -42,6 +46,41 @@ afterEach(() => {
   memorySessionActorOwners.reset();
   resetConfigRuntimeState();
 });
+
+const sessionRuntime = (
+  findLiveByOwner: WorkerPlacementSessionRuntime["managedWorktrees"]["findLiveByOwner"] = async () =>
+    undefined,
+): WorkerPlacementSessionRuntime => ({
+  resolveGatewaySessionStoreTargetInWorker,
+  resolveCanonicalSessionEntryFromStoreKeys,
+  managedWorktrees: { findLiveByOwner },
+});
+
+const createWorktree = (name: string, ownerId: string) =>
+  managedWorktrees.createEmpty({
+    name,
+    ownerKind: "session",
+    ownerId,
+    runSetupScript: false,
+    provisionIgnoredFiles: false,
+  });
+
+async function createActor(sessionKey: string, entry: InternalSessionEntry) {
+  const owner = memorySessionActorOwners.get({
+    agentId: "main",
+    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+  });
+  const actor = await owner.acquire(
+    { database: owner.identity, sessionKey },
+    { assertCurrent() {}, assertReadable() {} },
+  );
+  const result = await actor.storage!.mutate(
+    { type: "session.entry.create", input: { entry } },
+    { assertCurrent() {}, authorize() {} },
+  );
+  expect(result.kind).toBe("committed");
+  return { actor, owner };
+}
 
 test("guards a durable workspace with committed facts and no host session SQL", async () => {
   await withStateDirEnv("durable-placement-source-", async () => {
@@ -65,17 +104,11 @@ test("guards a durable workspace with committed facts and no host session SQL", 
           ...identity,
           config: {},
           errorMessage: "placement source changed",
-          sessionRuntime: {
-            resolveGatewaySessionStoreTargetInWorker,
-            resolveCanonicalSessionEntryFromStoreKeys,
-            managedWorktrees: {
-              findLiveByOwner: async () => ({
-                id: "original",
-                ownerId: identity.sessionKey,
-                path: "/synthetic",
-              }),
-            },
-          },
+          sessionRuntime: sessionRuntime(async () => ({
+            id: "original",
+            ownerId: identity.sessionKey,
+            path: "/synthetic",
+          })),
         });
         expect(resolved.workspace).toEqual({ kind: "local", path: "/synthetic" });
         resolved.assertCurrent();
@@ -109,52 +142,22 @@ test("prepares an actor workspace and guards exact placement metadata without ho
       sessionKey: "agent:main:dashboard:incognito-placement-source",
       sessionId: "placement-source",
     };
-    const worktree = await managedWorktrees.createEmpty({
-      name: "actor-placement",
-      ownerKind: "session",
-      ownerId: identity.sessionKey,
-      runSetupScript: false,
-      provisionIgnoredFiles: false,
+    const worktree = await createWorktree("actor-placement", identity.sessionKey);
+    const { actor, owner } = await createActor(identity.sessionKey, {
+      sessionId: identity.sessionId,
+      updatedAt: Date.now(),
+      lifecycleRevision: "placement-window",
+      incognito: true,
+      projectId: "full-planning-project",
+      worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
     });
-    const owner = memorySessionActorOwners.get({
-      agentId: "main",
-      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-    });
-    const actor = await owner.acquire(
-      { database: owner.identity, sessionKey: identity.sessionKey },
-      { assertCurrent() {}, assertReadable() {} },
-    );
-    expect(
-      (
-        await actor.storage!.mutate(
-          {
-            type: "session.entry.create",
-            input: {
-              entry: {
-                sessionId: identity.sessionId,
-                updatedAt: Date.now(),
-                lifecycleRevision: "placement-window",
-                incognito: true,
-                projectId: "full-planning-project",
-                worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
-              },
-            },
-          },
-          { assertCurrent() {}, authorize() {} },
-        )
-      ).kind,
-    ).toBe("committed");
     const sql = observeHostDataSql();
     try {
       using resolved = await resolveWorkerPlacementSessionTarget({
         ...identity,
         config: {},
         errorMessage: "placement source changed",
-        sessionRuntime: {
-          managedWorktrees,
-          resolveGatewaySessionStoreTargetInWorker,
-          resolveCanonicalSessionEntryFromStoreKeys,
-        },
+        sessionRuntime: sessionRuntime((...args) => managedWorktrees.findLiveByOwner(...args)),
       });
       expect(resolved.workspace).toEqual({ kind: "local", path: worktree.path });
       expect(resolved.entry.projectId).toBe("full-planning-project");
@@ -205,13 +208,7 @@ test.each([
           },
         );
       }
-      const originalWorktree = await managedWorktrees.createEmpty({
-        name: "full-target-original",
-        ownerKind: "session",
-        ownerId: identity.sessionKey,
-        runSetupScript: false,
-        provisionIgnoredFiles: false,
-      });
+      const originalWorktree = await createWorktree("full-target-original", identity.sessionKey);
       await replaceSessionEntry(
         { ...identity, storePath },
         {
@@ -260,13 +257,7 @@ test.each([
       }
       const globalConfig: OpenClawConfig = { ...individual, session: { scope: "global" } };
       setRuntimeConfigSnapshot(globalConfig, globalConfig);
-      const globalWorktree = await managedWorktrees.createEmpty({
-        name: "full-target-global",
-        ownerKind: "session",
-        ownerId: "global",
-        runSetupScript: false,
-        provisionIgnoredFiles: false,
-      });
+      const globalWorktree = await createWorktree("full-target-global", "global");
       await replaceSessionEntry(
         { agentId: "main", sessionKey: "global", storePath },
         {
@@ -320,16 +311,7 @@ test.each([
           warn: () => {},
         });
         const replay = vi.fn(async () => {});
-        let resultState: string | undefined;
-        let admissionFailure: { name: string; message: string } | undefined;
-        try {
-          resultState = (await runtime.dispatchService.resumeProvisioning(captured, replay))?.state;
-        } catch (error) {
-          admissionFailure =
-            error instanceof Error
-              ? { name: error.name, message: error.message }
-              : { name: "UnknownError", message: String(error) };
-        }
+        const result = await runtime.dispatchService.resumeProvisioning(captured, replay);
         const current = placements.get(identity.sessionId);
         const original = loadExactSessionEntryReadOnly({ ...identity, storePath })?.entry;
         const global = loadExactSessionEntryReadOnly({
@@ -337,29 +319,12 @@ test.each([
           sessionKey: "global",
           storePath,
         })?.entry;
-        const outcome = {
-          scope,
-          inherited,
-          replayCalls: replay.mock.calls.length,
-          result: resultState,
-          admissionFailure,
-          placement: current?.state,
-          recoveryError: current?.recoveryError,
-          environment: environments.get(environmentId)?.state,
-          destroyCalls: destroy.mock.calls.length,
-          originalSessionId: original?.sessionId,
-          originalWorktreeId: original?.worktree?.id,
-          globalSessionId: global?.sessionId,
-          globalWorktreeId: global?.worktree?.id,
-        };
-        console.log("FULL_TARGET_PROBE", JSON.stringify(outcome));
-        expect(admissionFailure, JSON.stringify(outcome)).toBeUndefined();
-        expect(resultState).toBeUndefined();
+        expect(result?.state).toBeUndefined();
         expect(original?.sessionId).toBe(identity.sessionId);
         expect(original?.worktree?.id).toBe(originalWorktree.id);
         expect(global?.sessionId).toBe("distinct-global-window");
         expect(global?.worktree?.id).toBe(globalWorktree.id);
-        expect(replay, JSON.stringify(outcome)).toHaveBeenCalledOnce();
+        expect(replay).toHaveBeenCalledOnce();
         expect(current?.state).toBe("provisioning");
         expect(destroy).not.toHaveBeenCalled();
       } finally {
@@ -397,14 +362,10 @@ test("rejects stale repository selection and refreshes the accepted checkpoint a
         updatedAt: 1,
       },
     );
-    const sessionRuntime = {
-      resolveGatewaySessionStoreTargetInWorker,
-      resolveCanonicalSessionEntryFromStoreKeys,
-      managedWorktrees: { findLiveByOwner: async () => undefined },
-    };
+    const repositoryRuntime = sessionRuntime();
     const select = () =>
       resolveWorkerPlacementSessionTarget({
-        sessionRuntime,
+        sessionRuntime: repositoryRuntime,
         config,
         ...REQUEST,
         errorMessage: "repository selection changed",
@@ -434,7 +395,7 @@ test("rejects stale repository selection and refreshes the accepted checkpoint a
     let checkedPendingPublication = false;
     const barriers = createGatewayWorkerPlacementReclaimBarriers({
       placements,
-      loadSessionRuntime: async () => sessionRuntime,
+      loadSessionRuntime: async () => repositoryRuntime,
       cancelSessionWork: async (request) => {
         const stage = repositoryPublications.stageRepositoryWorkspacePublication;
         const observation = vi
@@ -541,17 +502,11 @@ test("resolves consecutive placement workspaces without decoding unrelated sessi
     try {
       for (const sessionKey of keys) {
         using resolved = await resolveWorkerPlacementSessionTarget({
-          sessionRuntime: {
-            resolveGatewaySessionStoreTargetInWorker,
-            resolveCanonicalSessionEntryFromStoreKeys,
-            managedWorktrees: {
-              findLiveByOwner: async (_kind, ownerId) => ({
-                id: ownerId,
-                ownerId,
-                path: `/synthetic/${ownerId}`,
-              }),
-            },
-          },
+          sessionRuntime: sessionRuntime(async (_kind, ownerId) => ({
+            id: ownerId,
+            ownerId,
+            path: `/synthetic/${ownerId}`,
+          })),
           config,
           sessionId: sessionKey,
           sessionKey,
@@ -578,44 +533,20 @@ test("resolves a device folder without consulting Git or the managed-worktree re
       sessionKey: "agent:main:dashboard:incognito-device-folder",
       sessionId: "device-folder-session",
     };
-    const owner = memorySessionActorOwners.get({
-      agentId: "main",
-      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    const { actor, owner } = await createActor(identity.sessionKey, {
+      sessionId: identity.sessionId,
+      updatedAt: 1,
+      lifecycleRevision: "folder-generation",
+      incognito: true,
+      deviceFolder: { deviceId: "paired-device", path: "/existing/non-git" },
     });
-    const actor = await owner.acquire(
-      { database: owner.identity, sessionKey: identity.sessionKey },
-      { assertCurrent() {}, assertReadable() {} },
-    );
-    expect(
-      (
-        await actor.storage!.mutate(
-          {
-            type: "session.entry.create",
-            input: {
-              entry: {
-                sessionId: identity.sessionId,
-                updatedAt: 1,
-                lifecycleRevision: "folder-generation",
-                incognito: true,
-                deviceFolder: { deviceId: "paired-device", path: "/existing/non-git" },
-              },
-            },
-          },
-          { assertCurrent() {}, authorize() {} },
-        )
-      ).kind,
-    ).toBe("committed");
     const findLiveByOwner = vi.fn(async () => undefined);
     try {
       using resolved = await resolveWorkerPlacementSessionTarget({
         ...identity,
         config: {},
         errorMessage: "folder binding changed",
-        sessionRuntime: {
-          managedWorktrees: { findLiveByOwner },
-          resolveGatewaySessionStoreTargetInWorker,
-          resolveCanonicalSessionEntryFromStoreKeys,
-        },
+        sessionRuntime: sessionRuntime(findLiveByOwner),
       });
       expect(resolved.workspace).toEqual({
         kind: "device-folder",
@@ -655,11 +586,7 @@ test("reclaim keeps its session generation through its own workspace metadata co
         getAsync: async () => placement,
         waitForTurnClaimRelease: async () => {},
       },
-      loadSessionRuntime: async () => ({
-        resolveGatewaySessionStoreTargetInWorker,
-        resolveCanonicalSessionEntryFromStoreKeys,
-        managedWorktrees: { findLiveByOwner: async () => undefined },
-      }),
+      loadSessionRuntime: async () => sessionRuntime(),
       cancelSessionWork: async () => {},
       revokeSessionAuthority: () => {},
     });
@@ -706,30 +633,24 @@ test("retains workspace ownership across row-cache invalidation and observes lat
       ...identity,
       config,
       errorMessage: "workspace owner changed",
-      sessionRuntime: {
-        resolveGatewaySessionStoreTargetInWorker,
-        resolveCanonicalSessionEntryFromStoreKeys,
-        managedWorktrees: {
-          findLiveByOwner: async (_kind, ownerId) => {
-            const replica = createSessionActorReplica({
-              target: {
-                sessionKey: identity.sessionKey,
-                database: {
-                  kind: "file",
-                  physicalIdentity: physical.key.slice("file:".length),
-                  birthtime: physical.birthtime,
-                  nativeLocation: storePath,
-                },
-              },
-              lifetime: { assertCurrent() {}, assertReadable() {} },
-              currentGeneration: () => "retained-workspace-fixture",
-            });
-            replica.invalidate();
-            replica.close();
-            return { id: "retained-worktree", ownerId, path: "/synthetic/workspace" };
+      sessionRuntime: sessionRuntime(async (_kind, ownerId) => {
+        const replica = createSessionActorReplica({
+          target: {
+            sessionKey: identity.sessionKey,
+            database: {
+              kind: "file",
+              physicalIdentity: physical.key.slice("file:".length),
+              birthtime: physical.birthtime,
+              nativeLocation: storePath,
+            },
           },
-        },
-      },
+          lifetime: { assertCurrent() {}, assertReadable() {} },
+          currentGeneration: () => "retained-workspace-fixture",
+        });
+        replica.invalidate();
+        replica.close();
+        return { id: "retained-worktree", ownerId, path: "/synthetic/workspace" };
+      }),
     });
     expect(resolved.workspace).toEqual({ kind: "local", path: "/synthetic/workspace" });
     await patchSessionEntryCore(scope, () => ({ label: "updated during placement" }));

@@ -20,6 +20,63 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
+type RuntimeOptions = Parameters<typeof createGatewayWorkerPlacementRuntime>[0];
+
+function startRuntime(
+  time: ReturnType<typeof createGatewaySchedulerClock>,
+  reconcileActive: () => Promise<void>,
+  warn: RuntimeOptions["warn"],
+  placements: RuntimeOptions["placements"] = {
+    subscribeChanges: () => () => {},
+    workspaceResultInstanceId: () => "gateway-test",
+    getAsync: async () => undefined,
+    getManyAsync: async () => new Map(),
+    listAsync: async () => [],
+    retireSessionPlacementAsync: vi.fn(async () => {}),
+    pruneOrphanedWorkspaceReconciliations: async () => [],
+    listWorkspaceReconciliationOwners: async () => [],
+    listPendingWorkspaceResultsAsync: async () => [],
+  } as never,
+  environments: RuntimeOptions["environments"] = {
+    subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
+    installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
+    start: vi.fn(),
+    isStopping: () => false,
+    beginClose: vi.fn(),
+    stop: vi.fn().mockResolvedValue(undefined),
+  } as never,
+) {
+  runtimeFactoryMocks.createDiskSpace.mockReturnValue({
+    read: vi.fn(),
+    version: () => 0,
+    invalidate: vi.fn(),
+    nextSweepAtMs: () => Infinity,
+    sweep: vi.fn().mockResolvedValue(undefined),
+  });
+  runtimeFactoryMocks.createDispatch.mockReturnValue({
+    dispatch: vi.fn(),
+    forceDestroyEnvironment: vi.fn(),
+    reclaim: vi.fn(),
+    reconcile: vi.fn().mockResolvedValue(undefined),
+    reconcileActive,
+  });
+  return createGatewayWorkerPlacementRuntime({
+    initialPlacements: [],
+    scheduler: createTestGatewayScheduler(time.clock),
+    getCommittedRuntimeConfig: getRuntimeConfig,
+    cancelSessionWork: vi.fn(async () => {}),
+    placements,
+    environments,
+    gatewayNamespace: "gateway-test",
+    revokeSessionAuthority: vi.fn(),
+    warn,
+  }).startRuntime({
+    isClosePreludeStarted: () => false,
+    registerSidecar: vi.fn(),
+    unregisterSidecar: vi.fn(),
+  });
+}
+
 describe("worker placement session events", () => {
   it("retires changed placements after real placement and session writes without idle rescans", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -52,28 +109,13 @@ describe("worker placement session events", () => {
       );
       const list = vi.spyOn(placements, "listAsync");
       let reconciled = createDeferredCore();
-      runtimeFactoryMocks.createDiskSpace.mockReturnValue({
-        read: vi.fn(),
-        version: () => 0,
-        invalidate: vi.fn(),
-        nextSweepAtMs: () => Infinity,
-        sweep: vi.fn().mockResolvedValue(undefined),
-      });
-      runtimeFactoryMocks.createDispatch.mockReturnValue({
-        dispatch: vi.fn(),
-        forceDestroyEnvironment: vi.fn(),
-        reclaim: vi.fn(),
-        reconcile: vi.fn().mockResolvedValue(undefined),
-        reconcileActive: vi.fn(async () => reconciled.resolve()),
-      });
       const warn = vi.fn();
-      const runtime = createGatewayWorkerPlacementRuntime({
-        initialPlacements: [],
-        scheduler: createTestGatewayScheduler(time.clock),
-        getCommittedRuntimeConfig: getRuntimeConfig,
-        cancelSessionWork: vi.fn(async () => {}),
+      const sidecar = await startRuntime(
+        time,
+        vi.fn(async () => reconciled.resolve()),
+        warn,
         placements,
-        environments: {
+        {
           subscribeMachineShapeChanged: () => () => {},
           installReconcileEnvironmentGuard: () => () => {},
           start() {},
@@ -81,15 +123,7 @@ describe("worker placement session events", () => {
           beginClose() {},
           stop: async () => {},
         } as never,
-        gatewayNamespace: "gateway-test",
-        revokeSessionAuthority: vi.fn(),
-        warn,
-      });
-      const sidecar = await runtime.startRuntime({
-        isClosePreludeStarted: () => false,
-        registerSidecar: vi.fn(),
-        unregisterSidecar: vi.fn(),
-      });
+      );
       try {
         await time.advanceBy(60_000);
         await time.advanceBy(60_000);
@@ -163,7 +197,6 @@ describe("worker placement session events", () => {
   it("finishes background reconciliation after the notifying session request closes", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const time = createGatewaySchedulerClock();
-      const scheduler = createTestGatewayScheduler(time.clock);
       const placements = createWorkerSessionPlacementStore({
         database: openOpenClawStateDatabase(),
       });
@@ -177,54 +210,8 @@ describe("worker placement session events", () => {
           throw error;
         }
       });
-      runtimeFactoryMocks.createDiskSpace.mockReturnValue({
-        read: vi.fn(),
-        version: () => 0,
-        invalidate: vi.fn(),
-        nextSweepAtMs: () => Infinity,
-        sweep: vi.fn().mockResolvedValue(undefined),
-      });
-      runtimeFactoryMocks.createDispatch.mockReturnValue({
-        dispatch: vi.fn(),
-        forceDestroyEnvironment: vi.fn(),
-        reclaim: vi.fn(),
-        reconcile: vi.fn().mockResolvedValue(undefined),
-        reconcileActive,
-      });
       const warn = vi.fn();
-      const runtime = createGatewayWorkerPlacementRuntime({
-        initialPlacements: [],
-        scheduler,
-        getCommittedRuntimeConfig: getRuntimeConfig,
-        cancelSessionWork: vi.fn(async () => {}),
-        placements: {
-          subscribeChanges: () => () => {},
-          workspaceResultInstanceId: () => "gateway-test",
-          getAsync: async () => undefined,
-          getManyAsync: async () => new Map(),
-          listAsync: async () => [],
-          retireSessionPlacementAsync: vi.fn(async () => {}),
-          pruneOrphanedWorkspaceReconciliations: async () => [],
-          listWorkspaceReconciliationOwners: async () => [],
-          listPendingWorkspaceResultsAsync: async () => [],
-        } as never,
-        environments: {
-          subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
-          installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
-          start: vi.fn(),
-          isStopping: () => false,
-          beginClose: vi.fn(),
-          stop: vi.fn().mockResolvedValue(undefined),
-        } as never,
-        gatewayNamespace: "gateway-test",
-        revokeSessionAuthority: vi.fn(),
-        warn,
-      });
-      const sidecar = await runtime.startRuntime({
-        isClosePreludeStarted: () => false,
-        registerSidecar: vi.fn(),
-        unregisterSidecar: vi.fn(),
-      });
+      const sidecar = await startRuntime(time, reconcileActive, warn);
       try {
         await time.advanceBy(60_000);
         reconcileActive.mockClear();
@@ -250,60 +237,13 @@ describe("worker placement session events", () => {
 
   it("reports a failed reconciliation queued by a session change without leaking rejection", async () => {
     const time = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(time.clock);
     const databaseIdentity = Symbol("worker-placement-database");
     const releaseReconcile = createDeferredCore();
     const reconcileStarted = createDeferredCore();
     const failureReported = createDeferredCore();
     const reconcileActive = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
-    runtimeFactoryMocks.createDiskSpace.mockReturnValue({
-      read: vi.fn(),
-      version: () => 0,
-      invalidate: vi.fn(),
-      nextSweepAtMs: () => Infinity,
-      sweep: vi.fn().mockResolvedValue(undefined),
-    });
-    runtimeFactoryMocks.createDispatch.mockReturnValue({
-      dispatch: vi.fn(),
-      forceDestroyEnvironment: vi.fn(),
-      reclaim: vi.fn(),
-      reconcile: vi.fn().mockResolvedValue(undefined),
-      reconcileActive,
-    });
     const warn = vi.fn(() => failureReported.resolve());
-    const runtime = createGatewayWorkerPlacementRuntime({
-      initialPlacements: [],
-      scheduler,
-      getCommittedRuntimeConfig: getRuntimeConfig,
-      cancelSessionWork: vi.fn(async () => {}),
-      placements: {
-        subscribeChanges: () => () => {},
-        workspaceResultInstanceId: () => "gateway-test",
-        getAsync: async () => undefined,
-        getManyAsync: async () => new Map(),
-        listAsync: async () => [],
-        retireSessionPlacementAsync: vi.fn(async () => {}),
-        pruneOrphanedWorkspaceReconciliations: async () => [],
-        listWorkspaceReconciliationOwners: async () => [],
-        listPendingWorkspaceResultsAsync: async () => [],
-      } as never,
-      environments: {
-        subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
-        installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
-        start: vi.fn(),
-        isStopping: () => false,
-        beginClose: vi.fn(),
-        stop: vi.fn().mockResolvedValue(undefined),
-      } as never,
-      gatewayNamespace: "gateway-test",
-      revokeSessionAuthority: vi.fn(),
-      warn,
-    });
-    const sidecar = await runtime.startRuntime({
-      isClosePreludeStarted: () => false,
-      registerSidecar: vi.fn(),
-      unregisterSidecar: vi.fn(),
-    });
+    const sidecar = await startRuntime(time, reconcileActive, warn);
     let scheduledWake: void | Promise<void> = undefined;
     try {
       await time.advanceBy(60_000);

@@ -126,12 +126,7 @@ function pauseInventory() {
   const resume = createDeferredCore();
   const entered = createDeferredCore();
   boundary.afterReply = async (reply) => {
-    if (
-      isRecord(reply) &&
-      reply.ok === true &&
-      isRecord(reply.value) &&
-      reply.value.kind === "session-target-inventory"
-    ) {
+    if (isInventoryReply(reply)) {
       boundary.afterReply = undefined;
       entered.resolve();
       await resume.promise;
@@ -146,19 +141,48 @@ function pauseInventory() {
   };
 }
 
-function isEvidenceReply(reply: unknown): boolean {
-  return (
-    isRecord(reply) &&
-    reply.ok === true &&
-    isRecord(reply.value) &&
-    reply.value.kind === "session-identity-evidence"
-  );
+function isWorkerReply(reply: unknown, kind: string): boolean {
+  return isRecord(reply) && reply.ok === true && isRecord(reply.value) && reply.value.kind === kind;
+}
+
+const isInventoryReply = (reply: unknown) => isWorkerReply(reply, "session-target-inventory");
+const isEvidenceReply = (reply: unknown) => isWorkerReply(reply, "session-identity-evidence");
+
+function writeSession(
+  identity: Parameters<typeof replaceSessionEntrySync>[0] & { sessionId: string },
+  updatedAt = 1,
+) {
+  replaceSessionEntrySync(identity, { sessionId: identity.sessionId, updatedAt });
+}
+
+async function resolveEvidence(subject: Awaited<ReturnType<typeof placement>>) {
+  return (await createWorkerPlacementSessionEvidenceResolver([subject]))(subject);
+}
+
+function withState(run: Parameters<typeof withOpenClawTestState>[1]) {
+  return withOpenClawTestState({ scenario: "minimal" }, run);
+}
+
+async function withDiscoveryPause(
+  subject: Awaited<ReturnType<typeof placement>>,
+  gate: ReturnType<typeof pauseRegistry>,
+  run: (pending: ReturnType<typeof createWorkerPlacementSessionEvidenceResolver>) => Promise<void>,
+) {
+  const pending = createWorkerPlacementSessionEvidenceResolver([subject]);
+  try {
+    await gate.entered;
+    await run(pending);
+  } finally {
+    gate.resume();
+    await pending;
+    gate.restore();
+  }
 }
 
 it.for(["discovery", "identity"] as const)(
   "cancels placement evidence during %s admission without abandoning its writer",
   async (phase, { signal }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withState(async () => {
       setRuntimeConfigSnapshot({});
       const subject = await placement();
       await upsertSessionEntryCore(subject, { sessionId: subject.sessionId, updatedAt: 1 });
@@ -182,12 +206,7 @@ it.for(["discovery", "identity"] as const)(
         await withinTest(entered.promise, signal);
       } else {
         boundary.afterReply = async (reply) => {
-          if (
-            isRecord(reply) &&
-            reply.ok === true &&
-            isRecord(reply.value) &&
-            reply.value.kind === "session-target-inventory"
-          ) {
+          if (isInventoryReply(reply)) {
             boundary.afterReply = undefined;
             writer = runOpenClawAgentWriteAdmission(
               { agentId: "main", path: databasePath },
@@ -219,15 +238,13 @@ it.for(["discovery", "identity"] as const)(
 it.each(["path", "root", "agent"] as const)(
   "revokes unresolved discovery before a %s close can finish",
   async (selection) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withState(async () => {
       setRuntimeConfigSnapshot({});
       const subject = await placement();
-      replaceSessionEntrySync(subject, { sessionId: subject.sessionId, updatedAt: 1 });
+      writeSession(subject);
       const database = openOpenClawAgentDatabase({ agentId: "main" });
       const gate = pauseInventory();
-      const pending = createWorkerPlacementSessionEvidenceResolver([subject]);
-      try {
-        await gate.entered;
+      await withDiscoveryPause(subject, gate, async (pending) => {
         if (selection === "path") {
           await closeOpenClawAgentDatabaseByPathAsync(database.path, "main");
         } else if (selection === "root") {
@@ -237,14 +254,8 @@ it.each(["path", "root", "agent"] as const)(
         }
         gate.resume();
         expect(await (await pending)(subject)).toBe("unknown");
-        expect(await (await createWorkerPlacementSessionEvidenceResolver([subject]))(subject)).toBe(
-          "current",
-        );
-      } finally {
-        gate.resume();
-        await pending;
-        gate.restore();
-      }
+        expect(await resolveEvidence(subject)).toBe("current");
+      });
     });
   },
 );
@@ -252,7 +263,7 @@ it.each(["path", "root", "agent"] as const)(
 it.each([false, true])(
   "retains a newly resolved legacy suffix during registry discovery (close=%s)",
   async (close) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withState(async (state) => {
       const store = state.statePath("custom", "shared.json");
       const cfg: OpenClawConfig = { session: { store } };
       setRuntimeConfigSnapshot(cfg, cfg);
@@ -262,38 +273,26 @@ it.each([false, true])(
         path: state.statePath("custom", "shared.sqlite"),
       });
       const gate = pauseRegistry();
-      const pending = createWorkerPlacementSessionEvidenceResolver([subject]);
-      try {
-        await gate.entered;
+      await withDiscoveryPause(subject, gate, async (pending) => {
         const suffix = state.statePath("custom", "shared.main.2.sqlite");
-        replaceSessionEntrySync(
-          { ...subject, storePath: suffix },
-          { sessionId: subject.sessionId, updatedAt: 1 },
-        );
+        writeSession({ ...subject, storePath: suffix });
         if (close) {
           await closeOpenClawAgentDatabaseByPathAsync(suffix, "main");
         }
         gate.resume();
         expect(await (await pending)(subject)).toBe(close ? "unknown" : "current");
-      } finally {
-        gate.resume();
-        await pending;
-        gate.restore();
-      }
+      });
     });
   },
 );
 
 it("captures config, environment, cwd and placement identity before discovery yields", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  await withState(async (state) => {
     const store = path.relative(process.cwd(), state.statePath("captured.sqlite"));
     const cfg: OpenClawConfig = { session: { store } };
     setRuntimeConfigSnapshot(cfg, cfg);
     const subject = await placement();
-    replaceSessionEntrySync(
-      { ...subject, storePath: store },
-      { sessionId: subject.sessionId, updatedAt: 1 },
-    );
+    writeSession({ ...subject, storePath: store });
     const gate = pauseRegistry();
     const pending = createWorkerPlacementSessionEvidenceResolver([subject]);
     const originalRoot = process.env.OPENCLAW_STATE_DIR;
@@ -323,7 +322,7 @@ it("captures config, environment, cwd and placement identity before discovery yi
 it.each(["evidence write", "settlement write", "alias retarget"] as const)(
   "rejects stale absence after %s",
   async (change) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withState(async (state) => {
       const physical = state.statePath("physical.sqlite");
       const alias = state.statePath("alias.sqlite");
       openOpenClawAgentDatabase({ agentId: "main", path: physical });
@@ -332,16 +331,15 @@ it.each(["evidence write", "settlement write", "alias retarget"] as const)(
       setRuntimeConfigSnapshot(cfg, cfg);
       const subject = await placement();
       // A fixed shared store is selected only for agents with persisted scoped rows.
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: "agent:main:anchor", storePath: physical },
-        { sessionId: "anchor", updatedAt: 1 },
-      );
+      writeSession({
+        agentId: "main",
+        sessionKey: "agent:main:anchor",
+        storePath: physical,
+        sessionId: "anchor",
+      });
       const replacement = state.statePath("replacement.sqlite");
       if (change === "alias retarget") {
-        replaceSessionEntrySync(
-          { ...subject, storePath: replacement },
-          { sessionId: subject.sessionId, updatedAt: 1 },
-        );
+        writeSession({ ...subject, storePath: replacement });
       }
       let changed = false;
       const mutate = () => {
@@ -353,10 +351,7 @@ it.each(["evidence write", "settlement write", "alias retarget"] as const)(
           fs.unlinkSync(alias);
           fs.symlinkSync(replacement, alias);
         } else {
-          replaceSessionEntrySync(
-            { ...subject, storePath: physical },
-            { sessionId: subject.sessionId, updatedAt: 2 },
-          );
+          writeSession({ ...subject, storePath: physical }, 2);
         }
       };
       let evidenceRead = false;
@@ -375,27 +370,23 @@ it.each(["evidence write", "settlement write", "alias retarget"] as const)(
         }
       };
       try {
-        expect(await (await createWorkerPlacementSessionEvidenceResolver([subject]))(subject)).toBe(
-          "unknown",
-        );
+        expect(await resolveEvidence(subject)).toBe("unknown");
         expect(evidenceRead).toBe(true);
         expect(changed).toBe(true);
       } finally {
         boundary.afterReply = undefined;
         boundary.afterCleanup = undefined;
       }
-      expect(await (await createWorkerPlacementSessionEvidenceResolver([subject]))(subject)).toBe(
-        "current",
-      );
+      expect(await resolveEvidence(subject)).toBe("current");
     });
   },
 );
 
 it("transfers a Windows-normalized environment through inventory and evidence workers", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withState(async () => {
     setRuntimeConfigSnapshot({});
     const subject = await placement();
-    replaceSessionEntrySync(subject, { sessionId: subject.sessionId, updatedAt: 1 });
+    writeSession(subject);
     const { OPENCLAW_STATE_DIR, ...otherEnv } = process.env;
     const normalized = withMockedPlatform("win32", () =>
       configEnv.cloneEnvWithPlatformSemantics({
@@ -408,9 +399,7 @@ it("transfers a Windows-normalized environment through inventory and evidence wo
       .spyOn(configEnv, "cloneEnvWithPlatformSemantics")
       .mockReturnValueOnce(normalized);
     try {
-      expect(await (await createWorkerPlacementSessionEvidenceResolver([subject]))(subject)).toBe(
-        "current",
-      );
+      expect(await resolveEvidence(subject)).toBe("current");
     } finally {
       clone.mockRestore();
     }
@@ -418,7 +407,7 @@ it("transfers a Windows-normalized environment through inventory and evidence wo
 });
 
 it("reads memory evidence after an in-process write completes during disk work", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withState(async () => {
     setRuntimeConfigSnapshot({});
     const disk = await placement("disk-current");
     const incognito = await placement(
@@ -426,7 +415,7 @@ it("reads memory evidence after an in-process write completes during disk work",
       "main",
       "agent:main:dashboard:incognito-created",
     );
-    replaceSessionEntrySync(disk, { sessionId: disk.sessionId, updatedAt: 1 });
+    writeSession(disk);
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: "agent:main:dashboard:incognito-anchor" },
       {
@@ -453,7 +442,7 @@ it("reads memory evidence after an in-process write completes during disk work",
 });
 
 it("keeps the fixed physical owner and current precedence across canonical and malformed legacy rows", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  await withState(async (state) => {
     const store = state.statePath("shared.sqlite");
     const database = openOpenClawAgentDatabase({ agentId: "main", path: store });
     const cfg: OpenClawConfig = {
@@ -464,13 +453,12 @@ it("keeps the fixed physical owner and current precedence across canonical and m
     const subject = await placement("shared-subject", "ops");
     subject.sessionKey = "agent:main:main";
     for (const agentId of ["main", "ops"]) {
-      replaceSessionEntrySync(
-        { agentId, sessionKey: `agent:${agentId}:main`, storePath: store },
-        {
-          sessionId: subject.sessionId,
-          updatedAt: 1,
-        },
-      );
+      writeSession({
+        agentId,
+        sessionKey: `agent:${agentId}:main`,
+        storePath: store,
+        sessionId: subject.sessionId,
+      });
     }
     expect(
       readSessionIdentityEvidenceBatch([
