@@ -62,8 +62,10 @@ import {
   SETUP_GO_V6,
   UPLOAD_ARTIFACT_V7,
   evaluateWorkflowCondition,
-  evaluateWorkflowExpression,
+  evaluateWorkflow as evaluateWorkflowExpression,
   evaluateWorkflowRunner,
+  expectIncludes,
+  expectExcludes,
   quoteShell,
   readAndroidToolchainAction,
   readBuildArtifactsTestboxWorkflow,
@@ -914,8 +916,6 @@ AFTER_CD
             draft,
             cancelled,
             additionalNeeds: { admission: { outputs: {}, result } },
-            repository: "openclaw/openclaw",
-            runAttempt: 1,
           }),
           `${workflowPath}: ${eventName}, admission=${result}, cancelled=${cancelled}`,
         ).toBe(admitted);
@@ -1373,18 +1373,18 @@ AFTER_CD
       });
       expect(run, workflowPath).toContain('binary="$(mktemp "${RUNNER_TEMP}/opengrep.XXXXXX")"');
       expect(run, workflowPath).toContain("trap 'rm -f \"$binary\"' EXIT");
-      expect(run, workflowPath).toContain(
-        "curl -fsSL --retry 4 --retry-all-errors --retry-delay 2",
+      expectIncludes(
+        run,
+        [
+          "curl -fsSL --retry 4 --retry-all-errors --retry-delay 2",
+          "--connect-timeout 10 --max-time 300",
+          '-o "$binary"',
+          "https://github.com/opengrep/opengrep/releases/download/${OPENGREP_VERSION}/opengrep_manylinux_x86",
+          'printf \'%s  %s\\n\' "$OPENGREP_LINUX_X64_SHA256" "$binary" | sha256sum --check',
+          'install -m 0755 "$binary" "$install_dir/opengrep"',
+        ],
+        workflowPath,
       );
-      expect(run, workflowPath).toContain("--connect-timeout 10 --max-time 300");
-      expect(run, workflowPath).toContain('-o "$binary"');
-      expect(run, workflowPath).toContain(
-        "https://github.com/opengrep/opengrep/releases/download/${OPENGREP_VERSION}/opengrep_manylinux_x86",
-      );
-      expect(run, workflowPath).toContain(
-        'printf \'%s  %s\\n\' "$OPENGREP_LINUX_X64_SHA256" "$binary" | sha256sum --check',
-      );
-      expect(run, workflowPath).toContain('install -m 0755 "$binary" "$install_dir/opengrep"');
       expect(run.indexOf('-o "$binary"'), workflowPath).toBeLessThan(
         run.indexOf("sha256sum --check"),
       );
@@ -1695,11 +1695,7 @@ AFTER_CD
       [{ eventName: "push", repository: "contributor/openclaw" }, 2],
     ] as const) {
       expect(
-        evaluateWorkflowExpression(workflow.jobs.android.strategy["max-parallel"], {
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
-          ...context,
-        }),
+        evaluateWorkflowExpression(workflow.jobs.android.strategy["max-parallel"], { ...context }),
         JSON.stringify(context),
       ).toBe(expected);
     }
@@ -1769,21 +1765,13 @@ AFTER_CD
       step.run?.includes("scripts/package-openclaw-for-docker.mjs"),
     ) as WorkflowStep;
     for (const eventName of ["push", "pull_request"] as const) {
-      expect(
-        evaluateWorkflowExpression("${{ " + prepare.if + " }}", {
-          eventName,
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
-        }),
-      ).toBe(true);
+      expect(evaluateWorkflowExpression("${{ " + prepare.if + " }}", { eventName })).toBe(true);
     }
     for (const releaseGate of [false, true]) {
       for (const qualification of [false, true]) {
         expect(
           evaluateWorkflowExpression("${{ " + prepare.if + " }}", {
             eventName: "workflow_dispatch",
-            repository: "openclaw/openclaw",
-            runAttempt: 1,
             releaseGate,
             preflightOutputs: { ci_qualification: String(qualification) },
           }),
@@ -2040,8 +2028,6 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
                 ? String(
                     evaluateWorkflowExpression(inheritedScenario, {
                       eventName: "workflow_dispatch",
-                      repository: "openclaw/openclaw",
-                      runAttempt: 1,
                       preflightOutputs: { frozen_target: String(fixture.frozen ?? false) },
                     }),
                   )
@@ -2523,8 +2509,6 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           typeof runsOn === "string" && runsOn.startsWith("${{")
             ? evaluateWorkflowExpression(runsOn, {
                 eventName: "workflow_dispatch",
-                repository: "openclaw/openclaw",
-                runAttempt: 1,
                 runnerBackend,
                 useGithubHostedRunners,
               })
@@ -2560,8 +2544,6 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
         evaluateWorkflowExpression(runsOn, {
           eventName: "workflow_dispatch",
           matrix: lintMatrix,
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
           runnerBackend,
           ...overrides,
         });
@@ -2597,11 +2579,8 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       expect(
         evaluateWorkflowExpression(runsOn, {
           authorAssociation: "NONE",
-          eventName: "pull_request",
           headRepository: "openclaw/openclaw",
           matrix: lintMatrix,
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
           runnerBackend: "blacksmith",
         }),
       ).toBe("blacksmith-32vcpu-ubuntu-2404");
@@ -2625,8 +2604,6 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     expect(
       evaluateWorkflowExpression(job["timeout-minutes"], {
         eventName: "schedule",
-        repository: "openclaw/openclaw",
-        runAttempt: 1,
         runnerBackend: "blacksmith",
         frozenTarget: false,
         matrix: { shard: 1 },
@@ -2675,12 +2652,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       expect(
         typeof boundaryTimeout === "number"
           ? boundaryTimeout
-          : evaluateWorkflowExpression(boundaryTimeout, {
-              eventName: "pull_request",
-              repository: "openclaw/openclaw",
-              runAttempt: 2,
-              matrix: { group },
-            }),
+          : evaluateWorkflowExpression(boundaryTimeout, { runAttempt: 2, matrix: { group } }),
         group ?? "default additional check",
       ).toBe(expected);
     }
@@ -4327,8 +4299,6 @@ ${step.run}`,
             evaluateWorkflowExpression(harnessStep.if, {
               eventName,
               headRepository,
-              repository: "openclaw/openclaw",
-              runAttempt: 1,
               steps: { checkout_ref: { outputs: { sha: selectedSha } } },
               workflowSha,
             }),
@@ -5427,7 +5397,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       const checkoutBase = evaluateWorkflowExpression(job.env?.CHECKOUT_BASE_SHA ?? "${{ '' }}", {
         eventName,
         repository: "fixture/checkout",
-        runAttempt: 1,
         matrix: { task },
         preflightOutputs: { diff_base_revision: base },
       });
@@ -5882,18 +5851,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       );
       if (releaseTier === false) {
         expect(selectedFiles).toHaveLength(uiE2eRealGatewayTestFiles.length - 13);
-        expect(selectedFiles).not.toContain(
+        expectExcludes(selectedFiles, [
           "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
-        );
-        expect(selectedFiles).not.toContain(
           "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
-        );
-        expect(selectedFiles).not.toContain(
           "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts",
-        );
-        expect(selectedFiles).not.toContain(
           "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
-        );
+        ]);
       }
     },
   );
@@ -5925,18 +5888,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(verifierStep.env.PARALLEL_BUILT_VERIFIERS).toBe(
       "${{ runner.environment != 'github-hosted' && 'true' || 'false' }}",
     );
-    expect(verifierStep.run).toContain(
+    expectIncludes(verifierStep.run, [
       'OPENCLAW_VITEST_FS_MODULE_CACHE_PATH="${RUNNER_TEMP}/vitest-module-cache/${name}"',
-    );
-    expect(verifierStep.run).toContain(
       "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
-    );
-    expect(verifierStep.run).toContain(
       "env OPENCLAW_E2E_USE_PREBUILT_DIST=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=660000 node scripts/run-vitest.mjs run",
-    );
-    expect(verifierStep.run).toContain("--config test/vitest/vitest.e2e.config.ts");
-    expect(verifierStep.run).toContain("Selected target predates");
-    expect(verifierStep.run).toContain("pnpm test:build:singleton");
+      "--config test/vitest/vitest.e2e.config.ts",
+      "Selected target predates",
+      "pnpm test:build:singleton",
+    ]);
     // The startup asset rebuild must complete before any verifier forks so
     // concurrent readers never observe dist mid-write.
     expect(verifierStep.run).toContain("scripts/ensure-cli-startup-build.mts");
@@ -6192,9 +6151,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const build = steps.find((step: WorkflowStep) => step.name === "Build Node test runtime");
     const run = steps.find((step: WorkflowStep) => step.name === "Run Node test shard");
     const prebuilt = evaluateWorkflowExpression(run.env.OPENCLAW_E2E_USE_PREBUILT_DIST, {
-      eventName: "pull_request",
-      repository: "openclaw/openclaw",
-      runAttempt: 1,
       matrix: { pretest_build_mode: scenario.mode },
       steps: { [build.id]: { outputs: {}, outcome: scenario.outcome } },
     });
@@ -6434,20 +6390,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(networkConfig).not.toContain("\n  - extensions\n");
     expect(networkConfig).toContain("\n  - src/infra/net\n");
     expect(networkConfig).toContain("\n  - packages/net-policy/src\n");
-    expect(workflow).toContain("Fast PR network boundary diff scan");
-    expect(workflow).toContain(
+    expectIncludes(workflow, [
+      "Fast PR network boundary diff scan",
       '| select(.filename | test("(^|/)[^/]+\\\\.(?:e2e\\\\.)?test\\\\.tsx?$") | not)',
-    );
-    expect(workflow).toContain("Network runtime boundary-sensitive added lines");
-    expect(workflow).toContain(
+      "Network runtime boundary-sensitive added lines",
       'codex_transport="extensions/codex/src/app-server/transport-websocket.ts"',
-    );
-    expect(workflow).toContain(
       "network_codeql_contract_pattern='^\\.github/codeql/(codeql-network-runtime-boundary-critical-quality\\.yml|openclaw-boundary/queries/(raw-socket-callsite-classification|managed-proxy-runtime-mutation)\\.ql)$'",
-    );
-    expect(workflow).toContain(
       'if grep -Eq "$network_codeql_contract_pattern" "$changed_files" ||',
-    );
+    ]);
     expect(workflow).not.toContain('grep -Fv "$codex_transport: " "$added_lines"');
     expect(workflow).toContain("packages/net-policy/src/");
     expect(workflow).toContain(
@@ -7416,31 +7366,19 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
   );
   expect(signingToolsInstaller.run?.match(/--proto '=https' --tlsv1\.2/gu)).toHaveLength(2);
   expect(signingToolsInstaller.run?.match(/--connect-timeout 10 --max-time 120/gu)).toHaveLength(2);
-  expect(signingToolsInstaller.run).toContain('--output "$minisign_archive" "$MINISIGN_URL"');
-  expect(signingToolsInstaller.run).toContain(
+  expectIncludes(signingToolsInstaller.run, [
+    '--output "$minisign_archive" "$MINISIGN_URL"',
     'printf \'%s  %s\\n\' "$MINISIGN_ARCHIVE_SHA256" "$minisign_archive" | sha256sum --check -',
-  );
-  expect(signingToolsInstaller.run).toContain(
     'tar -xzf "$minisign_archive" -C "${RUNNER_TEMP}/bin" --strip-components=2 \\\n  minisign-linux/x86_64/minisign',
-  );
-  expect(signingToolsInstaller.run).toContain(
     'printf \'%s  %s\\n\' "$MINISIGN_BINARY_SHA256" "${RUNNER_TEMP}/bin/minisign" |',
-  );
-  expect(signingToolsInstaller.run).toContain(
     'printf \'%s  %s\\n\' "$TAURI_CLI_ARCHIVE_SHA256" "$tauri_archive" | sha256sum --check -',
-  );
-  expect(signingToolsInstaller.run).toContain('--output "$tauri_archive" "$TAURI_CLI_URL"');
-  expect(signingToolsInstaller.run).toContain(
+    '--output "$tauri_archive" "$TAURI_CLI_URL"',
     'tar -xzf "$tauri_archive" -C "${RUNNER_TEMP}/bin" cargo-tauri',
-  );
-  expect(signingToolsInstaller.run).toContain(
     'printf \'%s  %s\\n\' "$TAURI_CLI_BINARY_SHA256" "${RUNNER_TEMP}/bin/cargo-tauri" |',
-  );
-  expect(signingToolsInstaller.run).toContain(
     'chmod 0555 "${RUNNER_TEMP}/bin/cargo-tauri" "${RUNNER_TEMP}/bin/minisign"',
-  );
-  expect(signingToolsInstaller.run).toContain('"${RUNNER_TEMP}/bin/cargo-tauri" --version');
-  expect(signingToolsInstaller.run).toContain('"${RUNNER_TEMP}/bin/minisign" -v');
+    '"${RUNNER_TEMP}/bin/cargo-tauri" --version',
+    '"${RUNNER_TEMP}/bin/minisign" -v',
+  ]);
   expect(signingToolsInstaller.run).not.toMatch(
     /apt-get|GITHUB_PATH|(?:^|\n)\s*(?:export\s+)?PATH=/u,
   );
@@ -8198,129 +8136,67 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
         },
       });
 
-    const signingRoot = tempDirs.make("openclaw-linux-signing-job-");
-    const signingInput = path.join(signingRoot, "dist/signing-input");
-    const finalizedArtifact = path.join(signingInput, "OpenClaw-2026.8.2-amd64.AppImage");
-    mkdirSync(signingInput, { recursive: true });
-    writeFileSync(finalizedArtifact, "trusted-finalized-bytes");
-    const linuxSigningTools = writeSigningToolFixtures(signingRoot);
-    const signed = runSigning(signingRoot, signAppImage, linuxSigningTools);
-    expect(signed.status, `${signed.stdout}${signed.stderr}`).toBe(0);
-    expect(readFileSync(finalizedArtifact, "utf8")).toBe("trusted-finalized-bytes");
-    expect(
-      readFileSync(
-        path.join(signingRoot, "dist/linux-app/release/OpenClaw-2026.8.2-amd64.AppImage"),
-        "utf8",
-      ),
-    ).toBe("trusted-finalized-bytes");
-    expect(
-      readFileSync(
-        path.join(signingRoot, "dist/linux-app/signatures/OpenClaw-2026.8.2-amd64.AppImage.sig"),
-        "utf8",
-      ),
-    ).toBe(
-      `${Buffer.from("ephemeral-signature:OpenClaw-2026.8.2-amd64.AppImage").toString("base64")}\n`,
-    );
-    expect(readFileSync(linuxSigningTools.tauriLog, "utf8")).toBe(
-      "signer sign dist/signing-input/OpenClaw-2026.8.2-amd64.AppImage\n",
-    );
-    expect(readFileSync(linuxSigningTools.minisignLog, "utf8")).toBe(
-      "OpenClaw-2026.8.2-amd64.AppImage\n",
-    );
-    expect(existsSync(path.join(signingRoot, ".release-tooling"))).toBe(false);
-    expect(existsSync(path.join(signingRoot, "apps"))).toBe(false);
-
-    const desktopSigningRoot = tempDirs.make("openclaw-desktop-signing-job-");
-    const macosInput = path.join(
-      desktopSigningRoot,
-      "dist/signing-input/macos/OpenClaw-2026.8.2-darwin-aarch64.app.tar.gz",
-    );
-    const windowsInput = path.join(
-      desktopSigningRoot,
-      "dist/signing-input/windows/OpenClaw-2026.8.2-windows-x86_64.exe",
-    );
-    mkdirSync(path.dirname(macosInput), { recursive: true });
-    mkdirSync(path.dirname(windowsInput), { recursive: true });
-    writeFileSync(macosInput, "finalized-macos-updater-bytes");
-    writeFileSync(windowsInput, "finalized-windows-updater-bytes");
-    const desktopSigningTools = writeSigningToolFixtures(desktopSigningRoot);
-    const desktopSigned = runSigning(desktopSigningRoot, signDesktop, desktopSigningTools);
-    expect(desktopSigned.status, `${desktopSigned.stdout}${desktopSigned.stderr}`).toBe(0);
-    expect(readFileSync(macosInput, "utf8")).toBe("finalized-macos-updater-bytes");
-    expect(readFileSync(windowsInput, "utf8")).toBe("finalized-windows-updater-bytes");
-    expect(
-      readFileSync(
-        path.join(
-          desktopSigningRoot,
-          "dist/desktop-test/macos/release/OpenClaw-2026.8.2-darwin-aarch64.app.tar.gz",
-        ),
-        "utf8",
-      ),
-    ).toBe("finalized-macos-updater-bytes");
-    expect(
-      readFileSync(
-        path.join(
-          desktopSigningRoot,
-          "dist/desktop-test/windows/release/OpenClaw-2026.8.2-windows-x86_64.exe",
-        ),
-        "utf8",
-      ),
-    ).toBe("finalized-windows-updater-bytes");
-    expect(
-      Buffer.from(
-        readFileSync(
-          path.join(
-            desktopSigningRoot,
-            "dist/desktop-test/macos/signatures/OpenClaw-2026.8.2-darwin-aarch64.app.tar.gz.sig",
-          ),
+    const proveSigning = (
+      label: string,
+      signingStep: WorkflowStep,
+      artifacts: Array<[name: string, platform: string, bytes: string, exactSignature?: boolean]>,
+      desktop = true,
+    ) => {
+      const root = tempDirs.make(`openclaw-${label}-signing-job-`);
+      const paths = artifacts.map(([name, platform, bytes, exactSignature]) => ({
+        name,
+        bytes,
+        exactSignature,
+        input: path.join("dist/signing-input", platform, name),
+        output: path.join(platform ? "dist/desktop-test" : "dist/linux-app", platform),
+      }));
+      for (const artifact of paths) {
+        const file = path.join(root, artifact.input);
+        mkdirSync(path.dirname(file), { recursive: true });
+        writeFileSync(file, artifact.bytes);
+      }
+      const tools = writeSigningToolFixtures(root);
+      const signed = runSigning(root, signingStep, tools, desktop);
+      expect(signed.status, `${signed.stdout}${signed.stderr}`).toBe(0);
+      for (const artifact of paths) {
+        expect(readFileSync(path.join(root, artifact.input), "utf8")).toBe(artifact.bytes);
+        expect(
+          readFileSync(path.join(root, artifact.output, "release", artifact.name), "utf8"),
+        ).toBe(artifact.bytes);
+        const signature = readFileSync(
+          path.join(root, artifact.output, "signatures", `${artifact.name}.sig`),
           "utf8",
-        ),
-        "base64",
-      ).toString(),
-    ).toContain("OpenClaw-2026.8.2-darwin-aarch64.app.tar.gz");
-    expect(
-      Buffer.from(
-        readFileSync(
-          path.join(
-            desktopSigningRoot,
-            "dist/desktop-test/windows/signatures/OpenClaw-2026.8.2-windows-x86_64.exe.sig",
-          ),
-          "utf8",
-        ),
-        "base64",
-      ).toString(),
-    ).toContain("OpenClaw-2026.8.2-windows-x86_64.exe");
-    expect(readFileSync(desktopSigningTools.tauriLog, "utf8")).toBe(
-      "signer sign dist/signing-input/macos/OpenClaw-2026.8.2-darwin-aarch64.app.tar.gz\n" +
-        "signer sign dist/signing-input/windows/OpenClaw-2026.8.2-windows-x86_64.exe\n",
-    );
-    expect(readFileSync(desktopSigningTools.minisignLog, "utf8")).toBe(
-      "OpenClaw-2026.8.2-darwin-aarch64.app.tar.gz\nOpenClaw-2026.8.2-windows-x86_64.exe\n",
-    );
-    expect(existsSync(path.join(desktopSigningRoot, ".release-tooling"))).toBe(false);
-    expect(existsSync(path.join(desktopSigningRoot, "apps"))).toBe(false);
-
-    const windowsSigningRoot = tempDirs.make("openclaw-windows-signing-job-");
-    const windowsOnlyInput = path.join(
-      windowsSigningRoot,
-      "dist/signing-input/windows/OpenClaw-2026.8.2-windows-x86_64.exe",
-    );
-    mkdirSync(path.dirname(windowsOnlyInput), { recursive: true });
-    writeFileSync(windowsOnlyInput, "finalized-windows-only-bytes");
-    const windowsSigningTools = writeSigningToolFixtures(windowsSigningRoot);
-    const windowsSigned = runSigning(windowsSigningRoot, signDesktop, windowsSigningTools, false);
-    expect(windowsSigned.status, `${windowsSigned.stdout}${windowsSigned.stderr}`).toBe(0);
-    expect(
-      readFileSync(
-        path.join(
-          windowsSigningRoot,
-          "dist/desktop-test/windows/release/OpenClaw-2026.8.2-windows-x86_64.exe",
-        ),
-        "utf8",
-      ),
-    ).toBe("finalized-windows-only-bytes");
-    expect(readFileSync(windowsSigningTools.minisignLog, "utf8")).toBe(
-      "OpenClaw-2026.8.2-windows-x86_64.exe\n",
+        );
+        if (artifact.exactSignature) {
+          expect(signature).toBe(
+            `${Buffer.from(`ephemeral-signature:${artifact.name}`).toString("base64")}\n`,
+          );
+        } else {
+          expect(Buffer.from(signature, "base64").toString()).toContain(artifact.name);
+        }
+      }
+      expect(readFileSync(tools.tauriLog, "utf8")).toBe(
+        paths.map(({ input }) => `signer sign ${input}\n`).join(""),
+      );
+      expect(readFileSync(tools.minisignLog, "utf8")).toBe(
+        paths.map(({ name }) => `${name}\n`).join(""),
+      );
+      for (const directory of [".release-tooling", "apps"]) {
+        expect(existsSync(path.join(root, directory))).toBe(false);
+      }
+    };
+    proveSigning("linux", signAppImage, [
+      ["OpenClaw-2026.8.2-amd64.AppImage", "", "trusted-finalized-bytes", true],
+    ]);
+    proveSigning("desktop", signDesktop, [
+      ["OpenClaw-2026.8.2-darwin-aarch64.app.tar.gz", "macos", "finalized-macos-updater-bytes"],
+      ["OpenClaw-2026.8.2-windows-x86_64.exe", "windows", "finalized-windows-updater-bytes"],
+    ]);
+    proveSigning(
+      "windows",
+      signDesktop,
+      [["OpenClaw-2026.8.2-windows-x86_64.exe", "windows", "finalized-windows-only-bytes"]],
+      false,
     );
   }
   const linuxBuildBodies = linuxBuildSteps.map(({ run }) => run ?? "").join("\n");

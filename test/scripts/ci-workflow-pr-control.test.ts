@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
-  evaluateWorkflowExpression,
+  evaluateWorkflow as evaluateWorkflowExpression,
   readCiWorkflow,
   type WorkflowStep,
 } from "./ci-workflow.test-support.js";
@@ -130,7 +130,6 @@ describe("PR failure reporting", () => {
         evaluateWorkflowExpression(report.if, {
           eventName,
           headRepository,
-          repository: "openclaw/openclaw",
           runAttempt,
           preflightResult,
           preflightOutputs: { run_checks_node_core_nondist: "false" },
@@ -142,14 +141,7 @@ describe("PR failure reporting", () => {
       { draft: true },
       { repository: "contributor/openclaw" },
     ]) {
-      expect(
-        evaluateWorkflowExpression(report.if, {
-          eventName: "pull_request",
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
-          ...overrides,
-        }),
-      ).toBe(false);
+      expect(evaluateWorkflowExpression(report.if, { ...overrides })).toBe(false);
     }
   });
   it("gates cancelled workflows and drafts", () => {
@@ -158,27 +150,14 @@ describe("PR failure reporting", () => {
       for (const cancelled of [true, false]) {
         for (const draft of [true, false]) {
           expect(
-            evaluateWorkflowExpression(gate.if, {
-              ciOnPush: "true",
-              cancelled,
-              draft,
-              eventName,
-              repository: "openclaw/openclaw",
-              runAttempt: 1,
-            }),
+            evaluateWorkflowExpression(gate.if, { ciOnPush: "true", cancelled, draft, eventName }),
             JSON.stringify({ cancelled, draft, eventName }),
           ).toBe(!cancelled && (eventName !== "pull_request" || !draft));
         }
       }
     }
     expect(
-      evaluateWorkflowExpression(gate.if, {
-        eventName: "pull_request",
-        repository: "openclaw/openclaw",
-        runAttempt: 1,
-        cancelled: true,
-        failureReportResult: "failure",
-      }),
+      evaluateWorkflowExpression(gate.if, { cancelled: true, failureReportResult: "failure" }),
     ).toBe(false);
   });
 
@@ -264,14 +243,7 @@ describe("PR failure reporting", () => {
         (step: WorkflowStep) => step.name === "Run hosted core lint stripe",
       );
       const lintScript = lint.run.replace(/\$\{\{[\s\S]*?\}\}/gu, (expression: string) =>
-        String(
-          evaluateWorkflowExpression(expression, {
-            eventName: "pull_request",
-            repository: "openclaw/openclaw",
-            runAttempt: 1,
-            runnerProfile: "github",
-          }),
-        ),
+        String(evaluateWorkflowExpression(expression, { runnerProfile: "github" })),
       );
       for (const [evidence, compilerExit, expectedCalls, groups] of [
         ["1", "1", 2, 2],
@@ -324,8 +296,6 @@ describe("PR failure reporting", () => {
         ["check-additional-shard", "failure", "1", 1, 1],
       ] as const) {
         const allowed = evaluateWorkflowExpression(verify.env.ALLOW_KNOWN_MAIN_RED, {
-          eventName: "pull_request",
-          repository: "openclaw/openclaw",
           runAttempt: attempt,
           preflightOutputs: { run_checks_node_core_nondist: "true" },
           failureReportResult: "success",

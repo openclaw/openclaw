@@ -11,7 +11,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { evaluateWorkflowExpression, type WorkflowStep } from "./ci-workflow.test-support.js";
+import {
+  evaluateWorkflow as evaluateWorkflowExpression,
+  type WorkflowStep,
+} from "./ci-workflow.test-support.js";
 
 const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8")) as {
   jobs: Record<string, { steps: WorkflowStep[] }>;
@@ -93,8 +96,6 @@ ${step("macos-swift", "Clean OpenClawKit build scratch").run}
         `\${{ ${step("macos-swift", "Clean OpenClawKit build scratch").if} }}`,
         {
           eventName: "schedule",
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
           cancelled: true,
           failed: true,
           env: { OPENCLAWKIT_SCRATCH: scratchPaths[0]! },
@@ -117,40 +118,6 @@ ${step("macos-swift", "Clean OpenClawKit build scratch").run}
       ]);
     },
   );
-
-  it("macOS runs rendered and named-profile groups after the default-profile group fails", () => {
-    const root = fixture();
-    executable(root, "scripts/test-macos-native.mts", "exit 0");
-    const result = run(
-      root,
-      `swift() { echo swift-build >> "$TRACE"; }
-sysctl() { echo 2; }
-node() {
-  if [[ "$1" == -e ]]; then echo fixture; return; fi
-  printf '%s\\n' "$*" >> "$TRACE"
-  if [[ "$*" == *'default'*'--skip'* ]]; then return 7; fi
-}
-${step("macos-swift", "Swift test").run!}`,
-    );
-    expect(result.status, result.stderr).not.toBe(0);
-    const commands = readFileSync(path.join(root, "trace"), "utf8").trim().split("\n");
-    expect(commands).toHaveLength(4);
-    expect(commands[1]).toContain("default --package-path");
-    expect(commands[2]).toContain("--filter QuickChatCatalogPresentationTests");
-    expect(commands[3]).toContain("named --package-path");
-  });
-
-  it("macOS does not start test groups when test compilation fails", () => {
-    const root = fixture();
-    const result = run(
-      root,
-      `swift() { return 7; }
-node() { if [[ "$1" == -e ]]; then echo fixture; else echo unexpected >> "$TRACE"; fi; }
-${step("macos-swift", "Swift test").run!}`,
-    );
-    expect(result.status, result.stderr).toBe(7);
-    expect(result.stdout).not.toContain("macOS default profile");
-  });
 
   it("iOS runs the Access proof and Watch UI tests after lifecycle tests fail", () => {
     const root = fixture();

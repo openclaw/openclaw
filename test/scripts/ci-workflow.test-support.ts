@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { runInNewContext } from "node:vm";
+import { expect } from "vitest";
 import { parse } from "yaml";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
@@ -22,6 +23,30 @@ export const AMBIGUOUS_MAIN_PUSH_DIAGNOSTIC =
   "::error title=ambiguous main push::github.event.before is zero; refusing to infer a diff base for a created or recreated main branch.";
 export const testNodeExecPath = resolveTestNodeExecPath();
 export const TSX_IMPORT = import.meta.resolve("tsx");
+
+export function expectIncludes(actual: unknown, values: readonly unknown[], message?: string) {
+  for (const value of values) {
+    expect(actual, message).toContain(value);
+  }
+}
+
+export function expectExcludes(actual: unknown, values: readonly unknown[], message?: string) {
+  for (const value of values) {
+    expect(actual, message).not.toContain(value);
+  }
+}
+
+export function evaluateWorkflow(
+  expression: unknown,
+  context: Partial<Parameters<typeof evaluateWorkflowExpression>[1]> = {},
+) {
+  return evaluateWorkflowExpression(expression, {
+    eventName: "pull_request",
+    repository: "openclaw/openclaw",
+    runAttempt: 1,
+    ...context,
+  });
+}
 
 export type WorkflowStep = {
   "continue-on-error"?: boolean;

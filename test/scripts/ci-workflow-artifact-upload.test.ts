@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
-  evaluateWorkflowExpression,
+  evaluateWorkflow as evaluateWorkflowExpression,
   readCiWorkflow,
   type WorkflowStep,
 } from "./ci-workflow.test-support.js";
@@ -32,9 +32,6 @@ describe("built artifact proof upload", () => {
 
       expect(
         evaluateWorkflowExpression(`\${{ ${condition} }}`, {
-          eventName: "pull_request",
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
           failed: outcome === "failure" || outcome === "skipped",
           cancelled: outcome === "cancelled",
           preflightOutputs: { run_discord_component_proof: String(selected) },
