@@ -27,7 +27,7 @@ import { ADMIN_SCOPE, READ_SCOPE } from "./method-scopes.js";
 import { GatewayStartupCleanupError } from "./server-shutdown.js";
 import { startGatewayServer } from "./server.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
-import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
+import { GATEWAY_TEST_ENV_KEYS } from "./test-helpers.env.js";
 import { acquireGatewayE2ePortBlock } from "./test-helpers.listener.js";
 import type { WorkerEnvironmentServiceRecord } from "./worker-environments/service-contract.js";
 
@@ -118,21 +118,8 @@ const skippedServices = {
   OPENCLAW_SKIP_PROVIDERS: "1",
   OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
 };
-const ENV_KEYS = [
-  "HOME",
-  ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
-  "OPENCLAW_STATE_DIR",
-  "OPENCLAW_CONFIG_PATH",
-  "OPENCLAW_GATEWAY_TOKEN",
-  "OPENCLAW_GATEWAY_PASSWORD",
-  ...Object.keys(skippedServices),
-];
-
-type Cleanup = () => Promise<void> | void;
-
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-const cleanup: Cleanup[] = [];
+const cleanup: Array<() => Promise<void> | void> = [];
 
 beforeEach(injectedWorkerService.reset);
 
@@ -146,7 +133,7 @@ afterEach(async () => {
 });
 
 it("composes agent, environment, and artifact RPCs over one real Gateway", async () => {
-  const envSnapshot = captureEnv([...ENV_KEYS]);
+  const envSnapshot = captureEnv([...GATEWAY_TEST_ENV_KEYS, "OPENCLAW_GATEWAY_PASSWORD"]);
   cleanup.push(async () => {
     closeOpenClawAgentDatabasesForTest();
     await closeOpenClawStateDatabaseAsync();
@@ -290,6 +277,8 @@ it("composes agent, environment, and artifact RPCs over one real Gateway", async
   await expectRpc("agents.files.get", fileParams, { file });
 
   const sessionKey = "agent:main:artifact-api";
+  const getArtifact = (artifactId: string | undefined, queryAgentId?: string) =>
+    rpc("artifacts.get", { sessionKey, artifactId, agentId: queryAgentId });
   const sessionId = "gateway-agent-artifact-session";
   const messageId = "gateway-agent-artifact-message";
   const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
@@ -362,7 +351,7 @@ it("composes agent, environment, and artifact RPCs over one real Gateway", async
       download: { mode: "url" },
     });
     const artifactParams = { sessionKey, artifactId: artifact?.id };
-    await expectRpc("artifacts.get", artifactParams, {
+    await expect(getArtifact(artifact?.id)).resolves.toMatchObject({
       artifact: { id: artifact?.id, sessionKey },
     });
 
@@ -386,19 +375,10 @@ it("composes agent, environment, and artifact RPCs over one real Gateway", async
 
   const artifact = artifactList.artifacts[0]!;
 
-  await expect(
-    rpc("artifacts.get", {
-      sessionKey,
-      artifactId: "artifact_unknown",
-    }),
-  ).rejects.toThrow(/artifact not found/i);
-  await expect(
-    rpc("artifacts.get", {
-      sessionKey,
-      agentId,
-      artifactId: artifact.id,
-    }),
-  ).rejects.toThrow('agent "artifact-agent" does not match session key agent "main"');
+  await expect(getArtifact("artifact_unknown")).rejects.toThrow(/artifact not found/i);
+  await expect(getArtifact(artifact.id, agentId)).rejects.toThrow(
+    'agent "artifact-agent" does not match session key agent "main"',
+  );
 
   await expectRpc("agents.delete", { agentId, deleteFiles: false }, agentResult);
   await restartGateway("gateway agent artifact APIs after delete");

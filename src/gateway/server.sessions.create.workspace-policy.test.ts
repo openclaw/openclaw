@@ -66,8 +66,21 @@ function expectDetached(result: Awaited<ReturnType<typeof createSession>>) {
     expect(result.payload?.entry[field], field).toBeUndefined();
   }
 }
-function openWorkspaceClient(root: string, scope = "operator.admin", name = "device") {
-  return openClient({ scopes: [scope], deviceIdentityPath: path.join(root, `${name}.json`) });
+function expectInvalid(result: Awaited<ReturnType<typeof directSessionReq>>, message: unknown) {
+  expect(result).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST", message } });
+}
+async function openWorkspaceClient(root: string, scope = "operator.admin", name = "device") {
+  const client = await openClient({
+    scopes: [scope],
+    deviceIdentityPath: path.join(root, `${name}.json`),
+  });
+  return {
+    ...client,
+    [Symbol.dispose]() {
+      client.ws.close();
+      testState.agentConfig = undefined;
+    },
+  };
 }
 
 async function setupResetWorktree(prefix: string, model?: { primary: string }) {
@@ -77,10 +90,14 @@ async function setupResetWorktree(prefix: string, model?: { primary: string }) {
   testState.sessionConfig = { dmScope: "main" };
   const { storePath } = await createSessionStoreDir();
   await writeSessionStore({ entries: { main: sessionStoreEntry("sess-reset-parent") } });
+  let worktreeId: string | undefined;
   return {
     workspace,
     storePath,
-    async cleanup(worktreeId: string | undefined) {
+    track(id: string | undefined) {
+      worktreeId = id;
+    },
+    async [Symbol.asyncDispose]() {
       if (worktreeId && getRegistryWorktree(process.env, worktreeId)?.removedAt === undefined) {
         await managedWorktrees.remove({
           id: worktreeId,
@@ -170,23 +187,19 @@ test.each([
       }
     }
     const { storePath } = await createSessionStoreDir();
-    const { ws } = await openWorkspaceClient(
+    using client = await openWorkspaceClient(
       root,
       kind === "outside" ? "operator.write" : "operator.admin",
     );
+    const { ws } = client;
     const key = `agent:main:dashboard:${kind}-cwd`;
-    try {
-      const created = await rpcReq(ws, "sessions.create", {
-        cwd,
-        ...(kind === "outside" ? {} : { agentId: "main", key }),
-      });
-      expect(created).toMatchObject({ ok: false, error: { code, message } });
-      if (kind !== "outside") {
-        expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
-      }
-    } finally {
-      ws.close();
-      testState.agentConfig = undefined;
+    const created = await rpcReq(ws, "sessions.create", {
+      cwd,
+      ...(kind === "outside" ? {} : { agentId: "main", key }),
+    });
+    expect(created).toMatchObject({ ok: false, error: { code, message } });
+    if (kind !== "outside") {
+      expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
     }
   },
 );
@@ -202,49 +215,39 @@ test.each(["operator.admin", "operator.write"])(
     await fs.symlink(workspace, alias, directoryLinkType);
     testState.agentConfig = { workspace: alias, sandbox: { mode: "all" } };
     const { storePath } = await createSessionStoreDir();
-    const { ws } = await openWorkspaceClient(root, scope, "cwd-device");
-    try {
-      const key = "agent:main:dashboard:canonical-cwd";
-      const created = await rpcReq<{
-        entry?: { sessionRoot?: string; spawnedCwd?: string };
-      }>(ws, "sessions.create", { key, cwd: path.join(alias, "packages", "app") });
+    using client = await openWorkspaceClient(root, scope, "cwd-device");
+    const { ws } = client;
+    const key = "agent:main:dashboard:canonical-cwd";
+    const created = await rpcReq<{
+      entry?: { sessionRoot?: string; spawnedCwd?: string };
+    }>(ws, "sessions.create", { key, cwd: path.join(alias, "packages", "app") });
 
-      expect(created.ok, JSON.stringify(created.error)).toBe(true);
-      expect(created.payload?.entry).toMatchObject({ sessionRoot: cwd, spawnedCwd: cwd });
-      expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
-        sessionRoot: cwd,
-        spawnedCwd: cwd,
-      });
-    } finally {
-      ws.close();
-      testState.agentConfig = undefined;
-    }
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    expect(created.payload?.entry).toMatchObject({ sessionRoot: cwd, spawnedCwd: cwd });
+    expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
+      sessionRoot: cwd,
+      spawnedCwd: cwd,
+    });
   },
 );
 
 test("sessions.create requires admin for full permission mode", async () => {
   const workspace = tempDirs.make("openclaw-session-full-mode-");
   testState.agentConfig = { workspace };
-  const writer = await openWorkspaceClient(workspace, "operator.write", "writer");
-  const admin = await openWorkspaceClient(workspace, "operator.admin", "admin");
-  try {
-    await expect(
-      rpcReq(writer.ws, "sessions.create", { agentId: "main", permissionMode: "full" }),
-    ).resolves.toMatchObject({
-      ok: false,
-      error: { message: "missing scope: operator.admin" },
-    });
-    await expect(
-      rpcReq(admin.ws, "sessions.create", { agentId: "main", permissionMode: "full" }),
-    ).resolves.toMatchObject({
-      ok: true,
-      payload: { entry: { permissionMode: "full", sessionRoot: workspace } },
-    });
-  } finally {
-    writer.ws.close();
-    admin.ws.close();
-    testState.agentConfig = undefined;
-  }
+  using writer = await openWorkspaceClient(workspace, "operator.write", "writer");
+  using admin = await openWorkspaceClient(workspace, "operator.admin", "admin");
+  await expect(
+    rpcReq(writer.ws, "sessions.create", { agentId: "main", permissionMode: "full" }),
+  ).resolves.toMatchObject({
+    ok: false,
+    error: { message: "missing scope: operator.admin" },
+  });
+  await expect(
+    rpcReq(admin.ws, "sessions.create", { agentId: "main", permissionMode: "full" }),
+  ).resolves.toMatchObject({
+    ok: true,
+    payload: { entry: { permissionMode: "full", sessionRoot: workspace } },
+  });
 });
 
 test("sessions.create uses a non-git Gateway cwd directly but not as a worktree source", async () => {
@@ -254,21 +257,13 @@ test("sessions.create uses a non-git Gateway cwd directly but not as a worktree 
   expect(direct.payload?.entry?.spawnedCwd).toBe(cwd);
 
   const isolated = await createSession({ cwd, worktree: true });
-  expect(isolated.ok).toBe(false);
-  expect(isolated.error).toMatchObject({
-    code: "INVALID_REQUEST",
-    message: "agent workspace is not a git checkout",
-  });
+  expectInvalid(isolated, "agent workspace is not a git checkout");
 });
 
 test("sessions.create keeps its cwd contract absolute-only", async () => {
   const created = await directSessionReq("sessions.create", { cwd: "~/repo" });
 
-  expect(created.ok).toBe(false);
-  expect(created.error).toMatchObject({
-    code: "INVALID_REQUEST",
-    message: "sessions.create cwd must be absolute",
-  });
+  expectInvalid(created, "sessions.create cwd must be absolute");
 });
 
 test.each([
@@ -278,162 +273,141 @@ test.each([
 ] as const)(
   "sessions.create reset-in-place reports cleanup truth for $name",
   async ({ outcome }) => {
-    const { storePath, cleanup } = await setupResetWorktree("openclaw-reset-retained-worktree-");
-    const warnSpy = vi.spyOn(sessionLog, "warn").mockImplementation(() => {});
+    await using fixture = await setupResetWorktree("openclaw-reset-retained-worktree-");
+    const { storePath } = fixture;
+    using warnSpy = vi.spyOn(sessionLog, "warn").mockImplementation(() => {});
     const originalRemoveIfLossless = captureMethodCall("removeIfLossless")(
       ManagedWorktreeService.prototype,
     );
-    let restoreRemoveIfLossless = () => {};
-    let worktreeId: string | undefined;
-    try {
-      const created = await mainSession({ worktree: true });
-      expect(created.ok).toBe(true);
-      const worktree = created.payload!.worktree;
-      worktreeId = worktree.id;
-      const dirtyFile = path.join(worktree.path, "retained-work.txt");
-      if (outcome === "dirty") {
-        await fs.writeFile(dirtyFile, "preserve my work\n");
-      } else {
-        const removeSpy = vi
-          .spyOn(ManagedWorktreeService.prototype, "removeIfLossless")
-          .mockImplementation(async function (this: ManagedWorktreeService, id) {
-            if (outcome === "failed") {
-              throw new Error("simulated cleanup failure");
-            }
-            await originalRemoveIfLossless(this, id);
-            return false;
-          });
-        restoreRemoveIfLossless = () => removeSpy.mockRestore();
-      }
+    const created = await mainSession({ worktree: true });
+    expect(created.ok).toBe(true);
+    const worktree = created.payload!.worktree;
+    fixture.track(worktree.id);
+    const dirtyFile = path.join(worktree.path, "retained-work.txt");
+    if (outcome === "dirty") {
+      await fs.writeFile(dirtyFile, "preserve my work\n");
+    }
+    using _ =
+      outcome === "dirty"
+        ? undefined
+        : vi
+            .spyOn(ManagedWorktreeService.prototype, "removeIfLossless")
+            .mockImplementation(async function (this: ManagedWorktreeService, id) {
+              if (outcome === "failed") {
+                throw new Error("simulated cleanup failure");
+              }
+              await originalRemoveIfLossless(this, id);
+              return false;
+            });
 
-      const reset = await mainSession({}, "operator.write");
-      expectDetached(reset);
-      expect(
-        loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.worktree,
-      ).toBeUndefined();
-      if (outcome === "dirty") {
-        expect(getRegistryWorktree(process.env, worktree.id)).toMatchObject({
-          runEndCleanup: { outcome: "retained-dirty" },
-        });
-        await expect(fs.readFile(dirtyFile, "utf8")).resolves.toBe("preserve my work\n");
-        expect(warnSpy).toHaveBeenCalledOnce();
-        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(worktree.branch));
-        expect(warnSpy).toHaveBeenCalledWith(
-          expect.stringContaining(truncateUtf16Safe(sanitizeForLog(worktree.path), 256)),
-        );
-        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("retained-dirty"));
-      } else if (outcome === "failed") {
-        expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toBeUndefined();
-        await fs.access(worktree.path);
-        expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
-          "failed to finalize session worktree lifecycle: simulated cleanup failure",
-        );
-      } else {
-        expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toEqual(
-          expect.any(Number),
-        );
-        await expect(fs.access(worktree.path)).rejects.toThrow();
-        expect(warnSpy).not.toHaveBeenCalled();
-      }
-    } finally {
-      restoreRemoveIfLossless();
-      warnSpy.mockRestore();
-      await cleanup(worktreeId);
+    const reset = await mainSession({}, "operator.write");
+    expectDetached(reset);
+    expect(
+      loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.worktree,
+    ).toBeUndefined();
+    if (outcome === "dirty") {
+      expect(getRegistryWorktree(process.env, worktree.id)).toMatchObject({
+        runEndCleanup: { outcome: "retained-dirty" },
+      });
+      await expect(fs.readFile(dirtyFile, "utf8")).resolves.toBe("preserve my work\n");
+      expect(warnSpy).toHaveBeenCalledOnce();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(worktree.branch));
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(truncateUtf16Safe(sanitizeForLog(worktree.path), 256)),
+      );
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("retained-dirty"));
+    } else if (outcome === "failed") {
+      expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toBeUndefined();
+      await fs.access(worktree.path);
+      expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
+        "failed to finalize session worktree lifecycle: simulated cleanup failure",
+      );
+    } else {
+      expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toEqual(expect.any(Number));
+      await expect(fs.access(worktree.path)).rejects.toThrow();
+      expect(warnSpy).not.toHaveBeenCalled();
     }
   },
 );
 
 test("sessions.create reset-in-place detaches the prior worktree permission boundary", async () => {
   // The template remote makes this a lossless leave-worktree flow.
-  const { workspace, storePath, cleanup } = await setupResetWorktree(
-    "openclaw-reset-session-worktree-",
-    { primary: "openai/current-model" },
-  );
-  const warnSpy = vi.spyOn(sessionLog, "warn").mockImplementation(() => {});
-  let worktreeId: string | undefined;
-  let releaseWorktreeRemoval = () => {};
-  let restoreRemoveIfLossless = () => {};
+  await using fixture = await setupResetWorktree("openclaw-reset-session-worktree-", {
+    primary: "openai/current-model",
+  });
+  const { workspace, storePath } = fixture;
+  using warnSpy = vi.spyOn(sessionLog, "warn").mockImplementation(() => {});
   const resolved = { modelProvider: "openai", model: "current-model" };
-  try {
-    const created = await mainSession({ worktree: true, permissionMode: "workspace" });
-    expect(created.ok).toBe(true);
-    expect(created.payload?.key).toBe("agent:main:main");
-    expect(created.payload?.resolved).toEqual(resolved);
-    const worktree = created.payload?.worktree;
-    worktreeId = worktree?.id;
-    expect(created.payload?.entry.spawnedCwd).toBe(worktree?.path);
-    expect(created.payload?.entry.sessionRoot).toBe(worktree?.path);
-    expect(created.payload?.entry.permissionMode).toBe("workspace");
-    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.spawnedCwd).toBe(
-      worktree?.path,
-    );
+  const created = await mainSession({ worktree: true, permissionMode: "workspace" });
+  expect(created).toMatchObject({ ok: true, payload: { key: "agent:main:main" } });
+  expect(created.payload?.resolved).toEqual(resolved);
+  const worktree = created.payload?.worktree;
+  fixture.track(worktree?.id);
+  expect(created.payload?.entry.spawnedCwd).toBe(worktree?.path);
+  expect(created.payload?.entry.sessionRoot).toBe(worktree?.path);
+  expect(created.payload?.entry.permissionMode).toBe("workspace");
+  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.spawnedCwd).toBe(
+    worktree?.path,
+  );
 
-    // Pause the exact old-binding removal before destructive work. A same-key
-    // worktree reset must remain fenced until that prior generation is gone.
-    const originalRemoveIfLossless = captureMethodCall("removeIfLossless")(
-      ManagedWorktreeService.prototype,
-    );
-    const removalGate = new Promise<void>((resolve) => {
-      releaseWorktreeRemoval = resolve;
+  // Pause the exact old-binding removal before destructive work. A same-key
+  // worktree reset must remain fenced until that prior generation is gone.
+  const originalRemoveIfLossless = captureMethodCall("removeIfLossless")(
+    ManagedWorktreeService.prototype,
+  );
+  const removalGate = createDeferredCore();
+  const { promise: removalStarted, resolve: markRemovalStarted } = createDeferredCore();
+  using removeIfLosslessSpy = vi
+    .spyOn(ManagedWorktreeService.prototype, "removeIfLossless")
+    .mockImplementation(async function (this: ManagedWorktreeService, id) {
+      if (id === worktree?.id) {
+        expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
+          targetSessionKey: "agent:main:main",
+          reason: "session-reset",
+        });
+        markRemovalStarted();
+        expect(isSessionLifecycleMutationActive(storePath, ["agent:main:main"])).toBe(true);
+        await removalGate.promise;
+      }
+      return await originalRemoveIfLossless(this, id);
     });
-    const { promise: removalStarted, resolve: markRemovalStarted } = createDeferredCore();
-    const removeIfLosslessSpy = vi
-      .spyOn(ManagedWorktreeService.prototype, "removeIfLossless")
-      .mockImplementation(async function (this: ManagedWorktreeService, id) {
-        if (id === worktree?.id) {
-          expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
-            targetSessionKey: "agent:main:main",
-            reason: "session-reset",
-          });
-          markRemovalStarted();
-          expect(isSessionLifecycleMutationActive(storePath, ["agent:main:main"])).toBe(true);
-          await removalGate;
-        }
-        return await originalRemoveIfLossless(this, id);
-      });
-    restoreRemoveIfLossless = () => removeIfLosslessSpy.mockRestore();
-    const resetPromise = mainSession({}, "operator.write");
-    await removalStarted;
-    let successorSettled = false;
-    const successorPromise = createSession({
-      key: "agent:main:main",
-      agentId: "main",
-      worktree: true,
-    }).then((result) => {
-      successorSettled = true;
-      return result;
-    });
-    await Promise.resolve();
-    expect(successorSettled).toBe(false);
-    releaseWorktreeRemoval();
-    const [reset, successor] = await Promise.all([resetPromise, successorPromise]);
-    restoreRemoveIfLossless();
-    expectDetached(reset);
-    expect(reset.payload?.entry.permissionMode).toBeUndefined();
-    expect(reset.payload?.resolved).toEqual(resolved);
-    expect(getRegistryWorktree(process.env, worktree!.id)?.removedAt).toEqual(expect.any(Number));
-    await expect(fs.access(worktree!.path)).rejects.toThrow();
-    expect(warnSpy).not.toHaveBeenCalled();
-    expect(successor.ok).toBe(true);
-    const successorWorktree = successor.payload!.worktree;
-    expect(successorWorktree.id).not.toBe(worktree?.id);
-    worktreeId = successorWorktree.id;
-    await fs.access(successorWorktree.path);
-    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
-      spawnedCwd: successorWorktree.path,
-      worktree: {
-        id: successorWorktree.id,
-        branch: successorWorktree.branch,
-        repoRoot: workspace,
-      },
-    });
-    expect(getRegistryWorktree(process.env, successorWorktree.id)?.removedAt).toBeUndefined();
-  } finally {
-    releaseWorktreeRemoval();
-    restoreRemoveIfLossless();
-    warnSpy.mockRestore();
-    await cleanup(worktreeId);
-  }
+  using _ = { [Symbol.dispose]: () => removalGate.resolve() };
+  const resetPromise = mainSession({}, "operator.write");
+  await removalStarted;
+  let successorSettled = false;
+  const successorPromise = createSession({
+    key: "agent:main:main",
+    agentId: "main",
+    worktree: true,
+  }).then((result) => {
+    successorSettled = true;
+    return result;
+  });
+  await Promise.resolve();
+  expect(successorSettled).toBe(false);
+  removalGate.resolve();
+  const [reset, successor] = await Promise.all([resetPromise, successorPromise]);
+  removeIfLosslessSpy.mockRestore();
+  expectDetached(reset);
+  expect(reset.payload?.entry.permissionMode).toBeUndefined();
+  expect(reset.payload?.resolved).toEqual(resolved);
+  expect(getRegistryWorktree(process.env, worktree!.id)?.removedAt).toEqual(expect.any(Number));
+  await expect(fs.access(worktree!.path)).rejects.toThrow();
+  expect(warnSpy).not.toHaveBeenCalled();
+  expect(successor.ok).toBe(true);
+  const successorWorktree = successor.payload!.worktree;
+  expect(successorWorktree.id).not.toBe(worktree?.id);
+  fixture.track(successorWorktree.id);
+  await fs.access(successorWorktree.path);
+  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+    spawnedCwd: successorWorktree.path,
+    worktree: {
+      id: successorWorktree.id,
+      branch: successorWorktree.branch,
+      repoRoot: workspace,
+    },
+  });
+  expect(getRegistryWorktree(process.env, successorWorktree.id)?.removedAt).toBeUndefined();
 });
 
 test("sessions.create rejects worktrees for agent workspaces without a commit", async () => {
@@ -444,11 +418,7 @@ test("sessions.create rejects worktrees for agent workspaces without a commit", 
   try {
     const created = await createSession({ agentId: "main", worktree: true });
 
-    expect(created.ok).toBe(false);
-    expect(created.error).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: expect.stringContaining("git checkout has no commits"),
-    });
+    expectInvalid(created, expect.stringContaining("git checkout has no commits"));
     expect(created.error?.message).toContain("Create an initial commit, then retry.");
   } finally {
     testState.agentConfig = undefined;

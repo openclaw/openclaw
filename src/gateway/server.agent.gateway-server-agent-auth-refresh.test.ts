@@ -87,7 +87,7 @@ function observePublication(phase: "published" | "failed") {
       settled.resolve();
     }
   });
-  return { promise: settled.promise, unregister };
+  return { promise: settled.promise, unregister, [Symbol.dispose]: unregister };
 }
 
 async function expectStatus(response: Promise<AgentRpcFrame>, status: string) {
@@ -152,12 +152,9 @@ async function prepareAuthDispatchAgents(affectedAgentId: string) {
 }
 
 afterEach(async () => {
-  try {
-    const outcomes = await Promise.all(rpcDrains.splice(0));
-    expect(outcomes.flat().every((outcome) => outcome.status === "fulfilled")).toBe(true);
-  } finally {
-    testState.agentsConfig = undefined;
-  }
+  const outcomes = await Promise.all(rpcDrains.splice(0));
+  testState.agentsConfig = undefined;
+  expect(outcomes.flat().every((outcome) => outcome.status === "fulfilled")).toBe(true);
 });
 
 test("keeps an accepted run on its admitted runtime generation", async () => {
@@ -171,32 +168,27 @@ test("keeps an accepted run on its admitted runtime generation", async () => {
   const admittedSnapshots: Array<Awaited<ReturnType<typeof acquireRuntime>>["snapshot"]> = [];
   // Admission can derive a selected snapshot from the configured generation. Capture
   // the actual lease before ACK, then prove refresh cannot replace that run's identity.
-  const acquireSpy = vi
-    .spyOn(preparedRuntime, "acquireAgentRunPreparedModelRuntime")
-    .mockImplementation(async (input, options) => {
-      const lease = await acquireRuntime(input, options);
-      if (input.agentId === affectedAgentId) {
-        admittedSnapshots.push(lease.snapshot);
-      }
-      return lease;
-    });
-  const dispatchedSnapshots = new Map<
-    string,
-    ReturnType<typeof getPreparedModelRuntimeBorrowedSnapshot>
-  >();
+  using acquireSpy = vi.spyOn(preparedRuntime, "acquireAgentRunPreparedModelRuntime");
+  acquireSpy.mockImplementation(async (input, options) => {
+    const lease = await acquireRuntime(input, options);
+    if (input.agentId === affectedAgentId) {
+      admittedSnapshots.push(lease.snapshot);
+    }
+    return lease;
+  });
+  const dispatchedSnapshots = new Map<string, (typeof admittedSnapshots)[number] | undefined>();
   const originalCommand = agentCommandMock.getMockImplementation();
   expect(originalCommand).toBeDefined();
   const dispatchEntered = createDeferred();
   const releaseDispatch = createDeferred();
   const handlerHelpers = await import("./agent-turn/agent-handler-helpers.js");
   // Receiving the ACK is not a barrier against the server's dispatch timer.
-  const yieldSpy = vi
-    .spyOn(handlerHelpers, "yieldAfterAgentAcceptedAck")
-    .mockImplementationOnce(() => {
-      dispatchEntered.resolve();
-      return releaseDispatch.promise;
-    });
-  const published = observePublication("published");
+  using yieldSpy = vi.spyOn(handlerHelpers, "yieldAfterAgentAcceptedAck");
+  yieldSpy.mockImplementationOnce(() => {
+    dispatchEntered.resolve();
+    return releaseDispatch.promise;
+  });
+  using published = observePublication("published");
   try {
     agentCommandMock.mockImplementation((options, ...args) => {
       if (
@@ -244,9 +236,6 @@ test("keeps an accepted run on its admitted runtime generation", async () => {
     expect(dispatchedSnapshots.get(subsequentRunId) === admittedSnapshots[1]).toBe(true);
   } finally {
     releaseDispatch.resolve();
-    published.unregister();
-    yieldSpy.mockRestore();
-    acquireSpy.mockRestore();
     agentCommandMock.mockImplementation(originalCommand!);
   }
 });
@@ -332,8 +321,7 @@ test("aborts one affected waiter without cancelling shared auth publication", as
     const after = await loadPublishedGatewayReplyDispatchRuntime({ agentId: affectedAgentId });
     expect(after).not.toBe(before.runtime);
     await expectCompleted(waiting);
-    const affectedCalls = agentCommandCallsFor(waitingRunId);
-    expect(affectedCalls).toHaveLength(1);
+    expect(agentCommandCallsFor(waitingRunId)).toHaveLength(1);
     expectRuntime(waitingRunId, after);
     const subsequent = sendAgentRpc(affectedAgentId, subsequentRunId);
     await expectCompleted(subsequent);
@@ -355,25 +343,21 @@ test("never reuses an affected projection after auth publication rejects", async
   const affectedAgentId = "auth-reject";
   const runId = "idem-agent-auth-reject";
   const before = await prepareAuthDispatchAgents(affectedAgentId);
-  const ensureSpy = await mockPublication(before.agentDir, async () => {
+  using ensureSpy = await mockPublication(before.agentDir, async () => {
     throw new Error("auth publication rejected");
   });
-  const failed = observePublication("failed");
-  try {
-    refreshAuth(before.agentDir, "rejected-generation-key");
-    await failed.promise;
-    const unavailable = `prepared reply dispatch runtime owner was not published for ${affectedAgentId}`;
-    await expect(
-      loadPublishedGatewayReplyDispatchRuntime({ agentId: affectedAgentId }),
-    ).rejects.toThrow(unavailable);
+  using failed = observePublication("failed");
+  refreshAuth(before.agentDir, "rejected-generation-key");
+  await failed.promise;
+  const unavailable = `prepared reply dispatch runtime owner was not published for ${affectedAgentId}`;
+  await expect(
+    loadPublishedGatewayReplyDispatchRuntime({ agentId: affectedAgentId }),
+  ).rejects.toThrow(unavailable);
 
-    const rejected = sendAgentRpc(affectedAgentId, runId);
-    expectUnavailable(await rejected.response, unavailable);
-    expect(agentCommandCallsFor(runId)).toHaveLength(0);
-  } finally {
-    failed.unregister();
-    ensureSpy.mockRestore();
-  }
+  const rejected = sendAgentRpc(affectedAgentId, runId);
+  expectUnavailable(await rejected.response, unavailable);
+  expect(agentCommandCallsFor(runId)).toHaveLength(0);
+  ensureSpy.mockRestore();
 });
 
 test("reports provider auth refresh failures over the connected Gateway", async () => {
@@ -391,13 +375,10 @@ test("reports provider auth refresh failures over the connected Gateway", async 
       return { version: 1, profiles: {} };
     },
   });
-  activateSecretsRuntimeSnapshot(prepared);
-  try {
-    const response = await rpcReq(gatewaySuite.ws, "models.authStatus", { refresh: true });
+  using secrets = { prepared, [Symbol.dispose]: clearSecretsRuntimeSnapshot };
+  activateSecretsRuntimeSnapshot(secrets.prepared);
+  const response = await rpcReq(gatewaySuite.ws, "models.authStatus", { refresh: true });
 
-    expect(authStoreReads).toBe(2);
-    expectUnavailable(response, "simulated provider auth refresh failure");
-  } finally {
-    clearSecretsRuntimeSnapshot();
-  }
+  expect(authStoreReads).toBe(2);
+  expectUnavailable(response, "simulated provider auth refresh failure");
 });

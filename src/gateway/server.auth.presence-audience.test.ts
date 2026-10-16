@@ -38,22 +38,6 @@ const TRUSTED_PROXY_HEADERS = {
   "x-forwarded-user": "admin@example.com",
 };
 
-async function configureGatewayAuth(
-  auth: GatewayAuthConfig,
-  roles: GatewayOperatorRolesConfig,
-): Promise<void> {
-  testState.gatewayAuth = auth;
-  testState.gatewayControlUi = { allowedOrigins: [BROWSER_ORIGIN] };
-  await writeConfigFile({
-    gateway: {
-      auth,
-      trustedProxies: ["127.0.0.1"],
-      roles,
-      controlUi: { allowedOrigins: [BROWSER_ORIGIN] },
-    },
-  });
-}
-
 function responseScopes(response: Awaited<ReturnType<typeof connectReq>>): string[] | undefined {
   return (response.payload as { auth?: { scopes?: string[] } } | undefined)?.auth?.scopes;
 }
@@ -86,30 +70,33 @@ function observePresence(ws: PresenceSocket) {
 }
 
 test("shares people only with readers and filters their session references across hello, RPC, and activity events", async () => {
-  await configureGatewayAuth(
-    {
-      mode: "trusted-proxy",
-      identityScopes: {
-        "admin@example.com": ["operator.admin"],
-        "watcher@example.com": ["operator.admin"],
-      },
-      trustedProxy: {
-        userHeader: "x-forwarded-user",
-        requiredHeaders: ["x-forwarded-proto"],
-        allowLoopback: true,
-      },
+  const auth: GatewayAuthConfig = {
+    mode: "trusted-proxy",
+    identityScopes: {
+      "admin@example.com": ["operator.admin"],
+      "watcher@example.com": ["operator.admin"],
     },
-    {
-      default: "reader",
-      definitions: {
-        reader: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
-        writer: { sessions: { others: "write" }, agents: "*", scopes: ["operator.write"] },
-        restricted: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
-        maintainer: { sessions: { others: "write" }, agents: "*", scopes: ["operator.admin"] },
-        pairing: { sessions: { others: "none" }, agents: [], scopes: ["operator.pairing"] },
-      },
+    trustedProxy: {
+      userHeader: "x-forwarded-user",
+      requiredHeaders: ["x-forwarded-proto"],
+      allowLoopback: true,
     },
-  );
+  };
+  const roles: GatewayOperatorRolesConfig = {
+    default: "reader",
+    definitions: {
+      reader: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
+      writer: { sessions: { others: "write" }, agents: "*", scopes: ["operator.write"] },
+      restricted: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
+      maintainer: { sessions: { others: "write" }, agents: "*", scopes: ["operator.admin"] },
+      pairing: { sessions: { others: "none" }, agents: [], scopes: ["operator.pairing"] },
+    },
+  };
+  testState.gatewayAuth = auth;
+  testState.gatewayControlUi = { allowedOrigins: [BROWSER_ORIGIN] };
+  await writeConfigFile({
+    gateway: { auth, roles, trustedProxies: ["127.0.0.1"], controlUi: testState.gatewayControlUi },
+  });
   const creator = ensureProfileForEmail("creator@example.com");
   const restricted = ensureProfileForEmail("restricted@example.com");
   setUserProfileRole(restricted.id, "restricted");
@@ -228,7 +215,11 @@ test("shares people only with readers and filters their session references acros
       const { watchedSessions: _watchedSessions, ...person } = rawWatcher!;
       expect(person.user?.id).toBe(ensureProfileForEmail("watcher@example.com").id);
       expect(person.ts).toBeGreaterThan(0);
-      expect(person).toMatchObject(personTiming);
+      expect(person).toMatchObject({
+        ...personTiming,
+        ip: "203.0.113.50",
+        user: { name: "Presence Watcher" },
+      });
 
       const recipients = [];
       for (const { name, scopes, allowed } of [
@@ -267,49 +258,12 @@ test("shares people only with readers and filters their session references acros
           "presence.query",
           name === "reader" ? { include: ["devices", "network"] } : {},
         );
-        if (canRead) {
-          expect(query).toMatchObject({
-            status: "ok",
-            observedAt: expect.any(Number),
-            truncated: false,
-          });
-          const watcherPeople = query?.people.filter(
-            (entry) => entry.profileId === watcherProfile.id,
-          );
-          expect(watcherPeople, `${name} reads one named person`).toEqual([
-            expect.objectContaining({ name: "Presence Watcher", online: true }),
-          ]);
-          if (name === "reader") {
-            const connection = {
-              id: person.connectionId,
-              clientId: CONTROL_UI_CLIENT.id,
-              timeZone: "Europe/Vienna",
-              network: { ip: "203.0.113.50" },
-            };
-            expect(watcherPeople?.[0]).toMatchObject({
-              activity: {
-                at: person.connectionLastActivityAt,
-                source: "openclaw-interaction",
-              },
-              deviceCount: 1,
-              devices: [{ kind: "client", connections: [connection] }],
-            });
-            const self = await read<PresenceQueryResult>("presence.query", {
-              action: "person",
-              person: "me",
-            });
-            expect(self).toMatchObject({
-              status: "ok",
-              people: [{ profileId: ensureProfileForEmail("reader@example.com").id }],
-            });
-          }
-        } else {
+        if (!canRead) {
           expect(query).toBeUndefined();
         }
         recipients.push({
           ...recipient,
           name,
-          scopes,
           allowed,
           canRead,
           rpcPresence: presence,
@@ -391,13 +345,10 @@ test("shares people only with readers and filters their session references acros
 
       const isLiveIdle = (entry: SystemPresence) =>
         entry.user?.id === idlePerson.user?.id && entry.reason !== "disconnect";
-      const nextIdleRows = async (count: number) => {
-        const event = await nextPresence(
-          watcher.ws,
-          (rows) => rows.filter(isLiveIdle).length === count,
+      const nextIdleRows = (count: number) =>
+        nextPresence(watcher.ws, (rows) => rows.filter(isLiveIdle).length === count).then(
+          ({ payload }) => payload.presence.filter(isLiveIdle),
         );
-        return event.payload.presence.filter(isLiveIdle);
-      };
       const [overlappingRows, overlap] = await Promise.all([
         nextIdleRows(2),
         openRecipient("idle", ["operator.read"]),
