@@ -1,8 +1,10 @@
-// Mattermost tests cover interactions plugin behavior.
 import { createHmac } from "node:crypto";
-import { EventEmitter } from "node:events";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
+import { createServer, type ServerResponse } from "node:http";
+import {
+  createMockIncomingRequest,
+  createMockServerResponse,
+  postRawWebhook,
+} from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
 import { setMattermostRuntime } from "../runtime.js";
@@ -233,61 +235,6 @@ describe("createMattermostInteractionHandler", () => {
     setInteractionSecret("acct", "bot-token");
   });
 
-  function createReq(params: {
-    method?: string;
-    body?: unknown;
-    remoteAddress?: string;
-    headers?: Record<string, string>;
-  }): IncomingMessage {
-    const body =
-      params.body === undefined
-        ? ""
-        : typeof params.body === "string"
-          ? params.body
-          : JSON.stringify(params.body);
-    const req = Object.assign(new EventEmitter(), {
-      destroyed: false,
-      method: params.method ?? "POST",
-      headers: params.headers ?? {},
-      socket: { remoteAddress: params.remoteAddress ?? "203.0.113.10" },
-      destroy() {
-        this.destroyed = true;
-        return this;
-      },
-    });
-
-    queueMicrotask(() => {
-      if (body) {
-        req.emit("data", Buffer.from(body));
-      }
-      req.emit("end");
-    });
-
-    return req as IncomingMessage;
-  }
-
-  function createRes(): ServerResponse & { headers: Record<string, string>; body: string } {
-    const res = {
-      statusCode: 200,
-      headers: {},
-      body: "",
-      setHeader(name: string, value: string | number | readonly string[]) {
-        res.headers[name] = Array.isArray(value) ? value.join(",") : String(value);
-        return res;
-      },
-      end(
-        chunk?: string | Buffer | Uint8Array,
-        _encoding?: BufferEncoding | (() => void),
-        cb?: () => void,
-      ) {
-        res.body = chunk ? String(chunk) : "";
-        cb?.();
-        return res;
-      },
-    } as ServerResponse & { headers: Record<string, string>; body: string };
-    return res;
-  }
-
   function createActionContext(actionId = "approve", channelId = "chan-1") {
     const context = { action_id: actionId, __openclaw_channel_id: channelId };
     return { context, token: generateInteractionToken(context, "acct") };
@@ -328,18 +275,21 @@ describe("createMattermostInteractionHandler", () => {
       headers?: Record<string, string>;
     },
   ) {
-    const req = createReq({
-      remoteAddress: params.remoteAddress,
-      headers: params.headers,
-      body: params.body,
+    const body =
+      typeof params.body === "string" ? params.body : (JSON.stringify(params.body) ?? "");
+    const req = createMockIncomingRequest([body]);
+    req.method = "POST";
+    req.headers = params.headers ?? {};
+    Object.defineProperty(req.socket, "remoteAddress", {
+      value: params.remoteAddress ?? "203.0.113.10",
     });
-    const res = createRes();
+    const res = createMockServerResponse();
     await handler(req, res);
     return res;
   }
 
   function expectForbiddenResponse(
-    res: ServerResponse & { body: string },
+    res: ServerResponse & { body?: string },
     expectedMessage: string,
   ) {
     expect(res.statusCode).toBe(403);
