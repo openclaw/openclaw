@@ -1,4 +1,3 @@
-// Browser tests cover independently bounded delegated node-proxy requests.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -63,15 +62,33 @@ vi.mock("./browser-proxy-upload.js", () => uploadMocks);
 import { createBrowserNodeProxyRequest } from "./browser-node-proxy.js";
 import { BrowserServiceError } from "./browser/client-fetch.js";
 
-function createSessionProxy() {
+function createSessionProxy({
+  node = {},
+  fallback = false,
+  signal,
+}: {
+  node?: Partial<Parameters<typeof createBrowserNodeProxyRequest>[0]["nodeTarget"]>;
+  fallback?: boolean;
+  signal?: AbortSignal;
+} = {}) {
   return createBrowserNodeProxyRequest({
     nodeTarget: {
       nodeId: "node-1",
       commands: ["browser.proxy", "browser.proxy.upload.v1"],
+      ...node,
     },
-    allowAutomaticHostFallback: false,
+    allowAutomaticHostFallback: fallback,
+    signal,
   });
 }
+
+const originalBody = { paths: ["/tmp/openclaw/uploads/report.txt"], ref: "e12" };
+const uploadRequest = { method: "POST", path: "/hooks/file-chooser", body: originalBody };
+const upload = {
+  envelope: "browser-upload-v1",
+  files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
+};
+const hostUnavailable = "Browser control host is not reachable on 127.0.0.1:18791.";
 
 function readGatewayCall(index = 0) {
   const call = runtimeMocks.callGatewayTool.mock.calls[index];
@@ -130,11 +147,7 @@ describe("Browser node proxy nested watchdogs", () => {
 
   it("binds the tool execution signal to node requests without their own signal", async () => {
     const signal = new AbortController().signal;
-    const proxy = createBrowserNodeProxyRequest({
-      nodeTarget: { nodeId: "node-1" },
-      allowAutomaticHostFallback: false,
-      signal,
-    });
+    const proxy = createSessionProxy({ node: { commands: undefined }, signal });
 
     await proxy({ method: "GET", path: "/snapshot" });
 
@@ -144,11 +157,7 @@ describe("Browser node proxy nested watchdogs", () => {
   it("keeps an explicit request signal ahead of the bound tool execution signal", async () => {
     const toolSignal = new AbortController().signal;
     const requestSignal = new AbortController().signal;
-    const proxy = createBrowserNodeProxyRequest({
-      nodeTarget: { nodeId: "node-1" },
-      allowAutomaticHostFallback: false,
-      signal: toolSignal,
-    });
+    const proxy = createSessionProxy({ node: { commands: undefined }, signal: toolSignal });
 
     await proxy({ method: "GET", path: "/snapshot", signal: requestSignal });
 
@@ -160,15 +169,9 @@ describe("Browser node proxy nested watchdogs", () => {
 
   it("keeps the bound tool execution signal when a node falls back to the host", async () => {
     const signal = new AbortController().signal;
-    runtimeMocks.callGatewayTool.mockRejectedValueOnce(
-      new Error("Browser control host is not reachable on 127.0.0.1:18791."),
-    );
+    runtimeMocks.callGatewayTool.mockRejectedValueOnce(new Error(hostUnavailable));
     runtimeMocks.fetchBrowserJson.mockResolvedValueOnce({ ok: true, source: "gateway-host" });
-    const proxy = createBrowserNodeProxyRequest({
-      nodeTarget: { nodeId: "node-1" },
-      allowAutomaticHostFallback: true,
-      signal,
-    });
+    const proxy = createSessionProxy({ node: { commands: undefined }, fallback: true, signal });
 
     await expect(proxy({ method: "GET", path: "/snapshot" })).resolves.toMatchObject({
       ok: true,
@@ -184,16 +187,11 @@ describe("Browser node proxy nested watchdogs", () => {
   it.each(["unreachable", "upload-unsupported"] as const)(
     "does not switch browsers after a node action when the next request is %s",
     async (failure) => {
-      const proxy = createBrowserNodeProxyRequest({
-        nodeTarget: { nodeId: "node-1", commands: ["browser.proxy"] },
-        allowAutomaticHostFallback: true,
-      });
+      const proxy = createSessionProxy({ node: { commands: ["browser.proxy"] }, fallback: true });
       await proxy({ method: "POST", path: "/navigate", profile: "work" });
       runtimeMocks.fetchBrowserJson.mockResolvedValue({ ok: true, profile: "wrong-host" });
       if (failure === "unreachable") {
-        runtimeMocks.callGatewayTool.mockRejectedValueOnce(
-          new Error("Browser control host is not reachable on 127.0.0.1:18791."),
-        );
+        runtimeMocks.callGatewayTool.mockRejectedValueOnce(new Error(hostUnavailable));
       }
       const request =
         failure === "unreachable"
@@ -219,10 +217,7 @@ describe("Browser node proxy nested watchdogs", () => {
     runtimeMocks.callGatewayTool.mockResolvedValueOnce({
       payload: {},
     } as unknown as BrowserNodeResponse);
-    const proxy = createBrowserNodeProxyRequest({
-      nodeTarget: { nodeId: "node-1", label: "Studio Node" },
-      allowAutomaticHostFallback: false,
-    });
+    const proxy = createSessionProxy({ node: { commands: undefined, label: "Studio Node" } });
 
     await expect(proxy({ method: "GET", path: "/snapshot" })).rejects.toThrow(
       /Studio Node.*action=status.*target="host"/i,
@@ -238,10 +233,7 @@ describe("Browser node proxy nested watchdogs", () => {
       },
     } as unknown as BrowserNodeResponse);
     runtimeMocks.persistBrowserProxyResultFiles.mockRejectedValueOnce(transferError);
-    const proxy = createBrowserNodeProxyRequest({
-      nodeTarget: { nodeId: "node-1", commands: ["browser.proxy"] },
-      allowAutomaticHostFallback: true,
-    });
+    const proxy = createSessionProxy({ node: { commands: ["browser.proxy"] }, fallback: true });
 
     await expect(proxy({ method: "POST", path: "/screenshot" })).rejects.toBe(transferError);
 
@@ -255,24 +247,12 @@ describe("Browser node proxy nested watchdogs", () => {
   });
 
   it("sends Gateway-owned upload bytes without node-facing source paths", async () => {
-    const originalBody = {
-      paths: ["/tmp/openclaw/uploads/report.txt"],
-      ref: "e12",
-    };
-    const upload = {
-      envelope: "browser-upload-v1",
-      files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
-    };
     uploadMocks.prepareBrowserProxyUploadRequest.mockResolvedValueOnce({
       body: { ref: "e12" },
       upload,
     });
 
-    await createSessionProxy()({
-      method: "POST",
-      path: "/hooks/file-chooser",
-      body: originalBody,
-    });
+    await createSessionProxy()(uploadRequest);
 
     expect(readGatewayCall().node.params).toMatchObject({
       body: { ref: "e12" },
@@ -283,28 +263,14 @@ describe("Browser node proxy nested watchdogs", () => {
   });
 
   it("uses the original Gateway paths when an auto-selected old node lacks upload support", async () => {
-    const originalBody = {
-      paths: ["/tmp/openclaw/uploads/report.txt"],
-      ref: "e12",
-    };
     uploadMocks.prepareBrowserProxyUploadRequest.mockResolvedValueOnce({
       body: { ref: "e12" },
-      upload: {
-        envelope: "browser-upload-v1",
-        files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
-      },
+      upload,
     });
     runtimeMocks.fetchBrowserJson.mockResolvedValueOnce({ ok: true });
-    const proxy = createBrowserNodeProxyRequest({
-      nodeTarget: { nodeId: "node-1", commands: ["browser.proxy"] },
-      allowAutomaticHostFallback: true,
-    });
+    const proxy = createSessionProxy({ node: { commands: ["browser.proxy"] }, fallback: true });
 
-    await proxy({
-      method: "POST",
-      path: "/hooks/file-chooser",
-      body: originalBody,
-    });
+    await proxy(uploadRequest);
 
     expect(runtimeMocks.fetchBrowserJson).toHaveBeenCalledWith(
       "/hooks/file-chooser",
@@ -318,22 +284,16 @@ describe("Browser node proxy nested watchdogs", () => {
   });
 
   it("explains when remote upload transfer is awaiting node command approval", async () => {
-    const proxy = createBrowserNodeProxyRequest({
-      nodeTarget: {
-        nodeId: "node-1",
+    const proxy = createSessionProxy({
+      node: {
         commands: ["browser.proxy"],
         pendingDeclaredCommands: ["browser.proxy", "browser.proxy.upload.v1"],
       },
-      allowAutomaticHostFallback: false,
     });
 
-    await expect(
-      proxy({
-        method: "POST",
-        path: "/hooks/file-chooser",
-        body: { paths: ["/tmp/openclaw/uploads/report.txt"], ref: "e12" },
-      }),
-    ).rejects.toThrow("remote upload transfer is pending approval");
+    await expect(proxy(uploadRequest)).rejects.toThrow(
+      "remote upload transfer is pending approval",
+    );
     expect(runtimeMocks.callGatewayTool).not.toHaveBeenCalled();
     expect(uploadMocks.prepareBrowserProxyUploadRequest).not.toHaveBeenCalled();
   });

@@ -22,6 +22,34 @@ async function createTempRoot(label: string): Promise<string> {
   return root;
 }
 
+function chooser(body: unknown = {}) {
+  return { method: "POST", path: "/hooks/file-chooser", body };
+}
+
+function uploadFiles(...contents: string[]): BrowserProxyUploadV1 {
+  return {
+    envelope: BROWSER_PROXY_UPLOAD_ENVELOPE,
+    files: contents.map((text) => ({
+      name: "report.txt",
+      contentBase64: Buffer.from(text).toString("base64"),
+    })),
+  };
+}
+
+async function retainedDirectory(uploadDir: string, name: string, contents: string, marked = true) {
+  const directory = path.join(uploadDir, ".proxy-uploads", `upload-${name}`);
+  await fs.mkdir(directory, { recursive: true });
+  if (marked) {
+    await fs.writeFile(
+      path.join(directory, ".openclaw-browser-proxy-upload-v1"),
+      "openclaw-browser-proxy-upload-v1\n",
+      "utf8",
+    );
+  }
+  await fs.writeFile(path.join(directory, "report.txt"), contents, "utf8");
+  return directory;
+}
+
 afterEach(async () => {
   await Promise.all(
     tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
@@ -37,9 +65,7 @@ describe("browser proxy upload transport", () => {
     await fs.writeFile(path.join(inboundMediaDir, "report.txt"), "gateway inbound bytes", "utf8");
 
     const prepared = await prepareBrowserProxyUploadRequest({
-      method: "POST",
-      path: "/hooks/file-chooser",
-      body: { paths: ["media://inbound/report.txt"] },
+      ...chooser({ paths: ["media://inbound/report.txt"] }),
       uploadDir,
       inboundMediaDir,
     });
@@ -56,19 +82,9 @@ describe("browser proxy upload transport", () => {
   it("stages files under the node upload root with route-valid paths", async () => {
     const root = await createTempRoot("openclaw-browser-proxy-node-");
     const uploadDir = path.join(root, "uploads");
-    const upload: BrowserProxyUploadV1 = {
-      envelope: BROWSER_PROXY_UPLOAD_ENVELOPE,
-      files: [
-        { name: "report.txt", contentBase64: Buffer.from("node copy").toString("base64") },
-        { name: "report.txt", contentBase64: Buffer.from("second copy").toString("base64") },
-      ],
-    };
-
     const staged = await stageBrowserProxyUploadRequest({
-      method: "POST",
-      path: "/hooks/file-chooser",
-      body: { ref: "e12" },
-      upload,
+      ...chooser({ ref: "e12" }),
+      upload: uploadFiles("node copy", "second copy"),
       uploadDir,
     });
     const stagedPaths = (staged.body as { paths: string[] }).paths;
@@ -104,9 +120,7 @@ describe("browser proxy upload transport", () => {
 
     await expect(
       stageBrowserProxyUploadRequest({
-        method: "POST",
-        path: "/hooks/file-chooser",
-        body: { paths: ["/gateway/report.txt"] },
+        ...chooser({ paths: ["/gateway/report.txt"] }),
         upload,
         uploadDir: path.join(root, "uploads"),
       }),
@@ -114,9 +128,7 @@ describe("browser proxy upload transport", () => {
 
     await expect(
       stageBrowserProxyUploadRequest({
-        method: "POST",
-        path: "/hooks/file-chooser",
-        body: {},
+        ...chooser(),
         upload,
         uploadDir: path.join(root, "uploads"),
       }),
@@ -132,9 +144,7 @@ describe("browser proxy upload transport", () => {
 
     await expect(
       prepareBrowserProxyUploadRequest({
-        method: "POST",
-        path: "/hooks/file-chooser",
-        body: { paths: [sourcePath, 42] },
+        ...chooser({ paths: [sourcePath, 42] }),
         uploadDir,
         inboundMediaDir: path.join(root, "inbound"),
       }),
@@ -160,9 +170,7 @@ describe("browser proxy upload transport", () => {
       ["...", "upload"],
     ] as const;
     const staged = await stageBrowserProxyUploadRequest({
-      method: "POST",
-      path: "/hooks/file-chooser",
-      body: {},
+      ...chooser(),
       upload: {
         envelope: BROWSER_PROXY_UPLOAD_ENVELOPE,
         files: names.map(([name]) => ({ name, contentBase64: "aGVsbG8=" })),
@@ -198,15 +206,10 @@ describe("browser proxy upload transport", () => {
     const uploadDir = path.join(root, "uploads");
     const stagingRoot = path.join(uploadDir, ".proxy-uploads");
     const request: Parameters<typeof stageBrowserProxyUploadRequest>[0] = {
-      method: "POST",
-      path: "/hooks/file-chooser",
-      body: {},
+      ...chooser(),
       uploadDir,
       maxRetainedDirectories: 1,
-      upload: {
-        envelope: BROWSER_PROXY_UPLOAD_ENVELOPE,
-        files: [{ name: "report.txt", contentBase64: "ZGF0YQ==" }],
-      },
+      upload: uploadFiles("data"),
     };
     const firstAdmitted = Promise.withResolvers<void>();
     const releaseFirst = Promise.withResolvers<void>();
@@ -294,13 +297,8 @@ describe("browser proxy upload transport", () => {
     const root = await createTempRoot("openclaw-browser-proxy-marker-limit-");
     await expect(
       stageBrowserProxyUploadRequest({
-        method: "POST",
-        path: "/hooks/file-chooser",
-        body: {},
-        upload: {
-          envelope: BROWSER_PROXY_UPLOAD_ENVELOPE,
-          files: [{ name: "report.txt", contentBase64: Buffer.from("data").toString("base64") }],
-        },
+        ...chooser(),
+        upload: uploadFiles("data"),
         uploadDir: path.join(root, "uploads"),
         maxRetainedBytes: 4,
         maxRetainedDirectories: 10,
@@ -311,14 +309,7 @@ describe("browser proxy upload transport", () => {
   it("removes expired staged directories during startup recovery", async () => {
     const root = await createTempRoot("openclaw-browser-proxy-recovery-");
     const uploadDir = path.join(root, "uploads");
-    const staleDirectory = path.join(uploadDir, ".proxy-uploads", "upload-stale");
-    await fs.mkdir(staleDirectory, { recursive: true });
-    await fs.writeFile(
-      path.join(staleDirectory, ".openclaw-browser-proxy-upload-v1"),
-      "openclaw-browser-proxy-upload-v1\n",
-      "utf8",
-    );
-    await fs.writeFile(path.join(staleDirectory, "report.txt"), "stale", "utf8");
+    const staleDirectory = await retainedDirectory(uploadDir, "stale", "stale");
     const staleTime = new Date(Date.now() - 10_000);
     await fs.utimes(staleDirectory, staleTime, staleTime);
 
@@ -334,21 +325,8 @@ describe("browser proxy upload transport", () => {
   it("evicts the oldest retained directory during restart recovery when over quota", async () => {
     const root = await createTempRoot("openclaw-browser-proxy-recovery-quota-");
     const uploadDir = path.join(root, "uploads");
-    const stagingRoot = path.join(uploadDir, ".proxy-uploads");
-    const oldestDirectory = path.join(stagingRoot, "upload-oldest");
-    const newestDirectory = path.join(stagingRoot, "upload-newest");
-    for (const [directory, contents] of [
-      [oldestDirectory, "old"],
-      [newestDirectory, "new"],
-    ] as const) {
-      await fs.mkdir(directory, { recursive: true });
-      await fs.writeFile(
-        path.join(directory, ".openclaw-browser-proxy-upload-v1"),
-        "openclaw-browser-proxy-upload-v1\n",
-        "utf8",
-      );
-      await fs.writeFile(path.join(directory, "report.txt"), contents, "utf8");
-    }
+    const oldestDirectory = await retainedDirectory(uploadDir, "oldest", "old");
+    const newestDirectory = await retainedDirectory(uploadDir, "newest", "new");
     const now = Date.now();
     await fs.utimes(oldestDirectory, new Date(now - 2_000), new Date(now - 2_000));
     await fs.utimes(newestDirectory, new Date(now - 1_000), new Date(now - 1_000));
@@ -369,9 +347,7 @@ describe("browser proxy upload transport", () => {
   it("does not recover unmarked directories from the private staging root", async () => {
     const root = await createTempRoot("openclaw-browser-proxy-recovery-unmarked-");
     const uploadDir = path.join(root, "uploads");
-    const unrelatedDirectory = path.join(uploadDir, ".proxy-uploads", "upload-archive");
-    await fs.mkdir(unrelatedDirectory, { recursive: true });
-    await fs.writeFile(path.join(unrelatedDirectory, "report.txt"), "keep", "utf8");
+    const unrelatedDirectory = await retainedDirectory(uploadDir, "archive", "keep", false);
     const staleTime = new Date(Date.now() - 10_000);
     await fs.utimes(unrelatedDirectory, staleTime, staleTime);
 
