@@ -97,7 +97,7 @@
 .chat-context__entry > span:first-child {
   min-width: 0;
   overflow-wrap: anywhere;
-  font-family: var(--font-mono);
+  font-family: var(--mono);
 }
 .chat-context__entry > span:last-child {
   flex: none;
