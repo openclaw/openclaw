@@ -26,7 +26,7 @@ type ClaudePreparedExecutionWithSecret = {
 };
 
 const CLAUDE_CLI_DISALLOWED_TOOLS =
-  "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor";
+  "ScheduleWakeup,CronCreate,CronList,Bash(run_in_background:true),Monitor";
 const CLAUDE_CACHE_FLAG = "--exclude-dynamic-system-prompt-sections";
 
 describe("Claude CLI adapter equivalence", () => {
@@ -57,7 +57,7 @@ describe("Claude CLI adapter equivalence", () => {
       expect(args.filter((arg) => arg === "--disallowedTools")).toHaveLength(1);
       const denials = args[args.indexOf("--disallowedTools") + 1]?.split(",");
       expect(denials).toEqual(
-        expect.arrayContaining(["Bash", "CronCreate", "ScheduleWakeup", "Monitor"]),
+        expect.arrayContaining(["Bash", "CronCreate", "CronList", "ScheduleWakeup", "Monitor"]),
       );
       expect(args).not.toContain("--tools");
     }
