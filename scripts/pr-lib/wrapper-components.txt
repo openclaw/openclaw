@@ -372,6 +372,7 @@ src/infra/database-engine/postgres-search-schema.ts
 src/infra/database-engine/postgres-search.ts
 src/infra/database-engine/postgres-vector.ts
 src/infra/database-engine/registry.ts
+src/infra/database-engine/search-extension.ts
 src/infra/database-engine/search.ts
 src/infra/database-engine/sqlite-full-text.ts
 src/infra/database-engine/sqlite-search-schema.ts
