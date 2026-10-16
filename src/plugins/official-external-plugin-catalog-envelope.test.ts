@@ -149,7 +149,6 @@ it("rejects unsupported payload types and signed invalid feeds", () => {
 
 it("rejects malformed envelopes before verification", () => {
   const signature = envelope.signatures[0];
-  expect(signature).toBeDefined();
   assert(signature);
   expectVerification(
     { payloadType: PAYLOAD_TYPE, payload: "", signatures: [] },
@@ -161,7 +160,6 @@ it("rejects malformed envelopes before verification", () => {
 
 it("accepts beta legacy field names only for persisted snapshots", () => {
   const signature = envelope.signatures[0];
-  expect(signature).toBeDefined();
   assert(signature);
   const legacySignature = {
     keyId: signature.keyid,

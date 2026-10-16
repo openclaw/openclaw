@@ -58,13 +58,9 @@ function installWindowsPathFixture(params: {
   vi.spyOn(fs, "realpathSync").mockImplementation(
     (value: fs.PathLike, options?: fs.EncodingOption | fs.BufferEncodingOption) => {
       const encoding = typeof options === "string" ? options : options?.encoding;
-      if (
-        String(value) === params.root ||
-        (params.source && String(value) === windows.dirname(params.source))
-      ) {
-        const resolved = Buffer.from(
-          String(value) === params.root ? (params.canonicalRoot ?? params.root) : String(value),
-        );
+      const name = String(value);
+      if (name === params.root || (params.source && name === windows.dirname(params.source))) {
+        const resolved = Buffer.from(name === params.root ? (params.canonicalRoot ?? name) : name);
         return encoding === "buffer" ? resolved : resolved.toString(encoding ?? "utf8");
       }
       return encoding === "buffer"

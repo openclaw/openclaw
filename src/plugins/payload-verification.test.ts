@@ -57,18 +57,6 @@ function expectFailure(
   expect(result.failures).toStrictEqual([{ pluginId, installPath, reason, detail }]);
 }
 
-async function writePeerPackage(dir: string) {
-  await writePackage(
-    dir,
-    {
-      name: "@openclaw/codex",
-      main: "dist/index.js",
-      peerDependencies: { openclaw: ">=2026.5.18-beta.1" },
-    },
-    "export default {};\n",
-  );
-}
-
 async function writeBundle(
   dir: string,
   format: BundleFormat,
@@ -308,7 +296,15 @@ it.each(["missing", "wrong root", "host root"])(
   "audits the openclaw peer link: %s",
   async (target) => {
     const dir = path.join(tmpRoot, "codex");
-    await writePeerPackage(dir);
+    await writePackage(
+      dir,
+      {
+        name: "@openclaw/codex",
+        main: "dist/index.js",
+        peerDependencies: { openclaw: ">=2026.5.18-beta.1" },
+      },
+      "export default {};\n",
+    );
     const peerPath = path.join(dir, "node_modules", "openclaw");
     const wrongRoot = path.join(tmpRoot, "old-openclaw");
     if (target !== "missing") {
