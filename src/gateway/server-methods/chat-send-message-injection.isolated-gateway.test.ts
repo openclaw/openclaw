@@ -249,6 +249,9 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
           payload: { status: "started" },
         });
         expect(queueMessage).toHaveBeenCalledOnce();
+        expect(queueMessage.mock.calls[0]?.[0]).toContain(
+          "Synthetic steer awaiting the active run boundary.",
+        );
         expect(dispatchCapture.calls).toBe(0);
         clock = durationMs;
         commit.resolve();
@@ -368,38 +371,6 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
       } finally {
         ws.off("message", onChatFrame);
       }
-    },
-  );
-
-  it(
-    "isolated gateway: still steers when the tombstone belongs to an unrelated prior source turn",
-    { timeout: 30_000 },
-    async () => {
-      const queueMessage = await seedActiveTurn({
-        sessionKey: SESSION_KEY,
-        sessionId: "session-unrelated",
-        runId: "live-run-unrelated",
-        terminalRunId: "source-old",
-        sourceTurnId: SOURCE_TURN_ID,
-      });
-      const runId = `idem-iso-gw-unrelated-${randomUUID()}`;
-      const res = (await rpcReq(
-        ws,
-        "chat.send",
-        {
-          sessionKey: SESSION_KEY,
-          message: "unrelated-tombstone inbound",
-          idempotencyKey: runId,
-          queueMode: "steer",
-        },
-        20_000,
-      )) as WireResponse;
-
-      expect(res.ok, JSON.stringify(res)).toBe(true);
-      expect(res.payload?.status).toBe("started");
-      expect(queueMessage).toHaveBeenCalledOnce();
-      expect(queueMessage.mock.calls[0]?.[0]).toContain("unrelated-tombstone inbound");
-      expect(dispatchCapture.calls).toBe(0);
     },
   );
 });

@@ -228,10 +228,16 @@ export function useBrowserFollowupFixture() {
         signal?: AbortSignal;
         sessionMutationCommitGuard?: () => void;
       },
+      requestParams = params,
     ) => {
       const request = {
-        req: { type: "req", id: params.idempotencyKey, method: "chat.send", params },
-        params,
+        req: {
+          type: "req",
+          id: requestParams.idempotencyKey,
+          method: "chat.send",
+          params: requestParams,
+        },
+        params: requestParams,
         client,
         context,
         respond,

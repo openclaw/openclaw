@@ -13,7 +13,7 @@ import {
   gatewayReplyMock,
   installGatewayTestHooks,
 } from "../test-helpers.js";
-import { handleChatSend, handleTrustedInternalChatSend } from "./chat-send-handler.js";
+import { handleTrustedInternalChatSend } from "./chat-send-handler.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
 import type { RespondFn } from "./types.js";
 
@@ -154,7 +154,7 @@ it.for([false, true])(
     const firstResponse = vi.fn<RespondFn>();
     const secondResponse = vi.fn<RespondFn>();
     const firstSending = fixture.send(firstResponse);
-    let secondSending: Promise<void> | undefined;
+    let secondSending: ReturnType<typeof fixture.send> | undefined;
     const secondParams = {
       ...fixture.params,
       idempotencyKey: `ordered-second-${retry}`,
@@ -167,23 +167,7 @@ it.for([false, true])(
         status: "started",
         messageSeq: 2,
       });
-      secondSending = withPluginRuntimeGatewayRequestScope(
-        { context: fixture.context, isWebchatConnect: () => true },
-        () =>
-          handleChatSend({
-            req: {
-              type: "req",
-              id: secondParams.idempotencyKey,
-              method: "chat.send",
-              params: secondParams,
-            },
-            params: secondParams,
-            client: fixture.client,
-            context: fixture.context,
-            respond: secondResponse,
-            isWebchatConnect: () => true,
-          }),
-      );
+      secondSending = fixture.send(secondResponse, undefined, secondParams);
       await withinTest(laterAdmissionEntered.promise, signal);
       expect(secondResponse.mock.calls[0]?.[1]).toMatchObject({
         runId: secondParams.idempotencyKey,

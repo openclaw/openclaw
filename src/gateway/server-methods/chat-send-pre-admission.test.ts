@@ -110,6 +110,25 @@ function preAdmissionFixture(runId: string) {
   return { fixture, params };
 }
 
+function cacheSuccess(params: RetryParams, ts = 100, requestIdentity?: string) {
+  const { clientRunId } = params.session;
+  params.context.dedupe.set(`chat:${clientRunId}`, {
+    ts,
+    ok: true,
+    payload: { runId: clientRunId, status: "ok" },
+    ...(requestIdentity === undefined ? {} : { requestIdentity }),
+  });
+}
+
+function submittedMessage(params: RetryParams) {
+  return {
+    role: "user" as const,
+    timestamp: 100,
+    content: params.request.rawMessage,
+    __openclaw: { humanMentions: params.request.mentions },
+  };
+}
+
 function expectConflict(respond: RetryParams["respond"]) {
   expect(respond).toHaveBeenCalledWith(
     false,
@@ -381,11 +400,7 @@ describe("chat send retry identity", () => {
           text: params.request.rawMessage,
         };
       }
-      params.context.dedupe.set(`chat:${params.session.clientRunId}`, {
-        ts: 100,
-        ok: true,
-        payload: { runId: params.session.clientRunId, status: "ok" },
-      });
+      cacheSuccess(params, 100);
       vi.mocked(readSessionSubmittedInput).mockResolvedValue(undefined);
       expect(respondChatSendRetry(params, await prepareChatSendRetryComparison(params))).toBe(true);
       expectConflict(params.respond);
@@ -416,18 +431,9 @@ describe("chat send retry identity", () => {
     "compares %s selections to the original source after RAM identity expires",
     async (selection) => {
       const params = retryFixture(`source-${selection}`);
-      const original = {
-        role: "user" as const,
-        timestamp: 100,
-        content: params.request.rawMessage,
-        __openclaw: { humanMentions: params.request.mentions },
-      };
+      const original = submittedMessage(params);
       vi.mocked(readSessionSubmittedInput).mockResolvedValue(original);
-      params.context.dedupe.set(`chat:${params.session.clientRunId}`, {
-        ts: 200,
-        ok: true,
-        payload: { runId: params.session.clientRunId, status: "ok" },
-      });
+      cacheSuccess(params, 200);
       params.request.mentions =
         selection === "removed"
           ? undefined
@@ -461,11 +467,7 @@ describe("chat send retry identity", () => {
     "does not acknowledge an unverifiable %s mention source",
     async (source) => {
       const params = retryFixture(`unverifiable-${source}`);
-      params.context.dedupe.set(`chat:${params.session.clientRunId}`, {
-        ts: 200,
-        ok: true,
-        payload: { runId: params.session.clientRunId, status: "ok" },
-      });
+      cacheSuccess(params, 200);
       if (source === "redacted") {
         vi.mocked(readSessionSubmittedInput).mockResolvedValue({
           role: "user",
@@ -494,12 +496,7 @@ describe("chat send retry identity", () => {
       updatedAt: 100,
       restartRecoveryTerminalRunIds: [params.session.clientRunId],
     };
-    vi.mocked(readSessionSubmittedInput).mockResolvedValue({
-      role: "user",
-      timestamp: 100,
-      content: params.request.rawMessage,
-      __openclaw: { humanMentions: params.request.mentions },
-    });
+    vi.mocked(readSessionSubmittedInput).mockResolvedValue(submittedMessage(params));
     params.request.mentions = undefined;
     expect(
       resolveChatSendRequestConflict(params, await prepareChatSendRetryComparison(params)),
@@ -510,11 +507,7 @@ describe("chat send retry identity", () => {
 
   it("refuses stale projection evidence before replaying a cached response", async () => {
     const { params } = preAdmissionFixture("stale-submitted-source");
-    params.context.dedupe.set(`chat:${params.session.clientRunId}`, {
-      ts: 100,
-      ok: true,
-      payload: { runId: params.session.clientRunId, status: "ok" },
-    });
+    cacheSuccess(params, 100);
     vi.mocked(readSessionSubmittedInput).mockRejectedValue(
       new SessionTranscriptProjectionUnavailableError(params.session.entry!.sessionId),
     );
@@ -528,27 +521,12 @@ describe("chat send retry identity", () => {
 
   it("rejects a competing identity published while submitted comparison yields", async () => {
     const { params } = preAdmissionFixture("submitted-comparison-race");
-    const key = `chat:${params.session.clientRunId}`;
-    params.context.dedupe.set(key, {
-      ts: 100,
-      ok: true,
-      payload: { runId: params.session.clientRunId, status: "ok" },
-    });
+    cacheSuccess(params, 100);
     const read = createDeferred<Awaited<ReturnType<typeof readSessionSubmittedInput>>>();
     vi.mocked(readSessionSubmittedInput).mockReturnValue(read.promise);
     const pending = runChatSendPreAdmission(params);
-    params.context.dedupe.set(key, {
-      ts: 200,
-      ok: true,
-      requestIdentity: "competing-input",
-      payload: { runId: params.session.clientRunId, status: "ok" },
-    });
-    read.resolve({
-      role: "user",
-      timestamp: 100,
-      content: params.request.rawMessage,
-      __openclaw: { humanMentions: params.request.mentions },
-    });
+    cacheSuccess(params, 200, "competing-input");
+    read.resolve(submittedMessage(params));
     expect(await pending).toBe(false);
     expectConflict(params.respond);
   });

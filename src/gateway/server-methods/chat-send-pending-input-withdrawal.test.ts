@@ -34,6 +34,59 @@ installGatewayTestHooks();
 registerAgentSessionLoopTestLifecycle();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
 
+type FollowupFixture = Awaited<ReturnType<typeof createBrowserFollowupFixture>>;
+
+function activeInput(fixture: FollowupFixture) {
+  const active = fixture.context.chatAbortControllers.get(fixture.params.idempotencyKey);
+  if (!active) {
+    throw new Error("Expected the pending input's abort owner");
+  }
+  return active;
+}
+
+function enqueueInput(fixture: FollowupFixture, signal: AbortSignal) {
+  const dispatch = dispatchInboundMessageMock.mock.calls.at(-1)?.[0] as
+    | Parameters<typeof dispatchInboundMessage>[0]
+    | undefined;
+  const run = createQueueTestRun({ prompt: fixture.params.message });
+  run.abortSignal = signal;
+  run.turnAdoptionLifecycle = dispatch?.replyOptions?.turnAdoptionLifecycle;
+  expect(run.turnAdoptionLifecycle).toBeDefined();
+  expect(
+    enqueueFollowupRun(
+      fixture.scope.sessionKey,
+      run,
+      createQueueSettings({ mode: "followup" }),
+      "none",
+      async () => {},
+      false,
+    ),
+  ).toBe(true);
+  return run;
+}
+
+async function discardInput(
+  fixture: FollowupFixture,
+  respond = vi.fn<RespondFn>(),
+  hasCurrentClientAuthority?: () => boolean,
+) {
+  const params = {
+    sessionKey: fixture.scope.sessionKey,
+    runId: fixture.params.idempotencyKey,
+    discardPendingInput: true,
+  };
+  await handleChatAbortRequest({
+    params,
+    req: { type: "req", id: "discard-input", method: "chat.abort", params },
+    client: fixture.client,
+    context: fixture.context,
+    respond,
+    isWebchatConnect: () => true,
+    hasCurrentClientAuthority,
+  });
+  return respond;
+}
+
 describe("queued chat input withdrawal", () => {
   it("keeps refused browser input revoked after its session access returns", async () => {
     const fixture = await createBrowserFollowupFixture({
@@ -100,21 +153,9 @@ describe("queued chat input withdrawal", () => {
         await fixture.send();
         const recorder = await fixture.dispatchedRecorder;
         const runId = fixture.params.idempotencyKey;
-        const active = fixture.context.chatAbortControllers.get(runId);
-        if (!active) {
-          throw new Error("Expected the pending input's abort owner");
-        }
+        const active = activeInput(fixture);
         const discard = async () => {
-          const params = { sessionKey: fixture.scope.sessionKey, runId, discardPendingInput: true };
-          const respond = vi.fn<RespondFn>();
-          await handleChatAbortRequest({
-            params,
-            req: { type: "req", id: "discard-input", method: "chat.abort", params },
-            client: fixture.client,
-            context: fixture.context,
-            respond,
-            isWebchatConnect: () => true,
-          });
+          const respond = await discardInput(fixture);
           expect(respond).toHaveBeenCalledWith(true, {
             ok: true,
             aborted: true,
@@ -122,23 +163,7 @@ describe("queued chat input withdrawal", () => {
           });
         };
         if (target === "queued") {
-          const dispatch = dispatchInboundMessageMock.mock.calls.at(-1)?.[0] as
-            | Parameters<typeof dispatchInboundMessage>[0]
-            | undefined;
-          const run = createQueueTestRun({ prompt: fixture.params.message });
-          run.abortSignal = active.controller.signal;
-          run.turnAdoptionLifecycle = dispatch?.replyOptions?.turnAdoptionLifecycle;
-          expect(run.turnAdoptionLifecycle).toBeDefined();
-          expect(
-            enqueueFollowupRun(
-              fixture.scope.sessionKey,
-              run,
-              createQueueSettings({ mode: "followup" }),
-              "none",
-              async () => {},
-              false,
-            ),
-          ).toBe(true);
+          enqueueInput(fixture, active.controller.signal);
           const detached = createDeferred();
           vi.mocked(fixture.context.removeChatRun).mockImplementationOnce(() => {
             detached.resolve();
@@ -242,27 +267,9 @@ describe("queued chat input withdrawal", () => {
         await fixture.send();
         const recorder = await fixture.dispatchedRecorder;
         const runId = fixture.params.idempotencyKey;
-        const active = fixture.context.chatAbortControllers.get(runId);
-        if (!active) {
-          throw new Error("Expected the pending input's abort owner");
-        }
+        const active = activeInput(fixture);
         if (target === "queued-consumed") {
-          const dispatch = dispatchInboundMessageMock.mock.calls.at(-1)?.[0] as
-            | Parameters<typeof dispatchInboundMessage>[0]
-            | undefined;
-          const run = createQueueTestRun({ prompt: fixture.params.message });
-          run.abortSignal = active.controller.signal;
-          run.turnAdoptionLifecycle = dispatch?.replyOptions?.turnAdoptionLifecycle;
-          expect(
-            enqueueFollowupRun(
-              fixture.scope.sessionKey,
-              run,
-              createQueueSettings({ mode: "followup" }),
-              "none",
-              async () => {},
-              false,
-            ),
-          ).toBe(true);
+          enqueueInput(fixture, active.controller.signal);
         }
         if (target !== "admitted") {
           await recorder.persistApproved();
@@ -270,17 +277,7 @@ describe("queued chat input withdrawal", () => {
         const queued = fixture.context.chatQueuedTurns.get(runId);
         const pending = await listSessionPendingInputs(fixture.scope);
         const transcript = loadTranscriptEventsSync(fixture.scope);
-        const params = { sessionKey: fixture.scope.sessionKey, runId, discardPendingInput: true };
-        const respond = vi.fn<RespondFn>();
-
-        await handleChatAbortRequest({
-          params,
-          req: { type: "req", id: "stale-removal", method: "chat.abort", params },
-          client: fixture.client,
-          context: fixture.context,
-          respond,
-          isWebchatConnect: () => true,
-        });
+        const respond = await discardInput(fixture);
 
         expect(respond).toHaveBeenCalledWith(true, { ok: true, aborted: false, runIds: [] });
         expect(active.controller.signal.aborted).toBe(false);
@@ -310,26 +307,8 @@ describe("queued chat input withdrawal", () => {
         await fixture.send();
         await fixture.dispatchedRecorder;
         const runId = fixture.params.idempotencyKey;
-        const active = fixture.context.chatAbortControllers.get(runId);
-        if (!active) {
-          throw new Error("Expected the pending input's abort owner");
-        }
-        const dispatch = dispatchInboundMessageMock.mock.calls.at(-1)?.[0] as
-          | Parameters<typeof dispatchInboundMessage>[0]
-          | undefined;
-        const run = createQueueTestRun({ prompt: fixture.params.message });
-        run.abortSignal = active.controller.signal;
-        run.turnAdoptionLifecycle = dispatch?.replyOptions?.turnAdoptionLifecycle;
-        expect(
-          enqueueFollowupRun(
-            fixture.scope.sessionKey,
-            run,
-            createQueueSettings({ mode: "followup" }),
-            "none",
-            async () => {},
-            false,
-          ),
-        ).toBe(true);
+        const active = activeInput(fixture);
+        const run = enqueueInput(fixture, active.controller.signal);
         const queued = fixture.context.chatQueuedTurns.get(runId);
         expect(queued).toBeDefined();
         let adoption: Promise<"admitted" | "aborted"> | undefined;
@@ -372,18 +351,8 @@ describe("queued chat input withdrawal", () => {
             }
           }
         });
-        const params = { sessionKey: fixture.scope.sessionKey, runId, discardPendingInput: true };
         const respond = vi.fn<RespondFn>();
-        const remove = () =>
-          handleChatAbortRequest({
-            params,
-            req: { type: "req", id: "retry-removal", method: "chat.abort", params },
-            client: fixture.client,
-            context: fixture.context,
-            respond,
-            isWebchatConnect: () => true,
-            hasCurrentClientAuthority: () => requestCurrent,
-          });
+        const remove = () => discardInput(fixture, respond, () => requestCurrent);
 
         refusal.mockImplementation((callback, attachment) =>
           createAdmission((request, grant) => {

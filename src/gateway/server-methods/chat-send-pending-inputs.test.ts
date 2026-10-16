@@ -54,6 +54,28 @@ beforeEach(async () => {
   await prepareProfileCatalog();
 });
 
+function expectStarted(respond: RespondFn, payload: Record<string, unknown> = {}) {
+  expect(respond).toHaveBeenCalledWith(
+    true,
+    expect.objectContaining({ status: "started", ...payload }),
+    undefined,
+    expect.anything(),
+  );
+}
+
+function setProfile(
+  client: GatewayClient,
+  profile: ReturnType<typeof ensureProfileForEmail>,
+  displayName: string,
+) {
+  client.authenticatedUserProfile = {
+    profileId: profile.id,
+    displayName,
+    hasAvatar: false,
+    updatedAt: 1,
+  };
+}
+
 describe("ordinary chat input admission", () => {
   async function createMentionFixture(
     options: { active?: boolean; preserveContent?: boolean } = {},
@@ -110,12 +132,7 @@ describe("ordinary chat input admission", () => {
     const fixture = await createMentionFixture();
     try {
       const ack = await fixture.send();
-      expect(ack).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ status: "started" }),
-        undefined,
-        expect.anything(),
-      );
+      expectStarted(ack);
       expect(await fixture.read()).toEqual([]);
       const recorder = await fixture.dispatchedRecorder;
       const sql = observeHostDataSql();
@@ -179,12 +196,7 @@ describe("ordinary chat input admission", () => {
           }
         }),
       );
-      expect(ack).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ status: "started", messageSeq: 2 }),
-        undefined,
-        expect.anything(),
-      );
+      expectStarted(ack, { messageSeq: 2 });
       expect(atAck).toBe(1);
       await fixture.finishDispatch();
       expect(await fixture.read()).toHaveLength(1);
@@ -258,12 +270,7 @@ describe("ordinary chat input admission", () => {
     const fixture = await createBrowserFollowupFixture({ transientProjectionFailures: 1 });
     try {
       const ack = await fixture.send();
-      expect(ack).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ status: "started" }),
-        undefined,
-        expect.anything(),
-      );
+      expectStarted(ack);
       await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2));
       const accepted = await listSessionPendingInputs(fixture.scope);
       const reconnect = await fixture.send();
@@ -309,12 +316,7 @@ describe("ordinary chat input admission", () => {
       fixture.client.connect.client = { ...fixture.client.connect.client, ...clientInfo };
       fixture.params.queueMode = "followup";
       const profile = ensureProfileForEmail("alice@example.test");
-      fixture.client.authenticatedUserProfile = {
-        profileId: profile.id,
-        displayName: "Alice",
-        hasAvatar: false,
-        updatedAt: 1,
-      };
+      setProfile(fixture.client, profile, "Alice");
       const clone = vi.spyOn(globalThis, "structuredClone");
       const { scope, params, approvedContent, activeTranscript } = fixture;
       const readPending = () =>
@@ -340,12 +342,7 @@ describe("ordinary chat input admission", () => {
           replyRunRegistry.resolveCurrentMessageInjectionTarget(scope.sessionKey),
         ).toBeUndefined();
         await fixture.send(respond);
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ runId: params.idempotencyKey, status: "started" }),
-          undefined,
-          expect.anything(),
-        );
+        expectStarted(respond, { runId: params.idempotencyKey });
         expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("messageSeq");
         expect(transcriptAtAck).toEqual(activeTranscript);
         expect(await pendingAtAck).toMatchObject({
@@ -463,12 +460,7 @@ describe("ordinary chat input admission", () => {
           expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
           return;
         }
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ status: "started", ...(acp ? {} : { messageSeq: 2 }) }),
-          undefined,
-          expect.anything(),
-        );
+        expectStarted(respond, acp ? {} : { messageSeq: 2 });
         if (acp) {
           expect(transcriptAtAck).toEqual(fixture.activeTranscript);
           expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({ total: 1 });
@@ -525,12 +517,7 @@ describe("ordinary chat input admission", () => {
         expect(sql.queries.filter((query) => /\bworker_session_placements\b/u.test(query))).toEqual(
           [],
         );
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ status: "started" }),
-          undefined,
-          expect.anything(),
-        );
+        expectStarted(respond);
         expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("messageSeq");
         expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
         expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
@@ -651,12 +638,7 @@ describe("ordinary chat input admission", () => {
     async ({ disposition, recordedClient }) => {
       const fixture = await createBrowserFollowupFixture({ preserveContent: true });
       const profile = ensureProfileForEmail("legacy-input@example.test");
-      fixture.client.authenticatedUserProfile = {
-        profileId: profile.id,
-        displayName: "Legacy input author",
-        hasAvatar: false,
-        updatedAt: 1,
-      };
+      setProfile(fixture.client, profile, "Legacy input author");
       try {
         const originalAck = await fixture.send();
         expect(originalAck.mock.calls[0]?.[0]).toBe(true);
@@ -755,12 +737,7 @@ describe("ordinary chat input admission", () => {
       const resumedRelease = createDeferred();
       let resumedRecorder: UserTurnTranscriptRecorder | undefined;
       const profile = ensureProfileForEmail("restart-input@example.test");
-      fixture.client.authenticatedUserProfile = {
-        profileId: profile.id,
-        displayName: "Input author",
-        hasAvatar: false,
-        updatedAt: 1,
-      };
+      setProfile(fixture.client, profile, "Input author");
       if (!attachment) {
         delete fixture.params.sessionId;
       }
@@ -776,12 +753,7 @@ describe("ordinary chat input admission", () => {
       }
       try {
         const originalAck = await fixture.send();
-        expect(originalAck).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ status: "started" }),
-          undefined,
-          expect.anything(),
-        );
+        expectStarted(originalAck);
         const originalRecorder = await fixture.dispatchedRecorder;
         const original = (await listSessionPendingInputs(fixture.scope)).items[0];
         expect(original).toBeDefined();
@@ -808,12 +780,7 @@ describe("ordinary chat input admission", () => {
           __controlUiReconnectResume: true,
         });
         const ack = await fixture.send();
-        expect(ack).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ status: "started", runId: fixture.params.idempotencyKey }),
-          undefined,
-          expect.anything(),
-        );
+        expectStarted(ack, { runId: fixture.params.idempotencyKey });
         await vi.waitFor(() => expect(resumedRecorder).toBeDefined(), { timeout: 5_000 });
         if (!resumedRecorder) {
           throw new Error("Fresh input admission did not dispatch its recorder");
