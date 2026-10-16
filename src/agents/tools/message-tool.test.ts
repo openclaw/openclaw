@@ -652,7 +652,6 @@ describe("completion source-reply authority", () => {
     ["inline buffer", { action: "send", buffer: "c2VjcmV0" }],
     ["unknown plugin argument", { action: "send", pluginFile: "./AGENTS.md" }],
     ["whitespace-only message", { action: "send", message: " \n\t " }],
-    ["silent reply token", { action: "send", message: "NO_REPLY" }],
     ["inline reply route", { action: "send", message: "[[reply_to:message-2]] stolen thread" }],
     ["inline audio directive", { action: "send", message: "[[audio_as_voice]] completion" }],
     ["inline local media directive", { action: "send", message: "completion\nMEDIA:./AGENTS.md" }],
@@ -700,6 +699,7 @@ describe("completion source-reply authority", () => {
     const tool = createRestrictedTool();
 
     await tool.execute("implicit", { action: "send", message: "completion", final: true });
+    await tool.execute("literal-no-reply", { action: "send", message: "NO_REPLY", final: true });
     await tool.execute("media-prose", {
       action: "send",
       message: "See the MEDIA: section for details.",
@@ -719,7 +719,11 @@ describe("completion source-reply authority", () => {
       final: false,
     });
 
-    expect(mocks.runMessageAction).toHaveBeenCalledTimes(4);
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(5);
+    expect(mocks.runMessageAction).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ params: expect.objectContaining({ message: "NO_REPLY" }) }),
+    );
   });
 
   it("fails closed when the authoritative source target is missing", async () => {

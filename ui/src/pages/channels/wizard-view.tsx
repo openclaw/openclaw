@@ -5,7 +5,7 @@ import { WizardBusyButton, WizardStepControls } from "../../components/wizard-st
 import { t } from "../../lib/reactive/i18n.ts";
 import "../../components/modal-dialog.ts";
 import { channelDocsUrl } from "./hub-meta.ts";
-import type { ChannelWizardState } from "./wizard-controller.ts";
+import type { ChannelWizardState } from "./wizard-runner.ts";
 
 type ChannelWizardViewProps = {
   wizard: ChannelWizardState;

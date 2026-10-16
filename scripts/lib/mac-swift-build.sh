@@ -325,6 +325,66 @@ if committed_pins != snapshot_pins:
 PY
 }
 
+peekaboo_snapshot_image_devices() {
+  /usr/bin/python3 - "$PEEKABOO_SNAPSHOT_IMAGE" <<'PY'
+import os
+import plistlib
+import re
+import subprocess
+import sys
+
+target = os.path.realpath(sys.argv[1])
+info = subprocess.run(["hdiutil", "info", "-plist"], stdout=subprocess.PIPE)
+if info.returncode:
+    raise SystemExit(f"ERROR: hdiutil info failed with exit code {info.returncode}; cannot verify {target} is detached")
+for image in plistlib.loads(info.stdout).get("images", []):
+    image_path = image.get("image-path")
+    # Resolve both spellings across symlinks; the first whole disk owns the image.
+    if not image_path or os.path.realpath(image_path) != target:
+        continue
+    for entity in image.get("system-entities", []):
+        device = entity.get("dev-entry", "")
+        if re.fullmatch(r"/dev/disk[0-9]+", device):
+            print(device)
+            break
+    else:
+        raise SystemExit(f"ERROR: Peekaboo snapshot image has no whole-disk device: {image_path}")
+PY
+}
+
+detach_peekaboo_snapshot_image() {
+  local devices device
+  devices="$(peekaboo_snapshot_image_devices)" || return 1
+  [[ -n "$devices" ]] || return 0
+  while IFS= read -r device; do
+    hdiutil detach -quiet "$device" >/dev/null 2>&1 || true
+  done <<< "$devices"
+  devices="$(peekaboo_snapshot_image_devices)" || return 1
+  if [[ -n "$devices" ]]; then
+    echo "ERROR: Peekaboo snapshot image $PEEKABOO_SNAPSHOT_IMAGE is still attached; detach it with: hdiutil detach $(printf '%s' "$devices" | tr '\n' ' ')" >&2
+    return 1
+  fi
+}
+
+attach_peekaboo_snapshot() {
+  local attempt=1 errors attach_status
+  # Busy hosts can fail attach with EAGAIN after creating devices.
+  while [[ "$attempt" -le 3 ]]; do
+    errors="$(hdiutil attach -readonly -nobrowse -mountpoint "$PEEKABOO_SNAPSHOT_MOUNT" "$PEEKABOO_SNAPSHOT_IMAGE" 2>&1 >/dev/null)" && attach_status=0 || attach_status=$?
+    if [[ -n "$errors" ]]; then
+      printf '%s\n' "$errors" >&2
+    fi
+    [[ "$attach_status" == 0 ]] && return 0
+    if [[ "$errors" == *"Resource temporarily unavailable"* && "$attempt" -lt 3 ]]; then
+      detach_peekaboo_snapshot_image || return 1
+      sleep $((attempt * 2))
+      attempt=$((attempt + 1))
+    else
+      return "$attach_status"
+    fi
+  done
+}
+
 create_verified_peekaboo_snapshot() {
   local build_path="$1" expected="$2" source_checkout source_commit snapshot_commit
   source_checkout="$build_path/checkouts/Peekaboo"
@@ -338,9 +398,7 @@ create_verified_peekaboo_snapshot() {
     -srcfolder "$source_checkout" \
     -volname OpenClawPeekabooSnapshot \
     "$PEEKABOO_SNAPSHOT_IMAGE" >/dev/null
-  hdiutil attach -readonly -nobrowse \
-    -mountpoint "$PEEKABOO_SNAPSHOT_MOUNT" \
-    "$PEEKABOO_SNAPSHOT_IMAGE" >/dev/null
+  attach_peekaboo_snapshot
   snapshot_commit="$(compiled_peekaboo_commit "$PEEKABOO_SNAPSHOT_MOUNT" "$expected")" || return 1
   [[ "$snapshot_commit" == "$source_commit" ]] || return 1
 }
@@ -477,6 +535,10 @@ cleanup_swift_architecture() {
       elif printf '%s\n' "$mounts" | grep -F " on $PEEKABOO_SNAPSHOT_MOUNT (" >/dev/null; then
         cleanup_status=1
       fi
+      # A failed attach can leave the image's devices attached without a mount.
+      if [[ -e "$PEEKABOO_SNAPSHOT_IMAGE" ]]; then
+        detach_peekaboo_snapshot_image || cleanup_status=1
+      fi
     }
   fi
   if [[ "$cleanup_status" == "0" ]]; then
@@ -555,6 +617,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   SWIFT_PACKAGE_CONTAINER="$SWIFT_WORK_ROOT/package"
   SWIFT_PACKAGE_ROOT="$SWIFT_PACKAGE_CONTAINER/apps/macos"
   PEEKABOO_SNAPSHOT_ROOT="$SWIFT_WORK_ROOT/snapshot"
+  PEEKABOO_SNAPSHOT_IMAGE="$PEEKABOO_SNAPSHOT_ROOT/Peekaboo.dmg"
   PEEKABOO_SNAPSHOT_MOUNT="$9"
   case "$operation" in
     build) build_swift_architecture "$arch" ;;

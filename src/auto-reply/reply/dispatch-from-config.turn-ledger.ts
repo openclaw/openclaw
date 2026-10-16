@@ -82,7 +82,9 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher) {
       return;
     }
     outcomes.add(outcome);
-    if (kind === "tool" || !isReplyPayloadTerminalContent(payload)) {
+    const terminalFailureNotice =
+      kind === "final" && payload.isError === true && payload.isStatusNotice === true;
+    if (kind === "tool" || (!isReplyPayloadTerminalContent(payload) && !terminalFailureNotice)) {
       return;
     }
     if (outcome === "delivered" && !pending) {

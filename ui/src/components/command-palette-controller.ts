@@ -12,6 +12,7 @@ import { t } from "../lib/reactive/i18n.ts";
 import { resolveUiSelectedGlobalAgentId } from "../lib/sessions/session-key.ts";
 import { searchVisibleSessionTranscripts } from "../lib/sessions/transcript-search.ts";
 import { SubscriptionsController } from "../lib/subscriptions-controller.ts";
+import type { SolidControllerHost } from "../lit/solid-controller-host.ts";
 import {
   HumanMentionMenu,
   type HumanMentionMenuHost,
@@ -99,7 +100,7 @@ export class PaletteController {
   };
   private presentationScope: ReturnType<typeof gatewayPresentationScope> | undefined;
   private filter: PaletteFilter = "all";
-  private readonly draft: PaletteSessionDraft;
+  readonly draft: PaletteSessionDraft;
 
   private get query(): string {
     return this.draft.message;
@@ -132,13 +133,15 @@ export class PaletteController {
     private readonly element: HTMLElement,
     private readonly props: CommandPaletteProperties,
     private readonly readContext: () => ApplicationContext,
-    legacyHost: ConstructorParameters<typeof PaletteSessionDraft>[0],
+    legacyHost: SolidControllerHost,
     private readonly publish: () => void,
   ) {
     this.draft = new PaletteSessionDraft(
-      legacyHost,
+      element,
       () => ({ context: this.context, open: this.open }),
       {
+        changed: publish,
+        updateComplete: () => legacyHost.updateComplete,
         onClose: () => this.closePalette(),
         onMessageChange: (query) => {
           const text = query.trim();
@@ -199,6 +202,7 @@ export class PaletteController {
   }
 
   connect() {
+    this.draft.connect();
     this.gateway.connect();
     document.addEventListener("keydown", this.handleGlobalKeydown);
     this.publish();
@@ -250,6 +254,8 @@ export class PaletteController {
   }
 
   private synchronizePresentationScope() {
+    // Retire the draft synchronously with the gateway's presentation scope.
+    this.draft.synchronize();
     const gateway = this.context?.gateway;
     const scope = gateway ? gatewayPresentationScope(gateway) : undefined;
     if (this.presentationScope && this.presentationScope !== scope) {

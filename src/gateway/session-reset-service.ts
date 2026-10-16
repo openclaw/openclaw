@@ -737,13 +737,8 @@ async function performPreparedGatewaySessionReset({
 
       let createdNewEntry = false;
       assertCompletionAuthorized?.();
-      const boundaryEntry = (await loadResetSession(assertCompletionAuthorized)).entry;
-      if (boundaryEntry?.sessionId !== entry?.sessionId) {
-        params.assertCurrent?.();
-        throw new Error(`Session ${params.key} changed before reset boundary append.`);
-      }
       let resetBoundaryAppended = false;
-      const resetBoundaryId = boundaryEntry ? createSessionResetBoundaryId() : undefined;
+      const resetBoundaryId = entry ? createSessionResetBoundaryId() : undefined;
       let resetSkipped = false;
       let creationAuthorizationError: ReturnType<typeof errorShape> | undefined;
       let fastModeSelectionError: ReturnType<typeof missingScopeErrorShape> | undefined;
@@ -752,7 +747,7 @@ async function performPreparedGatewaySessionReset({
         commitGuard,
         archivePreviousTranscript: false,
         agentId: target.agentId,
-        resetBoundary: boundaryEntry
+        resetBoundary: entry
           ? {
               boundaryId: resetBoundaryId!,
               context: "clear",
@@ -784,7 +779,7 @@ async function performPreparedGatewaySessionReset({
           if (fastModeSelectionError) {
             throw new Error(fastModeSelectionError.message);
           }
-          if (currentEntry?.sessionId !== boundaryEntry?.sessionId) {
+          if (currentEntry?.sessionId !== entry?.sessionId) {
             if (currentEntry) {
               resetSkipped = true;
               return currentEntry;

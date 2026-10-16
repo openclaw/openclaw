@@ -236,6 +236,8 @@ export type PreparedModelCatalogProviderFacts = {
   expiresAt?: number;
   /** Consecutive failed discoveries; their backed-off retry deadline is `expiresAt`. */
   discoveryFailures?: number;
+  /** Rows carried from another plugin generation; visible until this generation reacquires them. */
+  provisional?: true;
   legacyAcquired?: boolean;
 };
 

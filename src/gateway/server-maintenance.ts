@@ -166,9 +166,17 @@ export function startGatewayMaintenanceTimers(params: {
     // Inspection and admission commit are synchronous: no new work can enter
     // between them, and a busy tick never changes the admission phase.
     let invalidated = false;
-    const admission = tryBeginGatewaySuspendAdmission(() => {
-      invalidated = true;
-    });
+    const admission = tryBeginGatewaySuspendAdmission(
+      () => {
+        invalidated = true;
+      },
+      {
+        owner: "host-thaw-recovery",
+        leaseId: `host-thaw-${scheduler.now()}`,
+        caller: "maintenance:host-thaw",
+        reason: mode,
+      },
+    );
     if (!admission?.commit()) {
       return { status: "retry", reason: "admission-closed" };
     }

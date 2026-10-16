@@ -13,7 +13,7 @@ import {
   type PresenceViewer,
 } from "../lib/presence-users.ts";
 import { profileDirectory } from "../lib/profile-directory.ts";
-import { ChatAuthorAvatar } from "../pages/chat/components/chat-author-avatar.ts";
+import { ChatAuthorAvatar } from "../pages/chat/components/chat-author-avatar-view.tsx";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";

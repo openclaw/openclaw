@@ -6,11 +6,11 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/solid/overlay.css";
 import { acquireNativeOverlaySurface } from "../../../lib/native-overlay-occlusion.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import {
   PRESENTATION_CHANGED_EVENT,
   type PresentationValue,
 } from "../../../lit/presentation-binding.ts";
-import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
 
 export function ChatPullRequestChecks(props: {
   label: string;
@@ -24,7 +24,7 @@ export function ChatPullRequestChecks(props: {
   let trigger!: HTMLElement;
   let surface!: HTMLElement;
   let mounted = false;
-  const parentPresented = useContext(SolidContentPresentation);
+  const parentPresented = useContext(ContentPresentation);
   const presented = () => {
     const value = props.presented;
     return parentPresented() && (typeof value === "boolean" ? value : value.isPresented());

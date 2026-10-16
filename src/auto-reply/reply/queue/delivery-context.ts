@@ -162,6 +162,8 @@ export function resolveFollowupDeliveryStorageKey(run: FollowupRun): string {
       run.toolsAllow ? (readToolAllowlistIntersection(run.toolsAllow) ?? null) : null,
     ),
     run.disableTools === true,
+    run.forceRestartSafeTools === true,
+    run.forceCodeModeTools === true,
     execution.extraSystemPrompt ?? "",
     execution.extraSystemPromptStatic ?? "",
     execution.sourceReplyDeliveryMode ?? "",
@@ -280,6 +282,8 @@ type FollowupRuntimeMetadata = Pick<
   | "gatewayLocalUserIngress"
   | "toolsAllow"
   | "disableTools"
+  | "forceRestartSafeTools"
+  | "forceCodeModeTools"
   | "abortSignal"
   | "queueAbortSignal"
   | "deliveryCorrelations"
@@ -406,6 +410,8 @@ export function collectRuntimeMetadata(
     ),
     toolsAllow: authoritySource?.toolsAllow,
     disableTools: authoritySource?.disableTools,
+    forceRestartSafeTools: authoritySource?.forceRestartSafeTools,
+    forceCodeModeTools: authoritySource?.forceCodeModeTools,
     abortSignal,
     queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
@@ -469,6 +475,8 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     explicitSkillSelections: source.explicitSkillSelections,
     toolsAllow: source.toolsAllow,
     disableTools: source.disableTools,
+    forceRestartSafeTools: source.forceRestartSafeTools,
+    forceCodeModeTools: source.forceCodeModeTools,
     images: source.images,
     imageOrder: source.imageOrder,
     media: source.media,

@@ -160,6 +160,8 @@ export type FollowupRun = {
   /** Turn-owned tool authority captured before queue ownership transfers. */
   toolsAllow?: string[];
   disableTools?: boolean;
+  forceRestartSafeTools?: boolean;
+  forceCodeModeTools?: boolean;
   /** Force individual drain; never merge this run into a collect batch. */
   disableCollectBatching?: boolean;
   /** Pending same-turn acceptance while this item remains parked in FIFO order. */

@@ -744,18 +744,19 @@ describe("agentCommand compaction transcript rotation", () => {
   });
 
   it.each([
-    ["empty payloads", "empty", []],
-    ["a silent NO_REPLY payload", "silent", [{ text: "NO_REPLY" }]],
+    ["empty payloads", "empty"],
+    ["an intentional silent final", "silent"],
   ] as const)(
-    "keeps compaction failure fatal for %s without manufacturing delivery state",
-    async (_label, sessionSuffix, payloads) => {
+    "preserves compaction failure after %s without manufacturing delivery state",
+    async (_label, sessionSuffix) => {
       const sessionId = `no-reply-compaction-failure-${sessionSuffix}`;
       const sessionKey = `agent:main:explicit:${sessionId}`;
       state.runAgentAttemptMock.mockResolvedValueOnce({
-        payloads: [...payloads],
+        payloads: [],
         meta: {
           durationMs: 1,
           stopReason: "end_turn",
+          terminalReply: { disposition: sessionSuffix },
           executionTrace: {
             runner: "cli",
             fallbackUsed: false,
@@ -771,12 +772,11 @@ describe("agentCommand compaction transcript rotation", () => {
       });
       state.runCliTurnCompactionLifecycleMock.mockRejectedValueOnce(new Error(COMPACTION_ERROR));
 
-      await expect(
-        agentCommand({
-          ...discordTurn(sessionId, sessionKey),
-          message: "prompt with no assistant reply",
-        }),
-      ).rejects.toThrow("Summarization failed: Connection error");
+      const command = agentCommand({
+        ...discordTurn(sessionId, sessionKey),
+        message: "prompt with no assistant reply",
+      });
+      await expect(command).rejects.toThrow("Summarization failed: Connection error");
 
       expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledOnce();
       expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();

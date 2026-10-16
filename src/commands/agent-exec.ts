@@ -20,6 +20,7 @@ import {
 } from "../infra/installation-target-context.js";
 import { writeRuntimeJson, writeRuntimeStdout, type RuntimeEnv } from "../runtime.js";
 import {
+  applyExecConfigOverrides,
   buildExecRunConfig,
   resolveAgentExecPrompt,
   resolveExecBaseConfig,
@@ -185,6 +186,7 @@ export async function agentExecCommand(
   let temporaryStateDir: string | undefined;
   let restoreEnvironment: (() => void) | undefined;
   let restoreConfigEnvironment: (() => void) | undefined;
+  let restoreOverrideEnvironment: (() => void) | undefined;
   let restoreRuntimeConfigSnapshot: (() => void) | undefined;
   let runtimePaths: typeof import("../config/paths.js") | undefined;
   let configIo: typeof import("../config/io.js") | undefined;
@@ -204,6 +206,11 @@ export async function agentExecCommand(
     const codeModeOverride = normalizeCodeMode(opts.codeMode);
     const prompt = await resolveAgentExecPrompt(positionalMessage, opts.messageFile, process.stdin);
     const cwd = await requireDirectory(opts.cwd ?? process.cwd(), "Working directory");
+    const { acquireEmbeddedStateLock, createEmbeddedStateSignalBridge } =
+      await import("../infra/embedded-state-lock.js");
+    // Admit cancellation before creating state so signals unwind temporary runs too.
+    signalBridge = createEmbeddedStateSignalBridge(process);
+    abortSignal = AbortSignal.any([signal, signalBridge.signal]);
     const stateDir = opts.stateDir
       ? await requireDirectory(opts.stateDir, "State directory")
       : await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-exec-"));
@@ -224,7 +231,7 @@ export async function agentExecCommand(
     // cannot inherit these credentials. The loader rolls back its own failed loads.
     const { restoreEnvChangesIfUnchanged, snapshotEnv } = configIo;
     const envBeforeConfigLoad = snapshotEnv(process.env);
-    const baseConfig = await resolveExecBaseConfig(opts);
+    const loadedConfig = await resolveExecBaseConfig(opts);
     const envAfterConfigLoad = snapshotEnv(process.env);
     restoreConfigEnvironment = () =>
       restoreEnvChangesIfUnchanged({
@@ -232,6 +239,14 @@ export async function agentExecCommand(
         before: envBeforeConfigLoad,
         after: envAfterConfigLoad,
       });
+    const baseConfig = await applyExecConfigOverrides(loadedConfig, opts.configOverride);
+    if (opts.configOverride?.length) {
+      const { prepareConfigRuntimeEnv } = await import("../config/config-env-vars.js");
+      restoreOverrideEnvironment = prepareConfigRuntimeEnv({
+        previousConfig: loadedConfig,
+        nextConfig: baseConfig,
+      }).publish();
+    }
     const runConfig = buildExecRunConfig({ base: baseConfig, cwd, opts });
     // Plugin discovery and its index keep the operator's roots after state moves.
     const inheritInstalledPlugins = opts.isolated !== true && opts.authEnvOnly !== true;
@@ -279,11 +294,6 @@ export async function agentExecCommand(
       temporaryDatabaseScope = createOpenClawDatabaseMaintenanceScope();
     }
     if (opts.stateDir) {
-      const { acquireEmbeddedStateLock, createEmbeddedStateSignalBridge } =
-        await import("../infra/embedded-state-lock.js");
-      signalBridge = createEmbeddedStateSignalBridge(process);
-      // Retained-state signals and caller cancellation both own the turn's lifetime.
-      abortSignal = AbortSignal.any([abortSignal, signalBridge.signal]);
       stateLock = await acquireEmbeddedStateLock({
         signal: abortSignal,
         formatActiveGatewayRefusal: formatActiveGatewayExecRefusal,
@@ -428,6 +438,7 @@ export async function agentExecCommand(
     }
   };
   runCleanupStep(() => restoreEnvironment?.());
+  runCleanupStep(() => restoreOverrideEnvironment?.());
   runCleanupStep(() => restoreConfigEnvironment?.());
   runCleanupStep(() => configIo?.clearConfigCache());
   runCleanupStep(() =>

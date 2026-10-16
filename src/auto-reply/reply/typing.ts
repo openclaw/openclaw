@@ -4,7 +4,6 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createTypingKeepaliveLoop } from "../../channels/typing-lifecycle.js";
-import { isSilentReplyPrefixText, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 
 const DEFAULT_TYPING_INTERVAL_SECONDS = 6;
 const DEFAULT_TYPING_TTL_MS = 2 * 60_000;
@@ -37,16 +36,9 @@ export function createTypingController(params: {
   onCleanup?: () => void;
   typingIntervalSeconds?: number;
   keepalive?: boolean;
-  silentToken?: string;
   log?: (message: string) => void;
 }): TypingController {
-  const {
-    onReplyStart,
-    onCleanup,
-    keepalive = true,
-    silentToken = SILENT_REPLY_TOKEN,
-    log,
-  } = params;
+  const { onReplyStart, onCleanup, keepalive = true, log } = params;
   if (!onReplyStart && !onCleanup) {
     return {
       onReplyStart: async () => {},
@@ -174,13 +166,6 @@ export function createTypingController(params: {
     if (!trimmed) {
       return;
     }
-    if (
-      silentToken &&
-      (isSilentReplyText(trimmed, silentToken) || isSilentReplyPrefixText(trimmed, silentToken))
-    ) {
-      return;
-    }
-    // Visible text, not silent control tokens, is what should start typing.
     refreshTypingTtl();
     await startTypingLoop();
   };

@@ -16,7 +16,6 @@ import {
   type SessionPatch,
 } from "../../lib/sessions/index.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import { solidContent, type LegacyDirectiveResult } from "../../lit/solid-content.tsx";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
@@ -137,7 +136,9 @@ export function renderChatPaneComposerControls(params: {
   onProviderSettings?: (provider: string) => void;
   onModelAccounts?: () => void;
 }): {
-  composerControls: LegacyDirectiveResult;
+  composerControls: Parameters<typeof ChatPaneModelControl>[0] & {
+    component: typeof ChatPaneModelControl;
+  };
   permissionPicker: ChatPermissionPickerProps;
 } {
   const {
@@ -232,7 +233,8 @@ export function renderChatPaneComposerControls(params: {
         }
       : selectedSession;
   return {
-    composerControls: solidContent(ChatPaneModelControl, {
+    composerControls: {
+      component: ChatPaneModelControl,
       model: {
         modelAuthStatusResult: state.modelAuthStatusResult,
         accountSelection,
@@ -319,7 +321,7 @@ export function renderChatPaneComposerControls(params: {
             ? switchChatSetting(state, { kind: "thinkingLevel", value: next }, targetSessionKey)
             : Promise.resolve(false),
       },
-    }),
+    },
     permissionPicker: {
       canSelectFull,
       defaultMode: agentDefaultPermissionMode,

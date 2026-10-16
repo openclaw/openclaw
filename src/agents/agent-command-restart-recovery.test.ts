@@ -161,6 +161,7 @@ describe("buildRestartRecoveryTerminalDeliveryEvidence", () => {
     },
     parentOnly: false,
     requesterSessionBound: true,
+    replyExpectation: "optional",
     deliveryTarget: {},
     shouldDeliverAgentFinal: true,
     requiresMessageToolDelivery: false,
@@ -399,13 +400,13 @@ describe("buildRestartRecoveryTerminalDeliveryEvidence", () => {
     expect(evidence?.messagingToolSentTargetsTruncated).toBe(true);
   });
 
-  it.each([["silent reply", { text: "NO_REPLY" }]])(
-    "does not turn %s into a durable visible-final receipt",
-    (_name, payload) => {
-      const evidence = buildRestartRecoveryTerminalDeliveryEvidence({ payloads: [payload] });
-      expect(evidence.payloads).toEqual([{ visible: false }]);
-    },
-  );
+  it("preserves a prepared literal token as visible without inventing a silence fact", () => {
+    const evidence = buildRestartRecoveryTerminalDeliveryEvidence({
+      payloads: [{ text: "NO_REPLY" }],
+    });
+    expect(evidence.payloads).toEqual([{ visible: true }]);
+    expect(evidence.meta?.terminalReply).toBeUndefined();
+  });
 
   it("preserves explicit hidden-payload visibility", () => {
     const evidence = buildRestartRecoveryTerminalDeliveryEvidence({

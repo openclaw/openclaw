@@ -70,7 +70,7 @@ async function observeShape(sidebar: Locator) {
         ].map((row) => row.textContent?.trim() ?? ""),
         avatarText: [
           ...element.querySelectorAll(
-            "[data-agent-group] .sidebar-agent-roster__row .sidebar-agent-roster__avatar",
+            "[data-agent-group] .sidebar-agent-roster__header .sidebar-agent-roster__avatar",
           ),
         ].map((row) => row.querySelector("[data-avatar]")?.getAttribute("data-avatar") ?? ""),
         brand: element.querySelector(".sidebar-workspace-header__main")?.textContent?.trim() ?? "",

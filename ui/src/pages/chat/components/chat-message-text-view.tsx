@@ -21,8 +21,8 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { MarkdownDomMedia, MarkdownMediaRoot } from "../../../lib/markdown-dom-reconciler.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
 import type { MarkdownMedia } from "./chat-message-media-markdown.ts";
 import { messageOverflowRef, shouldCollapseUserMessage } from "./chat-message-overflow.ts";
 import {
@@ -163,7 +163,7 @@ function DisclosureContent(props: {
   forwarded: boolean;
   children: JSX.Element;
 }) {
-  const presented = useContext(SolidContentPresentation);
+  const presented = useContext(ContentPresentation);
   let element!: HTMLDivElement;
   let previous: ((element?: Element) => void) | undefined;
   const dependencies = createMemo(
@@ -206,10 +206,10 @@ type MarkdownContentProps = {
   incremental?: boolean;
 };
 
-/** Both transcript text and legacy slots share the same incremental DOM owner. */
+/** Transcript text and inline media share the same incremental DOM owner. */
 export function MarkdownContent(props: MarkdownContentProps) {
   const solidOwner = getOwner();
-  const presented = useContext(SolidContentPresentation);
+  const presented = useContext(ContentPresentation);
   const fragment = document.createDocumentFragment();
   const roots = new Map<
     HTMLElement,
@@ -237,9 +237,9 @@ export function MarkdownContent(props: MarkdownContentProps) {
             const Content = dynamic(() => current().render);
             insert(
               container,
-              <SolidContentPresentation value={active}>
+              <ContentPresentation value={active}>
                 <Content item={current().items[index]!} index={index} />
-              </SolidContentPresentation>,
+              </ContentPresentation>,
             );
             return {
               update,

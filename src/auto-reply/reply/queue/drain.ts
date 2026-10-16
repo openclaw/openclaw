@@ -770,6 +770,8 @@ async function runSyntheticOverflowSummary(params: {
     personalBootstrapEligible: runtimeMetadata.personalBootstrapEligible,
     toolsAllow: runtimeMetadata.toolsAllow,
     disableTools: runtimeMetadata.disableTools,
+    forceRestartSafeTools: runtimeMetadata.forceRestartSafeTools,
+    forceCodeModeTools: runtimeMetadata.forceCodeModeTools,
     queuedFollowupReplyDisposition: runtimeMetadata.queuedFollowupReplyDisposition,
     runObservers: runtimeMetadata.runObservers,
     deliveryCorrelations: runtimeMetadata.deliveryCorrelations,

@@ -7,7 +7,7 @@ import type {
   ControlUiReplacement,
 } from "../../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../../app/context.ts";
-import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { ControlUiPluginCapability } from "../../../plugins/control-ui-capability.ts";
 import "../../../plugins/control-ui-view.solid.tsx";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -296,9 +296,9 @@ it("mounts only selected tool replacements and keeps their context, projection, 
   const [active, setActive] = createSignal(true);
   const view = mountSolid(
     () => (
-      <SolidContentPresentation value={active}>
+      <ContentPresentation value={active}>
         <MessageGroup group={group()} options={options()} />
-      </SolidContentPresentation>
+      </ContentPresentation>
     ),
     { wrapper: provider.wrapper },
   );

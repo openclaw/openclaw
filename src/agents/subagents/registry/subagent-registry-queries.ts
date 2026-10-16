@@ -50,6 +50,7 @@ export function listRunsForRequesterFromRuns(
     requesterAgentId?: string;
     requesterStorePath?: string | null;
   },
+  candidates: Iterable<SubagentRunRecord> = runs.values(),
 ): SubagentRunRecord[] {
   const key = requesterSessionKey.trim();
   if (!key) {
@@ -70,7 +71,7 @@ export function listRunsForRequesterFromRuns(
       ? undefined
       : buildLatestSubagentRunReadIndexFromRuns(runs);
 
-  return [...runs.values()].filter(
+  return [...candidates].filter(
     (entry) =>
       entry.requesterSessionKey === key &&
       (options?.requesterSessionId === undefined ||
@@ -548,13 +549,13 @@ export function countActiveRunsForSessionFromRuns<T extends SubagentRunReadRecor
   return count;
 }
 
-export function buildScopedSubagentRunReadIndexFromRuns(
-  runs: Map<string, SubagentRunRecord>,
+export function buildScopedSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecord>(
+  runs: Map<string, T>,
   rootSessionKey: string,
   requesterAgentId?: string,
   requesterStorePath?: string | null,
   rootRunIds?: ReadonlySet<string>,
-): SubagentRunReadIndex {
+): SubagentRunReadIndex<T> {
   return buildSubagentRunReadIndexFromRuns({
     runs:
       requesterAgentId || requesterStorePath !== undefined || rootRunIds
@@ -570,30 +571,6 @@ export function buildScopedSubagentRunReadIndexFromRuns(
           )
         : runs,
   });
-}
-
-export function countActiveDescendantRunsFromRuns(
-  runs: Map<string, SubagentRunRecord>,
-  rootSessionKey: string,
-  requesterAgentId?: string,
-  requesterStorePath?: string | null,
-  rootRunIds?: ReadonlySet<string>,
-): number {
-  return buildScopedSubagentRunReadIndexFromRuns(
-    runs,
-    rootSessionKey,
-    requesterAgentId,
-    requesterStorePath,
-    rootRunIds,
-  ).countActiveDescendantRuns(rootSessionKey);
-}
-
-/** Counts descendants that are live or ended but not yet cleaned up. */
-export function countPendingDescendantRunsFromRuns(
-  runs: Map<string, SubagentRunRecord>,
-  rootSessionKey: string,
-): number {
-  return buildSubagentRunReadIndexFromRuns({ runs }).countPendingDescendantRuns(rootSessionKey);
 }
 
 /**

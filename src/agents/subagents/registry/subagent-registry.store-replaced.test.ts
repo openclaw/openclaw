@@ -97,7 +97,11 @@ it("leaves yielded tasks with their owner until a final result needs store retir
   );
   delete completed.pauseReason;
   completed.execution.outcome = { status: "ok" };
-  completed.completion = { required: true, resultText: "retained final result" };
+  completed.completion = {
+    required: true,
+    resultText: "retained final result",
+    terminalReply: { disposition: "visible", text: "retained final result" },
+  };
   seedSubagentCompletionDelivery({ subagent: completed });
   publishCommittedRecords(completed);
   publishSystemEventStoreResolver(() => "replacement-store");

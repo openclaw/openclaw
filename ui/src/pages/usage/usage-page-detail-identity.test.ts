@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionUsageTimeSeries } from "../../../../src/shared/session-usage-timeseries-types.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -10,10 +10,12 @@ import {
   contextWithClient,
   contextWeight,
   createPage,
+  focusDocument,
   preloadUsage,
   refreshButton,
 } from "./usage-page.test-support.ts";
 
+beforeEach(focusDocument);
 afterEach(cleanupUsagePageTest);
 
 function usagePoints(timestamp: number, count: number) {
@@ -79,7 +81,9 @@ describe("UsagePage detail identity", () => {
         }
         return { providers: [] };
       });
-      const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
+      const client = { request } as unknown as GatewayBrowserClient;
+      const context = contextWithClient(client);
+      const page = await createPage(client, true, context);
       await preloadUsage(page);
       page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
       await vi.waitFor(() => expect(page.querySelectorAll(".session-log-entry")).toHaveLength(3));
@@ -95,9 +99,10 @@ describe("UsagePage detail identity", () => {
         if (refresh === "manual") {
           refreshButton(page).click();
         } else {
-          await page.loadUsage();
+          context.publishUsage({ usageUpdatedAt: 1 });
+          await vi.waitFor(() => expect(page.read().data.loading).toBe(false));
         }
-        await vi.waitFor(() => expect(page.details.timeSeries.data?.sessionId).toBe(sessionId));
+        await vi.waitFor(() => expect(page.read().detail.timeSeries?.sessionId).toBe(sessionId));
         if (activeDrag) {
           drag.move();
         }
@@ -164,10 +169,11 @@ describe("UsagePage detail identity", () => {
       await preloadUsage(page);
       page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
       await vi.waitFor(() => expect(page.textContent).toContain("Original turn"));
-      expect(page.details.timeSeries.data?.sessionId).toBe("original-instance");
+      expect(page.read().detail.timeSeries?.sessionId).toBe("original-instance");
 
       holdOriginal = true;
-      const oldLoad = page.details.timeSeries.load("global");
+      const oldLoad = page.refresh();
+      await vi.waitFor(() => expect(page.read().detail.timeSeriesLoading).toBe(true));
       context.setGatewaySnapshot({ suspensionPhase: "draining" });
       context.setGatewaySnapshot({ suspensionPhase: "accepting" });
       replaced = true;
@@ -180,7 +186,8 @@ describe("UsagePage detail identity", () => {
       if (refresh === "manual") {
         refreshButton(page).click();
       } else {
-        await page.loadUsage();
+        context.publishUsage({ usageUpdatedAt: 1 });
+        await vi.waitFor(() => expect(page.read().data.loading).toBe(false));
       }
       await vi.waitFor(() =>
         expect(page.querySelector(".session-bar-selection")?.textContent).toContain(
@@ -188,18 +195,22 @@ describe("UsagePage detail identity", () => {
         ),
       );
       expect.soft(page.usageSelectedSessions).toEqual(["global"]);
-      expect.soft(page.details.timeSeries.data).toBeNull();
-      expect.soft(page.details.sessionLogs.data).toBeNull();
+      expect.soft(page.read().detail.timeSeries).toBeNull();
+      expect.soft(page.read().detail.sessionLogs).toBeNull();
       retired.resolve({ sessionId: "retired-instance", points: [] });
       await oldLoad;
       await vi.waitFor(() => {
-        expect(page.details.timeSeries.loading).toBe(false);
-        expect(page.details.sessionLogs.loading).toBe(false);
+        expect(page.read().detail.timeSeriesLoading).toBe(false);
+        expect(page.read().detail.sessionLogsLoading).toBe(false);
       });
-      expect.soft(page.details.timeSeries.data).toBeNull();
-      expect.soft(page.details.sessionLogs.data).toBeNull();
-      expect.soft(page.details.timeSeries.status.error).toBe("Replacement details unavailable");
-      expect.soft(page.details.sessionLogs.status.error).toBe("Replacement details unavailable");
+      expect.soft(page.read().detail.timeSeries).toBeNull();
+      expect.soft(page.read().detail.sessionLogs).toBeNull();
+      expect
+        .soft(page.read().detail.timeSeriesStatus.error)
+        .toBe("Replacement details unavailable");
+      expect
+        .soft(page.read().detail.sessionLogsStatus.error)
+        .toBe("Replacement details unavailable");
       for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"]) {
         const requests = request.mock.calls
           .slice(beforeRefresh)
@@ -255,7 +266,9 @@ describe("UsagePage detail identity", () => {
         }
         return { providers: [] };
       });
-      const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
+      const client = { request } as unknown as GatewayBrowserClient;
+      const context = contextWithClient(client);
+      const page = await createPage(client, true, context);
       await preloadUsage(page);
       page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
       await vi.waitFor(() => expect(page.textContent).toContain("Retained turn"));
@@ -263,33 +276,37 @@ describe("UsagePage detail identity", () => {
       await page.updateComplete;
       expect(page.querySelectorAll(".session-log-entry")).toHaveLength(2);
       const range = page.querySelector(".timeseries-summary__range")?.textContent;
-      const timeSeries = page.details.timeSeries.data;
-      const logs = page.details.sessionLogs.data;
+      const timeSeries = page.read().detail.timeSeries;
+      const logs = page.read().detail.sessionLogs;
       label = "Refreshed summary";
       tokens = 350;
       revision += 1;
       if (refresh === "manual") {
         refreshButton(page).click();
       } else {
-        await page.loadUsage();
+        context.publishUsage({ usageUpdatedAt: 1 });
+        await vi.waitFor(() => expect(page.read().data.loading).toBe(false));
       }
       await vi.waitFor(() =>
         expect(page.querySelector(".session-bar-selection")?.textContent).toContain(label),
       );
-      await vi.waitFor(() => expect(page.details.timeSeries.loading).toBe(false));
+      await vi.waitFor(() => expect(page.read().detail.timeSeriesLoading).toBe(false));
       await page.updateComplete;
       expect(page.querySelector(".session-bar-selection")?.textContent).toContain(label);
-      await vi.waitFor(() => expect(page.details.session.data?.usage?.totalTokens).toBe(350));
+      await vi.waitFor(() =>
+        expect(page.read().data.selectedSession?.usage?.totalTokens).toBe(350),
+      );
       expect(page.querySelector(".session-detail-stats strong")?.textContent).toBe("200");
       expect(page.usageSelectedSessions).toEqual(["global"]);
-      expect(page.details.timeSeries.data).toEqual(timeSeries);
-      expect(page.details.sessionLogs.data).toEqual(logs);
+      expect(page.read().detail.timeSeries).toEqual(timeSeries);
+      expect(page.read().detail.sessionLogs).toEqual(logs);
       expect(page.querySelectorAll(".session-log-entry")).toHaveLength(2);
       expect(page.querySelector(".timeseries-summary__range")?.textContent).toBe(range);
       const summaryReads = request.mock.calls.filter(
         ([method]) => method === "sessions.usage",
       ).length;
-      await page.loadUsage();
+      context.publishUsage({ usageUpdatedAt: 2 });
+      await vi.waitFor(() => expect(page.read().data.loading).toBe(false));
       expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(
         summaryReads + 1,
       );
@@ -337,30 +354,32 @@ describe("UsagePage detail identity", () => {
         }
         return { providers: [], logs: [], points: [] };
       });
-      const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
+      const client = { request } as unknown as GatewayBrowserClient;
+      const context = contextWithClient(client);
+      const page = await createPage(client, true, context);
       await preloadUsage(page);
       page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
-      await vi.waitFor(() => expect(page.details.session.loading).toBe(false));
+      await vi.waitFor(() => expect(page.read().detail.context.loading).toBe(false));
       await page.updateComplete;
       if (conflict) {
-        expect.soft(page.details.session.data).toBeNull();
+        expect.soft(page.read().detail.context.weight).toBeUndefined();
         expect
-          .soft(page.details.session.status.error)
+          .soft(page.read().detail.context.status.error)
           .toBe("These context details are out of date. Refresh usage and try again.");
         expect
           .soft(page.querySelector(".context-details-panel")?.textContent)
           .not.toContain(report);
       } else {
-        expect(page.details.session.data?.contextWeight).toEqual(contextWeight(report));
-        expect(page.details.session.status.error).toBeNull();
+        expect(page.read().detail.context.weight).toEqual(contextWeight(report));
+        expect(page.read().detail.context.status.error).toBeNull();
       }
       returnedId = captured;
       report = "Recovered context";
       refreshButton(page).click();
       await vi.waitFor(() =>
-        expect(page.details.session.data?.contextWeight).toEqual(contextWeight(report)),
+        expect(page.read().detail.context.weight).toEqual(contextWeight(report)),
       );
-      expect(page.details.session.status.error).toBeNull();
+      expect(page.read().detail.context.status.error).toBeNull();
       expect(page.usageSelectedSessions).toEqual(["global"]);
       for (const [method, params] of request.mock.calls) {
         if (method === "sessions.usage" && params?.key) {

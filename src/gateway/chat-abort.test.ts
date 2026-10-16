@@ -533,7 +533,7 @@ describe("abortChatRunById", () => {
   it.each([
     ["streamed text", true, true],
     ["", true, true],
-    ["NO_REPLY", true, false],
+    ["NO_REPLY", true, true],
     ["stale text", false, false],
   ] as const)(
     "snapshots completed widgets before synchronous abort cleanup (%j, current=%j)",

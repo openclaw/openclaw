@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { updatePickers } from "../../test-helpers/select-picker.ts";
+import { updatePickers, openPicker } from "../../test-helpers/select-picker.ts";
 import {
   buildSessionObserverTogglePatch,
   buildSessionObserverUtilityModelPatch,
@@ -49,7 +49,10 @@ describe("session observer settings patches", () => {
     );
 
     await updatePickers(container);
-    const select = container.querySelector("openclaw-select-picker.model-picker__select");
+    const select = container.querySelector<HTMLElement>(
+      "openclaw-select-picker.model-picker__select",
+    )!;
+    await openPicker(select);
     const options = [...(select?.querySelectorAll('[role="option"]') ?? [])];
     const option = (label: string) =>
       options.find((candidate) => candidate.textContent?.trim() === label);

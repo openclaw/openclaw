@@ -2,19 +2,19 @@
 
 import { createRouter, definePage } from "@openclaw/uirouter";
 import { render } from "@solidjs/testing-library";
-import { flush } from "solid-js";
+import { createComponent, createRoot, flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiHost, ControlUiReplacement } from "../../../src/plugin-sdk/control-ui.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
+import { ApplicationProvider } from "../lib/reactive/context.ts";
 import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
+import "../plugins/control-ui-view.solid.tsx";
 import type { ChatRouteData } from "../pages/chat/session-route-data.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
-import "../plugins/control-ui-view.solid.tsx";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { equalShellRouteState, selectShellRouteState } from "./app-host-route-state.ts";
 import { ShellOwner } from "./app-host.tsx";
-import { connectLegacyApplicationContext } from "./app-root-lit.ts";
 import { renderApplicationShell } from "./app-shell-view.tsx";
 import { bootstrapApplication } from "./bootstrap.ts";
 
@@ -22,17 +22,29 @@ setupSidebarTest();
 
 async function mountShell() {
   const runtime = bootstrapApplication();
-  const owner = new ShellOwner(document.createElement("openclaw-app-shell"), runtime);
+  const { owner, dispose } = createRoot((disposeRoot) => ({
+    owner: new ShellOwner(document.createElement("openclaw-app-shell"), runtime),
+    dispose: disposeRoot,
+  }));
   owner.routeState = { routeId: "chat" };
-  const disconnectContext = connectLegacyApplicationContext(owner.element, runtime.context);
   document.body.append(owner.element);
-  const view = render(() => renderApplicationShell(owner), {
-    container: owner.element,
-  });
+  const view = render(
+    () =>
+      createComponent(ApplicationProvider, {
+        host: owner.element,
+        value: runtime.context,
+        get children() {
+          return renderApplicationShell(owner);
+        },
+      }),
+    {
+      container: owner.element,
+    },
+  );
   onTestFinished(() => {
     view.unmount();
-    disconnectContext();
     owner.disconnect();
+    dispose();
     runtime.stop();
   });
   await Promise.resolve();
@@ -282,10 +294,12 @@ it("restores the delegated shell after a pending update and can select another w
   };
   const selected = vi.spyOn(runtime.context.plugins, "selectedReplacement");
   selected.mockReturnValue(undefined);
+  runtime.context.plugins.selectReplacement("workspace", null);
   owner.routeState = { routeId: "plugins" };
   owner.invalidate();
   flush();
   selected.mockImplementation((surface) => (surface === "workspace" ? replacement : undefined));
+  runtime.context.plugins.selectReplacement("workspace", null);
   owner.invalidate();
   flush();
   expect(view.container.querySelector("openclaw-plugin-view")).toBeNull();
@@ -308,6 +322,7 @@ it("restores the delegated shell after a pending update and can select another w
   // A pending plugin update cannot remove the shell restored directly on Dashboard.
   plugin!.props = { sessionKey: "agent:main:updated", routeId: "dashboard" };
   selected.mockReturnValue(undefined);
+  runtime.context.plugins.selectReplacement("workspace", null);
   owner.invalidate();
   flush();
   expect(view.container.querySelector("openclaw-plugin-view")).toBeNull();
@@ -319,6 +334,7 @@ it("restores the delegated shell after a pending update and can select another w
   expect(shell?.isConnected).toBe(true);
 
   selected.mockImplementation((surface) => (surface === "workspace" ? replacement : undefined));
+  runtime.context.plugins.selectReplacement("workspace", null);
   owner.invalidate();
   flush();
   plugin =
@@ -344,6 +360,7 @@ it("restores the delegated shell after a pending update and can select another w
   expect(shell?.isConnected).toBe(true);
 
   selected.mockReturnValue(undefined);
+  runtime.context.plugins.selectReplacement("workspace", null);
   owner.invalidate();
   flush();
   owner.routeState = { routeId: "dashboard" };
@@ -371,6 +388,7 @@ it("restores the delegated shell after a pending update and can select another w
   owner.invalidate();
   flush();
   selected.mockImplementation((surface) => (surface === "workspace" ? customWorkspace : undefined));
+  runtime.context.plugins.selectReplacement("workspace", null);
   owner.invalidate();
   flush();
   expect(view.container.querySelector("openclaw-plugin-view")).toBeNull();
@@ -396,6 +414,7 @@ it("restores the delegated shell after a pending update and can select another w
   expect(view.container.querySelector("openclaw-app-sidebar")).toBe(sidebar);
 
   selected.mockReturnValue(undefined);
+  runtime.context.plugins.selectReplacement("workspace", null);
   owner.invalidate();
   flush();
   owner.routeState = { routeId: "dashboard" };

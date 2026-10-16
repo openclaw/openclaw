@@ -4,6 +4,7 @@ import type { RawBuilder } from "kysely";
 export type TextQuery =
   | { kind: "term"; text: string }
   | { kind: "phrase"; text: string; prefix?: boolean }
+  | { kind: "contains"; text: string }
   | { kind: "all" | "any"; clauses: readonly TextQuery[] };
 
 /** @experimental Existing derived-index declaration, admitted without catalog probes. */
@@ -13,6 +14,8 @@ export type TextIndexDefinition = {
   alias?: string;
   matchField?: string;
   hiddenRank?: boolean;
+  /** PostgreSQL indexes the owner's source/active projection, never immutable history. */
+  postgres?: { identity: string; mode?: "trigram" };
 };
 /** @experimental Index identity bound to one admitted store. */
 export type TextIndex = TextIndexDefinition & { readonly store: object };
@@ -20,12 +23,21 @@ export type TextIndex = TextIndexDefinition & { readonly store: object };
 /** @experimental Native expressions compose with the caller's scoped Kysely statement. */
 export interface FullTextCapability {
   match(index: TextIndex, query: TextQuery): RawBuilder<boolean>;
-  rank(index: TextIndex): {
+  rank(
+    index: TextIndex,
+    query?: TextQuery,
+  ): {
     value: RawBuilder<number>;
     order: "asc" | "desc";
     toRank(raw: number): number;
   };
-  snippet(index: TextIndex, field: string, maxTokens: number): RawBuilder<string>;
+  snippet(
+    index: TextIndex,
+    field: string,
+    maxTokens: number,
+    query?: TextQuery,
+    maxChars?: number,
+  ): RawBuilder<string>;
   identity(index: TextIndex): RawBuilder<number>;
   allocatedIdentity(index: TextIndex): RawBuilder<number>;
 }

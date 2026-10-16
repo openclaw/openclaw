@@ -337,15 +337,13 @@ describe("executeAgentTurn: CLI durable commentary", () => {
 
   it.each(
     [false, true].flatMap((completed) =>
-      [
-        { text: "NO_REPLY", silent: true },
-        { text: '{"action":"NO_REPLY"}', silent: true },
-        { text: "An ordinary caption.", silent: false },
-      ].map(({ text, silent }) => ({ text, silent, completed })),
+      ["NO_REPLY", '{"action":"NO_REPLY"}', '"NO_REPLY"', "NO_REPLY.", "An ordinary caption."].map(
+        (text) => ({ text, completed }),
+      ),
     ),
   )(
-    "keeps parsed CLI silence through normalization (completed=$completed): $text",
-    async ({ text, silent, completed }) => {
+    "keeps prepared CLI payload facts through normalization (completed=$completed): $text",
+    async ({ text, completed }) => {
       useClaudeCliFallback();
       const { createBlockReplyDeliveryHandler } =
         await vi.importActual<typeof import("./reply-delivery.js")>("./reply-delivery.js");
@@ -388,14 +386,10 @@ describe("executeAgentTurn: CLI durable commentary", () => {
       await executeAgentTurn(createTurnParams({ onPreparedBlockReply }, !completed));
 
       expect(normalizeMediaPaths).toHaveBeenCalledOnce();
-      if (silent) {
-        expect(onPreparedBlockReply).not.toHaveBeenCalled();
-      } else {
-        expect(onPreparedBlockReply).toHaveBeenCalledOnce();
-        expect(onPreparedBlockReply.mock.calls[0]?.[0].payload.text).toBe(
-          "Attachment preparation failed.",
-        );
-      }
+      expect(onPreparedBlockReply).toHaveBeenCalledOnce();
+      expect(onPreparedBlockReply.mock.calls[0]?.[0].payload.text).toBe(
+        "Attachment preparation failed.",
+      );
     },
   );
 

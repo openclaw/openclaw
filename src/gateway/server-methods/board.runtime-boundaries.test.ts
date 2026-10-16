@@ -6,7 +6,7 @@ import {
   PROTOCOL_VERSION,
   type BoardSnapshot,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resetBoardEventNoticeStateForTest } from "../../boards/board-notices.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
@@ -25,6 +25,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -132,6 +133,54 @@ describe("board gateway runtime boundaries", () => {
     closeOpenClawAgentDatabasesForTest();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+  });
+
+  it("serves board.data.read while a transcript-only database writer is held", async ({
+    signal,
+  }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const sessionKey = "agent:main:session";
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey, storePath: database.path },
+      { sessionId: "board-concurrent-reader", updatedAt: 1 },
+    );
+    const store = new SqliteBoardStore({
+      resolveSession: () => ({ agentId: "main", sessionKey, path: database.path }),
+    });
+    const { invoke, ticket } = await grantTools(
+      ["sessions.list"],
+      createHarness(undefined, undefined, store),
+    );
+    sessionList.mockImplementation(({ respond }) => respond(true, { sessions: [] }));
+    const entered = createDeferred();
+    const release = createDeferred();
+    const writer = runOpenClawAgentWorkerWrite(
+      { agentId: "main", path: database.path },
+      async () => {
+        database.db.exec("BEGIN IMMEDIATE");
+        entered.resolve();
+        try {
+          await release.promise;
+        } finally {
+          database.db.exec("ROLLBACK");
+        }
+      },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "transcript-only",
+    );
+    await entered.promise;
+    const read = invoke("board.data.read", { ticket, bindingId: "sessions.list" });
+    try {
+      const response = await withinTest(read, signal);
+      expect(database.db.isTransaction).toBe(true);
+      expect(response).toHaveBeenCalledWith(true, { sessions: [] });
+    } finally {
+      release.resolve();
+      await Promise.allSettled([writer, read]);
+    }
   });
 
   it("registers every contract method with its required scope", () => {

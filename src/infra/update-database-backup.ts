@@ -90,6 +90,21 @@ type BackupInput = {
 };
 type InspectionPlan = z.infer<typeof UpdateStateSchemaInspectionPlanSchema>;
 
+async function loadUpdateDatabaseBackupRuntime() {
+  const [{ discoverBackupDatabasePaths }, { readBackupEngine }] = await Promise.all([
+    import("./backup-sqlite-snapshot.js"),
+    import("../snapshot/database-backup.js"),
+  ]);
+  return { discoverBackupDatabasePaths, readBackupEngine };
+}
+
+let backupRuntime: ReturnType<typeof loadUpdateDatabaseBackupRuntime> | undefined;
+
+/** Resolve the backup's lazy modules before an updater replaces its own dist tree. */
+export function prepareUpdateDatabaseBackupRuntime() {
+  return (backupRuntime ??= loadUpdateDatabaseBackupRuntime());
+}
+
 async function inspectRestorableDatabaseFiles(
   databases: readonly string[],
   previous?: ReadonlyMap<string, BigIntStats>,
@@ -418,8 +433,8 @@ export async function createUpdateDatabaseBackup({
   retryAdvice?: boolean;
 }): Promise<UpdateDatabaseBackup> {
   const controller = new AbortController();
-  const { discoverBackupDatabasePaths } = await import("./backup-sqlite-snapshot.js");
-  const { readBackupEngine } = await import("../snapshot/database-backup.js");
+  const { discoverBackupDatabasePaths, readBackupEngine } =
+    await prepareUpdateDatabaseBackupRuntime();
   const postgresPaths = (await discoverBackupDatabasePaths(input)).filter(
     (file) => readBackupEngine(file).engine === "postgres",
   );

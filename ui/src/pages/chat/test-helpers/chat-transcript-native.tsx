@@ -55,6 +55,7 @@ function Content(props: { value: NativeContent }) {
       <Show when={search()}>
         {(value) => (
           <TranscriptSearch
+            revision={value()}
             state={getTranscriptState(value().paneId)}
             requestUpdate={value().requestUpdate}
             onClose={() =>
@@ -234,7 +235,7 @@ export function numberedContentRows(length: number): TestContentRow[] {
   }));
 }
 
-export function mcpRangeRows(appContent: unknown): TestContentRow[] {
+export function mcpRangeRows(appContent: JSX.Element): TestContentRow[] {
   return Array.from({ length: 24 }, (_, index) => ({
     kind: "content" as const,
     key: `row:${index}`,
