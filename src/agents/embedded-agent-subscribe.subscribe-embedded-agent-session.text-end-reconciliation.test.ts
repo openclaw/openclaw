@@ -322,6 +322,18 @@ describe("text_end replay and tool handoff", () => {
     expect(h.subscription.assistantTexts).toEqual(["Hello world"]);
   });
 
+  it("ignores a divergent full-content resend without a terminal partial snapshot", async () => {
+    const h = setup();
+    emitAssistantTextDelta({ emit: h.emit, delta: "Hello word" });
+    // The provider resends its full final text at text_end without a terminal
+    // partial snapshot, and the resend diverges from the streamed text.
+    emitAssistantTextEnd({ emit: h.emit, content: "Hello world" });
+    await h.subscription.waitForPendingEvents();
+    expect(h.onBlockReply).toHaveBeenCalledTimes(1);
+    expect(h.texts()).toEqual(["Hello word"]);
+    expect(h.subscription.assistantTexts).toEqual(["Hello word"]);
+  });
+
   it("sends only the new suffix when replies grow across tool calls", async () => {
     const h = setup();
     const expected = [
