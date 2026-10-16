@@ -7,7 +7,7 @@ import {
   readPluginBindingApprovalsInDatabase,
   upsertPluginBindingApprovalInDatabase,
 } from "../plugins/conversation-binding-state.kernel.js";
-import { importConfigMachineState } from "../state/config-machine-state-write.js";
+import { updateConfigMachineState } from "../state/config-machine-state-write.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
@@ -106,7 +106,11 @@ export async function migrateRetiredRuntimeState(
       return triggers;
     },
     (triggers) => {
-      importConfigMachineState([["voicewake.triggers", triggers]], { env });
+      updateConfigMachineState(
+        "voicewake.triggers",
+        (current) => (current === undefined ? triggers : current),
+        { env },
+      );
     },
     "Restore the listed trigger phrases through Voice Wake settings.",
   );
@@ -121,7 +125,11 @@ export async function migrateRetiredRuntimeState(
     },
     // The canonical Voice Wake reader owns route normalization, including legacy defaults.
     (routing) => {
-      importConfigMachineState([["voicewake.routing", routing]], { env });
+      updateConfigMachineState(
+        "voicewake.routing",
+        (current) => (current === undefined ? routing : current),
+        { env },
+      );
     },
     "Restore the archived defaultTarget and routes through Voice Wake routing settings.",
   );

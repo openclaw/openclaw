@@ -333,7 +333,7 @@ export function prepareLegacyOAuthSidecarImport(params: {
         ref: profile.oauthRef,
         env: oauthEnv,
         raw: parseAuthProfileMigrationSource(receipt),
-        allowKeychainPrompt: Boolean(process.stdin.isTTY),
+        allowKeychainPrompt: process.stdin.isTTY,
       });
       if (material) {
         delete profile.oauthRef;
