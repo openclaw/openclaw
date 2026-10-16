@@ -68,9 +68,12 @@ extension OpenClawChatComposer {
     #if os(iOS)
     var cleanDraftRow: some View {
         self.editorOverlay
-            .frame(maxWidth: .infinity, minHeight: self.textMinHeight, alignment: .topLeading)
+            .frame(maxWidth: .infinity, minHeight: self.textMinHeight, maxHeight: .infinity, alignment: .topLeading)
             .padding(.horizontal, CleanChatComposerMetrics.editorInlineInset)
-            .padding(.top, CleanChatComposerMetrics.editorBlockInset)
+            .padding(.top, self.draftTopInset)
+            // The room under a short draft belongs to the draft: a tap there starts typing.
+            .contentShape(Rectangle())
+            .onTapGesture { self.focusDraft() }
     }
     #endif
 
