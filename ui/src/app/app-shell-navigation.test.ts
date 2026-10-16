@@ -40,7 +40,7 @@ describe("Settings return navigation", () => {
           ...(["chat", "appearance", "model-providers"] as const).map((id) =>
             definePage<RouteId, ApplicationContext, unknown, RouteRedirect>({
               ...routePageSpec(id),
-              component: async () => ({ render: () => null }),
+              component: async () => ({ renderSolid: () => null }),
             }),
           ),
         ],

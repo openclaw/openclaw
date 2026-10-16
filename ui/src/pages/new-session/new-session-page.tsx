@@ -71,7 +71,7 @@ function DraftBlock(props: {
     onNavigate: (route, routeOptions) => props.page().context?.navigate(route, routeOptions),
     onFocusComposer: () =>
       submission().composerTextarea.getTextarea()?.focus({ preventScroll: true }),
-    requestUpdate: () => props.page().changed(),
+    onChange: () => props.page().changed(),
   }));
   const permissionControl = (
     <Show when={!catalog.isTarget(props.page().data)}>
@@ -386,14 +386,12 @@ defineSolidBridge<
   { data: NewSessionRouteData | undefined },
   {
     focusComposer(): void;
-    requestUpdate(): void;
   }
 >("openclaw-new-session-page", PageContent, {
   properties: { data: { default: undefined, attribute: false } },
   propertyChanged: (host) => pageOwners.get(host)?.changed(),
   methods: {
     focusComposer: (host) => pageOwners.get(host)?.focusComposer(),
-    requestUpdate: (host) => pageOwners.get(host)?.changed(),
   },
 });
 

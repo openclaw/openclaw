@@ -77,13 +77,13 @@ it("updates contextual navigation from its router and retires the subscription o
         id: "systems",
         path: "/systems",
         component: () => ({
-          render: () => "workspace",
+          renderSolid: () => "workspace",
           renderSidebar: (_data: unknown, pending: boolean) =>
             pending ? "loading machines" : "machine inventory",
         }),
         loader: () => loaded.promise,
       }),
-      definePage({ id: "cron", path: "/cron", component: () => ({ render: () => "cron" }) }),
+      definePage({ id: "cron", path: "/cron", component: () => ({ renderSolid: () => "cron" }) }),
     ],
   });
   onTestFinished(() => router.stop());

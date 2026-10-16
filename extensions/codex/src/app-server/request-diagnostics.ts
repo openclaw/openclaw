@@ -27,12 +27,16 @@ type RegisteredTransportIdentity = ReturnType<
 type ReadInitializeSnapshot = (beforeClientClose?: boolean) => InitializeSnapshot;
 
 /** Counts awaited APIs, not native execution or proof that a request was written. */
-export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
+export function createCodexRequestTimeoutDiagnostics(
+  timeoutMs: number,
+  acquireTimeoutMs = timeoutMs,
+) {
   if (!areDiagnosticsEnabledForProcess() || !embeddedAgentLog.isEnabled("warn")) {
     return undefined;
   }
   const startedAt = performance.now();
   let attempt = createAttempt(0);
+  let timeoutReported = false;
   function createAttempt(ordinal: number): {
     ordinal: number;
     phase: "prepare" | "acquire-client" | "callback" | "release-client";
@@ -125,6 +129,10 @@ export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
       attempt.phase = "release-client";
     },
     timeout() {
+      if (timeoutReported) {
+        return;
+      }
+      timeoutReported = true;
       try {
         if (!areDiagnosticsEnabledForProcess() || !embeddedAgentLog.isEnabled("warn")) {
           return;
@@ -134,7 +142,7 @@ export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
         const initialize = attempt.initializeSnapshot?.();
         embeddedAgentLog.warn("codex app-server scope timed out", {
           phase: attempt.phase === "callback" && pending > 0 ? "client-request" : attempt.phase,
-          timeoutMs,
+          timeoutMs: attempt.phase === "acquire-client" ? acquireTimeoutMs : timeoutMs,
           elapsedMs: Math.round(performance.now() - startedAt),
           scopeAttemptOrdinal: attempt.ordinal,
           ...(attempt.acquireLastObservedBoundary

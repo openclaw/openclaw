@@ -2,10 +2,20 @@
 
 import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
+import { currentConfigObject } from "../../lib/config/config-state-model.ts";
+import {
+  CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
+  createConfigCapabilityHarness,
+} from "../../lib/config/config-test-harness.ts";
+import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { updatePickers, openPicker } from "../../test-helpers/select-picker.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { MemoryDreamingControls } from "./memory-dreaming.tsx";
+import { createCuratedSettingsEditor } from "./curated-settings-editor.ts";
+import { curatedSettingsPresentation } from "./curated-settings-presentation.ts";
+import { CuratedSettingsPanel } from "./curated-settings.tsx";
+
+const presentation = curatedSettingsPresentation("memory-dreaming-settings");
 
 function dreamingConfig(dreaming: Record<string, unknown> | null) {
   return {
@@ -20,11 +30,14 @@ function renderInto(
   disabled = false,
 ): HTMLElement {
   const { container } = mountSolid(() => (
-    <MemoryDreamingControls
+    <CuratedSettingsPanel
+      presentation={presentation}
+      parameters={{ configOwner: "memory-core" }}
+      messageParameters={{ plugin: "memory-core" }}
       config={dreamingConfig(dreaming)}
       support="supported"
       disabled={disabled}
-      onPatch={onPatch}
+      onPatch={(_, path, value) => onPatch(path, value)}
     />
   ));
   flush();
@@ -75,7 +88,7 @@ function selectedSegment(container: HTMLElement): string | null {
   );
 }
 
-describe("MemoryDreamingControls", () => {
+describe("plugin-owned Dreaming settings presentation", () => {
   it("defaults phases on unless explicitly disabled", () => {
     const states = toggleStates(
       renderInto({ enabled: true, phases: { deep: { enabled: false } } }),
@@ -87,7 +100,12 @@ describe("MemoryDreamingControls", () => {
   });
 
   it("renders the runtime storage-mode default when the config omits it", () => {
-    expect(selectedSegment(renderInto({ enabled: true }))).toBe("separate");
+    const defaultPanel = renderInto({ enabled: true });
+    expect(selectedSegment(defaultPanel)).toBe("separate");
+    expect(rowFor(defaultPanel, "Storage mode").textContent).not.toContain("Default:");
+    expect(
+      rowFor(renderInto({ storage: { mode: "inline" } }), "Storage mode").textContent,
+    ).toContain("Default: Separate");
     expect(selectedSegment(renderInto({ storage: { mode: "inline" } }))).toBe("inline");
     expect(selectedSegment(renderInto({ storage: { mode: "both" } }))).toBe("both");
     // An unreadable stored value is not a fourth mode: it reads as the default.
@@ -125,7 +143,14 @@ describe("MemoryDreamingControls", () => {
     expect(onPatch).toHaveBeenCalledWith(["model"], undefined);
 
     const inherited = renderInto({ execution: { defaults: { model: "openai/gpt-5.6" } } });
-    expect(rowFor(inherited, "Dreaming model").textContent).not.toContain("Using default:");
+    await updatePickers(inherited);
+    const inheritedRow = rowFor(inherited, "Dreaming model");
+    expect(inheritedRow.textContent).not.toContain("Using default:");
+    const trigger = inheritedRow.querySelector<HTMLButtonElement>(".picker-select__trigger");
+    expect(trigger).not.toBeNull();
+    trigger!.click();
+    await updatePickers(inherited);
+    expect(inheritedRow.querySelector("[data-provider-icon=codex]")).not.toBeNull();
   });
 
   it("locks every global dreaming control when config mutation is unavailable", () => {
@@ -150,11 +175,14 @@ describe("MemoryDreamingControls", () => {
 it("keeps the edited field mounted when the owner publishes updated config", () => {
   const [dreaming, setDreaming] = createSignal<Record<string, unknown>>({ frequency: "0 3 * * *" });
   const view = mountSolid(() => (
-    <MemoryDreamingControls
+    <CuratedSettingsPanel
+      presentation={presentation}
+      parameters={{ configOwner: "memory-core" }}
+      messageParameters={{ plugin: "memory-core" }}
       config={dreamingConfig(dreaming())}
       support="supported"
       disabled={false}
-      onPatch={(_, value) => setDreaming({ frequency: value })}
+      onPatch={(_, _path, value) => setDreaming({ frequency: value })}
     />
   ));
   flush();
@@ -196,4 +224,85 @@ describe("numeric field bounds", () => {
     editNumber(numberInput(container, "Lookback days"), "");
     expect(onPatch).toHaveBeenCalledWith(["phases", "light", "lookbackDays"], undefined);
   });
+});
+
+it("submits edited values and removals through the shared config owner without materializing display defaults", async () => {
+  vi.useFakeTimers();
+  const secret = { source: "env", provider: "default", id: "BOT_TOKEN" };
+  let config: Record<string, unknown> = {
+    agents: { defaults: { userTimezone: "Asia/Singapore" } },
+    channels: { slack: { botToken: secret } },
+    plugins: {
+      slots: { memory: "none" },
+      entries: {
+        "memory-core": { config: { dreaming: { frequency: "0 1 * * *", verboseLogging: true } } },
+      },
+    },
+  };
+  const request = vi.fn(async (method: string, params?: unknown) => {
+    if (method === "config.get") {
+      return { config, raw: JSON.stringify(config), hash: "current", valid: true, issues: [] };
+    }
+    if (method === "config.set") {
+      config = JSON.parse((params as { raw: string }).raw);
+      return { config, hash: "saved" };
+    }
+    return {};
+  });
+  const { runtimeConfig } = createConfigCapabilityHarness(request);
+  const edit = createCuratedSettingsEditor(presentation, {
+    read: () => currentConfigObject(runtimeConfig.state),
+    parameters: () => ({ configOwner: "memory-core" }),
+    canEdit: () => runtimeConfig.state.connected,
+    patch: (path, value) => runtimeConfig.patchForm(path, value),
+    remove: (path) => runtimeConfig.removeFormValue(path),
+  });
+  await runtimeConfig.ensureLoaded();
+  const view = mountSolid(() => {
+    const runtime = projectRuntimeConfig(runtimeConfig);
+    return (
+      <CuratedSettingsPanel
+        presentation={presentation}
+        config={currentConfigObject(runtime.read().state)}
+        parameters={{ configOwner: "memory-core" }}
+        messageParameters={{ plugin: "memory-core" }}
+        support="unknown"
+        disabled={false}
+        onPatch={edit}
+      />
+    );
+  });
+  try {
+    flush();
+    expect(request.mock.calls.filter(([method]) => method === "config.set")).toHaveLength(0);
+    editNumber(numberInput(view.container, "Limit"), "0");
+    const toggle = rowFor(view.container, "Verbose logging").querySelector<HTMLInputElement>(
+      ".settings-toggle__input",
+    );
+    if (!toggle) {
+      throw new Error("Missing verbose logging toggle");
+    }
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event("change", { bubbles: true }));
+    editNumber(numberInput(view.container, "Dreaming frequency"), "");
+    runtimeConfig.patchForm(["agents", "defaults", "userTimezone"], "Etc/UTC");
+    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+    await runtimeConfig.waitForPendingWrites();
+    expect(config).toEqual({
+      agents: { defaults: { userTimezone: "Etc/UTC" } },
+      channels: { slack: { botToken: secret } },
+      plugins: {
+        slots: { memory: "none" },
+        entries: {
+          "memory-core": {
+            config: { dreaming: { verboseLogging: false, phases: { light: { limit: 0 } } } },
+          },
+        },
+      },
+    });
+  } finally {
+    view.unmount();
+    runtimeConfig.dispose();
+    vi.useRealTimers();
+  }
 });

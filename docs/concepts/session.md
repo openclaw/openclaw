@@ -245,6 +245,12 @@ Opt into automatic resets globally, then override them per chat type or channel:
 
 ## Gateway restart recovery
 
+An incoming message does not trigger a delivery-uncertainty notice while the
+previous reply is still being sent or its delivery result is being recorded.
+If a send settles with an unknown outcome, or restart recovery finds an
+unconfirmed final reply, OpenClaw retains the warning for the next turn on the
+same route.
+
 When a Gateway restart interrupts an admitted turn, including one still waiting
 in the queue or preparing to execute, OpenClaw tries to continue the existing
 session automatically. Shutdown records recovery before canceling queued work.

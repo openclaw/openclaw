@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   collectErrorGraphCandidates,
   toErrorObject,
@@ -68,6 +67,7 @@ import {
   type UsageCostWorkerReply,
   type UsageCostWorkerResult,
 } from "./session-cost-usage-worker.types.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
 import { isTransientSqliteError } from "./unhandled-rejections.js";
 import type { WorkerTaskChannel } from "./worker-task-server.js";
@@ -173,7 +173,7 @@ export async function executeUsageCostWorker(
   if (!cacheDatabase) {
     throw new Error("Usage cache database is not owned by this worker operation");
   }
-  const readCache = <T>(read: (db: DatabaseSync) => T, missing: T): T => {
+  const readCache = <T>(read: (db: EngineConnection) => T, missing: T): T => {
     const result = withOpenClawAgentDatabaseReadOnly(({ db }) => read(db), {
       ...cacheDatabase,
       env,

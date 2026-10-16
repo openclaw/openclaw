@@ -16,7 +16,6 @@ import { describe, expect, it, vi } from "vitest";
 import { ContentPresentation as SolidContentPresentation } from "../lib/solid/presentation.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
-import { LitContent as LegacyOutlet } from "./solid-bridge.ts";
 import { LitContent, mountLitContent, solidContent } from "./solid-content.tsx";
 
 describe("Lit and Solid content boundaries", () => {
@@ -28,7 +27,7 @@ describe("Lit and Solid content boundaries", () => {
       onSettled(() => settled(sibling?.isConnected));
       return (
         <section>
-          <LegacyOutlet render={() => html`${solidContent(Nested, {})}`} />
+          <LitContent value={html`${solidContent(Nested, {})}`} />
           <button ref={(element) => (sibling = element)}>Next</button>
         </section>
       );
@@ -430,9 +429,9 @@ it("updates an isolated Lit outlet and retires its directives without replacing 
     () => (
       <section>
         <input aria-label="Solid sibling" />
-        <LegacyOutlet
-          render={() => html`<button @click=${onClick}>${observeRemoval(label())}</button>`}
-        />
+        <span class="lit-content" style={{ display: "contents" }}>
+          <LitContent value={html`<button @click=${onClick}>${observeRemoval(label())}</button>`} />
+        </span>
       </section>
     ),
     { container },

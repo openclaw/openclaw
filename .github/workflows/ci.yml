@@ -22,6 +22,11 @@ on:
         default: default
         type: choice
         options: [default, main]
+      test_runtime_policy:
+        description: Opt-in Linux test runtime trial (bun-all or dual-all); empty preserves the current event policy.
+        required: false
+        default: ""
+        type: string
       capture_ui_proof:
         description: Capture and upload sanitized Control UI screenshots from real-Gateway tests.
         required: false
@@ -1490,6 +1495,7 @@ jobs:
           OPENCLAW_CI_WORKFLOW_REVISION: *workflow_sha
           OPENCLAW_CI_REPOSITORY: ${{ github.repository }}
           OPENCLAW_CI_EVENT_NAME: ${{ github.event_name }}
+          OPENCLAW_CI_TEST_RUNTIME_POLICY: ${{ github.event_name == 'workflow_dispatch' && inputs.test_runtime_policy || '' }}
           OPENCLAW_CI_RUNNER_PROFILE: ${{ steps.runner_profile.outputs.runner_profile }}
           OPENCLAW_CI_NODE_RUNNER_BACKEND: ${{ steps.runner_profile.outputs.node_runner_backend }}
           OPENCLAW_CI_QUALIFICATION: ${{ steps.runner_profile.outputs.ci_qualification }}
@@ -2280,8 +2286,8 @@ jobs:
     if: needs.preflight.outputs.run_ui_tests == 'true'
     # Keep unit shards on the existing hybrid pool; hosted retries and overrides remain available.
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04'))))) || ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04'))) }}
-    # Preserve the existing budgets for Blacksmith and explicit hosted routes.
-    timeout-minutes: ${{ ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 35 || 20 }}
+    # Dual-all runs both runtimes; other policies keep the backend-specific budget.
+    timeout-minutes: ${{ ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && (needs.preflight.outputs.ui_test_runtime_policy == 'dual-all' && 70 || 35) || (needs.preflight.outputs.ui_test_runtime_policy == 'dual-all' && 40 || 20) }}
     strategy:
       fail-fast: false
       max-parallel: 3
@@ -2310,7 +2316,7 @@ jobs:
 
       - name: Setup pinned Bun test runtime
         id: ui_bun
-        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && (needs.preflight.outputs.ui_test_runtime_policy == 'bun-compatible' || needs.preflight.outputs.ui_test_runtime_policy == 'dual') }}
+        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && contains(fromJSON('["bun-compatible","dual","bun-all","dual-all"]'), needs.preflight.outputs.ui_test_runtime_policy) }}
         uses: ./.ci-harness/.github/actions/setup-test-bun
 
       - name: Lint Control UI window.open usage
@@ -2327,7 +2333,7 @@ jobs:
           OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1"
           OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: ${{ format('["--maxWorkers", "3", "--reporter=verbose", "--reporter=github-actions", "--reporter=./scripts/lib/vitest-resource-reporter.mts"{0}]', needs.preflight.outputs.compatibility_target != 'true' && format(', "--shard={0}/{1}"', matrix.shard, needs.preflight.outputs.ui_test_shard_count) || '') }}
         run: |
-          if [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
+          if [[ "$COMPATIBILITY_TARGET" == "true" && "$OPENCLAW_CI_TEST_RUNTIME_POLICY" != "bun-all" && "$OPENCLAW_CI_TEST_RUNTIME_POLICY" != "dual-all" ]]; then
             # Frozen targets can contain timing-sensitive tests fixed on current main.
             # Give legacy browser fixtures enough headroom on shared hosted runners.
             # Isolate files because older suites can still leak module mocks between tests.

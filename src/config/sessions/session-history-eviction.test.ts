@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 
 const evictionWarnSpy = vi.hoisted(() => vi.fn());
 vi.mock("../../logging/subsystem.js", async () => {
@@ -632,11 +633,14 @@ describe("SQLite historical session disk budget", () => {
         return prepared;
       },
     );
-    const reads = trackSqliteStatementExecutions(owner.db, ["history"], (sql) =>
-      /^select\b/i.test(sql) &&
-      /"(?:session_windows|transcript_rewrite_watermarks|trajectory_runtime_events)"/.test(sql)
-        ? "history"
-        : null,
+    const reads = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(owner.db),
+      ["history"],
+      (sql) =>
+        /^select\b/i.test(sql) &&
+        /"(?:session_windows|transcript_rewrite_watermarks|trajectory_runtime_events)"/.test(sql)
+          ? "history"
+          : null,
     );
     try {
       expect(

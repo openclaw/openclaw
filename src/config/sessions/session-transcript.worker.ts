@@ -1,4 +1,9 @@
+import { workerData } from "node:worker_threads";
 import { decodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
+import {
+  installDatabaseEngineSelection,
+  type DatabaseEngineSelection,
+} from "../../infra/database-engine/context.js";
 import type {
   UsageCostWorkerInput,
   UsageCostWorkerReply,
@@ -20,6 +25,11 @@ import type {
   SessionTranscriptWorkerReply,
   SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
+
+const startup: { databaseEngineSelection?: DatabaseEngineSelection } | undefined = workerData;
+if (startup?.databaseEngineSelection) {
+  installDatabaseEngineSelection(startup.databaseEngineSelection);
+}
 
 let releaseReadValidation:
   | typeof import("../../state/openclaw-agent-db-validation-cache.js").releaseOpenClawAgentDatabaseReadValidation

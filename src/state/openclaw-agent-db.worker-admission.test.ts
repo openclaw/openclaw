@@ -1,12 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { onInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import type { SqliteWorkerExecutionAuthority } from "../infra/sqlite-worker-contract.js";
@@ -23,6 +23,7 @@ import {
 } from "../infra/sqlite-writer-admission-service.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { runWithAgentCreationClaim } from "./agent-creation-claim.js";
 import { AgentDatabaseSchemaAdmissionChangedError } from "./agent-database-admission-error.js";
 import { completeAgentDeletionJournalInDatabase } from "./agent-deletion-journal.js";
@@ -93,8 +94,8 @@ function observeCallerSchemaInspections(...pathnames: string[]) {
   return { inspections, restore: observer.restore };
 }
 
-function expectAdmittedSchemaObjects(database: DatabaseSync) {
-  const facts = getAdmittedSqliteSchemaFacts(database);
+function expectAdmittedSchemaObjects(database: EngineConnection) {
+  const facts = getAdmittedSqliteSchemaFacts(requireNativeSqliteDatabase(database));
   expect(facts?.textEncoding).toBe("UTF-8");
   expect(facts?.tables.has("session_nodes")).toBe(true);
   expect(facts?.indexes).toContain("idx_agent_session_nodes_updated_at");
@@ -297,7 +298,7 @@ it("admits cold storage in its worker and lends facts to every later native hand
     path: pathname,
   });
   assert(freshValidation);
-  expect(freshValidation.schema?.facts.textEncoding).toBe("UTF-8");
+  expect(freshValidation.schema?.facts?.textEncoding).toBe("UTF-8");
   expect(Atomics.load(new Int32Array(freshValidation.canonicalReady), 0)).toBe(1);
 
   // Native handles share the worker's physical admission across orderly close.

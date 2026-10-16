@@ -8,6 +8,7 @@ import {
   restoreConfigResolutionFacts,
 } from "../config/resolution-facts.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { installDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import type { Model } from "../llm/types.js";
 import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
@@ -552,6 +553,9 @@ function isWorkerRequest(value: unknown): value is PreparedModelWorkerRequest {
 
 if (parentPort) {
   const data = workerData as PreparedModelCatalogWorkerData;
+  if (data.databaseEngineSelection) {
+    installDatabaseEngineSelection(data.databaseEngineSelection);
+  }
   // Evicting another workspace recaptures native ESM graphs that Node cannot unload.
   // Keep each workspace's current context within this inventory-owned worker lifetime.
   const contexts = new Map<

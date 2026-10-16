@@ -185,51 +185,57 @@ export function openEngineStore(ref: {
     if (!known || (known.engine === "postgres" && known.version !== schema.version)) {
       admitPostgresCapabilities(db);
       // Bootstrap borrows opening custody; ordinary writes still require domain admission.
-      db.runTransaction(() => {
-        const fresh = !db
-          .prepare("SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = ?")
-          .get(identity.namespace);
-        if (fresh && !ref.existingOnly) {
-          db.exec(`CREATE SCHEMA IF NOT EXISTS "${identity.namespace.replaceAll('"', '""')}"`);
-          db.exec(postgresSchemaMetadataSql);
-        }
-        let meta;
-        try {
-          meta = db
-            .prepare("SELECT version, store_id FROM openclaw_schema_meta WHERE store = ?")
-            .get(schema.id);
-        } catch (cause) {
-          throw new Error(
-            "Missing PostgreSQL metadata; use the matching OpenClaw version or restore the matching PostgreSQL schema and anchor.",
-            { cause },
-          );
-        }
-        if (!meta) {
-          if (ref.existingOnly || !fresh) {
+      const admitExistingOnly = ref.existingOnly && schema.postgresMigrations?.length === 0;
+      // Bootstrap-only stores can admit an existing schema without a mutation receipt.
+      db.runTransaction(
+        () => {
+          const fresh = !db
+            .prepare("SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = ?")
+            .get(identity.namespace);
+          if (fresh && !ref.existingOnly) {
+            db.exec(`CREATE SCHEMA IF NOT EXISTS "${identity.namespace.replaceAll('"', '""')}"`);
+            db.exec(postgresSchemaMetadataSql);
+          }
+          let meta;
+          try {
+            meta = db
+              .prepare("SELECT version, store_id FROM openclaw_schema_meta WHERE store = ?")
+              .get(schema.id);
+          } catch (cause) {
             throw new Error(
-              "Missing PostgreSQL metadata; restore the matching PostgreSQL schema and anchor.",
+              "Missing PostgreSQL metadata; use the matching OpenClaw version or restore the matching PostgreSQL schema and anchor.",
+              { cause },
             );
           }
-          adapter.schema.bootstrap(store, db);
-        } else {
-          if (meta.store_id !== identity.storeId) {
-            throw new Error(
-              `PostgreSQL database identity mismatch: expected ${identity.storeId}, found ${String(meta.store_id)}. Restore the matching anchor and PostgreSQL backup.`,
-            );
+          if (!meta) {
+            if (ref.existingOnly || !fresh) {
+              throw new Error(
+                "Missing PostgreSQL metadata; restore the matching PostgreSQL schema and anchor.",
+              );
+            }
+            adapter.schema.bootstrap(store, db);
+          } else {
+            if (meta.store_id !== identity.storeId) {
+              throw new Error(
+                `PostgreSQL database identity mismatch: expected ${identity.storeId}, found ${String(meta.store_id)}. Restore the matching anchor and PostgreSQL backup.`,
+              );
+            }
+            if (meta.version !== schema.version) {
+              invalidateLocalSqliteSchemaAdmissions(db);
+              stageSqliteTransactionState(db, {
+                stage: () => {},
+                rollback: () => {},
+                commit: () => publishSqliteDatabaseSchemaChange(db),
+                invalidate: () => publishSqliteDatabaseSchemaChange(db),
+              });
+              adapter.schema.migrate(store, Number(meta.version), db);
+            }
           }
-          if (meta.version !== schema.version) {
-            invalidateLocalSqliteSchemaAdmissions(db);
-            stageSqliteTransactionState(db, {
-              stage: () => {},
-              rollback: () => {},
-              commit: () => publishSqliteDatabaseSchemaChange(db),
-              invalidate: () => publishSqliteDatabaseSchemaChange(db),
-            });
-            adapter.schema.migrate(store, Number(meta.version), db);
-          }
-        }
-        admit(!meta);
-      });
+          admit(!meta);
+        },
+        undefined,
+        admitExistingOnly,
+      );
     } else {
       admit(false);
     }

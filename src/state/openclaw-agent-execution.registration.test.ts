@@ -123,8 +123,8 @@ vi.mock("./openclaw-agent-db.js", () => ({
   openOpenClawAgentDatabase: edge.open,
   getOpenClawAgentDatabaseIfOpen: () => edge.database,
 }));
-vi.mock("./openclaw-agent-db-schema.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./openclaw-agent-db-schema.js")>()),
+vi.mock("./openclaw-agent-db-schema-refresh.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./openclaw-agent-db-schema-refresh.js")>()),
   refreshOpenClawAgentDatabaseSchema: () => undefined,
 }));
 vi.mock("./openclaw-agent-db-identity.js", () => ({

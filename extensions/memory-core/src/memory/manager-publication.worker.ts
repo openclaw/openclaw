@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   ensureMemoryIndexSchema,
   loadSqliteVecExtensionFromPath,
@@ -32,6 +33,7 @@ import {
   withSqliteDatabaseWriteScope,
   type SqliteWorkerBackend,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { requireMemorySearchDatabase } from "../memory-search-database.js";
 import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
 import { publishMemoryDatabaseTables } from "./manager-db-kernel.js";
 import {
@@ -158,11 +160,11 @@ export function bindSqliteWorkerBackend(
   input: MemoryPublicationConnection,
   context: {
     databasePath: string;
-    database: DatabaseSync;
+    database: EngineConnection;
     admit(stage: "transaction" | "commit"): void;
   },
 ) {
-  const db = context.database;
+  const db = requireMemorySearchDatabase(context.database);
   let pragmas = agentConnectionPragmas.get(db);
   if ("kind" in input && !pragmas) {
     pragmas = {

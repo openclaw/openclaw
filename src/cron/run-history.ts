@@ -22,6 +22,7 @@ type CronRunHistoryStatusFilter = "all" | CronRunStatus;
 
 export type ReadCronRunHistoryPageOptions = {
   storeKey: string;
+  view?: "full" | "summary";
   limit?: number;
   offset?: number;
   jobId?: string;
@@ -154,6 +155,14 @@ export function projectCronRunHistoryPage(
   const boundedOffset = Math.min(total, offset);
   const entries = rows.slice(boundedOffset, boundedOffset + limit).map(({ entry }) => entry);
   attachJobNames(entries, options.jobNameById);
+  if (options.view === "summary") {
+    // Search and visibility use the full record before pruning the response page.
+    for (const entry of entries) {
+      delete entry.diagnostics;
+      delete entry.delivery;
+      delete entry.failureNotificationDelivery;
+    }
+  }
   const nextOffset = boundedOffset + entries.length;
   return {
     entries,

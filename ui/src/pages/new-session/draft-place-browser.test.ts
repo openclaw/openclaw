@@ -68,7 +68,7 @@ function createBrowser(
     }),
     {
       readAgents: () => context.agents,
-      requestUpdate: vi.fn(),
+      changed: vi.fn(),
       updateComplete: () => Promise.resolve(),
       onInvalidate,
       onVisibilityRetired: vi.fn(),
@@ -89,7 +89,7 @@ function createBrowser(
       isAdmin,
     }),
     {
-      requestUpdate: vi.fn(),
+      changed: vi.fn(),
       updateComplete: () => view?.updateComplete ?? Promise.resolve(),
       onProjectMissing,
       onSelectProject,

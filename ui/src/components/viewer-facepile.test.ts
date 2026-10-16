@@ -3,6 +3,7 @@ import { createComponent } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import type { ApplicationContext } from "../app/context-types.ts";
+import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { resolveAvatarImageUrl } from "../lib/identity-avatar-loader.ts";
 import { resolveAvatarInitials } from "../lib/identity-avatar.ts";
@@ -14,6 +15,7 @@ import {
 } from "../lib/presence-users.ts";
 import { profileDirectory } from "../lib/profile-directory.ts";
 import { ChatAuthorAvatar } from "../pages/chat/components/chat-author-avatar-view.tsx";
+import { createContext, createGateway, createSessions } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
@@ -22,6 +24,7 @@ import {
   createSolidApplicationContextProvider,
 } from "../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import { SessionOwnerAvatar } from "./solid/session-owner-chip.tsx";
 import { ViewerAvatar } from "./solid/viewer-facepile.tsx";
 import "./viewer-facepile.ts";
 
@@ -261,6 +264,40 @@ it.each(["staticParticipants"] as const)(
     expect(projectPresencePayload(payload)).toBe(projection);
   },
 );
+
+it.each(["roster", "hydrated"])("uses the %s agent emoji for owner faces", async (source) => {
+  const client = createTestGatewayClient(async () => ({ agentId: "kitsune", emoji: "🦊" }));
+  const gateway = createGateway(client);
+  const identities = createAgentIdentityCapability(gateway);
+  const context = createContext(
+    gateway,
+    createSessions("kitsune", []),
+    {
+      defaultId: "kitsune",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "kitsune", identity: source === "roster" ? { emoji: "🦊" } : undefined }],
+    },
+    [],
+    identities,
+  );
+  const view = mountSolid(
+    () =>
+      createComponent(SessionOwnerAvatar, {
+        owner: { id: "kitsune", label: "Kitsune", identity: { type: "agent", id: "kitsune" } },
+      }),
+    { wrapper: createSolidApplicationContextProvider(context).wrapper },
+  );
+  if (source === "hydrated") {
+    await identities.ensure(["kitsune"]);
+  }
+  await waitForSolid(() => {
+    expect(
+      view.container.querySelector(".identity-avatar__text")?.getAttribute("data-avatar"),
+    ).toBe("🦊");
+    expect(view.container.querySelector(".identity-avatar__agent-face")).toBeNull();
+  });
+});
 
 it("renders ordered static participant actors without presence filtering", async () => {
   const facepile = document.createElement("openclaw-viewer-facepile");
