@@ -1,3 +1,4 @@
+import { JSDOM } from "jsdom";
 import { describe, expect, it } from "vitest";
 import { applyLoggingConfig, resetLogger } from "../logging/logger.js";
 import { computeInlineScriptHashes } from "./control-ui-csp.js";
@@ -38,8 +39,9 @@ describe("public session document", () => {
       unavailable: true,
     });
     expect(unavailable).toContain("not publicly available");
-    expect(unavailable).not.toContain("Public · Read-only");
-    expect(unavailable).not.toContain("Made with OpenClaw");
+    const unavailableMain = JSDOM.fragment(unavailable).querySelector("main")!;
+    expect(unavailableMain.textContent).not.toContain("Public · Read-only");
+    expect(unavailableMain.querySelector(".colophon")).toBeNull();
     expect(unavailable).not.toContain('http-equiv="refresh"');
   });
   it("publishes only user and assistant conversation text without internal input or metadata", () => {
@@ -352,8 +354,12 @@ describe("public session document", () => {
     expect(html).toContain("Earlier conversation");
     expect(html).toContain("Back to latest");
     expect(html).toContain('href="/share/session?token=v1.opaque&amp;offset=100" rel="prev"');
-    expect(html).toContain('href="/share/session?token=v1.opaque">Back to latest</a>');
-    expect(html).not.toContain("within its size limit");
+    const page = JSDOM.fragment(html);
+    expect(page.querySelector(".eyebrow a")?.getAttribute("href")).toBe(
+      "/share/session?token=v1.opaque",
+    );
+    expect(page.querySelector(".eyebrow a")?.textContent).toBe("Back to latest");
+    expect(page.querySelector(".notice")).toBeNull();
   });
 
   it("keeps bearer navigation relative when no trusted absolute origin is available", () => {
@@ -362,7 +368,9 @@ describe("public session document", () => {
     });
     expect(html).not.toContain('rel="canonical"');
     expect(html).not.toContain('property="og:url"');
-    expect(html).toContain('href="/share/session?token=v1.opaque">Refresh now</a>');
+    const refresh = JSDOM.fragment(html).querySelector("footer a");
+    expect(refresh?.getAttribute("href")).toBe("/share/session?token=v1.opaque");
+    expect(refresh?.textContent).toBe("Refresh now");
   });
 
   it("truncates titles and messages without splitting UTF-16 surrogate pairs", () => {

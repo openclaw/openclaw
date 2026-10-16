@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveBuildInfo } from "../write-build-info.ts";
 import { createManagedHandoffBuildConfigs } from "./managed-handoff-build-config.mts";
 import { createPublicSessionCardAssetsPlugin } from "./public-session-card-assets.mts";
+import { createPublicSessionLocalesPlugin } from "./public-session-locales.mts";
 import { collectRuntimeImportClosure } from "./runtime-import-closure.mts";
 import {
   getStandaloneRuntimeProcessOutputOptions,
@@ -118,6 +119,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     const schemaPlugin = createStateSchemaInlinePlugin(root);
     return [
       createPublicSessionCardAssetsPlugin(root, recordInput),
+      createPublicSessionLocalesPlugin(root, recordInput),
       {
         ...schemaPlugin,
         name: "openclaw:worker-build-inputs",

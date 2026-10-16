@@ -288,6 +288,15 @@ status if the connection fails. **Older messages** opens earlier pages without
 automatic refresh; **Back to latest** returns to the live view. Pages contain approximately 50 visible messages and tool-step groups, newest pages first and chronological within each page. Read and message size limits still apply, with visible omission notices. The initial conversation and social metadata
 work without JavaScript.
 
+The reader uses the saved Control UI language preference on the same origin, or
+your browser language when no supported preference is saved. Navigation, status,
+copy controls, and reader notices are localized, with right-to-left layout for
+Arabic and Persian. Conversation titles, messages, code, tool names, and filenames
+are never translated. Missing translations fall back to English; without
+JavaScript the initial document remains in English. Reader translations are
+packaged at build time from the same generated catalog as the Control UI, without
+loading the operator app or fetching a translation service.
+
 Public session links include a 1200 × 630 preview card with the session title and
 opening public request. When recorded worktree changes are already available,
 the card shows a work receipt with change counts and recorded PR/check details.

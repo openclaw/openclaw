@@ -22,6 +22,7 @@ import {
   publicPluginSdkEntrypoints,
 } from "./scripts/lib/plugin-sdk-entries.mts";
 import { createPublicSessionCardAssetsPlugin } from "./scripts/lib/public-session-card-assets.mts";
+import { createPublicSessionLocalesPlugin } from "./scripts/lib/public-session-locales.mts";
 import { isRecord } from "./scripts/lib/record-shared.mjs";
 import { createRuntimeDependencyOwnershipBuildPlugin } from "./scripts/lib/runtime-dependency-ownership-build-plugin.mts";
 import { runtimeProcessBuildEntries } from "./scripts/lib/runtime-process-build-entries.mts";
@@ -245,6 +246,9 @@ function nodeBuildConfig(
       typeof declarations === "object" && declarations.emitDtsOnly
         ? undefined
         : createPublicSessionCardAssetsPlugin(),
+      typeof declarations === "object" && declarations.emitDtsOnly
+        ? undefined
+        : createPublicSessionLocalesPlugin(),
       config.plugins,
     ],
     env,
@@ -292,7 +296,11 @@ function workerDeployBuildConfig(entry: Record<string, string>, split = false): 
       chunkFileNames: "worker/worker-chunk-[hash].mjs",
       assetFileNames: "worker/[name][extname]",
     },
-    plugins: [createStateSchemaInlinePlugin(), createWorkerDeployBuildPlugin()],
+    plugins: [
+      createStateSchemaInlinePlugin(),
+      createPublicSessionLocalesPlugin(),
+      createWorkerDeployBuildPlugin(),
+    ],
     shims: true,
     sourcemap: OUTPUT_SOURCE_MAPS,
     inputOptions: (options) => ({

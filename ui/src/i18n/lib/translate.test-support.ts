@@ -1,5 +1,5 @@
+import type { Locale } from "../../../../src/shared/control-ui-locale.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import type { Locale } from "./registry.ts";
 import { i18n } from "./translate.ts";
 import type { TranslationMap } from "./types.ts";
 

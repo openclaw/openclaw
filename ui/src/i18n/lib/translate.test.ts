@@ -1,6 +1,7 @@
 // @vitest-environment node
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Locale } from "../../../../src/shared/control-ui-locale.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import {
@@ -8,7 +9,6 @@ import {
   installSafeLocalStorageForTesting,
 } from "../../test-helpers/storage.ts";
 import { registerCommandPaletteEnglish } from "../locales/en-command-palette.ts";
-import type { Locale } from "./registry.ts";
 import { createI18nManagerForTesting } from "./translate.test-support.ts";
 import type { TranslationMap } from "./types.ts";
 
