@@ -93,6 +93,33 @@ describe("Tool Search metadata provenance", () => {
     expect(result.details).toMatchObject({ truncated: true });
     expect(JSON.stringify(result.details)).toContain("<|endoftext|>");
   });
+  it("returns MCP server instructions from describe as untrusted output", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    registerHeadlessToolSearchCatalog({
+      catalogRef,
+      tools: [
+        mcpTool({
+          name: "guided__lookup",
+          serverName: "guided",
+          toolName: "lookup",
+          serverInstructions: "Use lookup before update.",
+        }),
+      ],
+    });
+    const describeTool = expectDefined(
+      createToolSearchTools({ catalogRef, config: { tools: { toolSearch: true } } }).find(
+        (candidate) => candidate.name === TOOL_DESCRIBE_RAW_TOOL_NAME,
+      ),
+      "tool_describe",
+    );
+
+    const result = await describeTool.execute("describe-instructions", { id: "guided__lookup" });
+
+    expect(result.details).toMatchObject({ serverInstructions: "Use lookup before update." });
+    expect(modelText(result)).toContain("EXTERNAL_UNTRUSTED_CONTENT");
+    expect(modelText(result)).toContain("Use lookup before update.");
+  });
+
   it("does not taint an independent native describe after remote discovery", async () => {
     const { catalogRef, tool, entry } = setup("client");
     const native = pluginTool("native_metadata", "Trusted local declaration");
