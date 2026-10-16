@@ -19,9 +19,18 @@ import { createCommandsVitestConfig } from "../vitest/vitest.commands.config.ts"
 import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
 import { listMatchedTestFiles } from "./ci-node-test-plan.test-support.js";
 
+const commandsConfig = "test/vitest/vitest.commands.config.ts";
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 afterEach(() => vi.restoreAllMocks());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+const commandGroups = (job: CompactNodeTestShard) =>
+  job.groups.filter((group) => group.configs.includes(commandsConfig));
+const ownerName = (name: string) => name.replace(/-hosted-\d+$/u, "");
+function mockHost(cpus = 8, gib = 31) {
+  vi.spyOn(os, "availableParallelism").mockReturnValue(cpus);
+  vi.spyOn(os, "totalmem").mockReturnValue(gib * 1024 ** 3);
+}
 
 async function observeCommandWorkers(job: CompactNodeTestShard, env: NodeJS.ProcessEnv = {}) {
   const seen = new Map<string, string | undefined>();
@@ -103,15 +112,12 @@ describe("command CI ownership and parallel timing", () => {
       let measuredGroups = 0;
       let fallbackGroups = 0;
       for (const job of plan) {
-        const commands = job.groups.filter((group) =>
-          group.configs.includes("test/vitest/vitest.commands.config.ts"),
-        );
+        const commands = commandGroups(job);
         if (!commands.length) {
           continue;
         }
         const roomy = job.runner === "blacksmith-32vcpu-ubuntu-2404";
-        vi.spyOn(os, "availableParallelism").mockReturnValue(roomy ? 8 : 2);
-        vi.spyOn(os, "totalmem").mockReturnValue((roomy ? 31 : 8) * 1024 ** 3);
+        mockHost(roomy ? 8 : 2, roomy ? 31 : 8);
         const jobWorkers =
           runnerBackend !== "github" &&
           roomy &&
@@ -145,7 +151,7 @@ describe("command CI ownership and parallel timing", () => {
     "scales %s command work while preserving file and direct-sample floors",
     (runnerBackend) => {
       const group = {
-        configs: ["test/vitest/vitest.commands.config.ts"],
+        configs: [commandsConfig],
         includePatterns: Array.from(
           { length: 12 },
           (_, index) => `src/commands/fixture-${index}.test.ts`,
@@ -182,7 +188,7 @@ describe("command CI ownership and parallel timing", () => {
   );
 
   it("refits precise command selections independently by worker policy and retains exact prices", async () => {
-    const config = "test/vitest/vitest.commands.config.ts";
+    const config = commandsConfig;
     const owner = "agentic-commands-doctor-auth";
     const files = [
       "src/commands/doctor-auth.hints.test.ts",
@@ -219,8 +225,7 @@ describe("command CI ownership and parallel timing", () => {
           expect(job.planConcurrency).toBe(cell.workers === 2 ? 2 : 1);
           return Object.assign({}, cell, { job, group });
         });
-        vi.spyOn(os, "availableParallelism").mockReturnValue(8);
-        vi.spyOn(os, "totalmem").mockReturnValue(31 * 1024 ** 3);
+        mockHost();
         for (const { workers, job, group, seconds } of cells) {
           const env = {
             CI: "true",
@@ -274,7 +279,7 @@ describe("command CI ownership and parallel timing", () => {
   });
 
   it("projects serial timings once, retaining complete history and indivisible files", async () => {
-    const config = "test/vitest/vitest.commands.config.ts";
+    const config = commandsConfig;
     const owner = "agentic-commands-agent-channel";
     const memoryOwner = "agentic-commands-doctor-sessions-cron-memory";
     const timingKey = `${owner}#file-parallel-2`;
@@ -373,8 +378,7 @@ describe("command CI ownership and parallel timing", () => {
           ),
         ).toBe(true);
         expect(totalSeconds(measured)).toBe(1280);
-        vi.spyOn(os, "availableParallelism").mockReturnValue(8);
-        vi.spyOn(os, "totalmem").mockReturnValue(31 * 1024 ** 3);
+        mockHost();
         for (const job of measuredJobs) {
           const seen = await observeCommandWorkers(job);
           for (const group of job.groups.filter((entry) => measuredGroups.includes(entry))) {
@@ -398,6 +402,12 @@ describe("command CI ownership and parallel timing", () => {
     );
   });
   it("keeps Doctor session SQLite owners complete and isolated", () => {
+    const placementsFor = (plan: CompactNodeTestShard[], owners: string[]) =>
+      plan.flatMap((job, jobIndex) =>
+        job.groups
+          .filter((group) => owners.includes(ownerName(group.shard_name)))
+          .map((group) => ({ group, jobIndex })),
+      );
     const ownerNames = [
       "agentic-commands-doctor-sessions-cron",
       "agentic-commands-doctor-sessions-cron-memory",
@@ -405,9 +415,7 @@ describe("command CI ownership and parallel timing", () => {
       "agentic-commands-doctor-sessions-cron-sqlite-recovery",
     ];
     const base = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
-    const commandShards = base.filter((shard) =>
-      shard.configs.includes("test/vitest/vitest.commands.config.ts"),
-    );
+    const commandShards = base.filter((shard) => shard.configs.includes(commandsConfig));
     const owners = new Map(
       commandShards
         .filter((shard) => ownerNames.includes(shard.shardName))
@@ -435,21 +443,12 @@ describe("command CI ownership and parallel timing", () => {
         runnerBackend: "blacksmith",
         includeReleaseOnlyPluginShards: false,
       });
-      const placements = plan.flatMap((job, jobIndex) =>
-        job.groups
-          .filter((group) => ownerNames.includes(group.shard_name.replace(/-hosted-\d+$/u, "")))
-          .map((group) => ({ group, jobIndex })),
+      const placements = placementsFor(plan, ownerNames);
+      expect(new Set(placements.map(({ group }) => ownerName(group.shard_name)))).toEqual(
+        new Set(ownerNames),
       );
-      expect(
-        new Set(placements.map(({ group }) => group.shard_name.replace(/-hosted-\d+$/u, ""))),
-      ).toEqual(new Set(ownerNames));
       expect(new Set(placements.map(({ jobIndex }) => jobIndex)).size).toBe(placements.length);
-      expect(
-        plan
-          .flatMap((shard) => shard.groups)
-          .filter((group) => ownerNames.includes(group.shard_name.replace(/-hosted-\d+$/u, "")))
-          .every((group) => group.runner === DEFAULT_NODE_TEST_RUNNER),
-      ).toBe(true);
+      expect(placements.every(({ group }) => group.runner === DEFAULT_NODE_TEST_RUNNER)).toBe(true);
     }
 
     const families = [ownerNames, [1, 2, 3].map((part) => `agentic-gateway-core-${part}`)];
@@ -491,11 +490,7 @@ describe("command CI ownership and parallel timing", () => {
         runnerBackend: "hybrid",
       });
       for (const family of families) {
-        const placements = nestedPlan.flatMap((job, jobIndex) =>
-          job.groups
-            .filter((group) => family.includes(group.shard_name.replace(/-hosted-\d+$/u, "")))
-            .map((group) => ({ group, jobIndex })),
-        );
+        const placements = placementsFor(nestedPlan, family);
         expect(
           placements.filter(({ group }) => group.shard_name.startsWith(`${family[0]}-hosted-`)),
         ).toHaveLength(family[0]!.startsWith("agentic-commands-") ? 2 : 3);
@@ -504,7 +499,7 @@ describe("command CI ownership and parallel timing", () => {
         );
         for (const name of family) {
           const actual = placements
-            .filter(({ group }) => group.shard_name.replace(/-hosted-\d+$/u, "") === name)
+            .filter(({ group }) => ownerName(group.shard_name) === name)
             .flatMap(({ group }) => group.includePatterns ?? []);
           expect(actual.toSorted(), name).toEqual(
             base.find((shard) => shard.shardName === name)?.includePatterns?.toSorted(),
