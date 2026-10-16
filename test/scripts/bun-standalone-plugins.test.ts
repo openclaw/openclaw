@@ -3,12 +3,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { planStandalonePackageManager } from "../../scripts/lib/bun-standalone-package-manager.mjs";
 import {
   classifyStandalonePlugins,
   planStandalonePlugins,
   pruneStandalonePluginDirectories,
   selectStandalonePluginModules,
 } from "../../scripts/lib/bun-standalone-plugins.mjs";
+import {
+  planStandaloneRuntime,
+  pruneStandaloneRuntime,
+} from "../../scripts/lib/bun-standalone-sidecar.mjs";
 import { collectRootPackageExcludedExtensionDirs } from "../../scripts/lib/root-package-bundled-plugin-excludes.mjs";
 import { listBundledPluginMetadata } from "../../src/plugins/bundled-plugin-metadata.js";
 import {
@@ -158,6 +163,33 @@ describe("standalone plugin selection", () => {
         resolveOfficialExternalPluginId(entry) === "matrix",
     );
     expect(resolveOfficialExternalPluginInstall(matrix)?.npmSpec).toBe("@openclaw/matrix");
+  });
+
+  it("preserves the package manager runtime closure when plugins are omitted", () => {
+    const { root, write } = fixture();
+    write("node_modules/npm/package.json", JSON.stringify({ name: "npm", version: "1.0.0" }));
+    write("node_modules/npm/LICENSE", "fixture license");
+    write("node_modules/npm/bin/npm-cli.js", 'require("../lib/cli.js");');
+    write("node_modules/npm/lib/cli.js", 'module.exports = require("install-helper");');
+    write(
+      "node_modules/npm/node_modules/install-helper/package.json",
+      JSON.stringify({ name: "install-helper", main: "index.js" }),
+    );
+    write("node_modules/npm/node_modules/install-helper/index.js", "module.exports = 42;");
+
+    pruneStandalonePluginDirectories(root, planStandalonePlugins(root, ["core", "codex"]));
+    const manager = planStandalonePackageManager(root);
+    const runtime = planStandaloneRuntime(root, manager.files);
+    expect(runtime.pruning.categories.packageManager).toMatchObject({ files: 6 });
+    pruneStandaloneRuntime(runtime);
+
+    expect(fs.existsSync(path.join(root, "dist/extensions/matrix"))).toBe(false);
+    expect(fs.readFileSync(path.join(root, manager.manifest.entrypoint), "utf8")).toBe(
+      'require("../lib/cli.js");',
+    );
+    expect(
+      fs.readFileSync(path.join(root, "npm/node_modules/install-helper/index.js"), "utf8"),
+    ).toBe("module.exports = 42;");
   });
 
   it("excludes private root chunks before compilation but retains shared and currently referenced chunks", async () => {
