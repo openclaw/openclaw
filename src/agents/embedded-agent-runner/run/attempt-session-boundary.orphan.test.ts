@@ -186,17 +186,31 @@ async function withPersistedOrphanBoundary(
 }
 
 describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
-  it.each(["tail", "before-metadata"] as const)(
+  it.each(["tail", "before-metadata", "before-later-orphan"] as const)(
     "keeps an excluded recovery notice visible through later turns: %s",
     async (recoveryNotice) => {
       await withPersistedOrphanBoundary(
-        { parent: true, metadata: true, recoveryNotice },
+        {
+          parent: true,
+          metadata: true,
+          recoveryNotice: recoveryNotice === "before-later-orphan" ? "tail" : recoveryNotice,
+        },
         async ({ input, manager, orphanId, target }) => {
+          const previousInputs = ["orphan wake"];
+          if (recoveryNotice === "before-later-orphan") {
+            previousInputs.push("later orphan wake");
+            await manager.appendMessageAsync({
+              role: "user",
+              content: "later orphan wake",
+              timestamp: 3,
+            });
+            input.activeSession.agent.state.messages = manager.buildSessionContext().messages;
+          }
           const boundary = await prepareEmbeddedAttemptSessionBoundary(input);
           expect(boundary.orphanRepair).toBeUndefined();
-          expect(input.activeSession.agent.state.messages).toEqual([
-            expect.objectContaining({ role: "user", content: "orphan wake" }),
-          ]);
+          expect(input.activeSession.agent.state.messages).toMatchObject(
+            previousInputs.map((content) => ({ role: "user", content })),
+          );
           await manager.appendMessageAsync({ role: "user", content: "new request", timestamp: 3 });
           await manager.appendMessageAsync(
             makeAssistantMessageFixture({
@@ -209,7 +223,7 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
             expect.arrayContaining([orphanId, "recovery-notice"]),
           );
           expect(reopened.buildSessionContext().messages).toMatchObject([
-            { role: "user", content: "orphan wake" },
+            ...previousInputs.map((content) => ({ role: "user", content })),
             { role: "user", content: "new request" },
             { role: "assistant", content: [{ type: "text", text: "new reply" }] },
           ]);

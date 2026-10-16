@@ -25,7 +25,7 @@ import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 
 export class SessionManagerBranching extends SessionManagerMetadata {
   /** A context-only view must not rewind past omitted, user-visible entries. */
-  hasLoadedTranscriptTail(entryId: string): boolean {
+  hasLoadedTranscriptTail(entryId: string, parentId: string | null): boolean {
     this.assertTranscriptViewAvailable();
     if (this.appendMode === "side") {
       return false;
@@ -36,12 +36,13 @@ export class SessionManagerBranching extends SessionManagerMetadata {
       if (!entry) {
         return false;
       }
-      if (currentId === entryId) {
-        return true;
-      }
-      currentId = this.boundedParentIds.has(currentId)
+      const currentParentId = this.boundedParentIds.has(currentId)
         ? (this.boundedParentIds.get(currentId) ?? null)
         : entry.parentId;
+      if (currentId === entryId) {
+        return currentParentId === parentId;
+      }
+      currentId = currentParentId;
     }
     return false;
   }
