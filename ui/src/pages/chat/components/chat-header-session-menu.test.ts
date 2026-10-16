@@ -228,9 +228,13 @@ describe("chat header session menu", () => {
     expect(menu.openMenu()).toBe(true);
     flush();
     const pin = item(menu, "Unpin session");
+    const hidden = new Promise<void>((resolve) => {
+      panel(menu).addEventListener("overlay-after-hide", () => resolve(), { once: true });
+    });
     panel(menu).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     flush();
     expect(panel(menu).matches(":popover-open")).toBe(false);
+    await hidden;
     const changes: MutationRecord[] = [];
     const mutations = new MutationObserver((records) => changes.push(...records));
     mutations.observe(panel(menu), { childList: true, subtree: true, attributes: true });
