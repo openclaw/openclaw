@@ -16,9 +16,46 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const head = "a".repeat(40);
 const base = "c".repeat(40);
+const repository = {
+  id: "R_base",
+  databaseId: 1,
+  nameWithOwner: "base-owner/base-repo",
+  url: "https://github.com/base-owner/base-repo",
+};
 
-function graphqlResponse(repository: unknown) {
-  return { data: { repository } };
+function revalidatedCall(endpoint: string, host = "github.com", ...flags: string[]) {
+  return ["api", "--hostname", host, endpoint, ...flags, "-H", "Cache-Control: max-age=0"];
+}
+
+function readLines(file: string) {
+  return readFileSync(file, "utf8").trim().split("\n").filter(Boolean);
+}
+
+function expectPayload(result: ReturnType<typeof readPrMetadata>, bytes: Buffer, exists = false) {
+  expect(result.payloads).toEqual([
+    { path: expect.any(String), base64: bytes.toString("base64"), exists },
+  ]);
+}
+
+function expectSupplementalQuota(result: ReturnType<typeof readPrMetadata>) {
+  expect(result.stderr).toContain("resource=core");
+  expect(result.stderr).toContain(
+    "graphql 0/5000 reset=2027-01-15T08:00:00Z core 4900/5000 reset=2027-01-15T08:05:00Z",
+  );
+  expect(result.stderr).toContain(
+    "Supplemental quota probe (remaining/limit; not the failing response)",
+  );
+  expect(result.stderr).not.toContain("Wait until");
+  expect(result.stderr).not.toContain("secret-response-must-not-escape");
+  expect(result.calls.filter((args) => args.includes("rate_limit"))).toHaveLength(1);
+}
+
+function restFile(overrides: Record<string, unknown> = {}) {
+  return { filename: "x", status: "modified", additions: 0, deletions: 0, ...overrides };
+}
+
+function graphqlResponse(record: unknown) {
+  return { data: { repository: record } };
 }
 
 function connectionPage(nodes: unknown[], hasNextPage: boolean) {
@@ -62,11 +99,7 @@ type Fixture = {
   graphqlQuota?: boolean;
 };
 
-function readPrMetadata(
-  fixture: Fixture = {},
-  command = "pr_meta_json 42",
-  parentEnv: NodeJS.ProcessEnv = process.env,
-) {
+function readPrMetadata(fixture: Fixture = {}, command = "pr_meta_json 42") {
   const dir = tempDirs.make("openclaw-pr-metadata-");
   const gh = join(dir, "gh");
   const trace = join(dir, "trace");
@@ -285,7 +318,7 @@ if (endpoint === "user") {
     {
       cwd: process.cwd(),
       env: {
-        ...parentEnv,
+        ...process.env,
         // This unsupervised child owns neither the parent's snapshot nor its FD3.
         OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: undefined,
         OPENCLAW_PR_LOCK_NOTIFY_FD: undefined,
@@ -314,43 +347,29 @@ if (endpoint === "user") {
     ...result,
     attempts: Number(readFileSync(join(dir, "count"), "utf8")),
     notifications: readFileSync(join(dir, "notify"), "utf8"),
-    payloads: readFileSync(join(dir, "payloads"), "utf8")
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => {
-        const payload = JSON.parse(line) as { path: string; base64: string };
-        return {
-          path: payload.path,
-          base64: payload.base64,
-          exists: existsSync(dirname(payload.path)),
-        };
-      }),
-    calls: readFileSync(trace, "utf8")
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as string[]),
-    graphqlInputs: readFileSync(join(dir, "graphql-inputs"), "utf8")
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as { query: string; variables: Record<string, unknown> }),
-    delays: readFileSync(join(dir, "sleeps"), "utf8")
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map(Number),
+    payloads: readLines(join(dir, "payloads")).map((line) => {
+      const payload = JSON.parse(line) as { path: string; base64: string };
+      return {
+        path: payload.path,
+        base64: payload.base64,
+        exists: existsSync(dirname(payload.path)),
+      };
+    }),
+    calls: readLines(trace).map((line) => JSON.parse(line) as string[]),
+    graphqlInputs: readLines(join(dir, "graphql-inputs")).map(
+      (line) => JSON.parse(line) as { query: string; variables: Record<string, unknown> },
+    ),
+    delays: readLines(join(dir, "sleeps")).map(Number),
   };
 }
 
 describe("PR metadata through REST", () => {
   it.each([
-    { stream: "stdout", stdout: "  provider response\r\n\n", stderr: "" },
-    { stream: "stderr", stdout: "", stderr: " \tprovider diagnostic\r\n\n" },
-    { stream: "both", stdout: " provider response\r\n", stderr: " \tdiagnostic\n\n" },
-    { stream: "neither", stdout: "", stderr: "" },
-  ])("preserves failed CLI $stream bytes, diagnosing only absent output", ({ stdout, stderr }) => {
+    ["stdout", "  provider response\r\n\n", ""],
+    ["stderr", "", " \tprovider diagnostic\r\n\n"],
+    ["both", " provider response\r\n", " \tdiagnostic\n\n"],
+    ["neither", "", ""],
+  ])("preserves failed CLI %s bytes, diagnosing only absent output", (_stream, stdout, stderr) => {
     const result = readPrMetadata(
       { commandFailure: { stdout, stderr } },
       "pr_gh_plain api repos/base-owner/base-repo",
@@ -399,34 +418,11 @@ describe("PR metadata through REST", () => {
       const result = readPrMetadata({}, `${command} < '${stdinPath.replaceAll("'", "'\\''")}'`);
       expect(result.status, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout)).toMatchObject({ full_name: "base-owner/base-repo" });
-      expect(result.payloads).toEqual([
-        { path: expect.any(String), base64: expected.toString("base64"), exists: false },
-      ]);
+      expectPayload(result, expected);
     },
   );
 
-  it("reads real metadata with an unrelated inherited snapshot and closed notify FD", () => {
-    const result = readPrMetadata({}, "pr_meta_json 42", {
-      ...process.env,
-      OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: tempDirs.make("unrelated-metadata-snapshot-"),
-      OPENCLAW_PR_LOCK_NOTIFY_FD: "3",
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ number: 42, headRefOid: head });
-    expect(
-      result.calls.filter((args) => args.includes("repos/base-owner/base-repo/pulls/42")),
-    ).toHaveLength(2);
-    expect(result.notifications).toBe("");
-  });
-
   describe("core quota fallback", () => {
-    const repository = {
-      id: "R_base",
-      databaseId: 1,
-      nameWithOwner: "base-owner/base-repo",
-      url: "https://github.com/base-owner/base-repo",
-    };
-
     it.each(["observation", "repository only"])(
       "carries authoritative repository identity with one GraphQL PR read (%s)",
       (selection) => {
@@ -471,24 +467,8 @@ describe("PR metadata through REST", () => {
           });
         }
         expect(result.calls).toEqual([
-          [
-            "api",
-            "--hostname",
-            "GITHUB.COM",
-            "repos/Base-Owner/Base-Repo/pulls/42",
-            "-H",
-            "Cache-Control: max-age=0",
-          ],
-          [
-            "api",
-            "--hostname",
-            "GITHUB.COM",
-            "graphql",
-            "--input",
-            result.payloads[0]?.path,
-            "-H",
-            "Cache-Control: max-age=0",
-          ],
+          revalidatedCall("repos/Base-Owner/Base-Repo/pulls/42", "GITHUB.COM"),
+          revalidatedCall("graphql", "GITHUB.COM", "--input", result.payloads[0]!.path),
         ]);
         expect(result.graphqlInputs).toHaveLength(1);
         expect(result.graphqlInputs[0]?.query).toContain(
@@ -771,18 +751,14 @@ describe("PR metadata through REST", () => {
   });
 
   it.each([
-    {
-      mode: "cached",
-      command: "ensure_gh_api_auth; ensure_gh_api_auth; ensure_gh_api_auth; ensure_gh_api_auth",
-      probes: 1,
-    },
-    {
-      mode: "credential change",
-      command: "ensure_gh_api_auth; GH_TOKEN=synthetic-replacement ensure_gh_api_auth",
-      probes: 2,
-    },
-    { mode: "failed", command: "ensure_gh_api_auth || true; ensure_gh_api_auth", probes: 2 },
-  ])("reuses only valid writer authentication: $mode", ({ mode, command, probes }) => {
+    ["cached", "ensure_gh_api_auth; ensure_gh_api_auth; ensure_gh_api_auth; ensure_gh_api_auth", 1],
+    [
+      "credential change",
+      "ensure_gh_api_auth; GH_TOKEN=synthetic-replacement ensure_gh_api_auth",
+      2,
+    ],
+    ["failed", "ensure_gh_api_auth || true; ensure_gh_api_auth", 2],
+  ] as const)("reuses only valid writer authentication: %s", (mode, command, probes) => {
     const result = readPrMetadata(
       mode === "failed" ? { failure: "quota", failureTarget: "user" } : {},
       `${command}; printf "%s\\n" "$PR_GH_WRITER_LOGIN"`,
@@ -898,39 +874,34 @@ describe("PR metadata through REST", () => {
   });
 
   it.each([
-    {
-      name: "qualified repo URL",
-      ghRepo: "base-owner/base-repo",
-      command:
-        "pr_gh_plain repo view --json url --repo https://github.enterprise.invalid/base-owner/base-repo",
-      failureTarget: "repository",
-      host: "github.enterprise.invalid",
-    },
-    {
-      name: "qualified GH_REPO",
-      ghRepo: "github.enterprise.invalid/base-owner/base-repo",
-      command: "pr_gh_plain repo view --json url",
-      failureTarget: "repository",
-      host: "github.enterprise.invalid",
-    },
-    {
-      name: "qualified short repo flag",
-      ghRepo: "base-owner/base-repo",
-      command:
-        "pr_gh_plain pr checks 42 --required --json name,bucket,state -R github.enterprise.invalid/base-owner/base-repo",
-      failureTarget: "checks",
-      host: "github.enterprise.invalid",
-    },
-    {
-      name: "raw API default",
-      ghRepo: "github.enterprise.invalid/base-owner/base-repo",
-      command: "pr_gh_plain api repos/base-owner/base-repo/pulls/42",
-      failureTarget: "pull",
-      host: "",
-    },
+    [
+      "qualified repo URL",
+      "repository",
+      "base-owner/base-repo",
+      "pr_gh_plain repo view --json url --repo https://github.enterprise.invalid/base-owner/base-repo",
+    ],
+    [
+      "qualified GH_REPO",
+      "repository",
+      "github.enterprise.invalid/base-owner/base-repo",
+      "pr_gh_plain repo view --json url",
+    ],
+    [
+      "qualified short repo flag",
+      "checks",
+      "base-owner/base-repo",
+      "pr_gh_plain pr checks 42 --required --json name,bucket,state -R github.enterprise.invalid/base-owner/base-repo",
+    ],
+    [
+      "raw API default",
+      "pull",
+      "github.enterprise.invalid/base-owner/base-repo",
+      "pr_gh_plain api repos/base-owner/base-repo/pulls/42",
+    ],
   ] as const)(
-    "probes the failing host for $name without changing API defaults",
-    ({ ghRepo, command, failureTarget, host }) => {
+    "probes the failing host for %s without changing API defaults",
+    (_name, failureTarget, ghRepo, command) => {
+      const host = failureTarget === "pull" ? "" : "github.enterprise.invalid";
       const result = readPrMetadata(
         {
           ghRepo,
@@ -975,13 +946,7 @@ describe("PR metadata through REST", () => {
         );
       }
       expect(result.stderr).toBe("");
-      expect(result.payloads).toEqual([
-        {
-          path: expect.any(String),
-          base64: Buffer.from("payload").toString("base64"),
-          exists: true,
-        },
-      ]);
+      expectPayload(result, Buffer.from("payload"), true);
     },
   );
   it.each(["selected gh", "selected Git"])(
@@ -1075,14 +1040,9 @@ describe("PR metadata through REST", () => {
       );
       expect(result.status, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout)).toEqual({ url: repoURL });
-      expect(result.calls).toContainEqual([
-        "api",
-        "--hostname",
-        enterpriseHost,
-        "repos/base-owner/base-repo",
-        "-H",
-        "Cache-Control: max-age=0",
-      ]);
+      expect(result.calls).toContainEqual(
+        revalidatedCall("repos/base-owner/base-repo", enterpriseHost),
+      );
       expect(result.calls).toContainEqual([
         "pr",
         "edit",
@@ -1106,16 +1066,7 @@ describe("PR metadata through REST", () => {
       );
       expect(result.status, result.stderr).toBe(failure === "forbidden" ? 0 : 1);
       expect(result.stdout).toBe(failure === "forbidden" ? "unknown\n" : "");
-      expect(result.stderr).toContain("resource=core");
-      expect(result.stderr).toContain(
-        "graphql 0/5000 reset=2027-01-15T08:00:00Z core 4900/5000 reset=2027-01-15T08:05:00Z",
-      );
-      expect(result.stderr).toContain(
-        "Supplemental quota probe (remaining/limit; not the failing response)",
-      );
-      expect(result.stderr).not.toContain("Wait until");
-      expect(result.stderr).not.toContain("secret-response-must-not-escape");
-      expect(result.calls.filter((args) => args.includes("rate_limit"))).toHaveLength(1);
+      expectSupplementalQuota(result);
     },
   );
   it.each([undefined, null, 0, -1, 1.5])(
@@ -1160,7 +1111,11 @@ describe("PR metadata through REST", () => {
     const result = readPrMetadata();
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
+    expect(result.notifications).toBe("");
     expect(result.attempts).toBe(2);
+    expect(
+      result.calls.filter((args) => args.includes("repos/base-owner/base-repo/pulls/42")),
+    ).toHaveLength(2);
     expect(result.calls.filter((args) => args[0] === "api")).toHaveLength(3);
     expect(result.calls.some((args) => args.includes("repos/base-owner/base-repo"))).toBe(false);
     expect(
@@ -1215,7 +1170,7 @@ describe("PR metadata through REST", () => {
     ...[2, 0].map((changedFiles) => ({
       fixture: {
         changedFiles,
-        files: [{ filename: "src/file.ts", status: "modified", additions: 1, deletions: 0 }],
+        files: [restFile({ filename: "src/file.ts", additions: 1 })],
       },
       diagnostic:
         changedFiles === 2
@@ -1228,13 +1183,10 @@ describe("PR metadata through REST", () => {
       diagnostic: "malformed paginated metadata",
     })),
     ...[
-      [{ filename: "x", status: "modified", additions: -1, deletions: 0 }],
-      [{ filename: "x", status: "modified", additions: 0.5, deletions: 0 }],
-      [{ filename: "", status: "modified", additions: 0, deletions: 0 }],
-      [
-        { filename: "x", status: "modified", additions: 0, deletions: 0 },
-        { filename: "x", status: "modified", additions: 0, deletions: 0 },
-      ],
+      [restFile({ additions: -1 })],
+      [restFile({ additions: 0.5 })],
+      [restFile({ filename: "" })],
+      [restFile(), restFile()],
     ].map((files) => ({
       fixture: { changedFiles: files.length, files },
       diagnostic: "files must be an explicit array",
@@ -1304,10 +1256,7 @@ describe("PR metadata through REST", () => {
       };
       const response = (pullRequest: unknown) =>
         graphqlResponse({
-          id: "R_base",
-          databaseId: 1,
-          nameWithOwner: "base-owner/base-repo",
-          url: "https://github.com/base-owner/base-repo",
+          ...repository,
           pullRequest,
         });
       const emptyPage = { totalCount: 0, nodes: [], pageInfo: { hasNextPage: false } };
@@ -1389,26 +1338,12 @@ describe("PR metadata through REST", () => {
       const result = readPrMetadata({ failure: "quota", failureTarget }, command);
       expect(result.status).toBe(exitCode);
       expect(result.stdout).toBe("");
-      expect(result.stderr).toContain(
-        "Supplemental quota probe (remaining/limit; not the failing response)",
-      );
-      expect(result.stderr).not.toContain("Wait until");
+      expectSupplementalQuota(result);
       expect(result.stderr).toContain(`resource=${resource}`);
-      expect(result.stderr).toContain(
-        "graphql 0/5000 reset=2027-01-15T08:00:00Z core 4900/5000 reset=2027-01-15T08:05:00Z",
-      );
-      expect(result.stderr).not.toContain("secret-response-must-not-escape");
-      expect(result.calls.filter((args) => args.includes("rate_limit"))).toHaveLength(1);
       expect(result.attempts).toBe(failureTarget === "pull" ? 1 : 0);
       expect(result.delays).toEqual([]);
       if (command.includes("--input")) {
-        expect(result.payloads).toEqual([
-          {
-            path: expect.any(String),
-            base64: Buffer.from("private payload").toString("base64"),
-            exists: false,
-          },
-        ]);
+        expectPayload(result, Buffer.from("private payload"));
       }
     },
   );
