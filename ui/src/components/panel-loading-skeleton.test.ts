@@ -1,33 +1,25 @@
 import { cleanup, getByRole, render as renderSolid } from "@solidjs/testing-library";
 import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { renderLegacyTemplate } from "../lit/solid-content.tsx";
-import {
-  renderPanelLoadingSkeleton,
-  type PanelLoadingSkeletonVariant,
-} from "./panel-loading-skeleton.ts";
+import { mountSolid } from "../test-helpers/solid-render.tsx";
 import { PanelEmptyState } from "./solid/panel-empty-state.tsx";
+import type {
+  PanelLoadingSkeletonProps,
+  PanelLoadingSkeletonVariant,
+} from "./solid/panel-loading-skeleton.tsx";
 import { PanelLoadingSkeleton } from "./solid/panel-loading-skeleton.tsx";
 
 const owners: HTMLElement[] = [];
-function mountLegacy(template: unknown) {
-  const owner = document.body.appendChild(document.createElement("div"));
-  owners.push(owner);
-  renderLegacyTemplate(template, owner);
-  flush();
-  return owner;
-}
 
 afterEach(async () => {
   cleanup();
   for (const owner of owners.splice(0)) {
-    renderLegacyTemplate(undefined, owner);
     owner.remove();
   }
   await Promise.resolve();
 });
 
-describe("panel presentation bridges", () => {
+describe("panel presentations", () => {
   it.each([
     "board",
     "browser",
@@ -39,9 +31,12 @@ describe("panel presentation bridges", () => {
     "review",
     "terminal",
   ] satisfies PanelLoadingSkeletonVariant[])(
-    "renders an accessible light-DOM %s placeholder for Lit callers",
+    "renders an accessible light-DOM %s placeholder",
     async (variant) => {
-      const owner = mountLegacy(renderPanelLoadingSkeleton(variant, `Loading ${variant}`));
+      const { container: owner } = mountSolid(PanelLoadingSkeleton, {
+        variant,
+        label: `Loading ${variant}`,
+      });
       const skeleton = owner.querySelector("openclaw-panel-loading-skeleton")!;
       await skeleton.updateComplete;
       expect(skeleton.shadowRoot).toBeNull();
@@ -53,12 +48,18 @@ describe("panel presentation bridges", () => {
     },
   );
 
-  it("updates Lit properties and compact/overlay attributes without replacing unchanged contents", async () => {
-    const owner = mountLegacy(renderPanelLoadingSkeleton("browser", "Loading browser"));
+  it("updates compact/overlay attributes without replacing unchanged contents", async () => {
+    const view = mountSolid<PanelLoadingSkeletonProps>(PanelLoadingSkeleton, {
+      variant: "browser",
+      label: "Loading browser",
+      compact: false,
+      overlay: false,
+    });
+    const owner = view.container;
     const skeleton = owner.querySelector("openclaw-panel-loading-skeleton")!;
     await skeleton.updateComplete;
     const viewport = skeleton.querySelector(".viewport");
-    renderLegacyTemplate(renderPanelLoadingSkeleton("browser", "Reconnecting", true, true), owner);
+    view.update({ variant: "browser", label: "Reconnecting", compact: true, overlay: true });
     flush();
     await skeleton.updateComplete;
     expect(skeleton.querySelector(".viewport")).toBe(viewport);
@@ -67,7 +68,7 @@ describe("panel presentation bridges", () => {
     expect(skeleton.hasAttribute("compact")).toBe(true);
     expect(skeleton.hasAttribute("overlay")).toBe(true);
     expect(skeleton.getAttribute("aria-label")).toBe("Reconnecting");
-    renderLegacyTemplate(renderPanelLoadingSkeleton("desktop", "Connecting"), owner);
+    view.update({ variant: "desktop", label: "Connecting", compact: false, overlay: false });
     flush();
     await skeleton.updateComplete;
     expect(skeleton.compact).toBe(false);

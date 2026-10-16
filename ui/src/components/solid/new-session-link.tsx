@@ -4,6 +4,7 @@ import { pathForRoute } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
 import { IdentityAvatarController } from "../../lib/identity-avatar-loader.ts";
+import type { AgentIdentity } from "../../lib/identity-avatar-view.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -16,7 +17,6 @@ import {
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { newSessionSearch, type NewSessionTarget } from "../../pages/new-session/location.ts";
-import type { AgentIdentity } from "../identity-avatar-view.ts";
 import { Icon } from "./icon.tsx";
 import { AgentIdentityAvatar } from "./identity-avatar.tsx";
 import { ShortcutHint } from "./kbd.tsx";

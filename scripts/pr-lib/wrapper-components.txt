@@ -364,6 +364,9 @@ src/infra/database-engine/physical-facts.ts
 src/infra/database-engine/policy.ts
 src/infra/database-engine/postgres-catalog.ts
 src/infra/database-engine/postgres-schema.ts
+src/infra/database-engine/postgres-search-schema.ts
+src/infra/database-engine/postgres-search.ts
+src/infra/database-engine/postgres-vector.ts
 src/infra/database-engine/search.ts
 src/infra/database-engine/sqlite-full-text.ts
 src/infra/database-engine/sqlite-search-schema.ts
