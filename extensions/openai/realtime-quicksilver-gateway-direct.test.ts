@@ -10,22 +10,12 @@ import { fakeQuicksilverMediaSocket } from "./realtime-quicksilver-socket.test-s
 import { emitSideband, FakeSocket, parseSent } from "./realtime-quicksilver.test-helpers.js";
 
 type BridgeConfig = ConstructorParameters<typeof OpenAIQuicksilverGatewayBridge>[0];
-function createBridge(overrides: Partial<BridgeConfig>) {
-  return new OpenAIQuicksilverGatewayBridge(
-    {
-      providerConfig: {},
-      model: "gpt-live-1",
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      runAgentConsult: vi.fn(async () => ({ text: "Done" })),
-      logger: { debug: vi.fn(), warn: vi.fn() },
-      resolveAuth: async () => ({ type: "api-key", token: "test-api-key" }),
-      ...overrides,
-    },
-    openAIRealtimeHost,
-  );
-}
-
+const canaryConfig = {
+  model: "gpt-live-test-canary",
+  voice: "marin",
+  audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
+  resolveAuth: async () => ({ type: "api-key", token: "platform-key" }),
+} satisfies Partial<BridgeConfig>;
 function readAudio(socket: FakeSocket) {
   return parseSent(socket)
     .filter((event) => event.type === "session.input_audio.append")
@@ -35,11 +25,30 @@ function readAudio(socket: FakeSocket) {
 function createHarness(overrides: Partial<BridgeConfig> = {}) {
   let socket: FakeSocket | undefined;
   const webSocketFactory = vi.fn(() => (socket = new FakeSocket()));
-  const bridge = createBridge({
-    mediaSocketFactory: fakeQuicksilverMediaSocket(webSocketFactory),
-    ...overrides,
-  });
+  const callbacks = {
+    onAudio: vi.fn(),
+    onClose: vi.fn(),
+    onReady: vi.fn(),
+    onTranscript: vi.fn(),
+    logger: { debug: vi.fn(), warn: vi.fn() },
+    createPeer: vi.fn(),
+    fetchImpl: vi.fn<typeof fetch>(),
+  };
+  const bridge = new OpenAIQuicksilverGatewayBridge(
+    {
+      providerConfig: {},
+      model: "gpt-live-1",
+      onClearAudio: vi.fn(),
+      runAgentConsult: vi.fn(async () => ({ text: "Done" })),
+      resolveAuth: async () => ({ type: "api-key", token: "test-api-key" }),
+      ...callbacks,
+      mediaSocketFactory: fakeQuicksilverMediaSocket(webSocketFactory),
+      ...overrides,
+    },
+    openAIRealtimeHost,
+  );
   return {
+    ...callbacks,
     bridge,
     webSocketFactory,
     get socket() {
@@ -62,6 +71,9 @@ function transcript(socket: FakeSocket, delta: string, start_ms: number, end_ms:
 function closeReceipt(socket: FakeSocket, reason = "close_requested") {
   emitSideband(socket, { type: "session.closed", reason });
 }
+function frame(value = 0) {
+  return Buffer.alloc(OPENAI_QUICKSILVER_RELAY_FRAME_BYTES, value);
+}
 
 describe("GPT-Live Gateway direct transport", () => {
   it("retains opening and backoff capture until the retry is adopted exactly once", async () => {
@@ -73,10 +85,8 @@ describe("GPT-Live Gateway direct transport", () => {
       sockets.push(socket);
       return socket;
     });
-    const onReady = vi.fn();
-    const bridge = createBridge({
+    const { bridge, onReady } = createHarness({
       audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
-      onReady,
       mediaSocketFactory: (...args) => {
         const socket = createSocket(...args);
         const captured: Buffer[] = [];
@@ -89,12 +99,10 @@ describe("GPT-Live Gateway direct transport", () => {
         return socket;
       },
     });
-    const frames = [1, 2, 3, 4, 5].map((value) =>
-      Buffer.alloc(OPENAI_QUICKSILVER_RELAY_FRAME_BYTES, value),
-    );
-    const producer = Buffer.alloc(OPENAI_QUICKSILVER_RELAY_FRAME_BYTES);
-    const capture = (frame: Buffer) => {
-      frame.copy(producer);
+    const frames = [1, 2, 3, 4, 5].map(frame);
+    const producer = frame();
+    const capture = (audio: Buffer) => {
+      audio.copy(producer);
       bridge.sendAudio(producer);
       producer.fill(0);
     };
@@ -128,8 +136,7 @@ describe("GPT-Live Gateway direct transport", () => {
       expect(capturedByAttempt).toEqual([[], [Buffer.concat(frames.slice(0, 4))]]);
       capture(frames[4]!);
       await vi.advanceTimersByTimeAsync(100);
-      const sentAudio = readAudio(adopted);
-      expect(sentAudio).toEqual([...frames, Buffer.alloc(OPENAI_QUICKSILVER_RELAY_FRAME_BYTES)]);
+      expect(readAudio(adopted)).toEqual([...frames, frame()]);
       expect(capturedByAttempt).toEqual([[], [Buffer.concat(frames.slice(0, 4)), frames[4]]]);
       expect(sockets[0]!.sent).toEqual([]);
     } finally {
@@ -144,74 +151,57 @@ describe("GPT-Live Gateway direct transport", () => {
     }
   });
 
-  it.each(["transport-error"] as const)(
-    "paces buffered public microphone audio and silence until %s",
-    async () => {
-      const onReady = vi.fn();
-      const { bridge, start } = createHarness({ onReady });
-      const { socket: connectedSocket, connection } = await start();
-      const frames = [1, 2].map((value) =>
-        Buffer.alloc(OPENAI_QUICKSILVER_RELAY_FRAME_BYTES, value),
-      );
-      const capture = Buffer.concat([...frames, Buffer.from([3, 4])]);
-      bridge.sendAudio(capture);
-      capture.fill(0);
-      const audio = () => readAudio(connectedSocket);
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-      const timerNow = performance.now.bind(performance);
-      let suspensionMs = 0;
-      const now = vi.spyOn(performance, "now").mockImplementation(() => timerNow() + suspensionMs);
-      try {
-        expect(audio()).toEqual([]);
-        emitSideband(connectedSocket, { type: "session.started", session: {} });
-        await connection;
-        expect(bridge.pacesInputAudio).toBe(true);
-        expect(onReady).toHaveBeenCalledOnce();
-        expect(audio()).toEqual([frames[0]]);
-        suspensionMs = 5_000;
-        await vi.advanceTimersByTimeAsync(20);
-        expect(audio()).toEqual(frames);
-        await vi.advanceTimersByTimeAsync(20);
-        const partial = Buffer.alloc(OPENAI_QUICKSILVER_RELAY_FRAME_BYTES);
-        partial.set([3, 4]);
-        expect(audio()).toEqual([...frames, partial]);
-        await vi.advanceTimersByTimeAsync(40);
-        expect(audio()).toEqual([
-          ...frames,
-          partial,
-          Buffer.alloc(OPENAI_QUICKSILVER_RELAY_FRAME_BYTES),
-          Buffer.alloc(OPENAI_QUICKSILVER_RELAY_FRAME_BYTES),
-        ]);
-        connectedSocket.emit("error", new Error("synthetic transport failure"));
-        const closing = bridge.close();
-        const beforeClose = connectedSocket.sent.length;
-        bridge.sendAudio(frames[0]!);
-        await vi.advanceTimersByTimeAsync(100);
-        expect(connectedSocket.sent).toHaveLength(beforeClose);
-        closeReceipt(connectedSocket);
-        await expect(closing).rejects.toThrow("finalization is unconfirmed");
-      } finally {
-        closeReceipt(connectedSocket);
-        await Promise.allSettled([bridge.close()]);
-        now.mockRestore();
-        vi.useRealTimers();
-      }
-    },
-  );
+  it("paces buffered public microphone audio and silence until transport error", async () => {
+    const { bridge, start, onReady } = createHarness();
+    const { socket: connectedSocket, connection } = await start();
+    const frames = [1, 2].map(frame);
+    const capture = Buffer.concat([...frames, Buffer.from([3, 4])]);
+    bridge.sendAudio(capture);
+    capture.fill(0);
+    const audio = () => readAudio(connectedSocket);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const timerNow = performance.now.bind(performance);
+    let suspensionMs = 0;
+    const now = vi.spyOn(performance, "now").mockImplementation(() => timerNow() + suspensionMs);
+    try {
+      expect(audio()).toEqual([]);
+      emitSideband(connectedSocket, { type: "session.started", session: {} });
+      await connection;
+      expect(bridge.pacesInputAudio).toBe(true);
+      expect(onReady).toHaveBeenCalledOnce();
+      expect(audio()).toEqual([frames[0]]);
+      suspensionMs = 5_000;
+      await vi.advanceTimersByTimeAsync(20);
+      expect(audio()).toEqual(frames);
+      await vi.advanceTimersByTimeAsync(20);
+      const partial = frame();
+      partial.set([3, 4]);
+      expect(audio()).toEqual([...frames, partial]);
+      await vi.advanceTimersByTimeAsync(40);
+      expect(audio()).toEqual([...frames, partial, frame(), frame()]);
+      connectedSocket.emit("error", new Error("synthetic transport failure"));
+      const closing = bridge.close();
+      const beforeClose = connectedSocket.sent.length;
+      bridge.sendAudio(frames[0]!);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(connectedSocket.sent).toHaveLength(beforeClose);
+      closeReceipt(connectedSocket);
+      await expect(closing).rejects.toThrow("finalization is unconfirmed");
+    } finally {
+      closeReceipt(connectedSocket);
+      await Promise.allSettled([bridge.close()]);
+      now.mockRestore();
+      vi.useRealTimers();
+    }
+  });
 
   it("keeps a public provider error authoritative through reentrant transcript cleanup", async () => {
-    const onClose = vi.fn();
-    const logger = { debug: vi.fn(), warn: vi.fn() };
-    const createPeer = vi.fn();
-    const { bridge, start, webSocketFactory } = createHarness({
-      onClose,
+    const { bridge, start, webSocketFactory, onClose, logger, createPeer } = createHarness({
       onTranscript: (_role, _text, final) => {
         if (final) {
           void bridge.close();
         }
       },
-      logger,
-      createPeer,
     });
     try {
       const { socket, connection } = await start();
@@ -237,110 +227,76 @@ describe("GPT-Live Gateway direct transport", () => {
     }
   });
 
-  it.each(["connection_lost"] as const)(
-    "keeps public capacity and transcript ownership until finalization: %s",
-    async (terminal) => {
-      const onClose = vi.fn();
-      const onTranscript = vi.fn();
-      const onAudio = vi.fn();
-      const runAgentConsult = vi.fn(async () => ({ text: "must not start" }));
-      const logger = { debug: vi.fn(), warn: vi.fn() };
-      const harness = createHarness({
-        onAudio,
-        onClose,
-        onTranscript,
-        runAgentConsult,
-        logger,
-      });
-      const { bridge, start } = harness;
-      const reservations = Array.from({ length: 7 }, () => ({}));
-      const nextReservation = {};
-      let closing: void | Promise<void> = undefined;
-      try {
-        const { socket: connectedSocket, connection } = await start();
-        emitSideband(connectedSocket, { type: "session.started", session: {} });
-        await connection;
-        for (const reservation of reservations) {
-          reserveOpenAIQuicksilverSession(reservation);
-        }
-        transcript(connectedSocket, "Before close. ", 0, 100);
-        closing = bridge.close({ disposition: "detach" });
-        expect(closing).toBeInstanceOf(Promise);
-        expect(bridge.close()).toBe(closing);
-        expect(bridge.isConnected()).toBe(false);
-        expect(onClose).not.toHaveBeenCalled();
-        expect(() => reserveOpenAIQuicksilverSession(nextReservation)).toThrow(
-          "Too many concurrent",
-        );
-        expect(parseSent(connectedSocket)).toContainEqual({ type: "session.close" });
-        const sentBeforeLateActions = connectedSocket.sent.length;
-        bridge.sendAudio(Buffer.from([0, 1]));
-        bridge.sendUserMessage("late action");
-        emitSideband(connectedSocket, { type: "session.output_audio.delta", delta: "AAE=" });
-        transcript(connectedSocket, "During close.", 100, 200);
-        emitSideband(connectedSocket, {
-          type: "session.delegation.created",
-          offset_ms: 200,
-          delegation: { id: "item_late", type: "delegation", target: "client" },
-        });
-        expect(runAgentConsult).not.toHaveBeenCalled();
-        expect(onAudio).not.toHaveBeenCalled();
-        expect(connectedSocket.sent).toHaveLength(sentBeforeLateActions);
-        expect(onClose).not.toHaveBeenCalled();
-        closeReceipt(connectedSocket, terminal);
-        await expect(closing).resolves.toBeUndefined();
-        expect(onClose).toHaveBeenCalledExactlyOnceWith("error");
-        expect(
-          onTranscript.mock.calls
-            .filter((call) => call[2])
-            .map((call) => call[1])
-            .join(""),
-        ).toBe("Before close. During close.");
-        expect(() => reserveOpenAIQuicksilverSession(nextReservation)).not.toThrow();
-        const transcriptCount = onTranscript.mock.calls.length;
-        transcript(connectedSocket, "after finalization", 200, 300);
-        expect(onTranscript).toHaveBeenCalledTimes(transcriptCount);
-        expect(logger.warn).toHaveBeenCalledTimes(0);
-      } finally {
-        vi.useRealTimers();
-        const socket = harness.socket;
-        if (socket && !socket.closed) {
-          closeReceipt(socket);
-        }
-        await Promise.allSettled([closing, bridge.close()]);
-        for (const reservation of [...reservations, nextReservation]) {
-          releaseOpenAIQuicksilverSession(reservation);
-        }
+  it("keeps public capacity and transcript ownership until connection-lost finalization", async () => {
+    const runAgentConsult = vi.fn(async () => ({ text: "must not start" }));
+    const harness = createHarness({ runAgentConsult });
+    const { bridge, start, onAudio, onClose, onTranscript, logger } = harness;
+    const reservations = Array.from({ length: 7 }, () => ({}));
+    const nextReservation = {};
+    let closing: void | Promise<void> = undefined;
+    try {
+      const { socket: connectedSocket, connection } = await start();
+      emitSideband(connectedSocket, { type: "session.started", session: {} });
+      await connection;
+      for (const reservation of reservations) {
+        reserveOpenAIQuicksilverSession(reservation);
       }
-    },
-  );
+      transcript(connectedSocket, "Before close. ", 0, 100);
+      closing = bridge.close({ disposition: "detach" });
+      expect(closing).toBeInstanceOf(Promise);
+      expect(bridge.close()).toBe(closing);
+      expect(bridge.isConnected()).toBe(false);
+      expect(onClose).not.toHaveBeenCalled();
+      expect(() => reserveOpenAIQuicksilverSession(nextReservation)).toThrow("Too many concurrent");
+      expect(parseSent(connectedSocket)).toContainEqual({ type: "session.close" });
+      const sentBeforeLateActions = connectedSocket.sent.length;
+      bridge.sendAudio(Buffer.from([0, 1]));
+      bridge.sendUserMessage("late action");
+      emitSideband(connectedSocket, { type: "session.output_audio.delta", delta: "AAE=" });
+      transcript(connectedSocket, "During close.", 100, 200);
+      emitSideband(connectedSocket, {
+        type: "session.delegation.created",
+        offset_ms: 200,
+        delegation: { id: "item_late", type: "delegation", target: "client" },
+      });
+      expect(runAgentConsult).not.toHaveBeenCalled();
+      expect(onAudio).not.toHaveBeenCalled();
+      expect(connectedSocket.sent).toHaveLength(sentBeforeLateActions);
+      expect(onClose).not.toHaveBeenCalled();
+      closeReceipt(connectedSocket, "connection_lost");
+      await expect(closing).resolves.toBeUndefined();
+      expect(onClose).toHaveBeenCalledExactlyOnceWith("error");
+      expect(
+        onTranscript.mock.calls.flatMap(([, text, final]) => (final ? [text] : [])).join(""),
+      ).toBe("Before close. During close.");
+      expect(() => reserveOpenAIQuicksilverSession(nextReservation)).not.toThrow();
+      const transcriptCount = onTranscript.mock.calls.length;
+      transcript(connectedSocket, "after finalization", 200, 300);
+      expect(onTranscript).toHaveBeenCalledTimes(transcriptCount);
+      expect(logger.warn).toHaveBeenCalledTimes(0);
+    } finally {
+      vi.useRealTimers();
+      const socket = harness.socket;
+      if (socket && !socket.closed) {
+        closeReceipt(socket);
+      }
+      await Promise.allSettled([closing, bridge.close()]);
+      for (const reservation of [...reservations, nextReservation]) {
+        releaseOpenAIQuicksilverSession(reservation);
+      }
+    }
+  });
 
   it("waits for provider readiness and bypasses WebRTC allocation", async () => {
-    const createPeer = vi.fn();
-    const fetchImpl = vi.fn();
-    const onAudio = vi.fn();
-    const onClose = vi.fn();
-    const onReady = vi.fn();
     const runAgentConsult = Object.assign(
       vi.fn(async () => ({ text: "Delegated result" })),
       { claimAppend: vi.fn(() => true) },
     );
-    const { bridge, start } = createHarness({
-      model: "gpt-live-test-canary",
-      voice: "marin",
+    const { bridge, start, onAudio, onClose, onReady, createPeer, fetchImpl } = createHarness({
+      ...canaryConfig,
       instructions: "Speak briefly.",
-      audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
-      onAudio,
-      onClose,
-      onReady,
       runAgentConsult,
       handleDelegationInput: () => "consult",
-      resolveAuth: vi.fn(async () => ({
-        type: "api-key" as const,
-        token: "platform-key",
-      })),
-      createPeer,
-      fetchImpl: fetchImpl as typeof fetch,
     });
 
     try {
@@ -374,10 +330,7 @@ describe("GPT-Live Gateway direct transport", () => {
         type: "input_audio.append",
         audio: Buffer.concat([Buffer.from([0x01, 0x02]), Buffer.alloc(958)]).toString("base64"),
       });
-      emitSideband(connectedSocket, {
-        type: "output_audio.delta",
-        audio: "AwQ=",
-      });
+      emitSideband(connectedSocket, { type: "output_audio.delta", audio: "AwQ=" });
       expect(onAudio).toHaveBeenCalledExactlyOnceWith(Buffer.from([0x03, 0x04]));
 
       emitSideband(connectedSocket, {
@@ -404,20 +357,10 @@ describe("GPT-Live Gateway direct transport", () => {
   });
 
   it("rejects startup when onReady closes the bridge reentrantly", async () => {
-    const bridgeRef: { current?: OpenAIQuicksilverGatewayBridge } = {};
     const { bridge, start } = createHarness({
-      model: "gpt-live-test-canary",
-      voice: "marin",
-      audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
-      onReady: () => {
-        void bridgeRef.current?.close();
-      },
-      resolveAuth: vi.fn(async () => ({
-        type: "api-key" as const,
-        token: "platform-key",
-      })),
+      ...canaryConfig,
+      onReady: () => void bridge.close(),
     });
-    bridgeRef.current = bridge;
 
     const { socket, connection } = await start();
     emitSideband(socket!, { type: "session.started", session: {} });

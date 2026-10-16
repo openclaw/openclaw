@@ -29,6 +29,17 @@ function makeBroker(params?: Parameters<typeof createBroker>[0]) {
   brokers.push(harness.realtime);
   return {
     ...harness,
+    reserveLegacy: (gatewayControl: RealtimeVoiceGatewayControl) =>
+      reserve(
+        harness.realtime,
+        {
+          providerConfig: {},
+          model: "gpt-live-test",
+          runAgentConsult: harness.runAgentConsult,
+          gatewayControl,
+        },
+        { type: "api-key", token: "platform-key" },
+      ),
     redeem: async (token: string, body?: string) => {
       const response = createResponseHarness();
       await harness.realtime.handler(createRequest({ token, body }), response.res);
@@ -140,11 +151,10 @@ describe("GPT-Live browser session lifecycle", () => {
         throw new Error("Expected initial call JSON");
       }
       const { session } = JSON.parse(body);
-      const hostClassified = classified;
       expect(session.delegation).toEqual(
-        hostClassified ? { type: "client", ack_filler: false } : { type: "client" },
+        classified ? { type: "client", ack_filler: false } : { type: "client" },
       );
-      if (hostClassified) {
+      if (classified) {
         expect(session).not.toHaveProperty("initial_items");
         const background = session.instructions.match(
           /<shared_session_history>\n(.*)\n<\/shared_session_history>$/s,
@@ -188,40 +198,40 @@ describe("GPT-Live browser session lifecycle", () => {
       emitSideband(socket, delegation("task", "Check the project"));
       await vi.waitFor(() => expect(socket.sent.join("\n")).toContain("Done"));
       const receipts = parseSent(socket).filter((event) => event.type === "session.context.append");
-      expect(receipts).toHaveLength(hostClassified ? 1 : 0);
-      expect(handleDelegationInput).toHaveBeenCalledTimes(hostClassified ? 1 : 0);
+      expect(receipts).toHaveLength(classified ? 1 : 0);
+      expect(handleDelegationInput).toHaveBeenCalledTimes(classified ? 1 : 0);
     },
   );
 
-  it.each(["m=application 9 UDP/DTLS/SCTP webrtc-datachannel"])(
-    "rejects negotiated native %s media and closes its owner without upstream work",
-    async (media) => {
-      const fetchImpl = vi.fn(async () => createCallResponse());
-      const { realtime, runAgentConsult } = makeBroker({ fetchImpl });
-      const notifications: string[] = [];
-      const reservation = await reserve(
-        realtime,
-        nativeRequest(runAgentConsult, {
-          ownerConnId: "native-media-owner",
-          gatewayControl: {
-            bindBridge: vi.fn(),
-            bindControl: vi.fn(),
-            onError: () => notifications.push("error"),
-            onClose: (reason) => notifications.push(`close:${reason}`),
-          },
-        }),
-      );
-      const response = createResponseHarness();
-      await realtime.handler(
-        createRequest({ token: reservation.clientSecret, body: `${AUDIO_ONLY_SDP}${media}\r\n` }),
-        response.res,
-      );
-      expect(response.res.statusCode).toBe(400);
-      expect(fetchImpl).not.toHaveBeenCalled();
-      expect(notifications).toEqual(["error", "close:error"]);
-      expect(realtime.getSessionCounts()).toEqual(emptyCounts);
-    },
-  );
+  it("rejects native application media and closes its owner without upstream work", async () => {
+    const fetchImpl = vi.fn(async () => createCallResponse());
+    const { realtime, runAgentConsult } = makeBroker({ fetchImpl });
+    const notifications: string[] = [];
+    const reservation = await reserve(
+      realtime,
+      nativeRequest(runAgentConsult, {
+        ownerConnId: "native-media-owner",
+        gatewayControl: {
+          bindBridge: vi.fn(),
+          bindControl: vi.fn(),
+          onError: () => notifications.push("error"),
+          onClose: (reason) => notifications.push(`close:${reason}`),
+        },
+      }),
+    );
+    const response = createResponseHarness();
+    await realtime.handler(
+      createRequest({
+        token: reservation.clientSecret,
+        body: `${AUDIO_ONLY_SDP}m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n`,
+      }),
+      response.res,
+    );
+    expect(response.res.statusCode).toBe(400);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(notifications).toEqual(["error", "close:error"]);
+    expect(realtime.getSessionCounts()).toEqual(emptyCounts);
+  });
 
   it("counts negotiated native reservations per owner and restores capacity on cancellation", async () => {
     const { realtime, runAgentConsult } = makeBroker();
@@ -237,7 +247,7 @@ describe("GPT-Live browser session lifecycle", () => {
     await expect(reserveOwner("native-owner")).resolves.toHaveProperty("transport", "webrtc");
   });
 
-  it.each([true])("reports readiness and fences callbacks with negotiated control=%s", async () => {
+  it("reports readiness and fences callbacks with negotiated control", async () => {
     const socket = new FakeSocket("manual");
     const { realtime, runAgentConsult } = makeBroker({ socketFactory: () => socket });
     const bindBridge = vi.fn();
@@ -253,10 +263,7 @@ describe("GPT-Live browser session lifecycle", () => {
     const reservation = await reserve(realtime, request);
     const response = createResponseHarness();
     const handling = realtime.handler(
-      createRequest({
-        token: reservation.clientSecret,
-        body: AUDIO_ONLY_SDP,
-      }),
+      createRequest({ token: reservation.clientSecret, body: AUDIO_ONLY_SDP }),
       response.res,
     );
     await vi.waitFor(() => expect(socket.listenerCount("open")).toBeGreaterThan(0));
@@ -317,7 +324,7 @@ describe("GPT-Live browser session lifecycle", () => {
   ])(
     "reports $name once and releases the active browser owner",
     async ({ trigger, throwingCallback }) => {
-      const { realtime, redeem, runAgentConsult } = makeBroker();
+      const { realtime, redeem, reserveLegacy, runAgentConsult } = makeBroker();
       const notifications: string[] = [];
       const onError = vi.fn(() => {
         notifications.push("error");
@@ -329,16 +336,7 @@ describe("GPT-Live browser session lifecycle", () => {
       const onClose = vi.fn((reason: string) => {
         notifications.push(`close:${reason}`);
       });
-      const reservation = await reserve(
-        realtime,
-        {
-          providerConfig: {},
-          model: "gpt-live-test",
-          runAgentConsult,
-          gatewayControl: { bindBridge: vi.fn(), onError, onClose },
-        },
-        { type: "api-key", token: "platform-key" },
-      );
+      const reservation = await reserveLegacy({ bindBridge: vi.fn(), onError, onClose });
       const { socket } = await redeem(reservation.clientSecret);
       trigger(socket);
       expect(socket.closed).toBe(true);
@@ -362,19 +360,14 @@ describe("GPT-Live browser session lifecycle", () => {
       consultSignal = signal;
       return await result;
     });
-    const { realtime, redeem } = makeBroker({ runAgentConsult });
+    const { realtime, redeem, reserveLegacy } = makeBroker({ runAgentConsult });
     const handleDelegationInput = vi.fn(() => "control" as const);
     try {
-      const reservation = await reserve(
-        realtime,
-        {
-          providerConfig: {},
-          model: "gpt-live-test",
-          runAgentConsult,
-          gatewayControl: { bindBridge: vi.fn(), handleDelegationInput, onTranscript: vi.fn() },
-        },
-        { type: "api-key", token: "platform-key" },
-      );
+      const reservation = await reserveLegacy({
+        bindBridge: vi.fn(),
+        handleDelegationInput,
+        onTranscript: vi.fn(),
+      });
       const { socket } = await redeem(reservation.clientSecret);
       emitSideband(socket, delegation("accepted-delegation", "Finish this task"));
       await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());

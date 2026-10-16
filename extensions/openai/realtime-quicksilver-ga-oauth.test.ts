@@ -22,6 +22,7 @@ afterEach(async () => {
 
 const model = "gpt-realtime-2.1";
 const defaultAuth = { type: "oauth", token: "oauth-token", accountId: "account-123" } as const;
+const accountId = "7a1f92f3-7f0d-4d18-b1a0-8e6bd215c12f";
 async function reserveOAuth(
   realtime: ReturnType<typeof createBroker>["realtime"],
   auth: { type: "oauth"; token: string; accountId: string } = defaultAuth,
@@ -41,6 +42,15 @@ async function offer(realtime: ReturnType<typeof createBroker>["realtime"], toke
   const response = createResponseHarness();
   await realtime.handler(createRequest({ token, body: "v=ga-offer\r\n" }), response.res);
   return response;
+}
+
+async function providerFailure(detail: string, token: string) {
+  const harness = makeBroker(
+    vi.fn<typeof fetch>(async () => new Response(detail, { status: 429 })),
+  );
+  const reservation = await reserveOAuth(harness.realtime, { type: "oauth", token, accountId });
+  const response = await offer(harness.realtime, reservation.clientSecret);
+  return { ...harness, reservation, response };
 }
 
 const emptyCounts = { pending: 0, inFlight: 0, active: 0, reservations: 0 };
@@ -128,16 +138,8 @@ describe("GA OAuth offer broker", () => {
 
   it("redacts OAuth identity from a bounded browser-visible provider failure", async () => {
     const token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0In0.signature";
-    const accountId = "7a1f92f3-7f0d-4d18-b1a0-8e6bd215c12f";
     const detail = `safe diagnostic token=${token} account=${accountId} ${"x".repeat(1_000)}`;
-    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(detail, { status: 429 }));
-    const { realtime, sockets } = makeBroker(fetchImpl);
-    const reservation = await reserveOAuth(
-      realtime,
-      { type: "oauth", token, accountId },
-      { voice: "cedar" },
-    );
-    const response = await offer(realtime, reservation.clientSecret);
+    const { realtime, sockets, reservation, response } = await providerFailure(detail, token);
 
     expect(response.res.statusCode).toBe(502);
     expect(response.readBody()).toContain("safe diagnostic");
@@ -156,14 +158,10 @@ describe("GA OAuth offer broker", () => {
     "redacts an OAuth %s that straddles the detail cutoff",
     async (kind) => {
       const token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJib3VuZGFyeSJ9.signature";
-      const accountId = "7a1f92f3-7f0d-4d18-b1a0-8e6bd215c12f";
       const secret = kind === "token" ? token : accountId;
       const secretPrefix = secret.slice(0, 12);
       const detail = `${"x".repeat(490)}${secret}${"y".repeat(1_000)}`;
-      const fetchImpl = vi.fn<typeof fetch>(async () => new Response(detail, { status: 429 }));
-      const { realtime } = makeBroker(fetchImpl);
-      const reservation = await reserveOAuth(realtime, { type: "oauth", token, accountId });
-      const response = await offer(realtime, reservation.clientSecret);
+      const { response } = await providerFailure(detail, token);
 
       expect(response.res.statusCode).toBe(502);
       expect(response.readBody()).not.toContain(secret);
@@ -177,17 +175,13 @@ describe("GA OAuth offer broker", () => {
     "drops a provider error when an OAuth %s straddles the body cap",
     async (kind) => {
       const token = `eyJ${"a".repeat((kind === "token" ? 1_927 : 2_045) - 3)}`;
-      const accountId = "7a1f92f3-7f0d-4d18-b1a0-8e6bd215c12f";
       const secret = kind === "token" ? token : accountId;
       const splitAt = Math.floor(secret.length / 2);
       const shrinkablePrefix = token.repeat(8);
       const fillerLength = 16 * 1024 - shrinkablePrefix.length - splitAt;
       expect(fillerLength).toBeGreaterThanOrEqual(0);
       const detail = `${shrinkablePrefix}${" ".repeat(fillerLength)}${secret} trailing provider detail`;
-      const fetchImpl = vi.fn<typeof fetch>(async () => new Response(detail, { status: 429 }));
-      const { realtime } = makeBroker(fetchImpl);
-      const reservation = await reserveOAuth(realtime, { type: "oauth", token, accountId });
-      const response = await offer(realtime, reservation.clientSecret);
+      const { response } = await providerFailure(detail, token);
 
       expect(response.res.statusCode).toBe(502);
       expect(response.readBody()).not.toContain(secret.slice(0, splitAt));

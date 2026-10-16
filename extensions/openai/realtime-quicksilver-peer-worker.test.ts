@@ -8,10 +8,8 @@ import { describe, expect, it, vi } from "vitest";
 import { realtimeAudioTestEntrypoints } from "./realtime-audio-worker-entrypoints.test-support.js";
 import type { QuicksilverAudioWorkerEvent } from "./realtime-quicksilver-peer.runtime.js";
 
-const peerModule: typeof import("./realtime-quicksilver-peer.runtime.js") = await import(
-  resolveRuntimeWorkerUrl(realtimeAudioTestEntrypoints.peer).href
-);
-const { OpenAIQuicksilverAudioPeer } = peerModule;
+const { OpenAIQuicksilverAudioPeer }: typeof import("./realtime-quicksilver-peer.runtime.js") =
+  await import(resolveRuntimeWorkerUrl(realtimeAudioTestEntrypoints.peer).href);
 const weriftUrl = pathToFileURL(createRequire(import.meta.url).resolve("werift")).href;
 
 async function waitUntil(predicate: () => boolean, timeoutMs: number) {
@@ -122,7 +120,6 @@ describe("GPT-Live audio thread", () => {
     });
     const events: (QuicksilverAudioWorkerEvent | { type: "test-drained" | "test-resumed" })[] = [];
     const post = (message: { type: string }) => {
-      // Node Worker messages have no browser targetOrigin.
       // oxlint-disable-next-line unicorn/require-post-message-target-origin
       worker.postMessage(message);
     };
@@ -211,16 +208,15 @@ describe("GPT-Live audio thread", () => {
       // ICMP refusal of its next echo or RTCP send as a socket error that werift
       // leaves uncaught, which fails the receiver thread. Only that is expected.
       let hungUp = false;
-      const receiverErrors: { hungUp: boolean; error: unknown }[] = [];
-      receiver.on("error", (error) => receiverErrors.push({ hungUp, error }));
-      const expectReceiverHealthy = () =>
-        expect(
-          receiverErrors.filter(
-            ({ hungUp: afterHangUp, error }) =>
-              !afterHangUp ||
-              !(error instanceof Error && "code" in error && error.code === "ECONNREFUSED"),
-          ),
-        ).toEqual([]);
+      const receiverErrors: unknown[] = [];
+      receiver.on("error", (error) => {
+        if (
+          !hungUp ||
+          !(error instanceof Error && "code" in error && error.code === "ECONNREFUSED")
+        ) {
+          receiverErrors.push(error);
+        }
+      });
       const errors: Error[] = [];
       let audibleSamples = 0;
       let failAudioSink = false;
@@ -257,7 +253,6 @@ describe("GPT-Live audio thread", () => {
         peer.sendAudio(tone);
         tone.fill(0); // Capture may immediately recycle this caller-owned buffer.
         const answer = once(receiver, "message");
-        // Node Worker messaging has no browser targetOrigin.
         // oxlint-disable-next-line unicorn/require-post-message-target-origin
         receiver.postMessage({ type: "offer", sdp: await peer.createOffer() });
         await peer.applyAnswer((await answer)[0] as string);
@@ -284,7 +279,7 @@ describe("GPT-Live audio thread", () => {
           const afterClose = Atomics.load(counts, 1);
           await delay(80);
           expect(Atomics.load(counts, 1)).toBe(afterClose);
-          expectReceiverHealthy();
+          expect(receiverErrors).toEqual([]);
           return;
         }
         // The next PCM batch fails the sink, which hangs up the peer.
@@ -293,7 +288,7 @@ describe("GPT-Live audio thread", () => {
         await waitUntil(() => errors.length > 0, 2_000);
         expect(errors).toEqual([sinkError]);
         await expect(peer.createOffer()).rejects.toThrow("closed");
-        expectReceiverHealthy();
+        expect(receiverErrors).toEqual([]);
       } finally {
         peer?.close();
         await receiver.terminate();

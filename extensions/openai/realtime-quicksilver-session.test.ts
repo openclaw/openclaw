@@ -122,7 +122,7 @@ describe("GPT-Live offer broker", () => {
   it("waits for the GA sideband before returning an audio-only SDP answer and hangs up once", async () => {
     const { promise: sidebandReady, resolve: releaseSideband } = Promise.withResolvers<void>();
     const bridge = makeBridge({ connect: vi.fn(async () => await sidebandReady) });
-    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
       const target = requestTarget(url);
       if (target.endsWith("/hangup")) {
         return new Response(null, { status: 204 });
@@ -137,8 +137,7 @@ describe("GPT-Live offer broker", () => {
         headers: { Location: "/v1/realtime/calls/rtc_gateway" },
       });
     });
-    const fetchImpl = fetchMock as unknown as typeof fetch;
-    const { realtime, logger } = makeBroker({ fetchImpl });
+    const { realtime, logger } = makeBroker({ fetchImpl: fetchMock });
     let terminateSideband: (() => void) | undefined;
     const createBridge = vi.fn((params: { onTerminal: () => void }) => {
       terminateSideband = params.onTerminal;
@@ -151,10 +150,7 @@ describe("GPT-Live offer broker", () => {
       expect(reservation.offerResponseMaxBytes).toBe(256 * 1024);
       const response = createResponseHarness();
       const handling = realtime.handler(
-        createRequest({
-          token: reservation.clientSecret,
-          body: AUDIO_ONLY_SDP,
-        }),
+        createRequest({ token: reservation.clientSecret, body: AUDIO_ONLY_SDP }),
         response.res,
       );
       await vi.waitFor(() => expect(bridge.connect).toHaveBeenCalledOnce());
@@ -196,8 +192,7 @@ describe("GPT-Live offer broker", () => {
       isConnected: vi.fn(() => false),
     });
     const fetchMock = createGaFetch("rtc_error");
-    const fetchImpl = fetchMock as unknown as typeof fetch;
-    const { realtime } = makeBroker({ fetchImpl });
+    const { realtime } = makeBroker({ fetchImpl: fetchMock });
     const reservation = await reserveGaSession(realtime, () => bridge, {
       bindBridge: vi.fn(),
       onError,
@@ -212,8 +207,10 @@ describe("GPT-Live offer broker", () => {
     expect(onError).toHaveBeenCalledOnce();
     const callbackError = onError.mock.calls[0]?.[0] as Error | undefined;
     expect(callbackError).toBeInstanceOf(Error);
-    expect(callbackError?.name).toBe("Error");
-    expect(callbackError?.message).toBe("OpenAI GPT-Live transport failed");
+    expect(callbackError).toMatchObject({
+      name: "Error",
+      message: "OpenAI GPT-Live transport failed",
+    });
     expect(callbackError?.cause).toBeUndefined();
     expect(bridge.close).toHaveBeenCalledOnce();
     expect(
@@ -252,8 +249,8 @@ describe("GPT-Live offer broker", () => {
   ])(
     "rejects a bounded GA sideband SDP with %s before provider creation",
     async (_name, body, message) => {
-      const fetchImpl = vi.fn();
-      const { realtime } = makeBroker({ fetchImpl: fetchImpl as unknown as typeof fetch });
+      const fetchImpl = vi.fn<typeof fetch>();
+      const { realtime } = makeBroker({ fetchImpl });
       const reservation = await reserveGaSession(realtime, vi.fn());
       const response = await post(realtime, { token: reservation.clientSecret, body });
       expect(response.res.statusCode).toBe(400);
@@ -263,9 +260,7 @@ describe("GPT-Live offer broker", () => {
   );
 
   it("survives a connecting socket that errors during retry teardown", async () => {
-    // Regression: ws emits `error` asynchronously when a CONNECTING socket is closed.
-    // Without a retained listener that is an unhandled EventEmitter error and kills the
-    // Gateway process, so the retry must keep swallowing errors on discarded sockets.
+    // ws emits an unhandled `error` asynchronously when a CONNECTING socket closes.
     class ErrorOnCloseSocket extends FakeSocket {
       constructor() {
         super("manual");
@@ -312,9 +307,7 @@ describe("GPT-Live offer broker", () => {
 
     expect(response.res.statusCode).toBe(200);
     expect(sockets).toHaveLength(3);
-    expect(sockets[0]?.closeCode).toBe(1000);
-    expect(sockets[1]?.closeCode).toBe(1000);
-    expect(sockets[2]?.readyState).toBe(1);
+    expect(sockets).toMatchObject([{ closeCode: 1000 }, { closeCode: 1000 }, { readyState: 1 }]);
   });
 
   it("buffers sideband messages that arrive with the open handshake", async () => {
@@ -463,56 +456,44 @@ describe("GPT-Live offer broker", () => {
     expect(expired.res.statusCode).toBe(401);
   });
 
-  it.each([true])(
-    "expires an unused Gateway-control offer despite a throwing callback (%s)",
-    async () => {
-      vi.useFakeTimers();
-      const { realtime } = makeBroker();
-      const onClose = vi.fn(() => {
-        throw new Error("close callback failed");
-      });
-      const reservation = await reserveGaSession(realtime, vi.fn(), {
-        bindBridge: vi.fn(),
-        onClose,
-      });
+  it("expires an unused Gateway-control offer despite a throwing callback", async () => {
+    vi.useFakeTimers();
+    const { realtime } = makeBroker();
+    const onClose = vi.fn(() => {
+      throw new Error("close callback failed");
+    });
+    const reservation = await reserveGaSession(realtime, vi.fn(), {
+      bindBridge: vi.fn(),
+      onClose,
+    });
 
-      const expiryError = await vi.advanceTimersByTimeAsync(60_000).then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-      expect.soft(expiryError).toBeUndefined();
-      expect(onClose).toHaveBeenCalledExactlyOnceWith("completed");
-      const expired = await post(realtime, { token: reservation.clientSecret });
-      expect(expired.res.statusCode).toBe(401);
-    },
-  );
+    const expiryError = await vi.advanceTimersByTimeAsync(60_000).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect.soft(expiryError).toBeUndefined();
+    expect(onClose).toHaveBeenCalledExactlyOnceWith("completed");
+    const expired = await post(realtime, { token: reservation.clientSecret });
+    expect(expired.res.statusCode).toBe(401);
+  });
 
   it("releases a reservation after an empty SDP offer", async () => {
     const { realtime } = makeBroker();
-    const runAgentConsult = vi.fn(async () => ({ text: "Done" }));
-    const reservation = await reserveLiveSession(realtime, {
-      model: "gpt-live-1",
-      runAgentConsult,
-    });
+    const reservation = await reserveLiveSession(realtime, { model: "gpt-live-1" });
     const response = await post(realtime, { token: reservation.clientSecret, body: "   " });
     expect(response.res.statusCode).toBe(400);
 
     await expect(
       Promise.all(
-        Array.from({ length: 8 }, () =>
-          realtime.broker.createBrowserSession(
-            { providerConfig: {}, model: "gpt-live-1", runAgentConsult },
-            { type: "api-key", token: "platform-key" },
-          ),
-        ),
+        Array.from({ length: 8 }, () => reserveLiveSession(realtime, { model: "gpt-live-1" })),
       ),
     ).resolves.toHaveLength(8);
   });
 
   it("aborts a redeemed offer when its browser session is canceled", async () => {
     let upstreamSignal: AbortSignal | undefined;
-    const fetchImpl = vi.fn(
-      async (_url: string | URL | Request, init?: RequestInit): Promise<Response> =>
+    const fetchImpl = vi.fn<typeof fetch>(
+      async (_url, init) =>
         await new Promise<Response>((_resolve, reject) => {
           upstreamSignal = init?.signal ?? undefined;
           const rejectAbort = () => {
@@ -524,13 +505,9 @@ describe("GPT-Live offer broker", () => {
             rejectAbort();
           }
         }),
-    ) as unknown as typeof fetch;
+    );
     const { realtime, sockets } = makeBroker({ fetchImpl });
-    const runAgentConsult = vi.fn(async () => ({ text: "Done" }));
-    const reservation = await reserveLiveSession(realtime, {
-      model: "gpt-live-1",
-      runAgentConsult,
-    });
+    const reservation = await reserveLiveSession(realtime, { model: "gpt-live-1" });
     const response = createResponseHarness();
     const handling = realtime.handler(
       createRequest({ token: reservation.clientSecret }),
