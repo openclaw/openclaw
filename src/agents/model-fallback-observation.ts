@@ -303,7 +303,8 @@ export function logModelFallbackChainStopped(params: {
   }
   let errorName: string | undefined;
   try {
-    errorName = params.error instanceof Error ? params.error.name || undefined : undefined;
+    const name: unknown = params.error instanceof Error ? params.error.name : undefined;
+    errorName = typeof name === "string" && name ? name : undefined;
   } catch {
     // Optional diagnostic metadata must not replace the original stop error.
   }

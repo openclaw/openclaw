@@ -1,5 +1,4 @@
 import { emitAgentEvent } from "../infra/agent-events.js";
-import type { AssistantMessage } from "../llm/types.js";
 import {
   readAssistantTextBlocksForPhase,
   resolveAssistantMessagePhase,
@@ -10,7 +9,9 @@ import { createTextProjection, trimTextFilter } from "../shared/text/text-projec
 import { resolveCurrentSourceMessagingToolPartial } from "./embedded-agent-helpers/messaging-dedupe.js";
 import { updateLiveEditDiffProgress } from "./embedded-agent-live-edit-diff.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
-import { recordPendingAssistantReplyDirectives } from "./embedded-agent-subscribe.handlers.messages.replies.js";
+import {
+  recordPendingAssistantReplyDirectives,
+} from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import {
   extractAssistantStreamSnapshot,
   reconcileBlockReplySnapshot,
@@ -322,7 +323,9 @@ export function handleMessageUpdate(
   // A text_start partial may already contain text that the following text_delta replays.
   // Use starts only for lifecycle boundaries; consume their text from delta/end events.
   const shouldReadPartialText =
-    streamItemChanged || evtType === "text_end" || (shouldUsePhaseAwareBlockReply && !chunk);
+    streamItemChanged ||
+    (evtType === "text_end" && assistantRecord.partial !== undefined) ||
+    (shouldUsePhaseAwareBlockReply && (evtType === "text_end" || !chunk));
   const isTerminalSnapshot = evtType === "text_end" && shouldReadPartialText;
   let selectedAssistant =
     shouldUsePhaseAwareBlockReply || isResponsesTextEvent ? streamAssistant : partialAssistant;
@@ -407,7 +410,7 @@ export function handleMessageUpdate(
         textIsAppend = true;
       }
     }
-  } else if (!isTerminalSnapshot && next !== undefined && chunk) {
+  } else if (!isTerminalSnapshot && next !== undefined && (chunk || evtType === "text_end")) {
     visibleDelta = ctx.stripBlockTags(chunk, ctx.state.partialBlockState, {
       final: finalText,
     });

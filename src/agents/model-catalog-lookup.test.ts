@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   findModelCatalogEntry,
   findModelInCatalog,
+  prepareModelRunCapabilities,
   resolvePreparedModelThinkingCompat,
 } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
@@ -68,6 +69,27 @@ describe("catalog model identity", () => {
 });
 
 describe("prepared thinking disablement ownership", () => {
+  it("leaves the selected thinking format intact when the catalog only supplies effort tiers", () => {
+    const route = { api: "openai-completions", baseUrl: "https://reasoning.example/v1" } as const;
+    const entry = {
+      provider: "reasoning-provider",
+      id: "reasoning-model",
+      ...route,
+      compat: { supportedReasoningEfforts: ["high"] },
+    };
+    const { modelThinkingCapability } = prepareModelRunCapabilities(
+      [[entry], []],
+      [entry.provider, entry.id, "openclaw"],
+    );
+    expect(
+      resolvePreparedModelThinkingCompat({
+        capability: modelThinkingCapability,
+        model: { ...entry, compat: { thinkingFormat: "qwen" } },
+        agentRuntime: "openclaw",
+      }),
+    ).toStrictEqual({ supportedReasoningEfforts: ["high"] });
+  });
+
   it.each([
     {
       name: "does not grant disablement from nullable route metadata",

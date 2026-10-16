@@ -103,7 +103,10 @@ async function drain(stream: AsyncIterable<unknown>): Promise<void> {
 }
 
 function withFinalResult<T>(stream: AsyncIterable<T>) {
-  return Object.assign(stream, { result: async () => makeAssistantMessageFixture() });
+  return Object.assign(stream, {
+    result: async () =>
+      makeAssistantMessageFixture({ stopReason: "stop", errorMessage: undefined, content: [] }),
+  });
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");

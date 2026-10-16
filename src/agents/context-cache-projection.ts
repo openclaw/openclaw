@@ -51,8 +51,12 @@ function applyDiscoveredContextWindow(
   if (!model.id) {
     return;
   }
-  const capacity = model.contextTokens ?? model.contextWindow;
-  const discoveredContextTokens = capacity === undefined ? undefined : Math.trunc(capacity);
+  const discoveredContextTokens =
+    typeof model.contextTokens === "number"
+      ? Math.trunc(model.contextTokens)
+      : typeof model.contextWindow === "number"
+        ? Math.trunc(model.contextWindow)
+        : undefined;
   const contextTokens =
     resolveDiscoveredAnthropicFixedContextWindow(model) ?? discoveredContextTokens;
   if (!contextTokens || contextTokens <= 0) {

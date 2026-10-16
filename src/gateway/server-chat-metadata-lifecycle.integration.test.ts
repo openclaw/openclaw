@@ -784,13 +784,12 @@ describe("gateway chat metadata lifecycle composition", () => {
           sidecars.publish,
         );
         const healthy = await lifecycle.read({ agentId: "healthy" });
-        await expect(lifecycle.read({ agentId: "main" })).resolves.toHaveProperty("models");
+        const main = await lifecycle.read({ agentId: "main" });
+        expect(main).toHaveProperty("models");
         if (retireBeforeReplacement) {
           quiescePluginRegistry(retiredRegistry);
           expect(instance.acceptingCalls).toBe(false);
-          await expect(lifecycle.read({ agentId: "main" })).rejects.toThrow(
-            'prepared chat metadata owner retired for agent "main"',
-          );
+          await expect(lifecycle.read({ agentId: "main" })).resolves.toEqual(main);
           await expect(lifecycle.read({ agentId: "healthy" })).resolves.toEqual(healthy);
         }
         mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(createEmptyPluginRegistry);

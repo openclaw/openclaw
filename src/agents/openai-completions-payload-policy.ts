@@ -16,7 +16,7 @@ function shouldStripOpenAICompletionsStore(model: Parameters<StreamFn>[0]): bool
     resolveProviderRequestPolicyConfig({
       provider: model.provider,
       api: model.api,
-      baseUrl: model.baseUrl,
+      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
       compat: model.compat,
       capability: "llm",
       transport: "stream",

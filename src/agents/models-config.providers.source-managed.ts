@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /**
  * Enforces source-managed provider secret ownership rules.
  */
@@ -27,12 +28,12 @@ export function normalizeSourceProviderLookup(
     return new Map();
   }
   const validProviders = Object.fromEntries(
-    Object.entries(providers).map(
-      ([providerKey, providerConfig]): [string, SourceProviderEntry] => [
+    Object.entries(providers)
+      .filter(([, provider]) => isRecord(provider))
+      .map(([providerKey, providerConfig]): [string, SourceProviderEntry] => [
         providerKey,
         { providerKey, providerConfig },
-      ],
-    ),
+      ]),
   );
   // Use the merge boundary's collision rule so a case alias cannot displace the
   // canonical SecretRef owner and expose its resolved runtime value to models.json.
@@ -62,7 +63,7 @@ function resolveSourceManagedHeaderMarkers(params: {
   sourceConfig: OpenClawConfig | undefined;
 }): Record<string, string> {
   const sourceHeaders = params.sourceProvider.providerConfig.headers;
-  if (!sourceHeaders) {
+  if (!isRecord(sourceHeaders)) {
     return {};
   }
   const markers: Record<string, string> = {};

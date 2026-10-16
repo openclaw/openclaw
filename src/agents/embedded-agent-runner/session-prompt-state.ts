@@ -275,7 +275,9 @@ export function recordToolResultPromptProjection(
     content: cacheTtl
       ? message.content
       : message.content.flatMap((block) =>
-          block.type === "text" ? [{ type: "text" as const, text: block.text }] : [],
+          isRecord(block) && block.type === "text" && typeof block.text === "string"
+            ? [{ type: "text" as const, text: block.text }]
+            : [],
         ),
   });
 }

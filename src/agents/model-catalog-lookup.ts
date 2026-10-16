@@ -2,6 +2,7 @@
  * Looks up model catalog entries and input capability support.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -23,18 +24,13 @@ type ModelThinkingCompat = {
   supportedReasoningEfforts?: readonly string[] | null;
 };
 
-type ModelThinkingCompatInput = {
-  thinkingFormat?: string;
-  supportedReasoningEfforts?: readonly string[] | null;
-};
-
 type ModelRunCapabilityEntry = {
   provider: string;
   id: string;
   api?: string;
   baseUrl?: string;
   input?: readonly ModelInputType[];
-  compat?: ModelThinkingCompatInput | null;
+  compat?: unknown;
 };
 
 export type PreparedModelThinkingCapability = Readonly<{
@@ -47,23 +43,24 @@ export type PreparedModelThinkingCapability = Readonly<{
 }>;
 
 /** Projects only thinking policy fields from broader model compatibility metadata. */
-export function projectModelThinkingCompat(
-  compat: ModelThinkingCompatInput | Model["compat"] | null | undefined,
-): ModelThinkingCompat | undefined {
-  if (!compat) {
+export function projectModelThinkingCompat(compat: unknown): ModelThinkingCompat | undefined {
+  const record = asOptionalRecord(compat);
+  if (!record) {
     return undefined;
   }
-  const format = "thinkingFormat" in compat ? compat.thinkingFormat : undefined;
-  const thinkingFormat = format !== undefined && isModelThinkingFormat(format) ? format : undefined;
-  const supportedReasoningEfforts =
-    "supportedReasoningEfforts" in compat ? compat.supportedReasoningEfforts : undefined;
-  if (thinkingFormat === undefined && supportedReasoningEfforts === undefined) {
-    return undefined;
+  const projected: ModelThinkingCompat = {};
+  if (typeof record.thinkingFormat === "string" && isModelThinkingFormat(record.thinkingFormat)) {
+    projected.thinkingFormat = record.thinkingFormat;
   }
-  return {
-    thinkingFormat,
-    supportedReasoningEfforts,
-  };
+  if (record.supportedReasoningEfforts === null) {
+    projected.supportedReasoningEfforts = null;
+  } else if (
+    Array.isArray(record.supportedReasoningEfforts) &&
+    record.supportedReasoningEfforts.every((effort) => typeof effort === "string")
+  ) {
+    projected.supportedReasoningEfforts = [...record.supportedReasoningEfforts];
+  }
+  return Object.keys(projected).length > 0 ? projected : undefined;
 }
 
 /** Freezes thinking capability from the selected prepared catalog row. */

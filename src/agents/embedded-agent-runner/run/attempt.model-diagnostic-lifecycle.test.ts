@@ -45,7 +45,9 @@ function wrap(
 }
 function completedStream() {
   const stream = createAssistantMessageEventStream();
-  stream.end(makeAssistantMessageFixture());
+  stream.end(
+    makeAssistantMessageFixture({ stopReason: "stop", errorMessage: undefined, content: [] }),
+  );
   return stream;
 }
 async function drain(stream: AsyncIterable<unknown>) {
@@ -355,7 +357,12 @@ describe("model diagnostic lifecycle", () => {
     const wrapped = wrap(
       (() =>
         Object.assign(stream(), {
-          result: async () => makeAssistantMessageFixture(),
+          result: async () =>
+            makeAssistantMessageFixture({
+              stopReason: "stop",
+              errorMessage: undefined,
+              content: [],
+            }),
         })) as unknown as StreamFn,
       {
         config: {
@@ -368,7 +375,9 @@ describe("model diagnostic lifecycle", () => {
       },
     );
     const events = await timeline(async () => {
-      await drain(await wrapped({} as never, { messages: [] }));
+      const response = await wrapped({} as never, { messages: [] });
+      await drain(response);
+      await response.result();
     });
     expect(events.map((event) => event.name)).toEqual([
       "provider.request.started",
@@ -458,12 +467,13 @@ describe("model diagnostic lifecycle", () => {
       registerDiagnosticTracePropagationBridge({
         resolveTraceContext: () => (resolved ? trace : undefined),
       });
-      const source = vi.fn<StreamFn>();
+      const source = vi.fn<StreamFn>().mockImplementation(completedStream);
       const caller = {
         headers: { "X-Custom": "kept", TraceParent: "untrusted" },
         sessionId: "provider-session",
       };
-      await wrap(source)({} as never, {} as never, caller);
+      const response = await wrap(source)({} as never, {} as never, caller);
+      await response.result();
       expect(source.mock.calls[0]?.[2]).toMatchObject({
         sessionId: "provider-session",
         requestId: "call-1",
@@ -493,12 +503,18 @@ describe("model diagnostic lifecycle", () => {
     };
     const events = await collect(async () => {
       await drain(
-        await wrap((() => stream()) as unknown as StreamFn, {
-          sessionKey: "session-key",
-          sessionId: "session-id",
-          transport: "http",
-          ...budget,
-        })({} as never, {} as never),
+        await wrap(
+          (() =>
+            Object.assign(stream(), {
+              result: async () => makeAssistantMessageFixture({ errorMessage: secret }),
+            })) as unknown as StreamFn,
+          {
+            sessionKey: "session-key",
+            sessionId: "session-id",
+            transport: "http",
+            ...budget,
+          },
+        )({} as never, {} as never),
       );
     });
     expect(events.map((event) => event.type)).toEqual(["model.call.started", "model.call.error"]);

@@ -647,7 +647,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     let baseTurnPrefixMessages = stripRuntimeContextCustomMessages(
       preparation.turnPrefixMessages ?? [],
     );
-    const latestUnresolvedUserRequest = preparation.latestUnresolvedUserRequest ?? null;
+    const latestUnresolvedUserRequest = preparation.latestUnresolvedUserRequest;
     setCompactionSafeguardCancellation(ctx.sessionManager, undefined);
     const cancelCompaction = (reason: string, error?: unknown) => {
       setCompactionSafeguardCancellation(ctx.sessionManager, reason, error);
