@@ -20,8 +20,6 @@ export function createNostrRelaySubscriptionGroup(options: {
   const subscriptions = new Map<string, ReturnType<SimplePool["subscribeMany"]>>();
   const deadlineTimers = new Set<ReturnType<typeof setTimeout>>();
   const failures = new Map<string, number>();
-  // Newest live event per relay, so a resubscription asks only for what may be missing.
-  const newestSeen = new Map<string, number>();
   let locallyClosing = false;
   const backfillStatus = new Map<string, BackfillStatus>(
     relays.map((relay): [string, BackfillStatus] => [relay, "pending"]),
@@ -50,8 +48,6 @@ export function createNostrRelaySubscriptionGroup(options: {
   const subscribeRelay = (relay: string): void => {
     let relayClosed = false;
     let deadlineReached = false;
-    // Stored events may arrive in any order; only events after a real EOSE move the cursor.
-    let live = false;
     const deadlineTimer = setTimeout(() => {
       deadlineTimers.delete(deadlineTimer);
       deadlineReached = true;
@@ -59,52 +55,40 @@ export function createNostrRelaySubscriptionGroup(options: {
     }, DEFAULT_EOSE_CONFIRM_DEADLINE_MS);
     deadlineTimer.unref?.();
     deadlineTimers.add(deadlineTimer);
-    const since = newestSeen.get(relay);
 
+    // A resubscription replays from the original baseline; durable ingress dedupes the overlap.
     subscriptions.set(
       relay,
-      // Each relay gets its own filter: nostr-tools rewrites `since` in place on refire.
-      options.pool.subscribeMany(
-        [relay],
-        since === undefined ? { ...options.filter } : { ...options.filter, since },
-        {
-          onevent: (event) => {
-            if (live) {
-              const createdAt = Math.min(event.created_at, Math.floor(Date.now() / 1000));
-              newestSeen.set(relay, Math.max(newestSeen.get(relay) ?? 0, createdAt));
+      options.pool.subscribeMany([relay], options.filter, {
+        onevent: options.onEvent,
+        oneose: () => {
+          // Pool close is reported as EOSE first. Its onclose runs in this same turn.
+          queueMicrotask(() => {
+            if (!relayClosed && !deadlineReached) {
+              clearTimeout(deadlineTimer);
+              deadlineTimers.delete(deadlineTimer);
+              failures.delete(relay);
+              settleBackfill(relay, "confirmed");
             }
-            options.onEvent(event);
-          },
-          oneose: () => {
-            // Pool close is reported as EOSE first. Its onclose runs in this same turn.
-            queueMicrotask(() => {
-              if (!relayClosed && !deadlineReached) {
-                live = true;
-                clearTimeout(deadlineTimer);
-                deadlineTimers.delete(deadlineTimer);
-                failures.delete(relay);
-                settleBackfill(relay, "confirmed");
-              }
-            });
-          },
-          onclose: (reasons) => {
-            relayClosed = true;
-            clearTimeout(deadlineTimer);
-            deadlineTimers.delete(deadlineTimer);
-            settleBackfill(relay, "incomplete");
-            if (!locallyClosing && !options.abort.aborted) {
-              options.onClose(
-                relay,
-                reasons.map(({ reason }) => reason),
-              );
-              scheduleResubscribe(relay);
-            }
-          },
-          // Own earlier deadline marks synthetic library EOSE as incomplete.
-          maxWait: DEFAULT_EOSE_CONFIRM_DEADLINE_MS + LIBRARY_EOSE_TIMEOUT_MARGIN_MS,
-          abort: options.abort,
+          });
         },
-      ),
+        onclose: (reasons) => {
+          relayClosed = true;
+          clearTimeout(deadlineTimer);
+          deadlineTimers.delete(deadlineTimer);
+          settleBackfill(relay, "incomplete");
+          if (!locallyClosing && !options.abort.aborted) {
+            options.onClose(
+              relay,
+              reasons.map(({ reason }) => reason),
+            );
+            scheduleResubscribe(relay);
+          }
+        },
+        // Own earlier deadline marks synthetic library EOSE as incomplete.
+        maxWait: DEFAULT_EOSE_CONFIRM_DEADLINE_MS + LIBRARY_EOSE_TIMEOUT_MARGIN_MS,
+        abort: options.abort,
+      }),
     );
   };
 

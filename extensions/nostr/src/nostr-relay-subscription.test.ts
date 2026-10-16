@@ -4,7 +4,7 @@ import { createNostrRelaySubscriptionGroup } from "./nostr-relay-subscription.js
 
 type RelayHandlers = Parameters<SimplePool["subscribeMany"]>[2];
 
-function createHarness() {
+function createHarness(filter: Parameters<SimplePool["subscribeMany"]>[1] = { kinds: [4] }) {
   const handlers: RelayHandlers[] = [];
   const abortController = new AbortController();
   const subscribeMany = vi.fn(
@@ -35,7 +35,7 @@ function createHarness() {
   const group = createNostrRelaySubscriptionGroup({
     pool: { subscribeMany } as unknown as SimplePool,
     relays: ["wss://one.example", "wss://two.example"],
-    filter: { kinds: [4] },
+    filter,
     abort: abortController.signal,
     onEvent: (_event: Event) => {},
     onBackfillComplete,
@@ -118,29 +118,18 @@ describe("Nostr relay subscriptions", () => {
     await group.close("test complete");
   });
 
-  it("resubscribes from the newest live event that relay delivered", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    vi.setSystemTime(2_000_000);
-    const { group, handlers, subscribeMany } = createHarness();
-    handlers[0]?.oneose?.();
-    handlers[1]?.onevent?.({ created_at: 1_900 } as Event); // stored, may be out of order
+  it("resubscribes with the original replay baseline", async () => {
+    vi.useFakeTimers();
+    const { group, handlers, subscribeMany } = createHarness({ kinds: [4], since: 1_000 });
+
     handlers[1]?.oneose?.();
     await Promise.resolve();
-
-    handlers[1]?.onevent?.({ created_at: 1_500 } as Event);
-    handlers[0]?.onevent?.({ created_at: 9_999_999 } as Event); // far future, clamped to now
+    handlers[1]?.onevent?.({ created_at: 2_000 } as Event);
     handlers[1]?.onclose?.([{ url: "wss://two.example", reason: "relay connection failed" }]);
-    handlers[0]?.onclose?.([{ url: "wss://one.example", reason: "relay connection failed" }]);
     await vi.advanceTimersByTimeAsync(10_000);
 
-    const resubscribed = new Map(
-      subscribeMany.mock.calls.slice(2).map(([relays, filter]) => [relays[0], filter]),
-    );
-    expect(resubscribed.get("wss://two.example")).toEqual({ kinds: [4], since: 1_500 });
-    expect(resubscribed.get("wss://one.example")).toEqual({ kinds: [4], since: 2_000 });
-    // Every subscription owns its filter, so nostr-tools refires cannot leak `since` across relays.
-    expect(subscribeMany.mock.calls[0]?.[1]).toEqual({ kinds: [4] });
-    expect(subscribeMany.mock.calls[0]?.[1]).not.toBe(subscribeMany.mock.calls[1]?.[1]);
+    // A DM stamped 1_990 by a sender whose clock is behind must still match after reconnect.
+    expect(subscribeMany.mock.calls[2]?.[1]).toEqual({ kinds: [4], since: 1_000 });
     await group.close("test complete");
   });
 

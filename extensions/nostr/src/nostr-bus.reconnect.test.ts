@@ -16,7 +16,8 @@ import { startNostrBus } from "./nostr-bus.js";
 import { setNostrRuntime } from "./runtime.js";
 import { TEST_HEX_PRIVATE_KEY, TEST_HEX_PRIVATE_KEY_BYTES } from "./test-fixtures.js";
 
-vi.mock("./nostr-state-store.js", () => ({
+vi.mock("./nostr-state-store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./nostr-state-store.js")>()),
   readNostrBusState: vi.fn(async () => null),
   writeNostrBusState: vi.fn(async () => {}),
   computeSinceTimestamp: vi.fn(() => Math.floor(Date.now() / 1000) - 60),
@@ -35,7 +36,12 @@ async function startLoopbackRelay() {
   const dmSubscriptions: Array<{ socket: WebSocket; id: string }> = [];
   server.on("connection", (socket) => {
     socket.on("message", (raw) => {
-      const [type, id, ...filters] = JSON.parse(String(raw)) as [string, string, ...unknown[]];
+      const text = Array.isArray(raw) ? Buffer.concat(raw) : Buffer.from(raw);
+      const [type, id, ...filters] = JSON.parse(text.toString("utf8")) as [
+        string,
+        string,
+        ...unknown[],
+      ];
       if (type !== "REQ") {
         return;
       }
