@@ -15,7 +15,6 @@ import {
 import { runCommandWithTimeout } from "../process/exec.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { resolveUserPath } from "../utils.js";
-import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { assertSecureExecCommandPath } from "./exec-provider-path-validation.js";
 import { readJsonPointer } from "./json-pointer.js";
 import {
@@ -24,18 +23,19 @@ import {
 } from "./provider-integrations.js";
 import {
   isBuiltInDefaultSecretProviderRef,
-  normalizeAndGroupSecretRefs,
   type ProviderRefGroup,
   resolveSecretRefProviderSourceMismatch,
   secretRefKey,
   SINGLE_VALUE_FILE_REF_ID,
 } from "./ref-contract.js";
+import { resolveProviderGroups, type ProviderRefGroupResult } from "./resolve-batch.js";
 import {
   isProviderScopedSecretResolutionError,
   isSecretResolutionError,
   providerResolutionError,
   refResolutionError,
 } from "./resolve-errors.js";
+import { resolveProviderRefGroupWithCache } from "./resolve-ref-cache.js";
 import { resolveStoreRefs } from "./resolve-store.js";
 import type { SecretRefErrorHandler, SecretRefResolveCache } from "./resolve-types.js";
 import {
@@ -454,109 +454,104 @@ async function resolveProviderRefs({
   }
 }
 
+async function resolveProviderRefGroup(params: {
+  group: ProviderRefGroup;
+  refs: SecretRef[];
+  errorMode: "continue" | "stop";
+  options: ResolveSecretRefOptions;
+}): Promise<ProviderRefGroupResult> {
+  const { group, refs } = params;
+  if (group.refs.length > DEFAULT_MAX_REFS_PER_PROVIDER) {
+    throw providerResolutionError({
+      code: "SECRET_PROVIDER_INVALID",
+      source: group.source,
+      provider: group.providerName,
+      message: `Secret provider "${group.providerName}" exceeded maxRefsPerProvider (${DEFAULT_MAX_REFS_PER_PROVIDER}).`,
+    });
+  }
+  const refFailures = new Map<string, Parameters<SecretRefErrorHandler>[0]>();
+  const onRefError: SecretRefErrorHandler = (error) => {
+    if (params.errorMode === "stop") {
+      throw error;
+    }
+    refFailures.set(error.refId, error);
+  };
+  const providerConfig = resolveConfiguredProvider({
+    ref: expectDefined(refs[0], "refs entry at 0"),
+    config: params.options.config,
+    env: params.options.env ?? process.env,
+    manifestRegistry: params.options.manifestRegistry,
+  });
+  const values = await resolveProviderRefs({
+    refs,
+    source: group.source,
+    providerName: group.providerName,
+    providerConfig,
+    options: params.options,
+    onRefError,
+  });
+  for (const ref of refs) {
+    if (refFailures.has(ref.id)) {
+      continue;
+    }
+    if (!values.has(ref.id)) {
+      onRefError(
+        refResolutionError({
+          code: "SECRET_REF_PROVIDER_CONTRACT",
+          source: group.source,
+          provider: group.providerName,
+          refId: ref.id,
+          message: `Secret provider "${group.providerName}" did not return id "${ref.id}".`,
+        }),
+      );
+      continue;
+    }
+    if (isRedactedSecretValue(values.get(ref.id))) {
+      onRefError(
+        refResolutionError({
+          code: "SECRET_REF_REDACTED_VALUE",
+          source: group.source,
+          provider: group.providerName,
+          refId: ref.id,
+          message: `Secret reference "${group.source}:${group.providerName}:${ref.id}" resolves to a redaction placeholder. Run openclaw doctor --fix to repair a store-backed Gateway token; supply a real credential for other secrets.`,
+        }),
+      );
+    }
+  }
+  return { group, values, refFailures };
+}
+
 async function resolveSecretRefProviderGroups(params: {
   refs: SecretRef[];
   options: ResolveSecretRefOptions;
   errorMode: "continue" | "stop";
 }) {
-  const groups = normalizeAndGroupSecretRefs(params.refs);
-  const errorsByIndex = new Map<number, unknown>();
-  const { options, errorMode } = params;
-  const tasks = groups.map((group) => async () => {
-    const refFailures = new Map<string, Parameters<SecretRefErrorHandler>[0]>();
-    const onRefError: SecretRefErrorHandler = (error) => {
-      if (errorMode === "stop") {
-        throw error;
-      }
-      refFailures.set(error.refId, error);
-    };
-    if (group.refs.length > DEFAULT_MAX_REFS_PER_PROVIDER) {
-      throw providerResolutionError({
-        code: "SECRET_PROVIDER_INVALID",
-        source: group.source,
-        provider: group.providerName,
-        message: `Secret provider "${group.providerName}" exceeded maxRefsPerProvider (${DEFAULT_MAX_REFS_PER_PROVIDER}).`,
-      });
-    }
-    const providerConfig = resolveConfiguredProvider({
-      ref: expectDefined(group.refs[0], "refs entry at 0"),
-      config: options.config,
-      env: options.env ?? process.env,
-      manifestRegistry: options.manifestRegistry,
-    });
-    const values = await resolveProviderRefs({
-      refs: group.refs,
-      source: group.source,
-      providerName: group.providerName,
-      providerConfig,
-      options,
-      onRefError,
-    });
-    for (const ref of group.refs) {
-      if (refFailures.has(ref.id)) {
-        continue;
-      }
-      if (!values.has(ref.id)) {
-        onRefError(
-          refResolutionError({
-            code: "SECRET_REF_PROVIDER_CONTRACT",
-            source: group.source,
-            provider: group.providerName,
-            refId: ref.id,
-            message: `Secret provider "${group.providerName}" did not return id "${ref.id}".`,
-          }),
-        );
-        continue;
-      }
-      if (isRedactedSecretValue(values.get(ref.id))) {
-        onRefError(
-          refResolutionError({
-            code: "SECRET_REF_REDACTED_VALUE",
-            source: group.source,
-            provider: group.providerName,
-            refId: ref.id,
-            message: `Secret reference "${group.source}:${group.providerName}:${ref.id}" resolves to a redaction placeholder. Run openclaw doctor --fix to repair a store-backed Gateway token; supply a real credential for other secrets.`,
-          }),
-        );
-      }
-    }
-    return { group, values, refFailures };
-  });
-  const taskResults = await runTasksWithConcurrency({
-    tasks,
-    limit: DEFAULT_PROVIDER_CONCURRENCY,
+  return await resolveProviderGroups({
+    refs: params.refs,
     errorMode: params.errorMode,
-    onTaskError: (error, index) => {
-      errorsByIndex.set(index, error);
+    limit: DEFAULT_PROVIDER_CONCURRENCY,
+    resolveGroup: (group, errorMode) => {
+      const resolveBatch = (refs: SecretRef[], batchErrorMode = errorMode) =>
+        resolveProviderRefGroup({
+          group,
+          refs,
+          errorMode: batchErrorMode,
+          options: params.options,
+        });
+      const cache = params.options.cache
+        ? (params.options.cache.resolvedByRefKey ??= new Map())
+        : undefined;
+      if (cache) {
+        return resolveProviderRefGroupWithCache({
+          group,
+          errorMode,
+          cache,
+          resolveBatch: (refs) => resolveBatch(refs, "continue"),
+        });
+      }
+      return resolveBatch(group.refs);
     },
   });
-
-  const resolved = new Map<string, unknown>();
-  const failures: Array<{ group: ProviderRefGroup; error: unknown }> = [];
-  for (const result of taskResults.results) {
-    if (!result) {
-      continue;
-    }
-    for (const ref of result.group.refs) {
-      const error = result.refFailures.get(ref.id);
-      if (error) {
-        failures.push({ group: result.group, error });
-      } else {
-        resolved.set(secretRefKey(ref), result.values.get(ref.id));
-      }
-    }
-  }
-  for (const [index, group] of groups.entries()) {
-    if (errorsByIndex.has(index)) {
-      failures.push({ group, error: errorsByIndex.get(index) });
-    }
-  }
-  return {
-    resolved,
-    failures,
-    hasError: taskResults.hasError,
-    firstError: taskResults.firstError,
-  };
 }
 
 /** Resolves a batch of SecretRefs, grouped by provider for bounded provider concurrency. */
@@ -585,28 +580,18 @@ export async function resolveSecretRefValue(
   ref: SecretRef,
   options: ResolveSecretRefOptions,
 ): Promise<unknown> {
-  const cache = options.cache;
   const key = secretRefKey(ref);
-  const resolve = async () => {
-    const resolved = await resolveSecretRefValues([ref], options);
-    if (!resolved.has(key)) {
-      throw refResolutionError({
-        code: "SECRET_REF_PROVIDER_CONTRACT",
-        source: ref.source,
-        provider: ref.provider,
-        refId: ref.id,
-        message: `Secret reference "${key}" resolved to no value.`,
-      });
-    }
-    return resolved.get(key);
-  };
-
-  if (!cache) {
-    return await resolve();
+  const resolved = await resolveSecretRefValues([ref], options);
+  if (!resolved.has(key)) {
+    throw refResolutionError({
+      code: "SECRET_REF_PROVIDER_CONTRACT",
+      source: ref.source,
+      provider: ref.provider,
+      refId: ref.id,
+      message: `Secret reference "${key}" resolved to no value.`,
+    });
   }
-  // Store the in-flight promise so repeated callers do not race duplicate provider work.
-  cache.resolvedByRefKey ??= new Map();
-  return await getOrCreatePromise(cache.resolvedByRefKey, key, resolve);
+  return resolved.get(key);
 }
 
 /** Resolves one SecretRef and requires a non-empty string result. */
