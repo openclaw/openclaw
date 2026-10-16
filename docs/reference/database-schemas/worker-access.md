@@ -6567,8 +6567,13 @@ keys invalidate those rows through the database owner's committed admission
 receipts; unrelated writes leave them warm. Receipts carry no credential payload.
 Rollback retires staged facts, so the next discovery reloads durable rows once.
 A write overtaking a discovery read invalidates its cached result on the next
-lookup. Credential use still checks the live credential authority at the effect;
-canonical reads, maintenance, and pinned snapshots retain their existing paths.
+lookup. Cron and MCP authorization capture reuse complete canonical rows from
+this same cache, including private credential lifetimes. Runtime-only postimages
+cannot replace current complete rows or satisfy a canonical lookup. Credential
+use checks the writer's live authorization facts at the effect without rereading
+the database; replacement, revocation, pending refresh, and uncertain settlement
+still refuse use. External writers require exclusive offline custody. Maintenance
+and pinned snapshots retain their uncached paths.
 
 Question answer and cancellation authority composes fresh tool-policy classification
 with the question owner's final session-reader batch. The original physical store,
