@@ -70,6 +70,7 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
   return { ...actual, getGlobalHookRunner: getGlobalHookRunnerMock };
 });
 
+// mock-isolation: Keep Matrix network sends inert while testing monitor routing and delivery decisions.
 vi.mock("../send.js", () => ({
   editMessageMatrix: editMock,
   prepareMatrixSingleText: prepareMatrixSingleTextMock,

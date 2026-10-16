@@ -15,9 +15,6 @@ import { registerMatrixMonitorEvents } from "./events.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
 
-type RoomEventListener = (roomId: string, event: MatrixRawEvent) => void;
-type FailedDecryptListener = (roomId: string, event: MatrixRawEvent, error: Error) => void;
-type VerificationSummaryListener = (summary: MatrixVerificationSummary) => void;
 type VerificationFixture = Pick<MatrixVerificationSummary, "id" | "otherUserId"> &
   Partial<MatrixVerificationSummary>;
 
@@ -219,15 +216,16 @@ function createHarness(params?: {
     sasNoticeRetryDelayMs: params?.sasNoticeRetryDelayMs ?? 0,
   });
 
-  function getListener<T>(name: string): T {
-    return expectDefined(listeners.get(name) as T | undefined, name);
+  function getListener(name: string) {
+    return expectDefined(listeners.get(name), name);
   }
 
   function eventListener(name: string) {
-    const callback = getListener<RoomEventListener>(name);
+    const callback = getListener(name);
     return (roomId: string, event: EventFixture) => callback(roomId, matrixEvent(event));
   }
-  const failedDecrypt = getListener<FailedDecryptListener>("room.failed_decryption");
+  const failedDecrypt = getListener("room.failed_decryption");
+  const verificationSummary = getListener("verification.summary");
 
   return {
     dispose,
@@ -252,7 +250,8 @@ function createHarness(params?: {
       error = new Error("The sender's device has not sent us the keys for this message."),
     ) =>
       failedDecrypt(roomId, matrixEvent({ type: EventType.RoomMessageEncrypted, ...event }), error),
-    verificationSummaryListener: getListener<VerificationSummaryListener>("verification.summary"),
+    verificationSummaryListener: (summary: MatrixVerificationSummary) =>
+      verificationSummary(summary),
     roomInviteListener: eventListener("room.invite"),
     roomJoinListener: eventListener("room.join"),
     listenerCount: () => listeners.size,
@@ -974,4 +973,3 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     );
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
