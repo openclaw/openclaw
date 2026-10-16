@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
@@ -15,7 +15,7 @@ import { findOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.
 import type { DB } from "./openclaw-agent-db.generated.js";
 import { ensureColumn, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 
-type ReceiptDatabase = { db: DatabaseSync; agentId: string };
+type ReceiptDatabase = { db: EngineConnection; agentId: string };
 const canonicalReceiptAdmission: SqliteDatabaseAdmissionKey<string | null> = {
   name: "agent.canonical-validation-receipt",
   // Canonical writers preserve proof; only schema changes and offline repair revoke it.
@@ -23,7 +23,7 @@ const canonicalReceiptAdmission: SqliteDatabaseAdmissionKey<string | null> = {
   read: (value) => (value === null || typeof value === "string" ? value : undefined),
 };
 
-function hasReceiptColumn(db: DatabaseSync): boolean {
+function hasReceiptColumn(db: EngineConnection): boolean {
   const { tableName, columnName } = CANONICAL_READY_COLUMN_DEFINITION;
   return tableHasColumn(db, tableName, columnName);
 }

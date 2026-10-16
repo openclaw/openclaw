@@ -11,7 +11,10 @@ import {
   openNodeSqliteDatabase,
   openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime";
-import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  requireNativeSqliteDatabase,
+  closeOpenClawAgentDatabasesAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it } from "vitest";
 import { readMemoryDatabaseRevision } from "./manager-db-kernel.js";
@@ -49,7 +52,7 @@ it.each(["clean", "unclean"])(
     await withOpenClawTestState({ scenario: "minimal" }, async (fixture) => {
       const options = { agentId: "main", path: path.join(fixture.stateDir, "agent.sqlite") };
       const target = openOpenClawAgentDatabase(options);
-      const backend = await admit(target.db, target.path);
+      const backend = await admit(requireNativeSqliteDatabase(target.db), target.path);
       const sourcePath = path.join(fixture.stateDir, "shadow.sqlite");
       using source = openNodeSqliteDatabase(sourcePath, { allowExtension: true });
       const sourceBackend = await admit(source, sourcePath, {
@@ -82,7 +85,7 @@ it.each(["clean", "unclean"])(
               sourcePath,
               sourceIdentity: readMemoryShadowIdentity(sourcePath),
               metaKey: "memory_index_meta_v1",
-              expectedRevision: readMemoryDatabaseRevision(target.db),
+              expectedRevision: readMemoryDatabaseRevision(requireNativeSqliteDatabase(target.db)),
               sourceHasVectors: true,
               vectorIndexComplete: true,
               state,

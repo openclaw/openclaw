@@ -135,6 +135,25 @@ describe("launchTuiCli", () => {
     expect(options.stdio).toBe("inherit");
   });
 
+  it("launches a standalone TUI without a loose CLI entry", async () => {
+    vi.stubGlobal("__openclawStandaloneRootUrl", "file:///standalone/runtime/");
+    process.argv = [process.execPath];
+    process.execArgv.push("--trace-warnings");
+
+    await launchTuiCli({ deliver: false });
+
+    expectSpawned(["tui"]);
+  });
+
+  it("still rejects an unavailable loose CLI entry", async () => {
+    process.argv = [process.execPath];
+
+    await expect(launchTuiCli({ deliver: false })).rejects.toThrow(
+      "unable to relaunch TUI: current CLI entry path is unavailable",
+    );
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it("passes gateway connection options as TUI arguments without mutating env", async () => {
     await launchTuiCli({
       deliver: false,

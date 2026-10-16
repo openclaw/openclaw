@@ -474,31 +474,35 @@ describe("fault settlement and generation health", () => {
       }
     },
   );
-  it.each(["admission rollback"])(
-    "keeps auth failures across %s until provider configuration changes",
-    async (recovery) => {
-      const callback = vi
-        .fn<DecisionProviderV1["evaluate"]>()
-        .mockResolvedValueOnce({ status: "unavailable", reason: "authentication" })
-        .mockResolvedValue(answer);
-      const host = registered(callback);
-      expect(await host.run()).toMatchObject({ reason: "authentication" });
-      expect(await host.run()).toMatchObject({ reason: "circuit-open" });
-      const selected = config;
-      if (recovery === "admission rollback") {
-        const replacement = prepareDecisionProviderReload(host.registry, new Set([host.record.id]));
-        await replacement.rollback(new AbortController().signal);
-      }
-      expect(await host.run(options(), selected)).toMatchObject({ reason: "circuit-open" });
-      expect(callback).toHaveBeenCalledTimes(1);
-      expect(
-        await host.run(options(), {
-          ...selected,
-          plugins: { entries: { owner: { config: { endpoint: "updated" } } } },
-        }),
-      ).toMatchObject({ status: "ok" });
-    },
-  );
+  it("keeps rejected credentials from blocking another agent or later credential recovery", async () => {
+    let firstCredentialAccepted = false;
+    const callback = vi.fn<DecisionProviderV1["evaluate"]>(async (_batch, { agentId }) =>
+      agentId === "first" && !firstCredentialAccepted
+        ? { status: "unavailable", reason: "authentication", retryAfterMs: 60_000 }
+        : answer,
+    );
+    const host = registered(callback);
+    const providerHost = host.registry.decisionProviders[0]!.host;
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      expect(await host.run({ ...options(), agentId: "first" })).toEqual({
+        status: "unavailable",
+        reason: "authentication",
+      });
+      expect(callback).toHaveBeenCalledTimes(attempt);
+    }
+    expect(await host.run({ ...options(), agentId: "second" })).toMatchObject({ status: "ok" });
+
+    firstCredentialAccepted = true;
+    expect(await host.run({ ...options(), agentId: "first" })).toMatchObject({ status: "ok" });
+    expect(callback).toHaveBeenCalledTimes(5);
+    expect(providerHost.inspect(config)).toMatchObject({
+      activeRequests: 0,
+      callable: true,
+      successCount: 2,
+      reasons: { authentication: 3 },
+    });
+  });
   it("bounds recovery to one half-open trial", async () => {
     let now = 0;
     const clock = vi.spyOn(performance, "now").mockImplementation(() => now);

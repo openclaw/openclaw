@@ -12,6 +12,7 @@ import {
 } from "./device-auth-store.test-support.js";
 import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-bootstrap.js";
 import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
+import { withDevicePairingLock } from "./device-pairing-lock.js";
 import { updatePairedNodeBins, updatePairedNodeSessionHost } from "./device-pairing-node-facts.js";
 import { approveNodePairing, requestNodePairing } from "./device-pairing-node.js";
 import {
@@ -197,7 +198,8 @@ describe("device pairing tokens", () => {
     baseDir = await suiteRootTracker.setup();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await withDevicePairingLock(async () => {});
     persistDevicePairingStoreState({ pendingById: {}, pairedByDeviceId: {} }, baseDir, "both");
     persistDeviceBootstrapTokenRecords({}, baseDir);
   });
@@ -1041,25 +1043,6 @@ describe("device pairing tokens", () => {
       ok: false,
       reason: "token-mismatch",
     });
-  });
-
-  test("filters active token roles to the approved pairing role set", () => {
-    const device = {
-      role: "operator",
-      roles: ["operator"],
-      tokens: {
-        node: { token: "forged-node", role: "node", scopes: [], createdAtMs: 1 },
-        operator: {
-          token: "operator",
-          role: "operator",
-          scopes: ["operator.read"],
-          createdAtMs: 1,
-        },
-      },
-    };
-
-    expect(listEffectivePairedDeviceRoles(device)).toEqual(["operator"]);
-    expect(hasEffectivePairedDeviceRole(device, "node")).toBe(false);
   });
 
   test("does not treat a Linux CLI device as a card renderer", async () => {

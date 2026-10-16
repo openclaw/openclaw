@@ -867,7 +867,8 @@ describe("loadControlUiGitHubPreview", () => {
     fetchMock.mockImplementation(normal);
     await loadControlUiGitHubPreview(target, identity, fetchMock, true);
     expect(validators).toEqual([null, null, null, null, null, null]);
-    expect(avatarReads).toBe(6);
+    // Anonymous avatar bytes are shared; credentialed representations stay isolated.
+    expect(avatarReads).toBe(2);
   });
 
   it.each(["private", "retired"])(

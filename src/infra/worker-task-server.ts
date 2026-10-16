@@ -14,6 +14,7 @@ import {
   decodeAgentDatabaseReaderRequest,
   installDeletedAgentDatabaseFences,
 } from "./agent-database-readers.js";
+import { installDatabaseEngineSelection } from "./database-engine/context.js";
 import { withSqliteDatabaseAdmissionExchange } from "./sqlite-database-admission.js";
 import {
   bindSqliteDatabaseAdmissionUpstream,
@@ -121,6 +122,9 @@ export function serveOwnedWorkerTasks<Output>(
         cancelWorkerIdleGc();
       },
       installTaskContext(context) {
+        if (context.databaseEngineSelection) {
+          installDatabaseEngineSelection(context.databaseEngineSelection);
+        }
         installDeletedAgentDatabaseFences(context.deletedAgentDatabaseFences);
         if (context.databaseAdmissionPort) {
           bindSqliteDatabaseAdmissionUpstream(context.databaseAdmissionPort);

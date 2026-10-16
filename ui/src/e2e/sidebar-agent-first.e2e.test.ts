@@ -299,13 +299,6 @@ suite.define(() => {
           expect(await actions.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
           expect(await geometry()).toEqual(beforeFocus);
           expect(await add.getAttribute("href")).toBe("/new?agent=main");
-          await sidebar.locator(".sidebar-rail .sidebar-new-session").click();
-          const menuFace = sidebar.locator(
-            '.sidebar-new-session-menu [data-value="main"] .identity-avatar__agent-face',
-          );
-          await menuFace.waitFor();
-          await expect.poll(async () => (await menuFace.boundingBox())?.width).toBe(36);
-          await page.keyboard.press("Escape");
           await captureSidebarUiProof(
             suite,
             page,

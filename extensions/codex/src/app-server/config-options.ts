@@ -80,6 +80,13 @@ export function resolveCodexAppServerHomeScope(params: {
     : "agent";
 }
 
+export function resolveCodexAppServerRequestTimeoutMs(pluginConfig?: unknown): number {
+  return resolvePositiveTimerTimeoutMs(
+    readCodexPluginConfig(pluginConfig).appServer?.requestTimeoutMs,
+    60_000,
+  );
+}
+
 // Registration binds the host's canonical resolver; cold callers use config-runtime.ts.
 // Keep option resolution synchronous so endpoint admission cannot yield before revalidation.
 export function createCodexAppServerConfig({
@@ -310,7 +317,7 @@ export function createCodexAppServerConfig({
       ...(config.nativeHookRelay ? { nativeHookRelay: config.nativeHookRelay } : {}),
       codeModeOnly: config.codeModeOnly === true,
       loopDetectionPreToolUseRelay: config.loopDetectionPreToolUseRelay !== false,
-      requestTimeoutMs: resolvePositiveTimerTimeoutMs(config.requestTimeoutMs, 60_000),
+      requestTimeoutMs: resolveCodexAppServerRequestTimeoutMs(pluginConfig),
       approvalPolicy: forcedPolicy?.approvalPolicy ?? approvalPolicy,
       sandbox: resolvedSandbox,
       approvalsReviewer:

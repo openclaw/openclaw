@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -6,6 +5,7 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -18,7 +18,7 @@ import {
   type CanonicalSessionValidationRow,
 } from "./session-canonical-row.js";
 
-type ValidationDatabase = { agentId: string; db: DatabaseSync };
+type ValidationDatabase = { agentId: string; db: EngineConnection };
 type PendingDatabase = Pick<DB, "session_nodes" | "session_canonical_validation_pending">;
 
 export type CanonicalSessionValidationBatch = {

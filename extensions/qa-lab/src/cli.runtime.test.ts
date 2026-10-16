@@ -118,13 +118,12 @@ vi.mock("./scenario-catalog.js", async (importOriginal) => {
 });
 
 import { resolveRepoRelativeOutputDir } from "./cli-paths.js";
+import { runQaCoverageReportCommand, runQaParityReportCommand } from "./cli-report.runtime.js";
 import { registerQaLabCli } from "./cli.js";
 import {
   runQaDockerScaffoldCommand,
   runQaDockerUpCommand,
   runQaCharacterEvalCommand,
-  runQaCoverageReportCommand,
-  runQaParityReportCommand,
   runQaProfileCommand,
   runQaManualLaneCommand,
   resolveQaHarnessRepoRoot,

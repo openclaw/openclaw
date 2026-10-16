@@ -15,6 +15,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { buildConversationIdentity } from "./conversation-identity.js";
 import {
@@ -703,10 +704,13 @@ describe("conversation registry", () => {
     });
     try {
       const database = openOpenClawAgentDatabase(options);
-      const associationReads = trackSqliteStatementExecutions(database.db, ["route"], (sql) =>
-        sql.startsWith('select "last_seen_at", "route_context_json" from "session_conversations"')
-          ? "route"
-          : null,
+      const associationReads = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database.db),
+        ["route"],
+        (sql) =>
+          sql.startsWith('select "last_seen_at", "route_context_json" from "session_conversations"')
+            ? "route"
+            : null,
       );
       try {
         write(1, 20, { guildId: "receipt-guild" });

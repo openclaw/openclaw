@@ -18,6 +18,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
@@ -91,7 +92,7 @@ async function seedReports(stopReason: AssistantMessage["stopReason"] = assistan
       message: { role: "user", content: body },
     },
   ]);
-  const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+  const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: scope.agentId }).db);
   expect(
     db
       .prepare(
@@ -669,7 +670,9 @@ describe("SQLite report payload selection", () => {
         { type: "session", id: scope.sessionId, version: CURRENT_SESSION_VERSION },
         unreadable,
       ]);
-      const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+      const db = requireNativeSqliteDatabase(
+        openOpenClawAgentDatabase({ agentId: scope.agentId }).db,
+      );
       expect(
         db
           .prepare(
@@ -711,7 +714,9 @@ describe("SQLite report payload selection", () => {
         { type: "session", id: scope.sessionId, version: CURRENT_SESSION_VERSION },
         JSON.parse(raw),
       ]);
-      const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+      const db = requireNativeSqliteDatabase(
+        openOpenClawAgentDatabase({ agentId: scope.agentId }).db,
+      );
       const payload = prepareTranscriptPayload(db, raw);
       expect(payload.event_zstd).not.toBeNull();
       createTranscriptPayloadUpdater(db, scope.sessionId)({ ...payload, seq: 1 });

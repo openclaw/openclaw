@@ -9,6 +9,7 @@ import type { SkillSnapshot } from "../skills/types.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentRunClientContext, AgentRunMessageContext } from "./command/shared-types.js";
 import type { PreparedPairedComputerUse } from "./computer-use-node-capabilities.js";
+import type { resolveConversationQuestionInputMode } from "./conversation-capability-profile.js";
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "./exec-defaults.js";
 import type { InstalledSkill } from "./installed-skill-catalog.js";
@@ -112,6 +113,12 @@ export type OpenClawSharedToolsOptions = {
 };
 
 export type OpenClawToolsOptions = {
+  /** Actual prepared sandbox passed only by the coding-tool assembly owner. */
+  sandbox?: import("./sandbox/types.js").SandboxContext | null;
+  abortSignal?: AbortSignal;
+  pluginExecutionAuthority?: import("./admitted-run-context.js").AdmittedRunOperatorAuthority;
+  /** Captured installation identities, independent of prompt-facing sandbox paths. */
+  pluginExecutionSkillsSnapshot?: SkillSnapshot;
   /** Host-projected default sandbox surface; cannot execute other session actions. */
   sandboxSessionRenameOnly?: boolean;
   /** Host-issued source for session-control schema projection; execution rechecks the caller. */
@@ -122,6 +129,8 @@ export type OpenClawToolsOptions = {
   allowHostBrowserControl?: boolean;
   agentSessionKey?: string;
   agentChannel?: string;
+  /** Prepared active-conversation support for structured human questions. */
+  questionInputMode?: ReturnType<typeof resolveConversationQuestionInputMode>;
   /** Host-bound standalone request/grant authority, never supplied by tool arguments. */
   assertInvocationCurrent?: () => void;
   assertInputCommitAllowed?: () => void;

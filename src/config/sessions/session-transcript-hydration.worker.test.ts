@@ -57,8 +57,10 @@ function fixture(
   ): WorkerTaskChannel => ({
     consumeInput() {},
     notify() {},
-    async request(value) {
-      const chunk = value as SessionTranscriptHydrationChunk;
+    async request(value, transferList) {
+      const chunk = structuredClone(value, {
+        transfer: transferList?.slice(),
+      }) as SessionTranscriptHydrationChunk;
       chunks.push(chunk);
       await onChunk?.(chunk);
       return { input: undefined, consumed() {} };
@@ -92,7 +94,7 @@ it("keeps exact bytes and one snapshot across ACKs and keyset pages", async () =
   // Split a multibyte code point and terminate exact slice multiples with an empty frame.
   texts[0] = `${" ".repeat(65535)}"🦞"`;
   texts[1] = "{}".padEnd(2 * 65536, " ");
-  texts[257] = "{}".padEnd(4 * 65536, " ");
+  texts[257] = "{}".padEnd(20 * 65536, " ");
   const f = fixture(
     texts.map((text, seq) =>
       seq === 257
@@ -104,6 +106,7 @@ it("keeps exact bytes and one snapshot across ACKs and keyset pages", async () =
         : { seq: seq === 0 ? -2 : seq, text },
     ),
   );
+  const decompress = vi.spyOn(codec, "decompress");
   let acknowledgements = 0;
   try {
     const result = await f.stream(async () => {
@@ -153,6 +156,7 @@ it("keeps exact bytes and one snapshot across ACKs and keyset pages", async () =
     ).toEqual([1, 257]);
     expect(f.transactionsAtClose).toEqual([false]);
     expect(f.reader.isOpen).toBe(false);
+    expect(decompress).toHaveBeenCalledTimes(1);
   } finally {
     f.writer.close();
   }

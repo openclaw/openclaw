@@ -163,6 +163,8 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_session_recovery_age_seconds`                   | histogram | `action`, `active_work_kind`, `state`, `status`                                           |
 | `openclaw_gateway_event_loop_delay_max_seconds`           | histogram | none                                                                                      |
 | `openclaw_gateway_event_loop_observed_seconds_total`      | counter   | none                                                                                      |
+| `openclaw_gateway_main_thread_stall_seconds`              | histogram | `task`                                                                                    |
+| `openclaw_gateway_main_thread_stalls_dropped_total`       | counter   | none                                                                                      |
 | `openclaw_liveness_warning_total`                         | counter   | `reason`                                                                                  |
 | `openclaw_liveness_sessions`                              | gauge     | `state`                                                                                   |
 | `openclaw_liveness_event_loop_delay_p99_seconds`          | histogram | `reason`                                                                                  |
@@ -470,6 +472,22 @@ monitor resets discard the unfinished window. Diagnostic queue drops, the
 exporter's series cap, and process restarts can also lose observations. Watch
 the existing drop counters and the represented-duration counter when assessing
 coverage. Readiness decisions and persistent liveness-warning thresholds are unchanged.
+
+### Main-thread stall attribution
+
+`openclaw_gateway_main_thread_stall_seconds{task}` records individual main-thread
+tasks lasting at least 250 milliseconds. Its `_count` counts recorded tasks;
+`_sum` totals their elapsed seconds. Buckets are 0.25, 0.5, 1, 2.5, 5, and 10
+seconds, plus `+Inf`. The `task` label comes from code-owned work scopes and passes
+through the exporter's normal label sanitizer and series cap. It contains no
+request IDs or message content.
+
+`openclaw_gateway_main_thread_stalls_dropped_total` counts records omitted when
+the attribution buffer fills. It appears only after the first loss; the histogram
+appears only after the first recorded stall. Diagnostic queue drops and exporter
+restarts can also lose observations, so an absent histogram does not establish
+that no stalls occurred. Unlike event-loop window maxima, these observations
+attribute elapsed execution to a work scope; they do not provide CPU profiles.
 
 ### Worker request queues
 

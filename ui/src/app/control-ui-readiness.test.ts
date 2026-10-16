@@ -1,6 +1,9 @@
 import { createRouter, definePage } from "@openclaw/uirouter";
+import type { JSX } from "@solidjs/web";
+import { createComponent, Show } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
+import type { SolidRouteProps } from "../app-route-types.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import { ControlUiReadiness, type ControlUiCommittedPresentation } from "./control-ui-readiness.ts";
 import {
@@ -57,21 +60,27 @@ it("publishes the new generation only after the retiring MCP route releases its 
   destination.dataset.destination = "";
   destination.textContent = "Debug";
   type RouteData = { ready: boolean };
-  type RouteModule = { render: (data: RouteData | undefined) => Node | null };
+  type RouteModule = { renderSolid: (props: SolidRouteProps<RouteData>) => JSX.Element };
   const router = createRouter<"about" | "debug", Record<string, never>, RouteModule, RouteData>({
     routes: [
       definePage<"about" | "debug", Record<string, never>, RouteModule, RouteData>({
         id: "about",
         path: "/about",
         component: () => ({
-          render: (data) => (data ? previousView : null),
+          renderSolid: (props) =>
+            createComponent(Show, {
+              get when() {
+                return props.data;
+              },
+              children: () => previousView,
+            }),
         }),
         loader: () => ({ ready: true }),
       }),
       definePage<"about" | "debug", Record<string, never>, RouteModule, RouteData>({
         id: "debug",
         path: "/debug",
-        component: () => ({ render: () => destination }),
+        component: () => ({ renderSolid: () => destination }),
         loader: () => ({ ready: true }),
       }),
     ],

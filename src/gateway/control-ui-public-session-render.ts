@@ -73,9 +73,10 @@ const PUBLIC_SESSION_ENTRY_SCRIPT = `(()=>{
     pending.querySelector(".entry-status h1").textContent="Could not check access";
     pending.querySelector(".entry-status p").textContent="Check your connection, then reload or log in to try again.";
   }
-  if(link)fetch(link.href+"&probe=1",{credentials:"same-origin",redirect:"error",cache:"no-store",signal:AbortSignal.timeout(5000)}).then(response=>{
+  /* An auth proxy in front of the Gateway (Cloudflare Access) answers signed-out probes with a login redirect. */
+  if(link)fetch(link.href+"&probe=1",{credentials:"same-origin",redirect:"manual",cache:"no-store",signal:AbortSignal.timeout(5000)}).then(response=>{
     if(response.status===204||(response.status===401&&hasClientCredential()))location.replace(link.href+location.hash);
-    else if(response.status===401||response.status===403)showUnavailable(pending);
+    else if(response.type==="opaqueredirect"||response.status===401||response.status===403)showUnavailable(pending);
     else probeFailed();
   }).catch(probeFailed);
   document.addEventListener("click",event=>{const login=event.target.closest?.("#session-login");if(login)login.hash=location.hash});

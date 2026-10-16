@@ -107,6 +107,58 @@ describe("worktree template custody", () => {
     },
   );
 
+  it.each([false, true])(
+    "publishes an idle refresh only after settlement (failure=%s)",
+    async (fail) => {
+      const original = await prepareWorktreeTemplate(params);
+      await original?.release();
+      const entered = createDeferred();
+      const finish = createDeferred();
+      const failure = new Error("refresh failed");
+      const next: typeof params = {
+        ...params,
+        contentKey: "commit-2",
+        sourceCommit: "b".repeat(40),
+        refresh: async (record) => {
+          entered.resolve();
+          await finish.promise;
+          await fs.writeFile(path.join(record.path, "source"), "updated");
+          if (fail) {
+            throw failure;
+          }
+          return true;
+        },
+      };
+      const refreshing = prepareWorktreeTemplate(next);
+      await entered.promise;
+      expect((await listTemplatesAsync(env))[0]).toMatchObject({
+        id: original?.id,
+        status: "preparing",
+        contentKey: params.contentKey,
+      });
+      // Another request cannot consume the old tree while the new one is being written.
+      const concurrent = prepareWorktreeTemplate(next);
+      const rejected = fail ? expect(refreshing).rejects.toBe(failure) : undefined;
+      finish.resolve();
+      const refreshed = fail ? (await rejected, undefined) : await refreshing;
+      const reused = await concurrent;
+      if (fail) {
+        expect(reused?.id).not.toBe(original?.id);
+        expect(await fs.readFile(path.join(reused!.path, "source"), "utf8")).toBe("source");
+      } else {
+        expect(reused?.id).toBe(original?.id);
+        expect(await fs.readFile(path.join(reused!.path, "source"), "utf8")).toBe("updated");
+        await refreshed?.release();
+      }
+      expect((await listTemplatesAsync(env))[0]).toMatchObject({
+        status: "ready",
+        contentKey: next.contentKey,
+        sourceCommit: next.sourceCommit,
+      });
+      await reused?.release();
+    },
+  );
+
   it.each(["owner", "waiter"])(
     "keeps the other caller live when the preparation %s aborts",
     async (canceled) => {

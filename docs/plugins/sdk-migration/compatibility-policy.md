@@ -64,6 +64,13 @@ incognito owner during its separate migration.
 
 ### Retained helper contracts
 
+The question-reaction helpers in `openclaw/plugin-sdk/question-gateway-runtime`
+remain available for existing third-party plugins without a contract change. Bundled
+channels no longer use question reactions. New integrations should declare
+native question input through
+[`agentPrompt.questionInputMode`](/plugins/sdk-channel-plugins#what-your-plugin-owns)
+or let the agent ask in plain text. No removal date has been announced.
+
 `openclaw/plugin-sdk/sandbox.resolveSandboxRuntimeStatus` is deprecated. Await
 `resolveSandboxRuntimeStatusAsync` for a session lookup, or use
 `resolvePreparedSandboxRuntimeStatus` with an already selected full session entry

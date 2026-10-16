@@ -621,7 +621,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         state.realtimeTalkInputNotice = null;
         state.requestUpdate?.();
       },
-      onAbort: sessionActionCallbacks.onAbort,
+      ...sessionActionCallbacks,
       onQueueRemove: state.removeQueuedMessage,
       onQueueRetry: providerPaused ? undefined : (id) => void state.retryQueuedChatMessage(id),
       onQueueSteer:
@@ -651,7 +651,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onSetReply: sessionDisabledBanner ? undefined : setReply,
       replyMessageAccess: catalogKey || selectedSessionArchived ? undefined : replyMessageAccess,
       onRewindMessage: selectedSessionArchived ? undefined : sessionActionCallbacks.onRewindMessage,
-      onForkMessage: sessionActionCallbacks.onForkMessage,
       agentsList: state.agentsList,
       currentAgentId,
       fullMessageAgentId: scopedAgentParamsForSession(state, state.sessionKey).agentId,

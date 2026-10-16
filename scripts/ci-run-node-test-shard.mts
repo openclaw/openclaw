@@ -819,11 +819,13 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
                 }
               : entry;
           const selectedArgs =
-            selectedEntry.kind === "target" ? [selectedEntry.target] : selectedEntry.plan.configs;
+            selection.targets ??
+            (selectedEntry.kind === "target" ? [selectedEntry.target] : selectedEntry.plan.configs);
+          const selectedVitestArgs = [...(selection.vitestArgs ?? []), ...vitestExtraArgs];
           const args = nativeBun
             ? ["--native-bun", ...selection.files.map((file) => `./${file}`)]
-            : vitestExtraArgs.length > 0
-              ? [...selectedArgs, "--", ...vitestExtraArgs]
+            : selectedVitestArgs.length > 0
+              ? [...selectedArgs, "--", ...selectedVitestArgs]
               : selectedArgs;
           const childEnv = nativeBun
             ? prepareChildEnv(entry, { ...baseEnv, OPENCLAW_VITEST_RUNTIME: "bun" })
@@ -832,6 +834,19 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
                 cacheSlot,
                 runtime,
               });
+          if (
+            !nativeBun &&
+            (policy === "bun-all" || policy === "dual-all") &&
+            !selection.includePatterns
+          ) {
+            const inheritedInclude = prepareChildEnv(entry, baseEnv).OPENCLAW_VITEST_INCLUDE_FILE;
+            if (
+              inheritedInclude &&
+              !(entry.kind === "group" && entry.plan.includePatterns?.length)
+            ) {
+              childEnv.OPENCLAW_VITEST_INCLUDE_FILE = inheritedInclude;
+            }
+          }
           if (nativeBun) {
             delete childEnv[FS_MODULE_CACHE_ROOT_ENV_KEY];
             delete childEnv[FS_MODULE_CACHE_PATH_ENV_KEY];
@@ -846,6 +861,14 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
               const includeFile = join(scratchDir, `node-test-pre-shard-include-${index}.json`);
               writeFileSync(includeFile, JSON.stringify(includePatterns), "utf8");
               childEnv.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
+            } else if (policy === "bun-all" || policy === "dual-all") {
+              // Preserve discovery before applying the runtime membership after sharding.
+              const inheritedInclude = prepareChildEnv(entry, baseEnv).OPENCLAW_VITEST_INCLUDE_FILE;
+              if (inheritedInclude) {
+                childEnv.OPENCLAW_VITEST_INCLUDE_FILE = inheritedInclude;
+              } else {
+                delete childEnv.OPENCLAW_VITEST_INCLUDE_FILE;
+              }
             } else {
               delete childEnv.OPENCLAW_VITEST_INCLUDE_FILE;
             }

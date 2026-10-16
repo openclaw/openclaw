@@ -1970,8 +1970,11 @@ Phase C entry readers share this bounded MAIN residency. Eligible exact-entry
 and ordered-cohort reads reuse complete actor state or its entry-only projection;
 a cold miss loads the requested entries in one existing worker batch. Retained
 entry facts are frozen and shared, including selected prompt snapshots and sharing
-records. Mutable turn and workspace owners make shallow working copies when they
-adopt these facts; the public SDK detaches its mutable result at its own boundary.
+records. Installation freezes this internally produced JSON without rechecking
+prototypes or property descriptors, and skips already frozen shared subtrees.
+Worker transfer detaches objects but does not freeze them. Mutable turn and
+workspace owners make shallow working copies when they adopt these facts; the
+public SDK detaches its mutable result at its own boundary.
 Complete entry commit receipts refresh the entry projection without claiming transcript,
 membership, or pending-input coverage. Missing ancillary facts still use the
 existing reader. Scoped receipt counters keep unrelated session writes from
@@ -5440,9 +5443,12 @@ Released synchronous SDK readers retain their compatibility kernels. These
 changes add no schema, cache, configuration, migration, or update requirements.
 
 Awaited full-transcript event reads use the same history worker's hydration stream.
-Its ordered cursor includes the first bounded byte slice of each event; only
-larger events need follow-up slice queries. The cursor and follow-up reads retain
-one SQLite snapshot across transport acknowledgments.
+Its ordered cursor includes the first bounded byte slice of small events and
+identity text. Larger compressed events expand once per event, within the existing
+compressed-payload bound, before streaming 64 KiB frames; oversized identity text
+keeps native slice queries. Large compressed-event frame buffers transfer ownership to the host. The
+cursor and follow-up reads retain one SQLite snapshot across transport
+acknowledgments.
 Manual compaction reads entry and transcript statistics after the previous writer
 settles, then reuses them while its lifecycle owner holds admission closed.
 The initial canonical lookup supplies session identity without an unchanged-entry

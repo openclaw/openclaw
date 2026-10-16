@@ -12,6 +12,7 @@ import type {
   ForgetIndexPlan,
   ForgetIndexReadInput,
 } from "./memory-forget-index-task.js";
+import { requireMemorySearchDatabase } from "./memory-search-database.js";
 import { isMemorySessionIndexable } from "./memory/manager-session-sync-state.js";
 
 export async function readMemoryForgetIndexInWorker(
@@ -31,7 +32,8 @@ export async function readMemoryForgetIndexInWorker(
     entryKeys: new Set(request.entryKeys),
     corpusSnippets: new Set(request.corpusSnippets),
   };
-  const result = withFreshOpenClawAgentDatabaseReadOnly(({ db }) => {
+  const result = withFreshOpenClawAgentDatabaseReadOnly(({ db: connection }) => {
+    const db = requireMemorySearchDatabase(connection);
     const kysely = getNodeSqliteKysely<ForgetDatabase>(db);
     const indexedChunks = executeSqliteQuerySync(
       db,
@@ -161,7 +163,8 @@ export async function readMemoryForgetIndexInWorker(
     // Preview must not create or migrate state; its owner-validated handle
     // stays read-only while exposing vec0.
     const vectorResult = withFreshOpenClawAgentDatabaseReadOnly(
-      ({ db }) => {
+      ({ db: connection }) => {
+        const db = requireMemorySearchDatabase(connection);
         db.enableLoadExtension(true);
         db.loadExtension(preparedExtensionPath);
         const vectorKysely = getNodeSqliteKysely<ForgetDatabase>(db);

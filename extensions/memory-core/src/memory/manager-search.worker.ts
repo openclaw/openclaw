@@ -27,6 +27,10 @@ import type {
 } from "../memory-entry-origins-task.js";
 import { readMemoryForgetIndexInWorker } from "../memory-forget-index-read.js";
 import type { ForgetIndexPlan, ForgetIndexReadInput } from "../memory-forget-index-task.js";
+import {
+  requireMemorySearchCapability,
+  requireMemorySearchDatabase,
+} from "../memory-search-database.js";
 import type { MemoryDatabaseAdmission } from "./manager-database-admission.js";
 import { readMemoryIndex, type MemoryIndexReadCommand } from "./manager-index-read.js";
 import {
@@ -116,6 +120,7 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
     // A reply confirms module evaluation without opening an index or loading a provider.
     return { kind: "prewarm" };
   }
+  requireMemorySearchCapability();
   if (request.kind === "presence") {
     // This pre-manager probe also recognizes shipped memory-only databases.
     return { kind: "presence", present: inspectMemoryIndexPresenceInWorker(request.databasePath) };
@@ -128,7 +133,7 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
   }
   if (request.kind === "recall-metadata") {
     const result = withOpenClawAgentDatabaseReadOnly(
-      ({ db }) => readMemoryRecallData(db, request),
+      ({ db }) => readMemoryRecallData(requireMemorySearchDatabase(db), request),
       { agentId: request.agentId, path: request.databasePath },
     );
     if (!result.found) {
@@ -167,8 +172,8 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
     }
     throw new Error(`Memory search database unavailable: ${opened.reason}`);
   }
-  const { db } = opened.database;
   try {
+    const db = requireMemorySearchDatabase(opened.database.db);
     if (request.kind === "admission" || request.kind === "status") {
       const schema = getAdmittedSqliteSchemaFacts(db);
       if (!schema) {
