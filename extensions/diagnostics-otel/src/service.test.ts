@@ -2008,7 +2008,10 @@ describe("diagnostics-otel service", () => {
           "meterProvider",
           expect.anything(),
         );
-        expect(firstSpanProcessorOptions().selfObsMeterProvider).toBeDefined();
+        expect(firstSpanProcessorOptions()).toHaveProperty(
+          "selfObsMeterProvider",
+          expect.anything(),
+        );
         expect(diagWarn).toHaveBeenCalledWith(
           "OTEL_METRIC_EXPORT_TIMEOUT (3000) is greater than the active metric export interval (2000). Clamping timeout to interval value.",
         );
