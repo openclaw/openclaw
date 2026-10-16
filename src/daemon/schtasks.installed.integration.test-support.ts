@@ -16,42 +16,12 @@ import { waitForGatewayHttpReadiness } from "../cli/daemon-cli/restart-health-pr
 import { DEFAULT_RESTART_HEALTH_DELAY_MS } from "../cli/daemon-cli/restart-health.constants.js";
 import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import { run, type CommandRecord } from "./schtasks.installed-command.test-support.js";
-import {
-  assertInstalledSiblingBuildRefusal,
-  assertInstalledTaskDefinition,
-  doctorReportSchema,
-  inspectDisabledDiscoveryTasks,
-  inspectInstalledUpdateFailure,
-  runInstalledPublishedUpdate,
-  type InstalledTask as Task,
-} from "./schtasks.installed-diagnostics.test-support.js";
-import {
-  boundedEnv,
-  cellEvidence,
-  createInstalledProgressRecorder,
-  describeFailure,
-  entry,
-  installedStatusSchema,
-  keys,
-  packageRoot,
-  parseInstalledPreview,
-  prefix,
-  readInput,
-  readInstalledBuildIdentity,
-  readPreparedCell,
-  recordCapacityBoundary,
-  samePath,
-  verifyPreparedInstall,
-} from "./schtasks.installed-package.test-support.js";
-import {
-  inspectInstalledSelectedStartupFallback,
-  inspectInstalledStartupAliasBuildRefusal,
-  inspectInstalledStartupSiblings,
-} from "./schtasks.installed-startup.test-support.js";
+import * as diagnostics from "./schtasks.installed-diagnostics.test-support.js";
+import type { InstalledTask as Task } from "./schtasks.installed-diagnostics.test-support.js";
+import * as installed from "./schtasks.installed-package.test-support.js";
+import * as startup from "./schtasks.installed-startup.test-support.js";
 
 type Lifetime = ReturnType<typeof createFixtureLifetime>;
-const writeJson = (file: string, value: unknown) =>
-  fs.writeFile(file, JSON.stringify(value, null, 2));
 function combineFailure(
   previous: Error | undefined,
   error: unknown,
@@ -59,6 +29,30 @@ function combineFailure(
   options?: ErrorOptions,
 ) {
   return new AggregateError(previous ? [previous, error] : [error], message, options);
+}
+async function withFinalizer<T>(
+  action: () => Promise<T>,
+  finalize: (failure?: Error) => Promise<unknown>,
+  actionMessage: string,
+  finalizerMessage: string,
+  finalizerOptions?: (error: unknown) => ErrorOptions,
+) {
+  const outcome = await Promise.resolve()
+    .then(action)
+    .then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error: toErrorObject(error, actionMessage) }),
+    );
+  const failure = outcome.ok ? undefined : outcome.error;
+  try {
+    await finalize(failure);
+  } catch (error) {
+    throw combineFailure(failure, error, finalizerMessage, finalizerOptions?.(error));
+  }
+  if (!outcome.ok) {
+    throw outcome.error;
+  }
+  return outcome.value;
 }
 type Owners = {
   reserveLoopbackPort: () => Promise<number>;
@@ -92,31 +86,31 @@ export async function runInstalledLifecycle(
   const { readTaskPrincipal, readTaskXml, readRelatedProcessDiagnostics } =
     await import("./schtasks.integration-observation.test-support.js");
   const { waitForProcessExit } = await import("./schtasks.task-supervisor.native-test-support.js");
-  const key = z.enum(keys).parse(process.env.CI_WINDOWS_SCHTASKS_INSTALLED_CELL);
-  const cellIndex = keys.indexOf(key);
-  const input = await readInput(inputPath);
+  const key = z.enum(installed.keys).parse(process.env.CI_WINDOWS_SCHTASKS_INSTALLED_CELL);
+  const cellIndex = installed.keys.indexOf(key);
+  const input = await installed.readInput(inputPath);
   assert.equal(input.toolingSha, process.env.CI_WINDOWS_SCHTASKS_HEAD);
-  const prepared = await readPreparedCell(inputPath, input, key);
+  const prepared = await installed.readPreparedCell(inputPath, input, key);
   const id = process.env.CI_WINDOWS_SCHTASKS_TEST_ID;
   assert.ok(id && /^[a-z0-9-]{1,48}$/u.test(id));
-  samePath(path.join(input.stateRoot, key), process.env.CI_WINDOWS_SCHTASKS_ROOT ?? "");
+  installed.samePath(path.join(input.stateRoot, key), process.env.CI_WINDOWS_SCHTASKS_ROOT ?? "");
   const proofPath = process.env.CI_WINDOWS_SCHTASKS_PROOF_PATH;
   assert.ok(proofPath);
-  samePath(path.dirname(proofPath), cellEvidence(inputPath, key));
+  installed.samePath(path.dirname(proofPath), installed.cellEvidence(inputPath, key));
   await fs.mkdir(path.dirname(proofPath), { recursive: true });
   const admissions: Array<Record<string, unknown>> = [];
   const defaultBefore = await owners.readTaskDefinitionSnapshot("OpenClaw Gateway");
   const admissionPath = path.join(path.dirname(proofPath), "installed-cleanup.json");
   const rootDir = path.join(input.stateRoot, key);
   await fs.mkdir(rootDir);
-  const installRoot = prefix(input, key);
-  const initial = await verifyPreparedInstall(prepared, key, installRoot);
+  const installRoot = installed.prefix(input, key);
+  const initial = await installed.verifyPreparedInstall(prepared, key, installRoot);
   const commands: CommandRecord[] = [];
   const tasks: Task[] = [];
   let authorityPeerRoot: string | undefined;
   const observations: Record<string, unknown> = {};
   let cellFailure: Error | undefined;
-  const recordProgress = createInstalledProgressRecorder({
+  const recordProgress = installed.createInstalledProgressRecorder({
     input,
     key,
     rootDir,
@@ -125,46 +119,35 @@ export async function runInstalledLifecycle(
     observations,
   });
   await recordProgress("selected:hash-verified");
-  const cli = async (task: Task, args: string[], expectedExit = 0) => {
-    let commandFailure: Error | undefined;
-    let output = "";
-    try {
-      output = await run(
-        [task.entry, "--profile", task.profile, ...args],
-        task.env,
-        rootDir,
-        commands,
-        expectedExit,
-        signal,
-        {
-          observeService:
-            args[0] === "gateway" && (args[1] === "install" || args[1] === "status")
-              ? args[1]
-              : undefined,
-        },
-      );
-    } catch (error) {
-      commandFailure = toErrorObject(error, "Installed Scheduled Task command failed");
-    }
-    try {
-      await recordProgress(`command:${args.slice(0, 2).join(" ")}`, commandFailure);
-    } catch (recordError) {
-      throw combineFailure(commandFailure, recordError, "Installed command recording failed", {
-        cause: recordError,
-      });
-    }
-    if (commandFailure) {
-      throw commandFailure;
-    }
-    return output;
-  };
+  const cli = (task: Task, args: string[], expectedExit = 0) =>
+    withFinalizer(
+      () =>
+        run(
+          [task.entry, "--profile", task.profile, ...args],
+          task.env,
+          rootDir,
+          commands,
+          expectedExit,
+          signal,
+          {
+            observeService:
+              args[0] === "gateway" && (args[1] === "install" || args[1] === "status")
+                ? args[1]
+                : undefined,
+          },
+        ),
+      (failure) => recordProgress(`command:${args.slice(0, 2).join(" ")}`, failure),
+      "Installed Scheduled Task command failed",
+      "Installed command recording failed",
+      (cause) => ({ cause }),
+    );
   const jsonCli = async (task: Task, args: string[], expectedExit = 0) =>
     JSON.parse(await cli(task, args, expectedExit));
   const gateway = (task: Task, ...args: string[]) => cli(task, ["gateway", ...args, "--json"]);
   const readStatus = (task: Task) => jsonCli(task, ["gateway", "status", "--json"]);
   const inspection = {
     doctor: async (task: Task, expectedExit = 1) =>
-      doctorReportSchema
+      diagnostics.doctorReportSchema
         .extend({ ok: z.literal(expectedExit === 0) })
         .parse(
           await jsonCli(
@@ -239,13 +222,13 @@ export async function runInstalledLifecycle(
     const configPath = path.join(stateDir, "openclaw.json");
     const taskName = resolveGatewayWindowsTaskName(profile);
     const gatewayPort = await owners.reserveLoopbackPort();
-    const taskInstallRoot = role === "peer" ? prefix(input, `${key}-peer`) : installRoot;
+    const taskInstallRoot = role === "peer" ? installed.prefix(input, `${key}-peer`) : installRoot;
     if (role === "peer") {
-      await verifyPreparedInstall(prepared, `${key}-peer`, taskInstallRoot);
+      await installed.verifyPreparedInstall(prepared, `${key}-peer`, taskInstallRoot);
       await recordProgress("peer:hash-verified");
     }
     const env = {
-      ...boundedEnv(rootDir, taskInstallRoot),
+      ...installed.boundedEnv(rootDir, taskInstallRoot),
       OPENCLAW_PROFILE: profile,
       OPENCLAW_WINDOWS_TASK_NAME: taskName,
       OPENCLAW_STATE_DIR: stateDir,
@@ -272,13 +255,13 @@ export async function runInstalledLifecycle(
       stateDir,
       rootDir,
       installRoot: taskInstallRoot,
-      entry: entry(taskInstallRoot),
+      entry: installed.entry(taskInstallRoot),
       scriptPath: resolveTaskScriptPath(env),
     };
     const task = { ...admission, configPath, gatewayPort, env };
     tasks.push(task);
     admissions.push({ ...admission, taskInitiallyAbsent: true, cell: key, role });
-    await writeJson(admissionPath, admissions);
+    await installed.writeJson(admissionPath, admissions);
     // Both published CLIs support these options; 9.3 has no --runtime-path.
     await gateway(task, "install", "--runtime", "node", "--port", String(gatewayPort));
     // Installation acknowledges activation; the service owner has not checked readiness yet.
@@ -287,24 +270,26 @@ export async function runInstalledLifecycle(
   };
   const status = async (
     task: Task,
-    expected: Awaited<ReturnType<typeof readInstalledBuildIdentity>>,
+    expected: Awaited<ReturnType<typeof installed.readInstalledBuildIdentity>>,
     definition: "published" | "candidate",
   ) => {
-    const value = installedStatusSchema.parse(await readStatus(task));
+    const value = installed.installedStatusSchema.parse(await readStatus(task));
     assert.deepEqual(value.rpc.server, expected);
     assert.deepEqual(value.gateway, { version: expected.version, port: task.gatewayPort });
     assert.equal(value.rpc.url, `ws://127.0.0.1:${task.gatewayPort}`);
     assert.equal(await owners.canBindLoopbackPort(task.gatewayPort), false);
     assert.equal(readTaskPrincipal(task.taskName).taskState, 4);
-    samePath(value.service.command.programArguments[0] ?? "", process.execPath);
+    installed.samePath(value.service.command.programArguments[0] ?? "", process.execPath);
     assert.ok(
       value.service.command.programArguments.some(
         (arg) =>
           path.isAbsolute(arg) &&
-          arg.toLowerCase().startsWith((packageRoot(task.installRoot) + path.sep).toLowerCase()),
+          arg
+            .toLowerCase()
+            .startsWith((installed.packageRoot(task.installRoot) + path.sep).toLowerCase()),
       ),
     );
-    await assertInstalledTaskDefinition(task, definition);
+    await diagnostics.assertInstalledTaskDefinition(task, definition);
     return value;
   };
   try {
@@ -314,7 +299,7 @@ export async function runInstalledLifecycle(
     await fs.writeFile(path.join(rootDir, "npmrc"), "");
     await fs.writeFile(path.join(rootDir, "global-npmrc"), "");
     const selected = await createTask("selected");
-    const beforeIdentity = await readInstalledBuildIdentity(
+    const beforeIdentity = await installed.readInstalledBuildIdentity(
       installRoot,
       key === "fresh" ? input.candidate.version : key,
     );
@@ -330,14 +315,14 @@ export async function runInstalledLifecycle(
     if (key !== "fresh") {
       const peer = await createTask("peer");
       authorityPeerRoot = peer.installRoot;
-      const peerIdentity = await readInstalledBuildIdentity(peer.installRoot, key);
+      const peerIdentity = await installed.readInstalledBuildIdentity(peer.installRoot, key);
       const peerBefore = await status(peer, peerIdentity, "published");
       const peerXml = await readTaskXml(peer.taskName);
       const peerConfig = await fs.readFile(peer.configPath);
       const peerInstallBefore = await hashInstall(peer.installRoot);
       await recordProgress("peer-before-update:hash-verified");
       if (key === "2026.9.4") {
-        observations.siblingBuildRefusal = await assertInstalledSiblingBuildRefusal({
+        observations.siblingBuildRefusal = await diagnostics.assertInstalledSiblingBuildRefusal({
           ...context,
           toolingEntry: path.resolve("scripts/run-node.mjs"),
           selected,
@@ -361,13 +346,13 @@ export async function runInstalledLifecycle(
         installed: await hashInstall(installRoot),
       };
       await recordProgress("published-driver:hash-verified");
-      observations.update = await runInstalledPublishedUpdate({
+      observations.update = await diagnostics.runInstalledPublishedUpdate({
         ...context,
         task: selected,
       });
       await prepareInstalledPackage({ ...input, installRoot });
       await recordProgress("updated-candidate:hash-verified");
-      const candidateIdentity = await readInstalledBuildIdentity(
+      const candidateIdentity = await installed.readInstalledBuildIdentity(
         installRoot,
         input.candidate.version,
       );
@@ -398,23 +383,24 @@ export async function runInstalledLifecycle(
       assert.deepEqual(await hashInstall(peer.installRoot), peerInstallBefore);
       await recordProgress("peer-after-update:hash-verified");
       observations.peerPreserved = true;
-      observations.startupSiblings = await inspectInstalledStartupSiblings({
+      observations.startupSiblings = await startup.inspectInstalledStartupSiblings({
         ...inspection,
         selected,
         launcher: peer,
         expectedStatus: after,
       });
       if (key === "2026.9.4") {
-        observations.startupAliasBuildRefusal = await inspectInstalledStartupAliasBuildRefusal({
-          ...context,
-          toolingEntry: path.resolve("scripts/run-node.mjs"),
-          selected,
-          peer,
-          expectedSelected: after,
-          expectedPeer: peerAfter,
-          readStatus,
-          waitForLoopbackPortRelease: owners.waitForLoopbackPortRelease,
-        });
+        observations.startupAliasBuildRefusal =
+          await startup.inspectInstalledStartupAliasBuildRefusal({
+            ...context,
+            toolingEntry: path.resolve("scripts/run-node.mjs"),
+            selected,
+            peer,
+            expectedSelected: after,
+            expectedPeer: peerAfter,
+            readStatus,
+            waitForLoopbackPortRelease: owners.waitForLoopbackPortRelease,
+          });
       }
       await gateway(peer, "stop", "--force");
       await owners.waitForLoopbackPortRelease(peer.gatewayPort);
@@ -422,12 +408,12 @@ export async function runInstalledLifecycle(
     }
     // The packaged candidate must reach its real strict inspection preview, not exit-zero skip.
     const preview = async (task: Task = selected) =>
-      parseInstalledPreview(
+      installed.parseInstalledPreview(
         await cli(task, ["update", "--dry-run", "--tag", input.tarball, "--json"]),
         task.installRoot,
       );
     if (key === "fresh") {
-      observations.discovery = await inspectDisabledDiscoveryTasks({
+      observations.discovery = await diagnostics.inspectDisabledDiscoveryTasks({
         ...context,
         selected,
         preview,
@@ -438,7 +424,7 @@ export async function runInstalledLifecycle(
         rootDir,
         installRoot,
       });
-      observations.startupSiblings = await inspectInstalledStartupSiblings({
+      observations.startupSiblings = await startup.inspectInstalledStartupSiblings({
         ...inspection,
         selected,
         launcher: selected,
@@ -448,7 +434,10 @@ export async function runInstalledLifecycle(
     const beforeRestartPid = candidateStatus.service.runtime.pid;
     const beforeRestartXml = await readTaskXml(selected.taskName);
     assert.ok(beforeRestartXml);
-    const restartIdentity = await readInstalledBuildIdentity(installRoot, input.candidate.version);
+    const restartIdentity = await installed.readInstalledBuildIdentity(
+      installRoot,
+      input.candidate.version,
+    );
     await gateway(selected, "restart");
     await waitForProcessExit(beforeRestartPid);
     await awaitReadiness(selected, "candidate-restart");
@@ -471,7 +460,7 @@ export async function runInstalledLifecycle(
     );
     await gateway(selected, "stop", "--force");
     await owners.waitForLoopbackPortRelease(selected.gatewayPort);
-    observations.selectedStartupFallback = await inspectInstalledSelectedStartupFallback({
+    observations.selectedStartupFallback = await startup.inspectInstalledSelectedStartupFallback({
       ...inspection,
       observeFingerprint:
         key === "2026.9.4"
@@ -535,38 +524,30 @@ export async function runInstalledLifecycle(
         .replace(/<Arguments>[\s\S]*?<\/Arguments>/u, "")}`,
       "utf16le",
     );
-    let previewFailure: Error | undefined;
-    try {
-      await registerXml(malformedXml);
-      const registeredEmpty = await readTaskXml(selected.taskName);
-      assert.equal(readTaskPrincipal(selected.taskName).enabled, false);
-      const malformed = await preview();
-      assert.equal(await readTaskXml(selected.taskName), registeredEmpty);
-      assert.ok(
-        malformed.notes.some((note) => note.includes("Gateway service inspection is unavailable")),
-      );
-      assert.equal(await hashFile(selected.scriptPath), canonicalScriptHash);
-      observations.strictPreview = {
-        healthy,
-        malformed,
-        canonicalScriptHash,
-        malformedLauncherExecuted: false,
-      };
-    } catch (error) {
-      previewFailure = toErrorObject(error, "Installed Scheduled Task fixture failed");
-    }
-    try {
-      await registerXml(restoreXml);
-    } catch (error) {
-      previewFailure = combineFailure(
-        previewFailure,
-        error,
-        "Registered launcher restoration failed",
-      );
-    }
-    if (previewFailure) {
-      throw previewFailure;
-    }
+    await withFinalizer(
+      async () => {
+        await registerXml(malformedXml);
+        const registeredEmpty = await readTaskXml(selected.taskName);
+        assert.equal(readTaskPrincipal(selected.taskName).enabled, false);
+        const malformed = await preview();
+        assert.equal(await readTaskXml(selected.taskName), registeredEmpty);
+        assert.ok(
+          malformed.notes.some((note) =>
+            note.includes("Gateway service inspection is unavailable"),
+          ),
+        );
+        assert.equal(await hashFile(selected.scriptPath), canonicalScriptHash);
+        observations.strictPreview = {
+          healthy,
+          malformed,
+          canonicalScriptHash,
+          malformedLauncherExecuted: false,
+        };
+      },
+      () => registerXml(restoreXml),
+      "Installed Scheduled Task fixture failed",
+      "Registered launcher restoration failed",
+    );
     assert.deepEqual(await fs.readFile(selected.configPath), configBeforePreview);
     await gateway(selected, "uninstall");
     assert.equal(probeScheduledTaskExists(selected.taskName), false);
@@ -578,7 +559,12 @@ export async function runInstalledLifecycle(
     cellFailure = toErrorObject(error, "Installed Scheduled Task fixture failed");
     if (key !== "fresh" && tasks[0]) {
       try {
-        await inspectInstalledUpdateFailure({ task: tasks[0], commands, signal, observations });
+        await diagnostics.inspectInstalledUpdateFailure({
+          task: tasks[0],
+          commands,
+          signal,
+          observations,
+        });
       } catch (inspectionError) {
         cellFailure = combineFailure(
           cellFailure,
@@ -615,7 +601,11 @@ export async function runInstalledLifecycle(
         );
         await recordProgress("native-cleanup:command-result");
       });
-      await cleanupTask(task, packageRoot(task.installRoot), path.join(rootDir, "commands.json"));
+      await cleanupTask(
+        task,
+        installed.packageRoot(task.installRoot),
+        path.join(rootDir, "commands.json"),
+      );
       await owners.waitForLoopbackPortRelease(task.gatewayPort);
     } catch (error) {
       cellFailure = combineFailure(cellFailure, error, "Native cleanup failed");
@@ -623,25 +613,25 @@ export async function runInstalledLifecycle(
   }
   try {
     const remaining = readRelatedProcessDiagnostics(
-      tasks.map((task) => packageRoot(task.installRoot)),
+      tasks.map((task) => installed.packageRoot(task.installRoot)),
     );
     assert.equal(remaining.ok, true);
     assert.equal(remaining.truncated, false);
     assert.deepEqual(remaining.processes, []);
     assert.deepEqual(await owners.readTaskDefinitionSnapshot("OpenClaw Gateway"), defaultBefore);
-    await recordCapacityBoundary(inputPath, input, key, "after-native-cleanup");
+    await installed.recordCapacityBoundary(inputPath, input, key, "after-native-cleanup");
   } catch (error) {
     cellFailure = combineFailure(cellFailure, error, "Native residue remains");
   }
-  await writeJson(path.join(rootDir, "commands.json"), commands);
+  await installed.writeJson(path.join(rootDir, "commands.json"), commands);
   const result = {
     key,
     result: cellFailure ? "failed" : "passed",
     commands,
     observations,
-    failure: cellFailure ? describeFailure(cellFailure) : undefined,
+    failure: cellFailure ? installed.describeFailure(cellFailure) : undefined,
   };
-  await writeJson(proofPath, {
+  await installed.writeJson(proofPath, {
     result: cellFailure ? "failed" : "pass",
     head: input.toolingSha,
     candidate: input.candidate,
