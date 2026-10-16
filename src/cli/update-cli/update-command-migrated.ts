@@ -9,6 +9,7 @@ import {
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveDaemonRuntimePinStorePath } from "../../daemon/runtime-pin-store.js";
+import { resolveStatePortRoots } from "../../infra/database-engine/state-port.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
@@ -76,10 +77,14 @@ export async function inspectActivatedUpdateState(
     });
     const shared = current.find((entry) => entry.path === resolveOpenClawStateSqlitePath(env));
     const sharedVersion = shared ? resolveUpdateStateContentVersion(shared) : undefined;
+    const sharedStatePaths = new Set(
+      resolveStatePortRoots({ stateDir: resolveStateDir(env), config, env }),
+    );
     const incompleteAgents = candidateSchemaVersions
       ? current.filter(
           (entry) =>
             entry !== shared &&
+            !sharedStatePaths.has(entry.path) &&
             !shared?.retainedAgentPaths?.includes(entry.path) &&
             entry.path !== resolveDaemonRuntimePinStorePath(env) &&
             entry.userVersion !== null &&

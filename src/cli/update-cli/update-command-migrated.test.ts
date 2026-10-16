@@ -261,6 +261,57 @@ it.each([
   },
 );
 
+it.each([
+  { name: "default", pluginId: undefined },
+  { name: "configured", pluginId: "voice-call" },
+  { name: "scoped configured", pluginId: "@openclaw/voice-call" },
+])(
+  "accepts a retained $name Voice Call state store with plugins disabled",
+  async ({ pluginId }) => {
+    const stateDir = await fs.realpath(dirs.make("update-voice-call-state-"));
+    const voiceStore = pluginId
+      ? path.join(stateDir, "retained-voice-store")
+      : path.join(stateDir, "voice-calls");
+    const voicePath = path.join(voiceStore, "state", "openclaw.sqlite");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const config = {
+      plugins: {
+        enabled: false,
+        ...(pluginId
+          ? { entries: { [pluginId]: { enabled: false, config: { store: voiceStore } } } }
+          : {}),
+      },
+    };
+    openOpenClawStateDatabase({ env });
+    openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: voiceStore } });
+    const schemaVersions = await readUpdateStateSchemaVersions({ stateDir, config, env });
+    expect(schemaVersions).toContainEqual(expect.objectContaining({ path: voicePath }));
+    const result = {
+      status: "ok" as const,
+      mode: "npm" as const,
+      root: candidateRoot,
+      steps: [],
+      durationMs: 0,
+    };
+    await expect(
+      runtimeFixture.track(
+        inspectActivatedUpdateState({
+          result,
+          root: candidateRoot,
+          schemaVersions,
+          candidateSchemaVersions: {
+            state: OPENCLAW_STATE_SCHEMA_VERSION,
+            agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+          },
+          config,
+          env,
+        }),
+      ),
+    ).resolves.toBeUndefined();
+    expect(result).toMatchObject({ status: "ok", steps: [] });
+  },
+);
+
 it.each<{
   pending: boolean;
   status: "error" | "skipped";
