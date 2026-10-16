@@ -114,7 +114,10 @@ const mocks = vi.hoisted(() => ({
   detectLegacyStateMigrations: vi.fn(),
   runLegacyStateMigrations: vi.fn(),
   repairObsoleteGeneratedExecApprovals: vi.fn(() => 0),
-  collectLegacyPluginManifestContractMigrations: vi.fn(() => [] as unknown[]),
+  collectLegacyPluginManifestContractMigrations: vi.fn(
+    (_params?: { onSkippedManifest?: (skip: { manifestPath: string; reason: string }) => void }) =>
+      [] as unknown[],
+  ),
   legacyPluginManifestContractMigrationToHealthFinding: vi.fn(
     (migration: { pluginId: string }) => ({
       checkId: "core/doctor/legacy-plugin-manifests",
@@ -125,6 +128,13 @@ const mocks = vi.hoisted(() => ({
       requirement: "contracts-capability-keys",
     }),
   ),
+  legacyPluginManifestSkipToHealthFinding: vi.fn((skip: { manifestPath: string }) => ({
+    checkId: "core/doctor/legacy-plugin-manifests",
+    severity: "warning" as const,
+    message: `Plugin manifest ${skip.manifestPath} was not migrated: its bytes are not valid UTF-8.`,
+    path: skip.manifestPath,
+    requirement: "utf8-manifest",
+  })),
   maybeRepairLegacyPluginManifestContracts: vi.fn().mockResolvedValue(undefined),
   maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue({
     changes: [],
@@ -361,6 +371,7 @@ vi.mock("../commands/doctor-plugin-manifests.js", () => ({
     mocks.collectLegacyPluginManifestContractMigrations,
   legacyPluginManifestContractMigrationToHealthFinding:
     mocks.legacyPluginManifestContractMigrationToHealthFinding,
+  legacyPluginManifestSkipToHealthFinding: mocks.legacyPluginManifestSkipToHealthFinding,
   maybeRepairLegacyPluginManifestContracts: mocks.maybeRepairLegacyPluginManifestContracts,
 }));
 
@@ -846,9 +857,47 @@ describe("doctor health contributions", () => {
     expect(mocks.collectLegacyPluginManifestContractMigrations).toHaveBeenCalledWith({
       config: ctx.cfg,
       env: process.env,
+      onSkippedManifest: expect.any(Function),
     });
     expect(mocks.legacyPluginManifestContractMigrationToHealthFinding).toHaveBeenCalledWith(
       migration,
+      expect.any(Number),
+      expect.any(Array),
+    );
+  });
+
+  it("reports a legacy manifest skipped for undecodable bytes", async () => {
+    const contribution = requireDoctorContribution("doctor:legacy-plugin-manifests");
+    const check = contribution.healthChecks[0] as HealthCheck;
+    const skip = {
+      manifestPath: "/tmp/openclaw-plugin/openclaw.plugin.json",
+      reason:
+        "File is not valid UTF-8: /tmp/openclaw-plugin/openclaw.plugin.json; preserve its bytes and convert a copy to UTF-8 before retrying",
+    };
+    mocks.collectLegacyPluginManifestContractMigrations.mockImplementationOnce((params) => {
+      params?.onSkippedManifest?.(skip);
+      return [];
+    });
+    const ctx = createDoctorLintFixture({ plugins: { load: { paths: ["/tmp/openclaw-plugin"] } } });
+
+    await expect(
+      runDoctorLintChecks(ctx, {
+        checks: [check],
+        onlyIds: ["core/doctor/legacy-plugin-manifests"],
+      }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [
+        expect.objectContaining({
+          checkId: "core/doctor/legacy-plugin-manifests",
+          path: skip.manifestPath,
+          requirement: "utf8-manifest",
+        }),
+      ],
+    });
+    expect(mocks.legacyPluginManifestSkipToHealthFinding).toHaveBeenCalledWith(
+      skip,
       expect.any(Number),
       expect.any(Array),
     );
