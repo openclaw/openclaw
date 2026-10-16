@@ -3,6 +3,7 @@ import { createDirectoryTestRuntime } from "openclaw/plugin-sdk/channel-test-hel
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readWebAuthExistsForDecision } from "./auth-store.js";
+import { whatsappPlugin } from "./channel.js";
 import { getWhatsAppConnectionController } from "./connection-controller-runtime-context.js";
 import {
   acquireWhatsAppStandaloneConnectionOwner,
@@ -31,9 +32,13 @@ vi.mock("./active-listener.js", () => ({
   resolveWebAccountId: () => "default",
 }));
 
-vi.mock("./accounts.js", () => ({
-  resolveWhatsAppAuthDir: mocks.resolveAuthDir,
-}));
+vi.mock("./accounts.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./accounts.js")>();
+  return {
+    ...actual,
+    resolveWhatsAppAuthDir: mocks.resolveAuthDir,
+  };
+});
 
 vi.mock("./connection-controller-runtime-context.js", () => ({
   getWhatsAppConnectionController: mocks.getController,
@@ -92,6 +97,15 @@ describe("whatsapp directory", () => {
       runtime: runtimeEnv,
     }) as never;
 
+  const makeGroupMembersParams = (overrides: { groupId?: string; limit?: number } = {}) =>
+    ({
+      cfg,
+      accountId: undefined,
+      groupId: overrides.groupId ?? "120363418482883586@g.us",
+      limit: overrides.limit,
+      runtime: runtimeEnv,
+    }) as never;
+
   beforeEach(() => {
     vi.clearAllMocks();
     getControllerMock.mockReturnValue(null);
@@ -123,6 +137,74 @@ describe("whatsapp directory", () => {
     await expect(
       listWhatsAppDirectoryGroupsLive(makeParams({ query: "beta", limit: 1 })),
     ).resolves.toEqual([{ kind: "group", id: "120363100000000000@g.us", name: "Beta Team" }]);
+    expect(acquireOwnerMock).not.toHaveBeenCalled();
+  });
+
+  it("lists members through the active owner and preserves non-phone identifiers", async () => {
+    const groupId = "120363418482883586@g.us";
+    const proofEnabled = process.env.OPENCLAW_WHATSAPP_DIRECTORY_PROOF === "1";
+    const sock = {
+      groupMetadata: vi.fn().mockResolvedValue({
+        participants: [
+          { id: "opaque-member@lid", admin: null },
+          { id: "15551234567@s.whatsapp.net", admin: "admin" },
+        ],
+      }),
+    };
+    getControllerMock.mockReturnValue({ getCurrentSock: () => sock } as never);
+    const listGroupMembers = whatsappPlugin.directory?.listGroupMembers;
+    if (proofEnabled) {
+      console.log(
+        `WHATSAPP_DIRECTORY_PROOF capability=${typeof listGroupMembers === "function" ? "available" : "missing"} group=${groupId}`,
+      );
+    }
+    expect(listGroupMembers).toBeTypeOf("function");
+
+    const members = await listGroupMembers!(makeGroupMembersParams({ groupId }));
+    if (proofEnabled) {
+      console.log(`WHATSAPP_DIRECTORY_PROOF members=${JSON.stringify(members)}`);
+    }
+    expect(members).toEqual([
+      {
+        kind: "user",
+        id: "15551234567@s.whatsapp.net",
+        raw: { admin: "admin" },
+      },
+      { kind: "user", id: "opaque-member@lid", raw: { admin: "member" } },
+    ]);
+    expect(sock.groupMetadata).toHaveBeenCalledExactlyOnceWith(groupId);
+    expect(acquireOwnerMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["whatsapp:120363418482883586@g.us", "120363418482883586@g.us"],
+    ["whatsapp:group:120363418482883586@g.us", "120363418482883586@g.us"],
+  ])("normalizes prefixed group IDs before metadata lookup", async (groupId, normalizedGroupId) => {
+    const sock = {
+      groupMetadata: vi.fn().mockResolvedValue({ participants: [] }),
+    };
+    getControllerMock.mockReturnValue({ getCurrentSock: () => sock } as never);
+    const listGroupMembers = whatsappPlugin.directory?.listGroupMembers;
+    expect(listGroupMembers).toBeTypeOf("function");
+
+    await listGroupMembers!(makeGroupMembersParams({ groupId }));
+
+    expect(sock.groupMetadata).toHaveBeenCalledExactlyOnceWith(normalizedGroupId);
+  });
+
+  it("rejects a non-group JID before opening a member lookup", async () => {
+    const listGroupMembers = whatsappPlugin.directory?.listGroupMembers;
+    expect(listGroupMembers).toBeTypeOf("function");
+
+    await expect(
+      listGroupMembers!(makeGroupMembersParams({ groupId: "15551234567@s.whatsapp.net" })),
+    ).rejects.toThrow("WhatsApp group member lookup requires a group JID.");
+    if (process.env.OPENCLAW_WHATSAPP_DIRECTORY_PROOF === "1") {
+      console.log(
+        "WHATSAPP_DIRECTORY_PROOF negative-control=non-group-jid rejected before connection lookup",
+      );
+    }
+    expect(getControllerMock).not.toHaveBeenCalled();
     expect(acquireOwnerMock).not.toHaveBeenCalled();
   });
 
