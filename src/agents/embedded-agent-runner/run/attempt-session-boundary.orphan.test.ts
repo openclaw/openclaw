@@ -208,9 +208,11 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
           expect(reopened.getBranch().map((entry) => entry.id)).toEqual(
             expect.arrayContaining([orphanId, "recovery-notice"]),
           );
-          expect(reopened.buildSessionContext().messages.map((message) => message.content)).toEqual(
-            ["orphan wake", "new request", [{ type: "text", text: "new reply" }]],
-          );
+          expect(reopened.buildSessionContext().messages).toMatchObject([
+            { role: "user", content: "orphan wake" },
+            { role: "user", content: "new request" },
+            { role: "assistant", content: [{ type: "text", text: "new reply" }] },
+          ]);
         },
       );
     },
