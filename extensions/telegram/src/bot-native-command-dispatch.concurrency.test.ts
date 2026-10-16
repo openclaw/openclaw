@@ -61,7 +61,10 @@ function bufferedHarness(
     timer.mockRestore();
   });
   let updateId = 5000;
-  const dispatch = (message: Message.TextMessage, spooled = false) => {
+  const dispatch = (
+    message: Message.TextMessage & { chat: ReturnType<typeof groupCommand>["chat"] },
+    spooled = false,
+  ) => {
     const update = { update_id: ++updateId, message };
     const pending = spooled
       ? runWithTelegramSpooledReplayUpdate(update, () => bot.handleUpdate(update))

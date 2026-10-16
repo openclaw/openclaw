@@ -4,6 +4,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { withTriageTerminal } from "../../commands/triage.test-support.js";
 import { prepareGithubIssue } from "../../infra/github-issue.js";
 import { defaultRuntime } from "../../runtime.js";
+import { stepFixture } from "./update-command-fixtures.test-support.js";
 import {
   UpdateCommandFailure,
   UpdateCommandFinalizedRecoveryFailure,
@@ -153,11 +154,7 @@ it("does not submit when confirmation is cancelled", async () => {
 });
 
 it("keeps signal-cancelled rollback quiet", async () => {
-  f.result.steps = f.result.steps.map((step) => ({
-    ...step,
-    exitCode: 130,
-    termination: "signal",
-  }));
+  f.result.steps = [stepFixture("gateway-restart", { exitCode: 130, termination: "signal" })];
   await f.run();
   expectUnused("select", "prepare", "submit", "triage");
 });

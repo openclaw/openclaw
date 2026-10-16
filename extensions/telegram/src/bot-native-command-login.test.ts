@@ -483,7 +483,7 @@ describe("registerTelegramNativeCommands /login", () => {
       assert(params.signal, "expected login owner signal");
       const signal = params.signal;
       try {
-        await new Promise<never>((_resolve, reject) => {
+        return await new Promise<never>((_resolve, reject) => {
           signal.addEventListener("abort", () => reject(new Error("Telegram stopped")), {
             once: true,
           });

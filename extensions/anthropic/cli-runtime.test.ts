@@ -26,7 +26,7 @@ import {
 import { executeClaudeCli } from "./cli.runtime.js";
 
 const harness = createCliTestHarness("openclaw-claude-protocol-");
-const createLiveSession = () => harness.liveSession();
+const createLiveSession = harness.liveSession.bind(harness);
 const INPUT = "synthetic user input";
 const SYSTEM = "synthetic operator instructions";
 const PRIVATE = "current private context";

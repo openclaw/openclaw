@@ -3025,7 +3025,6 @@
 ["src/agents/subagents/spawn/acp-spawn.test.ts","../../../config/sessions/session-entry-read-runtime.js","35266988482db9d39770d11f66e8b5ec9ea4a7366dddff890eb1f1671e60422c",1]
 ["src/agents/subagents/spawn/acp-spawn.test.ts","../../../gateway/call.js","f8a10b8c5176793b3e4ddcbf4dcdd064844b07d34f1655dc54aa8f5ebf4e4cd6",1]
 ["src/agents/subagents/spawn/acp-spawn.test.ts","../../../gateway/session-utils-store-worker.js","78601a1d3bb88ade49f95a5f29aa634783801e449a3adef242c58cb58e0e1970",1]
-["src/agents/subagents/spawn/acp-spawn.test.ts","../../../infra/heartbeat-wake.js","495b712abf3711afa24cb074e6b6775bf0486a6689ad6f5c01a1101e9fd6b324",1]
 ["src/agents/subagents/spawn/acp-spawn.test.ts","../registry/subagent-registry.js","d0897ff9e8d4d3b6e65d6826e1804e644664145d51ceee2475d3ed14bbcabcc9",1]
 ["src/agents/subagents/spawn/acp-spawn.test.ts","./acp-spawn-parent-stream.js","386e7ade65493112e8a90ea69116c56e3f168a249c025d81143835b1a02d3991",1]
 ["src/agents/subagents/spawn/subagent-progress-card.test.ts","../../../infra/device-pairing.js","1cc084bd5c1e1a88e1b9b89226ddb95de2f733360715030350d8cddbf0ec6b60",1]
