@@ -62,9 +62,13 @@ describe("session control source capability", () => {
       assertCurrent: () => {},
     };
     for (const unissued of [forged, { ...authority }]) {
+      expect(() => captureSessionControlAuthority(unissued)).toThrow(/issued by the host/i);
       expect(() => hasSessionControlAuthority(unissued)).toThrow(/issued by the host/i);
     }
     revoke();
+    expect(() => captureSessionControlAuthority(authority)).toThrow(
+      "session control source revoked",
+    );
     expect(() => hasSessionControlAuthority(authority)).toThrow("session control source revoked");
   });
 
