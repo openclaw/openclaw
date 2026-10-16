@@ -16,7 +16,7 @@ import {
 import {
   createOwnedSqliteDatabase,
   declarePluginSqliteResources,
-} from "./backup-create.family-test-support.js";
+} from "./backup-create-family.test-support.js";
 import { createBackupArchive, type BackupCreateResult } from "./backup-create.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { readMainDatabasePosixLocks } from "./sqlite-posix-locks.test-support.js";

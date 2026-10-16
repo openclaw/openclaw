@@ -27,7 +27,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { inspectDatabase, expectDatabaseRows } from "./backup-create.family-test-support.js";
+import { inspectDatabase, expectDatabaseRows } from "./backup-create-family.test-support.js";
 import { listArchiveEntries } from "./backup-create.test-support.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";

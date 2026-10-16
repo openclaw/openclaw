@@ -27,7 +27,7 @@ import {
   createOwnedSqliteDatabase,
   declarePluginSqliteResources,
   expectDatabaseRows,
-} from "./backup-create.family-test-support.js";
+} from "./backup-create-family.test-support.js";
 import { createBackupArchive, type BackupCreateResult } from "./backup-create.js";
 import {
   makeBackupResult,
