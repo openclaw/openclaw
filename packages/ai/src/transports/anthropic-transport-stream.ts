@@ -28,9 +28,9 @@ import {
 } from "./anthropic-transport-options.js";
 import { buildGuardedModelFetch } from "./host-policy.js";
 import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
-import { iterateSseFrames } from "./sse-frames.js";
 import {
   createWritableTransportEventStream,
+  iterateSseFrames,
   mergeTransportHeaders,
 } from "./transport-stream-shared.js";
 import {
