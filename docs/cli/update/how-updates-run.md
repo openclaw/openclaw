@@ -1179,9 +1179,10 @@ every 30 seconds, then rechecks under maintenance ownership before repairing.
 This includes activation Doctor run by published updaters, which select the
 external service policy after stopping the Gateway themselves. A lease held by
 Doctor's own process, or any lease while a Gateway still owns the state, still
-refuses immediately. If the database
-is still open after 11 minutes, maintenance stops with the holder's PID and the
-usual deferred-maintenance warning (`agent-database-lease-active`).
+refuses immediately. This wait ends at the same deadline as the state wait, so
+time spent waiting for state ownership shortens it. If the database is still open
+at the deadline, maintenance stops with the holder's PID and the usual
+deferred-maintenance warning (`agent-database-lease-active`).
 
 An active Gateway suspension keeps installation changes under its host operation’s
 control. The installation watcher does not independently restart the Gateway

@@ -4,9 +4,11 @@ import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 import { sleep } from "../utils/sleep.js";
-import { DOCTOR_MAINTENANCE_CONTENTION_WAIT_MS } from "./doctor-maintenance-foreground.js";
-
-const LEASE_PROGRESS_INTERVAL_MS = 30_000;
+import {
+  DOCTOR_MAINTENANCE_WAIT_PROGRESS_INTERVAL_MS,
+  formatDoctorWaitSeconds,
+  resolveDoctorMaintenanceWaitDeadlineMs,
+} from "./doctor-maintenance-foreground.js";
 
 function createDoctorAgentLeaseRefusal(
   env: NodeJS.ProcessEnv,
@@ -100,10 +102,6 @@ export async function assertDoctorAgentLeaseAdmission(env: NodeJS.ProcessEnv): P
   }
 }
 
-function formatSeconds(ms: number) {
-  return `${Math.max(0, Math.round(ms / 1000))} s`;
-}
-
 function describeHolders(pids: readonly number[]) {
   // Failure facts are bounded; three PIDs identify the holders well enough.
   const shown = pids.length > 3 ? `${pids.slice(0, 3).join(", ")}, ...` : pids.join(", ");
@@ -112,9 +110,9 @@ function describeHolders(pids: readonly number[]) {
 
 /**
  * Admits Doctor maintenance once no other process holds an agent database lease.
- * Update-time Doctor releases everything the attempt acquired and waits with the
- * same budget as state contention: a lease holder must write shared state to
- * close its database, which Doctor's maintenance ownership would refuse.
+ * Update-time Doctor releases everything the attempt acquired and waits until the
+ * deadline it shares with state contention: a lease holder must write shared state
+ * to close its database, which Doctor's maintenance ownership would refuse.
  */
 export async function admitDoctorAgentLeases(params: {
   state: { readonly env: NodeJS.ProcessEnv; release(): Promise<Error | undefined> };
@@ -130,7 +128,7 @@ export async function admitDoctorAgentLeases(params: {
   const foreignHolders = (pids: readonly number[]) =>
     pids.length > 0 && !pids.includes(process.pid) ? pids : undefined;
   const startedAt = performance.now();
-  const deadlineMs = startedAt + DOCTOR_MAINTENANCE_CONTENTION_WAIT_MS;
+  let deadlineMs: number | undefined;
   let holders: readonly number[];
   let waited = false;
   let nextProgressAt = 0;
@@ -140,7 +138,7 @@ export async function admitDoctorAgentLeases(params: {
       await assertDoctorAgentLeaseAdmission(params.state.env);
       if (waited) {
         params.log(
-          `Agent databases closed after ${formatSeconds(performance.now() - startedAt)}; continuing Doctor maintenance.`,
+          `Agent databases closed after ${formatDoctorWaitSeconds(performance.now() - startedAt)}; continuing Doctor maintenance.`,
         );
       }
       return;
@@ -154,13 +152,16 @@ export async function admitDoctorAgentLeases(params: {
         throw error;
       }
       holders = foreign;
+      deadlineMs ??= await resolveDoctorMaintenanceWaitDeadlineMs(params.state.env);
       if (performance.now() >= deadlineMs) {
         // Keep the lease cause, not the inner refusal, so one failure fact is reported.
-        throw createDoctorAgentLeaseRefusal(
-          params.state.env,
-          cause,
-          `Waited ${formatSeconds(performance.now() - startedAt)}; ${describeHolders(holders)} still ${holders.length === 1 ? "has" : "have"} an agent database open.`,
-        );
+        throw waited
+          ? createDoctorAgentLeaseRefusal(
+              params.state.env,
+              cause,
+              `Waited ${formatDoctorWaitSeconds(performance.now() - startedAt)}; ${describeHolders(holders)} still ${holders.length === 1 ? "has" : "have"} an agent database open.`,
+            )
+          : error;
       }
       waited = true;
     }
@@ -180,10 +181,10 @@ export async function admitDoctorAgentLeases(params: {
       if (now >= nextProgressAt) {
         params.log(
           nextProgressAt === 0
-            ? `Waiting up to ${formatSeconds(DOCTOR_MAINTENANCE_CONTENTION_WAIT_MS)} for ${describeHolders(holders)} to close an agent database before Doctor maintenance. Let it finish, or stop it to continue sooner.`
-            : `Still waiting for ${describeHolders(holders)} to close an agent database (${formatSeconds(now - startedAt)} of ${formatSeconds(DOCTOR_MAINTENANCE_CONTENTION_WAIT_MS)}).`,
+            ? `Waiting up to ${formatDoctorWaitSeconds(deadlineMs - now)} for ${describeHolders(holders)} to close an agent database before Doctor maintenance. Let it finish, or stop it to continue sooner.`
+            : `Still waiting for ${describeHolders(holders)} to close an agent database (${formatDoctorWaitSeconds(now - startedAt)} of ${formatDoctorWaitSeconds(deadlineMs - startedAt)}).`,
         );
-        nextProgressAt = now + LEASE_PROGRESS_INTERVAL_MS;
+        nextProgressAt = now + DOCTOR_MAINTENANCE_WAIT_PROGRESS_INTERVAL_MS;
       }
       await sleep(Math.min(pollMs, deadlineMs - now), params.signal);
       pollMs = Math.min(pollMs * 2, 2_000);

@@ -11,17 +11,17 @@ import {
   collectUpdateDoctorFailureFacts,
   DoctorMaintenanceRefusalError,
 } from "../infra/update-doctor-result.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { claimOpenClawAgentDatabaseLease } from "../state/openclaw-agent-db-lease.js";
 import {
   closeOpenClawStateDatabaseForTest,
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "../state/openclaw-state-db.js";
-import { DOCTOR_MAINTENANCE_CONTENTION_WAIT_MS } from "./doctor-maintenance-foreground.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+// With no recorded rehearsal, waits end 30 min after Doctor started, less the 10 min floor.
+const FALLBACK_DEADLINE_MS = 1_200_000;
 
 afterEach(() => {
   vi.useRealTimers();
@@ -76,8 +76,10 @@ function startDoctor() {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
   const clock = { ms: 0 };
   vi.spyOn(performance, "now").mockImplementation(() => clock.ms);
-  const firstLog = createDeferredCore();
-  const log = vi.fn((..._args: unknown[]) => firstLog.resolve());
+  const listeners = new Set<(message: string) => void>();
+  const log = vi.fn((message: unknown) =>
+    listeners.forEach((listener) => listener(String(message))),
+  );
   let settled = false;
   const result = beginDoctorMaintenance({
     options: { repair: true, nonInteractive: true },
@@ -97,11 +99,20 @@ function startDoctor() {
     clock.ms = ms;
     await vi.advanceTimersToNextTimerAsync();
   };
+  // Settles once Doctor logs a matching line, or once admission settles without one.
+  const logged = (fragment: string) =>
+    Promise.race([
+      new Promise<void>((resolve) => {
+        listeners.add((message) => message.includes(fragment) && resolve());
+      }),
+      result,
+    ]);
   return {
     log,
     result,
     advanceTo,
-    firstWait: Promise.race([firstLog.promise, result]),
+    logged,
+    firstWait: logged("Waiting up to"),
     isSettled: () => settled,
   };
 }
@@ -116,35 +127,35 @@ it.each([
     const doctor = startDoctor();
     await doctor.firstWait;
     expect(doctor.log).toHaveBeenCalledWith(
-      `Waiting up to 660 s for OpenClaw process ${holder.holderPid} to close an agent database before Doctor maintenance. Let it finish, or stop it to continue sooner.`,
+      `Waiting up to 1200 s for OpenClaw process ${holder.holderPid} to close an agent database before Doctor maintenance. Let it finish, or stop it to continue sooner.`,
     );
     // The holder must write shared state to close; Doctor's ownership would refuse it.
     expect(fs.existsSync(holder.ownerPath)).toBe(false);
     await doctor.advanceTo(45_000);
     expect(doctor.log).toHaveBeenCalledWith(
-      `Still waiting for OpenClaw process ${holder.holderPid} to close an agent database (45 s of 660 s).`,
+      `Still waiting for OpenClaw process ${holder.holderPid} to close an agent database (45 s of 1200 s).`,
     );
-    await doctor.advanceTo(DOCTOR_MAINTENANCE_CONTENTION_WAIT_MS - 10_000);
+    await doctor.advanceTo(FALLBACK_DEADLINE_MS - 10_000);
     expect(doctor.isSettled()).toBe(false);
     expect(fs.existsSync(holder.ownerPath)).toBe(false);
     holder.release();
-    await doctor.advanceTo(DOCTOR_MAINTENANCE_CONTENTION_WAIT_MS - 8_000);
+    await doctor.advanceTo(FALLBACK_DEADLINE_MS - 8_000);
     const completed = await doctor.result;
     expect(completed).toHaveProperty("maintenance");
     expect(doctor.log).toHaveBeenCalledWith(
-      "Agent databases closed after 652 s; continuing Doctor maintenance.",
+      "Agent databases closed after 1192 s; continuing Doctor maintenance.",
     );
     await ("maintenance" in completed ? completed.maintenance?.finish({}) : undefined);
   },
 );
 
-it("fails update Doctor admission after the wait budget, naming the lease holder", async () => {
+it("fails update Doctor admission at the wait deadline, naming the lease holder", async () => {
   const holder = holdForeignLease({ update: true });
   const doctor = startDoctor();
   await doctor.firstWait;
-  await doctor.advanceTo(DOCTOR_MAINTENANCE_CONTENTION_WAIT_MS - 1);
+  await doctor.advanceTo(FALLBACK_DEADLINE_MS - 1);
   expect(doctor.isSettled()).toBe(false);
-  await doctor.advanceTo(DOCTOR_MAINTENANCE_CONTENTION_WAIT_MS);
+  await doctor.advanceTo(FALLBACK_DEADLINE_MS);
   const completed = await doctor.result;
   const error = "error" in completed ? completed.error : undefined;
   expect(error).toBeInstanceOf(DoctorMaintenanceRefusalError);
@@ -152,13 +163,48 @@ it("fails update Doctor admission after the wait budget, naming the lease holder
     kind: "deferred",
     reason: "agent-database-in-use",
   });
-  const message = `Doctor could not enter maintenance. Waited 660 s; OpenClaw process ${holder.holderPid} still has an agent database open. Stop other OpenClaw processes using this state, then retry the update.`;
+  const message = `Doctor could not enter maintenance. Waited 1200 s; OpenClaw process ${holder.holderPid} still has an agent database open. Stop other OpenClaw processes using this state, then retry the update.`;
   expect((error as Error).message).toBe(message);
   expect(collectUpdateDoctorFailureFacts(error)).toEqual([
     { check: "doctor", code: "agent-database-lease-active", message },
   ]);
   // A failed admission releases ownership for the holder and the next Doctor.
   expect(fs.existsSync(holder.ownerPath)).toBe(false);
+});
+
+it("shares one deadline with the state wait, so a long first wait shortens the lease wait", async () => {
+  const lease = holdForeignLease({ update: true });
+  const stateDir = path.dirname(path.dirname(lease.databasePath));
+  const stateHolder = acquireGatewayStateOwner({
+    databasePath: lease.databasePath,
+    payload: {
+      pid: process.ppid,
+      role: "agent-embedded",
+      createdAt: new Date().toISOString(),
+      configPath: path.join(stateDir, "openclaw.json"),
+      stateDir,
+    },
+  });
+  try {
+    const doctor = startDoctor();
+    await doctor.logged(`Waiting up to 1200 s for the OpenClaw agent-embedded process`);
+    stateHolder.release();
+    await doctor.advanceTo(900_000);
+    // The lease wait gets only what the state wait left of the same deadline.
+    await doctor.logged("to close an agent database");
+    expect(doctor.log).toHaveBeenCalledWith(
+      `Waiting up to 300 s for OpenClaw process ${lease.holderPid} to close an agent database before Doctor maintenance. Let it finish, or stop it to continue sooner.`,
+    );
+    await doctor.advanceTo(FALLBACK_DEADLINE_MS - 1);
+    expect(doctor.isSettled()).toBe(false);
+    await doctor.advanceTo(FALLBACK_DEADLINE_MS);
+    const completed = await doctor.result;
+    expect((completed as { error?: Error }).error?.message).toContain(
+      `Waited 1200 s; OpenClaw process ${lease.holderPid} still has an agent database open.`,
+    );
+  } finally {
+    stateHolder.release();
+  }
 });
 
 it.each([
