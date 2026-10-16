@@ -429,9 +429,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             apps/linux/src-tauri/target
-          key: windows-app-${{ runner.os }}-${{ hashFiles('apps/linux/src-tauri/Cargo.lock') }}
+            ${{ runner.temp }}/openclaw-desktop-npm-cache/_cacache
+          key: windows-app-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/linux/src-tauri/Cargo.lock', 'pnpm-lock.yaml') }}
           restore-keys: |
-            windows-app-${{ runner.os }}-
+            windows-app-v2-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Verify native Windows power lifecycle
         working-directory: apps/linux/src-tauri
@@ -446,6 +447,7 @@ jobs:
       - name: Build Windows installer without publishing
         working-directory: apps/linux/src-tauri
         env:
+          npm_config_cache: ${{ runner.temp }}/openclaw-desktop-npm-cache
           # Cold Windows declarations can exceed the package builder's 45-minute default.
           OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS: "3600000"
         run: pnpm dlx @tauri-apps/cli@2.11.4 build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":false}}'

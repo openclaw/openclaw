@@ -462,7 +462,7 @@ export async function createUpdateDatabaseBackup({
   const postgresPaths = prepared.paths.filter(
     (file) => readBackupEngine(file).engine === "postgres",
   );
-  const additionalPaths = [...(input.additionalPaths ?? []), ...postgresPaths].map((file) =>
+  const additionalPaths = [...(input.additionalPaths ?? []), ...prepared.paths].map((file) =>
     path.resolve(file),
   );
   const additionalFiles = input.additionalFiles?.map((file) => path.resolve(file));

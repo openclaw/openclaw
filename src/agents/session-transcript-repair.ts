@@ -136,13 +136,9 @@ export { stripToolResultDetails } from "../shared/model-context-message.js";
 function collectFollowingToolResults(
   messages: AgentMessage[],
   index: number,
+  currentToolCalls: ReturnType<typeof extractToolCallsFromAssistant>,
 ): { ids: Set<string>; displaced: boolean } {
   const ids = new Set<string>();
-  const assistant = messages[index];
-  const currentToolCalls =
-    assistant && typeof assistant === "object" && assistant.role === "assistant"
-      ? extractToolCallsFromAssistant(assistant)
-      : [];
   let sawNonToolResult = false;
   let displaced = false;
   for (let nextIndex = index + 1; nextIndex < messages.length; nextIndex += 1) {
@@ -201,7 +197,11 @@ export function sanitizeToolCallInputs(
       // the later pairing repair can synthesize missing legacy tool results
       // without mutating provider-owned assistant content.
       const replaySafeToolCalls = extractToolCallsFromAssistant(msg);
-      const followingToolResults = collectFollowingToolResults(messages, index);
+      const followingToolResults = collectFollowingToolResults(
+        messages,
+        index,
+        replaySafeToolCalls,
+      );
       const hasSpawnAttachments = hasSessionsSpawnAttachmentToolCall(msg.content);
       if (
         isReplaySafeThinkingAssistantTurn(msg.content, allowedToolNames, isCompleted) &&

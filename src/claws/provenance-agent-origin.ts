@@ -35,7 +35,7 @@ export function decodeClawAgentOwnership(
     if (!isAdoptedAgentPaths(parsed)) {
       throw new Error("Adopted Claw install record has invalid agent ownership data.");
     }
-    return { origin: "adopted", paths: [...parsed.paths] };
+    return { origin: "adopted", paths: parsed.paths };
   }
   if (
     schemaVersion !== "openclaw.clawInstallRecord.v1" &&
@@ -46,7 +46,7 @@ export function decodeClawAgentOwnership(
   if (!Array.isArray(parsed) || !parsed.every((path) => typeof path === "string")) {
     throw new Error("Created Claw install record has invalid agent ownership data.");
   }
-  return { origin: "created", paths: [...parsed] };
+  return { origin: "created", paths: parsed };
 }
 
 export function encodeClawAgentOwnership(

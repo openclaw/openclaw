@@ -20,11 +20,11 @@ export type RemoteModelCatalogWriteResult =
   | { status: "written" }
   | { status: "retained-newer"; row: RemoteModelCatalogStoreRow };
 
-// Older clients retain their v1 slot, including when both versions refresh the same mirror.
-export const REMOTE_MODEL_CATALOG_STATE_KEY = "modelCatalog.remote.v2";
-// Upgrades read the older client's row until this client stores its own. The row parses as
-// a v1 bundle, and activation still checks its source and age. It is never written here, so
-// a downgraded client keeps its catalog.
+// V3 must never replace the slot read by released v2 clients, even for the same mirror.
+export const REMOTE_MODEL_CATALOG_STATE_KEY = "modelCatalog.remote.v3";
+export const PREVIOUS_REMOTE_MODEL_CATALOG_STATE_KEY = "modelCatalog.remote.v2";
+// Released v1/v2 snapshots remain readable until this client stores its own.
+// Activation still checks source and age; downgrades keep their original slot.
 export const LEGACY_REMOTE_MODEL_CATALOG_STATE_KEY = "modelCatalog.remote";
 
 /** Synchronous boot snapshot capture and offline inspection only; refreshes use the worker. */
@@ -33,6 +33,10 @@ export function readRemoteModelCatalog(
 ): RemoteModelCatalogStoreRow | undefined {
   const snapshot =
     readConfigMachineState<RemoteModelCatalogSnapshot>(REMOTE_MODEL_CATALOG_STATE_KEY, options) ??
+    readConfigMachineState<RemoteModelCatalogSnapshot>(
+      PREVIOUS_REMOTE_MODEL_CATALOG_STATE_KEY,
+      options,
+    ) ??
     readConfigMachineState<RemoteModelCatalogSnapshot>(
       LEGACY_REMOTE_MODEL_CATALOG_STATE_KEY,
       options,

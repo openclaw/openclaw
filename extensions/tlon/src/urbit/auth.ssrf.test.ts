@@ -93,7 +93,10 @@ describe("tlon urbit auth ssrf", () => {
         lookupFn: privateLookupFn,
         fetchImpl: mockFetch as typeof fetch,
       }),
-    ).rejects.toMatchObject({ code: "auth_failed" });
+    ).rejects.toMatchObject({
+      name: "UrbitAuthError",
+      message: "Login failed with status 401",
+    });
     expect(canceled).toBe(true);
   });
 
@@ -123,7 +126,10 @@ describe("tlon urbit auth ssrf", () => {
             timeout = setTimeout(() => reject(new Error("login cancellation stalled")), 1_000);
           }),
         ]),
-      ).rejects.toMatchObject({ code: "auth_failed" });
+      ).rejects.toMatchObject({
+        name: "UrbitAuthError",
+        message: "Login failed with status 401",
+      });
     } finally {
       clearTimeout(timeout);
       void clone.body?.cancel().catch(() => undefined);

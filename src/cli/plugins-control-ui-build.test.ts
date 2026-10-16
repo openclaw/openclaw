@@ -93,7 +93,7 @@ console.log(JSON.stringify({ mode: (await fs.stat(manifest)).mode & 0o7777, cont
 });
 
 describe("native plugin browser builds", () => {
-  it.each([true, false])(
+  it.each([true, false, "settings-only"])(
     "builds runtime browser artifacts without changing authored plugin metadata (authored UI: %s)",
     async (authoredUi) => {
       const project = await fixture();
@@ -106,7 +106,19 @@ describe("native plugin browser builds", () => {
         id: "fixture",
         configSchema: { type: "object", properties: { token: { type: "string" } } },
         activation: { onStartup: true },
-        ...(authoredUi ? { controlUi: { entry: "dist/control-ui/authored/index.js" } } : {}),
+        ...(authoredUi
+          ? {
+              controlUi: {
+                entry: "dist/control-ui/authored/index.js",
+                ...(authoredUi === "settings-only"
+                  ? {
+                      activation: "settings-only",
+                      settingsViews: [{ section: "memory", panel: "overview" }],
+                    }
+                  : {}),
+              },
+            }
+          : {}),
       };
       const original = JSON.stringify(authored, null, 2);
       await fs.writeFile(manifestPath, original);
@@ -123,6 +135,13 @@ describe("native plugin browser builds", () => {
       expect(await fs.readFile(manifestPath, "utf8")).toBe(original);
       const generatedPath = path.join(project.rootDir, "dist/openclaw.plugin.json");
       const generated = JSON.parse(await fs.readFile(generatedPath, "utf8"));
+      expect(generated.controlUi.activation).toBe(
+        authoredUi === "settings-only" ? "settings-only" : undefined,
+      );
+      expect(generated.controlUi.settingsViews).toEqual(
+        authoredUi === "settings-only" ? [{ section: "memory", panel: "overview" }] : undefined,
+      );
+      expect(await buildPluginControlUi({ ...project, check: true })).toEqual(generated.controlUi);
       generated.id = "previous-name";
       generated.configSchema = { type: "object", properties: {} };
       generated.activation = { onStartup: false };

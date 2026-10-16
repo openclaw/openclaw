@@ -4,7 +4,6 @@ import path from "node:path";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { writeJson } from "../../infra/json-files.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
-import { isRecord } from "../bundle-mcp-adapter.js";
 
 export function injectBundleMcpBackendArgs(
   backend: CliBackendConfig,
@@ -39,13 +38,7 @@ export async function writeTemporaryBundleMcpJson(
 export function withOpenClawMcpCaptureHeader(
   config: Record<string, unknown>,
   captureKey: string,
-  missingServerError?: string,
 ): Record<string, unknown> {
-  const mcpServers = isRecord(config.mcpServers) ? config.mcpServers : {};
-  const openclaw = isRecord(mcpServers.openclaw) ? mcpServers.openclaw : undefined;
-  if (!openclaw && missingServerError) {
-    throw new Error(missingServerError);
-  }
   return applyMergePatch(config, {
     mcpServers: {
       openclaw: {

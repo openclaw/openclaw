@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
-import { McpAppUnmountGate } from "./mcp-app-unmount.ts";
+import { createMcpAppUnmountGate } from "./mcp-app-unmount.ts";
 
 const targetTag = "mcp-app-view";
 const teardown = vi.fn<() => Promise<void>>();
@@ -34,12 +34,12 @@ function mountGate(
   document.body.append(host);
   let key = "initial";
   let retainRenderedValue = false;
-  let requestUpdate = () => {};
-  const gate = new McpAppUnmountGate<Node[]>({ requestUpdate: () => requestUpdate() });
+  let invalidate = () => {};
+  const gate = createMcpAppUnmountGate<Node[]>(() => invalidate());
   mountSolid(
     () => {
       const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-      requestUpdate = () => setRevision((value) => value + 1);
+      invalidate = () => setRevision((value) => value + 1);
       const value = createMemo(() => {
         revision();
         return gate.render(key, renderValue, () => leavingRoots(root), { retainRenderedValue });
@@ -56,7 +56,7 @@ function mountGate(
     show(this: void, nextKey: string, retain = false) {
       key = nextKey;
       retainRenderedValue = retain;
-      requestUpdate();
+      invalidate();
     },
   };
 }
@@ -114,7 +114,7 @@ afterEach(() => {
   teardown.mockReset();
 });
 
-describe("McpAppUnmountGate", () => {
+describe("MCP App unmount gate", () => {
   it("retains the current value for an unchanged explicit owner", async () => {
     const owner = mountOwner();
     await owner.updateComplete;

@@ -19,7 +19,6 @@ export function createWhatsAppInboundMessageNormalizer(options: {
   socketSession: WhatsAppAttachedSocketSession;
   groupMetadata: WhatsAppGroupMetadataCacheOwner;
   parseTimestampSeconds: (value: unknown) => number | undefined;
-  logVerbose: (message: string) => void;
 }) {
   const { socketSession, groupMetadata } = options;
   const shouldSkipRecentOutboundEcho = (msg: WAMessage): boolean => {
@@ -38,7 +37,6 @@ export function createWhatsAppInboundMessageNormalizer(options: {
     ) {
       return false;
     }
-    options.logVerbose(`Skipping recent outbound WhatsApp echo ${id} for ${remoteJid}`);
     return true;
   };
 

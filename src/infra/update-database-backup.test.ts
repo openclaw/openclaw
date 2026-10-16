@@ -12,6 +12,7 @@ import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-
 import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-state-maintenance-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as diskSpace from "./disk-space.js";
+import { retireExpiredStandaloneDoctorCaptures } from "./doctor-capture-retention.js";
 import * as fileDescriptor from "./file-descriptor.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import * as sqliteIntegrity from "./sqlite-integrity.js";
@@ -22,7 +23,6 @@ import * as candidateState from "./update-candidate-state.js";
 import * as databaseSizes from "./update-candidate-state.sizes.js";
 import { resolveUpdateCaptureRoot } from "./update-capture-paths.js";
 import { createUpdateDatabaseBackupInProcess } from "./update-database-backup.js";
-import { retireExpiredStandaloneDoctorCaptures } from "./update-recovery-baseline-capture.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 import { getUpdateRunAsync } from "./update-run-reader.js";
 

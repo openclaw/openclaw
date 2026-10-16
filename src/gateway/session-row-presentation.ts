@@ -362,7 +362,7 @@ export function prepareProjectedSessionPresentation(
     }
     return view;
   };
-  const viewer = (value: SessionSharingTarget) => ({
+  const viewer = (value: SessionSharingTarget, sharingRole = sharing.roleForTarget(value)) => ({
     visibility: resolveSessionVisibility(value.entry),
     ...(profileId && !value.entry.incognito && !isIncognitoSessionKey(value.canonicalKey)
       ? {
@@ -373,13 +373,13 @@ export function prepareProjectedSessionPresentation(
             ).get(profileId)?.hidden ?? false,
         }
       : {}),
-    sharingRole: sharing.roleForTarget(value),
+    sharingRole,
     sendDisabledReason:
       authorizeSessionAgentRun(
         { cfg: policyConfig, client: client ?? null, target: value },
         { policy: sharing.policy },
       )?.message ??
-      sharing.authorizeTarget(value)?.message ??
+      sharing.authorizeTarget(value, sharingRole)?.message ??
       (resolveSendPolicy({ cfg, entry: value.entry, sessionKey: value.canonicalKey }) === "deny"
         ? "send blocked by session policy"
         : null),
@@ -533,7 +533,7 @@ export function prepareProjectedSessionPresentation(
             client: client ?? null,
             sessionKey: value.canonicalKey,
             target: value,
-          }) && !sharing.authorizeTarget(value)
+          }) && !sharing.authorizeTarget(value, viewerFacts?.sharingRole)
         : undefined;
     const signature =
       views &&

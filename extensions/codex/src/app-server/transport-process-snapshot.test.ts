@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isPidAlive } from "openclaw/plugin-sdk/process-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type PosixProcess,
   readCodexAppServerProcessCommand,
@@ -16,6 +16,20 @@ const procfs = vi.hoisted(() => ({
   readFile: vi.fn<(file: string) => string>(),
   readdir: vi.fn<() => string[]>(),
 }));
+
+// These fixtures exercise the retained Node ps path. Bun's native path has its
+// own core tests and the signed sandbox proof.
+const bunDescriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
+beforeEach(() => {
+  Object.defineProperty(process.versions, "bun", { configurable: true, value: undefined });
+});
+afterEach(() => {
+  if (bunDescriptor) {
+    Object.defineProperty(process.versions, "bun", bunDescriptor);
+  } else {
+    Reflect.deleteProperty(process.versions, "bun");
+  }
+});
 
 const observedProcess: PosixProcess = {
   pid: process.pid,
@@ -378,7 +392,7 @@ describe.skipIf(process.platform === "win32" || process.platform === "linux")(
           `#!/usr/bin/env node
 const selected = process.argv[process.argv.indexOf("-p") + 1]?.split(",");
 if (selected?.includes("${process.pid}") && ${JSON.stringify(mode)} !== "missing observer") {
-  console.log("${process.pid} ${process.ppid} ${process.pid} S Sat Aug 29 10:00:00 2026");
+  console.log("${process.pid} ${process.ppid} ${process.pid} S 501 Sat Aug 29 10:00:00 2026");
 }
 if (${JSON.stringify(mode)} === "malformed") console.log("unusable selected process");
 `,

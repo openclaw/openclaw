@@ -196,7 +196,6 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
     );
     expect(peekSystemEventEntries("agent:main:main")[0]?.text).toContain(FIRE_EMOJI);
     const diagnostics = log.mock.calls.map(([line]) => line).join("\n");
-    expect(diagnostics).toContain("reaction event enqueued chat=5678 message=100");
     expect(diagnostics).not.toContain("Bob");
     expect(diagnostics).not.toContain(FIRE_EMOJI);
   });

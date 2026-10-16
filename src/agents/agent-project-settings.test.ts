@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { prepareAgentProviderRetryCount } from "./agent-project-settings-prepared.js";
 import {
   buildEmbeddedAgentSettingsSnapshot,
   resolveEmbeddedAgentProjectSettingsPolicy,
@@ -19,6 +20,7 @@ import {
   clearPreparedEmbeddedAgentSettings,
   createPreparedEmbeddedAgentSettingsManager,
 } from "./agent-project-settings.js";
+import { SettingsManager } from "./sessions/settings-manager.js";
 
 async function withSettingsWorkspace(
   run: (params: {
@@ -80,6 +82,161 @@ describe("buildEmbeddedAgentSettingsSnapshot", () => {
     expect(snapshot.compaction?.keepRecentTokens).toBe(64_000);
     expect(snapshot.compaction?.reserveTokens).toBe(32_000);
     expect(snapshot.hideThinkingBlock).toBe(true);
+  });
+});
+
+describe("prepareAgentProviderRetryCount", () => {
+  it.each([undefined, 0, 7])(
+    "preserves released settings across preparation and an intentional write with count %s",
+    async (maxRetries) => {
+      await withSettingsWorkspace(async (params) => {
+        // v2026.10.4 (383c124cc32ffee3f8e56f549b88da94d269a4af) stores these
+        // canonical fields in two scopes; runtime preparation must never rewrite either file.
+        const globalSettings = {
+          theme: "dark",
+          defaultProvider: "openai",
+          shellPath: "/bin/sh",
+          retry: {
+            enabled: true,
+            provider: {
+              ...(maxRetries === undefined ? {} : { maxRetries: 2 }),
+              timeoutMs: 45_000,
+              maxRetryDelayMs: 12_000,
+            },
+          },
+        };
+        const projectSettings = {
+          defaultModel: "gpt-5",
+          hideThinkingBlock: true,
+          retry: {
+            provider: {
+              ...(maxRetries === undefined ? {} : { maxRetries }),
+              timeoutMs: 9_000,
+              maxRetryDelayMs: 2_500,
+            },
+          },
+        };
+        const globalPath = path.join(params.agentDir, "settings.json");
+        const projectPath = path.join(params.cwd, ".openclaw", "settings.json");
+        const globalBytes = `${JSON.stringify(globalSettings, null, 2)}\n`;
+        const projectBytes = `${JSON.stringify(projectSettings, null, 2)}\n`;
+        await fs.writeFile(globalPath, globalBytes);
+        await fs.writeFile(projectPath, projectBytes);
+        const expectedProvider = { maxRetries, timeoutMs: 9_000, maxRetryDelayMs: 2_500 };
+        const assertPrepared = (theme: string) => {
+          // Native preparation runs first, so embedded preparation must reuse its frozen inputs.
+          expect(prepareAgentProviderRetryCount(params)).toBe(maxRetries);
+          const prepared = createPreparedEmbeddedAgentSettingsManager(params);
+          expect(prepared.getProviderRetrySettings()).toEqual(expectedProvider);
+          expect(prepared.getTheme()).toBe(theme);
+          expect(prepared.getDefaultProvider()).toBe("openai");
+          expect(prepared.getDefaultModel()).toBe("gpt-5");
+          expect(prepared.getShellPath()).toBe("/bin/sh");
+          expect(prepared.getHideThinkingBlock()).toBe(true);
+          expect(prepared.getRetryEnabled()).toBe(false);
+          return prepared;
+        };
+        const prepared = assertPrepared("dark");
+        prepared.setTheme("attempt-only");
+        prepared.setRetryEnabled(true);
+        prepared.applyOverrides({ retry: { provider: { maxRetries: 99 } } });
+        await prepared.flush();
+        expect(await fs.readFile(globalPath, "utf8")).toBe(globalBytes);
+        expect(await fs.readFile(projectPath, "utf8")).toBe(projectBytes);
+        assertPrepared("dark");
+
+        const persistent = SettingsManager.create(params.cwd, params.agentDir);
+        persistent.setTheme("light");
+        await persistent.flush();
+        expect(JSON.parse(await fs.readFile(globalPath, "utf8"))).toEqual({
+          ...globalSettings,
+          theme: "light",
+        });
+        expect(await fs.readFile(projectPath, "utf8")).toBe(projectBytes);
+        const reopened = SettingsManager.create(params.cwd, params.agentDir);
+        expect(reopened.getTheme()).toBe("light");
+        expect(reopened.getProviderRetrySettings()).toEqual(expectedProvider);
+        expect(reopened.getGlobalSettings()).toEqual({ ...globalSettings, theme: "light" });
+        expect(reopened.getProjectSettings()).toEqual(projectSettings);
+        assertPrepared("dark");
+        clearPreparedEmbeddedAgentSettings([params.sessionId]);
+        assertPrepared("light");
+      });
+    },
+  );
+
+  it.each([undefined, 0, 1, 4])("projects only the explicit count %s", async (maxRetries) => {
+    await withSettingsWorkspace(async (params) => {
+      await fs.writeFile(
+        path.join(params.agentDir, "settings.json"),
+        JSON.stringify({ retry: { provider: { maxRetries } } }),
+      );
+      expect(prepareAgentProviderRetryCount(params)).toBe(maxRetries);
+      // Sharing the snapshot must not remove the embedded manager's existing delay default.
+      expect(createPreparedEmbeddedAgentSettingsManager(params).getProviderRetrySettings()).toEqual(
+        { maxRetries, timeoutMs: undefined, maxRetryDelayMs: 60_000 },
+      );
+    });
+  });
+
+  it.each(["trusted", "sanitize", "ignore"] as const)(
+    "keeps %s precedence, frozen file inputs and explicit invalidation",
+    async (policy) => {
+      await withSettingsWorkspace(async (params) => {
+        const pluginRoot = path.join(params.cwd, "bundle");
+        await fs.mkdir(pluginRoot);
+        await fs.writeFile(
+          path.join(params.agentDir, "settings.json"),
+          JSON.stringify({ retry: { provider: { maxRetries: 4 } } }),
+        );
+        await fs.writeFile(
+          path.join(pluginRoot, "settings.json"),
+          JSON.stringify({ retry: { provider: { maxRetries: 1 } } }),
+        );
+        const projectPath = path.join(params.cwd, ".openclaw", "settings.json");
+        await fs.writeFile(projectPath, JSON.stringify({ retry: { provider: { maxRetries: 0 } } }));
+        const input = {
+          ...params,
+          cfg: {
+            agents: { defaults: { embeddedAgent: { projectSettingsPolicy: policy } } },
+            plugins: { entries: { "retry-bundle": { enabled: true } } },
+          },
+          pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
+            plugins: [
+              {
+                id: "retry-bundle",
+                rootDir: pluginRoot,
+                format: "bundle",
+                settingsFiles: ["settings.json"],
+              },
+            ],
+          }),
+        };
+        expect(prepareAgentProviderRetryCount(input)).toBe(policy === "ignore" ? 1 : 0);
+        await fs.writeFile(projectPath, JSON.stringify({ retry: { provider: { maxRetries: 2 } } }));
+        expect(prepareAgentProviderRetryCount(input)).toBe(policy === "ignore" ? 1 : 0);
+        clearPreparedEmbeddedAgentSettings([params.sessionId]);
+        expect(prepareAgentProviderRetryCount(input)).toBe(policy === "ignore" ? 1 : 2);
+      });
+    },
+  );
+
+  it("does not admit embedded retired settings, compaction or delay policy into native setup", async () => {
+    await withSettingsWorkspace(async (params) => {
+      await fs.writeFile(
+        path.join(params.agentDir, "settings.json"),
+        JSON.stringify({
+          queueMode: "all",
+          httpIdleTimeoutMs: "invalid for embedded",
+          compaction: { reserveTokens: -1 },
+          retry: { provider: { maxRetries: 0, maxRetryDelayMs: 5, timeoutMs: 9 } },
+        }),
+      );
+      expect(prepareAgentProviderRetryCount(params)).toBe(0);
+      expect(() => createPreparedEmbeddedAgentSettingsManager(params)).toThrow(
+        "queueMode: use steeringMode",
+      );
+    });
   });
 });
 

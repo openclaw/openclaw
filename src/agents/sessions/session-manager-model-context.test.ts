@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -21,17 +22,11 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { sessionScope, withSessionState } from "./session-manager-fixtures.test-support.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 
 it("reports context queue overload without losing context and completes every admitted read", async () => {
-  await withOpenClawTestState({ label: "model-context-pressure" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      sessionId: "context-pressure",
-      sessionKey: "agent:main:context-pressure",
-      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  await withSessionState("context-pressure", async ({ scope }) => {
     const source = SessionManager.open(scope);
     source.appendMessage(makeUserMessage("retain this context", 1));
     await waitForSessionTranscriptProjection(scope);
@@ -85,14 +80,7 @@ it("reports context queue overload without losing context and completes every ad
 });
 
 it("acquires a long sparse context with bounded queries and preserved message order", async () => {
-  await withOpenClawTestState({ label: "model-context-batch" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      sessionId: "batched-context",
-      sessionKey: "agent:main:batched-context",
-      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  await withSessionState("batched-context", async ({ scope }) => {
     const messages = Array.from({ length: 1_200 }, (_, index) => ({
       type: "message",
       id: `message-${index}`,
@@ -144,14 +132,7 @@ it.each([
 ])(
   "acquires detached %s context without native payloads or changing stored evidence",
   async (scenario) => {
-    await withOpenClawTestState({ label: "model-context" }, async (state) => {
-      const scope = {
-        agentId: "main",
-        sessionId: "model-view",
-        sessionKey: "agent:main:model-view",
-        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await withSessionState("model-view", async ({ state, scope }) => {
       const source = SessionManager.open(scope);
       const marker = "synthetic-native-memory:";
       const metadata = {
@@ -347,9 +328,7 @@ it.each([
       source.branch(source.getLeafId()!);
       await waitForSessionTranscriptProjection(scope);
       const admitted = source.appendMessageWithTranscriptAnchor(makeUserMessage("current turn", 7));
-      if (!admitted.anchor) {
-        throw new Error("missing admission");
-      }
+      assert(admitted.anchor, "missing admission");
       const admission = {
         ...admitted.anchor,
         role: "user" as const,
@@ -502,12 +481,10 @@ it.each([
 
 it("keeps durable model reads non-persisting", async () => {
   await withOpenClawTestState({ label: "model-readonly" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      sessionId: "readonly",
-      sessionKey: "agent:main:readonly",
-      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-    };
+    const scope = sessionScope(
+      path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+      "readonly",
+    );
     expect(SessionManager.openModelContext(scope).buildSessionContext().messages).toEqual([]);
     expect(
       (await SessionManager.openModelContextAsync(scope)).buildSessionContext().messages,
@@ -570,14 +547,7 @@ it("keeps durable model reads non-persisting", async () => {
 });
 
 it("releases aborted durable context reads before the next read", async () => {
-  await withOpenClawTestState({ label: "context-worker-lifecycle" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      sessionId: "worker-lifecycle",
-      sessionKey: "agent:main:worker-lifecycle",
-      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  await withSessionState("worker-lifecycle", async ({ scope }) => {
     const source = SessionManager.open(scope);
     source.appendMessage({ role: "user", content: "visible", timestamp: 1 });
     expect((await SessionManager.openModelContextAsync(scope)).buildSessionContext()).toEqual(
@@ -604,21 +574,12 @@ it("releases aborted durable context reads before the next read", async () => {
 it.each(["rewrite", "append"] as const)(
   "validates durable admission before accepting context (mutation=%s)",
   async (mutation) => {
-    await withOpenClawTestState({ label: "context-worker-fence" }, async (state) => {
-      const scope = {
-        agentId: "main",
-        sessionId: "worker-fence",
-        sessionKey: "agent:main:worker-fence",
-        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await withSessionState("worker-fence", async ({ scope }) => {
       const source = SessionManager.open(scope);
       source.appendMessage({ role: "user", content: "previous", timestamp: 1 });
       await waitForSessionTranscriptProjection(scope);
       const admitted = source.appendMessageWithTranscriptAnchor(makeUserMessage("current", 2));
-      if (!admitted.anchor) {
-        throw new Error("missing admission");
-      }
+      assert(admitted.anchor, "missing admission");
       const admission = {
         ...admitted.anchor,
         role: "user" as const,
@@ -663,14 +624,7 @@ it.each(["rewrite", "append"] as const)(
 it.each(["append", "rewrite", "delete", "branch", "compaction", "reset", "other-session"] as const)(
   "validates unadmitted durable context before acceptance (mutation=%s)",
   async (mutation) => {
-    await withOpenClawTestState({ label: "unadmitted-context-fence" }, async (state) => {
-      const scope = {
-        agentId: "main",
-        sessionId: "unadmitted-context",
-        sessionKey: "agent:main:unadmitted-context",
-        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await withSessionState("unadmitted-context", async ({ scope }) => {
       const source = SessionManager.open(scope);
       const first = source.appendMessage({ role: "user", content: "before", timestamp: 1 });
       if (mutation === "branch") {
@@ -695,13 +649,13 @@ it.each(["append", "rewrite", "delete", "branch", "compaction", "reset", "other-
           expect(
             replaceTranscriptEventsSync(scope, [
               source.getHeader(),
-              ...source
-                .getEntries()
-                .map((entry) =>
-                  entry.type === "message"
-                    ? Object.assign({}, entry, { message: makeUserMessage("rewritten prefix", 1) })
-                    : entry,
-                ),
+              ...source.getEntries().map((entry) =>
+                entry.type === "message"
+                  ? Object.assign({}, entry, {
+                      message: makeUserMessage("rewritten prefix", 1),
+                    })
+                  : entry,
+              ),
             ]),
           ).toBe(true);
           return;
@@ -751,14 +705,7 @@ it.each(["append", "rewrite", "delete", "branch", "compaction", "reset", "other-
 it.each([false, true])(
   "closes lazy context without acquiring unread payloads (rejected=%s)",
   async (rejected) => {
-    await withOpenClawTestState({ label: "context-reader-lifetime" }, async (state) => {
-      const scope = {
-        agentId: "main",
-        sessionId: "lazy-context",
-        sessionKey: "agent:main:lazy-context",
-        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await withSessionState("lazy-context", async ({ scope }) => {
       const source = SessionManager.open(scope);
       source.appendMessage({ role: "user", content: "first", timestamp: 1 });
       const marker = "synthetic-unread-context:";

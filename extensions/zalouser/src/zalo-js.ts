@@ -167,7 +167,6 @@ function normalizeMessageContent(content: unknown): string {
 }
 
 function resolveInboundTimestamp(rawTs: unknown): number {
-  const fallbackTimestamp = () => asDateTimestampMs(Date.now()) ?? 0;
   const parsed =
     typeof rawTs === "number"
       ? rawTs
@@ -180,15 +179,15 @@ function resolveInboundTimestamp(rawTs: unknown): number {
     max: Number.MAX_SAFE_INTEGER,
   });
   if (timestamp === undefined) {
-    return fallbackTimestamp();
+    return Date.now();
   }
   if (timestamp > ZALO_TIMESTAMP_MS_THRESHOLD) {
-    return asDateTimestampMs(Math.trunc(timestamp)) ?? fallbackTimestamp();
+    return asDateTimestampMs(Math.trunc(timestamp)) ?? Date.now();
   }
   if (timestamp > MAX_SAFE_ZALO_TIMESTAMP_SECONDS) {
-    return fallbackTimestamp();
+    return Date.now();
   }
-  return asDateTimestampMs(Math.trunc(timestamp * 1000)) ?? fallbackTimestamp();
+  return asDateTimestampMs(Math.trunc(timestamp * 1000)) ?? Date.now();
 }
 
 function extractMentionIds(rawMentions: unknown): string[] {
@@ -1149,12 +1148,7 @@ export async function startZaloQrLogin(params: {
         assertCurrent();
         await login.beforeCredentialPersistence?.();
         assertCurrent();
-        await credentials.writeApiCredentials(
-          profile,
-          api,
-          assertCurrent,
-          capturedCredentials ?? undefined,
-        );
+        await credentials.writeApiCredentials(profile, api, assertCurrent, capturedCredentials);
         assertCurrent();
         invalidateApi(profile);
         apiByProfile.set(profile, api);

@@ -5492,7 +5492,6 @@
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayDiagnostics.kt","kind":"ui-call","surface":"android","id":"native.android.d3aef754c5f21cf0","source":"Setup code no longer valid"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayDiagnostics.kt","kind":"ui-call","surface":"android","id":"native.android.d8d3fa687d783fd1","source":"Stopping previous connection"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayDiagnostics.kt","kind":"ui-call","surface":"android","id":"native.android.bb535653a13e63ad","source":"TLS timed out"},
-    {"path":"apps/macos/Sources/OpenClaw/ScreenRecordService.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.b564485e0d516a94","source":"audio "},
     {"path":"apps/ios/Sources/RootTabsNavigation.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.794509366cc11cad","source":"Activity"},
     {"path":"apps/ios/Sources/RootTabsNavigation.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.984f3c89300610d1","source":"Agents"},
     {"path":"apps/ios/Sources/RootTabsNavigation.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.3641188c6519bb27","source":"Automations"},

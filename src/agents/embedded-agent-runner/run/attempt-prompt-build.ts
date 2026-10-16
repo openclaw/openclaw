@@ -102,6 +102,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   runtimeModel: string;
   systemPromptText: string;
   runAbortSignal?: AbortSignal;
+  hasBaselineTools: () => boolean;
   applyPromptBuildToolsAllow: (
     toolsAllow: string[] | undefined,
     decisionIsCurrent?: () => boolean,
@@ -228,7 +229,9 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
                   ? "hook-tool-policy"
                   : hasPendingActionInstructions
                     ? "pending-action-context"
-                    : undefined;
+                    : !input.hasBaselineTools()
+                      ? "no-tools"
+                      : undefined;
   let decisionPrefilter: DecisionPrefilterResult = {
     shouldPruneTools: false,
     status: "skipped",

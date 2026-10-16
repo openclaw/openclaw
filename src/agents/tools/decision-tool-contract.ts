@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
+import type { ModelDecisionCapabilities } from "@openclaw/model-catalog-core/model-catalog-types";
 import { Type } from "typebox";
-import type { DecisionBatch, DecisionOutcome } from "../../decisions/types.js";
+import type { DecisionOutcomeV2 } from "../../decisions/types-v2.js";
+import type { DecisionBatch } from "../../decisions/types.js";
 import { validateDecisionBatch } from "../../decisions/validation.js";
-import type { DecisionProviderCapabilities } from "../../plugins/manifest-types.js";
 import { textResult } from "./tool-results.js";
 
 const entry = {
@@ -56,7 +57,53 @@ export const DecisionEvaluateOutput = Type.Unsafe({
   required: ["status"],
   properties: {
     status: { enum: ["ok", "unavailable"] },
-    result: { type: "object" },
+    result: {
+      type: "object",
+      properties: {
+        model: { type: "string" },
+        answers: {
+          type: "object",
+          additionalProperties: {
+            type: "object",
+            properties: {
+              type: { enum: ["boolean", "choice", "score", "error"] },
+              answer: { type: ["boolean", "null"] },
+              probabilityTrue: { type: "number" },
+              choice: { type: ["string", "null"] },
+              score: { type: "number" },
+              probabilities: {
+                anyOf: [
+                  { type: "object", additionalProperties: { type: "number" } },
+                  { type: "array", items: { type: "number" } },
+                ],
+              },
+              probability: { type: ["number", "null"] },
+              confidence: { type: ["number", "null"] },
+              code: { enum: ["unsupported-input", "invalid-input", "provider-error"] },
+              providerCode: { type: "string" },
+              metadata: { type: "object", additionalProperties: true },
+            },
+          },
+        },
+        usage: {
+          type: "object",
+          properties: {
+            inputTokens: { type: "number" },
+            outputTokens: { type: "number" },
+            costUsd: { type: "number" },
+            units: {
+              type: "object",
+              properties: {
+                unit: { enum: ["decision-units", "requests"] },
+                amount: { type: "number" },
+              },
+            },
+            raw: {},
+          },
+        },
+        metadata: { type: "object", additionalProperties: true },
+      },
+    },
     provenance: { type: "object" },
     reason: { type: "string" },
     guidance: { type: "string" },
@@ -102,22 +149,32 @@ function canonicalize(value: unknown): unknown {
 }
 
 /** Describe only declared provider limits; missing metadata never means unlimited. */
-export function capabilityGuidance(capabilities: DecisionProviderCapabilities): string {
+export function capabilityGuidance(capabilities: ModelDecisionCapabilities): string {
+  const questionTypes = (["boolean", "choice", "score"] as const).filter(
+    (kind) => capabilities.questions?.[kind],
+  );
+  const declared = capabilities.limits;
   const limits = [
-    capabilities.maxQuestions === undefined
+    declared?.maxQuestions === undefined ? undefined : `at most ${declared.maxQuestions} questions`,
+    ...(["choice", "score"] as const).flatMap((kind) => {
+      const bounds = capabilities.questions?.[kind];
+      const unit = kind === "choice" ? "Choice alternatives" : "Score levels";
+      return [
+        bounds?.minOptions === undefined ? undefined : `at least ${bounds.minOptions} ${unit}`,
+        bounds?.maxOptions === undefined ? undefined : `at most ${bounds.maxOptions} ${unit}`,
+      ];
+    }),
+    declared?.maxRequestTokens === undefined
       ? undefined
-      : `at most ${capabilities.maxQuestions} questions`,
-    capabilities.maxChoiceAlternatives === undefined
+      : `at most ${declared.maxRequestTokens} tokens per request`,
+    declared?.maxStateAndQuestionTokens === undefined
       ? undefined
-      : `at most ${capabilities.maxChoiceAlternatives} Choice alternatives`,
-    capabilities.maxScoreLevels === undefined
+      : `at most ${declared.maxStateAndQuestionTokens} tokens per state-plus-question`,
+    declared?.maxInputTokens === undefined
       ? undefined
-      : `at most ${capabilities.maxScoreLevels} Score levels`,
-    capabilities.maxInputTokens === undefined
-      ? undefined
-      : `at most ${capabilities.maxInputTokens} tokens ${capabilities.inputTokenScope === "encoded-question" ? "per encoded question (state and rubric together)" : capabilities.inputTokenScope === "state-plus-each-criterion" ? "per state-plus-criterion pair" : "per provider input (accounting scope undeclared)"}; shorten state or rubric if exceeded`,
+      : `at most ${declared.maxInputTokens} tokens ${declared.inputTokenScope === "encoded-question" ? "per encoded question (state and rubric together)" : declared.inputTokenScope === "state-plus-each-criterion" ? "per state-plus-criterion pair" : "per provider input (accounting scope undeclared)"}; shorten state or rubric if exceeded`,
   ].filter((value): value is string => value !== undefined);
-  const boolean = capabilities.requiresBooleanCriteria
+  const boolean = capabilities.questions?.boolean?.requiresCriteria
     ? " Boolean questions require both criteria.true and criteria.false descriptions."
     : "";
   const confidence =
@@ -126,11 +183,17 @@ export function capabilityGuidance(capabilities: DecisionProviderCapabilities): 
       : capabilities.confidence === "provider-specific"
         ? " Optional confidence is a provider-specific distribution metric, not correctness probability."
         : "";
-  return `The selected provider supports ${capabilities.questionTypes.join(", ")} questions.${limits.length ? ` Limits: ${limits.join(", ")}.` : ""}${boolean}${confidence}`;
+  const supported =
+    capabilities.questions === undefined
+      ? "The selected model's question types are undeclared."
+      : questionTypes.length
+        ? `The selected provider supports ${questionTypes.join(", ")} questions.`
+        : "The selected model declares no Boolean, Choice or Score support.";
+  return `${supported}${limits.length ? ` Limits: ${limits.join(", ")}.` : ""}${boolean}${confidence}`;
 }
 
 const unavailableGuidance: Record<
-  Extract<DecisionOutcome, { status: "unavailable" }>["reason"],
+  Extract<DecisionOutcomeV2, { status: "unavailable" }>["reason"],
   string
 > = {
   disabled:
@@ -161,8 +224,8 @@ const unavailableGuidance: Record<
 
 /** Preserve provider values and provenance; diagnostics contain only bounded local facts. */
 export function decisionToolResult(
-  outcome: DecisionOutcome,
-  capabilities?: DecisionProviderCapabilities,
+  outcome: DecisionOutcomeV2,
+  capabilities?: ModelDecisionCapabilities,
 ) {
   const details =
     outcome.status === "unavailable"

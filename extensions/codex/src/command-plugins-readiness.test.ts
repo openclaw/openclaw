@@ -6,6 +6,7 @@ import type { v2 } from "./app-server/protocol.js";
 import { CodexAppServerRpcError } from "./app-server/rpc-error.js";
 import { createCodexTestBindingStore } from "./app-server/session-binding.test-helpers.js";
 import { handleCodexSubcommand } from "./command-handlers.js";
+import { createCodexCommandHost } from "./command-host.test-support.js";
 import type { CodexPluginsManagementIO } from "./command-plugin-config.js";
 import { handleCodexPluginsSubcommand } from "./command-plugins-management.js";
 import type { CodexPluginCommandContext } from "./command-plugins-runtime.js";
@@ -34,7 +35,7 @@ async function refreshHostedApps(context: CodexPluginCommandContext) {
   );
   return await handleCodexSubcommand(
     { ...ctx, args: "plugins refresh", commandBody: "/codex plugins refresh" },
-    { deps: { bindingStore: createCodexTestBindingStore() } },
+    { deps: createCodexCommandHost({ bindingStore: createCodexTestBindingStore() }) },
   );
 }
 
@@ -355,7 +356,7 @@ describe("Codex hosted app refresh", () => {
       const acquire = vi.spyOn(commandRuntime, "withCodexPluginCommandContext");
       const result = await handleCodexSubcommand(
         { ...ctx, args, senderIsOwner: owner },
-        { deps: { bindingStore: createCodexTestBindingStore() } },
+        { deps: createCodexCommandHost({ bindingStore: createCodexTestBindingStore() }) },
       );
       expect(result.text).toContain(expected);
       expect(acquire).not.toHaveBeenCalled();

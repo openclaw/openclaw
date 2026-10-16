@@ -235,16 +235,8 @@ export function createModelAuthAvailabilityResolver(
         ]),
       )
     : store.profiles;
-  const orderBaseStore =
+  const orderStore =
     orderProfiles === store.profiles ? store : { ...store, profiles: orderProfiles };
-  const orderStore: AuthProfileStore = orderBaseStore.usageStats
-    ? {
-        ...orderBaseStore,
-        usageStats: Object.fromEntries(
-          Object.entries(orderBaseStore.usageStats).map(([id, stats]) => [id, { ...stats }]),
-        ),
-      }
-    : orderBaseStore;
   const { aliasMap, envCandidateMap, authEvidenceMap } = resolveProviderEnvAuthLookupMaps({
     config: params.cfg,
     workspaceDir: params.workspaceDir,

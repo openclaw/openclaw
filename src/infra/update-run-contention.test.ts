@@ -5,6 +5,7 @@ import { createUpdateCommandExecutionGuards } from "../cli/update-cli/update-com
 import * as existingWrites from "../state/openclaw-state-db-existing-write.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { isPostgresSqlConnection } from "./sql-connection.js";
 import { readSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import { captureUpdateRunRedactionFacts } from "./update-run-codec.js";
@@ -194,9 +195,13 @@ it("restores the ordinary transaction wait after driver admission", () => {
   let connection: DatabaseSync | undefined;
   vi.spyOn(writer, "run").mockImplementation((operation, current) =>
     run((database) => {
+      const { db } = database;
+      if (isPostgresSqlConnection(db)) {
+        throw new Error("The busy-timeout fixture requires SQLite");
+      }
       const result = operation(database);
-      connection = database.db;
-      timeout = readSqliteBusyTimeout(database.db);
+      connection = db;
+      timeout = readSqliteBusyTimeout(db);
       return result;
     }, current),
   );

@@ -75,6 +75,9 @@ function registeredProvider(endpoint?: string) {
   } as unknown as OpenClawPluginApi);
   const provider = registerDecisionProvider.mock.calls[0]?.[0];
   assert(provider);
+  if (provider.contractVersion !== 1) {
+    throw new Error("TypeSafe fixture registered an unexpected decision contract");
+  }
   return provider;
 }
 

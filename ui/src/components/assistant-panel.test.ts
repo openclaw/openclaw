@@ -369,6 +369,40 @@ describe("assistant panel", () => {
     },
   );
 
+  it("retains plugin intent across context replacement and retires it on element removal", async () => {
+    const { context, panel, provider } = await mountPanel();
+    panel.custodianSuppressed = false;
+    panel.pageRouteId = "plugin";
+    await panel.updateComplete;
+    context.assistantDock.openSession(
+      { sessionKey: "agent:research:review", agentId: "research", label: "Review" },
+      {},
+    );
+    await panel.updateComplete;
+    const assistantDock = new AssistantDock();
+    const replacementContext = { ...context, assistantDock };
+    provider.setContext(replacementContext);
+    await panel.updateComplete;
+    expect(context.assistantDock.openSessionKey).toBeNull();
+    expect(assistantDock.openSessionKey).toBe("agent:research:review");
+    expect(panel.textContent).toContain("Review");
+
+    panel.remove();
+    await panel.updateComplete;
+    expect(assistantDock.openSessionKey).toBeNull();
+    expect(chatInputOwnerForContext(replacementContext).current).toBe("page");
+    provider.append(panel);
+    await panel.updateComplete;
+    expect(panel.assistantPanelOpen).toBe(false);
+    window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT));
+    await panel.updateComplete;
+    expect(panel.assistantPanelOpen).toBe(true);
+    expect(assistantDock.openSessionKey).toBeNull();
+    window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT));
+    await panel.updateComplete;
+    expect(panel.assistantPanelOpen).toBe(false);
+  });
+
   it("keeps a closed plugin dock closed when automatic Ask help arrived while it was open", async () => {
     vi.stubGlobal("innerWidth", 1342);
     const { context, panel } = await mountPanel();
@@ -756,11 +790,20 @@ describe("assistant panel", () => {
     expect(panel.assistantPanelOpen).toBe(true);
 
     panel.remove();
-    const { panel: restored } = await mountPanel();
+    const { panel: restored, provider, context } = await mountPanel();
     restored.custodianSuppressed = false;
     restored.pageRouteId = "updates";
     await restored.updateComplete;
     expect(restored.assistantPanelOpen).toBe(false);
+    provider.setContext({ ...context });
+    await restored.updateComplete;
+    expect(restored.assistantPanelOpen).toBe(false);
+    window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT));
+    await restored.updateComplete;
+    expect(restored.assistantPanelOpen).toBe(true);
+    provider.setContext({ ...context });
+    await restored.updateComplete;
+    expect(restored.assistantPanelOpen).toBe(true);
     restored.pageRouteId = "agents-home";
     await restored.updateComplete;
     expect(restored.assistantPanelOpen).toBe(true);

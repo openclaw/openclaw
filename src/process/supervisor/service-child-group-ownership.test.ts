@@ -13,7 +13,7 @@ vi.mock("./darwin-bun-process-census.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./darwin-bun-process-census.js")>()),
   readDarwinBunProcessCensus: nativeDarwinCensus,
 }));
-vi.mock("node:child_process", () => ({ spawnSync: census }));
+vi.mock("node:child_process", () => ({ spawnSync: census, execFile: vi.fn() }));
 vi.mock("node:fs", () => ({ readdirSync: directory, readFileSync: readStat }));
 vi.mock("../../shared/pid-alive.js", () => ({ isPidDefinitelyDead: definitelyDead }));
 import {
@@ -144,7 +144,14 @@ it.each([
   "observes Darwin ownership excluding only the inspector: %s",
   (_name, result, expected) => {
     mockProcessPlatform("darwin");
-    census.mockReturnValue({ pid: owner + 1, ...result });
+    census.mockReturnValue({
+      pid: owner + 1,
+      ...result,
+      stdout: result.stdout
+        .split("\n")
+        .map((row) => row.replace(/^(\d+) (\d+) (\S+)$/, "$1 $2 $3 1 501"))
+        .join("\n"),
+    });
     expect(hasLiveOwnedProcessGroupMembers()).toBe(expected);
     expect(directory).not.toHaveBeenCalled();
     expect(readStat).not.toHaveBeenCalled();
@@ -221,7 +228,10 @@ it.each([1000, 2000, undefined])(
 
 it("does not turn native Darwin inspection failures into an empty census", () => {
   mockProcessPlatform("darwin");
-  census.mockReturnValue({ status: 0, stdout: `${owner} ${owner} S 1 501\n` });
+  census.mockReturnValue({
+    status: 0,
+    stdout: `${owner} ${owner} S 1 501\n`,
+  });
   darwinCommand.mockImplementation(() => {
     throw new Error("native process inspection unavailable");
   });
@@ -255,4 +265,17 @@ it("uses the native census in Darwin Bun when sandboxed ps cannot execute", () =
   ]);
   expect(census).not.toHaveBeenCalled();
   expect(darwinCommand).toHaveBeenCalledExactlyOnceWith(owner, 501);
+});
+
+it("does not request Node Darwin arguments for kernel tasks or zombie states with flags", () => {
+  mockProcessPlatform("darwin");
+  census.mockReturnValue({
+    status: 0,
+    stdout: `0 0 R 0 0\n${owner} ${owner} Z+ 1 501\n`,
+  });
+  expect([...readProcessGroupMembers(1000, { readDarwinCommand: darwinCommand })]).toEqual([
+    { pid: 0, pgid: 0, state: "R", command: { ppid: 0, argv: [], uid: 0 } },
+    { pid: owner, pgid: owner, state: "Z+", command: { ppid: 1, argv: [], uid: 501 } },
+  ]);
+  expect(darwinCommand).not.toHaveBeenCalled();
 });

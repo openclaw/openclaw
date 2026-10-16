@@ -287,19 +287,23 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
     const groupLabel = () => t("chat.modelControls.providerModels", { provider: providerLabel() });
     const options = () => [...props.lead, ...props.more];
     const auth = () => params.providerAuth?.get(canonicalModelAuthProviderId(props.provider));
-    const showAuth = () =>
-      auth() &&
-      !(
-        auth()?.kind === "missing" &&
-        options().some(
-          (option) =>
-            option.disabled &&
-            (option.unavailableReason === "missing-auth" ||
-              option.unavailableReason === "auth-failed"),
-        )
-      );
-    const authLabel = () =>
-      showAuth() ? [auth()?.label, auth()?.detail].filter(Boolean).join(" · ") : undefined;
+    const authKind = createMemo(() => auth()?.kind);
+    const showAuth = createMemo(
+      () =>
+        Boolean(auth()) &&
+        !(
+          auth()?.kind === "missing" &&
+          options().some(
+            (option) =>
+              option.disabled &&
+              (option.unavailableReason === "missing-auth" ||
+                option.unavailableReason === "auth-failed"),
+          )
+        ),
+    );
+    const authLabel = createMemo(() =>
+      showAuth() ? [auth()?.label, auth()?.detail].filter(Boolean).join(" · ") : undefined,
+    );
     const routeDetail = () => {
       const route = resolveModelRuntimeRoute(props.provider);
       return route ? t(`chat.modelControls.routes.${route}.detail`) : undefined;
@@ -334,13 +338,13 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
             </span>
           </button>
           {showAuth() ? (
-            <span class="chat-controls__auth-meta" data-auth-kind={auth()?.kind}>
+            <span class="chat-controls__auth-meta" data-auth-kind={authKind()}>
               <span aria-hidden="true">
                 <Icon
                   name={
-                    auth()?.kind === "subscription"
+                    authKind() === "subscription"
                       ? "circleUser"
-                      : auth()?.kind === "api"
+                      : authKind() === "api"
                         ? "key"
                         : "alertTriangle"
                   }

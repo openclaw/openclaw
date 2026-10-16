@@ -135,7 +135,7 @@ keep the existing synchronous fallback.
 
   </Accordion>
   <Accordion title="api.runtime.state">
-    State directory resolution and SQLite-backed keyed storage.
+    State directory resolution and engine-aware keyed storage.
 
     ```typescript
     const stateDir = api.runtime.state.resolveStateDir(process.env);
@@ -165,6 +165,14 @@ keep the existing synchronous fallback.
     );
     const blob = await blobs.lookup("artifact-1");
     ```
+
+    Keyed stores use the boot-selected `state` family engine. To open an additional
+    physical state root, pass `env: { ...process.env, OPENCLAW_STATE_DIR: root }`
+    in the store options. Every root retains the same keyed-store contract and,
+    on PostgreSQL, gets its own anchor UUID and namespace from the engine owner.
+    Declare the root through [`backupResources`](/plugins/manifest/surfaces#backupresources-reference)
+    with `databaseFamily: "state"` so port, backup, update, and Doctor can discover
+    it after the account is disabled. Never allocate PostgreSQL schemas in a plugin.
 
     For command-owned writes, `store.register(key, value, { assertCurrent })`
     and `store.delete(key, { assertCurrent })` carry the captured owner assertion

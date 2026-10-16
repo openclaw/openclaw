@@ -10,6 +10,23 @@ import {
   resolveSlashCommandConfig,
 } from "./slash-commands.js";
 
+const fetchFixture = vi.hoisted((): { current: typeof fetch } => ({
+  current: vi.fn<typeof fetch>(),
+}));
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: async (params: Parameters<typeof actual.fetchWithSsrFGuard>[0]) => {
+      params.beforeRequest?.();
+      return {
+        response: await fetchFixture.current(params.url, params.init),
+        release: async () => {},
+      };
+    },
+  };
+});
+
 describe("slash-commands", () => {
   async function registerSingleStatusCommand(
     requestImpl: (path: string, init?: RequestInit) => Promise<unknown>,
@@ -236,7 +253,7 @@ describe("slash-commands", () => {
 
   it("recreates a drifted command when its accepted delete body cannot be read", async () => {
     const calls: string[] = [];
-    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+    fetchFixture.current = vi.fn<typeof fetch>(async (input, init) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       const method = init?.method ?? "GET";
       calls.push(`${method} ${url.replace("https://chat.example.com/api/v4", "")}`);
@@ -283,7 +300,6 @@ describe("slash-commands", () => {
     const client = createMattermostClient({
       baseUrl: "https://chat.example.com",
       botToken: "bot-token",
-      fetchImpl,
     });
 
     const result = await registerSlashCommands({

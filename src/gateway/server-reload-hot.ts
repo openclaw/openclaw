@@ -367,12 +367,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           cronReconciliation: params.cronReconciliation,
           reason: "reload",
           config: nextConfig,
-          afterStart: async () => {
-            await Promise.all([
-              nextState.cronState.reconcileExitWatchers(),
-              nextState.cronState.reconcileStreamWatchers(),
-            ]);
-          },
           logCron: params.logCron,
           onStartError: (err) => {
             if (!ownsCron()) {

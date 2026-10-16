@@ -1,14 +1,47 @@
+import path from "node:path";
 import { pathToFileURL } from "node:url";
+import * as ts from "typescript/unstable/ast";
 import {
   countMigrationSources,
   isTest,
   readInventorySources,
 } from "./control-ui-solid-inventory.mts";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import {
   parseRatchetArgs,
   reportRatchetFailures,
   resolveRatchetBase,
 } from "./lib/shrink-ratchet.mts";
+
+function controllerHostUsers(root: string, sources: ReadonlyMap<string, string>) {
+  using parser = createNativeTypeScriptParser({ cwd: root });
+  const files = [...sources]
+    .filter(([file, text]) => !isTest(file) && text.includes("solid-controller-host"))
+    .map(([fileName, text]) => ({ fileName, text }));
+  const users = new Set<string>();
+  for (const tree of parser.parseSourceFiles(files)) {
+    const visit = (node: ts.Node): void => {
+      const specifier =
+        ts.isImportDeclaration(node) || ts.isExportDeclaration(node)
+          ? node.moduleSpecifier
+          : ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword
+            ? node.arguments[0]
+            : ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)
+              ? node.argument.literal
+              : undefined;
+      if (
+        specifier &&
+        (ts.isStringLiteral(specifier) || ts.isNoSubstitutionTemplateLiteral(specifier)) &&
+        /(?:^|\/)solid-controller-host(?:\.ts)?$/u.test(specifier.text)
+      ) {
+        users.add(path.relative(root, tree.fileName).split(path.sep).join("/"));
+      }
+      node.forEachChild(visit);
+    };
+    visit(tree);
+  }
+  return users;
+}
 
 export function main(root = process.cwd(), argv = process.argv.slice(2)) {
   try {
@@ -22,6 +55,10 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     }
     const previous = readInventorySources(root, { ref: base, roots: ["ui/src"] });
     const current = readInventorySources(root, { staged: args.staged, roots: ["ui/src"] });
+    const previousHostUsers = controllerHostUsers(root, previous);
+    const newHostUsers = [...controllerHostUsers(root, current)].filter(
+      (file) => !previousHostUsers.has(file),
+    );
     // Parse candidates so comments and strings cannot keep the retirement gate open.
     const candidates = (sources: ReadonlyMap<string, string>) =>
       new Map(
@@ -42,6 +79,10 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     if (
       reportRatchetFailures(
         [
+          {
+            title: "New Control UI modules must not depend on the retiring controller host:",
+            entries: newHostUsers,
+          },
           {
             title: "Retired Control UI controller patterns must not be reintroduced:",
             entries: reintroduced,

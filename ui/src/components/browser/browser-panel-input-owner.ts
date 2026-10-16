@@ -13,7 +13,7 @@ import {
   pressBrowserKey,
   scrollBrowserBy,
 } from "./browser-client.ts";
-import type { BrowserPanelOperationOwnership } from "./browser-panel-operation-ownership.ts";
+import type { BrowserPanelOperations } from "./browser-panel-operation-ownership.ts";
 import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
 import type { BrowserPanelStream } from "./browser-panel-stream.ts";
 import {
@@ -46,7 +46,7 @@ type BrowserPanelInputState = {
 interface BrowserPanelInputHost extends BrowserPanelInputState {
   readonly stream: Pick<BrowserPanelStream, "ownsView">;
   readonly operations: Pick<
-    BrowserPanelOperationOwnership,
+    BrowserPanelOperations,
     "beginInspection" | "captureClient" | "epoch" | "isLive"
   >;
   readonly pendingInput: Pick<

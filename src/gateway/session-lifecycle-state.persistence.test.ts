@@ -308,7 +308,6 @@ it.each(["success", "failed-write"])(
     const admissionParams = {
       cfg,
       runId,
-      lifecycleGeneration: getAgentEventLifecycleGeneration(),
       agentDedupeKeys: [`agent:${runId}`],
       context,
       io: { emitAcceptance: vi.fn(), emitFinal: vi.fn() },

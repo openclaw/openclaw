@@ -120,7 +120,7 @@ export async function ensureLoaded(
         );
       }
     }
-    const rawConfigJob = loaded.configJobs[index] ?? structuredClone(raw);
+    const rawConfigJob = loaded.configJobs[index] ?? raw;
     const sourceIndex = loaded.configJobIndexes[index] ?? index;
     const runtimeEntry = loaded.configJobRuntimeEntries[index];
     const rawInvalidReason = getInvalidPersistedCronJobReason(raw);
@@ -162,7 +162,7 @@ export async function ensureLoaded(
       if (runtimeState && typeof runtimeState === "object" && !Array.isArray(runtimeState)) {
         // Preserve runtime state with the quarantined config so doctor can
         // repair shape without losing last/next run information.
-        quarantineEntry.state = structuredClone(runtimeState as Record<string, unknown>);
+        quarantineEntry.state = runtimeState as Record<string, unknown>;
       }
       const updatedAtMs = runtimeEntry?.updatedAtMs ?? raw.updatedAtMs;
       if (typeof updatedAtMs === "number" && Number.isFinite(updatedAtMs)) {

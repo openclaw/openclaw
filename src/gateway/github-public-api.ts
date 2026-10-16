@@ -36,6 +36,11 @@ export type ControlUiGitHubPreviewIdentity = {
   revalidate: () => Promise<void>;
   assertSelected: () => void;
 };
+export type ControlUiGitHubSessionIdentity = ControlUiGitHubPreviewIdentity & {
+  host: string;
+  apiBaseUrl: string;
+  repository: { id: number; owner: string; repo: string };
+};
 type ControlUiGitHubPreviewTarget = {
   owner: string;
   repo: string;
@@ -132,6 +137,17 @@ type GitHubPublicApi = {
     fetchImpl?: typeof fetch,
     refresh?: boolean,
     request?: GitHubReadRequest,
+  ) => Promise<ControlUiLinkReaderDocument>;
+  loadSessionGitHubPreview: (
+    target: ControlUiGitHubPreviewTarget,
+    identity: ControlUiGitHubSessionIdentity,
+    fetchImpl?: typeof fetch,
+  ) => Promise<Awaited<ReturnType<GitHubPublicApi["loadControlUiGitHubPreview"]>>>;
+  loadSessionGitHubDetail: (
+    target: GitHubDetailTarget,
+    identity: ControlUiGitHubSessionIdentity,
+    fetchImpl?: typeof fetch,
+    refresh?: boolean,
   ) => Promise<ControlUiLinkReaderDocument>;
   loadControlUiGitHubPreview: (
     target: ControlUiGitHubPreviewTarget,

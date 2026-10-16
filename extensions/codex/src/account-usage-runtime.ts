@@ -5,7 +5,7 @@ import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-r
 import { ensureAuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { z } from "zod";
 import { resolveCodexAppServerAuthProfileStore } from "./app-server/auth-profile.js";
-import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
+import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
 import { isCodexAppServerProxyLaunch } from "./app-server/launch-args.js";
 import { buildCodexAppServerUsageSnapshot } from "./app-server/rate-limits.js";
 import { readCodexAppServerUsage } from "./app-server/request.js";
@@ -66,7 +66,7 @@ export async function handleCodexAccountUsage({
     };
     assertCurrent();
     const { start } = resolveCodexAppServerRuntimeOptions({
-      pluginConfig: config.plugins?.entries?.codex?.config,
+      pluginConfig: readCodexPluginConfig(config.plugins?.entries?.codex?.config),
     });
     if (isCodexAppServerProxyLaunch(start.args)) {
       throw new Error(

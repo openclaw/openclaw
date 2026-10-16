@@ -6,7 +6,7 @@ import { makeChatHost } from "../chat-host.test-support.ts";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { lockChatScroll } from "../scroll.ts";
 import { mountTestTranscript } from "../test-helpers/chat-transcript-native.tsx";
-import { ChatTranscriptController } from "./chat-transcript-controller.ts";
+import { createTranscriptTestOwner } from "./chat-transcript-owner.test-support.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -73,7 +73,7 @@ describe("transcript follow continuity", () => {
       const flushFrames = stubAnimationFrames();
       transcriptDomState.measuredRowHeight = 120;
       let followEnabled = true;
-      const transcript = new ChatTranscriptController(
+      const transcript = createTranscriptTestOwner(
         {
           addController: vi.fn(),
           removeController: vi.fn(),
@@ -170,7 +170,7 @@ describe("transcript follow continuity", () => {
     async ({ source, settled }) => {
       stubAnimationFrames();
       const policy = makeChatHost({ chatHasAutoScrolled: true });
-      const transcript = new ChatTranscriptController(
+      const transcript = createTranscriptTestOwner(
         {
           addController: vi.fn(),
           removeController: vi.fn(),
@@ -237,7 +237,7 @@ describe("transcript follow continuity", () => {
       const { container, renderRows, transcript } = await mountTestTranscript(
         `typing-distance-${distance}`,
         rows,
-        new ChatTranscriptController(
+        createTranscriptTestOwner(
           {
             addController: () => undefined,
             removeController: () => undefined,

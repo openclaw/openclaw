@@ -45,9 +45,16 @@ export class SidebarPeopleRuntime {
   private lastOpenAt = -Infinity;
   private activity: ReturnType<typeof observePersonActivityData> | undefined;
   private readonly stopLocale: () => void;
+  private readonly stopGateway: (() => void) | undefined;
 
   constructor(private readonly host: AppSidebarSessionNavigationElement) {
     this.stopLocale = i18n.subscribe(() => this.sync());
+    // Retire connection-bound cards without waiting for a sidebar repaint.
+    this.stopGateway = host.sessionDataContext?.gateway.subscribe(() => {
+      if (!this.isCurrent()) {
+        this.close();
+      }
+    });
   }
 
   private scope(): string {
@@ -352,5 +359,6 @@ export class SidebarPeopleRuntime {
   dispose(): void {
     this.close();
     this.stopLocale();
+    this.stopGateway?.();
   }
 }

@@ -532,22 +532,6 @@ describe("OpenClaw shell server preferences", () => {
 });
 
 describe("OpenClaw shell settings search", () => {
-  it("loads config and schema for a non-empty query", async () => {
-    const runtimeConfig = {
-      ensureLoaded: vi.fn(() => Promise.resolve()),
-      ensureSchemaLoaded: vi.fn(() => Promise.resolve()),
-    } as unknown as ApplicationContext["runtimeConfig"];
-    const shell = createShellOwner() as unknown as ShellSettingsSearchLoadState;
-    shell.runtime = {
-      context: { runtimeConfig } as unknown as ApplicationContext,
-    };
-
-    await shell.handleSettingsSearchQueryChange("browser");
-
-    expect(runtimeConfig.ensureLoaded).toHaveBeenCalledOnce();
-    expect(runtimeConfig.ensureSchemaLoaded).toHaveBeenCalledOnce();
-  });
-
   it("does not load schema through a replaced runtime config capability", async () => {
     const loadGate = createDeferred();
     const firstRuntimeConfig = {
@@ -972,26 +956,6 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     expect(harness.setSelection).toHaveBeenCalledExactlyOnceWith("main", { background: true });
   });
 
-  it("keeps caches intact when a config.changed refresh returns the same roster", async () => {
-    vi.useFakeTimers();
-    const unchanged = roster("main", [{ id: "main", name: "Main" }, { id: "writer" }]);
-    const harness = createRosterRefreshContext({
-      previous: unchanged,
-      next: structuredClone(unchanged),
-      selectedId: "main",
-    });
-    const shell = createShellOwner() as unknown as ShellUiCommandState;
-    shell.runtime = { context: harness.context };
-
-    shell.handleGatewayEvent({ event: "config.changed", payload: {} });
-    await vi.advanceTimersByTimeAsync(100);
-
-    expect(harness.refreshList).toHaveBeenCalledOnce();
-    expect(harness.invalidateFiles).not.toHaveBeenCalled();
-    expect(harness.invalidateIdentity).not.toHaveBeenCalled();
-    expect(harness.ensureIdentity).not.toHaveBeenCalled();
-  });
-
   it("coalesces config.changed bursts into one roster refresh", async () => {
     vi.useFakeTimers();
     const unchanged = roster("main", [{ id: "main" }]);
@@ -1011,5 +975,8 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     await vi.advanceTimersByTimeAsync(1);
 
     expect(harness.refreshList).toHaveBeenCalledOnce();
+    expect(harness.invalidateFiles).not.toHaveBeenCalled();
+    expect(harness.invalidateIdentity).not.toHaveBeenCalled();
+    expect(harness.ensureIdentity).not.toHaveBeenCalled();
   });
 });

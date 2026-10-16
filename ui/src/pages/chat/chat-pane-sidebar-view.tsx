@@ -93,15 +93,17 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
                     panel.slot !== "conversation" && isSidebarSlotVisible(props.layout, panel.slot),
                 ) ?? []
               }
+              keyed={(panel) => panel.id}
             >
               {(panel) => (
                 <div
                   class="side-panel__panel"
-                  data-region={panel.id === props.layout.mainPanelId ? "main" : "side"}
+                  data-region={panel().id === props.layout.mainPanelId ? "main" : "side"}
                 >
                   <PanelLoadingSkeleton
-                    {...props.panelDefinitions.find((definition) => definition.slot === panel.slot)!
-                      .loading}
+                    {...props.panelDefinitions.find(
+                      (definition) => definition.slot === panel().slot,
+                    )!.loading}
                   />
                 </div>
               )}

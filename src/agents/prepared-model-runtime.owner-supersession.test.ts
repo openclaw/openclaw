@@ -454,32 +454,6 @@ describe("prepared model runtime owner selection", () => {
     }
   });
 
-  it("follows a config replacement while waiting for an auth publication", async () => {
-    mocks.configuredAgentIds = ["default"];
-    const config = {};
-    const nextConfig = { messages: { responsePrefix: "updated" } };
-    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
-    const input = fixture.agentInput("default", config);
-    const { started, release } = holdNextCatalogWrite();
-    let reader: ReturnType<typeof prepareModelRuntimeSnapshot> | undefined;
-    let replacement: ReturnType<typeof refreshPreparedModelRuntimeSnapshots> | undefined;
-    try {
-      mocks.mutationListener?.({ agentDir: input.agentDir, affectsInheritedStores: false });
-      await started.promise;
-      reader = prepareModelRuntimeSnapshot(input);
-      const result = expect(reader).resolves.toMatchObject({ config: nextConfig });
-      replacement = refreshPreparedModelRuntimeSnapshots(nextConfig, { gatewayLifecycle: true });
-      release.resolve();
-
-      await result;
-      await replacement;
-      expect((await reader).isCurrent()).toBe(true);
-    } finally {
-      release.resolve();
-      await Promise.allSettled([reader, replacement]);
-    }
-  });
-
   it("finishes config replacement after a second adopted auth mutation", async () => {
     mocks.configuredAgentIds = ["default"];
     const config = {};

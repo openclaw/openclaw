@@ -297,6 +297,7 @@ function createSidecarParams(
     defaultWorkspaceDir: params.defaultWorkspaceDir,
     deps: params.deps,
     startChannels: params.startChannels,
+    trackStartupWork: params.trackStartupWork,
     log: params.log,
     logHooks: params.logHooks,
     logChannels: params.logChannels,
@@ -1471,87 +1472,88 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(transcriptSidecarMocks.transcriptCapturePolicy.resume).toHaveBeenCalledTimes(1);
   });
 
-  it("starts and reports plugin services after channel startup completes", async () => {
-    await withEnvAsync(
-      { OPENCLAW_SKIP_CHANNELS: undefined, OPENCLAW_SKIP_PROVIDERS: undefined },
-      async () => {
-        let releaseChannels: (() => void) | undefined;
-        const events: string[] = [];
-        const pluginServices: PluginServicesHandle = {
-          reload: vi.fn(async () => {}),
-          stop: vi.fn(async () => {}),
-        };
-        const onPluginServices = vi.fn();
-        const onSidecarsReady = vi.fn();
-        const startChannels = vi.fn(
-          () =>
-            new Promise<void>((resolve) => {
-              events.push("channels-start");
-              releaseChannels = () => {
-                events.push("channels-end");
-                resolve();
-              };
-            }),
-        );
-        hoisted.startPluginServices.mockImplementationOnce(async (params) => {
-          events.push("plugin-services");
-          params.onHandle?.(pluginServices);
-          return pluginServices;
-        });
-
-        await startGatewayPostAttachRuntime({
-          ...createPostAttachParams({
-            sidecarStartup: "defer",
-            onChannelsStarted: async () => {
-              events.push("channels-started");
-            },
-            onPluginServices,
-            onSidecarsReady,
-          }),
-          startChannels,
-        });
-
-        await waitForGatewayTestState(() => {
-          expect(startChannels).toHaveBeenCalledTimes(1);
-        });
-        expect(hoisted.startPluginServices).not.toHaveBeenCalled();
-        expect(onPluginServices).not.toHaveBeenCalled();
-        expect(onSidecarsReady).not.toHaveBeenCalled();
-
-        if (!releaseChannels) {
-          throw new Error("Expected channel startup release callback to be initialized");
-        }
-        releaseChannels();
-        await waitForGatewayTestState(() => {
-          expect(hoisted.startPluginServices).toHaveBeenCalledTimes(1);
-          expect(onPluginServices).toHaveBeenCalledTimes(2);
-          expect(onPluginServices).toHaveBeenLastCalledWith(pluginServices);
-          expect(onSidecarsReady).toHaveBeenCalledTimes(1);
-        });
-        expect(events).toEqual([
-          "channels-start",
-          "channels-started",
-          "channels-end",
-          "plugin-services",
-        ]);
-        expect(onPluginServices).toHaveBeenCalledTimes(2);
-        const owner: PluginServicesHandle = onPluginServices.mock.calls[0]?.[0];
-        const config: OpenClawConfig = { diagnostics: { otel: { enabled: true } } };
-        const selected = new Set(["exporter"]);
-        await owner.reload(config, selected);
-        expect(pluginServices.reload).toHaveBeenCalledExactlyOnceWith(config, selected);
-        await owner.stop();
-        expect(pluginServices.stop).toHaveBeenCalledOnce();
-      },
+  it("starts independent sidecars while channels prepare and retains their shutdown custody", async () => {
+    const channels = createDeferred();
+    const channelsStarted = createDeferred();
+    const recoveryStarted = createDeferred();
+    const events: string[] = [];
+    const lifetime = new AsyncWorkScope();
+    const trackStartupWork: PostAttachParams["trackStartupWork"] = (run) => {
+      const operation = Promise.resolve().then(() => run(lifetime.signal));
+      return lifetime.track(() => operation);
+    };
+    const pluginServices: PluginServicesHandle = {
+      reload: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+    };
+    const onPluginServices = vi.fn();
+    const onSidecarsReady = vi.fn();
+    hoisted.startPluginServices.mockImplementationOnce(async (params) => {
+      events.push("plugin-services");
+      params.onHandle?.(pluginServices);
+      return pluginServices;
+    });
+    hoisted.activateSubagentRegistry.mockImplementationOnce(() => recoveryStarted.resolve());
+    const runtime = await startGatewayPostAttachRuntime(
+      createPostAttachParams({
+        sidecarStartup: "defer",
+        trackStartupWork,
+        startChannels: async () => {
+          events.push("channels-start");
+          channelsStarted.resolve();
+          await channels.promise;
+          events.push("channels-end");
+        },
+        onChannelsStarted: () => {
+          events.push("channels-started");
+        },
+        onPluginServices,
+        onSidecarsReady,
+      }),
     );
+
+    try {
+      await channelsStarted.promise;
+      await waitForGatewayTestState(() => expect(onSidecarsReady).toHaveBeenCalledOnce());
+      await runtime.startupSettled;
+      await recoveryStarted.promise;
+      expect(events).toEqual(["channels-start", "channels-started", "plugin-services"]);
+      expect(onPluginServices).toHaveBeenCalledTimes(2);
+      expect(onPluginServices).toHaveBeenLastCalledWith(pluginServices);
+      const owner: PluginServicesHandle = onPluginServices.mock.calls[0]?.[0];
+      const config: OpenClawConfig = { diagnostics: { otel: { enabled: true } } };
+      const selected = new Set(["exporter"]);
+      await owner.reload(config, selected);
+      expect(pluginServices.reload).toHaveBeenCalledExactlyOnceWith(config, selected);
+      await owner.stop();
+      expect(pluginServices.stop).toHaveBeenCalledOnce();
+
+      const closed = vi.fn();
+      const closing = lifetime.drain().then(closed);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(closed).not.toHaveBeenCalled();
+      channels.resolve();
+      await closing;
+      expect(closed).toHaveBeenCalledOnce();
+      expect(events.at(-1)).toBe("channels-end");
+    } finally {
+      channels.resolve();
+      await runtime.startupSettled;
+      await lifetime.drain();
+    }
   });
 
-  it("does not start plugin services after deferred close starts during channel startup", async () => {
+  it("does not start plugin services when close begins while scheduling channels", async () => {
     const channels = createDeferred();
     let closing = false;
     const onPluginServices = vi.fn();
     const onSidecarsReady = vi.fn();
-    const startChannels = vi.fn(() => channels.promise);
+    const startChannels = vi.fn(() => {
+      closing = true;
+      return channels.promise;
+    });
     const runtime = await startGatewayPostAttachRuntime(
       createPostAttachParams({
         sidecarStartup: "defer",
@@ -1563,7 +1565,6 @@ describe("startGatewayPostAttachRuntime", () => {
     );
     try {
       await waitForGatewayTestState(() => expect(startChannels).toHaveBeenCalledOnce());
-      closing = true;
       channels.resolve();
       await runtime.startupSettled;
       expect(onSidecarsReady).not.toHaveBeenCalled();
@@ -2440,10 +2441,13 @@ describe("startGatewayPostAttachRuntime", () => {
     resolveWatcher();
   });
 
-  it("does not create post-ready sidecars after close begins during channel startup", async () => {
+  it("does not create post-ready sidecars when close begins while scheduling channels", async () => {
     const channels = createDeferred();
     let closing = false;
-    const startChannels = vi.fn(() => channels.promise);
+    const startChannels = vi.fn(() => {
+      closing = true;
+      return channels.promise;
+    });
     const onPostReadySidecars = vi.fn<SidecarPublisher>();
     const starting = startGatewaySidecars({
       cfg: { hooks: { enabled: true, internal: { enabled: false }, gmail: { account: "me" } } },
@@ -2453,7 +2457,6 @@ describe("startGatewayPostAttachRuntime", () => {
     });
     try {
       await waitForGatewayTestState(() => expect(startChannels).toHaveBeenCalledOnce());
-      closing = true;
       channels.resolve();
       expect(await starting).toBe(0);
       expect(publishedPostReadySidecars.size).toBe(0);

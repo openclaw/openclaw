@@ -193,6 +193,7 @@ export class CodexCatalogRolloutScanner {
       this.directories.set(directory, cached);
       return cached;
     } catch {
+      // Unwatchable directories use full scans instead of cached fingerprints.
       return undefined;
     }
   }

@@ -17,7 +17,7 @@ import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
 import { prepareCodexWorkspaceDeveloperInstructions } from "./attempt-workspace-context.js";
 import { resolveOpenClawExecPolicyForCodexAppServer } from "./config-exec-approvals.js";
 import { assertCodexModelBackedReviewerEffectiveConfig } from "./config-reviewer.js";
-import { readCodexPluginConfig, resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
+import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import { resolveCodexNativeExecutionPolicy } from "./native-execution-policy.js";
 import { codexNativeHookRemoteCredentialPath } from "./native-hook-relay-remote.js";
 import {
@@ -88,7 +88,7 @@ export async function prepareCanonicalCodexFork(params: {
       "This child requires an execution environment that cannot be prepared during a native fork. Fork an original imported message instead.",
     );
   }
-  const pluginConfig = readCodexPluginConfig(context.pluginConfig);
+  const pluginConfig = context.pluginConfig;
   const runtime = resolveCodexSupervisionAppServerRuntimeOptions({
     pluginConfig,
     config,

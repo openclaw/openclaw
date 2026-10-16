@@ -35,7 +35,7 @@ async function buildSlashCommands(params: {
   try {
     const skillCommands = await prepareSkillCommandsForAgents({ cfg: params.cfg });
     for (const spec of skillCommands) {
-      const name = typeof spec.name === "string" ? spec.name.trim() : "";
+      const name = spec.name.trim();
       if (!name) {
         continue;
       }
@@ -116,7 +116,7 @@ export async function registerMattermostMonitorSlashCommands(params: {
     const slashCallbackUrl = resolveCallbackUrl({
       config: slashConfig,
       gatewayPort: resolveGatewayPort(params.cfg),
-      gatewayHost: params.cfg.gateway?.customBindHost ?? undefined,
+      gatewayHost: params.cfg.gateway?.customBindHost,
     });
 
     warnOnSuspiciousCallbackUrl({

@@ -6,7 +6,7 @@ import * as configModule from "../../config/config.js";
 import { recordDeferredPluginMigrations } from "../../infra/deferred-plugin-migrations.js";
 import {
   completeGatewayBootLifecycle,
-  recordGatewayBootStart,
+  beginGatewayBootLifecycle,
 } from "../../infra/gateway-boot-lifecycle.js";
 import {
   createSessionSqliteMigrationRun,
@@ -105,7 +105,7 @@ describe("update status installation replacement history", () => {
       const reason =
         "gateway.installation_replaced: on-disk 2026.9.5 differs from running 2026.9.4";
       const completedAtMs = Date.UTC(2026, 8, 19, 12);
-      const bootId = recordGatewayBootStart(process.env, completedAtMs - 1_000);
+      const bootId = (await beginGatewayBootLifecycle(process.env, completedAtMs - 1_000)).id;
       await completeGatewayBootLifecycle(
         bootId,
         { outcome: "planned_restart", reason },

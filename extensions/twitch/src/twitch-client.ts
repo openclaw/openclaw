@@ -159,7 +159,12 @@ export class TwitchClientManager {
             switch (level) {
               case LogLevel.CRITICAL:
               case LogLevel.ERROR:
-                this.logger.error(message);
+                // ircv3 parser errors can quote the raw incoming line or parameter.
+                this.logger.error(
+                  message.startsWith("Error parsing message: ")
+                    ? "Twitch IRC message parsing failed"
+                    : message,
+                );
                 break;
               case LogLevel.WARNING:
                 this.logger.warn(message);

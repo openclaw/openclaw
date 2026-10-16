@@ -6,7 +6,14 @@ import {
   resolveSidebarAttentionKey,
   resolveUpdateAttentionDismissal,
 } from "../../components/sidebar-attention-dismissals.ts";
-import { createGatewayHarness, createSessions, mountSidebar } from "../app-sidebar.ts";
+import {
+  createContext,
+  createGatewayHarness,
+  createSessions,
+  mountSidebar,
+  mountSidebarContext,
+} from "../app-sidebar.ts";
+import { waitForSolid } from "../solid-settle.ts";
 import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar footer identity menu", () => {
@@ -44,10 +51,16 @@ describe("AppSidebar footer identity menu", () => {
         server: { ...gatewayHarness.gateway.snapshot.hello!.server, bootId: "boot-a" },
       },
     });
-    const { sidebar, context } = await mountSidebar(
+    const context = createContext(
       gatewayHarness.gateway,
       createSessions("main", ["agent:main:main"]),
     );
+    const subscribers = new Set<Parameters<ApplicationOverlays["subscribe"]>[0]>();
+    vi.mocked(context.overlays.subscribe).mockImplementation((notify) => {
+      subscribers.add(notify);
+      return () => subscribers.delete(notify);
+    });
+    const { sidebar } = await mountSidebarContext(context);
     (context.overlays as unknown as { snapshot: ApplicationOverlays["snapshot"] }).snapshot = {
       ...context.overlays.snapshot,
       updateAvailable: { currentVersion: "2026.8.1", latestVersion: "2026.8.2", channel: "stable" },
@@ -73,10 +86,11 @@ describe("AppSidebar footer identity menu", () => {
       ...context.overlays.snapshot,
       updateAvailable: { currentVersion: "2026.8.2", latestVersion: "2026.8.2", channel: "stable" },
     };
-    sidebar.requestUpdate();
-    await sidebar.updateComplete;
-    expect(updates()?.textContent).not.toContain("Available");
-    expect(updates()?.getAttribute("aria-label")).toBe("Updates");
+    subscribers.forEach((notify) => notify(context.overlays.snapshot));
+    await waitForSolid(() => {
+      expect(updates()?.textContent).not.toContain("Available");
+      expect(updates()?.getAttribute("aria-label")).toBe("Updates");
+    });
   });
 
   it("owns account utilities, restores focus, and routes Profile", async () => {

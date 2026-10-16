@@ -318,9 +318,29 @@ function resolveModelCostConfigWithPricing(
 export function estimateUsageCost(params: {
   usage?: NormalizedUsage | null;
   cost?: ModelCostConfig;
+  /** Captured physical-route rates: missing billable counters or prices remain unknown. */
+  declaredCost?: Partial<Pick<ModelCostConfig, "input" | "output" | "cacheRead" | "cacheWrite">>;
 }): number | undefined {
   const usage = params.usage;
-  const cost = params.cost;
+  let cost = params.cost;
+  if (params.declaredCost) {
+    const buckets = ["input", "output", "cacheRead", "cacheWrite"] as const;
+    if (!usage || !buckets.some((bucket) => usage[bucket] !== undefined)) {
+      return undefined;
+    }
+    for (const bucket of buckets) {
+      const count = usage[bucket];
+      const rate = params.declaredCost[bucket];
+      if (
+        (count === undefined && rate !== 0) ||
+        (count !== undefined && (!Number.isFinite(count) || count < 0)) ||
+        (count !== 0 && (rate === undefined || !Number.isFinite(rate) || rate < 0))
+      ) {
+        return undefined;
+      }
+    }
+    cost = normalizeResolvedPricing(params.declaredCost);
+  }
   if (!usage || !cost || usage.usageReport?.state === "unavailable") {
     return undefined;
   }

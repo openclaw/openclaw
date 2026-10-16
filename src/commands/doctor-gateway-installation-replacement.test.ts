@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import * as gatewayCall from "../gateway/call.js";
 import {
   completeGatewayBootLifecycle,
-  recordGatewayBootStart,
+  beginGatewayBootLifecycle,
 } from "../infra/gateway-boot-lifecycle.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
@@ -49,14 +49,14 @@ beforeEach(async () => {
   );
   mocks.hasActiveGatewayExecCredential.mockReset().mockResolvedValue(false);
   mocks.note.mockReset();
-  const bootId = recordGatewayBootStart(process.env, completedAtMs - 1_000);
+  const bootId = (await beginGatewayBootLifecycle(process.env, completedAtMs - 1_000)).id;
   await completeGatewayBootLifecycle(
     bootId,
     { outcome: "planned_restart", reason },
     process.env,
     completedAtMs,
   );
-  recordGatewayBootStart(process.env, completedAtMs + 1_000);
+  await beginGatewayBootLifecycle(process.env, completedAtMs + 1_000);
 });
 
 describe("Doctor installation replacement diagnostics", () => {

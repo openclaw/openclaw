@@ -11,7 +11,7 @@ import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
 import { message, stubRailVisibility } from "./chat-position-rail.test-support.ts";
 import { getTranscriptState, type ChatThreadProps } from "./chat-thread-interactions.ts";
 import { ChatThread } from "./chat-thread-view.tsx";
-import type { ChatTranscriptController } from "./chat-transcript-controller.ts";
+import type { TestChatTranscript } from "./chat-transcript-owner.test-support.ts";
 import { publishTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 import {
   installTranscriptDomMocks,
@@ -22,7 +22,7 @@ import {
   type TestContentRow,
 } from "./chat-transcript.test-support.ts";
 
-function mountThread(container: HTMLElement, transcript: ChatTranscriptController) {
+function mountThread(container: HTMLElement, transcript: TestChatTranscript) {
   const [props, setProps] = createSignal<ChatThreadProps | null>(null);
   const view = mountSolid(
     () => (

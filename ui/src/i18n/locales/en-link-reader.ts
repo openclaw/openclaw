@@ -3,6 +3,7 @@ import { en } from "./en.ts";
 
 const enLinkReader = {
   linkReader: {
+    sessionRequired: "Open this link from its session to view the repository.",
     cachedPreview: "Cached details",
     previewAriaLabel: "Preview: {title}",
     newTab: "New reader tab",

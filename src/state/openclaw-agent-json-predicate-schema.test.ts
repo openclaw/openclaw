@@ -240,6 +240,10 @@ describe("agent JSON predicate migration", () => {
                 "session_windows",
                 "transcript_events",
                 "context_engine_turn_outbox",
+                "transcript_event_identities",
+                "memory_entry_origins",
+                "sqlite_stat1",
+                "sqlite_stat4",
               ],
               migrate,
             );

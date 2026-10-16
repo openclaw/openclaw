@@ -59,6 +59,7 @@ import {
   writableSessionActorNavigation,
 } from "./session-actor-transaction.js";
 import { withSessionActorTranscriptRewrite } from "./session-actor-transcript-publication.worker.js";
+import { modelContextPageWriteScope } from "./session-model-context-pages.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import {
   createTranscriptIndexAppenderInTransaction,
@@ -556,7 +557,9 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
   if (rows.length === 0) {
     return undefined;
   }
+  const writeScopes = new Set([resolved.sessionKey, sqliteSessionIdWriteScope(resolved.sessionId)]);
   const rewrites = rows.map((row) => {
+    writeScopes.add(modelContextPageWriteScope(resolved.sessionId, row.seq));
     const eventJson = JSON.stringify(canonicalizeTranscriptEventMedia(row.event));
     return {
       ...row,
@@ -580,74 +583,66 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
     transcriptRewritePreservesAdmission(row.expectedEventJson, row.eventJson),
   );
   const run = () =>
-    withSqliteDatabaseWriteScope(
-      database.db,
-      [resolved.sessionKey, sqliteSessionIdWriteScope(resolved.sessionId)],
-      () => {
-        const db = getSessionKysely(database.db);
-        const rewrite = prepareSqliteQuerySync<(typeof rewrites)[number]>(
-          database.db,
-          (parameter) =>
-            db
-              .updateTable("transcript_events")
-              .set(
-                options.legacyTextStorage
-                  ? { event_json: parameter((row) => row.eventJson) }
-                  : {
-                      event_json: parameter((row) => row.payload!.event_json),
-                      event_zstd: parameter((row) => row.payload!.event_zstd),
-                      event_utf8_bytes: parameter((row) => row.payload!.event_utf8_bytes),
-                      navigation_json: parameter((row) => row.payload!.navigation_json),
-                      navigation_type: parameter((row) => row.payload!.navigation_type),
-                      navigation_custom_type: parameter(
-                        (row) => row.payload!.navigation_custom_type,
-                      ),
-                      navigation_display: parameter((row) => row.payload!.navigation_display),
-                      message_role: parameter((row) => row.payload!.message_role),
-                      navigation_last_type: parameter((row) => row.payload!.navigation_last_type),
-                      navigation_last_custom_type: parameter(
-                        (row) => row.payload!.navigation_last_custom_type,
-                      ),
-                      navigation_valid: parameter((row) => row.payload!.navigation_valid),
-                    },
-              )
-              .where("session_id", "=", resolved.sessionId)
-              .where(
-                "seq",
-                "=",
-                parameter((row) => row.seq),
-              )
-              .where(
-                options.legacyTextStorage ? "event_json" : transcriptEventJsonSql(database.db),
-                "=",
-                parameter((row) => row.expectedEventJson),
-              ),
-        );
-        for (const row of rewrites) {
-          const result = rewrite(row);
-          if (result.numAffectedRows !== 1n) {
-            throw new SqliteTranscriptMutationConflictError(resolved.sessionId);
-          }
+    withSqliteDatabaseWriteScope(database.db, [...writeScopes], () => {
+      const db = getSessionKysely(database.db);
+      const rewrite = prepareSqliteQuerySync<(typeof rewrites)[number]>(database.db, (parameter) =>
+        db
+          .updateTable("transcript_events")
+          .set(
+            options.legacyTextStorage
+              ? { event_json: parameter((row) => row.eventJson) }
+              : {
+                  event_json: parameter((row) => row.payload!.event_json),
+                  event_zstd: parameter((row) => row.payload!.event_zstd),
+                  event_utf8_bytes: parameter((row) => row.payload!.event_utf8_bytes),
+                  navigation_json: parameter((row) => row.payload!.navigation_json),
+                  navigation_type: parameter((row) => row.payload!.navigation_type),
+                  navigation_custom_type: parameter((row) => row.payload!.navigation_custom_type),
+                  navigation_display: parameter((row) => row.payload!.navigation_display),
+                  message_role: parameter((row) => row.payload!.message_role),
+                  navigation_last_type: parameter((row) => row.payload!.navigation_last_type),
+                  navigation_last_custom_type: parameter(
+                    (row) => row.payload!.navigation_last_custom_type,
+                  ),
+                  navigation_valid: parameter((row) => row.payload!.navigation_valid),
+                },
+          )
+          .where("session_id", "=", resolved.sessionId)
+          .where(
+            "seq",
+            "=",
+            parameter((row) => row.seq),
+          )
+          .where(
+            options.legacyTextStorage ? "event_json" : transcriptEventJsonSql(database.db),
+            "=",
+            parameter((row) => row.expectedEventJson),
+          ),
+      );
+      for (const row of rewrites) {
+        const result = rewrite(row);
+        if (result.numAffectedRows !== 1n) {
+          throw new SqliteTranscriptMutationConflictError(resolved.sessionId);
         }
-        rewriteSessionActorContextStats(database, resolved, rewrites, projectionUnchanged);
-        // Correlation and identical prompt captures preserve admitted input; other
-        // payload rewrites still invalidate admissions and cursors.
-        const generation = admissionUnchanged
-          ? undefined
-          : rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
-        if (!projectionUnchanged) {
-          if (options.legacyTextStorage) {
-            // Media Doctor rebuilds after the physical storage migration; schema-22 readers
-            // cannot inspect an older TEXT-only transcript table during this repair.
-            markSessionTranscriptIndexDirtyInTransaction(database.db, resolved.sessionId);
-          } else {
-            reconcileRewrittenTranscriptIndex(database, resolved.sessionId, rebuildSynchronously);
-          }
+      }
+      rewriteSessionActorContextStats(database, resolved, rewrites, projectionUnchanged);
+      // Correlation and identical prompt captures preserve admitted input; other
+      // payload rewrites still invalidate admissions and cursors.
+      const generation = admissionUnchanged
+        ? undefined
+        : rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
+      if (!projectionUnchanged) {
+        if (options.legacyTextStorage) {
+          // Media Doctor rebuilds after the physical storage migration; schema-22 readers
+          // cannot inspect an older TEXT-only transcript table during this repair.
+          markSessionTranscriptIndexDirtyInTransaction(database.db, resolved.sessionId);
+        } else {
+          reconcileRewrittenTranscriptIndex(database, resolved.sessionId, rebuildSynchronously);
         }
-        touchTranscriptMutationInTransaction(database, resolved.sessionId);
-        return generation;
-      },
-    );
+      }
+      touchTranscriptMutationInTransaction(database, resolved.sessionId);
+      return generation;
+    });
   return projectionUnchanged && admissionUnchanged
     ? withSessionActorTranscriptRewrite(
         database,

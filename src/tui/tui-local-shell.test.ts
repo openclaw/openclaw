@@ -1,12 +1,14 @@
 // Verifies local shell process handling for TUI local mode.
-import type { OverlayHandle } from "@earendil-works/pi-tui";
-import { describe, expect, it, vi } from "vitest";
+import type { Component, OverlayHandle } from "@earendil-works/pi-tui";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as safeCwd from "../infra/safe-cwd.js";
 import {
   getProcessSupervisor,
   type ManagedRun,
   type ProcessSupervisor,
 } from "../process/supervisor/index.js";
 import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
+import { SearchableSelectList } from "./components/searchable-select-list.js";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 
 vi.mock("../process/supervisor/index.js", () => ({
@@ -30,16 +32,6 @@ function createShellSupervisor(spawn = vi.fn<ProcessSupervisor["spawn"]>()) {
 
 type ShellSupervisor = ReturnType<typeof createShellSupervisor>["supervisor"];
 
-const createSelector = () => {
-  const selector = {
-    onSelect: undefined as ((item: { value: string; label: string }) => void) | undefined,
-    onCancel: undefined as (() => void) | undefined,
-    render: () => ["selector"],
-    invalidate: () => {},
-  };
-  return selector;
-};
-
 function createOverlayHandle(): OverlayHandle {
   return {
     hide: vi.fn(),
@@ -52,12 +44,22 @@ function createOverlayHandle(): OverlayHandle {
   };
 }
 
+const harnesses: Array<{ shutdown: () => Promise<void>; runs: Promise<void>[] }> = [];
+
+afterEach(async () => {
+  try {
+    await Promise.all(harnesses.map((harness) => harness.shutdown()));
+  } finally {
+    await Promise.allSettled(harnesses.flatMap((harness) => harness.runs));
+    harnesses.length = 0;
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  }
+});
+
 function createShellHarness(params?: {
   spawn?: ShellSupervisor["spawn"];
   supervisor?: ReturnType<typeof createShellSupervisor>;
-  getCwd?: () => string | undefined;
-  env?: Record<string, string>;
-  maxOutputChars?: number;
 }) {
   const messages: string[] = [];
   const chatLog = {
@@ -67,13 +69,8 @@ function createShellHarness(params?: {
   };
   const tui = { requestRender: vi.fn() };
   const overlayHandle = createOverlayHandle();
-  const openOverlay = vi.fn(() => overlayHandle);
+  const openOverlay = vi.fn((_component: Component) => overlayHandle);
   const closeOverlay = vi.fn();
-  let lastSelector: ReturnType<typeof createSelector> | null = null;
-  const createSelectorSpy = vi.fn(() => {
-    lastSelector = createSelector();
-    return lastSelector;
-  });
   const { supervisor, cleanupScope } = params?.supervisor ?? createShellSupervisor(params?.spawn);
   vi.mocked(getProcessSupervisor).mockReturnValue(supervisor);
   const { runLocalShellLine, shutdown } = createLocalShellRunner({
@@ -81,22 +78,26 @@ function createShellHarness(params?: {
     tui,
     openOverlay,
     closeOverlay,
-    createSelector: createSelectorSpy,
-    ...(params?.getCwd ? { getCwd: params.getCwd } : {}),
-    ...(params?.env ? { env: params.env } : {}),
-    ...(params?.maxOutputChars !== undefined ? { maxOutputChars: params.maxOutputChars } : {}),
   });
+  const runs: Promise<void>[] = [];
+  harnesses.push({ shutdown, runs });
   return {
     messages,
     openOverlay,
     overlayHandle,
     closeOverlay,
-    createSelectorSpy,
     supervisor,
     cleanupScope,
-    runLocalShellLine,
+    runLocalShellLine: (line: string) => {
+      const run = runLocalShellLine(line);
+      runs.push(run);
+      return run;
+    },
     shutdown,
-    getLastSelector: () => lastSelector,
+    getLastSelector: () => {
+      const selector = openOverlay.mock.calls.at(-1)?.[0];
+      return selector instanceof SearchableSelectList ? selector : null;
+    },
   };
 }
 
@@ -146,7 +147,7 @@ describe("createLocalShellRunner", () => {
 
     expect(harness.messages).toContain("local shell: not enabled");
     expect(harness.messages).toContain("local shell: not enabled for this session");
-    expect(harness.createSelectorSpy).toHaveBeenCalledTimes(1);
+    expect(harness.openOverlay).toHaveBeenCalledTimes(1);
     expect(harness.supervisor.spawn).not.toHaveBeenCalled();
     expect(harness.closeOverlay).toHaveBeenCalledWith(harness.overlayHandle);
   });
@@ -154,10 +155,8 @@ describe("createLocalShellRunner", () => {
   it("sets OPENCLAW_SHELL when running local shell commands", async () => {
     const spawn = createSettlingSpawn({});
 
-    const harness = createShellHarness({
-      spawn,
-      env: { PATH: "/tmp/bin", USER: "dev" },
-    });
+    vi.stubEnv("PATH", "/tmp/bin");
+    const harness = createShellHarness({ spawn });
 
     const firstRun = harness.runLocalShellLine("!echo hi");
     expect(harness.openOverlay).toHaveBeenCalledTimes(1);
@@ -165,7 +164,7 @@ describe("createLocalShellRunner", () => {
     selector?.onSelect?.({ value: "yes", label: "Yes" });
     await firstRun;
 
-    expect(harness.createSelectorSpy).toHaveBeenCalledTimes(1);
+    expect(harness.openOverlay).toHaveBeenCalledTimes(1);
     expect(spawn).toHaveBeenCalledTimes(1);
     const input = spawn.mock.calls[0]?.[0];
     expect(input?.mode).toBe("anchored-shell");
@@ -176,14 +175,11 @@ describe("createLocalShellRunner", () => {
 
   it("keeps stderr visible instead of evicting it when stdout fills the output cap", async () => {
     const spawn = createSettlingSpawn({
-      stdout: ["0".repeat(20)],
+      stdout: ["0".repeat(40_000)],
       stderr: ["FATAL"],
     });
 
-    const harness = createShellHarness({
-      spawn,
-      maxOutputChars: 20,
-    });
+    const harness = createShellHarness({ spawn });
 
     const run = harness.runLocalShellLine("!noisy");
     harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes" });
@@ -195,11 +191,8 @@ describe("createLocalShellRunner", () => {
   });
 
   it("keeps a whole code point when the combined output tail starts inside an emoji", async () => {
-    const spawn = createSettlingSpawn({ stdout: ["x😀"], stderr: ["tail"] });
-    const harness = createShellHarness({
-      spawn,
-      maxOutputChars: 6,
-    });
+    const spawn = createSettlingSpawn({ stdout: ["x😀" + "a".repeat(39_994)], stderr: ["tail"] });
+    const harness = createShellHarness({ spawn });
 
     const run = harness.runLocalShellLine("!unicode");
     harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes" });
@@ -210,7 +203,8 @@ describe("createLocalShellRunner", () => {
   });
 
   it("refuses to retarget local commands after the working directory is deleted", async () => {
-    const harness = createShellHarness({ getCwd: () => undefined });
+    vi.spyOn(safeCwd, "tryProcessCwd").mockReturnValue(undefined);
+    const harness = createShellHarness();
 
     const run = harness.runLocalShellLine("!pwd");
     harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes" });

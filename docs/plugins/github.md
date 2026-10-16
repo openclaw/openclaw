@@ -196,3 +196,18 @@ GitHub uses the generic docked link-reader contribution in the
 [Plugin SDK](/plugins/sdk-overview/host-hooks#docked-link-readers). The plugin owns URL matching, GitHub API
 requests, caching, and mapping source data into the passive reader model. The
 Control UI owns tabs, layout, safe rendering, and keyboard interaction.
+
+## Session-bound Enterprise previews
+
+When `gateway.github.host` selects an Enterprise host, the plugin also advertises
+an exact-host, session-scoped reader. It uses the foreground session's repository
+and the selected GitHub App identity. Factory requests require the current signed-in
+operator's `session-item-read` proof and existing repository admission; a pasted
+URL cannot select another repository or borrow a different person's credentials.
+
+Private previews finish under that request's authority. Their UI cache is scoped
+to the connection, agent, and session; document caches also include the host,
+repository, and prepared reader identity. Access denial stays an error, rather than
+falling back to anonymous page metadata. Repository redirects require reopening
+an updated session target. Public `github.preview`, `github_read`, and
+`github_search` retain their public-repository contracts.
