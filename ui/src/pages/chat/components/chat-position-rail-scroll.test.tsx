@@ -61,7 +61,7 @@ class RailScrollTestHost extends HTMLElement {
           setRevision((value) => value + 1);
           flush();
         };
-        return content;
+        return <>{content()}</>;
       },
       { container: this.transcriptRoot },
     );
