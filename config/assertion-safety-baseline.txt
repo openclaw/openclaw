@@ -508,7 +508,7 @@ extensions/memory-core/src/session-backfill.ts	1
 extensions/memory-core/src/session-ingestion.ts	2
 extensions/memory-core/src/session-reset-recall-metadata.ts	3
 extensions/memory-core/src/short-term-promotion-apply.ts	1
-extensions/memory-core/src/short-term-promotion-memory-write.ts	2
+extensions/memory-core/src/short-term-promotion-memory-write.ts	1
 extensions/memory-core/src/short-term-promotion-record.ts	1
 extensions/memory-core/src/short-term-promotion-rehydrate.ts	1
 extensions/memory-core/src/standing-intents-tool.ts	1
