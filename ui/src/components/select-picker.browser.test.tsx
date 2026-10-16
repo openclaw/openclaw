@@ -47,6 +47,39 @@ async function mountModel(params: Omit<ModelPickerParams, "label" | "onChange">,
 }
 
 describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout", () => {
+  it("places submenus after batched writing-direction and placement changes", async () => {
+    const [direction, setDirection] = createSignal<"ltr" | "rtl">("ltr");
+    const [placement, setPlacement] = createSignal<"top" | "bottom">("bottom");
+    const host = mountHost();
+    mountSolid(
+      () => (
+        <div dir={direction()}>
+          <Picker
+            params={{
+              label: "Submenu",
+              value: "one",
+              options: [{ value: "one", label: "One" }],
+              variant: "submenu",
+              placement: placement(),
+              onChange() {},
+            }}
+          />
+        </div>
+      ),
+      { container: host },
+    );
+    const picker = host.querySelector<SelectPicker>("openclaw-select-picker")!;
+    await picker.updateComplete;
+    const menu = picker.querySelector<HTMLElement>(".picker-select__menu")!;
+    expect(menu.dataset.placement).toBe("right-start");
+
+    setDirection("rtl");
+    setPlacement("top");
+    flush();
+    await picker.updateComplete;
+    expect(menu.dataset.placement).toBe("left-start");
+  });
+
   it.each([
     { width: 1280, direction: "ltr" },
     { width: 390, direction: "ltr" },

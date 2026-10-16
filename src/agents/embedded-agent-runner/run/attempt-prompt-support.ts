@@ -92,6 +92,9 @@ export function createPromptBuildToolPolicy<
   return {
     current,
     apply,
+    // The session baseline includes client tools and survives prompt-level pruning.
+    // Read its latest permission generation, not the previous turn's restricted surface.
+    hasBaselineTools: () => baseline.activeToolNames.length > 0,
     prepareForDispatch: <T>(prepareRestoredPrompt: () => Promise<T>): Promise<T> | undefined => {
       if (!decisionIsCurrent || decisionIsCurrent()) {
         return undefined;

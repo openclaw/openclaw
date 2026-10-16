@@ -1,14 +1,15 @@
 /* @vitest-environment jsdom */
 
+import { createRoot, onCleanup } from "solid-js";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { i18n } from "../../i18n/index.ts";
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import type { PluginInstallRequest, PluginListResult } from "../../lib/plugins/index.ts";
-import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { PluginRowMessage } from "./plugin-row-message.tsx";
-import { PluginsConsentController } from "./plugins-consent-controller.ts";
+import { createPluginsConsent } from "./plugins-consent.ts";
 import {
   createClient,
   createContext,
@@ -41,43 +42,48 @@ function createConsentHarness(
       // A failed inventory read leaves the previously admitted result intact.
       return;
     }
-    messages = controller.reconcileInstallMessages(next);
+    messages = consent.reconcileInstallMessages(next);
     result = next;
   };
-  const controller = new PluginsConsentController({
-    gateway,
-    getContext: () => context,
-    getResult: () => result,
-    canMutate: () => true,
-    isBusy: (key) => busy.has(key),
-    setBusy: (key, action) => {
-      if (action) {
-        busy.add(key);
-      } else {
-        busy.delete(key);
-      }
-    },
-    setMessage: (key, message) => {
-      if (message) {
-        messages[key] = message;
-      } else {
-        delete messages[key];
-      }
-    },
-    getMessages: () => messages,
-    clearPageNotice: () => {},
-    closeDetails: () => {},
-    applyMutationResult: vi.fn(),
-    refreshCatalogAfterMutation: refreshCatalog,
-    requestUpdate: vi.fn(),
+  let consent!: ReturnType<typeof createPluginsConsent>;
+  const dispose = createRoot((stop) => {
+    onCleanup(() => gateway.dispose());
+    consent = createPluginsConsent({
+      gateway,
+      getContext: () => context,
+      getResult: () => result,
+      canMutate: () => true,
+      isBusy: (key) => busy.has(key),
+      setBusy: (key, action) => {
+        if (action) {
+          busy.add(key);
+        } else {
+          busy.delete(key);
+        }
+      },
+      setMessage: (key, message) => {
+        if (message) {
+          messages[key] = message;
+        } else {
+          delete messages[key];
+        }
+      },
+      getMessages: () => messages,
+      clearPageNotice: () => {},
+      closeDetails: () => {},
+      applyMutationResult: vi.fn(),
+      refreshCatalogAfterMutation: refreshCatalog,
+      onChange: () => {},
+    });
+    return stop;
   });
   return {
-    controller,
+    consent,
     get messages() {
       return messages;
     },
     refreshCatalog,
-    dispose: () => gateway.dispose(),
+    dispose,
   };
 }
 
@@ -145,51 +151,54 @@ it("blocks repeat install when saved-state reads fail, then reconciles aliases a
       throw new Error("Config refresh unavailable");
     }),
   );
-  const { controller } = fixture;
+  const { consent } = fixture;
   try {
     const alias = "clawhub:community-calendar";
-    await controller.install(installRequest, alias);
+    await consent.install(installRequest, alias);
     expect(fixture.messages[rowKey]?.text).toContain("Plugin startup failed");
     expect(fixture.messages[rowKey]?.text).toContain("Config refresh unavailable");
     expect(fixture.messages[alias]?.savedInstall).toBe(available.id);
     expect(fixture.messages[alias]?.installPolicyWarning).toBeUndefined();
-    await controller.install(installRequest, alias);
-    await controller.install(installRequest, rowKey);
+    await consent.install(installRequest, alias);
+    await consent.install(installRequest, rowKey);
     expect(
       gatewayRequest.mock.calls.filter(([method]) => method === "plugins.install"),
     ).toHaveLength(1);
     const otherIdentity = "npm:another-plugin";
-    const installingOther = controller.install(otherRequest, otherIdentity);
-    await waitForFast(() => {
-      expect(controller.installProgress.has(otherIdentity)).toBe(true);
+    const installingOther = consent.install(otherRequest, otherIdentity);
+    await waitForSolid(() => {
+      expect(consent.read().installProgress.has(otherIdentity)).toBe(true);
     });
-    expect(controller.installProgress.get(alias)?.finishedAt).toBeTypeOf("number");
-    expect(controller.installProgress.get(alias)?.canRetry).toBe(false);
+    expect(consent.read().installProgress.get(alias)?.finishedAt).toBeTypeOf("number");
+    expect(consent.read().installProgress.get(alias)?.canRetry).toBe(false);
     inventoryFails = false;
     await fixture.refreshCatalog();
-    expect(controller.installProgress.has(alias)).toBe(false);
-    expect(controller.installProgress.has(otherIdentity)).toBe(true);
-    expect(controller.installProgress.get(otherIdentity)?.finishedAt).toBeUndefined();
+    flush();
+    expect(consent.read().installProgress.has(alias)).toBe(false);
+    expect(consent.read().installProgress.has(otherIdentity)).toBe(true);
+    expect(consent.read().installProgress.get(otherIdentity)?.finishedAt).toBeUndefined();
     expect(fixture.messages[alias]).toBeUndefined();
     expect(fixture.messages[rowKey]?.text).toContain("Plugin startup failed");
     present = false;
     await fixture.refreshCatalog();
+    flush();
     expect(fixture.messages[rowKey]).toBeUndefined();
-    await controller.install(installRequest, alias);
+    await consent.install(installRequest, alias);
     expect(
       gatewayRequest.mock.calls.filter(([method]) => method === "plugins.install"),
     ).toHaveLength(3);
     otherInstall.reject(new Error("Another registry is unavailable"));
     await installingOther;
+    flush();
     expect(fixture.messages[otherIdentity]?.text).toContain("Another registry is unavailable");
     expect(fixture.messages[otherIdentity]?.text).toContain(
       "Reconnect and check installed plugins",
     );
-    expect(controller.installProgress.get(otherIdentity)?.failure?.title).toBe(
+    expect(consent.read().installProgress.get(otherIdentity)?.failure?.title).toBe(
       "Installation status unknown",
     );
-    expect(controller.installProgress.get(otherIdentity)?.canRetry).toBe(false);
-    expect(controller.installProgress.get(otherIdentity)?.finishedAt).toBeTypeOf("number");
+    expect(consent.read().installProgress.get(otherIdentity)?.canRetry).toBe(false);
+    expect(consent.read().installProgress.get(otherIdentity)?.finishedAt).toBeTypeOf("number");
   } finally {
     fixture.dispose();
   }

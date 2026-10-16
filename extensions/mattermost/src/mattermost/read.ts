@@ -8,7 +8,6 @@ import {
   createMattermostClient,
   fetchMattermostChannel,
   fetchMattermostChannelPosts,
-  type MattermostFetch,
   type MattermostPost,
 } from "./client.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -76,7 +75,6 @@ export async function readMattermostMessages(params: {
   after?: string;
   accountId?: string | null;
   context: ReadContext;
-  fetchImpl?: MattermostFetch;
 }): Promise<{ messages: MattermostPost[]; hasMore: boolean }> {
   const account = resolveMattermostAccount({ cfg: params.cfg, accountId: params.accountId });
   if (!account.enabled) {
@@ -91,7 +89,6 @@ export async function readMattermostMessages(params: {
   const client = createMattermostClient({
     baseUrl,
     botToken,
-    fetchImpl: params.fetchImpl,
     allowPrivateNetwork: account.config.network?.dangerouslyAllowPrivateNetwork === true,
   });
   if (params.context.conversationReadOrigin !== "direct-operator") {

@@ -21,9 +21,9 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { stageClawAddHostRequirementsStateless } from "./add-stateless.js";
 import {
   installClawPackages,
-  preflightClawPackage,
   rollbackStatelessClawPackages,
-} from "./packages.js";
+} from "./packages.boundary.test-support.js";
+import { preflightClawPackage } from "./packages.js";
 import { emptyPluginCapabilityEvidence, packageInstallPlan } from "./packages.test-support.js";
 import { runClawPluginBatch } from "./plugin-runtime.js";
 
@@ -39,6 +39,7 @@ const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
 const integrity = `sha256:${"a".repeat(64)}`;
 type InstallOptions = NonNullable<Parameters<typeof installClawPackages>[1]>;
+const realPreflightPluginInstall = preflightPluginInstall;
 
 function testPackageLease(onRelease: () => void = () => {}) {
   return {
@@ -57,7 +58,7 @@ function packageDeps(
   loadInstallRecords: () => Promise<Record<string, PluginInstallRecord>>,
 ) {
   return {
-    preflightPlugin: (params) => preflightPluginInstall({ ...params, loadInstallRecords }),
+    preflightPlugin: (params) => realPreflightPluginInstall({ ...params, loadInstallRecords }),
     probePlugin: async (request) => {
       const { spec } = request;
       const pluginId = spec.slice(spec.lastIndexOf("/") + 1).split("@")[0]!;

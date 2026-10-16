@@ -322,8 +322,12 @@ admission without reentering SQLite on the host. These checks belong to each
 startup request; reusing the native actor for ordinary work does not retain them.
 Committed deletion invalidates the captured pending admission before observers
 run, while rollback and replacement admission owners remain unaffected. Startup
-migration preserves its pending-versus-completed cleanup diagnostics. No schema,
-retention, permission, or update migration changes are required.
+migration reads deletion status, retained paths, and registered owners once per
+startup pass through the shared-state worker, preserving pending-versus-completed
+cleanup diagnostics. A later startup reads fresh facts; an overlapping deletion
+is enforced by database admission and cleanup owners without repeating discovery
+between maintenance phases. No schema, retention, permission, or update migration
+changes are required.
 
 Callers should request domain operations, such as claiming a cron run or
 appending a transcript report, from the store that owns the invariant. That

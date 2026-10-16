@@ -21,6 +21,7 @@ import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-mess
 import { ReasonedDisabledControl } from "./reasoned-disabled-control.tsx";
 
 export type PluginCatalogDetailProps = {
+  registerIcon?: (readId: () => string) => () => void;
   onAskPlugin?: () => void;
   busy?: boolean;
   installProgress?: PluginInstallProgress;
@@ -80,6 +81,7 @@ function CatalogDetailContent(props: {
       onBack={props.state.onBack}
       icon={
         <PluginArtTile
+          registerIcon={props.state.registerIcon}
           slug={plugin().id}
           name={plugin().catalog.name}
           iconUrl={packageIcon()}

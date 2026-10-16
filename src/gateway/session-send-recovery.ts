@@ -88,11 +88,11 @@ export async function recoverSessionSendDeliveries(
     isTransientRestartRecoveryError(error) ||
     (error instanceof SessionStoreUnavailableError &&
       (error.reason === "schema-missing" || isSqliteLockError(error.readError)));
-  const retry = <T>(operation: () => Promise<T>) =>
+  const retry = <T>(operation: () => Promise<T>, phase?: string) =>
     retryAsync(
       async () => {
         assertCurrent();
-        return operation();
+        return phase ? measureStartup(startupTrace, phase, operation) : operation();
       },
       {
         attempts: 3,
@@ -110,17 +110,22 @@ export async function recoverSessionSendDeliveries(
         },
       },
     );
-  const targets = await retry(() =>
-    discoverRestartRecoveryStoreTargets({
-      cfg: config,
-      shouldContinue: () => !signal.aborted,
-    }),
+  const targets = await retry(
+    () =>
+      discoverRestartRecoveryStoreTargets({
+        cfg: config,
+        shouldContinue: () => !signal.aborted,
+      }),
+    "sidecars.delivery-discovery",
   );
   let blockedCount = 0;
   let cancelledCount = 0;
   for (const target of targets) {
     assertCurrent();
-    const entries = await retry(() => readPendingInputRecoveryEntriesInWorker(target));
+    const entries = await retry(
+      () => readPendingInputRecoveryEntriesInWorker(target),
+      "sidecars.delivery-entries",
+    );
     for (const { sessionKey, entry } of entries) {
       const scope = {
         ...target,
@@ -134,7 +139,10 @@ export async function recoverSessionSendDeliveries(
       let before: number | undefined;
       do {
         assertCurrent();
-        const page = await retry(() => readSessionSendRecoveryPage(scope, { before }));
+        const page = await retry(
+          () => readSessionSendRecoveryPage(scope, { before }),
+          "sidecars.delivery-history",
+        );
         pending.unshift(...page.items);
         before = page.nextBefore;
       } while (before !== undefined);
@@ -266,7 +274,7 @@ export async function recoverSessionSendDeliveries(
             } finally {
               communication?.close();
             }
-          });
+          }, "sidecars.delivery-replay");
         } catch (error) {
           if (signal.aborted) {
             return;

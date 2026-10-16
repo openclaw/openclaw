@@ -37,9 +37,10 @@ backup.
 
 Post-activation schema verification preserves agent databases Doctor holds after
 deletion. These stores may keep an older schema without failing the update;
-Doctor's held-store warning remains visible. Active databases and pending
-deletions still require the candidate schema, and held stores remain part of
-rollback verification.
+Doctor's held-store warning remains visible. Configured agents required by the
+Gateway must still pass runtime admission: Doctor fails if a recovery hold
+leaves a required store unusable. Active databases and pending deletions require
+the candidate schema, and held stores remain part of rollback verification.
 
 OpenClaw.app runs plugin convergence through the selected runtime's Doctor while
 the app owns Gateway activation. This aligns managed official npm plugins with the new
