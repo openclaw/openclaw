@@ -747,7 +747,9 @@ extension OpenClawChatViewModel {
             {
                 self.sessions[index].reasoningLevel = reasoningLevel
             } else {
-                self.retainedActiveSessionReasoningLevel = reasoningLevel
+                var entry = self.retainedActiveSession ?? OpenClawChatSessionEntry(key: self.sessionKey)
+                entry.reasoningLevel = reasoningLevel
+                self.retainedActiveSession = entry
             }
         }
         let incoming = self.adoptingProvisionalFinalMessageIDs(

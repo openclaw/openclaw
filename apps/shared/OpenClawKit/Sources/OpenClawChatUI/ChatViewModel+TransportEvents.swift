@@ -147,11 +147,6 @@ extension OpenClawChatViewModel {
             key.map { self.matchesCurrentSessionKey(incoming: $0, agentId: change.agentId, current: self.sessionKey) }
                 ?? false
         }
-        if matchesCurrentSession(eventSessionKey), self.currentSessionEntry() == nil,
-           let reasoningLevel = change.session?.reasoningLevel
-        {
-            self.retainedActiveSessionReasoningLevel = reasoningLevel
-        }
         let swarmEvent = self.observeSwarmEvent(change)
         let ownedSwarmActivityNote = swarmEvent && SelfContainedSwarmHelpers.isActivityNote(change)
 
@@ -162,6 +157,14 @@ extension OpenClawChatViewModel {
             return self.handleLifecycleSessionChange(change, phase: phase)
         }
 
+        if let eventSessionKey, matchesCurrentSession(eventSessionKey), self.currentSessionEntry() == nil {
+            var entry = self.retainedActiveSession ?? OpenClawChatSessionEntry(key: eventSessionKey)
+            entry.key = eventSessionKey
+            self.retainedActiveSession = ChatSessionSidebarModel.applying(
+                sessionChange: change,
+                to: [entry],
+                activeAgentId: self.currentSessionSnapshot().deliveryAgentID)?.first
+        }
         if change.reason == "subagent-status", self.sidebarData == nil {
             let context = self.currentSessionSnapshot()
             return Task { await self.fetchSessions(limit: 50, sessionSnapshot: context) }
@@ -279,9 +282,16 @@ extension OpenClawChatViewModel {
     {
         guard let snapshot = change.session else { return false }
         guard self.lifecycleSnapshotMatchesEvent(snapshot, change: change) else { return false }
-        guard let index = self.lifecycleSessionIndex(snapshot, change: change) else { return false }
-
-        let existing = self.sessions[index]
+        let index = self.lifecycleSessionIndex(snapshot, change: change)
+        let existing: OpenClawChatSessionEntry
+        if let index {
+            existing = self.sessions[index]
+        } else {
+            guard self.matchesCurrentSessionKey(
+                incoming: snapshot.key, agentId: change.agentId, current: self.sessionKey)
+            else { return false }
+            existing = self.retainedActiveSession ?? OpenClawChatSessionEntry(key: snapshot.key)
+        }
         guard Self.canMergeLifecycleSnapshot(
             snapshot: snapshot,
             existing: existing,
@@ -289,8 +299,7 @@ extension OpenClawChatViewModel {
             runID: runID)
         else { return false }
 
-        var updated = self.sessions
-        updated[index] = Self.mergedLifecycleSession(
+        let merged = Self.mergedLifecycleSession(
             existing: existing,
             snapshot: snapshot,
             phase: phase,
@@ -298,6 +307,12 @@ extension OpenClawChatViewModel {
             activeRunIDsPresent: change.activeRunIdsPresent,
             color: change.color,
             colorPresent: change.colorPresent)
+        guard let index else {
+            self.retainedActiveSession = merged
+            return false
+        }
+        var updated = self.sessions
+        updated[index] = merged
         self.sessions = OpenClawChatSessionListOrganizer.organize(updated)
         self.persistSessionsToCache(
             self.sessions,

@@ -140,8 +140,11 @@ struct ChatReasoningVisibilityTests {
         #expect(viewModel.currentSessionReasoningVisible)
     }
 
-    @Test func `listed lifecycle merge retains an omitted level and ignores stale snapshots`() throws {
-        let viewModel = self.model()
+    @Test(arguments: [false, true], [false, true])
+    func `lifecycle merge retains an omitted level and rejects stale snapshots after eviction`(
+        sidebar: Bool, evicted: Bool) throws
+    {
+        let viewModel = self.model(sidebar: sidebar)
         defer { viewModel.detachTransport() }
         viewModel.sessions = try [self.row("off")]
         let on: OpenClawChatSessionsChangedEvent = try self.decode("""
@@ -156,6 +159,7 @@ struct ChatReasoningVisibilityTests {
         """)
         viewModel.handleTransportEvent(.sessionsChanged(partial))
         #expect(viewModel.currentSessionReasoningVisible)
+        if evicted { viewModel.sessions = [] }
         let stale: OpenClawChatSessionsChangedEvent = try self.decode("""
         {"sessionKey":"main","reason":"run-progress","phase":"start","runId":"older-run",
          "session":{"key":"main","updatedAt":1,"reasoningLevel":"off"}}
@@ -163,6 +167,24 @@ struct ChatReasoningVisibilityTests {
         viewModel.handleTransportEvent(.sessionsChanged(stale))
         viewModel.sessions = []
         #expect(viewModel.currentSessionReasoningVisible)
+    }
+
+    @Test(arguments: [false, true])
+    func `evicted session retains run ownership when accepting terminal reasoning`(sidebar: Bool) throws {
+        let viewModel = self.model(sidebar: sidebar)
+        defer { viewModel.detachTransport() }
+        viewModel.sessions = try [self.decode("""
+        {"key":"main","updatedAt":3,"reasoningLevel":"off","hasActiveRun":true,"activeRunIds":["current"]}
+        """)]
+        viewModel.sessions = []
+        for runID in ["older", "current"] {
+            let terminal: OpenClawChatSessionsChangedEvent = try self.decode("""
+            {"sessionKey":"main","reason":"run-progress","phase":"end","runId":"\(runID)",
+             "session":{"key":"main","updatedAt":4,"reasoningLevel":"on","hasActiveRun":false}}
+            """)
+            viewModel.handleTransportEvent(.sessionsChanged(terminal))
+            #expect(viewModel.currentSessionReasoningVisible == (runID == "current"))
+        }
     }
 
     @Test func `session switch clears retained reasoning and rejects old history`() throws {
