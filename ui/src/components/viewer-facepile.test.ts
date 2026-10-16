@@ -13,8 +13,7 @@ import {
   type PresenceViewer,
 } from "../lib/presence-users.ts";
 import { profileDirectory } from "../lib/profile-directory.ts";
-import { LitContent } from "../lit/solid-content.tsx";
-import { renderChatAuthorAvatar } from "../pages/chat/components/chat-author-avatar.ts";
+import { ChatAuthorAvatar } from "../pages/chat/components/chat-author-avatar-view.tsx";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
@@ -62,8 +61,8 @@ it("uses the same user initials and identity hue in the roster and attributed ch
   document.body.append(chat);
   mountSolid(
     () =>
-      createComponent(LitContent, {
-        value: renderChatAuthorAvatar({ id: user.id, name: user.name, username: user.email }),
+      createComponent(ChatAuthorAvatar, {
+        sender: { id: user.id, name: user.name, username: user.email },
       }),
     { container: chat },
   );
