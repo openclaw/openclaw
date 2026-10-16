@@ -103,7 +103,7 @@ function FileAction(props: {
       <button
         class={["btn btn--sm sidebar-file-view__action", props.class]}
         type="button"
-        // Capture the mount callback; teardown must not read disposed Show props.
+        // Native refs run unowned; capture the callback in its rendering scope.
         ref={untrack(() => props.ref)}
         aria-label={props.label}
         aria-pressed={props.pressed === undefined ? undefined : props.pressed ? "true" : "false"}
@@ -278,7 +278,7 @@ export function SidebarFile(props: {
           <div class="file-view__search" onKeyDown={(event) => controls().onSearchKeydown(event)}>
             <input
               type="search"
-              // The control snapshot can retire before the input ref is released.
+              // Resolve the narrowed Show accessor before the unowned ref callback runs.
               ref={untrack(() => controls().searchInputRef)}
               aria-label={t("chat.detailPanel.searchInFile")}
               placeholder={t("common.search")}

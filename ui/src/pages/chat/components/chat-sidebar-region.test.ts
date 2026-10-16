@@ -101,7 +101,9 @@ afterEach(() => {
 describe("chat sidebar region", () => {
   it("preserves header focus when an already locked side panel refreshes", async () => {
     vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const region = await createRegion();
     const header = element('<div class="sidebar-region__header"><button>Actions</button></div>');
     root(region).prepend(header);
