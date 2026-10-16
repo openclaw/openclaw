@@ -277,6 +277,30 @@ it.each([undefined, "Waiting for the parent to reply."])(
   },
 );
 
+it("does not revive a completed message wait when search hides the resumed reply", () => {
+  const messages = [
+    {
+      ...separateHistory[0],
+      content: [
+        { type: "text", text: "Waiting for the parent." },
+        { ...call, arguments: { waitFor: "message" } },
+        result,
+      ],
+    },
+  ];
+  const search = { searchOpen: true, searchQuery: "Waiting for the parent" };
+  const notice = expect.objectContaining({ kind: "notice", text: "Waiting for a message" });
+  expect(buildChatItems(createProps({ messages, ...search }))).toContainEqual(notice);
+  expect(
+    buildChatItems(
+      createProps({
+        messages: [...messages, { role: "assistant", content: "Back again.", timestamp: 4_000 }],
+        ...search,
+      }),
+    ),
+  ).not.toContainEqual(notice);
+});
+
 it("keeps Code Mode activity and its public yield acknowledgment without an empty assistant row", () => {
   const items = buildChatItems(createProps({ messages: emptyAssistantHistory() }));
   expect(items.filter((item) => item.kind === "group").map((item) => item.role)).not.toContain(
