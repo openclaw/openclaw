@@ -12,7 +12,11 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import * as stateReadPool from "../../state/openclaw-state-read-pool.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -124,6 +128,47 @@ it.each(["cold-file", "incognito"] as const)(
     });
   },
 );
+
+it("retains absent ACP metadata across async reads and follows in-process set and clear", async () => {
+  await withOpenClawTestState({ label: "acp-absent-receipt" }, async (state) => {
+    const sessionKey = "agent:main:acp:absent";
+    const cfg = { agents: { ownership: "explicit" as const, entries: { main: {} } } };
+    const entry = { sessionId: "session", lifecycleRevision: "original", updatedAt: 100 };
+    await state.writeConfig(cfg);
+    await replaceSessionEntry({ agentId: "main", sessionKey, env: state.env }, entry);
+    openOpenClawStateDatabase({ env: state.env });
+    const read = () =>
+      metadataReads.readAcpSessionMetaForEntryAsync({
+        sessionKey,
+        agentId: "main",
+        entry,
+        env: state.env,
+      });
+    const requests = vi.spyOn(stateReadPool, "startReadTask");
+    const sql = observeMainThreadSql();
+    try {
+      expect(await read()).toBeUndefined();
+      expect(requests).toHaveBeenCalledTimes(1);
+      requests.mockClear();
+      expect(await read()).toBeUndefined();
+      expect(requests).not.toHaveBeenCalled();
+
+      await upsertAcpSessionMeta({ cfg, env: state.env, sessionKey, mutate: () => meta });
+      requests.mockClear();
+      expect(await read()).toEqual(meta);
+      expect(requests).not.toHaveBeenCalled();
+
+      await upsertAcpSessionMeta({ cfg, env: state.env, sessionKey, mutate: () => null });
+      requests.mockClear();
+      expect(await read()).toBeUndefined();
+      expect(requests).not.toHaveBeenCalled();
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+      requests.mockRestore();
+    }
+  });
+});
 
 it("preserves missing-entry binding fences and unreadable-store results without creating stores", async () => {
   await withOpenClawTestState({ label: "acp-singular-missing" }, async (state) => {
