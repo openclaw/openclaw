@@ -29,7 +29,7 @@ import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-ad
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
-import { createWorkerPlacementSessionEvidenceResolver } from "./server-worker-placement-session-evidence.js";
+import { createWorkerPlacementSessionEvidenceResolver as createResolver } from "./server-worker-placement-session-evidence.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { sessionIdentity } from "./worker-environments/placement-suite.test-support.js";
 
@@ -92,11 +92,18 @@ async function placement(
 ) {
   return await createWorkerSessionPlacementStore({
     database: openOpenClawStateDatabase(),
-  }).startDispatch({
-    sessionId,
-    sessionKey,
-    agentId,
-  });
+  }).startDispatch({ sessionId, sessionKey, agentId });
+}
+
+function onReply(kind: string, run: () => void | Promise<void>, once = true) {
+  boundary.afterReply = async (reply) => {
+    if (isWorkerReply(reply, kind)) {
+      if (once) {
+        boundary.afterReply = undefined;
+      }
+      await run();
+    }
+  };
 }
 
 function pauseRead(phase: "registry" | "inventory") {
@@ -123,12 +130,7 @@ function pauseRead(phase: "registry" | "inventory") {
       });
     restore = () => spy.mockRestore();
   } else {
-    boundary.afterReply = async (reply) => {
-      if (isInventoryReply(reply)) {
-        boundary.afterReply = undefined;
-        await wait();
-      }
-    };
+    onReply("session-target-inventory", wait);
     restore = () => {
       boundary.afterReply = undefined;
     };
@@ -144,9 +146,6 @@ function isWorkerReply(reply: unknown, kind: string): boolean {
   return isRecord(reply) && reply.ok === true && isRecord(reply.value) && reply.value.kind === kind;
 }
 
-const isInventoryReply = (reply: unknown) => isWorkerReply(reply, "session-target-inventory");
-const isEvidenceReply = (reply: unknown) => isWorkerReply(reply, "session-identity-evidence");
-
 function writeSession(
   identity: Parameters<typeof replaceSessionEntrySync>[0] & { sessionId: string },
   updatedAt = 1,
@@ -154,8 +153,15 @@ function writeSession(
   replaceSessionEntrySync(identity, { sessionId: identity.sessionId, updatedAt });
 }
 
+function writeMemorySession(
+  identity: Parameters<typeof upsertSessionEntryCore>[0] & { sessionId: string },
+  updatedAt = 1,
+) {
+  return upsertSessionEntryCore(identity, { sessionId: identity.sessionId, updatedAt });
+}
+
 async function resolveEvidence(subject: Awaited<ReturnType<typeof placement>>) {
-  return (await createWorkerPlacementSessionEvidenceResolver([subject]))(subject);
+  return (await createResolver([subject]))(subject);
 }
 
 function withState(run: Parameters<typeof withOpenClawTestState>[1]) {
@@ -165,9 +171,9 @@ function withState(run: Parameters<typeof withOpenClawTestState>[1]) {
 async function withDiscoveryPause(
   subject: Awaited<ReturnType<typeof placement>>,
   gate: ReturnType<typeof pauseRead>,
-  run: (pending: ReturnType<typeof createWorkerPlacementSessionEvidenceResolver>) => Promise<void>,
+  run: (pending: ReturnType<typeof createResolver>) => Promise<void>,
 ) {
-  const pending = createWorkerPlacementSessionEvidenceResolver([subject]);
+  const pending = createResolver([subject]);
   try {
     await gate.entered;
     await run(pending);
@@ -184,7 +190,7 @@ it.for(["discovery", "identity"] as const)(
     withState(async () => {
       setRuntimeConfigSnapshot({});
       const subject = await placement();
-      await upsertSessionEntryCore(subject, { sessionId: subject.sessionId, updatedAt: 1 });
+      await writeMemorySession(subject);
       const database = openOpenClawAgentDatabase({ agentId: "main" });
       const databasePath = database.path;
       await closeOpenClawAgentDatabasesAsync();
@@ -204,18 +210,15 @@ it.for(["discovery", "identity"] as const)(
         writer = runWithSqliteDatabaseAdmissionTurn([], holdWriter, [path.dirname(databasePath)]);
         await withinTest(entered.promise, signal);
       } else {
-        boundary.afterReply = async (reply) => {
-          if (isInventoryReply(reply)) {
-            boundary.afterReply = undefined;
-            writer = runOpenClawAgentWriteAdmission(
-              { agentId: "main", path: databasePath },
-              holdWriter,
-            );
-            await entered.promise;
-          }
-        };
+        onReply("session-target-inventory", async () => {
+          writer = runOpenClawAgentWriteAdmission(
+            { agentId: "main", path: databasePath },
+            holdWriter,
+          );
+          await entered.promise;
+        });
       }
-      const pending = createWorkerPlacementSessionEvidenceResolver([subject], controller.signal);
+      const pending = createResolver([subject], controller.signal);
       void pending.catch(() => {});
       try {
         await withinTest(entered.promise, signal);
@@ -228,8 +231,7 @@ it.for(["discovery", "identity"] as const)(
         await Promise.allSettled([writer, pending]);
       }
       expect(writerSettled).toBe(true);
-      const resolve = await createWorkerPlacementSessionEvidenceResolver([subject]);
-      expect(await resolve(subject)).toBe("current");
+      expect(await resolveEvidence(subject)).toBe("current");
     }),
 );
 
@@ -290,7 +292,7 @@ it("captures config, environment, cwd and placement identity before discovery yi
     const subject = await placement();
     writeSession({ ...subject, storePath: store });
     const gate = pauseRead("registry");
-    const pending = createWorkerPlacementSessionEvidenceResolver([subject]);
+    const pending = createResolver([subject]);
     const originalRoot = process.env.OPENCLAW_STATE_DIR;
     const cwd = vi.spyOn(process, "cwd");
     try {
@@ -345,15 +347,16 @@ it.each(["evidence write", "settlement write", "alias retarget"] as const)(
         }
       };
       let evidenceRead = false;
-      boundary.afterReply = async (reply) => {
-        if (isEvidenceReply(reply)) {
+      onReply(
+        "session-identity-evidence",
+        () => {
           evidenceRead = true;
           if (change !== "settlement write") {
-            boundary.afterReply = undefined;
             mutate();
           }
-        }
-      };
+        },
+        change !== "settlement write",
+      );
       boundary.afterCleanup = async () => {
         if (change === "settlement write" && evidenceRead) {
           mutate();
@@ -404,23 +407,18 @@ it("reads memory evidence after an in-process write completes during disk work",
       "agent:main:dashboard:incognito-created",
     );
     writeSession(disk);
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: "agent:main:dashboard:incognito-anchor" },
-      {
-        sessionId: "private-anchor",
-        updatedAt: 1,
-      },
-    );
+    await writeMemorySession({
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:incognito-anchor",
+      sessionId: "private-anchor",
+    });
     let wrote = false;
-    boundary.afterReply = async (reply) => {
-      if (isEvidenceReply(reply)) {
-        boundary.afterReply = undefined;
-        await upsertSessionEntryCore(incognito, { sessionId: incognito.sessionId, updatedAt: 2 });
-        wrote = true;
-      }
-    };
+    onReply("session-identity-evidence", async () => {
+      await writeMemorySession(incognito, 2);
+      wrote = true;
+    });
     try {
-      const resolve = await createWorkerPlacementSessionEvidenceResolver([disk, incognito]);
+      const resolve = await createResolver([disk, incognito]);
       expect(wrote).toBe(true);
       expect(await Promise.all([disk, incognito].map(resolve))).toEqual(["current", "current"]);
     } finally {
@@ -453,6 +451,5 @@ it("keeps the fixed physical owner and current precedence across canonical and m
     database.db
       .prepare("UPDATE session_nodes SET entry_json = ?, entry_valid = 1 WHERE session_key = ?")
       .run("{", "agent:main:main");
-    const resolve = await createWorkerPlacementSessionEvidenceResolver([subject]);
-    expect(await resolve(subject)).toBe("current");
+    expect(await resolveEvidence(subject)).toBe("current");
   }));

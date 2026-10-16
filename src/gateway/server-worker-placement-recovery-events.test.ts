@@ -47,9 +47,17 @@ vi.mock("./server-worker-placement-session-evidence.js", () => ({
 import { getRuntimeConfig } from "../config/config.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
+import {
+  createEnvironments,
+  createIdleDiskSpace,
+  createRuntimeFactory,
+  placementAsyncDefaults,
+  startRuntime,
+} from "./server-worker-placement.test-support.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./worker-environments/device-provider-identity.js";
 import type { WorkerEnvironmentPlacementFacts } from "./worker-environments/placement-read-projection.types.js";
 
+const createRuntime = createRuntimeFactory(createGatewayWorkerPlacementRuntime, getRuntimeConfig);
 type RecoveryPlacement = ReturnType<typeof recoveryPlacement>;
 
 function recoveryPlacement(state: "active" | "failed" | "local" | "reclaimed" = "active") {
@@ -110,13 +118,7 @@ function createRecoveryRuntime(options: {
     getSessionEventSubscriberConnIds: () =>
       new Set(options.hasSubscribers === false ? [] : ["session-observer"]),
   };
-  runtimeMocks.createDiskSpace.mockReturnValue({
-    read: vi.fn(),
-    version: vi.fn(() => 0),
-    invalidate: vi.fn(),
-    nextSweepAtMs: () => Infinity,
-    sweep: vi.fn().mockResolvedValue(undefined),
-  });
+  runtimeMocks.createDiskSpace.mockReturnValue(createIdleDiskSpace());
   runtimeMocks.createSessionEvidenceResolver.mockResolvedValue(
     async () => options.evidence ?? "current",
   );
@@ -134,6 +136,7 @@ function createRecoveryRuntime(options: {
   }));
   let onMachineShapeChanged: ((profileId: string) => void) | undefined;
   const environments = {
+    ...createEnvironments(),
     get: (environmentId: string) =>
       options.environmentRows?.get(environmentId) ?? {
         environmentId,
@@ -148,13 +151,7 @@ function createRecoveryRuntime(options: {
         onMachineShapeChanged = undefined;
       };
     },
-    installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
-    start: vi.fn(),
-    isStopping: () => false,
-    beginClose: vi.fn(),
-    stop: vi.fn().mockResolvedValue(undefined),
   };
-  const warn = vi.fn();
   const readChangeSnapshot = vi.fn(async (profileIds?: readonly string[]) =>
     structuredClone(
       [...placements.values()].filter(
@@ -163,17 +160,10 @@ function createRecoveryRuntime(options: {
       ),
     ),
   );
-  const runtime = createGatewayWorkerPlacementRuntime({
-    initialPlacements: [],
+  const runtime = createRuntime({
     scheduler,
-    getCommittedRuntimeConfig: getRuntimeConfig,
-    cancelSessionWork: vi.fn(async () => {}),
     placements: {
-      workspaceResultInstanceId: () => "gateway-test",
-      getAsync: async (sessionId: string) => placements.get(sessionId),
-      getManyAsync: async (sessionIds: readonly string[]) =>
-        new Map([...placements].filter(([sessionId]) => sessionIds.includes(sessionId))),
-      listAsync: async () => [...placements.values()],
+      ...placementAsyncDefaults(() => [...placements.values()]),
       readChangeSnapshot,
       subscribeChanges: (listener: PublishPlacementChange) => {
         placementChangeListeners.add(listener);
@@ -195,15 +185,9 @@ function createRecoveryRuntime(options: {
           publishPlacementChange(placement);
         }
       },
-      pruneOrphanedWorkspaceReconciliations: async () => [],
-      listWorkspaceReconciliationOwners: async () => [],
-      listPendingWorkspaceResultsAsync: async () => [],
     } as never,
     environments: environments as never,
-    gatewayNamespace: "gateway-test",
     getSessionChangeContext: options.hasContext === false ? undefined : () => context,
-    revokeSessionAuthority: vi.fn(),
-    warn,
   });
   const sidecar = { current: null as Awaited<ReturnType<typeof runtime.startRuntime>> };
 
@@ -216,11 +200,7 @@ function createRecoveryRuntime(options: {
     runtime,
     time,
     start: async () => {
-      sidecar.current = await runtime.startRuntime({
-        isClosePreludeStarted: () => false,
-        registerSidecar: vi.fn(),
-        unregisterSidecar: vi.fn(),
-      });
+      sidecar.current = await startRuntime(runtime);
       if (!sidecar.current) {
         throw new Error("worker placement runtime did not start");
       }

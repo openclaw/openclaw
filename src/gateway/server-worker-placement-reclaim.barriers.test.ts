@@ -9,6 +9,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.j
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store.js";
+import { sessionIdentity } from "./worker-environments/placement-suite.test-support.js";
 
 vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
@@ -19,13 +20,9 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 
 async function fixture(name: string) {
-  const request = {
-    sessionId: `session-${name}`,
-    sessionKey: `agent:main:${name}`,
-    agentId: "main",
-  };
-  const entry = { sessionId: request.sessionId, lifecycleRevision: "original", updatedAt: 1 };
+  const request = sessionIdentity(name);
   const storePath = path.join(tempDirs.make(`reclaim-preparation-${name}-`), "sessions.sqlite");
+  const entry = { sessionId: request.sessionId, lifecycleRevision: "original", updatedAt: 1 };
   await replaceSessionEntry({ ...request, storePath }, entry);
   const placement = {
     ...request,
@@ -54,21 +51,20 @@ async function fixture(name: string) {
     revokeSessionAuthority: vi.fn(),
   });
   const run = vi.fn(async () => ({ ...placement, state: "reclaimed" as const }) as never);
-  const admit = (onInterrupt?: () => void) =>
-    beginSessionWorkAdmission({
-      scope: storePath,
-      identities: [request.sessionKey, request.sessionId],
-      assertAllowed: () => {},
-      onInterrupt,
-    });
   return {
     placement,
     cancel,
     run,
-    admit,
-    replaceEntry: async (lifecycleRevision: string) => {
+    admit: (onInterrupt?: () => void) =>
+      beginSessionWorkAdmission({
+        scope: storePath,
+        identities: [request.sessionKey, request.sessionId],
+        assertAllowed: () => {},
+        onInterrupt,
+      }),
+    replaceEntry: (lifecycleRevision: string) => {
       entry.lifecycleRevision = lifecycleRevision;
-      await replaceSessionEntry({ ...request, storePath }, entry);
+      return replaceSessionEntry({ ...request, storePath }, entry);
     },
     prepare: (options: Partial<Parameters<typeof barriers.runReclaimPreparation>[0]> = {}) =>
       barriers.runReclaimPreparation({ ...request, run, ...options }),

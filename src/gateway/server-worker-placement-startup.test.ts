@@ -26,92 +26,21 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
+import {
+  createEnvironments,
+  createIdleDiskSpace,
+  createRuntimeFactory,
+  placementStoreDefaults,
+  setDispatchMock,
+  startRuntime,
+} from "./server-worker-placement.test-support.js";
 import * as workspaceRetention from "./worker-environments/node-workspace-retain-coordinator.js";
 import type { WorkerPlacementRecoveryBarrier } from "./worker-environments/placement-dispatch-startup.js";
 import type { WorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
 
-function placementStoreDefaults(
-  readPlacements: () => ReadonlyArray<{
-    sessionId: string;
-    environmentId?: string | null;
-  }> = () => [],
-) {
-  return {
-    get: () => undefined,
-    list: () => readPlacements(),
-    readChangeSnapshot: async () => readPlacements(),
-    subscribeChanges: () => () => {},
-    readEnvironmentOwner: async (environmentId: string) =>
-      readPlacements().find((placement) => placement.environmentId === environmentId),
-    readProjection: async () => ({
-      placements: new Map(readPlacements().map((placement) => [placement.sessionId, placement])),
-    }),
-    workspaceResultInstanceId: () => "gateway-test",
-    getAsync: async (sessionId: string) =>
-      readPlacements().find((placement) => placement.sessionId === sessionId),
-    getManyAsync: async (sessionIds: readonly string[]) =>
-      new Map(
-        readPlacements()
-          .filter((placement) => sessionIds.includes(placement.sessionId))
-          .map((placement) => [placement.sessionId, placement]),
-      ),
-    listAsync: async () => readPlacements(),
-    retireSessionPlacementAsync: vi.fn(async () => {}),
-    pruneOrphanedWorkspaceReconciliations: async () => [],
-    listWorkspaceReconciliationOwners: async () => [],
-    listPendingWorkspaceResultsAsync: () => [],
-  };
-}
-
-function createEnvironments() {
-  return {
-    subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
-    installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
-    start: vi.fn(),
-    isStopping: () => false,
-    beginClose: vi.fn(),
-    stop: vi.fn().mockResolvedValue(undefined),
-  };
-}
-
+const createRuntime = createRuntimeFactory(createGatewayWorkerPlacementRuntime, getRuntimeConfig);
 function mockDispatch(overrides: Partial<WorkerPlacementDispatchService> = {}) {
-  runtimeFactoryMocks.createDispatch.mockReturnValue({
-    dispatch: vi.fn(),
-    forceDestroyEnvironment: vi.fn(),
-    reclaim: vi.fn(),
-    reconcile: vi.fn().mockResolvedValue(undefined),
-    reconcileActive: vi.fn().mockResolvedValue(undefined),
-    ...overrides,
-  });
-}
-
-type RuntimeOptions = Parameters<typeof createGatewayWorkerPlacementRuntime>[0];
-function createRuntime(options: Partial<RuntimeOptions>) {
-  return createGatewayWorkerPlacementRuntime({
-    initialPlacements: [],
-    scheduler: createTestGatewayScheduler(),
-    getCommittedRuntimeConfig: getRuntimeConfig,
-    cancelSessionWork: vi.fn(async () => {}),
-    placements: placementStoreDefaults() as never,
-    environments: createEnvironments() as never,
-    gatewayNamespace: "gateway-test",
-    revokeSessionAuthority: vi.fn(),
-    warn: vi.fn(),
-    ...options,
-  });
-}
-
-type Runtime = ReturnType<typeof createRuntime>;
-function startRuntime(
-  runtime: Runtime,
-  hooks: Partial<Parameters<Runtime["startRuntime"]>[0]> = {},
-) {
-  return runtime.startRuntime({
-    isClosePreludeStarted: () => false,
-    registerSidecar: vi.fn(),
-    unregisterSidecar: vi.fn(),
-    ...hooks,
-  });
+  setDispatchMock(runtimeFactoryMocks.createDispatch, overrides);
 }
 
 type ReconcileGuard = (environmentId: string, reconcileCore: () => Promise<void>) => Promise<void>;
@@ -158,13 +87,7 @@ async function withStoredSession(
 }
 
 beforeEach(() => {
-  runtimeFactoryMocks.createDiskSpace.mockReturnValue({
-    read: vi.fn(),
-    version: vi.fn(() => 0),
-    invalidate: vi.fn(),
-    nextSweepAtMs: () => Infinity,
-    sweep: vi.fn().mockResolvedValue(undefined),
-  });
+  runtimeFactoryMocks.createDiskSpace.mockReturnValue(createIdleDiskSpace());
 });
 
 describe("worker placement startup health lifetime", () => {

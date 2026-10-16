@@ -18,10 +18,18 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
+import {
+  createIdleDiskSpace,
+  createRuntimeFactory,
+  placementAsyncDefaults,
+  setDispatchMock,
+  startRuntime as startSidecar,
+} from "./server-worker-placement.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { sessionIdentity } from "./worker-environments/placement-suite.test-support.js";
 
 type RuntimeOptions = Parameters<typeof createGatewayWorkerPlacementRuntime>[0];
+const createRuntime = createRuntimeFactory(createGatewayWorkerPlacementRuntime, getRuntimeConfig);
 
 async function releaseLocalTurn(
   placements: RuntimeOptions["placements"],
@@ -50,54 +58,20 @@ function startRuntime(
   time: ReturnType<typeof createGatewaySchedulerClock>,
   reconcileActive: () => Promise<void>,
   warn: RuntimeOptions["warn"],
-  placements: RuntimeOptions["placements"] = {
-    subscribeChanges: () => () => {},
-    workspaceResultInstanceId: () => "gateway-test",
-    getAsync: async () => undefined,
-    getManyAsync: async () => new Map(),
-    listAsync: async () => [],
-    retireSessionPlacementAsync: vi.fn(async () => {}),
-    pruneOrphanedWorkspaceReconciliations: async () => [],
-    listWorkspaceReconciliationOwners: async () => [],
-    listPendingWorkspaceResultsAsync: async () => [],
-  } as never,
+  placements: RuntimeOptions["placements"] = placementAsyncDefaults() as never,
 ) {
   runtimeFactoryMocks.createDiskSpace.mockReturnValue({
-    read: vi.fn(),
+    ...createIdleDiskSpace(),
     version: () => 0,
-    invalidate: vi.fn(),
-    nextSweepAtMs: () => Infinity,
-    sweep: vi.fn().mockResolvedValue(undefined),
   });
-  runtimeFactoryMocks.createDispatch.mockReturnValue({
-    dispatch: vi.fn(),
-    forceDestroyEnvironment: vi.fn(),
-    reclaim: vi.fn(),
-    reconcile: vi.fn().mockResolvedValue(undefined),
-    reconcileActive,
-  });
-  return createGatewayWorkerPlacementRuntime({
-    initialPlacements: [],
-    scheduler: createTestGatewayScheduler(time.clock),
-    getCommittedRuntimeConfig: getRuntimeConfig,
-    cancelSessionWork: vi.fn(async () => {}),
-    placements,
-    environments: {
-      subscribeMachineShapeChanged: () => () => {},
-      installReconcileEnvironmentGuard: () => () => {},
-      start() {},
-      isStopping: () => false,
-      beginClose() {},
-      stop: async () => {},
-    } as never,
-    gatewayNamespace: "gateway-test",
-    revokeSessionAuthority: vi.fn(),
-    warn,
-  }).startRuntime({
-    isClosePreludeStarted: () => false,
-    registerSidecar: vi.fn(),
-    unregisterSidecar: vi.fn(),
-  });
+  setDispatchMock(runtimeFactoryMocks.createDispatch, { reconcileActive });
+  return startSidecar(
+    createRuntime({
+      scheduler: createTestGatewayScheduler(time.clock),
+      placements,
+      warn,
+    }),
+  );
 }
 
 it("retires changed placements after real placement and session writes without idle rescans", () =>
