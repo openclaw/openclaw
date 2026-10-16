@@ -231,9 +231,18 @@ describe("chat header session menu", () => {
     panel(menu).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     flush();
     expect(panel(menu).matches(":popover-open")).toBe(false);
+    const changes: MutationRecord[] = [];
+    const mutations = new MutationObserver((records) => changes.push(...records));
+    mutations.observe(panel(menu), { childList: true, subtree: true, attributes: true });
+    menu.session = { ...menu.session, pinned: false, unread: true };
+    await menu.updateComplete;
+    flush();
+    expect([...changes, ...mutations.takeRecords()]).toEqual([]);
+    mutations.disconnect();
     expect(menu.openMenu()).toBe(true);
     flush();
-    expect(item(menu, "Unpin session")).toBe(pin);
+    expect(item(menu, "Pin session")).toBe(pin);
+    expect(item(menu, "Mark as read")).toBeDefined();
   });
 
   it.each(["shown", "aborted", "retargeted"] as const)(
