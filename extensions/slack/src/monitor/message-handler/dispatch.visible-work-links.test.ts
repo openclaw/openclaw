@@ -35,16 +35,12 @@ const BOUNDED_WORK_SESSIONS = {
       ...(index === 0 ? { label: "🚀".repeat(40) } : {}),
     })),
   ],
-  links: [
-    {
-      url: "https://team.openclaw.ai/openclaw/chat/agent-1/work-1",
-      text: `Open ${"🚀".repeat(34)}…`,
-    },
-    { url: "https://team.openclaw.ai/openclaw/chat/agent-1/work-2", text: "Open work session 2" },
-    { url: "https://team.openclaw.ai/openclaw/chat/agent-1/work-3", text: "Open work session 3" },
-    { url: "https://team.openclaw.ai/openclaw/chat/agent-1/work-4", text: "Open work session 4" },
-    { url: "https://team.openclaw.ai/openclaw/chat/agent-1/work-5", text: "Open work session 5" },
-  ],
+  links: [`Open ${"🚀".repeat(34)}…`, ...[2, 3, 4, 5].map((n) => `Open work session ${n}`)].map(
+    (text, index) => ({
+      url: `https://team.openclaw.ai/openclaw/chat/agent-1/work-${index + 1}`,
+      text,
+    }),
+  ),
 };
 
 const requireRecord = createRequireRecord("object", "label-not-object");
@@ -293,10 +289,8 @@ describe("Slack progress visible work session links", () => {
     sessionBatches = [[FIRST_WORK_SESSION], [FIRST_WORK_SESSION]];
     await dispatchPreparedSlackMessage(preparedMessage(true));
     const initial = nativeChunks(startStream.mock.calls);
-    expect(initial).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ type: "task_update", status: "in_progress" }),
-      ]),
+    expect(initial).toContainEqual(
+      expect.objectContaining({ type: "task_update", status: "in_progress" }),
     );
     expect(initial.every((chunk) => !chunk.sources)).toBe(true);
     const completion = nativeChunks([...appendStream.mock.calls, ...stopStream.mock.calls]);
