@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Compilable } from "kysely";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -12,6 +11,7 @@ import {
   withinTest,
   withTestTimeout,
 } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { acquireStateDatabaseSchemaLease } from "../../infra/gateway-state-owner.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../../infra/node-sqlite.js";
@@ -357,24 +357,8 @@ it("enforces a physical archive budget without ordinary host SQLite calls", asyn
   seedFreePages(database, "archive-worker-proof", pageSize * 1536);
   expect(freePages(database)).toBeGreaterThan(1024);
   const sqlite = requireNodeSqlite();
-  const prepare = vi.spyOn(sqlite.DatabaseSync.prototype, "prepare");
-  // oxlint-disable-next-line typescript/unbound-method -- Forward native exec with its original database receiver.
-  const originalExec = sqlite.DatabaseSync.prototype.exec;
-  const executions: Array<{ location: string | null; sql: string }> = [];
-  const exec = vi.spyOn(sqlite.DatabaseSync.prototype, "exec").mockImplementation(function (
-    this: DatabaseSync,
-    sql,
-  ) {
-    executions.push({ location: this.location(), sql });
-    return Reflect.apply(originalExec, this, [sql]);
-  });
-  const statements = (["get", "all", "run", "iterate"] as const).map((method) =>
-    vi.spyOn(sqlite.StatementSync.prototype, method),
-  );
-  const probes = [prepare, exec, ...statements];
+  const hostSql = observeHostDataSql();
   let result: Awaited<ReturnType<typeof enforceSqliteSessionHistoryDiskBudget>>;
-  let hostQueries: string[];
-  let hostStatementCalls: number;
   try {
     const calibration = new sqlite.DatabaseSync(":memory:");
     try {
@@ -384,11 +368,12 @@ it("enforces a physical archive budget without ordinary host SQLite calls", asyn
       read.get();
       read.all();
       expect([...read.iterate()]).toHaveLength(1);
-      expect(probes.every((probe) => probe.mock.calls.length > 0)).toBe(true);
+      expect(hostSql.calls).toHaveLength(6);
+      expect(hostSql.calls.every((probe) => probe.mock.calls.length > 0)).toBe(true);
     } finally {
       calibration.close();
-      probes.forEach((probe) => probe.mockClear());
-      executions.length = 0;
+      hostSql.calls.forEach((probe) => probe.mockClear());
+      hostSql.queries.length = 0;
     }
     result = await own(
       enforceSqliteSessionHistoryDiskBudget({
@@ -398,21 +383,14 @@ it("enforces a physical archive budget without ordinary host SQLite calls", asyn
       }),
     );
   } finally {
-    hostQueries = prepare.mock.calls.map(([sql]) => sql);
-    hostStatementCalls = statements.reduce(
-      (count, statement) => count + statement.mock.calls.length,
-      0,
-    );
-    probes.forEach((probe) => probe.mockRestore());
+    hostSql.restore();
   }
   expect(result).toMatchObject({ removedEntries: 0, removedFiles: 1 });
   expect(result?.totalBytesAfter).toBeLessThanOrEqual(highWaterBytes);
   expect(fixture.readArchive()).toBeUndefined();
   expect(fs.existsSync(fixture.archivePath)).toBe(false);
   expect(loadSessionEntryReadOnly(retained)?.sessionId).toBe("guard-retained");
-  expect(hostQueries).toEqual([]);
-  expect(hostStatementCalls).toBe(0);
-  expect(executions).toEqual([]);
+  expect(hostSql.queries).toEqual([]);
 });
 
 it("rejects another agent's archive without changing its canonical row or file", async () => {

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { SQLInputValue } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as queue from "../../shared/store-writer-queue.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -112,15 +112,6 @@ function assertHistory(databasePath: string, sessionId: string) {
 
 function assertCurrent(databasePath: string, sessionKey: string, sessionId: string) {
   expect(currentRow(databasePath, sessionKey)).toEqual({ current_session_id: sessionId });
-}
-
-async function waitForEntry(started: Promise<unknown>, pending: Promise<unknown>, stage: string) {
-  await Promise.race([
-    started,
-    pending.then(() => {
-      throw new Error(`Ended before ${stage}`);
-    }),
-  ]);
 }
 
 function observeFirstSweep(spy: SessionHistoryBudgetQueueObservation) {
@@ -313,7 +304,7 @@ it.each([
         { skipMaintenance: true, maintenanceConfig },
       );
       work.push(patch);
-      await waitForEntry(updaterStarted.promise, patch, "patch updater");
+      await awaitGateBeforeSettlement(updaterStarted.promise, patch, "Patch ended before updater");
       // The patch must forward A to its late kick, even with ambient B.
       vi.stubEnv("OPENCLAW_STATE_DIR", successor);
       finishUpdater.resolve();
@@ -354,7 +345,7 @@ it.each([
           : enforceSqliteSessionHistoryDiskBudget(input);
       work.push(sweep);
     }
-    await waitForEntry(measured.promise, sweep, "real measurement");
+    await awaitGateBeforeSettlement(measured.promise, sweep, "Sweep ended before measurement");
     vi.stubEnv("OPENCLAW_STATE_DIR", successor);
     moveRelativeCwd?.();
     // Drop A's reopened handle/validation before the real measurement returns.
@@ -394,27 +385,18 @@ it.each([
     const successorStatePath = resolveOpenClawStateSqlitePath({
       OPENCLAW_STATE_DIR: trigger === "relative-kick" ? path.join(successor, "state") : successor,
     });
-    for (const [sql, message] of [
-      [
-        "SELECT agent_id, path FROM agent_databases LIMIT 1",
-        "budget admission must not register A's file in B",
-      ],
-      [
-        "SELECT count(*) AS count FROM agent_database_leases",
-        "budget admission must not claim a runtime lease in B",
-      ],
-    ]) {
-      expect
-        .soft(
-          fs.existsSync(successorStatePath) ? readRow(successorStatePath, sql) : undefined,
-          message,
-        )
-        .toBeUndefined();
-    }
-    expect(
-      successorFiles,
-      "absolute file ownership must retain the originating shared-state owner",
-    ).toEqual([]);
+    const successorRow = (sql: string) =>
+      fs.existsSync(successorStatePath) ? readRow(successorStatePath, sql) : undefined;
+    expect
+      .soft(
+        {
+          registration: successorRow("SELECT agent_id, path FROM agent_databases LIMIT 1"),
+          leases: successorRow("SELECT count(*) AS count FROM agent_database_leases"),
+          files: successorFiles,
+        },
+        "budget work must not register, lease or create files under the successor state",
+      )
+      .toEqual({ registration: undefined, leases: undefined, files: [] });
   },
 );
 

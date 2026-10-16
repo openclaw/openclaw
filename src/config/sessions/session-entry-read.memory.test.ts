@@ -125,14 +125,9 @@ it("unbound readers observe committed entry and sharing changes without replacin
     using now = vi.spyOn(Date, "now");
     now.mockReturnValue(2);
     await committed(patchEntry(storage, { updatedAt: 2, modelSelectionLocked: true }));
+    const member = { identityId: "fixture-reader", addedBy: "fixture-owner", addedAt: 3 };
     await committed(
-      storage.mutate(
-        {
-          type: "session.collaboration.add",
-          input: { params: { identityId: "fixture-reader", addedBy: "fixture-owner", addedAt: 3 } },
-        },
-        authority,
-      ),
+      storage.mutate({ type: "session.collaboration.add", input: { params: member } }, authority),
     );
     expect(current.readCurrent()?.modelSelectionLocked).toBe(true);
     expect((await list()).entries[0]?.entry.updatedAt).toBe(2);

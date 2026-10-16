@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { setImmediate } from "node:timers/promises";
 import type { Compilable } from "kysely";
 import { vi } from "vitest";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
@@ -41,13 +42,7 @@ export async function joinSessionHistoryBudgetSweeps(
         : [];
     });
     if (joined === pending.length) {
-      if (failures.length === 1) {
-        throw failures[0];
-      }
-      if (failures.length > 1) {
-        throw new AggregateError(failures, "Session history budget sweeps failed");
-      }
-      return;
+      break;
     }
     const next = pending.slice(joined);
     joined = pending.length;
@@ -57,11 +52,13 @@ export async function joinSessionHistoryBudgetSweeps(
         outcome.status === "rejected" ? [outcome.reason] : [],
       ),
     );
-    // A settled sweep may enqueue its existing pending-force continuation.
-    // A single queue barrier can return before that follow-up pass completes.
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    // A settled sweep can enqueue a pending-force continuation after a queue barrier.
+    await setImmediate();
+  }
+  if (failures.length) {
+    throw failures.length === 1
+      ? failures[0]
+      : new AggregateError(failures, "Session history budget sweeps failed");
   }
 }
 
@@ -69,28 +66,22 @@ export async function joinSessionHistoryBudgetSweeps(
 export async function withSessionHistoryBudgetSweepsForTest<T>(run: () => Promise<T>): Promise<T> {
   const queueSpy = vi.spyOn(storeWriterQueue, "runQueuedStoreWrite");
   try {
-    let outcome: { ok: true; value: T } | { ok: false; error: unknown };
-    try {
-      outcome = { ok: true, value: await run() };
-    } catch (error) {
-      outcome = { ok: false, error };
+    // The async wrapper also captures a synchronous throw before run returns its promise.
+    const [mutation] = await Promise.allSettled([(async () => run())()]);
+    const [maintenance] = await Promise.allSettled([joinSessionHistoryBudgetSweeps(queueSpy)]);
+    if (maintenance.status === "rejected") {
+      throw mutation.status === "rejected"
+        ? new AggregateError(
+            [mutation.reason, maintenance.reason],
+            "Fixture mutation and maintenance failed",
+            { cause: maintenance.reason },
+          )
+        : maintenance.reason;
     }
-    try {
-      await joinSessionHistoryBudgetSweeps(queueSpy);
-    } catch (error) {
-      if (!outcome.ok) {
-        throw new AggregateError(
-          [outcome.error, error],
-          "Fixture mutation and maintenance failed",
-          { cause: error },
-        );
-      }
-      throw error;
+    if (mutation.status === "rejected") {
+      throw mutation.reason;
     }
-    if (!outcome.ok) {
-      throw outcome.error;
-    }
-    return outcome.value;
+    return mutation.value;
   } finally {
     queueSpy.mockRestore();
   }
@@ -103,19 +94,14 @@ export function createSessionHistoryBudgetFixture(
     const owner = database();
     return executeSqliteQuerySync(owner.db, build(getSessionKysely(owner.db)));
   }
-  async function createHistoricalTranscript({
-    content,
-    nextSessionId,
-    sessionId,
-    sessionKey,
-    updatedAt,
-  }: {
+  async function createHistoricalTranscript(params: {
     content: string;
     nextSessionId: string;
     sessionId: string;
     sessionKey: string;
     updatedAt: number;
   }): Promise<void> {
+    const { content, nextSessionId, sessionId, sessionKey, updatedAt } = params;
     const resolved = resolveSqliteTranscriptScope({
       sessionId,
       sessionKey,
@@ -144,9 +130,6 @@ export function createSessionHistoryBudgetFixture(
 
   function database() {
     const target = resolveSqliteTargetFromSessionStorePath(readScope().storePath);
-    if (!target.path) {
-      throw new Error("expected SQLite database path");
-    }
     return openOpenClawAgentDatabase({ agentId: target.agentId ?? "main", path: target.path });
   }
 
@@ -156,10 +139,9 @@ export function createSessionHistoryBudgetFixture(
     settlePhysicalUsage(): void {
       const owner = database();
       owner.walMaintenance.checkpoint();
-      const row = owner.db.prepare("PRAGMA freelist_count").get() as
-        | { freelist_count?: unknown }
-        | undefined;
-      const freePages = Number(row?.freelist_count ?? 0);
+      const freePages = Number(
+        owner.db.prepare("PRAGMA freelist_count").get()?.freelist_count ?? 0,
+      );
       if (Number.isSafeInteger(freePages) && freePages > 0) {
         owner.db.exec(`PRAGMA incremental_vacuum(${freePages});`);
       }

@@ -7,6 +7,7 @@ import {
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as boardStore from "../../boards/sqlite-board-store.kernel.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -90,22 +91,18 @@ function readExact(
 it("hydrates only requested snapshots while retaining exact-read lifecycle and authorization facts", () =>
   withDatabase(async (database, env) => {
     const sessionKey = "agent:main:scoped-snapshots";
+    const sessionId = "snapshot-session";
+    const parent = "agent:main:dashboard:parent";
+    const lineage = { sidebarRoot: true, parentSessionKey: parent, spawnedBy: parent };
     const entry = {
-      sessionId: "snapshot-session",
-      sidebarRoot: true,
-      parentSessionKey: "agent:main:dashboard:parent",
-      spawnedBy: "agent:main:dashboard:parent",
+      sessionId,
+      ...lineage,
       updatedAt: 1,
       createdAt: 1,
       sessionStartedAt: 1,
       status: "done" as const,
       skillsSnapshot: { prompt: "saved prompt".repeat(8192), skills: [] },
-      sessionDiffBaseline: {
-        version: 1 as const,
-        sessionId: "snapshot-session",
-        root: "/synthetic",
-        files: [],
-      },
+      sessionDiffBaseline: { version: 1 as const, sessionId, root: "/synthetic", files: [] },
       systemPromptReport: {
         source: "run" as const,
         generatedAt: 1,
@@ -150,11 +147,7 @@ it("hydrates only requested snapshots while retaining exact-read lifecycle and a
         payloads.textBytes.entry = 0;
         const selected = read(fields);
         expect(selected.entries).toHaveLength(1);
-        expect(selected.entries[0]?.entry).toMatchObject({
-          sidebarRoot: true,
-          parentSessionKey: entry.parentSessionKey,
-          spawnedBy: entry.spawnedBy,
-        });
+        expect(selected.entries[0]?.entry).toMatchObject(lineage);
         expect(selected.databaseIdentity?.identity).toBeTypeOf("string");
         expect(selected.lifecycleTimestamps.sessionStartedAt).toBe(1);
         expect(selected.members).toEqual({ [sessionKey]: [] });
@@ -180,11 +173,7 @@ it("hydrates only requested snapshots while retaining exact-read lifecycle and a
       sessionKeys: [sessionKey],
       snapshotFields: ["sessionDiffBaseline"],
     });
-    expect(transported.entries[0]?.entry).toMatchObject({
-      sidebarRoot: true,
-      parentSessionKey: entry.parentSessionKey,
-      spawnedBy: entry.spawnedBy,
-    });
+    expect(transported.entries[0]?.entry).toMatchObject(lineage);
     expect(transported.entries[0]?.entry.sessionDiffBaseline).toEqual(entry.sessionDiffBaseline);
     expect(transported.entries[0]?.entry.skillsSnapshot).toBeUndefined();
     expect(transported.entries[0]?.entry.systemPromptReport).toBeUndefined();
@@ -341,8 +330,7 @@ it.each([false, true])("reads row metadata (continuation: %s)", (useContinuation
         concurrentCommit.mockImplementationOnce((...args) => {
           const readRow = prepareRows(...args);
           // Commit after entry acquisition; the remaining facts must retain its original snapshot.
-          peer.exec("BEGIN IMMEDIATE");
-          try {
+          runSqliteImmediateTransactionSync(peer, () => {
             peer
               .prepare(
                 "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.label', 'after') WHERE session_key = ?",
@@ -359,11 +347,7 @@ it.each([false, true])("reads row metadata (continuation: %s)", (useContinuation
                 "UPDATE session_transcript_cold_archives SET last_seq = 42 WHERE session_id = ?",
               )
               .run(sessionId);
-            peer.exec("COMMIT");
-          } catch (error) {
-            peer.exec("ROLLBACK");
-            throw error;
-          }
+          });
           return readRow;
         });
         const exec = vi.spyOn(reader.db, "exec");
@@ -647,19 +631,14 @@ it("reads retained headers and entries from one committed sharing snapshot", () 
       .spyOn(entryCache, "readExactSessionEntryCandidatesInDatabase")
       .mockImplementationOnce((...args) => {
         const selected = readEntries(...args);
-        peer.exec("BEGIN IMMEDIATE");
-        try {
+        runSqliteImmediateTransactionSync(peer, () => {
           peer
             .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
             .run(JSON.stringify({ sessionId: "retained-session", updatedAt: 1 }), sessionKey);
           peer
             .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
             .run(sessionKey);
-          peer.exec("COMMIT");
-        } catch (error) {
-          peer.exec("ROLLBACK");
-          throw error;
-        }
+        });
         return selected;
       });
     try {
@@ -727,36 +706,30 @@ it("keeps durable delivery generations live only through same-generation writes"
       path: path.join(path.dirname(database.path), "other", "openclaw-agent.sqlite"),
     });
     writeSessionEntry(other, sessionKey, { sessionId: "another-store-session", updatedAt: 1 });
+    const unavailable = expect.objectContaining({
+      code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE",
+    });
+    const revoked = expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_REVOKED" });
     const authority = await prepareSessionDeliveryGeneration(descriptor);
     try {
       await runExclusiveSessionLifecycleMutation("patch", {
         scope: database.path,
         identities: [sessionKey, entry.sessionId],
         prepare: async () => {
-          expect(authority.assertCurrent).toThrow(
-            expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
-          );
+          expect(authority.assertCurrent).toThrow(unavailable);
         },
         run: async () => {
-          expect(authority.assertCurrent).toThrow(
-            expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
-          );
+          expect(authority.assertCurrent).toThrow(unavailable);
         },
       });
       authority.assertCurrent();
       replaceSessionEntrySync(scope, {
         ...entry,
         updatedAt: 2,
-        delivery: {
-          kind: "external",
-          route: {
-            channel: "matrix",
-            accountId: "another-account",
-            target: { to: "!ordinary:example" },
-          },
+        delivery: normalizeSessionDeliveryState({
           context: { channel: "matrix", accountId: "another-account", to: "!ordinary:example" },
           origin: { provider: "matrix", accountId: "another-account", to: "!ordinary:example" },
-        },
+        }),
         activeWriterRunId: "new-ordinary-run",
       });
       addSessionMember(
@@ -779,15 +752,11 @@ it("keeps durable delivery generations live only through same-generation writes"
       }
       await expect(
         prepareSessionDeliveryGeneration({ ...descriptor, storePath: other.path }),
-      ).rejects.toThrow(expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_REVOKED" }));
+      ).rejects.toThrow(revoked);
       authority.assertCurrent();
       replaceSessionEntrySync(scope, { ...entry, lifecycleRevision: "reset-generation" });
-      expect(authority.assertCurrent).toThrow(
-        expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_REVOKED" }),
-      );
-      await expect(prepareSessionDeliveryGeneration(descriptor)).rejects.toThrow(
-        expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_REVOKED" }),
-      );
+      expect(authority.assertCurrent).toThrow(revoked);
+      await expect(prepareSessionDeliveryGeneration(descriptor)).rejects.toThrow(revoked);
       const replay = await prepareSessionDeliveryGeneration({
         ...descriptor,
         lifecycleRevision: "reset-generation",
@@ -801,21 +770,15 @@ it("keeps durable delivery generations live only through same-generation writes"
           },
           toDatabaseOptions(resolveSqliteScope(scope)),
         );
-        expect(replay.assertCurrent).toThrow(
-          expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_REVOKED" }),
-        );
-        await expect(prepareSessionDeliveryGeneration(descriptor)).rejects.toThrow(
-          expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_REVOKED" }),
-        );
+        expect(replay.assertCurrent).toThrow(revoked);
+        await expect(prepareSessionDeliveryGeneration(descriptor)).rejects.toThrow(revoked);
         const replacement = await prepareSessionDeliveryGeneration({
           ...descriptor,
           sessionId: "replacement",
         });
         replacement.assertCurrent();
         replacement.release();
-        expect(replacement.assertCurrent).toThrow(
-          expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
-        );
+        expect(replacement.assertCurrent).toThrow(unavailable);
       } finally {
         replay.release();
       }

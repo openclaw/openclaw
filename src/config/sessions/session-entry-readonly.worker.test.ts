@@ -16,6 +16,7 @@ import {
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
+import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -50,6 +51,9 @@ import { readSessionEntryWorkerRequest } from "./session-entry-read.worker.js";
 import { readSessionStoreTargetResult } from "./session-store-target-inventory.js";
 import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 
+const sqliteError = (message: string, errcode = 26) =>
+  Object.assign(new Error(message), { code: "ERR_SQLITE_ERROR", errcode });
+
 function createEntryFixture(env: NodeJS.ProcessEnv) {
   const database = openOpenClawAgentDatabase({ agentId: "main", env });
   const sessionKey = "agent:main:readonly-entry";
@@ -68,6 +72,7 @@ it("reuses listing revisions without payload scans and invalidates sibling edits
   withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKey = "agent:main:catalog-revision";
+    const listed = (category: string) => [{ sessionKey, entry: { updatedAt: 1, category } }];
     writeSessionEntry(database, sessionKey, {
       sessionId: "catalog-session",
       updatedAt: 1,
@@ -93,9 +98,7 @@ it("reuses listing revisions without payload scans and invalidates sibling edits
     try {
       const originalRevision = retained.run(target, () => {
         const first = read();
-        expect(first.entries).toMatchObject([
-          { sessionKey, entry: { updatedAt: 1, category: "Team" } },
-        ]);
+        expect(first.entries).toMatchObject(listed("Team"));
         expect(first.revision).toBeTypeOf("string");
         const opened = withOpenClawAgentDatabaseReadOnly((reader) => reader, { ...target, env });
         if (!opened.found) {
@@ -119,8 +122,7 @@ it("reuses listing revisions without payload scans and invalidates sibling edits
           source: first.source,
         });
         expect(payloads.counts.entries).toBe(0);
-        peer.exec("BEGIN IMMEDIATE");
-        try {
+        runSqliteImmediateTransactionSync(peer, () => {
           peer
             .prepare(
               "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.category', 'Private') WHERE session_key = ?",
@@ -130,15 +132,9 @@ it("reuses listing revisions without payload scans and invalidates sibling edits
           peer
             .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
             .run(sessionKey);
-          peer.exec("COMMIT");
-        } catch (error) {
-          peer.exec("ROLLBACK");
-          throw error;
-        }
+        });
         const changed = read(first.revision);
-        expect(changed.entries).toMatchObject([
-          { sessionKey, entry: { updatedAt: 1, category: "Private" } },
-        ]);
+        expect(changed.entries).toMatchObject(listed("Private"));
         expect(changed.revision).not.toBe(first.revision);
         expect(changed.unchanged).toBeUndefined();
         expect(payloads.counts.entries).toBeGreaterThan(0);
@@ -150,9 +146,7 @@ it("reuses listing revisions without payload scans and invalidates sibling edits
         const reopened = read(originalRevision);
         expect(reopened.revision).not.toBe(originalRevision);
         expect(reopened.unchanged).toBeUndefined();
-        expect(reopened.entries).toMatchObject([
-          { sessionKey, entry: { updatedAt: 1, category: "Private" } },
-        ]);
+        expect(reopened.entries).toMatchObject(listed("Private"));
       });
     } finally {
       retained.close();
@@ -246,10 +240,7 @@ it.each([false, true])(
     withOpenClawTestState({ label: "readonly-entry-open-failure" }, async ({ env, path }) => {
       const storePath = path("unreadable.sqlite");
       writeFileSync(storePath, "Not a SQLite database");
-      const closeError = Object.assign(new Error("native read close failed"), {
-        code: "ERR_SQLITE_ERROR",
-        errcode: 26,
-      });
+      const closeError = sqliteError("native read close failed");
       const nativeOpen = nodeSqlite.openNodeSqliteDatabase;
       let reader: DatabaseSync | undefined;
       let restoreClose: (() => void) | undefined;
@@ -316,10 +307,7 @@ it.each(["schema-retained", "schema-disposable", "row", "rollback"] as const)(
         throw new Error("Expected the committed reader admission");
       }
       const failure = schema
-        ? Object.assign(new Error("native selected-row query failed"), {
-            code: "ERR_SQLITE_ERROR",
-            errcode: 1,
-          })
+        ? sqliteError("native selected-row query failed", 1)
         : new Error("selected row could not be decoded");
       let reader: typeof database.db | undefined;
       const read = vi.spyOn(entryReads, "readSessionEntryRow").mockImplementation((source) => {
@@ -369,10 +357,7 @@ it.each(["schema-retained", "schema-disposable", "row", "rollback"] as const)(
 it("keeps source refusal outside the ordinary row-error result", () =>
   withOpenClawTestState({ label: "readonly-entry-source" }, async ({ env }) => {
     const { scope } = createEntryFixture(env);
-    const refusal = Object.assign(new Error("retained source changed"), {
-      code: "ERR_SQLITE_ERROR",
-      errcode: 26,
-    });
+    const refusal = sqliteError("retained source changed");
     expect(() =>
       loadSessionEntryReadOnlyResultInScope(scope, undefined, () => {
         throw refusal;
@@ -487,16 +472,14 @@ it.each(["logical", "omitted", "empty"] as const)(
   "fences the selected SQLite alias after a %s store read releases its initial owner",
   (locator) =>
     withOpenClawTestState({ label: "currency-selected-store-alias" }, async (state) => {
-      const original = openOpenClawAgentDatabase({
-        agentId: "main",
-        path: state.statePath("original", "openclaw-agent.sqlite"),
-        env: state.env,
-      });
-      const replacement = openOpenClawAgentDatabase({
-        agentId: "main",
-        path: state.statePath("replacement", "openclaw-agent.sqlite"),
-        env: state.env,
-      });
+      const openAt = (name: string) =>
+        openOpenClawAgentDatabase({
+          agentId: "main",
+          path: state.statePath(name, "openclaw-agent.sqlite"),
+          env: state.env,
+        });
+      const original = openAt("original");
+      const replacement = openAt("replacement");
       const sessionKey = "agent:main:subagent:currency-selected-alias";
       const entry = {
         sessionId: "selected-alias-session",
