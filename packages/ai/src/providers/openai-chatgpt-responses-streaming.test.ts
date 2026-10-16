@@ -370,13 +370,9 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
         status: 400,
         code: "invalid_request",
         type: "invalid_request_error",
-        body: {
-          message: "hostile prompt echo in a 400 body",
-          code: "invalid_request",
-          type: "invalid_request_error",
-        },
       }),
     );
+    expect(JSON.stringify(logWarn.mock.calls)).not.toContain("hostile prompt echo in a 400 body");
     const transportWarnings = logWarn.mock.calls.filter(
       ([category]) => category === "openai-transport",
     );
@@ -444,7 +440,7 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
     expect(logWarn).toHaveBeenCalledWith(
       "provider-error",
       "Model request failed",
-      expect.objectContaining({ responseId: "resp_failed", body: failedResponse.response.error }),
+      expect.objectContaining({ responseId: "resp_failed" }),
     );
     const transportWarnings = logWarn.mock.calls.filter(
       ([category]) => category === "openai-transport",

@@ -4,12 +4,12 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { BoardWidgetFrameLifecycle } from "./board-widget-frame.tsx";
+import { BoardWidgetFrameOwner } from "./board-widget-frame.tsx";
 
-let lifecycle: BoardWidgetFrameLifecycle | undefined;
+let lifecycle: BoardWidgetFrameOwner | undefined;
 const disposers: Array<() => void> = [];
 function mountFrame(
-  owner: BoardWidgetFrameLifecycle,
+  owner: BoardWidgetFrameOwner,
   widget: BoardWidget | (() => BoardWidget),
   root: HTMLElement,
 ) {
@@ -62,7 +62,7 @@ it("resumes its board bridge after suspension rolls back without reconnecting", 
     sandboxOrigin: "https://sandbox.example",
   };
   const refresh = vi.fn(async () => {});
-  lifecycle = new BoardWidgetFrameLifecycle({
+  lifecycle = new BoardWidgetFrameOwner({
     active: () => true,
     connected: () => root.isConnected,
     context: () => context,
@@ -71,7 +71,6 @@ it("resumes its board bridge after suspension rolls back without reconnecting", 
     reportContentHeight: () => {},
     scrollBy: () => {},
     resolveFrameUrl: () => () => "/widget?bt=ticket",
-    root: () => root,
     widget: () => widget,
   });
   mountFrame(lifecycle, widget, root);
@@ -167,7 +166,7 @@ it("keeps a stalled inner document mounted, offers retry, and accepts only the c
     lifecycle!.update();
   };
   const refresh = vi.fn(async () => {});
-  lifecycle = new BoardWidgetFrameLifecycle({
+  lifecycle = new BoardWidgetFrameOwner({
     active: () => true,
     connected: () => root.isConnected,
     context: () => context,
@@ -176,7 +175,6 @@ it("keeps a stalled inner document mounted, offers retry, and accepts only the c
     reportContentHeight: () => {},
     scrollBy: () => {},
     resolveFrameUrl: () => () => "/widget?bt=ticket",
-    root: () => root,
     widget: () => widget,
   });
   updateView = mountFrame(lifecycle, widget, root);
@@ -235,7 +233,7 @@ it.each(["current", "revision", "replacement", "reconnect"] as const)(
     const root = document.createElement("div");
     document.body.append(root);
     let updateView = () => {};
-    lifecycle = new BoardWidgetFrameLifecycle({
+    lifecycle = new BoardWidgetFrameOwner({
       active: () => true,
       connected: () => root.isConnected,
       context: () => undefined,
@@ -244,7 +242,6 @@ it.each(["current", "revision", "replacement", "reconnect"] as const)(
       reportContentHeight: () => {},
       scrollBy: () => {},
       resolveFrameUrl: () => (name, revision) => `/widget/${name}/${revision}`,
-      root: () => root,
       widget: () => widget,
     });
     lifecycle.connect();

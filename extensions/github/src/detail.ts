@@ -51,8 +51,7 @@ const detailCache = new Map<
   { expiresAt: number; settled: boolean; promise: Promise<CachedDocument> }
 >();
 
-type JsonPage = { value: unknown; hasNextPage: boolean };
-type ReadDetailPage = (url: string) => Promise<JsonPage>;
+type ReadDetailPage = Parameters<typeof fetchPullChecks>[3];
 
 class GitHubDetailAccessError extends ControlUiGitHubError {
   constructor() {

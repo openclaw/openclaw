@@ -6,6 +6,14 @@ import { projectDiagnosticValue, redactDiagnosticText } from "./credential-redac
 
 const MAX_ERROR_BODY_LENGTH = 4000;
 
+/** Diagnostics accept provider classification labels, not arbitrary error prose or objects. */
+export function readTransportDiagnosticLabel(value: unknown): string | number | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  return typeof value === "string" && /^[a-zA-Z0-9_.:-]{1,128}$/.test(value) ? value : undefined;
+}
+
 export type ProviderErrorProjection = {
   stopReason: "aborted" | "error";
   errorMessage: string;

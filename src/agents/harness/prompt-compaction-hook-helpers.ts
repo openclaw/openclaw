@@ -76,10 +76,8 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     (typeof currentUserMessage === "object" ? currentUserMessage.idempotencyKey : undefined);
   const promptEvent = {
     prompt: inputPrompt,
-    ...(typeof currentUserMessageText === "string"
-      ? { currentUserMessage: currentUserMessageText }
-      : {}),
-    ...(typeof currentUserMessageId === "string" ? { currentUserMessageId } : {}),
+    ...(currentUserMessageText !== undefined ? { currentUserMessage: currentUserMessageText } : {}),
+    ...(currentUserMessageId !== undefined ? { currentUserMessageId } : {}),
     messages:
       hasPromptBuildHooks || hookRunner?.hasHooks("agent_turn_prepare")
         ? typeof params.messages === "function"

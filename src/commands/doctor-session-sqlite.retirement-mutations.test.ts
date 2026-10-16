@@ -23,6 +23,53 @@ import {
 const { createLegacyStore, createVerifiedRecoveryStore } = useDoctorSessionSqliteTestFixture();
 
 describe("runDoctorSessionSqlite", () => {
+  it.each([false, true])(
+    "checks shared manifests once and preserves confirmation changes: %s",
+    async (changed) => {
+      const { store, imported, archivePath } = await createVerifiedRecoveryStore();
+      const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
+      const manifest = readMigrationManifest(manifestPath);
+      const duplicate = createSessionSqliteMigrationRun(store.env, []);
+      duplicate.manifest.targets = structuredClone(manifest.targets);
+      duplicate.manifest.completedAt = manifest.completedAt;
+      writeSessionSqliteMigrationManifest(duplicate);
+      const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
+      const original = fs.readFileSync(archivePath);
+      const reads = vi.spyOn(fs, "readFileSync");
+      try {
+        const cleanup = retireSessionSqliteRecovery({
+          env: store.env,
+          preview,
+          readConfig: async () => ({}),
+          confirm: async () => {
+            if (changed) {
+              duplicate.manifest.startedAt = "2026-01-01T00:00:00.000Z";
+              writeSessionSqliteMigrationManifest(duplicate);
+            }
+            reads.mockClear();
+            return true;
+          },
+        });
+        if (changed) {
+          await expect(cleanup).rejects.toThrow("Recovery manifest changed during confirmation");
+          expect(fs.readFileSync(archivePath)).toEqual(original);
+        } else {
+          const result = await cleanup;
+          expect(result.status).toBe("complete");
+          expect(result.totals.removedFiles).toBe(2);
+          expect(fs.existsSync(archivePath)).toBe(false);
+          expect(result.artifacts.filter((item) => item.outcome === "protected")).toHaveLength(2);
+          // The post-confirmation inventory supplies each manifest's only read.
+          for (const file of [manifestPath, duplicate.manifestPath]) {
+            expect(reads.mock.calls.filter(([input]) => input === file)).toHaveLength(1);
+          }
+        }
+      } finally {
+        reads.mockRestore();
+      }
+    },
+  );
+
   it("blocks a same-size replacement recovery original during preview", async () => {
     const { store, archivePath } = await createVerifiedRecoveryStore();
     const original = fs.readFileSync(archivePath);

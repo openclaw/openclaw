@@ -2,8 +2,9 @@ import { ChildProcess, spawn } from "node:child_process";
 import { once } from "node:events";
 import { constants as osConstants } from "node:os";
 import process from "node:process";
-import { setImmediate as nextTurn, setTimeout as waitForProcessTick } from "node:timers/promises";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { waitForDead } from "../../test/helpers/process-wait.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -23,17 +24,6 @@ function mockTerminatingChild(exitCode: number | null = null) {
   const kill = vi.spyOn(child, "kill").mockReturnValue(true);
   vi.spyOn(adoptedChildren, "scheduleAdoptedChildZombieReapAfterExit").mockImplementation(() => {});
   return { child, kill };
-}
-
-// The root's close event does not join its orphaned descendant's exit.
-async function waitForDescendantExit(pid: number, signal: AbortSignal): Promise<void> {
-  try {
-    while (processIdentity.isPidAlive(pid)) {
-      await waitForProcessTick(25, undefined, { signal });
-    }
-  } catch (error) {
-    throw new Error(`Timed out waiting for descendant ${pid} to exit`, { cause: error });
-  }
 }
 
 async function withOwnedTree(
@@ -85,7 +75,8 @@ async function withOwnedTree(
     killPidIfAlive(descendantPid);
     await closed;
     if (descendantPid) {
-      await waitForDescendantExit(descendantPid, signal);
+      // The root's close event does not join its orphaned descendant's exit.
+      await waitForDead(descendantPid, signal);
       expect(processIdentity.isPidAlive(descendantPid)).toBe(false);
     }
   }

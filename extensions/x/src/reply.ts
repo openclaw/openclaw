@@ -1,15 +1,13 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import type { XApiClient, XAssertActive } from "./api.js";
 import { normalizeXReplyTarget } from "./target.js";
 import { findXUrls } from "./urls.js";
 
 const DEFAULT_X_REPLY_SIGNATURE = "🤖 automated reply";
-export type XVisibleWorkSession = {
-  sessionKey: string;
-  url: string;
-  label?: string;
-  publicRead?: boolean;
-};
+export type XVisibleWorkSession = Parameters<
+  NonNullable<GetReplyOptions["onVisibleWorkSessions"]>
+>[0][number];
 const graphemes = new Intl.Segmenter("en", { granularity: "grapheme" });
 const emojiSequence = new RegExp("^\\p{RGI_Emoji}$", "v");
 

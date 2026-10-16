@@ -421,6 +421,7 @@ function normalizeModelCatalogModel(value: unknown): ModelCatalogModel | undefin
   const contextWindow = normalizePositiveNumber(value.contextWindow);
   const contextWindowSelection = normalizeModelCatalogContextWindowSelection(value);
   const contextTokens = normalizePositiveInteger(value.contextTokens);
+  const parameterCount = normalizePositiveInteger(value.parameterCount);
   const maxTokens = normalizePositiveNumber(value.maxTokens);
   const thinkingLevelMap = normalizeModelCatalogThinkingLevelMap(value.thinkingLevelMap);
   const cost = normalizeModelCatalogCost(value.cost);
@@ -443,6 +444,7 @@ function normalizeModelCatalogModel(value: unknown): ModelCatalogModel | undefin
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...contextWindowSelection,
     ...(contextTokens !== undefined ? { contextTokens } : {}),
+    ...(parameterCount !== undefined ? { parameterCount } : {}),
     ...(maxTokens !== undefined ? { maxTokens } : {}),
     ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     ...(cost ? { cost } : {}),

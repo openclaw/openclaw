@@ -1,9 +1,60 @@
 // Covers provider catalog entries derived from plugin metadata.
+import { normalizeModelCatalogProviderRows } from "@openclaw/model-catalog-core/model-catalog-normalize";
+import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
-import { buildSingleProviderApiKeyCatalog, findCatalogTemplate } from "./provider-catalog.js";
+import {
+  buildEffectiveManifestProviderConfig,
+  buildManifestModelProviderConfig,
+  buildManifestProviderCatalogFamily,
+  buildSingleProviderApiKeyCatalog,
+  findCatalogTemplate,
+} from "./provider-catalog.js";
 import type { ProviderCatalogContext } from "./types.js";
+
+describe("manifest model size projection", () => {
+  const providerId = "local-models";
+  const catalog: ModelCatalogProvider = {
+    baseUrl: "http://127.0.0.1:1234/v1",
+    api: "openai-completions",
+    models: [
+      {
+        id: "compact-chat",
+        name: "Compact Chat",
+        contextWindow: 32_768,
+        maxTokens: 8192,
+        parameterCount: 4_000_000_000,
+      },
+    ],
+  };
+
+  it.each([
+    ["raw manifest", () => buildManifestModelProviderConfig({ providerId, catalog }).models],
+    [
+      "effective manifest",
+      () =>
+        buildEffectiveManifestProviderConfig(
+          normalizeModelCatalogProviderRows({
+            provider: providerId,
+            providerCatalog: catalog,
+            source: "manifest",
+          }),
+        )?.models,
+    ],
+    [
+      "family augmentation",
+      () =>
+        buildManifestProviderCatalogFamily({
+          surfaces: [{ id: providerId, label: "Local models", catalog }],
+        }).augmentModelCatalog(),
+    ],
+  ])("keeps total parameters through %s", (_name, project) => {
+    expect(project()).toEqual([
+      expect.objectContaining({ id: "compact-chat", parameterCount: 4_000_000_000 }),
+    ]);
+  });
+});
 
 function createProviderConfig(overrides: Partial<ModelProviderConfig> = {}): ModelProviderConfig {
   return {

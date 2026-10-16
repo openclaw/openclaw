@@ -14,6 +14,7 @@ import {
   setupPluginInstallTestState,
   successfulInstall,
 } from "./missing-configured-plugin-install.test-helpers.js";
+import { runPostCorePluginConvergence } from "./post-core-plugin-convergence.js";
 
 const mocks = vi.hoisted(() => ({
   installPluginFromNpmSpec: vi.fn(),
@@ -198,6 +199,50 @@ describe("Doctor official plugin version repair", () => {
       };
     });
   });
+
+  it.each([true, false])(
+    "converges the app-owned post-core cohort or reports pending repair (available=%s)",
+    async (available) => {
+      const { cfg, env, records } = createDriftedInstalls({
+        packages: [["discord", "@openclaw/discord"]],
+      });
+      if (!available) {
+        mocks.resolveNpmSpecMetadata.mockResolvedValue({
+          ok: false,
+          category: "metadata-env",
+          error: "ECONNREFUSED registry unreachable",
+        });
+      }
+      const result = await runPostCorePluginConvergence({
+        cfg,
+        env: {
+          ...env,
+          OPENCLAW_UPDATE_IN_PROGRESS: "1",
+          OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
+          OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+          OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+          OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "0",
+        },
+        baselineInstallRecords: records,
+        compatibilityHostVersion: coreVersion,
+      });
+
+      if (available) {
+        expect(result.installRecords.discord?.version).toBe(coreVersion);
+        expect(result.warnings).toEqual([]);
+      } else {
+        expect(result.installRecords.discord).toEqual(records.discord);
+        expect(result.errored).toBe(false);
+        expect(result.warnings).toContainEqual(
+          expect.objectContaining({
+            pluginId: "discord",
+            message: expect.stringContaining(oldVersion),
+            guidance: ["Run `openclaw update repair` to retry plugin repair."],
+          }),
+        );
+      }
+    },
+  );
 
   it("preserves an exact plugin release newer than the core cohort", async () => {
     const { records, repair } = createDriftedInstalls({

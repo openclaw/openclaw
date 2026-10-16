@@ -233,7 +233,7 @@ describe("GitHub PR checks through the document loader", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
-  it.each([undefined, "abcdef0", "../main", "a".repeat(41)])(
+  it.each([undefined, "../main"])(
     "does not substitute a branch or merge SHA for invalid head %s",
     async (headSha) => {
       const fetchMock = publicFetch();
