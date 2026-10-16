@@ -32,7 +32,7 @@ import type {
   CodexNativeSubagentSubmissionStore,
   CodexNativeSubagentSubmission,
 } from "./native-subagent-submission.js";
-import type { CodexServerNotification } from "./protocol.js";
+import type { CodexServerNotification, JsonObject } from "./protocol.js";
 import { matchesCodexNativeSubagentSubmissionBinding } from "./session-binding-record.js";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
 
@@ -50,10 +50,33 @@ function spawnNotification(
   };
 }
 
+function notifyCollab(
+  client: ReturnType<typeof createClient>,
+  tool: "wait" | "sendInput",
+  item: JsonObject,
+  turnId: string,
+  phase: "started" | "completed" = "completed",
+) {
+  return client.notify({
+    method: `item/${phase}`,
+    params: {
+      threadId: "parent-thread",
+      turnId,
+      item: {
+        type: "collabAgentToolCall",
+        tool,
+        status: phase === "started" ? "inProgress" : "completed",
+        senderThreadId: "parent-thread",
+        receiverThreadIds: ["child-thread"],
+        ...item,
+      },
+    },
+  });
+}
+
 function createCustody() {
   const holds: AgentHarnessCompletionCustody[] = [];
   const executions = new Set<AgentHarnessCompletionCustody>();
-  const released = createDeferred<void>();
   const retain = (settled = false): AgentHarnessCompletionCustody => {
     const lifetime = new AbortController();
     const hold: AgentHarnessCompletionCustody = {
@@ -69,9 +92,6 @@ function createCustody() {
       release() {
         executions.delete(hold);
         lifetime.abort();
-        if (holds.every((entry) => entry.signal.aborted)) {
-          released.resolve();
-        }
       },
     };
     holds.push(hold);
@@ -84,7 +104,6 @@ function createCustody() {
     root: retain(),
     holds,
     executions,
-    released: released.promise,
     live: () => holds.filter((hold) => !hold.signal.aborted),
   };
 }
@@ -317,21 +336,7 @@ describe("native assignment completion custody", () => {
     const parent = await registerParent(monitor);
     parent.bindTurn("parent-turn");
     await client.notify(spawnNotification("child-thread", "parent-turn"));
-    await client.notify({
-      method: "item/completed",
-      params: {
-        threadId: "parent-thread",
-        turnId: "parent-turn",
-        item: {
-          id: "send-child",
-          type: "collabAgentToolCall",
-          tool: "sendInput",
-          status: "completed",
-          senderThreadId: "parent-thread",
-          receiverThreadIds: ["child-thread"],
-        },
-      },
-    });
+    await notifyCollab(client, "sendInput", { id: "send-child" }, "parent-turn");
     await client.notify(
       successfulSendInputOutput({ callId: "send-child", submissionId: "followup-turn" }),
     );
@@ -564,21 +569,14 @@ async function createSubmissionFixture() {
       items: [{ id: "a", type: "agentMessage", text: "result A" }],
     }),
   );
-  await client.notify({
-    method: "item/completed",
-    params: {
-      threadId: binding.threadId,
-      turnId: "parent-turn-a",
-      item: {
-        type: "collabAgentToolCall",
-        tool: "wait",
-        status: "completed",
-        senderThreadId: binding.threadId,
-        receiverThreadIds: ["child-thread"],
-        agentsStates: { "child-thread": { status: "completed", message: "result A" } },
-      },
+  await notifyCollab(
+    client,
+    "wait",
+    {
+      agentsStates: { "child-thread": { status: "completed", message: "result A" } },
     },
-  });
+    "parent-turn-a",
+  );
   await vi.waitFor(() =>
     expect(isCodexAppServerLiveThreadClaimed(client as never, "child-thread")).toBe(false),
   );
@@ -587,22 +585,15 @@ async function createSubmissionFixture() {
 
   const submit = async (submissionId: string) => {
     parent.bindTurn("parent-turn-b");
-    await client.notify({
-      method: "item/completed",
-      params: {
-        threadId: binding.threadId,
-        turnId: "parent-turn-b",
-        item: {
-          id: "send-b",
-          type: "collabAgentToolCall",
-          tool: "sendInput",
-          status: "completed",
-          senderThreadId: binding.threadId,
-          receiverThreadIds: ["child-thread"],
-          agentsStates: { "child-thread": { status: "running" } },
-        },
+    await notifyCollab(
+      client,
+      "sendInput",
+      {
+        id: "send-b",
+        agentsStates: { "child-thread": { status: "running" } },
       },
-    });
+      "parent-turn-b",
+    );
     await client.notify(
       successfulSendInputOutput({
         parentThreadId: binding.threadId,
@@ -706,30 +697,18 @@ async function completeTurn(client: Client, id: string, text: string) {
 
 async function collabCall(client: Client, tool: "wait" | "sendInput", id: string) {
   for (const phase of ["started", "completed"] as const) {
-    await client.notify({
-      method: `item/${phase}`,
-      params: {
-        threadId: "parent-thread",
-        turnId: "parent-turn",
-        item: {
-          type: "collabAgentToolCall",
-          id,
-          tool,
-          status: phase === "started" ? "inProgress" : "completed",
-          senderThreadId: "parent-thread",
-          receiverThreadIds: ["child-thread"],
-          agentsStates:
-            phase === "started"
-              ? {}
-              : {
-                  "child-thread":
-                    tool === "wait"
-                      ? { status: "completed", message: "A result" }
-                      : { status: "running" },
-                },
-        },
+    const state =
+      tool === "wait" ? { status: "completed", message: "A result" } : { status: "running" };
+    await notifyCollab(
+      client,
+      tool,
+      {
+        id,
+        agentsStates: phase === "started" ? {} : { "child-thread": state },
       },
-    });
+      "parent-turn",
+      phase,
+    );
   }
 }
 
