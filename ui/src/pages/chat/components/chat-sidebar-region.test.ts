@@ -138,7 +138,9 @@ describe("chat sidebar region", () => {
     });
     await region.updateComplete;
     expect(label()?.textContent).toBe("Research assistant");
-    const icon = root(region).querySelector(".tabstrip-tab__icon [data-agent-avatar]");
+    const icon = root(region).querySelector(
+      '.tabstrip-tab[data-tab-value="conversation"] .identity-avatar--agent',
+    );
     expect(icon).not.toBeNull();
     const mutations: MutationRecord[] = [];
     const observer = new MutationObserver((records) => mutations.push(...records));
@@ -148,7 +150,11 @@ describe("chat sidebar region", () => {
     mutations.push(...observer.takeRecords());
     observer.disconnect();
     expect(mutations).toHaveLength(0);
-    expect(root(region).querySelector(".tabstrip-tab__icon [data-agent-avatar]")).toBe(icon);
+    expect(
+      root(region).querySelector(
+        '.tabstrip-tab[data-tab-value="conversation"] .identity-avatar--agent',
+      ),
+    ).toBe(icon);
     expect(
       root(region)
         .querySelector(

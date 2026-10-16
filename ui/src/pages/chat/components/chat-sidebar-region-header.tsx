@@ -15,8 +15,8 @@ import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.t
 import { KeyboardShortcut } from "../../../components/solid/kbd.tsx";
 import { Menu, type MenuItem } from "../../../components/solid/menu.tsx";
 import "../../../components/tooltip.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
 import type { AgentIdentity } from "../../../lib/identity-avatar-view.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 import { readLinkFavicon } from "../link-favicon-cache.ts";
 import {
   sidebarActivePanel,
