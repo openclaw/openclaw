@@ -3,6 +3,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
+const unavailable = vi.hoisted(() => () => {
+  throw new Error("Optional runtime unavailable");
+});
 const runStackLoaded = vi.hoisted(() => vi.fn());
 const sessionCreateStackLoaded = vi.hoisted(() => vi.fn());
 const optionalMediaRuntimesLoaded = vi.hoisted(() => vi.fn());
@@ -25,12 +28,8 @@ vi.mock("./chat.js", () => {
 vi.mock("../../agents/sandbox/context.js", () => {
   optionalMediaRuntimesLoaded("sandbox-context");
   return {
-    resolveSandboxContext: () => {
-      throw new Error("Sandbox context is unavailable");
-    },
-    ensureSandboxWorkspaceForSession: () => {
-      throw new Error("Sandbox workspace runtime is unavailable");
-    },
+    resolveSandboxContext: unavailable,
+    ensureSandboxWorkspaceForSession: unavailable,
   };
 });
 
@@ -38,9 +37,7 @@ vi.mock("../../auto-reply/reply/stage-sandbox-media.js", () => {
   optionalMediaRuntimesLoaded("stage-sandbox-media");
   return {
     SANDBOX_MEDIA_MAX_BYTES: 50 * 1024 * 1024,
-    stageSandboxMedia: () => {
-      throw new Error("Sandbox media staging is unavailable");
-    },
+    stageSandboxMedia: unavailable,
   };
 });
 
@@ -48,12 +45,8 @@ vi.mock("../../auto-reply/reply/reply-media-paths.js", async (importOriginal) =>
   optionalMediaRuntimesLoaded("reply-media-paths");
   return {
     ...(await importOriginal<typeof import("../../auto-reply/reply/reply-media-paths.js")>()),
-    createReplyMediaContext: () => {
-      throw new Error("Reply media context is unavailable");
-    },
-    createReplyMediaPathNormalizer: () => {
-      throw new Error("Reply media normalization is unavailable");
-    },
+    createReplyMediaContext: unavailable,
+    createReplyMediaPathNormalizer: unavailable,
   };
 });
 
@@ -117,20 +110,8 @@ describe("lazy core handler families", () => {
   it.each([
     ["paired client", { enabled: true, phase: "listening" }, false, false, undefined],
     ["webchat with a Talk node", { enabled: false, phase: undefined }, true, true, undefined],
-    [
-      "webchat without a Talk node",
-      { enabled: true, phase: undefined },
-      true,
-      false,
-      "UNAVAILABLE",
-    ],
-    [
-      "invalid mode parameters",
-      { enabled: "yes", phase: undefined },
-      false,
-      false,
-      "INVALID_REQUEST",
-    ],
+    ["webchat/no node", { enabled: true, phase: undefined }, true, false, "UNAVAILABLE"],
+    ["invalid params", { enabled: "yes", phase: undefined }, false, false, "INVALID_REQUEST"],
   ] as const)(
     "handles Talk mode for %s without loading speech synthesis",
     async (_name, params, webchat, connectedTalkNode, errorCode) => {

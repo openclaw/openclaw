@@ -348,14 +348,12 @@ describe("Gateway status owner routing", () => {
         } else {
           expect(selected).toMatchObject({ ok: false });
         }
-        expect(resolveRequestedSessionAgentId(config, "agent:molty:main")).toEqual({
-          ok: true,
-          agentId: "molty",
-        });
-        expect(resolveRequestedSessionAgentId(config, "agent:main:main")).toEqual({
-          ok: true,
-          agentId: "main",
-        });
+        for (const id of ["molty", "main"]) {
+          expect(resolveRequestedSessionAgentId(config, `agent:${id}:main`)).toEqual({
+            ok: true,
+            agentId: id,
+          });
+        }
       });
     },
   );

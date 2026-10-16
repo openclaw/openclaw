@@ -34,10 +34,21 @@ function workspaceContext(workspace: string) {
   };
 }
 
-function nodeContext(invoke: ReturnType<typeof vi.fn>, node: Record<string, unknown>, config = {}) {
+const connectedNode = {
+  connId: "conn-1",
+  nodeId: "macbook",
+  platform: "macos",
+  deviceFamily: "Mac",
+  commands: ["fs.listDir"],
+};
+function nodeContext(
+  invoke: ReturnType<typeof vi.fn>,
+  node: Record<string, unknown> | null = connectedNode,
+  config = {},
+) {
   return {
     getRuntimeConfig: () => config,
-    nodeRegistry: { get: vi.fn().mockReturnValue(node), invoke },
+    nodeRegistry: { get: vi.fn().mockReturnValue(node ?? undefined), invoke },
   };
 }
 
@@ -162,24 +173,14 @@ describe("fs.listDir", () => {
     expect(result).not.toHaveProperty("parent");
   });
 
-  it("rejects write-scoped browsing outside configured workspaces", async () => {
+  it.each(["outside", "symlink escape"])("rejects write-scoped browsing via %s", async (route) => {
     const workspace = tempDirs.make("openclaw-fs-workspace-");
     const outside = tempDirs.make("openclaw-fs-outside-");
-
-    const [ok, , error] = await call({ path: outside }, workspaceContext(workspace), writeClient);
-
-    expect(ok).toBe(false);
-    expect(error).toMatchObject({ message: expect.stringContaining("operator.admin") });
-  });
-
-  it("rejects write-scoped browsing through a workspace symlink that escapes", async () => {
-    const workspace = tempDirs.make("openclaw-fs-workspace-");
-    const outside = tempDirs.make("openclaw-fs-outside-");
-    const escape = path.join(workspace, "escape");
-    fsSync.symlinkSync(outside, escape);
-
-    const [ok, , error] = await call({ path: escape }, workspaceContext(workspace), writeClient);
-
+    const target = route === "outside" ? outside : path.join(workspace, "escape");
+    if (route !== "outside") {
+      fsSync.symlinkSync(outside, target);
+    }
+    const [ok, , error] = await call({ path: target }, workspaceContext(workspace), writeClient);
     expect(ok).toBe(false);
     expect(error).toMatchObject({ message: expect.stringContaining("operator.admin") });
   });
@@ -203,15 +204,12 @@ describe("fs.listDir", () => {
       payloadJSON: JSON.stringify({
         path: "/Users/peter",
         home: "/Users/peter",
-        entries: [{ name: "Projects", path: "/Users/peter/Projects" }],
+        entries: [],
       }),
     });
     const context = nodeContext(invoke, {
-      connId: "conn-1",
+      ...connectedNode,
       pairingGeneration: "generation-1",
-      nodeId: "macbook",
-      platform: "macos",
-      deviceFamily: "Mac",
       commands: ["system.run", "fs.listDir"],
     });
 
@@ -260,17 +258,9 @@ describe("fs.listDir", () => {
 
   it("rejects node listings blocked by the live command policy", async () => {
     const invoke = vi.fn();
-    const context = nodeContext(
-      invoke,
-      {
-        connId: "conn-1",
-        nodeId: "macbook",
-        platform: "macos",
-        deviceFamily: "Mac",
-        commands: ["fs.listDir"],
-      },
-      { gateway: { nodes: { commands: { deny: ["fs.listDir"] } } } },
-    );
+    const context = nodeContext(invoke, undefined, {
+      gateway: { nodes: { commands: { deny: ["fs.listDir"] } } },
+    });
 
     const [ok, , error] = await call({ nodeId: "macbook" }, context);
 
@@ -282,24 +272,21 @@ describe("fs.listDir", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it("rejects disconnected and directory-browse-incompatible nodes", async () => {
-    const disconnected = await call(
-      { nodeId: "offline" },
-      { nodeRegistry: { get: vi.fn(), invoke: vi.fn() } },
-    );
-    expect(disconnected[0]).toBe(false);
-    expect(disconnected[2]).toMatchObject({
-      code: "UNAVAILABLE",
-    });
-
-    const unsupported = await call(
-      { nodeId: "old-node" },
-      nodeContext(vi.fn(), { connId: "conn-2", commands: ["system.run"] }),
-    );
-    expect(unsupported[0]).toBe(false);
-    expect(unsupported[2]).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: expect.stringContaining("does not support"),
-    });
+  it.each([
+    ["offline", null, { code: "UNAVAILABLE" }],
+    [
+      "old-node",
+      { connId: "conn-2", commands: ["system.run"] },
+      {
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("does not support"),
+      },
+    ],
+  ] as const)("rejects unavailable directory browsing on %s", async (nodeId, node, error) => {
+    expect(await call({ nodeId }, nodeContext(vi.fn(), node))).toMatchObject([
+      false,
+      undefined,
+      error,
+    ]);
   });
 });
