@@ -10,6 +10,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { createNodeEvalArgs } from "../test-utils/node-process.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import { resolveCommandResolutionFromArgv } from "./exec-command-resolution.js";
 import {
   clearExecutablePathCache,
   isRegularFile,
@@ -105,6 +106,65 @@ describe("executable path helpers", () => {
         );
       } else {
         expect(resolved).toBeUndefined();
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each([
+    ["absolute", "actual"],
+    ["relative", "actual"],
+    ["absolute", "decoy"],
+    ["relative", "decoy"],
+    ["home", "actual"],
+    ["home", "decoy"],
+    ["cwd", "actual"],
+    ["cwd", "decoy"],
+  ])(
+    "resolves an explicit %s symlink-parent path with an %s executable",
+    async (form, location) => {
+      const root = tempDirs.make("openclaw-explicit-traversal-");
+      const configured = path.join(root, "configured");
+      const actual = path.join(root, "actual");
+      await fs.mkdir(configured);
+      await fs.mkdir(path.join(actual, "bin"), { recursive: true });
+      await fs.symlink(path.join(actual, "bin"), path.join(configured, "alias"));
+      await fs.writeFile(path.join(location === "actual" ? actual : configured, "runner"), "", {
+        mode: 0o755,
+      });
+      const rawExecutable =
+        form === "absolute"
+          ? `${configured}/alias/../runner`
+          : form === "home"
+            ? "~/alias/../runner"
+            : form === "cwd"
+              ? "./runner"
+              : "configured/alias/../runner";
+      const cwd = form === "cwd" ? `${configured}/alias/..` : root;
+      const env = { HOME: configured };
+      const expectedPath = `${configured}/alias/../${form === "cwd" ? "./" : ""}runner`;
+      const resolved = resolveExecutablePath(rawExecutable, { cwd, env, useCache: false });
+      const command = resolveCommandResolutionFromArgv(
+        [rawExecutable],
+        cwd,
+        env,
+        process.platform,
+        {
+          useCache: false,
+        },
+      );
+
+      if (location === "actual") {
+        expect(resolved).toBe(expectedPath);
+        const realPath = nodeFs.realpathSync.native(path.join(actual, "runner"));
+        expect(nodeFs.realpathSync.native(resolved!)).toBe(realPath);
+        expect(command?.execution.resolvedRealPath).toBe(realPath);
+        expect(command?.policy.resolvedRealPath).toBe(realPath);
+      } else {
+        expect(resolved).toBeUndefined();
+        expect(command?.execution.resolvedPath).toBeUndefined();
+        expect(command?.execution.resolvedRealPath).toBeUndefined();
+        expect(command?.policy.resolvedPath).toBeUndefined();
+        expect(command?.policy.resolvedRealPath).toBeUndefined();
       }
     },
   );
@@ -302,8 +362,8 @@ describe("executable path helpers", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32")("normalizes POSIX absolute executable candidates", () => {
-    expect(resolveExecutablePathCandidate("/usr/bin/../../bin/sh")).toBe("/bin/sh");
+  it.runIf(process.platform !== "win32")("preserves POSIX parents in executable candidates", () => {
+    expect(resolveExecutablePathCandidate("/usr/bin/../../bin/sh")).toBe("/usr/bin/../../bin/sh");
     expect(resolveExecutablePathCandidate("/usr/bin/./env")).toBe("/usr/bin/env");
   });
 

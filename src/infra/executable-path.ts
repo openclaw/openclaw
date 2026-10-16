@@ -29,9 +29,18 @@ export function resolveExecutablePathCandidate(
     return expanded;
   }
   if (path.isAbsolute(expanded)) {
-    return path.resolve(expanded);
+    return process.platform !== "win32" && expanded.split("/").includes("..")
+      ? expanded
+      : path.resolve(expanded);
   }
   const base = options?.cwd && options.cwd.trim() ? options.cwd.trim() : process.cwd();
+  // POSIX resolves parents after following symlinks, so lexical folding can select another file.
+  if (process.platform !== "win32") {
+    const candidate = `${path.isAbsolute(base) ? base : `${process.cwd()}/${base}`}/${expanded}`;
+    if (candidate.split("/").includes("..")) {
+      return candidate;
+    }
+  }
   return path.resolve(base, expanded);
 }
 
