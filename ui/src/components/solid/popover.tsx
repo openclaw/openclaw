@@ -40,6 +40,7 @@ export function Popover(props: PopoverProps): JSX.Element {
   let surface!: HTMLDivElement;
   let mounted = false;
   let anchorBinding: ReturnType<typeof createOverlayAnchor> | undefined;
+  // Identity, lazy mounting, and root placement are fixed for this native overlay lifetime.
   const id = untrack(() => props.id);
   const lazy = untrack(() => props.lazy);
   const sameRoot = untrack(() => props.sameRoot ?? false);

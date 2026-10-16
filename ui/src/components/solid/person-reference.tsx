@@ -192,6 +192,7 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
   }
 
   function renderCard() {
+    // Native hovercard events snapshot current facts without owning reactive subscriptions.
     untrack(() => {
       activityExpiry.sync();
       const card = portal.card;

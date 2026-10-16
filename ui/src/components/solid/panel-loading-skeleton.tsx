@@ -182,6 +182,7 @@ export const PanelLoadingSkeleton = defineSolidBridge<PanelLoadingSkeletonProps>
   (props, host) => {
     host.setAttribute("role", "status");
     host.setAttribute("aria-busy", "true");
+    // Native host accessibility attributes must commit with the skeleton content.
     createRenderEffect(
       () => ({ variant: props.variant ?? "files", label: props.label }),
       (value) => {
