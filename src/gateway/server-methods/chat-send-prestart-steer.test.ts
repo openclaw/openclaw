@@ -32,7 +32,7 @@ import {
   directSessionReq,
   setupGatewaySessionsHandlerTestHarness,
 } from "../test/server-sessions.test-helpers.js";
-import { loadRealChatDispatch } from "./chat-send-authority.test-support.js";
+import { loadRealChatDispatch, successfulChatTurn } from "./chat-send-authority.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
@@ -146,21 +146,7 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         followupStarted.resolve();
         await releaseFollowup.promise;
       }
-      return {
-        runId,
-        outcome: {
-          kind: "settled",
-          status: "ok",
-          result: {
-            payloads: [{ text: "Included the regression proof." }],
-            meta: { durationMs: 0 },
-          },
-          resolved: { provider: "openai", model: "gpt-test" },
-          fallback: { exhausted: false, attempts: [] },
-          autoCompactionCount: 0,
-          didLogHeartbeatStrip: false,
-        },
-      };
+      return successfulChatTurn(runId, "Included the regression proof.");
     });
     // Observe custody without replacing dispatch, reply preparation, or queue policy.
     dispatchInboundMessageMock.mockImplementation(async (raw: unknown) => {
@@ -385,18 +371,7 @@ test("queues a fresh follow-up while stopped preparation still owns the reply sl
       consumed.push(followupRun.prompt);
       followupStarted.resolve();
     }
-    return {
-      runId,
-      outcome: {
-        kind: "settled",
-        status: "ok",
-        result: { payloads: [{ text: "The new request completed." }], meta: { durationMs: 0 } },
-        resolved: { provider: "openai", model: "gpt-test" },
-        fallback: { exhausted: false, attempts: [] },
-        autoCompactionCount: 0,
-        didLogHeartbeatStrip: false,
-      },
-    };
+    return successfulChatTurn(runId, "The new request completed.");
   });
   dispatchInboundMessageMock.mockImplementation(async (raw: unknown) => {
     const params = raw as Parameters<typeof dispatchInboundMessage>[0];

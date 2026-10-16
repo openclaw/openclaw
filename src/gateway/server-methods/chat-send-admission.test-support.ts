@@ -5,16 +5,30 @@ import { prepareChatSendSession, qualifyChatSendSession } from "./chat-send-sess
 type Preparation = Omit<Parameters<typeof prepareChatSendSession>[0], "request"> &
   Pick<Parameters<typeof normalizeChatSendRequest>[0], "params">;
 
-export async function prepareChatAdmission({ params, ...options }: Preparation) {
-  const request = await normalizeChatSendRequest({ params, client: options.client });
+export async function prepareChatAdmission({
+  params,
+  client,
+  context,
+  isDirectExternalUser,
+  assertCurrent,
+}: Preparation) {
+  const request = await normalizeChatSendRequest({ params, client });
   if (!request.ok) {
     throw new Error(request.error);
   }
-  const prepared = await prepareChatSendSession({ ...options, request: request.value });
+  const prepared = await prepareChatSendSession({
+    client,
+    context,
+    isDirectExternalUser,
+    assertCurrent,
+    request: request.value,
+  });
   if (!prepared.ok) {
     throw new Error("Session preparation failed");
   }
   return {
+    client,
+    context,
     request: request.value,
     prepared: prepared.value,
     session: await qualifyChatSendSession(prepared.value),
@@ -33,5 +47,12 @@ export async function prepareAuthorizedChatAdmission(options: Preparation) {
   if (resolved.error || !authorization?.withCurrent) {
     throw new Error("Expected retained worker authorization");
   }
-  return { ...prepared, authorization, authorizationError: resolved.error };
+  return {
+    ...prepared,
+    authorization,
+    authorizationError: resolved.error,
+    assertCurrent: authorization.assertCurrent,
+    withCurrent: authorization.withCurrent,
+    withPreparedCurrent: authorization.withPreparedCurrent,
+  };
 }

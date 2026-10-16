@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as dispatch from "../../auto-reply/dispatch.js";
+import type { executeAgentTurn } from "../../auto-reply/reply/agent-runner-execution.js";
 import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import * as chatDispatch from "./chat-send-agent-dispatch.js";
 
@@ -47,4 +48,22 @@ export async function loadRealChatDispatch() {
       ...params,
       replyResolver: actualReply.getReplyFromConfig,
     });
+}
+
+export function successfulChatTurn(
+  runId: string,
+  text: string,
+): Awaited<ReturnType<typeof executeAgentTurn>> {
+  return {
+    runId,
+    outcome: {
+      kind: "settled",
+      status: "ok",
+      result: { payloads: [{ text }], meta: { durationMs: 0 } },
+      resolved: { provider: "openai", model: "gpt-test" },
+      fallback: { exhausted: false, attempts: [] },
+      autoCompactionCount: 0,
+      didLogHeartbeatStrip: false,
+    },
+  };
 }

@@ -1,10 +1,42 @@
 import { vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareChatSendAttachments } from "./chat-send-attachments.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 
 type Preparation = Parameters<typeof prepareChatSendAttachments>[0];
 type Entry = Partial<NonNullable<Preparation["session"]["entry"]>>;
+
+export function attachmentConfig(
+  state: OpenClawTestState,
+  {
+    mode = "all",
+    sandboxRoot = "sandboxes",
+    mediaMaxMb,
+    global = false,
+  }: { mode?: "off" | "all"; sandboxRoot?: string; mediaMaxMb?: number; global?: boolean } = {},
+): OpenClawConfig {
+  return {
+    agents: {
+      ownership: "explicit",
+      entries: global
+        ? { main: { workspace: state.path("main") }, work: { workspace: state.path("work") } }
+        : { main: { workspace: state.workspaceDir } },
+      defaults: {
+        skipBootstrap: true,
+        ...(mediaMaxMb === undefined ? {} : { mediaMaxMb }),
+        sandbox: {
+          mode,
+          scope: "agent",
+          workspaceRoot: state.path(sandboxRoot),
+          workspaceAccess: "none",
+        },
+      },
+    },
+    ...(global ? { session: { scope: "global" } } : {}),
+  };
+}
 
 export function attachmentParams(
   idempotencyKey: string,

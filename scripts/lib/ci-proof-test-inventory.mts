@@ -4641,7 +4641,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "src/gateway/server-methods/artifacts.images.test.ts",
   "src/gateway/server-methods/chat-history-model-policy.test.ts",
   "src/gateway/server-methods/chat-metadata-handler.test.ts",
-  "src/gateway/server-methods/chat-send-attachments.cancel.test.ts",
   "src/gateway/server-methods/chat-send-reply-dispatch.test.ts",
   "src/gateway/server-methods/cron.runs.test.ts",
   "src/gateway/server-methods/cron.validation.test.ts",
