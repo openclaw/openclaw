@@ -71,6 +71,7 @@ export function AgentsHomeView(props: AgentsHomeProps) {
     <>
       <div class="agents-home__header">
         <SettingsPageHeader
+          stacked
           title={title()}
           subtitle={subtitle()}
           actions={
