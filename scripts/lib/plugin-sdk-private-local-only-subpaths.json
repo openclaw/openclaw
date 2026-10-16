@@ -155,6 +155,7 @@
   "qa-runtime",
   "realtime-bootstrap-context",
   "realtime-transcription",
+  "realtime-transcription-provider",
   "realtime-transcription-session",
   "realtime-voice",
   "realtime-voice-activation",
