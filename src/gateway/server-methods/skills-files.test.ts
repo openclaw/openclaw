@@ -20,7 +20,7 @@ let directory: string;
 let skillDir: string;
 let skillPath: string;
 let config: OpenClawConfig;
-let entries: SkillEntry[];
+let entries: [SkillEntry];
 const content =
   "---\nname: release-notes\ndescription: Write clear release notes.\n---\n# Release notes\n";
 
