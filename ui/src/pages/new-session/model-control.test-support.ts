@@ -32,9 +32,24 @@ export function contextWith(
       listener({ type: "event", event, payload });
     }
   };
+  const ownerListeners = {
+    gateway: new Set<() => void>(),
+    agents: new Set<() => void>(),
+    sessions: new Set<() => void>(),
+    config: new Set<() => void>(),
+  };
+  const subscribe = (owner: keyof typeof ownerListeners) => (listener: () => void) => {
+    ownerListeners[owner].add(listener);
+    return () => ownerListeners[owner].delete(listener);
+  };
+  const publish = (owner: keyof typeof ownerListeners) =>
+    ownerListeners[owner].forEach((listener) => listener());
   const context = {
     navigate,
+    agents: { subscribe: subscribe("agents") },
+    config: { subscribe: subscribe("config"), current: {} },
     gateway: {
+      subscribe: subscribe("gateway"),
       subscribeEvents: (listener: Parameters<ApplicationGateway["subscribeEvents"]>[0]) => {
         listeners.add(listener);
         return () => listeners.delete(listener);
@@ -46,6 +61,7 @@ export function contextWith(
       },
     },
     sessions: {
+      subscribe: subscribe("sessions"),
       state: {
         result: {
           defaults: {
@@ -63,7 +79,7 @@ export function contextWith(
       },
     },
   } as unknown as ApplicationContext;
-  return { context, navigate, request, emitCatalogChanged };
+  return { context, navigate, request, emitCatalogChanged, publish, ownerListeners };
 }
 
 export function renderControl(
@@ -76,19 +92,16 @@ export function renderControl(
     thinkingDefault: "medium",
   },
 ) {
-  const container = document.createElement("div");
-  mountSolid(
-    () =>
-      createComponent(NewSessionModelControlView, {
-        control,
-        options: {
-          ...(agent ? { agent } : {}),
-          agentId,
-          context,
-          sending: false,
-        },
-      }),
-    { container },
+  const { container } = mountSolid(() =>
+    createComponent(NewSessionModelControlView, {
+      control,
+      options: {
+        ...(agent ? { agent } : {}),
+        agentId,
+        context,
+        sending: false,
+      },
+    }),
   );
   return container;
 }

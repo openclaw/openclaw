@@ -1,4 +1,5 @@
 import "../../../styles/chat/session-rail.css";
+import "../../../styles/chat/working-indicator.css";
 import "./chat-comment-controller.ts";
 import { createEffect, createMemo, createSignal, For, Show, onCleanup, untrack } from "solid-js";
 import type { SessionObserverDigest } from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
@@ -20,6 +21,7 @@ import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.typ
 import { createChatAttachmentDropHandlers } from "./chat-attachments.ts";
 import { MessageMarkdown } from "./chat-message-text-view.tsx";
 import { SessionRailComposer, sessionRailQuestion } from "./chat-session-rail-composer.tsx";
+import { ChatWorkingIndicator } from "./chat-working-indicator.tsx";
 
 function checksSummary(pullRequest: ControlUiSessionPullRequest): string | null {
   const checks = pullRequest.checks;
@@ -206,6 +208,10 @@ function ChatSessionRailContent(props: ChatSessionRailProps) {
               const value = turn();
               return value.status === "failed" ? value : undefined;
             });
+            const working = createMemo(() => {
+              const value = turn();
+              return value.status === "pending" ? value : undefined;
+            });
             return (
               <article
                 class={[
@@ -230,24 +236,39 @@ function ChatSessionRailContent(props: ChatSessionRailProps) {
                   when={answered()}
                   fallback={
                     <>
-                      <div class="chat-session-rail__hint">
-                        {t(failed() ? COMPANION_HINT_KEYS[failed()!.hint] : "chat.rail.askPending")}
-                      </div>
+                      <Show when={working()}>
+                        {(waiting) => (
+                          // Same working indicator the main transcript shows while a run has no output yet.
+                          <div class="chat-group assistant chat-session-rail__message">
+                            <ChatWorkingIndicator
+                              part={{
+                                kind: "reading-indicator",
+                                key: `side-chat:${waiting().startedAt}`,
+                                startedAt: waiting().startedAt,
+                              }}
+                              options={{}}
+                            />
+                          </div>
+                        )}
+                      </Show>
                       <Show when={failed()}>
-                        {(failure) =>
-                          failure().retryable &&
-                          props.connected &&
-                          props.onSubmit && (
-                            <button
-                              class="btn btn--secondary chat-session-rail__retry"
-                              type="button"
-                              disabled={pending()}
-                              onClick={() => props.onSubmit?.(failure().source)}
-                            >
-                              {t("chat.rail.askRetry")}
-                            </button>
-                          )
-                        }
+                        {(failure) => (
+                          <>
+                            <div class="chat-session-rail__hint">
+                              {t(COMPANION_HINT_KEYS[failure().hint])}
+                            </div>
+                            {failure().retryable && props.connected && props.onSubmit && (
+                              <button
+                                class="btn btn--secondary chat-session-rail__retry"
+                                type="button"
+                                disabled={pending()}
+                                onClick={() => props.onSubmit?.(failure().source)}
+                              >
+                                {t("chat.rail.askRetry")}
+                              </button>
+                            )}
+                          </>
+                        )}
                       </Show>
                     </>
                   }

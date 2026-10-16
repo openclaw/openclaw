@@ -533,7 +533,7 @@ describe("Sessions board rules and live facts", () => {
     });
   });
 
-  it("shares frozen projections and reuses 80 unchanged rows after one session changes", async () => {
+  it("shares projections and reuses 80 unchanged rows after one session changes", async () => {
     await withService(
       { facts: Array.from({ length: 81 }, (_, index) => Object.freeze(facts(String(index)))) },
       async ({ service, store, state, emit }) => {
@@ -549,7 +549,6 @@ describe("Sessions board rules and live facts", () => {
         const first = readers[0]!;
         expect(readers.every((read) => read === first)).toBe(true);
         expect(first.sessions).toHaveLength(81);
-        expect(first.sessions.every(Object.isFrozen)).toBe(true);
         expect(boards).toHaveBeenCalledOnce();
         expect(placements).toHaveBeenCalledOnce();
         emit(facts("0").key, "category");

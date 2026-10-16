@@ -1,3 +1,4 @@
+import { jsonExtractText } from "../../infra/database-engine/json-values.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
@@ -8,6 +9,7 @@ import {
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { matchesPluginHostCleanupSession } from "./plugin-host-cleanup.js";
 import {
@@ -39,11 +41,55 @@ export function readSessionEntryList(
   let unchanged: true | undefined;
   let nextCronRunUpdatedAt: number | null = null;
   let nextCronRunSessionKey: string | null = null;
+  let nextExecRecoverySessionKey: string | null = null;
 
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
       readWithCanonicalSessionReaderContinuation(database, request.continuation, () => {
         source = captureSessionEntryReadSource(database, request.expectedIdentity);
+        if (scope.pendingExecRecovery) {
+          const page = scope.pendingExecRecovery;
+          const keys = executeSqliteQuerySync(
+            database.db,
+            getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
+              .selectFrom("session_nodes")
+              .select("session_key")
+              .where("session_key", ">", page.afterSessionKey ?? "")
+              // Absent facts evaluate to SQL NULL; empty obligations are not candidates.
+              .where((eb) =>
+                eb(
+                  jsonExtractText(database.db, eb.ref("entry_json"), "pendingExecNotifications"),
+                  "!=",
+                  "{}",
+                ),
+              )
+              .orderBy("session_key")
+              .limit(page.limit),
+          ).rows.map((row) => row.session_key);
+          nextExecRecoverySessionKey = keys.length === page.limit ? keys.at(-1)! : null;
+          return keys.length ? readSelectedSessionEntriesInDatabase(database, keys) : [];
+        }
+        if (scope.pendingInputRecovery) {
+          if (!hasSessionPendingInputsSchema(database.db)) {
+            return [];
+          }
+          const keys = executeSqliteQuerySync(
+            database.db,
+            getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
+              .selectFrom("session_pending_inputs as input")
+              .innerJoin("session_nodes as session", (join) =>
+                join
+                  .onRef("session.session_key", "=", "input.session_key")
+                  .onRef("session.current_session_id", "=", "input.session_id"),
+              )
+              .select("input.session_key")
+              .distinct()
+              .where("input.consumed_event_id", "is", null)
+              // Queued inputs without live custody become interrupted in the history owner.
+              .where("input.state", "in", ["queued", "interrupted"]),
+          ).rows.map((row) => row.session_key);
+          return keys.length ? readSelectedSessionEntriesInDatabase(database, keys) : [];
+        }
         if (scope.cleanupSession === undefined) {
           const read = () =>
             listSqliteSessionEntriesFromDatabase(
@@ -127,5 +173,6 @@ export function readSessionEntryList(
     unchanged,
     ...(scope.expiredCronRuns ? { nextCronRunUpdatedAt } : {}),
     ...(scope.cronRetention ? { nextCronRunSessionKey } : {}),
+    ...(scope.pendingExecRecovery ? { nextExecRecoverySessionKey } : {}),
   };
 }

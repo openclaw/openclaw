@@ -21,7 +21,7 @@ import {
 function buildTombstonedSessionNotice(reason: string): string {
   return (
     `I couldn't continue this session after a gateway restart: ${reason}. ` +
-    "Your transcript is safe. In WebChat, use Resume in new session to continue it; " +
+    "Your transcript is safe. In WebChat, use Resume to continue in this session; " +
     "in other channels, use /new or /reset to start a replacement session."
   );
 }

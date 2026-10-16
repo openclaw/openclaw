@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { Show, createEffect, createSignal, onCleanup, untrack, useContext } from "solid-js";
+import { Show, createEffect, createSignal, untrack, useContext } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { requestVideoPoster } from "../../../lib/media/video-poster.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -29,7 +29,6 @@ function VideoPreviewContent(props: VideoPreviewProps): JSX.Element {
   let controller: AbortController | undefined;
   let currentPoster: string | undefined;
   let visible = false;
-  let disposed = false;
   let element!: HTMLDivElement;
   const release = () => {
     controller?.abort();
@@ -40,7 +39,7 @@ function VideoPreviewContent(props: VideoPreviewProps): JSX.Element {
     currentPoster = undefined;
   };
   const requestPoster = () => {
-    if (disposed || !presented() || !visible || controller || failed()) {
+    if (!presented() || !visible || controller || failed()) {
       return;
     }
     const request = new AbortController();
@@ -52,13 +51,8 @@ function VideoPreviewContent(props: VideoPreviewProps): JSX.Element {
       height: 225,
       signal: request.signal,
     }).then((blob) => {
-      if (
-        disposed ||
-        !presented() ||
-        request !== controller ||
-        request.signal.aborted ||
-        !visible
-      ) {
+      // Hiding, parking, or disposal aborts this request through release().
+      if (request.signal.aborted) {
         return;
       }
       if (blob) {
@@ -95,9 +89,6 @@ function VideoPreviewContent(props: VideoPreviewProps): JSX.Element {
       release();
     };
   });
-  onCleanup(() => {
-    disposed = true;
-  });
   return (
     <div
       class="chat-video-preview__content"
@@ -122,11 +113,9 @@ function VideoPreviewContent(props: VideoPreviewProps): JSX.Element {
                 src={url()}
                 alt={props.label}
                 onError={() => {
-                  if (!disposed && currentPoster === url()) {
-                    release();
-                    setPosterUrl(undefined);
-                    setFailed(true);
-                  }
+                  release();
+                  setPosterUrl(undefined);
+                  setFailed(true);
                 }}
               />
             )}

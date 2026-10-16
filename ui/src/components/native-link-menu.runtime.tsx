@@ -5,6 +5,7 @@ import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.
 import { activateMenuShortcut } from "./menu-shortcuts.ts";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd } from "./solid/kbd.tsx";
+import { pointMenuTriggerAttributes } from "./solid/menu-trigger.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "./solid/menu.tsx";
 import { resolveTransientContainer } from "./transient-container.ts";
 import "./native-link-menu.css";
@@ -95,19 +96,10 @@ export const NativeLinkMenu = defineSolidBridge<Props>(
             props.onClose();
           }
         }}
-        triggerAttributes={{
-          tabindex: -1,
-          "aria-hidden": "true",
-          style: {
-            position: "fixed",
-            left: `${Math.max(8, Math.min(props.x, window.innerWidth - 264 - 8))}px`,
-            top: `${Math.max(8, Math.min(props.y, window.innerHeight - 136 - 8))}px`,
-            width: "1px",
-            height: "1px",
-            opacity: 0,
-            "pointer-events": "none",
-          },
-        }}
+        triggerAttributes={pointMenuTriggerAttributes({
+          x: Math.max(8, Math.min(props.x, window.innerWidth - 264 - 8)),
+          y: Math.max(8, Math.min(props.y, window.innerHeight - 136 - 8)),
+        })}
       />
     );
   },

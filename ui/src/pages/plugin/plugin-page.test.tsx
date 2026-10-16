@@ -17,6 +17,7 @@ import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { getLogbookState, stopLogbookPolling } from "./logbook-controller.ts";
 import { BUNDLED_TAB_VIEWS } from "./plugin-page-lifecycle.ts";
 import { PluginPage, type PluginPageProps } from "./plugin-page.tsx";
+import { page as pluginRoute } from "./route.ts";
 
 type ApplicationConfig = ApplicationConfigCapability["current"];
 const cleanups: Array<() => void> = [];
@@ -217,29 +218,51 @@ describe("PluginPage", () => {
       plugins,
       gateway: { snapshot: { phase: "connected" }, subscribe: () => () => undefined },
     } as unknown as ApplicationContext;
-    const fixture = mountPage(context, {
+    const route = await pluginRoute.component();
+    const [data, setData] = createSignal({
       pluginId,
-      tabId: "notes",
+      id: "notes",
       params: { document: "saved-draft" },
     });
+    const provider = createSolidApplicationContextProvider(context);
+    const view = mountSolid(
+      () =>
+        route.renderSolid({
+          get data() {
+            return data();
+          },
+          loaderPending: false,
+          presented: true,
+        }),
+      { wrapper: provider.wrapper },
+    );
+    cleanups.push(view.unmount);
+    const page = view.container.querySelector("openclaw-plugin-page")!;
     await settle();
-    expect(fixture.page.querySelector('[aria-label="Loading…"]')).not.toBeNull();
-    expect(fixture.page.textContent).not.toContain("Open Labs");
+    expect(page.querySelector('[aria-label="Loading…"]')).not.toBeNull();
+    expect(page.textContent).not.toContain("Open Labs");
     loading = false;
     listeners.forEach((listener) => listener());
     await settle();
-    expect(fixture.page.textContent).toContain("Custom plugin UI is off");
-    expect(fixture.page.params).toEqual({ document: "saved-draft" });
-    const link = fixture.page.querySelector<HTMLAnchorElement>('a[href="/console/settings/labs"]');
+    expect(page.textContent).toContain("Custom plugin UI is off");
+    expect(page.params).toEqual({ document: "saved-draft" });
+    const link = page.querySelector<HTMLAnchorElement>('a[href="/console/settings/labs"]');
     expect(link?.textContent?.trim()).toBe("Open Labs");
     link?.click();
     expect(navigate).toHaveBeenCalledExactlyOnceWith("labs");
     plugins.errors = [{ pluginId, message: "Custom plugin UI is off" }];
     listeners.forEach((listener) => listener());
     await settle();
-    expect(fixture.page.textContent).toContain("Plugin panel unavailable");
-    expect(fixture.page.textContent).toContain("Custom plugin UI is off");
-    expect(fixture.page.textContent).not.toContain("Open Labs");
+    expect(page.textContent).toContain("Plugin panel unavailable");
+    expect(page.textContent).toContain("Custom plugin UI is off");
+    expect(page.textContent).not.toContain("Open Labs");
+    setData({ pluginId: "other-review", id: "details", params: { document: "next-draft" } });
+    await settle();
+    expect(view.container.querySelector("openclaw-plugin-page")).toBe(page);
+    expect(page.pluginId).toBe("other-review");
+    expect(page.tabId).toBe("details");
+    expect(page.params).toEqual({ document: "next-draft" });
+    expect(page.textContent).not.toContain("Custom plugin UI is off");
   });
 
   it("refreshes parent auth before mounting an external plugin frame", async () => {

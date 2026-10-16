@@ -3,6 +3,7 @@ import type {
   SkillWorkshopChange,
   SkillWorkshopSkillSummary,
 } from "@openclaw/gateway-protocol";
+import { Show } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
@@ -40,35 +41,33 @@ export function MutationButton(props: {
       ? props.view().access.canArchive
       : props.view().access.canRestore;
   return (
-    <>
-      {allowed() && (
-        <button
-          type="button"
-          class={
-            props.variant === "link"
-              ? "sw-link-button"
-              : props.variant === "danger"
-                ? "btn btn--sm danger"
-                : "btn btn--sm oc-action"
-          }
-          title={props.title}
-          disabled={props.view().pendingAction !== null}
-          onClick={(event) => {
-            event.stopPropagation();
-            props.view().onMutate(props.mutation, props.actionKey);
-          }}
-        >
-          {props.variant === "danger" && (
-            <span aria-hidden="true">
-              <Icon name="archive" />
-            </span>
-          )}
-          {props.view().pendingAction === props.actionKey
-            ? t("skillWorkshop.viewer.loading")
-            : props.label}
-        </button>
-      )}
-    </>
+    <Show when={allowed()}>
+      <button
+        type="button"
+        class={
+          props.variant === "link"
+            ? "sw-link-button"
+            : props.variant === "danger"
+              ? "btn btn--sm danger"
+              : "btn btn--sm oc-action"
+        }
+        title={props.title}
+        disabled={props.view().pendingAction !== null}
+        onClick={(event) => {
+          event.stopPropagation();
+          props.view().onMutate(props.mutation, props.actionKey);
+        }}
+      >
+        {props.variant === "danger" && (
+          <span aria-hidden="true">
+            <Icon name="archive" />
+          </span>
+        )}
+        {props.view().pendingAction === props.actionKey
+          ? t("skillWorkshop.viewer.loading")
+          : props.label}
+      </button>
+    </Show>
   );
 }
 

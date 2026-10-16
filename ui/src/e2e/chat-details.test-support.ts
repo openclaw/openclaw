@@ -23,6 +23,21 @@ export async function openChatDetails(page: Page | Locator): Promise<Locator> {
   return details;
 }
 
+/** Dismiss through the visible control in both desktop and mobile presentations. */
+export async function closeChatDetails(page: Page | Locator): Promise<void> {
+  const details = page
+    .getByRole("dialog", { name: "Details", exact: true })
+    .or(page.getByRole("complementary", { name: "Details", exact: true }));
+  await details.waitFor();
+  const trigger = page.getByRole("button", { name: "Details", exact: true });
+  if (await trigger.isVisible()) {
+    await trigger.click();
+  } else {
+    await details.getByRole("button", { name: "Close details", exact: true }).click();
+  }
+  await details.waitFor({ state: "hidden" });
+}
+
 export async function openDetailsPullRequests(page: Page | Locator): Promise<Locator> {
   const details = await openChatDetails(page);
   const session = details.locator(".chat-details-session");

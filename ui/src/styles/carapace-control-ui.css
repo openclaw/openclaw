@@ -589,7 +589,8 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
   justify-content: flex-start;
 }
 
-.settings-page.oc-app-surface .btn.oc-action {
+.settings-page.oc-app-surface .btn.oc-action,
+.agents-home .btn.agents-home__claw-add.oc-action {
   min-height: 0;
   gap: 6px;
   padding: 8px 14px;
@@ -614,12 +615,14 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
   color: var(--primary-foreground);
 }
 
-.settings-page.oc-app-surface .btn.btn--sm.oc-action {
+.settings-page.oc-app-surface .btn.btn--sm.oc-action,
+.agents-home .btn.btn--sm.agents-home__claw-add.oc-action {
   padding: 6px 10px;
   font-size: var(--oc-font-size-xs);
 }
 
-.settings-page.oc-app-surface .btn.oc-action:hover:not(:disabled) {
+.settings-page.oc-app-surface .btn.oc-action:hover:not(:disabled),
+.agents-home .btn.agents-home__claw-add.oc-action:hover:not(:disabled) {
   border-color: var(--oc-border-strong);
   background: var(--oc-surface-interactive-hover);
   color: var(--oc-text-primary);

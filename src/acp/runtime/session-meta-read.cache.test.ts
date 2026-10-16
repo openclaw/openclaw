@@ -19,6 +19,7 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js"
 import {
   buildAcpDatabaseSessionKey,
   deleteAcpSessionMetaRows,
+  readPublishedAcpSessionRows,
   upsertAcpSessionMetaRow,
 } from "./session-meta-keys.js";
 import type { AcpSessionReadCommand } from "./session-meta-read.types.js";
@@ -90,8 +91,8 @@ function fixture() {
   return { writer, pathname, read };
 }
 
-it("reuses admitted ACP rows until an ACP write without freshness probes", () => {
-  const { writer, read } = fixture();
+it("reuses admitted ACP rows and committed postimages without rereading metadata", () => {
+  const { writer, pathname, read } = fixture();
   expect(read().rows).toEqual([null]);
   expect(read().rows).toEqual([null]);
   const observation = observeSqliteReadSql(StatementSync.prototype);
@@ -102,8 +103,11 @@ it("reuses admitted ACP rows until an ACP write without freshness probes", () =>
     expect(read().rows).toEqual([null]);
     expect(metadataReads()).toHaveLength(0);
     insert(writer, "first");
+    expect(readPublishedAcpSessionRows(pathname, command.entries)?.[0]).toMatchObject({
+      runtime_session_name: "first",
+    });
     expect(read().rows[0]).toMatchObject({ runtime_session_name: "first" });
-    expect(metadataReads()).toHaveLength(1);
+    expect(metadataReads()).toHaveLength(0);
     const rows = read().rows;
     expect(rows[0]).toMatchObject({ runtime_session_name: "first" });
     if (rows[0] && "runtime_session_name" in rows[0]) {
@@ -113,15 +117,16 @@ it("reuses admitted ACP rows until an ACP write without freshness probes", () =>
     expect(
       read({ ...command, entries: [{ keys: [key], entry: { sessionId: "successor" } }] }).rows,
     ).toEqual([null]);
-    expect(metadataReads()).toHaveLength(1);
+    expect(metadataReads()).toHaveLength(0);
     writer.prepare("INSERT INTO config_machine_state VALUES ('unrelated', '{}', 1)").run();
     expect(read().rows[0]).toMatchObject({ runtime_session_name: "first" });
-    expect(metadataReads()).toHaveLength(1);
+    expect(metadataReads()).toHaveLength(0);
     insert(writer, "second");
     expect(read().rows[0]).toMatchObject({ runtime_session_name: "second" });
     deleteAcpSessionMetaRows(writer, [key]);
     expect(read().rows).toEqual([null]);
-    expect(metadataReads()).toHaveLength(3);
+    expect(readPublishedAcpSessionRows(pathname, command.entries)).toEqual([null]);
+    expect(metadataReads()).toHaveLength(0);
     expect(observation.queries.filter((sql) => /data_version/iu.test(sql))).toEqual([]);
   } finally {
     observation.restore();

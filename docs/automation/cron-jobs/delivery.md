@@ -34,6 +34,8 @@ open the run's session.
 
 With `announce`, the chat that receives the result owns it. The result is added to the conversation after the channel confirms delivery, using the content actually sent after channel transforms and hooks. OpenClaw writes one assistant message into that chat's transcript so the next reply can use it as context. The result records its job and run; retries do not duplicate it, and OpenClaw waits for active turns before committing it. Destination creation and remembered-route updates happen only after confirmed delivery; newly created destinations inherit the source session's required sandbox policy.
 
+A newly committed visible result refreshes the destination's idle freshness, so a reply within the idle window retains the scheduled question. Replaying the same result, silent runs, and failed or uncertain deliveries do not refresh it. Recurring visible results can keep the destination idle-fresh; daily reset still uses the session start time.
+
 - Delivery to the creating chat writes the result there.
 - Delivery to a different chat or topic writes the result **only in the destination**, not in the creating chat.
 - With no external route, such as a WebChat-created job, the creating conversation receives the result.
@@ -111,7 +113,8 @@ Implicit announce delivery uses configured channel allowlists to validate and re
 Failure-alert webhooks stay **Unknown** when the request may have reached the
 receiver but its response is lost. An explicit HTTP rejection or a failure proven
 to precede sending records **Not delivered** and allows the in-app fallback
-notification. An unknown outcome does not trigger that fallback.
+notification, including when Gateway work admission refuses an alert before its
+transport starts. An unknown outcome does not trigger that fallback.
 
 A model-backed run can finish successfully even when its final reply says the requested task is blocked or could not be completed. The scheduler does not infer execution failure from assistant prose. Such a reply follows normal delivery: `announce` sends it, `none` stays silent, and `NO_REPLY` suppresses a text-only announcement without failing the run. A blocker report does not itself increment the execution-failure streak, trigger error backoff, or request a failure alert or owner-conversation repair. Runtime errors, such as provider failures and execution timeouts, still use the failure policy below.
 
@@ -152,6 +155,8 @@ Repair is on by default. Upgrading changes what you see for owned automations th
 When a job created from a conversation (it has an owner session) reaches its execution-failure alert threshold and the alert would go to chat (`announce` mode), OpenClaw sends a repair request to that owner conversation instead of the alert. The request names the job and includes its schedule, name, payload, and last error; the name, payload, and error are marked as untrusted data. Command jobs and on-exit or stream schedules are operator-only and alert as before.
 
 The conversation handles the request as an ordinary agent turn, as if it had received a message: it runs in that conversation's session, with its transcript, workspace, and tool policy, and the reply goes to the conversation's own route, including its thread or topic. Heartbeat settings do not apply. For recurring jobs, a transient outage gets no reply, a problem it can fix in the workspace (for example the helper script or instructions file the job follows) gets fixed with a one-line note, and otherwise it asks you for exactly what it needs. For a terminal one-shot failure, the agent does the still-needed work or schedules a corrected automation, stays silent if the work is no longer needed, or asks you for what is missing. The request does not carry your sender identity, so owner-only tools such as automation control stay unavailable; changing the job itself happens in your reply turn.
+
+The scheduler's repair instructions stay in the model transcript, not the chat feed. Chat shows only the agent's repair note or request for help; pending inputs, live updates, and reloaded history omit the internal request.
 
 Each failure streak gets at most one repair request, even if its cause changes later. The alert is sent as before when the job has no owner conversation or is excluded from repair. If a one-shot's repair request cannot start, the normal failure alert is sent instead. Recurring jobs keep running while the repair turn works. A failed run only verifies the repair if it started after the repair turn finished; earlier runs still count toward the failure streak but do not trigger the unsuccessful-repair alert. If the repair turn exceeds its normal agent timeout, the next failure sends the alert instead. Later alerts in the streak follow the usual cooldown. A successful run clears the streak silently. Existing incidents recorded before settlement tracking was added keep the previous behavior: the next failure after the request can alert.
 

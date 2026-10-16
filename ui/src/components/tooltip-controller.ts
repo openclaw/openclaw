@@ -1,3 +1,4 @@
+import type { OverlayPlacement } from "./overlay-anchor.ts";
 import { containsComposed } from "./overlay-registry.ts";
 import { isTooltipTextRedundant, normalizeTooltipText } from "./tooltip-content.ts";
 
@@ -15,26 +16,15 @@ const RICH_CONTENT_CLOSE_DELAY = 100;
 let nextTooltipId = 0;
 const createTooltipId = () => `openclaw-tooltip-${++nextTooltipId}`;
 
-export type TooltipPlacement =
-  | "top"
-  | "top-start"
-  | "top-end"
-  | "bottom"
-  | "bottom-start"
-  | "bottom-end"
-  | "left"
-  | "left-start"
-  | "left-end"
-  | "right"
-  | "right-start"
-  | "right-end";
 export interface TooltipPolicyProps {
   content?: string;
-  placement?: TooltipPlacement;
+  placement?: OverlayPlacement;
   closeDelay?: number;
   hoverDismissDelay?: number;
   delay?: number;
   describe?: boolean;
+  /** Read-only cards must not block nearby actions when their surface overlaps them. */
+  pointerThrough?: boolean;
   autoSize?: boolean;
   disabled?: boolean;
   openOnClick?: boolean;
@@ -110,7 +100,6 @@ export class TooltipController {
   #describedBy: string | null = null;
   #descriptionCaptured = false;
   #suppressNextFocusOpen = false;
-  #focusRevision = 0;
   #descriptionElement: HTMLSpanElement | null = null;
   #richContentObserver: MutationObserver | null = null;
   readonly #triggerContentObserver = new MutationObserver(() => this.#syncDescription());
@@ -163,7 +152,7 @@ export class TooltipController {
   get trigger() {
     return this.#triggerElement;
   }
-  get resolvedPlacement(): TooltipPlacement {
+  get resolvedPlacement(): OverlayPlacement {
     return (this.placement === "right-start" || this.placement === "right") &&
       this.host.ownerDocument.defaultView?.matchMedia?.("(max-width: 640px)").matches
       ? "bottom-start"
@@ -298,7 +287,6 @@ export class TooltipController {
     this.#close();
   };
   readonly handleFocusIn = () => {
-    this.#focusRevision += 1;
     if (this.#suppressNextFocusOpen) {
       this.#suppressNextFocusOpen = false;
       this.#close();
@@ -320,16 +308,11 @@ export class TooltipController {
       return;
     }
     if (event instanceof FocusEvent && event.relatedTarget === null) {
-      const revision = this.#focusRevision;
       const trigger = this.#triggerElement;
       // Chromium blurs a removed trigger before disconnecting its subtree.
       // Let that removal retire silently, while preserving ordinary blur dismissal.
       queueMicrotask(() => {
-        if (
-          revision !== this.#focusRevision ||
-          trigger !== this.#triggerElement ||
-          this.#shouldRemainOpen()
-        ) {
+        if (trigger !== this.#triggerElement || this.#shouldRemainOpen()) {
           return;
         }
         if (!this.host.isConnected || !trigger?.isConnected) {
@@ -548,7 +531,10 @@ export class TooltipController {
     this.options
       .richContainer()
       ?.closest<HTMLElement>(".tooltip-surface")
-      ?.style.setProperty("pointer-events", richText ? "auto" : "none");
+      ?.style.setProperty(
+        "pointer-events",
+        richText && !this.options.props().pointerThrough ? "auto" : "none",
+      );
     if (!this.describe) {
       this.#restoreDescription();
       return;
@@ -711,13 +697,13 @@ export class TooltipController {
     }
   };
 
-  focusTriggerWithoutOpening(target: HTMLElement) {
+  focusTriggerWithoutOpening(target: HTMLElement, options?: FocusOptions) {
     if (this.#triggerElement?.contains(target) && !target.matches(":focus")) {
       // Navigation can replace a focused toggle with its inverse. Preserve the
       // focus handoff without presenting it as fresh tooltip intent.
       this.#suppressNextFocusOpen = true;
     }
-    target.focus();
+    target.focus(options);
   }
 }
 

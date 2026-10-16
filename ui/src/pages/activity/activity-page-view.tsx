@@ -11,7 +11,7 @@ import {
 import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
-import { renderHubTabs } from "../../components/hub-tabs.ts";
+import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
@@ -28,7 +28,6 @@ import {
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
 } from "../../lib/sessions/session-key.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { ActivityPageController } from "./activity-page-controller.ts";
 import { renderCurrentWork as CurrentWork } from "./current-work-view.tsx";
 import { renderRunInspector as RunInspector } from "./run-inspector-view.tsx";
@@ -173,25 +172,23 @@ export function ActivityPageView(props: {
       </ShellLayoutBoundary>
       <SettingsWorkspace fillHeight>
         <Show when={route()?.mode !== "run"}>
-          <LitContent
-            render={() =>
-              renderHubTabs({
-                id: "activity-mode",
-                active: route()?.mode ?? "sessions",
-                tabs: [
-                  { value: "sessions", label: t("activityFeed.sessionsMode") },
-                  { value: "live", label: t("activity.runInspector.liveMode") },
-                ],
-                ariaLabel: t("activity.runInspector.activityView"),
-                panelId: "activity-mode-panel",
-                className: "activity-mode-tabs",
-                variant: "sub",
-                onSelect: (selected) =>
-                  state().context.navigate("activity", {
-                    search: selected === "live" ? "?view=live" : "",
-                  }),
-              })
-            }
+          <HubTabs
+            {...{
+              id: "activity-mode",
+              active: route()?.mode ?? "sessions",
+              tabs: [
+                { value: "sessions", label: t("activityFeed.sessionsMode") },
+                { value: "live", label: t("activity.runInspector.liveMode") },
+              ],
+              ariaLabel: t("activity.runInspector.activityView"),
+              panelId: "activity-mode-panel",
+              class: "activity-mode-tabs",
+              variant: "sub",
+              onSelect: (selected) =>
+                state().context.navigate("activity", {
+                  search: selected === "live" ? "?view=live" : "",
+                }),
+            }}
           />
         </Show>
         <div

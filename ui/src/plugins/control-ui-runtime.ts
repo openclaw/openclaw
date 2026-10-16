@@ -19,6 +19,8 @@ import { formatUiError } from "../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import {
   controlUiPluginAssetGrantError,
+  controlUiPluginDeliveryIdentity,
+  controlUiPluginDistribution,
   ControlUiPluginAssetPreloads,
 } from "./control-ui-assets.ts";
 import type {
@@ -29,6 +31,7 @@ import type {
 
 export type ControlUiPluginOwner = {
   descriptor: PluginControlUiModule;
+  deliveryIdentity?: string;
   client: GatewayBrowserClient;
   abort: AbortController;
   disposers: Set<ControlUiDisposer>;
@@ -229,7 +232,11 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       const installed = new Set(catalog.plugins.map((plugin) => plugin.pluginId));
       this.loadingCatalog = installed;
       for (const [id, owner] of this.owners) {
-        if (!installed.has(id)) {
+        const next = catalog.plugins.find((descriptor) => descriptor.pluginId === id);
+        if (
+          !next ||
+          (owner.deliveryIdentity ?? "gateway") !== controlUiPluginDeliveryIdentity(next)
+        ) {
           this.owners.delete(id);
           this.disposeOwner(owner);
         }
@@ -238,28 +245,19 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       if (catalog.plugins.length) {
         const gatewayUrl = new URL(client.gatewayUrl, window.location.href);
         gatewayUrl.protocol = gatewayUrl.protocol.replace(/^ws/u, "http");
-        if (!sameOrigin) {
-          this.loadingCatalog = null;
-          const error = new Error(
-            `Native plugin UI requires the Control UI served by the connected Gateway. Open ${gatewayUrl.origin} and reconnect there.`,
-          );
-          await Promise.all(
-            catalog.plugins.map((descriptor) => {
-              this.reportError(descriptor.pluginId, error);
-              return this.reportActivation(descriptor, client, current, "failed", error);
-            }),
-          );
-          return;
-        }
-        if (!bootstrap) {
-          throw new Error("Could not authenticate native plugin assets. Reconnect and retry.");
-        }
         for (const descriptor of catalog.plugins) {
-          const grantError = controlUiPluginAssetGrantError(
-            descriptor,
-            bootstrap,
-            this.getContext().resourceBasePath,
-          );
+          if (controlUiPluginDistribution(descriptor)) {
+            continue;
+          }
+          const grantError = !sameOrigin
+            ? `Native plugin UI requires the Control UI served by the connected Gateway. Open ${gatewayUrl.origin} and reconnect there.`
+            : !bootstrap
+              ? "Could not authenticate native plugin assets. Reconnect and retry."
+              : controlUiPluginAssetGrantError(
+                  descriptor,
+                  bootstrap,
+                  this.getContext().resourceBasePath,
+                );
           if (grantError) {
             installed.delete(descriptor.pluginId);
             const error = new Error(grantError);
@@ -270,7 +268,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
             }
           }
         }
-        if (bootstrap.pluginAssetsRequireAuth) {
+        if (bootstrap?.pluginAssetsRequireAuth) {
           this.startGrantRenewal();
         }
       }
@@ -322,6 +320,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
     const abort = new AbortController();
     const owner: Omit<ControlUiPluginOwner, "host"> = {
       descriptor,
+      deliveryIdentity: controlUiPluginDeliveryIdentity(descriptor),
       client,
       abort,
       disposers: new Set<ControlUiDisposer>(),

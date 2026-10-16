@@ -45,7 +45,6 @@ const failedNpmVersionQueryResult: SpawnResult = {
   termination: "exit",
 };
 const validatePackageExtensionEntriesForInstallMock = vi.fn();
-const markClawPackageIndependentlyOwnedMock = vi.fn();
 const withClawPackageLifecycleLeaseMock = vi.fn(
   async (_artifact: unknown, operation: () => Promise<unknown>, _options?: unknown) =>
     await operation(),
@@ -130,11 +129,6 @@ vi.mock("../infra/clawhub-packages.js", async (importOriginal) => {
     fetchClawHubPackageDetail: (...args: unknown[]) => fetchClawHubPackageDetailMock(...args),
   };
 });
-
-vi.mock("../state/claw-package-adoption.js", () => ({
-  markClawPackageIndependentlyOwned: (...args: unknown[]) =>
-    markClawPackageIndependentlyOwnedMock(...args),
-}));
 
 vi.mock("../state/claw-package-lifecycle-lease.js", () => ({
   withClawPackageLifecycleLease: (
@@ -2410,11 +2404,6 @@ describe("updateNpmInstalledPlugins", () => {
       expect.any(Function),
       undefined,
     );
-    expect(markClawPackageIndependentlyOwnedMock).toHaveBeenCalledWith({
-      kind: "plugin",
-      source: "clawhub",
-      ref: "demo",
-    });
     expectRecordFields(result.config.plugins?.installs?.demo, {
       ...updated.clawhub,
       spec: "clawhub:demo@1.2.3",

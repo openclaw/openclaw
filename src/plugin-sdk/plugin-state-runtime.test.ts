@@ -64,27 +64,27 @@ describe("published plugin state SQLite runtime", () => {
     const databasePath = path.join(tempDirs.make("openclaw-plugin-state-wal-"), "state.sqlite");
     const database = new DatabaseSync(databasePath);
     let journalModeAttempts = 0;
-    const instrumentedDatabase = new Proxy(database, {
-      get(target, property) {
-        if (property === "exec") {
-          return (sql: string) => {
-            if (sql === "PRAGMA journal_mode = WAL;" && journalModeAttempts++ === 0) {
-              vi.setSystemTime(Date.now() + 1_000_000);
-              throw Object.assign(new Error("database is locked"), {
-                code: "ERR_SQLITE_ERROR",
-                errcode: 5,
-              });
-            }
-            return target.exec(sql);
-          };
-        }
-        const value = Reflect.get(target, property, target);
-        return typeof value === "function" ? value.bind(target) : value;
-      },
+    const prepare = database.prepare.bind(database);
+    vi.spyOn(database, "prepare").mockImplementation((sql) => {
+      const statement = prepare(sql);
+      if (sql === "PRAGMA journal_mode = WAL;") {
+        const get = statement.get.bind(statement);
+        vi.spyOn(statement, "get").mockImplementation((...params) => {
+          if (journalModeAttempts++ === 0) {
+            vi.setSystemTime(Date.now() + 1_000_000);
+            throw Object.assign(new Error("database is locked"), {
+              code: "ERR_SQLITE_ERROR",
+              errcode: 5,
+            });
+          }
+          return get(...params);
+        });
+      }
+      return statement;
     });
 
     try {
-      const maintenance = configureSqliteConnectionPragmas(instrumentedDatabase, {
+      const maintenance = configureSqliteConnectionPragmas(database, {
         busyTimeoutMs: 50,
         checkpointIntervalMs: 0,
         databasePath,

@@ -129,7 +129,7 @@ it("reuses complete actor context with the worker's byte bounds, anchors and rol
         },
       });
       const hot = f.read();
-      expect(replica.beginRead().install(hot)).toBe(true);
+      expect(replica.beginRead()(hot)).toBe(true);
       const retained = seedSessionActorTranscriptContext(
         undefined,
         hot,

@@ -126,9 +126,8 @@ describe("AppSidebar automatic list scope replacement", () => {
       const expand = sidebar.querySelector<HTMLButtonElement>(
         `[data-child-session-toggle="${nextParent.key}"]`,
       );
-      expect(expand?.getAttribute("aria-expanded")).toBe("false");
-      expand!.click();
-      await settleLitElement(sidebar);
+      // The newly discovered child reveals its parent after the background queue drains.
+      expect(expand?.getAttribute("aria-expanded")).toBe("true");
       expect(sidebar.textContent).toContain(`${nextParent.key} child`);
       expect(parents).toHaveLength(2);
     } finally {
@@ -299,8 +298,11 @@ describe("AppSidebar automatic list scope replacement", () => {
           `[data-child-session-toggle="${researchParent}"]`,
         );
         expect(expand).not.toBeNull();
-        expect(expand?.getAttribute("aria-expanded")).toBe("false");
-        expand!.click();
+        // Only the cross-agent roster discovers a new child after the initial baseline.
+        expect(expand?.getAttribute("aria-expanded")).toBe(nextAgent === "main" ? "false" : "true");
+        if (nextAgent === "main") {
+          expand!.click();
+        }
         await settleLitElement(sidebar);
         await vi.advanceTimersByTimeAsync(0);
         expect(sidebar.textContent).toContain("Next child");

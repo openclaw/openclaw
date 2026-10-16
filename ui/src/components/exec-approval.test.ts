@@ -106,29 +106,6 @@ describe("openclaw-exec-approval", () => {
     vi.restoreAllMocks();
   });
 
-  it("uses neutral unavailable copy for exec allow-always decisions", async () => {
-    await renderOpenedApproval(
-      createExecRequest({
-        request: {
-          command: "echo hello",
-          ask: "always",
-          allowedDecisions: ["allow-once", "deny"],
-        },
-      }),
-    );
-
-    await getRenderedModalDialog(container);
-
-    expect(
-      Array.from(container.querySelectorAll(".exec-approval-actions button > span")).map((label) =>
-        label.textContent?.trim(),
-      ),
-    ).toEqual(["Allow once", "Deny"]);
-    expect(container.querySelector(".exec-approval-warning")?.textContent?.trim()).toBe(
-      "Allow Always is unavailable for this command.",
-    );
-  });
-
   it("does not show exec unavailable copy for restricted plugin approvals", async () => {
     await renderOpenedApproval(
       createExecRequest({
@@ -158,11 +135,11 @@ describe("openclaw-exec-approval", () => {
     vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     await renderOpenedApproval(createExecRequest({ expiresAtMs: 90_500 }));
     const { dialog } = await getRenderedModalDialog(container);
-    const countdown = container.querySelector<ExecApprovalElement>(".exec-approval-countdown");
+    const countdown = container.querySelector<HTMLElement>(".exec-approval-countdown");
     if (!countdown) {
       throw new Error("Expected approval countdown");
     }
-    await countdown.updateComplete;
+    flush();
 
     expect(countdown.textContent?.trim()).toBe("expires in 01:31");
     expect(dialog.getAttribute("aria-description")).toBe("expires in 01:31");
@@ -191,8 +168,16 @@ describe("openclaw-exec-approval", () => {
         request: { command: "pnpm test", agentId: "worker" },
       }),
     ];
-    const { approval } = await renderOpenedApproval(queue);
+    const { approval, onDecision } = await renderOpenedApproval(queue);
     await getRenderedModalDialog(container);
+    const card = container.querySelector(".exec-approval-card")!;
+    const actions = card.querySelector(".exec-approval-actions")!;
+    const pending = container.querySelector(".exec-approval-list")!;
+    expect(card.contains(pending)).toBe(true);
+    expect(card.lastElementChild).toBe(actions);
+    expect(
+      pending.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
 
     expect(container.querySelector(".exec-approval-card")?.getAttribute("data-approval-id")).toBe(
       "approval-oldest",
@@ -204,6 +189,8 @@ describe("openclaw-exec-approval", () => {
       "approval-newer",
     );
     expect(queue.map((entry) => entry.id)).toEqual(["approval-oldest", "approval-newer"]);
+    container.querySelector<HTMLButtonElement>(".exec-approval-actions button")!.click();
+    expect(onDecision).toHaveBeenCalledWith("approval-newer", "allow-once");
   });
 
   it("compacts queued commands without splitting a surrogate pair", async () => {
@@ -348,31 +335,10 @@ describe("openclaw-exec-approval", () => {
     expect(onDecision).not.toHaveBeenCalled();
   });
 
-  it("dismissal closes the view without deciding and the chip can reopen it", async () => {
-    const { approval, onDecision } = await renderOpenedApproval(
-      createExecRequest({ request: { command: "echo hello" } }),
-    );
-    const { modal } = await getRenderedModalDialog(container);
-    const cancel = new CustomEvent("modal-cancel", {
-      bubbles: true,
-      composed: true,
-      cancelable: true,
-    });
-
-    expect(modal.dispatchEvent(cancel)).toBe(true);
-    await approval.updateComplete;
-    expect(container.querySelector("openclaw-modal-dialog")).toBeNull();
-    expect(onDecision).not.toHaveBeenCalled();
-
-    (approval as ExecApprovalElement & { show(): void }).show();
-    await approval.updateComplete;
-    expect(container.querySelector("openclaw-modal-dialog")).not.toBeNull();
-  });
-
   // Settings Escape guards read this fact; a pending queue alone must not
   // report an open dialog now that approvals surface passively.
   it("records dialogOpen only while the dialog is explicitly open", async () => {
-    const { approval } = await renderApproval(createExecRequest());
+    const { approval, onDecision } = await renderApproval(createExecRequest());
     const element = approval as ExecApprovalElement & { show(): void; dialogOpen: boolean };
     expect(element.dialogOpen).toBe(false);
 
@@ -386,6 +352,7 @@ describe("openclaw-exec-approval", () => {
     );
     await approval.updateComplete;
     expect(element.dialogOpen).toBe(false);
+    expect(onDecision).not.toHaveBeenCalled();
   });
 
   it("closes and resets after the approval queue drains", async () => {

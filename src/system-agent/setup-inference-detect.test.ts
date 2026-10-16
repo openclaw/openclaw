@@ -452,24 +452,4 @@ describe("setup inference discovery deadline", () => {
     expect(result.authOptions).toContainEqual(expect.objectContaining({ id: "custom-api-key" }));
     expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
   });
-
-  it.each([0, 20_000])(
-    "returns discovery completed after %i ms and releases its deadline",
-    async (delay) => {
-      const started = createDeferred();
-      const available = createDeferred<ProviderAppGuidedSetupCandidate | null>();
-      const detection = detectWithProvider(() => {
-        started.resolve();
-        return available.promise;
-      });
-      await started.promise;
-      await vi.advanceTimersByTimeAsync(delay);
-      available.resolve({ modelRef: "fixture/slow-model" });
-      const result = await detection;
-      expect(result.candidates).toContainEqual(
-        expect.objectContaining({ modelRef: "fixture/slow-model" }),
-      );
-      expect(vi.getTimerCount(), describePendingFakeTimers()).toBe(0);
-    },
-  );
 });

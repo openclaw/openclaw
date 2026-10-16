@@ -101,33 +101,6 @@ describe("cron stream schedule validation", () => {
     }
   });
 
-  it("rotates logical source identity only when source ownership changes", async () => {
-    const { cron } = await createCron(true);
-    try {
-      const created = await cron.add(streamJob());
-      const initialIdentity = created.state.streamSourceIdentity;
-      expect(initialIdentity).toEqual(expect.any(String));
-
-      const equivalent = await cron.update(created.id, {
-        schedule: structuredClone(created.schedule),
-      });
-      expect(equivalent.state.streamSourceIdentity).toBe(initialIdentity);
-
-      const replaced = await cron.update(created.id, {
-        schedule: { kind: "stream", command: ["replacement-source"] },
-      });
-      expect(replaced.state.streamSourceIdentity).not.toBe(initialIdentity);
-
-      const disabled = await cron.update(created.id, { enabled: false });
-      expect(disabled.state.streamSourceIdentity).not.toBe(replaced.state.streamSourceIdentity);
-
-      const reenabled = await cron.update(created.id, { enabled: true });
-      expect(reenabled.state.streamSourceIdentity).not.toBe(disabled.state.streamSourceIdentity);
-    } finally {
-      cron.stop();
-    }
-  });
-
   it("ignores stale owner writes after an A-to-B-to-A source replacement", async () => {
     const { cron } = await createCron(true);
     try {

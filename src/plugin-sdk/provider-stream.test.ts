@@ -169,7 +169,7 @@ describe("composeProviderStreamWrappers", () => {
 describe("buildProviderStreamFamilyHooks", () => {
   it.each([
     {
-      name: "public OpenAI Responses: configured flex beats fast mode",
+      name: "public OpenAI Responses: selected Fast overrides configured flex",
       model: {
         api: "openai-responses",
         provider: "openai",
@@ -177,7 +177,7 @@ describe("buildProviderStreamFamilyHooks", () => {
         id: "gpt-5.6-luna",
       },
       extraParams: { fastMode: true, serviceTier: "flex" },
-      expectedServiceTier: "flex",
+      expectedServiceTier: "priority",
     },
     {
       name: "ChatGPT Responses: fast mode defaults to priority",

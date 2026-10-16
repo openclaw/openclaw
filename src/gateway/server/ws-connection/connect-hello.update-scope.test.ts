@@ -510,6 +510,7 @@ describe("sendGatewayHello update detail scope", () => {
     });
     expectRedactedHelloSnapshot(context);
     expect(helloPayload(context)?.features.capabilities).toContain("node-permission-errors");
+    expect(helloPayload(context)?.features.capabilities).toContain("agent-session-id-create-v1");
   });
 
   it.each([

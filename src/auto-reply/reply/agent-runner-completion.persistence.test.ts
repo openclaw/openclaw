@@ -48,9 +48,13 @@ function createFixture() {
   });
 }
 
-it.each(["initial", "refresh"] as const)(
-  "preserves the completed reply after one invalidated %s read",
-  async (stage) => {
+it.each([
+  { stage: "initial", count: 1 },
+  { stage: "refresh", count: 1 },
+  { stage: "initial", count: 2 },
+] as const)(
+  "preserves the completed reply after $count cache-only invalidations during the $stage read",
+  async ({ stage, count }) => {
     const fixture = await createFixture();
     const invalidate = () =>
       sessionChanges.invalidate({
@@ -83,18 +87,20 @@ it.each(["initial", "refresh"] as const)(
       afterRead() {
         if (armed) {
           armed = false;
-          invalidations += 1;
-          // Revoke the real in-flight replica publication, not a mocked read error.
-          invalidate();
+          // Cache-only invalidation does not revoke the unchanged scoped write token.
+          for (let index = 0; index < count; index += 1) {
+            invalidations += 1;
+            invalidate();
+          }
         }
       },
     });
     try {
       await expect(finalizeReplyAgentRun(fixture.context)).resolves.toMatchObject({ text: "done" });
-      expect(invalidations).toBe(1);
+      expect(invalidations).toBe(count);
       expect(normalize).toHaveBeenCalledOnce();
       expect(observer.commands.filter((command) => command === "session.actor.read")).toHaveLength(
-        stage === "initial" ? 2 : 3,
+        stage === "initial" ? 1 : 2,
       );
       expect(
         observer.commands.filter((command) => command === "session.actor.completeTurn"),
@@ -114,7 +120,7 @@ it.each(["initial", "refresh"] as const)(
   },
 );
 
-it.each(["second-invalidation", "unrelated-error", "writer-replaced"] as const)(
+it.each(["unrelated-error", "writer-replaced"] as const)(
   "does not retry or publish a completed reply past %s",
   async (failure) => {
     const fixture = await createFixture();
@@ -135,7 +141,7 @@ it.each(["second-invalidation", "unrelated-error", "writer-replaced"] as const)(
             }),
           );
         }
-        if (failure === "second-invalidation" || reads === 1) {
+        if (reads === 1) {
           sessionChanges.invalidate({
             sessionKey: fixture.context.sessionKey!,
             storePath,
@@ -152,7 +158,7 @@ it.each(["second-invalidation", "unrelated-error", "writer-replaced"] as const)(
       );
       await replacement;
       // Replacement is rejected at admission before another worker read can execute.
-      expect(reads).toBe(failure === "second-invalidation" ? 2 : 1);
+      expect(reads).toBe(1);
       expect(observer.commands).not.toContain("session.actor.completeTurn");
       expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
       expect(fixture.read()?.inputTokens).toBeUndefined();

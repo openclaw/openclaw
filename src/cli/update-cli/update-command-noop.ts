@@ -4,7 +4,7 @@ import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
+import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership-preflight.js";
 import { readPackageVersion, UpdatePreMutationError } from "./shared.js";
 import {
   maybeRepairLegacyConfigForUpdateChannel,

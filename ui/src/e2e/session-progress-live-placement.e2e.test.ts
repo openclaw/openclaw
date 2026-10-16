@@ -383,6 +383,16 @@ suite.define(() => {
           .poll(() => visiblePane.locator('[data-progress-card-placement="rail"]').count())
           .toBe(0);
         const sideHeader = sidePanel.locator('[data-region-header="side"]');
+        await captureProof(page, "details-mobile-header.png");
+        await expect
+          .poll(() =>
+            visiblePane.evaluate((element) => {
+              const header = element.querySelector(".sidebar-region__header")!;
+              const details = element.querySelector(".chat-details")!;
+              return details.getBoundingClientRect().top >= header.getBoundingClientRect().bottom;
+            }),
+          )
+          .toBe(true);
         await selectChatLayoutAction(page, "Minimize side panel");
         await sideHeader.waitFor({ state: "hidden" });
         await openChatDetails(visiblePane);

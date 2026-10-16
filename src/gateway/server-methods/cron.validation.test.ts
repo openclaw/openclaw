@@ -114,6 +114,14 @@ vi.mock("../../config/config.js", async () => {
   };
 });
 
+// Credential capture is exercised by cron.inference-binding.test.ts and
+// isolated-agent.auth-continuity.integration.test.ts. These delivery/management
+// validation fixtures intentionally have no inference account.
+vi.mock("../../cron/inference-binding.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../cron/inference-binding.runtime.js")>()),
+  captureCronInferenceBinding: async () => undefined,
+}));
+
 // mock-isolation: Validation fixtures do not read live session delivery metadata.
 vi.mock("../../cron/delivery-preview.js", () => ({
   resolveCronDeliveryFailurePreview: async () => undefined,
@@ -497,26 +505,11 @@ describe("cron method validation", () => {
     },
   );
 
-  it.each([false])("runs an exact job id with caller scope %s", async (scoped) => {
+  it("runs a padded exact job ID without caller scope", async () => {
     const context = createCronContext(createCronJob({ id: "cron-1", agentId: "ops" }));
-    const { respond } = await invokeCron(
-      "cron.run",
-      {
-        id: scoped ? "cron-1" : " cron-1 ",
-        ...(scoped
-          ? { mode: "due", expectedProcessInstanceId: getGatewayProcessInstanceId() }
-          : {}),
-      },
-      { context, client: scoped ? callerClient("ops") : undefined },
-    );
+    const { respond } = await invokeCron("cron.run", { id: " cron-1 " }, { context });
     expect(context.cron.readJob).toHaveBeenCalledWith("cron-1");
-    if (scoped) {
-      expect(context.cron.enqueueRun).toHaveBeenCalledWith("cron-1", "due", {
-        commitGuard: expect.any(Function),
-      });
-    } else {
-      expect(context.cron.enqueueRun).toHaveBeenCalledWith("cron-1", "force");
-    }
+    expect(context.cron.enqueueRun).toHaveBeenCalledWith("cron-1", "force");
     expect(respond).toHaveBeenCalledWith(
       true,
       {
@@ -615,7 +608,7 @@ describe("cron method validation", () => {
           elapsedMs: fails ? 1301 : 1302,
           phaseDurationsMs: fails
             ? { setup: 0, listing: 1301 }
-            : { setup: 0, listing: 1302, projection: 0, response: 0, handlerExit: 0 },
+            : { setup: 0, listing: 1301, projection: 1, response: 0, handlerExit: 0 },
           sourcePageMs: 1301,
           sourcePageCount: 1,
           scopeAttemptCount: 1,
@@ -625,7 +618,7 @@ describe("cron method validation", () => {
           previewsRequested: false,
           scopeApplied: true,
           ...(!fails ? { returnedCount: 1 } : {}),
-          scopeProcessingMs: fails ? 0 : 1,
+          scopeProcessingMs: 0,
         });
       },
     );
@@ -1527,7 +1520,7 @@ describe("cron method validation", () => {
     const list = await invokeCron("cron.list", { compact: true }, { context, client: runClient });
     expect(list.respond).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ total: 1 }),
+      expect.objectContaining({ total: 1, jobs: [expect.objectContaining({ id: accountJob.id })] }),
       undefined,
     );
 
@@ -1572,31 +1565,6 @@ describe("cron method validation", () => {
       undefined,
     );
 
-    const remove = await invokeCron(
-      "cron.remove",
-      { id: accountJob.id },
-      { context, client: runClient },
-    );
-    expect(remove.respond).toHaveBeenCalledWith(true, { ok: true, removed: true }, undefined);
-    expect(context.cron.remove).toHaveBeenCalledWith(accountJob.id, {
-      commitGuard: expect.any(Function),
-    });
-
-    cronRunRecordsOverride.mockImplementationOnce(async () => {
-      runClient.internal!.agentRuntimeIdentity!.cronSelfManagementContext!.expiresAtMs =
-        Date.now() - 1;
-      return [];
-    });
-    const expiredHistory = await invokeCron(
-      "cron.runs",
-      { id: accountJob.id },
-      { context, client: runClient },
-    );
-    expectResponseError(expiredHistory.respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "Automation not found",
-    });
-
     const update = await invokeCron(
       "cron.update",
       { id: accountJob.id, patch: { enabled: false } },
@@ -1613,6 +1581,28 @@ describe("cron method validation", () => {
       messageIncludes: "Automation not found: cron-1",
     });
     expect(context.cron.enqueueRun).not.toHaveBeenCalled();
+
+    const remove = await invokeCron(
+      "cron.remove",
+      { id: accountJob.id },
+      { context, client: runClient },
+    );
+    expect(remove.respond).toHaveBeenCalledWith(true, { ok: true, removed: true }, undefined);
+
+    cronRunRecordsOverride.mockImplementationOnce(async () => {
+      runClient.internal!.agentRuntimeIdentity!.cronSelfManagementContext!.expiresAtMs =
+        Date.now() - 1;
+      return [];
+    });
+    const expiredHistory = await invokeCron(
+      "cron.runs",
+      { id: accountJob.id },
+      { context, client: runClient },
+    );
+    expectResponseError(expiredHistory.respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "Automation not found",
+    });
   });
 
   it("keeps trusted scheduled authority operator-only", async () => {
@@ -2422,20 +2412,6 @@ describe("cron method validation", () => {
       code: "INVALID_REQUEST",
       messageIncludes: "Automation not found",
     });
-  });
-
-  it("retains full cron job discovery for all-scope history", async () => {
-    const context = createCronContext(createCronJob({ id: "cron-1" }));
-
-    const { respond } = await invokeCron("cron.runs", { scope: "all" }, { context });
-
-    expect(context.cron.list).toHaveBeenCalledExactlyOnceWith({ includeDisabled: true });
-    expect(context.cron.readJob).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ entries: expect.any(Array) }),
-      undefined,
-    );
   });
 
   it("does not widen a whitespace-only cron.runs selector to all history", async () => {

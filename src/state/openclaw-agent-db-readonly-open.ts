@@ -75,8 +75,8 @@ export function readOpenClawAgentDatabase<T>(
 
 function hasAdmittedAgentReadOnlySchema(database: OpenClawAgentReadOnlyDatabase): boolean {
   const userVersion = assertSupportedAgentSchemaVersion(database.db, database.path);
-  assertCanonicalAgentPersistenceVersion(database.db, database.path, userVersion);
   const schemaMeta = readExistingAgentSchemaMeta(database.db);
+  assertCanonicalAgentPersistenceVersion(database.db, database.path, userVersion);
   if (!schemaMeta) {
     return false;
   }

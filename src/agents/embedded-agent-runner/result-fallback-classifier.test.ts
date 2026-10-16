@@ -486,6 +486,7 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
         payloads: [],
         meta: {
           durationMs: 42,
+          terminalReply: { disposition: "silent" },
           finalAssistantRawText: "NO_REPLY",
           finalAssistantVisibleText: "NO_REPLY",
         },
@@ -633,6 +634,13 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
       label: "an exact terminal tool batch intentionally completes the turn",
       meta: { intentionalTerminalCompletion: "tool-batch" as const },
     },
+    {
+      label: "an optional empty result completes without a reply",
+      meta: {
+        terminalReply: { disposition: "empty" as const },
+        terminalReplyExpectation: "optional" as const,
+      },
+    },
   ])("does not fallback after $label", ({ meta }) => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "openai",
@@ -645,6 +653,26 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
 
     expect(result).toBeNull();
   });
+
+  it.each([undefined, "required", "result-required"] as const)(
+    "keeps a clean empty %s turn fallback-eligible",
+    (terminalReplyExpectation) => {
+      expect(
+        classifyEmbeddedAgentRunResultForModelFallback({
+          provider: "openai",
+          model: "gpt-5.5",
+          result: {
+            payloads: [],
+            meta: {
+              durationMs: 42,
+              terminalReply: { disposition: "empty" },
+              terminalReplyExpectation,
+            },
+          },
+        }),
+      ).toMatchObject({ reason: "format", code: "empty_result" });
+    },
+  );
 
   it.each([
     {

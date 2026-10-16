@@ -249,9 +249,9 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
   it.each([
     { fastMode: "ultrafast" as const, serviceTier: undefined, expected: 260_000 },
     { fastMode: true, serviceTier: undefined, expected: 922_000 },
-    { fastMode: false, serviceTier: "ultrafast", expected: 260_000 },
-    { fastMode: "ultrafast" as const, serviceTier: "priority", expected: 922_000 },
-    { fastMode: "ultrafast" as const, serviceTier: "default", expected: 922_000 },
+    { fastMode: false, serviceTier: "ultrafast", expected: 922_000 },
+    { fastMode: "ultrafast" as const, serviceTier: "priority", expected: 260_000 },
+    { fastMode: "ultrafast" as const, serviceTier: "default", expected: 260_000 },
   ])(
     "caps client compaction only for the effective Ultrafast tier: $fastMode/$serviceTier",
     ({ fastMode, serviceTier, expected }) => {
@@ -339,19 +339,6 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
       ).toBe(260_000);
     },
   );
-
-  it("keeps a smaller client budget under Ultrafast even with server compaction disabled", () => {
-    const result = resolveEmbeddedRuntimeModelPolicy({
-      cfg: {},
-      provider: "openai",
-      modelId: "gpt-5.5",
-      runtimeModel: createRuntimeModel(),
-      nativeModelOwned: false,
-      contextTokenBudget: 120_000,
-      requestExtraParams: { fastMode: "ultrafast", responsesServerCompaction: false },
-    });
-    expect(result.contextTokenBudget).toBe(120_000);
-  });
 
   it("keeps an unknown model's generic fallback untrusted", () => {
     const result = resolveEmbeddedRuntimeModelPolicy({

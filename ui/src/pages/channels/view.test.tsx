@@ -1,6 +1,8 @@
 // Channels page view tests.
+import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelsStatusSnapshot, WhatsAppStatus } from "../../api/types.ts";
+import { i18n } from "../../i18n/lib/translate.ts";
 import { channelSnapshotEntryIsActive } from "../../lib/channels/index.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { renderChannelDetail } from "./view.detail.tsx";
@@ -121,15 +123,38 @@ describe("channels plugin presentation metadata", () => {
       "blob:slack-plugin-icon",
     );
     expect(container.textContent).not.toContain("Legacy channel subtitle");
-    for (const selector of [".channels-item", ".channels-detail__header", ".channels-wizard"]) {
-      const icon = container.querySelector(`${selector} img`)!;
+    const selectors = [".channels-item", ".channels-detail__header", ".channels-wizard"];
+    const originalIcons = selectors.map((selector) => container.querySelector(`${selector} img`)!);
+    for (const [index, selector] of selectors.entries()) {
+      const icon = originalIcons[index]!;
       icon.dispatchEvent(new Event("error"));
+      flush();
       expect(container.querySelector(`${selector} img`)).toBeNull();
       expect(
         container.querySelector(
           `${selector} .channels-tile--fallback, ${selector} .channels-cover--fallback`,
         )?.textContent,
       ).toContain("SL");
+    }
+    renderChannelView(ChannelsView, props, container);
+    for (const selector of selectors) {
+      expect(container.querySelector(`${selector} img`)).toBeNull();
+    }
+    Object.assign(props.presentation, { pluginIconUrls: { slack: "blob:replacement-slack-icon" } });
+    renderChannelView(ChannelsView, props, container);
+    for (const [index, selector] of selectors.entries()) {
+      const replacement = container.querySelector(`${selector} img`)!;
+      expect(replacement.getAttribute("src")).toBe("blob:replacement-slack-icon");
+      originalIcons[index]!.dispatchEvent(new Event("error"));
+      flush();
+      expect(container.querySelector(`${selector} img`)).toBe(replacement);
+    }
+    Object.assign(props.presentation, { pluginIconUrls: { slack: "blob:slack-plugin-icon" } });
+    renderChannelView(ChannelsView, props, container);
+    for (const selector of selectors) {
+      expect(container.querySelector(`${selector} img`)?.getAttribute("src")).toBe(
+        "blob:slack-plugin-icon",
+      );
     }
     Object.assign(props.presentation, { pluginIconUrls: {} });
     Object.assign(props.presentation, {
@@ -439,6 +464,7 @@ function renderChannelDetailFixture(
     loading?: boolean;
     configError?: string;
     onRefresh?: ChannelsProps["onRefresh"];
+    accounts?: ChannelsStatusSnapshot["channelAccounts"][string];
   } = {},
 ) {
   const props = createProps({
@@ -446,7 +472,7 @@ function renderChannelDetailFixture(
     channelOrder: [channelId],
     channelLabels: { [channelId]: options.label ?? channelId },
     channels,
-    channelAccounts: {},
+    channelAccounts: { [channelId]: options.accounts ?? [] },
     channelDefaultAccountId: {},
   });
   props.channels.channelsLoading = options.loading ?? false;
@@ -568,6 +594,22 @@ describe("channel config advanced tier", () => {
   });
 });
 
+const CHANNEL_DETAIL_CASES = [
+  ["discord", "Discord", []],
+  [
+    "googlechat",
+    "Google Chat",
+    [
+      ["Credential", "service-account"],
+      ["Audience", "url · https://chat.example"],
+    ],
+  ],
+  ["imessage", "iMessage", []],
+  ["signal", "Signal", [["Base URL", "https://signal.example"]]],
+  ["slack", "Slack", []],
+  ["telegram", "Telegram", [["Mode", "polling"]]],
+] satisfies Array<[string, string, Array<[string, string]>]>;
+
 describe("channel detail", () => {
   it.each(["whatsapp", "nostr"] as const)(
     "shows an escaped configuration save error inside the %s editor",
@@ -587,17 +629,7 @@ describe("channel detail", () => {
     },
   );
 
-  it.each([
-    ["signal", "Signal", [["Base URL", "https://signal.example"]]],
-    [
-      "googlechat",
-      "Google Chat",
-      [
-        ["Credential", "service-account"],
-        ["Audience", "url · https://chat.example"],
-      ],
-    ],
-  ] satisfies Array<[string, string, Array<[string, string]>]>)(
+  it.each(CHANNEL_DETAIL_CASES)(
     "preserves localized status facts and probe actions for %s",
     (channelId, title, extraFacts) => {
       const onRefresh = vi.fn();
@@ -632,24 +664,48 @@ describe("channel detail", () => {
     },
   );
 
-  it("projects an in-flight channel read onto the detail Probe action", () => {
-    const onRefresh = vi.fn();
-    const container = renderChannelDetailFixture(
-      "telegram",
-      { telegram: { configured: true, running: true } },
-      { loading: true, onRefresh },
-    );
-    const probe = container.querySelector<HTMLButtonElement>(".settings-row--actions button");
+  it.each(CHANNEL_DETAIL_CASES)(
+    "keeps the cold recommended %s detail available",
+    (channelId, title) => {
+      const props = createProps(null);
+      props.selectedChannel = channelId;
+      const container = document.createElement("div");
+      renderChannelView(ChannelsView, props, container);
+      const detail = container.querySelector(".channels-detail")!;
 
-    expect(probe?.disabled).toBe(true);
-    expect(probe?.getAttribute("aria-busy")).toBe("true");
-    expect(probe?.textContent?.trim()).toBe("Refreshing…");
-    probe?.click();
-    expect(onRefresh).not.toHaveBeenCalled();
-  });
+      expect(detail.querySelector(".settings-section__heading")?.textContent?.trim()).toBe(title);
+      expect(detail.querySelector(".settings-row--actions button")?.textContent?.trim()).toBe(
+        "Check connection",
+      );
+      expect(
+        Array.from(detail.querySelectorAll("dt"), (node) => node.textContent?.trim()),
+      ).toContain("Last connection check");
+      expect(detail.textContent).not.toContain("Channel status and configuration.");
+    },
+  );
+
+  it.each(CHANNEL_DETAIL_CASES)(
+    "projects an in-flight %s read onto its Probe action",
+    (channelId) => {
+      const onRefresh = vi.fn();
+      const container = renderChannelDetailFixture(
+        channelId,
+        { [channelId]: { configured: true, running: true } },
+        { loading: true, onRefresh },
+      );
+      const probe = container.querySelector<HTMLButtonElement>(".settings-row--actions button");
+
+      expect(probe?.disabled).toBe(true);
+      expect(probe?.getAttribute("aria-busy")).toBe("true");
+      expect(probe?.textContent?.trim()).toBe("Refreshing…");
+      probe?.click();
+      expect(onRefresh).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps missing Google Chat status unknown while other known channels are stopped", () => {
     const google = renderChannelDetailFixture("googlechat", { googlechat: null });
+    const googlePresent = renderChannelDetailFixture("googlechat", { googlechat: {} });
     const discord = renderChannelDetailFixture("discord", { discord: null });
     const fact = (container: HTMLElement, label: string) =>
       Array.from(container.querySelectorAll("dt"))
@@ -657,7 +713,88 @@ describe("channel detail", () => {
         ?.nextElementSibling?.textContent?.trim();
 
     expect(fact(google, "Running")).toBe("n/a");
+    expect(fact(googlePresent, "Running")).toBe("No");
     expect(fact(discord, "Running")).toBe("No");
+  });
+
+  it.each([0, 1, 2])("shows Telegram account rows only above its %i-account threshold", (count) => {
+    const accounts = [
+      {
+        accountId: "first",
+        name: "First",
+        configured: true,
+        running: false,
+        probe: { bot: { username: "first_bot" } },
+      },
+      { accountId: "second", name: "Second", configured: false, running: true },
+    ].slice(0, count);
+    const container = renderChannelDetailFixture(
+      "telegram",
+      { telegram: { running: true } },
+      { accounts },
+    );
+    if (count < 2) {
+      expect(container.querySelector("dl")?.textContent).toContain("RunningYes");
+      expect(container.textContent).not.toContain("@first_bot");
+    } else {
+      expect(container.querySelector("dl")).toBeNull();
+      const rows = Array.from(container.querySelectorAll(".settings-row")).filter((row) =>
+        row.querySelector(".settings-row__title"),
+      );
+      expect(rows.map((row) => row.querySelector(".settings-row__title")?.textContent)).toEqual([
+        "@first_bot",
+        "Second",
+      ]);
+      expect(rows.map((row) => row.querySelector(".settings-row__desc")?.textContent)).toEqual([
+        "first · Configured: Yes",
+        "second · Configured: No",
+      ]);
+      expect(rows.map((row) => row.querySelector(".settings-status")?.textContent?.trim())).toEqual(
+        ["No", "Running"],
+      );
+    }
+  });
+
+  it("keeps the bundled display policy for a same-ID custom channel status", () => {
+    const container = renderChannelDetailFixture(
+      "signal",
+      {
+        signal: {
+          configured: true,
+          baseUrl: "https://custom.example",
+          lastError: "Custom failure",
+          probe: { ok: false, error: "Probe failure" },
+          lastStartAt: Date.now(),
+          lastProbeAt: Date.now(),
+        },
+      },
+      { label: "Custom Signal" },
+    );
+    expect(container.querySelector(".settings-section__heading")?.textContent?.trim()).toBe(
+      "Signal",
+    );
+    expect(container.textContent).toContain("https://custom.example");
+    expect(container.textContent).toContain("Custom failure");
+    expect(container.textContent).toContain("Probe failure");
+    expect(container.textContent).toContain("just now");
+  });
+
+  it("updates the same mounted detail when the locale changes", async () => {
+    try {
+      await i18n.setLocale("en");
+      const container = renderChannelDetailFixture("signal", { signal: {} });
+      const english = "signal-cli status and channel configuration.";
+      expect(container.textContent).toContain(english);
+      await i18n.setLocale("fr");
+      flush();
+      expect(container.textContent).toContain(i18n.t("channels.signal.subtitle"));
+      expect(container.textContent).not.toContain(english);
+      await i18n.setLocale("en");
+      flush();
+      expect(container.textContent).toContain(english);
+    } finally {
+      await i18n.setLocale("en");
+    }
   });
 
   it.each(["__proto__"])(

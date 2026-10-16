@@ -79,6 +79,10 @@ export async function prepareAttempt(input: {
   currentAttemptCompletedAssistant?: AssistantMessage;
   sourceReplyDeliveryMode?: "message_tool_only";
   heartbeat?: { continuesConversation: boolean };
+  replyDeliveryState?: Parameters<typeof prepareEmbeddedRunTerminal>[0]["replyDeliveryState"];
+  sourceReplyDeliveryState?: Parameters<
+    typeof prepareEmbeddedRunTerminal
+  >[0]["sourceReplyDeliveryState"];
   terminalState: EmbeddedRunTerminalState;
 }) {
   const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
@@ -108,5 +112,7 @@ export async function prepareAttempt(input: {
     contextRecoveryState: createEmbeddedRunContextRecoveryState(),
     resolvedToolResultFormat: "markdown",
     terminalState: input.terminalState,
+    replyDeliveryState: input.replyDeliveryState,
+    sourceReplyDeliveryState: input.sourceReplyDeliveryState,
   });
 }

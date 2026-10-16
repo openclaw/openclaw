@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -54,6 +54,11 @@ function terminalOpenResult(sessionId: string) {
 }
 
 describe("terminal panel readiness", () => {
+  beforeAll(async () => {
+    // Load the real responder before fake time drives readiness deadlines.
+    await import("@openclaw/libterminal/browser");
+  });
+
   beforeEach(async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("sessionStorage", createStorageMock());

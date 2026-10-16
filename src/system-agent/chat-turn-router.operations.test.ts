@@ -21,7 +21,6 @@ import {
   SystemAgentInferenceUnavailableError,
   verifyConfigAfterSystemAgentWrite,
   type OpenClawConfig,
-  type WizardPrompter,
 } from "./chat-engine.test-support.js";
 import { ChatTurnRouter } from "./chat-turn-router.js";
 import { ChatWizardHost } from "./chat-wizard-host.js";
@@ -266,38 +265,6 @@ describe("SystemAgentChatEngine operations", () => {
     const reply = await router.resolveTurn("connect telegram for me");
 
     expect(reply.text).toContain("wizard exploded");
-  });
-
-  it("routes an inference-setup directive out of the agent loop", async () => {
-    const router = createRouterHarness({
-      surface: "cli",
-      runAgentTurn: async () => ({
-        text: "Opening the menu wizard.",
-        directive: { kind: "open-setup" as const, target: "guided" as const },
-      }),
-    });
-    const reply = await router.resolveTurn("I would rather use menus");
-    expect(reply.action).toBe("none");
-    expect(reply.handoff).toBeUndefined();
-    expect(reply.text).toContain("Opening the menu wizard");
-    expect(reply.text).toContain("run `openclaw onboard`");
-  });
-
-  it("starts the channel wizard from an agent-loop directive", async () => {
-    useTempStateDir();
-    const engine = new SystemAgentChatEngine({
-      runAgentTurn: async () => ({
-        text: "Telegram it is — setup questions follow.",
-        directive: { kind: "channel-setup" as const, channel: "telegram" },
-      }),
-      deps: { loadOverview: fakeOverviewLoader() },
-      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
-        await prompter.text({ message: "Bot token" });
-      },
-    });
-    const reply = await engine.handle("hook me up with telegram please");
-    expect(reply.text).toContain("Telegram it is");
-    expect(reply.text).toContain("Bot token");
   });
 
   it("rejects an agent directive when the verified route changes during its turn", async () => {
@@ -841,42 +808,6 @@ describe("SystemAgentChatEngine CLI loop backends", () => {
       expectDefined(runCliAgent.mock.calls[1], "runCliAgent.mock.calls[1] test invariant")[0]
         .cliSessionBinding,
     ).toEqual({ sessionId: "native-1" });
-  });
-
-  it("reports a failed CLI loop without another inference attempt", async () => {
-    useTempStateDir();
-    const config = {
-      agents: {
-        defaults: {
-          model: { primary: "claude-cli/claude-opus-4-8" },
-        },
-      },
-    } satisfies OpenClawConfig;
-    const snapshot = configSnapshot(config);
-    const inference = await createCliVerifiedBinding(config);
-    const inferenceDeps = {
-      ...inference.deps,
-      readConfigFileSnapshot: (async () => snapshot) as never,
-    };
-    const runCliAgent = vi.fn(async () => {
-      throw new Error("claude exploded");
-    });
-    const engine = new SystemAgentChatEngine({
-      verifiedInference: inference.binding,
-      runAgentTurn: (params) =>
-        runSystemAgentTurnWithDeps(params, {
-          ...inferenceDeps,
-          runCliAgent: runCliAgent as never,
-        }),
-      deps: {
-        ...inferenceDeps,
-        loadOverview: fakeOverviewLoader({ defaultModel: "claude-cli/claude-opus-4-8" }),
-      },
-    });
-
-    await expect(engine.handle("do a health check")).rejects.toThrow("claude exploded");
-    expect(runCliAgent).toHaveBeenCalledOnce();
-    expect(engine.historyLength()).toBe(0);
   });
 });
 

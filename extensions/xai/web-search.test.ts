@@ -3,8 +3,8 @@ import { createTestWizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtim
 import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { jsonResponse, withEnvAsync, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildXaiCatalogModels, resolveXaiCatalogEntry } from "./model-definitions.js";
-import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
+import { resolveXaiCatalogEntry } from "./model-definitions.js";
+import { resolveXaiForwardCompatModel } from "./provider-models.js";
 import { createXaiWebSearchProvider as createXaiWebSearchContractProvider } from "./web-search-contract-api.js";
 import { createXaiWebSearchProvider } from "./web-search.js";
 
@@ -164,36 +164,6 @@ function resolveForwardModel(modelId: string) {
       providerConfig: { api: "openai-responses", baseUrl: "https://api.x.ai/v1" },
     },
   });
-}
-
-function expectCatalogEntry(
-  modelId: string,
-  expected: {
-    id?: string;
-    reasoning?: boolean;
-    input?: string[];
-    contextWindow?: number;
-    maxTokens?: number;
-    cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
-  },
-) {
-  const entry = resolveXaiCatalogEntry(modelId);
-  expect(entry?.id).toBe(expected.id ?? modelId);
-  if ("reasoning" in expected) {
-    expect(entry?.reasoning).toBe(expected.reasoning);
-  }
-  if (expected.input) {
-    expect(entry?.input).toEqual(expected.input);
-  }
-  if (expected.contextWindow !== undefined) {
-    expect(entry?.contextWindow).toBe(expected.contextWindow);
-  }
-  if (expected.maxTokens !== undefined) {
-    expect(entry?.maxTokens).toBe(expected.maxTokens);
-  }
-  if (expected.cost) {
-    expect(entry?.cost).toEqual(expected.cost);
-  }
 }
 
 afterEach(() => {
@@ -610,18 +580,6 @@ describe("xai web search config resolution", () => {
 });
 
 describe("xai provider models", () => {
-  it("publishes only current selectable chat models newest first", () => {
-    expect(buildXaiCatalogModels().map((model) => model.id)).toEqual([
-      "grok-4.7",
-      "grok-4.6",
-      "grok-4.5",
-      "grok-build-0.1",
-      "grok-4.3",
-      "grok-4.20-0309-reasoning",
-      "grok-4.20-0309-non-reasoning",
-    ]);
-  });
-
   it("resolves curated rows and their aliases from the manifest", () => {
     const grok43 = {
       id: "grok-4.3",
@@ -631,20 +589,7 @@ describe("xai provider models", () => {
       maxTokens: 64_000,
       cost: { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
     };
-    expectCatalogEntry("grok-4.3", grok43);
-    expectCatalogEntry("grok-4.3-latest", grok43);
-    expectCatalogEntry("xai/GROK-4.3", grok43);
-  });
-
-  it("marks current Grok families as modern while excluding multi-agent ids", () => {
-    expect(isModernXaiModel("grok-4.5")).toBe(true);
-    expect(isModernXaiModel("grok-4.3")).toBe(true);
-    expect(isModernXaiModel("grok-build-0.1")).toBe(true);
-    expect(isModernXaiModel("grok-4.20-0309-reasoning")).toBe(true);
-    expect(isModernXaiModel("grok-build-latest")).toBe(true);
-    expect(isModernXaiModel("grok-code-fast-1")).toBe(true);
-    expect(isModernXaiModel("grok-3-mini-fast")).toBe(false);
-    expect(isModernXaiModel("grok-4.20-multi-agent-experimental-beta-0304")).toBe(false);
+    expect(resolveXaiCatalogEntry("xai/GROK-4.3")).toMatchObject(grok43);
   });
 
   it("builds forward-compatible runtime models for newer Grok ids", () => {

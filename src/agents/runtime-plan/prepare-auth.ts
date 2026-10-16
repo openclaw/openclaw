@@ -69,6 +69,8 @@ type PrepareAgentRuntimeAuthPlanParams = {
   metadataSnapshot?: PluginMetadataSnapshot;
   authProfileStore?: AuthProfileStore;
   sessionAuthProfileId?: string;
+  /** Required by a durable caller, without turning automatic selection into a user pin. */
+  requiredAuthProfileId?: string;
   sessionAuthProfileSource?: "auto" | "user" | "user-link";
   allowAuthProfileFallback?: boolean;
   harnessId?: string;
@@ -290,10 +292,11 @@ export function prepareAgentRuntimeAuth(
 ): PreparedAgentRuntimeAuth {
   const params = { ...input, config: resolveModelProviderAuthConfig(input) };
   const requestedProfileId = params.sessionAuthProfileId?.trim() || undefined;
-  const userPinnedProfileId =
-    params.sessionAuthProfileSource === "user" || params.sessionAuthProfileSource === "user-link"
+  const lockedProfileId =
+    params.requiredAuthProfileId ??
+    (params.sessionAuthProfileSource === "user" || params.sessionAuthProfileSource === "user-link"
       ? requestedProfileId
-      : undefined;
+      : undefined);
   const harnessOwnsOpenAIAuth =
     params.harnessId?.trim().toLowerCase() === "codex" ||
     params.harnessRuntime?.trim().toLowerCase() === "codex";
@@ -303,53 +306,51 @@ export function prepareAgentRuntimeAuth(
       ? { id: harnessAuthOwnerId }
       : undefined;
   const harnessAllowsAuthProfileForwarding = params.allowHarnessAuthProfileForwarding !== false;
-  if (userPinnedProfileId && !harnessAllowsAuthProfileForwarding) {
+  if (lockedProfileId && !harnessAllowsAuthProfileForwarding) {
     throw new Error(
-      `Auth profile "${userPinnedProfileId}" cannot be forwarded to the selected agent harness. Configure that harness's native account instead.`,
+      `Auth profile "${lockedProfileId}" cannot be forwarded to the selected agent harness. Configure that harness's native account instead.`,
     );
   }
   const store = params.authProfileStore;
   const authProfileSelectionProvider = harnessOwnsOpenAIAuth ? "openai" : params.provider;
-  if (userPinnedProfileId) {
+  if (lockedProfileId) {
     const eligibility = store
       ? resolveAuthProfileEligibility({
           cfg: params.config,
           authAliasLookupParams: params,
           store,
           provider: authProfileSelectionProvider,
-          profileId: userPinnedProfileId,
+          profileId: lockedProfileId,
           includePendingOAuthRefresh: true,
         })
       : { eligible: false };
     if (!eligibility.eligible) {
       if (
-        !store?.profiles[userPinnedProfileId] &&
-        params.config?.auth?.profiles?.[userPinnedProfileId]?.mode !== "aws-sdk"
+        !store?.profiles[lockedProfileId] &&
+        params.config?.auth?.profiles?.[lockedProfileId]?.mode !== "aws-sdk"
       ) {
         throw createSelectedAuthProfileUnavailableError({
-          profileId: userPinnedProfileId,
+          profileId: lockedProfileId,
           provider: authProfileSelectionProvider,
           modelId: params.modelId,
         });
       }
       throw new Error(
-        `Auth profile "${userPinnedProfileId}" is not configured for ${authProfileSelectionProvider}.`,
+        `Auth profile "${lockedProfileId}" is not configured for ${authProfileSelectionProvider}.`,
       );
     }
   }
 
   const configuredProvider = resolveMergedModelProviderConfig(params.config, params.provider);
   const configuredAuthMode =
-    userPinnedProfileId || !harnessAllowsAuthProfileForwarding
-      ? undefined
-      : configuredProvider?.auth;
+    lockedProfileId || !harnessAllowsAuthProfileForwarding ? undefined : configuredProvider?.auth;
   const configuredAwsSdkAuth = configuredAuthMode === "aws-sdk";
   const providerApiKeySecretRef = harnessAllowsAuthProfileForwarding
     ? resolveProviderConfigSecretInput(params.config, params.provider).ref
     : undefined;
   const providerHasApiKeySecretRef = Boolean(providerApiKeySecretRef);
   const providerBinding =
-    harnessAllowsAuthProfileForwarding && !userPinnedProfileId && store && !configuredAwsSdkAuth
+    harnessAllowsAuthProfileForwarding && !lockedProfileId && store && !configuredAwsSdkAuth
       ? resolvePreparedProviderEntryApiKeyProfileReference({
           ...params,
           store,
@@ -381,7 +382,9 @@ export function prepareAgentRuntimeAuth(
   const selectedConfiguredAuthMode =
     configuredAuthMode ?? (providerHasDirectMaterial ? "api-key" : undefined);
   const selectedProfileId =
-    boundProfileId ?? (params.allowAuthProfileFallback === false ? userPinnedProfileId : undefined);
+    params.requiredAuthProfileId ??
+    boundProfileId ??
+    (params.allowAuthProfileFallback === false ? lockedProfileId : undefined);
   const resolvedAutomaticOrder =
     !harnessAllowsAuthProfileForwarding ||
     selectedProfileId ||
@@ -402,14 +405,11 @@ export function prepareAgentRuntimeAuth(
           readinessMode: "read-only",
           includePendingOAuthRefresh: true,
         });
-  const automaticOrderResolution = prependAuthProfilePin(
-    resolvedAutomaticOrder,
-    userPinnedProfileId,
-  );
+  const automaticOrderResolution = prependAuthProfilePin(resolvedAutomaticOrder, lockedProfileId);
   const providerPreferredProfileId =
     harnessAllowsAuthProfileForwarding &&
     !selectedProfileId &&
-    !userPinnedProfileId &&
+    !lockedProfileId &&
     !providerBindingSuppressesProfiles &&
     !configuredAwsSdkAuth &&
     store
@@ -491,7 +491,7 @@ export function prepareAgentRuntimeAuth(
   const ownership = selectedProfileId
     ? {
         reason:
-          selectedProfileId === userPinnedProfileId
+          selectedProfileId === lockedProfileId
             ? ("runtime-binding" as const)
             : ("provider-binding" as const),
         source: resolveProfile(params, selectedProfileId, { ignoreCooldown: true }),
@@ -510,18 +510,18 @@ export function prepareAgentRuntimeAuth(
   const sourcePlan = buildProviderModelAuthSourcePlan({
     ...(ownership ? { ownership } : {}),
     profiles: resolvedOrderedProfileIds.map((profileId) => resolveProfile(params, profileId)),
-    ...(userPinnedProfileId || providerPreferredProfileId
-      ? { preferredProfileId: userPinnedProfileId ?? providerPreferredProfileId }
+    ...(lockedProfileId || providerPreferredProfileId
+      ? { preferredProfileId: lockedProfileId ?? providerPreferredProfileId }
       : {}),
     explicitOrder: automaticOrderResolution.hasExplicitOrder,
-    preserveProfilePriority: Boolean(userPinnedProfileId),
+    preserveProfilePriority: Boolean(lockedProfileId),
     ...(fallbackDirectSource ? { fallback: fallbackDirectSource } : {}),
     allowCooldown: params.allowTransientCooldownProbe,
   });
   const pinnedSource =
     sourcePlan.kind === "required"
       ? sourcePlan.source
-      : sourcePlan.orderedProfiles.find((source) => source.profileId === userPinnedProfileId);
+      : sourcePlan.orderedProfiles.find((source) => source.profileId === lockedProfileId);
   const resolution = resolveOpenAIModelRoutes({
     provider: params.provider,
     modelId: params.modelId,
@@ -579,8 +579,10 @@ export function prepareAgentRuntimeAuth(
         profile?.mode ?? (source?.kind === "direct" ? source.mode : selectedConfiguredAuthMode),
       sessionAuthProfileId: profile?.profileId,
       sessionAuthProfileSource: profile
-        ? profile.profileId === userPinnedProfileId
-          ? "user"
+        ? profile.profileId === lockedProfileId
+          ? params.requiredAuthProfileId
+            ? (params.sessionAuthProfileSource ?? "auto")
+            : "user"
           : "auto"
         : undefined,
       sessionAuthProfileCandidateIds: candidateIds,

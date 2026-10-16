@@ -101,8 +101,13 @@ export function createCommandCompactionAccounting(params: {
           const carriedCount = hasSameCompactionWriter(accounting?.target, fact.target)
             ? (accounting?.count ?? 0)
             : 0;
+          const transitions = [
+            ...(accounting?.admissionTransitions ?? []),
+            ...(fact.admissionTransitions ?? []),
+          ];
           accounting = {
             ...fact,
+            ...(transitions.length ? { admissionTransitions: Object.freeze(transitions) } : {}),
             count: carriedCount + fact.count,
             currentContextSnapshot:
               fact.currentContextSnapshot ?? accounting?.currentContextSnapshot,

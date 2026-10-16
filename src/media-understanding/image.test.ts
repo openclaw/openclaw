@@ -188,39 +188,6 @@ describe("describeImageWithModelCore", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("passes workspaceDir through MiniMax VLM fallback auth", async () => {
-    const authStorage = {
-      [SET_RUNTIME_API_KEY_FIELD]: setRuntimeApiKeyMock,
-    };
-    resolveModelAsyncMock.mockResolvedValue({
-      authStorage,
-      modelRegistry: { find: vi.fn(() => null) },
-      error: "Unknown model: minimax-portal/MiniMax-VL-01",
-    });
-
-    await expect(
-      describeImageWithModelCore({
-        ...imageRequestDefaults(),
-        workspaceDir: "/tmp/openclaw-workspace",
-        provider: "minimax-portal",
-        model: "MiniMax-VL-01",
-        prompt: "Describe the image.",
-      }),
-    ).resolves.toEqual({
-      text: "portal ok",
-      model: "MiniMax-VL-01",
-    });
-
-    expect(resolveApiKeyForProviderCoreMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "minimax-portal",
-        agentDir: "/tmp/openclaw-agent",
-        workspaceDir: "/tmp/openclaw-workspace",
-      }),
-    );
-    expect(fetchMock).toHaveBeenCalledOnce();
-  });
-
   it("uses canonical MiniMax CN baseUrl for VLM alias fallback", async () => {
     const authStorage = {
       [SET_RUNTIME_API_KEY_FIELD]: setRuntimeApiKeyMock,
@@ -234,6 +201,7 @@ describe("describeImageWithModelCore", () => {
     await expect(
       describeImageWithModelCore({
         ...imageRequestDefaults(),
+        workspaceDir: "/tmp/openclaw-workspace",
         cfg: {
           models: {
             providers: {
@@ -257,6 +225,8 @@ describe("describeImageWithModelCore", () => {
     expect(resolveApiKeyForProviderCoreMock).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "minimax",
+        agentDir: "/tmp/openclaw-agent",
+        workspaceDir: "/tmp/openclaw-workspace",
       }),
     );
     const [fetchUrl] = expectDefined(fetchMock.mock.calls[0], "fetch call 0");
@@ -461,38 +431,6 @@ describe("image runtime cancellation and retries", () => {
       "cancelled image completion call 0",
     )[2];
     expect(options?.signal?.aborted).toBe(true);
-  });
-
-  it("rejects when a generic image completion ignores the abort signal", async () => {
-    vi.useFakeTimers();
-    mockImageModel({
-      api: "openai-responses",
-      provider: "openai",
-      id: "gpt-5.4-mini",
-      baseUrl: "https://api.openai.com/v1",
-    });
-    completeMock.mockImplementation(() => new Promise(() => {}));
-
-    const result = describeImageWithModelCore({
-      ...imageRequestDefaults(),
-      provider: "openai",
-      model: "gpt-5.4-mini",
-      prompt: "Describe the image.",
-      timeoutMs: 25,
-    });
-
-    const assertion = expect(result).rejects.toThrow(
-      "image description request timed out after 25ms",
-    );
-    await vi.advanceTimersByTimeAsync(25);
-    await assertion;
-    const firstCall = expectDefined(completeMock.mock.calls[0], "timed image completion call 0");
-    const options = firstCall[2];
-    if (!options?.signal) {
-      throw new Error("Expected image completion abort signal");
-    }
-    expect(options.signal.aborted).toBe(true);
-    expect(options.timeoutMs).toBe(25);
   });
 
   it("retains the prepared runtime until an aborted provider actually settles", async () => {

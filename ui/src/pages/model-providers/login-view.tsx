@@ -162,7 +162,7 @@ export function ModelProviderLoginView(props: {
                 </Show>
               </Show>
             </div>
-            <div class="model-setup-wizard__footer">
+            <openclaw-modal-actions class="model-setup-wizard__footer">
               <Show
                 when={current().provider}
                 fallback={
@@ -189,7 +189,7 @@ export function ModelProviderLoginView(props: {
               <button class="btn" onClick={() => current().onClose()}>
                 {t("common.cancel")}
               </button>
-            </div>
+            </openclaw-modal-actions>
           </div>
         </openclaw-modal-dialog>
       )}

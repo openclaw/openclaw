@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -97,6 +98,7 @@ export async function handleChatHistoryRequest({
     inputRunIds,
   } = params;
   const pageCursor = decodeChatHistoryPageCursor(cursor);
+  const includePluginSteering = client?.connect.client?.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
   const messageId = pageCursor?.messageId ?? wireMessageId;
   const deltaCursor = pageCursor ? undefined : cursor;
   const retainedSessionId = retainedTranscript?.sessionId;
@@ -248,6 +250,7 @@ export async function handleChatHistoryRequest({
                   {
                     // Internal adapters may inspect message objects before responding.
                     encodeResponse: acceptsSerializedJson && method === req.method,
+                    includePluginSteering,
                     entry: historyEntry,
                     provider: resolvedSessionModel.provider,
                     sessionId,
@@ -388,6 +391,8 @@ export async function handleChatHistoryRequest({
         requestedSessionKey: sessionKey,
         canonicalSessionKey: canonicalKey,
         sessionId,
+        agentId: sessionAgentId,
+        defaultAgentId: compatibilityOwnerAgentId,
       });
       if (sessionInfo && Object.hasOwn(historyPage, "activeLeafEntryId")) {
         sessionInfo.activeLeafEntryId = historyPage.activeLeafEntryId ?? null;
@@ -494,6 +499,7 @@ export async function handleChatHistoryRequest({
             delta = await readChatHistoryDelta(
               {
                 toolResultMaxChars,
+                includePluginSteering,
                 agentId: sessionAgentId,
                 cursor: deltaCursor,
                 maxBytes: maxResponseBytes,

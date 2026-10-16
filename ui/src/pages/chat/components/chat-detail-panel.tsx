@@ -213,23 +213,18 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
     invalidate();
     fileEditorLoad = import("./file-editor-view.ts")
       .then(async ({ createFileEditorView }) => {
-        const current = visibleContent;
-        if (version !== fileOperationVersion || current?.kind !== "file") {
+        if (version !== fileOperationVersion) {
           return;
         }
         const editor = await createFileEditorView({
           parent,
-          content: fileDraftContent ?? current.content,
-          name: current.name,
+          content: fileDraftContent ?? content.content,
+          name: content.name,
           editable: fileEditing,
           wrap: fileWrap,
           onSave: saveFile,
         });
-        if (
-          version !== fileOperationVersion ||
-          !updatingHost.isConnected ||
-          visibleContent?.kind !== "file"
-        ) {
+        if (version !== fileOperationVersion || !updatingHost.isConnected) {
           editor.destroy();
           return;
         }
@@ -238,7 +233,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
         fileEditor = editor;
         fileDraftContent = null;
         editor.onDocChanged((nextContent) => {
-          const draft = captureFileEditorDraft(current, {
+          const draft = captureFileEditorDraft(content, {
             // Reload synchronization may normalize display text without a user edit.
             editing: fileEditing && !fileReloading,
             content: nextContent,
@@ -472,11 +467,11 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
       return;
     }
     const outcome = await content.edit.save({ content: nextContent, expectedHash });
-    if (version !== fileOperationVersion || visibleContent?.kind !== "file") {
+    if (version !== fileOperationVersion) {
       return;
     }
     if (outcome.ok) {
-      updateSavedFile(visibleContent, nextContent, outcome.hash);
+      updateSavedFile(content, nextContent, outcome.hash);
     } else if (outcome.code === "conflict") {
       fileSaveNotice = { kind: "conflict" };
     } else {
@@ -515,7 +510,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
     invalidate();
     trackFileOperation(
       content.edit.fetchLatest().then(async (latest) => {
-        if (version !== fileOperationVersion || visibleContent?.kind !== "file") {
+        if (version !== fileOperationVersion) {
           return;
         }
         if (!latest) {
@@ -537,15 +532,15 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
         fileEditor?.setContent(latest.content);
         fileDraftContent = fileEditor ? null : latest.content;
         htmlPreview.discard(latest.content);
-        updateSavedFile(visibleContent, latest.content, latest.hash);
+        updateSavedFile(content, latest.content, latest.hash);
         // A reload can bring back content that no longer qualifies for edit
         // mode (e.g. the agent rewrote the file with mixed line endings);
         // drop the edit capability instead of letting a save corrupt it.
         if (!latest.editable) {
-          setFileDraft(visibleContent, null);
+          setFileDraft(content, null);
           fileEditing = false;
           fileDirty = false;
-          const { edit: _removed, ...readOnly } = visibleContent;
+          const { edit: _removed, ...readOnly } = content;
           visibleContent = readOnly;
         }
       }),
@@ -748,5 +743,15 @@ export const ChatDetailPanel = defineSolidBridge("openclaw-chat-detail-panel", D
 declare global {
   interface HTMLElementTagNameMap {
     "openclaw-chat-detail-panel": ChatDetailPanel;
+  }
+}
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-chat-detail-panel": HTMLAttributes<ChatDetailPanel> & {
+        [Key in keyof ChatDetailPanelProps as `prop:${Key}`]?: ChatDetailPanelProps[Key];
+      };
+    }
   }
 }

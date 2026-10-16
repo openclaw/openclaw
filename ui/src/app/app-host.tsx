@@ -6,7 +6,7 @@ import {
   titleForRoute,
 } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
-import "../components/app-topbar.ts";
+import "../components/app-topbar-solid.tsx";
 import "../components/assistant-panel.ts";
 import type { RouteId } from "../app-routes.ts";
 import "../components/resizable-divider.ts";
@@ -157,7 +157,7 @@ export class ShellOwner
   // Settings navigation is needed only after entering the settings takeover.
   // Keep its search, update-card, and sidebar rendering graph off the startup path.
   readonly settingsSidebar = new LazyRenderer(this, () =>
-    import("../components/settings-sidebar.ts").then((module) => module.renderSettingsSidebar),
+    import("../components/settings-sidebar.tsx").then((module) => module.renderSettingsSidebar),
   );
   readonly debugOverlayFrame = new LazyRenderer(this, () =>
     import("../pages/debug/debug-overlay-frame.ts").then(
@@ -594,19 +594,11 @@ export class ShellOwner
     if (isSessionRouteId(routeId) && this.activeSessionKey) {
       primaryContext = this.chatTitleContext(context, outboxScopeHost) || primaryContext;
     }
-    const { phase, lastError } = context.gateway.snapshot;
-    // A warm shell renders before hello; initial loading is not a lost connection.
-    const gatewayDisconnected =
-      phase !== "connected" &&
-      (Boolean(lastError) ||
-        phase === "reconnecting" ||
-        phase === "offline" ||
-        phase === "reload-required");
+    const { phase } = context.gateway.snapshot;
     let title = formatDocumentTitle({
       context: primaryContext,
       brandName: context.theme.branding.brandName,
       attentionCount: phase === "connected" ? context.overlays.snapshot.approvalQueue.length : 0,
-      gatewayDisconnected,
     });
     const environment = context.config?.current.environment;
     if (environment) {

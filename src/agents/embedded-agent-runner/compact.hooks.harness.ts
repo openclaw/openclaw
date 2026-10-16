@@ -356,7 +356,6 @@ function createCompactHooksRuntimePlan(params: BuildAgentRuntimePlanParams): Age
       resolvePolicy: vi.fn(() => transcriptPolicy),
     },
     delivery: {
-      isSilentPayload: vi.fn(() => false),
       resolveFollowupRoute: vi.fn(() => undefined),
     },
     outcome: {

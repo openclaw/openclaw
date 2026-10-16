@@ -20,8 +20,6 @@ import {
   type SecretsStoreDraft,
   type SecretsStoreState,
 } from "../../lib/secrets-store/index.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
-import { PageLayout } from "../page-layout.tsx";
 import { SecretsStore, type SecretsDialogMode } from "./view.tsx";
 
 const MAX_VALUE_BYTES = 64 * 1024;
@@ -300,7 +298,7 @@ class SecretsPageState {
   }
 }
 
-function SecretsPageContent() {
+export function SecretsPage() {
   const context = useApplication();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const model = untrack(
@@ -327,7 +325,7 @@ function SecretsPageContent() {
     model.notify();
   };
   return (
-    <>
+    <openclaw-secrets-page>
       <SettingsPageHeader title={t("tabs.secrets")} subtitle={t("secretsStore.hint")} />
       <SettingsWorkspace>
         <SecretsStore
@@ -376,16 +374,6 @@ function SecretsPageContent() {
           onDelete={(entry) => void model.removeEntry(entry)}
         />
       </SettingsWorkspace>
-    </>
+    </openclaw-secrets-page>
   );
 }
-
-export const SecretsPage = defineSolidBridge(
-  "openclaw-secrets-page",
-  (_props, host) => (
-    <PageLayout host={host}>
-      <SecretsPageContent />
-    </PageLayout>
-  ),
-  { properties: {} },
-);

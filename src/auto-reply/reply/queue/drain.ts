@@ -55,6 +55,7 @@ import {
   completeFollowupRunLifecycle,
   completeFollowupRuns,
   retireFollowupRunCancellation,
+  updateFollowupRetryHeartbeats,
 } from "./lifecycle.js";
 import {
   clearFollowupQueue,
@@ -438,6 +439,7 @@ function createAggregateCancellation(items: readonly FollowupRun[]): AggregateCa
     admit: () => {
       // Before admission every source remains independently cancellable. Once
       // atomic, only the latest source owns aggregate client cancellation.
+      // Original operator-grant revocation stays bound separately to the run.
       for (const signal of signals) {
         if (signal !== ownerSignal) {
           disposeSignal(signal);
@@ -452,22 +454,56 @@ function createAggregateCancellation(items: readonly FollowupRun[]): AggregateCa
   };
 }
 
-function createAggregateLifecycle(
+function createAggregateDelivery(
   items: readonly FollowupRun[],
-  onAdopted: NonNullable<FollowupRun["turnAdoptionLifecycle"]>["onAdopted"],
-  onSettled: () => void,
-): NonNullable<FollowupRun["turnAdoptionLifecycle"]> {
+  consume: () => void,
+  complete: () => void,
+) {
+  assertSingleAdmissionOwner(items);
+  const cancellation = createAggregateCancellation(items);
+  let admitted = false;
+  const needsAdmission =
+    items.length > 1 || items.some((item) => hasExclusiveTurnAdmission(item.turnAdoptionLifecycle));
+  const lifecycle: FollowupRun["turnAdoptionLifecycle"] = needsAdmission
+    ? {
+        // Synthetic aggregates own cancellation; sources keep their own admission.
+        admission: "cancel-only",
+        ...(items.some(
+          (item) =>
+            item.turnAdoptionLifecycle?.cronCreatorAuthorityUnavailable === "queued-local-operator",
+        )
+          ? { cronCreatorAuthorityUnavailable: "queued-local-operator" as const }
+          : {}),
+        onAdopted: async () => {
+          if (admitted) {
+            return;
+          }
+          admitted = true;
+          // Durable aggregate acceptance consumes every source even if one ingress ack fails.
+          consume();
+          await Promise.all(items.map((item) => admitFollowupRunLifecycle(item)));
+          cancellation.admit();
+          const owner = resolveAggregateOwner(items);
+          for (const item of items) {
+            if (item !== owner) {
+              retireFollowupRunCancellation(item);
+            }
+          }
+        },
+        onSettled: () => {
+          if (admitted) {
+            complete();
+          }
+        },
+      }
+    : undefined;
   return {
-    // Synthetic aggregates own cancellation; sources keep their own admission.
-    admission: "cancel-only",
-    ...(items.some(
-      (item) =>
-        item.turnAdoptionLifecycle?.cronCreatorAuthorityUnavailable === "queued-local-operator",
-    )
-      ? { cronCreatorAuthorityUnavailable: "queued-local-operator" as const }
-      : {}),
-    onAdopted,
-    onSettled,
+    abortSignal: cancellation.signal,
+    turnAdoptionLifecycle: lifecycle,
+    get admitted() {
+      return admitted;
+    },
+    dispose: cancellation.dispose,
   };
 }
 
@@ -524,43 +560,24 @@ async function runQueueSummaryDelivery(
   delivery: QueueSummaryDelivery,
   run: (params: {
     abortSignal?: AbortSignal;
-    onAdmitted?: () => void | Promise<void>;
+    turnAdoptionLifecycle?: FollowupRun["turnAdoptionLifecycle"];
   }) => Promise<void>,
 ): Promise<boolean> {
-  assertSingleAdmissionOwner(delivery.sources);
+  const aggregate = createAggregateDelivery(
+    delivery.sources,
+    () => consumeQueueSummaryDelivery(queue, delivery, false),
+    () => completeFollowupRuns(delivery.sources),
+  );
   for (const source of delivery.sources) {
     queue.activeSummarySources.add(source);
     queue.inFlight.add(source);
   }
-  let admitted = false;
-  const cancellation = createAggregateCancellation(delivery.sources);
-  const needsAdmission =
-    delivery.sources.length > 1 ||
-    delivery.sources.some((source) => hasExclusiveTurnAdmission(source.turnAdoptionLifecycle));
-  const onAdmitted = needsAdmission
-    ? async () => {
-        if (admitted) {
-          return;
-        }
-        await Promise.all(delivery.sources.map((source) => admitFollowupRunLifecycle(source)));
-        cancellation.admit();
-        admitted = true;
-        // A multi-source summary is atomic once it owns the reply lane.
-        // Retire sibling ids while the latest source owns aggregate cancel.
-        consumeQueueSummaryDelivery(queue, delivery, false);
-        const aggregateOwner = resolveAggregateOwner(delivery.sources);
-        for (const source of delivery.sources) {
-          if (source !== aggregateOwner) {
-            retireFollowupRunCancellation(source);
-          }
-        }
-      }
-    : undefined;
   try {
     try {
-      await run({ abortSignal: cancellation.signal, onAdmitted });
+      await run(aggregate);
     } catch (err) {
-      if (!admitted) {
+      updateFollowupRetryHeartbeats(err, delivery.sources);
+      if (!aggregate.admitted) {
         if (!(err instanceof FollowupRunDeferredError)) {
           releaseQueueSummaryDeliveryForRetry(queue, delivery);
         }
@@ -571,7 +588,7 @@ async function runQueueSummaryDelivery(
       }
       throw err;
     }
-    if (!admitted) {
+    if (!aggregate.admitted) {
       const canceledSources = delivery.sources.filter(isFollowupRunAborted);
       if (canceledSources.length > 0) {
         consumeQueueSummaryDelivery(queue, {
@@ -584,7 +601,7 @@ async function runQueueSummaryDelivery(
     }
     return true;
   } finally {
-    cancellation.dispose();
+    aggregate.dispose();
     for (const source of delivery.sources) {
       queue.inFlight.delete(source);
       queue.activeSummarySources.delete(source);
@@ -621,7 +638,7 @@ export async function dropAbortedFollowups(
     defaultRuntime.error?.(`followup queue cancellation settlement failed: ${String(error)}`);
   });
   await Promise.all(
-    pending.map(async (item) => {
+    [...pending, ...summaries].map(async (item) => {
       try {
         await runFollowup(item);
       } catch (error) {
@@ -701,7 +718,7 @@ async function runSyntheticOverflowSummary(params: {
   sources: FollowupRun[];
   prompt: string;
   abortSignal?: AbortSignal;
-  onAdmitted?: () => void | Promise<void>;
+  turnAdoptionLifecycle?: FollowupRun["turnAdoptionLifecycle"];
   runFollowup: (run: FollowupRun) => Promise<void>;
 }): Promise<void> {
   const promptHash = createHash("sha256").update(params.prompt).digest("hex");
@@ -736,7 +753,6 @@ async function runSyntheticOverflowSummary(params: {
   });
   const currentInboundEventKind = resolveOverflowSummaryInboundEventKind(params.sources);
   const runtimeMetadata = collectRuntimeMetadata(params.sources);
-  let admitted = false;
   await params.runFollowup({
     prompt: params.prompt,
     sourceTurnId: runtimeMetadata.sourceTurnId,
@@ -754,25 +770,13 @@ async function runSyntheticOverflowSummary(params: {
     personalBootstrapEligible: runtimeMetadata.personalBootstrapEligible,
     toolsAllow: runtimeMetadata.toolsAllow,
     disableTools: runtimeMetadata.disableTools,
+    forceRestartSafeTools: runtimeMetadata.forceRestartSafeTools,
+    forceCodeModeTools: runtimeMetadata.forceCodeModeTools,
     queuedFollowupReplyDisposition: runtimeMetadata.queuedFollowupReplyDisposition,
     runObservers: runtimeMetadata.runObservers,
+    deliveryCorrelations: runtimeMetadata.deliveryCorrelations,
     replyOperationRunStates: runtimeMetadata.replyOperationRunStates,
-    ...(params.onAdmitted
-      ? {
-          turnAdoptionLifecycle: createAggregateLifecycle(
-            params.sources,
-            async () => {
-              await params.onAdmitted?.();
-              admitted = true;
-            },
-            () => {
-              if (admitted) {
-                completeFollowupRuns(params.sources);
-              }
-            },
-          ),
-        }
-      : {}),
+    turnAdoptionLifecycle: params.turnAdoptionLifecycle,
     ...resolveOriginRoutingMetadata([params.source]),
     ...(currentInboundEventKind ? { currentInboundEventKind } : {}),
   });
@@ -828,13 +832,13 @@ async function drainOverflowSummaryGroup(params: {
       droppedCount: sources.length,
       sources,
     },
-    ({ abortSignal, onAdmitted }) =>
+    ({ abortSignal, turnAdoptionLifecycle }) =>
       runSyntheticOverflowSummary({
         source,
         sources,
         prompt,
         abortSignal,
-        onAdmitted,
+        turnAdoptionLifecycle,
         runFollowup: params.runFollowup,
       }),
   );
@@ -868,6 +872,14 @@ export function scheduleFollowupDrain(
     }
   };
   const effectiveRunFollowup = FOLLOWUP_RUN_CALLBACKS.get(key) ?? runFollowup;
+  const runIndividualFollowup = async (item: FollowupRun) => {
+    try {
+      await effectiveRunFollowup(item);
+    } catch (error) {
+      updateFollowupRetryHeartbeats(error, [item]);
+      throw error;
+    }
+  };
   const reserveOptions = {
     inFlight: queue.inFlight,
     shouldRestoreOnError: () =>
@@ -902,7 +914,7 @@ export function scheduleFollowupDrain(
           waitingForSteer = true;
           break;
         }
-        if (await drainProtectedPriorityFollowup(queue, effectiveRunFollowup)) {
+        if (await drainProtectedPriorityFollowup(queue, runIndividualFollowup)) {
           continue;
         }
         if (
@@ -929,7 +941,7 @@ export function scheduleFollowupDrain(
             collectState,
             isCrossChannel,
             items: queue.items,
-            run: effectiveRunFollowup,
+            run: runIndividualFollowup,
             reserveOptions,
           });
           if (collectDrainResult === "empty") {
@@ -945,17 +957,11 @@ export function scheduleFollowupDrain(
             break;
           }
 
-          const currentGroupItems = prepared.items.filter((item) => queue.items.includes(item));
-          const abortedGroupItems = currentGroupItems.filter(isFollowupRunAborted);
-          if (abortedGroupItems.length > 0) {
-            removeQueuedItemsByRef(queue.items, abortedGroupItems);
-            completeFollowupRuns(abortedGroupItems);
-          }
-          const activeGroupItems = currentGroupItems.filter((item) => !isFollowupRunAborted(item));
+          // Stop can detach pending sources while policy preparation awaits.
+          const activeGroupItems = prepared.items.filter((item) => queue.items.includes(item));
           if (activeGroupItems.length === 0) {
             continue;
           }
-          assertSingleAdmissionOwner(activeGroupItems);
           const groupSource = expectDefined(activeGroupItems.at(-1), "active collect source");
           const run = resolveCollectedRun(activeGroupItems, groupSource.run);
 
@@ -976,31 +982,15 @@ export function scheduleFollowupDrain(
           const transcriptPrompt = buildCollectTranscriptInput(activeGroupItems).text;
           const userTurnTranscriptRecorder =
             createCollectUserTurnTranscriptRecorder(activeGroupItems);
-          const aggregateOwner = resolveAggregateOwner(activeGroupItems);
-          const cancellation = createAggregateCancellation(activeGroupItems);
-          let admitted = false;
-          const restoreGroupItems = (groupItemsToRestore: FollowupRun[]) => {
-            const missingItems = groupItemsToRestore.filter((item) => !queue.items.includes(item));
-            queue.items.unshift(...missingItems);
-          };
-          const needsGroupAdmission =
-            activeGroupItems.length > 1 ||
-            activeGroupItems.some((item) => hasExclusiveTurnAdmission(item.turnAdoptionLifecycle));
-          const admitGroupSources = async () => {
-            await Promise.all(activeGroupItems.map((item) => admitFollowupRunLifecycle(item)));
-            cancellation.admit();
-            admitted = true;
-            removeQueuedItemsByRef(queue.items, activeGroupItems);
-            for (const item of activeGroupItems) {
-              if (item !== aggregateOwner) {
-                retireFollowupRunCancellation(item);
-              }
-            }
-          };
           const completeGroup = () => {
             removeQueuedItemsByRef(queue.items, activeGroupItems);
             completeFollowupRuns(activeGroupItems);
           };
+          const aggregate = createAggregateDelivery(
+            activeGroupItems,
+            () => removeQueuedItemsByRef(queue.items, activeGroupItems),
+            completeGroup,
+          );
           try {
             // Mark active group items as in-flight so the drop policy does not
             // select them as overflow victims while the group drain is awaited.
@@ -1015,28 +1005,17 @@ export function scheduleFollowupDrain(
               messageId: groupSource.messageId ?? resolveFollowupReplyAnchor(groupSource),
               enqueuedAt: Date.now(),
               ...routing,
-              ...collectRuntimeMetadata(activeGroupItems, cancellation.signal),
-              ...(needsGroupAdmission
-                ? {
-                    turnAdoptionLifecycle: createAggregateLifecycle(
-                      activeGroupItems,
-                      admitGroupSources,
-                      () => {
-                        if (admitted) {
-                          completeGroup();
-                        }
-                      },
-                    ),
-                  }
+              ...collectRuntimeMetadata(activeGroupItems, aggregate.abortSignal),
+              ...(aggregate.turnAdoptionLifecycle
+                ? { turnAdoptionLifecycle: aggregate.turnAdoptionLifecycle }
                 : {}),
               ...collectQueuedPromptMedia(activeGroupItems),
             });
           } catch (err) {
-            if (admitted) {
+            updateFollowupRetryHeartbeats(err, activeGroupItems);
+            if (aggregate.admitted) {
               completeGroup();
-            } else if (reserveOptions.shouldRestoreOnError()) {
-              restoreGroupItems(activeGroupItems);
-            } else {
+            } else if (!reserveOptions.shouldRestoreOnError()) {
               completeFollowupRuns(activeGroupItems);
             }
             throw err;
@@ -1044,17 +1023,15 @@ export function scheduleFollowupDrain(
             for (const item of activeGroupItems) {
               queue.inFlight.delete(item);
             }
-            cancellation.dispose();
+            aggregate.dispose();
           }
-          if (!admitted) {
+          if (!aggregate.admitted) {
             const canceledSources = activeGroupItems.filter(isFollowupRunAborted);
             if (canceledSources.length > 0) {
               removeQueuedItemsByRef(queue.items, canceledSources);
               completeFollowupRuns(canceledSources);
               const survivors = activeGroupItems.filter((item) => !canceledSources.includes(item));
-              if (reserveOptions.shouldRestoreOnError()) {
-                restoreGroupItems(survivors);
-              } else {
+              if (!reserveOptions.shouldRestoreOnError()) {
                 completeFollowupRuns(survivors);
               }
               continue;
@@ -1064,7 +1041,7 @@ export function scheduleFollowupDrain(
           continue;
         }
 
-        if (!(await drainNextQueueItem(queue.items, effectiveRunFollowup, reserveOptions))) {
+        if (!(await drainNextQueueItem(queue.items, runIndividualFollowup, reserveOptions))) {
           break;
         }
       }

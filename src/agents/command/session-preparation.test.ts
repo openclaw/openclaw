@@ -23,6 +23,7 @@ import {
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
+import { persistAgentSession } from "./attempt-execution.shared.js";
 import { prepareCommandConversationContext } from "./conversation-context.js";
 import {
   prepareCommandSessionRecoveryEntry,
@@ -47,12 +48,84 @@ vi.mock("./attempt-execution.shared.js", () => ({ persistAgentSession: vi.fn() }
 vi.mock("./runtime-loaders.js", () => ({
   loadSkillsRuntime: async () => ({
     getRemoteSkillEligibility: () => ({}),
-    resolveReusableWorkspaceSkillSnapshot: () => ({ snapshot: undefined, shouldRefresh: false }),
+    resolveReusableWorkspaceSkillSnapshot: skillSnapshot,
   }),
   loadExecDefaultsRuntime: async () => ({
     resolveNodeExecEligibilityAsync: () => ({ canExec: false }),
   }),
 }));
+
+const { skillSnapshot } = vi.hoisted(() => ({
+  skillSnapshot: vi.fn(() => ({
+    snapshot: undefined as SessionEntry["skillsSnapshot"],
+    shouldRefresh: false,
+  })),
+}));
+
+it.each([
+  { refresh: true, skipTouch: false },
+  { refresh: true, skipTouch: true },
+  { refresh: false, skipTouch: false },
+  { refresh: false, skipTouch: true },
+])(
+  "prepares session metadata together (refresh=$refresh, skipTouch=$skipTouch)",
+  async (testCase) => {
+    const sessionKey = "agent:main:prepare-metadata";
+    const runId = "prepare-metadata";
+    const initial: SessionEntry = {
+      sessionId: "metadata-session",
+      updatedAt: 1,
+      lastInteractionAt: 1,
+      agentStatus: { note: "busy", expiresAt: 10 },
+    };
+    const snapshot = { prompt: "skill instructions", skills: [], version: 1 };
+    const store = { [sessionKey]: initial };
+    const persist = vi.mocked(persistAgentSession);
+    persist.mockImplementation(async ({ entry }) => {
+      store[sessionKey] = entry;
+      return entry;
+    });
+    skillSnapshot.mockReturnValue({
+      snapshot: testCase.refresh ? snapshot : undefined,
+      shouldRefresh: testCase.refresh,
+    });
+    try {
+      const prepared = await prepareEmbeddedSessionState({
+        cfg: {},
+        opts: { message: "hello", skipInitialSessionTouch: testCase.skipTouch },
+        sessionEntry: initial,
+        sessionStore: store,
+        sessionKey,
+        sessionId: initial.sessionId,
+        storePath: "/unused/command.sqlite",
+        sessionAgentId: "main",
+        lifecycleGeneration: getAgentRunLifecycleGeneration(),
+        runId,
+        executionWorkspaceDir: "/workspace",
+        watchSkills: false,
+        isNewSession: false,
+        isSubagentLaneTurn: true,
+        suppressVisibleSessionEffects: false,
+        sessionStateActor: { actorType: "human" },
+      });
+      expect(prepared.sessionEntry).toMatchObject({
+        sessionId: "metadata-session",
+        lastInteractionAt: testCase.skipTouch ? 1 : expect.any(Number),
+      });
+      expect(prepared.sessionEntry?.skillsSnapshot).toEqual(
+        testCase.refresh ? snapshot : undefined,
+      );
+      expect(prepared.sessionEntry?.agentStatus).toEqual(
+        testCase.skipTouch ? { note: "busy", expiresAt: 10 } : undefined,
+      );
+      expect(persist).toHaveBeenCalledTimes(testCase.refresh || !testCase.skipTouch ? 1 : 0);
+    } finally {
+      persist.mockReset();
+      skillSnapshot.mockReturnValue({ snapshot: undefined, shouldRefresh: false });
+      clearAgentRunContext(runId);
+    }
+  },
+);
 
 it.each(["subagent_settle", "subagent_announce", "sessions_send"])(
   "retains original operator recovery custody only for the exact requester settle source: %s",
@@ -254,10 +327,10 @@ it.each([
       shared
         ? buildGroupChatContext({
             sessionCtx: ctx,
-            silentReplyPolicy: "disallow",
-            silentToken: "NO_REPLY",
           })
-        : buildSourceConversationContext({ sessionCtx: ctx }),
+        : buildSourceConversationContext({
+            sessionCtx: ctx,
+          }),
       shared && buildGroupIntro({ activation: "always", defaultActivation: "mention" }),
     ]
       .filter(Boolean)

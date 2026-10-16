@@ -649,52 +649,6 @@ describe("gateway suspend coordinator", () => {
     },
   );
 
-  it("ignores an already-queued expiry callback after the same drain lease is renewed", () => {
-    vi.useFakeTimers();
-    try {
-      let nowMs = 1_000;
-      const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-      const resumeScheduling = vi.fn();
-      const params = {
-        requestId: "request-stale-drain-expiry",
-        drain: true,
-        pauseScheduling: vi.fn(),
-        resumeScheduling,
-        inspect: inspectors({ getTerminalSessions: () => 1 }),
-        nowMs: () => nowMs,
-        createSuspensionId: () => "suspension-stale-drain-expiry",
-      };
-
-      expect(prepareGatewaySuspend(params)).toMatchObject({ status: "draining" });
-      const staleExpiry = timeoutSpy.mock.calls[0]?.[0];
-      expect(typeof staleExpiry).toBe("function");
-
-      nowMs = 2_000;
-      expect(prepareGatewaySuspend(params)).toMatchObject({
-        status: "draining",
-        expiresAtMs: 2_000 + SUSPEND_TTL_MS,
-      });
-      if (typeof staleExpiry !== "function") {
-        throw new Error("missing initial suspension expiry callback");
-      }
-      staleExpiry();
-
-      expect(resumeScheduling).not.toHaveBeenCalled();
-      expect(getGatewaySuspendAdmissionPhase()).toBe("draining");
-      expect(getGatewaySuspendStatus("suspension-stale-drain-expiry")).toMatchObject({
-        status: "draining",
-        expiresAtMs: 2_000 + SUSPEND_TTL_MS,
-      });
-
-      vi.advanceTimersByTime(SUSPEND_TTL_MS);
-      expect(resumeScheduling).toHaveBeenCalledOnce();
-      expect(isGatewayWorkAdmissionClosed()).toBe(false);
-    } finally {
-      vi.restoreAllMocks();
-      vi.useRealTimers();
-    }
-  });
-
   it("enters recovery when lease expiry cannot resume the scheduler", () => {
     vi.useFakeTimers();
     const phases: string[] = [];

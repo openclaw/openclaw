@@ -383,7 +383,10 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         await page.locator(".chat-pane__workspace-chip").click();
         await gateway.waitForRequest("worktrees.branches");
-        await page.getByText(label, { exact: true }).click();
+        await page
+          .locator(".chat-pane__workspace-menu")
+          .getByRole("menuitem", { name: label, exact: true })
+          .click();
 
         const alert = page.getByRole("alert").filter({ hasText: "Copy failed" });
         await alert.waitFor({ state: "visible", timeout: 10_000 });

@@ -1,6 +1,5 @@
 import { createMemo, For } from "solid-js";
 import "../../components/agent-select-registration.ts";
-import { icons as legacyIcons } from "../../components/icons.ts";
 import {
   SettingsSection,
   SettingsRow,
@@ -350,8 +349,7 @@ function ExecApprovalsScope(props: ExecApprovalsState) {
     {
       value: EXEC_APPROVALS_DEFAULT_SCOPE,
       label: t("devices.execApprovals.defaults"),
-      // The unported selector owns rendering this opaque Lit icon.
-      icon: legacyIcons.settings,
+      icon: "settings" as const,
     },
     ...props.agents.map((agent) => ({
       value: agent.id,

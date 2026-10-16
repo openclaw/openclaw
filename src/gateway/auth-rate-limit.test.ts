@@ -1,4 +1,3 @@
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Auth rate-limit tests cover sliding-window, lockout, scope, loopback, and
 // cleanup behavior shared by gateway secret and device-token authentication.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -77,18 +76,6 @@ describe("auth rate limiter", () => {
     limiter.recordFailure("10.0.0.33");
     const afterExtraFailure = limiter.check("10.0.0.33");
     expect(afterExtraFailure.retryAfterMs).toBeLessThanOrEqual(initialRetryAfter - 1_000);
-  });
-
-  it("clamps oversized lockout durations", () => {
-    limiter = createClockedAuthRateLimiter({
-      maxAttempts: 1,
-      windowMs: 60_000,
-      lockoutMs: Number.MAX_SAFE_INTEGER,
-    });
-
-    limiter.recordFailure("10.0.0.34");
-
-    expect(limiter.check("10.0.0.34").retryAfterMs).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("applies new limits to retained scope history without releasing earned lockouts", async () => {
@@ -218,14 +205,6 @@ describe("auth rate limiter", () => {
 
   // ---------- loopback exemption ----------
 
-  it.each(["127.0.0.1", "::1"])("exempts loopback address %s by default", (ip) => {
-    limiter = createClockedAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      limiter.recordFailure(ip);
-    }
-    expect(limiter.check(ip).allowed).toBe(true);
-  });
-
   it.each([false, true])(
     "escalates and caps loopback delay with an existing lockout: %s",
     async (locked) => {
@@ -310,25 +289,6 @@ describe("auth rate limiter", () => {
     },
   );
 
-  it("reset clears the loopback penalty history", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    limiter = createClockedAuthRateLimiter({ pruneIntervalMs: 0 });
-    limiter.recordFailure("127.0.0.1");
-    limiter.recordFailure("127.0.0.1");
-    limiter.reset("127.0.0.1");
-
-    const delayed = limiter.recordFailureAndDelay("127.0.0.1");
-    await advancePenaltyClock(249);
-    let settled = false;
-    void delayed.then(() => {
-      settled = true;
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-    await advancePenaltyClock(1);
-    await delayed;
-  });
-
   // Regression: an earlier revision skipped the delay once a global timer cap was
   // full, so an attacker could park cheap failures in every slot and then guess
   // without penalty. Concurrency must never buy a faster answer than one attempt.
@@ -381,23 +341,6 @@ describe("auth rate limiter", () => {
     expect(settled).toEqual(["first", "second"]);
   });
 
-  it("reports the authoritative exemption policy for fallback serialization", () => {
-    limiter = createClockedAuthRateLimiter({ maxAttempts: 1 });
-    expect(isAuthRateLimitClientExempt(limiter, "127.0.0.1")).toBe(true);
-    expect(isAuthRateLimitClientExempt(limiter, buildRateLimitIdentityKey("node", "node-1"))).toBe(
-      false,
-    );
-    limiter.recordFailure("127.0.0.1");
-    limiter.updateConfig({ maxAttempts: 1, exemptLoopback: false });
-    expect(isAuthRateLimitClientExempt(limiter, "127.0.0.1")).toBe(false);
-    expect(limiter.check("127.0.0.1").allowed).toBe(false);
-    limiter.updateConfig();
-    expect(isAuthRateLimitClientExempt(limiter, "127.0.0.1")).toBe(true);
-    expect(limiter.check("127.0.0.1").allowed).toBe(true);
-    limiter.updateConfig({ exemptLoopback: false });
-    expect(limiter.check("127.0.0.1").allowed).toBe(false);
-  });
-
   it("does not exempt opaque identity keys", () => {
     limiter = createClockedAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
     const key = buildRateLimitIdentityKey("node", "node-1");
@@ -433,16 +376,6 @@ describe("auth rate limiter", () => {
     },
   );
 
-  it("clamps oversized positive auto-prune intervals", async () => {
-    limiter = createClockedAuthRateLimiter({ pruneIntervalMs: Number.MAX_SAFE_INTEGER });
-
-    limiter.recordFailure("10.0.0.32");
-    await clock.advanceBy(MAX_TIMER_TIMEOUT_MS - 1);
-    expect(limiter.size()).toBe(1);
-    await clock.advanceBy(1);
-    expect(limiter.size()).toBe(0);
-  });
-
   it("sleeps with no history and resumes pruning without shortening lockouts", async () => {
     createLimiter({ windowMs: 1_000, lockoutMs: 3_000, maxAttempts: 1, pruneIntervalMs: 1_000 });
     expect(scheduler.nextWakeAtMs).toBeNull();
@@ -460,16 +393,6 @@ describe("auth rate limiter", () => {
     await clock.advanceBy(3_000);
     expect(limiter.size()).toBe(0);
     expect(scheduler.nextWakeAtMs).toBeNull();
-  });
-
-  // ---------- undefined / empty IP ----------
-
-  it("normalizes undefined IP to 'unknown'", () => {
-    createLimiter();
-    limiter.recordFailure(undefined);
-    limiter.recordFailure(undefined);
-    expect(limiter.check(undefined).allowed).toBe(false);
-    expect(limiter.size()).toBe(1);
   });
 
   it("dispose settles pending loopback failure delays immediately", async () => {

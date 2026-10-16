@@ -499,6 +499,9 @@ export function createDispatchReplyOperationCoordinator(params: {
           : { status: "skipped", reason: admission.reason };
     }
     if (admission.status === "skipped") {
+      if (admission.error) {
+        params.replyOptions?.internalEventExecution?.onFailed?.(admission.error);
+      }
       if (
         admission.reason === "active-run" &&
         (allowActiveResolution ||
@@ -508,8 +511,8 @@ export function createDispatchReplyOperationCoordinator(params: {
             routeThreadId: params.routeThreadId,
           }))
       ) {
-        // A low-level successor retains its own cancellation while it waits for queue admission.
-        if (allowActiveResolution && !params.allowActiveQueueResolution) {
+        // Gateway and low-level successors retain their own cancellation while awaiting queue admission.
+        if (allowActiveResolution && !allowGatewayQueueResolution) {
           preDispatchAbortOperation = admission.activeOperation;
         }
         preDispatchLifecycleAdmission = admission.lifecycleAdmission;

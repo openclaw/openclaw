@@ -8,7 +8,7 @@ import {
 } from "../chat/components/chat-composer-dom.ts";
 import { ComposerEmojiMenu } from "../chat/components/chat-composer-emoji.tsx";
 import { HumanMentionMenu } from "../chat/components/chat-composer-mention-menu.tsx";
-import type { ChatComposerPlusMenuView } from "../chat/components/chat-composer-plus-menu.tsx";
+import type { ChatComposerPlusMenuView } from "../chat/components/chat-composer-plus-menu.types.ts";
 import {
   createSkillMenuState,
   resetSkillMenuState,

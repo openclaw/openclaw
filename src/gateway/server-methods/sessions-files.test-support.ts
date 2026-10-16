@@ -1,13 +1,22 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { expect, vi } from "vitest";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
+import { afterAll, expect, vi } from "vitest";
+import { reserveTestPortListener } from "../../test-utils/port-claims.js";
+import { handleArtifactDownloadHttpRequest } from "../artifact-downloads.js";
+import type {
+  GatewayClient,
+  GatewayRequestHandlerOptions,
+  GatewayRequestHandlers,
+  RespondFn,
+} from "./types.js";
 
 type SessionFilesMethod =
   | "sessions.files.list"
   | "sessions.files.get"
+  | "sessions.files.download"
   | "sessions.files.assets"
   | "sessions.files.set"
   | "sessions.files.reveal";
@@ -58,6 +67,68 @@ export function createSessionFilesHandlerInvoker(handlers: GatewayRequestHandler
       ...options,
     });
     return responder.calls;
+  };
+}
+
+export function createSessionFileDownloadClient() {
+  const controller = new AbortController();
+  const client: GatewayClient = {
+    connId: "session-file-reader",
+    connectionSignal: controller.signal,
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      scopes: ["operator.admin"],
+      client: { id: "test", version: "test", platform: "test", mode: "test" },
+    },
+  };
+  return { client, [Symbol.dispose]: () => controller.abort() };
+}
+
+const downloadClients = new Set<GatewayClient>();
+let downloadServer:
+  | ReturnType<typeof reserveTestPortListener<ReturnType<typeof createServer>>>
+  | undefined;
+afterAll(async () => {
+  if (downloadServer) {
+    const server = await downloadServer;
+    server.listener.closeAllConnections();
+    await server.releaseListener();
+    await server.claim.release();
+  }
+});
+
+export async function openSessionFileDownload(
+  client: GatewayClient,
+  url: string,
+  init?: RequestInit,
+) {
+  downloadClients.clear();
+  downloadClients.add(client);
+  downloadServer ??= reserveTestPortListener({
+    offsets: [0],
+    createListener: () =>
+      createServer((req, res) => {
+        void handleArtifactDownloadHttpRequest(req, res, {
+          clients: downloadClients,
+          basePath: "",
+        });
+      }),
+  });
+  const { claim } = await downloadServer;
+  return fetch("http://127.0.0.1:" + claim.port + url, init);
+}
+
+export async function fetchSessionFileDownload(
+  client: GatewayClient,
+  url: string,
+  method = "GET",
+  headers?: Record<string, string>,
+) {
+  const result = await openSessionFileDownload(client, url, { method, headers });
+  return {
+    response: { statusCode: result.status, getHeader: (name: string) => result.headers.get(name) },
+    body: method === "HEAD" ? undefined : new Uint8Array(await result.arrayBuffer()),
   };
 }
 

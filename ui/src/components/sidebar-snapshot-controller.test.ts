@@ -47,7 +47,8 @@ const model: SidebarSnapshotModel = {
   onlineCounts: [],
   peopleSortMode: "presence",
   peopleStatusFilter: "all",
-  onlineExpanded: true,
+  peoplePresenceFilter: "online",
+  offlineUsers: [],
   ownerId: "profile-a",
   involvingMe: true,
   footer: { id: "profile-a", name: "Juniper" },
@@ -422,7 +423,7 @@ describe("sidebar snapshot lifecycle", () => {
       return written.promise;
     });
     test.publish();
-    void test.settle({ ...model, onlineExpanded: false });
+    void test.settle({ ...model, peoplePresenceFilter: "all" });
     test.controller.synchronize();
     test.controller.capture();
     await issued.promise;

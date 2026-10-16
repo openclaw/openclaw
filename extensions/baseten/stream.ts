@@ -56,12 +56,15 @@ export function createBasetenThinkingWrapper(
             stripAssistantMessagesOnly: true,
             replaceNullReasoningContent: true,
           });
-          // The current Pro endpoint requires this envelope whenever scalar effort is present.
+          // The current Pro endpoint requires this envelope whenever scalar effort is present,
+          // and rejects an enabled envelope next to effort "none".
           if (
             normalizedModelId === "deepseek-ai/deepseek-v4-pro-0813" &&
             payload.reasoning_effort !== undefined
           ) {
-            payload.thinking = { type: "enabled" };
+            payload.thinking = {
+              type: payload.reasoning_effort === "none" ? "disabled" : "enabled",
+            };
           }
         }
         if (optIn) {

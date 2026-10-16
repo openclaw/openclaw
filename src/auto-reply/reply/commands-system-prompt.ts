@@ -172,6 +172,7 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
     model: `${params.provider}/${params.model}`,
     channel: params.command.channel,
     accountId,
+    requester: { agentTo: params.ctx.To, agentThreadId: params.ctx.MessageThreadId },
     chatType: normalizeChatType(params.ctx.ChatType ?? targetSessionEntry?.chatType),
   });
   const fullAccessState = resolveEmbeddedFullAccessState({

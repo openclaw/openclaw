@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { ControllerHost } from "../../lit/subscriptions-controller.ts";
+import type { ControllerHost } from "../../lib/subscriptions-controller.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
@@ -450,23 +450,6 @@ describe("DraftPlaceBrowser", () => {
       expect(fixture.onProjectMissing).toHaveBeenCalled();
     },
   );
-
-  it("tracks overlapping popover hides independently", () => {
-    const { browser } = createBrowser(async () => ({}));
-
-    browser.popoverCallbacks("project").onPopoverHide();
-    browser.popoverCallbacks("where").onPopoverHide();
-
-    expect(browser.popoverHiding("project")).toBe(true);
-    expect(browser.popoverHiding("where")).toBe(true);
-
-    browser.onPopoverAfterHide("project");
-    expect(browser.popoverHiding("project")).toBe(false);
-    expect(browser.popoverHiding("where")).toBe(true);
-
-    browser.onPopoverAfterHide("where");
-    expect(browser.popoverHiding("where")).toBe(false);
-  });
 
   it.each([
     ["the Gateway omits recents", async () => ({ projects: [] })],

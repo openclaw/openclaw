@@ -1,3 +1,5 @@
+import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WorkspacePackageAliasEntry } from "./plugin-cache-sdk.js";
 
 // Jiti-loaded plugin code runs outside the Vitest/tsgo resolver, so every
@@ -98,7 +100,7 @@ export const WORKSPACE_PACKAGE_ALIAS_NAMES = new Set([
   ...WORKSPACE_PACKAGE_ALIAS_SUBPATHS.map(([name]) => `@openclaw/${name}`),
   ...WORKSPACE_PACKAGE_EXPORT_DIRS.map((name) => `@openclaw/${name}`),
 ]);
-export const ROOT_PACKAGED_WORKSPACE_PACKAGE_DIRS = new Set([
+const ROOT_PACKAGED_WORKSPACE_PACKAGE_DIRS = new Set([
   "acp-core",
   "media-core",
   "normalization-core",
@@ -106,3 +108,53 @@ export const ROOT_PACKAGED_WORKSPACE_PACKAGE_DIRS = new Set([
   "terminal-core",
   "worker-runtime",
 ]);
+
+export function workspacePackageExportAliasEntries(params: {
+  packageName: string;
+  packageDir: string;
+  exports: unknown;
+}): WorkspacePackageAliasEntry[] {
+  const entries: WorkspacePackageAliasEntry[] = [];
+  for (const [exportKey, value] of Object.entries(isRecord(params.exports) ? params.exports : {})) {
+    const subpath = exportKey === "." ? "" : exportKey.startsWith("./") ? exportKey.slice(2) : null;
+    if (subpath === null || (exportKey !== "." && !subpath) || subpath.includes("..")) {
+      continue;
+    }
+    const importPath =
+      typeof value === "string"
+        ? value
+        : isRecord(value)
+          ? typeof value.import === "string"
+            ? value.import
+            : typeof value.default === "string"
+              ? value.default
+              : null
+          : null;
+    if (!importPath?.startsWith("./dist/") || !importPath.endsWith(".mjs")) {
+      continue;
+    }
+    const distFile = importPath.slice("./dist/".length);
+    entries.push({
+      packageName: params.packageName,
+      packageDir: params.packageDir,
+      subpath,
+      srcFile: distFile.replace(/\.mjs$/u, ".ts"),
+      distFile,
+    });
+  }
+  return entries.toSorted((a, b) => a.subpath.localeCompare(b.subpath));
+}
+
+export function workspacePackageAliasCandidates(
+  entry: WorkspacePackageAliasEntry,
+  kind: "dist" | "src",
+): string[] {
+  return kind === "dist"
+    ? [
+        ...(ROOT_PACKAGED_WORKSPACE_PACKAGE_DIRS.has(entry.packageDir)
+          ? [path.join("dist", entry.packageDir, entry.distFile.replace(/\.mjs$/u, ".js"))]
+          : []),
+        path.join("packages", entry.packageDir, "dist", entry.distFile),
+      ]
+    : [path.join("packages", entry.packageDir, "src", entry.srcFile)];
+}

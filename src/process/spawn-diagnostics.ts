@@ -55,7 +55,17 @@ const gitOperation = resolveGlobalSingleton(
   Symbol.for("openclaw.gitSpawnOperation"),
   () => new AsyncLocalStorage<GitProcessOperation | "unknown">(),
 );
-const CHILD_OPERATIONS = ["agent.exec", "shell.snapshot", "service.relay"] as const;
+const CHILD_OPERATIONS = [
+  "agent.exec",
+  "agent.cli",
+  "agent.file-read",
+  "shell.snapshot",
+  "service.relay",
+  "service.manager",
+  "worktree.filesystem",
+  "worktree.cleanup",
+  "worktree.maintenance",
+] as const;
 type ChildProcessOperation = (typeof CHILD_OPERATIONS)[number];
 const childOperations: ReadonlySet<string> = new Set(CHILD_OPERATIONS);
 const childOperation = resolveGlobalSingleton(
