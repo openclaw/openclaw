@@ -101,7 +101,8 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     request and response still match the current history, OpenClaw sends only
     the new input and references the prior response with
     `previous_response_id`. Otherwise it sends full history without that
-    reference.
+    reference. Idle cached connections expire after five minutes; keeping a
+    connection warm does not retain the completed run's execution context.
 
     A setup or handshake failure before request dispatch falls back to SSE; it
     is not retried or reconnected first. After dispatch, failures with an

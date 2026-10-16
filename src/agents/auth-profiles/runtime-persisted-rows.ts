@@ -22,6 +22,7 @@ export function createRuntimeAuthProfileRowsCache(revisionAtPath: (path: string)
     receipt: object;
     revision: string;
     rows?: AuthProfileRowRead;
+    canonical: boolean;
   };
   const entries = new Map<string, Entry>();
   const hasCurrentSource = (databasePath: string, entry: Entry) =>
@@ -33,12 +34,25 @@ export function createRuntimeAuthProfileRowsCache(revisionAtPath: (path: string)
       return Boolean(entry && hasCurrentSource(databasePath, entry));
     },
     recordSource(databasePath: string, identity: string, store: AuthProfileStore | null) {
+      const entry = entries.get(databasePath);
+      // Runtime postimages omit private authorization lifetimes. Keep the complete rows
+      // when this publication describes the same admitted source without an auth write.
+      if (
+        store &&
+        entry?.canonical &&
+        entry.rows &&
+        entry.identity === identity &&
+        hasCurrentSource(databasePath, entry)
+      ) {
+        return;
+      }
       const source = store && structuredClone(store);
       entries.set(databasePath, {
         identity,
         receipt: readAuthProfileRowsReceipt(databasePath),
         revision: revisionAtPath(databasePath),
-        // Only canonical persisted values enter this cache, before runtime secret overlays.
+        canonical: false,
+        // Persisted values precede runtime secret overlays but omit private lifetimes.
         rows: source
           ? freezeJsonSnapshot({
               store: { status: "readable", raw: buildPersistedAuthProfileSecretsStore(source) },
@@ -87,7 +101,11 @@ export function createRuntimeAuthProfileRowsCache(revisionAtPath: (path: string)
         entry.revision = revisionAtPath(databasePath);
       }
     },
-    prepare(databasePath: string, reader: RowsReader): RowsReader {
+    prepare(
+      databasePath: string,
+      reader: RowsReader,
+      source: "runtime" | "canonical" = "runtime",
+    ): RowsReader {
       return {
         assertCurrent: reader.assertCurrent,
         async read() {
@@ -99,7 +117,8 @@ export function createRuntimeAuthProfileRowsCache(revisionAtPath: (path: string)
             entry?.identity === reader.identity &&
             entry?.revision === revision &&
             entry.receipt === receipt &&
-            entry.rows
+            entry.rows &&
+            (source !== "canonical" || entry.canonical)
           ) {
             return entry.rows;
           }
@@ -116,6 +135,7 @@ export function createRuntimeAuthProfileRowsCache(revisionAtPath: (path: string)
               receipt,
               revision,
               rows,
+              canonical: true,
             });
           }
           return rows;

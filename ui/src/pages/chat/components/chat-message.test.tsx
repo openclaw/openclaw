@@ -16,7 +16,7 @@ import { buildCachedChatItems } from "../chat-thread.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
 import { ChatNotice } from "./chat-divider.tsx";
-import { dismissConfirmedActionPopovers } from "./chat-message-confirmation.ts";
+import { dismissConfirmedActionPopovers } from "./chat-message-confirmation-view.tsx";
 import {
   ActivityGroup,
   MessageGroup as MessageGroupView,

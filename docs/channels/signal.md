@@ -20,7 +20,7 @@ Signal is a downloadable channel plugin (`@openclaw/signal`). The gateway talks 
 openclaw plugins install @openclaw/signal
 ```
 
-`@openclaw/signal` installs from npm first, then falls back to its declared ClawHub package only when the npm target is unavailable. Use `npm:` or `clawhub:` to force a source. `plugins install` registers and enables the plugin; no separate `enable` step is needed. See [Plugins](/tools/plugin) for general install rules.
+`@openclaw/signal` installs from ClawHub by default. Use `npm:@openclaw/signal` to install directly from npm. `plugins install` registers and enables the plugin; no separate `enable` step is needed. See [Plugins](/tools/plugin) for general install rules.
 
 ## Quick setup
 

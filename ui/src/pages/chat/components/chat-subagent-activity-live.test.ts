@@ -13,8 +13,8 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { projectSubagentStatus } from "../chat-subagent-wait.ts";
-import { ChatSubagentActivity } from "./chat-subagent-activity-live.ts";
-import type { SubagentActivityProps } from "./chat-subagent-activity.ts";
+import { ChatSubagentActivity } from "./chat-subagent-activity-live.tsx";
+import type { SubagentActivityProps } from "./chat-subagent-activity.tsx";
 
 type ChatSubagentActivityLive = SolidBridgeElement<SubagentActivityProps>;
 

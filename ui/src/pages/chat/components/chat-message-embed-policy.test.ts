@@ -8,7 +8,7 @@ import { groupMessages } from "../chat-thread-grouping.ts";
 import { buildMessageItems } from "../chat-thread-items.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { MessageGroup, MessageGroupContent } from "./chat-message-group-view.tsx";
-import { prepareChatMessageRender } from "./chat-message-markdown.ts";
+import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 import { StreamGroupParts, type StreamGroupPart } from "./chat-message-stream-view.tsx";
 
 function createEmbedHarness(container: HTMLElement, surface: "persisted" | "streaming") {

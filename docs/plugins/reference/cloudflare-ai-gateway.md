@@ -15,7 +15,7 @@ Adds Cloudflare AI Gateway model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/cloudflare-ai-gateway-provider`
-- Install route: npm or ClawHub: `clawhub:@openclaw/cloudflare-ai-gateway-provider`
+- Install route: npm or ClawHub: `@openclaw/cloudflare-ai-gateway-provider`
 
 ## Surface
 

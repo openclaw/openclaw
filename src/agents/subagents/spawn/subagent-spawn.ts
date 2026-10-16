@@ -364,7 +364,6 @@ export async function spawnSubagentDirect(
         childIdem,
         outputSchema: params.outputSchema,
         childSystemPrompt,
-        thinkingOverride: plan.thinkingOverride,
         runTimeoutSeconds,
         lightContext: params.lightContext === true,
         requesterOrigin,
@@ -466,9 +465,9 @@ export async function spawnSubagentDirect(
         canRetireReservation = scope.canRetireReservation;
       },
       async initialize() {
-        const result =
+        const preparation =
           params.lightContext && preparedSpawnContext.mode === "isolated"
-            ? ({ status: "ok", preparation: undefined } as const)
+            ? undefined
             : await runWithAgentToolSourceExecutionScope(assertActive, () =>
                 prepareContextEngineSubagentSpawn({
                   assertActive,
@@ -479,11 +478,8 @@ export async function spawnSubagentDirect(
                   runTimeoutSeconds,
                 }),
               );
-        if (result.status === "error") {
-          throw new Error(result.error);
-        }
-        contextEnginePreparation = result.preparation;
-        preparationHold.prepared(result.preparation, isCleanupCurrent);
+        contextEnginePreparation = preparation;
+        preparationHold.prepared(preparation, isCleanupCurrent);
         return { contextEnginePreparation };
       },
       async dispatchTurn() {

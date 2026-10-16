@@ -79,6 +79,8 @@ type ImplicitProviderParams = {
   providerDiscoveryEntriesOnly?: boolean;
   onProviderCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
   sourceModelFields?: SourceModelFields;
+  /** Filled with the plugin whose discovery produced each provider id, hook aliases included. */
+  discoveredProviderPluginIds?: Map<string, string>;
 };
 
 type ImplicitProviderContext = ImplicitProviderParams & {
@@ -318,6 +320,9 @@ async function resolvePluginImplicitProviders(
           env: ctx.env,
           profileApiKey: undefined,
         });
+        if (provider.pluginId) {
+          ctx.discoveredProviderPluginIds?.set(normalizeProviderId(providerId), provider.pluginId);
+        }
       }
     }
     Object.assign(merged, discovered);

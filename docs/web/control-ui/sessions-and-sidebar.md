@@ -17,8 +17,10 @@ On phones, swipe right across the chat to open navigation. A deliberate swipe op
 
 To work directly in a folder on a paired device, select that specific device,
 then choose **Existing folder on device** in the workspace picker. Enter an
-absolute path on that device. The option appears only when the connected session
-host advertises support; **Auto** cannot select an existing device folder.
+absolute path on that device, or, as an admin, choose **Browse folders on**
+_device_ and pick a folder from that device. The option appears only when the
+connected session host advertises support; **Auto** cannot select an existing
+device folder.
 The session stays bound to that device and displays its folder path. Files stay
 on the device rather than being copied to or reconciled with the Gateway. See
 [session hosting](/nodes/session-hosting#work-in-an-existing-device-folder).
@@ -44,6 +46,11 @@ buttons is selected; click any view to open its list. Selecting a different view
 while the list is open switches directly to that view. Clicking Users again keeps
 its list open; use the collapse button or keyboard shortcut to hide it.
 Home, Inbox, and your account controls stay together at the bottom of the rail.
+When gateway switching is available, the account menu shows one current-gateway row.
+Open it to switch gateways or open **Gateway settings**; **Set as primary** appears
+when the current gateway supports it. In the Mac app, Command-click or Control-click
+a gateway to open a new window. **Get the apps** remains available in the browser,
+but is omitted in the Mac app.
 Open your account menu and choose **Updates** to go directly to **Settings → Updates**.
 This opens the update settings page without starting an update. For the `stable` and
 `beta` update channels, an **Available** badge appears beside **Updates** when a new

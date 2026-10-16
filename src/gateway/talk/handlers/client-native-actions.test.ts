@@ -149,7 +149,7 @@ describe("native Talk action ownership through public plugin registration", () =
       const rowProjection = await createSessionRowProjection({
         cfg: { agents: { entries: { [AGENT_ID]: {} } } },
       });
-      const publications: Promise<void>[] = [];
+      const publications: ReturnType<typeof publish>[] = [];
       const published = vi.fn();
       const publish = createTranscriptUpdateBroadcastHandler({
         getSessionRowProjection: () => rowProjection,

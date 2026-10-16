@@ -25,6 +25,8 @@ import {
   retainSubagentRunRuntimeOwner,
   isQueuedSubagentRunRekey,
   isSameSubagentRunOwner,
+  latestSubagentRun,
+  compareSubagentRunGeneration,
 } from "./subagent-run-generation.js";
 import { SubagentSessionReadLookup } from "./subagent-session-read-scope.js";
 
@@ -209,23 +211,21 @@ function collectorGroupKey(entry: SubagentRunRecord): string | undefined {
   ]);
 }
 
-type SubagentRetirementScope = {
-  observation:
-    | ({ entry: SubagentRunRecord; state: "selected" | "retired" } & Pick<
-        SubagentRunRecord,
-        "generation" | "createdAt"
-      >)
-    | { entry?: never; generation?: never; createdAt?: never; state: "superseded" };
-  isSuccessor: (candidate: SubagentRunRecord) => boolean;
-  publication: {
-    entry: SubagentRunRecord;
-    promise: Promise<void>;
-    resolve: () => void;
-    settled: boolean;
-  };
+type SubagentRetirementObservation =
+  | ({ entry: SubagentRunRecord; state: "selected" | "retired" } & Pick<
+      SubagentRunRecord,
+      "generation" | "createdAt"
+    >)
+  | { entry?: never; generation?: never; createdAt?: never; state: "superseded" };
+
+type SubagentRetirementPublication = {
+  key: object;
+  promise: Promise<void>;
+  resolve: () => void;
+  settled: boolean;
 };
 
-const retirementPublications = new WeakMap<object, Set<SubagentRetirementScope["publication"]>>();
+const retirementPublications = new Map<object, Set<SubagentRetirementPublication>>();
 
 export function waitForSubagentRetirementPublication(
   observed: SubagentRunRecord,
@@ -243,16 +243,15 @@ export function hasPendingSubagentRetirementPublication(observed: SubagentRunRec
   return Boolean(retirementPublications.get(getSubagentRunRuntimeKey(entry))?.size);
 }
 
-function completeRetirementPublication(scope: SubagentRetirementScope): void {
-  const publication = scope.publication;
+function completeRetirementPublication(publication: SubagentRetirementPublication): void {
   if (publication.settled) {
     return;
   }
   publication.settled = true;
-  const pending = retirementPublications.get(getSubagentRunRuntimeKey(publication.entry));
+  const pending = retirementPublications.get(publication.key);
   pending?.delete(publication);
   if (pending?.size === 0) {
-    retirementPublications.delete(getSubagentRunRuntimeKey(publication.entry));
+    retirementPublications.delete(publication.key);
   }
   publication.resolve();
 }
@@ -268,14 +267,6 @@ type CompletionCustody = {
 
 class SubagentRunMap extends Map<string, SubagentRunRecord> {
   readLookup = new SubagentSessionReadLookup();
-  private readonly retirementScopes = new Set<SubagentRetirementScope>();
-  private readonly registrationScopes = new Set<{
-    childSessionKey: string;
-    childAgentId?: string;
-    current: boolean;
-    superseded: boolean;
-    expectedEntry?: SubagentRunRecord;
-  }>();
   private readonly completionAuthorities = new Map<object, CompletionCustody>();
   // A tombstone rejects stale callbacks without retaining closed Gateway/source contexts.
   // True marks restart custody; false marks a live admitted source.
@@ -464,159 +455,116 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     }
   }
 
-  /** A cancellation borrows retirement evidence only for its own lexical lifetime. */
+  /** Keep captured cancellation work; inspect current successors only at use. */
   captureRetirement(
     entry: SubagentRunRecord,
     isSuccessor: (candidate: SubagentRunRecord) => boolean,
   ) {
     const { promise, resolve } = createDeferredCore();
     const publication = {
-      entry,
+      key: getSubagentRunRuntimeKey(entry),
       promise,
       resolve,
       settled: false,
     };
-    const scope: SubagentRetirementScope = {
-      observation: {
-        entry,
-        generation: entry.generation,
-        createdAt: entry.createdAt,
-        state: "selected",
-      },
-      isSuccessor,
-      publication,
-    };
-    this.retirementScopes.add(scope);
-    const pending = retirementPublications.get(getSubagentRunRuntimeKey(entry));
+    const pending = retirementPublications.get(publication.key);
     if (pending) {
       pending.add(publication);
     } else {
-      retirementPublications.set(getSubagentRunRuntimeKey(entry), new Set([publication]));
+      retirementPublications.set(publication.key, new Set([publication]));
     }
+    // A newer row can already coexist with a specifically selected legacy task.
+    const initial =
+      latestSubagentRun(
+        getSubagentRunsForChildSession(entry.childSessionKey, entry.childAgentId),
+      ) ?? entry;
+    let active = true;
+    const observe = (): SubagentRetirementObservation => {
+      const successor = latestSubagentRun(
+        getSubagentRunsForChildSession(entry.childSessionKey, entry.childAgentId),
+        (candidate) =>
+          !isSameSubagentRunOwner(candidate, entry) &&
+          (candidate.runId === entry.runId ||
+            (compareSubagentRunGeneration(candidate, initial) >= 0 &&
+              !isSameSubagentRunOwner(candidate, initial))) &&
+          isSuccessor(candidate),
+      );
+      if (!active || successor) {
+        return { state: "superseded" };
+      }
+      const current = getCurrentSubagentRunOwner(this, entry);
+      const selected = current ?? entry;
+      return {
+        entry: selected,
+        generation: selected.generation,
+        createdAt: selected.createdAt,
+        state: current ? "selected" : "retired",
+      };
+    };
     return {
       get observation() {
-        return scope.observation;
+        return observe();
       },
-      completePublication: () => completeRetirementPublication(scope),
+      completePublication: () => completeRetirementPublication(publication),
       release: () => {
-        completeRetirementPublication(scope);
-        scope.observation = { state: "superseded" };
-        this.retirementScopes.delete(scope);
+        active = false;
+        completeRetirementPublication(publication);
       },
     };
   }
 
-  /** A committed successor remains superseding even if it retires before preparation finishes. */
+  /** Registration checks current rows; retired temporary successors need no retained fence. */
   captureRegistrationOwnership(
     childSessionKey: string,
     expectedEntry?: SubagentRunRecord,
     childAgentId?: string,
   ) {
-    const scope = {
-      childSessionKey,
-      childAgentId,
-      current: true,
-      superseded: false,
-      expectedEntry,
+    let active = true;
+    let accepted = expectedEntry;
+    const latest = () =>
+      latestSubagentRun(getSubagentRunsForChildSession(childSessionKey, childAgentId));
+    const initial = latest();
+    const replaced = (observed: SubagentRunRecord | undefined) => {
+      const current = latest();
+      return current !== undefined && !isSameSubagentRunOwner(current, observed);
     };
-    this.registrationScopes.add(scope);
     return {
       get superseded() {
-        return scope.superseded;
+        return accepted !== undefined && replaced(accepted);
       },
       assertCurrent: () => {
-        if (!scope.current) {
+        if (!active || replaced(accepted ?? initial)) {
           throw new Error("Subagent registration owner changed during preparation");
         }
       },
       accept: (entry: SubagentRunRecord) => {
-        if (!scope.current || entry.childSessionKey !== childSessionKey) {
+        if (!active || !matchesSubagentChildSessionOwner(entry, childSessionKey, childAgentId)) {
           throw new Error("Subagent registration owner changed before publication");
         }
-        scope.expectedEntry = entry;
+        accepted = entry;
         this.commitOwnership(entry);
       },
       release: () => {
-        scope.current = false;
-        this.registrationScopes.delete(scope);
+        active = false;
       },
     };
   }
 
   /** Publish accepted runtime ownership after the row's commit acknowledgement. */
   commitOwnership(entry: SubagentRunRecord): void {
-    if (this.settleCommittedOwnership(entry)) {
+    if (isSameSubagentRunOwner(this.get(entry.runId), entry)) {
       publishSubagentRunChanges([entry.childSessionKey], [entry.runId]);
     }
   }
 
-  /** Bulk restore settles custody before its one atomic row publication notifies readers. */
-  settleCommittedOwnership(entry: SubagentRunRecord): boolean {
-    if (!isSameSubagentRunOwner(this.get(entry.runId), entry)) {
-      return false;
-    }
-    for (const scope of this.registrationScopes) {
-      if (
-        matchesSubagentChildSessionOwner(entry, scope.childSessionKey, scope.childAgentId) &&
-        !isSameSubagentRunOwner(scope.expectedEntry, entry)
-      ) {
-        scope.current = false;
-        scope.superseded = true;
-      }
-    }
-    for (const scope of this.retirementScopes) {
-      const previous = scope.observation.entry;
-      if (
-        previous &&
-        !isSameSubagentRunOwner(previous, entry) &&
-        previous.childSessionKey === entry.childSessionKey &&
-        scope.isSuccessor(entry)
-      ) {
-        // New work supersedes the selected execution, even if the replacement
-        // is retired before the pending Stop resumes.
-        scope.observation = { state: "superseded" };
-      }
-    }
-    return true;
-  }
-
-  /** Normal cleanup calls this only after its deletion commits; raw map deletion is not evidence. */
+  /** Notify readers after the row's committed retirement. */
   confirmRetirement(entry: SubagentRunRecord): void {
-    for (const scope of this.retirementScopes) {
-      const observed = scope.observation;
-      if (
-        isSameSubagentRunOwner(observed.entry, entry) &&
-        observed.state === "selected" &&
-        !isSameSubagentRunOwner(this.get(entry.runId), entry)
-      ) {
-        observed.state = "retired";
-      }
-    }
     publishSubagentRunChanges([entry.childSessionKey], [entry.runId]);
   }
 
   private publishRuntimeOwner(previous: SubagentRunRecord, entry: SubagentRunRecord): void {
     this.transferCompletionAuthority(previous, entry);
     bindGatewayContextResolver(entry, getGatewayContextResolver(previous));
-    const retirements = retirementPublications.get(getSubagentRunRuntimeKey(previous));
-    if (retirements) {
-      for (const publication of retirements) {
-        publication.entry = entry;
-      }
-    }
-    for (const scope of this.retirementScopes) {
-      if (
-        scope.observation.state !== "superseded" &&
-        isSameSubagentRunOwner(scope.observation.entry, previous)
-      ) {
-        scope.observation = {
-          ...scope.observation,
-          entry,
-          generation: entry.generation,
-          createdAt: entry.createdAt,
-        };
-      }
-    }
   }
 
   /** The row owner invokes this only after the source deletion and accepted address commit. */
@@ -665,19 +613,14 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   }
 
   override clear(): void {
-    for (const scope of this.registrationScopes) {
-      scope.current = false;
-      scope.superseded = true;
-    }
-    this.registrationScopes.clear();
     for (const { entry } of this.completionAuthorities.values()) {
       this.releaseCompletionAuthority(entry);
     }
-    for (const scope of this.retirementScopes) {
-      completeRetirementPublication(scope);
-      scope.observation = { state: "superseded" };
+    for (const pending of retirementPublications.values()) {
+      for (const publication of pending) {
+        completeRetirementPublication(publication);
+      }
     }
-    this.retirementScopes.clear();
     super.clear();
     this.readLookup = new SubagentSessionReadLookup();
     for (const index of runIndexes) {

@@ -82,6 +82,30 @@ export function registerSharedClientLifetimeTests(
     },
   );
 
+  it.each(["shared", "isolated"] as const)(
+    "preserves a %s registration failure after its startup deadline",
+    async (kind) => {
+      vi.useFakeTimers();
+      const starting = createDeferred<CodexAppServerClient>();
+      const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(starting.promise);
+      const acquire =
+        kind === "shared"
+          ? getLeasedSharedCodexAppServerClient
+          : createIsolatedCodexAppServerClient;
+      const failure = new Error("Cannot inspect Codex processes: inspection deadline exceeded");
+      const pending = acquire({
+        timeoutMs: kind === "shared" ? 1_000 : 50,
+        pluginConfig: { appServer: { requestTimeoutMs: 10 } },
+      });
+      const rejected = expect(pending).rejects.toBe(failure);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(startSpy).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(kind === "shared" ? 100 : 50);
+      starting.reject(failure);
+      await rejected;
+    },
+  );
+
   it.each([
     ["shared", "validation"],
     ["isolated", "validation"],
