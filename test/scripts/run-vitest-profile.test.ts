@@ -115,15 +115,6 @@ describe("scripts/run-vitest-profile", () => {
         failProfile = false,
         unhandled = false,
         errorPolicy = "default",
-      }: {
-        pool: string;
-        isolate?: boolean;
-        custom?: boolean;
-        failRun?: boolean;
-        projects?: boolean;
-        failProfile?: boolean;
-        unhandled?: boolean;
-        errorPolicy?: string;
       },
       { signal },
     ) =>
@@ -134,8 +125,8 @@ describe("scripts/run-vitest-profile", () => {
         const outputDir = path.join(root, "profiles with spaces");
         const configPath = path.join(root, "custom.config.ts");
         const configLoads = path.join(root, "config-loads");
-        fs.writeFileSync(
-          configPath,
+        files.write(
+          "custom.config.ts",
           `import fs from "node:fs";
 fs.appendFileSync(${JSON.stringify(configLoads)}, "loaded\\n");
 export default { test: {
@@ -148,28 +139,24 @@ export default { test: {
 } };`,
         );
         for (const name of ["config-excluded", "cli-excluded"]) {
-          fs.writeFileSync(
-            path.join(root, name + ".test.ts"),
-            'throw new Error("excluded files must not run");',
-          );
+          files.write(name + ".test.ts", 'throw new Error("excluded files must not run");');
         }
-        fs.writeFileSync(
-          path.join(root, "custom-setup.ts"),
+        files.write(
+          "custom-setup.ts",
           `export function setup(project) {
   project.provide("customSetupCount", (project.getProvidedContext().customSetupCount ?? 0) + 1);
 }`,
         );
-        const customRunner = path.join(root, "custom-runner.ts");
-        fs.writeFileSync(
-          customRunner,
+        files.write(
+          "custom-runner.ts",
           `import { TestRunner } from "vitest";
 export default class extends TestRunner {
   onCollectStart(file) { super.onCollectStart(file); globalThis.profileCustomRunner = true; }
 }`,
         );
         for (const name of ["first", "second"]) {
-          fs.writeFileSync(
-            path.join(root, `${name}.test.ts`),
+          files.write(
+            `${name}.test.ts`,
             `import fs from "node:fs";
 import process from "node:process";
 import { isMainThread, threadId } from "node:worker_threads";
@@ -325,25 +312,20 @@ it("holds admitted work until the caller releases it", async () => {
       }
     }));
 
-  it.for([{ mode: "main", flags: ["--help", "--help"] }])(
-    "prints $mode help for $flags without starting a test server",
-    ({ mode, flags }, { signal }) =>
-      lifetime.run(async () => {
-        const root = createTempDir("oc-profile-help-");
-        const ordering = path.join(root, "hash-order.jsonl");
-        const drained = path.join(root, "event-loop-drained");
-        const profiles = path.join(root, "profiles");
-        const preload = path.join(root, "observe-hash-order.mjs");
-        fs.writeFileSync(
-          preload,
-          `import crypto from "node:crypto";
+  it("prints repeated main help without starting a test server", ({ signal }) =>
+    lifetime.run(async () => {
+      const root = createTempDir("oc-profile-help-");
+      const ordering = path.join(root, "hash-order.jsonl");
+      const drained = path.join(root, "event-loop-drained");
+      const profiles = path.join(root, "profiles");
+      const preload = path.join(root, "observe-hash-order.mjs");
+      fs.writeFileSync(
+        preload,
+        `import crypto from "node:crypto";
 import fs from "node:fs";
 import inspector from "node:inspector/promises";
 import { syncBuiltinESMExports } from "node:module";
-const childEntry = ${JSON.stringify(path.join(repoRoot, "scripts/run-vitest-profile-child.mts"))};
-const role = process.argv[1] === childEntry ? "inner"
-  : process.argv[1] === ${JSON.stringify(path.join(repoRoot, "scripts/run-vitest-profile.mts"))} ? "outer" : undefined;
-if (role === "inner") {
+if (process.argv[1] === ${JSON.stringify(path.join(repoRoot, "scripts/run-vitest-profile-child.mts"))}) {
   process.once("beforeExit", () => fs.writeFileSync(${JSON.stringify(drained)}, "drained"));
 }
 let profiling = false;
@@ -367,25 +349,19 @@ crypto.getHashes = function() {
   return getHashes();
 };
 syncBuiltinESMExports();`,
-        );
-        const args = profileArgs(root, mode, ...flags);
-        const result = await runProfileProcess(args, root, signal, {
-          NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
-        });
-        expect(
-          fs
-            .readFileSync(ordering, "utf8")
-            .trim()
-            .split("\n")
-            .map((line) => JSON.parse(line)),
-          result.output,
-        ).toEqual([{ tlsLoaded: false, profiling: mode === "main" }]);
-        expect(result.code, result.output).toBe(0);
-        expect(result.output).toContain("Usage:");
-        expect(fs.existsSync(drained), result.output).toBe(true);
-        expect(fs.readdirSync(profiles)).toHaveLength(mode === "main" ? 1 : 0);
-      }),
-  );
+      );
+      const args = profileArgs(root, "main", "--help", "--help");
+      const result = await runProfileProcess(args, root, signal, {
+        NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
+      });
+      expect(scriptFiles(root).jsonLines("hash-order.jsonl"), result.output).toEqual([
+        { tlsLoaded: false, profiling: true },
+      ]);
+      expect(result.code, result.output).toBe(0);
+      expect(result.output).toContain("Usage:");
+      expect(fs.existsSync(drained), result.output).toBe(true);
+      expect(fs.readdirSync(profiles)).toHaveLength(1);
+    }));
 
   it.for([
     { mode: "main", flag: "--unknown-profile-test-option", error: "Unknown option" },

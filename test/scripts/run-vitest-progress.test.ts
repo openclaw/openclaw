@@ -336,7 +336,7 @@ process.send({event:"ready"});
         let duplicates = 0;
         const replied = createDeferred();
         const replies: unknown[] = [];
-        const output = captureOutput(handle.child);
+        const output = captureOutput(handle.child.stdout!, handle.child.stderr!);
         handle.child.on("message", (message: unknown) => {
           if (!message || typeof message !== "object" || !("event" in message)) {
             return;
@@ -416,14 +416,10 @@ process.send({event:"ready"});
             await watched.completion;
           }
         } finally {
-          try {
-            await owner.dispose();
-          } catch (error) {
-            disposalFailure = error;
-          } finally {
-            verificationRead.mockRestore();
-            compilerLaunch.mockRestore();
-          }
+          const [disposal] = await Promise.allSettled([owner.dispose()]);
+          disposalFailure = disposal.status === "rejected" ? disposal.reason : undefined;
+          verificationRead.mockRestore();
+          compilerLaunch.mockRestore();
         }
       }
       if (verification === "tampered") {

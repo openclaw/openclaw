@@ -30,6 +30,10 @@ function fixtureEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return cleanRunnerEnv({ CI: "1", ...overrides });
 }
 
+function runSync(args: string[], env: NodeJS.ProcessEnv, timeout = 15_000) {
+  return spawnSync(testNodeExecPath, args, { cwd: repoRoot, env, encoding: "utf8", timeout });
+}
+
 function managedFixture(
   context: TestContext,
   prefix: string,
@@ -88,7 +92,6 @@ const loaderEntries = [
   {
     name: "JavaScript launcher",
     args: [path.join(repoRoot, "scripts/run-vitest.mjs")],
-    failedTrailers: ["[test] FAILED (exit 2)"],
   },
   ...[
     "test",
@@ -99,81 +102,64 @@ const loaderEntries = [
     "test:perf:imports",
     "test:perf:imports:changed",
     "test:watch",
+    "test:extensions:batch",
   ].map((name) => ({
     name,
     args: packageScripts[name]!.split(" ").slice(1),
-    failedTrailers: ["[test] FAILED (exit 2)"],
   })),
-  {
-    name: "test:extensions:batch",
-    args: packageScripts["test:extensions:batch"]!.split(" ").slice(1),
-    failedTrailers: [],
-  },
 ];
 
 describe("Vitest CLI final outcome ownership", () => {
-  it.for(
-    ["missing", "broken"].flatMap((failure) =>
-      loaderEntries.map(({ name, args, failedTrailers }) => ({
+  it.for([
+    ...["missing", "broken"].flatMap((failure) =>
+      loaderEntries.map(({ name, args }) => ({
         name,
         args,
-        failedTrailers,
         failure,
+        code: 2,
+        failedTrailers: name === "test:extensions:batch" ? [] : ["[test] FAILED (exit 2)"],
       })),
     ),
-  )(
-    "classifies $failure loader initialization at $name",
-    ({ failure, args, failedTrailers }, context) =>
-      managedFixture(context, "oc-vt-loader-failure-", async (files, run) => {
-        const preload = files.path("preload.mjs");
-        const loaderFailure =
-          failure === "missing"
+    ...[0, 1, 2].map((code) => ({
+      name: "JavaScript implementation",
+      args: [],
+      failure: "settled",
+      code,
+      failedTrailers: code ? [`[test] FAILED (exit ${code})`] : [],
+    })),
+  ])(
+    "classifies $failure exit $code at $name",
+    ({ failure, args, failedTrailers, code }, context) =>
+      managedFixture(context, "oc-vt-loader-", async (files, run) => {
+        const settled = failure === "settled";
+        const injection = settled
+          ? `return {format: "module", shortCircuit: true, source: "process.exitCode = ${code};" };`
+          : failure === "missing"
             ? 'throw Object.assign(new Error("owned missing loader dependency"), {code: "ERR_MODULE_NOT_FOUND"});'
             : `return {format: "module", shortCircuit: true, source: ${JSON.stringify('throw new Error("owned broken loader dependency");')}};`;
-        fs.writeFileSync(
-          preload,
+        files.write(
+          "preload.mjs",
           `import {registerHooks} from "node:module";
 registerHooks({load(url, context, nextLoad) {
-  if (url.endsWith("/scripts/tsx.mjs")) {
-    ${loaderFailure}
+  if (url.endsWith(${JSON.stringify(settled ? "/scripts/run-vitest-child.mts" : "/scripts/tsx.mjs")})) {
+    ${injection}
   }
   return nextLoad(url, context);
 }});`,
         );
         const result = await run(
-          [...args, "--help"],
-          testRunnerFixtureEnv({ NODE_OPTIONS: `--import=${preload}` }),
+          settled ? [path.join(preparedCli.root, "scripts/run-vitest.mjs")] : [...args, "--help"],
+          {
+            ...(settled ? preparedCli.env(testRunnerFixtureEnv()) : testRunnerFixtureEnv()),
+            NODE_OPTIONS: `--import=${files.path("preload.mjs")}`,
+          },
         );
-        expect(result, result.stderr).toMatchObject({ error: undefined, status: 2 });
-        expect(result.stderr).toContain(`owned ${failure} loader dependency`);
+        expect(result, result.stderr).toMatchObject({ error: undefined, status: code });
+        if (!settled) {
+          expect(result.stderr).toContain(`owned ${failure} loader dependency`);
+        }
         expect(result.stderr.match(/^\[.*\] FAILED \(exit \d+\)$/gmu) ?? []).toEqual(
           failedTrailers,
-        );
-      }),
-  );
-
-  it.for([0, 1, 2])(
-    "preserves settled implementation exit %s through the JavaScript CLI",
-    (code, context) =>
-      managedFixture(context, "oc-vt-exit-propagation-", async (files, run) => {
-        const preload = files.path("preload.mjs");
-        fs.writeFileSync(
-          preload,
-          `import { registerHooks } from "node:module";
-registerHooks({ load(url, context, nextLoad) {
-  if (url.endsWith("/scripts/run-vitest-child.mts")) {
-    return { format: "module", shortCircuit: true, source: "process.exitCode = ${code};" };
-  }
-  return nextLoad(url, context);
-}});`,
-        );
-        const result = await run([path.join(preparedCli.root, "scripts/run-vitest.mjs")], {
-          ...preparedCli.env(testRunnerFixtureEnv()),
-          NODE_OPTIONS: `--import=${preload}`,
-        });
-        expect(result, result.stderr).toMatchObject({ error: undefined, status: code });
-        expect(result.stderr.match(/^\[test\] FAILED \(exit \d+\)$/gmu) ?? []).toEqual(
-          code ? [`[test] FAILED (exit ${code})`] : [],
         );
       }),
   );
@@ -197,30 +183,27 @@ registerHooks({ load(url, context, nextLoad) {
       managedFixture(context, "oc-vt-trailer-", async (files, run) => {
         const root = files.path();
         const target = "test/scripts/run-vitest.test.ts";
-        const receipt = path.join(root, "receipt.json");
-        fs.mkdirSync(path.join(root, "test/scripts"), { recursive: true });
-        fs.mkdirSync(path.join(root, "test/vitest"));
+        fs.mkdirSync(files.path("test/scripts"), { recursive: true });
+        fs.mkdirSync(files.path("test/vitest"));
         files.linkModules();
-        fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
-        fs.writeFileSync(
-          path.join(root, target),
+        files.write("package.json", '{"type":"module"}');
+        files.write(
+          target,
           `import { afterAll, expect, it } from "vitest";
 afterAll(() => process.stderr.write("fixture cleanup finished\\n"));
 it("trailer fixture", async () => {
   ${outcome === "failure" ? 'expect.fail("intentional trailer fixture failure");' : outcome === "signal" ? 'process.stderr.write("fixture signal ready\\n"); await new Promise(() => {});' : "expect(1).toBe(1);"}
 });`,
         );
-        // The router classifies pure tests separately from process-owning tooling.
-        // Both fixture configs use the same real Vitest test and cleanup boundary.
         const config = `import fs from "node:fs";
 import os from "node:os";
 import { getVitestWorkerDescriptor } from ${JSON.stringify(path.join(repoRoot, "scripts/lib/vitest-worker-descriptor.mts"))};
-fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({
+fs.writeFileSync(${JSON.stringify(files.path("receipt.json"))}, JSON.stringify({
   pid: process.pid, namespace: os.tmpdir(), generation: getVitestWorkerDescriptor()?.directory,
 }));
 export default { test: { include: [${JSON.stringify(target)}], maxWorkers: 1 } };`;
         for (const owner of ["tooling", "unit-fast"]) {
-          fs.writeFileSync(path.join(root, `test/vitest/vitest.${owner}.config.ts`), config);
+          files.write(`test/vitest/vitest.${owner}.config.ts`, config);
         }
         const args =
           outcome === "help"
@@ -239,7 +222,7 @@ export default { test: { include: [${JSON.stringify(target)}], maxWorkers: 1 } }
           FORCE_COLOR: "0",
           TSX_TSCONFIG_PATH: path.join(repoRoot, "tsconfig.json"),
         });
-        let output = "";
+        let output = { text: "" };
         let signaled = false;
         const preload = script.endsWith(".mts")
           ? ["--import", path.join(preparedCli.root, "scripts/tsx.mjs")]
@@ -251,12 +234,13 @@ export default { test: { include: [${JSON.stringify(target)}], maxWorkers: 1 } }
           {
             cwd: root,
             onReady(child) {
-              child.stdout!.on("data", (chunk) => {
-                output += String(chunk);
-              });
-              child.stderr!.on("data", (chunk) => {
-                output += String(chunk);
-                if (outcome === "signal" && !signaled && output.includes("fixture signal ready")) {
+              output = captureOutput(child.stdout!, child.stderr!);
+              child.stderr!.on("data", () => {
+                if (
+                  outcome === "signal" &&
+                  !signaled &&
+                  output.text.includes("fixture signal ready")
+                ) {
                   signaled = true;
                   child.kill("SIGTERM");
                 }
@@ -264,13 +248,12 @@ export default { test: { include: [${JSON.stringify(target)}], maxWorkers: 1 } }
             },
           },
         );
-        expect(result.error, output).toBeUndefined();
         const code =
           outcome === "signal" ? 143 : outcome === "failure" || outcome === "startup" ? 1 : 0;
         const failed = code !== 0;
-        expect(result.status, output).toBe(code);
+        expect(result, output.text).toMatchObject({ error: undefined, status: code });
         const trailer = `[${tool}] FAILED (exit ${code})`;
-        expect(output.match(/^\[.*\] FAILED \(exit \d+\)$/gmu) ?? [], output).toEqual(
+        expect(output.text.match(/^\[.*\] FAILED \(exit \d+\)$/gmu) ?? [], output.text).toEqual(
           failed ? [trailer] : [],
         );
         // The trailer belongs to stderr; arrivals on separate pipes have no shared order.
@@ -278,22 +261,22 @@ export default { test: { include: [${JSON.stringify(target)}], maxWorkers: 1 } }
           expect(result.stderr.trim().split("\n").at(-1)).toBe(trailer);
         }
         if (outcome === "startup") {
-          expect(output).toContain("Unknown option");
+          expect(output.text).toContain("Unknown option");
         }
         if (outcome === "help") {
-          expect(output).toMatch(/Usage:|vitest\//);
+          expect(output.text).toMatch(/Usage:|vitest\//);
         }
         if (["failure", "success", "signal"].includes(outcome)) {
           if (outcome === "signal") {
             expect(signaled).toBe(true);
           } else {
-            expect(output).toContain("fixture cleanup finished");
+            expect(output.text).toContain("fixture cleanup finished");
           }
           if (outcome === "failure") {
-            expect(output).toContain("intentional trailer fixture failure");
+            expect(output.text).toContain("intentional trailer fixture failure");
           }
           if (!direct && outcome !== "signal") {
-            expect(output).toMatch(/\[test\] (?:failed|passed) 1 Vitest shard/);
+            expect(output.text).toMatch(/\[test\] (?:failed|passed) 1 Vitest shard/);
           }
           const owned = files.json("receipt.json");
           expect(isProcessAlive(owned.pid)).toBe(false);
@@ -346,9 +329,7 @@ fs.readFileSync = (file, ...args) => {
 syncBuiltinESMExports();
 `,
       );
-      const env = fixtureEnv();
-      const result = spawnSync(
-        testNodeExecPath,
+      const result = runSync(
         [
           path.join(repoRoot, `scripts/run-vitest.${extension}`),
           "run",
@@ -356,39 +337,37 @@ syncBuiltinESMExports();
           "test/vitest/vitest.ui-e2e.config.ts",
           "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
         ],
-        {
-          cwd: repoRoot,
-          // This preload replaces only I/O; it does not install a TypeScript loader.
-          env: { ...env, CI: "1", NODE_OPTIONS: `--import=${preload}` },
-          encoding: "utf8",
-          timeout: 15_000,
-        },
+        // This preload replaces only I/O; it does not install a TypeScript loader.
+        fixtureEnv({ NODE_OPTIONS: `--import=${preload}` }),
       );
-      expect(result.error, result.stderr).toBeUndefined();
-      expect(result.signal, result.stderr).toBeNull();
-      expect(result.status, result.stderr).toBe(2);
+      expect(result, result.stderr).toMatchObject({ error: undefined, signal: null, status: 2 });
       expect(result.stderr).toContain("fixture runtime identity inspected");
       expect(result.stderr).not.toContain("fixture reader or UI build admitted");
     },
   );
 
-  it.for(["success", "runtime-failure", "ai-failure", "prebuilt", "skip", "custom", "cancel"])(
+  it.for([
+    ["success", ["runtime", "ai"], 4, "1", ""],
+    ["runtime-failure", ["runtime"], 0, "", ""],
+    ["ai-failure", ["runtime", "ai"], 0, "", ""],
+    ["prebuilt", [], 4, "1", ""],
+    ["skip", [], 4, "", "1"],
+    ["custom", [], 1, "", ""],
+    ["cancel", ["runtime"], 0, "", ""],
+  ] as const)(
     "prepares the direct E2E reader generation once: %s",
     { timeout: 60_000 },
-    async (outcome, { signal }) => {
+    async ([outcome, expectedBuilds, readerCount, expectedPrebuilt, expectedSkip], { signal }) => {
       const root = tempDirs.make("oc-vt-preparation-");
       const files = scriptFiles(root);
       const receiptsPath = path.join(root, "events.jsonl");
       const pidPath = path.join(root, "builder.pid");
-      const executable = path.join(root, "command.mjs");
-      const preload = path.join(root, "preload.mjs");
       const aiDeclarations = path.join(root, "ai-declarations");
       if (outcome === "prebuilt") {
-        // A complete prebuilt generation includes the typed AI package.
         fs.writeFileSync(aiDeclarations, "");
       }
-      fs.writeFileSync(
-        executable,
+      files.write(
+        "command.mjs",
         `import fs from "node:fs";
 ${fixtureReceiptClientSource(fixtureReceipts.endpoint)}
 const kind = process.argv[2];
@@ -412,12 +391,9 @@ if (kind === "runtime" && ${JSON.stringify(outcome)} === "cancel") {
 }
 `,
       );
-      // Preserve the real CLI and managed process owners; replace only the
-      // expensive executables so build/read admission remains observable.
-      // The stub AI build publishes its declarations as a fixture receipt, so
-      // the declaration check sees the stub's output, not the checkout's dist.
-      fs.writeFileSync(
-        preload,
+      // Stub executables publish real declaration receipts; admission and joins stay real.
+      files.write(
+        "preload.mjs",
         `import cp from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -432,7 +408,7 @@ cp.spawn = (bin, args, options) => {
   const kind = args.includes("scripts/prepare-vitest-runtime.mjs") ? "runtime"
     : args.includes("scripts/tsdown-build.mts") ? "ai"
     : args.some(arg => arg === "vitest" || arg.endsWith("/vitest.mjs")) ? "reader" : null;
-  return kind ? spawn(process.execPath, [${JSON.stringify(executable)}, kind,
+  return kind ? spawn(process.execPath, [${JSON.stringify(files.path("command.mjs"))}, kind,
     args.find(arg => arg.startsWith("--shard=")) ?? "direct"], options) : spawn(bin, args, options);
 };
 syncBuiltinESMExports();
@@ -449,7 +425,7 @@ syncBuiltinESMExports();
         testNodeExecPath,
         [
           "--import",
-          preload,
+          files.path("preload.mjs"),
           path.join(repoRoot, "scripts/run-vitest.mts"),
           "run",
           "--config",
@@ -459,11 +435,11 @@ syncBuiltinESMExports();
         ],
         {
           cwd: repoRoot,
-          env: preparedCli.env({ ...env, CI: "1" }),
+          env: preparedCli.env(env),
           stdio: ["ignore", "pipe", "pipe"],
         },
       );
-      const output = captureOutput(child);
+      const output = captureOutput(child.stdout, child.stderr);
       const closed = childTermination(child);
       let builderPid: number | undefined;
       try {
@@ -497,14 +473,10 @@ syncBuiltinESMExports();
         }> = files.jsonLines("events.jsonl");
         const readers = events.filter(({ kind, event }) => kind === "reader" && event === "start");
         const builds = events.filter(({ kind, event }) => kind !== "reader" && event === "start");
-        expect(builds.map(({ kind }) => kind)).toEqual(
-          ["prebuilt", "skip", "custom"].includes(outcome)
-            ? []
-            : ["runtime-failure", "cancel"].includes(outcome)
-              ? ["runtime"]
-              : ["runtime", "ai"],
+        expect(builds.map(({ kind }) => kind)).toEqual(expectedBuilds);
+        expect(readers.map(({ prebuilt, skip }) => [prebuilt, skip])).toEqual(
+          Array.from({ length: readerCount }, () => [expectedPrebuilt, expectedSkip]),
         );
-        expect(readers).toHaveLength(failed ? 0 : outcome === "custom" ? 1 : 4);
         if (outcome === "success") {
           expect(events.slice(0, 4).map(({ kind, event }) => `${kind}:${event}`)).toEqual([
             "runtime:start",
@@ -512,12 +484,6 @@ syncBuiltinESMExports();
             "ai:start",
             "ai:end",
           ]);
-        }
-        for (const reader of readers) {
-          expect(reader).toMatchObject({
-            prebuilt: ["success", "prebuilt"].includes(outcome) ? "1" : "",
-            skip: outcome === "skip" ? "1" : "",
-          });
         }
         for (const workerPid of new Set(events.map(({ pid }) => pid))) {
           // CLI completion follows managed builder and reader child/group joins.
@@ -548,8 +514,8 @@ syncBuiltinESMExports();
       const configPath = path.join(root, "test/vitest/vitest.e2e.config.ts");
       fs.mkdirSync(path.dirname(configPath), { recursive: true });
       const receiptPath = path.join(root, "executed.jsonl");
-      fs.writeFileSync(
-        configPath,
+      files.write(
+        "test/vitest/vitest.e2e.config.ts",
         `export default {
   root: ${JSON.stringify(root)},
   test: {
@@ -559,8 +525,8 @@ syncBuiltinESMExports();
 };`,
       );
       for (let index = 0; index < 4; index++) {
-        fs.writeFileSync(
-          path.join(root, `case-${index}.test.ts`),
+        files.write(
+          `case-${index}.test.ts`,
           `import fs from "node:fs";
 import { expect, it } from "vitest";
 it("case ${index}", () => {
@@ -569,16 +535,10 @@ it("case ${index}", () => {
 });`,
         );
       }
-      const env = fixtureEnv();
-      const result = spawnSync(
-        testNodeExecPath,
+      const result = runSync(
         [path.join(preparedCli.root, "scripts/run-vitest.mjs"), "run", "--config", configPath],
-        {
-          cwd: repoRoot,
-          env: preparedCli.env({ ...env, CI: "1", NO_COLOR: "1", FORCE_COLOR: "0" }),
-          encoding: "utf8",
-          timeout: 45_000,
-        },
+        preparedCli.env(fixtureEnv({ NO_COLOR: "1", FORCE_COLOR: "0" })),
+        45_000,
       );
       expect(result.error, result.stderr).toBeUndefined();
       const trailer = `[test] FAILED (exit ${outcome === "cancel" ? 143 : 1})`;

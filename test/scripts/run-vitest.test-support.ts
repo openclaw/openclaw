@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import type { Readable } from "node:stream";
 import { vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
@@ -35,9 +36,9 @@ export function cleanRunnerEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.Proces
   return { ...env, ...overrides };
 }
 
-export function captureOutput(child: Pick<ChildProcess, "stdout" | "stderr">) {
+export function captureOutput(...streams: Readable[]) {
   let text = "";
-  for (const stream of [child.stdout!, child.stderr!]) {
+  for (const stream of streams) {
     stream.on("data", (chunk: string | Buffer) => {
       text += chunk;
     });

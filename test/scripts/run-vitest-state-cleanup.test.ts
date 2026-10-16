@@ -13,7 +13,7 @@ import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { proveNestedRetention } from "./nested-retention.test-support.js";
-import { repoRoot, scriptFiles } from "./run-vitest.test-support.js";
+import { captureOutput, repoRoot, scriptFiles } from "./run-vitest.test-support.js";
 import { createPreparedWorkerCompiler } from "./vitest-worker-artifacts.prepared.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -29,6 +29,10 @@ const testNodeExecPath = resolveTestNodeExecPath();
 const preparedCompiler = process.platform === "win32" ? undefined : createPreparedWorkerCompiler();
 beforeAll(() => preparedCompiler?.prepare());
 afterAll(() => preparedCompiler?.cleanup());
+
+function homeEnv(home: string, tmp: string) {
+  return { HOME: home, USERPROFILE: home, TMPDIR: tmp, TMP: tmp, TEMP: tmp };
+}
 
 function prepareVitestFixture(root: string, homeName = "home") {
   const files = scriptFiles(root);
@@ -68,16 +72,13 @@ function expectFixtureResults(
   expect(report.testResults.map((file) => file.name)).toEqual(
     fixtureTests.map(([filename]) => path.join(testRoot, filename)),
   );
+  const failures = [
+    failFirstFile ? counterfactualFailure : undefined,
+    failRun ? intentionalFailure : undefined,
+  ];
   for (const [index, [, expectedTitle]] of fixtureTests.entries()) {
     const file = report.testResults[index]!;
-    const failure =
-      index === 0
-        ? failFirstFile
-          ? counterfactualFailure
-          : undefined
-        : failRun
-          ? intentionalFailure
-          : undefined;
+    const failure = failures[index];
     const expectedStatus = failure ? "failed" : "passed";
     const childFailureMessages = file.assertionResults
       .flatMap(({ failureMessages }) => failureMessages ?? [])
@@ -116,26 +117,17 @@ function expectFixtureResults(
   });
 }
 
-function cleanupCase(
+const cleanupDefaults = {
+  failRun: false,
+  pauseAfterAck: false,
+  failFirstFile: false,
+  homePolicy: "isolated",
+};
+const cleanupCase = (
   route: string,
   pool: string,
-  changes: Partial<{
-    failRun: boolean;
-    pauseAfterAck: boolean;
-    failFirstFile: boolean;
-    homePolicy: string;
-  }> = {},
-) {
-  return {
-    route,
-    pool,
-    failRun: false,
-    pauseAfterAck: false,
-    failFirstFile: false,
-    homePolicy: "isolated",
-    ...changes,
-  };
-}
+  changes: Partial<typeof cleanupDefaults> = {},
+) => ({ route, pool, ...cleanupDefaults, ...changes });
 const cleanupCases = [
   cleanupCase("main", "threads"),
   cleanupCase("main", "threads", { failRun: true }),
@@ -361,11 +353,7 @@ export default {
     const env: NodeJS.ProcessEnv = {
       PATH: process.env.PATH,
       COREPACK_HOME: process.env.COREPACK_HOME,
-      HOME: home,
-      USERPROFILE: home,
-      TMPDIR: tmp,
-      TMP: tmp,
-      TEMP: tmp,
+      ...homeEnv(home, tmp),
       XDG_CONFIG_HOME: path.join(home, "config"),
       XDG_CACHE_HOME: path.join(home, "cache"),
       XDG_DATA_HOME: path.join(home, "data"),
@@ -697,11 +685,7 @@ it.each([
       `throw new Error("config evaluated before admission");`,
     );
     const env = {
-      HOME: home,
-      USERPROFILE: home,
-      TMPDIR: tmp,
-      TMP: tmp,
-      TEMP: tmp,
+      ...homeEnv(home, tmp),
       LIVE: "1",
       OPENCLAW_LIVE_TEST: "1",
       OPENCLAW_LIVE_GATEWAY: "1",
@@ -745,13 +729,10 @@ console.log(JSON.stringify({ namespace: os.tmpdir(), homes: [os.homedir(), homed
       return;
     }
     const { child, completion } = spawnOwnedVitestProcess(spec);
-    let output = "";
-    child.stdout!.on("data", (chunk) => {
-      output += chunk;
-    });
+    const output = captureOutput(child.stdout!);
     child.stderr!.resume();
     expect((await completion).code).toBe(0);
-    const observed = JSON.parse(output);
+    const observed = JSON.parse(output.text);
     expect(observed.homes).toEqual(
       Array(4).fill(expected === "hermetic" ? path.join(observed.namespace, "home") : home),
     );
@@ -775,14 +756,11 @@ it("retains native home after child and pipes close when descendants cannot be v
     homeMode: "hermetic",
     options: { detached: false, env: { TMPDIR: root }, stdio: ["ignore", "pipe", "pipe"] },
   });
-  let output = "";
-  child.stdout!.on("data", (chunk) => {
-    output += chunk;
-  });
+  const output = captureOutput(child.stdout!);
   child.stderr!.resume();
   try {
     expect((await completion).code).toBe(0);
-    const observed = JSON.parse(output);
+    const observed = JSON.parse(output.text);
     expect(observed.home).toBe(path.join(observed.namespace, "home"));
     expect(path.dirname(observed.namespace)).toBe(root);
     expect(fs.existsSync(observed.home)).toBe(true);
