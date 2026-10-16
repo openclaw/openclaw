@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isSessionRowAssistantMessage } from "../../gateway/session-row-transcript-preview.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   createSqliteCommitReceipt,
@@ -245,6 +246,9 @@ function isTranscriptReceipt(value: unknown): value is SessionTranscriptAuthorit
       (row.lastMessagePreview !== undefined &&
         row.lastMessagePreview !== null &&
         typeof row.lastMessagePreview !== "string") ||
+      (row.lastAssistantMessage !== undefined &&
+        row.lastAssistantMessage !== null &&
+        !isSessionRowAssistantMessage(row.lastAssistantMessage)) ||
       (row.terminalModel !== undefined &&
         row.terminalModel !== null &&
         !isSessionTranscriptTerminalModel(row.terminalModel))

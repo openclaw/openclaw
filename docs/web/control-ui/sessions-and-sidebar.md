@@ -329,6 +329,12 @@ mode, Display omits grouping and empty-group controls because the sidebar always
 groups by agent. Reset leaves those hidden preferences unchanged. It also preserves
 a saved Person grouping while owner data temporarily makes that choice unavailable.
 
+In **Show all agents**, compact agent rows show a muted preview of the agent's
+most recent available assistant reply across its visible, non-archived sessions.
+A newer user message does not replace that preview. Agents without an available
+assistant reply keep a name-only row. The top-level roster does not show the
+session list's empty-filter hint.
+
 Switching to the all-agents roster or another navigation view, or closing
 navigation releases background sidebar activity streams. Open conversation panes
 keep their live messages. The active agent's session list retains critical observer

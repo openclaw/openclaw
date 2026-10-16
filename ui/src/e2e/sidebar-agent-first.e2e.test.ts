@@ -18,7 +18,7 @@ const agentsList: AgentsListResult = {
   scope: "per-sender",
   agents: [
     { id: "main", name: "Engineering" },
-    { id: "research", name: "Research", identity: { emoji: "🔬" } },
+    { id: "research", name: "Research and competitive intelligence", identity: { emoji: "🔬" } },
     { id: "writing", name: "Writing", identity: { avatarUrl: imageAvatar } },
   ],
 };
@@ -35,7 +35,13 @@ const sessionRow = (
   ...extra,
 });
 const sessionRows = [
-  sessionRow("project", "Project next steps"),
+  sessionRow("project", "Project next steps", {
+    lastAssistantMessage: {
+      text: "I've set up the template, but it still needs a final review before sharing with the team.",
+      timestamp: 90,
+    },
+    lastMessagePreview: "A newer user message must not replace the agent preview.",
+  }),
   sessionRow("weekly", "Weekly review"),
   sessionRow("parent", "Implement the navigation sidebar without losing independent outcomes", {
     lastMessagePreview: "A preview must not create a second line in team mode.",
@@ -151,7 +157,19 @@ suite.define(() => {
           }
           await group.locator('[data-agent-collapse="main"]').click();
           await page.locator("body").click({ position: { x: 1000, y: 800 } });
-          const name = group.locator(".sidebar-agent-roster__copy > span");
+          const name = group.locator(".sidebar-agent-roster__name");
+          const preview = group.locator(".sidebar-agent-roster__preview");
+          expect(await preview.textContent()).toBe(sessionRows[0]!.lastAssistantMessage!.text);
+          expect(await preview.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+          const longName = sidebar.locator(
+            '[data-agent-group="research"] .sidebar-agent-roster__name',
+          );
+          expect(await longName.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+          expect(
+            await sidebar
+              .locator('[data-agent-group="writing"] .sidebar-agent-roster__preview')
+              .count(),
+          ).toBe(0);
           const nameWidth = (await name.boundingBox())?.width;
           await group.locator(".sidebar-agent-roster__header").hover();
           expect(await name.textContent()).toBe("Engineering");
@@ -258,12 +276,11 @@ suite.define(() => {
             });
           const beforeFocus = await geometry();
           expect(beforeFocus.avatarWidth).toBe(24);
-          expect(beforeFocus.headerHeight).toBe(touch ? 44 : 36);
-          // Agent names share the session-title edge; the avatar centers over the lead icons.
-          expect(beforeFocus.rows[0]!.left).toBeCloseTo(beforeFocus.agentRowLeft, 1);
-          expect(beforeFocus.avatarLeft + beforeFocus.avatarWidth / 2).toBeCloseTo(
-            (beforeFocus.rows[0]!.iconLeft + beforeFocus.rows[0]!.iconRight) / 2,
-            1,
+          expect(beforeFocus.headerHeight).toBe(44);
+          // Compact agent labels have more room than their indented session titles.
+          expect(beforeFocus.rows[0]!.left - beforeFocus.agentRowLeft).toBeCloseTo(16, 1);
+          expect(beforeFocus.agentRowLeft - beforeFocus.avatarLeft - beforeFocus.avatarWidth).toBe(
+            8,
           );
           expect(beforeFocus.rows[1]!.left - beforeFocus.rows[0]!.left).toBeCloseTo(16, 1);
           expect(beforeFocus.rows[2]!.left - beforeFocus.rows[1]!.left).toBeCloseTo(16, 1);
@@ -349,7 +366,7 @@ suite.define(() => {
             beforeFocus.rows[0]!.right,
           );
           expect(summaryActions.x + summaryActions.width).toBeCloseTo(
-            beforeFocus.rows[0]!.right,
+            beforeFocus.rows[0]!.right - 4,
             1,
           );
           await captureSidebarUiProof(suite, page, `agent-first-${mode}-${width}-collapsed.png`);

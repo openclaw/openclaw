@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../lib/session-pull-requests.ts";
 import {
   agentIds,
@@ -11,6 +12,40 @@ import {
 } from "./roster.test-support.ts";
 
 describe("AppSidebar main-chat metadata", () => {
+  it("updates the assistant preview and removes its line when the session is replaced", async () => {
+    const { sidebar, context, result } = await mountRoster(roster, [
+      session("working", 10, {
+        sessionId: "first",
+        lastMessagePreview: "A new user question",
+        lastAssistantMessage: { text: "I have set up the template.", timestamp: 9 },
+      }),
+    ]);
+    sidebar.sidebarAgentsMode = "roster";
+    const header = () =>
+      sidebar.querySelector('[data-agent-group="working"] .sidebar-agent-roster__header')!;
+    const preview = () => header()?.querySelector(".sidebar-agent-roster__preview");
+    await vi.waitFor(() => expect(preview()?.textContent).toBe("I have set up the template."));
+    expect(header().querySelector(".sidebar-agent-roster__name")?.textContent).toBe("Forge");
+    expect(header().textContent).not.toContain("A new user question");
+    result.sessions = [
+      session("working", 20, {
+        sessionId: "first",
+        lastAssistantMessage: { text: "The template is ready to use.", timestamp: 20 },
+      }),
+    ];
+    await rosterActivityStore(context).refresh();
+    await vi.waitFor(() => expect(preview()?.textContent).toBe("The template is ready to use."));
+    result.sessions = [
+      session("working", 30, {
+        sessionId: "replacement",
+        lastMessagePreview: "Start a new task",
+      }),
+    ];
+    await rosterActivityStore(context).refresh();
+    await vi.waitFor(() => expect(preview()).toBeNull());
+    expect(header().querySelector(".sidebar-agent-roster__name")?.textContent).toBe("Forge");
+  });
+
   it("keeps main metadata and live PR snapshots on the header without an empty collapse control", async () => {
     const mainKey = "agent:working:main";
     const { sidebar, gatewayHarness } = await mountRoster(roster, [

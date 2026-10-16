@@ -97,7 +97,9 @@ export function preserveRosterPresentationMetadata(
     !existing ||
     !incoming.sessionId ||
     incoming.sessionId !== existing.sessionId ||
-    (incoming.derivedTitle !== undefined && incoming.lastMessagePreview !== undefined)
+    (incoming.derivedTitle !== undefined &&
+      incoming.lastMessagePreview !== undefined &&
+      incoming.lastAssistantMessage !== undefined)
   ) {
     return incoming;
   }
@@ -107,9 +109,9 @@ export function preserveRosterPresentationMetadata(
     return incoming;
   }
   const row = { ...incoming };
-  for (const field of ["derivedTitle", "lastMessagePreview"] as const) {
+  for (const field of ["derivedTitle", "lastMessagePreview", "lastAssistantMessage"] as const) {
     if (incoming[field] === undefined && existing[field] !== undefined) {
-      row[field] = existing[field];
+      Object.assign(row, { [field]: existing[field] });
     }
   }
   return row;
@@ -407,6 +409,7 @@ export type SessionRowObservation = {
 
 type SessionRowReconcileOptions = SessionReconcileOptions & {
   preserveExisting?: boolean;
+  clearedFields?: readonly string[];
 };
 
 type RejectedRowDisposition =
@@ -480,6 +483,9 @@ export function reconcileSessionRow(
     ),
     existing,
   );
+  for (const field of options.clearedFields ?? []) {
+    Reflect.deleteProperty(admittedRow, field);
+  }
   if (isStaleForActiveSession(admittedRow, previous)) {
     return reject("stale-active");
   }
@@ -598,10 +604,12 @@ export function reconcileSessionChangedRow(
     ...(sessionId ? { sessionId } : {}),
     ...(fullSnapshot && snapshotAgentId ? { agentId: snapshotAgentId } : {}),
   };
+  const clearedFields: string[] = [];
   // Optional wire fields use null as a tombstone; the explicit nullable fields keep null.
   for (const [field, value] of Object.entries(rowFields)) {
     if (value === null && !NULLABLE_SESSION_ROW_FIELDS.has(field)) {
       Reflect.deleteProperty(offered, field);
+      clearedFields.push(field);
     }
   }
   const fields = [
@@ -614,6 +622,7 @@ export function reconcileSessionChangedRow(
     {
       ...options,
       selectedGlobalAgentId: info.agentId ?? options.selectedGlobalAgentId ?? null,
+      clearedFields,
     },
     project && existing
       ? {

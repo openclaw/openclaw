@@ -1,20 +1,20 @@
 openclaw-sidebar-agent-roster {
   --team-slot-gap: 4px;
   /* Session titles start after the row spacer, lead indicator, and gaps
-     (20px + 4px + 20px + 8px); agent names and pagination share this edge. */
+     (20px + 4px + 20px + 8px); pagination shares this edge. */
   --roster-title-offset: 52px;
   --roster-avatar-size: 24px;
   width: 100%;
 }
 
-/* Avatar sits over the session lead column so agent names start at the
-   session-title edge; hover actions keep a reserved trailing cell. */
+/* Agent headers use a compact leading column; hover actions retain their own cell. */
 .sidebar-agent-roster__header {
   display: grid;
-  grid-template-columns: calc(var(--roster-title-offset) - 4px) minmax(0, 1fr) auto;
-  grid-template-rows: var(--roster-header-height, 36px);
+  grid-template-columns: var(--roster-avatar-size) minmax(0, 1fr) auto;
+  grid-template-rows: 44px;
   align-items: center;
-  column-gap: 4px;
+  column-gap: 8px;
+  padding-inline: 4px;
   border-radius: var(--radius-md);
   color: var(--muted);
   font-size: 12px;
@@ -30,8 +30,6 @@ openclaw-sidebar-agent-roster {
 .sidebar-agent-roster__toggle {
   grid-column: 1;
   justify-self: end;
-  /* Center the avatar over the 20px session lead indicator. */
-  margin-inline-end: calc((var(--roster-avatar-size) - 20px) / 2);
 }
 
 .sidebar-agent-roster__toggle {
@@ -117,15 +115,21 @@ openclaw-sidebar-agent-roster {
   display: grid;
   flex: 1;
   min-width: 0;
-  font-size: 14px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
+  font-size: 13px;
+  font-weight: 550;
+  line-height: 16px;
 }
 
 .sidebar-agent-roster__copy > span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.sidebar-agent-roster__preview {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
 }
 
 .sidebar-agent-roster__unread {
@@ -378,9 +382,6 @@ openclaw-sidebar-agent-roster {
   }
   .sidebar-recent-session--team:is(:hover, :focus-within) > .sidebar-recent-session__link {
     padding-right: 0;
-  }
-  .sidebar-agent-roster__header {
-    --roster-header-height: 44px;
   }
   .sidebar-agent-roster__actions {
     opacity: 1;

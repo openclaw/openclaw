@@ -636,7 +636,7 @@ suite.define(() => {
                 bottom: rect.bottom,
               };
             };
-            const name = header.querySelector<HTMLElement>(".sidebar-agent-roster__copy > span")!;
+            const name = header.querySelector<HTMLElement>(".sidebar-agent-roster__name")!;
             return {
               header: box(header),
               signals: box(header.querySelector(".sidebar-agent-roster__signals")!),
