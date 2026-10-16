@@ -1,4 +1,5 @@
 /** Doctor-owned migration from workspace TOOLS.md into the AGENTS.md Tools section. */
+import { isUtf8 } from "node:buffer";
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -126,6 +127,11 @@ async function readMigrationFileSnapshot(
     !sameFileIdentity(currentStat, file.stat)
   ) {
     throw new Error(`${path.basename(filePath)} changed while opening it for migration`);
+  }
+  if (!isUtf8(file.buffer)) {
+    throw new Error(
+      `${path.basename(filePath)} must be valid UTF-8. The file was left untouched. Preserve a byte-for-byte copy, recover or convert it using its known original encoding, then rerun ${formatCliCommand("openclaw doctor --fix")}.`,
+    );
   }
   return { content: file.buffer.toString("utf8"), stat: currentStat };
 }
