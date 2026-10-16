@@ -1,28 +1,19 @@
-// Shared fs bridge test helpers install Docker/path-safety mocks and provide
-// seeded sandbox fixtures for boundary and shell tests.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { beforeEach, expect, vi, type Mock } from "vitest";
+import { beforeEach, expect, vi } from "vitest";
 
-type ExecDockerRawFn = typeof import("./docker.js").execDockerRaw;
 type OpenRootFileFn = typeof import("../../infra/boundary-file-read.js").openRootFile;
-type ExecDockerRawMock = Mock<ExecDockerRawFn>;
-type OpenRootFileMock = Mock<OpenRootFileFn>;
 type BeforeAsyncRead = (fd: number) => Promise<void>;
-type FsBridgeHoisted = {
-  execDockerRaw: ExecDockerRawMock;
-  openRootFile: OpenRootFileMock;
-};
 
 let actualOpenRootFile: OpenRootFileFn | undefined;
 let beforeAsyncRead: BeforeAsyncRead | undefined;
 
-const hoisted = vi.hoisted((): FsBridgeHoisted => ({
-  execDockerRaw: vi.fn(),
-  openRootFile: vi.fn(),
+const hoisted = vi.hoisted(() => ({
+  execDockerRaw: vi.fn<typeof import("./docker.js").execDockerRaw>(),
+  openRootFile: vi.fn<OpenRootFileFn>(),
 }));
 
 async function createPathSafetyRuntimeMock() {
@@ -33,7 +24,7 @@ async function createPathSafetyRuntimeMock() {
   const beforeRead = beforeAsyncRead;
   return {
     ...actual,
-    openRootFile: (params: Parameters<OpenRootFileFn>[0]) => hoisted.openRootFile(params),
+    openRootFile: hoisted.openRootFile,
     ...(beforeRead
       ? {
           readFileDescriptorBounded: async (
@@ -76,12 +67,10 @@ async function loadFreshFsBridgeModuleForTest(beforeRead?: BeforeAsyncRead) {
   try {
     ({ createSandboxFsBridge: createSandboxFsBridgeImpl } = await import("./fs-bridge.js"));
   } finally {
-    if (beforeRead) {
-      if (descriptor) {
-        Object.defineProperty(fsSync.readFile, promisify.custom, descriptor);
-      } else {
-        Reflect.deleteProperty(fsSync.readFile, promisify.custom);
-      }
+    if (beforeRead && descriptor) {
+      Object.defineProperty(fsSync.readFile, promisify.custom, descriptor);
+    } else if (beforeRead) {
+      Reflect.deleteProperty(fsSync.readFile, promisify.custom);
     }
   }
 }
@@ -119,14 +108,12 @@ export function createSandboxFsBridge(
   });
 }
 
-export const mockedExecDockerRaw: ExecDockerRawMock = hoisted.execDockerRaw;
-export const mockedOpenRootFile: OpenRootFileMock = hoisted.openRootFile;
+export const mockedExecDockerRaw = hoisted.execDockerRaw;
+export const mockedOpenRootFile = hoisted.openRootFile;
 const DOCKER_SCRIPT_INDEX = 5;
 const DOCKER_FIRST_SCRIPT_ARG_INDEX = 7;
 
 export function getDockerScript(args: string[]): string {
-  // docker exec argv positions are stable in fs bridge tests; helpers keep
-  // script assertions readable across many call sites.
   return args[DOCKER_SCRIPT_INDEX] ?? "";
 }
 
@@ -173,43 +160,17 @@ export function dockerExecResult(stdout: string) {
 
 export function createSandbox(overrides?: Partial<SandboxContext>): SandboxContext {
   return createSandboxTestContext({
-    overrides: {
-      containerName: "openclaw-sbx-test",
-      ...overrides,
-    },
-    dockerOverrides: {
-      image: "openclaw-sandbox:bookworm-slim",
-      containerPrefix: "openclaw-sbx-",
-    },
+    overrides,
+    dockerOverrides: { image: "openclaw-sandbox:bookworm-slim", containerPrefix: "openclaw-sbx-" },
   });
 }
 
-export async function createSeededSandboxFsBridge(
-  stateDir: string,
-  params?: {
-    rootFileName?: string;
-    rootContents?: string;
-    nestedFileName?: string;
-    nestedContents?: string;
-  },
-) {
+export async function createSeededSandboxFsBridge(stateDir: string, rootContents = "hello") {
   const workspaceDir = path.join(stateDir, "workspace");
   await fs.mkdir(path.join(workspaceDir, "nested"), { recursive: true });
-  await fs.writeFile(
-    path.join(workspaceDir, params?.rootFileName ?? "from.txt"),
-    params?.rootContents ?? "hello",
-    "utf8",
-  );
-  await fs.writeFile(
-    path.join(workspaceDir, "nested", params?.nestedFileName ?? "file.txt"),
-    params?.nestedContents ?? "bye",
-    "utf8",
-  );
+  await fs.writeFile(path.join(workspaceDir, "from.txt"), rootContents, "utf8");
   const bridge = createSandboxFsBridge({
-    sandbox: createSandbox({
-      workspaceDir,
-      agentWorkspaceDir: workspaceDir,
-    }),
+    sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
   });
   return { workspaceDir, bridge };
 }
@@ -226,23 +187,19 @@ export async function withTempDir<T>(
   }
 }
 
-function installDockerReadMock(params?: { canonicalPath?: string }) {
-  const canonicalPath = params?.canonicalPath;
+function installDockerReadMock() {
   mockedExecDockerRaw.mockImplementation(async (args) => {
     const script = getDockerScript(args);
-    if (script.includes('readlink -n -f -- "$cursor"')) {
-      return dockerExecResult(`${canonicalPath ?? getDockerArg(args, 1)}\n`);
-    }
-    if (script.includes('stat -c "%F|%s|%y"')) {
-      return dockerExecResult("regular file|1|2");
-    }
-    if (script.includes('cat -- "$1"')) {
-      return dockerExecResult("content");
-    }
-    if (script.includes("mktemp")) {
-      return dockerExecResult("/workspace/.openclaw-write-b.txt.ABC123\n");
-    }
-    return dockerExecResult("");
+    const stdout = script.includes('readlink -n -f -- "$cursor"')
+      ? `${getDockerArg(args, 1)}\n`
+      : script.includes('stat -c "%F|%s|%y"')
+        ? "regular file|1|2"
+        : script.includes('cat -- "$1"')
+          ? "content"
+          : script.includes("mktemp")
+            ? "/workspace/.openclaw-write-b.txt.ABC123\n"
+            : "";
+    return dockerExecResult(stdout);
   });
 }
 
@@ -261,8 +218,7 @@ export async function expectMkdirpAllowsExistingDirectory(params?: {
 }) {
   await withTempDir("openclaw-fs-bridge-mkdirp-", async (stateDir) => {
     const workspaceDir = path.join(stateDir, "workspace");
-    const nestedDir = path.join(workspaceDir, "memory", "kemik");
-    await fs.mkdir(nestedDir, { recursive: true });
+    await fs.mkdir(path.join(workspaceDir, "memory/kemik"), { recursive: true });
 
     if (params?.forceBoundaryIoFallback) {
       mockedOpenRootFile.mockImplementationOnce(async () => ({
@@ -273,10 +229,7 @@ export async function expectMkdirpAllowsExistingDirectory(params?: {
     }
 
     const bridge = createSandboxFsBridge({
-      sandbox: createSandbox({
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-      }),
+      sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
     });
 
     await expect(bridge.mkdirp({ filePath: "memory/kemik" })).resolves.toBeUndefined();
@@ -286,13 +239,8 @@ export async function expectMkdirpAllowsExistingDirectory(params?: {
         getDockerScript(args).includes("operation = sys.argv[1]") &&
         getDockerArg(args, 1) === "mkdirp",
     );
-    if (!mkdirCall) {
-      throw new Error("expected docker mkdirp call");
-    }
-    const mountRoot = getDockerArg(mkdirCall[0], 2);
-    const relativePath = getDockerArg(mkdirCall[0], 3);
-    expect(mountRoot).toBe("/workspace");
-    expect(relativePath).toBe("memory/kemik");
+    expect(mkdirCall).toBeDefined();
+    expect(mkdirCall![0].slice(8, 10)).toEqual(["/workspace", "memory/kemik"]);
   });
 }
 
