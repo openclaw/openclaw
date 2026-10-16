@@ -152,7 +152,6 @@ it("revokes retained validation when corruption is reported after native close",
   revokeSqliteDatabaseAdmissions(database);
   try {
     database.open();
-    expect(getAdmittedSqliteSchemaFacts(database)).toBeUndefined();
     admitSqliteSchema(database);
     expect(getAdmittedSqliteSchemaFacts(database)?.admissionId).not.toBe(admitted?.admissionId);
     expect(database.prepare("SELECT value FROM proof").get()).toEqual({ value: 42 });

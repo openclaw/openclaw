@@ -171,12 +171,12 @@ function exchange(target: string | Admission, create?: boolean): void {
   state.exchanging = true;
   try {
     const scope = typeof target === "string" ? { location: target } : { admissions: [target] };
-    const retired = typeof target !== "string" && isRetired(target);
     const admissions = state.registry.captureExchange(scope, target);
     installSqliteDatabaseAdmissions(
       current(
         admissions,
-        retired ? undefined : typeof target === "string" ? target : target.location,
+        // Publications already name their generation; only opens request pathname discovery.
+        typeof target === "string" ? target : undefined,
         create,
       ),
     );
