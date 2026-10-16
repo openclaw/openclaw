@@ -286,27 +286,16 @@ export async function runPreparedEmbeddedLoop(
         runLoopIterations: runRetryBudget.attemptsCounted,
         maxRunLoopIterations: runRetryBudget.maxAttempts,
       });
-      let recordedCompactionCount = 0;
-      let acceptsRequestBudget = true;
-      contextRecoveryState.compactionRequestBudget = undefined;
-      params.onCompactionRequestBudget?.(undefined);
+      const accounting = contextRecoveryState.beginAttempt(
+        abortSignal,
+        params.onCompactionRequestBudget,
+      );
       const attemptRunInput: PreparedEmbeddedRunInput = {
         ...admittedRunInput,
         runParams: {
           ...params,
-          onCompactionRequestBudget: (budget) => {
-            if (!acceptsRequestBudget || abortSignal?.aborted) {
-              return;
-            }
-            contextRecoveryState.compactionRequestBudget = budget;
-            params.onCompactionRequestBudget?.(budget);
-          },
-          onContextAccountingEvent: (event) => {
-            if (event.kind === "compaction") {
-              recordedCompactionCount += 1;
-            }
-            contextRecoveryState.observeContextAccounting(event);
-          },
+          onCompactionRequestBudget: accounting.onCompactionRequestBudget,
+          onContextAccountingEvent: accounting.onContextAccountingEvent,
         },
       };
       let dispatch: Awaited<ReturnType<typeof prepareAndDispatchEmbeddedRunAttempt>>;
@@ -338,7 +327,7 @@ export async function runPreparedEmbeddedLoop(
           }),
         );
       } catch (error) {
-        acceptsRequestBudget = false;
+        accounting.close();
         providerReview.failure(error);
         const retryTrace = await failoverRetryController.recoverThrownHarnessAuthFailure(error);
         if (!retryTrace) {
@@ -348,7 +337,7 @@ export async function runPreparedEmbeddedLoop(
         lastRetryFailoverReason = retryTrace.reason;
         continue;
       } finally {
-        acceptsRequestBudget = false;
+        accounting.close();
       }
       startupStagesEmitted = dispatch.startupStagesEmitted;
       const { dispatchedAttempt, runtimePlan } = dispatch;
@@ -369,7 +358,7 @@ export async function runPreparedEmbeddedLoop(
         runInput: admittedRunInput,
         preparedRuntime,
         dispatchedAttempt,
-        recordedCompactionCount,
+        recordedCompactionCount: accounting.recordedCompactionCount,
         sessionPromptState,
         provider,
         modelId,
