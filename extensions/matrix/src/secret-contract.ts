@@ -1,5 +1,6 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
+  collectSecretInputAssignment,
   createChannelSecretContract,
   hasConfiguredSecretInputValue,
   hasOwnProperty,
@@ -49,7 +50,12 @@ export const channelSecrets = createChannelSecretContract({
       matrix.accessToken,
       params.defaults,
     );
-    params.collectSecret(matrix, "accessToken", "channels.matrix.accessToken", {
+    collectSecretInputAssignment({
+      value: matrix.accessToken,
+      path: "channels.matrix.accessToken",
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
       active:
         defaultAccountEnabled &&
         !defaultAccountAccessTokenConfigured &&
@@ -57,8 +63,16 @@ export const channelSecrets = createChannelSecretContract({
       inactiveReason:
         "Matrix channel or default account is disabled, or default-account access-token auth overrides the top-level accessToken.",
       owner: accountSecretOwner(DEFAULT_ACCOUNT_ID),
+      apply: (value) => {
+        matrix.accessToken = value;
+      },
     });
-    params.collectSecret(matrix, "password", "channels.matrix.password", {
+    collectSecretInputAssignment({
+      value: matrix.password,
+      path: "channels.matrix.password",
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
       active:
         defaultAccountEnabled &&
         !(
@@ -72,22 +86,28 @@ export const channelSecrets = createChannelSecretContract({
       inactiveReason:
         "Matrix channel or default account is disabled, or higher-precedence default-account auth is configured.",
       owner: accountSecretOwner(DEFAULT_ACCOUNT_ID),
+      apply: (value) => {
+        matrix.password = value;
+      },
     });
     if (!surface.hasExplicitAccounts) {
       return;
     }
     for (const { accountId, account, enabled } of surface.accounts) {
       if (hasOwnProperty(account, "accessToken")) {
-        params.collectSecret(
-          account,
-          "accessToken",
-          `channels.matrix.accounts.${accountId}.accessToken`,
-          {
-            active: enabled,
-            inactiveReason: "Matrix account is disabled.",
-            owner: accountSecretOwner(accountId),
+        collectSecretInputAssignment({
+          value: account.accessToken,
+          path: `channels.matrix.accounts.${accountId}.accessToken`,
+          expected: "string",
+          defaults: params.defaults,
+          context: params.context,
+          active: enabled,
+          inactiveReason: "Matrix account is disabled.",
+          owner: accountSecretOwner(accountId),
+          apply: (value) => {
+            account.accessToken = value;
           },
-        );
+        });
       }
       if (!hasOwnProperty(account, "password")) {
         continue;
@@ -103,7 +123,12 @@ export const channelSecrets = createChannelSecretContract({
       const inheritedDefaultAccountAccessTokenConfigured =
         normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID &&
         (baseAccessTokenConfigured || envAccessTokenConfigured);
-      params.collectSecret(account, "password", `channels.matrix.accounts.${accountId}.password`, {
+      collectSecretInputAssignment({
+        value: account.password,
+        path: `channels.matrix.accounts.${accountId}.password`,
+        expected: "string",
+        defaults: params.defaults,
+        context: params.context,
         active:
           enabled &&
           !(
@@ -113,6 +138,9 @@ export const channelSecrets = createChannelSecretContract({
           ),
         inactiveReason: "Matrix account is disabled or this account has an accessToken configured.",
         owner: accountSecretOwner(accountId),
+        apply: (value) => {
+          account.password = value;
+        },
       });
     }
   },

@@ -75,7 +75,9 @@ function resolveProviderConfigRecord(
   raw: TtsConfig,
   provider: TtsProvider,
 ): Record<string, unknown> {
-  const rawRecord: Record<string, unknown> = raw;
+  const rawRecord: Record<string, unknown> = isObjectRecord(raw)
+    ? (raw as Record<string, unknown>)
+    : {};
   const providers: Record<string, unknown> = isObjectRecord(raw.providers) ? raw.providers : {};
   if (provider === "microsoft") {
     return {

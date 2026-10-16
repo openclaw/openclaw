@@ -2479,6 +2479,7 @@ src/transcripts/config.ts	2
 src/transcripts/store-export-ownership.ts	2
 src/transcripts/store-sqlite.ts	2
 src/tts/openai-compatible-speech-provider.ts	1
+src/tts/status-config.ts	1
 src/tts/tts-config.ts	4
 src/tts/tts-core.ts	1
 src/tts/tts-payload.ts	1
