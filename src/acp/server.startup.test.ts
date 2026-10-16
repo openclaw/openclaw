@@ -415,9 +415,7 @@ describe("serveAcpGateway startup", () => {
       expect(mockState.agentSideConnectionCtor).not.toHaveBeenCalled();
       await emitHelloAndWaitForAgentSideConnection();
       await stopServeWithSigint(signalHandlers, servePromise);
-    } finally {
-      onceSpy.mockRestore();
-    }
+    });
   });
 
   it("injects the server-owned SQLite event ledger into the ACP agent", async () => {
@@ -554,22 +552,6 @@ describe("serveAcpGateway startup", () => {
       onceSpy.mockRestore();
     }
   });
-
-  it("passes the resolved TLS fingerprint into the ACP gateway client", async () => {
-    mockState.resolveGatewayClientBootstrap.mockResolvedValue({
-      url: "wss://127.0.0.1:18789",
-      urlSource: "local loopback",
-      connectionDetails: {
-        url: "wss://127.0.0.1:18789",
-        urlSource: "local loopback",
-        message: "Gateway target: wss://127.0.0.1:18789",
-      },
-      tlsFingerprint: "sha256:local",
-      auth: {
-        token: undefined,
-        password: undefined,
-      },
-    });
 
     it("passes the resolved TLS fingerprint into the ACP gateway client", async () => {
       mockState.resolveGatewayClientBootstrap.mockResolvedValue({

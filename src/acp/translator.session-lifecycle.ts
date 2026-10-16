@@ -47,6 +47,15 @@ import type { AcpTranslatorSessionUpdates } from "./translator.session-updates.j
 
 const ACP_LOAD_SESSION_REPLAY_LIMIT = 1_000_000;
 
+function hasExplicitSessionRouting(
+  meta: ReturnType<typeof parseSessionMeta>,
+  opts: AcpServerOptions,
+): boolean {
+  return Boolean(
+    meta.sessionKey || meta.sessionLabel || opts.defaultSessionKey || opts.defaultSessionLabel,
+  );
+}
+
 export class AcpTranslatorSessionLifecycle {
   constructor(
     private readonly gateway: GatewayClient,
@@ -95,12 +104,7 @@ export class AcpTranslatorSessionLifecycle {
     }
 
     const meta = parseSessionMeta(params["_meta"]);
-    const hasExplicitRouting = Boolean(
-      meta.sessionKey ||
-      meta.sessionLabel ||
-      this.opts.defaultSessionKey ||
-      this.opts.defaultSessionLabel,
-    );
+    const hasExplicitRouting = hasExplicitSessionRouting(meta, this.opts);
     const exactLedgerReplay: AcpEventLedgerReplay = hasExplicitRouting
       ? { complete: false, events: [] }
       : await this.sessionUpdates.readLedgerReplayBySessionId(params.sessionId);
