@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
@@ -27,12 +27,16 @@ import { setupCronServiceSuite } from "./service.test-harness.js";
 import { loadCronStore } from "./store.js";
 import type { CronJobCreate, CronJobPatch, CronToolsAllowProvenance } from "./types.js";
 
+let cron: CronService;
+let storePath: string;
+
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "openclaw-cron-channel-requester-",
 });
 
-function createCronService(storePath: string) {
-  return new CronService({
+beforeEach(async () => {
+  ({ storePath } = await makeStorePath());
+  cron = new CronService({
     scheduler: createTestGatewayScheduler(),
     nowMs: () => Date.now(),
     storePath,
@@ -42,7 +46,11 @@ function createCronService(storePath: string) {
     requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
-}
+});
+// Teardown hooks run in reverse registration order, before the store is closed.
+afterEach(() => cron?.stop());
+
+const readJob = async () => (await loadCronStore(storePath)).jobs[0];
 
 const requesterOwner = {
   agentId: "ops",
@@ -65,6 +73,11 @@ const fullRequesterProvenance: CronToolsAllowProvenance = {
   version: 1,
   source: "final-executable-surface",
   callerOrigin: { kind: "unknown" },
+  channelRequester,
+};
+const nativeProvenance: CronToolsAllowProvenance = {
+  version: 1,
+  source: "authenticated-requester",
   channelRequester,
 };
 const localProvenance: CronToolsAllowProvenance = {
@@ -92,8 +105,6 @@ function requesterDeclaration(overrides: Partial<CronJobCreate> = {}): CronJobCr
 
 describe("CronService authenticated channel requester", () => {
   it("rejects a minted requester token at commit after its MCP capture is deactivated", async () => {
-    const { storePath } = await makeStorePath();
-    const cron = createCronService(storePath);
     const runId = "cron-requester-mcp-commit";
     const admission = prepareAgentRunAdmission({
       cfg: {},
@@ -198,58 +209,47 @@ describe("CronService authenticated channel requester", () => {
         revokeMcpLoopbackClientGrant(loopbackToken);
       }
       admission.close();
-      cron.stop();
     }
   });
 
   it("persists and rebinds a finite authenticated requester cap", async () => {
-    const { storePath } = await makeStorePath();
-    const cron = createCronService(storePath);
-    const provenance: CronToolsAllowProvenance = {
-      version: 1,
-      source: "authenticated-requester",
-      channelRequester,
-    };
-    try {
-      const created = await cron.add(requesterDeclaration(), {
-        scheduledToolPolicy: requesterPolicy,
-        toolsAllowProvenance: provenance,
-        createdActor: { type: "human", source: "profile", id: "original-session-creator" },
-      });
-      const stored = (await loadCronStore(storePath)).jobs[0]!;
-      expect(stored.toolsAllowProvenance).toEqual(provenance);
-      expect(stored.payload.toolsAllow).toEqual(["message"]);
-      expect(stored.payload.toolsAllowIsDefault).toBeUndefined();
+    const provenance = nativeProvenance;
+    const created = await cron.add(requesterDeclaration(), {
+      scheduledToolPolicy: requesterPolicy,
+      toolsAllowProvenance: provenance,
+      createdActor: { type: "human", source: "profile", id: "original-session-creator" },
+    });
+    const stored = (await readJob())!;
+    expect(stored.toolsAllowProvenance).toEqual(provenance);
+    expect(stored.payload.toolsAllow).toEqual(["message"]);
+    expect(stored.payload.toolsAllowIsDefault).toBeUndefined();
 
-      const nextRequester = { ...channelRequester, senderId: "requester-b" };
-      await cron.update(
-        created.id,
-        { name: "Updated executable instructions" },
-        {
-          toolsAllowProvenance: {
-            version: 1,
-            source: "authenticated-requester",
-            channelRequester: nextRequester,
-          },
+    const nextRequester = { ...channelRequester, senderId: "requester-b" };
+    await cron.update(
+      created.id,
+      { name: "Updated executable instructions" },
+      {
+        toolsAllowProvenance: {
+          version: 1,
+          source: "authenticated-requester",
+          channelRequester: nextRequester,
         },
-      );
-      const rebound = (await loadCronStore(storePath)).jobs[0]!;
-      expect(rebound.toolsAllowProvenance).toEqual({
-        ...provenance,
-        channelRequester: nextRequester,
-      });
-      expect(rebound.owner).toEqual(requesterOwner);
-      expect(rebound.scheduledToolPolicy).toEqual(requesterPolicy);
-      expect(rebound.payload.toolsAllow).toEqual(["message"]);
-      expect(rebound.createdActor?.id).toBe("original-session-creator");
+      },
+    );
+    const rebound = (await readJob())!;
+    expect(rebound.toolsAllowProvenance).toEqual({
+      ...provenance,
+      channelRequester: nextRequester,
+    });
+    expect(rebound.owner).toEqual(requesterOwner);
+    expect(rebound.scheduledToolPolicy).toEqual(requesterPolicy);
+    expect(rebound.payload.toolsAllow).toEqual(["message"]);
+    expect(rebound.createdActor?.id).toBe("original-session-creator");
 
-      await cron.update(created.id, {
-        payload: { kind: "agentTurn", message: "New instructions without a native capture" },
-      });
-      expect((await loadCronStore(storePath)).jobs[0]?.toolsAllowProvenance).toBeUndefined();
-    } finally {
-      cron.stop();
-    }
+    await cron.update(created.id, {
+      payload: { kind: "agentTurn", message: "New instructions without a native capture" },
+    });
+    expect((await readJob())?.toolsAllowProvenance).toBeUndefined();
   });
 
   it.each<{
@@ -291,45 +291,37 @@ describe("CronService authenticated channel requester", () => {
       freshRequester: true,
     },
   ])("reconciles requester authority for $name", async (testCase) => {
-    const { storePath } = await makeStorePath();
-    const cron = createCronService(storePath);
-    try {
-      const created = await cron.add(requesterDeclaration({ trigger: testCase.trigger }), {
-        scheduledToolPolicy: requesterPolicy,
-        toolsAllowProvenance: fullRequesterProvenance,
-      });
-      await cron.update(
-        created.id,
-        testCase.patch,
-        testCase.freshRequester
-          ? {
-              toolsAllowProvenance: {
-                version: 1,
-                source: "authenticated-requester",
-                channelRequester: { ...channelRequester, senderId: "requester-b" },
-              },
-            }
-          : undefined,
-      );
-      const stored = (await loadCronStore(storePath)).jobs[0]!;
-      expect(stored.toolsAllowProvenance).toEqual({
-        version: 1,
-        source: "final-executable-surface",
-        callerOrigin: { kind: "unknown" },
-        ...(testCase.preserves ? { channelRequester } : {}),
-      });
-      expect(stored.scheduledToolPolicy).toEqual(requesterPolicy);
-      expect(stored.payload.toolsAllow).toEqual(["message"]);
-    } finally {
-      cron.stop();
-    }
+    const created = await cron.add(requesterDeclaration({ trigger: testCase.trigger }), {
+      scheduledToolPolicy: requesterPolicy,
+      toolsAllowProvenance: fullRequesterProvenance,
+    });
+    await cron.update(
+      created.id,
+      testCase.patch,
+      testCase.freshRequester
+        ? {
+            toolsAllowProvenance: {
+              version: 1,
+              source: "authenticated-requester",
+              channelRequester: { ...channelRequester, senderId: "requester-b" },
+            },
+          }
+        : undefined,
+    );
+    const stored = (await readJob())!;
+    expect(stored.toolsAllowProvenance).toEqual({
+      version: 1,
+      source: "final-executable-surface",
+      callerOrigin: { kind: "unknown" },
+      ...(testCase.preserves ? { channelRequester } : {}),
+    });
+    expect(stored.scheduledToolPolicy).toEqual(requesterPolicy);
+    expect(stored.payload.toolsAllow).toEqual(["message"]);
   });
 
   it.each(["update", "declaration"] as const)(
     "captures the native requester during %s without clearing captured harness authority",
     async (mutation) => {
-      const { storePath } = await makeStorePath();
-      const cron = createCronService(storePath);
       const input = requesterDeclaration();
       const runtimeAuthority = {
         version: 1 as const,
@@ -338,82 +330,68 @@ describe("CronService authenticated channel requester", () => {
         payload: { apps: [{ id: "calendar" }] },
       };
       const commitGuard = vi.fn();
-      const toolsAllowProvenance: CronToolsAllowProvenance = {
-        version: 1,
-        source: "authenticated-requester",
-        channelRequester,
-      };
-      try {
-        const created = await cron.add(input, {
-          scheduledToolPolicy: requesterPolicy,
-          toolsAllowProvenance: {
-            version: 1,
-            source: "final-executable-surface",
-            callerOrigin: { kind: "unknown" },
-          },
-          captureRuntimeAuthority: () => runtimeAuthority,
+      const toolsAllowProvenance = nativeProvenance;
+      const created = await cron.add(input, {
+        scheduledToolPolicy: requesterPolicy,
+        toolsAllowProvenance: {
+          version: 1,
+          source: "final-executable-surface",
+          callerOrigin: { kind: "unknown" },
+        },
+        captureRuntimeAuthority: () => runtimeAuthority,
+      });
+      const repeat = () =>
+        cron.add(
+          { ...input, payload: { kind: "agentTurn", message: "updated report" } },
+          { toolsAllowProvenance, commitGuard },
+        );
+      if (mutation === "update") {
+        await cron.update(
+          created.id,
+          { payload: { kind: "agentTurn", message: "updated report" } },
+          { toolsAllowProvenance, commitGuard },
+        );
+      } else {
+        expect(await repeat()).toMatchObject({
+          id: created.id,
+          created: false,
+          updated: true,
         });
-        const repeat = () =>
-          cron.add(
-            { ...input, payload: { kind: "agentTurn", message: "updated report" } },
-            { toolsAllowProvenance, commitGuard },
-          );
-        if (mutation === "update") {
-          await cron.update(
-            created.id,
-            { payload: { kind: "agentTurn", message: "updated report" } },
-            { toolsAllowProvenance, commitGuard },
-          );
-        } else {
-          expect(await repeat()).toMatchObject({
-            id: created.id,
-            created: false,
-            updated: true,
-          });
-          expect(commitGuard).toHaveBeenCalled();
-          commitGuard.mockClear();
-          expect(await repeat()).toMatchObject({
-            id: created.id,
-            created: false,
-            updated: false,
-          });
-        }
         expect(commitGuard).toHaveBeenCalled();
-        const stored = (await loadCronStore(storePath)).jobs[0]!;
-        expect(stored.toolsAllowProvenance).toEqual(fullRequesterProvenance);
-        expect(stored.runtimeAuthority).toEqual(runtimeAuthority);
-        expect(stored.runtimeAuthorityRecoveryRequired).toBeUndefined();
-        expect(stored.payload.toolsAllow).toEqual(["message"]);
-      } finally {
-        cron.stop();
+        commitGuard.mockClear();
+        expect(await repeat()).toMatchObject({
+          id: created.id,
+          created: false,
+          updated: false,
+        });
       }
+      expect(commitGuard).toHaveBeenCalled();
+      const stored = (await readJob())!;
+      expect(stored.toolsAllowProvenance).toEqual(fullRequesterProvenance);
+      expect(stored.runtimeAuthority).toEqual(runtimeAuthority);
+      expect(stored.runtimeAuthorityRecoveryRequired).toBeUndefined();
+      expect(stored.payload.toolsAllow).toEqual(["message"]);
     },
   );
 
   it("keeps native requester facts within the job account during update", async () => {
-    const { storePath } = await makeStorePath();
-    const cron = createCronService(storePath);
     const input = requesterDeclaration();
-    try {
-      const created = await cron.add(input, {
-        scheduledToolPolicy: requesterPolicy,
-        toolsAllowProvenance: fullRequesterProvenance,
-      });
-      const options = {
-        toolsAllowProvenance: {
-          version: 1 as const,
-          source: "authenticated-requester" as const,
-          channelRequester: { ...channelRequester, accountId: "another-account" },
-        },
-      };
-      await cron.update(created.id, { name: "Updated report" }, options);
-      const stored = (await loadCronStore(storePath)).jobs[0]!;
-      expect(stored.toolsAllowProvenance?.channelRequester).toBeUndefined();
-      expect(stored.toolsAllowProvenance?.source).toBe("final-executable-surface");
-      expect(stored.scheduledToolPolicy).toEqual(requesterPolicy);
-    } finally {
-      cron.stop();
-    }
+    const created = await cron.add(input, {
+      scheduledToolPolicy: requesterPolicy,
+      toolsAllowProvenance: fullRequesterProvenance,
+    });
+    const options = {
+      toolsAllowProvenance: {
+        version: 1 as const,
+        source: "authenticated-requester" as const,
+        channelRequester: { ...channelRequester, accountId: "another-account" },
+      },
+    };
+    await cron.update(created.id, { name: "Updated report" }, options);
+    const stored = (await readJob())!;
+    expect(stored.toolsAllowProvenance?.channelRequester).toBeUndefined();
+    expect(stored.toolsAllowProvenance?.source).toBe("final-executable-surface");
+    expect(stored.scheduledToolPolicy).toEqual(requesterPolicy);
   });
 
   it.each([
@@ -422,124 +400,96 @@ describe("CronService authenticated channel requester", () => {
   ] as const)(
     "preserves $mode policy across operator tool-runtime transitions through $mutation",
     async ({ mutation, mode }) => {
-      const { storePath } = await makeStorePath();
-      const cron = createCronService(storePath);
       const input = requesterDeclaration();
-      try {
-        const created = await cron.add(
-          input,
-          mode === "account"
-            ? {
-                scheduledToolPolicy: requesterPolicy,
-                toolsAllowProvenance: fullRequesterProvenance,
-              }
-            : undefined,
-        );
-        const command: CronJobCreate["payload"] = {
-          kind: "command",
-          argv: ["true"],
-        };
-        if (mutation === "update") {
-          await cron.update(created.id, { payload: command });
-        } else {
-          await cron.add({ ...input, payload: { ...command, toolsAllow: ["message"] } });
-        }
-        const dormant = (await loadCronStore(storePath)).jobs[0]!;
-        expect(dormant.scheduledToolPolicy).toEqual(
-          mode === "account" ? requesterPolicy : undefined,
-        );
-        expect(dormant.toolsAllowProvenance?.channelRequester).toBeUndefined();
-
-        if (mutation === "update") {
-          await cron.update(created.id, { payload: { kind: "agentTurn", message: "report" } });
-        } else {
-          await cron.add(input);
-        }
-        const restored = (await loadCronStore(storePath)).jobs[0]!;
-        expect(restored.scheduledToolPolicy).toEqual(
-          mode === "account" ? requesterPolicy : { version: 1, mode: "trusted" },
-        );
-        expect(restored.toolsAllowProvenance?.channelRequester).toBeUndefined();
-        expect(restored.payload.toolsAllow).toEqual(["message"]);
-      } finally {
-        cron.stop();
+      const created = await cron.add(
+        input,
+        mode === "account"
+          ? {
+              scheduledToolPolicy: requesterPolicy,
+              toolsAllowProvenance: fullRequesterProvenance,
+            }
+          : undefined,
+      );
+      const command: CronJobCreate["payload"] = {
+        kind: "command",
+        argv: ["true"],
+      };
+      if (mutation === "update") {
+        await cron.update(created.id, { payload: command });
+      } else {
+        await cron.add({ ...input, payload: { ...command, toolsAllow: ["message"] } });
       }
+      const dormant = (await readJob())!;
+      expect(dormant.scheduledToolPolicy).toEqual(mode === "account" ? requesterPolicy : undefined);
+      expect(dormant.toolsAllowProvenance?.channelRequester).toBeUndefined();
+
+      if (mutation === "update") {
+        await cron.update(created.id, { payload: { kind: "agentTurn", message: "report" } });
+      } else {
+        await cron.add(input);
+      }
+      const restored = (await readJob())!;
+      expect(restored.scheduledToolPolicy).toEqual(
+        mode === "account" ? requesterPolicy : { version: 1, mode: "trusted" },
+      );
+      expect(restored.toolsAllowProvenance?.channelRequester).toBeUndefined();
+      expect(restored.payload.toolsAllow).toEqual(["message"]);
     },
   );
 });
 
 describe("CronService authenticated caller origin", () => {
   it("persists local creation, clears executable edits, and permits explicit reauthorization", async () => {
-    const { storePath } = await makeStorePath();
-    const cron = createCronService(storePath);
-    try {
-      const created = await cron.add(requesterDeclaration({ declarationKey: undefined }), {
-        scheduledToolPolicy: requesterPolicy,
-        toolsAllowProvenance: localProvenance,
-      });
-      expect(created.toolsAllowProvenance).toEqual(localProvenance);
+    const created = await cron.add(requesterDeclaration({ declarationKey: undefined }), {
+      scheduledToolPolicy: requesterPolicy,
+      toolsAllowProvenance: localProvenance,
+    });
+    expect(created.toolsAllowProvenance).toEqual(localProvenance);
 
-      await cron.update(created.id, {
-        description: "descriptive only",
-        displayName: "Daily report metadata",
-      });
-      expect((await loadCronStore(storePath)).jobs[0]?.toolsAllowProvenance).toEqual(
-        localProvenance,
-      );
+    await cron.update(created.id, {
+      description: "descriptive only",
+      displayName: "Daily report metadata",
+    });
+    expect((await readJob())?.toolsAllowProvenance).toEqual(localProvenance);
 
-      await cron.update(created.id, {
-        payload: { kind: "agentTurn", toolsAllow: ["message"] },
-      });
-      expect((await loadCronStore(storePath)).jobs[0]?.toolsAllowProvenance).toEqual(
-        localProvenance,
-      );
+    await cron.update(created.id, {
+      payload: { kind: "agentTurn", toolsAllow: ["message"] },
+    });
+    expect((await readJob())?.toolsAllowProvenance).toEqual(localProvenance);
 
-      await cron.update(created.id, { name: "Changed model context" });
-      expect((await loadCronStore(storePath)).jobs[0]?.toolsAllowProvenance).toBeUndefined();
+    await cron.update(created.id, { name: "Changed model context" });
+    expect((await readJob())?.toolsAllowProvenance).toBeUndefined();
 
-      await cron.update(
-        created.id,
-        { payload: { kind: "agentTurn", toolsAllow: ["message"] } },
-        { toolsAllowProvenance: localProvenance },
-      );
-      expect((await loadCronStore(storePath)).jobs[0]?.toolsAllowProvenance).toEqual(
-        localProvenance,
-      );
-    } finally {
-      cron.stop();
-    }
+    await cron.update(
+      created.id,
+      { payload: { kind: "agentTurn", toolsAllow: ["message"] } },
+      { toolsAllowProvenance: localProvenance },
+    );
+    expect((await readJob())?.toolsAllowProvenance).toEqual(localProvenance);
   });
 
   it("does not authorize an unchanged declarative job, but rebinds a changed declaration", async () => {
-    const { storePath } = await makeStorePath();
-    const cron = createCronService(storePath);
     const declaration = requesterDeclaration();
-    try {
-      const created = await cron.add(declaration, { scheduledToolPolicy: requesterPolicy });
-      expect(created.toolsAllowProvenance).toBeUndefined();
+    const created = await cron.add(declaration, { scheduledToolPolicy: requesterPolicy });
+    expect(created.toolsAllowProvenance).toBeUndefined();
 
-      expect(
-        await cron.add(declaration, {
-          scheduledToolPolicy: requesterPolicy,
-          toolsAllowProvenance: localProvenance,
-        }),
-      ).toMatchObject({ created: false, updated: false });
-      expect((await loadCronStore(storePath)).jobs[0]?.toolsAllowProvenance).toBeUndefined();
+    expect(
+      await cron.add(declaration, {
+        scheduledToolPolicy: requesterPolicy,
+        toolsAllowProvenance: localProvenance,
+      }),
+    ).toMatchObject({ created: false, updated: false });
+    expect((await readJob())?.toolsAllowProvenance).toBeUndefined();
 
-      expect(
-        await cron.add(
-          {
-            ...declaration,
-            payload: { kind: "agentTurn", message: "changed report", toolsAllow: ["message"] },
-          },
-          { scheduledToolPolicy: requesterPolicy, toolsAllowProvenance: localProvenance },
-        ),
-      ).toMatchObject({ created: false, updated: true });
-      expect((await loadCronStore(storePath)).jobs[0]?.toolsAllowProvenance).toEqual(
-        localProvenance,
-      );
-    } finally {
-      cron.stop();
-    }
+    expect(
+      await cron.add(
+        {
+          ...declaration,
+          payload: { kind: "agentTurn", message: "changed report", toolsAllow: ["message"] },
+        },
+        { scheduledToolPolicy: requesterPolicy, toolsAllowProvenance: localProvenance },
+      ),
+    ).toMatchObject({ created: false, updated: true });
+    expect((await readJob())?.toolsAllowProvenance).toEqual(localProvenance);
   });
 });

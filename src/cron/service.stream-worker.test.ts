@@ -21,6 +21,15 @@ import * as runHistory from "./store/run-history.js";
 import { cronStreamScheduleKey } from "./stream-schedule.js";
 import type { CronJob } from "./types.js";
 
+const readState = async (storePath: string, id: string) =>
+  (await loadCronJobsStore(storePath)).jobs.find((row) => row.id === id)?.state;
+
+const settle = <T>(pending: Promise<T>) =>
+  pending.then(
+    (value) => ({ kind: "returned" as const, value }),
+    (error: unknown) => ({ kind: "rejected" as const, error }),
+  );
+
 async function withStreamService(
   run: (fixture: {
     service: CronService;
@@ -146,9 +155,7 @@ describe("cron stream worker service", () => {
         expect.objectContaining({ agentId: "alpha" }),
       ]);
       expect(service.getJob(job.id)?.state).toMatchObject(expectedState);
-      expect(
-        (await loadCronJobsStore(storePath)).jobs.find((row) => row.id === job.id)?.state,
-      ).toMatchObject(expectedState);
+      expect(await readState(storePath, job.id)).toMatchObject(expectedState);
     });
   });
 
@@ -167,14 +174,11 @@ describe("cron stream worker service", () => {
       let pending: Promise<unknown> | undefined;
       try {
         await entered.promise;
-        pending = service
-          .updateExternalState(job.id, source.scheduleKey, source.identity, {
+        pending = settle(
+          service.updateExternalState(job.id, source.scheduleKey, source.identity, {
             streamStatus: "error",
-          })
-          .then(
-            (value) => ({ kind: "returned", value }),
-            (error: unknown) => ({ kind: "rejected", error }),
-          );
+          }),
+        );
         setDefaultAgent("beta");
         release.resolve();
         expect(await blocker).toBe(blockerError);
@@ -183,10 +187,7 @@ describe("cron stream worker service", () => {
           error: { message: "Cron mutation source or service changed before commit" },
         });
         expect(service.getJob(job.id)?.state.streamStatus).toBeUndefined();
-        expect(
-          (await loadCronJobsStore(storePath)).jobs.find((row) => row.id === job.id)?.state
-            .streamStatus,
-        ).toBeUndefined();
+        expect((await readState(storePath, job.id))?.streamStatus).toBeUndefined();
       } finally {
         release.resolve();
         await blocker;
@@ -238,15 +239,9 @@ describe("cron stream worker service", () => {
           sourceIdentity: source.identity,
           processAlive: true,
         });
-        expect(
-          (await loadCronJobsStore(storePath)).jobs.find((row) => row.id === job.id)?.state
-            .streamStatus,
-        ).toBe("running");
+        expect((await readState(storePath, job.id))?.streamStatus).toBe("running");
         updateState.mockClear();
-        const stopping = await watchers.stop(job.id, "shutdown").then(
-          () => ({ kind: "stopped" }),
-          (error: unknown) => ({ kind: "rejected", error }),
-        );
+        const stopping = await settle(watchers.stop(job.id, "shutdown"));
         const loss = expectDefined(dropped, "actual retirement reply loss");
         expect(loss.wasDropped()).toBe(true);
         expect(loss.attempts).toEqual(["cron.mutateExternalState"]);
@@ -333,20 +328,16 @@ describe("cron stream worker service", () => {
           lastError: "source exhausted restarts",
         };
         let settled = false;
-        const pending = service
-          .recordExternalFailure(
+        const pending = settle(
+          service.recordExternalFailure(
             job.id,
             "source exhausted restarts",
             { streamStatus: "error", streamRestartExhausted: true },
             source,
-          )
-          .then(
-            () => ({ kind: "returned" }),
-            (error: unknown) => ({ kind: "rejected", error }),
-          )
-          .finally(() => {
-            settled = true;
-          });
+          ),
+        ).finally(() => {
+          settled = true;
+        });
         try {
           if (loseReply) {
             expect(await pending).toMatchObject({ kind: "rejected" });
@@ -360,9 +351,7 @@ describe("cron stream worker service", () => {
               onEvent.mock.calls.filter(([event]) => event.action === "finished"),
             ).toHaveLength(0);
             expect(service.getJob(job.id)?.state).toEqual(residentBefore);
-            expect(
-              (await loadCronJobsStore(storePath)).jobs.find((row) => row.id === job.id)?.state,
-            ).toMatchObject(expectedState);
+            expect(await readState(storePath, job.id)).toMatchObject(expectedState);
             return;
           }
           expect(
@@ -376,9 +365,7 @@ describe("cron stream worker service", () => {
           expect(onEvent.mock.calls.filter(([event]) => event.action === "finished")).toHaveLength(
             0,
           );
-          expect(
-            (await loadCronJobsStore(storePath)).jobs.find((row) => row.id === job.id)?.state,
-          ).toMatchObject(expectedState);
+          expect(await readState(storePath, job.id)).toMatchObject(expectedState);
           setDefaultAgent("beta");
           releaseHistory.resolve();
           const outcome = await pending;
@@ -410,9 +397,7 @@ describe("cron stream worker service", () => {
             }),
           ]);
           expect(service.getJob(job.id)?.state).toEqual(residentBefore);
-          expect(
-            (await loadCronJobsStore(storePath)).jobs.find((row) => row.id === job.id)?.state,
-          ).toMatchObject(expectedState);
+          expect(await readState(storePath, job.id)).toMatchObject(expectedState);
         } finally {
           releaseHistory.resolve();
           await pending;

@@ -49,6 +49,9 @@ function fixtureState(defaultAgentId?: string): CronServiceState {
   return { deps: { nowMs: () => NOW, defaultAgentId } } as unknown as CronServiceState;
 }
 
+const scheduledJob = (schedule: CronJob["schedule"]) =>
+  createJob(fixtureState(), input({ schedule }));
+
 const convergence = { enabledExplicit: true, nowMs: NOW };
 
 describe("applyJobPatch", () => {
@@ -179,25 +182,33 @@ describe("applyJobPatch", () => {
 describe("agent payload patches", () => {
   it("updates authored agent settings in a single payload patch", () => {
     const current = agentJob();
-    applyJobPatch(current, {
-      payload: {
-        kind: "agentTurn",
-        lightContext: true,
-        model: "openai/gpt-5",
-        fallbacks: ["anthropic/claude-haiku-3-5"],
-        thinking: "low",
-        toolsAllow: ["read", "write"],
-      },
-    });
-    expect(current.payload).toEqual({
-      kind: "agentTurn",
-      message: "do it",
+    const settings = {
       lightContext: true,
       model: "openai/gpt-5",
       fallbacks: ["anthropic/claude-haiku-3-5"],
       thinking: "low",
       toolsAllow: ["read", "write"],
-    });
+    };
+    const expected = structuredClone({ kind: "agentTurn", message: "do it", ...settings });
+    applyJobPatch(current, { payload: { kind: "agentTurn", ...settings } });
+    expect(current.payload).toEqual(expected);
+  });
+
+  it("builds a replacement agent payload with authored settings and default tool authority", () => {
+    const current = fixtureJob();
+    const sessionTarget = "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
+    const payload = {
+      kind: "agentTurn",
+      message: "hello",
+      lightContext: true,
+      fallbacks: ["anthropic/claude-haiku-3-5", "openai/gpt-5"],
+      toolsAllow: ["exec", "read"],
+      toolsAllowIsDefault: true,
+    } satisfies CronJobCreate["payload"];
+    const expected = structuredClone(payload);
+    applyJobPatch(current, { sessionTarget, payload });
+    expect(current.sessionTarget).toBe(sessionTarget);
+    expect(current.payload).toEqual(expected);
   });
 
   it("clears saved model-selection overrides without changing the message", () => {
@@ -214,32 +225,6 @@ describe("agent payload patches", () => {
       payload: { kind: "agentTurn", model: null, thinking: null, fallbacks: null },
     });
     expect(current.payload).toEqual({ kind: "agentTurn", message: "do it" });
-  });
-
-  it("builds a replacement agent payload with authored settings and default tool authority", () => {
-    const current = fixtureJob();
-    applyJobPatch(current, {
-      sessionTarget: "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==",
-      payload: {
-        kind: "agentTurn",
-        message: "hello",
-        lightContext: true,
-        fallbacks: ["anthropic/claude-haiku-3-5", "openai/gpt-5"],
-        toolsAllow: ["exec", "read"],
-        toolsAllowIsDefault: true,
-      },
-    });
-    expect(current.sessionTarget).toBe(
-      "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==",
-    );
-    expect(current.payload).toEqual({
-      kind: "agentTurn",
-      message: "hello",
-      lightContext: true,
-      fallbacks: ["anthropic/claude-haiku-3-5", "openai/gpt-5"],
-      toolsAllow: ["exec", "read"],
-      toolsAllowIsDefault: true,
-    });
   });
 
   it.each([
@@ -275,33 +260,23 @@ describe("agent payload patches", () => {
 
 describe("time schedule validation", () => {
   it("rejects overflowing intervals while preserving the inclusive Date boundary", () => {
-    expect(() =>
-      createJob(
-        fixtureState(),
-        input({ schedule: { kind: "every", everyMs: MAX_DATE_TIMESTAMP_MS } }),
-      ),
-    ).toThrow("cron every schedule has no upcoming run time and would never fire");
+    expect(() => scheduledJob({ kind: "every", everyMs: MAX_DATE_TIMESTAMP_MS })).toThrow(
+      "cron every schedule has no upcoming run time and would never fire",
+    );
     expect(
-      createJob(
-        fixtureState(),
-        input({ schedule: { kind: "every", everyMs: MAX_DATE_TIMESTAMP_MS, anchorMs: 0 } }),
-      ).state.nextRunAtMs,
+      scheduledJob({ kind: "every", everyMs: MAX_DATE_TIMESTAMP_MS, anchorMs: 0 }).state
+        .nextRunAtMs,
     ).toBe(MAX_DATE_TIMESTAMP_MS);
   });
 
   it("rejects invalid one-shot timestamps at the service boundary", () => {
     expect(
-      createJob(
-        fixtureState(),
-        input({ schedule: { kind: "at", at: new Date(MAX_DATE_TIMESTAMP_MS).toISOString() } }),
-      ).state.nextRunAtMs,
+      scheduledJob({ kind: "at", at: new Date(MAX_DATE_TIMESTAMP_MS).toISOString() }).state
+        .nextRunAtMs,
     ).toBe(MAX_DATE_TIMESTAMP_MS);
-    expect(() =>
-      createJob(
-        fixtureState(),
-        input({ schedule: { kind: "at", at: String(MAX_DATE_TIMESTAMP_MS + 1) } }),
-      ),
-    ).toThrow("Date-valid absolute timestamp");
+    expect(() => scheduledJob({ kind: "at", at: String(MAX_DATE_TIMESTAMP_MS + 1) })).toThrow(
+      "Date-valid absolute timestamp",
+    );
   });
 });
 
@@ -513,36 +488,25 @@ describe("cron schedules", () => {
   });
 });
 
-function createCronSystemEventJob(now: number, overrides: Partial<CronJob> = {}): CronJob {
-  const { state, ...jobOverrides } = overrides;
-  return {
+function maintenanceFixture(statePatch: CronJob["state"]) {
+  const job = fixtureJob({
     id: "test-job",
     name: "test job",
-    enabled: true,
-    schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
     payload: { kind: "systemEvent", text: "test" },
-    sessionTarget: "main",
+    schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
     wakeMode: "next-heartbeat",
-    createdAtMs: now,
-    updatedAtMs: now,
-    ...jobOverrides,
-    state: state ? { ...state } : {},
-  };
+    state: statePatch,
+  });
+  return { job, state: createMockCronStateForJobs({ jobs: [job], nowMs: NOW }) };
 }
 
 describe("cron maintenance ownership", () => {
   it("leaves a queued marker from before a clock rollback for startup recovery", () => {
-    const now = Date.now();
-    const futureQueuedAt = now + 3 * 60 * 60_000;
-
-    const job = createCronSystemEventJob(now, {
-      state: {
-        nextRunAtMs: now + 60_000,
-        queuedAtMs: futureQueuedAt,
-      },
+    const futureQueuedAt = NOW + 3 * 60 * 60_000;
+    const { job, state } = maintenanceFixture({
+      nextRunAtMs: NOW + 60_000,
+      queuedAtMs: futureQueuedAt,
     });
-
-    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
     recomputeSingleJobForMaintenance(
       state,
       job,
@@ -551,19 +515,15 @@ describe("cron maintenance ownership", () => {
     );
 
     expect(job.state.queuedAtMs).toBe(futureQueuedAt);
-    expect(job.state.nextRunAtMs).toBe(now + 60_000);
+    expect(job.state.nextRunAtMs).toBe(NOW + 60_000);
   });
 
   it("preserves a future running marker owned by a live execution", () => {
-    const now = Date.now();
-    const futureMarker = now + 3 * 60 * 60_000;
-    const job = createCronSystemEventJob(now, {
-      state: {
-        nextRunAtMs: now + 60_000,
-        runningAtMs: futureMarker,
-      },
+    const futureMarker = NOW + 3 * 60 * 60_000;
+    const { job, state } = maintenanceFixture({
+      nextRunAtMs: NOW + 60_000,
+      runningAtMs: futureMarker,
     });
-    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
     const marker = markCronJobActive(job.id);
     try {
       recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
@@ -574,23 +534,17 @@ describe("cron maintenance ownership", () => {
   });
 
   it("leaves an overdue running marker and its deadline for startup recovery", () => {
-    const now = Date.now();
-    const pastDue = now - 60_000;
-    const staleRunningAt = now - 3 * 60 * 60_000;
-
-    const job = createCronSystemEventJob(now, {
-      state: {
-        nextRunAtMs: pastDue,
-        runningAtMs: staleRunningAt,
-        lastRunAtMs: pastDue + 1000,
-      },
+    const pastDue = NOW - 60_000;
+    const staleRunningAt = NOW - 3 * 60 * 60_000;
+    const { job, state } = maintenanceFixture({
+      nextRunAtMs: pastDue,
+      runningAtMs: staleRunningAt,
+      lastRunAtMs: pastDue + 1000,
     });
-
-    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
     recomputeSingleJobForMaintenance(
       state,
       job,
-      { deferredNotifications: [], recomputeExpired: true, nowMs: now },
+      { deferredNotifications: [], recomputeExpired: true, nowMs: NOW },
       { reservations: new Map(), isJobActive: () => false },
     );
 
