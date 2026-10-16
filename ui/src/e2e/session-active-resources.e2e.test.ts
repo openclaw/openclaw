@@ -1,4 +1,3 @@
-import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
@@ -35,22 +34,18 @@ const notes = {
   label: "Notes",
   updatedAt: 900,
 };
-const inventory = {
-  environments: [
-    {
-      id: "worker-desktop",
-      type: "worker",
-      status: "available",
-      desktop: true,
-      worker: {
-        providerId: "test",
-        state: "attached",
-        ageMs: 1000,
-        attachedSessionIds: ["desktop-session"],
-        tunnelStatus: "connected",
-      },
-    },
-  ],
+const environment = {
+  id: "worker-desktop",
+  type: "worker",
+  status: "available",
+  desktop: true,
+  worker: {
+    providerId: "test",
+    state: "attached",
+    ageMs: 1000,
+    attachedSessionIds: ["desktop-session"],
+    tunnelStatus: "connected",
+  },
 };
 const list = (active: boolean, snapshotAt?: number) => ({
   sessions: [active ? row : { ...row, placement: { state: "local" }, snapshotAt }, notes],
@@ -76,8 +71,6 @@ const desktop = {
   expiresAtMs: 60000,
   control: false,
 };
-const screenshot = (page: Page, name: string) =>
-  page.screenshot({ path: path.join(suite.artifactDir, `${name}.png`), animations: "disabled" });
 const withPage = (run: (fixture: { page: Page }) => Promise<void>, width = 1280) =>
   suite.withPage({ serviceWorkers: "block", viewport: { width, height: 900 } }, run);
 async function openResources(page: Page, options: Parameters<typeof installMockGateway>[1]) {
@@ -129,21 +122,20 @@ suite.define(() => {
           historyMessages: [{ role: "assistant", content: "Your existing desktop is ready." }],
           methodResponses: {
             "sessions.list": list(!staleRoster, staleRoster ? 1000 : undefined),
-            "environments.list": inventory,
             "environments.status": explicitTargetOnReload
               ? {
                   cases: [
                     {
                       match: { environmentId: explicitEnvironmentId },
-                      response: { ...inventory.environments[0], id: explicitEnvironmentId },
+                      response: { ...environment, id: explicitEnvironmentId },
                     },
                     {
                       match: { environmentId: "worker-desktop" },
-                      response: inventory.environments[0],
+                      response: environment,
                     },
                   ],
                 }
-              : inventory.environments[0],
+              : environment,
             "desktop.observe": desktop,
           },
         });
@@ -168,20 +160,15 @@ suite.define(() => {
         } else {
           expect(chatBox!.height).toBeGreaterThan(100);
         }
-        await screenshot(page, `direct-desktop-${String(width)}`);
         if (explicitTargetOnReload) {
           const explicitSource = { kind: "environment", environmentId: explicitEnvironmentId };
           await gateway.deferNext("desktop.observe", { source: explicitSource });
           await page.evaluate(
-            ({ eventName, sessionKey, environmentId }) => {
-              window.dispatchEvent(
-                new CustomEvent(eventName, {
-                  detail: { open: true, sessionKey, environmentId },
-                }),
-              );
-            },
+            ({ eventName, ...detail }) =>
+              window.dispatchEvent(new CustomEvent(eventName, { detail })),
             {
               eventName: DESKTOP_PANEL_TOGGLE_EVENT,
+              open: true,
               sessionKey: key,
               environmentId: explicitEnvironmentId,
             },
@@ -225,7 +212,6 @@ suite.define(() => {
           await installScriptedRfbServer(page);
           await gateway.resolveDeferred("desktop.observe");
           await pane(page).locator(".desktop-surface canvas").waitFor();
-          await screenshot(page, "desktop-swap-reload");
           expect(await desktopTab(page).count()).toBe(1);
         } else if (scenario === "reclaim") {
           await dockChatSidePanel(page, "bottom");
@@ -264,10 +250,9 @@ suite.define(() => {
           historyMessages: [{ role: "assistant", content: "Waiting for the session desktop." }],
           methodResponses: {
             "sessions.list": list(runnerAvailability),
-            "environments.list": inventory,
             "environments.status": runnerAvailability
-              ? { ...inventory.environments[0], status: "unavailable" }
-              : inventory.environments[0],
+              ? { ...environment, status: "unavailable" }
+              : environment,
             "desktop.observe": desktop,
           },
         });
@@ -276,26 +261,24 @@ suite.define(() => {
           await gateway.waitForRequest("environments.status");
         }
         expect(await desktopTab(page).count()).toBe(0);
-        await screenshot(page, "before-active");
         const rfb = await installScriptedRfbServer(page);
         const composer = pane(page).locator(".agent-chat__composer-combobox textarea");
         await composer.fill("Keep my draft and focus");
         const inventoryBeforeActivation = (await gateway.getRequests("environments.status")).length;
         await gateway.deferNext("environments.status");
         await gateway.setSessionsListResponse(list(true));
-        await gateway.setMethodResponse("environments.status", inventory.environments[0]);
+        await gateway.setMethodResponse("environments.status", environment);
         await gateway.emitGatewayEvent(
           "sessions.changed",
           runnerAvailability ? { reason: "runner-availability" } : { key, reason: "patch" },
         );
         await gateway.waitForRequest("environments.status", { after: inventoryBeforeActivation });
         expect(await desktopTab(page).count()).toBe(0);
-        await gateway.resolveDeferred("environments.status", inventory.environments[0]);
+        await gateway.resolveDeferred("environments.status", environment);
         await desktopTab(page).waitFor();
         await pane(page).locator(".desktop-surface canvas").waitFor();
         expect(await composer.inputValue()).toBe("Keep my draft and focus");
         expect(await composer.evaluate((element) => element === document.activeElement)).toBe(true);
-        await screenshot(page, "newly-active");
         const observationCount = (await gateway.getRequests("desktop.observe")).length;
         await page.getByRole("link", { name: "Notes", exact: true }).click();
         await expect
@@ -337,8 +320,7 @@ suite.define(() => {
           historyMessages: [{ role: "assistant", content: "Resource ownership proof." }],
           methodResponses: {
             "sessions.list": list(false),
-            "environments.list": inventory,
-            "environments.status": inventory.environments[0],
+            "environments.status": environment,
           },
         });
         await gateway.waitForRequest("sessions.describe");
@@ -368,7 +350,7 @@ suite.define(() => {
           filtered ? { ...list(false), sessions: [notes] } : list(false),
         );
         await gateway.emitGatewayEvent("sessions.changed", { key, reason: "patch" });
-        await gateway.resolveDeferred("environments.status", inventory.environments[0]);
+        await gateway.resolveDeferred("environments.status", environment);
         await expectRequestCountStable(gateway, "desktop.observe", 0);
         expect(await ownerPane.getByRole("tab", { name: "Desktop", exact: true }).count()).toBe(0);
         await gateway.waitForRequest("sessions.describe", { after: descriptorReads });
@@ -475,13 +457,11 @@ suite.define(() => {
       }
       await assertNoProvisioning(gateway);
       await pane(page).locator("openclaw-browser-panel .bp-shot").waitFor();
-      await screenshot(page, "browser-active");
       await selectChatLayoutAction(pane(page), /^Swap /);
       await page.reload();
       await ready(page);
       await pane(page).locator("openclaw-browser-panel[embedded] .bp").waitFor();
       await pane(page).locator("openclaw-browser-panel .bp-shot").waitFor();
-      await screenshot(page, "browser-swap-reload");
       expect(await pane(page).locator("openclaw-browser-panel").count()).toBe(1);
       await assertNoProvisioning(gateway);
     });

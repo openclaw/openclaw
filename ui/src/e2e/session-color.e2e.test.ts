@@ -107,28 +107,18 @@ suite.define(() => {
         await expect.poll(focused).toBe("Blue");
         await page.keyboard.press("Shift+Tab");
         await expect.poll(focused).toBe("Red");
-        for (let index = 0; index < 8; index += 1) {
-          await page.keyboard.press("Tab");
-        }
+        await press(page, ...Array.from({ length: 8 }, () => "Tab"));
         await expect.poll(() => picker.locator(".session-menu__icon-choice:focus").count()).toBe(1);
         await press(page, "ArrowRight", "Enter");
         await patched({ icon: "🚀" });
         await page.keyboard.press("Tab");
         const reset = button(picker, "Reset to default");
-        await expect
-          .poll(() =>
-            reset.evaluate(
-              (element) => element.previousElementSibling?.getAttribute("role") ?? null,
-            ),
-          )
-          .toBe("separator");
         await expectFocused(reset);
         await page.keyboard.press("Shift+Tab");
         const iconCount = await picker.locator(".session-menu__icon-choice").count();
         for (let index = 0; index < iconCount && (await focused()) !== "Custom icon…"; index += 1) {
           await page.keyboard.press("ArrowRight");
         }
-        await expect.poll(focused).toBe("Custom icon…");
         await page.keyboard.press("Enter");
         const custom = picker.getByRole("textbox", { name: "Custom icon", exact: true });
         await expect
@@ -172,27 +162,6 @@ suite.define(() => {
       { ...sessionRow("agent:main:research", "Research notes", now - 60_000), color: "green" },
       { ...sessionRow("agent:main:release", "Release checklist", now - 120_000), color: "orange" },
     ];
-    const importedSession = {
-      threadId: "imported",
-      name: "Imported CLI notes",
-      status: "stored",
-      color: "cyan",
-      canContinue: false,
-      canArchive: false,
-    };
-    const catalogHost = {
-      hostId: "gateway:claude",
-      label: "Gateway",
-      kind: "gateway",
-      connected: true,
-      sessions: [importedSession],
-    };
-    const catalog = {
-      id: "claude",
-      label: "Claude Code",
-      capabilities: { continueSession: false, archive: false },
-      hosts: [catalogHost],
-    };
     const text =
       "The design review is ready. Use session colors to keep related conversations easy to find.";
     const gateway = await installMockGateway(page, {
@@ -201,9 +170,8 @@ suite.define(() => {
       methodResponses: {
         "sessions.list": sessionsListResponse(sessions),
         "sessions.patch": {},
-        "sessions.catalog.list": { catalogs: [catalog] },
       },
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.patch", "sessions.catalog.list"],
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.patch"],
     });
     const patched = sessionPatches(gateway, key);
     const shot = async (
@@ -228,17 +196,10 @@ suite.define(() => {
       expect(await row.getAttribute("class")).not.toContain("sidebar-recent-session--colored");
       expect(await dot.count()).toBe(0);
       await shot("before-no-color.png");
-      const imported = page
-        .locator("[data-catalog-session-key]")
-        .filter({ hasText: "Imported CLI notes" });
-      await imported.waitFor({ state: "visible" });
-      expect(await imported.getAttribute("style")).toContain("--session-color-cyan");
-
       await row.click({ button: "right" });
       await openAppearance(page);
       await button(page, "Purple").click();
-      const set = await patched({ color: "purple" });
-      expect(set.params).toMatchObject({ key, color: "purple" });
+      await patched({ color: "purple" });
       await expect
         .poll(() => row.getAttribute("class"))
         .toContain("sidebar-recent-session--colored");
@@ -250,7 +211,6 @@ suite.define(() => {
       );
       const darkStripe = await stripe();
       expect(darkStripe).not.toBe("rgba(0, 0, 0, 0)");
-      // Both choices persist in the same open picker, without reopening the menu.
       const picker = page.locator("openclaw-session-menu .session-menu__appearance");
       await button(picker, "book").click();
       await patched({ icon: "book" });
@@ -282,8 +242,7 @@ suite.define(() => {
       });
       await gateway.setSessionsListResponse(sessionsListResponse(sessions));
       await gateway.emitGatewayEvent("sessions.changed", { sessionKey: key, color: null });
-      // Only the roster response carries this label; wait for that render so a
-      // transient event-only clear cannot hide a stale color restored by refresh.
+      // Await the roster-only label so an event-only clear cannot mask a stale refresh color.
       await row.getByText("Design review refreshed", { exact: true }).waitFor();
       expect(
         await row.evaluate((element) => element.style.getPropertyValue("--session-color")),

@@ -8,6 +8,8 @@ import {
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const now = Date.now();
+const selected = sessionRow("agent:main:selected", "Planning desk", now);
 type Page = Parameters<typeof installMockGateway>[0];
 type Session = ReturnType<typeof sessionRow>;
 const rowFor = (page: Page, key: string) =>
@@ -21,6 +23,12 @@ const pageOptions = {
   serviceWorkers: "block" as const,
   viewport: { height: 1000, width: 1280 },
 };
+const whatsappOrigin = (chatType: "direct" | "group", from: string) => ({
+  provider: "whatsapp",
+  chatType,
+  from,
+  accountId: "personal",
+});
 
 async function withSessions(
   sessions: [Session, ...Session[]],
@@ -46,19 +54,11 @@ async function withSessions(
 
 suite.define(() => {
   it("distinguishes same-title channel sessions and keeps session contributors separate from chat identity", async () => {
-    const now = Date.now();
-    const selected = sessionRow("agent:main:selected", "Planning desk", now);
     const groupKey = "agent:main:whatsapp:group:120363000001@g.us";
     const group = sessionRow(groupKey, "Weekend plans", now - 1, {
       kind: "group",
       channel: "whatsapp",
-      origin: {
-        provider: "whatsapp",
-        chatType: "group",
-        label: "Weekend plans",
-        from: "120363000001@g.us",
-        accountId: "personal",
-      },
+      origin: whatsappOrigin("group", "120363000001@g.us"),
       createdActor: {
         type: "human",
         id: "cli",
@@ -76,13 +76,7 @@ suite.define(() => {
     });
     const direct = sessionRow("agent:main:whatsapp:direct:+15555550123", "Ada", now - 3, {
       channel: "whatsapp",
-      origin: {
-        provider: "whatsapp",
-        chatType: "direct",
-        label: "Ada",
-        from: "15555550123@s.whatsapp.net",
-        accountId: "personal",
-      },
+      origin: whatsappOrigin("direct", "15555550123@s.whatsapp.net"),
     });
 
     await withSessions([selected, group, imessage, direct], async ({ page, gateway }) => {
@@ -119,18 +113,17 @@ suite.define(() => {
   });
 
   it("refreshes channel details in an already-open hovercard when Gateway metadata changes", async () => {
-    const now = Date.now();
-    const selected = sessionRow("agent:main:selected", "Planning desk", now);
     const linkedKey = "agent:main:discord:channel:123456789012345678";
+    const origin = {
+      provider: "discord",
+      chatType: "channel",
+      label: "Example community #planning channel id:123456789012345678",
+      accountId: "community",
+    };
     const linked = sessionRow(linkedKey, "Launch checklist", now - 1, {
       kind: "group",
       channel: "discord",
-      origin: {
-        provider: "discord",
-        chatType: "channel",
-        label: "Example community #planning channel id:123456789012345678",
-        accountId: "community",
-      },
+      origin,
     });
     await withSessions([selected, linked], async ({ page, gateway }) => {
       await rowFor(page, linked.key).hover();
@@ -140,9 +133,7 @@ suite.define(() => {
       const revised = {
         ...linked,
         origin: {
-          provider: "discord",
-          chatType: "channel",
-          accountId: "community",
+          ...origin,
           label: "Example community #release channel id:123456789012345678",
           threadId: "987654321098765432",
         },
@@ -156,13 +147,7 @@ suite.define(() => {
   });
 
   it("does not call a dashboard session channel-linked just because it has delivery metadata", async () => {
-    const now = Date.now();
-    const origin = {
-      provider: "whatsapp",
-      chatType: "direct",
-      from: "+15555550123",
-      accountId: "personal",
-    };
+    const origin = whatsappOrigin("direct", "+15555550123");
     const main = sessionRow("agent:main:main", "Main", now, { channel: "whatsapp", origin });
     const dashboard = sessionRow("agent:main:dashboard:example", "Research desk", now - 1, {
       channel: "whatsapp",

@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-contract";
@@ -40,28 +41,15 @@ const suite = createControlUiE2eSuite({
 });
 
 async function showDashboard(page: Page): Promise<void> {
-  const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
+  // Every scenario starts in a fresh browser context; no saved views need merging.
   await page.addInitScript(
     ({ key, storageKey }) => {
-      const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}") as Record<
-        string,
-        unknown
-      >;
-      const boardSessionViews =
-        settings.boardSessionViews && typeof settings.boardSessionViews === "object"
-          ? (settings.boardSessionViews as Record<string, unknown>)
-          : {};
-      const savedView = boardSessionViews[key];
-      settings.boardSessionViews = {
-        ...boardSessionViews,
-        [key]: {
-          activeTabId: "main",
-          ...(savedView && typeof savedView === "object" ? savedView : {}),
-        },
-      };
-      localStorage.setItem(storageKey, JSON.stringify(settings));
+      localStorage.setItem(
+        storageKey,
+        JSON.stringify({ boardSessionViews: { [key]: { activeTabId: "main" } } }),
+      );
     },
-    { key: sessionKey, storageKey: settingsKey },
+    { key: sessionKey, storageKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl) },
   );
 }
 
@@ -162,6 +150,20 @@ const expectBoardLink = async (link: Locator) =>
     "/workboard/platform",
   );
 
+async function expectPinned(
+  gateway: MockGatewayControls,
+  preview: Locator,
+  expected: { name: string; title: string; content: Record<string, string> },
+) {
+  await expect.poll(async () => (await gateway.getRequests("board.widget.put")).length).toBe(1);
+  expect((await gateway.getRequests("board.widget.put"))[0]?.params).toEqual({
+    sessionKey,
+    agentId: "main",
+    ...expected,
+  });
+  await expect.poll(() => preview.getByRole("button", { name: "Pinned" }).isDisabled()).toBe(true);
+}
+
 async function updateCards(
   gateway: MockGatewayControls,
   cards: WorkboardCard[],
@@ -198,13 +200,8 @@ suite.define(() => {
   const canvasView = useCanvasSandboxFixture();
   it("keeps widget documents in standards mode and cancels self-navigation", async () => {
     const sandboxHost = createSandboxHostHttpServer();
-    await new Promise<void>((resolve, reject) => {
-      sandboxHost.once("error", reject);
-      sandboxHost.listen(0, "127.0.0.1", () => {
-        sandboxHost.off("error", reject);
-        resolve();
-      });
-    });
+    sandboxHost.listen(0, "127.0.0.1");
+    await once(sandboxHost, "listening");
     const sandboxAddress = sandboxHost.address();
     if (!sandboxAddress || typeof sandboxAddress === "string") {
       throw new Error("sandbox host did not bind a TCP address");
@@ -386,17 +383,11 @@ suite.define(() => {
       );
     }
     await preview.getByRole("button", { name: "Pin to dashboard" }).click();
-    await expect.poll(async () => (await gateway.getRequests("board.widget.put")).length).toBe(1);
-    expect((await gateway.getRequests("board.widget.put"))[0]?.params).toEqual({
-      sessionKey,
-      agentId: "main",
+    await expectPinned(gateway, preview, {
       name: "canvas-cv_release",
       title: "Release status",
       content: { kind: "canvas-doc", docId: "cv_release" },
     });
-    await expect
-      .poll(() => preview.getByRole("button", { name: "Pinned" }).isDisabled())
-      .toBe(true);
     if (recordProof) {
       await writeFile(
         path.join(suite.artifactDir, "workboard-pin", "02-pinned.png"),
@@ -537,17 +528,11 @@ suite.define(() => {
     await preview.hover();
     await preview.getByRole("button", { name: "Pin to dashboard" }).click();
 
-    await expect.poll(async () => (await gateway.getRequests("board.widget.put")).length).toBe(1);
-    expect((await gateway.getRequests("board.widget.put"))[0]?.params).toEqual({
-      sessionKey,
-      agentId: "main",
+    await expectPinned(gateway, preview, {
       name: "mcp-app-28b65635ecaa78ac",
       title: "Demo App",
       content: { kind: "mcp-app", viewId: "view-session-bound" },
     });
-    await expect
-      .poll(() => preview.getByRole("button", { name: "Pinned" }).isDisabled())
-      .toBe(true);
     await context.close();
   });
 
@@ -571,7 +556,6 @@ suite.define(() => {
       title: "Already running",
       sessionKey: undefined,
       status: "running",
-      position: 1_000,
     };
     const gateway = await setupDashboard(page, {
       ...workboardUi,
@@ -673,7 +657,7 @@ suite.define(() => {
 
   it("keeps a read-only Workboard dashboard card visible without allowing status changes", async () => {
     await suite.withPage({ viewport: { height: 900, width: 1280 } }, async ({ page }) => {
-      const card = makeCard({ title: "Read-only dashboard card", position: 1 });
+      const card = makeCard({ title: "Read-only dashboard card" });
       const gateway = await setupDashboard(page, {
         ...workboardUi,
         controlUiWidgetKinds: widgetKinds,
@@ -704,7 +688,6 @@ suite.define(() => {
       id: "card-dashboard-stitch",
       title: "Ship dashboard stitch",
       status: "running",
-      labels: ["ui"],
       agentId: undefined,
       sessionKey,
       runId: "run-dashboard-stitch",
@@ -717,6 +700,10 @@ suite.define(() => {
         "workboard.cards.list": workboardCardsListResponse([card]),
       },
     });
+    const setHistory = (text: string) =>
+      gateway.setMethodResponse("chat.history", {
+        messages: [{ role: "assistant", content: [{ type: "text", text }] }],
+      });
     try {
       await openDashboard(page);
       const chip = page.locator(".workboard-session-chip");
@@ -743,11 +730,7 @@ suite.define(() => {
       });
       await workboardCard.waitFor();
       await workboardCard.click();
-      await gateway.setMethodResponse("chat.history", {
-        messages: [
-          { role: "assistant", content: [{ type: "text", text: "Dashboard stitch progress" }] },
-        ],
-      });
+      await setHistory("Dashboard stitch progress");
       await page.getByRole("tab", { name: "Session", exact: true }).click();
       const cardSummary = page.locator("openclaw-plugin-session-summary");
       await cardSummary.getByText("Dashboard stitch progress", { exact: true }).waitFor();
@@ -756,11 +739,7 @@ suite.define(() => {
       });
       await capture("02-workboard-card-dashboard.png");
 
-      await gateway.setMethodResponse("chat.history", {
-        messages: [
-          { role: "assistant", content: [{ type: "text", text: "Dashboard stitch complete" }] },
-        ],
-      });
+      await setHistory("Dashboard stitch complete");
       await gateway.emitGatewayEvent("session.message", { sessionKey });
       await cardSummary.getByText("Dashboard stitch complete", { exact: true }).waitFor();
       expect(
@@ -772,37 +751,22 @@ suite.define(() => {
   });
 
   it("links Workboard cards without dashboard widgets and omits the disabled plugin", async () => {
-    const cases = [
-      {
-        name: "plugin disabled",
-        native: false,
-        board: boardSnapshot,
-        config: workboardConfigSnapshot(false),
-      },
-      {
-        name: "board empty",
-        native: true,
-        board: { sessionKey, revision: 1, tabs: [], widgets: [] },
-        config: workboardConfigSnapshot(),
-      },
-    ];
-
-    for (const testCase of cases) {
+    for (const native of [false, true]) {
+      const name = native ? "board empty" : "plugin disabled";
       await suite.withPage({ viewport: { height: 900, width: 1280 } }, async ({ page }) => {
         const gateway = await setupDashboard(page, {
-          ...(testCase.native ? workboardUi : {}),
+          ...(native ? workboardUi : {}),
           featureMethods: ["config.get", "workboard.cards.list"],
           methodResponses: {
-            "board.get": testCase.board,
-            "config.get": testCase.config,
+            "board.get": native
+              ? { sessionKey, revision: 1, tabs: [], widgets: [] }
+              : boardSnapshot,
+            "config.get": workboardConfigSnapshot(native),
             "workboard.cards.list": workboardCardsListResponse([
               makeCard({
-                id: `card-${testCase.name.replaceAll(" ", "-")}`,
-                title: testCase.name,
+                id: `card-${name.replaceAll(" ", "-")}`,
+                title: name,
                 status: "running",
-                priority: "normal",
-                labels: [],
-                position: 1,
                 sessionKey,
                 agentId: undefined,
               }),
@@ -814,8 +778,8 @@ suite.define(() => {
           .poll(async () => (await gateway.getRequests("board.get")).length)
           .toBeGreaterThan(0);
         const chip = page.locator(".workboard-session-chip");
-        if (testCase.native) {
-          await expect.poll(() => chip.textContent()).toContain(testCase.name);
+        if (native) {
+          await expect.poll(() => chip.textContent()).toContain(name);
           await expectBoardLink(chip);
           expect(await gateway.getRequests("workboard.cards.list")).toHaveLength(1);
         } else {

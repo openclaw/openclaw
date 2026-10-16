@@ -143,12 +143,10 @@ suite.define(() => {
       await expectVisible("Remote shared conversation", "Imported meeting", involved.label);
       await chooseSidebarOwner(page, "involving-me");
       await expect
-        .poll(async () =>
-          (await gateway.getRequests("sessions.list")).some(
-            (request) => (request.params as { involvingMe?: boolean }).involvingMe === true,
-          ),
+        .poll(
+          async () => (await gateway.getRequests("sessions.list", { involvingMe: true })).length,
         )
-        .toBe(true);
+        .toBeGreaterThan(0);
       await expectVisible(native.label, involved.label);
       const artifactParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
       if (artifactParent) {

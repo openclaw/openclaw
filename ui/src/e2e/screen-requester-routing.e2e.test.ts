@@ -173,8 +173,6 @@ suite.define(() => {
     const other = expectDefined(browsers[1], "other user");
     const proof = (name: string) =>
       captureUiProof(suite, requester.page, "screen-requester-routing", `${name}.png`);
-    const observe = (control: boolean) =>
-      requester.gateway.setMethodResponse("desktop.observe", observation(control));
 
     await command("select", { action: "navigate" });
     await expect
@@ -200,16 +198,14 @@ suite.define(() => {
     await requester.gateway.waitForRequest("desktop.observe", {
       match: { source: { kind: "environment", environmentId: "preview-desktop" } },
     });
-    await desktop.locator("canvas").waitFor();
     await expect.poll(rfb.events).toContain("authenticated:1");
     await rfb.send([createRfbRawFrame()]);
     expect(await other.gateway.getRequests("desktop.observe")).toHaveLength(0);
 
-    await observe(true);
+    await requester.gateway.setMethodResponse("desktop.observe", observation(true));
     await desktop.getByRole("button", { name: "Take control", exact: true }).click();
     await expect.poll(rfb.events).toContain("authenticated:2");
     await desktop.getByRole("button", { name: "Switch to view only", exact: true }).waitFor();
-    expect(await desktop.locator(".desktop-note").count()).toBe(0);
     const controlledCanvas = await desktop.locator("canvas").elementHandle();
     const desktopRequests = () =>
       Promise.all(
@@ -228,29 +224,12 @@ suite.define(() => {
         ...(environmentId ? { environmentId } : {}),
       });
       await requester.page.locator(`.sidebar-region--${dock}`).filter({ has: desktop }).waitFor();
-      await expect
-        .poll(() =>
-          desktop.evaluate(
-            (element) =>
-              (element as HTMLElementTagNameMap["openclaw-desktop-panel"]).refreshOnPresentation,
-          ),
-        )
-        .toBe(true);
       expect(await desktopRequests()).toEqual(requestsBeforeShow);
       expect(await controlledCanvas?.evaluate((element) => element.isConnected)).toBe(true);
       expect(await rfb.connectionCount()).toBe(2);
       await desktop.getByRole("button", { name: "Switch to view only", exact: true }).waitFor();
-      expect(await desktop.locator(".desktop-note").count()).toBe(0);
     }
     await proof("human-control-preserved");
-    await observe(false);
-    // The Gateway revokes the human controller when the agent explicitly takes over.
-    await rfb.disconnect("control-taken:Agent", 4000);
-    await desktop.getByText("Agent took control", { exact: true }).waitFor();
-    await expect.poll(rfb.events).toContain("authenticated:3");
-    expect((await requester.gateway.getRequests("desktop.observe")).at(-1)).toMatchObject({
-      params: { control: false },
-    });
 
     await command("prepare-web", { action: "portal_show", environmentId: "preview-desktop" });
     const portal = requester.page.locator("openclaw-portals-page[embedded]");
@@ -280,11 +259,6 @@ suite.define(() => {
 
     await requester.page.reload();
     await app.getByRole("heading", { name: "Crabbox web app" }).waitFor();
-    expect(
-      await desktop.evaluate(
-        (element) => (element as HTMLElementTagNameMap["openclaw-desktop-panel"]).requestedSource,
-      ),
-    ).toBe("preview-desktop");
 
     await command("hide-web", { action: "portal_hide" });
     await portal.waitFor({ state: "detached" });

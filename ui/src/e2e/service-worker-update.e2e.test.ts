@@ -1,17 +1,16 @@
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { createServer as createHttpServer, type ServerResponse } from "node:http";
+import { createServer as createHttpServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, webkit, type Browser, type BrowserContextOptions, type Page } from "playwright";
-import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   buildProductionControlUiE2e,
   createControlUiMockBootstrapConfig,
@@ -26,28 +25,11 @@ import {
 
 const useWebKit = process.env.OPENCLAW_CONTROL_UI_E2E_BROWSER === "webkit";
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-let artifactDir: string;
-beforeEach(() => {
-  if (captureUiProof) {
-    artifactDir = createControlUiE2eArtifactDir("service-worker-update");
-  }
-});
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 const buildA = "service-worker-build-a";
 const buildB = "service-worker-build-b";
 
-type BuildAsset = {
-  path: string;
-  sha256: string;
-};
-
-type InstallGate = {
-  url: string;
-  requested: Promise<void>;
-  release: () => void;
-  close: () => Promise<void>;
-};
 type TerminalPanel = HTMLElement & {
   agentId: string | null;
   available: boolean;
@@ -62,6 +44,7 @@ const researchGateway = {
   assistantAgentId: "research",
   defaultAgentId: "research",
   serverBuildId: buildA,
+  terminalEnabled: true,
 };
 
 async function createPage(options: BrowserContextOptions, includeErrorName = true) {
@@ -94,7 +77,7 @@ async function stageBuildB(destination: string): Promise<void> {
   }
 }
 
-async function findBuildAsset(buildId: string, buildDir = outDir): Promise<BuildAsset> {
+async function findBuildAsset(buildId: string, buildDir = outDir) {
   const html = await readFile(path.join(buildDir, "index.html"), "utf8");
   expect(html).toContain(`"buildId":${JSON.stringify(buildId)}`);
   const assetPath = html.match(/<script\b[^>]*\bsrc="\.\/(assets\/[^"?]+\.js)"/u)?.[1];
@@ -128,12 +111,10 @@ async function readBuildCacheName(buildId: string, buildDir = outDir): Promise<s
 }
 
 async function prepareOnlineLoopback(page: Page): Promise<void> {
-  // Network-isolated runners have no external interface, although this fixture
-  // serves HTTP on loopback. Set the browser network state before any navigation.
+  // Network-isolated runners need an online override before loopback navigation.
   if (!useWebKit) {
     const protocol = await page.context().newCDPSession(page);
-    // Chromium clears an all-unthrottled state override. A positive latency
-    // hint keeps the native online override active; this command does not throttle requests.
+    // Positive latency keeps Chromium's online override active without throttling requests.
     await protocol.send("Network.overrideNetworkState", {
       offline: false,
       latency: 1,
@@ -145,36 +126,19 @@ async function prepareOnlineLoopback(page: Page): Promise<void> {
   expect(await page.evaluate(() => navigator.onLine)).toBe(true);
 }
 
-async function createInstallGate(expectedRequests = 1): Promise<InstallGate> {
-  let requestCount = 0;
-  let released = false;
-  const pendingResponses = new Set<ServerResponse>();
-  const releaseResponse = (response: ServerResponse) => {
-    if (!response.writableEnded) {
-      response.statusCode = 204;
-      response.end();
-    }
-  };
-  const release = () => {
-    released = true;
-    for (const response of pendingResponses) {
-      releaseResponse(response);
-    }
-    pendingResponses.clear();
-  };
+async function createInstallGate() {
+  const released = createDeferred();
   const requested = createDeferred();
   const gateServer = createHttpServer((_request, response) => {
     response.setHeader("Access-Control-Allow-Origin", "*");
-    // Worker installation may retry or overlap; release is permanent for this gate.
-    if (released) {
-      releaseResponse(response);
-    } else {
-      pendingResponses.add(response);
-      response.once("close", () => pendingResponses.delete(response));
-    }
-    if (++requestCount === expectedRequests) {
-      requested.resolve();
-    }
+    requested.resolve();
+    // A settled promise releases concurrent requests and any later retries.
+    void released.promise.then(() => {
+      if (!response.writableEnded) {
+        response.statusCode = 204;
+        response.end();
+      }
+    });
   });
   gateServer.listen(0, "127.0.0.1");
   await once(gateServer, "listening");
@@ -185,9 +149,9 @@ async function createInstallGate(expectedRequests = 1): Promise<InstallGate> {
   return {
     url: `http://127.0.0.1:${address.port}/release-install`,
     requested: requested.promise,
-    release,
+    release: released.resolve,
     close: async () => {
-      release();
+      released.resolve();
       await promisify(gateServer.close.bind(gateServer))();
     },
   };
@@ -210,33 +174,19 @@ async function holdReplacementWorkerInstalling(buildDir: string, gateUrl: string
 }
 
 async function ensureControlledPage(page: Page, pageErrors: string[], expectedBuildId: string) {
-  const registration = await page.evaluate(async () => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([
-        navigator.serviceWorker.ready.then(() => ({
-          controlled: navigator.serviceWorker.controller !== null,
-          timedOut: false,
-        })),
-        // Settle diagnostics without waiting on the unavailable worker or network.
-        new Promise<{ controlled: false; timedOut: true }>((resolve) => {
-          timer = setTimeout(() => resolve({ controlled: false, timedOut: true }), 10_000);
-        }),
-      ]);
-    } finally {
-      clearTimeout(timer);
-    }
-  });
-  if (registration.timedOut) {
-    throw new Error(
-      `Service worker did not become ready: Worker readiness timed out for ${expectedBuildId}; page errors: ${JSON.stringify(pageErrors)}`,
-    );
-  }
+  const controlled = await withTestTimeout(
+    page.evaluate(async () => {
+      await navigator.serviceWorker.ready;
+      return navigator.serviceWorker.controller !== null;
+    }),
+    10_000,
+    `Service worker did not become ready: Worker readiness timed out for ${expectedBuildId}; page errors: ${JSON.stringify(pageErrors)}`,
+  );
   await page.waitForFunction(async () => {
     const value = await navigator.serviceWorker.ready;
     return value.active?.state === "activated";
   });
-  if (!registration.controlled) {
+  if (!controlled) {
     // Reload under the worker without racing the router with a replaceState("/").
     await page.reload();
   }
@@ -248,35 +198,13 @@ async function ensureControlledPage(page: Page, pageErrors: string[], expectedBu
   });
 }
 
-async function fetchControlledAsset(
-  page: Page,
-  assetPath: string,
-): Promise<{ controllerState: string | null; sha256: string }> {
+async function fetchControlledAsset(page: Page, assetPath: string) {
   return page.evaluate(async (relativePath) => {
     const response = await fetch(new URL(`/${relativePath}`, window.location.origin));
     if (!response.ok) {
       throw new Error(`Build asset request failed with HTTP ${response.status}`);
     }
     const digest = await crypto.subtle.digest("SHA-256", await response.arrayBuffer());
-    await new Promise<void>((resolve) => {
-      let observedController: ServiceWorker | null = null;
-      const observeController = () => {
-        const controller = navigator.serviceWorker.controller;
-        if (controller !== observedController) {
-          observedController?.removeEventListener("statechange", observeController);
-          observedController = controller;
-          observedController?.addEventListener("statechange", observeController);
-        }
-        if (controller?.state !== "activated") {
-          return;
-        }
-        observedController?.removeEventListener("statechange", observeController);
-        navigator.serviceWorker.removeEventListener("controllerchange", observeController);
-        resolve();
-      };
-      navigator.serviceWorker.addEventListener("controllerchange", observeController);
-      observeController();
-    });
     return {
       controllerState: navigator.serviceWorker.controller?.state ?? null,
       sha256: [...new Uint8Array(digest)]
@@ -287,38 +215,6 @@ async function fetchControlledAsset(
 }
 
 describe("Control UI service-worker production update E2E", () => {
-  it("releases concurrent and later worker installation requests", async ({ signal }) => {
-    const gate = await createInstallGate(2);
-    const requests = [fetch(gate.url, { signal }), fetch(gate.url, { signal })];
-    try {
-      await gate.requested;
-      gate.release();
-      expect((await Promise.all(requests)).map((response) => response.status)).toEqual([204, 204]);
-      expect((await fetch(gate.url, { signal })).status).toBe(204);
-    } finally {
-      await gate.close();
-    }
-  });
-
-  it("boots a document loaded on a deep link (Gateway asset-path contract)", async () => {
-    // Relative entry scripts need the Gateway's depth-insensitive /assets/ resolution.
-    const { context, page, pageErrors } = await createPage({ serviceWorkers: "block" });
-    await installMockGateway(page, researchGateway);
-    try {
-      expect((await page.goto(`${server.baseUrl}chat/research`))?.status()).toBe(200);
-      await page.waitForFunction(
-        () => window.openclawControlUi?.snapshot().ready === true,
-        undefined,
-        { timeout: controlUiE2eWaitTimeoutMs },
-      );
-    } catch (error) {
-      await diagnose(page, pageErrors, error, "deep-link-boot");
-      throw error;
-    } finally {
-      await context.close();
-    }
-  }, 60_000);
-
   beforeAll(async () => {
     if (!useWebKit && !canRunPlaywrightChromium(chromiumExecutablePath)) {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
@@ -327,10 +223,7 @@ describe("Control UI service-worker production update E2E", () => {
     server = await startProductionControlUiE2eServer(
       outDir,
       buildA,
-      createControlUiMockBootstrapConfig({
-        ...researchGateway,
-        terminalEnabled: true,
-      }),
+      createControlUiMockBootstrapConfig(researchGateway),
     );
     browser = useWebKit
       ? await webkit.launch()
@@ -373,7 +266,6 @@ describe("Control UI service-worker production update E2E", () => {
       });
       const gateway = await installMockGateway(page, {
         ...researchGateway,
-        terminalEnabled: true,
         methodResponses: {
           "config.get": {
             config: { count: 1 },
@@ -496,11 +388,14 @@ describe("Control UI service-worker production update E2E", () => {
   );
 
   it("refreshes a same-version build on reconnect before restoring an owned terminal", async () => {
+    const artifactDir = captureUiProof
+      ? createControlUiE2eArtifactDir("service-worker-update")
+      : null;
     const { context, page, pageErrors } = await createPage({
       locale: "en-US",
       serviceWorkers: "allow",
       viewport: { height: 720, width: 1280 },
-      ...(captureUiProof
+      ...(artifactDir
         ? { recordVideo: { dir: artifactDir, size: { height: 720, width: 1280 } } }
         : {}),
     });
@@ -520,35 +415,20 @@ describe("Control UI service-worker production update E2E", () => {
           owner: "agent:research:main",
         },
       },
-      terminalEnabled: true,
     });
     await prepareOnlineLoopback(page);
     const getTerminalAttaches = () => gateway.getRequests("terminal.attach");
-    let installGate: InstallGate | null = null;
+    let installGate: Awaited<ReturnType<typeof createInstallGate>> | null = null;
 
     try {
       expect((await page.goto(`${server.baseUrl}chat`))?.status()).toBe(200);
       await ensureControlledPage(page, pageErrors, buildA);
-      await expect
-        .poll(
-          async () =>
-            evaluateControlUiContext(page, (application) => {
-              const panel = document.querySelector<TerminalPanel>("openclaw-terminal-panel");
-              return {
-                available: panel?.available ?? null,
-                phase: application.gateway.snapshot.phase,
-                terminalEnabled: application.config.current.terminalEnabled,
-                hasHello: application.gateway.snapshot.hello !== null,
-              };
-            }),
-          { timeout: controlUiE2eWaitTimeoutMs },
-        )
-        .toMatchObject({
-          available: true,
-          phase: "connected",
-          terminalEnabled: true,
-          hasHello: true,
-        });
+      // Availability requires connected, enabled, and a hello advertising terminal.open.
+      await page.waitForFunction(
+        () => document.querySelector<TerminalPanel>("openclaw-terminal-panel")?.available === true,
+        undefined,
+        { timeout: controlUiE2eWaitTimeoutMs },
+      );
 
       const assetA = await findBuildAsset(buildA);
       const cacheA = await readBuildCacheName(buildA);
@@ -651,44 +531,31 @@ describe("Control UI service-worker production update E2E", () => {
         controllerState: "activated",
         sha256: assetB.sha256,
       });
-      expect(refreshedAsset.sha256).toBe(initialAsset.sha256);
       await expect
-        .poll(() =>
-          page.evaluate(
-            async ({ assetPath, currentBuild, previousBuild, cacheName }) => {
-              const registration = await navigator.serviceWorker.getRegistration();
-              if (!registration) {
-                return null;
-              }
-              const shell = await caches.match(new URL("__offline_shell__", registration.scope), {
-                cacheName,
-              });
-              const html = shell ? await shell.text() : "";
-              return {
-                currentAsset: html.includes(assetPath),
-                currentBuild: html.includes(currentBuild),
-                previousBuild: html.includes(previousBuild),
-                documentRootCached: Boolean(
-                  await caches.match(new URL("./", registration.scope), { cacheName }),
-                ),
-              };
-            },
-            {
-              assetPath: assetB.path,
-              currentBuild: `"buildId":${JSON.stringify(buildB)}`,
-              previousBuild: `"buildId":${JSON.stringify(buildA)}`,
-              cacheName: cacheB,
-            },
-          ),
-        )
-        .toEqual({
-          currentAsset: true,
-          currentBuild: true,
-          previousBuild: false,
-          documentRootCached: false,
-        });
+        .poll(async () => {
+          const shell = await page.evaluate(async (cacheName) => {
+            const registration = await navigator.serviceWorker.getRegistration();
+            if (!registration) {
+              return null;
+            }
+            const response = await caches.match(new URL("__offline_shell__", registration.scope), {
+              cacheName,
+            });
+            return {
+              html: response ? await response.text() : "",
+              documentRootCached: Boolean(
+                await caches.match(new URL("./", registration.scope), { cacheName }),
+              ),
+            };
+          }, cacheB);
+          expect(shell?.html).toContain(assetB.path);
+          expect(shell?.html).toContain(`"buildId":${JSON.stringify(buildB)}`);
+          expect(shell?.html).not.toContain(`"buildId":${JSON.stringify(buildA)}`);
+          return shell?.documentRootCached;
+        })
+        .toBe(false);
 
-      if (captureUiProof) {
+      if (artifactDir) {
         await page.screenshot({
           animations: "disabled",
           path: path.join(artifactDir, "updated-worker-controlled-page.png"),

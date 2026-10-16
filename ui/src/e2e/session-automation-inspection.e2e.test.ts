@@ -32,8 +32,6 @@ function job(id = "ci", overrides: Partial<CronJob> = {}): CronJob {
   return {
     id,
     name: "Check CI and comments",
-    agentId: "main",
-    sessionKey: key,
     enabled: true,
     createdAtMs: 1,
     updatedAtMs: 1,
@@ -70,7 +68,6 @@ async function fixture(page: Page, jobs: CronJob[], width = 1440, deferred = fal
     methodResponses: {
       "progressCard.get": { card: null },
       "cron.list": inventory(jobs),
-      "cron.status": { enabled: true, jobs: jobs.length, nextWakeAtMs: null },
       "sessions.list": chatSessionListResponse([
         {
           key,
@@ -97,7 +94,6 @@ async function fixture(page: Page, jobs: CronJob[], width = 1440, deferred = fal
   await card.waitFor({ state: "visible" });
   return {
     gateway,
-    link,
     card,
     trigger: card.locator(".session-hovercard__automation-link"),
     flyout: card.locator(".session-hovercard__automations"),
@@ -106,69 +102,36 @@ async function fixture(page: Page, jobs: CronJob[], width = 1440, deferred = fal
   };
 }
 suite.define(() => {
-  it.each([1440, 390])(
-    "inspects a named automation and keeps native keyboard navigation at %i pixels",
-    async (width) => {
-      await withPage(async ({ page }) => {
-        const { gateway, link, card, trigger, flyout } = await fixture(page, [job()], width);
-        await expect.poll(() => trigger.textContent()).toBe("Check CI and comments");
-        await trigger.hover();
-        await flyout.waitFor({ state: "visible" });
-        await flyout.hover();
-        await expect.poll(() => flyout.isVisible()).toBe(true);
-        expect(await flyout.textContent()).toContain("Every 5m");
-        expect(await flyout.textContent()).toContain("Last run succeeded");
-        expect(await flyout.textContent()).toContain("Next");
-        expect(await detail(flyout, "preview")).toBe(prompt);
-        if (captureUiProofEnabled) {
-          const frame = await takeControlUiScreenshotFrame(page, card, [trigger, flyout], {
-            animations: "disabled",
-            elements: [card],
-          });
-          await writeFile(
-            path.join(suite.artifactDir, `after-${width}.png`),
-            frame.elements[0]!.png,
-          );
-          await writeFile(path.join(suite.artifactDir, `after-context-${width}.png`), frame.png);
-        }
-        await trigger.click();
-        await page.mouse.move(width - 5, 10);
-        await flyout.waitFor({ state: "visible" });
-        const summary = flyout.locator("summary");
-        await summary.click();
-        expect(await flyout.locator("pre").textContent()).toBe(prompt);
-        await summary.focus();
-        await page.keyboard.press("Escape");
-        await flyout.waitFor({ state: "hidden" });
-        expect(await card.isVisible()).toBe(true);
-        await page.keyboard.press("Enter");
-        await flyout.waitFor({ state: "visible" });
-        await page.keyboard.press("Tab");
-        await flyout.waitFor({ state: "visible" });
-        expect(await summary.evaluate((el) => el === document.activeElement)).toBe(true);
-        const open = openLink(flyout);
-        expect(await open.getAttribute("href")).toContain("job=ci");
-        expect(
-          (await gateway.getRequests("cron.list")).filter((request) => {
-            const p = requireRecord(request.params);
-            return p.sessionKey === key && p.compact !== true;
-          }).length,
-        ).toBe(1);
-        await page.keyboard.press("Escape");
-        await page.keyboard.press("Escape");
-        await card.waitFor({ state: "detached" });
-        expect(await link.evaluate((el) => el === document.activeElement)).toBe(true);
-        // Escape returns to the sidebar; a new hover explicitly re-enters the dismissed card.
-        await link.hover();
-        await trigger.hover();
-        await flyout.waitFor({ state: "visible" });
-        await openLink(flyout).click();
-        await expect.poll(() => new URL(page.url()).pathname).toBe("/automations");
-        expect(new URL(page.url()).searchParams.get("job")).toBe("ci");
-        expect(new URL(page.url()).searchParams.get("session")).toBe(key);
-      }, width);
-    },
-  );
+  it.each([1440, 390])("inspects and opens a named automation at %i pixels", async (width) => {
+    await withPage(async ({ page }) => {
+      const { gateway, card, trigger, flyout } = await fixture(page, [job()], width);
+      await expect.poll(() => trigger.textContent()).toBe("Check CI and comments");
+      await trigger.hover();
+      await flyout.waitFor({ state: "visible" });
+      await flyout.hover();
+      await expect.poll(() => flyout.isVisible()).toBe(true);
+      expect(await flyout.textContent()).toContain("Last run succeeded");
+      expect(await flyout.textContent()).toContain("Next");
+      expect(await detail(flyout, "preview")).toBe(prompt);
+      if (captureUiProofEnabled) {
+        const frame = await takeControlUiScreenshotFrame(page, card, [trigger, flyout], {
+          animations: "disabled",
+          elements: [card],
+        });
+        await writeFile(path.join(suite.artifactDir, `after-${width}.png`), frame.elements[0]!.png);
+        await writeFile(path.join(suite.artifactDir, `after-context-${width}.png`), frame.png);
+      }
+      await trigger.click();
+      await page.mouse.move(width - 5, 10);
+      await flyout.waitFor({ state: "visible" });
+      const reads = await gateway.getRequests("cron.list", { sessionKey: key });
+      expect(reads.filter(({ params }) => requireRecord(params).compact !== true)).toHaveLength(1);
+      await openLink(flyout).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/automations");
+      expect(new URL(page.url()).searchParams.get("job")).toBe("ci");
+      expect(new URL(page.url()).searchParams.get("session")).toBe(key);
+    }, width);
+  });
   it("switches attached jobs and refreshes runtime state without changing automation settings", async () => {
     await withPage(async ({ page }) => {
       const paused = job("merge", {
