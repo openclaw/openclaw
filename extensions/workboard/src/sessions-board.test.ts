@@ -886,6 +886,7 @@ describe("Sessions board rules and live facts", () => {
     await withService(
       { facts: [facts("one")] },
       async ({ service, store, state, selectSessionFacts, emit }) => {
+        await service.read(BOARD_ID);
         const admittedRevision = store.sessionsRevision;
         let sourceReads = 0;
         selectSessionFacts.mockImplementation(async () => {
