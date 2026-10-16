@@ -1,4 +1,3 @@
-// Slack tests cover monitor.thread resolution plugin behavior.
 import {
   WebClient,
   WebAPIHTTPError,
@@ -8,12 +7,14 @@ import {
 } from "@slack/web-api";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SlackMessageEvent } from "../types.js";
 import type { SlackIngressTurnLifecycle } from "./ingress.types.js";
 import {
   createSlackThreadTsResolver,
   isTransientSlackThreadLookupError,
 } from "./thread-resolution.js";
+
+const ambiguous = { _ambiguousThreadReply: true };
+const resolved = { thread_ts: "9" };
 
 type SlackThreadClient = Parameters<typeof createSlackThreadTsResolver>[0]["client"];
 
@@ -21,12 +22,7 @@ function createResolver(history: ReturnType<typeof vi.fn>) {
   const resolver = createSlackThreadTsResolver({
     client: { conversations: { history } } as unknown as SlackThreadClient,
   });
-  const message: SlackMessageEvent = {
-    type: "message",
-    channel: "C1",
-    parent_user_id: "U2",
-    ts: "1",
-  };
+  const message = { type: "message" as const, channel: "C1", parent_user_id: "U2", ts: "1" };
   return (
     source: "message" | "app_mention" = "message",
     turnAdoptionLifecycle?: SlackIngressTurnLifecycle,
@@ -116,9 +112,7 @@ describe("createSlackThreadTsResolver", () => {
     const turnAdoptionLifecycle = createDurableTurnLifecycle();
 
     await expect(resolve("message", turnAdoptionLifecycle)).rejects.toBe(error);
-    await expect(resolve("app_mention", turnAdoptionLifecycle)).resolves.toMatchObject({
-      thread_ts: "9",
-    });
+    await expect(resolve("app_mention", turnAdoptionLifecycle)).resolves.toMatchObject(resolved);
 
     expect(historyMock).toHaveBeenCalledTimes(2);
   });
@@ -130,12 +124,8 @@ describe("createSlackThreadTsResolver", () => {
       .mockResolvedValueOnce({ messages: [{ ts: "1", thread_ts: "9" }] });
     const resolve = createResolver(historyMock);
 
-    await expect(resolve("message")).resolves.toMatchObject({
-      _ambiguousThreadReply: true,
-    });
-    await expect(resolve("app_mention")).resolves.toMatchObject({
-      thread_ts: "9",
-    });
+    await expect(resolve("message")).resolves.toMatchObject(ambiguous);
+    await expect(resolve("app_mention")).resolves.toMatchObject(resolved);
 
     expect(historyMock).toHaveBeenCalledTimes(2);
   });
@@ -159,7 +149,7 @@ describe("createSlackThreadTsResolver", () => {
       { status: "rejected", reason: outage },
       { status: "rejected", reason: outage },
     ]);
-    await expect(resolve("message", firstLifecycle)).resolves.toMatchObject({ thread_ts: "9" });
+    await expect(resolve("message", firstLifecycle)).resolves.toMatchObject(resolved);
     expect(historyMock).toHaveBeenCalledTimes(2);
   });
 
@@ -178,12 +168,8 @@ describe("createSlackThreadTsResolver", () => {
     const resolve = createResolver(historyMock);
     const turnAdoptionLifecycle = createDurableTurnLifecycle();
 
-    await expect(resolve("message", turnAdoptionLifecycle)).resolves.toMatchObject({
-      _ambiguousThreadReply: true,
-    });
-    await expect(resolve("app_mention", turnAdoptionLifecycle)).resolves.toMatchObject({
-      _ambiguousThreadReply: true,
-    });
+    await expect(resolve("message", turnAdoptionLifecycle)).resolves.toMatchObject(ambiguous);
+    await expect(resolve("app_mention", turnAdoptionLifecycle)).resolves.toMatchObject(ambiguous);
     expect(historyMock).toHaveBeenCalledTimes(1);
   });
 });

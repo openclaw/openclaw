@@ -22,10 +22,7 @@ import {
 const { monitorSlackProvider } = await import("./provider.js");
 const { replyMock, sendMock, appStopMock, resolveSlackUserAllowlistMock } = getSlackTestState();
 
-beforeEach(async () => {
-  await resetSlackTestState();
-});
-
+beforeEach(() => resetSlackTestState());
 afterEach(() => clearRuntimeConfigSnapshot());
 
 function userEvent(user: string, ts: string, channel: string, channel_type: "im" | "channel") {
@@ -33,7 +30,11 @@ function userEvent(user: string, ts: string, channel: string, channel_type: "im"
 }
 
 function slackConfig(slack: SlackAccountConfig): OpenClawConfig {
-  return { channels: { slack } };
+  return { channels: { slack: { enabled: true, ...slack } } };
+}
+
+function approvalConfig(slack: SlackAccountConfig): OpenClawConfig {
+  return slackConfig({ botToken: "xoxb-test", appToken: "xapp-test", ...slack });
 }
 
 async function withMonitor(
@@ -54,9 +55,7 @@ function createRuntimeContextCapture() {
   }));
   return {
     channelRuntime: {
-      inbound: {
-        buildContext: buildChannelInboundEventContext,
-      },
+      inbound: { buildContext: buildChannelInboundEventContext },
       runtimeContexts: {
         register,
         get: vi.fn(),
@@ -72,7 +71,6 @@ describe("slack startup user allowlist resolution", () => {
     "delivers an allowed bot's reply by default and stops subsequent turns after %s revocation",
     async (revokedPolicy) => {
       const initial: OpenClawConfig = slackConfig({
-        enabled: true,
         groupPolicy: "open",
         historyLimit: 0,
         streaming: { mode: "off" },
@@ -112,8 +110,7 @@ describe("slack startup user allowlist resolution", () => {
         replyMock.mockClear();
         sendMock.mockClear();
         await receive("BDENIED", "002");
-        expect(replyMock).not.toHaveBeenCalled();
-        expect(sendMock).not.toHaveBeenCalled();
+        expect([replyMock.mock.calls, sendMock.mock.calls]).toEqual([[], []]);
 
         const revoked: OpenClawConfig = slackConfig({
           ...initial.channels?.slack,
@@ -123,8 +120,7 @@ describe("slack startup user allowlist resolution", () => {
         });
         setRuntimeConfigSnapshot(revoked, revoked);
         await receive("B123BOT", "003");
-        expect(replyMock).not.toHaveBeenCalled();
-        expect(sendMock).not.toHaveBeenCalled();
+        expect([replyMock.mock.calls, sendMock.mock.calls]).toEqual([[], []]);
         expect(appStopMock).not.toHaveBeenCalled();
       });
     },
@@ -132,7 +128,6 @@ describe("slack startup user allowlist resolution", () => {
 
   it("rejects a sender revoked while workspace policy resolution is pending", async () => {
     const initial: OpenClawConfig = slackConfig({
-      enabled: true,
       dangerouslyAllowNameMatching: true,
       dmPolicy: "allowlist",
       allowFrom: ["UOLD"],
@@ -174,17 +169,11 @@ describe("slack startup user allowlist resolution", () => {
 
   it("registers one native approval client per Enterprise Grid team", async () => {
     await resetSlackTestState(
-      slackConfig({
-        enabled: true,
-        botToken: "xoxb-test",
+      approvalConfig({
         appToken: "xapp-1-A123-test",
         dmPolicy: "disabled",
         groupPolicy: "open",
-        execApprovals: {
-          enabled: true,
-          approvers: ["U123OWNER"],
-          target: "both",
-        },
+        execApprovals: { enabled: true, approvers: ["U123OWNER"], target: "both" },
       }),
     );
     getSlackClient().auth.test.mockResolvedValueOnce({
@@ -206,13 +195,11 @@ describe("slack startup user allowlist resolution", () => {
         const resolveClient = registration?.context?.resolveClient;
         expect(resolveClient).toBeTypeOf("function");
         const teamOne = resolveClient?.("T111") as { teamId?: string };
-        const teamOneAgain = resolveClient?.("T111") as { teamId?: string };
+        expect(resolveClient?.("T111")).toBe(teamOne);
         const teamTwo = resolveClient?.("T222") as { teamId?: string };
 
-        expect(teamOneAgain).toBe(teamOne);
         expect(teamTwo).not.toBe(teamOne);
-        expect(teamOne.teamId).toBe("T111");
-        expect(teamTwo.teamId).toBe("T222");
+        expect([teamOne.teamId, teamTwo.teamId]).toEqual(["T111", "T222"]);
       },
       { channelRuntime, appToken: "xapp-1-A123-test" },
     );
@@ -220,10 +207,7 @@ describe("slack startup user allowlist resolution", () => {
 
   it("registers the native approval runtime for plugin-only Slack approvals", async () => {
     await resetSlackTestState({
-      ...slackConfig({
-        enabled: true,
-        botToken: "xoxb-test",
-        appToken: "xapp-test",
+      ...approvalConfig({
         allowFrom: ["U123OWNER"],
         execApprovals: { enabled: false, approvers: ["U999EXEC"], target: "both" },
       }),
@@ -259,23 +243,18 @@ describe("slack startup user allowlist resolution", () => {
 
   it("skips user entry resolution when name matching is not enabled", async () => {
     await resetSlackTestState({
-      messages: {
-        responsePrefix: "PFX",
-      },
-      channels: {
-        slack: {
-          enabled: true,
-          dmPolicy: "allowlist",
-          allowFrom: ["<@U123GLOBAL>", "@global-user"],
-          channels: {
-            C123: {
-              enabled: true,
-              requireMention: false,
-              users: ["<@U123CHANNEL>", "@channel-user"],
-            },
+      messages: { responsePrefix: "PFX" },
+      ...slackConfig({
+        dmPolicy: "allowlist",
+        allowFrom: ["<@U123GLOBAL>", "@global-user"],
+        channels: {
+          C123: {
+            enabled: true,
+            requireMention: false,
+            users: ["<@U123CHANNEL>", "@channel-user"],
           },
         },
-      },
+      }),
     });
     replyMock.mockResolvedValue({ text: "ok" });
 
