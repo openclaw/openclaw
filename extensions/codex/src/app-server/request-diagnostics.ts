@@ -36,6 +36,7 @@ export function createCodexRequestTimeoutDiagnostics(
   }
   const startedAt = performance.now();
   let attempt = createAttempt(0);
+  let timeoutReported = false;
   function createAttempt(ordinal: number): {
     ordinal: number;
     phase: "prepare" | "acquire-client" | "callback" | "release-client";
@@ -128,6 +129,10 @@ export function createCodexRequestTimeoutDiagnostics(
       attempt.phase = "release-client";
     },
     timeout() {
+      if (timeoutReported) {
+        return;
+      }
+      timeoutReported = true;
       try {
         if (!areDiagnosticsEnabledForProcess() || !embeddedAgentLog.isEnabled("warn")) {
           return;

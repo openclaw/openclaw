@@ -5,7 +5,7 @@ import type { CodexCatalogPreviewCache } from "../session-catalog-native-project
 import { isCodexAppServerStartupError, resolveCodexStartupTimeoutMs } from "./attempt-timeouts.js";
 import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-profile.js";
 import type { CodexAppServerClient } from "./client.js";
-import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
+import { resolveCodexAppServerRequestTimeoutMs } from "./config-runtime.js";
 import type {
   CodexAppServerRequestMethod,
   CodexAppServerRequestParams,
@@ -301,13 +301,13 @@ export async function withCodexAppServerJsonClient<T>(
   const acquireTimeoutMs = params.isolated
     ? timeoutMs
     : resolveCodexStartupTimeoutMs({
-        requestTimeoutMs: resolveCodexAppServerRuntimeOptions({ pluginConfig: params.pluginConfig })
-          .requestTimeoutMs,
+        requestTimeoutMs: resolveCodexAppServerRequestTimeoutMs(params.pluginConfig),
       });
   const timeoutMessage = params.timeoutMessage ?? "codex app-server request timed out";
   const timeoutDiagnostics = createCodexRequestTimeoutDiagnostics(timeoutMs, acquireTimeoutMs);
   const scopePhase: { current: CodexControlRequestPhase } = { current: "prepare" };
   let errorPhase: CodexControlRequestPhase | undefined;
+  let deadlinePhase: CodexControlRequestPhase | undefined;
   const setPhase = (phase: CodexControlRequestPhase) => {
     scopePhase.current = phase;
     observeControl(params.controlObservation, phase);
@@ -376,11 +376,6 @@ export async function withCodexAppServerJsonClient<T>(
         };
         setPhase("acquire-client");
         const client = await acquireClient(acquireOptions);
-        if (!params.isolated) {
-          deadline =
-            Number.isFinite(timeoutMs) && timeoutMs > 0 ? performance.now() + timeoutMs : undefined;
-        }
-        timeoutDiagnostics?.acquired(client);
         let scopeActive = true;
         const assertCurrent = () => {
           throwIfAbandoned();
@@ -392,6 +387,14 @@ export async function withCodexAppServerJsonClient<T>(
           assertRequestOwnerCurrent(params.assertCurrent);
         };
         try {
+          throwIfAbandoned();
+          if (!params.isolated) {
+            deadline =
+              Number.isFinite(timeoutMs) && timeoutMs > 0
+                ? performance.now() + timeoutMs
+                : undefined;
+          }
+          timeoutDiagnostics?.acquired(client);
           setPhase("prepare");
           assertCurrent();
           const scopedRequest: CodexAppServerScopedRequest = async <R>(
@@ -468,13 +471,19 @@ export async function withCodexAppServerJsonClient<T>(
           });
         } catch (error) {
           errorPhase = scopePhase.current;
+          if (isPastDeadline()) {
+            deadlinePhase = errorPhase;
+            timeoutDiagnostics?.timeout();
+          }
           throw error;
         } finally {
           scopeActive = false;
           setPhase("release-client");
           timeoutDiagnostics?.release();
           const requestErrorPhase = errorPhase;
+          const requestDeadlinePhase = deadlinePhase;
           errorPhase = scopePhase.current;
+          deadlinePhase = undefined;
           if (params.isolated) {
             // Wait for the child to actually exit (with a SIGKILL fallback) so
             // the parent process doesn't hang on an orphaned codex app-server.
@@ -490,6 +499,7 @@ export async function withCodexAppServerJsonClient<T>(
           }
           // A thrown cleanup error owns its phase; only successful cleanup restores it.
           errorPhase = requestErrorPhase;
+          deadlinePhase = requestDeadlinePhase;
         }
       })(),
     });
@@ -497,14 +507,14 @@ export async function withCodexAppServerJsonClient<T>(
     const deadlineObserved = isPastDeadline();
     observeControl(
       params.controlObservation,
-      deadlineObserved ? scopePhase.current : (errorPhase ?? scopePhase.current),
+      deadlinePhase ?? (deadlineObserved ? scopePhase.current : (errorPhase ?? scopePhase.current)),
       { error, deadlineObserved },
     );
     if (deadlineObserved) {
       timeoutDiagnostics?.timeout();
     }
     if (
-      scopePhase.current === "acquire-client" &&
+      (errorPhase ?? scopePhase.current) === "acquire-client" &&
       (deadlineObserved ||
         (isNativeError(error) && isCodexAppServerStartupError(error, "timed_out")))
     ) {

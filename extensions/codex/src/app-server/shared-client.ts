@@ -41,6 +41,7 @@ import {
 import { CodexAppServerClient, isUnsupportedCodexAppServerVersionError } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
 import {
+  resolveCodexAppServerRequestTimeoutMs,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexAppServerStartOptionsForAgent,
 } from "./config-runtime.js";
@@ -522,9 +523,7 @@ async function acquireSharedCodexAppServerClient(
       runtimeArtifactMode,
       expectedRuntimeArtifact: options?.expectedRuntimeArtifact,
       timeoutMs: resolveCodexStartupTimeoutMs({
-        requestTimeoutMs: resolveCodexAppServerRuntimeOptions({
-          pluginConfig: options?.pluginConfig,
-        }).requestTimeoutMs,
+        requestTimeoutMs: resolveCodexAppServerRequestTimeoutMs(options?.pluginConfig),
       }),
       config: options?.config,
     }));
