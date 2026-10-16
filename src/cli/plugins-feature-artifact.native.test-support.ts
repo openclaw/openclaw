@@ -33,6 +33,14 @@ const directories: string[] = [];
 let pristineParent: string | undefined;
 let pristineFixturePromise: Promise<string> | undefined;
 
+async function writeFiles(root: string, files: Record<string, string>) {
+  for (const [name, content] of Object.entries(files)) {
+    const file = path.join(root, name);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, content);
+  }
+}
+
 async function unpack(archive: string, parent: string, name = "extracted") {
   const cwd = path.join(parent, name);
   await fs.mkdir(cwd);
@@ -184,19 +192,13 @@ void describe("plugin artifact authoring", () => {
 
   runCases(
     [
-      {
-        id: "inferred-tools",
-        filename: "inferred-tools.tgz",
-        runtime: false,
-        inferred: true,
-        setup: true,
-      },
-      { id: "@author/tools", filename: "@author__tools.tgz", runtime: false, setup: false },
-      { id: "runtime-tools", filename: "runtime-tools.tgz", runtime: true, setup: false },
+      { id: "inferred-tools", filename: "inferred-tools.tgz", inferred: true, setup: true },
+      { id: "@author/tools", filename: "@author__tools.tgz" },
+      { id: "runtime-tools", filename: "runtime-tools.tgz", runtime: true },
       { id: "setup-tools", filename: "setup-tools.tgz", runtime: true, setup: true },
     ],
     ({ id }) => `packs ${id} with its installed runtime and metadata intact`,
-    async ({ id, filename, runtime, setup, inferred = false }) => {
+    async ({ id, filename, runtime = false, setup = false, inferred = false }) => {
       const parent = await fs.realpath(
         await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tool-pack-")),
       );
@@ -220,41 +222,27 @@ void describe("plugin artifact authoring", () => {
           compat: { pluginApi: ">=2026.5.17" },
         },
       };
-      await fs.writeFile(path.join(rootDir, "package.json"), JSON.stringify(packageManifest));
-      await fs.writeFile(
-        path.join(rootDir, "dist/shared.js"),
-        "export const shared = { ready: false };",
-      );
       const entry = (
         marker: string,
         sharedPath = "./shared.js",
       ) => `import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
 import { shared } from ${JSON.stringify(sharedPath)}; shared.ready = true;
 export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name: "Packed tool", description: "Artifact fixture", tools: (tool) => [tool({ name: "artifact_echo", description: "Echo", optional: true, parameters: { type: "object", properties: {} }, execute: async () => ({ ok: true }) })] }), { artifactMarker: ${JSON.stringify(marker)}, shared });`;
-      await fs.writeFile(
-        path.join(rootDir, "dist/index.js"),
-        entry(inferred ? "runtime" : "source"),
-      );
-      if (inferred) {
-        await fs.mkdir(path.join(rootDir, "src"));
-        await fs.writeFile(
-          path.join(rootDir, "src/index.ts"),
-          entry("source", "../dist/shared.js"),
-        );
-      }
-      if (runtime) {
-        await fs.writeFile(path.join(rootDir, "dist/compiled.js"), entry("runtime"));
-      }
-      if (setup) {
-        await fs.writeFile(
-          path.join(rootDir, "dist/setup-source.js"),
-          'import { shared } from "./shared.js"; export default { artifactMarker: "setup-source", shared };',
-        );
-        await fs.writeFile(
-          path.join(rootDir, "dist/setup-runtime.js"),
-          'import { shared } from "./shared.js"; export default { artifactMarker: "setup-runtime", shared };',
-        );
-      }
+      await writeFiles(rootDir, {
+        "package.json": JSON.stringify(packageManifest),
+        "dist/shared.js": "export const shared = { ready: false };",
+        "dist/index.js": entry(inferred ? "runtime" : "source"),
+        ...(inferred ? { "src/index.ts": entry("source", "../dist/shared.js") } : {}),
+        ...(runtime ? { "dist/compiled.js": entry("runtime") } : {}),
+        ...(setup
+          ? Object.fromEntries(
+              ["source", "runtime"].map((marker) => [
+                `dist/setup-${marker}.js`,
+                `import { shared } from "./shared.js"; export default { artifactMarker: "setup-${marker}", shared };`,
+              ]),
+            )
+          : {}),
+      });
       await runPluginsBuildCommand({ root: rootDir });
       const sourceManifest = await fs.readFile(path.join(rootDir, "openclaw.plugin.json"));
       const jsonOutput: unknown[] = [];
@@ -437,11 +425,7 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
       "source.ts": "private source",
       ".hidden.js": "private hidden file",
     };
-    for (const [name, content] of Object.entries(files)) {
-      const filePath = path.join(rootDir, directory, name);
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(filePath, content);
-    }
+    await writeFiles(path.join(rootDir, directory), files);
     const activate = async (packageRoot: string) => {
       const browser = await import(
         pathToFileURL(path.join(packageRoot, manifest.controlUi.entry)).href

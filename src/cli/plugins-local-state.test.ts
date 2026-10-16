@@ -1,15 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  createEmptyUninstallActions,
-  installHooksFromNpmSpecMock,
-  pluginLifecycleGatewayMock,
-  pluginsCliRuntimeLogs,
-  refreshPluginRegistryMock,
-  resetPluginsCliTestState,
-  resolvePluginLifecycleGatewayMock,
-  runPluginsCommand,
-} from "./plugins-cli-test-helpers.js";
+import * as cli from "./plugins-cli-test-helpers.js";
 
 const boundary = vi.hoisted(() => ({
   foreign: false,
@@ -59,8 +50,8 @@ vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
 }));
 vi.mock("../plugins/management-mutations.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/management-mutations.js")>()),
-  installManagedPlugin: (...args: unknown[]) => boundary.install(...args),
-  mutateManagedPluginEnabled: (...args: unknown[]) => boundary.policy(...args),
+  installManagedPlugin: boundary.install,
+  mutateManagedPluginEnabled: boundary.policy,
 }));
 vi.mock("../plugins/management-uninstall.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/management-uninstall.js")>()),
@@ -73,22 +64,22 @@ vi.mock("../plugins/management-uninstall.js", async (importOriginal) => ({
       name: "alpha",
       installRecords: {},
       snapshot: { config: {} },
-      plan: { actions: createEmptyUninstallActions(), directoryRemoval: null },
+      plan: { actions: cli.createEmptyUninstallActions(), directoryRemoval: null },
     },
   }),
-  uninstallPluginWithPolicy: (...args: unknown[]) => boundary.uninstall(...args),
+  uninstallPluginWithPolicy: boundary.uninstall,
 }));
 vi.mock("../plugins/official-external-plugin-catalog.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/official-external-plugin-catalog.js")>()),
-  loadConfiguredHostedOfficialExternalPluginCatalogEntries: (...args: unknown[]) =>
-    boundary.catalog(...args),
+  loadConfiguredHostedOfficialExternalPluginCatalogEntries: boundary.catalog,
 }));
 vi.mock("./hook-install-persistence.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./hook-install-persistence.js")>()),
-  persistHookPackInstall: (...args: unknown[]) => boundary.persistHook(...args),
+  persistHookPackInstall: boundary.persistHook,
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const run = (...args: string[]) => cli.runPluginsCommand(["plugins", ...args]);
 
 beforeAll(() => {
   // The shared synthetic storage fixture skips custody; this suite exercises the real guard.
@@ -96,7 +87,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
-  resetPluginsCliTestState();
+  cli.resetPluginsCliTestState();
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-plugin-owner-"));
   boundary.foreign = false;
   boundary.revoked = false;
@@ -110,22 +101,14 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 const commands = [
-  {
-    name: "install",
-    args: ["install", "npm:synthetic-plugin", "--force"],
-    effect: boundary.install,
-  },
-  { name: "enable", args: ["enable", "alpha"], effect: boundary.policy },
-  { name: "disable", args: ["disable", "alpha"], effect: boundary.policy },
-  { name: "uninstall", args: ["uninstall", "alpha", "--force"], effect: boundary.uninstall },
-  { name: "registry refresh", args: ["registry", "--refresh"], effect: refreshPluginRegistryMock },
-  {
-    name: "update",
-    args: ["update", "--all"],
-    output: "No tracked plugins or hook packs to update.",
-  },
-  { name: "marketplace entries", args: ["marketplace", "entries"], effect: boundary.catalog },
-  { name: "marketplace refresh", args: ["marketplace", "refresh"], effect: boundary.catalog },
+  { args: ["install", "npm:synthetic-plugin", "--force"], effect: boundary.install },
+  { args: ["enable", "alpha"], effect: boundary.policy },
+  { args: ["disable", "alpha"], effect: boundary.policy },
+  { args: ["uninstall", "alpha", "--force"], effect: boundary.uninstall },
+  { args: ["registry", "--refresh"], effect: cli.refreshPluginRegistryMock },
+  { args: ["update", "--all"], output: "No tracked plugins or hook packs to update." },
+  { args: ["marketplace", "entries"], effect: boundary.catalog },
+  { args: ["marketplace", "refresh"], effect: boundary.catalog },
 ];
 
 describe("local plugin command ownership", () => {
@@ -137,79 +120,70 @@ describe("local plugin command ownership", () => {
       beforePersistentApply();
       effect();
     });
-    await expect(runPluginsCommand(["plugins", "enable", "alpha"])).rejects.toThrow(
-      "Offline ownership is no longer current",
-    );
+    await expect(run("enable", "alpha")).rejects.toThrow("Offline ownership is no longer current");
     expect(effect).not.toHaveBeenCalled();
   });
 
-  it.each(commands)("refuses $name while another process owns state", async ({ args, effect }) => {
+  it.each(commands)("refuses $args while another process owns state", async ({ args, effect }) => {
     boundary.foreign = true;
-    await expect(runPluginsCommand(["plugins", ...args])).rejects.toThrow(/stop the Gateway/i);
+    await expect(run(...args)).rejects.toThrow(/stop the Gateway/i);
     if (effect) {
       expect(effect).not.toHaveBeenCalled();
     }
-    expect(pluginsCliRuntimeLogs.join("\n")).not.toContain("No tracked plugins");
+    expect(cli.pluginsCliRuntimeLogs.join("\n")).not.toContain("No tracked plugins");
   });
 
-  it.each(commands)("runs $name while the Gateway is stopped", async ({ args, effect, output }) => {
-    await runPluginsCommand(["plugins", ...args]);
+  it.each(commands)("runs $args while the Gateway is stopped", async ({ args, effect, output }) => {
+    await run(...args);
     if (effect) {
       expect(effect).toHaveBeenCalledOnce();
     }
     if (output) {
-      expect(pluginsCliRuntimeLogs).toContain(output);
+      expect(cli.pluginsCliRuntimeLogs).toContain(output);
     }
   });
 
-  it.each(["enable", "disable", "install", "uninstall"])(
-    "keeps the existing %s Gateway route",
-    async (command) => {
-      boundary.foreign = true;
-      resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
-      pluginLifecycleGatewayMock.mockResolvedValue({
-        plugin: { id: "alpha" },
-        pluginId: "alpha",
-        removed: [],
-        runtime: { generation: 2 },
-      });
-      await runPluginsCommand([
-        "plugins",
-        command,
-        command === "install" ? "npm:synthetic-plugin" : "alpha",
-        ...(["install", "uninstall"].includes(command) ? ["--force"] : []),
-      ]);
-      expect(pluginLifecycleGatewayMock.mock.calls[0]?.[0]).toBe(
-        `plugins.${command === "enable" || command === "disable" ? "setEnabled" : command}`,
-      );
-      expect(boundary.install).not.toHaveBeenCalled();
-      expect(boundary.policy).not.toHaveBeenCalled();
-      expect(boundary.uninstall).not.toHaveBeenCalled();
-    },
-  );
+  it.each(commands.slice(0, 4))("keeps the existing $args Gateway route", async ({ args }) => {
+    const command = args[0];
+    boundary.foreign = true;
+    cli.resolvePluginLifecycleGatewayMock.mockResolvedValue(cli.pluginLifecycleGatewayMock);
+    cli.pluginLifecycleGatewayMock.mockResolvedValue({
+      plugin: { id: "alpha" },
+      pluginId: "alpha",
+      removed: [],
+      runtime: { generation: 2 },
+    });
+    await run(...args);
+    expect(cli.pluginLifecycleGatewayMock.mock.calls[0]?.[0]).toBe(
+      `plugins.${command === "enable" || command === "disable" ? "setEnabled" : command}`,
+    );
+    expect(boundary.install).not.toHaveBeenCalled();
+    expect(boundary.policy).not.toHaveBeenCalled();
+    expect(boundary.uninstall).not.toHaveBeenCalled();
+  });
 
   it.each([true, false])("guards hook fallback when foreign owner=%s", async (foreign) => {
     boundary.foreign = foreign;
-    resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
-    pluginLifecycleGatewayMock.mockRejectedValue(
+    cli.resolvePluginLifecycleGatewayMock.mockResolvedValue(cli.pluginLifecycleGatewayMock);
+    cli.pluginLifecycleGatewayMock.mockRejectedValue(
       Object.assign(new Error("not a plugin"), {
         details: { pluginInstallRejected: true, pluginInstallCode: "missing_openclaw_extensions" },
       }),
     );
-    installHooksFromNpmSpecMock.mockResolvedValue({
+    cli.installHooksFromNpmSpecMock.mockResolvedValue({
       ok: true,
       hookPackId: "synthetic-hooks",
       hooks: [],
       targetDir: "/synthetic-hooks",
     });
-    const command = runPluginsCommand(["plugins", "install", "npm:synthetic-hooks", "--force"]);
+    const command = run("install", "npm:synthetic-hooks", "--force");
     if (foreign) {
       await expect(command).rejects.toThrow(/stop the Gateway/i);
-      expect(installHooksFromNpmSpecMock).not.toHaveBeenCalled();
+      expect(cli.installHooksFromNpmSpecMock).not.toHaveBeenCalled();
       expect(boundary.persistHook).not.toHaveBeenCalled();
     } else {
       await command;
-      expect(installHooksFromNpmSpecMock).toHaveBeenCalledOnce();
+      expect(cli.installHooksFromNpmSpecMock).toHaveBeenCalledOnce();
       expect(boundary.persistHook).toHaveBeenCalledOnce();
     }
   });

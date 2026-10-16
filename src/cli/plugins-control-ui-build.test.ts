@@ -42,7 +42,7 @@ afterEach(async () => {
   );
 });
 
-async function fixture() {
+async function fixture(files: Record<string, string> = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-build-"));
   directories.push(directory);
   await fs.mkdir(path.join(directory, "node_modules"));
@@ -59,6 +59,7 @@ async function fixture() {
     "style.css": ".fixture { color: var(--text); }",
     "lazy.js": 'export const value = "literal dependency";',
     "localized/value.js": 'export const value = "glob dependency";',
+    ...files,
   });
   return {
     rootDir: directory,
@@ -174,13 +175,12 @@ describe("native plugin browser builds", () => {
   );
 
   it("preserves esbuild's existing non-Solid JSX compilation", async () => {
-    const project = await fixture();
-    await writeFiles(project.rootDir, {
+    const project = await fixture({
       "renderer.js":
         "export const createElement = (tag, props, ...children) => ({ tag, props, children });",
       "view.tsx":
         'import * as React from "./renderer.js"; export const view = <p>Existing JSX</p>;',
-      [project.source]: 'export * from "./view.tsx";',
+      "index.ts": 'export * from "./view.tsx";',
     });
     const declaration = await buildPluginControlUi(project);
     const built = await project.import(declaration.entry);
@@ -266,11 +266,10 @@ export { flush };
   });
 
   it("removes unused dependency loaders without treating text as imports", async () => {
-    const project = await fixture();
-    await writeFiles(project.rootDir, {
+    const project = await fixture({
       "dependency.js":
         'export const message = "import(variable)"; export const unused = (specifier) => import(specifier);',
-      [project.source]: '// import(anotherVariable)\nexport { message } from "./dependency.js";',
+      "index.ts": '// import(anotherVariable)\nexport { message } from "./dependency.js";',
     });
     const result = await buildPluginControlUi(project);
     const built = await project.import(result.entry);
@@ -278,10 +277,9 @@ export { flush };
   });
 
   it("rejects a retained computed import in a split output chunk", async () => {
-    const project = await fixture();
-    await writeFiles(project.rootDir, {
+    const project = await fixture({
       "page.js": "export const load = (specifier) => import(specifier);",
-      [project.source]: 'export const loadPage = () => import("./page.js");',
+      "index.ts": 'export const loadPage = () => import("./page.js");',
     });
     await expect(buildPluginControlUi(project)).rejects.toThrow("will not be bundled");
     await expectNoBuild(project.rootDir);
@@ -294,8 +292,7 @@ export { flush };
       source: 'export const load = () => import("https://example.invalid/plugin.js");',
     },
   ])("rejects a retained external $name", async ({ source }) => {
-    const project = await fixture();
-    await project.write(project.source, source);
+    const project = await fixture({ "index.ts": source });
     await expect(buildPluginControlUi(project)).rejects.toThrow(
       "must bundle their browser dependencies",
     );
@@ -412,13 +409,11 @@ export { flush };
       const first = await buildPluginControlUi(project);
       const generation = path.join(project.rootDir, path.dirname(first.entry));
       const modeOf = async (target: string) => ((await fs.stat(target)).mode & 0o777).toString(8);
-      expect(await modeOf(generations)).toBe("755");
-      expect(await modeOf(generation)).toBe("755");
       assert.ok(first.styles?.[0]);
       const script = path.join(project.rootDir, first.entry);
       const stylesheet = path.join(project.rootDir, first.styles[0]);
-      expect(await modeOf(script)).toBe("644");
-      expect(await modeOf(stylesheet)).toBe("644");
+      const modes = () => Promise.all([generations, generation, script, stylesheet].map(modeOf));
+      expect(await modes()).toEqual(["755", "755", "644", "644"]);
       const assets = (await fs.readdir(generation)).map((name) => path.join(generation, name));
       const originalAssets = await Promise.all(assets.map((file) => fs.readFile(file)));
       expect(await Promise.all(assets.map(modeOf))).toEqual(assets.map(() => "644"));
@@ -428,21 +423,15 @@ export { flush };
       await fs.chmod(generation, 0o700);
       await Promise.all(assets.map((file) => fs.chmod(file, 0o600)));
       expect(await buildPluginControlUi({ ...project, check: true })).toEqual(first);
-      expect(await Promise.all([generations, generation, script, stylesheet].map(modeOf))).toEqual([
-        "700",
-        "700",
-        "600",
-        "600",
-      ]);
+      expect(await modes()).toEqual(["700", "700", "600", "600"]);
       expect(await buildPluginControlUi(project)).toEqual(first);
-      expect(await modeOf(generations)).toBe("755");
-      expect(await modeOf(generation)).toBe("755");
-      expect(await modeOf(script)).toBe("644");
-      expect(await modeOf(stylesheet)).toBe("644");
+      expect(await modes()).toEqual(["755", "755", "644", "644"]);
       expect(await Promise.all(assets.map(modeOf))).toEqual(assets.map(() => "644"));
       expect(await Promise.all(assets.map((file) => fs.readFile(file)))).toEqual(originalAssets);
-      expect(await modeOf(project.rootDir)).toBe("700");
-      expect(await modeOf(path.dirname(generations))).toBe("700");
+      expect(await Promise.all([project.rootDir, path.dirname(generations)].map(modeOf))).toEqual([
+        "700",
+        "700",
+      ]);
     },
   );
 

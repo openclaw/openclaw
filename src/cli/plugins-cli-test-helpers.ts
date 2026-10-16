@@ -1,6 +1,5 @@
 // Shared Vitest mocks and runtime capture helpers for plugin CLI command tests.
 import { Command } from "commander";
-import type { Mock } from "vitest";
 import { vi } from "vitest";
 import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -10,7 +9,10 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install-types.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { recordPluginManifestInstallOwner } from "../plugins/manifest-install-owner.js";
-import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import {
+  createPluginManifestRecordFixture,
+  createPluginMetadataSnapshotFixture,
+} from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { invokePluginArtifactInstallMock } from "../plugins/test-helpers/install-fixtures.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -20,7 +22,7 @@ import {
 } from "./plugins-cli-config.test-support.js";
 import type { CliMockOutputRuntime } from "./test-runtime-capture.js";
 
-type UnknownMock = Mock<(...args: unknown[]) => unknown>;
+type UnknownFn = (...args: unknown[]) => unknown;
 type ConfigModule = typeof import("../config/config.js");
 type StatusModule = typeof import("../plugins/status.js");
 type InstallModule = typeof import("../plugins/install.js");
@@ -29,7 +31,7 @@ type RegistryModule = typeof import("../plugins/plugin-registry.js");
 type SlotsModule = typeof import("../plugins/slots.js");
 type BundledSourcesModule = typeof import("../plugins/bundled-sources.js");
 type HookInstallModule = typeof import("../hooks/install.js");
-type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
+type AsyncUnknownFn = (...args: unknown[]) => Promise<unknown>;
 type LoadConfigFn = ConfigModule["loadConfig"];
 type ReplaceConfigFileFn = ConfigModule["replaceConfigFile"];
 type ReportClawHubPluginInstallTelemetryFn =
@@ -81,11 +83,6 @@ export function setHookInstallRecords(records: Record<string, HookInstallRecord>
   mockHookInstallRecords = structuredClone(records);
 }
 
-function clonePluginInstallRecords(records: PluginInstallRecordMap): PluginInstallRecordMap {
-  // Tests mutate records freely; clone to keep helper state from leaking across assertions.
-  return structuredClone(records);
-}
-
 export function createTestInstalledPluginIndex(params: {
   policyHash: string;
   installRecords: PluginInstallRecordMap;
@@ -99,7 +96,7 @@ export function createTestInstalledPluginIndex(params: {
     policyHash: params.policyHash,
     generatedAtMs: 0,
     refreshReason: "source-changed",
-    installRecords: clonePluginInstallRecords(params.installRecords),
+    installRecords: structuredClone(params.installRecords),
     plugins: params.plugins ?? [],
     diagnostics: [],
   };
@@ -115,25 +112,39 @@ function forwardMock<T extends (...args: never[]) => unknown>(getMock: () => unk
   return (...args: Parameters<T>): ReturnType<T> => invokeMock(getMock(), ...args);
 }
 
-export const pluginCliConfigMock: Mock<LoadConfigFn> = vi.fn<LoadConfigFn>(
-  () => ({}) as OpenClawConfig,
+function artifactMock<
+  T extends (params: never) => Promise<{ ok: boolean; pluginId?: string; version?: string }>,
+>(getMock: () => unknown) {
+  return (params: Parameters<T>[0]) =>
+    invokePluginArtifactInstallMock<Awaited<ReturnType<T>>>(getMock(), params);
+}
+
+const resetMocks: (() => void)[] = [];
+function stub<T extends NonNullable<Parameters<typeof vi.fn>[0]>>(implementation?: T) {
+  const result = vi.fn<T>(implementation);
+  resetMocks.push(() => {
+    result.mockReset();
+  });
+  return result;
+}
+
+export const pluginCliConfigMock = stub<LoadConfigFn>(() => ({}) as OpenClawConfig);
+export const readConfigFileSnapshotMock = stub<AsyncUnknownFn>();
+export const readConfigFileSnapshotForWriteMock = stub<AsyncUnknownFn>();
+export const configWriteMock = stub<AsyncUnknownFn>(async () => undefined);
+export const replaceConfigFileMock = stub<ReplaceConfigFileFn>();
+export const installPluginFromMarketplaceMock = stub<InstallPluginFromMarketplaceFn>();
+export const installPluginFromGitSpecMock = stub<InstallPluginFromGitSpecFn>();
+const listMarketplacePlugins = stub<ListMarketplacePluginsFn>();
+export const resolveMarketplaceInstallShortcutMock = stub<ResolveMarketplaceInstallShortcutFn>();
+export const enablePluginInConfigMock = stub<UnknownFn>();
+export const recordPluginInstallMock = stub<UnknownFn>();
+const loadInstalledPluginIndexInstallRecords = stub<AsyncUnknownFn>(async () =>
+  structuredClone(mockInstalledPluginIndexInstallRecords),
 );
-export const readConfigFileSnapshotMock: AsyncUnknownMock = vi.fn();
-export const readConfigFileSnapshotForWriteMock: AsyncUnknownMock = vi.fn();
-export const configWriteMock: AsyncUnknownMock = vi.fn(async () => undefined);
-export const replaceConfigFileMock = vi.fn<ReplaceConfigFileFn>();
-export const installPluginFromMarketplaceMock: Mock<InstallPluginFromMarketplaceFn> = vi.fn();
-export const installPluginFromGitSpecMock: Mock<InstallPluginFromGitSpecFn> = vi.fn();
-const listMarketplacePlugins: Mock<ListMarketplacePluginsFn> = vi.fn();
-export const resolveMarketplaceInstallShortcutMock: Mock<ResolveMarketplaceInstallShortcutFn> =
-  vi.fn();
-export const enablePluginInConfigMock: UnknownMock = vi.fn();
-export const recordPluginInstallMock: UnknownMock = vi.fn();
-const loadInstalledPluginIndexInstallRecords: AsyncUnknownMock = vi.fn(async () =>
-  clonePluginInstallRecords(mockInstalledPluginIndexInstallRecords),
+export const readPersistedInstalledPluginIndexMock = stub<ReadPersistedInstalledPluginIndexFn>(
+  async () => null,
 );
-export const readPersistedInstalledPluginIndexMock: Mock<ReadPersistedInstalledPluginIndexFn> =
-  vi.fn<ReadPersistedInstalledPluginIndexFn>(async () => null);
 const writeMockInstalledIndexWithLease: WritePersistedInstalledPluginIndexInstallRecordsWithLeaseFn =
   async (records) => {
     const previous = await readPersistedInstalledPluginIndexMock();
@@ -143,7 +154,7 @@ const writeMockInstalledIndexWithLease: WritePersistedInstalledPluginIndexInstal
       updated_at_ms: revision,
     });
     const before = previous ? row(previous, mockInstalledPluginIndexRevision) : null;
-    mockInstalledPluginIndexInstallRecords = clonePluginInstallRecords(records);
+    mockInstalledPluginIndexInstallRecords = structuredClone(records);
     mockInstalledPluginIndexRevision += 1;
     return {
       previous,
@@ -158,8 +169,8 @@ const writeMockInstalledIndexWithLease: WritePersistedInstalledPluginIndexInstal
       },
     };
   };
-export const writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock: Mock<WritePersistedInstalledPluginIndexInstallRecordsWithLeaseFn> =
-  vi.fn<WritePersistedInstalledPluginIndexInstallRecordsWithLeaseFn>(
+export const writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock =
+  stub<WritePersistedInstalledPluginIndexInstallRecordsWithLeaseFn>(
     writeMockInstalledIndexWithLease,
   );
 const restoreMockInstalledIndexIfCurrent: RestorePersistedInstalledPluginIndexIfCurrentFn = async (
@@ -169,124 +180,107 @@ const restoreMockInstalledIndexIfCurrent: RestorePersistedInstalledPluginIndexIf
   if (mockInstalledPluginIndexRevision !== expectedRevision) {
     return false;
   }
-  mockInstalledPluginIndexInstallRecords = clonePluginInstallRecords(
+  mockInstalledPluginIndexInstallRecords = structuredClone(
     (index?.installRecords ?? {}) as PluginInstallRecordMap,
   );
   mockInstalledPluginIndexRevision += 1;
   return true;
 };
-export const restorePersistedInstalledPluginIndexIfCurrentMock: Mock<RestorePersistedInstalledPluginIndexIfCurrentFn> =
-  vi.fn<RestorePersistedInstalledPluginIndexIfCurrentFn>(restoreMockInstalledIndexIfCurrent);
-export const loadPluginManifestRegistryMock: UnknownMock = vi.fn();
-export const loadPluginMetadataSnapshotMock = vi.fn(createPluginsCliMetadataSnapshot);
-export const buildPluginSnapshotReportMock: UnknownMock = vi.fn();
-export const buildPluginRegistrySnapshotReportMock: UnknownMock = vi.fn();
-export const buildPluginInspectReportMock: UnknownMock = vi.fn();
-export const buildAllPluginInspectReportsMock: UnknownMock = vi.fn();
-export const buildPluginDiagnosticsReportMock: UnknownMock = vi.fn();
+export const restorePersistedInstalledPluginIndexIfCurrentMock =
+  stub<RestorePersistedInstalledPluginIndexIfCurrentFn>(restoreMockInstalledIndexIfCurrent);
+export const loadPluginManifestRegistryMock = stub<UnknownFn>();
+export const loadPluginMetadataSnapshotMock = stub(createPluginsCliMetadataSnapshot);
+export const buildPluginSnapshotReportMock = stub<UnknownFn>();
+export const buildPluginRegistrySnapshotReportMock = stub<UnknownFn>();
+export const buildPluginInspectReportMock = stub<UnknownFn>();
+export const buildAllPluginInspectReportsMock = stub<UnknownFn>();
+export const buildPluginDiagnosticsReportMock = stub<UnknownFn>();
 export const withPluginDiagnosticsReportForInspectionMock =
-  vi.fn<StatusModule["withPluginDiagnosticsReportForInspection"]>();
-export const retirePluginDiagnosticsMock = vi.fn<() => void | Promise<void>>();
-export const buildPluginCompatibilityNoticesMock: UnknownMock = vi.fn();
-export const inspectPluginRegistryMock: AsyncUnknownMock = vi.fn();
-export const refreshPluginRegistryMock: AsyncUnknownMock = vi.fn();
+  stub<StatusModule["withPluginDiagnosticsReportForInspection"]>();
+export const retirePluginDiagnosticsMock = stub<() => void | Promise<void>>();
+export const buildPluginCompatibilityNoticesMock = stub<UnknownFn>();
+export const inspectPluginRegistryMock = stub<AsyncUnknownFn>();
+export const refreshPluginRegistryMock = stub<AsyncUnknownFn>();
 export const resolvePluginLifecycleGatewayMock = vi.fn();
-export const pluginLifecycleGatewayMock: AsyncUnknownMock = vi.fn();
-export const clearPluginRegistryLoadCacheMock: UnknownMock = vi.fn();
-export const applyExclusiveSlotSelectionMock: UnknownMock = vi.fn();
+export const pluginLifecycleGatewayMock = stub<AsyncUnknownFn>();
+export const clearPluginRegistryLoadCacheMock = stub<UnknownFn>();
+export const applyExclusiveSlotSelectionMock = stub<UnknownFn>();
 export const planPluginUninstallMock =
-  vi.fn<(typeof import("../plugins/uninstall.js"))["planPluginUninstall"]>();
+  stub<(typeof import("../plugins/uninstall.js"))["planPluginUninstall"]>();
 export const applyPluginUninstallDirectoryRemovalMock =
-  vi.fn<(typeof import("../plugins/uninstall.js"))["applyPluginUninstallDirectoryRemoval"]>();
-export const updateNpmInstalledPluginsMock: Mock<UpdateNpmInstalledPluginsFn> = vi.fn();
-export const updateNpmInstalledHookPacksMock: Mock<UpdateNpmInstalledHookPacksFn> = vi.fn();
-export const promptYesNoMock: AsyncUnknownMock = vi.fn();
-const promptText: AsyncUnknownMock = vi.fn();
+  stub<(typeof import("../plugins/uninstall.js"))["applyPluginUninstallDirectoryRemoval"]>();
+export const updateNpmInstalledPluginsMock = stub<UpdateNpmInstalledPluginsFn>();
+export const updateNpmInstalledHookPacksMock = stub<UpdateNpmInstalledHookPacksFn>();
+export const promptYesNoMock = stub<AsyncUnknownFn>();
+const promptText = stub<AsyncUnknownFn>();
 export class PromptInputClosedError extends Error {
   constructor() {
     super("Prompt input closed before an answer was received.");
     this.name = "PromptInputClosedError";
   }
 }
-export const installPluginFromNpmSpecMock: AsyncUnknownMock = vi.fn();
-export const installPluginFromNpmPackArchiveMock: AsyncUnknownMock = vi.fn();
-export const installPluginFromPathMock: AsyncUnknownMock = vi.fn();
-export const installPluginFromClawHubMock: AsyncUnknownMock = vi.fn();
-export const reportClawHubPluginInstallTelemetryMock: Mock<ReportClawHubPluginInstallTelemetryFn> =
-  vi.fn(async () => undefined);
-export const findBundledPluginSourceMock: UnknownMock = vi.fn();
-export const installHooksFromNpmSpecMock: AsyncUnknownMock = vi.fn();
-export const installHooksFromPathMock: AsyncUnknownMock = vi.fn();
-export const recordHookInstallMock: UnknownMock = vi.fn();
-
-const { defaultRuntime, pluginsCliRuntimeLogs, runtimeErrors, resetRuntimeCapture } = vi.hoisted(
-  () => {
-    const runtimeLogsLocal: string[] = [];
-    const runtimeErrorsLocal: string[] = [];
-    const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
-    const normalizeStdout = (value: string) => (value.endsWith("\n") ? value.slice(0, -1) : value);
-    const stringifyJson = (value: unknown, space = 2) =>
-      JSON.stringify(value, null, space > 0 ? space : undefined);
-    const defaultRuntimeLocal = {
-      log: vi.fn((...args: unknown[]) => {
-        runtimeLogsLocal.push(stringifyArgs(args));
-      }),
-      error: vi.fn((...args: unknown[]) => {
-        runtimeErrorsLocal.push(stringifyArgs(args));
-      }),
-      writeStdout: vi.fn((value: string) => {
-        defaultRuntimeLocal.log(normalizeStdout(value));
-      }),
-      writeJson: vi.fn((value: unknown, space = 2) => {
-        defaultRuntimeLocal.log(stringifyJson(value, space));
-      }),
-      exit: vi.fn((code: number) => {
-        throw new Error(`__exit__:${code} ${runtimeErrorsLocal.join("\n")}`);
-      }),
-    } as CliMockOutputRuntime;
-    return {
-      defaultRuntime: defaultRuntimeLocal,
-      pluginsCliRuntimeLogs: runtimeLogsLocal,
-      runtimeErrors: runtimeErrorsLocal,
-      resetRuntimeCapture: () => {
-        runtimeLogsLocal.length = 0;
-        runtimeErrorsLocal.length = 0;
-      },
-    };
-  },
+export const installPluginFromNpmSpecMock = stub<AsyncUnknownFn>();
+export const installPluginFromNpmPackArchiveMock = stub<AsyncUnknownFn>();
+export const installPluginFromPathMock = stub<AsyncUnknownFn>();
+export const installPluginFromClawHubMock = stub<AsyncUnknownFn>();
+export const reportClawHubPluginInstallTelemetryMock = stub<ReportClawHubPluginInstallTelemetryFn>(
+  async () => undefined,
 );
+export const findBundledPluginSourceMock = stub<UnknownFn>();
+export const installHooksFromNpmSpecMock = stub<AsyncUnknownFn>();
+export const installHooksFromPathMock = stub<AsyncUnknownFn>();
+export const recordHookInstallMock = stub<UnknownFn>();
+
+const {
+  defaultRuntime,
+  pluginsCliRuntimeLogs,
+  runtimeErrors,
+  resetRuntimeCapture,
+  restoreRuntimeCaptureMocks,
+} = vi.hoisted(() => {
+  const runtimeLogsLocal: string[] = [];
+  const runtimeErrorsLocal: string[] = [];
+  const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
+  const normalizeStdout = (value: string) => (value.endsWith("\n") ? value.slice(0, -1) : value);
+  const stringifyJson = (value: unknown, space = 2) =>
+    JSON.stringify(value, null, space > 0 ? space : undefined);
+  const defaultRuntimeLocal = {
+    log: vi.fn((...args: unknown[]) => {
+      runtimeLogsLocal.push(stringifyArgs(args));
+    }),
+    error: vi.fn((...args: unknown[]) => {
+      runtimeErrorsLocal.push(stringifyArgs(args));
+    }),
+    writeStdout: vi.fn((value: string) => {
+      defaultRuntimeLocal.log(normalizeStdout(value));
+    }),
+    writeJson: vi.fn((value: unknown, space = 2) => {
+      defaultRuntimeLocal.log(stringifyJson(value, space));
+    }),
+    exit: vi.fn((code: number) => {
+      throw new Error(`__exit__:${code} ${runtimeErrorsLocal.join("\n")}`);
+    }),
+  } as CliMockOutputRuntime;
+  return {
+    defaultRuntime: defaultRuntimeLocal,
+    restoreRuntimeCaptureMocks: () => {
+      for (const output of Object.values(defaultRuntimeLocal)) {
+        output.mockReset();
+      }
+    },
+    pluginsCliRuntimeLogs: runtimeLogsLocal,
+    runtimeErrors: runtimeErrorsLocal,
+    resetRuntimeCapture: () => {
+      runtimeLogsLocal.length = 0;
+      runtimeErrorsLocal.length = 0;
+    },
+  };
+});
 
 export { runtimeErrors, pluginsCliRuntimeLogs };
 
 export function setInstalledPluginIndexInstallRecords(records: PluginInstallRecordMap): void {
-  mockInstalledPluginIndexInstallRecords = clonePluginInstallRecords(records);
-}
-
-function restoreRuntimeCaptureMocks() {
-  defaultRuntime.log.mockReset();
-  defaultRuntime.log.mockImplementation((...args: unknown[]) => {
-    pluginsCliRuntimeLogs.push(args.map((value) => String(value)).join(" "));
-  });
-
-  defaultRuntime.error.mockReset();
-  defaultRuntime.error.mockImplementation((...args: unknown[]) => {
-    runtimeErrors.push(args.map((value) => String(value)).join(" "));
-  });
-
-  defaultRuntime.writeStdout.mockReset();
-  defaultRuntime.writeStdout.mockImplementation((value: string) => {
-    defaultRuntime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
-  });
-
-  defaultRuntime.writeJson.mockReset();
-  defaultRuntime.writeJson.mockImplementation((value: unknown, space = 2) => {
-    defaultRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
-  });
-
-  defaultRuntime.exit.mockReset();
-  defaultRuntime.exit.mockImplementation((code: number) => {
-    throw new Error(`__exit__:${code} ${runtimeErrors.join("\n")}`);
-  });
+  mockInstalledPluginIndexInstallRecords = structuredClone(records);
 }
 
 vi.mock("../runtime.js", () => ({
@@ -374,11 +368,9 @@ vi.mock("../config/paths.js", async (importOriginal) => {
 });
 
 vi.mock("../plugins/marketplace.js", () => ({
-  installPluginFromMarketplace: ((params: Parameters<InstallPluginFromMarketplaceFn>[0]) =>
-    invokePluginArtifactInstallMock<Awaited<ReturnType<InstallPluginFromMarketplaceFn>>>(
-      installPluginFromMarketplaceMock,
-      params,
-    )) as InstallPluginFromMarketplaceFn,
+  installPluginFromMarketplace: artifactMock<InstallPluginFromMarketplaceFn>(
+    () => installPluginFromMarketplaceMock,
+  ),
   listMarketplacePlugins: ((...args: Parameters<ListMarketplacePluginsFn>) =>
     listMarketplacePlugins(...args)) as ListMarketplacePluginsFn,
   resolveMarketplaceInstallShortcut: ((...args: Parameters<ResolveMarketplaceInstallShortcutFn>) =>
@@ -411,15 +403,12 @@ vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) =
     await importOriginal<typeof import("../plugins/installed-plugin-index-records.js")>();
   return {
     ...actual,
-    loadInstalledPluginIndexInstallRecords: ((...args: unknown[]) =>
-      invokeMock<unknown[], unknown>(loadInstalledPluginIndexInstallRecords, ...args)) as (
-      ...args: unknown[]
-    ) => unknown,
-    writePersistedInstalledPluginIndexInstallRecordsWithLease: ((...args: unknown[]) =>
-      invokeMock<unknown[], unknown>(
-        writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
-        ...args,
-      )) as (...args: unknown[]) => unknown,
+    loadInstalledPluginIndexInstallRecords: forwardMock<UnknownFn>(
+      () => loadInstalledPluginIndexInstallRecords,
+    ),
+    writePersistedInstalledPluginIndexInstallRecordsWithLease: forwardMock<UnknownFn>(
+      () => writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
+    ),
     recordPluginInstallInRecords: (
       records: Record<string, unknown>,
       update: { pluginId: string; installedAt?: string } & Record<string, unknown>,
@@ -443,7 +432,7 @@ vi.mock("../plugins/installed-plugin-index-record-reader.js", async (importOrigi
   return {
     ...actual,
     loadInstalledPluginIndexInstallRecordsSync: () =>
-      clonePluginInstallRecords(mockInstalledPluginIndexInstallRecords),
+      structuredClone(mockInstalledPluginIndexInstallRecords),
   };
 });
 
@@ -452,10 +441,9 @@ vi.mock("../plugins/installed-plugin-index-store.js", async (importOriginal) => 
     await importOriginal<typeof import("../plugins/installed-plugin-index-store.js")>();
   return {
     ...actual,
-    readPersistedInstalledPluginIndex: ((...args: unknown[]) =>
-      invokeMock<unknown[], unknown>(readPersistedInstalledPluginIndexMock, ...args)) as (
-      ...args: unknown[]
-    ) => unknown,
+    readPersistedInstalledPluginIndex: forwardMock<UnknownFn>(
+      () => readPersistedInstalledPluginIndexMock,
+    ),
   };
 });
 
@@ -464,11 +452,9 @@ vi.mock("../plugins/installed-plugin-index-store-write.js", async (importOrigina
     await importOriginal<typeof import("../plugins/installed-plugin-index-store-write.js")>();
   return {
     ...actual,
-    restorePersistedInstalledPluginIndexIfCurrent: ((...args: unknown[]) =>
-      invokeMock<unknown[], unknown>(
-        restorePersistedInstalledPluginIndexIfCurrentMock,
-        ...args,
-      )) as (...args: unknown[]) => unknown,
+    restorePersistedInstalledPluginIndexIfCurrent: forwardMock<UnknownFn>(
+      () => restorePersistedInstalledPluginIndexIfCurrentMock,
+    ),
   };
 });
 
@@ -477,7 +463,7 @@ function createPluginsCliMetadataSnapshot(
     (typeof import("../plugins/plugin-metadata-snapshot.js"))["loadPluginMetadataSnapshot"]
   >[0],
 ) {
-  const records = clonePluginInstallRecords(mockInstalledPluginIndexInstallRecords);
+  const records = structuredClone(mockInstalledPluginIndexInstallRecords);
   const manifestRegistry = loadPluginManifestRegistryMock({
     ...params,
     installRecords: records,
@@ -559,21 +545,16 @@ vi.mock("../plugins/status-snapshot.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/status-snapshot.js")>();
   return {
     ...actual,
-    buildPluginRegistrySnapshotReport: (
-      ...args: Parameters<typeof actual.buildPluginRegistrySnapshotReport>
-    ) =>
-      invokeMock<
-        Parameters<typeof actual.buildPluginRegistrySnapshotReport>,
-        ReturnType<typeof actual.buildPluginRegistrySnapshotReport>
-      >(buildPluginRegistrySnapshotReportMock, ...args),
+    buildPluginRegistrySnapshotReport: forwardMock<typeof actual.buildPluginRegistrySnapshotReport>(
+      () => buildPluginRegistrySnapshotReportMock,
+    ),
   };
 });
 
 vi.mock("../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: ((...args: unknown[]) =>
-    invokeMock<unknown[], unknown>(loadPluginManifestRegistryMock, ...args)) as (
-    ...args: unknown[]
-  ) => unknown,
+  loadPluginManifestRegistryForPluginRegistry: forwardMock<UnknownFn>(
+    () => loadPluginManifestRegistryMock,
+  ),
   loadPluginRegistrySnapshotWithMetadata: () => ({
     source: "derived",
     snapshot: { plugins: [] },
@@ -595,10 +576,7 @@ vi.mock("../plugins/plugin-registry-refresh.js", async (importOriginal) => {
 });
 
 vi.mock("../plugins/loader.js", () => ({
-  clearPluginRegistryLoadCache: ((...args: unknown[]) =>
-    invokeMock<unknown[], unknown>(clearPluginRegistryLoadCacheMock, ...args)) as (
-    ...args: unknown[]
-  ) => unknown,
+  clearPluginRegistryLoadCache: forwardMock<UnknownFn>(() => clearPluginRegistryLoadCacheMock),
 }));
 
 vi.mock("../plugins/slots.js", async (importOriginal) => {
@@ -648,25 +626,15 @@ vi.mock("./prompt.js", () => ({
 
 vi.mock("../plugins/install.js", () => ({
   PLUGIN_INSTALL_ERROR_CODE,
-  installPluginFromNpmSpec: ((params: Parameters<InstallModule["installPluginFromNpmSpec"]>[0]) =>
-    invokePluginArtifactInstallMock<Awaited<ReturnType<InstallModule["installPluginFromNpmSpec"]>>>(
-      installPluginFromNpmSpecMock,
-      params,
-    )) as InstallModule["installPluginFromNpmSpec"],
-  installPluginFromNpmPackArchive: ((
-    params: Parameters<InstallModule["installPluginFromNpmPackArchive"]>[0],
-  ) =>
-    invokePluginArtifactInstallMock<
-      Awaited<ReturnType<InstallModule["installPluginFromNpmPackArchive"]>>
-    >(
-      installPluginFromNpmPackArchiveMock,
-      params,
-    )) as InstallModule["installPluginFromNpmPackArchive"],
-  installPluginFromPath: ((params: Parameters<InstallModule["installPluginFromPath"]>[0]) =>
-    invokePluginArtifactInstallMock<Awaited<ReturnType<InstallModule["installPluginFromPath"]>>>(
-      installPluginFromPathMock,
-      params,
-    )) as InstallModule["installPluginFromPath"],
+  installPluginFromNpmSpec: artifactMock<InstallModule["installPluginFromNpmSpec"]>(
+    () => installPluginFromNpmSpecMock,
+  ),
+  installPluginFromNpmPackArchive: artifactMock<InstallModule["installPluginFromNpmPackArchive"]>(
+    () => installPluginFromNpmPackArchiveMock,
+  ),
+  installPluginFromPath: artifactMock<InstallModule["installPluginFromPath"]>(
+    () => installPluginFromPathMock,
+  ),
 }));
 
 vi.mock("../plugins/bundled-sources.js", async (importOriginal) => {
@@ -691,19 +659,9 @@ vi.mock("../plugins/git-install.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/git-install.js")>();
   return {
     ...actual,
-    installPluginFromGitSpec: ((
-      params: Parameters<
-        (typeof import("../plugins/git-install.js"))["installPluginFromGitSpec"]
-      >[0],
-    ) =>
-      invokePluginArtifactInstallMock<
-        Awaited<
-          ReturnType<(typeof import("../plugins/git-install.js"))["installPluginFromGitSpec"]>
-        >
-      >(
-        installPluginFromGitSpecMock,
-        params,
-      )) as (typeof import("../plugins/git-install.js"))["installPluginFromGitSpec"],
+    installPluginFromGitSpec: artifactMock<
+      (typeof import("../plugins/git-install.js"))["installPluginFromGitSpec"]
+    >(() => installPluginFromGitSpecMock),
   };
 });
 
@@ -739,15 +697,9 @@ vi.mock("../plugins/clawhub.js", () => ({
     VERSION_NOT_FOUND: "version_not_found",
     ARTIFACT_UNAVAILABLE: "artifact_unavailable",
   },
-  installPluginFromClawHub: ((
-    params: Parameters<(typeof import("../plugins/clawhub.js"))["installPluginFromClawHub"]>[0],
-  ) =>
-    invokePluginArtifactInstallMock<
-      Awaited<ReturnType<(typeof import("../plugins/clawhub.js"))["installPluginFromClawHub"]>>
-    >(
-      installPluginFromClawHubMock,
-      params,
-    )) as (typeof import("../plugins/clawhub.js"))["installPluginFromClawHub"],
+  installPluginFromClawHub: artifactMock<
+    (typeof import("../plugins/clawhub.js"))["installPluginFromClawHub"]
+  >(() => installPluginFromClawHubMock),
 }));
 
 vi.mock("../infra/clawhub-packages.js", () => ({
@@ -766,64 +718,24 @@ export async function runPluginsCommand(argv: string[]) {
 }
 
 export function resetPluginsCliTestState() {
+  for (const reset of resetMocks) {
+    reset();
+  }
   resetRuntimeCapture();
   restoreRuntimeCaptureMocks();
-  pluginCliConfigMock.mockReset();
-  readConfigFileSnapshotMock.mockReset();
-  readConfigFileSnapshotForWriteMock.mockReset();
-  configWriteMock.mockReset();
-  replaceConfigFileMock.mockReset();
-  installPluginFromMarketplaceMock.mockReset();
-  listMarketplacePlugins.mockReset();
-  resolveMarketplaceInstallShortcutMock.mockReset();
-  enablePluginInConfigMock.mockReset();
-  recordPluginInstallMock.mockReset();
   mockInstalledPluginIndexInstallRecords = {};
   mockInstalledPluginIndexRevision = 0;
   mockPersistedConfigs.clear();
-  loadInstalledPluginIndexInstallRecords.mockReset();
-  writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock.mockReset();
-  readPersistedInstalledPluginIndexMock.mockReset();
-  restorePersistedInstalledPluginIndexIfCurrentMock.mockReset();
-  loadPluginManifestRegistryMock.mockReset();
-  loadPluginMetadataSnapshotMock.mockReset().mockImplementation(createPluginsCliMetadataSnapshot);
-  buildPluginSnapshotReportMock.mockReset();
-  buildPluginRegistrySnapshotReportMock.mockReset();
-  buildPluginInspectReportMock.mockReset();
-  buildAllPluginInspectReportsMock.mockReset();
-  buildPluginDiagnosticsReportMock.mockReset();
-  withPluginDiagnosticsReportForInspectionMock.mockReset();
+  loadPluginMetadataSnapshotMock.mockImplementation(createPluginsCliMetadataSnapshot);
   withPluginDiagnosticsReportForInspectionMock.mockImplementation(async (_params, formatReport) =>
     formatReport({ ...createEmptyPluginRegistry(), workspaceScope: "omitted" }),
   );
-  retirePluginDiagnosticsMock.mockReset();
-  buildPluginCompatibilityNoticesMock.mockReset();
-  inspectPluginRegistryMock.mockReset();
-  refreshPluginRegistryMock.mockReset();
   resolvePluginLifecycleGatewayMock.mockReset().mockResolvedValue(null);
-  pluginLifecycleGatewayMock
-    .mockReset()
-    .mockResolvedValue({ runtime: { operationId: "cli-test", generation: 2, pluginIds: [] } });
-  clearPluginRegistryLoadCacheMock.mockReset();
-  applyExclusiveSlotSelectionMock.mockReset();
-  planPluginUninstallMock.mockReset();
-  applyPluginUninstallDirectoryRemovalMock.mockReset();
-  updateNpmInstalledPluginsMock.mockReset();
-  updateNpmInstalledHookPacksMock.mockReset();
+  pluginLifecycleGatewayMock.mockResolvedValue({
+    runtime: { operationId: "cli-test", generation: 2, pluginIds: [] },
+  });
   mockHookInstallRecords = {};
-  promptText.mockReset();
-  promptYesNoMock.mockReset();
-  installPluginFromGitSpecMock.mockReset();
-  installPluginFromNpmSpecMock.mockReset();
-  installPluginFromNpmPackArchiveMock.mockReset();
-  installPluginFromPathMock.mockReset();
-  installPluginFromClawHubMock.mockReset();
-  reportClawHubPluginInstallTelemetryMock.mockReset();
   reportClawHubPluginInstallTelemetryMock.mockResolvedValue(undefined);
-  findBundledPluginSourceMock.mockReset();
-  installHooksFromNpmSpecMock.mockReset();
-  installHooksFromPathMock.mockReset();
-  recordHookInstallMock.mockReset();
 
   pluginCliConfigMock.mockReturnValue({} as OpenClawConfig);
   readConfigFileSnapshotMock.mockImplementation(async () =>
@@ -871,7 +783,7 @@ export function resetPluginsCliTestState() {
     ((cfg: OpenClawConfig) => cfg) as (...args: unknown[]) => unknown,
   );
   loadInstalledPluginIndexInstallRecords.mockImplementation(async () =>
-    clonePluginInstallRecords(mockInstalledPluginIndexInstallRecords),
+    structuredClone(mockInstalledPluginIndexInstallRecords),
   );
   readPersistedInstalledPluginIndexMock.mockResolvedValue(null);
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock.mockImplementation(
@@ -887,18 +799,13 @@ export function resetPluginsCliTestState() {
       plugins: Object.entries(installRecords).map(([pluginId, record]) => {
         const rootDir = record.installPath ?? record.sourcePath ?? `/tmp/${pluginId}`;
         return recordPluginManifestInstallOwner(
-          {
+          createPluginManifestRecordFixture({
             id: pluginId,
-            channels: [],
-            providers: [],
-            cliBackends: [],
-            skills: [],
-            hooks: [],
             origin: "global",
             rootDir,
             source: `${rootDir}/index.js`,
             manifestPath: `${rootDir}/openclaw.plugin.json`,
-          },
+          }),
           pluginId,
         );
       }),
@@ -949,41 +856,20 @@ export function resetPluginsCliTestState() {
     directoryRemoved: false,
     warnings: [],
   });
-  updateNpmInstalledPluginsMock.mockResolvedValue({
-    outcomes: [],
-    changed: false,
-    config: {} as OpenClawConfig,
-  });
-  updateNpmInstalledHookPacksMock.mockResolvedValue({
-    outcomes: [],
-    changed: false,
-    config: {} as OpenClawConfig,
-  });
+  for (const mock of [updateNpmInstalledPluginsMock, updateNpmInstalledHookPacksMock]) {
+    mock.mockResolvedValue({ outcomes: [], changed: false, config: {} });
+  }
   promptYesNoMock.mockResolvedValue(true);
   promptText.mockResolvedValue("demo");
-  installPluginFromPathMock.mockResolvedValue({
-    ok: false,
-    error: "path install disabled in test",
-  });
-  installPluginFromGitSpecMock.mockResolvedValue({
-    ok: false,
-    error: "git install disabled in test",
-  });
-  installPluginFromNpmSpecMock.mockResolvedValue({
-    ok: false,
-    error: "npm install disabled in test",
-  });
-  installPluginFromClawHubMock.mockResolvedValue({
-    ok: false,
-    error: "clawhub install disabled in test",
-  });
-  installHooksFromPathMock.mockResolvedValue({
-    ok: false,
-    error: "hook path install disabled in test",
-  });
-  installHooksFromNpmSpecMock.mockResolvedValue({
-    ok: false,
-    error: "hook npm install disabled in test",
-  });
+  for (const [mock, source] of [
+    [installPluginFromPathMock, "path"],
+    [installPluginFromGitSpecMock, "git"],
+    [installPluginFromNpmSpecMock, "npm"],
+    [installPluginFromClawHubMock, "clawhub"],
+    [installHooksFromPathMock, "hook path"],
+    [installHooksFromNpmSpecMock, "hook npm"],
+  ] as const) {
+    mock.mockResolvedValue({ ok: false, error: `${source} install disabled in test` });
+  }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
