@@ -9,9 +9,8 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
+import { upsertSessionEntryCore } from "./session-accessor.entry.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
-import { acquireSessionActorStorage } from "./session-actor-storage-binding.js";
-import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import type { SessionColdReadPreparation } from "./session-cold-storage-read.js";
 import type { SessionColdArchive } from "./session-cold-storage-state.js";
 import { restoreSessionColdTranscript as restore } from "./session-cold-storage.js";
@@ -175,27 +174,13 @@ it("skips cold storage for an unbound memory session without recreating a closed
     agentId: target.agentId,
     path: resolveIncognitoOpenClawAgentSqlitePath(target),
   };
-  const entry = { sessionId: target.sessionId, updatedAt: 1, incognito: true };
-  const authority = { assertCurrent() {}, authorize() {} };
   try {
-    const initial = await acquireSessionActorStorage(target, {
-      lifetime: { assertCurrent() {}, assertReadable() {} },
-      authority,
-      create: true,
-    });
-    if (!initial) {
-      throw new Error("Expected memory owner");
-    }
-    try {
-      readSessionActorStorageResult(
-        await initial.actor.storage.mutate(
-          { type: "session.entry.create", input: { entry } },
-          authority,
-        ),
-      );
-    } finally {
-      await initial.actor.release();
-    }
+    await expect(
+      upsertSessionEntryCore(
+        { ...target, storePath: namespace.path },
+        { sessionId: target.sessionId, updatedAt: 1, incognito: true },
+      ),
+    ).resolves.toMatchObject({ sessionId: target.sessionId });
     await expect(restore(target)).resolves.toBeUndefined();
     memorySessionActorOwners.closeDatabase(namespace);
     await expect(restore(target)).resolves.toBeUndefined();
