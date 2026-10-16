@@ -32,7 +32,6 @@ export function ComposerInputScope(props: {
 }) {
   const state = untrack(() => props.state);
   onCleanup(() => {
-    state.textareaRef?.();
     state.composerInputRef?.();
   });
   return untrack(() => props.children);

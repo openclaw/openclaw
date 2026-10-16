@@ -143,8 +143,6 @@ export function ChatComposer(props: ChatComposerProps) {
   onSettled(() => listen(document, "visibilitychange", () => prediction.sync()));
   onCleanup(() => {
     disposed = true;
-    state.textareaRef?.();
-    state.composerInputRef?.();
   });
   return renderChatComposerView(context, currentProps);
 }
