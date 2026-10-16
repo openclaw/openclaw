@@ -9,7 +9,6 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withInProcessAgentRuntimeIdentity } from "./in-process-agent-runtime-identity.js";
-import { createGatewayMethodRegistry } from "./methods/registry.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
 import {
@@ -52,23 +51,12 @@ function writerConfig(
 
 function fixture(scopes = ["operator.write"]) {
   const caller = createOperatorClient({ profileName: "plugin-caller", scopes });
-  const context = createContext();
   const request = vi.fn(({ respond }: GatewayRequestHandlerOptions) => respond(true, accepted));
   const resolve = vi.fn(({ respond }: GatewayRequestHandlerOptions) => respond(true, { ok: true }));
-  context.getGatewayMethodRegistry = () =>
-    createGatewayMethodRegistry(
-      (
-        [
-          ["request", request],
-          ["resolve", resolve],
-        ] as const
-      ).map(([action, handler]) => ({
-        name: `plugin.approval.${action}`,
-        scope: "operator.approvals" as const,
-        owner: { kind: "core" as const, area: "plugin-approval" },
-        handler,
-      })),
-    );
+  const context = createContext([
+    ["plugin.approval.request", "operator.approvals", "plugin-approval", request],
+    ["plugin.approval.resolve", "operator.approvals", "plugin-approval", resolve],
+  ]);
   const scoped = <T>(run: () => Promise<T>, client = caller) =>
     withPluginRuntimeGatewayRequestScope({ client, context, isWebchatConnect: () => false }, run);
   const trusted = (pluginId = "lobster", pluginOrigin: "bundled" | "config" = "bundled") =>
