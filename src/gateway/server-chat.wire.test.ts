@@ -165,6 +165,35 @@ function expectCapturedTail(actual: string, tail: string, prefix: string) {
 
 afterEach(() => vi.useRealTimers());
 
+it("gives arriving text batches one fixed downstream window without delaying terminal flush", async () => {
+  await using harness = createHarness();
+  const { frames } = connect(harness.clients, "viewer");
+  const runId = "batched-text";
+  const emit = harness.registerRun(runId, "agent:main:batched-text");
+  await emit(1, "assistant", { text: "A", delta: "A" });
+  expect(payloads(frames, "chat")).toHaveLength(1);
+  expect(payloads(frames, "agent")).toHaveLength(1);
+  vi.advanceTimersByTime(40);
+  await emit(2, "assistant", { text: "AB", delta: "B" });
+  vi.advanceTimersByTime(35);
+  expect(payloads(frames, "chat")).toHaveLength(1);
+  expect(payloads(frames, "agent")).toHaveLength(1);
+  vi.advanceTimersByTime(5);
+  await emit(3, "assistant", { text: "ABC", delta: "C" });
+  vi.advanceTimersByTime(20);
+  await emit(4, "assistant", { text: "ABCD", delta: "D" });
+  vi.advanceTimersByTime(15);
+  expect(payloads(frames, "chat")).toHaveLength(2);
+  expect(payloads(frames, "agent")).toHaveLength(2);
+  expect(chatDeltaText(frames)).toBe("ABCD");
+  expect(payloads(frames, "agent").at(-1)?.data?.delta).toBe("BCD");
+  await emit(5, "assistant", { text: "ABCDE", delta: "E" });
+  await emitLifecycleEnd(harness.handler, runId, 6);
+  expect(chatDeltaText(frames)).toBe("ABCDE");
+  expect(payloads(frames, "chat").at(-1)?.state).toBe("final");
+  expect(payloads(frames, "agent").some((payload) => payload.data?.delta === "E")).toBe(true);
+});
+
 it("replaces the wire baseline when a cumulative snapshot restores capped context", () => {
   const state = createChatRunState();
   const runId = "restored-context";

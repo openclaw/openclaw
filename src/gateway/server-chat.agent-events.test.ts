@@ -713,7 +713,7 @@ describe("agent event handler", () => {
         );
       }
 
-      // A fresh post-idle batch must also wait for a wake, even with no previous tail queued.
+      // A fresh post-idle batch owns a full window, even with no previous tail queued.
       now += 200;
       await emitStep(3);
       now += 100;
@@ -721,7 +721,7 @@ describe("agent event handler", () => {
       for (const run of runs) {
         expect(progressFor(run.clientRunId)).toHaveLength(leadingFrames * 2);
       }
-      vi.advanceTimersByTime(1);
+      vi.advanceTimersByTime(75);
       for (const run of runs) {
         const expected = run.chunks.join("");
         const progress = progressFor(run.clientRunId);

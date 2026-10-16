@@ -616,7 +616,7 @@ export function createAgentEventHandler({
       return;
     }
     const now = Date.now();
-    run.deltaSentAt = now;
+    run.sentChatDelta = true;
     const spawnedBy = resolveSpawnedBy(sessionKey);
     const deliveryKey = JSON.stringify([
       "chat",
@@ -691,14 +691,13 @@ export function createAgentEventHandler({
     if (!mergedRawText && !previousRawText) {
       return;
     }
-    const now = Date.now();
     run.bufferIsCurrent = isCurrent;
     if (!mergedRawText) {
       broadcastChatDelta(delivery, "");
       return;
     }
-    if (run.deltaSentAt !== undefined && !input.replace) {
-      scheduleLiveTextFlush(run, "chat", LIVE_TEXT_PACING_MS - (now - run.deltaSentAt), () => {
+    if (run.sentChatDelta && !input.replace) {
+      scheduleLiveTextFlush(run, "chat", LIVE_TEXT_PACING_MS, () => {
         if (run.bufferIsCurrent?.() === false) {
           chatRunState.clearRun(clientRunId);
           agentRunSeq.delete(sourceRunId);
@@ -975,7 +974,7 @@ export function createAgentEventHandler({
       if (buffered.isCurrent?.() === false) {
         continue;
       }
-      state.lastSentAt = Date.now();
+      state.sent = true;
       sendAgentPayload(buffered.sessionKey, buffered.payload, {
         agentId: buffered.agentId,
         controlUiVisible: buffered.controlUiVisible,
@@ -1021,17 +1020,15 @@ export function createAgentEventHandler({
   ) => {
     const { payload } = next;
     const stream = resolveAgentTextThrottleStream(payload);
-    const now = Date.now();
     const run = stream ? chatRunState.getOrCreate(clientRunId) : undefined;
     const state = run && stream ? ((run.agentText ??= {})[stream] ??= {}) : undefined;
-    const last = state?.lastSentAt;
     const previous = state?.bufferedEvent;
     // Even an overdue wake owns delivery; flushing on ingress defeats batching
     // while a busy event loop is still draining provider notifications.
     if (
       run &&
       state &&
-      last !== undefined &&
+      state.sent &&
       shouldCoalesceAgentTextEvent(payload) &&
       (!previous ||
         (previous.payload.data.itemId === payload.data.itemId &&
@@ -1045,7 +1042,7 @@ export function createAgentEventHandler({
         ...next,
         payload: previous ? mergeAgentTextPayload(previous.payload, payload) : payload,
       };
-      scheduleLiveTextFlush(run, "agent", LIVE_TEXT_PACING_MS - (now - last), () =>
+      scheduleLiveTextFlush(run, "agent", LIVE_TEXT_PACING_MS, () =>
         flushBufferedAgentDeltaIfNeeded(clientRunId),
       );
       return;
@@ -1059,7 +1056,7 @@ export function createAgentEventHandler({
       settle,
     });
     if (state) {
-      state.lastSentAt = now;
+      state.sent = true;
     }
   };
 
