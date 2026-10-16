@@ -64,12 +64,18 @@ function registerHooks(...hooks: string[]) {
   });
 }
 
-async function runHookSafetyFinalReply(mode: "partial" | "progress") {
+function mockFinalReply(payload: FinalReplyPayload, waitForIdle = false) {
   dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-    await params?.dispatcher.sendFinalReply({ text: "final answer" });
-    await params?.dispatcher.waitForIdle();
+    await params?.dispatcher.sendFinalReply(payload);
+    if (waitForIdle) {
+      await params?.dispatcher.waitForIdle();
+    }
     return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
   });
+}
+
+async function runHookSafetyFinalReply(mode: "partial" | "progress") {
+  mockFinalReply({ text: "final answer" }, true);
   await runDraft({ discordConfig: { streaming: { mode } } });
 }
 
@@ -114,10 +120,7 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     draftStream.clear.mockRejectedValueOnce(new Error("preview cleanup failed"));
     createDiscordDraftStream.mockReturnValueOnce(draftStream);
     const runtimeError = vi.fn();
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.dispatcher.sendFinalReply({ text: "Hello\nWorld" });
-      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
-    });
+    mockFinalReply({ text: "Hello\nWorld" });
     await runDraft({
       discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
       runtime: { log: vi.fn(), error: runtimeError },
@@ -130,11 +133,7 @@ describe("processDiscordMessage draft streaming final delivery", () => {
   });
 
   it("sends a fresh final message for broadcast mentions like @everyone", async () => {
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.dispatcher.sendFinalReply({ text: "heads up @everyone" });
-      await params?.dispatcher.waitForIdle();
-      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
-    });
+    mockFinalReply({ text: "heads up @everyone" }, true);
 
     await runDraft({
       discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
@@ -292,10 +291,7 @@ async function runFinalReplyScenario(
   overrides: AutomaticDeliveryOverrides = {},
 ) {
   const draftStream = createMockDraftStreamForTest();
-  dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-    await params?.dispatcher.sendFinalReply(payload);
-    return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
-  });
+  mockFinalReply(payload);
 
   await runDraft({
     discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
@@ -428,12 +424,9 @@ describe("processDiscordMessage draft streaming recovery", () => {
   });
 
   it("renders reasoning-tagged final payloads as a 🧠 blockquote, never the final", async () => {
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.dispatcher.sendFinalReply({
-        text: "Reasoning:\nthis renders as a quoted thinking message",
-        isReasoning: true,
-      });
-      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    mockFinalReply({
+      text: "Reasoning:\nthis renders as a quoted thinking message",
+      isReasoning: true,
     });
 
     await runDraft({ discordConfig: { streaming: { mode: "off" } } });

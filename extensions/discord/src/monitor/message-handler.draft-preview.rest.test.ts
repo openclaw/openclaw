@@ -5,7 +5,6 @@ import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testi
 import {
   createReplyDispatcher,
   type ReplyDispatchRuntimeInfo,
-  type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { RequestClient } from "../internal/discord.js";
@@ -19,13 +18,16 @@ type Harness = ReturnType<typeof createContinuationHarness>;
 type RetainedDraft = Parameters<NonNullable<ReplyDispatchRuntimeInfo["adoptProgressDraft"]>>[0];
 
 function createContinuationHarness(options?: {
+  realTimers?: boolean;
   missingId?: boolean;
   queueRequests?: boolean;
-  textLimit?: number;
   mode?: "partial" | "block" | "progress";
   isRoomEvent?: boolean;
   discordConfig?: PreviewOptions["discordConfig"];
 }) {
+  if (!options?.realTimers) {
+    vi.useFakeTimers();
+  }
   const visible = new Map<string, string>();
   let nextId = 0;
   const failures = { edit: false, rateLimitOnce: false, deletes: 0 };
@@ -33,6 +35,7 @@ function createContinuationHarness(options?: {
   const admission: {
     beforeRequest?: (method: string) => Promise<void>;
     afterCreate?: () => Promise<void>;
+    beforeCleanup?: () => Promise<void>;
   } = {};
   const requests: string[] = [];
   const requestPaths: string[] = [];
@@ -86,11 +89,25 @@ function createContinuationHarness(options?: {
     accountId: "default",
     sourceRepliesAreToolOnly: false,
     isRoomEvent: options?.isRoomEvent,
-    textLimit: options?.textLimit ?? 2_000,
+    textLimit: 2_000,
     deliveryRest: rest,
     deliverChannelId: "c1",
     replyReference: { peek: () => undefined },
     log: () => {},
+  });
+  let draft: RetainedDraft;
+  const stream = controller.draftStream!;
+  onTestFinished(async () => {
+    try {
+      await admission.beforeCleanup?.();
+      if (draft) {
+        draft.retire();
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      await controller.cleanup();
+    } finally {
+      vi.useRealTimers();
+    }
   });
   return {
     controller,
@@ -102,18 +119,15 @@ function createContinuationHarness(options?: {
     deletedIds,
     admission,
     rateLimited,
+    stream,
+    get draft() {
+      return draft;
+    },
+    adopt(candidate: RetainedDraft) {
+      draft = candidate;
+      return true;
+    },
   };
-}
-
-function cleanupPreview(controller: Preview, beforeCleanup?: () => Promise<void>) {
-  onTestFinished(async () => {
-    try {
-      await beforeCleanup?.();
-      await controller.cleanup();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
 }
 
 async function advancePreview(preview: Pick<Preview, "flush">, ms = 1_500) {
@@ -131,10 +145,28 @@ function childProgress(status: "running" | "completed") {
   };
 }
 
+function expectCard(visible: Map<string, string>, contains: string[], excludes: string[] = []) {
+  expect(visible.size).toBe(1);
+  const [card] = visible.values();
+  for (const text of contains) {
+    expect(card).toContain(text);
+  }
+  for (const text of excludes) {
+    expect(card).not.toContain(text);
+  }
+}
+
+function assertAuthority(message: string, isOpen = () => false) {
+  return () => {
+    if (!isOpen()) {
+      throw new Error(message);
+    }
+  };
+}
+
 async function deliverWaitingReply(
   harness: Harness,
   adopt: NonNullable<ReplyDispatchRuntimeInfo["adoptProgressDraft"]>,
-  payload: ReplyPayload = { text: "Waiting for delegated work." },
 ) {
   const { controller, rest } = harness;
   const onError = vi.fn();
@@ -165,10 +197,13 @@ async function deliverWaitingReply(
     onError,
   });
   dispatcher.sendFinalReply(
-    setReplyPayloadMetadata(payload, {
-      continuationStatus: true,
-      progressContinuation: { adopt, close: () => {} },
-    }),
+    setReplyPayloadMetadata(
+      { text: "Waiting for delegated work." },
+      {
+        continuationStatus: true,
+        progressContinuation: { adopt, close: () => {} },
+      },
+    ),
   );
   dispatcher.markComplete();
   await dispatcher.waitForIdle();
@@ -187,34 +222,12 @@ async function stageDelegation(controller: Preview) {
   );
 }
 
-function retainProgress(harness: Harness, beforeCleanup?: () => Promise<void>) {
-  let draft: RetainedDraft;
-  const stream = harness.controller.draftStream!;
-  cleanupPreview(harness.controller, async () => {
-    await beforeCleanup?.();
-    draft?.retire();
-    await vi.advanceTimersByTimeAsync(0);
-  });
-  return {
-    stream,
-    get draft() {
-      return draft;
-    },
-    adopt(candidate: RetainedDraft) {
-      draft = candidate;
-      return true;
-    },
-  };
-}
-
 describe("Discord draft preview REST lifecycle", () => {
   it("keeps ambient room events private even with default progress", async () => {
-    vi.useFakeTimers();
     const { controller, visible } = createContinuationHarness({
       discordConfig: {},
       isRoomEvent: true,
     });
-    cleanupPreview(controller);
     await stageDelegation(controller);
     await controller.pushPlanProgress([{ step: "Private ambient work", status: "in_progress" }]);
     await advancePreview(controller);
@@ -223,9 +236,7 @@ describe("Discord draft preview REST lifecycle", () => {
   });
 
   it("shows running work without a preamble or utility narration", async () => {
-    vi.useFakeTimers();
     const { controller, visible } = createContinuationHarness({ discordConfig: {} });
-    cleanupPreview(controller);
     await controller.pushItemEvent(
       projectAgentToolActivity({
         name: "exec",
@@ -235,19 +246,15 @@ describe("Discord draft preview REST lifecycle", () => {
       }),
     );
     await advancePreview(controller);
-    expect(visible.size).toBe(1);
-    expect([...visible.values()][0]).toContain("Exec: running");
-    expect([...visible.values()][0]).not.toContain("PRIVATE_COMMAND_ARGUMENT");
+    expectCard(visible, ["Exec: running"], ["PRIVATE_COMMAND_ARGUMENT"]);
   });
 
   it("keeps one confirmed card after yield and isolates a queued turn's cleanup", async () => {
-    vi.useFakeTimers();
     const harness = createContinuationHarness({ discordConfig: {} });
     const { controller, visible, requests } = harness;
-    const retained = retainProgress(harness);
     await stageDelegation(controller);
-    await deliverWaitingReply(harness, retained.adopt);
-    const { draft, stream } = retained;
+    await deliverWaitingReply(harness, harness.adopt);
+    const { draft, stream } = harness;
     expect(draft).toBeDefined();
     expect(requests).toEqual(["POST"]);
     expect(controller.draftStream).toBeUndefined();
@@ -280,10 +287,8 @@ describe("Discord draft preview REST lifecycle", () => {
   });
 
   it("does not flush a progress final when delivery admission refuses custody", async () => {
-    vi.useFakeTimers();
     const { controller, requests } = createContinuationHarness();
     const adopt = vi.fn(() => true);
-    cleanupPreview(controller);
     await stageDelegation(controller);
     await advancePreview(controller);
     const priorRequests = [...requests];
@@ -306,14 +311,12 @@ describe("Discord draft preview REST lifecycle", () => {
   it.each(["missing-id", "stopped", "declined", "label-only"] as const)(
     "delivers the required waiting reply instead of adopting a %s card",
     async (scenario) => {
-      vi.useFakeTimers();
       const harness = createContinuationHarness({
         missingId: scenario === "missing-id",
         discordConfig: {},
       });
       const { controller, visible, failures } = harness;
       const adopt = vi.fn(() => scenario !== "declined");
-      cleanupPreview(controller);
       if (scenario === "label-only") {
         await controller.pushItemEvent({
           itemId: "read",
@@ -341,47 +344,33 @@ describe("Discord draft preview REST lifecycle", () => {
   );
 
   it("keeps initial and later child updates in the channel scope after requester authority closes", async () => {
-    vi.useFakeTimers();
     let serviceOpen = true;
     let requesterOpen = true;
-    const serviceAssertion = vi.fn(() => {
-      if (!serviceOpen) {
-        throw new Error("channel stopped");
-      }
-    });
+    const serviceAssertion = vi.fn(assertAuthority("channel stopped", () => serviceOpen));
     const harness = withDiscordRequestAuthority(serviceAssertion, () =>
       createContinuationHarness({ discordConfig: {} }),
     );
     const { controller, visible } = harness;
-    const retained = retainProgress(harness, async () => {
+    harness.admission.beforeCleanup = async () => {
       serviceOpen = true;
-    });
+    };
     await stageDelegation(controller);
     await withDiscordRequestAuthority(
-      () => {
-        if (!requesterOpen) {
-          throw new Error("requester settled");
-        }
-      },
+      assertAuthority("requester settled", () => requesterOpen),
       () =>
         deliverWaitingReply(harness, (candidate) => {
-          retained.adopt(candidate);
+          harness.adopt(candidate);
           candidate.push(childProgress("running"));
           requesterOpen = false;
           return true;
         }),
     );
-    const { draft, stream } = retained;
+    const { draft, stream } = harness;
     await advancePreview(stream, 1_200);
     expect(visible.get("1")).toContain("Review: running");
-    withDiscordRequestAuthority(
-      () => {
-        throw new Error("unrelated child scope");
-      },
-      () => {
-        draft.push(childProgress("completed"));
-      },
-    );
+    withDiscordRequestAuthority(assertAuthority("unrelated child scope"), () => {
+      draft.push(childProgress("completed"));
+    });
     await advancePreview(stream, 1_200);
     expect(visible.get("1")).toContain("Review: completed");
     expect(serviceAssertion).toHaveBeenCalled();
@@ -395,7 +384,6 @@ describe("Discord draft preview REST lifecycle", () => {
   it.each(["admission", "rate-limit retry"] as const)(
     "fences a retained edit waiting for %s when the draft retires",
     async (boundary) => {
-      vi.useFakeTimers();
       const harness = createContinuationHarness({
         discordConfig: {},
         queueRequests: boundary === "rate-limit retry",
@@ -403,12 +391,12 @@ describe("Discord draft preview REST lifecycle", () => {
       const { controller, visible, requests, admission, failures, rateLimited } = harness;
       const entered = createDeferred<void>();
       const release = createDeferred<void>();
-      const retained = retainProgress(harness, async () => {
+      admission.beforeCleanup = async () => {
         release.resolve();
-      });
+      };
       await stageDelegation(controller);
-      await deliverWaitingReply(harness, retained.adopt);
-      const { draft } = retained;
+      await deliverWaitingReply(harness, harness.adopt);
+      const { draft } = harness;
       if (boundary === "admission") {
         admission.beforeRequest = async (method) => {
           if (method === "PATCH") {
@@ -435,7 +423,7 @@ describe("Discord draft preview REST lifecycle", () => {
 
   it("preserves split code fences when block previews edit one message", async () => {
     const text = `\`\`\`text\n${"const value = 1;\n".repeat(60)}\`\`\``;
-    const { controller, visible } = createContinuationHarness({ mode: "block" });
+    const { controller, visible } = createContinuationHarness({ mode: "block", realTimers: true });
     try {
       controller.updateFromPartial(text);
       await controller.flush();
@@ -448,7 +436,7 @@ describe("Discord draft preview REST lifecycle", () => {
   });
 
   it("publishes and retracts a short complete plan, then resumes in block mode", async () => {
-    const { controller, visible } = createContinuationHarness({ mode: "block" });
+    const { controller, visible } = createContinuationHarness({ mode: "block", realTimers: true });
     await controller.pushPlanProgress([]);
     expect(visible.size).toBe(0);
     await controller.pushPlanProgress([{ step: "Check", status: "in_progress" }]);
@@ -477,25 +465,16 @@ describe("Discord draft preview REST lifecycle", () => {
     );
     await controller.pushToolEvent({ toolCallId: "exec-1", name: "exec", phase: "start" });
     await controller.flush();
-    expect(visible.size).toBe(1);
-    const withActivity = [...visible.values()][0];
-    expect(withActivity).toContain("▢ Retry");
-    expect(withActivity).toContain("blocked");
-    expect(withActivity).toContain("Exec");
-    expect(withActivity).not.toContain("private detail");
+    expectCard(visible, ["▢ Retry", "blocked", "Exec"], ["private detail"]);
     controller.handleAssistantMessageBoundary();
     await controller.pushPlanProgress([]);
     await controller.flush();
-    expect(visible.size).toBe(1);
-    const afterClear = [...visible.values()][0];
-    expect(afterClear).not.toContain("Retry");
-    expect(afterClear).toContain("blocked");
-    expect(afterClear).toContain("Exec");
+    expectCard(visible, ["blocked", "Exec"], ["Retry"]);
     await controller.cleanup();
   });
 
   it("retains the progress draft after an error final is delivered", async () => {
-    const { controller, rest, requestPaths } = createContinuationHarness();
+    const { controller, rest, requestPaths } = createContinuationHarness({ realTimers: true });
     controller.draftStream?.update("Exec: failed");
     await controller.flush();
     await controller.lifecycle.deliver({
@@ -522,6 +501,7 @@ describe("Discord draft preview REST lifecycle", () => {
     const { controller, visible, deletedIds, failures, admission, requests } =
       createContinuationHarness({
         queueRequests: true,
+        realTimers: true,
       });
     failures.deletes = 2;
     admission.afterCreate = async () => {

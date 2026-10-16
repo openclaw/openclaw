@@ -55,8 +55,25 @@ async function runAutomatic(
 ) {
   await runProcessDiscordMessage(await createAutomaticSourceDeliveryContext(overrides));
 }
-async function runQuoted(options: Parameters<typeof createQuotedContext>[0]) {
-  await runProcessDiscordMessage(await createQuotedContext(options));
+async function runTimedAutomatic(
+  dispatch: (params: DispatchInboundParams | undefined) => Promise<void>,
+  overrides: Parameters<typeof createAutomaticSourceDeliveryContext>[0] = {},
+  advance = 0,
+) {
+  vi.useFakeTimers();
+  const entered = createDeferred<void>();
+  dispatchInboundMessage.mockImplementationOnce(async (params) => {
+    entered.resolve();
+    await dispatch(params);
+    return createNoQueuedDispatchResult();
+  });
+  const running = runAutomatic(overrides);
+  await entered.promise;
+  if (advance) {
+    await vi.advanceTimersByTimeAsync(advance);
+  }
+  await vi.runAllTimersAsync();
+  await running;
 }
 
 const session = { store: "/tmp/openclaw-discord-process-test-sessions.json" };
@@ -122,35 +139,27 @@ describe("processDiscordMessage ack reactions", () => {
   });
 
   it.each([
-    {
-      name: "typing mode never",
-      overrides: { cfg: { agents: { defaults: { typingMode: "never" } } } },
-    },
-    { name: "room events", overrides: { inboundEventKind: "room_event" } },
-  ])("suppresses fast-reply typing for $name", async ({ name, overrides }) => {
-    dispatchInboundMessage.mockImplementationOnce((params) =>
-      sendFinal(params, { text: "fast reply" }),
-    );
-    await runAutomatic(overrides);
-    if (name === "room events") {
-      expect(getLastDispatchReplyOptions()?.suppressTyping).toBe(true);
-    }
-    expect(typingMocks.sendTyping).not.toHaveBeenCalled();
-    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
-  });
-
-  it("starts typing on admission and forwards repeated resolver refreshes", async () => {
+    ["never", 0],
+    ["room_event", 0],
+    ["message", 2],
+  ] as const)("honors %s typing policy and admission refreshes", async (mode, refreshes) => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      expect(typingMocks.sendTyping).not.toHaveBeenCalled();
-      await params?.replyOptions?.onReplyStart?.();
-      await params?.replyOptions?.onReplyStart?.();
+      if (mode === "message") {
+        expect(typingMocks.sendTyping).not.toHaveBeenCalled();
+        await params?.replyOptions?.onReplyStart?.();
+        await params?.replyOptions?.onReplyStart?.();
+      }
       return sendFinal(params, { text: "long reply" });
     });
-    await runAutomatic({
-      cfg: { agents: { defaults: { typingMode: "message" } } },
-    });
-
-    expect(typingMocks.sendTyping).toHaveBeenCalledTimes(2);
+    await runAutomatic(
+      mode === "room_event"
+        ? { inboundEventKind: mode }
+        : { cfg: { agents: { defaults: { typingMode: mode } } } },
+    );
+    if (mode === "room_event") {
+      expect(getLastDispatchReplyOptions()?.suppressTyping).toBe(true);
+    }
+    expect(typingMocks.sendTyping).toHaveBeenCalledTimes(refreshes);
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
   });
 
@@ -206,35 +215,29 @@ describe("processDiscordMessage ack reactions", () => {
     { target: "channel", args: { channelId: "c1" }, channelId: "c1", messageId: "tracked-m1" },
     { target: "user", args: { to: "user:u1" }, channelId: "dm-u1", messageId: "m1" },
   ])("routes source acknowledgements and tracked $target reactions", async (scenario) => {
-    vi.useFakeTimers();
-    const dispatchEntered = createDeferred<void>();
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      dispatchEntered.resolve();
-      await params?.replyOptions?.onToolStart?.({
-        name: "message",
-        phase: "start",
-        args: {
-          action: "react",
-          ...scenario.args,
-          messageId: scenario.messageId,
-          emoji: "📈",
-          trackToolCalls: true,
-        },
-      });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, DEFAULT_TIMING.debounceMs);
-      });
-      return createNoQueuedDispatchResult();
-    });
-    const ctx = await createAutomaticSourceDeliveryContext({
-      message: { id: "1001", timestamp: new Date().toISOString(), attachments: [] },
-      messageChannelId: "fallback-channel",
-    });
-    const runPromise = runProcessDiscordMessage(ctx);
-    await dispatchEntered.promise;
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-    await vi.runAllTimersAsync();
-    await runPromise;
+    await runTimedAutomatic(
+      async (params) => {
+        await params?.replyOptions?.onToolStart?.({
+          name: "message",
+          phase: "start",
+          args: {
+            action: "react",
+            ...scenario.args,
+            messageId: scenario.messageId,
+            emoji: "📈",
+            trackToolCalls: true,
+          },
+        });
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, DEFAULT_TIMING.debounceMs);
+        });
+      },
+      {
+        message: { id: "1001", timestamp: new Date().toISOString(), attachments: [] },
+        messageChannelId: "fallback-channel",
+      },
+      DEFAULT_TIMING.debounceMs,
+    );
 
     expectReactAckCallAt(0, "👀", {
       channelId: "fallback-channel",
@@ -256,29 +259,21 @@ describe("processDiscordMessage ack reactions", () => {
   });
 
   it("keeps one acknowledgement through reasoning, tools, compaction, silence, and success", async () => {
-    vi.useFakeTimers();
-    const dispatchEntered = createDeferred<void>();
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      dispatchEntered.resolve();
-      await params?.replyOptions?.onReasoningStream?.({});
-      await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-      await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-      await params?.replyOptions?.onCompactionStart?.();
-      await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-      await params?.replyOptions?.onCompactionEnd?.();
-      await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.stallHardMs + 1_000);
-      return createNoQueuedDispatchResult();
-    });
-
-    const ctx = await createAutomaticSourceDeliveryContext({
-      cfg: { messages: { ackReaction: "👀" }, session },
-    });
-
-    const runPromise = runProcessDiscordMessage(ctx);
-    await dispatchEntered.promise;
-    await vi.runAllTimersAsync();
-    await runPromise;
+    await runTimedAutomatic(
+      async (params) => {
+        await params?.replyOptions?.onReasoningStream?.({});
+        await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+        await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+        await params?.replyOptions?.onCompactionStart?.();
+        await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+        await params?.replyOptions?.onCompactionEnd?.();
+        await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.stallHardMs + 1_000);
+      },
+      {
+        cfg: { messages: { ackReaction: "👀" }, session },
+      },
+    );
 
     expect(getReactionEmojis()).toEqual(["👀"]);
     expect(sendMocks.removeReactionDiscord).not.toHaveBeenCalled();
@@ -574,39 +569,6 @@ describe("processDiscordMessage session routing and room events", () => {
   });
 });
 
-async function createQuotedContext(options: {
-  replyId: string;
-  body: string;
-  author: { id: string; username: string; globalName: string };
-  fetch: typeof fetch;
-  text?: string;
-  visibility?: "all" | "allowlist";
-  botUserId?: string;
-}) {
-  const text = options.text ?? "<@bot> what is this?";
-  return await createBaseContext({
-    cfg: {
-      channels: { discord: { contextVisibility: options.visibility ?? "all" } },
-      messages: { ackReaction: "👀" },
-      session,
-    },
-    channelConfig: options.visibility === "allowlist" ? { allowed: true, users: ["U1"] } : null,
-    botUserId: options.botUserId,
-    discordRestFetch: options.fetch,
-    message: {
-      ...message("m-reply", text),
-      messageReference: { type: 0, message_id: options.replyId, channel_id: "c1" },
-      referencedMessage: {
-        ...message(options.replyId, options.body),
-        attachments: [attachment("reply.png", "image/png", "att-reply")],
-        author: { ...options.author, discriminator: "0" },
-      },
-    },
-    baseText: text,
-    messageText: text,
-  });
-}
-
 describe("processDiscordMessage session routing", () => {
   it("frames preflight audio transcript in dispatch context and marks media transcribed", async () => {
     const fetchImpl = vi.fn(async () => {
@@ -666,62 +628,63 @@ describe("processDiscordMessage session routing", () => {
     });
   });
 
-  it.each([
-    {
-      name: "hides disallowed reply media",
-      options: {
-        replyId: "m-hidden",
-        body: "hidden image",
-        visibility: "allowlist" as const,
-        author: { id: "U2", username: "mallory", globalName: "Mallory" },
-      },
-      expected: { ReplyToBody: undefined, MediaPath: undefined, MediaPaths: undefined },
-      fetches: 0,
-    },
-    {
-      name: "keeps attachment-only reply context",
-      options: {
-        replyId: "m-attachment-only",
-        body: "",
-        author: { id: "U2", username: "bob", globalName: "Bob" },
-      },
-      expected: {
-        ReplyToSender: "bob",
-        ReplyToBody: undefined,
-        media: [
-          expect.objectContaining({ contentType: "image/png", messageId: "m-attachment-only" }),
-        ],
-      },
-      fetches: 1,
-    },
-    {
-      name: "preserves bot reply text without fetching self media",
-      options: {
-        replyId: "m-bot-previous",
-        body: quotedBotBody,
-        botUserId: "bot-1",
-        author: { id: "bot-1", username: "Spartacus", globalName: "Spartacus" },
-        text: "<@bot> hit that again",
-      },
-      expected: {
-        ReplyToSender: "Spartacus",
-        ReplyToBody: quotedBotBody,
-        RawBody: "<@bot> hit that again",
-        MediaPaths: undefined,
-      },
-      fetches: 0,
-    },
-  ])("$name", async ({ options, expected, fetches }) => {
-    const fetchImpl = vi.fn(async () => {
-      if (!fetches) {
-        throw new Error("reply media must not be fetched");
+  it.each(["hidden", "attachment-only", "bot-previous"] as const)(
+    "preserves permitted reply context and media for %s",
+    async (kind) => {
+      const hidden = kind === "hidden";
+      const bot = kind === "bot-previous";
+      const replyId = `m-${kind}`;
+      const text = bot ? "<@bot> hit that again" : "<@bot> what is this?";
+      const username = hidden ? "mallory" : bot ? "Spartacus" : "bob";
+      const body = hidden ? "hidden image" : bot ? quotedBotBody : "";
+      const fetchImpl = vi.fn(async () => {
+        if (hidden || bot) {
+          throw new Error("reply media must not be fetched");
+        }
+        return new Response(Buffer.from("image"), { headers: { "content-type": "image/png" } });
+      });
+      await runBase({
+        cfg: {
+          channels: { discord: { contextVisibility: hidden ? "allowlist" : "all" } },
+          messages: { ackReaction: "👀" },
+          session,
+        },
+        channelConfig: hidden ? { allowed: true, users: ["U1"] } : null,
+        botUserId: bot ? "bot-1" : undefined,
+        discordRestFetch: fetchImpl,
+        message: {
+          ...message("m-reply", text),
+          messageReference: { type: 0, message_id: replyId, channel_id: "c1" },
+          referencedMessage: {
+            ...message(replyId, body),
+            attachments: [attachment("reply.png", "image/png", "att-reply")],
+            author: {
+              id: bot ? "bot-1" : "U2",
+              username,
+              globalName: hidden ? "Mallory" : bot ? "Spartacus" : "Bob",
+              discriminator: "0",
+            },
+          },
+        },
+        baseText: text,
+        messageText: text,
+      });
+      expectCtx({ ReplyToId: replyId, ReplyToBody: bot ? body : undefined });
+      if (!hidden) {
+        expectCtx({ ReplyToSender: username });
       }
-      return new Response(Buffer.from("image"), { headers: { "content-type": "image/png" } });
-    });
-    await runQuoted({ ...options, fetch: fetchImpl });
-    expectCtx({ ReplyToId: options.replyId, ...expected });
-    expect(fetchImpl).toHaveBeenCalledTimes(fetches);
-  });
+      if (hidden) {
+        expectCtx({ MediaPath: undefined, MediaPaths: undefined });
+      } else if (bot) {
+        expectCtx({ RawBody: text, MediaPaths: undefined });
+      } else {
+        expectCtx({
+          media: [expect.objectContaining({ contentType: "image/png", messageId: replyId })],
+        });
+      }
+      expect(fetchImpl).toHaveBeenCalledTimes(hidden || bot ? 0 : 1);
+    },
+  );
 
   it("stores DM lastRoute with user target for direct-session continuity", async () => {
     await runBase({
