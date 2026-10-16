@@ -657,7 +657,7 @@ export class DesktopPanelController extends SolidPanelController {
         loading: this.loading,
         automaticSource: this.usesAutomaticSource,
         hasTarget: this.sessionKey !== null || this.requestedSource !== null,
-        errorText: this.launcher.error() ?? this.errorText,
+        errorText: this.launcher.feedback().error ?? this.errorText,
         noticeText: this.noticeText,
         availability: this.sessionSource.desktopAvailability,
         picker: {
@@ -698,7 +698,7 @@ export class DesktopPanelController extends SolidPanelController {
       },
       controlling: this.controlling,
       desktopApps: this.desktopApps,
-      launchingApp: this.launcher.app(),
+      launchingApp: this.launcher.feedback().app ?? null,
       startup: this.sessionSource.startupEnvironment,
       sizing: {
         mode: this.sizingMode,

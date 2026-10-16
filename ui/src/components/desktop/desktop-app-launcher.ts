@@ -1,53 +1,56 @@
-import type { WorkerDesktopAppId, WorkerDesktopLaunchResult } from "@openclaw/gateway-protocol";
+import type { DesktopSource, WorkerDesktopAppId } from "@openclaw/gateway-protocol";
 import { createSignal, onCleanup } from "solid-js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import type { DesktopPanelController } from "./desktop-panel-controller.ts";
+import type { DesktopPanelState } from "./desktop-panel-state.ts";
+
+type LaunchTarget = {
+  client: GatewayBrowserClient | null;
+  source: DesktopSource | null;
+  presented: boolean;
+  state: DesktopPanelState;
+  apps: readonly WorkerDesktopAppId[];
+};
 
 /** Keeps app-launch feedback scoped to the current desktop presentation. */
-export function createDesktopAppLauncher(target: () => DesktopPanelController["launchTarget"]) {
-  const [app, setApp] = createSignal<WorkerDesktopAppId | null>(null);
-  const [error, setError] = createSignal<string | null>(null);
+export function createDesktopAppLauncher(target: () => LaunchTarget) {
+  const [feedback, setFeedback] = createSignal<{ app?: WorkerDesktopAppId; error?: string }>({});
   // Admission must see a same-turn launch before Solid publishes its busy indicator.
-  let pendingApp: WorkerDesktopAppId | null = null;
-  let operationId = 0;
+  let pending: { app: WorkerDesktopAppId } | undefined;
   onCleanup(() => {
-    operationId += 1;
+    pending = undefined;
   });
   const clear = () => {
-    operationId += 1;
-    pendingApp = null;
-    setApp(null);
-    setError(null);
+    pending = undefined;
+    setFeedback({});
   };
-  const launch = async (nextApp: WorkerDesktopAppId) => {
+  const launch = async (app: WorkerDesktopAppId) => {
     const { client, source, presented, state, apps } = target();
     if (
       !client ||
       !presented ||
       source?.kind !== "environment" ||
       (state !== "connecting" && state !== "connected") ||
-      !apps.includes(nextApp) ||
-      pendingApp === nextApp
+      !apps.includes(app) ||
+      pending?.app === app
     ) {
       return;
     }
-    const requestId = ++operationId;
-    pendingApp = nextApp;
-    setApp(nextApp);
-    setError(null);
+    const request = { app };
+    pending = request;
+    setFeedback(request);
+    let error: string | undefined;
     try {
-      await client.request<WorkerDesktopLaunchResult>("desktop.launch", { source, app: nextApp });
+      await client.request("desktop.launch", { source, app });
     } catch (cause) {
-      if (requestId === operationId) {
-        setError(formatUiError(cause));
-      }
+      error = formatUiError(cause);
     }
-    if (requestId === operationId) {
-      pendingApp = null;
-      setApp(null);
+    if (pending === request) {
+      pending = undefined;
+      setFeedback({ error });
     }
   };
-  return { app, error, clear, launch };
+  return { feedback, clear, launch };
 }
 
 export type DesktopAppLauncher = ReturnType<typeof createDesktopAppLauncher>;
