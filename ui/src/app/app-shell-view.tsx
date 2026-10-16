@@ -68,6 +68,7 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
   // The web-chrome flag remains a reactive view read for the current host path.
   const legacyMacChrome = () =>
     !view().nativeWebChrome && document.documentElement.classList.contains("openclaw-native-macos");
+  // Lazy registrations and the native sidebar consume committed shell presentation.
   createEffect(view, (state) => {
     props.host.lazyCustomElements.requestWhileActive(
       props.host.onboardingMemoryImportElement,

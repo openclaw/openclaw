@@ -24,7 +24,7 @@ export interface PopoverProps {
   anchor?: HTMLElement;
   trigger?: JSX.Element;
   children?: JSX.Element;
-  class?: string;
+  class?: JSX.HTMLAttributes<HTMLDivElement>["class"];
   open?: boolean;
   placement?: OverlayPlacement;
   dismissOutsidePointer?: boolean;

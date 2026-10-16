@@ -105,6 +105,7 @@ function BrowserDashboardWidgetContent(
       }
     }
   }
+  // Requests share a synchronous pending latch; Solid only schedules scope reconciliation.
   createEffect(
     () =>
       [

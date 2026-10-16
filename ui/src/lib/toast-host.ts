@@ -10,6 +10,7 @@ if (typeof customElements !== "undefined") {
     "openclaw-toast-host",
     (props, host) => {
       const controller = toastControllerFor(host);
+      // Focus after the DOM commit determines whether the existing toast deadline pauses.
       createEffect(
         () => [props.toast, props.active],
         () => controller.updated(),
