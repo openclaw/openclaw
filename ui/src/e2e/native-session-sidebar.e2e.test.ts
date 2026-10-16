@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -14,6 +15,31 @@ const suite = createControlUiE2eSuite({
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const collapsedSessionSectionsStorageKey = "openclaw:sidebar:sessions:collapsed-sections";
+const gatewayHost = { hostId: "gateway:local", label: "Gateway", kind: "gateway", connected: true };
+const idleSession = { status: "idle", archived: false, canContinue: true, canArchive: true };
+const capabilities = { continueSession: true, archive: true };
+const contextOptions = {
+  deviceScaleFactor: 2,
+  locale: "en-US",
+  serviceWorkers: "block",
+  viewport: { height: 1100, width: 1440 },
+} as const;
+function installCatalog(
+  page: Page,
+  catalogs: unknown[],
+  options: Parameters<typeof installMockGateway>[1] = {},
+) {
+  return installMockGateway(page, {
+    ...options,
+    featureMethods: [
+      "chat.metadata",
+      "chat.startup",
+      "sessions.catalog.list",
+      ...(options.featureMethods ?? []),
+    ],
+    methodResponses: { "sessions.catalog.list": { catalogs } },
+  });
+}
 let uiProofArtifactDir: string;
 beforeEach(() => {
   if (captureUiProofEnabled) {
@@ -23,76 +49,56 @@ beforeEach(() => {
 
 suite.define(() => {
   it("hides empty failing catalogs while keeping sessions from available hosts", async () => {
-    const context = await suite.newBrowserContext({
-      deviceScaleFactor: 2,
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 1100, width: 1440 },
-    });
+    const context = await suite.newBrowserContext(contextOptions);
     const page = await context.newPage();
     await page.addInitScript(
       (key) => localStorage.removeItem(key),
       collapsedSessionSectionsStorageKey,
     );
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
-      methodResponses: {
-        "sessions.catalog.list": {
-          catalogs: [
-            {
-              id: "codex",
-              label: "Codex",
-              capabilities: { continueSession: true, archive: true, startTerminal: true },
-              hosts: [
-                {
-                  hostId: "gateway:local",
-                  label: "Gateway",
-                  kind: "gateway",
-                  connected: true,
-                  sessions: [],
-                  error: {
-                    code: "APP_SERVER_UNAVAILABLE",
-                    message: "Codex app-server is unavailable",
-                  },
-                },
-              ],
+    const gateway = await installCatalog(page, [
+      {
+        id: "codex",
+        label: "Codex",
+        capabilities: { ...capabilities, startTerminal: true },
+        hosts: [
+          {
+            ...gatewayHost,
+            sessions: [],
+            error: {
+              code: "APP_SERVER_UNAVAILABLE",
+              message: "Codex app-server is unavailable",
             },
-            {
-              id: "claude",
-              label: "Claude Code",
-              capabilities: { continueSession: true, archive: false },
-              hosts: [
-                {
-                  hostId: "gateway:local",
-                  label: "Gateway",
-                  kind: "gateway",
-                  connected: true,
-                  sessions: [
-                    {
-                      threadId: "native-sidebar-proof",
-                      name: "Review release notes",
-                      cwd: "/workspace/release-notes",
-                      status: "idle",
-                      archived: false,
-                      canContinue: true,
-                      canArchive: false,
-                    },
-                  ],
-                },
-                {
-                  hostId: "node:offline",
-                  label: "Remote workstation",
-                  kind: "node",
-                  connected: false,
-                  sessions: [],
-                  error: { code: "NODE_INVOKE_FAILED", message: "Remote catalog is unavailable" },
-                },
-              ],
-            },
-          ],
-        },
+          },
+        ],
       },
-    });
+      {
+        id: "claude",
+        label: "Claude Code",
+        capabilities: { continueSession: true, archive: false },
+        hosts: [
+          {
+            ...gatewayHost,
+            sessions: [
+              {
+                threadId: "native-sidebar-proof",
+                name: "Review release notes",
+                cwd: "/workspace/release-notes",
+                ...idleSession,
+                canArchive: false,
+              },
+            ],
+          },
+          {
+            hostId: "node:offline",
+            label: "Remote workstation",
+            kind: "node",
+            connected: false,
+            sessions: [],
+            error: { code: "NODE_INVOKE_FAILED", message: "Remote catalog is unavailable" },
+          },
+        ],
+      },
+    ]);
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("sessions.catalog.list");
@@ -114,76 +120,57 @@ suite.define(() => {
   });
 
   it("hides empty native hosts and the empty Coding section", async () => {
-    const context = await suite.newBrowserContext({
-      deviceScaleFactor: 2,
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 1100, width: 1440 },
-    });
+    const context = await suite.newBrowserContext(contextOptions);
     const page = await context.newPage();
     await page.addInitScript(
       (key) => localStorage.removeItem(key),
       collapsedSessionSectionsStorageKey,
     );
-    await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
-      methodResponses: {
-        "sessions.catalog.list": {
-          catalogs: [
-            {
-              id: "codex",
-              label: "Codex",
-              capabilities: { continueSession: true, archive: true },
-              hosts: [
-                {
-                  hostId: "gateway:local",
-                  label: "Gateway",
-                  kind: "gateway",
-                  connected: true,
-                  sessions: [
-                    {
-                      threadId: "thread-shared",
-                      name: "Shared gateway session",
-                      cwd: "/workspace/openclaw",
-                      status: "idle",
-                      archived: false,
-                      canContinue: true,
-                      canArchive: true,
-                    },
-                  ],
-                },
-                {
-                  hostId: "node:remote",
-                  label: "Remote Workstation",
-                  kind: "node",
-                  connected: true,
-                  nodeId: "remote",
-                  sessions: [
-                    {
-                      threadId: "thread-remote",
-                      name: "Remote-only session",
-                      cwd: "/workspace/remote",
-                      status: "idle",
-                      archived: false,
-                      canContinue: false,
-                      canArchive: false,
-                    },
-                  ],
-                },
-                {
-                  hostId: "node:empty",
-                  label: "Empty Workstation",
-                  kind: "node",
-                  connected: true,
-                  nodeId: "empty",
-                  sessions: [],
-                },
-              ],
-            },
-          ],
-        },
+    await installCatalog(page, [
+      {
+        id: "codex",
+        label: "Codex",
+        capabilities,
+        hosts: [
+          {
+            ...gatewayHost,
+            sessions: [
+              {
+                threadId: "thread-shared",
+                name: "Shared gateway session",
+                cwd: "/workspace/openclaw",
+                ...idleSession,
+              },
+            ],
+          },
+          {
+            hostId: "node:remote",
+            label: "Remote Workstation",
+            kind: "node",
+            connected: true,
+            nodeId: "remote",
+            sessions: [
+              {
+                threadId: "thread-remote",
+                name: "Remote-only session",
+                cwd: "/workspace/remote",
+                ...idleSession,
+                canContinue: false,
+                canArchive: false,
+              },
+            ],
+          },
+          {
+            hostId: "node:empty",
+            label: "Empty Workstation",
+            kind: "node",
+            connected: true,
+            nodeId: "empty",
+            sessions: [],
+          },
+        ],
       },
-    });
+    ]);
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -219,53 +206,46 @@ suite.define(() => {
       ? createControlUiE2eArtifactDir("adopted-session-menu", proofRoot)
       : undefined;
     const context = await suite.newBrowserContext({
-      deviceScaleFactor: 2,
+      ...contextOptions,
       hasTouch,
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 1100, width: 1440 },
     });
     const page = await context.newPage();
-    await installMockGateway(page, {
-      sessionKey: "agent:main:main",
-      terminalEnabled: true,
-      sessions: [
-        { key: "agent:main:main", kind: "direct", label: "Main session", updatedAt: 2 },
-        { key: adoptedKey, kind: "direct", label: "Adopted native session", updatedAt: 1 },
-      ],
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list", "terminal.open"],
-      methodResponses: {
-        "sessions.catalog.list": {
-          catalogs: [
+    await installCatalog(
+      page,
+      [
+        {
+          id: "codex",
+          label: "Codex",
+          capabilities: { continueSession: true, archive: false },
+          hosts: [
             {
-              id: "codex",
-              label: "Codex",
-              capabilities: { continueSession: true, archive: false },
-              hosts: [
+              ...gatewayHost,
+              sessions: [
                 {
-                  hostId: "gateway:local",
-                  label: "Gateway",
-                  kind: "gateway",
-                  connected: true,
-                  sessions: [
-                    {
-                      threadId: "adopted-thread",
-                      name: "Adopted native session",
-                      status: "stored",
-                      archived: false,
-                      sessionKey: adoptedKey,
-                      canContinue: true,
-                      canOpenTerminal: true,
-                      canArchive: false,
-                    },
-                  ],
+                  threadId: "adopted-thread",
+                  name: "Adopted native session",
+                  status: "stored",
+                  archived: false,
+                  sessionKey: adoptedKey,
+                  canContinue: true,
+                  canOpenTerminal: true,
+                  canArchive: false,
                 },
               ],
             },
           ],
         },
+      ],
+      {
+        sessionKey: "agent:main:main",
+        terminalEnabled: true,
+        sessions: [
+          { key: "agent:main:main", kind: "direct", label: "Main session", updatedAt: 2 },
+          { key: adoptedKey, kind: "direct", label: "Adopted native session", updatedAt: 1 },
+        ],
+        featureMethods: ["terminal.open"],
       },
-    });
+    );
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);

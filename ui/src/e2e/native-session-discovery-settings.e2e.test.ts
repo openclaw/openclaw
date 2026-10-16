@@ -13,6 +13,7 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const objectSchema = (properties: Record<string, unknown>) => ({ type: "object", properties });
 let uiProofArtifactDir: string;
 beforeEach(() => {
   if (captureUiProofEnabled) {
@@ -23,20 +24,11 @@ beforeEach(() => {
 suite.define(() => {
   it("explains node-list failures beside available sessions and exposes independent discovery settings", async () => {
     const page = await suite.browser.newPage({ viewport: { height: 1100, width: 1440 } });
-    const discoveryPluginSchema = {
-      type: "object",
-      properties: {
-        config: {
-          type: "object",
-          properties: {
-            sessionCatalog: {
-              type: "object",
-              properties: { enabled: { type: "boolean", default: true } },
-            },
-          },
-        },
-      },
-    };
+    const discoveryPluginSchema = objectSchema({
+      config: objectSchema({
+        sessionCatalog: objectSchema({ enabled: { type: "boolean", default: true } }),
+      }),
+    });
     await installMockGateway(page, {
       featureMethods: [
         "chat.metadata",
@@ -59,23 +51,14 @@ suite.define(() => {
           hash: "native-session-discovery-e2e",
         },
         "config.schema": {
-          schema: {
-            type: "object",
-            properties: {
-              plugins: {
-                type: "object",
-                properties: {
-                  entries: {
-                    type: "object",
-                    properties: {
-                      anthropic: discoveryPluginSchema,
-                      codex: discoveryPluginSchema,
-                    },
-                  },
-                },
-              },
-            },
-          },
+          schema: objectSchema({
+            plugins: objectSchema({
+              entries: objectSchema({
+                anthropic: discoveryPluginSchema,
+                codex: discoveryPluginSchema,
+              }),
+            }),
+          }),
           uiHints: {
             "plugins.entries.anthropic.config.sessionCatalog.enabled": {
               label: "Discover Claude Code Sessions",
@@ -90,20 +73,12 @@ suite.define(() => {
           generatedAt: "2026-07-14T00:00:00.000Z",
         },
         "plugins.list": {
-          plugins: [
-            {
-              id: "codex",
-              name: "Codex",
-              origin: "bundled",
-              installed: true,
-            },
-            {
-              id: "anthropic",
-              name: "Anthropic",
-              origin: "bundled",
-              installed: true,
-            },
-          ],
+          plugins: ["codex", "anthropic"].map((id) => ({
+            id,
+            name: id === "codex" ? "Codex" : "Anthropic",
+            origin: "bundled",
+            installed: true,
+          })),
           diagnostics: [],
           mutationAllowed: true,
         },
@@ -154,11 +129,13 @@ suite.define(() => {
         '[data-session-section="catalog:codex"] .sidebar-session-group-toggle',
       );
       await warning.waitFor({ state: "visible" });
-      await expect.poll(() => tooltipTitleText(warning)).toContain("[NODE_LIST_FAILED]");
-      await expect.poll(() => tooltipTitleText(warning)).toContain("pairing database is locked");
-      await expect
-        .poll(() => tooltipTitleText(warning))
-        .toContain("Settings > Appearance > Session sources");
+      for (const text of [
+        "[NODE_LIST_FAILED]",
+        "pairing database is locked",
+        "Settings > Appearance > Session sources",
+      ]) {
+        await expect.poll(() => tooltipTitleText(warning)).toContain(text);
+      }
       expect(await page.getByText("Available native session", { exact: true }).count()).toBe(1);
       expect(await page.locator('[data-session-catalog-host="node:registry"]').count()).toBe(0);
 

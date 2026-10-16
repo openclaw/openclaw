@@ -1,6 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { BrowserContext } from "playwright";
+import type { BrowserContext, Locator, Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
 import {
   takeControlUiElementScreenshot,
@@ -25,6 +25,14 @@ suite.define(() => {
   });
 
   const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+  async function capture(page: Page, file: string, element: Locator, targets: Locator[]) {
+    if (captureProof) {
+      await writeFile(
+        path.join(suite.artifactDir, file),
+        await takeControlUiElementScreenshot(page, element, targets),
+      );
+    }
+  }
 
   async function openPage(options: {
     hasTouch?: boolean;
@@ -68,17 +76,12 @@ suite.define(() => {
     const toolbar = page.locator(".macos-titlebar-controls");
     await expect.poll(() => toolbar.isVisible()).toBe(true);
     await expect.poll(() => toolbar.getByRole("button").count()).toBe(2);
-    await expect.poll(() => toolbar.getByRole("button", { name: "Back" }).isVisible()).toBe(true);
-    await expect
-      .poll(() => toolbar.getByRole("button", { name: "Forward" }).isVisible())
-      .toBe(true);
-    await expect
-      .poll(() => toolbar.getByRole("button", { name: "Expand sidebar" }).count())
-      .toBe(0);
-    await expect
-      .poll(() => toolbar.getByRole("button", { name: "Open command palette" }).count())
-      .toBe(0);
-    await expect.poll(() => toolbar.getByRole("button", { name: "New session" }).count()).toBe(0);
+    for (const name of ["Back", "Forward"]) {
+      await expect.poll(() => toolbar.getByRole("button", { name }).isVisible()).toBe(true);
+    }
+    for (const name of ["Expand sidebar", "Open command palette", "New session"]) {
+      await expect.poll(() => toolbar.getByRole("button", { name }).count()).toBe(0);
+    }
   });
 
   it("keeps the document root scroll-locked in the Settings takeover", async () => {
@@ -133,37 +136,22 @@ suite.define(() => {
     const drawerButton = header.getByRole("button", { name: "Expand sidebar" });
     await drawerButton.waitFor({ state: "visible" });
     await expect.poll(() => header.locator(".chat-pane__palette-open").count()).toBe(0);
-    if (captureProof) {
-      await writeFile(
-        path.join(suite.artifactDir, "01-chat-title-bar.png"),
-        await takeControlUiElementScreenshot(page, header, [drawerButton]),
-      );
-    }
+    await capture(page, "01-chat-title-bar.png", header, [drawerButton]);
 
     await drawerButton.tap();
     await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-drawer-open");
     const drawerSearch = page.locator(".shell-nav .sidebar-brand__search");
     await expect.poll(() => drawerSearch.isVisible()).toBe(true);
 
-    if (captureProof) {
-      await writeFile(
-        path.join(suite.artifactDir, "02-sidebar-drawer.png"),
-        await takeControlUiElementScreenshot(page, page.locator(".shell-nav"), [drawerSearch]),
-      );
-    }
+    await capture(page, "02-sidebar-drawer.png", page.locator(".shell-nav"), [drawerSearch]);
 
     await drawerSearch.tap();
     const paletteInput = page.locator(".cmd-palette__input");
     await paletteInput.waitFor({ state: "visible" });
     await expect.poll(() => paletteInput.evaluate((input) => input.matches(":focus"))).toBe(true);
-    if (captureProof) {
-      await writeFile(
-        path.join(suite.artifactDir, "03-command-palette.png"),
-        await takeControlUiElementScreenshot(page, page.locator(".cmd-palette").first(), [
-          paletteInput,
-        ]),
-      );
-    }
+    await capture(page, "03-command-palette.png", page.locator(".cmd-palette").first(), [
+      paletteInput,
+    ]);
   });
 
   it.each([

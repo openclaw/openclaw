@@ -29,6 +29,33 @@ const DESKTOP_CONTEXT: BrowserContextOptions = {
   ...BASE_CONTEXT,
   viewport: { height: 900, width: 1280 },
 };
+const checkoutPopover = (page: Page) =>
+  page.locator(".oc-popover.new-session-page__checkout-popover");
+const worktreeOption = (page: Page) =>
+  checkoutPopover(page).getByRole("button", {
+    name: "New worktree Isolated copy of the repo",
+    exact: true,
+  });
+const messageInput = (page: Page) => page.locator(".new-session-page__message");
+const startButton = (page: Page) => page.getByRole("button", { name: "Start session" });
+const requestCount = async (gateway: MockGateway, method: string) =>
+  (await gateway.getRequests(method)).length;
+
+async function selectWorktree(page: Page) {
+  const trigger = page.locator("#new-session-checkout-trigger");
+  await trigger.click();
+  await worktreeOption(page).click();
+  await page.keyboard.press("Escape");
+  await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
+}
+
+function workspaceResponses(key: string) {
+  return {
+    "fs.listDir": { path: WORKSPACE, home: "/home/peter", entries: [] },
+    "worktrees.branches": branchList(),
+    "sessions.create": { key },
+  };
+}
 
 function mainAgentList(name = "Main", workspace = WORKSPACE) {
   return {
@@ -91,13 +118,13 @@ async function chooseCustomFolder(page: Page, gateway: MockGateway) {
 }
 
 async function reconnectForBranchRediscovery(page: Page, gateway: MockGateway) {
-  const branchRequests = (await gateway.getRequests("worktrees.branches")).length;
+  const branchRequests = await requestCount(gateway, "worktrees.branches");
   await gateway.setOnline(false);
   await waitForControlUiGatewayReconnecting(page);
   await gateway.setOnline(true);
   await waitForControlUiGatewayReady(page);
   await expect
-    .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
+    .poll(async () => await requestCount(gateway, "worktrees.branches"))
     .toBe(branchRequests + 1);
 }
 
@@ -109,7 +136,7 @@ async function expectPendingNewSession(page: Page, message: string) {
   await pollLocatorText(startup.locator('.chat-working-indicator[role="status"]')).toContain(
     "Starting…",
   );
-  expect(await page.locator(".new-session-page__message").isVisible()).toBe(false);
+  expect(await messageInput(page).isVisible()).toBe(false);
 }
 
 suite.define(() => {
@@ -132,11 +159,9 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}new`);
-      const checkout = page.locator(".oc-popover.new-session-page__checkout-popover");
+      const checkout = checkoutPopover(page);
       await page.locator("#new-session-checkout-trigger").click();
-      await checkout
-        .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
-        .click();
+      await worktreeOption(page).click();
 
       const baseRef = checkoutBaseRefInput(checkout);
       await baseRef.focus();
@@ -201,8 +226,8 @@ suite.define(() => {
         .poll(() => page.evaluate(() => document.activeElement?.className))
         .toContain("new-session-page__message");
 
-      await page.locator(".new-session-page__message").fill("verify the picker inputs");
-      await page.getByRole("button", { name: "Start session" }).click();
+      await messageInput(page).fill("verify the picker inputs");
+      await startButton(page).click();
       await gateway.waitForRequest("sessions.create");
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
 
@@ -233,9 +258,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}new`);
         const checkout = page.locator("#new-session-checkout-trigger");
         await checkout.click();
-        await page
-          .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
-          .click();
+        await worktreeOption(page).click();
         await expect.poll(() => checkout.getAttribute("data-worktree")).toBe("true");
         const baseRef = checkoutBaseRefInput(page);
         await baseRef.fill("origin/release-outside-suggestions");
@@ -258,8 +281,8 @@ suite.define(() => {
           )
           .waitFor({ state: "visible" });
         await page.keyboard.press("Escape");
-        await page.locator(".new-session-page__message").fill("start from the selected release");
-        await page.getByRole("button", { name: "Start session" }).click();
+        await messageInput(page).fill("start from the selected release");
+        await startButton(page).click();
         expect((await gateway.waitForRequest("sessions.create")).params).toMatchObject({
           agentId: "main",
           message: "start from the selected release",
@@ -283,22 +306,17 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("worktrees.branches");
       const trigger = page.locator("#new-session-checkout-trigger");
-      const place = page.locator(".oc-popover.new-session-page__checkout-popover");
-      await trigger.click();
-      await place
-        .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
-        .click();
-      await page.keyboard.press("Escape");
-      await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
+      const place = checkoutPopover(page);
+      await selectWorktree(page);
 
-      const branchRequests = (await gateway.getRequests("worktrees.branches")).length;
+      const branchRequests = await requestCount(gateway, "worktrees.branches");
       await gateway.deferNext("worktrees.branches");
       await gateway.setOnline(false);
       await waitForControlUiGatewayReconnecting(page);
       await gateway.setOnline(true);
       await waitForControlUiGatewayReady(page);
       await expect
-        .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
+        .poll(async () => await requestCount(gateway, "worktrees.branches"))
         .toBe(branchRequests + 1);
       await gateway.rejectDeferred("worktrees.branches", {
         code: "UNAVAILABLE",
@@ -307,16 +325,13 @@ suite.define(() => {
 
       await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
       await trigger.click();
-      const worktree = place.getByRole("button", {
-        name: "New worktree Isolated copy of the repo",
-        exact: true,
-      });
+      const worktree = worktreeOption(page);
       await expect.poll(() => worktree.getAttribute("aria-pressed")).toBe("true");
       expect(await worktree.isDisabled()).toBe(true);
       await page.keyboard.press("Escape");
 
-      await page.locator(".new-session-page__message").fill("keep this task isolated");
-      const start = page.getByRole("button", { name: "Start session" });
+      await messageInput(page).fill("keep this task isolated");
+      const start = startButton(page);
       await expect.poll(() => start.isDisabled()).toBe(true);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       await trigger.click();
@@ -338,22 +353,12 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         workspace: WORKSPACE,
         workspaceGit: true,
-        methodResponses: {
-          "fs.listDir": { path: WORKSPACE, home: "/home/peter", entries: [] },
-          "worktrees.branches": branchList(),
-          "sessions.create": { key: "agent:main:custom-now-direct" },
-        },
+        methodResponses: workspaceResponses("agent:main:custom-now-direct"),
       });
       await page.goto(`${suite.server.baseUrl}new`);
       await chooseCustomFolder(page, gateway);
       const trigger = page.locator("#new-session-checkout-trigger");
-      const place = page.locator(".oc-popover.new-session-page__checkout-popover");
-      await trigger.click();
-      await place
-        .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
-        .click();
-      await page.keyboard.press("Escape");
-      await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
+      await selectWorktree(page);
 
       await gateway.setMethodResponse("worktrees.branches", {
         branches: [],
@@ -374,8 +379,8 @@ suite.define(() => {
         return value?.agents?.main?.worktree;
       });
       expect(storedWorktree).toBe(false);
-      await page.locator(".new-session-page__message").fill("continue directly");
-      await page.getByRole("button", { name: "Start session" }).click();
+      await messageInput(page).fill("continue directly");
+      await startButton(page).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({ cwd: TARGET_REPO, message: "continue directly" });
       expect(create.params).not.toHaveProperty("worktree");
@@ -387,22 +392,13 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         workspace: WORKSPACE,
         workspaceGit: true,
-        methodResponses: {
-          "fs.listDir": { path: WORKSPACE, home: "/home/peter", entries: [] },
-          "worktrees.branches": branchList(),
-          "sessions.create": { key: "agent:main:custom-worktree-cleared" },
-        },
+        methodResponses: workspaceResponses("agent:main:custom-worktree-cleared"),
       });
       await page.goto(`${suite.server.baseUrl}new`);
       await chooseCustomFolder(page, gateway);
       const trigger = page.locator("#new-session-checkout-trigger");
-      const place = page.locator(".oc-popover.new-session-page__checkout-popover");
-      await trigger.click();
-      await place
-        .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
-        .click();
-      await page.keyboard.press("Escape");
-      await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
+      const place = checkoutPopover(page);
+      await selectWorktree(page);
 
       await gateway.setMethodResponse("worktrees.branches", {
         branches: [],
@@ -411,14 +407,11 @@ suite.define(() => {
       await reconnectForBranchRediscovery(page, gateway);
 
       await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
-      await page.locator(".new-session-page__message").fill("do not run directly");
-      const start = page.getByRole("button", { name: "Start session" });
+      await messageInput(page).fill("do not run directly");
+      const start = startButton(page);
       await expect.poll(() => start.isDisabled()).toBe(true);
       await trigger.click();
-      const worktree = place.getByRole("button", {
-        name: "New worktree Isolated copy of the repo",
-        exact: true,
-      });
+      const worktree = worktreeOption(page);
       expect(await worktree.isDisabled()).toBe(true);
       await expect
         .poll(() => tooltipTitleText(worktree))
@@ -477,8 +470,8 @@ suite.define(() => {
 
       await expect.poll(() => whereTrigger.getAttribute("data-cloud-profile")).toBe("aws");
       await expect.poll(() => checkoutTrigger.getAttribute("data-worktree")).toBe("true");
-      await page.locator(".new-session-page__message").fill("do not run directly");
-      const start = page.getByRole("button", { name: "Start session" });
+      await messageInput(page).fill("do not run directly");
+      const start = startButton(page);
       await expect.poll(() => start.isDisabled()).toBe(true);
       await whereTrigger.click();
       const cloud = where.getByRole("button", { name: "aws", exact: true });
@@ -487,7 +480,7 @@ suite.define(() => {
       await expect.poll(() => start.isDisabled()).toBe(true);
       await page.keyboard.press("Escape");
       await checkoutTrigger.click();
-      const checkout = page.locator(".oc-popover.new-session-page__checkout-popover");
+      const checkout = checkoutPopover(page);
       expect(await checkout.locator('[data-value="checkout"]').isDisabled()).toBe(true);
       await checkoutBaseRefInput(checkout).waitFor();
       await checkout.getByLabel("Name", { exact: true }).waitFor();
@@ -547,16 +540,14 @@ suite.define(() => {
       await gateway.waitForRequest("environments.list");
       await gateway.waitForRequest("worktrees.branches");
 
-      const message = page.locator(".new-session-page__message");
+      const message = messageInput(page);
       const whereSelect = page.locator(".oc-popover.new-session-page__where-popover");
       const whereTrigger = page.locator("#new-session-where-trigger");
       const projectSelect = page.locator(".oc-popover.new-session-page__project-popover");
       const projectTrigger = page.locator("#new-session-project-trigger");
       await message.fill("preserve this replacement draft");
       await page.locator("#new-session-checkout-trigger").click();
-      await page
-        .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
-        .click();
+      await worktreeOption(page).click();
       await page.keyboard.press("Escape");
       await whereTrigger.click();
       await whereSelect.getByRole("button", { name: "Old device" }).click();
@@ -578,14 +569,14 @@ suite.define(() => {
       });
       await gateway.setMethodResponse("worktrees.branches", branchList("beta"));
       const socketsBefore = await gateway.getSocketCount();
-      const environmentsBefore = (await gateway.getRequests("environments.list")).length;
-      const branchesBefore = (await gateway.getRequests("worktrees.branches")).length;
+      const environmentsBefore = await requestCount(gateway, "environments.list");
+      const branchesBefore = await requestCount(gateway, "worktrees.branches");
 
       await replaceGatewayClient(page);
 
       await expect.poll(() => gateway.getSocketCount()).toBe(socketsBefore + 1);
       await expect
-        .poll(async () => (await gateway.getRequests("environments.list")).length)
+        .poll(async () => await requestCount(gateway, "environments.list"))
         .toBe(environmentsBefore + 1);
       await expect
         .poll(async () =>
@@ -613,7 +604,7 @@ suite.define(() => {
       expect(await whereSelect.getByRole("button", { name: "Old device" }).count()).toBe(0);
       await page.keyboard.press("Escape");
       await page.locator("#new-session-checkout-trigger").click();
-      const checkout = page.locator(".oc-popover.new-session-page__checkout-popover");
+      const checkout = checkoutPopover(page);
       await expect
         .poll(() => checkoutBaseRefInput(checkout).getAttribute("placeholder"))
         .toBe("beta");
@@ -661,7 +652,7 @@ suite.define(() => {
             },
           });
           await page.goto(`${suite.server.baseUrl}new`);
-          const message = page.locator(".new-session-page__message");
+          const message = messageInput(page);
           const start = page.locator("button.new-session-page__start-submit");
           await message.fill("keep this admitted task");
           await waitForGatewayRecoveryScope(page, false);
@@ -714,7 +705,7 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}new`);
         await page.getByRole("heading", { name: "Original agent" }).waitFor();
-        const message = page.locator(".new-session-page__message");
+        const message = messageInput(page);
         const start = page.locator("button.new-session-page__start-submit");
         const submittedMessage = "retry this draft after reconnect";
         await message.fill(submittedMessage);
@@ -723,7 +714,7 @@ suite.define(() => {
         const originalCreate = await gateway.waitForRequest("sessions.create");
         await expectPendingNewSession(page, submittedMessage);
         await gateway.deferNext("sessions.create");
-        const agentRequestsBefore = (await gateway.getRequests("agents.list")).length;
+        const agentRequestsBefore = await requestCount(gateway, "agents.list");
 
         if (reconnectKind === "client replacement") {
           await gateway.setMethodResponse(
@@ -747,11 +738,9 @@ suite.define(() => {
           await waitForControlUiGatewayReady(page);
         }
         await expect
-          .poll(async () => (await gateway.getRequests("agents.list")).length)
+          .poll(async () => await requestCount(gateway, "agents.list"))
           .toBe(agentRequestsBefore + 1);
-        await expect
-          .poll(async () => (await gateway.getRequests("sessions.create")).length)
-          .toBe(2);
+        await expect.poll(async () => await requestCount(gateway, "sessions.create")).toBe(2);
         const resumedCreate = (await gateway.getRequests("sessions.create")).at(-1);
         expect(originalCreate.params).toMatchObject({
           idempotencyKey: expect.any(String),
@@ -779,9 +768,9 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}new`);
         await page.getByRole("heading", { name: "Main" }).waitFor();
         await waitForGatewayRecoveryScope(page);
-        await page.locator(".new-session-page__message").fill("do not duplicate this task");
+        await messageInput(page).fill("do not duplicate this task");
         await gateway.deferNext("sessions.create");
-        await page.getByRole("button", { name: "Start session" }).click();
+        await startButton(page).click();
         await gateway.waitForRequest("sessions.create");
         await expectPendingNewSession(page, "do not duplicate this task");
 
@@ -813,23 +802,23 @@ suite.define(() => {
           hasText:
             "The Gateway changed while this session was starting. Check recent sessions before starting this task again.",
         });
-        await page.locator(".new-session-page__message").waitFor();
+        await messageInput(page).waitFor();
         if (change === "process restarts") {
           await warning.waitFor();
           await expect
-            .poll(() => page.locator(".new-session-page__message").inputValue())
+            .poll(() => messageInput(page).inputValue())
             .toBe("do not duplicate this task");
-          expect(await page.getByRole("button", { name: "Start session" }).isDisabled()).toBe(true);
+          expect(await startButton(page).isDisabled()).toBe(true);
         } else {
           // A different principal gets a fresh draft, not the previous owner's
           // private text or frozen startup controller (including its error).
-          await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("");
+          await expect.poll(() => messageInput(page).inputValue()).toBe("");
           expect(await warning.isVisible()).toBe(false);
           expect(
             await page.getByText("do not duplicate this task", { exact: true }).isVisible(),
           ).toBe(false);
-          await page.locator(".new-session-page__message").fill("new owner's task");
-          expect(await page.getByRole("button", { name: "Start session" }).isEnabled()).toBe(true);
+          await messageInput(page).fill("new owner's task");
+          expect(await startButton(page).isEnabled()).toBe(true);
         }
         expect(await page.locator(".new-session-page__starting").isVisible()).toBe(false);
         expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
@@ -916,7 +905,7 @@ suite.define(() => {
 
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
       await pollLocatorText(folderLabel).toBe("openclaw");
-      await page.locator(".new-session-page__message").fill("retarget this draft");
+      await messageInput(page).fill("retarget this draft");
       await page.getByRole("button", { name: "Start in terminal" }).click();
 
       const create = await gateway.waitForRequest("sessions.catalog.startTerminal");
