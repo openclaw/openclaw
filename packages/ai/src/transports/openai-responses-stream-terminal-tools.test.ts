@@ -15,6 +15,17 @@ const added = (slot: number, overrides: Record<string, unknown> = {}) => ({
   output_index: slot,
   item: tool(slot, { arguments: "", status: "in_progress", ...overrides }),
 });
+const done = (slot: number, overrides: Record<string, unknown> = {}) => ({
+  type: "response.output_item.done",
+  output_index: slot,
+  item: tool(slot, overrides),
+});
+const argumentEvent = (type: string, slot: number, fields: Record<string, unknown>) => ({
+  type: `response.function_call_arguments.${type}`,
+  output_index: slot,
+  item_id: `fc_${slot}`,
+  ...fields,
+});
 
 describe("Responses terminal tool completion", () => {
   it.each([
@@ -38,11 +49,12 @@ describe("Responses terminal tool completion", () => {
         : { encrypted_content: encrypted ? "synthetic-ciphertext" : null }),
     };
     const call = tool(1, { async: true });
-    const pendingSibling =
-      ending === "output-limit-active" ||
-      ending === "output-limit-rejected" ||
-      ending === "conflicting-status" ||
-      ending === "malformed-sibling";
+    const pendingSibling = [
+      "output-limit-active",
+      "output-limit-rejected",
+      "conflicting-status",
+      "malformed-sibling",
+    ].includes(ending);
     const terminalOutput = [
       completedReasoning,
       call,
@@ -51,10 +63,8 @@ describe("Responses terminal tool completion", () => {
         : []),
     ];
     const isIncomplete =
-      ending === "length" ||
       ending.startsWith("output-limit") ||
-      ending === "conflicting-status" ||
-      ending === "content-filter";
+      ["length", "conflicting-status", "content-filter"].includes(ending);
     const terminalEvent =
       ending === "failed"
         ? {
@@ -83,17 +93,9 @@ describe("Responses terminal tool completion", () => {
         { type: "response.output_item.added", output_index: 0, item: reasoning },
         { type: "response.output_item.done", output_index: 0, item: reasoning },
         added(1, { async: true }),
-        { type: "response.output_item.done", output_index: 1, item: call },
+        done(1, { async: true }),
         ...(pendingSibling ? [added(2)] : []),
-        ...(ending === "output-limit-rejected"
-          ? [
-              {
-                type: "response.output_item.done",
-                output_index: 2,
-                item: tool(2, { status: "incomplete" }),
-              },
-            ]
-          : []),
+        ...(ending === "output-limit-rejected" ? [done(2, { status: "incomplete" })] : []),
         terminalEvent,
       ],
       { asyncToolExecution: true },
@@ -126,44 +128,28 @@ describe("Responses terminal tool completion", () => {
     expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([]);
   });
 
-  it.each(["unindexed"])(
-    "completes a %s call exactly once when its item-done event is missing",
-    async (identity) => {
-      const anonymous = identity === "anonymous" ? { id: undefined, call_id: undefined } : {};
-      const item = tool(0, {
-        ...anonymous,
-        ...(identity === "rotated" ? { id: "fc_terminal_rotated" } : {}),
-        arguments: '{"slot":0,"id":9007199254740993}',
-      });
-      const result = await runFixture([
-        {
-          ...added(0, anonymous),
-          ...(identity === "unindexed" || identity === "anonymous"
-            ? { output_index: undefined }
-            : {}),
-        },
-        completed("resp_missing_done", [item]),
-      ]);
-      expect(result.error).toBeNull();
-      expect(result.stopReason).toBe("toolUse");
-      expect(result.events).toEqual([
-        { type: "toolcall_start", contentIndex: 0 },
-        { type: "toolcall_end", contentIndex: 0 },
-      ]);
-      expect(result.content).toEqual([
-        {
-          type: "toolCall",
-          id:
-            identity === "anonymous"
-              ? "call_<generated>"
-              : `call_0|${identity === "rotated" ? "fc_terminal_rotated" : "fc_0"}`,
-          name: "lookup",
-          arguments: { slot: 0, id: "9007199254740993" },
-          partialJson: false,
-        },
-      ]);
-    },
-  );
+  it("completes an unindexed call exactly once when its item-done event is missing", async () => {
+    const item = tool(0, { arguments: '{"slot":0,"id":9007199254740993}' });
+    const result = await runFixture([
+      { ...added(0), output_index: undefined },
+      completed("resp_missing_done", [item]),
+    ]);
+    expect(result.error).toBeNull();
+    expect(result.stopReason).toBe("toolUse");
+    expect(result.events).toEqual([
+      { type: "toolcall_start", contentIndex: 0 },
+      { type: "toolcall_end", contentIndex: 0 },
+    ]);
+    expect(result.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_0|fc_0",
+        name: "lookup",
+        arguments: { slot: 0, id: "9007199254740993" },
+        partialJson: false,
+      },
+    ]);
+  });
 
   it.each([
     ["malformed arguments", { arguments: '{"slot":' }],
@@ -184,7 +170,7 @@ describe("Responses terminal tool completion", () => {
 
   it("rejects a changed completed call identity before another active call completes", async () => {
     const result = await runFixture([
-      { type: "response.output_item.done", output_index: 0, item: tool(0) },
+      done(0),
       added(1),
       completed("resp_completed_conflict", [tool(0, { call_id: "call_conflicting" }), tool(1)]),
     ]);
@@ -194,14 +180,11 @@ describe("Responses terminal tool completion", () => {
     ]);
   });
 
-  it.each([["duplicate call", [tool(0), tool(0)]]])(
-    "rejects a terminal %s without completing the active call",
-    async (_name, items) => {
-      const result = await runFixture([added(0), completed("resp_unresolved", items)]);
-      expect(result.error).not.toBeNull();
-      expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([]);
-    },
-  );
+  it("rejects a terminal duplicate call without completing the active call", async () => {
+    const result = await runFixture([added(0), completed("resp_unresolved", [tool(0), tool(0)])]);
+    expect(result.error).not.toBeNull();
+    expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([]);
+  });
 
   it("never completes active tools from an incomplete response", async () => {
     const result = await runFixture([
@@ -220,24 +203,9 @@ describe("Responses terminal tool completion", () => {
     const doneArgs = JSON.stringify({ if_match: '"rev-1"', object_id: "x" });
     const result = await runFixture([
       added(0),
-      {
-        type: "response.function_call_arguments.delta",
-        output_index: 0,
-        item_id: "fc_0",
-        delta: streamedArgs,
-      },
-      {
-        type: "response.function_call_arguments.done",
-        output_index: 0,
-        item_id: "fc_0",
-        name: "lookup",
-        arguments: streamedArgs,
-      },
-      {
-        type: "response.output_item.done",
-        output_index: 0,
-        item: tool(0, { arguments: doneArgs }),
-      },
+      argumentEvent("delta", 0, { delta: streamedArgs }),
+      argumentEvent("done", 0, { name: "lookup", arguments: streamedArgs }),
+      done(0, { arguments: doneArgs }),
       completed("resp_schema_valid_disagree", [tool(0, { arguments: streamedArgs })]),
     ]);
     expect(result.error).toBeNull();
@@ -250,28 +218,15 @@ describe("Responses terminal tool completion", () => {
     const streamedArgs = JSON.stringify({ slot: 9 });
     const result = await runFixture([
       added(0),
-      // Route a complete, disagreeing buffer so the preference would fire
-      // without the reliability gate.
-      {
-        type: "response.function_call_arguments.delta",
-        output_index: 0,
-        item_id: "fc_0",
-        delta: streamedArgs,
-      },
+      argumentEvent("delta", 0, { delta: streamedArgs }),
       added(1),
-      // A delta with no output_index and a non-matching item_id cannot route
-      // to either active call, so markArgumentsUnreliable fires on both,
-      // clearing the preference even though the buffer is complete JSON.
+      // An unroutable delta invalidates both otherwise complete argument buffers.
       {
         type: "response.function_call_arguments.delta",
         item_id: "fc_unknown",
         delta: streamedArgs,
       },
-      {
-        type: "response.output_item.done",
-        output_index: 0,
-        item: tool(0, { arguments: doneArgs }),
-      },
+      done(0, { arguments: doneArgs }),
       completed("resp_unreliable", [tool(0, { arguments: doneArgs }), tool(1)]),
     ]);
     expect(result.error).toBeNull();

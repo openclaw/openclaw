@@ -90,31 +90,6 @@ function model(params: { provider: string; baseUrl: string }): Model<"openai-res
   };
 }
 
-async function turn(params: {
-  runtime: Runtime;
-  model: Model<"openai-responses">;
-  context: Context;
-  sessionId: string;
-  text: string;
-  transport: OpenAIResponsesOptions["transport"];
-}): Promise<void> {
-  params.context.messages.push({
-    role: "user",
-    content: params.text,
-    timestamp: params.context.messages.length + 1,
-  });
-  const response = await params.runtime.complete(params.model, params.context, {
-    apiKey: "test-key",
-    sessionId: params.sessionId,
-    transport: params.transport,
-    reasoningEffort: "low",
-  });
-  if (response.stopReason === "error") {
-    throw new Error(response.errorMessage ?? "OpenAI Responses turn failed");
-  }
-  params.context.messages.push(response);
-}
-
 class LoopbackHttpResponsesServer {
   readonly requests: Array<Record<string, unknown>> = [];
   private server: Server | undefined;
@@ -196,53 +171,47 @@ async function exerciseRuntimeCleanup<T>(params: {
   model: Model<"openai-responses">;
   transport: OpenAIResponsesOptions["transport"];
   observe: () => T;
-}): Promise<{
-  firstShared: T;
-  secondShared: T;
-  firstOther: T;
-  secondOther: T;
-  survivingShared: T;
-  replacedShared: T;
-  survivingOther: T;
-  replacedOther: T;
-}> {
+}) {
   const first = createNodeLlmRuntime(createRegistry());
   const second = createNodeLlmRuntime(createRegistry());
-  const contexts = {
-    firstShared: { messages: [] } satisfies Context,
-    firstOther: { messages: [] } satisfies Context,
-    secondShared: { messages: [] } satisfies Context,
-    secondOther: { messages: [] } satisfies Context,
+  const runner = (runtime: Runtime, label: string) => {
+    const contexts = new Map<string, Context>();
+    return async (sessionId: string) => {
+      const context: Context = contexts.get(sessionId) ?? { messages: [] };
+      contexts.set(sessionId, context);
+      context.messages.push({
+        role: "user",
+        content: `${label} ${sessionId}${context.messages.length ? " again" : ""}`,
+        timestamp: context.messages.length + 1,
+      });
+      const response = await runtime.complete(params.model, context, {
+        apiKey: "test-key",
+        sessionId,
+        transport: params.transport,
+        reasoningEffort: "low",
+      });
+      if (response.stopReason === "error") {
+        throw new Error(response.errorMessage ?? "OpenAI Responses turn failed");
+      }
+      context.messages.push(response);
+      return params.observe();
+    };
   };
-  const run = async (runtime: Runtime, context: Context, sessionId: string, text: string) => {
-    await turn({
-      runtime,
-      model: params.model,
-      context,
-      sessionId,
-      text,
-      transport: params.transport,
-    });
-    return params.observe();
-  };
+  const runFirst = runner(first, "first");
+  const runSecond = runner(second, "second");
   try {
-    const firstShared = await run(first, contexts.firstShared, "shared", "first shared");
-    const secondShared = await run(second, contexts.secondShared, "shared", "second shared");
-    const firstOther = await run(first, contexts.firstOther, "other", "first other");
-    const secondOther = await run(second, contexts.secondOther, "other", "second other");
+    const firstShared = await runFirst("shared");
+    const secondShared = await runSecond("shared");
+    const firstOther = await runFirst("other");
+    const secondOther = await runSecond("other");
 
     first.cleanupSessionResources("shared");
-    const survivingShared = await run(
-      second,
-      contexts.secondShared,
-      "shared",
-      "second shared again",
-    );
-    const replacedShared = await run(first, contexts.firstShared, "shared", "first shared again");
+    const survivingShared = await runSecond("shared");
+    const replacedShared = await runFirst("shared");
 
     first.cleanupSessionResources();
-    const survivingOther = await run(second, contexts.secondOther, "other", "second other again");
-    const replacedOther = await run(first, contexts.firstOther, "other", "first other again");
+    const survivingOther = await runSecond("other");
+    const replacedOther = await runFirst("other");
     return {
       firstShared,
       secondShared,

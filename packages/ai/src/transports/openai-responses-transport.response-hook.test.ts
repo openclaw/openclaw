@@ -142,9 +142,15 @@ function installChatGptResponse(): RequestLifecycle {
   return tracked.lifecycle;
 }
 
-function createManagedFixtureStream(
-  createStream: StreamFn,
-  model: Model,
+type FixtureStream<T extends Model["api"]> = (
+  model: Model<T>,
+  context: Context,
+  options?: BaseOpenAIStreamOptions,
+) => ReturnType<StreamFn>;
+
+function createManagedFixtureStream<T extends Model["api"]>(
+  createStream: FixtureStream<T>,
+  model: Model<T>,
   options?: BaseOpenAIStreamOptions,
 ): AssistantMessageEventStreamLike {
   const result = createStream(model, context, { apiKey: "fixture-token", ...options });
@@ -157,52 +163,37 @@ function createManagedFixtureStream(
 const managedOpenAIStream = createOpenAIResponsesTransportStreamFn();
 const managedAzureStream = createAzureOpenAIResponsesTransportStreamFn();
 
+function fixture<T extends Model["api"]>(
+  name: string,
+  model: Model<T>,
+  createStream: FixtureStream<T>,
+) {
+  return {
+    name,
+    model,
+    installResponse: installSdkResponse,
+    createStream: (options?: BaseOpenAIStreamOptions) =>
+      createManagedFixtureStream(createStream, model, options),
+  };
+}
+
+async function collectEventTypes(stream: AssistantMessageEventStreamLike, into: string[]) {
+  for await (const event of stream) {
+    into.push(event.type);
+  }
+}
+
 const fixtures = {
-  openai: {
-    name: "SDK OpenAI",
-    model: openAIModel,
-    installResponse: installSdkResponse,
-    createStream: (options?: BaseOpenAIStreamOptions) =>
-      createManagedFixtureStream(managedOpenAIStream, openAIModel, options),
-  },
-  azure: {
-    name: "SDK Azure",
-    model: azureModel,
-    installResponse: installSdkResponse,
-    createStream: (options?: BaseOpenAIStreamOptions) =>
-      createManagedFixtureStream(managedAzureStream, azureModel, options),
-  },
-  traditionalAzure: {
-    name: "traditional SDK Azure",
-    model: traditionalAzureModel,
-    installResponse: installSdkResponse,
-    createStream: (options?: BaseOpenAIStreamOptions) =>
-      createManagedFixtureStream(managedAzureStream, traditionalAzureModel, options),
-  },
-  sharedAzure: {
-    name: "package Azure Responses",
-    model: azureModel,
-    installResponse: installSdkResponse,
-    createStream: (options?: BaseOpenAIStreamOptions) =>
-      streamAzureOpenAIResponses(azureModel, context, { apiKey: "fixture-token", ...options }),
-  },
-  sharedTraditionalAzure: {
-    name: "package traditional Azure Responses",
-    model: traditionalAzureModel,
-    installResponse: installSdkResponse,
-    createStream: (options?: BaseOpenAIStreamOptions) =>
-      streamAzureOpenAIResponses(traditionalAzureModel, context, {
-        apiKey: "fixture-token",
-        ...options,
-      }),
-  },
-  shared: {
-    name: "shared Responses provider",
-    model: openAIModel,
-    installResponse: installSdkResponse,
-    createStream: (options?: BaseOpenAIStreamOptions) =>
-      streamOpenAIResponses(openAIModel, context, { apiKey: "fixture-token", ...options }),
-  },
+  openai: fixture("SDK OpenAI", openAIModel, managedOpenAIStream),
+  azure: fixture("SDK Azure", azureModel, managedAzureStream),
+  traditionalAzure: fixture("traditional SDK Azure", traditionalAzureModel, managedAzureStream),
+  sharedAzure: fixture("package Azure Responses", azureModel, streamAzureOpenAIResponses),
+  sharedTraditionalAzure: fixture(
+    "package traditional Azure Responses",
+    traditionalAzureModel,
+    streamAzureOpenAIResponses,
+  ),
+  shared: fixture("shared Responses provider", openAIModel, streamOpenAIResponses),
   chatgpt: {
     name: "native ChatGPT SSE",
     model: chatGptModel,
@@ -267,45 +258,21 @@ it.each([{ id: "gpt-6-sol", api: "azure-openai-responses" }] as const)(
   },
 );
 
-describe.each([
-  {
-    name: "OpenAI",
-    model: openAIModel,
-    createStream: managedOpenAIStream,
-    defaultEncoding: "identity",
-  },
-])("$name Responses encoding", ({ model, createStream, defaultEncoding }) => {
-  it.each([{ source: "turn", key: "Accept-Encoding", expected: "gzip, br" }])(
-    "preserves the $source encoding on the final SDK request",
-    async ({ source, key, expected }) => {
-      vi.stubEnv(
-        "OPENAI_CUSTOM_HEADERS",
-        source === "default"
-          ? undefined
-          : `${key}: ${source === "environment" ? expected : "deflate"}`,
-      );
-      const fetchMock = vi.fn<typeof fetch>(async () => completedResponse());
-      configureAiTransportHost({
-        buildModelFetch: () => fetchMock,
-        plugin: {
-          ...previousHost.plugin,
-          resolveTransportTurnState: () =>
-            source === "turn" ? { headers: { [key]: expected } } : undefined,
-        },
-      });
-      const stream = createManagedFixtureStream(
-        createStream,
-        { ...model, ...(source === "model" ? { headers: { [key]: expected } } : {}) },
-        source === "caller" ? { headers: { [key]: expected } } : undefined,
-      );
-      expect((await stream.result()).stopReason).toBe("stop");
-      expect(fetchMock).toHaveBeenCalledOnce();
-      const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
-      expect(headers.get("accept-encoding")).toBe(
-        source === "default" ? defaultEncoding : expected,
-      );
+it("preserves the turn encoding on the final OpenAI SDK request", async () => {
+  vi.stubEnv("OPENAI_CUSTOM_HEADERS", "Accept-Encoding: deflate");
+  const fetchMock = vi.fn<typeof fetch>(async () => completedResponse());
+  configureAiTransportHost({
+    buildModelFetch: () => fetchMock,
+    plugin: {
+      ...previousHost.plugin,
+      resolveTransportTurnState: () => ({ headers: { "Accept-Encoding": "gzip, br" } }),
     },
-  );
+  });
+  const stream = createManagedFixtureStream(managedOpenAIStream, openAIModel);
+  expect((await stream.result()).stopReason).toBe("stop");
+  expect(fetchMock).toHaveBeenCalledOnce();
+  const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+  expect(headers.get("accept-encoding")).toBe("gzip, br");
 });
 
 describe.each([fixtures.azure, fixtures.chatgpt])(
@@ -324,11 +291,7 @@ describe.each([fixtures.azure, fixtures.chatgpt])(
         order.push("hook:end");
       });
       const stream = createStream({ onResponse });
-      const consume = (async () => {
-        for await (const event of stream) {
-          order.push(event.type);
-        }
-      })();
+      const consume = collectEventTypes(stream, order);
 
       await vi.waitFor(() => expect(onResponse).toHaveBeenCalledOnce());
       expect(order).toEqual(["hook:start"]);
@@ -363,11 +326,7 @@ describe.each([fixtures.shared])("$name response hook", ({ createStream, install
       onResponse,
     });
     const eventTypes: string[] = [];
-    const consume = (async () => {
-      for await (const event of stream) {
-        eventTypes.push(event.type);
-      }
-    })();
+    const consume = collectEventTypes(stream, eventTypes);
     const result = await settleWithin(stream.result());
     await consume;
 
@@ -404,11 +363,7 @@ describe.each([fixtures.openai, fixtures.chatgpt])(
         const onResponse = vi.fn(() => pendingHook);
         const stream = createStream({ signal: controller.signal, onResponse });
         const eventTypes: string[] = [];
-        const consume = (async () => {
-          for await (const event of stream) {
-            eventTypes.push(event.type);
-          }
-        })();
+        const consume = collectEventTypes(stream, eventTypes);
 
         await vi.waitFor(() => expect(onResponse).toHaveBeenCalledOnce());
         const abortReason = Object.assign(new Error("caller canceled the provider response"), {
