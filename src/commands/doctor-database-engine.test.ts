@@ -9,7 +9,6 @@ import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fix
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as engineInspection from "./doctor-database-engine-inspection.js";
 import {
-  collectDatabaseEngineHealthFindings,
   collectDoctorDatabaseEngineHealthFindings,
   noteDatabaseEngines,
 } from "./doctor-database-engine.js";
@@ -36,7 +35,7 @@ beforeEach(() => {
 
 describe("Doctor database engines", () => {
   it("reports default SQLite store families without an experimental warning", async () => {
-    await noteDatabaseEngines({});
+    const findings = await noteDatabaseEngines({});
     expect(note).toHaveBeenCalledExactlyOnceWith(
       expect.stringContaining(
         "Shared state: default=sqlite, override=inherit, effective=sqlite (configured)",
@@ -44,12 +43,12 @@ describe("Doctor database engines", () => {
       "Database engines",
     );
     expect(vi.mocked(note).mock.calls[0]?.[0]).not.toContain("experimental");
-    expect(collectDatabaseEngineHealthFindings({})).toEqual([]);
+    expect(findings).toEqual([]);
   });
 
   it("reports selected and unported engines with one actionable warning", async () => {
     const cfg = { database: { engine: "postgres" as const } };
-    await noteDatabaseEngines(cfg);
+    const findings = await noteDatabaseEngines(cfg);
     expect(note).toHaveBeenCalledExactlyOnceWith(
       expect.stringContaining(
         "Shared state: default=postgres, override=inherit, effective=postgres (configured)",
@@ -65,7 +64,7 @@ describe("Doctor database engines", () => {
     );
     expect(output.match(/experimental/g)).toHaveLength(1);
     expect(output).toContain("Stores without a registered PostgreSQL schema remain on SQLite");
-    expect(collectDatabaseEngineHealthFindings(cfg)).toEqual([
+    expect(findings).toEqual([
       expect.objectContaining({
         severity: "warning",
         path: "database.engine",
@@ -85,7 +84,7 @@ describe("Doctor database engines", () => {
         },
       },
     };
-    await noteDatabaseEngines(cfg);
+    const findings = await noteDatabaseEngines(cfg);
     const output = String(vi.mocked(note).mock.calls[0]?.[0]);
     expect(output).toContain(
       "Workboard: default=sqlite, override=postgres, effective=postgres (configured)",
@@ -96,7 +95,7 @@ describe("Doctor database engines", () => {
     expect(output).toContain(
       "Database quarantine: default=sqlite, override=fixed local, effective=sqlite (configured)",
     );
-    expect(collectDatabaseEngineHealthFindings(cfg)).toHaveLength(1);
+    expect(findings).toHaveLength(1);
   });
 
   it("distinguishes configured choices from conflicting physical stores without exposing connection details", async () => {
@@ -107,15 +106,18 @@ describe("Doctor database engines", () => {
       },
     };
     const observed = { workboard: ["sqlite" as const], state: ["sqlite" as const] };
-    await noteDatabaseEngines(cfg, {
-      inspection: { observed, stateRoots: [], discoveryFailed: false },
+    vi.mocked(engineInspection.inspectDoctorDatabaseEngines).mockResolvedValue({
+      observed,
+      stateRoots: [],
+      discoveryFailed: false,
     });
+    const findings = await noteDatabaseEngines(cfg);
     const output = String(vi.mocked(note).mock.calls[0]?.[0]);
     expect(output).toContain(
       "Workboard: default=sqlite, override=postgres, effective=postgres (configured); observed=sqlite",
     );
     expect(output).not.toContain("secret");
-    expect(collectDatabaseEngineHealthFindings(cfg, observed)).toEqual([
+    expect(findings).toEqual([
       expect.objectContaining({ message: expect.stringContaining("experimental") }),
       expect.objectContaining({
         path: "database.families.workboard.engine",

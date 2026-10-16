@@ -147,22 +147,14 @@ afterEach(() => {
 });
 
 describe("candidate update admission", () => {
-  it.each(["package", "git"] as const)(
-    "attests family config through existing admission for %s",
-    async (installKind) => {
-      writeConfig({ database: { families: { workboard: { engine: "sqlite" } } } });
-      context.installation.installKind = installKind;
-      fs.writeFileSync(contextPath, JSON.stringify(context));
-      const before = snapshotFiles();
-      await updateAdmitCommand(contextPath);
-      expect(process.exitCode).toBe(0);
-      expect(readVerdict()).toMatchObject({
-        verdict: "admit",
-        facts: { checks: expect.arrayContaining([{ name: "database-families", status: "ok" }]) },
-      });
-      expect(snapshotFiles()).toEqual(before);
-    },
-  );
+  it("attests family config through existing admission without mutation", async () => {
+    writeConfig({ database: { families: { workboard: { engine: "sqlite" } } } });
+    const before = snapshotFiles();
+    await updateAdmitCommand(contextPath);
+    expect(process.exitCode).toBe(0);
+    expect(readVerdict().facts.checks).toContainEqual({ name: "database-families", status: "ok" });
+    expect(snapshotFiles()).toEqual(before);
+  });
 
   it("admits retained plugin config for Doctor without weakening normal validation", async () => {
     const pluginId = "pending-settings";

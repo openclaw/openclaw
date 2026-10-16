@@ -121,50 +121,63 @@ describe.skipIf(!connection)("family-scoped database port", () => {
     120_000,
   );
 
-  it.each(["resume", "rollback"] as const)(
-    "blocks startup after interrupted scoped publication and supports %s",
-    async (action) => {
-      await port({ family: "state", to: "postgres" });
-      const other = hash(shared);
-      const before = canonical(workboard);
-      const write = configIo.writeConfigFile;
-      vi.spyOn(configIo, "writeConfigFile").mockImplementationOnce(async (...args) => {
-        await write(...args);
-        throw new Error("synthetic interruption after publication");
-      });
-      await expect(port({ family: "workboard", to: "postgres" })).rejects.toThrow("Database port");
-      vi.restoreAllMocks();
-      expect(readBackupEngine(workboard).engine).toBe("postgres");
-      expect(() => assertDatabasePortStartupAllowed(state.stateDir)).toThrow();
-      const active = databasePortManifestPath(state.stateDir);
-      const saved = JSON.parse(fs.readFileSync(active, "utf8")) as DatabasePortManifest;
-      const inputsFile = saved.artifacts.find((file) => path.basename(file.path) === "inputs.json");
-      assert(inputsFile);
-      expect(JSON.parse(fs.readFileSync(inputsFile.path, "utf8"))).toMatchObject({
-        selection: {
-          path: ["database", "families", "workboard", "engine"],
-          originalValue: null,
-          effectiveSource: "sqlite",
-        },
-      });
-      await port({ [action]: active });
-      expect(() => assertDatabasePortStartupAllowed(state.stateDir)).not.toThrow();
-      expect(hash(shared)).toBe(other);
-      expect(readBackupEngine(workboard).engine).toBe(action === "resume" ? "postgres" : "sqlite");
-      if (action === "resume") {
-        await port({ family: "workboard", to: "sqlite" });
-      }
-      expect(canonical(workboard)).toEqual(before);
-      await port({ family: "state", to: "sqlite" });
-    },
-    120_000,
-  );
-
   it("refuses agents on a different engine from state before any publication", async () => {
     const before = fs.readFileSync(state.configPath);
     await expect(port({ family: "agent", to: "postgres" })).rejects.toThrow(
       /different engine than state until PR3/,
     );
     expect(fs.readFileSync(state.configPath)).toEqual(before);
+  });
+
+  describe("interrupted scoped publication", () => {
+    beforeAll(async () => {
+      await port({ family: "state", to: "postgres" });
+    }, 120_000);
+    afterAll(async () => {
+      await port({ family: "state", to: "sqlite" });
+    }, 120_000);
+
+    it.each(["resume", "rollback"] as const)(
+      "blocks startup and supports %s",
+      async (action) => {
+        const other = hash(shared);
+        const before = canonical(workboard);
+        const write = configIo.writeConfigFile;
+        vi.spyOn(configIo, "writeConfigFile").mockImplementationOnce(async (...args) => {
+          await write(...args);
+          throw new Error("synthetic interruption after publication");
+        });
+        await expect(port({ family: "workboard", to: "postgres" })).rejects.toThrow(
+          "Database port",
+        );
+        vi.restoreAllMocks();
+        expect(readBackupEngine(workboard).engine).toBe("postgres");
+        expect(() => assertDatabasePortStartupAllowed(state.stateDir)).toThrow();
+        const active = databasePortManifestPath(state.stateDir);
+        const saved = JSON.parse(fs.readFileSync(active, "utf8")) as DatabasePortManifest;
+        const inputsFile = saved.artifacts.find(
+          (file) => path.basename(file.path) === "inputs.json",
+        );
+        assert(inputsFile);
+        expect(JSON.parse(fs.readFileSync(inputsFile.path, "utf8"))).toMatchObject({
+          selection: {
+            path: ["database", "families", "workboard", "engine"],
+            originalValue: null,
+            effectiveSource: "sqlite",
+          },
+        });
+        await port({ [action]: active });
+        expect(() => assertDatabasePortStartupAllowed(state.stateDir)).not.toThrow();
+        expect(hash(shared)).toBe(other);
+        expect(readBackupEngine(workboard).engine).toBe(
+          action === "resume" ? "postgres" : "sqlite",
+        );
+        if (action === "resume") {
+          await port({ family: "workboard", to: "sqlite" });
+        }
+        expect(canonical(workboard)).toEqual(before);
+      },
+      120_000,
+    );
   });
 });

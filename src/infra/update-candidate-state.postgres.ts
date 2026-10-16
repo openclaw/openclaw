@@ -1,12 +1,12 @@
 import path from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
-import { readBackupEngine } from "../snapshot/database-backup.js";
 import { admitStatePostgres, stateEngineSchema } from "../state/openclaw-state-db-engine.js";
 import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
 import { databaseEngineAdapters } from "./database-engine/adapters.js";
 import { resolveDatabaseEngineSelection } from "./database-engine/config.js";
 import {
   getDatabaseEngineInput,
+  getDatabaseEngineSelection,
   getScopedDatabaseEngineSelection,
   withDatabaseEngineSelection,
 } from "./database-engine/context.js";
@@ -14,7 +14,8 @@ import {
   admitPostgresPhysicalFacts,
   getPostgresPhysicalFacts,
 } from "./database-engine/physical-facts.js";
-import { withDatabasePortPostgres } from "./database-engine/port-provider.js";
+import { readBackupEngine } from "./database-engine/physical-store.js";
+import { withPostgresStoreMetadata } from "./database-engine/postgres-store-metadata.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import type { StateDatabaseDiscovery } from "./update-candidate-paths.js";
 import {
@@ -83,16 +84,14 @@ if (parentPort && workerData?.updatePostgresState === true) {
       if (anchor.engine !== "postgres") {
         throw new Error("PostgreSQL update inspection requires a PostgreSQL anchor.");
       }
-      return withDatabasePortPostgres(
-        input.config,
-        anchor,
-        async (_client, _descriptor, sourceVersion) => ({
-          files: entries,
-          version: { userVersion: sourceVersion },
-        }),
-        undefined,
-        { ...process.env, ...input.env },
-      );
+      const postgres = getDatabaseEngineSelection()?.postgres;
+      if (!postgres) {
+        throw new Error("PostgreSQL update inspection requires the captured connection.");
+      }
+      return withPostgresStoreMetadata(postgres, anchor, async (_client, metadata) => ({
+        files: entries,
+        version: { userVersion: metadata.version },
+      }));
     }
     const inputEngine = getDatabaseEngineInput("state");
     if (!inputEngine) {

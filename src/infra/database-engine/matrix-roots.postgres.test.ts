@@ -37,6 +37,7 @@ import { createBackupSqliteSnapshotPlan } from "../backup-sqlite-snapshot.js";
 import * as recovery from "../database-port-recovery.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import * as snapshots from "../sqlite-snapshot.js";
+import { runPluginDoctorStateMigrationPlans } from "../state-migrations.plugin-doctor.js";
 import { resolveDatabaseEngineSelection } from "./config.js";
 import { withDatabaseEngineSelection } from "./context.js";
 import { resolveDatabaseFamilyEngines } from "./registry.js";
@@ -138,7 +139,9 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
             "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at) VALUES ('matrix', 'inbound-dedupe', ?, ?, ?)",
           ).run(legacyKey, JSON.stringify(legacy), legacy.ts);
         }
-        await expect(doctorDatabasePort({ family: "state", to: "postgres", dryRun: true })).rejects.toThrow(
+        await expect(
+          doctorDatabasePort({ family: "state", to: "postgres", dryRun: true }),
+        ).rejects.toThrow(
           "Run openclaw doctor --fix first, then retry port. If a named plugin is disabled, enable it for repair.",
         );
         // Complete Doctor's retained-root scan before porting, then keep testing a disabled plugin.

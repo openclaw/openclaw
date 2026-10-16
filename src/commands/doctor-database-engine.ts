@@ -8,9 +8,9 @@ import type { DatabaseEngineFamily, DatabaseEngineId } from "../infra/database-e
 import type { DoctorDatabaseEngineInspection } from "./doctor-database-engine-inspection.js";
 
 export type ObservedDatabaseEngines = Partial<Record<DatabaseEngineFamily, DatabaseEngineId[]>>;
-type InspectionOptions = { env?: NodeJS.ProcessEnv; inspection?: DoctorDatabaseEngineInspection };
+type InspectionOptions = { env?: NodeJS.ProcessEnv };
 
-export function collectDatabaseEngineHealthFindings(
+function collectDatabaseEngineHealthFindings(
   cfg: OpenClawConfig,
   observed: ObservedDatabaseEngines = {},
 ): HealthFinding[] {
@@ -78,9 +78,6 @@ function stateRootFindings(
 }
 
 async function inspect(cfg: OpenClawConfig, options: InspectionOptions) {
-  if (options.inspection) {
-    return options.inspection;
-  }
   const { inspectDoctorDatabaseEngines } = await import("./doctor-database-engine-inspection.js");
   const env = options.env ?? process.env;
   return inspectDoctorDatabaseEngines({ config: cfg, stateDir: resolveStateDir(env), env });

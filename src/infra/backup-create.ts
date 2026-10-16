@@ -145,8 +145,7 @@ async function resolveOutputPath(params: {
   }
 
   try {
-    const stat = await fs.stat(resolved);
-    if (stat.isDirectory()) {
+    if ((await fs.stat(resolved)).isDirectory()) {
       return path.join(resolved, basename);
     }
   } catch {
@@ -235,10 +234,10 @@ export async function chooseBackupTempRoot(params: {
 }): Promise<string> {
   const systemTmp = os.tmpdir();
   const canonicalSystemTmp = await canonicalizePathForContainment(systemTmp);
-  const systemTmpInsideAsset = params.assets.some((asset) =>
+  const overlapping = params.assets.find((asset) =>
     isPathInside(asset.sourcePath, canonicalSystemTmp),
   );
-  if (!systemTmpInsideAsset) {
+  if (!overlapping) {
     return systemTmp;
   }
 
@@ -249,12 +248,9 @@ export async function chooseBackupTempRoot(params: {
   // Without an output path (offsite uploads stage into scratch), fall back to
   // the parent of the source that contains the system temp dir, e.g. when the
   // Gateway runs jobs with TMPDIR=~/.openclaw/tmp.
-  const overlapping = params.assets.find((asset) =>
-    isPathInside(asset.sourcePath, canonicalSystemTmp),
-  );
   const fallback = params.outputPath
     ? path.dirname(params.outputPath)
-    : path.dirname(overlapping!.sourcePath);
+    : path.dirname(overlapping.sourcePath);
   const canonicalFallback = await canonicalizePathForContainment(fallback);
   const fallbackInsideAsset = params.assets.find((asset) =>
     isPathInside(asset.sourcePath, canonicalFallback),

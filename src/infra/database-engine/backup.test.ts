@@ -201,8 +201,9 @@ describe.skipIf(!connection)("matched PostgreSQL backup and update recovery", ()
           }
           {
             using original = openNodeSqliteDatabase(credentialsPath, { readOnly: true });
-            expect(original.prepare("SELECT socket_token FROM native_exec_socket_credentials").get())
-              .toEqual({ socket_token: "synthetic-socket-token" });
+            expect(
+              original.prepare("SELECT socket_token FROM native_exec_socket_credentials").get(),
+            ).toEqual({ socket_token: "synthetic-socket-token" });
           }
           const capsule = plan.snapshots.filter((asset) =>
             asset.archiveSourcePath.startsWith(`${anchorPath}.postgres/`),

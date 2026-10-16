@@ -9,7 +9,11 @@ import {
   getScopedDatabaseEngineSelection,
   withDatabaseEngineSelection,
 } from "../infra/database-engine/context.js";
-import { readEngineAnchor } from "../infra/database-engine/open.js";
+import {
+  readBackupEngine,
+  readBackupEngineImage,
+  type BackupEngine,
+} from "../infra/database-engine/physical-store.js";
 import type { DatabasePortPluginOwners } from "../infra/database-engine/port-descriptor.js";
 import {
   withDatabasePortPostgres,
@@ -25,10 +29,8 @@ import type { DatabaseEngineSelection } from "../infra/database-engine/types.js"
 import { requireDirectorySync, syncDirectory } from "../infra/directory-durability.js";
 import { copyFileHandle } from "../infra/file-descriptor.js";
 import { hasActiveGatewayStateOwner } from "../infra/gateway-state-owner.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { quoteSqliteIdentifier as quote } from "../infra/sqlite-schema-sql.js";
-import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import {
   captureDatabaseArtifact,
@@ -44,9 +46,8 @@ import {
 import type { GitBackupIdentity, GitBackupManifest } from "./git-backup-codec.js";
 export { captureDatabaseArtifact, assertDatabaseArtifact } from "./database-backup-core.worker.js";
 
-export type BackupEngine =
-  | { engine: "sqlite" }
-  | { engine: "postgres"; storeId: string; namespace: string };
+export { readBackupEngine, readBackupEngineImage };
+export type { BackupEngine };
 
 const offlineBackup = new AsyncLocalStorage<{
   config: OpenClawConfig;
@@ -107,36 +108,6 @@ export async function verifyMatchedPostgresBackup(
   }
   await verifyPostgresExportEnvelope(directory, envelope.manifest, inspectHeldAnchor, profile);
   return envelope.manifest;
-}
-
-/** Reads an already captured private image without reacquiring its live source. */
-export function readBackupEngineImage(imagePath: string, sourcePath: string): BackupEngine {
-  using db = openNodeSqliteDatabase(imagePath, { readOnly: true });
-  const rows = readEngineAnchor(db);
-  if (!rows) {
-    return { engine: "sqlite" };
-  }
-  const row = rows[0];
-  if (
-    rows.length !== 1 ||
-    row?.engine !== "postgres" ||
-    typeof row.store_id !== "string" ||
-    typeof row.schema !== "string" ||
-    !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(row.schema)
-  ) {
-    throw new Error(`Invalid PostgreSQL anchor: ${sourcePath}. Restore its matched backup.`);
-  }
-  return { engine: "postgres", storeId: row.store_id, namespace: row.schema };
-}
-
-/** Acquire the private image in a child so source descriptor closes preserve live POSIX locks. */
-export function readBackupEngine(sourcePath: string): BackupEngine {
-  const prepared = prepareSqliteReadOnlyLocationSync(sourcePath);
-  try {
-    return readBackupEngineImage(prepared.location, sourcePath);
-  } finally {
-    prepared.cleanup();
-  }
 }
 
 async function inspectHeldAnchor(handle: FileHandle) {

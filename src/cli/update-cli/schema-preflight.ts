@@ -5,7 +5,6 @@ import { createConfigIO } from "../../config/io.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../../config/sessions/targets.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveDatabaseEngineSelection } from "../../infra/database-engine/config.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { preflightOpenClawDatabaseSchemaContexts } from "../../state/openclaw-database-preflight-contexts.js";
@@ -153,6 +152,7 @@ export async function checkTargetDatabaseSchemasForContexts(
   if (!supportedVersions) {
     return { incompatible: [], indeterminate: [] };
   }
+  const { resolveDatabaseEngineSelection } = await import("../../infra/database-engine/config.js");
   const inspectionContexts = await Promise.all(
     contexts.map(async (context) => {
       try {

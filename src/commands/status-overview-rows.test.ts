@@ -37,7 +37,6 @@ function backup(createdAt: number, kind: "git" | "archive", status: "ok" | "fail
 }
 
 it("keeps default status concise and reports configured family choices without secrets", () => {
-  const params = createStatusCommandOverviewRowsParams();
   expect(
     findRowValue(buildStatusCommandOverviewRows(params), "Database engines (configured)"),
   ).toBeUndefined();

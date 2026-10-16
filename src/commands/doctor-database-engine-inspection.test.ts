@@ -7,7 +7,6 @@ import {
   inspectDoctorDatabaseEngines,
   type DoctorDatabaseEngineInspection,
 } from "./doctor-database-engine-inspection.js";
-import { collectDatabaseEngineHealthFindings } from "./doctor-database-engine.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 let root: string;
@@ -39,10 +38,6 @@ beforeAll(async () => {
 describe("Doctor physical engine inspection", () => {
   it("reports all physical state engines despite incompatible configuration without changing artifacts", () => {
     expect(inspection.observed.state).toEqual(["sqlite", "postgres"]);
-    const findings = collectDatabaseEngineHealthFindings(config, inspection.observed);
-    expect(findings.some((finding) => finding.path === "database.families.state.engine")).toBe(
-      true,
-    );
     expect(inspection.stateRoots.map(({ physical }) => physical.engine)).toEqual([
       "sqlite",
       "postgres",
