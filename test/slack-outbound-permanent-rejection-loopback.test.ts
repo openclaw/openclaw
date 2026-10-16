@@ -36,22 +36,20 @@ function closeDatabases() {
   closeOpenClawStateDatabaseForTest();
 }
 
-function readQueueTerminal(
-  stateDir: string,
-  intentId: string,
-): { retryCount: number; status: string } | undefined {
+function readQueueTerminal(stateDir: string, intentId: string) {
   const { db } = openOpenClawStateDatabase({
     env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
   });
-  const row = db
-    // sqlite-allow-raw: The proof reads one exact queue owner after terminalization.
-    .prepare(
-      "SELECT status, retry_count FROM delivery_queue_entries WHERE queue_name = ? AND id = ?",
-    )
-    .get(OUTBOUND_DELIVERY_QUEUE_NAME, intentId) as
-    | { retry_count: number; status: string }
-    | undefined;
-  return row ? { retryCount: row.retry_count, status: row.status } : undefined;
+  return (
+    db
+      // sqlite-allow-raw: The proof reads one exact queue owner after terminalization.
+      .prepare(
+        "SELECT status, retry_count AS retryCount FROM delivery_queue_entries WHERE queue_name = ? AND id = ?",
+      )
+      .get(OUTBOUND_DELIVERY_QUEUE_NAME, intentId) as
+      | { retryCount: number; status: string }
+      | undefined
+  );
 }
 
 async function withSlackPermanentRejectionLoopback(
@@ -95,9 +93,7 @@ describe("Slack permanent rejections over real Web API transport", () => {
   it("dead-letters both real platform rejections and never replays them after restart", async () => {
     await withSlackPermanentRejectionLoopback(async (requests) => {
       const { slackPlugin } = await import("../extensions/slack/api.js");
-      const cfg = {
-        channels: { slack: { botToken: "xoxb-loopback" } },
-      } satisfies OpenClawConfig;
+      const cfg: OpenClawConfig = { channels: { slack: { botToken: "xoxb-loopback" } } };
       setActivePluginRegistry(
         createTestRegistry([{ pluginId: "slack", plugin: slackPlugin, source: "test" }]),
       );
@@ -107,17 +103,17 @@ describe("Slack permanent rejections over real Web API transport", () => {
           const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
           const queueStatus = (intentId: string) =>
             getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, intentId, stateDir);
-          const drain = (
-            code: string,
-            selectEntry: NonNullable<Parameters<typeof drainPendingDeliveries>[0]["selectEntry"]>,
-          ) =>
+          const drain = (code: string, intentId?: string) =>
             drainPendingDeliveries({
               drainKey: `slack:default:${code}`,
               logLabel: `Slack loopback ${code} recovery`,
               cfg,
               stateDir,
               log,
-              selectEntry,
+              selectEntry: (entry) => ({
+                match: intentId ? entry.id === intentId : entry.channel === "slack",
+                bypassBackoff: true,
+              }),
             });
           for (const [index, code] of CLASSIFIED_CODES.entries()) {
             const intentId = `${DELIVERY_INTENT_PREFIX}-${code}`;
@@ -150,10 +146,7 @@ describe("Slack permanent rejections over real Web API transport", () => {
             expect(queueStatus(intentId)).toBe("pending");
 
             log.warn.mockClear();
-            await drain(code, (entry) => ({
-              match: entry.id === intentId,
-              bypassBackoff: true,
-            }));
+            await drain(code, intentId);
 
             expect(requests).toHaveLength(index + 1);
             expect(requests[index]).toMatchObject({
@@ -174,10 +167,7 @@ describe("Slack permanent rejections over real Web API transport", () => {
             expect(queueStatus(`${DELIVERY_INTENT_PREFIX}-${code}`)).toBe("failed");
           }
 
-          await drain("post-restart", (entry) => ({
-            match: entry.channel === "slack",
-            bypassBackoff: true,
-          }));
+          await drain("post-restart");
           expect(requests).toHaveLength(CLASSIFIED_CODES.length);
         } finally {
           closeDatabases();

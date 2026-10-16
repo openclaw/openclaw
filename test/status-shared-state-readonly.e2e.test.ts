@@ -27,24 +27,20 @@ function expectHealthy(result: { code: number | null; stderr: string; stdout: st
 function createUnavailablePluginFixture(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-status-degraded-plugin-"));
   onTestFinished(() => fs.rmSync(root, { recursive: true, force: true }));
-  fs.writeFileSync(
-    path.join(root, "package.json"),
-    JSON.stringify({
-      name: DEGRADED_PLUGIN_ID,
-      version: "1.0.0",
-      type: "module",
-      main: "./missing-main.js",
-      openclaw: { extensions: ["./index.js"] },
-      peerDependencies: { openclaw: ">=2026.1.1" },
-    }),
-  );
-  fs.writeFileSync(
-    path.join(root, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: DEGRADED_PLUGIN_ID,
-      configSchema: { type: "object", additionalProperties: false, properties: {} },
-    }),
-  );
+  const writeJson = (name: string, value: unknown) =>
+    fs.writeFileSync(path.join(root, name), JSON.stringify(value));
+  writeJson("package.json", {
+    name: DEGRADED_PLUGIN_ID,
+    version: "1.0.0",
+    type: "module",
+    main: "./missing-main.js",
+    openclaw: { extensions: ["./index.js"] },
+    peerDependencies: { openclaw: ">=2026.1.1" },
+  });
+  writeJson("openclaw.plugin.json", {
+    id: DEGRADED_PLUGIN_ID,
+    configSchema: { type: "object", additionalProperties: false, properties: {} },
+  });
   fs.writeFileSync(path.join(root, "index.js"), "export default { register() {} };\n");
   return root;
 }
@@ -173,37 +169,24 @@ describe("status shared-state ownership", () => {
   it("reads status while the Gateway owns state and another writer is active", async () => {
     const instance = await createInstance({ name: "status-read-only-live-gateway" });
     const databasePath = path.join(instance.stateDir, "state", "openclaw.sqlite");
-    let writer: DatabaseSync | undefined;
-    try {
-      await instance.startGateway();
-      // The Gateway still writes after readiness, so wait for its write lock like product writers do.
-      writer = new DatabaseSync(databasePath, { timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS });
-      // A read-only status path can overlap this writer. Writable schema/bootstrap work cannot.
-      writer.exec("BEGIN IMMEDIATE");
+    await instance.startGateway();
+    // The Gateway still writes after readiness, so wait for its write lock like product writers do.
+    using writer = new DatabaseSync(databasePath, { timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS });
+    // A read-only status path can overlap this writer. Writable schema/bootstrap work cannot.
+    writer.exec("BEGIN IMMEDIATE");
 
-      const status = await instance.cli(["status", "--json"], { timeoutMs: 15_000 });
+    const status = await instance.cli(["status", "--json"], { timeoutMs: 15_000 });
 
-      expectHealthy(status);
-      expect(instance.child?.exitCode).toBeNull();
+    expectHealthy(status);
+    expect(instance.child?.exitCode).toBeNull();
 
-      writer.exec("ROLLBACK");
-      writer.close();
-      writer = undefined;
-      await instance.stopGateway();
+    writer.exec("ROLLBACK");
+    writer.close();
+    await instance.stopGateway();
 
-      const verifier = new DatabaseSync(databasePath, { readOnly: true });
-      try {
-        expect(verifier.prepare("PRAGMA integrity_check").get()).toEqual({
-          integrity_check: "ok",
-        });
-      } finally {
-        verifier.close();
-      }
-    } finally {
-      if (writer?.isTransaction) {
-        writer.exec("ROLLBACK");
-      }
-      writer?.close();
-    }
+    using verifier = new DatabaseSync(databasePath, { readOnly: true });
+    expect(verifier.prepare("PRAGMA integrity_check").get()).toEqual({
+      integrity_check: "ok",
+    });
   }, 120_000);
 });
