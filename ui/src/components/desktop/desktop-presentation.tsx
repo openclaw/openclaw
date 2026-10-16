@@ -180,13 +180,10 @@ export function DesktopPresentation(props: { view: DesktopPresentationOptions })
           {...content}
           controlling={props.view.controlling}
           sizing={props.view.sizing}
-          keyboardInputValue={props.view.mobileKeyboard.value}
+          keyboard={props.view.mobileKeyboard}
           pictureInPictureControl={pictureInPictureControl()}
           audioControl={audioControl()}
           onControlToggle={props.view.onControlToggle}
-          onKeyboardFocus={(event) => props.view.mobileKeyboard.focus(event)}
-          onKeyboardEvent={(event) => props.view.mobileKeyboard.handleKeyboardEvent(event)}
-          onKeyboardInput={(event) => props.view.mobileKeyboard.handleInput(event)}
           onClose={props.view.onDocumentClose}
         />
       ) : (

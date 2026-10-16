@@ -1,7 +1,3 @@
-/**
- * Legacy config migration for Amazon Bedrock discovery settings. It moves
- * old `models.bedrockDiscovery` config into plugin-local config shape.
- */
 import { mergeMissing } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { asNullableRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -35,7 +31,6 @@ function pruneEmptyModelsRoot(root: JsonRecord): void {
   }
 }
 
-/** Migrate legacy Bedrock discovery config into `plugins.entries.amazon-bedrock.config`. */
 export function migrateAmazonBedrockLegacyConfig<T>(raw: T): { config: T; changes: string[] } {
   if (!isRecord(raw)) {
     return { config: raw, changes: [] };

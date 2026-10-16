@@ -1,6 +1,7 @@
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
@@ -215,19 +216,15 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       }
     }
     const presenceKey = `${this.params.accountId}:${data.guild_id}:${userId}`;
-    const previousRun = this.pendingByGuildUser.get(presenceKey) ?? Promise.resolve();
-    const handle = () => this.handleSerial(data, client, userId, presenceKey);
-    const run = previousRun.then(handle, handle);
-    this.pendingByGuildUser.set(presenceKey, run);
     try {
-      await run;
+      await enqueueKeyedTask({
+        tails: this.pendingByGuildUser,
+        key: presenceKey,
+        task: () => this.handleSerial(data, client, userId, presenceKey),
+      });
     } catch (err) {
       const logger = this.params.logger ?? discordEventQueueLog;
       logger.error(danger(`discord presence handler failed: ${String(err)}`));
-    } finally {
-      if (this.pendingByGuildUser.get(presenceKey) === run) {
-        this.pendingByGuildUser.delete(presenceKey);
-      }
     }
   }
 

@@ -238,6 +238,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
             repair: true,
             databaseGenerations:
               params.databaseBackup?.migration?.to ?? params.databaseBackup?.sourceGenerations,
+            databasePluginOwners: params.databaseBackup?.pluginOwners,
             yes: params.yes,
             workspaceSuggestions: params.workspaceSuggestions === true,
             ...(params.phase === "post-plugin" && process.env[POST_CORE_UPDATE_ENV] === "1"

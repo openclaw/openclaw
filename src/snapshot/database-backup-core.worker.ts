@@ -175,16 +175,19 @@ export async function fingerprintPostgresDatabase(params: {
   anchor: Anchor;
 }) {
   const { client, descriptor, anchor } = params;
+  const inspection = await inspectDatabasePort(
+    { engine: "postgres", db: client, namespace: anchor.namespace },
+    descriptor,
+    anchor.storeId,
+  );
+  // PostgreSQL planner order is not a schema or data change.
+  inspection.catalog.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b), "en"));
   return createHash("sha256")
     .update(
       JSON.stringify({
         ...anchor,
         version: descriptor.version,
-        ...(await inspectDatabasePort(
-          { engine: "postgres", db: client, namespace: anchor.namespace },
-          descriptor,
-          anchor.storeId,
-        )),
+        ...inspection,
       }),
     )
     .digest("hex");
