@@ -28,6 +28,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readGatewayLastInstallationReplacementAsync } from "../../infra/gateway-boot-lifecycle.js";
 import { readPackageActivationReceipt } from "../../infra/package-update-activation.js";
+import { withSqliteDatabaseAdmissionWait } from "../../infra/sqlite-worker-database-admission-relay.js";
 import {
   normalizeUpdateChannel,
   resolveUpdateChannelDisplay,
@@ -116,8 +117,14 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     timeoutMs,
   );
   try {
-    await scope.run(() =>
-      withArtifactPreservingStateReads(() => inspectUpdateStatus(opts, scope.signal, timeoutMs)),
+    await withSqliteDatabaseAdmissionWait(
+      { deadlineAtMs: Date.now() + timeoutMs, assertActive: () => scope.signal.throwIfAborted() },
+      () =>
+        scope.run(() =>
+          withArtifactPreservingStateReads(() =>
+            inspectUpdateStatus(opts, scope.signal, timeoutMs),
+          ),
+        ),
     );
   } finally {
     clearTimeout(timer);

@@ -18,6 +18,7 @@ import { withSqliteDatabaseAdmissionExchange } from "./sqlite-database-admission
 import {
   bindSqliteDatabaseAdmissionUpstream,
   exchangeSqliteDatabaseAdmissions,
+  withSqliteDatabaseAdmissionWait,
 } from "./sqlite-worker-database-admission-relay.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "./worker-idle-gc.js";
 import { serveWorkerMemorySamples } from "./worker-memory.js";
@@ -59,6 +60,7 @@ export function serveOwnedWorkerTasks<Output>(
   let memoryPort: MessagePort;
   let taskPort: MessagePort | undefined;
   let databaseAdmissionPort: MessagePort | undefined;
+  let databaseAdmissionDeadlineAtMs: number | undefined;
   let closeMemorySamples: (() => void) | undefined;
   const runWithDatabaseAdmission = async <T>(operation: () => T | Promise<T>): Promise<T> => {
     const port = databaseAdmissionPort;
@@ -78,7 +80,14 @@ export function serveOwnedWorkerTasks<Output>(
     }
   };
   serveRuntimeWorkerTasks<Output, WorkerTaskContext>(
-    (input, channel, control) => runWithDatabaseAdmission(() => handler(input, channel, control)),
+    (input, channel, control) =>
+      withSqliteDatabaseAdmissionWait(
+        {
+          deadlineAtMs: databaseAdmissionDeadlineAtMs,
+          assertActive: () => control.throwIfCancelled(),
+        },
+        () => runWithDatabaseAdmission(() => handler(input, channel, control)),
+      ),
     {
       ...options,
       closeResource: (key) =>
@@ -121,6 +130,7 @@ export function serveOwnedWorkerTasks<Output>(
         cancelWorkerIdleGc();
       },
       installTaskContext(context) {
+        databaseAdmissionDeadlineAtMs = context.databaseAdmissionDeadlineAtMs;
         installDeletedAgentDatabaseFences(context.deletedAgentDatabaseFences);
         if (context.databaseAdmissionPort) {
           bindSqliteDatabaseAdmissionUpstream(context.databaseAdmissionPort);

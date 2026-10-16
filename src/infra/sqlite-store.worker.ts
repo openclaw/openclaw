@@ -192,6 +192,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
           actor: request.actor,
           context: {
             port: request.operationAdmission,
+            databaseAdmissionDeadlineAtMs: request.databaseAdmissionDeadlineAtMs,
             attachment: request.operationAttachment,
             requestCustody: request.requestCustody,
             executionAuthority: request.executionAuthority,

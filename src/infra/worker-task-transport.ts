@@ -6,4 +6,5 @@ export const WORKER_TASK_PORT_MESSAGE = "openclaw.worker-task-port";
 export type WorkerTaskContext = {
   deletedAgentDatabaseFences: [string, string][];
   databaseAdmissionPort?: MessagePort;
+  databaseAdmissionDeadlineAtMs?: number;
 };
