@@ -34,7 +34,11 @@ or the calling user's model authority are absent.
 The backend must enforce read-only resource mounts; SSH sandbox file uploads do
 not qualify. Mounts or tmpfs overlays that replace the selected package also make
 it unavailable.
-Writable aliases of the package's backing files also disqualify it.
+The original selected package must not be writable through the guest's workspace
+or mounts. A read-only synchronized copy does not make a guest-writable source
+trusted. Installer symlinks remain supported when their canonical targets are
+host-only or read-only; writable aliases of either the original or copied package
+disqualify it. Move an affected installation to a host-only or read-only location.
 
 The canonical skill discovers the enabled tool and calls it at its required
 checkpoint. If the tool is unavailable, enable the narrow capability or repair
