@@ -13,7 +13,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import { Command } from "commander";
-import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
 import { readMcpOAuthStoreReadOnly } from "../agents/mcp-oauth-store.js";
 import {
@@ -44,14 +43,17 @@ import {
   configureMcpServerOffline,
   updateMcpToolsOffline,
 } from "./mcp-cli-state-owner.js";
+import {
+  createMcpProbeRuntime,
+  loadEffectiveMcpConfig,
+  readMcpProbeResult,
+  selectConfiguredProbeServers,
+  type McpPluginInventory,
+} from "./mcp-cli.plugin-servers.js";
 import { exitCliAfterOutput, requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { collectOption } from "./program/helpers.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
-const createSessionMcpRuntime = createLazyRuntimeMethod(
-  () => import("../agents/agent-bundle-mcp-runtime.js"),
-  (runtime) => runtime.createSessionMcpRuntime,
-);
 const disposeAllSessionMcpRuntimes = createLazyRuntimeMethod(
   () => import("../agents/agent-bundle-mcp-manager-api.js"),
   (runtime) => runtime.disposeAllSessionMcpRuntimes,
@@ -265,8 +267,6 @@ type McpDoctorIssue = {
 };
 
 const MCP_DOCTOR_CONCURRENCY = 4;
-const MCP_CODEX_APPROVAL_ANNOTATION_HINT =
-  "tools have no safety annotations; calls require approval in prompting session postures";
 
 const SENSITIVE_HEADER_NAMES = new Set([
   "authorization",
@@ -378,6 +378,8 @@ async function collectMcpDoctorIssues(params: {
   authoredServer?: Record<string, unknown>;
   probe: boolean;
   config: OpenClawConfig;
+  configuredServers: Record<string, Record<string, unknown>>;
+  pluginInventory: McpPluginInventory;
 }): Promise<McpDoctorIssue[]> {
   const issues: McpDoctorIssue[] = [];
   const { name, server } = params;
@@ -467,6 +469,8 @@ async function collectMcpDoctorIssues(params: {
       config: params.config,
       name,
       server,
+      configuredServers: params.configuredServers,
+      pluginInventory: params.pluginInventory,
     });
     issues.push(...probeIssues);
   }
@@ -477,10 +481,18 @@ async function probeMcpServerIssues(params: {
   config: OpenClawConfig;
   name: string;
   server: Record<string, unknown>;
+  configuredServers: Record<string, Record<string, unknown>>;
+  pluginInventory: McpPluginInventory;
 }): Promise<McpDoctorIssue[]> {
-  const runtime = await createMcpProbeRuntime("openclaw-cli-mcp-doctor", params.config, {
-    [params.name]: params.server,
-  });
+  const runtime = await createMcpProbeRuntime(
+    "openclaw-cli-mcp-doctor",
+    params.config,
+    selectConfiguredProbeServers({ [params.name]: params.server }, params.configuredServers),
+    {
+      pluginInventory: params.pluginInventory,
+      includeServerNames: new Set([params.name]),
+    },
+  );
   try {
     const result = await readMcpProbeResult(runtime);
     const diagnostic = result.diagnostics[0];
@@ -567,72 +579,6 @@ async function buildMcpStatusEntries(
   );
 }
 
-async function readMcpProbeResult(runtime: SessionMcpRuntime) {
-  const { buildBundleMcpToolsFromCatalog } =
-    await import("../agents/agent-bundle-mcp-materialize.js");
-  const catalog = await runtime.getCatalog();
-  const projectedTools = buildBundleMcpToolsFromCatalog({ catalog });
-  return {
-    generatedAt: new Date(catalog.generatedAt).toISOString(),
-    servers: Object.fromEntries(
-      Object.entries(catalog.servers)
-        .toSorted(([a], [b]) => a.localeCompare(b))
-        .map(([name, server]) => {
-          const codexApprovalMode = server.codexApprovalMode ?? "auto";
-          const serverTools = catalog.tools.filter((tool) => tool.serverName === name);
-          const approvalHint =
-            codexApprovalMode === "auto" &&
-            serverTools.length > 0 &&
-            serverTools.every((tool) => Object.keys(tool.codexAnnotations ?? {}).length === 0)
-              ? MCP_CODEX_APPROVAL_ANNOTATION_HINT
-              : undefined;
-          return [
-            name,
-            {
-              launch: server.launchSummary,
-              tools: server.toolCount,
-              codexApprovalMode,
-              ...(approvalHint ? { approvalHint } : {}),
-              ...(server.requestTimeoutMs ? { requestTimeoutMs: server.requestTimeoutMs } : {}),
-              ...(server.supportsParallelToolCalls
-                ? { supportsParallelToolCalls: server.supportsParallelToolCalls }
-                : {}),
-              ...(server.tools?.filteredCount ? { filteredTools: server.tools.filteredCount } : {}),
-              ...(server.resources ? { resources: true } : {}),
-              ...(server.prompts ? { prompts: true } : {}),
-              ...(server.tools?.listChanged ||
-              server.resources?.listChanged ||
-              server.prompts?.listChanged
-                ? {
-                    listChanged: {
-                      tools: server.tools?.listChanged === true,
-                      resources: server.resources?.listChanged === true,
-                      prompts: server.prompts?.listChanged === true,
-                    },
-                  }
-                : {}),
-            },
-          ];
-        }),
-    ),
-    tools: projectedTools.map((tool) => tool.name).toSorted(),
-    diagnostics: catalog.diagnostics ?? [],
-  };
-}
-
-function createMcpProbeRuntime(
-  sessionId: string,
-  config: OpenClawConfig,
-  servers: Record<string, Record<string, unknown>>,
-): Promise<SessionMcpRuntime> {
-  return createSessionMcpRuntime({
-    sessionId,
-    workspaceDir: process.cwd(),
-    cfg: { ...config, mcp: { ...config.mcp, servers } },
-    manifestRegistry: { plugins: [] },
-  });
-}
-
 const DEFAULT_MCP_PROBE_INITIALIZE_TIMEOUT_MS = 5_000;
 
 function resolveMcpProbeIssue(params: {
@@ -656,6 +602,9 @@ async function probeMcpServersOrFail(params: {
   config: OpenClawConfig;
   servers: Record<string, Record<string, unknown>>;
   path: string;
+  configuredServers?: Record<string, Record<string, unknown>> | undefined;
+  pluginInventory?: McpPluginInventory | undefined;
+  includeServerNames?: ReadonlySet<string> | undefined;
 }): Promise<void> {
   const probeServers = Object.fromEntries(
     Object.entries(params.servers).map(([name, server]) => [
@@ -665,10 +614,17 @@ async function probeMcpServersOrFail(params: {
         : { ...server, connectionTimeoutMs: DEFAULT_MCP_PROBE_INITIALIZE_TIMEOUT_MS },
     ]),
   );
+  const injectedServers = params.configuredServers
+    ? selectConfiguredProbeServers(probeServers, params.configuredServers)
+    : probeServers;
   const runtime = await createMcpProbeRuntime(
     "openclaw-cli-mcp-probe",
     params.config,
-    probeServers,
+    injectedServers,
+    {
+      pluginInventory: params.pluginInventory,
+      includeServerNames: params.includeServerNames,
+    },
   );
   try {
     const result = await readMcpProbeResult(runtime);
@@ -682,7 +638,7 @@ async function probeMcpServersOrFail(params: {
 }
 
 const OPENCLAW_MCP_REGISTRY_SCOPE_NOTE =
-  "Note: this command only shows OpenClaw-managed mcp.servers entries and does not include mcporter servers from config/mcporter.json.";
+  "Note: read and OAuth commands show OpenClaw mcp.servers entries plus MCP servers contributed by enabled plugins; this registry does not include mcporter servers from config/mcporter.json.";
 
 export function registerMcpCli(program: Command) {
   const mcp = program
@@ -734,10 +690,10 @@ export function registerMcpCli(program: Command) {
 
   mcp
     .command("list")
-    .description("List OpenClaw-managed MCP servers from mcp.servers")
+    .description("List MCP servers from mcp.servers and enabled plugins")
     .option("--json", "Print JSON")
     .action(async (opts: { json?: boolean }) => {
-      const loaded = await loadMcpConfig(opts);
+      const loaded = await loadEffectiveMcpConfig(await loadMcpConfig(opts));
       if (opts.json) {
         defaultRuntime.writeJson(loaded.mcpServers);
         return;
@@ -745,12 +701,12 @@ export function registerMcpCli(program: Command) {
       const entries = Object.entries(loaded.mcpServers).toSorted(([a], [b]) => a.localeCompare(b));
       if (entries.length === 0) {
         defaultRuntime.log(
-          `No OpenClaw-managed MCP servers configured in ${loaded.path}. Add one with ${formatCliCommand('openclaw mcp set <name> \'{"command":"uvx","args":["context7-mcp"]}\'')}.`,
+          `No MCP servers found in ${loaded.path} or enabled plugins. Add one with ${formatCliCommand('openclaw mcp set <name> \'{"command":"uvx","args":["context7-mcp"]}\'')}.`,
         );
         defaultRuntime.log(OPENCLAW_MCP_REGISTRY_SCOPE_NOTE);
         return;
       }
-      defaultRuntime.log(`OpenClaw-managed MCP servers (${loaded.path}):`);
+      defaultRuntime.log(`MCP servers (${loaded.path}):`);
       for (const [name, server] of entries) {
         const connectedPrincipals = await countConnectedMcpPrincipals(name, server);
         const connected =
@@ -765,17 +721,15 @@ export function registerMcpCli(program: Command) {
 
   mcp
     .command("show")
-    .description("Show one OpenClaw-managed MCP server or the full mcp.servers config")
+    .description("Show one MCP server or the full mcp.servers config")
     .argument("[name]", "MCP server name")
     .option("--json", "Print JSON")
     .action(async (name: string | undefined, opts: { json?: boolean }) => {
-      const loaded = await loadMcpConfig(opts);
+      const loaded = await loadEffectiveMcpConfig(await loadMcpConfig(opts));
       const value = name ? requireMcpServer(loaded, name, opts) : loaded.mcpServers;
       if (!opts.json) {
         defaultRuntime.log(
-          name
-            ? `OpenClaw-managed MCP server "${name}" (${loaded.path}):`
-            : `OpenClaw-managed MCP servers (${loaded.path}):`,
+          name ? `MCP server "${name}" (${loaded.path}):` : `MCP servers (${loaded.path}):`,
         );
       }
       defaultRuntime.writeJson(value ?? {});
@@ -787,7 +741,7 @@ export function registerMcpCli(program: Command) {
     .option("-v, --verbose", "Show transport, auth, timeout, and filter details", false)
     .option("--json", "Print JSON")
     .action(async (opts: { json?: boolean; verbose?: boolean }) => {
-      const loaded = await loadMcpConfig(opts);
+      const loaded = await loadEffectiveMcpConfig(await loadMcpConfig(opts));
       const status = await buildMcpStatusEntries(loaded.mcpServers);
       if (opts.json) {
         defaultRuntime.writeJson({ path: loaded.path, servers: status });
@@ -844,7 +798,7 @@ export function registerMcpCli(program: Command) {
       offlineMcpAction(
         "probe",
         async (_owner, name: string | undefined, opts: { json?: boolean }) => {
-          const loaded = await loadMcpConfig(opts);
+          const loaded = await loadEffectiveMcpConfig(await loadMcpConfig(opts));
           const servers = selectMcpServers(loaded, name, opts);
           if (name && loaded.mcpServers[name]?.enabled === false) {
             fail(
@@ -863,7 +817,11 @@ export function registerMcpCli(program: Command) {
           const runtime = await createMcpProbeRuntime(
             "openclaw-cli-mcp-probe",
             loaded.config,
-            servers,
+            selectConfiguredProbeServers(servers, loaded.configuredMcpServers),
+            {
+              pluginInventory: loaded.pluginInventory,
+              includeServerNames: name ? new Set([name]) : undefined,
+            },
           );
           try {
             const result = await readMcpProbeResult(runtime);
@@ -905,7 +863,7 @@ export function registerMcpCli(program: Command) {
     .option("--json", "Print JSON")
     .action(async (name: string | undefined, opts: { probe?: boolean; json?: boolean }) => {
       const run = async () => {
-        const loaded = await loadMcpConfig(opts);
+        const loaded = await loadEffectiveMcpConfig(await loadMcpConfig(opts));
         const selected = selectMcpServers(loaded, name, opts);
         const tasks = Object.entries(selected)
           .toSorted(([a], [b]) => a.localeCompare(b))
@@ -916,6 +874,8 @@ export function registerMcpCli(program: Command) {
               authoredServer: loaded.authoredConfig?.mcp?.servers?.[serverName],
               config: loaded.config,
               probe: Boolean(opts.probe),
+              configuredServers: loaded.configuredMcpServers,
+              pluginInventory: loaded.pluginInventory,
             });
             return {
               name: serverName,
@@ -1241,7 +1201,7 @@ export function registerMcpCli(program: Command) {
     .option("--code <code>", "Authorization code from the OAuth redirect")
     .action(
       offlineMcpAction("login", async (owner, name: string, opts: { code?: string }) => {
-        const loaded = await loadMcpConfig();
+        const loaded = await loadEffectiveMcpConfig(await loadMcpConfig());
         const server = requireMcpServer(loaded, name);
         await loginMcpServer({ name, server, code: opts.code, owner, fail });
       }),
@@ -1253,7 +1213,7 @@ export function registerMcpCli(program: Command) {
     .argument("<name>", "MCP server name")
     .action(
       offlineMcpAction("logout", async (_owner, name: string) => {
-        const loaded = await loadMcpConfig();
+        const loaded = await loadEffectiveMcpConfig(await loadMcpConfig());
         const server = requireMcpServer(loaded, name);
         if (asRecord(server.oauth)?.identity === "per-requester") {
           fail(

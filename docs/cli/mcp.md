@@ -11,12 +11,12 @@ sidebarTitle: "MCP"
 `openclaw mcp` has two jobs:
 
 - run OpenClaw as an MCP server with `openclaw mcp serve`
-- manage OpenClaw-managed outbound MCP server definitions with `list`, `show`, `status`, `doctor`, `probe`, `add`, `set`, `configure`, `tools`, `login`, `logout`, `reload`, and `unset`
+- manage outbound MCP server definitions with `list`, `show`, `status`, `doctor`, `probe`, `add`, `set`, `configure`, `tools`, `login`, `logout`, `reload`, and `unset`
 
 `serve` is OpenClaw acting as an MCP server. The other subcommands are OpenClaw acting as an MCP client-side registry for servers its own runtimes may consume later.
 
 <Note>
-  `list`, `show`, `set`, and `unset` only read and write OpenClaw-managed `mcp.servers` entries in OpenClaw config. They do not include mcporter servers from `config/mcporter.json`; use `mcporter list` for that registry.
+  Read and OAuth commands (`list`, `show`, `status`, `doctor`, `probe`, `login`, `logout`) resolve the same effective server set as agent runtimes: `mcp.servers` entries plus MCP servers contributed by enabled plugins, with `mcp.servers` overrides winning. Write commands (`add`, `set`, `configure`, `tools`, `unset`) only read and write `mcp.servers` entries. None of them include mcporter servers from `config/mcporter.json`; use `mcporter list` for that registry.
 </Note>
 
 Use [`openclaw acp`](/cli/acp) when OpenClaw should host a coding harness session itself and route that runtime through ACP.
