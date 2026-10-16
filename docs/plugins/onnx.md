@@ -19,11 +19,12 @@ examples, and provider-neutral plugin API.
 
 ## Setup
 
-This development adapter requires the prepared decision-provider V2 API.
-Use the matching source checkout until a released host provides that API.
-The package compatibility floor must name that supporting release before
-publication. The native runtime belongs to the plugin package and is not
-bundled into core.
+This adapter requires the prepared decision-provider V2 API. Released OpenClaw
+`2026.10.4` exposes V1 only. Use a matching source checkout until a supporting
+paired host/plugin release is available. The normal release process aligns
+plugin API and build versions with the host; the older installation floor alone
+does not establish V2 compatibility. The native runtime belongs to the plugin
+package and is not bundled into core.
 
 ### Current development checkout
 
