@@ -18,8 +18,8 @@ import {
   appendSessionTranscriptMessageByIdentity,
   readVisibleSessionTranscriptMessageEntries,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createSandboxTestContext, createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, expect, it, vi } from "vitest";
 import type { CodexUserInput } from "./protocol.js";
 import {
   createParams,
@@ -69,25 +69,22 @@ async function createMediaFixture(scenario: Scenario, managed = false) {
     mediaDir = await fs.mkdtemp(path.join(inbound, "steering-"));
     managedFixtures.push(mediaDir);
   }
-  const blueBytes = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
-  const greenBytes = createSolidPngBuffer(1, 1, { r: 0, g: 255, b: 0 });
-  const redBytes = createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 });
-  const blue = { path: path.join(mediaDir, "blue.png"), contentType: "image/png" };
-  const green = { path: path.join(mediaDir, "green.png"), contentType: "image/png" };
-  const document = {
-    path: path.join(mediaDir, "document.png"),
-    kind: "document" as const,
+  const png = (r: number, g: number, b: number) => createSolidPngBuffer(1, 1, { r, g, b });
+  const blueBytes = png(0, 0, 255),
+    greenBytes = png(0, 255, 0),
+    redBytes = png(255, 0, 0);
+  const image = async (name: string, bytes: Buffer) => {
+    const file = { path: path.join(mediaDir, `${name}.png`), contentType: "image/png" };
+    await fs.writeFile(file.path, bytes);
+    return file;
   };
-  const described = {
-    path: path.join(mediaDir, "described.png"),
-    contentType: "image/png",
-  };
-  await Promise.all([
-    fs.writeFile(blue.path, blueBytes),
-    fs.writeFile(green.path, greenBytes),
-    fs.writeFile(document.path, redBytes),
-    fs.writeFile(described.path, redBytes),
+  const [blue, green, documentImage, described] = await Promise.all([
+    image("blue", blueBytes),
+    image("green", greenBytes),
+    image("document", redBytes),
+    image("described", redBytes),
   ]);
+  const document = { path: documentImage.path, kind: "document" as const };
   const inline = {
     type: "image" as const,
     data: redBytes.toString("base64"),
@@ -260,11 +257,15 @@ function registerSteeringWorkspace(
   });
 }
 
-function queueMedia(fixture: MediaFixture, text = fixture.message.content) {
+function queueMedia(
+  fixture: MediaFixture,
+  text = fixture.message.content,
+  options = fixture.options,
+) {
   const accepted = vi.fn();
   expect(
     queueAgentHarnessMessage(fixture.params.sessionId, text, {
-      ...fixture.options,
+      ...options,
       onQueueAccepted: accepted,
     }),
   ).toBe(true);
@@ -287,391 +288,335 @@ async function expectUnpersisted(fixture: MediaFixture, harness: StartedHarness)
   expect(await fixture.readSteeredMessages()).toEqual([]);
 }
 
-describe("Codex active-run steering media", () => {
-  it.each(["ro"] as const)(
-    "prepares remote attachments with sandbox access %s without changing images or transcript",
-    async (workspaceAccess) => {
-      const fixture = await createMediaFixture("resolved", true);
-      const sandboxRoot = path.join(tempDir, "sandbox");
-      await fs.mkdir(sandboxRoot);
-      const docker = {
-        image: "fixture",
-        containerPrefix: "fixture",
-        workdir: "/workspace",
-        readOnlyRoot: true,
-        tmpfs: [],
-        network: "none",
-        capDrop: [],
-      };
-      fixture.params.sandbox = {
-        enabled: true,
-        backendId: "docker",
-        sessionKey: fixture.params.sessionKey!,
-        workspaceDir: sandboxRoot,
-        agentWorkspaceDir: fixture.params.workspaceDir,
-        workspaceAccess,
-        runtimeId: "fixture",
-        runtimeLabel: "fixture",
-        containerName: "fixture",
-        containerWorkdir: "/workspace",
-        docker,
-        tools: { allow: [], deny: [] },
-        browserAllowHostControl: false,
-        fsBridge: createRemoteShellSandboxFsBridge({
-          sandbox: {
-            workspaceDir: sandboxRoot,
-            agentWorkspaceDir: fixture.params.workspaceDir,
-            workspaceAccess,
-            containerName: "fixture",
-            containerWorkdir: "/workspace",
-            docker,
-          },
-          runtime: {
-            remoteWorkspaceDir: "/workspace",
-            remoteAgentWorkspaceDir: "/agent",
-            runRemoteShellScript: async () => {
-              throw new Error("Gateway originals are not in the sandbox");
-            },
-          },
-        }),
-      };
-      // Deferred originals must be resolved even when the initial snapshot has no file paths.
-      fixture.recorder.message = { ...fixture.message, __openclaw: { media: [{ kind: "image" }] } };
-      fixture.options.media = [];
-      const note = "Attachments are available in /remote/workspace/.inputs/steered-turn.";
-      const prepare = vi.fn<NonNullable<AgentWorkspaceAccess["prepareTurnAttachments"]>>(
-        async (_turn, assertCurrent) => {
-          assertCurrent();
-          return note;
-        },
-      );
-      const release = registerSteeringWorkspace(fixture, prepare);
-      const harness = createStartedThreadHarness();
-      try {
-        await withActiveMediaTurn(fixture, harness, async () => {
-          const accepted = queueMedia(fixture);
-          await waitForAcceptance(accepted, true);
-          const [steer] = steers(harness);
-          expect(steer.input).toEqual([
-            { type: "text", text: `${fixture.message.content}\n\n${note}`, text_elements: [] },
-            ...fixture.expectedImages,
-          ]);
-          expect(prepare).toHaveBeenCalledExactlyOnceWith(
-            expect.objectContaining({
-              media: fixture.canonicalMedia.map((fact) => expect.objectContaining(fact)),
-              config: fixture.params.config,
-              abortSignal: expect.any(AbortSignal),
-            }),
-            expect.any(Function),
-          );
-          await notifyConsumed(harness, steer.clientUserMessageId);
-          expect(await fixture.readSteeredMessages()).toEqual([fixture.message]);
-        });
-      } finally {
-        release();
-      }
+it("prepares remote attachments with sandbox access ro without changing images or transcript", async () => {
+  const workspaceAccess = "ro";
+
+  const fixture = await createMediaFixture("resolved", true);
+  const sandboxRoot = path.join(tempDir, "sandbox");
+  await fs.mkdir(sandboxRoot);
+  const sandbox = createSandboxTestContext({
+    overrides: {
+      sessionKey: fixture.params.sessionKey!,
+      workspaceDir: sandboxRoot,
+      agentWorkspaceDir: fixture.params.workspaceDir,
+      workspaceAccess,
+      runtimeId: "fixture",
+      runtimeLabel: "fixture",
+      containerName: "fixture",
+      tools: { allow: [], deny: [] },
+    },
+    dockerOverrides: { image: "fixture", containerPrefix: "fixture", readOnlyRoot: true },
+  });
+  sandbox.fsBridge = createRemoteShellSandboxFsBridge({
+    sandbox,
+    runtime: {
+      remoteWorkspaceDir: "/workspace",
+      remoteAgentWorkspaceDir: "/agent",
+      runRemoteShellScript: async () => {
+        throw new Error("Gateway originals are not in the sandbox");
+      },
+    },
+  });
+  fixture.params.sandbox = sandbox;
+  // Deferred originals must be resolved even when the initial snapshot has no file paths.
+  fixture.recorder.message = { ...fixture.message, __openclaw: { media: [{ kind: "image" }] } };
+  fixture.options.media = [];
+  const note = "Attachments are available in /remote/workspace/.inputs/steered-turn.";
+  const prepare = vi.fn<NonNullable<AgentWorkspaceAccess["prepareTurnAttachments"]>>(
+    async (_turn, assertCurrent) => {
+      assertCurrent();
+      return note;
     },
   );
-
-  it.each(["replaced", "host-closed"] as const)(
-    "rejects %s workspace attachment preparation before native steering",
-    async (failure) => {
-      const fixture = await createMediaFixture("resolved");
-      const closeHost = await bindProductionHarnessHostCapabilitiesForTest(fixture.params);
-      const prepared = createDeferred<string>();
-      const prepare = vi.fn<NonNullable<AgentWorkspaceAccess["prepareTurnAttachments"]>>(
-        async () => await prepared.promise,
-      );
-      const release = registerSteeringWorkspace(fixture, prepare);
-      let releaseReplacement: (() => void) | undefined;
-      const harness = createStartedThreadHarness();
-      try {
-        await withActiveMediaTurn(fixture, harness, async () => {
-          const accepted = queueMedia(fixture);
-          await vi.waitFor(() => expect(prepare).toHaveBeenCalledOnce(), fastWait);
-          expect(steers(harness)).toEqual([]);
-          if (failure === "replaced") {
-            release();
-            releaseReplacement = registerSteeringWorkspace(fixture, prepare);
-          } else {
-            closeHost();
-          }
-          prepared.resolve("Attachments prepared.");
-          await waitForAcceptance(accepted, false);
-          await expectUnpersisted(fixture, harness);
-        });
-      } finally {
-        prepared.resolve("Attachments prepared.");
-        closeHost();
-        release();
-        releaseReplacement?.();
-      }
-    },
-  );
-
-  it("keeps consumed question answers accepted when their host closes during the response", async () => {
-    const fixture = await createMediaFixture("offloaded");
-    const onAttemptTimeout = vi.fn();
-    fixture.params.onAttemptTimeout = onAttemptTimeout;
-    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(fixture.params);
-    const harness = createStartedThreadHarness();
-    await withActiveMediaTurn(fixture, harness, async (controller) => {
-      const result = { status: "answered" as const, answers: { answers: { choice: ["yes"] } } };
-      const answer = createDeferred<typeof result>();
-      const onBlockReply = vi.fn();
-      const questionId = "ask_0123456789abcdef0123456789abcdef";
-      const gatewayCall = vi.fn(async (method: string) => {
-        if (method === "question.request") {
-          return { id: questionId };
-        }
-        if (method === "question.waitAnswer") {
-          return await answer.promise;
-        }
-        if (method === "question.resolve") {
-          answer.resolve(result);
-          closeHost();
-          return {};
-        }
-        throw new Error(`unexpected question method: ${method}`);
-      });
-      const question = runAgentHarnessGatewayQuestion({
-        questionId,
-        questions: [{ id: "choice", header: "Choice", question: "Continue?", options: [] }],
-        sessionKey: fixture.params.sessionKey!,
-        timeoutMs: 60_000,
-        gatewayCall,
-        delivery: { onBlockReply },
-        signal: controller.signal,
-      });
-      try {
-        await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledOnce(), fastWait);
-        expect(onAttemptTimeout).not.toHaveBeenCalled();
-        const accepted = vi.fn();
-        expect(
-          queueAgentHarnessMessage(fixture.params.sessionId, "yes", {
-            debounceMs: 0,
-            isInboundUserMessage: true,
-            toolAuthorityFingerprint: fixture.params.toolAuthorityFingerprint,
-            onQueueAccepted: accepted,
-          }),
-        ).toBe(true);
-        await expect(question).resolves.toEqual(result);
-        await waitForAcceptance(accepted, true);
-        expect(onAttemptTimeout).not.toHaveBeenCalled();
-        expect(steers(harness)).toEqual([]);
-      } finally {
-        closeHost();
-        answer.resolve(result);
-        await question;
-      }
-    });
-  });
-
-  it.each(["outside-workspace"] as const)(
-    "rejects a %s structured image before dispatch or persistence",
-    async () => {
-      const fixture = await createMediaFixture("offloaded");
-      fixture.params.config = { ...fixture.params.config, tools: { fs: { workspaceOnly: true } } };
-      const imagePath = path.join(await fs.realpath(tempDir), "unavailable.png");
-      await fs.writeFile(imagePath, createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 }));
-      fixture.options.media = [{ path: imagePath, contentType: "image/png" }];
-      fixture.options.imageOrder = ["offloaded"];
-      fixture.message["__openclaw"] = { media: fixture.options.media };
-      fixture.options.userTurnTranscriptRecorder = fixture.recorder;
-      const harness = createStartedThreadHarness();
-      await withActiveMediaTurn(fixture, harness, async () => {
-        const accepted = queueMedia(fixture, "inspect this");
-        await waitForAcceptance(accepted, false);
-        await expectUnpersisted(fixture, harness);
-      });
-    },
-  );
-
-  it("rejects hydrated media after its captured host authority closes", async () => {
-    const fixture = await createMediaFixture("resolved");
-    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(fixture.params);
-    const prepared = createDeferred<UserMessage>();
-    fixture.recorder.resolveMessage.mockImplementation(() => prepared.promise);
-    const harness = createStartedThreadHarness();
+  const release = registerSteeringWorkspace(fixture, prepare);
+  const harness = createStartedThreadHarness();
+  try {
     await withActiveMediaTurn(fixture, harness, async () => {
-      const accepted = vi.fn();
-      try {
-        expect(
-          queueAgentHarnessMessage(fixture.params.sessionId, "delayed image", {
-            ...fixture.options,
-            onQueueAccepted: accepted,
-          }),
-        ).toBe(true);
-        await vi.waitFor(
-          () => expect(fixture.recorder.resolveMessage).toHaveBeenCalledOnce(),
-          fastWait,
-        );
-        expect(accepted).not.toHaveBeenCalled();
-        closeHost();
-        prepared.resolve(fixture.message);
-        // Host closure does not settle the queue itself: rejection here comes
-        // from the authority check after the real hydrator returns.
-        await waitForAcceptance(accepted, false);
-        await expectUnpersisted(fixture, harness);
-      } finally {
-        closeHost();
-        prepared.resolve(fixture.message);
-      }
-    });
-  });
-
-  it("keeps later text behind the reserved image preparation slot", async () => {
-    const fixture = await createMediaFixture("resolved");
-    const prepared = createDeferred<UserMessage>();
-    fixture.recorder.resolveMessage.mockImplementation(() => prepared.promise);
-    const harness = createStartedThreadHarness();
-    await withActiveMediaTurn(fixture, harness, async () => {
-      const firstAccepted = vi.fn();
-      const secondAccepted = vi.fn();
-      try {
-        expect(
-          queueAgentHarnessMessage(fixture.params.sessionId, "first image", {
-            ...fixture.options,
-            onQueueAccepted: firstAccepted,
-          }),
-        ).toBe(true);
-        await vi.waitFor(
-          () => expect(fixture.recorder.resolveMessage).toHaveBeenCalledOnce(),
-          fastWait,
-        );
-        expect(
-          queueAgentHarnessMessage(fixture.params.sessionId, "later text", {
-            debounceMs: 0,
-            onQueueAccepted: secondAccepted,
-          }),
-        ).toBe(true);
-        expect(steers(harness)).toEqual([]);
-        prepared.resolve(fixture.message);
-        await vi.waitFor(
-          () => expect(secondAccepted).toHaveBeenCalledExactlyOnceWith(true),
-          fastWait,
-        );
-        expect(firstAccepted).toHaveBeenCalledExactlyOnceWith(true);
-        const requests = steers(harness);
-        expect(requests.map((entry) => entry.input)).toEqual([
-          [{ type: "text", text: "first image", text_elements: [] }, ...fixture.expectedImages],
-          [{ type: "text", text: "later text", text_elements: [] }],
-        ]);
-        expect(fixture.recorder.persistApproved).toHaveBeenCalledOnce();
-        for (const steer of requests) {
-          await notifyConsumed(harness, steer.clientUserMessageId);
-        }
-        expect(fixture.recorder.persistApproved).toHaveBeenCalledOnce();
-      } finally {
-        prepared.resolve(fixture.message);
-      }
-    });
-  });
-
-  it("leaves rejected steering intact for a caller-owned fallback consumer", async () => {
-    const fixture = await createMediaFixture("mixed");
-    const harness = createStartedThreadHarness(async (method) => {
-      if (method === "turn/steer") {
-        throw new Error("no active turn to steer");
-      }
-    });
-    await withActiveMediaTurn(fixture, harness, async () => {
-      const originalText = "  preserve this caption\n";
-      const originalOptions = { ...fixture.options, userTurnTranscriptRecorder: fixture.recorder };
-      const expectedPayload = {
-        text: originalText,
-        images: structuredClone(originalOptions.images),
-        imageOrder: structuredClone(originalOptions.imageOrder),
-        media: structuredClone(originalOptions.media),
-      };
-      // The SDK exposes eligibility plus acceptance, not the Gateway fallback dispatcher.
-      // Consume the actual retained inputs after rejection; do not compare an object to itself.
-      const fallback = vi.fn(async (text: string, options: QueueOptions) => ({
-        payload: structuredClone({
-          text,
-          images: options.images,
-          imageOrder: options.imageOrder,
-          media: options.media,
-        }),
-        recorder: options.userTurnTranscriptRecorder,
-        hydrated: await detectAndLoadAgentHarnessPromptImages({
-          prompt: text,
-          existingImages: options.images,
-          imageOrder: options.imageOrder,
-          media: options.media,
-          workspaceDir: fixture.params.workspaceDir,
-          model: fixture.params.model,
-          workspaceOnly: true,
-        }),
-      }));
-      let fallbackResult: ReturnType<typeof fallback> | undefined;
-      const accepted = vi.fn((value: boolean) => {
-        if (!value) {
-          fallbackResult = fallback(originalText, originalOptions);
-        }
-      });
-      expect(
-        queueAgentHarnessMessage(fixture.params.sessionId, originalText, {
-          ...originalOptions,
-          onQueueAccepted: accepted,
-        }),
-      ).toBe(true);
-      await waitForAcceptance(accepted, false);
-      const result = await fallbackResult;
-      expect(result?.payload).toEqual(expectedPayload);
-      expect(result?.recorder).toBe(fixture.recorder);
-      expect(
-        result?.hydrated.images.map((image) => ({
-          type: image.type,
-          url: `data:${image.mimeType};base64,${image.data}`,
-        })),
-      ).toEqual(fixture.expectedImages);
-      expect(result?.hydrated.loadedCount).toBe(2);
-      expect(fallback).toHaveBeenCalledOnce();
-      const [steer] = steers(harness);
-      await notifyConsumed(harness, steer.clientUserMessageId);
-      expect(fixture.recorder.persistApproved).toHaveBeenCalledOnce();
-      expect(await fixture.readSteeredMessages()).toEqual([fixture.message]);
-      await result?.recorder?.persistApproved();
-      expect(await fixture.readSteeredMessages()).toEqual([fixture.message]);
-    });
-  });
-
-  it("does not consume an offloaded image caption as a pending text-only answer", async () => {
-    const fixture = await createMediaFixture("offloaded");
-    fixture.params.onBlockReply = vi.fn();
-    const harness = createStartedThreadHarness();
-    await withActiveMediaTurn(fixture, harness, async () => {
-      const response = harness.handleServerRequest({
-        id: "request-image-answer",
-        method: "item/tool/requestUserInput",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          itemId: "ask-image-answer",
-          isBlocking: true,
-          questions: [
-            {
-              id: "answer",
-              header: "Answer",
-              question: "Enter an answer",
-              isSecret: true,
-              isOther: false,
-              options: null,
-            },
-          ],
-        },
-      });
-      await vi.waitFor(() => expect(fixture.params.onBlockReply).toHaveBeenCalledOnce(), fastWait);
-      const accepted = queueMedia(fixture, "image caption");
+      const accepted = queueMedia(fixture);
       await waitForAcceptance(accepted, true);
-      await expect(response).resolves.toEqual({ answers: {} });
       const [steer] = steers(harness);
-      expect(steer?.input).toEqual([
-        { type: "text", text: "image caption", text_elements: [] },
+      expect(steer.input).toEqual([
+        { type: "text", text: `${fixture.message.content}\n\n${note}`, text_elements: [] },
         ...fixture.expectedImages,
       ]);
+      expect(prepare).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          media: fixture.canonicalMedia.map((fact) => expect.objectContaining(fact)),
+          config: fixture.params.config,
+          abortSignal: expect.any(AbortSignal),
+        }),
+        expect.any(Function),
+      );
       await notifyConsumed(harness, steer.clientUserMessageId);
+      expect(await fixture.readSteeredMessages()).toEqual([fixture.message]);
     });
+  } finally {
+    release();
+  }
+});
+
+it.each(["replaced", "host-closed", "hydration-host-closed"] as const)(
+  "rejects %s attachment preparation before dispatch or persistence",
+  async (failure) => {
+    const fixture = await createMediaFixture("resolved");
+    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(fixture.params);
+    const prepared = createDeferred<void>();
+    const hydrating = failure === "hydration-host-closed";
+    const prepare = vi.fn<NonNullable<AgentWorkspaceAccess["prepareTurnAttachments"]>>(async () => {
+      await prepared.promise;
+      return "Attachments prepared.";
+    });
+    if (hydrating) {
+      fixture.recorder.resolveMessage.mockImplementation(async () => {
+        await prepared.promise;
+        return fixture.message;
+      });
+    }
+    const release = hydrating ? () => {} : registerSteeringWorkspace(fixture, prepare);
+    let releaseReplacement: (() => void) | undefined;
+    const harness = createStartedThreadHarness();
+    try {
+      await withActiveMediaTurn(fixture, harness, async () => {
+        const accepted = queueMedia(fixture, hydrating ? "delayed image" : fixture.message.content);
+        await vi.waitFor(
+          () =>
+            expect(hydrating ? fixture.recorder.resolveMessage : prepare).toHaveBeenCalledOnce(),
+          fastWait,
+        );
+        expect(steers(harness)).toEqual([]);
+        if (hydrating) {
+          expect(accepted).not.toHaveBeenCalled();
+        }
+        if (failure === "replaced") {
+          release();
+          releaseReplacement = registerSteeringWorkspace(fixture, prepare);
+        } else {
+          closeHost();
+        }
+        // Closing the host does not settle hydration: its post-await authority check rejects.
+        prepared.resolve();
+        await waitForAcceptance(accepted, false);
+        await expectUnpersisted(fixture, harness);
+      });
+    } finally {
+      prepared.resolve();
+      closeHost();
+      release();
+      releaseReplacement?.();
+    }
+  },
+);
+
+it("keeps consumed question answers accepted when their host closes during the response", async () => {
+  const fixture = await createMediaFixture("offloaded");
+  const onAttemptTimeout = vi.fn();
+  fixture.params.onAttemptTimeout = onAttemptTimeout;
+  const closeHost = await bindProductionHarnessHostCapabilitiesForTest(fixture.params);
+  const harness = createStartedThreadHarness();
+  await withActiveMediaTurn(fixture, harness, async (controller) => {
+    const result = { status: "answered" as const, answers: { answers: { choice: ["yes"] } } };
+    const answer = createDeferred<typeof result>();
+    const onBlockReply = vi.fn();
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    const gatewayCall = vi.fn(async (method: string) => {
+      if (method === "question.request") {
+        return { id: questionId };
+      }
+      if (method === "question.waitAnswer") {
+        return await answer.promise;
+      }
+      if (method === "question.resolve") {
+        answer.resolve(result);
+        closeHost();
+        return {};
+      }
+      throw new Error(`unexpected question method: ${method}`);
+    });
+    const question = runAgentHarnessGatewayQuestion({
+      questionId,
+      questions: [{ id: "choice", header: "Choice", question: "Continue?", options: [] }],
+      sessionKey: fixture.params.sessionKey!,
+      timeoutMs: 60_000,
+      gatewayCall,
+      delivery: { onBlockReply },
+      signal: controller.signal,
+    });
+    try {
+      await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledOnce(), fastWait);
+      expect(onAttemptTimeout).not.toHaveBeenCalled();
+      const accepted = queueMedia(fixture, "yes", {
+        debounceMs: 0,
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint: fixture.params.toolAuthorityFingerprint,
+      });
+      await expect(question).resolves.toEqual(result);
+      await waitForAcceptance(accepted, true);
+      expect(onAttemptTimeout).not.toHaveBeenCalled();
+      expect(steers(harness)).toEqual([]);
+    } finally {
+      closeHost();
+      answer.resolve(result);
+      await question;
+    }
+  });
+});
+
+it("rejects a outside-workspace structured image before dispatch or persistence", async () => {
+  const fixture = await createMediaFixture("offloaded");
+  fixture.params.config = { ...fixture.params.config, tools: { fs: { workspaceOnly: true } } };
+  const imagePath = path.join(await fs.realpath(tempDir), "unavailable.png");
+  await fs.writeFile(imagePath, createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 }));
+  fixture.options.media = [{ path: imagePath, contentType: "image/png" }];
+  fixture.options.imageOrder = ["offloaded"];
+  fixture.message["__openclaw"] = { media: fixture.options.media };
+  fixture.options.userTurnTranscriptRecorder = fixture.recorder;
+  const harness = createStartedThreadHarness();
+  await withActiveMediaTurn(fixture, harness, async () => {
+    const accepted = queueMedia(fixture, "inspect this");
+    await waitForAcceptance(accepted, false);
+    await expectUnpersisted(fixture, harness);
+  });
+});
+
+it("keeps later text behind the reserved image preparation slot", async () => {
+  const fixture = await createMediaFixture("resolved");
+  const prepared = createDeferred<UserMessage>();
+  fixture.recorder.resolveMessage.mockImplementation(() => prepared.promise);
+  const harness = createStartedThreadHarness();
+  await withActiveMediaTurn(fixture, harness, async () => {
+    try {
+      const firstAccepted = queueMedia(fixture, "first image");
+      await vi.waitFor(
+        () => expect(fixture.recorder.resolveMessage).toHaveBeenCalledOnce(),
+        fastWait,
+      );
+      const secondAccepted = queueMedia(fixture, "later text", { debounceMs: 0 });
+      expect(steers(harness)).toEqual([]);
+      prepared.resolve(fixture.message);
+      await vi.waitFor(
+        () => expect(secondAccepted).toHaveBeenCalledExactlyOnceWith(true),
+        fastWait,
+      );
+      expect(firstAccepted).toHaveBeenCalledExactlyOnceWith(true);
+      const requests = steers(harness);
+      expect(requests.map((entry) => entry.input)).toEqual([
+        [{ type: "text", text: "first image", text_elements: [] }, ...fixture.expectedImages],
+        [{ type: "text", text: "later text", text_elements: [] }],
+      ]);
+      expect(fixture.recorder.persistApproved).toHaveBeenCalledOnce();
+      for (const steer of requests) {
+        await notifyConsumed(harness, steer.clientUserMessageId);
+      }
+      expect(fixture.recorder.persistApproved).toHaveBeenCalledOnce();
+    } finally {
+      prepared.resolve(fixture.message);
+    }
+  });
+});
+
+it("leaves rejected steering intact for a caller-owned fallback consumer", async () => {
+  const fixture = await createMediaFixture("mixed");
+  const harness = createStartedThreadHarness(async (method) => {
+    if (method === "turn/steer") {
+      throw new Error("no active turn to steer");
+    }
+  });
+  await withActiveMediaTurn(fixture, harness, async () => {
+    const originalText = "  preserve this caption\n";
+    const originalOptions = { ...fixture.options, userTurnTranscriptRecorder: fixture.recorder };
+    const expectedPayload = {
+      text: originalText,
+      images: structuredClone(originalOptions.images),
+      imageOrder: structuredClone(originalOptions.imageOrder),
+      media: structuredClone(originalOptions.media),
+    };
+    // The SDK exposes eligibility plus acceptance, not the Gateway fallback dispatcher.
+    // Consume the actual retained inputs after rejection; do not compare an object to itself.
+    const fallback = vi.fn(async (text: string, options: QueueOptions) => ({
+      payload: structuredClone({
+        text,
+        images: options.images,
+        imageOrder: options.imageOrder,
+        media: options.media,
+      }),
+      recorder: options.userTurnTranscriptRecorder,
+      hydrated: await detectAndLoadAgentHarnessPromptImages({
+        prompt: text,
+        existingImages: options.images,
+        imageOrder: options.imageOrder,
+        media: options.media,
+        workspaceDir: fixture.params.workspaceDir,
+        model: fixture.params.model,
+        workspaceOnly: true,
+      }),
+    }));
+    let fallbackResult: ReturnType<typeof fallback> | undefined;
+    const accepted = vi.fn((value: boolean) => {
+      if (!value) {
+        fallbackResult = fallback(originalText, originalOptions);
+      }
+    });
+    expect(
+      queueAgentHarnessMessage(fixture.params.sessionId, originalText, {
+        ...originalOptions,
+        onQueueAccepted: accepted,
+      }),
+    ).toBe(true);
+    await waitForAcceptance(accepted, false);
+    const result = await fallbackResult;
+    expect(result?.payload).toEqual(expectedPayload);
+    expect(result?.recorder).toBe(fixture.recorder);
+    expect(
+      result?.hydrated.images.map((image) => ({
+        type: image.type,
+        url: `data:${image.mimeType};base64,${image.data}`,
+      })),
+    ).toEqual(fixture.expectedImages);
+    expect(result?.hydrated.loadedCount).toBe(2);
+    expect(fallback).toHaveBeenCalledOnce();
+    const [steer] = steers(harness);
+    await notifyConsumed(harness, steer.clientUserMessageId);
+    expect(fixture.recorder.persistApproved).toHaveBeenCalledOnce();
+    expect(await fixture.readSteeredMessages()).toEqual([fixture.message]);
+    await result?.recorder?.persistApproved();
+    expect(await fixture.readSteeredMessages()).toEqual([fixture.message]);
+  });
+});
+
+it("does not consume an offloaded image caption as a pending text-only answer", async () => {
+  const fixture = await createMediaFixture("offloaded");
+  fixture.params.onBlockReply = vi.fn();
+  const harness = createStartedThreadHarness();
+  await withActiveMediaTurn(fixture, harness, async () => {
+    const response = harness.handleServerRequest({
+      id: "request-image-answer",
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "ask-image-answer",
+        isBlocking: true,
+        questions: [
+          {
+            id: "answer",
+            header: "Answer",
+            question: "Enter an answer",
+            isSecret: true,
+            isOther: false,
+            options: null,
+          },
+        ],
+      },
+    });
+    await vi.waitFor(() => expect(fixture.params.onBlockReply).toHaveBeenCalledOnce(), fastWait);
+    const accepted = queueMedia(fixture, "image caption");
+    await waitForAcceptance(accepted, true);
+    await expect(response).resolves.toEqual({ answers: {} });
+    const [steer] = steers(harness);
+    expect(steer?.input).toEqual([
+      { type: "text", text: "image caption", text_elements: [] },
+      ...fixture.expectedImages,
+    ]);
+    await notifyConsumed(harness, steer.clientUserMessageId);
   });
 });
