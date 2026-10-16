@@ -453,14 +453,19 @@ export function handleMessageUpdate(
         projection.directiveCodePrefix = undefined;
       }
       const projected = textIsAppend
-        ? projection.projector.append(visibleDelta)
+        ? projection.projector.append(
+            visibleDelta,
+            unchangedBlockAppend && projection.projector.source === previousPreparedSource
+              ? preparedSource
+              : undefined,
+          )
         : projection.projector.replace(nextRawStreamText);
       nextRawStreamText = projection.projector.source;
       next = projected.text;
       appendDelta = projected.delta;
       // Generic directives retain their raw chunk coordinates: restored trim whitespace
       // could otherwise make an inline tag look like an indented code block.
-      if (kind !== "raw" || next !== nextRawStreamText.trim()) {
+      if (kind !== "raw" || !projection.projector.matchesTrimmedSource) {
         visibleDelta = projected.delta ?? (previousText.startsWith(next) ? "" : next);
       }
     }
@@ -517,7 +522,7 @@ export function handleMessageUpdate(
       !ctx.params.enforceFinalTag &&
       (priorBlockIndex === streamContentIndex ||
         (priorBlockIndex === undefined && !priorBlockText)) &&
-      next === nextRawStreamText.trim() &&
+      projection?.projector.matchesTrimmedSource &&
       ((previousText === previousCleaned && next === cleanedText) ||
         (appendDelta !== null && replyDelta === appendDelta));
     if (plainAppend) {
