@@ -1,4 +1,3 @@
-// Outbound bridge tests cover channel message handoff from core to outbound adapters.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createChannelMessageAdapterFromOutbound } from "./outbound-bridge.js";
@@ -17,6 +16,8 @@ type ChannelMessageOutboundBridgeResult = Awaited<
 >;
 
 const cfg = {} as OpenClawConfig;
+const textRequest = { cfg, to: "room-1", text: "hello" };
+const routing = { threadId: "thread-1", replyToId: "parent-1" };
 
 function makeReceipt(ids: string[], kind: MessageReceipt["parts"][number]["kind"]): MessageReceipt {
   return {
@@ -39,7 +40,7 @@ describe("createChannelMessageAdapterFromOutbound", () => {
       },
     });
     const onDeliveryResult = vi.fn();
-    const result = await adapter.send?.text?.({ cfg, to: "room-1", text: "---", onDeliveryResult });
+    const result = await adapter.send?.text?.({ ...textRequest, text: "---", onDeliveryResult });
     for (const delivery of [result, onDeliveryResult.mock.calls[0]?.[0]]) {
       expect(delivery).toMatchObject({
         outcome: "not_sent",
@@ -61,32 +62,23 @@ describe("createChannelMessageAdapterFromOutbound", () => {
         sendText,
       },
     });
-    const result = await adapter.send?.text?.({
-      cfg,
-      to: "room-1",
-      text: "hello",
-      replyToId: "parent-1",
-      threadId: "thread-1",
-    });
-    expect(adapter.id).toBe("demo");
-    expect(adapter.durableFinal).toEqual({ capabilities: { text: true, replyTo: true } });
+    const result = await adapter.send?.text?.({ ...textRequest, ...routing });
+    expect([adapter.id, adapter.durableFinal]).toEqual([
+      "demo",
+      { capabilities: { text: true, replyTo: true } },
+    ]);
     expect(sendText).toHaveBeenCalledTimes(1);
     expect(sendText.mock.calls[0]?.[0]).toMatchObject({
-      to: "room-1",
-      text: "hello",
-      replyToId: "parent-1",
-      threadId: "thread-1",
+      ...textRequest,
+      ...routing,
     });
     expect(result).toMatchObject({
       messageId: "msg-1",
       receipt: {
         primaryPlatformMessageId: "msg-1",
         platformMessageIds: ["msg-1"],
-        threadId: "thread-1",
-        replyToId: "parent-1",
-        parts: [
-          { platformMessageId: "msg-1", kind: "text", threadId: "thread-1", replyToId: "parent-1" },
-        ],
+        ...routing,
+        parts: [{ platformMessageId: "msg-1", kind: "text", ...routing }],
       },
     });
   });
@@ -158,18 +150,18 @@ describe("createChannelMessageAdapterFromOutbound", () => {
         sendText: vi.fn(async () => ({ target })),
       },
     });
-    const result = await adapter.send?.text?.({ cfg, to: "room-1", text: "hello" });
-    expect(result?.target).toEqual(target);
+    const result = await adapter.send?.text?.(textRequest);
+    expect([result?.target, result?.receipt.platformMessageIds, result?.receipt.parts]).toEqual([
+      target,
+      [],
+      [],
+    ]);
     expect(result).not.toHaveProperty("messageId");
     expect(result?.receipt.primaryPlatformMessageId).toBeUndefined();
-    expect(result?.receipt.platformMessageIds).toEqual([]);
-    expect(result?.receipt.parts).toEqual([]);
   });
 
   it("preserves contracted delivery facts without exposing private provider fields", async () => {
-    const sourceResult = (messageId: string) => ({
-      channel: "forged-channel",
-      messageId,
+    const publicFacts = {
       chatId: "chat-1",
       channelId: "channel-1",
       roomId: "room-1",
@@ -178,7 +170,10 @@ describe("createChannelMessageAdapterFromOutbound", () => {
       pollId: "poll-1",
       timestamp: 123,
       meta: { questionActionIds: ["question:1"], questionMessageId: "question-card" },
-      receipt: makeReceipt([messageId], "text"),
+    };
+    const expectedFacts = structuredClone(publicFacts);
+    const privateFacts = {
+      channel: "forged-channel",
       accessToken: "private-access-token",
       content: "private-provider-content",
       primaryMessageId: "private-primary-id",
@@ -186,6 +181,12 @@ describe("createChannelMessageAdapterFromOutbound", () => {
       blocks: [{ text: "private-block" }],
       callback: { value: "private-callback" },
       action: { value: "private-action" },
+    };
+    const sourceResult = (messageId: string) => ({
+      ...publicFacts,
+      ...privateFacts,
+      messageId,
+      receipt: makeReceipt([messageId], "text"),
     });
     const onDeliveryResult = vi.fn();
     const adapter = createChannelMessageAdapterFromOutbound({
@@ -196,39 +197,15 @@ describe("createChannelMessageAdapterFromOutbound", () => {
         },
       },
     });
-    const result = await adapter.send?.text?.({
-      cfg,
-      to: "room-1",
-      text: "hello",
-      onDeliveryResult,
-    });
+    const result = await adapter.send?.text?.({ ...textRequest, onDeliveryResult });
     expect(onDeliveryResult).toHaveBeenCalledOnce();
     const progress = onDeliveryResult.mock.calls[0]?.[0];
     for (const [delivery, messageId] of [
       [progress, "progress-1"],
       [result, "final-1"],
     ] as const) {
-      expect(delivery).toMatchObject({
-        messageId,
-        chatId: "chat-1",
-        channelId: "channel-1",
-        roomId: "room-1",
-        conversationId: "conversation-1",
-        toJid: "recipient@example.invalid",
-        pollId: "poll-1",
-        timestamp: 123,
-        meta: { questionActionIds: ["question:1"], questionMessageId: "question-card" },
-      });
-      for (const privateField of [
-        "channel",
-        "accessToken",
-        "content",
-        "primaryMessageId",
-        "threadTs",
-        "blocks",
-        "callback",
-        "action",
-      ]) {
+      expect(delivery).toMatchObject({ ...expectedFacts, messageId });
+      for (const privateField of Object.keys(privateFacts)) {
         expect(delivery).not.toHaveProperty(privateField);
       }
     }
@@ -244,8 +221,7 @@ describe("createChannelMessageAdapterFromOutbound", () => {
     });
     await expect(
       adapter.send?.media?.({
-        cfg,
-        to: "room-1",
+        ...textRequest,
         text: "caption",
         mediaUrl: "file:///tmp/a.png",
       }),
@@ -322,8 +298,7 @@ describe("createChannelMessageAdapterFromOutbound", () => {
       },
     });
     const result = await adapter.send?.payload?.({
-      cfg,
-      to: "room-1",
+      ...textRequest,
       text: payload.text ?? "",
       payload,
     });
@@ -399,13 +374,12 @@ describe("createChannelMessageAdapterFromOutbound", () => {
       },
     });
     const result = await adapter.send?.poll?.({
-      cfg,
-      to: "room-1",
+      ...textRequest,
       poll: { question: "Ship?", options: ["Yes", "No"] },
     });
-    expect(result?.messageId).toBe("card-1");
-    expect(result?.receipt.parts).toEqual([
-      { platformMessageId: "card-1", kind: "poll", index: 0 },
+    expect([result?.messageId, result?.receipt.parts]).toEqual([
+      "card-1",
+      [{ platformMessageId: "card-1", kind: "poll", index: 0 }],
     ]);
     expect(receipt.parts[0]?.kind).toBe("card");
   });
@@ -448,19 +422,16 @@ describe("createChannelMessageAdapterFromOutbound", () => {
     const live = { capabilities: { draftPreview: true, previewFinalization: true } };
     const receive = {
       defaultAckPolicy: "after_agent_dispatch" as const,
-      supportedAckPolicies: ["after_receive_record", "after_agent_dispatch"] as const,
-    };
+      supportedAckPolicies: ["after_receive_record", "after_agent_dispatch"],
+    } satisfies NonNullable<
+      Parameters<typeof createChannelMessageAdapterFromOutbound>[0]["receive"]
+    >;
+    const expected = structuredClone([live, receive]);
     const adapter = createChannelMessageAdapterFromOutbound({
       outbound: {},
       live,
-      receive: { ...receive, supportedAckPolicies: [...receive.supportedAckPolicies] },
+      receive,
     });
-    expect(adapter.live).toEqual({
-      capabilities: { draftPreview: true, previewFinalization: true },
-    });
-    expect(adapter.receive).toEqual({
-      defaultAckPolicy: "after_agent_dispatch",
-      supportedAckPolicies: ["after_receive_record", "after_agent_dispatch"],
-    });
+    expect([adapter.live, adapter.receive]).toEqual(expected);
   });
 });

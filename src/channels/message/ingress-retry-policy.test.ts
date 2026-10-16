@@ -1,4 +1,3 @@
-// Retry policy: backoff, attempt floor + age gate for dead-letter.
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { describe, expect, it } from "vitest";
 import {
@@ -8,6 +7,12 @@ import {
   resolveIngressRetryDelayMs,
   shouldDeadLetterRetryableIngressEvent,
 } from "./ingress-retry-policy.js";
+
+const codedError = (message: string, code: string) => Object.assign(new Error(message), { code });
+const wrapError = (cause: Error) =>
+  Object.assign(new Error("BotError in middleware"), {
+    error: new Error("telegram spooled update processing failed", { cause }),
+  });
 
 function disposition(
   err: unknown,
@@ -142,13 +147,8 @@ describe("ingress retry policy", () => {
 
   it("dead-letters a restart tombstone by structured code instead of wording", () => {
     const message = "This generation is terminal.";
-    const wrapped = Object.assign(new Error("BotError in middleware"), {
-      error: new Error("telegram spooled update processing failed", {
-        cause: Object.assign(new Error(message), {
-          code: "SESSION_RESTART_RECOVERY_TOMBSTONE",
-        }),
-      }),
-    });
+    const tombstone = codedError(message, "SESSION_RESTART_RECOVERY_TOMBSTONE");
+    const wrapped = wrapError(tombstone);
     expect(
       disposition(wrapped, 0, {
         config: { maxAttempts: 8, deadLetterMinAgeMs: 24 * 60 * 60 * 1000 },
@@ -159,14 +159,11 @@ describe("ingress retry policy", () => {
       message: wrapped.message,
       attempt: 1,
     });
-    expect(
-      disposition(
-        Object.assign(new Error(message), {
-          code: "SESSION_RESTART_RECOVERY_TOMBSTONE",
-        }),
-        425,
-      ),
-    ).toMatchObject({ kind: "fail", reason: "restart-recovery-tombstone", attempt: 426 });
+    expect(disposition(tombstone, 425)).toMatchObject({
+      kind: "fail",
+      reason: "restart-recovery-tombstone",
+      attempt: 426,
+    });
   });
 
   it.each([undefined, "SESSION_WORK_START_INVALIDATED"])(
@@ -235,12 +232,7 @@ describe("ingress retry policy", () => {
   it("keeps wrapped session-start conflicts under both retry and age gates", () => {
     const maxAttempts = 3;
     const message = 'Session "agent:main:telegram:direct:1" changed while starting work. Retry.';
-    const conflict = Object.assign(new Error(message), {
-      code: "SESSION_WORK_START_CHANGED",
-    });
-    const wrapped = Object.assign(new Error("BotError in middleware"), {
-      error: new Error("telegram spooled update processing failed", { cause: conflict }),
-    });
+    const wrapped = wrapError(codedError(message, "SESSION_WORK_START_CHANGED"));
     const config = { maxAttempts };
     const beforeLimit = disposition(wrapped, maxAttempts - 2, { config });
     expect(beforeLimit).toMatchObject({
@@ -252,11 +244,9 @@ describe("ingress retry policy", () => {
       attempt: maxAttempts,
     });
     expect(
-      disposition(
-        Object.assign(new Error(message), { code: "SESSION_WORK_START_INVALIDATED" }),
-        maxAttempts - 1,
-        { config },
-      ),
+      disposition(codedError(message, "SESSION_WORK_START_INVALIDATED"), maxAttempts - 1, {
+        config,
+      }),
     ).toMatchObject({ kind: "release", attempt: maxAttempts });
     const atLimit = disposition(wrapped, maxAttempts - 1, { config });
     expect(atLimit).toEqual({

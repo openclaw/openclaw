@@ -43,64 +43,52 @@ describe("channel ingress claim ownership", () => {
 
   it.each(["transaction", "commit"] as const)(
     "revalidates live lane policy at native %s admission",
-    async (stage) => {
-      await withTempState(async (stateDir) => {
-        const queue = createChannelIngressQueue<{ lane: string }>({
-          channelId: "test",
-          accountId: "a",
-          stateDir,
-        });
-        await queue.enqueue(
-          "a",
-          { lane: "chat:123" },
-          { laneKey: "chat:123:topic:7", receivedAt: 1 },
-        );
-        await queue.enqueue(
-          "b",
-          { lane: "chat:456" },
-          { laneKey: "chat:456:topic:9", receivedAt: 2 },
-        );
+    (stage) =>
+      withTempState(async (stateDir) => {
+        const options = { channelId: "test", accountId: "a", stateDir };
+        const queue = createChannelIngressQueue<{ lane: string }>(options);
+        for (const [id, lane, laneKey, receivedAt] of [
+          ["a", "chat:123", "chat:123:topic:7", 1],
+          ["b", "chat:456", "chat:456:topic:9", 2],
+        ] as const) {
+          await queue.enqueue(id, { lane }, { laneKey, receivedAt });
+        }
         let policyChanged = false;
-        const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+        using _ = probe.admission(workerAdmission, (request, grant, admit) => {
           if (request.stage === stage) {
             policyChanged = true;
           }
           admit(request, grant);
         });
-        try {
-          const claimed = await queue.claimNext({
-            ownerId: "worker",
-            blockedLaneKeys: ["chat:123"],
-            deriveLaneKey: (record) => {
-              const laneKey =
-                record.id === "a" && !policyChanged ? record.laneKey : record.payload.lane;
-              record.payload.lane = "callback-local";
-              return laneKey;
-            },
-            reconcileStoredLaneKey: (_record, stored, derived) =>
-              stored === `${derived}:topic:7` || stored === `${derived}:topic:9`,
-          });
-          expect(policyChanged).toBe(true);
-          expect(claimed).toMatchObject({ id: "b", laneKey: "chat:456" });
-          expect((await queue.listClaims()).map((row) => [row.id, row.laneKey])).toEqual([
-            ["b", "chat:456"],
-          ]);
-          expect((await queue.listPending())[0]).toMatchObject({
-            id: "a",
-            laneKey: "chat:123:topic:7",
-            payload: { lane: "chat:123" },
-          });
-        } finally {
-          admission.mockRestore();
-        }
-      });
-    },
+        const claimed = await queue.claimNext({
+          ownerId: "worker",
+          blockedLaneKeys: ["chat:123"],
+          deriveLaneKey: (record) => {
+            const laneKey =
+              record.id === "a" && !policyChanged ? record.laneKey : record.payload.lane;
+            record.payload.lane = "callback-local";
+            return laneKey;
+          },
+          reconcileStoredLaneKey: (_record, stored, derived) =>
+            stored === `${derived}:topic:7` || stored === `${derived}:topic:9`,
+        });
+        expect(policyChanged).toBe(true);
+        expect(claimed).toMatchObject({ id: "b", laneKey: "chat:456" });
+        expect((await queue.listClaims()).map((row) => [row.id, row.laneKey])).toEqual([
+          ["b", "chat:456"],
+        ]);
+        expect((await queue.listPending())[0]).toMatchObject({
+          id: "a",
+          laneKey: "chat:123:topic:7",
+          payload: { lane: "chat:123" },
+        });
+      }),
   );
 
   it.each(["policy exception", "owner retirement"] as const)(
     "does not retry a claim after %s during commit policy evaluation",
-    async (cause) => {
-      await withTempState(async (stateDir) => {
+    (cause) =>
+      withTempState(async (stateDir) => {
         const failure = new Error(cause);
         const options = { channelId: "test", accountId: "a", stateDir };
         let current = true;
@@ -113,45 +101,39 @@ describe("channel ingress claim ownership", () => {
         let committing = false;
         let failed = false;
         let transactions = 0;
-        const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+        using _ = probe.admission(workerAdmission, (request, grant, admit) => {
           if (request.stage === "transaction") {
             transactions++;
           }
           committing = request.stage === "commit";
           admit(request, grant);
         });
-        try {
-          await expect(
-            queue.claimNext({
-              deriveLaneKey: (record) => {
-                if (committing && !failed) {
-                  failed = true;
-                  if (cause === "owner retirement") {
-                    current = false;
-                  } else {
-                    throw failure;
-                  }
+        await expect(
+          queue.claimNext({
+            deriveLaneKey: (record) => {
+              if (committing && !failed) {
+                failed = true;
+                if (cause === "owner retirement") {
+                  current = false;
+                } else {
+                  throw failure;
                 }
-                return record.payload.text;
-              },
-            }),
-          ).rejects.toBe(failure);
-          expect(failed).toBe(true);
-          expect(transactions).toBe(1);
-          const inspector = createChannelIngressQueue(options);
-          expect((await inspector.listPending()).map((row) => [row.id, row.laneKey])).toEqual([
-            ["event-1", undefined],
-          ]);
-          expect(await inspector.listClaims()).toEqual([]);
-        } finally {
-          admission.mockRestore();
-        }
-      });
-    },
+              }
+              return record.payload.text;
+            },
+          }),
+        ).rejects.toBe(failure);
+        expect([failed, transactions]).toEqual([true, 1]);
+        const inspector = createChannelIngressQueue(options);
+        expect((await inspector.listPending()).map((row) => [row.id, row.laneKey])).toEqual([
+          ["event-1", undefined],
+        ]);
+        expect(await inspector.listClaims()).toEqual([]);
+      }),
   );
 
-  it("does not retry a policy conflict when the native rollback reply is lost", async () => {
-    await withTempState(async (stateDir) => {
+  it("does not retry a policy conflict when the native rollback reply is lost", () =>
+    withTempState(async (stateDir) => {
       const queue = createTestIngressQueue(stateDir);
       let policyChanged = false;
       let stopped: Promise<number> | undefined;
@@ -218,62 +200,53 @@ describe("channel ingress claim ownership", () => {
         replies.mockRestore();
         await stopped;
       }
-    });
-  });
+    }));
 
   it.each(["claim", "claimNext"] as const)(
     "starts a %s lease at custom-clock transaction admission",
-    async (method) => {
-      await withTempState(async (stateDir) => {
+    (method) =>
+      withTempState(async (stateDir) => {
         let clock = 10;
         const queue = createTestIngressQueue(stateDir, { now: () => clock });
         await queue.enqueue("event-1", { text: "queued" });
         let admitted = false;
-        const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+        using _ = probe.admission(workerAdmission, (request, grant, admit) => {
           if (request.stage === "transaction") {
             admitted = true;
             clock = 1_000;
           }
           admit(request, grant);
         });
-        try {
-          const claim = method === "claim" ? await queue.claim("event-1") : await queue.claimNext();
-          expect(admitted).toBe(true);
-          expect(claim?.claim.claimedAt).toBe(1_000);
-          expect(await queue.recoverStaleClaims({ now: 1_001, staleMs: 100 })).toBe(0);
-          expect((await queue.listClaims())[0]?.claim.token).toBe(claim?.claim.token);
-        } finally {
-          admission.mockRestore();
-        }
-      });
-    },
+        const claim = method === "claim" ? await queue.claim("event-1") : await queue.claimNext();
+        expect([admitted, claim?.claim.claimedAt]).toEqual([true, 1_000]);
+        expect(await queue.recoverStaleClaims({ now: 1_001, staleMs: 100 })).toBe(0);
+        expect((await queue.listClaims())[0]?.claim.token).toBe(claim?.claim.token);
+      }),
   );
 
-  it("requires claim tokens before mutating claimed rows", async () => {
-    await withTempState(async (stateDir) => {
+  it("requires claim tokens before mutating claimed rows", () =>
+    withTempState(async (stateDir) => {
       const queue = createTestIngressQueue(stateDir, { now: () => 10 });
 
       await queue.enqueue("event-1", { text: "claimed" });
-      const claimed = await queue.claim("event-1", { ownerId: "worker" });
-      if (!claimed) {
-        throw new Error("Expected a claimed ingress event");
-      }
+      const claimed = expectDefined(await queue.claim("event-1", { ownerId: "worker" }), "claim");
 
-      expect(await queue.complete("event-1")).toBe(false);
-      expect(await queue.release("event-1")).toBe(false);
-      expect(await queue.fail("event-1", { reason: "stale-handler" })).toBe(false);
-      expect(await queue.delete("event-1")).toBe(false);
+      expect([
+        await queue.complete("event-1"),
+        await queue.release("event-1"),
+        await queue.fail("event-1", { reason: "stale-handler" }),
+        await queue.delete("event-1"),
+      ]).toEqual([false, false, false, false]);
 
       expect(await queue.complete(claimed, { completedAt: 20 })).toBe(true);
       const duplicate = await queue.enqueue("event-1", { text: "duplicate" });
       expect(duplicate.kind).toBe("completed");
-    });
-  });
+    }));
 
   it.each(["refreshed", "reclaimed", "recovered"] as const)(
     "fences stale recovery and refresh against a %s claim",
-    async (change) => {
-      await withTempState(async (stateDir) => {
+    (change) =>
+      withTempState(async (stateDir) => {
         const queue = createTestIngressQueue(stateDir, { now: () => 10 });
         await queue.enqueue("event-1", { text: "claimed" });
         const claimed = expectDefined(
@@ -323,7 +296,6 @@ describe("channel ingress claim ownership", () => {
             { id: "event-1", updatedAt: 40, claim: { ownerId: "replacement", claimedAt: 40 } },
           ]);
         }
-      });
-    },
+      }),
   );
 });
