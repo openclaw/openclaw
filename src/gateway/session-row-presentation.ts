@@ -598,7 +598,10 @@ export function prepareProjectedSessionPresentation(
     row: GatewaySessionRow,
     captured?: Pick<CapturedSessionRowPresentation, "modelCache">,
   ) => projectModels(row, captured?.modelCache?.views, captured?.modelCache?.signature);
-  const present = (record: records.MaterializedRow, options: PresentationOptions) => {
+  const present = (
+    record: records.MaterializedRow,
+    options: PresentationOptions,
+  ): GatewaySessionRow | null => {
     const captured = captureRecord(record, options);
     let row = captured.row;
     if (captured.work) {

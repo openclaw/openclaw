@@ -5,6 +5,8 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js"
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createSessionLifecyclePublisher } from "./server-chat-lifecycle-publication.js";
+import { createSessionEventSubscriberRegistry } from "./server-chat-state.js";
 import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
 import {
   drainSessionEventPublications,
@@ -233,6 +235,69 @@ it("keeps prepared exact rows and ancestors inside the synchronous publication",
       expect(() => retained?.describe({ key: childKey, agentId: "main" })).toThrow(
         "no longer active",
       );
+    } finally {
+      projection.dispose();
+      release();
+    }
+  });
+});
+
+it("publishes an unscoped lifecycle event without materializing unrelated dirty rows", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = {
+      agents: { ownership: "explicit" as const, entries: { main: {}, work: {} } },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    const target = { agentId: "main", sessionKey: "agent:main:unrelated" };
+    replaceSessionEntrySync(target, { sessionId: "unrelated", updatedAt: 1 });
+    const release = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    try {
+      await projection.ensureMaterialized();
+      replaceSessionEntrySync(target, {
+        sessionId: "unrelated",
+        updatedAt: 2,
+        label: "Pending unrelated update",
+      });
+      const dirtyRows = projection.dirtyRowCount;
+      const materialized = projection.materializedCount;
+      expect(dirtyRows).toBeGreaterThan(0);
+      const delivered = createDeferredCore();
+      const broadcastToConnIds = vi.fn(() => delivered.resolve());
+      const subscribers = createSessionEventSubscriberRegistry();
+      subscribers.subscribe("viewer");
+      const publisher = createSessionLifecyclePublisher({
+        broadcastToConnIds,
+        sessionEventSubscribers: subscribers,
+        getSessionRowProjection: () => projection,
+        // An unresolved routing owner has no readable lifecycle snapshot.
+        loadGatewaySessionLifecycleSnapshotForEvent: () => ({ row: null }),
+        persistGatewaySessionLifecycleEventForEvent: async () => undefined,
+      });
+      const event = {
+        runId: "unscoped-run",
+        seq: 1,
+        ts: 100,
+        stream: "lifecycle",
+        data: { phase: "start" },
+      };
+      publisher.publish({
+        event,
+        phase: "start",
+        sessionKey: "unscoped",
+        agentId: undefined,
+        clientRunId: event.runId,
+        runContext: undefined,
+      });
+      await delivered.promise;
+      expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+        "sessions.changed",
+        { sessionKey: "unscoped", phase: "start", runId: event.runId, ts: event.ts },
+        new Set(["viewer"]),
+        { dropIfSlow: true },
+      );
+      expect(projection.dirtyRowCount).toBe(dirtyRows);
+      expect(projection.materializedCount).toBe(materialized);
     } finally {
       projection.dispose();
       release();

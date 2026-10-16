@@ -20,6 +20,7 @@ serveWorkerTasks<SessionListWorkerReply>(async (input) => {
   kernel.apply({
     ...update,
     reset:
+      // SAFETY: The private sender encodes canonical persisted rows, excluding runtime handles.
       update.reset === undefined ? undefined : (JSON.parse(update.reset) as SessionListWorkerRow[]),
   });
   return { kind: "page", page: kernel.select(request) };
