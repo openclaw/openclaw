@@ -4191,7 +4191,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "ui/src/pages/chat/components/chat-json-text.test.ts",
   "ui/src/pages/chat/components/chat-message-streaming.browser.test.tsx",
   "ui/src/pages/chat/components/chat-message.subagent.test.ts",
-  "ui/src/pages/chat/components/chat-message.test.ts",
+  "ui/src/pages/chat/components/chat-message.test.tsx",
   "ui/src/pages/chat/components/chat-model-policy.test.ts",
   "ui/src/pages/chat/components/chat-pane-header.test.ts",
   "ui/src/pages/chat/components/chat-picker-overlay.test.ts",

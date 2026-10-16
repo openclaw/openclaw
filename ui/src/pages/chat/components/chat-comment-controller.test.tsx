@@ -1,28 +1,22 @@
-import { nothing, render } from "lit";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createSignal } from "solid-js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
-import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import "../../../lib/toast-host.ts";
 import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayload,
 } from "../attachment-payload-store.ts";
 import { createComposerContainer } from "../chat-composer.test-support.ts";
-import { renderChat } from "../chat-view-render.test-support.ts";
-import { createChatProps } from "../chat-view.test-helpers.ts";
+import { createChatProps, renderChatPropsInto } from "../chat-view.test-helpers.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
-import "./chat-comment-controller.ts";
-import { renderChatSelectionAnnotations } from "./chat-selection-annotations.ts";
+import { ChatCommentController } from "./chat-comment-controller.ts";
+import { ChatSelectionAnnotations } from "./chat-selection-annotations.tsx";
 import { createChatSelectionAttachment } from "./chat-selection-attachment.ts";
 
 const payloads = new Set<string>();
-type CommentControllerElement = HTMLElement & {
-  props: ChatAttachmentControlsProps;
-  sessionKey: string;
-  disabled: boolean;
-  presented: boolean;
-  updateComplete: Promise<unknown>;
-};
+type CommentControllerElement = InstanceType<typeof ChatCommentController.Element>;
 
 beforeEach(() => {
   vi.stubGlobal(
@@ -64,9 +58,7 @@ async function mountComments(additional: ChatAttachment[] = []) {
   const signalOwner = new AbortController();
   const card = document.createElement("section");
   card.className = "chat";
-  const controller = document.createElement(
-    "openclaw-chat-comment-controller",
-  ) as CommentControllerElement;
+  const controller = new ChatCommentController.Element();
   const composer = document.createElement("div");
   const props: ChatAttachmentControlsProps = {
     attachments,
@@ -78,16 +70,18 @@ async function mountComments(additional: ChatAttachment[] = []) {
         payloads.add(item.id);
       }
       controller.props = { ...props, attachments };
-      render(renderChatSelectionAnnotations(controller.props), composer);
+      setAnnotationProps(controller.props);
     },
   };
   controller.props = props;
   controller.sessionKey = "agent:main:main";
-  render(renderChatSelectionAnnotations(props), composer);
+  const [annotationProps, setAnnotationProps] = createSignal(props);
+  mountSolid(() => <ChatSelectionAnnotations {...annotationProps()} />, { container: composer });
   const toast = document.createElement("openclaw-toast-host");
   card.append(controller, composer, toast);
   document.body.append(card);
   await controller.updateComplete;
+  flush();
   const edit = () =>
     composer.querySelector<HTMLButtonElement>('button[aria-label="Edit comment 1"]')!.click();
   const input = () =>
@@ -111,9 +105,6 @@ async function mountComments(additional: ChatAttachment[] = []) {
 describe("comment actions outside the transcript", () => {
   it("keeps an editor across draft renders and retires it when composition is disabled", async () => {
     const container = createComposerContainer();
-    onTestFinished(() => {
-      render(nothing, container);
-    });
     document.body.append(container);
     const attachment: ChatAttachment = {
       id: "rendered-comment",
@@ -127,11 +118,12 @@ describe("comment actions outside the transcript", () => {
       },
     };
     const props = createChatProps({ loading: true, attachments: [attachment] });
-    render(renderChat(props), container);
+    renderChatPropsInto(container, props);
     const controller = container.querySelector<CommentControllerElement>(
       "openclaw-chat-comment-controller",
     )!;
     await controller.updateComplete;
+    flush();
     controller.dispatchEvent(
       new CustomEvent("openclaw-comment-action", {
         bubbles: true,
@@ -142,17 +134,20 @@ describe("comment actions outside the transcript", () => {
     expect(editor.value).toBe("In-progress edit");
     editor.value = "A draft that must survive";
 
-    render(renderChat(props), container);
+    renderChatPropsInto(container, props);
     await controller.updateComplete;
+    flush();
     expect(document.querySelector(".chat-annotation-editor textarea")).toBe(editor);
 
-    render(renderChat({ ...props, draft: "A new draft" }), container);
+    renderChatPropsInto(container, { ...props, draft: "A new draft" });
     await controller.updateComplete;
+    flush();
     expect(editor.value).toBe("A draft that must survive");
     expect(document.querySelector(".chat-annotation-editor textarea")).toBe(editor);
 
-    render(renderChat({ ...props, canSend: false }), container);
+    renderChatPropsInto(container, { ...props, canSend: false });
     await controller.updateComplete;
+    flush();
     expect(document.querySelector(".chat-annotation-editor")).toBeNull();
   });
 
@@ -163,6 +158,7 @@ describe("comment actions outside the transcript", () => {
     fixture.input()!.value = "Revised comment";
     fixture.save().click();
     await fixture.controller.updateComplete;
+    flush();
     expect(fixture.attachments()[0]?.selectionAnnotation?.comment).toBe("Revised comment");
     expect(getChatAttachmentDataUrl(fixture.attachment)).toBeNull();
     fixture.composer
@@ -193,10 +189,12 @@ describe("comment actions outside the transcript", () => {
       },
     };
     await fixture.controller.updateComplete;
+    flush();
     fixture.edit();
     fixture.input()!.value = "Original comment!";
     fixture.save().click();
     await fixture.controller.updateComplete;
+    flush();
     expect(fixture.input()?.value).toBe("Original comment!");
     expect(fixture.attachments()).toEqual([fixture.attachment, file]);
     expect(getChatAttachmentDataUrl(fixture.attachment)).toBe(originalPayload);
@@ -207,6 +205,7 @@ describe("comment actions outside the transcript", () => {
     fixture.input()!.value = "Replaced comment";
     fixture.save().click();
     await fixture.controller.updateComplete;
+    flush();
     expect(fixture.input()).toBeNull();
     expect(fixture.attachments()).toMatchObject([
       { selectionAnnotation: { comment: "Replaced comment" } },
@@ -266,6 +265,7 @@ describe("comment actions outside the transcript", () => {
         fixture.signalOwner.abort();
       }
       await fixture.controller.updateComplete;
+      flush();
       expect(fixture.input()).toBeNull();
       save.click();
       fixture.composer.dispatchEvent(
@@ -284,6 +284,7 @@ describe("comment actions outside the transcript", () => {
     fixture.controller.remove();
     fixture.card.prepend(fixture.controller);
     await fixture.controller.updateComplete;
+    flush();
     fixture.edit();
     expect(fixture.input()).not.toBeNull();
     fixture.signalOwner.abort();
@@ -295,11 +296,13 @@ describe("comment actions outside the transcript", () => {
     fixture.edit();
     fixture.controller.props = { ...fixture.controller.props, draft: "A new draft" };
     await fixture.controller.updateComplete;
+    flush();
     expect(fixture.input()).not.toBeNull();
 
     const nextOwner = new AbortController();
     fixture.controller.props = { ...fixture.controller.props, readSignal: nextOwner.signal };
     await fixture.controller.updateComplete;
+    flush();
     expect(fixture.input()).toBeNull();
     fixture.edit();
     fixture.signalOwner.abort();

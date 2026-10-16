@@ -1,24 +1,30 @@
 /* @vitest-environment jsdom */
 
-import { html, nothing, render } from "lit";
+import { For, Show } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { projectAgentToolActivity } from "../../../../../src/infra/agent-activity-events.js";
 import * as markdown from "../../../components/markdown.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { setAvatarGatewayOrigin } from "../../../lib/identity-avatar-context.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import * as localStorageModule from "../../../local-storage.ts";
 import { prepareChatHistoryFixture } from "../../../test-helpers/chat-activity-fixtures.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import * as chatAvatar from "../chat-avatar.ts";
 import { attachHistoryActivity } from "../chat-history-request.ts";
 import { buildCachedChatItems } from "../chat-thread.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
-import { renderChatNotice } from "./chat-divider.ts";
+import { ChatNotice } from "./chat-divider.tsx";
 import { dismissConfirmedActionPopovers } from "./chat-message-confirmation.ts";
-import { renderActivityGroup, renderMessageGroup } from "./chat-message-group.test-support.ts";
+import {
+  ActivityGroup,
+  MessageGroup as MessageGroupView,
+  type NativeMessageGroupOptions,
+} from "./chat-message-group-view.tsx";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
-import { renderStreamGroup } from "./chat-message-stream.test-support.ts";
+import { StreamGroup } from "./chat-message-stream-view.tsx";
 import {
   createAssistantMessage,
   createCanvasPreview,
@@ -66,17 +72,89 @@ function getSafeLocalStorageMock(): Storage {
   };
 }
 
+function TestAvatar(props: { role: string }) {
+  return <div class={`chat-avatar ${props.role}`} />;
+}
+
 beforeEach(() => {
   view = document.createElement("div");
   vi.spyOn(localStorageModule, "getSafeLocalStorage").mockImplementation(getSafeLocalStorageMock);
   vi.spyOn(markdown, "toSanitizedMarkdownHtml").mockImplementation(markdownRenderMock);
   vi.spyOn(markdown, "toStreamingMarkdownParts").mockImplementation(streamingMarkdownRenderMock);
-  vi.spyOn(chatAvatar, "renderChatAvatar").mockImplementation(
-    (role) => html`<div class="chat-avatar ${role}"></div>`,
+  vi.spyOn(chatAvatar, "renderChatAvatar").mockImplementation((role) =>
+    solidContent(TestAvatar, { role }),
   );
 });
 
-type RenderMessageGroupOptions = Parameters<typeof renderMessageGroup>[1];
+type RenderMessageGroupOptions = NativeMessageGroupOptions;
+type MessageFixture =
+  | { kind: "group"; props: Parameters<typeof MessageGroupView>[0] }
+  | { kind: "activity"; props: Parameters<typeof ActivityGroup>[0] }
+  | { kind: "stream"; props: Parameters<typeof StreamGroup>[0] }
+  | { kind: "notice"; props: Parameters<typeof ChatNotice>[0] };
+const messageMounts = new Map<
+  HTMLElement,
+  ReturnType<typeof mountSolid<{ values: MessageFixture[] }>>
+>();
+
+function MessageFixtureView(props: { value: MessageFixture }) {
+  const group = () => (props.value.kind === "group" ? props.value.props : undefined);
+  const activity = () => (props.value.kind === "activity" ? props.value.props : undefined);
+  const stream = () => (props.value.kind === "stream" ? props.value.props : undefined);
+  const notice = () => (props.value.kind === "notice" ? props.value.props : undefined);
+  return (
+    <>
+      <Show when={group()}>{(value) => <MessageGroupView {...value()} />}</Show>
+      <Show when={activity()}>{(value) => <ActivityGroup {...value()} />}</Show>
+      <Show when={stream()}>{(value) => <StreamGroup {...value()} />}</Show>
+      <Show when={notice()}>{(value) => <ChatNotice {...value()} />}</Show>
+    </>
+  );
+}
+
+function MessageFixtures(props: { values: MessageFixture[] }) {
+  return (
+    <For each={props.values} keyed={false}>
+      {(value) => <MessageFixtureView value={value()} />}
+    </For>
+  );
+}
+
+function render(value: MessageFixture | MessageFixture[], container: HTMLElement) {
+  const values = Array.isArray(value) ? value : [value];
+  const existing = messageMounts.get(container);
+  if (existing) {
+    existing.update({ values });
+  } else {
+    messageMounts.set(container, mountSolid(MessageFixtures, { values }, container));
+  }
+}
+
+function renderMessageGroup(
+  group: MessageGroup,
+  options: RenderMessageGroupOptions,
+): MessageFixture {
+  return { kind: "group", props: { group, options } };
+}
+
+function renderActivityGroup(
+  groups: Parameters<typeof ActivityGroup>[0]["groups"],
+  options: RenderMessageGroupOptions,
+  presentation: "standalone" | "continuation" = "standalone",
+): MessageFixture {
+  return { kind: "activity", props: { groups, options, presentation } };
+}
+
+function renderStreamGroup(
+  parts: Parameters<typeof StreamGroup>[0]["parts"],
+  options: Parameters<typeof StreamGroup>[0]["options"] = {},
+): MessageFixture {
+  return { kind: "stream", props: { parts, options } };
+}
+
+function renderChatNotice(item: Parameters<typeof ChatNotice>[0]["item"]): MessageFixture {
+  return { kind: "notice", props: { item } };
+}
 function expectElement<T extends Element>(
   container: Element,
   selector: string,
@@ -253,7 +331,10 @@ function renderMessageGroups(
   opts: Partial<RenderMessageGroupOptions> = {},
   container: HTMLElement = view,
 ) {
-  render(html`${groups.map((group) => renderTestMessageGroup(group, opts))}`, container);
+  render(
+    groups.map((group) => renderTestMessageGroup(group, opts)),
+    container,
+  );
 }
 
 function clearConfirmedActionSkip() {
@@ -469,11 +550,17 @@ function renderNotices(host: ReturnType<typeof createHost>, runId: string, paneI
   if (!items.length || !items.every((item) => item.kind === "notice")) {
     throw new Error("Expected notice projections");
   }
-  render(html`${items.map((item) => renderChatNotice(item))}`, view);
+  render(
+    items.map((item) => renderChatNotice(item)),
+    view,
+  );
 }
 
 afterEach(() => {
-  render(nothing, view);
+  for (const mount of messageMounts.values()) {
+    mount.dispose();
+  }
+  messageMounts.clear();
   view.remove();
   // These detached render fixtures own the callbacks a live chat pane normally releases.
   for (const subscriber of mediaSubscribers) {
