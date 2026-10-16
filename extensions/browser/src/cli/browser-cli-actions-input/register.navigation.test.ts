@@ -45,7 +45,7 @@ describe("browser navigation commands", () => {
 
       expect(gatewayMock).toHaveBeenLastCalledWith(
         "browser.request",
-        expect.objectContaining({ timeout: String(Number(timeout) + 10_000) }),
+        expect.objectContaining({ timeout: String(Number(timeout) + 130_000) }),
         expect.objectContaining({
           method: "POST",
           path: "/navigate",
@@ -83,7 +83,7 @@ describe("browser navigation commands", () => {
 
     expect(gatewayMock).toHaveBeenLastCalledWith(
       "browser.request",
-      expect.objectContaining({ timeout: "70000" }),
+      expect.objectContaining({ timeout: "190000" }),
       expect.objectContaining({
         method: "POST",
         path: "/act",

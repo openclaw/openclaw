@@ -570,8 +570,8 @@ describe("browser config", () => {
     it("uses defaults for local launch and post-launch readiness windows", () => {
       const resolved = resolveBrowserConfig({});
 
-      expect(resolved.localLaunchTimeoutMs).toBe(15_000);
-      expect(resolved.localCdpReadyTimeoutMs).toBe(8_000);
+      expect(resolved.localLaunchTimeoutMs).toBe(60_000);
+      expect(resolved.localCdpReadyTimeoutMs).toBe(30_000);
     });
   });
 

@@ -342,12 +342,12 @@ describe("Browser node proxy nested watchdogs", () => {
     const timeoutMs = Number.MAX_SAFE_INTEGER;
     await createSessionProxy()({ method: "GET", path: "/snapshot", timeoutMs });
 
-    const actionTimeoutMs = Math.min(timeoutMs, MAX_TIMER_TIMEOUT_MS - 10_000);
+    const actionTimeoutMs = Math.min(timeoutMs, MAX_TIMER_TIMEOUT_MS - 130_000);
     const { gateway, node } = readGatewayCall();
     expect([node.params.timeoutMs, node.timeoutMs, gateway.timeoutMs]).toEqual([
       actionTimeoutMs,
-      actionTimeoutMs + 5_000,
-      actionTimeoutMs + 10_000,
+      actionTimeoutMs + 125_000,
+      actionTimeoutMs + 130_000,
     ]);
     expect(gateway.timeoutMs).toBeLessThanOrEqual(MAX_TIMER_TIMEOUT_MS);
   });
