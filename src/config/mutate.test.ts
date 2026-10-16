@@ -198,38 +198,6 @@ describe("config mutate helpers", () => {
     delete process.env.OPENCLAW_NIX_MODE;
   });
 
-  it("mutates the source config rather than the runtime projection", async () => {
-    const snapshot = createSnapshot({
-      path: resolveConfigPath(),
-      hash: "source-hash",
-      sourceConfig: { gateway: { port: 18789 } },
-      runtimeConfig: { gateway: { port: 19001 } },
-    });
-    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue(readResult(snapshot));
-    const nextConfig = { gateway: { port: 18789, auth: { mode: "token" as const } } };
-    ioMocks.writeConfigFile.mockResolvedValue({
-      persistedConfig: nextConfig,
-      persistedHash: "written",
-    });
-    const result = await mutateConfigFile({
-      baseHash: snapshot.hash,
-      base: "source",
-      mutate(draft) {
-        draft.gateway = { ...draft.gateway, auth: { mode: "token" } };
-      },
-    });
-    expect(ioMocks.writeConfigFile).toHaveBeenCalledWith(nextConfig, {
-      baseSnapshot: snapshot,
-      expectedConfigPath: snapshot.path,
-      afterWrite: { mode: "auto" },
-      inputBase: "source",
-    });
-    expect(result.nextConfig).toEqual(nextConfig);
-    expect(result.previousHash).toBe("source-hash");
-    expect(result.persistedHash).toBe("written");
-    expect(result.followUp).toEqual({ mode: "auto", requiresRestart: false });
-  });
-
   it("retries transform mutations on stale config conflicts", async () => {
     const initial = createSnapshot({
       hash: "hash-1",

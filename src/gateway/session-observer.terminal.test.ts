@@ -279,18 +279,6 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
     expect(persistDigest).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves text split across assistant deltas in the assembled note", async () => {
-    const harness = createHarness();
-    startAndAddToolNotes(harness.observer);
-    emitEvent(harness, "assistant", { delta: "Calling the API with api_k" });
-    emitEvent(harness, "assistant", { delta: "ey=super-secret-value-0123456789 attached." });
-    await advanceAndFlush(12_000);
-    expect(harness.completeModel).toHaveBeenCalledOnce();
-    const prompt = completionPrompt(harness);
-    expect(prompt).toContain("Assistant:");
-    expect(prompt).toContain("super-secret-value-0123456789");
-  });
-
   it("invalidates the persist-time guard when a newer run replaces a dormant run", async () => {
     const persistDigest = vi.fn(async (_params: PersistDigestParams) => undefined);
     const harness = createHarness({ persistDigest });

@@ -7,13 +7,12 @@ import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/displ
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { LitContent } from "../lit/solid-bridge.ts";
 import { PluginArtTile } from "../pages/plugins/consent-dialog.tsx";
 import type { CommandPaletteItem } from "./command-palette-catalog-search.ts";
-import { renderAgentIdentityAvatar } from "./identity-avatar-view.ts";
 import { Icon } from "./solid/icon.tsx";
+import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 import { renderSessionOwnerAvatar } from "./solid/session-presentation.tsx";
-import { renderThemeBrandIcon } from "./theme-brand-icon.ts";
+import { ThemeBrandingIcon } from "./theme-brand-icon.tsx";
 
 // Preserve source offsets when case folding expands Unicode characters.
 // The pattern is literal and Solid escapes every rendered text segment.
@@ -134,7 +133,9 @@ export function CommandPaletteResult(props: {
               when={props.item.id === "panel-custodian"}
               fallback={<Icon name={props.item.icon} />}
             >
-              <LitContent render={() => renderThemeBrandIcon()} />
+              <span class="lit-content" style={{ display: "contents" }}>
+                <ThemeBrandingIcon />
+              </span>
             </Show>
           </span>
         }
@@ -142,14 +143,12 @@ export function CommandPaletteResult(props: {
         <Match when={props.agent}>
           {(agent) => (
             <span class="cmd-palette__avatar" aria-hidden="true">
-              <LitContent
-                render={() =>
-                  renderAgentIdentityAvatar({
-                    id: agent().id,
-                    avatar: resolveAgentAvatarUrl(agent(), props.identity),
-                    textAvatar: resolveAgentTextAvatar(agent(), props.identity),
-                  })
-                }
+              <AgentIdentityAvatar
+                agent={{
+                  id: agent().id,
+                  avatar: resolveAgentAvatarUrl(agent(), props.identity),
+                  textAvatar: resolveAgentTextAvatar(agent(), props.identity),
+                }}
               />
               <Show when={owner()?.id}>
                 <span class="cmd-palette__owner">

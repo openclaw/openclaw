@@ -189,6 +189,7 @@ export function selectProfileAccessEntries(
             ...row,
             githubAccountIds: accounts.map(({ accountId }) => accountId),
             githubLogin: identity?.primary?.login ?? null,
+            githubIdentity: identity?.primary ? projectGitHubIdentity(identity.primary) : null,
           }
         : row,
     ];
@@ -251,14 +252,18 @@ export function selectUserProfileGitHubIdentities(
   const identities = new Map<string, UserProfileGitHubIdentity>();
   for (const [profileId, { primary }] of selectStoredGitHubIdentities(db, profileIds)) {
     if (primary) {
-      identities.set(profileId, {
-        login: primary.login,
-        profileUrl: `https://github.com/${primary.login}`,
-        avatarUrl: `https://avatars.githubusercontent.com/u/${primary.accountId}?v=4`,
-      });
+      identities.set(profileId, projectGitHubIdentity(primary));
     }
   }
   return identities;
+}
+
+function projectGitHubIdentity(primary: StoredGitHubIdentity): UserProfileGitHubIdentity {
+  return {
+    login: primary.login,
+    profileUrl: `https://github.com/${primary.login}`,
+    avatarUrl: `https://avatars.githubusercontent.com/u/${primary.accountId}?v=4`,
+  };
 }
 
 /** Resolves current verified identities and public-credit preferences without initializing storage. */

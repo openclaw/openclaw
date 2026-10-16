@@ -57,7 +57,6 @@ export type GitHubSessionReceiptIdentities = Record<
 >;
 
 export type SharedGitHubPublicationReadInput = {
-  kind: "repository" | "worktree";
   session: {
     agentId: string;
     sessionKey: string;

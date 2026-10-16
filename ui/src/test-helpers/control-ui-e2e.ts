@@ -373,8 +373,6 @@ export type ControlUiMockGatewayScenario = {
   assistantName?: string;
   automaticallyFetchFavicons?: boolean;
   communityInvite?: boolean;
-  /** Only invitation behavior tests opt into a fresh visitor; visual proofs keep it dismissed. */
-  communityInviteDismissed?: boolean;
   basePath?: string;
   controlUiTabs?: Array<{
     group?: string;
@@ -884,8 +882,7 @@ function normalizeScenario(
     pluginAssetsRequireAuth: scenario.pluginAssetsRequireAuth ?? true,
     attachmentMaxBytes: scenario.attachmentMaxBytes ?? DEFAULT_MOCK_ATTACHMENT_MAX_BYTES,
     automaticallyFetchFavicons: scenario.automaticallyFetchFavicons ?? false,
-    communityInvite: scenario.communityInvite ?? true,
-    communityInviteDismissed: scenario.communityInviteDismissed ?? true,
+    communityInvite: scenario.communityInvite ?? false,
     agentModel:
       scenario.agentModel === undefined ? "openai/gpt-5.5" : scenario.agentModel?.trim() || null,
     assistantAgentId: scenario.assistantAgentId?.trim() || defaultAgentId,
@@ -1057,17 +1054,6 @@ function installControlUiMockGateway(
   };
 
   const scenario = input.scenario;
-  if (scenario.communityInviteDismissed) {
-    try {
-      // Same persisted preference as community-invite-state.ts, before the first sidebar render.
-      window.localStorage.setItem(
-        "openclaw:control-ui:community-invite:v2",
-        JSON.stringify({ dismissedAtMs: 1770000000000 }),
-      );
-    } catch {
-      // The product already suppresses the invitation when storage is unavailable.
-    }
-  }
   const serverBuildIdStateKey = "openclaw.control-ui-e2e.serverBuildId";
   let serverBuildId = scenario.serverBuildId;
   let gatewayBootId =

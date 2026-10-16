@@ -60,49 +60,28 @@ afterEach(async () => {
 });
 
 describe("update run ledger", () => {
-  it.each(["candidate", "installed"] as const)(
-    "persists and reports %s admission through the existing origin metadata",
-    (owner) => {
-      const options = isolatedOptions();
-      const run = createUpdateRun({ trigger: "cli" }, options);
-      const checks = [{ name: "config", status: "warn" as const, detail: "Missing custom path." }];
-      const admission =
-        owner === "candidate"
-          ? { owner, protocol: 1 as const, candidateVersion: "2026.9.5", checks }
-          : { owner, fallbackReason: "update-admission-unsupported-target" };
-      const candidateAdmission =
-        owner === "candidate"
-          ? {
-              protocol: 1 as const,
-              verdict: "admit" as const,
-              reasons: [],
-              warnings: [{ code: "missing-load-path", message: "Missing custom path." }],
-              facts: { candidateVersion: "2026.9.5", installedVersion: "2026.9.4", checks },
-            }
-          : undefined;
-      const saved = recordUpdateRunPhase(
-        run.runId,
-        "staging",
-        { origin: { admission, candidateAdmission } },
-        options,
-      );
-      expect(saved.admission).toEqual(admission);
-      const retained = getUpdateRun(run.runId, options)!;
-      expect(retained.admission).toEqual(admission);
-      expect(retained.origin.candidateAdmission).toEqual(candidateAdmission);
-      expect(listUpdateRuns({}, options)[0]?.admission).toEqual(admission);
-      const report = renderUpdateRunReport(retained).markdown;
-      expect(report).toContain(`Update safety checks ran in the ${owner} updater`);
-      expect(report).toContain(
-        owner === "candidate" ? "config: warn" : "update-admission-unsupported-target",
-      );
-      const database = openOpenClawStateDatabase(options);
-      const row = database.db
-        .prepare("SELECT origin_json FROM update_runs WHERE run_id = ?")
-        .get(run.runId) as { origin_json: string };
-      expect(JSON.parse(row.origin_json).admission).toEqual(admission);
-    },
-  );
+  it("persists and reports installed admission through the existing origin metadata", () => {
+    const options = isolatedOptions();
+    const run = createUpdateRun({ trigger: "cli" }, options);
+    const admission = {
+      owner: "installed" as const,
+      fallbackReason: "update-admission-unsupported-target",
+    };
+    const saved = recordUpdateRunPhase(run.runId, "staging", { origin: { admission } }, options);
+    expect(saved.admission).toEqual(admission);
+    const retained = getUpdateRun(run.runId, options)!;
+    expect(retained.admission).toEqual(admission);
+    expect(retained.origin.candidateAdmission).toBeUndefined();
+    expect(listUpdateRuns({}, options)[0]?.admission).toEqual(admission);
+    const report = renderUpdateRunReport(retained).markdown;
+    expect(report).toContain("Update safety checks ran in the installed updater");
+    expect(report).toContain("update-admission-unsupported-target");
+    const database = openOpenClawStateDatabase(options);
+    const row = database.db
+      .prepare("SELECT origin_json FROM update_runs WHERE run_id = ?")
+      .get(run.runId) as { origin_json: string };
+    expect(JSON.parse(row.origin_json).admission).toEqual(admission);
+  });
 
   it("retains an accepted admission's identities beside maximum driver metadata and large warnings", () => {
     const options = isolatedOptions();
@@ -157,6 +136,9 @@ describe("update run ledger", () => {
       candidateVersion,
       installedVersion,
     });
+    expect(renderUpdateRunReport(retained).markdown).toContain(
+      "Update safety checks ran in the candidate updater",
+    );
     expect(Buffer.byteLength(JSON.stringify(retained.origin))).toBeLessThanOrEqual(16 * 1024);
   });
 

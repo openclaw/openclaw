@@ -645,7 +645,7 @@ describe("conversation-owned temporary environments", () => {
     expect(parked[0]![0]).toContain("lease-1");
     expect(parked[0]![0]).toContain("http 503");
     expect(parked[0]![0]).toContain("crabbox stop lease-1");
-    expect(parked[0]![0]).toContain("crabbox leases list");
+    expect(parked[0]![0]).toContain("crabbox inspect --id lease-1 --json");
     expect(service.get(created.attachment.environmentId)?.error).toBe(parked[0]![0]);
     await withGatewayToolCallerIdentity(
       {

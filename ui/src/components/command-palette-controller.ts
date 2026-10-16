@@ -5,13 +5,13 @@ import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../app/operator-access.ts";
 import { updateHumanMentions, type HumanMentionInput } from "../lib/chat/human-mentions.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { GatewayPageBinding } from "../lib/gateway-page-binding.ts";
 import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
 import { ModelCatalogReader } from "../lib/model-catalog-reader.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { resolveUiSelectedGlobalAgentId } from "../lib/sessions/session-key.ts";
 import { searchVisibleSessionTranscripts } from "../lib/sessions/transcript-search.ts";
-import { GatewayPageController } from "../lit/gateway-page-controller.ts";
-import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import { SubscriptionsController } from "../lib/subscriptions-controller.ts";
 import {
   HumanMentionMenu,
   type HumanMentionMenuHost,
@@ -126,7 +126,7 @@ export class PaletteController {
     loadedAt?: number;
   };
   private readonly modelReader = new ModelCatalogReader(() => this.publish());
-  private readonly gateway: GatewayPageController;
+  private readonly gateway: GatewayPageBinding;
 
   constructor(
     private readonly element: HTMLElement,
@@ -156,7 +156,7 @@ export class PaletteController {
       },
     );
     this.subscriptions = new SubscriptionsController(legacyHost);
-    this.gateway = new GatewayPageController(legacyHost, {
+    this.gateway = new GatewayPageBinding(this.publish, {
       getGateway: () => this.context?.gateway,
       invalidateRequests: () => {
         this.clearSessionSearch();
@@ -199,6 +199,7 @@ export class PaletteController {
   }
 
   connect() {
+    this.gateway.connect();
     document.addEventListener("keydown", this.handleGlobalKeydown);
     this.publish();
   }
@@ -210,6 +211,7 @@ export class PaletteController {
     this.inputElement?.removeEventListener("focus", this.adoptInitialInput);
     this.inputElement = undefined;
     this.open = false;
+    this.gateway.dispose();
     this.mentionMenu.dispose();
     this.composing = false;
     this.mentionInput = undefined;

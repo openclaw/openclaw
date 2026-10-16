@@ -618,23 +618,6 @@ function createAgentCliSignalBridge(processLike: AgentCliProcessLike = process) 
   };
 }
 
-function isAgentCliProcessLike(value: unknown): value is AgentCliProcessLike {
-  return (
-    Boolean(value) &&
-    typeof value === "object" &&
-    typeof (value as { on?: unknown }).on === "function" &&
-    typeof (value as { off?: unknown }).off === "function"
-  );
-}
-
-function resolveAgentCliProcessLike(deps: AgentCliDeps | undefined): AgentCliProcessLike {
-  if (!deps || !Object.hasOwn(deps, "process")) {
-    return process;
-  }
-  const processLike = (deps as { process?: unknown }).process;
-  return isAgentCliProcessLike(processLike) ? processLike : process;
-}
-
 async function delayMs(ms: number, signal?: AbortSignal): Promise<void> {
   try {
     await sleep(ms, signal);
@@ -1075,7 +1058,7 @@ export async function agentCliCommand(
   const gatewayDispatchOpts = dispatchOpts.runId
     ? dispatchOpts
     : { ...dispatchOpts, runId: randomIdempotencyKey() };
-  const signalBridge = createAgentCliSignalBridge(resolveAgentCliProcessLike(deps));
+  const signalBridge = createAgentCliSignalBridge(deps?.process);
   try {
     if (dispatchOpts.local === true) {
       const stateLock = await acquireEmbeddedAgentStateLock(

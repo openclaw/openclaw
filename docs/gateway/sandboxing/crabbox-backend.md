@@ -8,7 +8,7 @@ Run sandboxed tools on a machine leased by Crabbox. OpenClaw manages the remote 
 
 ## Crabbox backend
 
-Initial support is for direct Daytona leases. Install a Crabbox build with fixed-lease recovery, repository-owned `exec`, and `stop --current-repo`. Authenticate Crabbox for Daytona on the Gateway host, then check support from the workspace that will own the sandbox:
+Initial support is for direct Daytona leases. Crabbox 0.77.0 or newer is required, including fixed-lease recovery, repository-owned `exec`, and `stop --current-repo`. OpenClaw prepares a verified managed distribution when the selected executable is missing or outdated, preserving the operator's binary and config; `openclaw doctor --fix` prepares configured sandboxes too. Authenticate Crabbox for Daytona on the Gateway host, then check support from the workspace that will own the sandbox:
 
 ```bash
 crabbox exec --check --provider daytona
@@ -57,5 +57,9 @@ Every remote command, file operation, upload, and staged-exec cleanup runs throu
 The `sandbox` block registers the backend. `provider`, `class`, `ttl`, and `idleTimeout` are optional and fall back to the Crabbox configuration on the host. Set `binary` to select a particular Crabbox executable; otherwise OpenClaw discovers a sibling build or uses `crabbox` from `PATH`. `agents.defaults.sandbox.ssh.workspaceRoot` still selects the remote root. Other SSH settings, including `target` and identity settings, do not configure the Crabbox transport: Crabbox owns its private provider connection.
 
 Provider credentials are inherited by the local Crabbox process. They are not automatically copied into the remote command environment. OpenClaw stages the requested remote environment privately through the same command owner, preserving raw file bytes and command output.
+
+TTL is total lifetime from creation; idle timeout is the inactivity window. The earlier deadline ends the lease. Omitted values inherit host configuration, or Crabbox's 30-minute TTL and idle defaults. Policy may clamp requests. The default maximum is four hours; trusted direct-provider `maxTTL` configuration can allow up to 24 hours. `keep` does not exempt a sandbox from expiry. The example's `2h` / `30m` is a bounded multi-turn request, not a persistence guarantee.
+
+Sandbox tools use `exec`, not `run`: there is no sandbox-wide heartbeat or command auto-extension promise between calls. Daytona fixes its native deadline at creation, so choose enough TTL at allocation. An expired or released fixed ID requires reconciliation or `openclaw sandbox recreate` through the existing sandbox owner before replacement. If Crabbox configuration sets `directLeases: deny` without permitting Daytona in its trusted `directLeaseAllow`, direct Daytona allocation is unavailable; do not bypass the policy with another credential or provider.
 
 `openclaw sandbox list`/`recreate`/prune treat Crabbox runtimes like other remote runtimes; removing a runtime releases the lease through repository-scoped cleanup. Every tool call crosses the network, so expect higher latency than Docker. Use the provider's idle and TTL settings and explicit cleanup to manage resource usage. Existing lease inspection, access, and cleanup follow Crabbox's stored provider claim. To switch providers, recreate the existing sandbox before starting work with the new provider. The sandboxed browser and `sandbox.docker.binds` are not supported on this backend.

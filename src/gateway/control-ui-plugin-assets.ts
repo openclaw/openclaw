@@ -11,11 +11,13 @@ import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   readPluginControlUiAssets,
+  pluginControlUiRevision,
   type PluginControlUiAsset,
 } from "../plugins/control-ui-assets.js";
 import { shouldRejectHardlinkedPluginFiles } from "../plugins/hardlink-policy.js";
 import { loadPluginManifest, type PluginManifestControlUi } from "../plugins/manifest.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { hasCanonicalPluginDistribution } from "../plugins/plugin-runtime-artifact-binding.js";
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import type { PluginRecord, PluginRegistry } from "../plugins/registry.js";
 import { getPluginRegistryForContext } from "../plugins/runtime.js";
@@ -155,13 +157,7 @@ async function snapshotBrowserBuild(
       }),
     },
   );
-  const digest = createHash("sha256").update(JSON.stringify({ declaration, uiCapabilities }));
-  for (const [name, asset] of [...assets].toSorted(([left], [right]) =>
-    left.localeCompare(right),
-  )) {
-    digest.update(`${name}\0${asset.body.length}\0`).update(asset.body);
-  }
-  const revision = digest.digest("hex");
+  const revision = pluginControlUiRevision(declaration, uiCapabilities, assets);
   const basePath = getRuntimeConfigSnapshot()?.gateway?.controlUi?.basePath;
   const prefix = `${controlUiPluginAssetPrefix(record.id, basePath)}${revision}/`;
   const assetUrl = (name: string) =>
@@ -178,6 +174,14 @@ async function snapshotBrowserBuild(
       imports,
       styles: styles.map(assetUrl),
       ...(uiCapabilities !== undefined ? { uiCapabilities } : {}),
+      ...(hasCanonicalPluginDistribution(record) && record.packageName && record.packageVersion
+        ? {
+            bundledDistribution: {
+              packageName: record.packageName,
+              packageVersion: record.packageVersion,
+            },
+          }
+        : {}),
     },
   };
 }

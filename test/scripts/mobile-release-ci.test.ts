@@ -374,7 +374,9 @@ describe("mobile release CI tools", () => {
         },
         inputs: { operation: scenario.operation },
         vars: { ANDROID_INTERNAL_ENABLED: scenario.enabled },
+        needs: { qualify: { result: "success" } },
         always: () => true,
+        cancelled: () => false,
       };
       const evaluate = (expression: string) => evaluateWorkflowExpression(expression, context);
       expect(Boolean(evaluate(release.if)), JSON.stringify(scenario)).toBe(
@@ -1414,7 +1416,7 @@ fi
     );
     expect(steps[artifactIndex]).toMatchObject({
       if: "always()",
-      uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+      uses: "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
       with: {
         name: "android-emulator-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}",
         path: "${{ runner.temp }}/android-emulator-diagnostic",

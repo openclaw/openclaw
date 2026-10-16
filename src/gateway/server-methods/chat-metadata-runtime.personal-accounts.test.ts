@@ -42,6 +42,28 @@ import {
 import { WITHOUT_OPENAI_ENV_AUTH } from "./models-list-result.openai-routes.test-support.js";
 
 describe("gateway chat metadata personal accounts", () => {
+  test("stops serving a retained shared list once the requester connects a personal account", async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const { harness, owner, alice, aliceScope } = await createPersonalChatMetadataFixture();
+      let current = true;
+      harness.setOwner({ ...owner, isCurrent: () => current });
+      await harness.runtime.refresh();
+      const request = {
+        ...aliceScope,
+        params: { agentId: "main", view: "configured" as const },
+        includeManualSelection: false,
+      };
+      const shared = { accountSelection: { kind: "automatic" } };
+      expect(await harness.runtime.readModelsList(request)).toMatchObject(shared);
+      // The retired owner's replacement has not published, so reads use the retained list.
+      current = false;
+      expect(await harness.runtime.readModelsList(request)).toMatchObject(shared);
+      connectChatMetadataAccount(alice.id);
+      // Personal accounts need their own projection, not the retained shared list.
+      expect(await harness.runtime.readModelsList(request)).toBeUndefined();
+    });
+  });
+
   test("reads a startup account label while unrelated work occupies the state writer", async ({
     signal,
   }) => {

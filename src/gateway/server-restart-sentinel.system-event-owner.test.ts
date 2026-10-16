@@ -274,43 +274,54 @@ it.each(["completed", "failed", "cancelled"] as const)(
   },
 );
 
-it("keeps an event retryable when normal admission refuses it before adoption", async () => {
-  await withOpenClawTestState({ label: "restart-event-retry", layout: "state-only" }, async () => {
-    setRuntimeConfigSnapshot({});
-    mockEventSession();
-    const queueContext = captureOpenClawStateWorkerContext();
-    const id = await queueStorage.enqueueSessionDelivery(
-      {
-        kind: "systemEvent",
-        sessionKey: "agent:main:main",
-        text: "resume work",
+it.each([undefined, true, false])(
+  "settles an admission refusal with retryable=%s",
+  async (retryable) => {
+    await withOpenClawTestState(
+      { label: "restart-event-retry", layout: "state-only" },
+      async () => {
+        setRuntimeConfigSnapshot({});
+        mockEventSession();
+        const queueContext = captureOpenClawStateWorkerContext();
+        const id = await queueStorage.enqueueSessionDelivery(
+          {
+            kind: "systemEvent",
+            sessionKey: "agent:main:main",
+            text: "resume work",
+          },
+          queueContext,
+        );
+        mocks.enqueueSessionEvent.mockReturnValueOnce({
+          id: "refused-event",
+          accepted: Promise.resolve({ ok: false, error: "session is busy" }),
+          cancel: () => true,
+          settled: Promise.resolve({
+            status: "failed",
+            executionStarted: false,
+            delivered: false,
+            error: "session is busy",
+            retryable,
+          }),
+        });
+        await drainPendingSessionDelivery({
+          id,
+          queueContext,
+          bypassBackoff: true,
+          logLabel: "restart admission",
+          log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          deliver: (entry) => deliverQueuedSessionDelivery({ deps: {}, entry, queueContext }),
+        });
+        const pending = await queueStorage.loadPendingSessionDelivery(id, queueContext);
+        if (retryable === false) {
+          expect(pending).toBeNull();
+        } else {
+          expect(pending).toMatchObject({ id, retryCount: 1, lastError: "session is busy" });
+          expect(pending?.deliveryStartedAt).toBeUndefined();
+        }
       },
-      queueContext,
     );
-    mocks.enqueueSessionEvent.mockReturnValueOnce({
-      id: "refused-event",
-      accepted: Promise.resolve({ ok: false, error: "session is busy" }),
-      cancel: () => true,
-      settled: Promise.resolve({
-        status: "failed",
-        executionStarted: false,
-        delivered: false,
-        error: "session is busy",
-      }),
-    });
-    await drainPendingSessionDelivery({
-      id,
-      queueContext,
-      bypassBackoff: true,
-      logLabel: "restart admission",
-      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      deliver: (entry) => deliverQueuedSessionDelivery({ deps: {}, entry, queueContext }),
-    });
-    const pending = await queueStorage.loadPendingSessionDelivery(id, queueContext);
-    expect(pending).toMatchObject({ id, retryCount: 1, lastError: "session is busy" });
-    expect(pending?.deliveryStartedAt).toBeUndefined();
-  });
-});
+  },
+);
 
 it("does not hand off an event after its queue admission retires during the session read", async () => {
   await withOpenClawTestState(

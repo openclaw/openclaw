@@ -1,8 +1,18 @@
+import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
+import type {
+  SqliteWorkerBackend,
+  SqliteWorkerOperations,
+} from "../../infra/sqlite-worker-contract.js";
 import { deferSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operation-admission.js";
+import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import { createSqliteWorkerTransferOwner } from "../../infra/sqlite-worker-transfer.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
-import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import {
+  getOpenClawAgentDatabaseIfOpen,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
 import type { AgentDatabaseAdmissionRestriction } from "../../state/openclaw-agent-execution-domain.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { captureTrajectoryRuntimeRetentionMetadataMutation } from "../../trajectory/runtime-retention.sqlite.js";
@@ -37,8 +47,40 @@ import { readSessionPendingInputAuthorityFactsInTransaction } from "./session-pe
 import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
 import { readStagedSessionTranscriptAuthority } from "./session-transcript-authority.js";
 
+export type SessionWorkerDatabaseBinding = {
+  database: DatabaseSync;
+  databasePath: string;
+  admit(stage: "transaction" | "commit", restriction?: AgentDatabaseAdmissionRestriction): void;
+};
+
+/** Private write domains borrow one canonical connection and its admission lifecycle. */
+export function bindSessionWorkerBackend<Operations extends SqliteWorkerOperations>(
+  input: { agentId: string },
+  bound: SessionWorkerDatabaseBinding,
+  domain: string,
+  createExecute: (
+    context: AgentWorkerOperationContext,
+    database: OpenClawAgentDatabase,
+  ) => SqliteWorkerBackend<Operations>["execute"],
+  owner = domain,
+): SqliteWorkerBackend<Operations> {
+  const options = {
+    agentId: input.agentId,
+    path: bound.databasePath,
+    env: getSqliteWorkerStateContext().environment,
+  };
+  const database = getOpenClawAgentDatabaseIfOpen(options);
+  if (!database || database.db !== bound.database || database.path !== bound.databasePath) {
+    throw new Error(`${owner} lost its canonical database owner`);
+  }
+  const context = createSessionWorkerOperationContext(database, options, bound, domain);
+  return bindSqliteWorkerDatabase<Operations>(database.db, {
+    execute: createExecute(context, database),
+  });
+}
+
 /** Connection-bound domains share the executor's transaction and publication grants. */
-export function createSessionWorkerOperationContext(
+function createSessionWorkerOperationContext(
   database: OpenClawAgentDatabase,
   options: AgentWorkerOperationContext["options"],
   bound: {

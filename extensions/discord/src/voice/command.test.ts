@@ -3,7 +3,6 @@ import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/c
 import { describe, expect, it, vi } from "vitest";
 import type { CommandInteraction, CommandWithSubcommands } from "../internal/discord.js";
 import { createDiscordLivePolicyReader } from "../monitor/live-policy.js";
-import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
 import { createDiscordVoiceCommand } from "./command.js";
 import type { DiscordVoiceManager } from "./voice-runtime.js";
 
@@ -227,18 +226,14 @@ describe("createDiscordVoiceCommand", () => {
     });
   });
 
-  it("vc status tolerates partial thread channels with throwing getters", async () => {
+  it("vc status handles channels without optional metadata", async () => {
     const statusSpy = vi.fn(() => []);
     const manager = {
       status: statusSpy,
     } as unknown as DiscordVoiceManager;
     const { status } = createVoiceCommandHarness(manager);
-    const partialChannel = createPartialDiscordChannelWithThrowingGetters(
-      { id: "123456789012345678" },
-      ["name", "parentId"],
-    );
     const { interaction, reply } = createInteraction({
-      channel: partialChannel as CommandInteraction["channel"],
+      channel: { id: "123456789012345678" } as CommandInteraction["channel"],
       client: { fetchChannel: vi.fn(async () => null) } as unknown as CommandInteraction["client"],
       guild: { id: "g1", name: "Guild" } as CommandInteraction["guild"],
     });

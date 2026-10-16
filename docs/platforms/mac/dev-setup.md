@@ -70,6 +70,11 @@ setups are supported. `scripts/stage-mac-runtime.sh` installs the package with
 build-time Node and npm, then stages Bun and SQLite. No Node executable or
 npm/corepack/npx shims ship in the app.
 
+For an executable-plus-sidecar packaging input, the separate
+[standalone builder](/install/standalone) emits `openclaw`, `runtime/`, and a
+manifest with compiler provenance and mode-specific signing entitlements.
+Desktop packaging owns seeding and replacement of that complete artifact.
+
 The OpenClaw Bun fork has one shared pin in `scripts/lib/openclaw-bun.json`,
 consumed by macOS packaging, the Tauri app, and CI's `setup-test-bun` action.
 `scripts/stage-openclaw-bun.sh <runtime> <darwin|linux> <arm64|x64> [...]`

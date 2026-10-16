@@ -116,6 +116,7 @@ describe("Team Reports registration", () => {
         services[0]!.start({ config, stateDir: "/unused", logger: console, scheduler }),
       ).rejects.toBe(stopBeforeOpening);
       expect(createTeamReportsStore).toHaveBeenCalledWith({
+        config,
         stateDir: "/unused",
         workerModuleUrl: pathToFileURL(path.resolve(worker)),
       });

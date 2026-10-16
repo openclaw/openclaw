@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import * as runtimePaths from "../../daemon/runtime-paths.js";
+import { withDaemonRuntimePinStore } from "../../daemon/runtime-pin-store.js";
 import { ServiceStartRefusalError } from "../../daemon/service-inspection-error.js";
 import type {
   GatewayServiceCommandConfig,
@@ -74,12 +75,12 @@ describe("registered gateway install runtime default", () => {
     const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
     const bunPath = "/opt/app/runtime/bun";
     Object.defineProperty(process, "execPath", { configurable: true, value: bunPath });
-    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.2" });
+    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.3" });
     vi.spyOn(runtimePaths, "resolvePreferredNodePath").mockResolvedValue(undefined);
     vi.spyOn(runtimePaths, "resolveSystemNodeInfo").mockResolvedValue(null);
     const supported = {
       status: "supported" as const,
-      version: "1.4.2",
+      version: "1.4.3",
       sqliteVersion: "3.53.4",
       sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
       nodeSharedSqlite: false,
@@ -135,6 +136,9 @@ beforeEach(async () => {
   })) {
     vi.stubEnv(key, value);
   }
+  await fs.mkdir(state);
+  // Keep migration pending, but create private files before emulating another platform.
+  withDaemonRuntimePinStore(process.env, true, () => undefined);
   vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
   mockSystemAccountHome();
   clearConfigCache();
@@ -145,7 +149,6 @@ beforeEach(async () => {
   service.install.mockResolvedValue(undefined);
   service.readCommand.mockReset();
   service.readCommand.mockResolvedValue(null);
-  await fs.mkdir(state);
   await fs.writeFile(
     path.join(state, "openclaw.json"),
     JSON.stringify({ gateway: { mode: "local", auth: { mode: "none" } } }),

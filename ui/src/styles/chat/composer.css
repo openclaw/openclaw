@@ -1,9 +1,8 @@
 .context-usage__popover,
 .chat-controls__inline-select-menu,
-.agent-chat__attach-menu::part(menu),
-.agent-chat__capability-menu::part(menu),
-.chat-controls__permission-picker::part(menu),
-.chat-talk-input-picker::part(menu) {
+.agent-chat__capability-menu-panel,
+.chat-controls__permission-menu,
+.chat-talk-input-picker__menu {
   border: 1px solid var(--chat-composer-popover-border, var(--overlay-border));
   border-radius: var(--chat-composer-popover-radius, var(--radius-lg));
   background: var(--chat-composer-popover-background, var(--bg-elevated));
@@ -11,16 +10,35 @@
   corner-shape: superellipse(1.5);
 }
 
-.chat-controls__inline-select[open] > wa-popup::part(popup) {
+/* Retire entry animation before the overlay waits for closing presentation. */
+.chat-controls__inline-select[open] > .chat-picker-overlay:where(:not([data-phase="closing"])) {
   animation: chat-composer-picker-in var(--control-ui-transition-fast) ease;
 }
 
-.chat-controls__inline-select[open] > wa-popup[data-current-placement^="top"]::part(popup) {
+.chat-controls__inline-select[open] > .chat-picker-overlay[data-placement^="top"] {
   transform-origin: bottom;
 }
 
-.chat-controls__inline-select[open] > wa-popup[data-current-placement^="bottom"]::part(popup) {
+.chat-controls__inline-select[open] > .chat-picker-overlay[data-placement^="bottom"] {
   transform-origin: top;
+}
+
+.chat-picker-overlay {
+  /* Try the full panel before shrinking it to the preferred side's remaining space. */
+  max-height: min(var(--oc-overlay-max-height, 420px), calc(100dvh - 16px));
+  position-try-fallbacks:
+    --chat-picker-fit flip-block,
+    --chat-picker-fit,
+    --chat-picker-fit flip-inline,
+    --chat-picker-fit flip-block flip-inline;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+}
+
+@position-try --chat-picker-fit {
+  max-height: min(var(--oc-overlay-max-height, 420px), calc(100% - 16px));
 }
 
 @keyframes chat-composer-picker-in {
@@ -102,6 +120,10 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .chat-controls__inline-select[open] > .chat-picker-overlay {
+    animation: none;
+  }
+
   .agent-chat__input--dictating::after {
     --chat-dictation-edge-angle: 238deg;
     animation: none;
@@ -263,7 +285,7 @@
   font-size: 12px;
 }
 
-.agent-chat__attach-menu-option [slot="icon"] {
+.agent-chat__attach-menu-option > .oc-menu-item__icon {
   color: var(--muted);
 }
 
@@ -279,10 +301,8 @@
   stroke-width: 1.5px;
 }
 
-.agent-chat__capability-menu::part(menu) {
-  /* Web Awesome owns this menu's important max-height rule. Keep capability
-     views compact while respecting the composer's live viewport budget. */
-  --auto-size-available-height: min(
+.agent-chat__capability-menu-panel {
+  --oc-overlay-max-height: min(
     420px,
     50dvh,
     var(--chat-composer-popover-max-height, calc(100dvh - 116px))
@@ -296,7 +316,7 @@
   scrollbar-gutter: stable;
 }
 
-.agent-chat__capability-menu[data-view="root"]::part(menu) {
+.agent-chat__capability-menu[data-view="root"] .agent-chat__capability-menu-panel {
   /* Wide enough that "Web search" plus its trailing switch stays one line. */
   width: 208px;
   min-width: 208px;
@@ -305,7 +325,7 @@
   scrollbar-gutter: auto;
 }
 
-.agent-chat__capability-menu-item[value="back"] {
+.agent-chat__capability-menu-item[data-value="back"] {
   position: sticky;
   top: calc(-1 * var(--menu-padding));
   z-index: 1;
@@ -313,8 +333,6 @@
 }
 
 .agent-chat__capability-menu-item {
-  --wa-color-text-normal: var(--text);
-
   flex-shrink: 0;
 }
 
@@ -363,17 +381,14 @@
   color: var(--muted);
 }
 
-/* Row voice shared with the permission picker: 13/600 strong titles, muted 11px
-   notes, and a 16px icon part so the icon→label distance is the row gap alone
-   (wa-dropdown-item's default icon part is 24px wide, which read as a wider,
-   misaligned gap next to the custom-markup pickers). */
-.agent-chat__attach-menu-option::part(icon),
-.agent-chat__capability-menu-item::part(icon) {
+/* Keep native menu rows aligned with the permission picker. */
+:is(.agent-chat__attach-menu-option, .agent-chat__capability-menu-item) > .oc-menu-item__icon {
   width: var(--chat-composer-menu-icon);
+  margin-inline-end: 0;
 }
 
-.agent-chat__attach-menu-option::part(label),
-.agent-chat__capability-menu-item::part(label) {
+.agent-chat__attach-menu-option > .oc-menu-item__label,
+.agent-chat__capability-menu-item > .oc-menu-item__label {
   color: var(--text-strong);
   font-size: 13px;
   font-weight: 600;
@@ -398,7 +413,7 @@
   line-height: 1.25;
 }
 
-.agent-chat__capability-menu-item[value^="library-"] .agent-chat__capability-menu-label > span,
+.agent-chat__capability-menu-item[data-value^="library-"] .agent-chat__capability-menu-label > span,
 .chat-browser-annotation-card__meta > span,
 .chat-controls__model-option-title,
 .chat-controls__model-option-meta,
@@ -418,7 +433,7 @@
   pointer-events: none;
 }
 
-.agent-chat__capability-menu-toggle[type="checkbox"]::part(checkmark) {
+.agent-chat__capability-menu-toggle--switch > .oc-menu-item__check {
   display: none;
 }
 
@@ -873,7 +888,7 @@
   transform: rotate(180deg);
 }
 
-.chat-talk-input-picker::part(menu) {
+.chat-talk-input-picker__menu {
   width: min(300px, calc(100vw - 24px));
   padding: 8px;
 }
@@ -952,7 +967,7 @@
 
 /* Sole content of the popover when no input can be selected, so it carries the
    row's own weight instead of reading as a footnote under the heading. */
-.chat-talk-input-picker__notice {
+.chat-talk-input-picker__notice:disabled {
   padding: 0;
   opacity: 1;
   color: inherit;
@@ -1060,7 +1075,8 @@
   line-height: 1.35;
 }
 
-.chat-talk-input-picker__preference::part(checkmark) {
+.chat-talk-input-picker__preference > .oc-menu-item__check,
+.chat-talk-input-picker__item > .oc-menu-item__check {
   display: none;
 }
 
@@ -1206,6 +1222,11 @@
       100vw - var(--safe-area-left) - var(--safe-area-right) - 2 * var(--shell-popup-inline-gutter)
     );
     max-height: min(440px, var(--auto-size-available-height, calc(100dvh - 116px)));
+  }
+
+  .agent-chat__input .chat-controls__inline-select > .chat-picker-overlay {
+    position-area: top span-all;
+    justify-self: center;
   }
 }
 
@@ -1538,6 +1559,23 @@ html[dir="rtl"] .chat-attachment-loading > span {
   }
 }
 
+.chat-attachment-failures {
+  margin: 0 var(--chat-composer-editor-inset-inline) var(--chat-composer-editor-inset-block);
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  color: var(--danger);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.chat-attachment-failures__help {
+  margin-block-start: 4px;
+  color: var(--text);
+}
+
 .chat-attachment-error {
   display: grid;
   width: 100%;
@@ -1856,6 +1894,13 @@ html[dir="rtl"] .chat-attachment-loading > span {
 .agent-chat__photo-input,
 .agent-chat__camera-input {
   display: none;
+  position: fixed;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  box-sizing: border-box;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .chat-controls__model {
@@ -1938,6 +1983,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 .chat-controls__inline-select-trigger:hover,
+.chat-controls__inline-select-trigger[aria-expanded="true"],
 .chat-controls__inline-select[open] > .chat-controls__inline-select-trigger {
   background: color-mix(in srgb, var(--text) 7%, transparent);
   color: var(--text-strong);
@@ -2044,7 +2090,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
   max-height: min(280px, var(--auto-size-available-height, calc(100vh - 120px)));
 }
 
-.chat-controls__permission-picker::part(menu) {
+.chat-controls__permission-menu {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   column-gap: 16px;
@@ -2077,6 +2123,14 @@ html[dir="rtl"] .chat-attachment-loading > span {
   grid-column: 1 / -1;
 }
 
+.chat-controls__permission-option > .oc-menu-item__check {
+  display: none;
+}
+
+.chat-controls__permission-option > :is(.oc-menu-item__icon, .oc-menu-item__details) {
+  margin-inline: 0;
+}
+
 .chat-controls__permission-icon,
 .chat-controls__permission-lock {
   display: inline-flex;
@@ -2091,6 +2145,10 @@ html[dir="rtl"] .chat-attachment-loading > span {
 
 .chat-controls__permission-trigger .chat-controls__permission-icon {
   color: currentColor;
+}
+
+.chat-controls__permission-trigger > .oc-menu-item__label {
+  display: contents;
 }
 
 .agent-chat__input .chat-controls__permission-trigger--default,
@@ -2130,7 +2188,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
   color: var(--muted);
 }
 
-.chat-controls__permission-option:state(disabled) .chat-controls__permission-option-icon,
+.chat-controls__permission-option:disabled .chat-controls__permission-option-icon,
 .chat-controls__permission-option[data-chat-permission-option="full"]
   .chat-controls__permission-option-icon {
   color: var(--accent);
@@ -3396,8 +3454,12 @@ html[dir="rtl"] .chat-attachment-loading > span {
 .agent-chat__welcome-avatar {
   width: 96px;
   height: 96px;
-  border-radius: 50%;
   object-fit: cover;
+}
+
+.agent-chat__welcome-avatar,
+.agent-chat__welcome-avatar .identity-avatar--agent {
+  border-radius: 50%;
 }
 
 .agent-chat__welcome-avatar .identity-avatar__text {

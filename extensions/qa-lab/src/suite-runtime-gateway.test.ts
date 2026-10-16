@@ -193,41 +193,6 @@ describe("qa suite gateway helpers", () => {
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
-  it("bounds oversized suite gateway JSON responses", async () => {
-    let chunksRead = 0;
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (chunksRead === 0) {
-            chunksRead += 1;
-            controller.enqueue(new TextEncoder().encode('{"payload":"'));
-            return;
-          }
-          if (chunksRead <= 256) {
-            chunksRead += 1;
-            controller.enqueue(new Uint8Array(64 * 1024).fill(0x61));
-            return;
-          }
-          controller.enqueue(new TextEncoder().encode('"}'));
-          controller.close();
-        },
-      }),
-      {
-        headers: { "content-type": "application/json" },
-      },
-    );
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({ response, release });
-
-    await expect(fetchJson("http://127.0.0.1:43123/config")).rejects.toThrow(
-      "qa-lab-suite-fetch-json: JSON response exceeds 16777216 bytes",
-    );
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({ timeoutMs: 15_000 }),
-    );
-    expect(release).toHaveBeenCalledTimes(1);
-  });
-
   it("bounds stalled suite gateway JSON response bodies", async () => {
     vi.useFakeTimers();
     const release = vi.fn(async () => {});

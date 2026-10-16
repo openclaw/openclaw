@@ -31,6 +31,7 @@ let providerAvailable = false;
 let providerEmbeddingError: Error | null = null;
 let providerQueryError: Error | null = null;
 let providerQueryCalls = 0;
+let providerBatchCalls = 0;
 const createEmbeddingProviderMock = vi.hoisted(() =>
   vi.fn(async () => {
     await providerConstructionGate;
@@ -44,6 +45,7 @@ const createEmbeddingProviderMock = vi.hoisted(() =>
           id: "openai",
           model: "mock-embed",
           embedBatch: async (texts: string[]) => {
+            providerBatchCalls += 1;
             if (providerEmbeddingError) {
               throw providerEmbeddingError;
             }
@@ -116,6 +118,7 @@ describe("memory manager FTS-only reindex", () => {
     providerEmbeddingError = null;
     providerQueryError = null;
     providerQueryCalls = 0;
+    providerBatchCalls = 0;
     workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Alpha topic\n\nKeep this note.");
@@ -299,6 +302,102 @@ describe("memory manager FTS-only reindex", () => {
       ]);
     } finally {
       nowSpy.mockRestore();
+    }
+  });
+
+  it.each(["watch", "search maintenance"])(
+    "retains the original embedding cooldown after a quota failure in %s",
+    async (origin) => {
+      providerAvailable = true;
+      const memoryManager = await createManager();
+      await memoryManager.sync({ force: true });
+      const idle = memoryManager as unknown as { awaitManagerIdle(): Promise<void> };
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+      try {
+        const quotaError = Object.assign(new Error("embedding quota exhausted"), {
+          status: 429,
+          errorCode: "insufficient_quota",
+        });
+        providerEmbeddingError = quotaError;
+        providerQueryError = quotaError;
+        await fs.writeFile(
+          path.join(workspaceDir, "MEMORY.md"),
+          "Alpha topic\n\nPending quota update.",
+        );
+        // The observation fixture leaves dirty notification to the test.
+        Reflect.set(memoryManager, "dirty", true);
+        if (origin === "watch") {
+          await expect(memoryManager.sync({ reason: "watch" })).rejects.toThrow(
+            "embedding quota exhausted",
+          );
+        } else {
+          await expect(memoryManager.search("Alpha topic")).resolves.toHaveLength(1);
+          await idle.awaitManagerIdle();
+        }
+        const requestsAfterFailure = providerBatchCalls + providerQueryCalls;
+
+        for (const elapsed of [10_000, 29_999]) {
+          clock.mockReturnValue(now + elapsed);
+          await expect(memoryManager.search("Alpha topic")).resolves.toHaveLength(1);
+          await idle.awaitManagerIdle();
+          expect(providerBatchCalls + providerQueryCalls).toBe(requestsAfterFailure);
+          expect(memoryManager.getCachedEmbeddingAvailability()?.cacheExpiresAtMs).toBe(
+            now + 30_000,
+          );
+          expect(countChunksContaining("Pending quota update")).toBe(0);
+        }
+
+        providerEmbeddingError = null;
+        providerQueryError = null;
+        clock.mockReturnValue(now + 30_000);
+        await expect(memoryManager.search("Alpha topic")).resolves.toHaveLength(1);
+        await idle.awaitManagerIdle();
+        expect(providerBatchCalls + providerQueryCalls).toBeGreaterThan(requestsAfterFailure);
+        expect(countChunksContaining("Pending quota update")).toBeGreaterThan(0);
+        expect(memoryManager.status().custom?.providerState).toEqual({
+          mode: "active",
+          providerId: "openai",
+        });
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
+  it("updates a keyword-only index during the original embedding cooldown", async () => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      providerAvailable = true;
+      const quotaError = Object.assign(new Error("embedding quota exhausted"), {
+        status: 429,
+        errorCode: "insufficient_quota",
+      });
+      providerEmbeddingError = quotaError;
+      providerQueryError = quotaError;
+      const memoryManager = await createManager();
+      const idle = memoryManager as unknown as { awaitManagerIdle(): Promise<void> };
+      await expect(memoryManager.search("Alpha topic")).resolves.toHaveLength(1);
+      await idle.awaitManagerIdle();
+      const requestsAfterFailure = providerBatchCalls + providerQueryCalls;
+
+      for (const [elapsed, marker] of [
+        [10_000, "Gamma keyword update"],
+        [29_999, "Delta keyword update"],
+      ] as const) {
+        clock.mockReturnValue(now + elapsed);
+        await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), `${marker}\n\nKeep this note.`);
+        Reflect.set(memoryManager, "dirty", true);
+        await memoryManager.search(marker);
+        await idle.awaitManagerIdle();
+        expect(providerBatchCalls + providerQueryCalls).toBe(requestsAfterFailure);
+        expect(countChunksContaining(marker)).toBeGreaterThan(0);
+        await expect(memoryManager.search(marker)).resolves.toHaveLength(1);
+        expect(memoryManager.getCachedEmbeddingAvailability()?.cacheExpiresAtMs).toBe(now + 30_000);
+      }
+    } finally {
+      clock.mockRestore();
     }
   });
 

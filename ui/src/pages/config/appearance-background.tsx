@@ -2,15 +2,15 @@ import { createEffect, createMemo, createSignal, onCleanup, onSettled } from "so
 import type { ApplicationContext } from "../../app/context.ts";
 import { SessionBackground } from "../../components/session-background.tsx";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { AppearanceBackgroundController } from "./appearance-background-controller.ts";
 import { AppearanceBackground as AppearanceBackgroundView } from "./view-appearance-background.tsx";
 
 export type AppearanceBackgroundProps = { context?: ApplicationContext };
 
-function AppearanceBackgroundContent(props: AppearanceBackgroundProps & { host: HTMLElement }) {
+export function AppearanceBackground(props: AppearanceBackgroundProps) {
+  let host!: HTMLElement;
   const context = createMemo(() => props.context ?? useApplication());
-  // Plain controllers can notify while a descendant or bridge owns the current scope.
+  // Plain controllers can notify while a descendant owns the current scope.
   const [revision, publish] = createSignal(0, { ownedWrite: true });
   const controller = new AppearanceBackgroundController(() => publish((value) => value + 1));
   let preview!: SessionBackground;
@@ -19,7 +19,7 @@ function AppearanceBackgroundContent(props: AppearanceBackgroundProps & { host: 
     return controller.viewProps;
   });
   onSettled(() => {
-    controller.attach(props.host, context());
+    controller.attach(host, context());
   });
   createEffect(context, (current) => controller.connect(current));
   createEffect(revision, () => {
@@ -29,7 +29,7 @@ function AppearanceBackgroundContent(props: AppearanceBackgroundProps & { host: 
   });
   onCleanup(() => controller.dispose());
   return (
-    <>
+    <openclaw-appearance-background ref={(element) => (host = element)}>
       <SessionBackground
         class="settings-background-preview"
         data-background-preview-canvas
@@ -41,12 +41,6 @@ function AppearanceBackgroundContent(props: AppearanceBackgroundProps & { host: 
         preferenceOverride={(revision(), controller.previewPreference)}
       />
       <AppearanceBackgroundView {...viewProps()} />
-    </>
+    </openclaw-appearance-background>
   );
 }
-
-export const AppearanceBackground = defineSolidBridge<AppearanceBackgroundProps>(
-  "openclaw-appearance-background",
-  (props, host) => <AppearanceBackgroundContent {...props} host={host} />,
-  { properties: { context: { default: undefined, attribute: false } } },
-);

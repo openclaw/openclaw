@@ -8,6 +8,7 @@ import { normalizeComparablePath, readRegularFile, statRegularFile } from "./fs-
 import { hashText } from "./hash.js";
 import { createSubsystemLogger } from "./openclaw-runtime-io.js";
 import { isCronRunSessionKey } from "./openclaw-runtime-paths.js";
+import { prepareAssistantTranscriptText } from "./openclaw-runtime-session-visibility.js";
 import {
   assertBoundIncognitoMemorySyncAccess,
   captureIncognitoMemoryReader,
@@ -22,7 +23,6 @@ import {
   isExecCompletionEvent,
   isHeartbeatUserMessage,
   isSessionArchiveArtifactName,
-  isSilentReplyPayloadText,
   isUsageCountedSessionTranscriptFileName,
   materializeSessionArchiveForRead,
   parseUsageCountedSessionIdFromFileName,
@@ -435,9 +435,6 @@ function sanitizeSessionText(text: string, role: "user" | "assistant"): string |
   ) {
     return null;
   }
-  if (isSilentReplyPayloadText(normalized)) {
-    return null;
-  }
   // Assistant-side machinery acks: HEARTBEAT_OK is the canonical "all clear,
   // nothing to do" reply to a heartbeat tick. Drop on the assistant side
   // directly so we do not have to rely on cross-message coupling with the
@@ -663,7 +660,7 @@ export async function buildSessionEntryFromSnapshot(
   const result = await buildSessionEntryFromSource(
     absPath,
     {
-      ...structuredClone(options),
+      ...options,
       ...(onTranscriptMessage
         ? {
             onTranscriptMessage(message, observedAt) {
@@ -862,8 +859,14 @@ async function buildSessionEntryFromSource(
       ) {
         continue;
       }
-      const rawText = collectRawSessionText(message.content);
-      if (rawText === null) {
+      if ("display" in message && message.display === false) {
+        continue;
+      }
+      const rawText = prepareAssistantTranscriptText(
+        message,
+        collectRawSessionText(message.content) ?? undefined,
+      );
+      if (rawText === undefined) {
         continue;
       }
 

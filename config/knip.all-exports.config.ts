@@ -157,13 +157,8 @@ const workspaces = Object.fromEntries(
         : {}),
       entry: [
         ...settings.entry,
-        // The presentation proof HTML selects these browser entries by renderer query param.
-        ...(workspace === "ui"
-          ? [
-              "src/test-helpers/presentation-primitives-lit.ts!",
-              "src/test-helpers/presentation-primitives-solid.tsx!",
-            ]
-          : []),
+        // The presentation proof HTML loads this browser entry.
+        ...(workspace === "ui" ? ["src/test-helpers/presentation-primitives-solid.tsx!"] : []),
         // Native builds load this private entry through the generator's temporary bundle.
         ...(workspace === "packages/gateway-protocol" ? ["scripts/native-codegen.ts!"] : []),
         // Compiler registries emit entry modules, including declarations

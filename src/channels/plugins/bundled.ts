@@ -280,10 +280,6 @@ function listBundledChannelPluginIdsForRoot(
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-export function listBundledChannelPluginIds(): readonly ChannelId[] {
-  return listBundledChannelPluginIdsForRoot(resolveBundledChannelRootScope());
-}
-
 function resolveBundledChannelMetadata(
   id: ChannelId,
   rootScope: BundledChannelRootScope,
@@ -324,14 +320,6 @@ function getBundledChannelArtifactForRoot<TKind extends BundledChannelArtifactKi
     // SAFETY: rememberBundledChannelArtifact writes this key from the matching typed kind loader.
     return cached.value as BundledChannelArtifactValues[TKind] | undefined;
   }
-  // Keep failure and recursion state separate by artifact kind: broken secrets
-  // must never poison the runtime plugin, setup plugin, or entry contracts.
-  const loadKey = `${kind}\0${id}`;
-  const { artifactLoadsInProgress } = getPluginCacheRoot(metadata.rootDir);
-  if (artifactLoadsInProgress.has(loadKey)) {
-    return undefined;
-  }
-  artifactLoadsInProgress.add(loadKey);
   try {
     const artifact = bundledChannelArtifactLoaders[kind]({ id, rootScope, metadata });
     rememberBundledChannelArtifact(rootScope, kind, id, artifact, metadata);
@@ -353,8 +341,6 @@ function getBundledChannelArtifactForRoot<TKind extends BundledChannelArtifactKi
     log.warn(`[channels] failed to load bundled channel${descriptions[kind]} ${id}: ${detail}`);
     rememberBundledChannelArtifact(rootScope, kind, id, undefined, metadata);
     return undefined;
-  } finally {
-    artifactLoadsInProgress.delete(loadKey);
   }
 }
 

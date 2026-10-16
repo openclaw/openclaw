@@ -14,6 +14,25 @@ title: "Database layout"
 | Global control plane | `~/.openclaw/state/openclaw.sqlite`                        | Shared configuration state, registries, approvals, plugin state, and shared runtime state             |
 | Per-agent data plane | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` | Sessions, transcripts, memory indexes, auth state, conversation state, and agent-scoped runtime state |
 
+### Local daemon service intent
+
+`<state-root>/control/services.sqlite` is a daemon-owned, SQLite-only store on every
+engine. Its independent schema version 1 contains `daemon_runtime_pins`, keyed by
+the existing hashed service identity, with exact versioned `value_json` and
+`updated_at_ms`. Malformed and stale records remain operator intent; inspection
+reports an error instead of treating them as unpinned. The single-row
+`daemon_runtime_pin_migration` receipt records version 1, the source state path,
+`copied` or `complete`, and its update time. A pending receipt is never unpinned.
+
+Doctor moves legacy `daemon-runtime-pin:*` rows from shared `config_machine_state`
+under exclusive state custody. It commits exact local copies before deleting
+source rows, then marks the receipt complete; identical copies resume an
+interrupted copy. Install/start/repair perform this step under service custody
+before reading intent. Read-only status reports `migrationPending` with the next
+step `run openclaw doctor`. Conflicting values or timestamps stop migration with both stores retained. Managed updates
+run this migration for SQLite installations too. The exact updater recovery
+capture includes the local store. Runtime reads never fall back to shared state.
+
 On Windows, plain drive/UNC paths and their extended-length (`\\?\`) spellings
 identify the same shared-state database owner. Opens, write admission, retained
 connections, and cleanup use the same path identity; native SQLite opens still
@@ -90,7 +109,7 @@ The table is not secret storage. See the
 
 ### Session run outcomes and liveness
 
-The canonical session entry's optional `status` stores only `done`, `failed`,
+The stored session entry's optional `status` stores only `done`, `failed`,
 `killed`, `timeout`, or `interrupted`. Starting a run clears the previous outcome.
 `GatewaySessionRow.status` may also expose `running` or `queued`, derived from the
 run registry and queue owner rather than durable session metadata. Storage workers
@@ -103,18 +122,18 @@ including turns without a channel route. An interrupted outcome alone does not
 authorize resumption or delivery. See [Restart recovery](/gateway/restart-recovery).
 
 Doctor and startup share a one-time normalization of legacy persisted `running`
-and `queued` entries to `interrupted`, before canonical session reads; verified legacy
+and `queued` entries to `interrupted`, before stored-session reads; verified legacy
 yields retain an unset outcome so their child continuation keeps ownership. Eligible
 legacy `running` entries acquire recovery custody if they lack a claim; existing
 claims, transcripts, and activity timestamps remain intact. This changes no table or schema
 version: the existing SQL status index still projects `interrupted` as `failed`;
-canonical entry JSON retains the distinct outcome. Older releases still infer
+stored entry JSON retains the distinct outcome. Older releases still infer
 activity from their persisted flag, so they cannot provide the new liveness or
 claim-only recovery behavior when reopened on these entries.
 
 ### Activity session recaps
 
-[Activity](/web/control-ui/settings#activity-tab) stores one optional `activitySummary` object in the existing `session_nodes.entry_json` session metadata. This is a reconstructible cache; the transcript remains canonical. The [approved persistence design](https://github.com/openclaw/openclaw/issues/147383) adds no SQL table, column, or database schema-version change. Current and `v2026.9.4` metadata serializers preserve unknown optional fields; unknown recap payload versions are treated as cache misses.
+[Activity](/web/control-ui/settings#activity-tab) stores one optional `activitySummary` object in the existing `session_nodes.entry_json` session metadata. This is a reconstructible cache; the transcript remains the source of truth. The [approved persistence design](https://github.com/openclaw/openclaw/issues/147383) adds no SQL table, column, or database schema-version change. Current and `v2026.9.4` metadata serializers preserve unknown optional fields; unknown recap payload versions are treated as cache misses.
 
 Since [agent schema 24](/reference/database-schemas/agent-schema-history#session-hot-facts-and-snapshots),
 `session_nodes.entry_json` contains hot session facts. The separately keyed
@@ -132,12 +151,12 @@ The latest recap survives restart and archival. Deleting the session removes it;
 
 ### User-turn model prompt projections
 
-Canonical user messages may include the optional private field
+Stored user messages may include the optional private field
 `__openclaw.modelPromptProjection: { version: 1, text: string }`. The user-turn
 transcript recorder stores the first model-facing text, including prompt-hook
 prepend/append context or a model-prompt replacement, before provider dispatch.
 The ordinary `content` remains the original user transcript. Projection text is
-stored without secret masking and before deterministic timestamp and sender
+stored without secret masking and before rule-based timestamp and sender
 normalization. Both the first dispatch and replay use that recorded text, then
 apply the same normalization.
 
@@ -194,7 +213,7 @@ and entry-key columns, so live-row counts can read the index without fetching
 stored values. Quotas, TTL cutoffs, ordering, and row contents are unchanged.
 
 Writable startup and `openclaw doctor --fix` replace the older four-column
-definition through canonical index repair, without a schema-version bump. The
+definition through required-index repair, without a schema-version bump. The
 repair builds temporary indexes and runs the existing table and full-file
 integrity checks; allow for extra disk space and work proportional to stored
 entries during the first repair.
@@ -266,7 +285,7 @@ source identity, account, and metadata-agent lookups.
 | Columns                                                                                                                 | Type                                        | Purpose                                                                 |
 | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- | ----------------------------------------------------------------------- |
 | `session_id`, `started_at`                                                                                              | `TEXT NOT NULL`                             | Capture ID and original start time.                                     |
-| `selector`, `export_key`, `session_slug`                                                                                | `TEXT NOT NULL`                             | Canonical selector and derived export identity.                         |
+| `selector`, `export_key`, `session_slug`                                                                                | `TEXT NOT NULL`                             | Normalized selector and derived export identity.                        |
 | `provider_id`, `source_json`                                                                                            | `TEXT NOT NULL`                             | Source provider and locator.                                            |
 | `source_account_id`, `source_guild_id`, `source_channel_id`, `source_meeting_url`, `source_thread_ts`, `source_file_id` | Nullable `TEXT`                             | Query projections of string-valued source fields.                       |
 | `title`, `stopped_at`, `metadata_json`                                                                                  | Nullable `TEXT`                             | Display title, terminal time, and session metadata including ownership. |
@@ -331,14 +350,14 @@ predicates. Occupancy episodes and model-backed notes add no further schema chan
 `update_runs` stores one durable record per update in the shared
 `state/openclaw.sqlite` database. `src/infra/update-run-ledger.ts` owns writes
 from the admitting Gateway, orchestrator CLI, and restarted Gateway. The table
-is additive at shared schema version 15: the canonical schema declares it and
-first use ensures it inside the same write transaction. Existing tables and the
+is additive at shared schema version 15: the current schema declares it and
+first use creates it if missing inside the same write transaction. Existing tables and the
 schema version stay unchanged; older readers ignore the new table.
 
 `run_id` is the UUID primary key. Rows retain creation/update timestamps,
 trigger, phase, status, reason, origin, target, before/after versions, steps,
 verification facts, repair attempts, confirmation/finish timestamps, and known
-downtime. Each JSON column has a 16 KiB hard limit with deterministic truncation
+downtime. Each JSON column has a 16 KiB hard limit with fixed truncation rules
 and redaction. The ledger stores bounded diagnostic summaries, not raw logs or
 credentials. There is no automatic history deletion.
 
@@ -529,7 +548,7 @@ This change requires no schema migration. See the
 
 The worktree service owns template creation, reuse, invalidation, and cleanup under a mutation lease for each template cache key. It reserves a `preparing` row before creating the artifact and publishes `ready` only after preparation completes. Persisted readers retain the generation while checkouts clone independently; cleanup and replacement defer while readers remain. Durable mutations recheck custody inside synchronous state transactions; filesystem work runs outside those transactions. Cleanup uses the reserved template ID so an old operation cannot delete its replacement. Templates are replaced when the commit or checkout policy changes and retired after seven days without use.
 
-The additive table is ensured on first use and does not change the numeric database schema version. Existing worktree and snapshot records retain their meaning; no existing checkout is migrated or moved. Template artifacts are reconstructible, while registered worktree contents and recovery snapshots retain their existing preservation rules.
+The additive table is created if missing on first use and does not change the numeric database schema version. Existing worktree and snapshot records retain their meaning; no existing checkout is migrated or moved. Template artifacts are reconstructible, while registered worktree contents and recovery snapshots retain their existing preservation rules.
 
 ### Conversation environments
 
@@ -545,14 +564,14 @@ Allocation intent and attachment reservation commit together before provisioning
 Concurrent creation and retries reuse the owned allocation. Stop closes the
 relation before waiting for remote cleanup; cleanup failure retains the relation
 and prevents replacement until the old lease is confirmed destroyed. Session
-reset or deletion retires it, and startup checks the canonical session incarnation
+reset or deletion retires it, and startup checks the stored session incarnation
 before allowing access. The configured profile's `suspendAfter` expires idle
 attachments; active agent runs and desktop observers keep them active. Provider
 lease lifetime limits continue to apply. Closing a sidebar panel only releases
 its viewer. Terminal attachment rows follow the environment owner's seven-day
 retention through a cascading foreign key.
 
-The table is ensured when the worker environment store opens and does not change
+The table is created if missing when the worker environment store opens and does not change
 the numeric schema version or the meaning of existing placement columns. Older
 builds ignore the relation and show these machines as ordinary unassigned
 environments; they do not maintain conversation attachment activity or cleanup.
@@ -564,11 +583,11 @@ shared state database; no external attachment state needs reconstruction.
 
 ### Cloud repository workspaces
 
-Repository-only [cloud sessions](/gateway/cloud-workers#dispatching-a-session) use the first-use `session_repository_workspaces` table in the shared state database. The existing session entry carries only `repositoryWorkspaceId`; the shared row owns the canonical agent/session key, repository URL, requested ref, session branch, setup intent, pinned base commit and manifest, accepted checkpoint pointer, and revision. Session reset preserves this owner; a fork receives a distinct owner.
+Repository-only [cloud sessions](/gateway/cloud-workers#dispatching-a-session) use the first-use `session_repository_workspaces` table in the shared state database. The existing session entry carries only `repositoryWorkspaceId`; the shared row owns the normalized agent/session key, repository URL, requested ref, session branch, setup intent, pinned base commit and manifest, accepted checkpoint pointer, and revision. Session reset preserves this owner; a fork receives a distinct owner.
 
 `github_repository_publication_requests` records shared and personal publication against an immutable accepted checkpoint and the session's admitted lifecycle revision. Reset preserves the session ID and repository checkpoint but invalidates publication authorized before that reset. Personal requests also retain the selected profile and connection generation and require same-owner confirmation after an interrupted publication. Pending publication keeps its original source even after an explicit move materializes a Gateway worktree.
 
-Both tables are additive, lazily ensured on first use, and leave the numeric database schema version unchanged. That is not a compatibility promise for older cloud-session implementations: run a build that understands repository-only sessions when using this state. Existing local managed-worktree sessions keep their existing representation.
+Both tables are additive, created if missing on first use, and leave the numeric database schema version unchanged. That is not a compatibility promise for older cloud-session implementations: run a build that understands repository-only sessions when using this state. Existing local managed-worktree sessions keep their existing representation.
 
 Checkpoint Git artifacts live under `state/repository-workspaces/<workspace-id>.git`, next to the shared database. These are bare repositories containing complete file manifests, cumulative changed-file blobs, and publication snapshots; they are not working checkouts or a backup of upstream Git history. Restoring an entire checkout still requires access to the pinned upstream commit. Back up these artifacts together with the shared and per-agent databases.
 
@@ -602,7 +621,7 @@ Crabbox recorded the request: recovery may allocate and immediately release the
 reserved runtime. Unknown outcomes retain the recovery row; an absent local claim
 or an error message is not proof that provider resources are absent.
 
-The reservation is canonical recovery state. Do not delete it to clear a provider
+The reservation is stored recovery state. Do not delete it to clear a provider
 error. Before downgrading to a version without reservation support, disable the
 backend and reconcile its pending leases using the current version. Older readers
 can open the database but do not implement this lifecycle.
@@ -634,7 +653,7 @@ with one `immutable_installation` row instead of a package operation. The accept
 [immutable update design](/reference/team-immutable-update-design#detect-and-adopt-an-immutable-installation)
 binds explicit adoption to the physical installation and current generation,
 system service and account, state/config/profile, pinned external runtime, and
-official source. Its strict descriptor is canonical adoption state: version 1
+official source. Its strict descriptor is recorded adoption state: version 1
 records preparation-only adoption, and version 2 records explicitly enabled
 activation. The revision and optional prepared-generation receipt record verified
 preparation. The activation record owns pointer publication, service effects,

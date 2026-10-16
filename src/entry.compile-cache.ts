@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { getCompileCacheDir } from "node:module";
 import path from "node:path";
 import process from "node:process";
+import { resolveOpenClawCliInvocation } from "../cli-invocation.mjs";
 import {
   enableOpenClawCompileCache as enableInstallCompileCache,
   resolveOpenClawCompileCacheDirectory,
@@ -71,8 +72,7 @@ function buildOpenClawCompileCacheRespawnPlan(params: {
   };
   delete nextEnv.NODE_COMPILE_CACHE;
   return {
-    command: process.execPath,
-    args: [...process.execArgv, params.currentFile, ...argv.slice(2)],
+    ...resolveOpenClawCliInvocation({ entryPath: params.currentFile, args: argv.slice(2) }),
     env: nextEnv,
     detachForProcessTree: platform !== "win32" && !isTerminalInteractiveRespawnArgv(argv),
   };
@@ -94,12 +94,12 @@ export async function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
       foregroundGateway: true,
     });
     if (env) {
-      const args = [...process.execArgv, params.currentFile, ...process.argv.slice(2)];
+      const { command, args } = resolveOpenClawCliInvocation({ entryPath: params.currentFile });
       if (process.platform !== "win32" && process.execve) {
-        process.execve(process.execPath, [process.execPath, ...args], env);
+        process.execve(command, [command, ...args], env);
       }
       const { runRespawnedChild } = await import("../node-runtime-recovery.mjs");
-      return runRespawnedChild(process.execPath, args, env);
+      return runRespawnedChild(command, args, env);
     }
   }
   const plan = buildOpenClawCompileCacheRespawnPlan({

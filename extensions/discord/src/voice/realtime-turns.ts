@@ -88,7 +88,7 @@ export class DiscordRealtimeTurns {
     ) {
       throw new Error("A Discord realtime connection cannot change speaker authority");
     }
-    this.source ??= Object.freeze({ userId, senderIsOwner: context.senderIsOwner });
+    this.source ??= { userId, senderIsOwner: context.senderIsOwner };
     this.resetPartialWakeNameTracking();
     const turn: PendingSpeakerTurn = {
       bridge: this.params.bridge(),

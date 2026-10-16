@@ -231,7 +231,7 @@ export function resolveRunFastModeForFallbackCandidate(params: {
     sessionEntry: params.sessionEntry,
   });
   return {
-    fastMode: params.run.fastModeOverride ? params.run.fastMode : state.mode,
+    fastMode: params.run.fastModeOverride ? params.run.fastMode : state.requestMode,
     fastModeAutoOnSeconds: params.run.fastModeAutoOnSecondsOverride
       ? params.run.fastModeAutoOnSeconds
       : state.fastAutoOnSeconds,

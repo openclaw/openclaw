@@ -890,6 +890,43 @@ test("sessions.list breaks timestamp ties by key for stable paging", async () =>
   expect(paged.payload?.sessions.map((session) => session.key)).toEqual(expectedOrder.slice(2));
 });
 
+test("chat.inject writes to the transcript owner after the requested row's facts are cached", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionId = "8f14e45f-ceea-4e7a-9f8b-2d5c6b1a0e93";
+  const baseKey = "agent:main:cron:3f1c9a52-7d4e-4b8a-9c21-5e6f7a8b9c0d";
+  const runKey = `${baseKey}:run:${sessionId}`;
+  await writeSessionStore({
+    entries: {
+      [baseKey]: { sessionId, updatedAt: 1 },
+      [runKey]: { sessionId, updatedAt: 2 },
+    },
+  });
+  await seedLinearTranscript({ contents: ["cron run"], sessionId, sessionKey: runKey, storePath });
+  const ownerRows = () => loadTranscriptRows({ sessionId, sessionKey: runKey, storePath });
+  const rowsBefore = (await ownerRows()).length;
+  const { ws } = await openClient();
+  try {
+    // Reading the base row must not make it the owner of the shared transcript.
+    expect((await rpcReq(ws, "sessions.abort", { key: baseKey })).ok).toBe(true);
+    for (const message of ["first", "second"]) {
+      const injected = await rpcReq(ws, "chat.inject", { sessionKey: baseKey, message });
+      expect([injected.ok, injected.error]).toEqual([true, undefined]);
+    }
+    expect((await ownerRows()).slice(rowsBefore)).toMatchObject([
+      {
+        type: "message",
+        message: { role: "assistant", content: [{ type: "text", text: "first" }] },
+      },
+      {
+        type: "message",
+        message: { role: "assistant", content: [{ type: "text", text: "second" }] },
+      },
+    ]);
+  } finally {
+    ws.close();
+  }
+});
+
 test("archiving a session disables cron jobs bound to it", async () => {
   await createSessionStoreDir();
   const now = Date.now();

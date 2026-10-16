@@ -158,6 +158,7 @@ export type SessionCatalogGroupsParams = {
   visibleSessionLimits: ReadonlyMap<string, number>;
   projectGrouping: CatalogProjectGrouping;
   liveRows: readonly GatewaySessionRow[];
+  isRunVisuallyActive: (row: GatewaySessionRow) => boolean;
   renderLiveRow: (
     row: () => GatewaySessionRow,
     display: CatalogBackingSessionDisplay,
@@ -233,6 +234,7 @@ type BridgeAttributes<Props> = SolidJSX.HTMLAttributes<SolidBridgeElement<Props>
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
+      "openclaw-sidebar-session-filter-popover": HTMLAttributes<HTMLElement>;
       "openclaw-sidebar-collapse-toggle": HTMLAttributes<HTMLElement> & {
         "prop:onToggle"?: () => void;
       };

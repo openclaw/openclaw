@@ -1,12 +1,16 @@
+import { lstat } from "node:fs/promises";
 import path from "node:path";
-import { createZstdDecompress } from "node:zlib";
+import { constants, createZstdDecompress } from "node:zlib";
 import { root as openSafeFilesystemRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import { isJsonObject, type CodexThread, type JsonObject } from "./app-server/protocol.js";
 import type { CodexCatalogPageDiagnostics } from "./session-catalog-diagnostics.js";
 
 const MAX_SESSION_META_BYTES = 1024 * 1024;
 const SESSION_META_READ_CHUNK_BYTES = 64 * 1024;
+const MAX_COMPRESSED_META_BYTES = 8 * 1024 * 1024;
+const SESSION_META_DEADLINE_MS = 5_000;
 const MAX_PROVENANCE_CACHE_ENTRIES = 20_000;
+const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
 const provenanceByPath = new Map<string, boolean>();
 
@@ -23,9 +27,19 @@ export async function readCodexSessionMeta(
   sessionsRoot: string,
   rolloutPath: string,
   threadId: string,
+  options: { canonicalSource?: boolean } = {},
 ): Promise<JsonObject | null | undefined> {
+  const deadline = options.canonicalSource
+    ? performance.now() + SESSION_META_DEADLINE_MS
+    : Infinity;
   let safeRoot: Awaited<ReturnType<typeof openSafeFilesystemRoot>>;
   try {
+    if (options.canonicalSource) {
+      const stat = await lstat(sessionsRoot);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) {
+        return undefined;
+      }
+    }
     safeRoot = await openSafeFilesystemRoot(sessionsRoot, {
       hardlinks: "reject",
       maxBytes: Number.MAX_SAFE_INTEGER,
@@ -41,40 +55,68 @@ export async function readCodexSessionMeta(
     let opened: Awaited<ReturnType<typeof safeRoot.open>>;
     try {
       opened = await safeRoot.open(path.relative(sessionsRoot, candidate));
-    } catch {
-      continue;
+    } catch (error) {
+      if (isJsonObject(error) && (error.code === "not-found" || error.code === "ENOENT")) {
+        continue;
+      }
+      return undefined;
     }
-    const input = opened.handle.createReadStream({
-      autoClose: false,
-      highWaterMark: SESSION_META_READ_CHUNK_BYTES,
-    });
-    const decoder = candidate.endsWith(".zst") ? createZstdDecompress() : undefined;
-    if (decoder) {
-      input.on("error", (error) => decoder.destroy(error));
-      input.pipe(decoder);
-    }
-    const reader = decoder ?? input;
     try {
+      const compressed = candidate.endsWith(".zst");
+      if (
+        !opened.stat.size ||
+        (options.canonicalSource && compressed && opened.stat.size > MAX_COMPRESSED_META_BYTES) ||
+        performance.now() >= deadline
+      ) {
+        return undefined;
+      }
+      const input = opened.handle.createReadStream({
+        autoClose: false,
+        highWaterMark: SESSION_META_READ_CHUNK_BYTES,
+        end: opened.stat.size - 1,
+      });
+      const decoder = compressed
+        ? createZstdDecompress({
+            chunkSize: SESSION_META_READ_CHUNK_BYTES,
+            params: options.canonicalSource ? { [constants.ZSTD_d_windowLogMax]: 25 } : undefined,
+          })
+        : undefined;
+      if (decoder) {
+        input.on("error", (error) => decoder.destroy(error));
+        input.pipe(decoder);
+      }
+      const reader = decoder ?? input;
+      const timer = options.canonicalSource
+        ? setTimeout(
+            () => reader.destroy(new Error("Codex rollout metadata observation timed out")),
+            Math.floor(Math.max(1, deadline - performance.now())),
+          )
+        : undefined;
       const chunks: Buffer[] = [];
       let bytesReadTotal = 0;
       let line: string | undefined;
-      for await (const value of reader) {
-        const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
-        const remaining = MAX_SESSION_META_BYTES - bytesReadTotal;
-        if (remaining <= 0) {
-          break;
+      try {
+        for await (const value of reader) {
+          const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+          const newline = chunk.indexOf(0x0a);
+          const prefix = newline >= 0 ? chunk.subarray(0, newline) : chunk;
+          bytesReadTotal += prefix.length;
+          if (bytesReadTotal > MAX_SESSION_META_BYTES) {
+            return undefined;
+          }
+          chunks.push(prefix);
+          if (newline >= 0) {
+            line = utf8Decoder.decode(Buffer.concat(chunks));
+            break;
+          }
         }
-        const bounded = chunk.subarray(0, remaining);
-        bytesReadTotal += bounded.length;
-        const newline = bounded.indexOf(0x0a);
-        chunks.push(newline >= 0 ? bounded.subarray(0, newline) : bounded);
-        if (newline >= 0) {
-          line = Buffer.concat(chunks).toString("utf8");
-          break;
-        }
+      } finally {
+        clearTimeout(timer);
+        reader.destroy();
+        input.destroy();
       }
       if (!line) {
-        continue;
+        return undefined;
       }
       const parsed: unknown = JSON.parse(line);
       if (
@@ -87,10 +129,8 @@ export async function readCodexSessionMeta(
       const payload = parsed.payload;
       return payload.id === threadId ? payload : null;
     } catch {
-      continue;
+      return undefined;
     } finally {
-      reader.destroy();
-      input.destroy();
       await opened.handle.close().catch(() => undefined);
     }
   }

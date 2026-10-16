@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show, untrack } from "solid-js";
 import type { SessionMoveTarget } from "../../../packages/gateway-protocol/src/index.js";
 import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
 import { formatUiError } from "../lib/format-error.ts";
@@ -59,9 +59,23 @@ export function showSessionPlacementTargetDialog(
       active = false;
     };
     function Dialog() {
-      const [loading, setLoading] = createSignal(true);
-      const [loadError, setLoadError] = createSignal<string | null>(null);
-      const [catalog, setCatalog] = createSignal<Catalog>({ profiles: [], devices: [] });
+      const loaded = createMemo<Catalog | string | null>(
+        () =>
+          options
+            .loadCatalog()
+            .catch((error: unknown) =>
+              untrack(() => formatUiError(error, t("sessionsView.moveSessionCatalogFailed"))),
+            ),
+        { loadingValue: null },
+      );
+      const loadError = createMemo(() => {
+        const value = loaded();
+        return typeof value === "string" ? value : null;
+      });
+      const catalog = createMemo(() => {
+        const value = loaded();
+        return value && typeof value !== "string" ? value : { profiles: [], devices: [] };
+      });
       const [selected, select] = createSignal<SessionMoveTarget | null>(
         options.mode === "move" && !options.gatewayDisabledReason ? { kind: "gateway" } : null,
       );
@@ -80,7 +94,7 @@ export function showSessionPlacementTargetDialog(
 
       const selectable = () => {
         const target = selected();
-        if (loading() || loadError() || !target) {
+        if (loaded() === null || loadError() || !target) {
           return false;
         }
         if (target.kind === "gateway") {
@@ -136,22 +150,6 @@ export function showSessionPlacementTargetDialog(
         ];
       }
 
-      const complete = (loaded: Catalog | null, error?: unknown) => {
-        if (modal.settled) {
-          return;
-        }
-        if (loaded) {
-          setCatalog(loaded);
-        } else {
-          setLoadError(formatUiError(error, t("sessionsView.moveSessionCatalogFailed")));
-        }
-        setLoading(false);
-      };
-      void options.loadCatalog().then(
-        (loaded) => complete(loaded),
-        (error: unknown) => complete(null, error),
-      );
-
       return (
         <openclaw-modal-dialog label={title()} onModal-cancel={() => finish(null)}>
           <form class="exec-approval-card" onSubmit={submit}>
@@ -169,7 +167,7 @@ export function showSessionPlacementTargetDialog(
             >
               {t(`sessionsView.${notice}`)}
             </div>
-            {loading() ? (
+            {loaded() === null ? (
               <div class="muted">{t("common.loading")}</div>
             ) : loadError() ? (
               <div class="exec-approval-error" role="alert">
@@ -258,14 +256,14 @@ export function showSessionPlacementTargetDialog(
                 </For>
               </div>
             )}
-            <div class="exec-approval-actions">
+            <openclaw-modal-actions class="exec-approval-actions">
               <button type="submit" class="btn primary" disabled={!selectable()}>
                 {t(`sessionsView.${options.mode}SessionAction`)}
               </button>
               <button type="button" class="btn" onClick={() => finish(null)}>
                 {t("common.cancel")}
               </button>
-            </div>
+            </openclaw-modal-actions>
           </form>
         </openclaw-modal-dialog>
       );

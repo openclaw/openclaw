@@ -834,6 +834,22 @@ beyond the grace period.
 
 ## Native Codex recovery after Tasks removal
 
+The Codex plugin's `codex-native-assignment-repair` runs during
+`openclaw doctor --fix` and update-time Doctor, after session repair. It collapses
+proven duplicate assignments for the same child and native turn and removes
+assignments whose requester session, lifecycle, or connection is provably
+obsolete. Compatible aliases retain their receipt and recorded-result metadata;
+conflicting facts produce a recoverable warning without changing the row.
+Separate pending turns of one child are preserved. Repairs use the
+existing SQLite backup and exact-row compare-and-apply owner; no database schema
+or assignment format changes. Ordinary Gateway startup does not run this repair.
+
+Unknown or malformed ownership and bindings changed during repair are preserved
+with recoverable warnings, allowing updates to finish best effort. Retry
+`openclaw doctor --fix` after resolving those warnings. Historical retry exhaustion
+without durable evidence stays unresolved: neither the age of an assignment nor
+a child's completed execution proves its result was delivered or abandoned.
+
 The Codex plugin's `codex-native-task-assignments` Doctor migration preserves
 recoverable native child work when upgrading from the Tasks runtime. It runs
 through the existing plugin state-migration lifecycle, including update-time
@@ -1097,7 +1113,7 @@ against the current SQLite owners before the import can rename profiles.
 
     Code Mode's runtime migration preserves an explicit QuickJS choice in global config, keyed agent entries, and legacy agent rosters. Existing `executor` values win, and activation and limits remain unchanged. Selecting the bundled QuickJS runtime works even when generic plugins are disabled or allowlisted, without enabling other plugins; an explicit deny or disabled entry for `code-mode-quickjs` still blocks it. Configurations that never selected a runtime use the new `node` default. See [Code Mode executors](/tools/code-mode/executors) before enabling Node execution; `node:vm` is not a security boundary.
 
-    Doctor removes retired `silentReply.internal` settings from agent defaults and surface overrides while preserving `silentReply.group`. This repair runs through the normal config backup and validation flow, including update-time Doctor. Direct chats and internal sessions, including subagents, require a result; only external channel groups can opt into `NO_REPLY`.
+    Doctor removes retired `silentReply.internal` settings from agent defaults and surface overrides while preserving `silentReply.group`. This repair runs through the normal config backup and validation flow, including update-time Doctor. Internal sessions, including subagents and private completions, require a result. External direct and group chats can end with explicit `NO_REPLY`; see [Silent replies](/concepts/messages#silent-replies).
 
     Doctor names the retired tuning paths it actually removes in one notice, including explicit `false` values: `Removed retired runtime tuning knobs: diagnostics.memoryPressureSnapshot; built-in defaults now apply.` Run `openclaw doctor --fix` before starting with these retired keys. Memory-pressure events remain available; use [diagnostics export or manual allocation profiling](/gateway/diagnostics) for current evidence.
 

@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { GatewayClientRequestError } from "../../../../packages/gateway-client/src/request-error.js";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -137,7 +138,18 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     if (closeInvalidatedClient(client, req.method, isCommittedGrantCurrent)) {
       return;
     }
-    const diagnostics = createGatewayRpcDiagnostics(req.method, getMethodRegistry, extraHandlers);
+    const diagnostics = createGatewayRpcDiagnostics(
+      req.method,
+      getMethodRegistry,
+      extraHandlers,
+      req.method === "models.list" || req.method === "sessions.list" || req.method === "cron.list"
+        ? {
+            clientKind: client.connect.client.id,
+            source: sendResponse === send ? "wire" : "internal",
+            params: req.params,
+          }
+        : undefined,
+    );
     logWs("in", "req", { connId, id: req.id, method: req.method });
     const generationState = SharedGatewaySessionGenerationState.fromReader(
       getRequiredSharedGatewaySessionGeneration,
@@ -420,16 +432,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
             ).catch(() => undefined);
             // Refuse within the preparation lease so its response settles before the
             // preparation join; the mutating handler retains its execution owner.
-            if (context.requestEntryLifetime?.signal.aborted) {
-              respondWithAuthority(
-                false,
-                undefined,
-                errorShape(ErrorCodes.UNAVAILABLE, "gateway closing before request dispatch", {
-                  retryable: true,
-                }),
-              );
-              return;
-            }
+            entry?.assertOpen();
             if (isClosed()) {
               return;
             }
@@ -515,9 +518,15 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
               errorShape(
                 ErrorCodes.UNAVAILABLE,
                 formatForLog(err),
-                startTimedOut
-                  ? { retryable: true, details: { reason: "request-start-timeout" } }
-                  : undefined,
+                err instanceof GatewayClientRequestError
+                  ? {
+                      retryable: err.retryable,
+                      retryAfterMs: err.retryAfterMs,
+                      details: err.details,
+                    }
+                  : startTimedOut
+                    ? { retryable: true, details: { reason: "request-start-timeout" } }
+                    : undefined,
               ),
           );
         } finally {

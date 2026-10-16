@@ -102,6 +102,38 @@ describe("CI failure reporter bootstrap", () => {
 });
 
 describe("completed PR failure reporting", () => {
+  it("uses complete successful prerequisite results without enumerating jobs", async () => {
+    const fetchMock = fixture([job(1, "checks-ui")]);
+    const report = await reportPrFailures({
+      ...options,
+      preflightResult: "success",
+      securityFastResult: "success",
+      jobResults: ["success", "success", "success", "skipped"],
+    });
+    expect(report).toMatchObject({ failures: [], knownMainRed: false, failureJobId: "" });
+    expect(formatFailureReport(report, options)).toContain("prerequisite results");
+    expect(fetchMock.mock.calls.map(([url]) => new URL(url).pathname)).toEqual([
+      `/repos/${repository}/actions/runs/100`,
+    ]);
+  });
+
+  it.each(["failure", "cancelled", "unknown", "", undefined])(
+    "enumerates jobs when a prerequisite result is %s",
+    async (result) => {
+      const fetchMock = fixture([job(1, "checks-ui", "timed_out")]);
+      const report = await reportPrFailures({
+        ...options,
+        preflightResult: "success",
+        securityFastResult: "success",
+        jobResults: ["success", "success", result],
+      });
+      expect(report.failures).toMatchObject([{ job: "checks-ui", conclusion: "timed_out" }]);
+      expect(report.knownMainRed).toBe(false);
+      expect(report.failureJobId).toBe("1");
+      expect(fetchMock.mock.calls.some(([url]) => url.includes("/attempts/1/jobs"))).toBe(true);
+    },
+  );
+
   it("reports every failure without cancellation and preserves a blocking gate result", async () => {
     fixture([
       job(1, "preflight"),

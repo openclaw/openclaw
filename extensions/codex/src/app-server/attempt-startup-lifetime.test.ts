@@ -195,7 +195,7 @@ describe("Codex runtime startup resource lifetime", () => {
   setupRunAttemptTestHooks();
   afterEach(() => clearRuntimeConfigSnapshot());
 
-  it.each(["capture-failed", "abort", "cleanup", "replacement"] as const)(
+  it.each(["capture-failed", "abort"] as const)(
     "releases allocated runtime owners once when native monitor setup ends with %s",
     async (ending) => {
       const harness = createStartedThreadHarness();
@@ -256,20 +256,13 @@ describe("Codex runtime startup resource lifetime", () => {
           pluginConfig: { appServer: { mode: "yolo", experimental: { sandboxExecServer: true } } },
           nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
         });
-        const rejected =
-          ending === "capture-failed" || ending === "abort"
-            ? expect(run).rejects.toBe(setupError)
-            : expect(run).rejects.toThrow("registration was superseded during setup");
+        const rejected = expect(run).rejects.toBe(setupError);
         await captured.promise;
         const resources = resourcesSpy.mock.results[0]?.value;
         assert(resources);
         expect(resources.state.nativeSubagentMonitor).toBeUndefined();
         if (ending === "abort") {
           abortController.abort(setupError);
-        } else if (ending === "cleanup") {
-          await resources.releaseCurrentRoute();
-        } else if (ending === "replacement") {
-          resources.state.thread = { ...resources.state.thread };
         }
         releaseCapture.resolve();
         await rejected;

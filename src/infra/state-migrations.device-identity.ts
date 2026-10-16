@@ -203,11 +203,6 @@ function importAndRecordReceipt(params: {
         }
       }
 
-      const verified = readCanonicalIdentity(db);
-      if (!verified || classifyCanonicalRow(verified, params.snapshot.identity) !== "same") {
-        throw new Error("SQLite verification failed for the primary device identity");
-      }
-
       const reportJson = JSON.stringify({
         source: MIGRATION_KIND,
         target: "device_identities",

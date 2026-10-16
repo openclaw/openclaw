@@ -336,6 +336,27 @@ describe("browser tab routes", () => {
     );
   });
 
+  it.each([
+    { label: "managed", overrides: {}, expected: true },
+    {
+      label: "existing-session",
+      overrides: { driver: "existing-session" as const },
+      expected: false,
+    },
+    { label: "attach-only", overrides: { attachOnly: true }, expected: false },
+    { label: "remote CDP", overrides: { cdpIsLoopback: false }, expected: false },
+    { label: "attach-only engine", overrides: { engine: "lightpanda" as const }, expected: false },
+  ])(
+    "advertises automatic preview resizing only for $label ownership",
+    async ({ overrides, expected }) => {
+      const response = await callTabsList({
+        profileCtx: createProfileContext({ profile: makeBrowserProfile(overrides) }),
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toMatchObject({ running: true, canAutoResizeViewport: expected });
+    },
+  );
+
   it("validates tab-open input before resolving or leasing a profile", async () => {
     const profileCtx = createProfileContext();
     const routeCtx = createRouteContext(profileCtx);
@@ -568,7 +589,7 @@ describe("browser tab routes", () => {
 
       expect(response.statusCode).toBe(200);
       expect(response.body).toEqual({
-        ...(method === "get" ? { running: true } : { ok: true }),
+        ...(method === "get" ? { running: true, canAutoResizeViewport: false } : { ok: true }),
         tabs: [
           publicTab(),
           { ...internalTab(), url: "", urlUnavailableReason: "navigation_blocked" },
@@ -582,7 +603,7 @@ describe("browser tab routes", () => {
       navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
       const recovered = await callTabsRoute(request);
       expect(recovered.body).toEqual({
-        ...(method === "get" ? { running: true } : { ok: true }),
+        ...(method === "get" ? { running: true, canAutoResizeViewport: false } : { ok: true }),
         tabs,
       });
     },

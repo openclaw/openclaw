@@ -830,10 +830,13 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let work = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked")).firstMatch
         XCTAssertTrue(work.waitForExistence(timeout: 5))
         work.tap()
-        for _ in 0..<12 where !latestSeededReply.isHittable {
-            app.swipeUp()
+        // A visible text leaf can be unhittable inside its accessible message container.
+        // This setup needs the reply's pixels in the viewport, not a tap target.
+        for _ in 0..<12 where !latestSeededReply.exists || !transcript.frame.contains(latestSeededReply.frame) {
+            transcript.swipeUp()
         }
-        XCTAssertTrue(latestSeededReply.isHittable)
+        XCTAssertTrue(transcript.frame.contains(latestSeededReply.frame))
+        self.assertElementHasRenderedContent(latestSeededReply, named: "seeded reply after expanding work")
 
         // Revealing the reply after expanding work does not establish live-edge following.
         let initialJumpToLatest = app.buttons["Jump to latest reply"]
@@ -1031,6 +1034,35 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertLessThanOrEqual(latest.frame.maxY, composer.frame.minY + 1)
         XCTAssertFalse(app.buttons["Jump to latest reply"].exists)
         self.attachScreenshot(named: "existing-session-latest-output")
+    }
+
+    func testTaskListLongPressOffersRefreshDismissAndClear() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-progress-card-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let card = app.buttons.matching(NSPredicate(
+            format: "label BEGINSWITH %@", "Plan, 1 of 3 steps done")).firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: 8))
+        // On touch the one-line header keeps only the collapse caret.
+        let actions = ["refresh", "dismiss", "clear-saved"]
+        for action in actions {
+            XCTAssertFalse(
+                app.buttons["chat-progress-card-\(action)"].exists,
+                "Task list header still has a \(action) button")
+        }
+        self.attachScreenshot(named: "task-list-card")
+
+        card.press(forDuration: 0.8)
+        for action in actions {
+            XCTAssertTrue(
+                app.buttons["chat-progress-card-\(action)"].waitForExistence(timeout: 3),
+                "Task list menu has no \(action) action")
+        }
+        self.attachScreenshot(named: "task-list-menu")
+        app.buttons["chat-progress-card-dismiss"].tap()
+        XCTAssertTrue(card.waitForNonExistence(timeout: 3))
+        self.attachScreenshot(named: "task-list-dismissed")
     }
 
     func testChatPresentationInLightAppearance() throws {

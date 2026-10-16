@@ -22,13 +22,19 @@ import { htmlPreviewElement, isHtmlDocument } from "./chat-html-preview.ts";
 
 registerEnglishCatalog(registerFilePreviewEnglish);
 
+type HtmlPreviewProperties = Pick<
+  HTMLElementTagNameMap["openclaw-chat-html-preview"],
+  "html" | "sourceIdentity" | "sessionFileSource" | "title" | "embedSandboxMode"
+>;
+
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
       "openclaw-chat-html-preview": HTMLAttributes<
         HTMLElementTagNameMap["openclaw-chat-html-preview"]
-      > &
-        Properties<HTMLElementTagNameMap["openclaw-chat-html-preview"]>;
+      > & {
+        [Key in keyof HtmlPreviewProperties as `prop:${Key}`]?: HtmlPreviewProperties[Key];
+      };
     }
   }
 }

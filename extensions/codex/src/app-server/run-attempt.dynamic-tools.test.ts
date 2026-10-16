@@ -110,7 +110,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     setCodexTestModelSupportsTools(params, true);
     const closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
     // Protocol acceptance owns this test; host I/O must not spend the execution watchdog.
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const run = runCodexAppServerAttempt(params);
     try {
       await Promise.race([

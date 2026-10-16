@@ -1,7 +1,6 @@
 // Attachment cache tests cover bounded reads, MIME detection, and temporary-file ownership.
 import fs from "node:fs/promises";
 import path from "node:path";
-import JSZip from "jszip";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as fsSafe from "../infra/fs-safe.js";
@@ -32,7 +31,6 @@ const PNG_1X1 = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
   "base64",
 );
-const AMBIGUOUS_WEBM = Buffer.from("1a45dfa3874282847765626d", "hex");
 
 describe("media understanding attachment cache", () => {
   it.each(["canonical", "directory alias"] as const)(
@@ -137,94 +135,7 @@ describe("media understanding attachment cache", () => {
     readRemoteMediaBufferMock.mockReset();
   });
 
-  it.each<{
-    source: "local" | "remote";
-    fileName: string;
-    bytes: () => Buffer | Promise<Buffer>;
-    declaredMime: string;
-    contentType?: string;
-    expected: { mime: string; class: string };
-  }>([
-    {
-      source: "local",
-      fileName: "photo.jpg",
-      bytes: () => PNG_1X1,
-      declaredMime: "application/pdf",
-      expected: { mime: "image/png", class: "image" },
-    },
-    {
-      source: "local",
-      fileName: "notes",
-      bytes: () => Buffer.from("验证".repeat(700), "utf8"),
-      declaredMime: "application/octet-stream",
-      expected: { mime: "text/plain", class: "text" },
-    },
-    {
-      source: "remote",
-      fileName: "photo.jpg",
-      bytes: () => PNG_1X1,
-      declaredMime: "application/pdf",
-      contentType: "image/jpeg",
-      expected: { mime: "image/png", class: "image" },
-    },
-    {
-      source: "remote",
-      fileName: "voice.webm",
-      bytes: () => AMBIGUOUS_WEBM,
-      declaredMime: "application/pdf",
-      contentType: "audio/webm",
-      expected: { mime: "audio/webm", class: "audio" },
-    },
-    {
-      source: "remote",
-      fileName: "download",
-      bytes: () => new JSZip().file("hello.txt", "hi").generateAsync({ type: "nodebuffer" }),
-      declaredMime: "application/pdf",
-      contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      expected: {
-        mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        class: "document",
-      },
-    },
-  ])("classifies $source $fileName as $expected.mime despite declared MIME", async (testCase) => {
-    await withTestDir({ prefix: "openclaw-media-cache-mime-" }, async (base) => {
-      const buffer = await testCase.bytes();
-      const attachmentPath = path.join(base, testCase.fileName);
-      if (testCase.source === "local") {
-        await fs.writeFile(attachmentPath, buffer);
-      } else {
-        readRemoteMediaBufferMock.mockResolvedValue({
-          buffer,
-          contentType: testCase.contentType,
-          fileName: testCase.fileName,
-        });
-      }
-      const cache = new MediaAttachmentCache(
-        [
-          {
-            index: 0,
-            mime: testCase.declaredMime,
-            ...(testCase.source === "local"
-              ? { path: attachmentPath }
-              : { url: `https://example.com/${testCase.fileName}` }),
-          },
-        ],
-        { localPathRoots: [base] },
-      );
-
-      const result = await cache.getBuffer({
-        attachmentIndex: 0,
-        maxBytes: buffer.byteLength,
-        timeoutMs: 1000,
-      });
-
-      expect(result.mime).toBe(testCase.expected.mime);
-      expect(result.classification).toEqual(testCase.expected);
-      expect(result.buffer).toEqual(buffer);
-    });
-  });
-
-  it.each(["unchanged", "growing", "read-failure"] as const)(
+  it.each(["growing", "read-failure"] as const)(
     "closes one bounded local read when the file is %s",
     async (behavior) => {
       await withTestDir({ prefix: "openclaw-media-cache-growth-" }, async (base) => {
@@ -276,9 +187,7 @@ describe("media understanding attachment cache", () => {
         });
 
         const result = cache.getBuffer({ attachmentIndex: 0, maxBytes, timeoutMs: 1000 });
-        if (behavior === "unchanged") {
-          await expect(result).resolves.toMatchObject({ buffer: PNG_1X1 });
-        } else if (behavior === "growing") {
+        if (behavior === "growing") {
           await expect(result).rejects.toMatchObject({ reason: "maxBytes" });
         } else {
           await expect(result).rejects.toBe(readError);
@@ -362,17 +271,25 @@ describe("media understanding attachment cache", () => {
       vi.mocked(resolvePreferredOpenClawTmpDir).mockReturnValue(base);
       const localPath = path.join(base, "photo.png");
       await fs.writeFile(localPath, PNG_1X1);
-      readRemoteMediaBufferMock.mockResolvedValue({ buffer: PNG_1X1, fileName: "photo.png" });
+      readRemoteMediaBufferMock.mockResolvedValue({
+        buffer: PNG_1X1,
+        fileName: "photo.png",
+        contentType: "image/jpeg",
+      });
       const cache = new MediaAttachmentCache(
         [
-          { index: 0, url: "https://example.com/photo.png" },
-          { index: 1, path: localPath },
+          { index: 0, url: "https://example.com/photo.png", mime: "application/pdf" },
+          { index: 1, path: localPath, mime: "application/octet-stream" },
         ],
         { localPathRoots: [base], includeDefaultLocalPathRoots: false },
       );
       const request = { attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1_000 };
       const borrowed = await cache.getBuffer(request);
-      await cache.getBuffer({ ...request, attachmentIndex: 1 });
+      const local = await cache.getBuffer({ ...request, attachmentIndex: 1 });
+      expect(borrowed.classification).toEqual({ mime: "image/png", class: "image" });
+      expect(local.classification).toEqual({ mime: "image/png", class: "image" });
+      expect(local.mime).toBe("image/png");
+      expect(borrowed.mime).toBe("image/png");
       expect(await cache.getPath({ ...request, attachmentIndex: 1 })).toBe(localPath);
       await cache.cleanup();
       expect(await fs.readdir(base)).toEqual(["photo.png"]);

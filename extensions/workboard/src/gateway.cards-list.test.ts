@@ -83,7 +83,7 @@ describe("workboard card list revisions", () => {
     }
   });
 
-  it("shares one frozen card payload per revision and publishes one invalidation per mutation", async () => {
+  it("shares one card payload per revision and publishes one invalidation per mutation", async () => {
     const { store, stores } = createWorkboardSqliteTestHarness();
     const card = await store.create({ title: "Before", boardId: "ops" });
     await store.claim(card.id, { ownerId: "worker", token: "test-claim-token" });
@@ -100,11 +100,8 @@ describe("workboard card list revisions", () => {
     expect(second).toBe(first);
     expect(await list("ops")).toBe(first);
     expect(reads).toHaveBeenCalledOnce();
-    expect(Object.isFrozen(first)).toBe(true);
-    expect(Object.isFrozen(first.cards[0].metadata.automation)).toBe(true);
     expect(first.cards[0].metadata.claim.token).toBe("[redacted]");
     expect((await store.get(card.id))?.metadata?.claim?.token).toBe("test-claim-token");
-    expect(() => first.cards.push(card)).toThrow(TypeError);
     expect((await list("default")).cards).toEqual([]);
     expect((await list()).cards).toEqual(first.cards);
 

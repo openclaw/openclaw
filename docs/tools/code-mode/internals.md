@@ -127,14 +127,14 @@ statuses: `completed`, `waiting`, or `failed`.
 - Expiry, wrong-session, wrong-run, and unknown/already-resuming `runId`
   values do not produce a distinct terminal status; they surface as a
   `failed` result (`code: "invalid_input"`) with a message such as `code mode
-run is unavailable or expired.` or `code mode run belongs to a different
-session.`.
+  run is unavailable or expired.` or `code mode run belongs to a different
+  session.`.
 - A run's continuation is released as soon as it settles to
   `completed` or `failed`, or is dropped on Gateway shutdown. Continuations
   do not survive a restart; committed session-store values do.
 - OpenClaw caps the number of concurrently suspended runs per process (64) and
   rejects new suspensions past that cap with `too many suspended code mode
-runs.`.
+  runs.`.
 
 The selected executor stays fixed for the cell's lifetime. Suspended state is
 bounded by the per-process cap above and `snapshotTtlSeconds`. QuickJS also
@@ -240,8 +240,9 @@ bridge as QuickJS. Suspension retains the worker, context, and pending promises;
 `wait` continues that context without replaying the source. Cancellation,
 expiry, terminal results, and shutdown release the retained execution.
 
-After successful completion, Node keeps up to four idle workers warm for five
-minutes each, reusing only workers with the same runtime entry and heap limit.
+After successful completion, Node keeps up to four idle workers for 30 seconds
+to reuse short bursts, then retains one for up to five minutes since its last
+completion. Reuse requires the same runtime entry and heap limit.
 Reuse stays within the creating Gateway or CLI command lifetime; closing that
 host joins worker retirement. Standalone executor calls without a host close
 their completed worker immediately. Each new cell still gets a fresh VM context.

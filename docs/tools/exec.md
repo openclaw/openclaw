@@ -54,7 +54,7 @@ Run in a pseudo-terminal when available. Use for TTY-only CLIs, coding agents, a
 </ParamField>
 
 <ParamField path="host" type="'auto' | 'sandbox' | 'gateway' | 'node'" default="auto">
-Where to execute. Omit `host` or use `auto` to inherit the configured exec host, including agent and session overrides. When that configured host is also `auto`, it resolves to `sandbox` when a sandbox runtime is active and `gateway` otherwise. A session that requires a sandbox stays sandboxed regardless of the configured host.
+Where to execute. With no `node` argument, omit `host` or use `auto` to inherit the configured exec host, including agent and session overrides. When that configured host is also `auto`, it resolves to `sandbox` when a sandbox runtime is active and `gateway` otherwise. A session that requires a sandbox stays sandboxed regardless of the configured host.
 
 The model-facing schema and code-mode signature list only hosts permitted by the session's host policy, and omit `sandbox` when no sandbox runtime is active. These choices are captured when the tool is created. Node connectivity is checked at execution time.
 </ParamField>
@@ -64,7 +64,7 @@ The baseline ask mode is derived from `tools.exec.mode` and host approvals. For 
 </ParamField>
 
 <ParamField path="node" type="string">
-Node id/name when `host=node`.
+Node id/name. With `host` omitted, `node` implies `host=node` and follows the same host policy and approvals. An explicit host other than `node` (including `auto`) conflicts and is rejected before execution; omit `host` or set it to `node`.
 </ParamField>
 
 <ParamField path="elevated" type="boolean" default="false">

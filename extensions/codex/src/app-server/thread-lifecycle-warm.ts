@@ -156,13 +156,23 @@ async function releaseCodexRetainedLiveThread(
 
 /** Release follows the physical owner across connection rotation, never a copied thread id. */
 export async function releaseCodexBoundLiveThread(
-  options: CodexLiveThreadReleaseParams & { clientId?: string; ownerClientId?: string },
+  options: CodexLiveThreadReleaseParams & {
+    clientId?: string;
+    ownerClientId?: string;
+    /** Runs synchronously when `signal` ends a wait for the previous owner's exit. */
+    onExitWaitCancelled?: () => void;
+  },
 ): Promise<boolean> {
+  const exitWaitAbortError = (signal: AbortSignal) => {
+    // Abort dispatch calls this synchronously, before any rejection handler runs.
+    options.onExitWaitCancelled?.();
+    return codexThreadLifecycleAbortError(signal);
+  };
   const changedClient = options.ownerClientId && options.ownerClientId !== options.clientId;
   const previous = changedClient
     ? await retainSharedCodexAppServerClientByInstanceId(options.ownerClientId!, {
         signal: options.signal,
-        createAbortError: codexThreadLifecycleAbortError,
+        createAbortError: exitWaitAbortError,
       })
     : undefined;
   if (changedClient && !previous) {
@@ -200,7 +210,7 @@ export async function releaseCodexBoundLiveThread(
     // keep it alive indefinitely. This runs under the thread queue and binding
     // lease, so cancellation must end the wait without proceeding to a write.
     if (retiredExit) {
-      await racePromiseWithAbortSignal(retiredExit, options.signal, codexThreadLifecycleAbortError);
+      await racePromiseWithAbortSignal(retiredExit, options.signal, exitWaitAbortError);
     }
   }
 }
@@ -255,16 +265,7 @@ export async function tryReuseCodexLiveThread(
       if (!creationPolicy && params.appServer.serviceTier === "ultrafast") {
         throw new CodexIncognitoPolicyChangeError("compaction settings");
       }
-      await params.buildFinalConfigPatch?.(
-        {
-          action: "resume",
-          binding,
-          ...(options.nativeModelInputTools
-            ? { nativeModelInputTools: options.nativeModelInputTools }
-            : {}),
-        },
-        params.client,
-      );
+      await prepareCodexThreadFinalConfigPatch(params, options.nativeModelInputTools, binding);
       throwIfAborted();
       params.assertCurrent?.();
       return { kind: "ready", binding: { ...binding, lifecycle: { action: "resumed" } } };

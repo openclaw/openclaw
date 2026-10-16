@@ -1,11 +1,20 @@
-import { For, createEffect, createMemo, createRenderEffect, onCleanup } from "solid-js";
+import {
+  For,
+  createEffect,
+  createMemo,
+  createRenderEffect,
+  createUniqueId,
+  onCleanup,
+} from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { Menu, type MenuHandle } from "../../../components/solid/menu.tsx";
 import {
   chatQueueMovableSegments,
   isMovableChatQueueItem,
 } from "../../../lib/chat/chat-queue-order.ts";
 import type { ChatQueueItem, ChatQueueDisplayItem } from "../../../lib/chat/chat-types.ts";
 import { updateHumanMentions, type HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
+import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
 import {
   clearCompositionEnd,
   isComposingKeyboardEvent,
@@ -16,9 +25,7 @@ import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
 import { isQueuedSendInlineState } from "../chat-progress.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
 import { isChatSendReconnecting } from "../chat-send-presentation.ts";
-import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
-import { hasComposerContent } from "./chat-composer-controls.ts";
-import { LitContent } from "./chat-composer-interop.tsx";
+import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 
 type ChatQueueProps = {
@@ -44,8 +51,7 @@ type ChatQueueReorder = {
 const DRAG_MIME = "application/x-openclaw-queued-message";
 const DRAG_OVER_CLASS = "chat-queue__item--drop-target";
 const KEYBOARD_EDIT_FOCUS_ATTRIBUTE = "data-edit-keyboard-focus";
-const QUEUE_ROW_CONTROL_SELECTOR =
-  "a, button, input, select, textarea, wa-dropdown, wa-dropdown-item";
+const QUEUE_ROW_CONTROL_SELECTOR = "a, button, input, select, textarea";
 const QUEUE_DRAG_SCROLL_EDGE = 24;
 const QUEUE_DRAG_SCROLL_MAX_SPEED = 12;
 const queueMentionInputs = new WeakMap<HTMLTextAreaElement, HumanMentionInput>();
@@ -291,11 +297,13 @@ function ChatQueueItem(rowProps: {
   controls: ChatQueueProps;
   reorder: ChatQueueReorder;
 }) {
+  const menuId = createUniqueId();
+  let menu!: MenuHandle;
+  let pointerSelection = false;
   const item = () => rowProps.item;
   const reorder = () => rowProps.reorder;
   const edit = createMemo(() => rowProps.controls.queuedEdit);
-  const authorAvatar = createMemo(() => renderChatAuthorAvatar(item().sender));
-  const hasAuthorAvatar = createMemo(() => hasComposerContent(authorAvatar()));
+  const hasAuthorAvatar = createMemo(() => Boolean(formatSenderLabel(item().sender)));
   const images = createMemo(() =>
     item().attachments?.filter((attachment) => attachment.mimeType.startsWith("image/")),
   );
@@ -523,7 +531,7 @@ function ChatQueueItem(rowProps: {
           <QueueWaitingIcon />
         </span>
       )}
-      <LitContent value={authorAvatar()} />
+      <ChatAuthorAvatar sender={item().sender} />
       {previewUrl() && images() ? (
         <img
           class="chat-queue__images"
@@ -660,38 +668,40 @@ function ChatQueueItem(rowProps: {
           </openclaw-tooltip>
         )}
         {editing() || !editable() ? null : (
-          <wa-dropdown
+          <Menu
+            id={`chat-queue-${menuId}`}
             class="chat-queue__overflow"
             placement="top-end"
-            onWa-select={(event: CustomEvent<{ item: Element & { value?: string } }>) => {
-              const selectedItem = event.detail.item;
-              if (selectedItem.value === "edit" && canEdit()) {
-                const dropdown = event.currentTarget;
-                const row =
-                  dropdown instanceof Element ? dropdown.closest(".chat-queue__item") : null;
-                const keyboard = selectedItem.matches(":focus-visible");
-                markQueueEditFocus(row, keyboard);
+            label={t("chat.queue.moreActions")}
+            triggerClass="chat-queue__more"
+            trigger={<Icon name="moreHorizontal" />}
+            disabled={!canEdit()}
+            items={[
+              {
+                id: "edit",
+                label: t("chat.queue.editQueuedMessage"),
+                icon: <Icon name="pencil" />,
+                disabled: !canEdit(),
+                attributes: {
+                  onClick: (event) => {
+                    // Programmatic menu focus can retain :focus-visible after a pointer click.
+                    pointerSelection = event.detail > 0;
+                  },
+                },
+              },
+            ]}
+            ref={(handle) => {
+              menu = handle;
+            }}
+            onSelect={(selected) => {
+              const keyboard = !pointerSelection;
+              pointerSelection = false;
+              if (selected.id === "edit" && canEdit()) {
+                markQueueEditFocus(menu.overlay.surface.closest(".chat-queue__item"), keyboard);
                 edit()?.onEdit?.(item().id);
               }
             }}
-          >
-            <button
-              slot="trigger"
-              class="chat-queue__more"
-              type="button"
-              disabled={!canEdit()}
-              aria-label={t("chat.queue.moreActions")}
-              onDblClick={(event: MouseEvent) => event.stopPropagation()}
-            >
-              <Icon name="moreHorizontal" />
-            </button>
-            <wa-dropdown-item value="edit" disabled={!canEdit()}>
-              <span slot="icon" aria-hidden="true">
-                <Icon name="pencil" />
-              </span>
-              {t("chat.queue.editQueuedMessage")}
-            </wa-dropdown-item>
-          </wa-dropdown>
+          />
         )}
       </span>
       {mentions()?.length ? (

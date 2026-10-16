@@ -10,10 +10,9 @@ import {
   encodeOpenClawStateWorkerError,
   type OpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
+import { installDatabaseEngineSelection } from "./database-engine/context.js";
 import { captureSqliteNativeRuntimeAdmission } from "./node-sqlite.js";
 import {
-  captureSqliteDatabaseAdmissions,
-  createSqliteDatabaseAdmissionCursor,
   installSqliteDatabaseAdmissions,
   withSqliteDatabaseAdmissionExchange,
 } from "./sqlite-database-admission.js";
@@ -82,7 +81,6 @@ let sourceLoaderRegistered = false;
 let nativeCleanupFailure: OpenClawStateWorkerErrorPayload | undefined;
 let operationAdmission: { actor: number; context: SqliteWorkerOperationContext } | undefined;
 let nativeRuntimeAdmissionSent = false;
-const databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
 
 async function loadBackendModule(moduleUrl: string, sourceLoaderUrl?: string): Promise<unknown> {
   if (!sourceLoaderRegistered && sourceLoaderUrl) {
@@ -201,6 +199,17 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         };
       }
       if (request.stateContext) {
+        installDatabaseEngineSelection({ input: request.stateContext.databaseEngineInput });
+        const retained = stateContexts.get(request.actor);
+        if (retained) {
+          if (Object.hasOwn(request.stateContext, "stateIntegrity")) {
+            request.stateContext.stateIntegrity ??= retained.stateIntegrity;
+          }
+          if (Object.hasOwn(request.stateContext, "scheduledMaintenanceSuspension")) {
+            request.stateContext.scheduledMaintenanceSuspension ??=
+              retained.scheduledMaintenanceSuspension;
+          }
+        }
         stateContexts.set(request.actor, request.stateContext);
       }
     }
@@ -567,9 +576,6 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
     });
   }
   const complete = !reply.ok || (!pendingInput && !pendingResult);
-  if (complete) {
-    reply.databaseAdmissions = captureSqliteDatabaseAdmissions(databaseAdmissionCursor);
-  }
   if (complete && nativeCleanupFailure) {
     reply.cleanupFailure = nativeCleanupFailure;
     nativeCleanupFailure = undefined;

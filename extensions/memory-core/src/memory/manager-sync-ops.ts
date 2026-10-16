@@ -411,7 +411,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         }
         if (!this.provider && this.fts.enabled && isMemoryEmbeddingOperationError(err)) {
           this.requestSessionIndexRetry();
-          this.syncOutcomes.recordActiveFailure(err);
+          this.syncOutcomes.recordFailure(err);
           log.warn(`memory embeddings unavailable; leaving memory index dirty: ${reason}`);
           return;
         }
@@ -471,7 +471,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       sessionsFullRetryDirty || sessionsReconcileDirty || sessionsDirtyFiles.size > 0;
     if (failure) {
       this.requestSessionIndexRetry(true);
-      this.syncOutcomes.recordActiveFailure(failure.error);
+      this.syncOutcomes.recordFailure(failure.error);
     }
     return true;
   }
@@ -605,7 +605,11 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           const syncProvider = this.syncProviderGeneration
             ? this.syncProviderGeneration.provider
             : this.provider;
-          const vectorIndexComplete = syncProvider === null || this.vector.available === true;
+          // Empty rebuilds have no missing vectors, even before the extension is needed.
+          const vectorIndexComplete =
+            syncProvider === null ||
+            !shadow.facts.hasIndexedChunks ||
+            this.vector.available === true;
           const nextMeta: MemoryIndexMeta = {
             model: syncProvider?.model ?? "fts-only",
             provider: syncProvider?.id ?? "none",

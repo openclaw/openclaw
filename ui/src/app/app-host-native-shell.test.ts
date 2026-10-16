@@ -1,18 +1,15 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../components/modal-dialog.ts";
 import "../components/sidebar-update-card.tsx";
+import { createTooltip, settleTooltip } from "../components/tooltip.test-support.ts";
+import { createNavigationPreferencesFixture } from "../test-helpers/application-context-fixtures.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { createShellOwner } from "./app-host-solid.test-support.ts";
 import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
 import type { ApplicationContext } from "./context.ts";
-import {
-  handleNavDrawerKeydown,
-  navigationSurfaceIsHidden,
-  renderFloatingUpdateCard,
-} from "./navigation-surface.ts";
+import { handleNavDrawerKeydown } from "./navigation-surface.ts";
 
 type ShellNavigationState = {
   runtime: { context: ApplicationContext };
@@ -65,6 +62,34 @@ afterEach(() => {
 });
 
 describe("OpenClaw native shell", () => {
+  it("focuses the navigation drawer without a tooltip claiming Escape", async () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    const shell = createShellOwner();
+    const context = {
+      ...nativeSessionContext(vi.fn(), "research"),
+      navigation: createNavigationPreferencesFixture(),
+    };
+    Object.assign(shell, { runtime: { context } });
+    const drawer = document.createElement("nav");
+    drawer.className = "shell-nav";
+    const { tooltip, trigger } = createTooltip("Workspace options");
+    Object.defineProperty(trigger, "checkVisibility", { value: () => true });
+    drawer.append(tooltip);
+    shell.element.append(drawer);
+    document.body.append(shell.element);
+    try {
+      await settleTooltip(tooltip);
+      shell.toggleNavigationSurface();
+      shell.afterCommit();
+      await shell.updateComplete;
+      await settleTooltip(tooltip);
+      expect(document.activeElement).toBe(trigger);
+      expect(tooltip.hasAttribute("open")).toBe(false);
+    } finally {
+      shell.element.remove();
+    }
+  });
+
   it.each(["MacIntel", "Win32"])(
     "uses only the platform sidebar modifier on %s without consuming text navigation",
     (platform) => {
@@ -587,136 +612,5 @@ describe("OpenClaw native shell", () => {
 
     expect(event.defaultPrevented).toBe(false);
     expect(navigate).not.toHaveBeenCalled();
-  });
-});
-
-describe("OpenClaw shell update affordance", () => {
-  it("renders floating attention while keeping update actions in navigation", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    const shared = {
-      mobileNavLayout: false,
-      onboarding: false,
-      refreshRequired: false,
-      onRefresh: vi.fn(),
-    };
-    const collapsed = navigationSurfaceIsHidden({
-      onboarding: false,
-      navCollapsed: true,
-      navDrawerOpen: false,
-      mobileNavLayout: false,
-    });
-    render(renderFloatingUpdateCard({ ...shared, navigationSurfaceHidden: collapsed }), container);
-    expect(
-      container.querySelector("openclaw-sidebar-attention.sidebar-attention--floating"),
-    ).not.toBeNull();
-    expect(container.querySelector("openclaw-sidebar-update-card")).toBeNull();
-
-    render(
-      renderFloatingUpdateCard({
-        ...shared,
-        navigationSurfaceHidden: collapsed,
-        refreshRequired: true,
-      }),
-      container,
-    );
-    const refreshCard = container.querySelector<
-      HTMLElement & { onRefresh: () => void; refreshRequired: boolean }
-    >("openclaw-sidebar-update-card");
-    expect(refreshCard?.refreshRequired).toBe(true);
-    refreshCard?.onRefresh();
-    expect(shared.onRefresh).toHaveBeenCalledOnce();
-
-    const visible = navigationSurfaceIsHidden({
-      onboarding: false,
-      navCollapsed: false,
-      navDrawerOpen: false,
-      mobileNavLayout: false,
-    });
-    render(
-      renderFloatingUpdateCard({
-        ...shared,
-        navigationSurfaceHidden: visible,
-        refreshRequired: true,
-      }),
-      container,
-    );
-    expect(container.querySelector("openclaw-sidebar-update-card")).not.toBeNull();
-    container.remove();
-  });
-
-  it("keeps attention in the closed mobile drawer while preserving stale-client refresh", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    try {
-      const navigationSurfaceHidden = navigationSurfaceIsHidden({
-        onboarding: false,
-        navCollapsed: false,
-        navDrawerOpen: false,
-        mobileNavLayout: true,
-      });
-      expect(navigationSurfaceHidden).toBe(true);
-      const shared = {
-        navigationSurfaceHidden,
-        mobileNavLayout: true,
-        onboarding: false,
-        refreshRequired: false,
-        onRefresh: vi.fn(),
-      };
-
-      render(renderFloatingUpdateCard(shared), container);
-      expect(
-        container.querySelector("openclaw-sidebar-attention.sidebar-attention--floating"),
-      ).toBeNull();
-
-      render(renderFloatingUpdateCard({ ...shared, refreshRequired: true }), container);
-      const refreshCard = container.querySelector<
-        HTMLElement & { updateComplete: Promise<boolean> }
-      >("openclaw-sidebar-update-card");
-      await refreshCard?.updateComplete;
-      expect(refreshCard?.querySelector(".sidebar-update-card")).not.toBeNull();
-    } finally {
-      container.remove();
-    }
-  });
-
-  it("keeps the stale-client refresh visible during onboarding", () => {
-    const container = document.createElement("div");
-    const shared = {
-      mobileNavLayout: false,
-      onboarding: true,
-      refreshRequired: true,
-      onRefresh: vi.fn(),
-    };
-    expect(
-      navigationSurfaceIsHidden({
-        onboarding: true,
-        navCollapsed: false,
-        navDrawerOpen: false,
-        mobileNavLayout: false,
-      }),
-    ).toBe(true);
-
-    for (const navigationSurfaceHidden of [false, true]) {
-      render(renderFloatingUpdateCard({ ...shared, navigationSurfaceHidden }), container);
-      expect(
-        container.querySelector("openclaw-sidebar-attention.sidebar-attention--floating"),
-      ).toBeNull();
-      const cards = container.querySelectorAll<HTMLElement & { refreshRequired: boolean }>(
-        "openclaw-sidebar-update-card",
-      );
-      expect(cards).toHaveLength(1);
-      expect(cards[0]?.refreshRequired).toBe(true);
-    }
-
-    render(
-      renderFloatingUpdateCard({
-        ...shared,
-        navigationSurfaceHidden: true,
-        refreshRequired: false,
-      }),
-      container,
-    );
-    expect(container.querySelector("openclaw-sidebar-update-card")).toBeNull();
   });
 });
