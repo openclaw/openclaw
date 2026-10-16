@@ -1,4 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { releaseAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
+import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
+import { prepareWedgedAttachedComputer } from "./computer-service.test-support.js";
+import { summarizeWorkerEnvironment } from "./environment-summary.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import * as nodeTunnelSupport from "./node-worker-tunnel.test-support.js";
 import * as support from "./service.test-support.js";
@@ -155,6 +160,106 @@ describe("worker provider node teardown", () => {
       }
     },
   );
+
+  it.each([
+    { isolation: "dedicated", sharedHost: false },
+    { isolation: "shared", sharedHost: true },
+  ] as const)(
+    "settles an attached computer that cannot close only by destroying a dedicated machine ($isolation)",
+    async ({ sharedHost }) => {
+      const environmentId = "worker-wedged-computer";
+      const { attached, nodeTunnels, start, reconnect } = await disconnectedNodeOwner(
+        environmentId,
+        sharedHost,
+      );
+      const wedged = await prepareWedgedAttachedComputer({
+        environmentId,
+        ownerEpoch: attached.ownerEpoch,
+      });
+      const destroy = vi.fn(async () => {});
+      const service = support.createService(
+        support.createProvider({
+          supportedExecutionModes: ["worker-turn", "remote-exec"],
+          destroy,
+        }),
+        {
+          nodeTunnelManager: nodeTunnels,
+          closeEnvironmentComputers: wedged.computers.closeEnvironment,
+        },
+      );
+      try {
+        reconnect();
+        await start();
+        if (sharedHost) {
+          await expect(service.destroy(environmentId)).rejects.toThrow(
+            "Attached computer cleanup failed",
+          );
+          expect(destroy).not.toHaveBeenCalled();
+          expect(support.testState.store.get(environmentId)?.state).toBe("attached");
+          return;
+        }
+        await expect(service.destroy(environmentId)).resolves.toMatchObject({
+          state: "destroyed",
+        });
+        expect(destroy).toHaveBeenCalledOnce();
+        expect(wedged.h.options.warn).toHaveBeenCalledWith(
+          expect.stringContaining("DriverError.Tool"),
+        );
+        await expect(
+          wedged.computers.closeEnvironment(environmentId, attached.ownerEpoch),
+        ).resolves.toBeUndefined();
+      } finally {
+        reconnect();
+        await wedged.computers.close().catch(() => {});
+        releaseAgentRunDelegatedAuthority(wedged.h.authority);
+        resetPluginRuntimeStateForTest();
+      }
+    },
+  );
+
+  it("reports a pending dedicated teardown as stopping without a desktop", async () => {
+    const environmentId = "worker-pending-teardown";
+    const { nodeTunnels, start, reconnect } = await disconnectedNodeOwner(environmentId);
+    const providerDestroying = createDeferred();
+    const releaseDestroy = createDeferred();
+    const service = support.createService(
+      support.createProvider({
+        supportedExecutionModes: ["worker-turn", "remote-exec"],
+        destroy: async () => {
+          providerDestroying.resolve();
+          await releaseDestroy.promise;
+        },
+      }),
+      { nodeTunnelManager: nodeTunnels },
+    );
+    const summary = () => {
+      const record = service.get(environmentId);
+      if (!record) {
+        throw new Error("Expected the worker environment");
+      }
+      return summarizeWorkerEnvironment(record, support.testState.nowMs);
+    };
+    try {
+      reconnect();
+      await start();
+      expect(summary()).toMatchObject({ status: "available", desktop: true });
+
+      const destroying = service.destroy(environmentId);
+      await providerDestroying.promise;
+      // The dedicated machine stays attached until the provider confirms its destruction.
+      expect(service.get(environmentId)?.state).toBe("attached");
+      const pending = summary();
+      expect(pending.status).toBe("stopping");
+      expect(pending).not.toHaveProperty("desktop");
+      expect(pending.worker).not.toHaveProperty("desktop");
+
+      releaseDestroy.resolve();
+      await expect(destroying).resolves.toMatchObject({ state: "destroyed" });
+    } finally {
+      releaseDestroy.resolve();
+      reconnect();
+    }
+  });
 
   it.each([
     { sharedHost: true, providersEnabled: true },

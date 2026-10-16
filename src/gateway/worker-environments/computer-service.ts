@@ -6,6 +6,8 @@ import {
   type WorkerEnvironmentComputerAuthority,
 } from "./computer-transport.js";
 import type { WorkerSessionPlacementStore, WorkerSessionTurnClaim } from "./placement-store.js";
+import type { WorkerTunnelStopReason } from "./tunnel-contract.js";
+import { boundedWorkerError } from "./worker-error.js";
 import type { WorkerComputerExecutor } from "./worker-turn-computer-rpc.js";
 
 type WorkerComputerTransport = ReturnType<PreparedWorkerComputer["bind"]>;
@@ -98,24 +100,44 @@ export function createWorkerComputerService(
       );
       return prepared;
     },
-    closeEnvironment: async (environmentId: string, ownerEpoch?: number) => {
-      const results = await Promise.allSettled(
-        [...attachedOwners]
-          .filter(
-            ([, source]) =>
-              source.environmentId === environmentId &&
-              (ownerEpoch === undefined || source.ownerEpoch === ownerEpoch),
-          )
-          .map(async ([prepared]) =>
-            (await prepared.catch(() => undefined))?.close("environment-stopped"),
-          ),
+    closeEnvironment: async (
+      environmentId: string,
+      ownerEpoch?: number,
+      reason?: WorkerTunnelStopReason,
+    ) => {
+      const environmentOwners = [...attachedOwners].filter(
+        ([, source]) =>
+          source.environmentId === environmentId &&
+          (ownerEpoch === undefined || source.ownerEpoch === ownerEpoch),
       );
+      const results = await Promise.allSettled(
+        environmentOwners.map(async ([prepared]) =>
+          (await prepared.catch(() => undefined))?.close("environment-stopped"),
+        ),
+      );
+      if (reason === "provider-destroyed") {
+        // The provider destroyed the dedicated machine and its native driver with it.
+        for (const [prepared] of environmentOwners) {
+          attachedOwners.delete(prepared);
+        }
+        return;
+      }
       const failures = results.flatMap((result) =>
         result.status === "rejected" ? [result.reason] : [],
       );
-      if (failures.length) {
-        throw new AggregateError(failures, "Attached computer cleanup failed");
+      if (!failures.length) {
+        return;
       }
+      const failure = new AggregateError(failures, "Attached computer cleanup failed");
+      if (reason === "provider-destroying") {
+        // Closing already fenced local input. A driver that cannot release its execution must
+        // not keep the dedicated machine alive; custody stays until the destroy is confirmed.
+        options.warn(
+          `${boundedWorkerError(failure)}; continuing provider teardown of the dedicated machine.`,
+        );
+        return;
+      }
+      throw failure;
     },
     prepare: (claim: WorkerSessionTurnClaim) => {
       if (stopped || !options.placements.validateTurnClaim(claim)) {

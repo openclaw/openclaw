@@ -28,10 +28,12 @@ export function summarizeWorkerEnvironment(
     record.state === "failed" || record.state === "orphaned" || cleanupPending
       ? record.error
       : undefined;
+  const status = WORKER_STATUS[record.state];
   return {
     id: record.environmentId,
     type: "worker",
-    status: error ? "error" : WORKER_STATUS[record.state],
+    // A dedicated machine keeps its usable state until the provider confirms destruction.
+    status: error ? "error" : cleanupPending && status !== "error" ? "stopping" : status,
     ...(record.sharedHost === null
       ? {}
       : { trust: record.sharedHost ? "persistent" : "disposable" }),
