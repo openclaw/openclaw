@@ -6283,7 +6283,6 @@
 ["src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts","./run-subagent-registry.runtime.js","2b154dee1a8184afb3f5d268957ec2eab1d5087f420cf006b13098e16b340e9d",1]
 ["src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts","./session.js","0c8e3f82f9d6686738f79c960b16b0b2dffef7a38d7df9370c2b6d6ed9f0d27f",1]
 ["src/cron/isolated-agent/delivery-payload-normalization.test.ts","../../tts/tts.runtime.js","bee08e4fb06f6a5e4114a5c9da9c29c1b353ade3344967ab0d7e12f9eaac9379",1]
-["src/cron/isolated-agent/delivery-target.test.ts","../../config/sessions/delivery-info.js","261bb685dd6562f7f02fa3b92be6c63d1431db3d2166779184d60c8dd7869bed",1]
 ["src/cron/isolated-agent/delivery-target.test.ts","../../config/sessions/main-session.js","f2ecdfc1498b87eafab2c6629037d9ce88ad8b27322a5524d007b83a6cdc6057",1]
 ["src/cron/isolated-agent/delivery-target.test.ts","../../config/sessions/paths.js","c85cd0da833d1bd42d19142a4094d7531b4cc2922d372af49236d9451c8d12d1",1]
 ["src/cron/isolated-agent/delivery-target.test.ts","../../infra/outbound/channel-selection.runtime.js","c878c515fe9dce329014c57e72be630fb92b889d7bec7c3f8c11097a96e519de",1]

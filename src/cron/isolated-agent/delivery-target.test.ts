@@ -26,7 +26,8 @@ vi.mock("../../config/sessions/main-session.js", () => ({
   resolveAgentMainSessionKey: vi.fn().mockReturnValue("agent:test:main"),
 }));
 
-vi.mock("../../config/sessions/delivery-info.js", () => ({
+vi.mock("../../config/sessions/delivery-info.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/delivery-info.js")>()),
   extractDeliveryInfo: extractDeliveryInfoMock,
   extractDeliveryInfoBatch: (
     requests: Array<{ sessionKey?: string; agentId?: string }>,
