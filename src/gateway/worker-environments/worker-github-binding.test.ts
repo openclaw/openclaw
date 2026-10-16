@@ -317,6 +317,9 @@ describe("worker GitHub launch binding", () => {
     }
     setRuntimeConfigSnapshot(config);
     const reachedSync = new Error("repository sync reached");
+    const syncWorkspace = vi
+      .fn<WorkerTunnelHandle["syncWorkspace"]>()
+      .mockRejectedValue(reachedSync);
     const tunnel: WorkerTunnelHandle = {
       environmentId: "identity-test",
       ownerEpoch: 1,
@@ -324,7 +327,7 @@ describe("worker GitHub launch binding", () => {
       stop: vi.fn(),
       quiesceWorkspace: vi.fn(),
       reconcileWorkspace: vi.fn(),
-      syncWorkspace: vi.fn().mockRejectedValue(reachedSync),
+      syncWorkspace,
     };
     const operation = syncSessionRepositoryWorkspace({
       ...session,
@@ -353,7 +356,7 @@ describe("worker GitHub launch binding", () => {
     });
     if (scenario === "no identity" || scenario === "invalid author") {
       await expect(operation).rejects.toBe(reachedSync);
-      const source = vi.mocked(tunnel.syncWorkspace).mock.calls[0]?.[0].source;
+      const source = syncWorkspace.mock.calls[0]?.[0].source;
       if (scenario === "no identity") {
         expect(source).not.toHaveProperty("gitToken");
       } else {
@@ -366,7 +369,7 @@ describe("worker GitHub launch binding", () => {
         await expect(operation).rejects.toBeInstanceOf(GitHubIdentityError);
         await expect(operation).rejects.toThrow(/reconnect/iu);
       }
-      expect(tunnel.syncWorkspace).not.toHaveBeenCalled();
+      expect(syncWorkspace).not.toHaveBeenCalled();
     }
   });
 
