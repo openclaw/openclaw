@@ -38,6 +38,18 @@ let installPluginFromMarketplace: typeof import("./marketplace.js").installPlugi
 let listMarketplacePlugins: typeof import("./marketplace.js").listMarketplacePlugins;
 let resolveMarketplaceInstallShortcut: typeof import("./marketplace.js").resolveMarketplaceInstallShortcut;
 const tempOutsideDirs: string[] = [];
+const pluginName = "frontend-design";
+const relativePlugin = "./plugins/frontend-design";
+const manifestFor = (source: unknown, name = pluginName) => ({ plugins: [{ name, source }] });
+const remoteInstall = (marketplace = "owner/repo") =>
+  installPluginFromMarketplace({ marketplace, plugin: pluginName });
+const githubSource = (repo: string, ref?: string, pluginPath?: string) => ({
+  kind: "github",
+  repo,
+  path: pluginPath,
+  ref,
+});
+const gitSource = (url: string, ref?: string) => ({ kind: "git", url, path: undefined, ref });
 
 vi.mock("./install.js", () => ({
   installPluginFromPath: (...args: unknown[]) => installPluginFromPathMock(...args),
@@ -77,7 +89,6 @@ async function writeRemoteMarketplaceFixture(params: {
   pluginDir?: string;
   pluginFile?: string;
 }) {
-  await fs.mkdir(path.join(params.repoDir, ".claude-plugin"), { recursive: true });
   if (params.pluginDir) {
     await fs.mkdir(path.join(params.repoDir, params.pluginDir), { recursive: true });
   }
@@ -86,10 +97,7 @@ async function writeRemoteMarketplaceFixture(params: {
     await fs.mkdir(path.dirname(pluginFilePath), { recursive: true });
     await fs.writeFile(pluginFilePath, "plugin fixture");
   }
-  await fs.writeFile(
-    path.join(params.repoDir, ".claude-plugin", "marketplace.json"),
-    JSON.stringify(params.manifest),
-  );
+  await writeMarketplaceManifest(params.repoDir, params.manifest);
 }
 
 async function writeLocalMarketplaceFixture(params: {
@@ -104,7 +112,7 @@ async function writeLocalMarketplaceFixture(params: {
 }
 
 async function withKnownMarketplaceRegistry<T>(
-  marketplaces: Record<string, unknown>,
+  marketplaces: Record<string, unknown> | ((homeDir: string) => Record<string, unknown>),
   run: (homeDir: string) => Promise<T>,
 ): Promise<T> {
   return await withTempDir("openclaw-marketplace-known-", async (homeDir) => {
@@ -112,7 +120,10 @@ async function withKnownMarketplaceRegistry<T>(
     const registryPath = path.join(homeDir, ".claude", "plugins", "known_marketplaces.json");
     await fs.mkdir(path.dirname(registryPath), { recursive: true });
     await fs.mkdir(openClawHome, { recursive: true });
-    await fs.writeFile(registryPath, JSON.stringify(marketplaces));
+    await fs.writeFile(
+      registryPath,
+      JSON.stringify(typeof marketplaces === "function" ? marketplaces(homeDir) : marketplaces),
+    );
     return await withEnvAsync({ HOME: homeDir, OPENCLAW_HOME: openClawHome }, async () =>
       run(homeDir),
     );
@@ -129,9 +140,7 @@ function mockRemoteMarketplaceClone(params: {
     expect(typeof repoDir).toBe("string");
     await writeRemoteMarketplaceFixture({
       repoDir: repoDir as string,
-      manifest: params.manifest,
-      ...(params.pluginDir ? { pluginDir: params.pluginDir } : {}),
-      ...(params.pluginFile ? { pluginFile: params.pluginFile } : {}),
+      ...params,
     });
     return { code: 0, stdout: "", stderr: "", killed: false };
   });
@@ -218,9 +227,9 @@ describe("marketplace plugins", () => {
   });
 
   it.each([
-    {
-      label: "GitHub primary identifier and ref",
-      source: {
+    [
+      "GitHub primary identifier and ref",
+      {
         type: "github",
         source: "git",
         repo: " owner/primary ",
@@ -230,11 +239,11 @@ describe("marketplace plugins", () => {
         branch: "main",
         tag: "v1",
       },
-      expected: { kind: "github", repo: "owner/primary", path: "plugins/example", ref: "pinned" },
-    },
-    {
-      label: "Git primary identifier and branch",
-      source: {
+      githubSource("owner/primary", "pinned", "plugins/example"),
+    ],
+    [
+      "Git primary identifier and branch",
+      {
         type: "git",
         source: "github",
         url: " https://example.com/primary.git ",
@@ -243,50 +252,35 @@ describe("marketplace plugins", () => {
         branch: " main ",
         tag: "v1",
       },
-      expected: {
-        kind: "git",
-        url: "https://example.com/primary.git",
-        path: undefined,
-        ref: "main",
-      },
-    },
-    {
-      label: "GitHub URL alias and tag",
-      source: { source: "github", repo: " ", url: " owner/alias ", branch: " ", tag: " v1 " },
-      expected: { kind: "github", repo: "owner/alias", path: undefined, ref: "v1" },
-    },
-    {
-      label: "Git repo alias and fallback discriminator",
-      source: { type: " ", source: "git", url: 42, repo: " https://example.com/alias.git " },
-      expected: {
-        kind: "git",
-        url: "https://example.com/alias.git",
-        path: undefined,
-        ref: undefined,
-      },
-    },
-    {
-      label: "GitHub missing optional fields",
-      source: { type: "github", repo: "owner/repo" },
-      expected: { kind: "github", repo: "owner/repo", path: undefined, ref: undefined },
-    },
-    {
-      label: "Git explicit ref before branch and tag",
-      source: {
+      gitSource("https://example.com/primary.git", "main"),
+    ],
+    [
+      "GitHub URL alias and tag",
+      { source: "github", repo: " ", url: " owner/alias ", branch: " ", tag: " v1 " },
+      githubSource("owner/alias", "v1"),
+    ],
+    [
+      "Git repo alias and fallback discriminator",
+      { type: " ", source: "git", url: 42, repo: " https://example.com/alias.git " },
+      gitSource("https://example.com/alias.git"),
+    ],
+    [
+      "GitHub missing optional fields",
+      { type: "github", repo: "owner/repo" },
+      githubSource("owner/repo"),
+    ],
+    [
+      "Git explicit ref before branch and tag",
+      {
         type: "git",
         url: "https://example.com/repo.git",
         ref: " pinned ",
         branch: "main",
         tag: "v1",
       },
-      expected: {
-        kind: "git",
-        url: "https://example.com/repo.git",
-        path: undefined,
-        ref: "pinned",
-      },
-    },
-  ])("normalizes $label in local marketplace listings", async ({ source, expected }) => {
+      gitSource("https://example.com/repo.git", "pinned"),
+    ],
+  ] as const)("normalizes %s in local marketplace listings", async (_label, source, expected) => {
     await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
       await writeMarketplaceManifest(rootDir, { plugins: [{ name: "example", source }] });
 
@@ -376,14 +370,7 @@ describe("marketplace plugins", () => {
       const manifestPath = await writeLocalMarketplaceFixture({
         rootDir,
         pluginDir,
-        manifest: {
-          plugins: [
-            {
-              name: "frontend-design",
-              source: "./plugins/frontend-design",
-            },
-          ],
-        },
+        manifest: manifestFor(relativePlugin),
       });
       mockSuccessfulMarketplaceInstall();
 
@@ -456,34 +443,23 @@ describe("marketplace plugins", () => {
   });
 
   it("resolves Claude-style plugin@marketplace shortcuts from known_marketplaces.json", async () => {
-    await withTempDir("openclaw-marketplace-test-", async (homeDir) => {
-      const openClawHome = path.join(homeDir, "openclaw-home");
-      await fs.mkdir(path.join(homeDir, ".claude", "plugins"), { recursive: true });
-      await fs.mkdir(openClawHome, { recursive: true });
-      await fs.writeFile(
-        path.join(homeDir, ".claude", "plugins", "known_marketplaces.json"),
-        JSON.stringify({
-          "claude-plugins-official": {
-            source: {
-              source: "github",
-              repo: "anthropics/claude-plugins-official",
-            },
-            installLocation: path.join(homeDir, ".claude", "plugins", "marketplaces", "official"),
-          },
-        }),
-      );
-
-      const shortcut = await withEnvAsync(
-        { HOME: homeDir, OPENCLAW_HOME: openClawHome },
-        async () => await resolveMarketplaceInstallShortcut("superpowers@claude-plugins-official"),
-      );
-
-      expect(shortcut).toEqual({
-        ok: true,
-        plugin: "superpowers",
-        marketplaceSource: "claude-plugins-official",
-      });
-    });
+    await withKnownMarketplaceRegistry(
+      (homeDir) => ({
+        "claude-plugins-official": {
+          source: { source: "github", repo: "anthropics/claude-plugins-official" },
+          installLocation: path.join(homeDir, ".claude", "plugins", "marketplaces", "official"),
+        },
+      }),
+      async () => {
+        expect(
+          await resolveMarketplaceInstallShortcut("superpowers@claude-plugins-official"),
+        ).toEqual({
+          ok: true,
+          plugin: "superpowers",
+          marketplaceSource: "claude-plugins-official",
+        });
+      },
+    );
   });
 
   const cyclicKnownMarketplaces = [
@@ -541,9 +517,7 @@ describe("marketplace plugins", () => {
       await writeLocalMarketplaceFixture({
         rootDir: marketplaceRoot,
         pluginDir,
-        manifest: {
-          plugins: [{ name: "frontend-design", source: "./plugins/frontend-design" }],
-        },
+        manifest: manifestFor(relativePlugin),
       });
       await fs.writeFile(
         path.join(homeDir, ".claude", "plugins", "known_marketplaces.json"),
@@ -596,21 +570,11 @@ describe("marketplace plugins", () => {
   it("installs remote marketplace plugins from relative paths inside the cloned repo", async () => {
     mockRemoteMarketplaceClone({
       pluginDir: path.join("plugins", "frontend-design"),
-      manifest: {
-        plugins: [
-          {
-            name: "frontend-design",
-            source: "./plugins/frontend-design",
-          },
-        ],
-      },
+      manifest: manifestFor(relativePlugin),
     });
     mockSuccessfulMarketplaceInstall();
 
-    const result = await installPluginFromMarketplace({
-      marketplace: "owner/repo",
-      plugin: "frontend-design",
-    });
+    const result = await remoteInstall();
 
     expectRemoteMarketplaceInstallResult(result);
     expect(installPluginInput().installPolicyRequest).toMatchObject({
@@ -628,21 +592,11 @@ describe("marketplace plugins", () => {
   it("preserves remote marketplace file path sources inside the cloned repo", async () => {
     mockRemoteMarketplaceClone({
       pluginFile: path.join("plugins", "frontend-design.tgz"),
-      manifest: {
-        plugins: [
-          {
-            name: "frontend-design",
-            source: "./plugins/frontend-design.tgz",
-          },
-        ],
-      },
+      manifest: manifestFor(`${relativePlugin}.tgz`),
     });
     mockSuccessfulMarketplaceInstall();
 
-    const result = await installPluginFromMarketplace({
-      marketplace: "owner/repo",
-      plugin: "frontend-design",
-    });
+    const result = await remoteInstall();
 
     expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
     expect(String(installPluginInput().path)).toMatch(
@@ -668,14 +622,7 @@ describe("marketplace plugins", () => {
     const commit = "0123456789abcdef0123456789abcdef01234567";
     mockRemoteMarketplaceClone({
       pluginFile: path.join("plugins", "frontend-design.tgz"),
-      manifest: {
-        plugins: [
-          {
-            name: "frontend-design",
-            source: "./plugins/frontend-design.tgz",
-          },
-        ],
-      },
+      manifest: manifestFor(`${relativePlugin}.tgz`),
     });
     runCommandWithTimeoutMock.mockResolvedValueOnce({
       code: 0,
@@ -685,10 +632,7 @@ describe("marketplace plugins", () => {
     });
     mockSuccessfulMarketplaceInstall();
 
-    const result = await installPluginFromMarketplace({
-      marketplace: `owner/repo#${commit}`,
-      plugin: "frontend-design",
-    });
+    const result = await remoteInstall(`owner/repo#${commit}`);
 
     expectMarketplaceInstallSuccess(result, {
       marketplacePlugin: "frontend-design",
@@ -725,20 +669,10 @@ describe("marketplace plugins", () => {
     async () => {
       mockRemoteMarketplaceCloneWithOutsideSymlink({
         symlinkPath: "plugins/evil-link",
-        manifest: {
-          plugins: [
-            {
-              name: "frontend-design",
-              source: "./plugins/evil-link",
-            },
-          ],
-        },
+        manifest: manifestFor("./plugins/evil-link"),
       });
 
-      const result = await installPluginFromMarketplace({
-        marketplace: "owner/repo",
-        plugin: "frontend-design",
-      });
+      const result = await remoteInstall();
 
       expect(result).toEqual({
         ok: false,
@@ -753,51 +687,21 @@ describe("marketplace plugins", () => {
   it.each([
     {
       name: "rejects remote marketplace git plugin sources before cloning nested remotes",
-      manifest: {
-        plugins: [
-          {
-            name: "frontend-design",
-            source: {
-              type: "git",
-              url: "https://evil.example/repo.git",
-            },
-          },
-        ],
-      },
+      manifest: manifestFor({ type: "git", url: "https://evil.example/repo.git" }),
       expectedError:
         'invalid marketplace entry "frontend-design" in owner/repo: ' +
         "remote marketplaces may not use git plugin sources",
     },
     {
       name: "rejects remote marketplace absolute plugin paths",
-      manifest: {
-        plugins: [
-          {
-            name: "frontend-design",
-            source: {
-              type: "path",
-              path: "/tmp/frontend-design",
-            },
-          },
-        ],
-      },
+      manifest: manifestFor({ type: "path", path: "/tmp/frontend-design" }),
       expectedError:
         'invalid marketplace entry "frontend-design" in owner/repo: ' +
         "remote marketplaces may only use relative plugin paths",
     },
     {
       name: "rejects remote marketplace HTTP plugin paths",
-      manifest: {
-        plugins: [
-          {
-            name: "frontend-design",
-            source: {
-              type: "path",
-              path: "https://evil.example/plugin.tgz",
-            },
-          },
-        ],
-      },
+      manifest: manifestFor({ type: "path", path: "https://evil.example/plugin.tgz" }),
       expectedError:
         'invalid marketplace entry "frontend-design" in owner/repo: ' +
         "remote marketplaces may not use HTTP(S) plugin paths",
@@ -808,17 +712,7 @@ describe("marketplace plugins", () => {
 
   it("reports missing remote marketplace paths as not found instead of escapes", async () => {
     mockRemoteMarketplaceClone({
-      manifest: {
-        plugins: [
-          {
-            name: "frontend-design",
-            source: {
-              type: "path",
-              path: "plugins/missing-plugin",
-            },
-          },
-        ],
-      },
+      manifest: manifestFor({ type: "path", path: "plugins/missing-plugin" }),
     });
 
     const result = await listMarketplacePlugins({ marketplace: "owner/repo" });

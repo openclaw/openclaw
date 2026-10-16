@@ -53,22 +53,40 @@ async function listMarketplaceDownloadTempDirs(): Promise<string[]> {
     .toSorted();
 }
 
-function fetchGuardInput(callIndex = 0): Record<string, unknown> {
-  const input = fetchWithSsrFGuardMock.mock.calls[callIndex]?.[0];
-  if (!input || typeof input !== "object") {
-    throw new Error(`expected fetch guard input ${callIndex}`);
-  }
-  return input as Record<string, unknown>;
-}
-
 function expectFetchDownloadCall(url = "https://example.com/frontend-design.tgz") {
-  const input = fetchGuardInput();
-  expect(input.url).toBe(url);
-  expect(input.timeoutMs).toBe(120_000);
-  expect(input.auditContext).toBe("marketplace-plugin-download");
+  expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]).toMatchObject({
+    url,
+    timeoutMs: 120_000,
+    auditContext: "marketplace-plugin-download",
+  });
 }
 
 const archiveUrl = "https://example.com/frontend-design.tgz";
+function respond(
+  response: Response,
+  finalUrl = archiveUrl,
+  release: () => Promise<void> = vi.fn(async () => undefined),
+) {
+  fetchWithSsrFGuardMock.mockResolvedValueOnce({ response, finalUrl, release });
+  return release;
+}
+
+function streamingResponse(cancel: () => void, bytes = "archive fixture", init?: ResponseInit) {
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(Buffer.from(bytes));
+      },
+      cancel,
+    }),
+    init,
+  );
+}
+
+function expectDownloadFailure(result: unknown, error: string) {
+  expect(result).toEqual({ ok: false, error: `failed to download ${archiveUrl}: ${error}` });
+  expect(installPluginFromPathMock).not.toHaveBeenCalled();
+}
 
 async function withArchiveMarketplace(
   run: (
@@ -122,15 +140,10 @@ describe("marketplace archive downloads", () => {
         kind === "empty"
           ? new Response(null, { status: 200 })
           : kind === "HTTP"
-            ? new Response(
-                new ReadableStream<Uint8Array>({
-                  start(controller) {
-                    controller.enqueue(new TextEncoder().encode("ignored"));
-                  },
-                  cancel,
-                }),
-                { status: 503, statusText: "Service Unavailable" },
-              )
+            ? streamingResponse(cancel, "ignored", {
+                status: 503,
+                statusText: "Service Unavailable",
+              })
             : kind === "drive-relative filename"
               ? new Response(new Blob([Buffer.from("tgz-bytes")]), { status: 200 })
               : ({
@@ -140,18 +153,13 @@ describe("marketplace archive downloads", () => {
                   arrayBuffer,
                   body: kind === "non-streaming" ? { cancel } : { getReader: () => reader, cancel },
                 } as unknown as Response);
-      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      respond(
         response,
-        finalUrl:
-          kind === "drive-relative filename" ? "https://cdn.example.com/C:plugin.tgz" : archiveUrl,
+        kind === "drive-relative filename" ? "https://cdn.example.com/C:plugin.tgz" : archiveUrl,
         release,
-      });
-      expect(await install()).toEqual({
-        ok: false,
-        error: `failed to download ${archiveUrl}: ${error}`,
-      });
+      );
+      expectDownloadFailure(await install(), error);
       expectFetchDownloadCall();
-      expect(installPluginFromPathMock).not.toHaveBeenCalled();
       expect(release).toHaveBeenCalledTimes(1);
       if (kind === "HTTP" || kind === "non-streaming" || kind.endsWith("length")) {
         expect(cancel).toHaveBeenCalledTimes(1);
@@ -171,11 +179,11 @@ describe("marketplace archive downloads", () => {
       const release = vi.fn(async () => {
         throw new Error("dispatcher close failed");
       });
-      fetchWithSsrFGuardMock.mockResolvedValueOnce({
-        response: new Response(new Blob([Buffer.from("tgz-bytes")]), { status: 200 }),
-        finalUrl: "https://cdn.example.com/releases/12345",
+      respond(
+        new Response(new Blob([Buffer.from("tgz-bytes")]), { status: 200 }),
+        "https://cdn.example.com/releases/12345",
         release,
-      });
+      );
       installPluginFromPathMock.mockImplementation(
         async ({ path: archivePath }: { path: string }) => {
           expect(await fs.readFile(archivePath, "utf8")).toBe("tgz-bytes");
@@ -241,10 +249,7 @@ describe("marketplace archive downloads", () => {
         finalUrl: "https://cdn.example.com/releases/frontend-design.tgz",
         release: vi.fn(async () => undefined),
       });
-      expect(await install()).toEqual({
-        ok: false,
-        error: `failed to download ${archiveUrl}: ${error}`,
-      });
+      expectDownloadFailure(await install(), error);
       expect(arrayBuffer).not.toHaveBeenCalled();
       expect(reader.cancel).toHaveBeenCalledTimes(1);
       expect(reader.releaseLock).toHaveBeenCalledTimes(1);
@@ -252,7 +257,6 @@ describe("marketplace archive downloads", () => {
         expect(reader.read).toHaveBeenCalledTimes(2);
       }
       expect(await listMarketplaceDownloadTempDirs()).toEqual(beforeTempDirs);
-      expect(installPluginFromPathMock).not.toHaveBeenCalled();
     });
   });
   it.each(["open fails", "write makes no progress"])(
@@ -262,20 +266,8 @@ describe("marketplace archive downloads", () => {
       configureFsSafeNative({ mode: "off" });
       await withArchiveMarketplace(async (install) => {
         const cancel = vi.fn();
-        const response = new Response(
-          new ReadableStream<Uint8Array>({
-            start(controller) {
-              controller.enqueue(Buffer.from("archive fixture"));
-            },
-            cancel,
-          }),
-        );
-        const release = vi.fn(async () => undefined);
-        fetchWithSsrFGuardMock.mockResolvedValueOnce({
-          response,
-          finalUrl: "https://example.com/frontend-design.tgz",
-          release,
-        });
+        const response = streamingResponse(cancel);
+        const release = respond(response);
         const open = fs.open.bind(fs);
         const attemptedPaths: string[] = [];
         const downloads: { pathname: string; handle: Awaited<ReturnType<typeof fs.open>> }[] = [];

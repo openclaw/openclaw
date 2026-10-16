@@ -1,5 +1,6 @@
 // Covers memory embedding provider runtime hooks from plugins.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { EmbeddingBatchOptions } from "./embedding-provider-runtime-types.js";
 import type { EmbeddingProviderRuntime } from "./embedding-provider-types.js";
 import {
@@ -26,10 +27,19 @@ vi.mock("./capability-provider-runtime.js", () => ({
 let runtimeModule: typeof import("./memory-embedding-provider-runtime.js");
 
 function createCapabilityAdapter(id: string): EmbeddingProviderAdapter {
-  return {
-    id,
-    create: async () => ({ provider: null }),
-  };
+  return { id, create: async () => ({ provider: null }) };
+}
+
+function configuredOllama(id: string, baseUrl: string): OpenClawConfig {
+  return { models: { providers: { [id]: { api: "ollama", baseUrl, models: [] } } } };
+}
+
+function expectCapabilityLookup(providerId: string, cfg?: OpenClawConfig) {
+  expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledWith({
+    key: "embeddingProviders",
+    providerId,
+    cfg,
+  });
 }
 
 beforeEach(async () => {
@@ -56,69 +66,33 @@ describe("memory embedding provider runtime resolution", () => {
     ]);
     expect(runtimeModule.getMemoryEmbeddingProvider("ollama")?.id).toBe("ollama");
     expect(mocks.resolvePluginCapabilityProviders).toHaveBeenCalledTimes(1);
-    expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledWith({
-      key: "embeddingProviders",
-      providerId: "ollama",
-      cfg: undefined,
-    });
+    expectCapabilityLookup("ollama");
   });
 
   it("uses a configured provider api as the memory adapter owner", () => {
     const ollamaAdapter = createCapabilityAdapter("ollama");
-    const config = {
-      models: {
-        providers: {
-          "ollama-5080": {
-            api: "ollama",
-            baseUrl: "http://10.0.0.8:11435",
-            models: [],
-          },
-        },
-      },
-    };
+    const config = configuredOllama("ollama-5080", "http://10.0.0.8:11435");
     mocks.resolvePluginCapabilityProvider.mockImplementation(({ providerId }) =>
       providerId === "ollama" ? ollamaAdapter : undefined,
     );
 
-    expect(runtimeModule.getMemoryEmbeddingProvider("ollama-5080", config as never)?.id).toBe(
+    expect(runtimeModule.getMemoryEmbeddingProvider("ollama-5080", config)?.id).toBe(
       ollamaAdapter.id,
     );
-    expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledWith({
-      key: "embeddingProviders",
-      providerId: "ollama-5080",
-      cfg: config,
-    });
-    expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledWith({
-      key: "embeddingProviders",
-      providerId: "ollama",
-      cfg: config,
-    });
+    expectCapabilityLookup("ollama-5080", config);
+    expectCapabilityLookup("ollama", config);
   });
 
   it("uses registered adapters through a configured provider api", () => {
     const ollamaAdapter = createCapabilityAdapter("ollama");
     registerEmbeddingProvider(ollamaAdapter);
-    const config = {
-      models: {
-        providers: {
-          "ollama-gpu1": {
-            api: "ollama",
-            baseUrl: "http://ollama-host:11435",
-            models: [],
-          },
-        },
-      },
-    } as never;
+    const config = configuredOllama("ollama-gpu1", "http://ollama-host:11435");
 
     expect(runtimeModule.getMemoryEmbeddingProvider("ollama-gpu1", config)?.id).toBe(
       ollamaAdapter.id,
     );
     expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledTimes(1);
-    expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledWith({
-      key: "embeddingProviders",
-      providerId: "ollama-gpu1",
-      cfg: config,
-    });
+    expectCapabilityLookup("ollama-gpu1", config);
   });
 
   it("returns generic provider, runtime, and identity objects unchanged", async () => {

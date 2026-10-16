@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginRuntimeMock } from "../plugin-sdk/test-helpers/plugin-runtime-mock.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { bindMemoryProvider } from "./memory-provider-adapter.js";
-import type { MemoryProviderHandle } from "./memory-provider-types.js";
+import type { MemoryAudience, MemoryProviderHandle } from "./memory-provider-types.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 import { createPluginToolFactoryContext } from "./tool-factory-context.js";
@@ -50,8 +51,7 @@ function childEntry(parent: FakeSessionRow, parentKey = ROOT_KEY): FakeSessionRo
   };
 }
 
-function resolveAt(sessionKey: string, entry: FakeSessionRow, senderIsOwner?: boolean) {
-  fakeSessionOwner.rows.set(sessionKey, entry);
+function resolveEntry(sessionKey: string, entry: FakeSessionRow, senderIsOwner?: boolean) {
   return resolveMemoryAudienceFromEntry(
     {
       agentId: AGENT_ID,
@@ -62,6 +62,30 @@ function resolveAt(sessionKey: string, entry: FakeSessionRow, senderIsOwner?: bo
     },
     entry,
   );
+}
+
+function resolveAt(sessionKey: string, entry: FakeSessionRow, senderIsOwner?: boolean) {
+  fakeSessionOwner.rows.set(sessionKey, entry);
+  return resolveEntry(sessionKey, entry, senderIsOwner);
+}
+
+function delegate(audience: MemoryAudience, sessionKey = CHILD_KEY) {
+  return delegateMemoryAudience(audience, { sessionKey, storePath: STORE_PATH });
+}
+
+async function delegatedChild() {
+  const root = rootEntry();
+  const rootGrant = await grantAt(ROOT_KEY, root, true);
+  fakeSessionOwner.rows.set(CHILD_KEY, childEntry(root));
+  return { rootGrant, grant: await delegate(rootGrant.audience) };
+}
+
+function bindProvider(raw: MemoryProviderHandle, audience: MemoryAudience, signal?: AbortSignal) {
+  return bindMemoryProvider(raw, "test", {
+    authority: { kind: "session", sessionKey: CHILD_KEY, sandboxed: false, audience },
+    assertCurrent() {},
+    signal,
+  });
 }
 
 async function grantAt(sessionKey: string, entry: FakeSessionRow, senderIsOwner?: boolean) {
@@ -118,18 +142,10 @@ describe("memory audience resolution", () => {
     const root = rootEntry();
     const child = childEntry(root);
     fakeSessionOwner.rows.set(CHILD_KEY, child);
-    await expect(
-      resolveMemoryAudienceFromEntry(
-        {
-          agentId: AGENT_ID,
-          sessionKey: CHILD_KEY,
-          sessionId: child.sessionId,
-          senderIsOwner: true,
-          storePath: STORE_PATH,
-        },
-        child,
-      ),
-    ).resolves.toMatchObject({ status: "denied", kind: "stale-lineage" });
+    await expect(resolveEntry(CHILD_KEY, child, true)).resolves.toMatchObject({
+      status: "denied",
+      kind: "stale-lineage",
+    });
     await expect(
       resolveAt(ROOT_KEY, { ...root, chatType: undefined }, true),
     ).resolves.toMatchObject({ status: "denied", kind: "ineligible" });
@@ -342,10 +358,7 @@ describe("memory audience delegation", () => {
     const root = rootEntry();
     const { audience } = await grantAt(ROOT_KEY, root, true);
     fakeSessionOwner.rows.set(CHILD_KEY, { sessionId: "recall-session", updatedAt: 1 });
-    const delegated = await delegateMemoryAudience(audience, {
-      sessionKey: CHILD_KEY,
-      storePath: STORE_PATH,
-    });
+    const delegated = await delegate(audience);
     expect(delegated.audience).toEqual(audience);
     expect(delegated.audience).not.toBe(audience);
     expect(Object.isFrozen(delegated.audience)).toBe(true);
@@ -355,56 +368,33 @@ describe("memory audience delegation", () => {
       "different session",
     );
     const raw = provider();
-    const bound = bindMemoryProvider(raw, "test", {
-      authority: {
-        kind: "session",
-        sessionKey: CHILD_KEY,
-        sandboxed: false,
-        audience: delegated.audience,
-      },
-      assertCurrent() {},
-    });
+    const bound = bindProvider(raw, delegated.audience);
     await expect(bound.health()).resolves.toMatchObject({ status: "ready" });
     fakeSessionOwner.rows.set(ROOT_KEY, { ...root, lifecycleRevision: randomUUID() });
     await expect(bound.health()).rejects.toThrow("no longer current");
     expect(() => assertMemoryAudienceCurrent(audience)).toThrow("no longer current");
-    await expect(
-      delegateMemoryAudience(audience, { sessionKey: "agent:main:other", storePath: STORE_PATH }),
-    ).rejects.toThrow("no longer current");
+    await expect(delegate(audience, "agent:main:other")).rejects.toThrow("no longer current");
     expect(raw.health).toHaveBeenCalledTimes(1);
   });
 
   it("requires an existing child session for the same agent", async () => {
     const { audience } = await grantAt(ROOT_KEY, rootEntry(), true);
-    await expect(
-      delegateMemoryAudience(audience, { sessionKey: CHILD_KEY, storePath: STORE_PATH }),
-    ).rejects.toThrow("requires an existing child session");
-    await expect(
-      delegateMemoryAudience(audience, { sessionKey: "agent:other:child", storePath: STORE_PATH }),
-    ).rejects.toThrow("requires a session for the same agent");
+    await expect(delegate(audience)).rejects.toThrow("requires an existing child session");
+    await expect(delegate(audience, "agent:other:child")).rejects.toThrow(
+      "requires a session for the same agent",
+    );
   });
 });
 
 describe("memory audience publication readiness", () => {
   it("observes a child publication when its parent rejects preparation", async () => {
-    const root = rootEntry();
-    const rootGrant = await grantAt(ROOT_KEY, root, true);
-    fakeSessionOwner.rows.set(CHILD_KEY, childEntry(root));
-    const grant = await delegateMemoryAudience(rootGrant.audience, {
-      sessionKey: CHILD_KEY,
-      storePath: STORE_PATH,
-    });
-    let rejectPublication!: (error: Error) => void;
-    fakeSessionOwner.publications.set(
-      CHILD_KEY,
-      new Promise<void>((_, reject) => {
-        rejectPublication = reject;
-      }),
-    );
+    const { rootGrant, grant } = await delegatedChild();
+    const publication = createDeferredCore();
+    fakeSessionOwner.publications.set(CHILD_KEY, publication.promise);
     rootGrant.release();
     try {
       expect(() => prepareMemoryAudienceRead(grant.audience)).toThrow("released by its owner");
-      rejectPublication(new Error("Synthetic rejected child publication"));
+      publication.reject(new Error("Synthetic rejected child publication"));
       // Drain the rejection turn: Vitest must see no unhandled publication failure.
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
@@ -418,32 +408,13 @@ describe("memory audience publication readiness", () => {
   it.each(["metadata", "reset", "release", "abort"] as const)(
     "joins a parent publication and handles %s before provider I/O",
     async (change) => {
-      const root = rootEntry();
-      const rootGrant = await grantAt(ROOT_KEY, root, true);
-      const child = childEntry(root);
-      fakeSessionOwner.rows.set(CHILD_KEY, child);
-      const grant = await delegateMemoryAudience(rootGrant.audience, {
-        sessionKey: CHILD_KEY,
-        storePath: STORE_PATH,
-      });
-      let settle!: () => void;
-      const publication = new Promise<void>((resolve) => {
-        settle = resolve;
-      });
+      const { rootGrant, grant } = await delegatedChild();
+      const publication = createDeferredCore();
       fakeSessionOwner.pendingKeys.add(ROOT_KEY);
-      fakeSessionOwner.publications.set(ROOT_KEY, publication);
+      fakeSessionOwner.publications.set(ROOT_KEY, publication.promise);
       const controller = new AbortController();
       const native = provider();
-      const bound = bindMemoryProvider(native, "test", {
-        authority: {
-          kind: "session",
-          sessionKey: CHILD_KEY,
-          sandboxed: false,
-          audience: grant.audience,
-        },
-        assertCurrent: () => {},
-        signal: controller.signal,
-      });
+      const bound = bindProvider(native, grant.audience, controller.signal);
       const result = bound.health();
       const observed = result.catch((error: unknown) => error);
       try {
@@ -463,7 +434,7 @@ describe("memory audience publication readiness", () => {
         }
         fakeSessionOwner.pendingKeys.delete(ROOT_KEY);
         fakeSessionOwner.publications.delete(ROOT_KEY);
-        settle();
+        publication.resolve();
         if (change === "metadata") {
           await expect(result).resolves.toMatchObject({ status: "ready" });
           expect(native.health).toHaveBeenCalledOnce();
@@ -475,7 +446,7 @@ describe("memory audience publication readiness", () => {
       } finally {
         fakeSessionOwner.pendingKeys.delete(ROOT_KEY);
         fakeSessionOwner.publications.delete(ROOT_KEY);
-        settle();
+        publication.resolve();
         await observed;
         await bound.close();
         grant.release();
@@ -524,13 +495,8 @@ it.each(["memory", "other", "reset", "abort"] as const)(
       context.assertInvocationCurrent,
       context.memoryAudience,
     );
-    let settle!: () => void;
-    fakeSessionOwner.publications.set(
-      ROOT_KEY,
-      new Promise<void>((resolve) => {
-        settle = resolve;
-      }),
-    );
+    const publication = createDeferredCore();
+    fakeSessionOwner.publications.set(ROOT_KEY, publication.promise);
     fakeSessionOwner.pendingKeys.add(ROOT_KEY);
     const controller = new AbortController();
     const result = tool.execute("call", {}, controller.signal);
@@ -551,7 +517,7 @@ it.each(["memory", "other", "reset", "abort"] as const)(
       }
       fakeSessionOwner.pendingKeys.delete(ROOT_KEY);
       fakeSessionOwner.publications.delete(ROOT_KEY);
-      settle();
+      publication.resolve();
       if (kind === "reset" || kind === "abort") {
         expect(await observed).toBeInstanceOf(Error);
         expect(execute).not.toHaveBeenCalled();
@@ -562,7 +528,7 @@ it.each(["memory", "other", "reset", "abort"] as const)(
     } finally {
       fakeSessionOwner.pendingKeys.delete(ROOT_KEY);
       fakeSessionOwner.publications.delete(ROOT_KEY);
-      settle();
+      publication.resolve();
       await observed;
       grant.release();
     }

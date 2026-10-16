@@ -3,7 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { delegateMemoryAudience, resolveMemoryAudienceFromEntry } from "./memory-audience.js";
 import { fakeSessionOwner } from "./memory-audience.test-support.js";
-import type { MemoryCallerContext, MemoryProviderHandle } from "./memory-provider-types.js";
+import type {
+  MemoryAudience,
+  MemoryCallerContext,
+  MemoryProviderHandle,
+} from "./memory-provider-types.js";
 import type {
   MemoryPluginCapability,
   MemoryProviderRuntime,
@@ -39,14 +43,14 @@ import {
   prepareMemoryRuntimeReload,
 } from "./memory-runtime.js";
 
-function context() {
+function context(audience?: MemoryAudience) {
   let current = true;
   return {
     revoke() {
       current = false;
     },
     value: {
-      authority: { kind: "session", sessionKey: "agent:main:chat", sandboxed: true },
+      authority: { kind: "session", sessionKey: "agent:main:chat", sandboxed: true, audience },
       assertCurrent() {
         if (!current) {
           throw new Error("caller revoked");
@@ -55,11 +59,11 @@ function context() {
     } satisfies MemoryCallerContext,
   };
 }
-function provider() {
+function provider(withCandidates = false) {
   const capabilities: MemoryProviderHandle["capabilities"] = {
     sources: ["memory"],
     pagination: false,
-    candidates: [],
+    candidates: withCandidates ? ["trigger"] : [],
     projectFilter: false,
   };
   return {
@@ -68,11 +72,18 @@ function provider() {
     get: vi.fn(async () => ({ status: "not_found" as const })),
     health: vi.fn(async () => ({ status: "ready" as const })),
     close: vi.fn(async () => {}),
+    ...(withCandidates ? { candidates: vi.fn(async () => ({ hits: [] })) } : {}),
   } satisfies MemoryProviderHandle;
 }
 function open(caller = context()) {
   return getActiveMemoryProviderCore({ cfg: {}, agentId: "main", context: caller.value });
 }
+function advertise(raw = provider()) {
+  const openProvider = vi.fn(async () => ({ provider: raw }));
+  state.capability.providerRuntime = { open: openProvider };
+  return openProvider;
+}
+
 function legacy(searchManager: RegisteredMemorySearchManager) {
   return {
     getMemorySearchManager: vi.fn(async () => ({ manager: searchManager })),
@@ -137,10 +148,8 @@ async function ownerAudience(sessionKey: string) {
 describe("provider-neutral memory resolver", () => {
   it("rejects a minted audience used by a different session", async () => {
     const { audience } = await ownerAudience("agent:main:owner");
-    const openProvider = vi.fn(async () => ({ provider: provider() }));
-    state.capability.providerRuntime = { open: openProvider };
-    const caller = context();
-    Reflect.set(caller.value.authority, "audience", audience);
+    const openProvider = advertise();
+    const caller = context(audience);
     await expect(open(caller)).rejects.toThrow("memory audience is bound to a different session");
     expect(openProvider).not.toHaveBeenCalled();
     fakeSessionOwner.rows.set(caller.value.authority.sessionKey, {
@@ -160,10 +169,8 @@ describe("provider-neutral memory resolver", () => {
   it("never opens a provider for an audience that went stale before open", async () => {
     const sessionKey = "agent:main:chat";
     const { audience, entry } = await ownerAudience(sessionKey);
-    const openProvider = vi.fn(async () => ({ provider: provider() }));
-    state.capability.providerRuntime = { open: openProvider };
-    const caller = context();
-    Reflect.set(caller.value.authority, "audience", audience);
+    const openProvider = advertise();
+    const caller = context(audience);
     fakeSessionOwner.rows.set(sessionKey, { ...entry, lifecycleRevision: "generation-2" });
     await expect(open(caller)).rejects.toThrow("memory audience is no longer current");
     expect(openProvider).not.toHaveBeenCalled();
@@ -179,18 +186,15 @@ describe("provider-neutral memory resolver", () => {
         return { provider: raw };
       }),
     };
-    const caller = context();
-    Reflect.set(caller.value.authority, "audience", audience);
+    const caller = context(audience);
     await expect(open(caller)).rejects.toThrow("memory audience is no longer current");
     expect(raw.close).toHaveBeenCalledOnce();
     expect(raw.health).not.toHaveBeenCalled();
   });
 
   it("rejects a forged session audience before opening a provider", async () => {
-    const openProvider = vi.fn(async () => ({ provider: provider() }));
-    state.capability.providerRuntime = { open: openProvider };
-    const caller = context();
-    Reflect.set(caller.value.authority, "audience", {
+    const openProvider = advertise();
+    const caller = context({
       kind: "owner-private",
       agentId: "main",
     });
@@ -228,7 +232,7 @@ describe("provider-neutral memory resolver", () => {
 
   it("rejects cross-provider refs, revoked results, and retained calls after close", async () => {
     const raw = provider();
-    state.capability.providerRuntime = { open: async () => ({ provider: raw }) };
+    advertise(raw);
     const caller = context();
     const bound = (await open(caller)).provider!;
     await expect(bound.get({ reference: { providerId: "other", id: "record" } })).rejects.toThrow(
@@ -281,7 +285,7 @@ describe("provider-neutral memory resolver", () => {
   ])("closes providers with %s", async (_name, invalidate) => {
     const raw = provider();
     invalidate(raw);
-    state.capability.providerRuntime = { open: async () => ({ provider: raw }) };
+    advertise(raw);
     await expect(open()).rejects.toThrow("valid capabilities with matching candidates");
     expect(raw.close).toHaveBeenCalledTimes(1);
   });
@@ -293,14 +297,8 @@ describe("provider-neutral memory resolver", () => {
   ])(
     "rejects undeclared search %s before calling the provider",
     async (_name, request, message) => {
-      const raw = { ...provider(), candidates: vi.fn(async () => ({ hits: [] })) };
-      raw.capabilities = {
-        sources: ["memory"],
-        pagination: false,
-        candidates: ["trigger"],
-        projectFilter: false,
-      };
-      state.capability.providerRuntime = { open: async () => ({ provider: raw }) };
+      const raw = provider(true);
+      advertise(raw);
       const bound = (await open()).provider!;
       await expect(bound.search(request)).rejects.toThrow(message);
       expect(raw.search).not.toHaveBeenCalled();
@@ -317,18 +315,11 @@ describe("provider-neutral memory resolver", () => {
   ])(
     "rejects undeclared candidate %s before calling the provider",
     async (_name, request, message) => {
-      const candidates = vi.fn(async () => ({ hits: [] }));
-      const raw = { ...provider(), candidates };
-      raw.capabilities = {
-        sources: ["memory"],
-        pagination: false,
-        candidates: ["trigger"],
-        projectFilter: false,
-      };
-      state.capability.providerRuntime = { open: async () => ({ provider: raw }) };
+      const raw = provider(true);
+      advertise(raw);
       const bound = (await open()).provider!;
       await expect(bound.candidates!(request)).rejects.toThrow(message);
-      expect(candidates).not.toHaveBeenCalled();
+      expect(raw.candidates).not.toHaveBeenCalled();
     },
   );
 
@@ -543,8 +534,7 @@ it.each(["before", "during"] as const)(
       return { provider: native };
     });
     state.capability.providerRuntime = { open: openProvider };
-    const caller = context();
-    Reflect.set(caller.value.authority, "audience", grant.audience);
+    const caller = context(grant.audience);
     if (when === "before") {
       admit();
     }
