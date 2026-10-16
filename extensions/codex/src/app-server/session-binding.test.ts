@@ -67,6 +67,23 @@ function setBinding(store: BindingStore, identity: Identity, binding: ThreadBind
   return store.mutate(identity, { kind: "set", binding });
 }
 
+function nativeBinding(threadId: string, supervision: boolean): ThreadBinding {
+  return {
+    threadId,
+    cwd: "/repo",
+    model: "gpt-5.6-luna",
+    modelProvider: "openai",
+    ...(supervision
+      ? {
+          connectionScope: "supervision" as const,
+          supervisionSourceThreadId: "native-source",
+          conversationSourceTransferComplete: true as const,
+          preserveNativeModel: true as const,
+        }
+      : {}),
+  };
+}
+
 async function createGenerationFixture(threadId = "thread-old", cwd = "/old") {
   const fixture = createBindingFixture();
   const previous = makeStableSessionIdentity("session-1", "agent:main:telegram:chat-1");
@@ -540,19 +557,8 @@ describe("Codex app-server binding store", () => {
       const current = { ...previous, sessionId: "session-after-compaction" };
       const sessionScope = { agentId: current.agentId, sessionKey: current.sessionKey, storePath };
       const binding = {
-        threadId: "native-thread-before-compaction",
-        cwd: "/repo",
-        model: "gpt-5.6-luna",
-        modelProvider: "openai",
+        ...nativeBinding("native-thread-before-compaction", ownership === "supervision"),
         dynamicToolsFingerprint: hashFingerprint("native-tools"),
-        ...(ownership === "supervision"
-          ? {
-              connectionScope: "supervision" as const,
-              supervisionSourceThreadId: "native-source",
-              conversationSourceTransferComplete: true as const,
-              preserveNativeModel: true as const,
-            }
-          : {}),
       };
       const openStore = () => {
         const state = createSqliteState({
@@ -618,20 +624,7 @@ describe("Codex app-server binding store", () => {
         ...(mismatch === "different session key" ? { sessionKey: "agent:main:other" } : {}),
         ...(mismatch === "different agent" ? { agentId: "other" } : {}),
       };
-      const binding = {
-        threadId: "native-thread-foreign-generation",
-        cwd: "/repo",
-        model: "gpt-5.6-luna",
-        modelProvider: "openai",
-        ...(supervision
-          ? {
-              connectionScope: "supervision" as const,
-              supervisionSourceThreadId: "native-source",
-              conversationSourceTransferComplete: true as const,
-              preserveNativeModel: true as const,
-            }
-          : {}),
-      };
+      const binding = nativeBinding("native-thread-foreign-generation", supervision);
 
       await upsertSessionEntry({
         agentId: current.agentId,
