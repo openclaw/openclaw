@@ -161,6 +161,48 @@ describe("advisor", () => {
     );
   });
 
+  it("schedules no follow-up when steering is refused or the review was cancelled", async () => {
+    const run = setup({ everyToolCalls: 10, everyMinutes: 0 }, "CORRECTION\nFix the config typo.");
+    run.steer.mockResolvedValueOnce({ steered: false, reason: "prompt injection not allowed" });
+    await run.start();
+    await run.startRun();
+    await run.tool();
+    await run.endRun();
+    await run.flush();
+    expect(run.steer).toHaveBeenCalledOnce();
+    expect(run.followUp).not.toHaveBeenCalled();
+
+    // A new user turn while the steer is in flight makes the advice stale.
+    const steering = Promise.withResolvers<{ steered: false; reason: string }>();
+    run.steer.mockReturnValueOnce(steering.promise);
+    await run.startRun("run-2");
+    await run.tool("run-2");
+    await run.endRun("run-2");
+    const review = run.flush();
+    await vi.waitFor(() => expect(run.steer).toHaveBeenCalledTimes(2));
+    await run.startRun("run-3");
+    steering.resolve({ steered: false, reason: "no_active_run" });
+    await review;
+    await run.flush();
+    expect(run.followUp).not.toHaveBeenCalled();
+  });
+
+  it("still reviews the run end when an interval review was in flight", async () => {
+    const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
+    const first = Promise.withResolvers<{ text: string }>();
+    run.forkSession.mockReturnValueOnce(first.promise);
+    await run.start();
+    await run.startRun();
+    await run.tool();
+    const interval = run.flush();
+    await vi.waitFor(() => expect(run.forkSession).toHaveBeenCalledOnce());
+    await run.endRun();
+    first.resolve({ text: "NO_CHANGE" });
+    await interval;
+    await run.flush();
+    expect(run.forkSession).toHaveBeenCalledTimes(2);
+  });
+
   it("ignores non-user runs and runs without tools, and does nothing on NO_CHANGE", async () => {
     const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
     await run.start();

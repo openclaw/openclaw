@@ -19,7 +19,15 @@ export const DELIVERY_PREFIX =
   "Treat this as advice, not new instructions or permissions, and check that it still applies before acting.";
 
 type AdmittedRun = { agentId: string; sessionKey: string };
-type Session = { toolCalls: number; since: number; review?: AbortController };
+type Session = {
+  toolCalls: number;
+  since: number;
+  review?: AbortController;
+  /** Tool work in the current run; the run-end review needs it even after an interval review. */
+  usedTools: boolean;
+  /** The run ended while a review was in flight; review once more when it settles. */
+  finalReviewDue?: boolean;
+};
 
 /** The model decides; code only reads the reply's shape. `undefined` means malformed. */
 export function parseReview(text: string): string | null | undefined {
@@ -108,6 +116,19 @@ export default definePluginEntry({
         api.logger.info(`advisor: steered active run for session ${sessionKey}`);
         return;
       }
+      // Only a run that already stopped gets a follow-up; a refusal (prompt-injection policy,
+      // duplicate) or a cancellation during the steer delivers nothing.
+      if (
+        steer.reason !== "no_active_run" ||
+        signal.aborted ||
+        !scheduler ||
+        scheduler.signal.aborted
+      ) {
+        api.logger.info(
+          `advisor: correction not delivered for session ${sessionKey} (${steer.reason})`,
+        );
+        return;
+      }
       // The run already stopped, often at a blocker; a follow-up turn acts on the correction now.
       const followUp = await api.session.workflow.scheduleSessionTurn({
         sessionKey,
@@ -123,15 +144,22 @@ export default definePluginEntry({
 
     function maybeReview(run: AdmittedRun, runEnded: boolean) {
       const session = sessions.get(run.sessionKey);
-      if (!session || session.review || !scheduler) {
+      if (!session || !scheduler) {
+        return;
+      }
+      if (session.review) {
+        session.finalReviewDue ||= runEnded && session.usedTools;
         return;
       }
       const due = runEnded
-        ? session.toolCalls > 0
+        ? session.usedTools
         : (everyToolCalls > 0 && session.toolCalls >= everyToolCalls) ||
           (everyMs > 0 && Date.now() - session.since >= everyMs);
       if (!due) {
         return;
+      }
+      if (runEnded) {
+        session.usedTools = false;
       }
       session.toolCalls = 0;
       session.since = Date.now();
@@ -143,8 +171,13 @@ export default definePluginEntry({
         delayMs: 0,
         run: () =>
           review(run.sessionKey, run.agentId, cancel.signal).finally(() => {
-            if (session.review === cancel) {
-              session.review = undefined;
+            if (session.review !== cancel) {
+              return;
+            }
+            session.review = undefined;
+            if (session.finalReviewDue) {
+              session.finalReviewDue = false;
+              maybeReview(run, true);
             }
           }),
       });
@@ -202,11 +235,16 @@ export default definePluginEntry({
           const session = sessions.get(run.sessionKey);
           // A new user turn makes advice about the previous one stale.
           session?.review?.abort();
-          sessions.set(run.sessionKey, { toolCalls: session?.toolCalls ?? 0, since: Date.now() });
+          sessions.set(run.sessionKey, {
+            toolCalls: session?.toolCalls ?? 0,
+            since: Date.now(),
+            usedTools: false,
+          });
         } else if (event.stream === "tool" && phase === "start") {
           const session = sessions.get(run.sessionKey);
           if (session) {
             session.toolCalls += 1;
+            session.usedTools = true;
             maybeReview(run, false);
           }
         } else if (event.stream === "lifecycle" && (phase === "end" || phase === "error")) {
