@@ -70,25 +70,6 @@ function resolveLocalModeWithUnresolvedPassword(mode: "none" | "trusted-proxy") 
   );
 }
 
-function expectUnresolvedLocalAuthSecretRefFailure(params: {
-  authMode: "token" | "password";
-  secretId: string;
-  errorPath: "gateway.auth.token" | "gateway.auth.password";
-  remote?: { token?: string; password?: string };
-}) {
-  expect(() =>
-    resolveGatewayCredentialsFor(
-      {
-        mode: "local",
-        auth: { mode: params.authMode, [params.authMode]: envSecretRef(params.secretId) },
-        remote: params.remote,
-      },
-      { env: EMPTY_GATEWAY_ENV },
-      true,
-    ),
-  ).toThrow(params.errorPath);
-}
-
 describe("resolveGatewayCredentialsFromConfig", () => {
   it("prefers explicit credentials over config and environment", () => {
     const resolved = resolveGatewayCredentialsFor(
@@ -139,23 +120,25 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     expect(resolved).toEqual(DEFAULT_REMOTE_AUTH);
   });
 
-  it("fails closed when local token SecretRef is unresolved and remote token fallback exists", () => {
-    expectUnresolvedLocalAuthSecretRefFailure({
-      authMode: "token",
-      secretId: "MISSING_LOCAL_TOKEN",
-      errorPath: "gateway.auth.token",
-      remote: { token: "remote-token" },
-    });
-  });
-
-  it("fails closed when local password SecretRef is unresolved and remote password fallback exists", () => {
-    expectUnresolvedLocalAuthSecretRefFailure({
-      authMode: "password",
-      secretId: "MISSING_LOCAL_PASSWORD",
-      errorPath: "gateway.auth.password",
-      remote: { password: "remote-password" }, // pragma: allowlist secret
-    });
-  });
+  it.each(["token", "password"] as const)(
+    "fails closed when local %s SecretRef is unresolved and remote fallback exists",
+    (credential) => {
+      expect(() =>
+        resolveGatewayCredentialsFor(
+          {
+            mode: "local",
+            auth: {
+              mode: credential,
+              [credential]: envSecretRef(`MISSING_LOCAL_${credential.toUpperCase()}`),
+            },
+            remote: { [credential]: `remote-${credential}` },
+          },
+          { env: EMPTY_GATEWAY_ENV },
+          true,
+        ),
+      ).toThrow(`gateway.auth.${credential}`);
+    },
+  );
 
   it("fails closed on env-template local tokens in the synchronous resolver", () => {
     expect(() =>
@@ -209,14 +192,19 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     expect(resolved.token).toBeUndefined();
   });
 
-  it("throws when remote token auth relies on an unresolved SecretRef", () => {
-    expect(() =>
-      resolveRemoteGatewayCredentials(
-        { token: envSecretRef("MISSING_REMOTE_TOKEN") },
-        { remoteTokenFallback: "remote-only" },
-      ),
-    ).toThrow("gateway.remote.token");
-  });
+  it.each(["token", "password"] as const)(
+    "throws when remote %s auth relies on an unresolved SecretRef",
+    (credential) => {
+      expect(() =>
+        resolveRemoteGatewayCredentials(
+          { [credential]: envSecretRef(`MISSING_REMOTE_${credential.toUpperCase()}`) },
+          credential === "token"
+            ? { remoteTokenFallback: "remote-only" }
+            : { remotePasswordFallback: "remote-only" }, // pragma: allowlist secret
+        ),
+      ).toThrow(`gateway.remote.${credential}`);
+    },
+  );
 
   const missingLocalToken = { mode: "token", token: envSecretRef("MISSING_LOCAL_TOKEN") } as const;
 
@@ -254,15 +242,6 @@ describe("resolveGatewayCredentialsFromConfig", () => {
       token: undefined,
       password: "remote-password", // pragma: allowlist secret
     });
-  });
-
-  it("throws when remote password auth relies on an unresolved SecretRef", () => {
-    expect(() =>
-      resolveRemoteGatewayCredentials(
-        { password: envSecretRef("MISSING_REMOTE_PASSWORD") },
-        { remotePasswordFallback: "remote-only" }, // pragma: allowlist secret
-      ),
-    ).toThrow("gateway.remote.password");
   });
 
   it.each([

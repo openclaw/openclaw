@@ -8,21 +8,17 @@ type ResolvedAuth = { token?: string; password?: string };
 type GatewayConnectionAuthOptions = Parameters<typeof resolveGatewayCredentialsWithSecretInputs>[0];
 type AuthOptions = Partial<Omit<GatewayConnectionAuthOptions, "config" | "env">>;
 const CONFIG_AUTH = { token: "config-token", password: "config-password" }; // pragma: allowlist secret
+const LOCAL_AUTH = { token: "local-token", password: "local-password" }; // pragma: allowlist secret
+const REMOTE_AUTH = { token: "remote-token", password: "remote-password" }; // pragma: allowlist secret
 
 function createCredentialConfig(
   mode: "local" | "remote" = "remote",
-  remote: NonNullable<OpenClawConfig["gateway"]>["remote"] = {
-    token: "remote-token",
-    password: "remote-password", // pragma: allowlist secret
-  },
+  remote: NonNullable<OpenClawConfig["gateway"]>["remote"] = REMOTE_AUTH,
 ): OpenClawConfig {
   return {
     gateway: {
       mode,
-      auth: {
-        token: "local-token",
-        password: "local-password", // pragma: allowlist secret
-      },
+      auth: LOCAL_AUTH,
       remote: { url: "wss://remote.example", ...remote },
     },
   };
@@ -135,12 +131,10 @@ describe("resolveGatewayCredentialsWithSecretInputs", () => {
   it.each(["token", "password"] as const)(
     "throws when config-first %s SecretRef cannot resolve even if env exists",
     async (credential) => {
+      const secretId = `MISSING_CONFIG_FIRST_${credential.toUpperCase()}`;
       await expect(
         resolveGatewayCredentialsWithSecretInputs({
-          config: createLocalSecretConfig(
-            credential,
-            `MISSING_CONFIG_FIRST_${credential.toUpperCase()}`,
-          ),
+          config: createLocalSecretConfig(credential, secretId),
           env: { [`OPENCLAW_GATEWAY_${credential.toUpperCase()}`]: `env-${credential}` },
         }),
       ).rejects.toThrow(`gateway.auth.${credential}`);

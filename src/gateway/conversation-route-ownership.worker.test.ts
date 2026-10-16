@@ -11,12 +11,11 @@ import {
 } from "../config/sessions/conversation-registry.js";
 import { resolveConversationRouteFingerprint } from "../config/sessions/conversation-route-fingerprint.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createChannelHandler } from "../infra/outbound/deliver-channel.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
-import type { SqliteWorkerOperations, SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
+import type { SqliteWorkerOperations } from "../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import * as workerStore from "../infra/sqlite-worker-store.js";
 import { setActivePluginRegistry, resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
@@ -125,22 +124,24 @@ it.each(["final", "queued"] as const)(
   async (phase) => {
     const scope = { agentId: "main", databaseAgentId: "main", storePath };
     const sessionKey = `agent:main:reef:channel:${phase}`;
-    const entry: SessionEntry = {
-      sessionId: `session-${phase}`,
-      updatedAt: 100,
-      chatType: "channel",
-      delivery: {
-        kind: "external",
-        route: {
-          channel: "reef",
-          accountId: "default",
-          target: { to: `reef:${phase}`, chatType: "channel" },
+    replaceSessionEntrySync(
+      { ...scope, sessionKey },
+      {
+        sessionId: `session-${phase}`,
+        updatedAt: 100,
+        chatType: "channel",
+        delivery: {
+          kind: "external",
+          route: {
+            channel: "reef",
+            accountId: "default",
+            target: { to: `reef:${phase}`, chatType: "channel" },
+          },
+          context: { channel: "reef", accountId: "default", to: `reef:${phase}` },
+          origin: { provider: "reef", accountId: "default", nativeChannelId: "native-original" },
         },
-        context: { channel: "reef", accountId: "default", to: `reef:${phase}` },
-        origin: { provider: "reef", accountId: "default", nativeChannelId: "native-original" },
       },
-    };
-    replaceSessionEntrySync({ ...scope, sessionKey }, entry);
+    );
     const conversationRef = buildConversationRef({
       channel: "reef",
       accountId: "default",
@@ -305,11 +306,7 @@ it.each(["final", "queued"] as const)(
       const run = workerStore.runSqliteWorkerStoreOperation;
       vi.spyOn(workerStore, "runSqliteWorkerStoreOperation").mockImplementation(
         <Operations extends SqliteWorkerOperations, T>(
-          store: SqliteWorkerStore<Operations>,
-          operation: (owner: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
-          context?: Parameters<typeof run>[2],
-          assertCurrent?: Parameters<typeof run>[3],
-          admission?: Parameters<typeof run>[4],
+          ...[store, operation, ...runOptions]: Parameters<typeof run<Operations, T>>
         ) =>
           run(
             store,
@@ -324,9 +321,7 @@ it.each(["final", "queued"] as const)(
                   return result;
                 },
               }),
-            context,
-            assertCurrent,
-            admission,
+            ...runOptions,
           ),
       );
       const pending = handler.sendText("admitted before revocation");

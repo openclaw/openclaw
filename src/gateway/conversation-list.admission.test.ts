@@ -77,7 +77,11 @@ async function createDirectory(
   };
   const list = (overrides: Partial<Parameters<typeof runGatewayConversationList>[0]> = {}) =>
     runGatewayConversationList({ config, agentId, channel: "reef", limit: 10, ...overrides }, deps);
-  return { config, deps, routed, scope, storePath, list };
+  const expectStored = async (count: number) => {
+    expect(await listConversations(scope)).toHaveLength(count);
+    expect(listSessionEntriesCore(scope)).toEqual([]);
+  };
+  return { config, deps, routed, scope, storePath, list, expectStored };
 }
 
 describe("conversation directory write admission", () => {
@@ -137,21 +141,17 @@ describe("conversation directory write admission", () => {
             error: new Error("Conversation route ownership is temporarily unavailable"),
           });
         } else {
+          const conversations =
+            eligibility === "eligible"
+              ? expect.arrayContaining(
+                  peerIds.map((id) => expect.objectContaining({ target: `reef:${id}` })),
+                )
+              : [];
           await expect(result).resolves.toMatchObject({
-            value: {
-              conversations:
-                eligibility === "eligible"
-                  ? expect.arrayContaining(
-                      peerIds.map((id) => expect.objectContaining({ target: `reef:${id}` })),
-                    )
-                  : [],
-            },
+            value: { conversations },
           });
         }
-        expect(await listConversations(fixture.scope)).toHaveLength(
-          eligibility === "eligible" ? peerIds.length : 0,
-        );
-        expect(listSessionEntriesCore(fixture.scope)).toEqual([]);
+        await fixture.expectStored(eligibility === "eligible" ? peerIds.length : 0);
       } finally {
         release.resolve();
         await blocker;
@@ -191,8 +191,7 @@ describe("conversation directory write admission", () => {
         await expect(result).resolves.toMatchObject({
           conversations: [expect.objectContaining({ target: "reef:peer" })],
         });
-        expect(await listConversations(fixture.scope)).toHaveLength(1);
-        expect(listSessionEntriesCore(fixture.scope)).toEqual([]);
+        await fixture.expectStored(1);
       } finally {
         releaseRoute.resolve();
         await result;

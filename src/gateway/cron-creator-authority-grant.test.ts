@@ -60,6 +60,12 @@ function createManagementFixture(controlUiAdmin = true) {
     operationalRunInstance,
     delegatedAuthority: { kind: "local", ...authority },
   };
+  const run = <T>(
+    grant: Parameters<typeof withGrant>[0],
+    body: () => Promise<T>,
+    method = "cron.get",
+    caller = identity,
+  ) => withGrant(grant, caller, method, body);
   return {
     authority,
     identity,
@@ -69,6 +75,9 @@ function createManagementFixture(controlUiAdmin = true) {
       continuationCurrent = false;
     },
     mint: (method = "cron.get") => mint(scope, operation.signal, undefined, { method, authority }),
+    run,
+    deny: (grant: Parameters<typeof withGrant>[0], method = "cron.get", caller = identity) =>
+      expectDenied((body) => run(grant, body, method, caller)),
   };
 }
 
@@ -177,21 +186,15 @@ describe("cron creator authority grants", () => {
       expect(consumed.assertCurrent).not.toThrow();
       expect(() => consume(grant)).toThrow("no longer active");
       await Promise.resolve();
-      const revoke = {
-        issuer: () => {
-          current.issuer = false;
-        },
-        scope: () => {
-          current.scope = false;
-        },
-        "scope abort": () => scope.abort(),
-        "run settlement": () => revokeScope(scope),
-        operation: () => operation.abort(),
-        "channel owner": () => {
-          current.channel = false;
-        },
-      };
-      revoke[revoked]();
+      if (revoked === "issuer" || revoked === "scope") {
+        current[revoked] = false;
+      } else if (revoked === "channel owner") {
+        current.channel = false;
+      } else if (revoked === "run settlement") {
+        revokeScope(scope);
+      } else {
+        (revoked === "operation" ? operation : scope).abort();
+      }
       expect(consumed.assertCurrent).toThrow("no longer active");
     },
   );
@@ -202,7 +205,7 @@ describe("cron management authority grants", () => {
     const fixture = createManagementFixture();
     const grant = fixture.mint();
     let retained: (() => void) | undefined;
-    await withGrant(grant, fixture.identity, "cron.get", async () => {
+    await fixture.run(grant, async () => {
       retained = getCronManagementAuthority(fixture.identity);
       expect(retained).toBeTypeOf("function");
       expect(getCronManagementCallerOrigin(fixture.identity)).toEqual({ kind: "local" });
@@ -217,22 +220,13 @@ describe("cron management authority grants", () => {
     expect(retained).not.toThrow();
     revokeScope(fixture.scope);
     expect(retained).toThrow(denied);
-    const replay = vi.fn();
-    await expect(withGrant(grant, fixture.identity, "cron.get", replay)).rejects.toThrow(denied);
-    expect(replay).not.toHaveBeenCalled();
+    await fixture.deny(grant);
   });
 
   it("rejects missing grants and callers without an admitted admin capability", async () => {
     const fixture = createManagementFixture(false);
     expect(fixture.mint).toThrow(denied);
-    await expectDenied((run) =>
-      withGrant(
-        { runId: fixture.scope.runId, token: "missing-grant" },
-        fixture.identity,
-        "cron.get",
-        run,
-      ),
-    );
+    await fixture.deny({ runId: fixture.scope.runId, token: "missing-grant" });
   });
 
   it("expires at sixty seconds before redemption", async () => {
@@ -240,7 +234,7 @@ describe("cron management authority grants", () => {
     const fixture = createManagementFixture();
     const grant = fixture.mint();
     clock.mockReturnValue(61_000);
-    await expectDenied((run) => withGrant(grant, fixture.identity, "cron.get", run));
+    await fixture.deny(grant);
   });
 
   it.each(["method", "run", "instance", "lifecycle", "claim"] as const)(
@@ -260,32 +254,25 @@ describe("cron management authority grants", () => {
           ...(substitution === "claim" ? { claimId: "other-claim" } : {}),
         },
       };
-      await expectDenied((run) =>
-        withGrant(
-          substitution === "run" ? { ...grant, runId: "other-run" } : grant,
-          identity,
-          substitution === "method" ? "cron.remove" : "cron.get",
-          run,
-        ),
+      await fixture.deny(
+        substitution === "run" ? { ...grant, runId: "other-run" } : grant,
+        substitution === "method" ? "cron.remove" : "cron.get",
+        identity,
       );
-      await expect(
-        withGrant(grant, fixture.identity, "cron.get", async () => "allowed"),
-      ).resolves.toBe("allowed");
+      await expect(fixture.run(grant, async () => "allowed")).resolves.toBe("allowed");
     },
   );
 
   it("keeps creator and management grants purpose-bound", async () => {
     const fixture = createManagementFixture();
     const creator = mint(fixture.scope);
-    await expect(withGrant(creator, fixture.identity, "cron.get", vi.fn())).rejects.toThrow(denied);
+    await fixture.deny(creator);
     expect(() => consume(creator)).not.toThrow();
     expect(() => fixture.mint("cron.add")).toThrow(denied);
 
     const management = fixture.mint();
     expect(() => consume(management)).toThrow("Configured MCP cron authority is no longer active");
-    await expect(
-      withGrant(management, fixture.identity, "cron.get", async () => "allowed"),
-    ).resolves.toBe("allowed");
+    await expect(fixture.run(management, async () => "allowed")).resolves.toBe("allowed");
   });
 
   type Fixture = ReturnType<typeof createManagementFixture>;
@@ -309,7 +296,7 @@ describe("cron management authority grants", () => {
     const started = createDeferred();
     const resume = createDeferred();
     const effect = vi.fn();
-    const operation = withGrant(fixture.mint(), fixture.identity, "cron.get", async () => {
+    const operation = fixture.run(fixture.mint(), async () => {
       const assertActive = getCronManagementAuthority(fixture.identity)!;
       assertActive();
       started.resolve();
