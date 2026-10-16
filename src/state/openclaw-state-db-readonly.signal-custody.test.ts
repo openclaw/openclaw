@@ -15,9 +15,9 @@ import { createDeferredCore } from "../shared/deferred.js";
 import type { OpenClawStateDatabaseAsyncResource } from "./openclaw-state-db-async-lifecycle.js";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "./openclaw-state-db-async-lifecycle.js";
 import {
-  executeExistingOpenClawStateRead,
-  withArtifactPreservingStateReads,
-  withOpenClawStateDatabaseReadSnapshot,
+  executeExistingOpenClawStateRead as executeRead,
+  withArtifactPreservingStateReads as preservingArtifacts,
+  withOpenClawStateDatabaseReadSnapshot as withSnapshot,
 } from "./openclaw-state-db-readonly.js";
 import {
   observeAsyncFixture,
@@ -57,13 +57,7 @@ const mocks = vi.hoisted(() => ({
     throw new Error("This controlled custody test must not open SQLite or start a worker");
   }),
 }));
-type Prepare = (
-  path: string,
-  options?: {
-    signal?: AbortSignal;
-    preserveSourceArtifacts?: boolean;
-  },
-) => Promise<PreparedSqliteReadOnlyLocation>;
+type Prepare = typeof import("../infra/sqlite-snapshot-source.js").prepareSqliteReadOnlyLocation;
 type Read = (
   source: OpenClawStateReadLocation,
   authority: OpenClawStateReadAuthority,
@@ -214,33 +208,34 @@ afterEach(async () => {
   expect(mocks.forbidden).not.toHaveBeenCalled();
 });
 
-function runDirectRead() {
-  return withArtifactPreservingStateReads(read);
-}
-
-const read = () =>
-  executeExistingOpenClawStateRead({ path: mocks.source }, { type: "backup.runs" });
-const snapshot = <T>(callback: () => Promise<T>) =>
-  withOpenClawStateDatabaseReadSnapshot(callback, { path: mocks.source });
+const runDirectRead = () => preservingArtifacts(read);
+const read = () => executeRead({ path: mocks.source }, { type: "backup.runs" });
+const snapshot = <T>(callback: () => Promise<T>) => withSnapshot(callback, { path: mocks.source });
 const location = (deferCleanup = false) =>
   adoptPreparedLocation(`${mocks.directory}/database.sqlite`, mocks.directory, deferCleanup);
+
+function stage<T>(value: T, event?: string) {
+  const entered = createDeferredCore();
+  const finish = createDeferredCore();
+  const run = async () => {
+    entered.resolve();
+    await finish.promise;
+    if (event) {
+      mocks.events.push(event);
+    }
+    return value;
+  };
+  return { run, entered: entered.promise, release: finish.resolve };
+}
 
 function hold<TArgs extends unknown[], TResult>(
   mock: Mock<(...args: TArgs) => Promise<TResult>>,
   result: TResult,
   event?: string,
 ) {
-  const entered = createDeferredCore();
-  const finish = createDeferredCore();
-  mock.mockImplementation(async () => {
-    entered.resolve();
-    await finish.promise;
-    if (event) {
-      mocks.events.push(event);
-    }
-    return result;
-  });
-  return { entered: entered.promise, release: finish.resolve };
+  const held = stage(result, event);
+  mock.mockImplementation(held.run);
+  return held;
 }
 
 async function closeResources() {
@@ -254,11 +249,7 @@ async function expectEntered(entered: Promise<unknown>, operation: Promise<unkno
 }
 
 function expectCallerPending(caller: AsyncWorkScope, drained = false) {
-  expect({ removed: mocks.removed, pending: caller.hasPendingWork, drained }).toEqual({
-    removed: [],
-    pending: true,
-    drained: false,
-  });
+  expect([mocks.removed, caller.hasPendingWork, drained]).toEqual([[], true, false]);
 }
 
 function captureOutcome(operation: Promise<unknown>) {
@@ -273,6 +264,23 @@ function assertFilesRetained() {
   expect(exitCleanup).toBeTypeOf("function");
   exitCleanup?.();
   expect(mocks.removed).toEqual([]);
+}
+
+async function duringCleanup(
+  operation: Promise<unknown>,
+  held: { release: () => void }[],
+  check: () => void | Promise<void>,
+) {
+  const cleanup = cleanupSnapshotOperations();
+  try {
+    await check();
+  } finally {
+    for (const gate of held) {
+      gate.release();
+    }
+    await operation;
+    await cleanup;
+  }
 }
 
 it.each([
@@ -329,20 +337,12 @@ it.each([
 it.each(["direct", "snapshot"] as const)(
   "joins a pending %s preparation handoff before removing its directory",
   async (kind) => {
-    const prepared = location();
-    const preparation = hold(mocks.prepare, prepared);
+    const preparation = hold(mocks.prepare, location());
     const operation = captureOutcome(
       kind === "direct" ? runDirectRead() : snapshot(async () => "complete"),
     );
     await expectEntered(preparation.entered, operation);
-    const cleanup = cleanupSnapshotOperations();
-    try {
-      assertFilesRetained();
-    } finally {
-      preparation.release();
-      await operation;
-      await cleanup;
-    }
+    await duringCleanup(operation, [preparation], assertFilesRetained);
     expect(mocks.removed).toEqual([mocks.directory]);
     expect(mocks.read).not.toHaveBeenCalled();
   },
@@ -353,47 +353,33 @@ it("joins the direct reader and its transport close before deleting prepared byt
   const closing = hold(mocks.close, undefined, "close-settled");
   const operation = captureOutcome(runDirectRead());
   await reading.entered;
-  const cleanup = cleanupSnapshotOperations();
-  try {
+  await duringCleanup(operation, [reading, closing], async () => {
     assertFilesRetained();
     reading.release();
     await closing.entered;
     assertFilesRetained();
-  } finally {
-    reading.release();
-    closing.release();
-    await operation;
-    await cleanup;
-  }
+  });
   expect(mocks.events).toEqual(["read-settled", "close-settled", "remove"]);
 });
 
 it("retains an enclosing snapshot callback while cleanup closes new read admission", async () => {
-  const entered = createDeferredCore();
-  const finishCallback = createDeferredCore();
+  const callback = stage(undefined, "callback-settled");
   let escaped!: ReturnType<typeof AsyncLocalStorage.snapshot>;
   const operation = captureOutcome(
     snapshot(async () => {
       escaped = AsyncLocalStorage.snapshot();
-      entered.resolve();
-      await finishCallback.promise;
-      mocks.events.push("callback-settled");
+      await callback.run();
     }),
   );
-  await entered.promise;
-  const cleanup = cleanupSnapshotOperations();
-  try {
+  await callback.entered;
+  await duringCleanup(operation, [callback], async () => {
     assertFilesRetained();
     const rejected = await escaped(() => captureOutcome(Promise.resolve().then(read)));
     expect(
       "error" in rejected && isStateDatabaseReadAdmissionInvalidatedError(rejected.error),
     ).toBe(true);
     expect(mocks.read).not.toHaveBeenCalled();
-  } finally {
-    finishCallback.resolve();
-    await operation;
-    await cleanup;
-  }
+  });
   expect(mocks.events).toEqual(["callback-settled", "remove"]);
 });
 
@@ -420,8 +406,7 @@ it.each(["registered", "not-yet-registered"] as const)(
   "joins preparation admitted during removal when its directory is %s",
   async (registration) => {
     const initialDirectory = "/synthetic/state/initial-snapshot";
-    const removingInitial = createDeferredCore();
-    const finishInitialRemoval = createDeferredCore();
+    const initialRemoval = stage(undefined);
     const preparing = createDeferredCore();
     const stopped = createDeferredCore();
     const finishPreparation = createDeferredCore<PreparedSqliteReadOnlyLocation>();
@@ -430,8 +415,7 @@ it.each(["registered", "not-yet-registered"] as const)(
     const prepareLocation = () => (prepared ??= location());
     mocks.removeAsync.mockImplementation(async (file) => {
       if (file === initialDirectory) {
-        removingInitial.resolve();
-        await finishInitialRemoval.promise;
+        await initialRemoval.run();
       }
       mocks.removed.push(file);
       mocks.events.push("remove");
@@ -447,12 +431,12 @@ it.each(["registered", "not-yet-registered"] as const)(
     });
     adoptPreparedLocation(`${initialDirectory}/database.sqlite`, initialDirectory);
     const cleanup = cleanupSnapshotOperations();
-    await removingInitial.promise;
+    await initialRemoval.entered;
     const operation = captureOutcome(runDirectRead());
     await preparing.promise;
     try {
       expect(preparationSignal).toBeDefined();
-      finishInitialRemoval.resolve();
+      initialRemoval.release();
       const progress = await Promise.race([
         stopped.promise.then(() => "late-work-stopped"),
         cleanup.then(() => "cleanup-returned"),
@@ -460,7 +444,7 @@ it.each(["registered", "not-yet-registered"] as const)(
       expect(mocks.removed).toEqual([initialDirectory]);
       expect(progress).toBe("late-work-stopped");
     } finally {
-      finishInitialRemoval.resolve();
+      initialRemoval.release();
       finishPreparation.resolve(prepareLocation());
       await operation;
       await cleanup;
@@ -473,11 +457,10 @@ it.each(["registered", "not-yet-registered"] as const)(
 it("forwards caller cancellation while retaining descendants and transport close", async () => {
   const caller = new AsyncWorkScope();
   const reason = new Error("Controlled caller cancellation");
-  const entered = createDeferredCore();
+  const callback = stage(undefined);
   const reading = hold(mocks.read, readResult);
   const closing = hold(mocks.close, undefined, "close-settled");
-  const finishCallback = createDeferredCore();
-  const finishDescendant = createDeferredCore();
+  const child = stage(undefined, "descendant-settled");
   let observedSignal: AbortSignal | undefined;
   let abortListenerSignal: AbortSignal | undefined;
   let descendant: Promise<void> | undefined;
@@ -495,18 +478,14 @@ it("forwards caller cancellation while retaining descendants and transport close
           },
           { once: true },
         );
-        descendant = trackAsyncWork(async () => {
-          await finishDescendant.promise;
-          mocks.events.push("descendant-settled");
-        });
+        descendant = trackAsyncWork(child.run);
         reader = captureOutcome(read());
-        entered.resolve();
-        await finishCallback.promise;
+        await callback.run();
       }),
     ),
   );
   try {
-    await expectEntered(entered.promise, operation);
+    await expectEntered(callback.entered, operation);
     await expectEntered(reading.entered, reader ?? operation);
     caller.beginClose(reason);
     draining = caller.drain().then(() => {
@@ -516,7 +495,7 @@ it("forwards caller cancellation while retaining descendants and transport close
     expect(observedSignal?.aborted).toBe(true);
     expect(observedSignal?.reason).toBe(reason);
     expect(abortListenerSignal).toBe(observedSignal);
-    finishCallback.resolve();
+    callback.release();
     reading.release();
     await expectEntered(closing.entered, reader ?? operation);
     expectCallerPending(caller, callerDrained);
@@ -524,8 +503,8 @@ it("forwards caller cancellation while retaining descendants and transport close
     expect(await reader).toEqual({ error: reason });
     expectCallerPending(caller, callerDrained);
   } finally {
-    finishCallback.resolve();
-    finishDescendant.resolve();
+    callback.release();
+    child.release();
     reading.release();
     closing.release();
     await descendant;
@@ -540,19 +519,16 @@ it("forwards caller cancellation while retaining descendants and transport close
 it("preserves caller cancellation that precedes snapshot callback admission", async () => {
   const caller = new AsyncWorkScope();
   const reason = new Error("Controlled cancellation during preparation");
-  const entered = createDeferredCore();
-  const finishCallback = createDeferredCore();
-  const prepared = location();
+  const callback = stage(undefined);
   let observed: { aborted: boolean | undefined; reason: unknown } | undefined;
   let draining: Promise<void> | undefined;
-  const preparation = hold(mocks.prepare, prepared);
+  const preparation = hold(mocks.prepare, location());
   const operation = captureOutcome(
     caller.track(() =>
       snapshot(async () => {
         const signal = getAsyncWorkSignal();
         observed = { aborted: signal?.aborted, reason: signal?.reason };
-        entered.resolve();
-        await finishCallback.promise;
+        await callback.run();
       }),
     ),
   );
@@ -562,7 +538,7 @@ it("preserves caller cancellation that precedes snapshot callback admission", as
     draining = caller.drain();
     preparation.release();
     const progress = await Promise.race([
-      entered.promise.then(() => "callback-entered"),
+      callback.entered.then(() => "callback-entered"),
       operation.then(() => "operation-settled"),
     ]);
     expect(progress).toBe("callback-entered");
@@ -571,7 +547,7 @@ it("preserves caller cancellation that precedes snapshot callback admission", as
     expectCallerPending(caller);
   } finally {
     preparation.release();
-    finishCallback.resolve();
+    callback.release();
     await operation;
     await (draining ?? caller.drain());
   }
@@ -579,8 +555,7 @@ it("preserves caller cancellation that precedes snapshot callback admission", as
 });
 
 it("retains tracked abort-listener cleanup when a snapshot callback completes normally", async () => {
-  const listenerEntered = createDeferredCore();
-  const finishTail = createDeferredCore();
+  const listener = stage(undefined, "listener-tail-settled");
   let callbackSignal: AbortSignal | undefined;
   let listenerSignal: AbortSignal | undefined;
   let tail: Promise<void> | undefined;
@@ -592,11 +567,7 @@ it("retains tracked abort-listener cleanup when a snapshot callback completes no
         "abort",
         () => {
           listenerSignal = getAsyncWorkSignal();
-          tail = trackAsyncWork(async () => {
-            await finishTail.promise;
-            mocks.events.push("listener-tail-settled");
-          });
-          listenerEntered.resolve();
+          tail = trackAsyncWork(listener.run);
         },
         { once: true },
       );
@@ -608,7 +579,7 @@ it("retains tracked abort-listener cleanup when a snapshot callback completes no
     return outcome;
   });
   try {
-    await expectEntered(listenerEntered.promise, operation);
+    await expectEntered(listener.entered, operation);
     // Let the fake close/removal promise chain settle while the listener tail stays held.
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
@@ -617,7 +588,7 @@ it("retains tracked abort-listener cleanup when a snapshot callback completes no
     expect(operationSettled).toBe(false);
     expect(listenerSignal).toBe(callbackSignal);
   } finally {
-    finishTail.resolve();
+    listener.release();
     await tail;
     await operation;
   }

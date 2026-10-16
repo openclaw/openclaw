@@ -79,11 +79,11 @@ function expectAggregate(error: unknown, primary: Error, cleanup: unknown) {
 }
 
 beforeEach(() => {
-  mocks.identity.mockReset();
-  mocks.schema.mockReset();
-  mocks.policy.mockReset().mockReturnValue(false);
+  for (const mock of [mocks.identity, mocks.schema, mocks.policy, mocks.releaseToken]) {
+    mock.mockReset();
+  }
+  mocks.policy.mockReturnValue(false);
   mocks.acquireToken.mockClear();
-  mocks.releaseToken.mockReset();
   mocks.db = { isOpen: true, close: vi.fn<() => void>() };
   mocks.openTracked.mockReset().mockImplementation(() => mocks.db);
   mocks.openPrivate.mockReset().mockImplementation(() => mocks.db);
@@ -112,18 +112,13 @@ it.each([
 ])("settles a %s failure only after releasing native custody", (phase) => {
   const failure = new Error(`${phase} failed`);
   const fail = failWith(failure);
-  if (phase === "schema") {
-    mocks.schema.mockImplementation(fail);
-  }
-  if (phase === "policy") {
-    mocks.policy.mockImplementation(fail);
-  }
-  if (phase === "handle policy") {
-    mocks.policy.mockReturnValueOnce(false).mockImplementationOnce(fail);
-  }
-  if (phase === "native cleanup") {
-    mocks.db.close.mockImplementation(fail);
-  }
+  const configure: Partial<Record<typeof phase, () => unknown>> = {
+    schema: () => mocks.schema.mockImplementation(fail),
+    policy: () => mocks.policy.mockImplementation(fail),
+    "handle policy": () => mocks.policy.mockReturnValueOnce(false).mockImplementationOnce(fail),
+    "native cleanup": () => mocks.db.close.mockImplementation(fail),
+  };
+  configure[phase]?.();
   const read = phase === "query" ? fail : value;
   const admission =
     phase === "admission" ? fail : phase === "admission cleanup" ? () => fail : undefined;
@@ -134,11 +129,10 @@ it.each([
   } else {
     expect(run).toThrow(failure);
   }
+  expect(mocks.closeHandle).toHaveBeenCalledTimes(phase === "policy" ? 0 : 1);
   if (phase === "policy") {
     expect(mocks.openTracked).not.toHaveBeenCalled();
-    expect(mocks.closeHandle).not.toHaveBeenCalled();
   } else {
-    expect(mocks.closeHandle).toHaveBeenCalledOnce();
     expect(mocks.db.isOpen).toBe(phase === "native cleanup");
   }
   if (unavailable) {
@@ -160,10 +154,11 @@ it.each([false, true])("rejects incomplete snapshot cleanup (query failed: %s)",
   const prepared = snapshot(false);
   const read = queryFailed ? failWith(failure) : value;
   if (queryFailed) {
-    expect(caught(() => readLocation(read, pathname, prepared))).toMatchObject({
-      cause: failure,
-      errors: [failure, expect.objectContaining({ message: cleanupMessage })],
-    });
+    expectAggregate(
+      caught(() => readLocation(read, pathname, prepared)),
+      failure,
+      expect.objectContaining({ message: cleanupMessage }),
+    );
   } else {
     expect(() => withLocation(read, pathname, prepared)).toThrow(cleanupMessage);
   }
@@ -210,21 +205,19 @@ it.each([
     expect(failure).toBe(primary);
   }
   expect(mocks.openPrivate).not.toHaveBeenCalled();
+  expect(mocks.openTracked).toHaveBeenCalledTimes(afterOpen ? 1 : 0);
+  expect(mocks.closeHandle).toHaveBeenCalledTimes(afterOpen ? 1 : 0);
   if (privateSource) {
     expect(prepared.cleanup).toHaveBeenCalledOnce();
   } else {
     expect(mocks.identity).toHaveBeenCalledWith(pathname, expectedIdentity);
   }
   if (afterOpen) {
-    expect(mocks.openTracked).toHaveBeenCalledOnce();
     expect(mocks.closeHandle).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ db: mocks.db, path: pathname }),
     );
     expect(nativeClose).toHaveBeenCalledOnce();
     expect(mocks.db.isOpen).toBe(closeFailed);
-  } else {
-    expect(mocks.openTracked).not.toHaveBeenCalled();
-    expect(mocks.closeHandle).not.toHaveBeenCalled();
   }
 });
 
