@@ -505,7 +505,13 @@ export function renderSessionLeadingState(props: SessionLeadingStateProps) {
     ].filter((identity): identity is SessionParticipantIdentity => identity !== undefined);
   });
   const hasContent = createMemo(() => hasIcon() || Boolean(channelAvatarUrl()) || hasOwner());
-  const showGlyph = createMemo(() => hasContent() || (child() ? running() : showRun()));
+  const showGlyph = createMemo(
+    () =>
+      hasIcon() ||
+      (child() && !channelAvatarUrl()
+        ? running()
+        : Boolean(channelAvatarUrl()) || hasOwner() || showRun()),
+  );
   const content = (
     <Switch fallback={<OwnerChip />}>
       <Match when={attentionIcon()}>
@@ -544,7 +550,9 @@ export function renderSessionLeadingState(props: SessionLeadingStateProps) {
       }
     >
       <SessionGlyph
-        content={hasContent() ? content : undefined}
+        content={
+          hasContent() ? (!attentionIcon() && props.icon === false ? false : content) : undefined
+        }
         running={showRun()}
         queued={ownRunQueued() && !subagentsWorking()}
         runningLabel={runningLabel()}

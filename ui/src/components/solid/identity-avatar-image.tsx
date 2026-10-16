@@ -10,10 +10,7 @@ type IdentityAvatarImageProps = {
   onImageError?: () => void;
 };
 
-function setIdentityAvatarState(
-  element: Element,
-  state: "none" | "pending" | "loaded" | "failed",
-) {
+function setIdentityAvatarState(element: Element, state: "none" | "pending" | "loaded" | "failed") {
   if (element.getAttribute("data-avatar-state") === state) {
     return;
   }

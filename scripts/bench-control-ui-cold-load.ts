@@ -180,8 +180,6 @@ const { values } = parseArgs({
     "init-script": { type: "string", multiple: true, default: [] },
     "sidebar-list-churn": { type: "boolean", default: false },
     "sidebar-live-churn": { type: "boolean", default: false },
-    "probe-dir": { type: "string" },
-    untraced: { type: "boolean", default: false },
     "sidebar-row-transfer": { type: "string", default: "full" },
     "bundle-dir": { type: "string" },
     runs: { type: "string", default: "3" },
@@ -383,16 +381,7 @@ try {
       pins: fixture.sidebarEntries,
     },
   );
-  const warmProbes = values["warm-reload"]
-    ? (values["probe-dir"]
-        ? await Promise.all(
-            ["loaf-mutation.init.js", "ws-rpc-census.init.js"].map((file) =>
-              readFile(path.join(values["probe-dir"]!, file), "utf8"),
-            ),
-          )
-        : []
-      ).join("\n") + `\n(${warmReloadProbe.toString()})();`
-    : "";
+  const warmProbes = values["warm-reload"] ? `\n(${warmReloadProbe.toString()})();` : "";
   await page.addInitScript({
     content: `;(() => { if (window !== window.top) return; const __name = (fn) => fn; ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\n${fixture.sidebarListChurn ? `window.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params)));` : ""}\n${createColdLoadProbeInitScript({ latencyMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
   });
