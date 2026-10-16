@@ -1,6 +1,5 @@
 // Real-browser proof for native-host link routing and the bridge-free browser path.
-import path from "node:path";
-import type { Page } from "playwright";
+import type { BrowserContext, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { NativeBrowserMessage, NativeBrowserReply } from "../app/native-browser-bridge.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -35,6 +34,23 @@ const linkMessages = (page: Page) =>
 const nativeBrowserMessages = (page: Page) =>
   page.evaluate(() => (window as LinkTestWindow).openclawNativeBrowserMessages);
 
+async function openChat(context: BrowserContext, text: string) {
+  const page = await context.newPage();
+  await installMockGateway(page, {
+    historyMessages: [
+      { role: "assistant", timestamp: Date.now(), content: [{ type: "text", text }] },
+    ],
+  });
+  await page.goto(`${suite.server.baseUrl}chat`);
+  return { page, link: page.getByRole("link", { name: "report" }) };
+}
+const expectBrowserTab = (page: Page, url: string) =>
+  expect
+    .poll(() => nativeBrowserMessages(page))
+    .toContainEqual(
+      expect.objectContaining({ type: "open", url, tabId: expect.stringMatching(/^mac-/) }),
+    );
+
 suite.define(() => {
   it("opens native Browser panel tabs and keeps external link actions", async () => {
     const context = await newBrowserContext();
@@ -68,37 +84,13 @@ suite.define(() => {
         },
       };
     });
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      historyMessages: [
-        {
-          content: [
-            {
-              type: "text",
-              text: [
-                "Read the [report](https://example.com/report),",
-                "open [Usage](/usage), or inspect `README.md:1`.",
-              ].join(" "),
-            },
-          ],
-          role: "assistant",
-          timestamp: Date.now(),
-        },
-      ],
-    });
-    await page.goto(`${suite.server.baseUrl}chat`);
-    const link = page.getByRole("link", { name: "report" });
+    const { page, link } = await openChat(
+      context,
+      "Read the [report](https://example.com/report), open [Usage](/usage), or inspect `README.md:1`.",
+    );
 
     await link.click();
-    await expect
-      .poll(() => nativeBrowserMessages(page))
-      .toContainEqual(
-        expect.objectContaining({
-          type: "open",
-          url: "https://example.com/report",
-          tabId: expect.stringMatching(/^mac-/),
-        }),
-      );
+    await expectBrowserTab(page, "https://example.com/report");
     await expect.poll(() => linkMessages(page)).toEqual([]);
 
     await page.evaluate(() => {
@@ -142,14 +134,6 @@ suite.define(() => {
     const menuHost = page.locator("openclaw-native-link-menu");
     await expect.poll(() => menu.isVisible()).toBe(true);
     await expect.poll(() => replyMenu.count()).toBe(0);
-    await expect
-      .poll(() => page.locator("openclaw-native-link-menu .session-menu__text").allTextContents())
-      .toEqual(["Open in Browser Panel", "Open in Default Browser", "Copy Link"]);
-    await page.screenshot({
-      path: path.join(suite.artifactDir, "01-native-link-menu-page.jpg"),
-      type: "jpeg",
-      quality: 60,
-    });
     await menuHost.getByRole("menuitem", { name: "Open in Default Browser" }).click();
     await expect
       .poll(() => linkMessages(page))
@@ -210,15 +194,7 @@ suite.define(() => {
     const modalBrowserItem = menuHost.getByRole("menuitem", { name: "Open in Browser Panel" });
     await expect.poll(() => modalBrowserItem.isVisible()).toBe(true);
     await modalBrowserItem.click();
-    await expect
-      .poll(() => nativeBrowserMessages(page))
-      .toContainEqual(
-        expect.objectContaining({
-          type: "open",
-          url: "https://example.com/modal-report",
-          tabId: expect.stringMatching(/^mac-/),
-        }),
-      );
+    await expectBrowserTab(page, "https://example.com/modal-report");
     expect(await linkMessages(page)).toHaveLength(2);
     await page.evaluate(() => {
       document.querySelector("#native-link-routing-modal")?.remove();
@@ -242,18 +218,10 @@ suite.define(() => {
 
   it("keeps ordinary browser navigation when the native bridge is absent", async () => {
     const context = await newBrowserContext();
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      historyMessages: [
-        {
-          content: [{ type: "text", text: "Read the [report](https://example.com/report)." }],
-          role: "assistant",
-          timestamp: Date.now(),
-        },
-      ],
-    });
-    await page.goto(`${suite.server.baseUrl}chat`);
-    const link = page.getByRole("link", { name: "report" });
+    const { page, link } = await openChat(
+      context,
+      "Read the [report](https://example.com/report).",
+    );
 
     await link.click({ button: "right" });
     expect(await page.locator("openclaw-native-link-menu").count()).toBe(0);

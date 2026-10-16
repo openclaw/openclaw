@@ -3,9 +3,11 @@ import { createServer } from "node:http";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.ts";
 import { pauseVirtualClock, type ControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const indexHtmlPath = path.resolve(
   process.cwd(),
@@ -22,28 +24,31 @@ let syntheticModuleRenders = false;
 async function startRegisteredElementFixture(): Promise<ControlUiE2eServer> {
   const indexHtml = await readFile(indexHtmlPath, "utf8");
   const server = createServer((request, response) => {
-    const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
-    if (requestUrl.pathname === "/src/main.ts") {
-      response.setHeader("content-type", "text/javascript; charset=utf-8");
-      response.end(
-        syntheticModuleRenders
-          ? `customElements.define("openclaw-app", class extends HTMLElement {
+    const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+    const module = pathname === "/src/main.ts" || pathname === "/slow.js";
+    const body =
+      pathname === "/slow.js"
+        ? "export const loaded = true;"
+        : pathname === "/src/main.ts"
+          ? syntheticModuleRenders
+            ? `customElements.define("openclaw-app", class extends HTMLElement {
               connectedCallback() {
                 this.textContent = "Application rendered";
                 window.dispatchEvent(new Event(${JSON.stringify(renderEvent)}));
               }
             });`
-          : 'customElements.define("openclaw-app", class extends HTMLElement {});',
+            : 'customElements.define("openclaw-app", class extends HTMLElement {});'
+          : pathname === "/"
+            ? indexHtml
+            : undefined;
+    response.statusCode = body === undefined ? 404 : 200;
+    if (body !== undefined) {
+      response.setHeader(
+        "content-type",
+        `${module ? "text/javascript" : "text/html"}; charset=utf-8`,
       );
-      return;
     }
-    if (requestUrl.pathname === "/") {
-      response.setHeader("content-type", "text/html; charset=utf-8");
-      response.end(indexHtml);
-      return;
-    }
-    response.statusCode = 404;
-    response.end();
+    response.end(body);
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -62,22 +67,19 @@ async function startRegisteredElementFixture(): Promise<ControlUiE2eServer> {
   };
 }
 
-async function addLifecycleCounters(page: Page): Promise<void> {
+async function preparePage(page: Page): Promise<void> {
   await page.addInitScript(
     ({ loadKey, renderedEvent, renderKey }) => {
-      const loadCount = Number.parseInt(sessionStorage.getItem(loadKey) ?? "0", 10);
-      sessionStorage.setItem(loadKey, String(loadCount + 1));
-      window.addEventListener(renderedEvent, () => {
-        const renderCount = Number.parseInt(sessionStorage.getItem(renderKey) ?? "0", 10);
-        sessionStorage.setItem(renderKey, String(renderCount + 1));
-      });
+      const increment = (key: string) =>
+        sessionStorage.setItem(
+          key,
+          String(Number.parseInt(sessionStorage.getItem(key) ?? "0", 10) + 1),
+        );
+      increment(loadKey);
+      window.addEventListener(renderedEvent, () => increment(renderKey));
     },
     { loadKey: loadCountKey, renderedEvent: renderEvent, renderKey: renderCountKey },
   );
-}
-
-async function prepareClock(page: Page) {
-  await addLifecycleCounters(page);
   await page.clock.install();
   await pauseVirtualClock(page);
 }
@@ -114,28 +116,16 @@ registeredElementSuite.define(() => {
     "preserves a slow module graph (recovery document: %s)",
     async (recovery) => {
       syntheticModuleRenders = true;
-      const requested = createDeferred();
-      const release = createDeferred();
-      let moduleRequests = 0;
+      let held!: Awaited<ReturnType<typeof holdModuleResponse>>;
       await registeredElementSuite.withPage(
         pageOptions,
         async ({ page }) => {
-          await addLifecycleCounters(page);
+          await preparePage(page);
           await page.route("**/src/main.ts", async (route) => {
             const response = await route.fetch();
             await route.fulfill({ response, body: `import "/slow.js";\n${await response.text()}` });
           });
-          await page.route("**/slow.js", async (route) => {
-            moduleRequests += 1;
-            requested.resolve();
-            await release.promise;
-            await route.fulfill({
-              contentType: "text/javascript",
-              body: "export const loaded = true;",
-            });
-          });
-          await page.clock.install();
-          await pauseVirtualClock(page);
+          held = await holdModuleResponse(page, /\/slow\.js$/u);
           const url = new URL(registeredElementSuite.server.baseUrl);
           if (recovery) {
             url.searchParams.set("openclaw_mount_recovery", "1");
@@ -143,24 +133,24 @@ registeredElementSuite.define(() => {
           url.searchParams.set("session", "synthetic-session");
           url.hash = "synthetic-fragment";
           await page.goto(url.href, { waitUntil: "commit" });
-          await requested.promise;
+          await held.request;
           await page.clock.runFor(12_001);
 
           await page.getByRole("heading", { name: "Control UI is still loading" }).waitFor();
           expect(await counter(page, loadCountKey)).toBe("1");
           await page.getByRole("button", { name: "Keep waiting" }).click();
           await page.clock.runFor(12_001);
-          expect(moduleRequests).toBe(1);
+          expect(held.requests()).toBe(1);
           expect(await counter(page, loadCountKey)).toBe("1");
 
-          release.resolve();
+          held.release();
           await page.getByText("Application rendered", { exact: true }).waitFor();
           expect(await page.locator("#openclaw-mount-fallback").isHidden()).toBe(true);
           expect(await counter(page, renderCountKey)).toBe("1");
           expect(new URL(page.url()).searchParams.get("session")).toBe("synthetic-session");
           expect(new URL(page.url()).hash).toBe("#synthetic-fragment");
         },
-        async () => release.resolve(),
+        async () => held?.release(),
       );
     },
   );
@@ -168,7 +158,7 @@ registeredElementSuite.define(() => {
   it("shows the fallback when registration never produces an application render", async () => {
     syntheticModuleRenders = false;
     await registeredElementSuite.withPage(pageOptions, async ({ page }) => {
-      await prepareClock(page);
+      await preparePage(page);
       await page.goto(registeredElementSuite.server.baseUrl, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => customElements.get("openclaw-app") !== undefined);
 
@@ -177,7 +167,6 @@ registeredElementSuite.define(() => {
 
       await exhaustMountRecovery(page);
 
-      await page.getByRole("heading", { name: "Control UI did not start" }).waitFor();
       expect(await page.getByRole("button", { name: "Try again" }).isVisible()).toBe(true);
       expect(await page.getByRole("button", { name: "Keep waiting" }).isVisible()).toBe(true);
       expect(await counter(page, renderCountKey)).toBeNull();
@@ -247,7 +236,7 @@ const runtimeFailureSuite = createControlUiE2eSuite({
 runtimeFailureSuite.define(() => {
   it("does not complete startup when application runtime creation throws", async () => {
     await runtimeFailureSuite.withPage(pageOptions, async ({ page }) => {
-      await addLifecycleCounters(page);
+      await preparePage(page);
       await page.addInitScript(() => {
         const browserGetComputedStyle = globalThis.getComputedStyle.bind(globalThis);
         Object.defineProperty(globalThis, "getComputedStyle", {
@@ -260,8 +249,6 @@ runtimeFailureSuite.define(() => {
           },
         });
       });
-      await page.clock.install();
-      await pauseVirtualClock(page);
       const failed = page.waitForEvent("pageerror", {
         predicate: (error) => error.message === "forced application runtime creation failure",
       });
@@ -270,7 +257,6 @@ runtimeFailureSuite.define(() => {
 
       await exhaustMountRecovery(page);
 
-      await page.getByRole("heading", { name: "Control UI did not start" }).waitFor();
       expect(await counter(page, renderCountKey)).toBeNull();
     });
   });

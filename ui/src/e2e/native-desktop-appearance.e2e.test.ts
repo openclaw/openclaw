@@ -2,7 +2,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { serveCompanion } from "./native-desktop.test-support.ts";
-import { nativeForm } from "./native-form.test-support.ts";
+import { expectControl, nativeForm } from "./native-form.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Native desktop appearance E2E" });
 const schemes = ["light", "dark"] as const;
@@ -163,21 +163,14 @@ async function expectAppearance(page: Page, scheme: Scheme, surface = ".panel", 
           if (!components) {
             throw new Error(`Expected opaque RGB color, received ${color}`);
           }
-          const red = Number(components[1]);
-          const green = Number(components[2]);
-          const blue = Number(components[3]);
-          if (
-            [red, green, blue].some(
-              (channel) => !Number.isFinite(channel) || channel < 0 || channel > 255,
-            )
-          ) {
-            throw new Error(`Invalid RGB components: ${color}`);
-          }
-          const linear = (channel: number) => {
-            const value = channel / 255;
+          const linear = (channel: string) => {
+            const value = Number(channel) / 255;
             return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
           };
-          return linear(red) * 0.2126 + linear(green) * 0.7152 + linear(blue) * 0.0722;
+          return [0.2126, 0.7152, 0.0722].reduce(
+            (sum, weight, index) => sum + linear(components[index + 1]!) * weight,
+            0,
+          );
         };
         const background = luminance(
           getComputedStyle(document.querySelector(surfaceSelector)!).backgroundColor,
@@ -213,6 +206,37 @@ async function expectControlsFit(page: Page) {
   ).toEqual([]);
 }
 
+async function openQuickChat(page: Page) {
+  const native = await installNative(page);
+  await page.goto(`${suite.server.baseUrl}companion/quickchat.html`);
+  const message = page.getByRole("textbox", { name: "Quick Chat message", exact: true });
+  await expect.poll(() => message.getAttribute("placeholder")).toBe("Message Assistant");
+  await native.deferIdentity();
+  await native.emit("quickchat:shown", {});
+  await expect.poll(() => native.identityPending()).toBe(true);
+  return { native, message };
+}
+
+async function startReply(
+  native: Awaited<ReturnType<typeof installNative>>,
+  agentId: string,
+  text: string,
+) {
+  const reply = {
+    gatewayGeneration: 1,
+    runId: "reply-1",
+    sessionKey: `agent:${agentId}:quickchat`,
+    agentId,
+  };
+  await native.emit("quickchat:chat-event", {
+    ...reply,
+    state: "delta",
+    deltaText: text,
+    message: { role: "assistant", content: [{ type: "text", text }] },
+  });
+  return reply;
+}
+
 suite.define(() => {
   it.each(schemes)(
     "keeps remote setup drafts and authentication usable from %s appearance",
@@ -239,15 +263,13 @@ suite.define(() => {
           for (const scheme of schemes) {
             await expectAppearance(page, scheme);
             expect(await url.inputValue()).toBe("https://gateway.example.test");
-            expect(await token.inputValue()).toBe("draft-token");
-            expect(await token.getAttribute("type")).toBe("password");
+            await expectControl(token, { value: "draft-token", type: "password" });
             await expectControlsFit(page);
           }
           await form.button("Show credential").click();
           expect(await token.getAttribute("type")).toBe("text");
           await form.field("Authentication").selectOption("password");
-          expect(await token.inputValue()).toBe("");
-          expect(await token.isDisabled()).toBe(true);
+          await expectControl(token, { value: "", disabled: true });
           expect(await password.getAttribute("type")).toBe("password");
           await password.fill("draft-password");
           await connect.click();
@@ -325,8 +347,7 @@ suite.define(() => {
           expect(await credential.inputValue()).toBe("");
           await credential.fill("replacement-draft");
           await expectAppearance(page, colorScheme === "light" ? "dark" : "light");
-          expect(await credential.inputValue()).toBe("replacement-draft");
-          expect(await credential.getAttribute("type")).toBe("password");
+          await expectControl(credential, { value: "replacement-draft", type: "password" });
           await expectControlsFit(page);
           await form.button("Back").click();
           expect(await native.requests("close_connection_settings")).toHaveLength(1);
@@ -387,13 +408,7 @@ suite.define(() => {
         { colorScheme, reducedMotion: "reduce", viewport: { width: 400, height: 560 } },
         async ({ page }) => {
           const form = nativeForm(page);
-          const native = await installNative(page);
-          await page.goto(`${suite.server.baseUrl}companion/quickchat.html`);
-          const message = page.getByRole("textbox", { name: "Quick Chat message", exact: true });
-          await expect.poll(() => message.getAttribute("placeholder")).toBe("Message Assistant");
-          await native.deferIdentity();
-          await native.emit("quickchat:shown", {});
-          await expect.poll(() => native.identityPending()).toBe(true);
+          const { native, message } = await openQuickChat(page);
           await message.fill("Please summarize the project notes.");
           await form.button("Choose agent").click();
           for (const scheme of schemes) {
@@ -431,21 +446,7 @@ suite.define(() => {
             },
           ]);
           expect(await message.inputValue()).toBe("");
-          const reply = {
-            gatewayGeneration: 1,
-            runId: "reply-1",
-            sessionKey: "agent:writer:quickchat",
-            agentId: "writer",
-          };
-          await native.emit("quickchat:chat-event", {
-            ...reply,
-            state: "delta",
-            deltaText: "The project is ready.",
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: "The project is ready." }],
-            },
-          });
+          const reply = await startReply(native, "writer", "The project is ready.");
           await form.text("The project is ready.").waitFor();
           await native.releaseIdentity();
           expect(await message.getAttribute("placeholder")).toBe(
@@ -500,27 +501,10 @@ suite.define(() => {
         { colorScheme, reducedMotion: "reduce", viewport: { width: 640, height: 520 } },
         async ({ page }) => {
           const form = nativeForm(page);
-          const native = await installNative(page);
-          await page.goto(`${suite.server.baseUrl}companion/quickchat.html`);
-          const message = page.getByRole("textbox", { name: "Quick Chat message", exact: true });
-          await expect.poll(() => message.getAttribute("placeholder")).toBe("Message Assistant");
-          await native.deferIdentity();
-          await native.emit("quickchat:shown", {});
-          await expect.poll(() => native.identityPending()).toBe(true);
+          const { native, message } = await openQuickChat(page);
           await message.fill("Summarize the project.");
           await form.button("Send message").click();
-          const reply = {
-            gatewayGeneration: 1,
-            runId: "reply-1",
-            sessionKey: "agent:main:quickchat",
-            agentId: "main",
-          };
-          await native.emit("quickchat:chat-event", {
-            ...reply,
-            state: "delta",
-            deltaText: "Ready.",
-            message: { role: "assistant", content: [{ type: "text", text: "Ready." }] },
-          });
+          const reply = await startReply(native, "main", "Ready.");
           await form.text("Ready.").waitFor();
           await expect.poll(() => message.getAttribute("readonly")).toBeNull();
           await message.fill("Keep this draft.");

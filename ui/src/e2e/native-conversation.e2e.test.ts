@@ -1,13 +1,10 @@
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledSettingsStorageKey,
   defaultControlUiFeatureMethods,
 } from "../test-helpers/control-ui-e2e.ts";
 import {
-  captureUiProofEnabled,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
@@ -32,6 +29,12 @@ const messages = (page: Page) =>
 const lastMessage = async (page: Page, type: string) =>
   (await messages(page)).findLast((message) => message.type === type);
 const sessionContext = (name: string) => ({ agentId: "main", sessionKey: `agent:main:${name}` });
+const sessionRow = (name: string, label = name) => ({
+  key: `agent:main:${name}`,
+  label,
+  kind: "direct",
+});
+const assistantText = (text: string) => ({ role: "assistant", content: [{ type: "text", text }] });
 async function installConversationHost(page: Page, features?: string[]) {
   await page.addInitScript((requestedFeatures) => {
     Object.assign(window, {
@@ -139,28 +142,15 @@ const navigate = (page: Page, name: string, requestId: string) =>
 suite.define(() => {
   it("keeps a single web conversation with in-page native navigation and Dashboard handoff", async () => {
     await suite.withPage({ viewport, serviceWorkers: "block" }, async ({ page }) => {
-      const proofDir = captureUiProofEnabled
-        ? createControlUiE2eArtifactDir("native-conversation")
-        : undefined;
       await installConversationHost(page);
       const linkedUrl = controlUiSessionUrl(suite.server.baseUrl, "agent:main:linked");
       const gateway = await installMockGateway(page, {
         workspace: "/workspace",
-        sessions: ["main", "next", "linked"].map((name) => ({
-          key: `agent:main:${name}`,
-          label: name,
-          kind: "direct",
-        })),
+        sessions: ["main", "next", "linked"].map((name) => sessionRow(name)),
         historyMessages: [
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "text",
-                text: `Conversation ready. [Linked conversation](${linkedUrl}) · [Settings](/settings?section=general) · [Notes](notes.txt)`,
-              },
-            ],
-          },
+          assistantText(
+            `Conversation ready. [Linked conversation](${linkedUrl}) · [Settings](/settings?section=general) · [Notes](notes.txt)`,
+          ),
         ],
         methodResponses: {
           "sessions.files.get": {
@@ -184,18 +174,11 @@ suite.define(() => {
           storageKey,
           JSON.stringify({
             chatSplitLayout: {
-              columns: [
-                {
-                  id: "c1",
-                  panes: [{ id: "p1", sessionKey: "agent:main:main" }],
-                  paneWeights: [1],
-                },
-                {
-                  id: "c2",
-                  panes: [{ id: "p2", sessionKey: "agent:main:extra" }],
-                  paneWeights: [1],
-                },
-              ],
+              columns: ["main", "extra"].map((name, index) => ({
+                id: `c${index + 1}`,
+                panes: [{ id: `p${index + 1}`, sessionKey: `agent:main:${name}` }],
+                paneWeights: [1],
+              })),
               columnWeights: [0.5, 0.5],
               activePaneId: "p2",
             },
@@ -223,9 +206,6 @@ suite.define(() => {
       expect(await pane.locator(".chat-thread").boundingBox()).toMatchObject({ y: 52 });
       const leadingBox = await header.locator(".chat-pane__header-leading").boundingBox();
       expect(leadingBox!.y + leadingBox!.height / 2).toBe(26);
-      if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "conversation-titlebar.png") });
-      }
       const dragMessages = () =>
         page.evaluate(() => (window as ConversationTestWindow).windowDragMessages);
       await header.hover({ position: { x: viewport.width / 2, y: 26 } });
@@ -276,14 +256,13 @@ suite.define(() => {
       );
       await pane.getByRole("button", { name: "Close tab: notes.txt", exact: true }).click();
       await fileView.waitFor({ state: "detached" });
-      if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "conversation-initial.png") });
-      }
       await composer.fill("Verify the web composer");
       await pane.getByRole("button", { name: "Send message", exact: true }).click();
       const request = requireRecord((await gateway.waitForRequest("chat.send")).params);
-      expect(request.message).toBe("Verify the web composer");
-      expect(request.sessionKey).toBe("agent:main:main");
+      expect(request).toMatchObject({
+        message: "Verify the web composer",
+        sessionKey: "agent:main:main",
+      });
       await gateway.emitChatFinal({
         runId: requireString(request.idempotencyKey, "run id"),
         text: "Web composer verified.",
@@ -367,9 +346,6 @@ suite.define(() => {
       await command(page, "focus-composer", {}, "focus");
       expect(await composer.evaluate((element) => element === document.activeElement)).toBe(true);
       expect(await headerLeadingInset(page)).toBe(12);
-      if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "conversation-navigated.png") });
-      }
       expect((await messages(page)).some((message) => message.type === "session-facts")).toBe(
         false,
       );
@@ -380,11 +356,7 @@ suite.define(() => {
     await suite.withPage({ viewport, serviceWorkers: "block" }, async ({ page }) => {
       await installConversationHost(page, ["session-facts-v1", "unknown-fixture-feature"]);
       await installMockGateway(page, {
-        sessions: ["main", "draft-b"].map((name) => ({
-          key: `agent:main:${name}`,
-          kind: "direct",
-          label: name,
-        })),
+        sessions: ["main", "draft-b"].map((name) => sessionRow(name)),
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const composer = page.locator(
@@ -402,18 +374,15 @@ suite.define(() => {
       await command(page, "navigate", sessionB, "draft-b");
       const privateDraft = "Only the web composer may read this unsent draft.";
       await composer.fill(privateDraft);
-      await expect.poll(latestFacts).toMatchObject({
+      const expectedDraft = {
         sessions: expect.arrayContaining([
           { ...sessionB, hasComposerDraft: true, outboxAttentionCount: 0 },
         ]),
-      });
+      };
+      await expect.poll(latestFacts).toMatchObject(expectedDraft);
       await navigate(page, "main", "show-a-with-b-draft");
       expect(await composer.inputValue()).toBe("");
-      expect(await latestFacts()).toMatchObject({
-        sessions: expect.arrayContaining([
-          { ...sessionB, hasComposerDraft: true, outboxAttentionCount: 0 },
-        ]),
-      });
+      expect(await latestFacts()).toMatchObject(expectedDraft);
       await command(page, "navigate", sessionB, "clear-draft-b");
       expect(await composer.inputValue()).toBe(privateDraft);
       await composer.fill("");
@@ -466,13 +435,11 @@ suite.define(() => {
           "plugins.controlUi.report",
         ],
         sessions: [
-          { key: "agent:main:main", kind: "direct", label: "Session A" },
+          sessionRow("main", "Session A"),
           {
-            key: sessionB.sessionKey,
+            ...sessionRow("worker-b", "Worker B"),
             sessionId: "worker-b-incarnation",
             agentId: "main",
-            kind: "direct",
-            label: "Worker B",
             hasActiveRun: false,
             placement: {
               state: "active",
@@ -573,9 +540,7 @@ suite.define(() => {
           await installNativeWebChrome(page);
         }
         await installMockGateway(page, {
-          historyMessages: [
-            { role: "assistant", content: [{ type: "text", text: "Ordinary conversation." }] },
-          ],
+          historyMessages: [assistantText("Ordinary conversation.")],
         });
         await page.goto(`${suite.server.baseUrl}chat`);
         await page.locator(".agent-chat__composer-combobox textarea").waitFor();

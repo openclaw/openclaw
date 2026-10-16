@@ -1,4 +1,4 @@
-import { describe, expect, it, onTestFinished } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   type createControlUiE2eSuite,
   holdModuleResponse,
@@ -11,57 +11,57 @@ export function defineNativeModuleBoundaryTests(
 ) {
   describe("Native navigation module loading", () => {
     const openPage = createNativeNavPageOpener(suite);
+    async function openHeldPage(source: string, options: Parameters<typeof openPage>[0] = {}) {
+      let held!: Awaited<ReturnType<typeof holdModuleResponse>>;
+      const page = await openPage({
+        ...options,
+        beforeNavigate: async (target) => {
+          await options.beforeNavigate?.(target);
+          held = await holdModuleResponse(target, moduleRequest(`ui/src/${source}`));
+        },
+      });
+      // The suite's context teardown releases held responses even on assertion failure.
+      return { page, held };
+    }
 
     it("closes navigation while the sidebar element is still unregistered", async () => {
-      const testCase = {
-        module: moduleRequest("ui/src/components/app-sidebar.tsx"),
+      const errors: string[] = [];
+      const { page, held } = await openHeldPage("components/app-sidebar.tsx", {
         pathname: "new",
         readySelector: ".new-session-page__message",
-        tag: "openclaw-app-sidebar",
-      };
-      let held!: Awaited<ReturnType<typeof holdModuleResponse>>;
-      const errors: string[] = [];
-      try {
-        const page = await openPage({
-          ...testCase,
-          width: 900,
-          beforeNavigate: async (targetPage) => {
-            targetPage.on("pageerror", (error) => errors.push(error.message));
-            held = await holdModuleResponse(targetPage, testCase.module);
-          },
-        });
-        await held.request;
-        const element = page.locator(testCase.tag).first();
-        expect(await element.evaluate((node) => node.matches(":defined"))).toBe(false);
-        const toggle = page.locator(".topbar-nav-toggle");
-        const navigation = page.getByRole("dialog", { name: "Navigation" });
-        await toggle.click();
-        await expect.poll(() => navigation.isVisible()).toBe(true);
-        await page.keyboard.press("Escape");
-        await expect.poll(() => navigation.isVisible()).toBe(false);
-        expect(await page.locator("#control-ui-main").getAttribute("inert")).toBeNull();
+        width: 900,
+        beforeNavigate: async (targetPage) => {
+          targetPage.on("pageerror", (error) => errors.push(error.message));
+        },
+      });
+      await held.request;
+      const element = page.locator("openclaw-app-sidebar").first();
+      expect(await element.evaluate((node) => node.matches(":defined"))).toBe(false);
+      const toggle = page.locator(".topbar-nav-toggle");
+      const navigation = page.getByRole("dialog", { name: "Navigation" });
+      await toggle.click();
+      await expect.poll(() => navigation.isVisible()).toBe(true);
+      await page.keyboard.press("Escape");
+      await expect.poll(() => navigation.isVisible()).toBe(false);
+      expect(await page.locator("#control-ui-main").getAttribute("inert")).toBeNull();
 
-        await toggle.click();
-        await expect.poll(() => navigation.isVisible()).toBe(true);
-        await page.setViewportSize({ width: 1440, height: 900 });
-        await expect.poll(() => navigation.isVisible()).toBe(false);
-        await expect
-          .poll(() => page.locator(".shell").getAttribute("class"))
-          .not.toContain("shell--mobile-nav");
-        expect(errors).toEqual([]);
+      await toggle.click();
+      await expect.poll(() => navigation.isVisible()).toBe(true);
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await expect.poll(() => navigation.isVisible()).toBe(false);
+      await expect
+        .poll(() => page.locator(".shell").getAttribute("class"))
+        .not.toContain("shell--mobile-nav");
 
-        held.release();
-        await expect.poll(() => element.evaluate((node) => node.matches(":defined"))).toBe(true);
-        await page.setViewportSize({ width: 900, height: 900 });
-        await toggle.click();
-        await expect.poll(() => navigation.isVisible()).toBe(true);
-        await page.keyboard.press("Escape");
-        await expect.poll(() => navigation.isVisible()).toBe(false);
-        expect(errors).toEqual([]);
-        expect(held.requests()).toBe(1);
-      } finally {
-        held?.release();
-      }
+      held.release();
+      await expect.poll(() => element.evaluate((node) => node.matches(":defined"))).toBe(true);
+      await page.setViewportSize({ width: 900, height: 900 });
+      await toggle.click();
+      await expect.poll(() => navigation.isVisible()).toBe(true);
+      await page.keyboard.press("Escape");
+      await expect.poll(() => navigation.isVisible()).toBe(false);
+      expect(errors).toEqual([]);
+      expect(held.requests()).toBe(1);
     });
 
     it.each([
@@ -71,15 +71,8 @@ export function defineNativeModuleBoundaryTests(
       "outside pointer",
       "Escape",
     ] as const)("keeps pending Inbox intent current across %s", async (action) => {
-      let held!: Awaited<ReturnType<typeof holdModuleResponse>>;
-      const page = await openPage({
+      const { page, held } = await openHeldPage("components/sidebar-attention-panel.runtime.tsx", {
         pathname: "new",
-        beforeNavigate: async (targetPage) => {
-          held = await holdModuleResponse(
-            targetPage,
-            moduleRequest("ui/src/components/sidebar-attention-panel.runtime.tsx"),
-          );
-        },
       });
       const attention = await page
         .locator("openclaw-app-sidebar openclaw-sidebar-attention")
@@ -87,72 +80,59 @@ export function defineNativeModuleBoundaryTests(
       expect(attention).not.toBeNull();
       const inbox = page.locator("openclaw-app-sidebar .sidebar-issues-button");
       const dialog = page.getByRole("dialog", { name: "Inbox" });
-      try {
-        await inbox.click();
-        const moduleUrl = await held.request;
-        expect(await dialog.count()).toBe(0);
-        if (action === "reconnection") {
-          await attention!.evaluate(async (element) => {
-            const parent = element.parentNode!;
-            const next = element.nextSibling;
-            element.remove();
-            // Cross the bridge's move-preserving turn before reconnecting.
-            await Promise.resolve();
-            parent.insertBefore(element, next);
-          });
-        } else if (action === "outside pointer") {
-          await page.locator(".new-session-page__message").click();
-        } else if (action === "Escape") {
-          await page.keyboard.press("Escape");
-        } else {
-          const toggle = page.locator('[data-navigation-view="sessions"]');
-          await toggle.click();
-          await expect.poll(() => page.locator(".sidebar-shell").isVisible()).toBe(false);
-          // The native event does not generate an outside pointer that could
-          // accidentally dismiss an Inbox resurrected by the old import.
-          await page.evaluate(() => {
-            window.dispatchEvent(new CustomEvent("openclaw:native-toggle-sidebar"));
-          });
-          await expect.poll(() => page.locator(".sidebar-shell").isVisible()).toBe(true);
-          if (action === "replacement open") {
-            await inbox.click();
-          }
-        }
-        held.release();
-        // Keep the import native: Vitest rewrites imports inside serialized callbacks.
-        await page.evaluate(`import(${JSON.stringify(moduleUrl)}).then(() => undefined)`);
-        await attention!.evaluate(
-          (element) =>
-            (element as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete,
-        );
-        if (action !== "replacement open") {
-          expect(await dialog.count()).toBe(0);
-          expect(await inbox.getAttribute("aria-expanded")).toBe("false");
+      await inbox.click();
+      const moduleUrl = await held.request;
+      expect(await dialog.count()).toBe(0);
+      if (action === "reconnection") {
+        await attention!.evaluate(async (element) => {
+          const parent = element.parentNode!;
+          const next = element.nextSibling;
+          element.remove();
+          // Cross the bridge's move-preserving turn before reconnecting.
+          await Promise.resolve();
+          parent.insertBefore(element, next);
+        });
+      } else if (action === "outside pointer") {
+        await page.locator(".new-session-page__message").click();
+      } else if (action === "Escape") {
+        await page.keyboard.press("Escape");
+      } else {
+        const toggle = page.locator('[data-navigation-view="sessions"]');
+        await toggle.click();
+        await expect.poll(() => page.locator(".sidebar-shell").isVisible()).toBe(false);
+        // The native event does not generate an outside pointer that could
+        // accidentally dismiss an Inbox resurrected by the old import.
+        await page.evaluate(() => {
+          window.dispatchEvent(new CustomEvent("openclaw:native-toggle-sidebar"));
+        });
+        await expect.poll(() => page.locator(".sidebar-shell").isVisible()).toBe(true);
+        if (action === "replacement open") {
           await inbox.click();
         }
-        await dialog.waitFor({ state: "visible" });
-        await expect
-          .poll(() => dialog.evaluate((element) => element.contains(document.activeElement)))
-          .toBe(true);
-        expect(held.requests()).toBe(1);
-        await page.keyboard.press("Escape");
-        await expect.poll(() => dialog.count()).toBe(0);
-      } finally {
-        held.release();
       }
+      held.release();
+      // Keep the import native: Vitest rewrites imports inside serialized callbacks.
+      await page.evaluate(`import(${JSON.stringify(moduleUrl)}).then(() => undefined)`);
+      await attention!.evaluate(
+        (element) => (element as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete,
+      );
+      if (action !== "replacement open") {
+        expect(await dialog.count()).toBe(0);
+        expect(await inbox.getAttribute("aria-expanded")).toBe("false");
+        await inbox.click();
+      }
+      await dialog.waitFor({ state: "visible" });
+      await expect
+        .poll(() => dialog.evaluate((element) => element.contains(document.activeElement)))
+        .toBe(true);
+      expect(held.requests()).toBe(1);
+      await page.keyboard.press("Escape");
+      await expect.poll(() => dialog.count()).toBe(0);
     });
 
     it("keeps overlay motion anchored to its owning interaction", async () => {
-      let popupModule!: Awaited<ReturnType<typeof holdModuleResponse>>;
-      onTestFinished(() => popupModule?.release());
-      const page = await openPage({
+      const { page, held: popupModule } = await openHeldPage("components/solid/tooltip.tsx", {
         nativeNav: false,
-        beforeNavigate: async (nextPage) => {
-          popupModule = await holdModuleResponse(
-            nextPage,
-            moduleRequest("ui/src/components/solid/tooltip.tsx"),
-          );
-        },
       });
 
       await page.keyboard.press("ControlOrMeta+K");
@@ -160,13 +140,15 @@ export function defineNativeModuleBoundaryTests(
       const palette = page.locator("openclaw-command-palette .cmd-palette");
       const paletteDialog = page.locator("openclaw-command-palette openclaw-modal-dialog.palette");
       await palette.locator(".cmd-palette__input:not([disabled])").waitFor({ state: "visible" });
-      const paletteAnimationName = await palette.evaluate(
-        (element) => getComputedStyle(element).animationName,
+      expect(await palette.evaluate((element) => getComputedStyle(element).animationName)).toBe(
+        "none",
       );
-      const paletteDialogAnimationDuration = await paletteDialog.evaluate((element) => {
-        const dialog = element.querySelector<HTMLDialogElement>("dialog");
-        return dialog ? getComputedStyle(dialog).animationDuration : "missing";
-      });
+      expect(
+        await paletteDialog.evaluate((element) => {
+          const dialog = element.querySelector<HTMLDialogElement>("dialog");
+          return dialog ? getComputedStyle(dialog).animationDuration : "missing";
+        }),
+      ).toBe("0s");
       await page.keyboard.press("Escape");
 
       const sidebar = page.locator("openclaw-app-sidebar");
@@ -191,28 +173,23 @@ export function defineNativeModuleBoundaryTests(
       expect(await surface.isVisible()).toBe(false);
       popupModule.release();
       await surface.waitFor({ state: "visible" });
-      const hoverCardMotion = await sidebar
-        .locator("openclaw-sidebar-build-chip openclaw-tooltip")
-        .evaluate((tooltip) => {
-          const popupSurface = tooltip.shadowRoot?.querySelector<HTMLElement>(
-            ".tooltip-surface[popover]",
-          );
-          if (!popupSurface || !popupSurface.matches(":popover-open")) {
-            throw new Error("expected the open native sidebar hovercard");
-          }
-          const [originX, originY] = getComputedStyle(popupSurface)
-            .transformOrigin.split(" ")
-            .map(Number.parseFloat);
-          return {
-            animationDuration: getComputedStyle(popupSurface).animationDuration,
-            popupHeight: popupSurface.offsetHeight,
-            popupWidth: popupSurface.offsetWidth,
-            originX,
-            originY,
-            placement: popupSurface.getAttribute("data-placement"),
-            playState: getComputedStyle(popupSurface).animationPlayState,
-          };
-        });
+      const hoverCardMotion = await surface.evaluate((popupSurface) => {
+        if (!(popupSurface instanceof HTMLElement)) {
+          throw new Error("Expected HTML hovercard");
+        }
+        const style = getComputedStyle(popupSurface);
+        const [originX, originY] = style.transformOrigin.split(" ").map(Number.parseFloat);
+        return {
+          open: popupSurface.matches(":popover-open"),
+          animationDuration: style.animationDuration,
+          popupHeight: popupSurface.offsetHeight,
+          popupWidth: popupSurface.offsetWidth,
+          originX,
+          originY,
+          placement: popupSurface.getAttribute("data-placement"),
+          playState: style.animationPlayState,
+        };
+      });
       await surface.evaluate((element) => {
         (element as HTMLElement).style.removeProperty("animation-play-state");
       });
@@ -224,16 +201,15 @@ export function defineNativeModuleBoundaryTests(
       const drawer = page.locator(".shell-nav.nav-drawer");
       await expect.poll(() => drawer.count()).toBe(1);
       await page.locator(".chat-pane__nav-toggle:visible").first().click();
-      const drawerAnimationName = await drawer.evaluate(
-        (element) => getComputedStyle(element).animationName,
+      expect(await drawer.evaluate((element) => getComputedStyle(element).animationName)).toBe(
+        "none",
       );
-
-      expect(paletteAnimationName).toBe("none");
-      expect(paletteDialogAnimationDuration).toBe("0s");
-      expect(drawerAnimationName).toBe("none");
-      expect(hoverCardMotion.animationDuration).toBe("0.14s");
-      expect(hoverCardMotion.playState).toBe("paused");
-      expect(hoverCardMotion.placement).toMatch(/^top(?:-|$)/u);
+      expect(hoverCardMotion).toMatchObject({
+        open: true,
+        animationDuration: "0.14s",
+        playState: "paused",
+        placement: expect.stringMatching(/^top(?:-|$)/u),
+      });
       expect(hoverCardMotion.originX).toBeGreaterThan(hoverCardMotion.popupWidth * 0.45);
       expect(hoverCardMotion.originX).toBeLessThan(hoverCardMotion.popupWidth * 0.55);
       expect(hoverCardMotion.originY).toBeGreaterThan(hoverCardMotion.popupHeight * 0.95);
