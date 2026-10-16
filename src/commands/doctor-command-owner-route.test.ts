@@ -17,7 +17,6 @@ import {
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import { recoverCommandOwnerTargetKinds } from "./doctor-command-owner-recovery.js";
 import { migrateLegacyCommandOwners } from "./doctor-command-owner.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
@@ -37,50 +36,55 @@ const registry = createTestRegistry([
 ]);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function heartbeat(cfg: OpenClawConfig) {
-  return resolveHeartbeatDeliveryTargetWithSessionRoute({ cfg, agentId: "main" });
+const heartbeat = (cfg: OpenClawConfig) =>
+  resolveHeartbeatDeliveryTargetWithSessionRoute({ cfg, agentId: "main" });
+const writeJson = (file: string, value: unknown) => fs.writeFile(file, JSON.stringify(value));
+const owner = "100000000000000001";
+const typedOwner = `discord:user:${owner}`;
+const bareOwner = `discord:${owner}`;
+const directRoute = { channel: "discord", to: `user:${owner}`, chatType: "direct" };
+function config(ownerEntry = typedOwner, plugins?: OpenClawConfig["plugins"]): OpenClawConfig {
+  return {
+    agents: { entries: { main: {} } },
+    channels: { discord: { token: "test-token" } },
+    commands: { ownerAllowFrom: [ownerEntry] },
+    ...(plugins ? { plugins } : {}),
+  };
 }
+const recover = (cfg: OpenClawConfig, file: string) =>
+  recoverCommandOwnerTargetKinds({ config: cfg, snapshot: { path: file, parsed: cfg } });
 
-function writeJson(file: string, value: unknown) {
-  return fs.writeFile(file, JSON.stringify(value));
-}
-
-it.each([false, true])(
-  "Doctor reports or repairs a stripped owner (history: %s)",
-  async (history) => {
-    await withDoctorConfigPreflightHome(async (home) => {
-      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
-        const cfg = { ...config(`discord:${owner}`), plugins: { enabled: false } };
-        const configPath = await writeOpenClawConfig(home, cfg);
-        if (history) {
-          await writeJson(`${configPath}.bak`, cfg);
-          await writeJson(`${configPath}.bak.1`, config());
-        }
-        expect(await heartbeat(cfg)).toMatchObject({ channel: "none", reason: "no-route" });
-        await using ctx = await withPluginRuntimeRegistryScope(registry, () =>
-          prepareDoctorContext(configPath),
-        );
-        if (history) {
-          expect(ctx.configResult.pendingChangePanels?.join("\n")).toContain(
-            "Restored commands.ownerAllowFrom[0] target kind",
-          );
-          await runInitialConfigWriteHealth(ctx);
-          expect(ctx.configWriteRefusal).toBeUndefined();
-          const saved = await readConfigFileSnapshot();
-          expect(saved.config.commands?.ownerAllowFrom).toEqual([`discord:user:${owner}`]);
-          expect(
-            await withPluginRuntimeRegistryScope(registry, () => heartbeat(saved.config)),
-          ).toMatchObject({ channel: "discord", to: `user:${owner}`, chatType: "direct" });
-        } else {
-          expect(ctx.cfg.commands?.ownerAllowFrom).toEqual([`discord:${owner}`]);
-          expect(ctx.configResult.warnings?.join("\n")).toContain('reason="no-route"');
-          expect(ctx.configResult.warnings?.join("\n")).toContain(
-            `set commands.ownerAllowFrom[0] to "discord:user:${owner}"`,
-          );
-        }
-      });
-    });
-  },
+it.each([false, true])("Doctor reports or repairs a stripped owner (history: %s)", (history) =>
+  withDoctorConfigPreflightHome(async (home) => {
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+    const cfg = config(bareOwner, { enabled: false });
+    const configPath = await writeOpenClawConfig(home, cfg);
+    if (history) {
+      await writeJson(`${configPath}.bak`, cfg);
+      await writeJson(`${configPath}.bak.1`, config());
+    }
+    expect(await heartbeat(cfg)).toMatchObject({ channel: "none", reason: "no-route" });
+    await using ctx = await withPluginRuntimeRegistryScope(registry, () =>
+      prepareDoctorContext(configPath),
+    );
+    if (history) {
+      expect(ctx.configResult.pendingChangePanels?.join("\n")).toContain(
+        "Restored commands.ownerAllowFrom[0] target kind",
+      );
+      await runInitialConfigWriteHealth(ctx);
+      expect(ctx.configWriteRefusal).toBeUndefined();
+      const saved = await readConfigFileSnapshot();
+      expect(saved.config.commands?.ownerAllowFrom).toEqual([typedOwner]);
+      expect(
+        await withPluginRuntimeRegistryScope(registry, () => heartbeat(saved.config)),
+      ).toMatchObject(directRoute);
+    } else {
+      expect(ctx.cfg.commands?.ownerAllowFrom).toEqual([bareOwner]);
+      const warnings = ctx.configResult.warnings?.join("\n");
+      expect(warnings).toContain('reason="no-route"');
+      expect(warnings).toContain(`set commands.ownerAllowFrom[0] to "${typedOwner}"`);
+    }
+  }),
 );
 
 it("recovers an installed channel's owner kind without a runtime registry", async () => {
@@ -105,63 +109,43 @@ it("recovers an installed channel's owner kind without a runtime registry", asyn
     path.join(pluginDir, "index.cjs"),
     'throw new Error("Doctor must not activate the runtime");',
   );
-  // The installed entry returns the real setup contract without recompiling its source graph.
   await fs.writeFile(
     path.join(pluginDir, "setup-entry.cjs"),
     "module.exports = { plugin: globalThis.__doctorOwnerSetup };",
   );
   vi.stubGlobal("__doctorOwnerSetup", discordSetupPlugin);
-  const cfg = {
-    ...config(`discord:${owner}`),
-    plugins: { allow: ["discord"], load: { paths: [pluginDir] } },
-  };
+  const cfg = config(bareOwner, { allow: ["discord"], load: { paths: [pluginDir] } });
   const configPath = path.join(home, "openclaw.json");
   await writeJson(`${configPath}.bak`, config());
   setActivePluginRegistry(createTestRegistry());
-  await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
-    const result = recoverCommandOwnerTargetKinds({
-      config: cfg,
-      snapshot: { path: configPath, parsed: cfg },
-    });
-    expect(result.config.commands?.ownerAllowFrom).toEqual([`discord:user:${owner}`]);
-    expect(result.warnings).toEqual([]);
-  });
+  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+  const result = recover(cfg, configPath);
+  expect(result.config.commands?.ownerAllowFrom).toEqual([typedOwner]);
+  expect(result.warnings).toEqual([]);
 });
 
-it.each(["different-owner", "include", "invalid", "symlink"])(
-  "does not search past %s history to guess an owner kind",
-  async (history) => {
-    const home = tempDirs.make("doctor-owner-history-");
-    const cfg = { ...config(`discord:${owner}`), plugins: { enabled: false } };
-    const configPath = path.join(home, "openclaw.json");
-    await writeJson(`${configPath}.bak.1`, config());
-    if (history === "symlink") {
-      await fs.symlink(`${configPath}.bak.1`, `${configPath}.bak`);
-    } else {
-      await fs.writeFile(
-        `${configPath}.bak`,
-        history === "invalid"
-          ? "{"
-          : JSON.stringify(
-              history === "include"
-                ? { $include: "old.json" }
-                : config("discord:100000000000000002"),
-            ),
-      );
-    }
-    const result = recoverCommandOwnerTargetKinds({
-      config: cfg,
-      snapshot: { path: configPath, parsed: cfg },
-    });
-    expect(result.config).toBe(cfg);
-    expect(result.changes).toEqual([]);
-    expect(result.warnings.join("\n")).toContain(`"discord:user:${owner}"`);
-  },
-);
-const registrySnapshot = captureActivePluginRegistrySnapshot();
-beforeEach(() => {
-  setActivePluginRegistry(registry);
+it.each([
+  ["different-owner", JSON.stringify(config("discord:100000000000000002"))],
+  ["include", '{"$include":"old.json"}'],
+  ["invalid", "{"],
+  ["symlink", undefined],
+])("does not search past %s history to guess an owner kind", async (_history, raw) => {
+  const home = tempDirs.make("doctor-owner-history-");
+  const cfg = config(bareOwner, { enabled: false });
+  const configPath = path.join(home, "openclaw.json");
+  await writeJson(`${configPath}.bak.1`, config());
+  if (raw === undefined) {
+    await fs.symlink(`${configPath}.bak.1`, `${configPath}.bak`);
+  } else {
+    await fs.writeFile(`${configPath}.bak`, raw);
+  }
+  const result = recover(cfg, configPath);
+  expect(result.config).toBe(cfg);
+  expect(result.changes).toEqual([]);
+  expect(result.warnings.join("\n")).toContain(`"${typedOwner}"`);
 });
+const registrySnapshot = captureActivePluginRegistrySnapshot();
+beforeEach(() => setActivePluginRegistry(registry));
 
 it.each(["runtime", "setup"])(
   "normalizes a legacy owner using the unambiguous Telegram %s contract",
@@ -181,24 +165,15 @@ it.each(["runtime", "setup"])(
 afterEach(() => {
   restoreActivePluginRegistrySnapshot(registrySnapshot);
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
-
-const owner = "100000000000000001";
-function config(ownerEntry = `discord:user:${owner}`): OpenClawConfig {
-  return {
-    agents: { entries: { main: {} } },
-    channels: { discord: { token: "test-token" } },
-    commands: { ownerAllowFrom: [ownerEntry] },
-  };
-}
 
 it("keeps a Discord owner's direct heartbeat route and command authority through Doctor", async () => {
   const original = config();
-  const expected = { channel: "discord", to: `user:${owner}`, chatType: "direct" };
-  expect(await heartbeat(original)).toMatchObject(expected);
+  expect(await heartbeat(original)).toMatchObject(directRoute);
   const migrated = migrateLegacyCommandOwners(original, []);
-  expect(await heartbeat(migrated)).toMatchObject(expected);
-  expect(migrated.commands?.ownerAllowFrom).toEqual([`discord:user:${owner}`]);
+  expect(await heartbeat(migrated)).toMatchObject(directRoute);
+  expect(migrated.commands?.ownerAllowFrom).toEqual([typedOwner]);
   for (const senderId of [owner, "100000000000000002"]) {
     expect(
       resolveCommandAuthorization({
