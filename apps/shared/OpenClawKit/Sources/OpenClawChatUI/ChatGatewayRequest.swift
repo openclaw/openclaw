@@ -216,6 +216,7 @@ public enum OpenClawChatGatewayRequests {
         spawnedBy: String? = nil,
         offset: Int? = nil,
         configuredAgentsOnly: Bool? = nil,
+        rowMode: String? = nil,
         timeoutMs: Double = 15000) -> OpenClawChatGatewayRequest
     {
         var params: [String: AnyCodable] = [
@@ -228,6 +229,7 @@ public enum OpenClawChatGatewayRequests {
         self.add(spawnedBy, to: &params, key: "spawnedBy")
         params["offset"] = offset.map(AnyCodable.init)
         params["configuredAgentsOnly"] = configuredAgentsOnly.map(AnyCodable.init)
+        self.add(rowMode, to: &params, key: "rowMode")
         self.add(search, to: &params, key: "search")
         if archived {
             params["archived"] = AnyCodable(true)

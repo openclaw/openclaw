@@ -8,6 +8,7 @@ import {
   removeSessionMember,
 } from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { retainSessionListForegroundWork } from "../session-projection-work.js";
@@ -21,6 +22,69 @@ import {
 } from "./sessions-read-cache.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("bounds full-detail pages before preparing archived rows and preserves pagination", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    runOpenClawAgentWriteTransaction(
+      () => {
+        for (let index = 0; index < 205; index++) {
+          replaceSessionEntrySync(
+            { agentId: "main", sessionKey: `agent:main:page-${index}` },
+            { sessionId: `page-${index}`, updatedAt: index + 1, archivedAt: 1 },
+          );
+        }
+      },
+      { agentId: "main" },
+    );
+    const release = retainSessionListForegroundWork();
+    const context = requestContext(cfg);
+    const client = identifiedClient("page-viewer");
+    await initializeSessionReadContext(context);
+    const projection = getSessionRowProjection(context)!;
+    const list = (
+      request: Parameters<typeof listSessions>[0]["request"],
+      acceptsSerializedJson = true,
+    ) =>
+      listSessions({
+        context,
+        client,
+        request: { archived: true, ...request },
+        acceptsSerializedJson,
+      });
+    try {
+      const request = Object.freeze({ limit: 10_000 });
+      const first = await list(request);
+      expect(first).toMatchObject({
+        count: 200,
+        totalCount: 205,
+        limitApplied: 200,
+        nextOffset: 200,
+        hasMore: true,
+      });
+      expect(projection.materializedCount).toBe(200);
+      const tail = await list({ ...request, offset: first.nextOffset! });
+      expect(tail).toMatchObject({
+        count: 5,
+        totalCount: 205,
+        limitApplied: 200,
+        nextOffset: null,
+        hasMore: false,
+      });
+      expect([...first.sessions, ...tail.sessions].map((row) => row.sessionId)).toEqual(
+        Array.from({ length: 205 }, (_, index) => `page-${204 - index}`),
+      );
+      expect((await list(request, false)).sessions).toHaveLength(200);
+      expect((await list({})).sessions).toHaveLength(100);
+      expect((await list({ limit: 1 })).sessions).toHaveLength(1);
+      expect((await list({ ...request, rowMode: "compact" })).sessions).toHaveLength(205);
+    } finally {
+      projection.dispose();
+      release();
+    }
+  });
+});
 
 it("pages and searches archived sessions without materializing excluded candidates", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

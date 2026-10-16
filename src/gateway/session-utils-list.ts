@@ -53,6 +53,8 @@ import { matchesSessionArchiveFilter } from "./session-utils-core.js";
 import { getSessionDefaults } from "./session-utils-model.js";
 import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
 
+const FULL_SESSION_PAGE_LIMIT = 200;
+
 export function* selectSessionEntries(
   params: SessionListFilterParams & {
     defaultLimit?: number;
@@ -490,7 +492,12 @@ export async function listProjectedSessions(params: {
   diagnostics?: SessionListDiagnostics;
   onResult?: (result: SessionsListResult) => void;
 }): Promise<SessionsListResult> {
-  const { projection, opts, key: exactKey, context, client, diagnostics } = params;
+  const { projection, opts: requested, key: exactKey, context, client, diagnostics } = params;
+  // Bound preparation and presentation together; pagination exposes every remaining row.
+  const opts =
+    requested.rowMode === undefined && (requested.limit ?? 0) > FULL_SESSION_PAGE_LIMIT
+      ? { ...requested, limit: FULL_SESSION_PAGE_LIMIT }
+      : requested;
   // Search and Board filters inspect full row facts; ordinary paging selects from metadata.
   const selectionPreparation = {
     metadataOnly: !opts.search?.trim() && opts.hasBoard === undefined,

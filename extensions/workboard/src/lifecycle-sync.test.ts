@@ -780,7 +780,7 @@ describe("Workboard gateway lifecycle sync", () => {
       }
       expect(method).toBe("sessions.list");
       expect(options).toMatchObject({ includeGlobal: false, includeUnknown: false });
-      return { sessions: [] };
+      return { sessions: [], hasMore: false };
     });
 
     await expect(
@@ -800,23 +800,22 @@ describe("Workboard gateway lifecycle sync", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("treats a full sessions.list page as possibly truncated", async () => {
-    // Keep a full page conservative even when a mock or older peer omits pagination
-    // metadata, or absent sessions could be marked missing.
-    const request = vi.fn().mockResolvedValue({
-      sessions: Array.from({ length: 10_000 }, (_, index) => ({
-        key: `agent:main:dashboard:${index}`,
-        status: "done",
-      })),
-    });
+  it.each([true, false, undefined])(
+    "uses sessions.list completeness for a short page (hasMore=%s)",
+    async (hasMore) => {
+      const request = vi.fn().mockResolvedValue({
+        sessions: [{ key: "agent:main:dashboard:recent", status: "done" }],
+        hasMore,
+      });
 
-    const snapshot = await readWorkboardLifecycleSessions({
-      isAvailable: async () => true,
-      request,
-    });
-    expect(snapshot.complete).toBe(false);
-    expect(snapshot.sessions).toHaveLength(10_000);
-  });
+      const snapshot = await readWorkboardLifecycleSessions({
+        isAvailable: async () => true,
+        request,
+      });
+      expect(snapshot.complete).toBe(hasMore === false);
+      expect(snapshot.sessions).toEqual([{ key: "agent:main:dashboard:recent", status: "done" }]);
+    },
+  );
 });
 
 function createSessionReader(sessionKey: string, updatedAt: number) {

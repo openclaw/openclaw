@@ -1382,8 +1382,8 @@ class ChatController internal constructor(
   /**
    * Enumerates every session assigned to the group. The UI session list is windowed
    * (limited, archived either-or), so group mutations must not derive membership from
-   * it. An absent limit is capped at 100 rows server-side, so both queries send an
-   * explicit high bound; sessions.list filters archived rows either-or, hence two calls.
+   * it. Compact rows retain the membership fields without full-detail page limits;
+   * sessions.list filters archived rows either-or, hence two calls.
    */
   private suspend fun listSessionGroupMembers(
     group: String,
@@ -1392,7 +1392,11 @@ class ChatController internal constructor(
   ): List<ChatSessionEntry> {
     val members = LinkedHashMap<String, ChatSessionEntry>()
     for (archived in listOf(false, true)) {
-      val params = sessionListParams(ownerAgentId, GROUP_MEMBER_FETCH_LIMIT, archived)
+      val params =
+        buildJsonObject {
+          sessionListParams(ownerAgentId, GROUP_MEMBER_FETCH_LIMIT, archived).forEach { (key, value) -> put(key, value) }
+          put("rowMode", JsonPrimitive("compact"))
+        }
       val rows = parseSessions(lease.request("sessions.list", params.toString())).sessions
       for (row in rows) {
         if (row.category?.trim() == group && !members.containsKey(row.key)) members[row.key] = row

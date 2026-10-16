@@ -126,6 +126,7 @@ enum VoiceWakeForwarder {
                 search: nil,
                 archived: false,
                 includeGlobal: false,
+                rowMode: "compact",
                 timeoutMs: 10000)
             let data = try await GatewayConnection.shared.request(request)
             return try JSONDecoder().decode(SessionListResponse.self, from: data).sessions

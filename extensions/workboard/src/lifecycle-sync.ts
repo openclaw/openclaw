@@ -426,6 +426,7 @@ export async function readWorkboardLifecycleSessions(
   const payload = await gateway.request(
     "sessions.list",
     {
+      rowMode: "compact",
       limit: WORKBOARD_SESSION_SWEEP_LIMIT,
       configuredAgentsOnly: true,
       archived: "all",
@@ -442,9 +443,7 @@ export async function readWorkboardLifecycleSessions(
       const session = normalizeSession(value);
       return session ? [session] : [];
     }),
-    // A short page proves the snapshot is complete. Keep full pages conservative
-    // so absent sessions are never inferred as "missing" when the page is truncated.
-    complete: payload.sessions.length < WORKBOARD_SESSION_SWEEP_LIMIT,
+    complete: payload.hasMore === false,
   };
 }
 
