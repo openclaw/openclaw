@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { expect } from "vitest";
+import { assert, expect } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -196,9 +196,7 @@ export async function expectMcpRelayPrincipalAuthority(params: {
         const caller = [...params.clients].find(
           (client) => client.connect.device?.id === identity.deviceId,
         );
-        if (!caller) {
-          throw new Error("Missing admitted relay consent caller");
-        }
+        assert(caller, "Missing admitted relay consent caller");
         const clock = createGatewaySchedulerClock(Date.now());
         const scheduler = createTestPluginServiceScheduler(createTestGatewayScheduler(clock.clock));
         const runtime = createLazyPluginRuntime({});
@@ -223,16 +221,12 @@ export async function expectMcpRelayPrincipalAuthority(params: {
             );
           },
           registerService: (registered) => {
-            if (registered.apiVersion !== 2) {
-              throw new Error("Expected the scheduler-owned MCP relay service");
-            }
+            assert(registered.apiVersion === 2, "Expected scheduler-owned MCP relay service");
             service = registered;
           },
         });
         mcpRelayPlugin.register(api);
-        if (!service) {
-          throw new Error("MCP relay did not register its service");
-        }
+        assert(service, "MCP relay did not register its service");
         const context: OpenClawPluginServiceContextV2 = {
           config,
           stateDir: params.state.stateDir,
@@ -254,9 +248,7 @@ export async function expectMcpRelayPrincipalAuthority(params: {
           await service.start(context);
           await clock.advanceBy(0);
           const relay = McpRelayTestSocket.latest;
-          if (!relay) {
-            throw new Error("MCP relay did not connect");
-          }
+          assert(relay, "MCP relay did not connect");
           const receive = (type: string, fields: Record<string, unknown>) =>
             relay.receive({ type, ...fields });
           const next = async (expected: object, matches?: (frame: RelayFrame) => boolean) => {
@@ -382,53 +374,53 @@ export async function expectMcpRelayPrincipalAuthority(params: {
             "remote-ingress",
             ceiling,
           );
-          const dataRequest = (op: string, input: Record<string, unknown>) =>
-            exchange(op, input, grantId);
-          expect(await dataRequest("status", {})).toMatchObject({
+          const data = (op: string, input: Record<string, unknown> = {}) =>
+            expect(exchange(op, input, grantId)).resolves;
+          const conversation = (conversationId: string) =>
+            expect.objectContaining({ conversationId });
+          await data("status").toMatchObject({
             ok: true,
             result: { agents: [expect.objectContaining({ id: "main" })] },
           });
           const ownKey = profileId ? `agent:main:ingress-${profileId}` : params.ownerSessionKey;
           const foreignKey = `agent:main:ingress-${admin.id}`;
-          expect(await dataRequest("conversations.list", { limit: 50 })).toMatchObject({
+          await data("conversations.list", { limit: 50 }).toMatchObject({
             ok: true,
             result: {
-              conversations: expect.arrayContaining([
-                expect.objectContaining({ conversationId: ownKey }),
-              ]),
+              conversations: expect.arrayContaining([conversation(ownKey)]),
             },
           });
-          expect(
-            await dataRequest("conversation.read", { conversationId: ownKey, limit: 1 }),
-          ).toMatchObject({ ok: true, result: { conversationId: ownKey, messages: [] } });
+          await data("conversation.read", { conversationId: ownKey, limit: 1 }).toMatchObject({
+            ok: true,
+            result: { conversationId: ownKey, messages: [] },
+          });
           if (profileId) {
             // Existing UI authority retires; the same live grant then binds the current role.
             await setIngressRole(profileId, "reader");
-            expect(await dataRequest("status", {})).toMatchObject({ ok: false });
+            await data("status").toMatchObject({ ok: false });
             await next(
               { sid: browserSid },
               (frame) =>
                 frame.sid === browserSid &&
                 (frame.type === "ui.error" || frame.type === "ui.ws.close"),
             );
-            expect(await dataRequest("status", {})).toMatchObject({ ok: true });
-            expect(await dataRequest("conversations.list", { limit: 50 })).toMatchObject({
+            await data("status").toMatchObject({ ok: true });
+            await data("conversations.list", { limit: 50 }).toMatchObject({
               result: {
-                conversations: expect.not.arrayContaining([
-                  expect.objectContaining({ conversationId: foreignKey }),
-                ]),
+                conversations: expect.not.arrayContaining([conversation(foreignKey)]),
               },
             });
-            expect(
-              await dataRequest("conversation.read", { conversationId: foreignKey, limit: 1 }),
-            ).toMatchObject({ ok: false, error: { code: "not_found" } });
-            expect(
-              await dataRequest("message.send", {
-                conversationId: ownKey,
-                message: "Must not start",
-                waitMs: 0,
-              }),
-            ).toMatchObject({ ok: false });
+            await data("conversation.read", { conversationId: foreignKey, limit: 1 }).toMatchObject(
+              {
+                ok: false,
+                error: { code: "not_found" },
+              },
+            );
+            await data("message.send", {
+              conversationId: ownKey,
+              message: "Must not start",
+              waitMs: 0,
+            }).toMatchObject({ ok: false });
             expect(errors).toContainEqual("mcp-relay: op=message.send method=chat.send failed");
           }
           expect(
@@ -440,17 +432,14 @@ export async function expectMcpRelayPrincipalAuthority(params: {
               (frame) => frame.sid === browserSid && frame.type === "ui.error",
             );
           }
-          expect(await dataRequest("conversations.list", { limit: 1 })).toMatchObject({
+          await data("conversations.list", { limit: 1 }).toMatchObject({
             ok: false,
             error: { code: "grant_revoked" },
           });
           openSocket("ws-reopened");
           await clock.advanceBy(0);
           await next(
-            {
-              type: "ui.error",
-              code: "grant_revoked",
-            },
+            { type: "ui.error", code: "grant_revoked" },
             (frame) => frame.sid === "ws-reopened",
           );
           await opening;

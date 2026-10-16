@@ -2,7 +2,7 @@ import { on, once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, assert, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -79,6 +79,14 @@ const SHARED_TOKEN = "remote-control-ui-integration-shared-token";
 const TOKEN_AUTH = { mode: "token", token: SHARED_TOKEN, allowTailscale: false } as const;
 const SCOPES = ["operator.read", "operator.write"] as const;
 const OWNER_SESSION_KEY = "agent:main:ingress-owner-chat";
+
+function heldReadBarrier() {
+  return { entered: createDeferred(), release: createDeferred() };
+}
+function heldMutationBarrier(count: number) {
+  return { ...heldReadBarrier(), remaining: count, unsettled: count, settled: createDeferred() };
+}
+
 describe("remote Control UI ingress production composition", () => {
   let state: OpenClawTestState;
   let ingress: GatewayControlUiIngressV2 | undefined;
@@ -89,18 +97,8 @@ describe("remote Control UI ingress production composition", () => {
   let projection: SessionRowProjection | undefined;
   let backgroundPath: string;
   let assistantMediaPath: string;
-  let heldMutation:
-    | {
-        entered: ReturnType<typeof createDeferred>;
-        release: ReturnType<typeof createDeferred>;
-        remaining: number;
-        unsettled: number;
-        settled: ReturnType<typeof createDeferred>;
-      }
-    | undefined;
-  let heldRead:
-    | { entered: ReturnType<typeof createDeferred>; release: ReturnType<typeof createDeferred> }
-    | undefined;
+  let heldMutation: ReturnType<typeof heldMutationBarrier> | undefined;
+  let heldRead: ReturnType<typeof heldReadBarrier> | undefined;
   const extraHandlers: GatewayRequestHandlers = {
     "users.setDisplayName": async (options) => {
       const held = heldMutation;
@@ -187,9 +185,7 @@ describe("remote Control UI ingress production composition", () => {
       expectedPreference: null,
       imageBase64: PNG_BYTES.toString("base64"),
     });
-    if (background.status !== "ok" || !background.asset) {
-      throw new Error("Synthetic owner background was not uploaded");
-    }
+    assert(background.status === "ok" && background.asset, "Missing fixture background");
     backgroundPath = `/claw/__openclaw__/users/background/${background.asset.assetId}`;
     const channelAvatar = await saveMediaBuffer(PNG_BYTES, "image/png", "inbound");
     await upsertSessionEntryCore(
@@ -326,9 +322,7 @@ describe("remote Control UI ingress production composition", () => {
   });
 
   async function openRemote(handle = ingress): Promise<Peer> {
-    if (!handle) {
-      throw new Error("Missing ingress fixture");
-    }
+    assert(handle, "Missing ingress fixture");
     const { socket } = await handle.openWebSocket({
       pathAndQuery: "/claw",
       origin: PUBLIC_ORIGIN,
@@ -340,9 +334,7 @@ describe("remote Control UI ingress production composition", () => {
       send: async (frame) => socket.send({ kind: "text", text: JSON.stringify(frame) }),
       read: async () => {
         const frame = await messages.next();
-        if (frame.done || frame.value.kind !== "text") {
-          throw new Error("Expected a Gateway JSON frame");
-        }
+        assert(!frame.done && frame.value.kind === "text", "Expected a Gateway JSON frame");
         return JSON.parse(frame.value.text) as IngressFrame;
       },
       close: async () => {
@@ -369,9 +361,7 @@ describe("remote Control UI ingress production composition", () => {
       },
       read: async () => {
         const frame = await messages.next();
-        if (frame.done) {
-          throw new Error("Direct Gateway socket closed before its response");
-        }
+        assert(!frame.done, "Direct Gateway socket closed before its response");
         return JSON.parse(String(frame.value[0])) as IngressFrame;
       },
       close: async () => {
@@ -499,9 +489,7 @@ describe("remote Control UI ingress production composition", () => {
         }),
       ).toMatchObject({ ok: true });
       const adminClient = [...clients].find((client) => client.connect.client.mode === "cli");
-      if (!adminClient) {
-        throw new Error("Missing authenticated administrator connection");
-      }
+      assert(adminClient, "Missing authenticated administrator connection");
       await withPluginRuntimeGatewayRequestScope(
         {
           client: adminClient,
@@ -721,14 +709,8 @@ describe("remote Control UI ingress production composition", () => {
       expectHello(await connect(peer, { identity, profileId: subject.id }), "remote-ingress", [
         "operator.admin",
       ]);
-      heldMutation = {
-        entered: createDeferred(),
-        release: createDeferred(),
-        remaining: 2,
-        unsettled: 2,
-        settled: createDeferred(),
-      };
-      heldRead = { entered: createDeferred(), release: createDeferred() };
+      heldMutation = heldMutationBarrier(2);
+      heldRead = heldReadBarrier();
       const pendingHttp = readRemote("/claw/control-ui-config.json?held=1", ui);
       const rejectedHttp = pendingHttp.catch((error: unknown) => error);
       const mutation = {

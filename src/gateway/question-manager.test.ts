@@ -1,10 +1,6 @@
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  Question,
-  QuestionAnswers,
-  QuestionResolvedEvent,
-} from "../../packages/gateway-protocol/src/index.js";
+import type { Question, QuestionAnswers } from "../../packages/gateway-protocol/src/index.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -21,7 +17,6 @@ import {
   QuestionManager,
   QuestionManagerError,
   QuestionManagerErrorCodes,
-  type QuestionObservation,
 } from "./question-manager.js";
 
 const QUESTION_RESOLVED_ENTRY_GRACE_MS = 15_000;
@@ -162,12 +157,8 @@ describe("QuestionManager", () => {
       if (retirement === "cleanup") {
         await manager.drain();
         await clock.advanceBy(15_000);
-      }
-      if (retirement === "reset") {
-        manager.reset();
-      }
-      if (retirement === "close") {
-        manager.close();
+      } else {
+        manager[retirement]();
       }
       expect(release).toHaveBeenCalledOnce();
       expect(observation.isCurrent()).toBe(false);
@@ -217,32 +208,29 @@ describe("QuestionManager", () => {
   });
 
   it("keeps resolution receipts opt-in for simultaneous and late waiters", async () => {
-    const record = askQuestion({ onResolved });
-    const legacy = manager.waitAnswer(record.id);
-    const tracked = manager.waitAnswer(record.id, undefined, true);
+    const { id } = askQuestion({ onResolved });
+    const legacy = manager.waitAnswer(id);
+    const tracked = manager.waitAnswer(id, undefined, true);
     const resolutionId = "candidate-resolution";
+    const receipt = receiptResult(resolutionId);
 
-    expect(manager.resolve(record.id, answers, "plain-text", { resolutionId })).toEqual(
-      answerResult,
-    );
+    expect(manager.resolve(id, answers, "plain-text", { resolutionId })).toEqual(answerResult);
     await expect(legacy).resolves.toEqual(answerResult);
-    await expect(tracked).resolves.toEqual(receiptResult(resolutionId));
-    await expect(manager.waitAnswer(record.id)).resolves.toEqual(answerResult);
-    await expect(manager.waitAnswer(record.id, undefined, true)).resolves.toEqual(
-      receiptResult(resolutionId),
-    );
-    expect(manager.get(record.id)).toMatchObject({ status: "answered", resolvedBy: "plain-text" });
-    expect(manager.get(record.id)).not.toHaveProperty("resolutionId");
+    await expect(tracked).resolves.toEqual(receipt);
+    await expect(manager.waitAnswer(id)).resolves.toEqual(answerResult);
+    await expect(manager.waitAnswer(id, undefined, true)).resolves.toEqual(receipt);
+    expect(manager.get(id)).toMatchObject({ status: "answered", resolvedBy: "plain-text" });
+    expect(manager.get(id)).not.toHaveProperty("resolutionId");
     expect(onResolved).toHaveBeenCalledOnce();
-    expect(onResolved.mock.calls[0]?.[0]).toEqual({ id: record.id, ...answerResult });
+    expect(onResolved.mock.calls[0]?.[0]).toEqual({ id, ...answerResult });
     expect(() =>
-      manager.resolve(record.id, answers, "other", { resolutionId: "other-resolution" }),
+      manager.resolve(id, answers, "other", { resolutionId: "other-resolution" }),
     ).toThrowError(QuestionManagerError);
     await manager.drain();
     await clock.advanceBy(QUESTION_RESOLVED_ENTRY_GRACE_MS);
-    expect(manager.get(record.id)).toBeNull();
+    expect(manager.get(id)).toBeNull();
     // Already-delivered proof survives terminal-record cleanup, without a later lookup.
-    await expect(tracked).resolves.toEqual(receiptResult(resolutionId));
+    await expect(tracked).resolves.toEqual(receipt);
   });
 
   it("does not stamp a receipt when the synchronous commit fails", async () => {
@@ -420,23 +408,17 @@ describe("QuestionManager", () => {
       onResolved,
       registerHumanInputWait: () => releaseHumanInputWait,
     });
-    let closingObserverSettled = false;
-    let otherObserverSettled = false;
-    const closingObserver = observer
-      .track(() => manager.waitAnswer(record.id, 5_000))
-      .then((result) => {
-        closingObserverSettled = true;
-        return result;
-      });
-    const otherObserver = manager.waitAnswer(record.id, 5_000).then((result) => {
-      otherObserverSettled = true;
-      return result;
-    });
+    const closingObserverSettled = vi.fn();
+    const otherObserverSettled = vi.fn();
+    const closingObserver = observer.track(() => manager.waitAnswer(record.id, 5_000));
+    const otherObserver = manager.waitAnswer(record.id, 5_000);
+    void closingObserver.then(closingObserverSettled);
+    void otherObserver.then(otherObserverSettled);
     try {
       observer.beginClose();
       await vi.advanceTimersByTimeAsync(0);
-      expect(closingObserverSettled).toBe(true);
-      expect(otherObserverSettled).toBe(false);
+      expect(closingObserverSettled).toHaveBeenCalledOnce();
+      expect(otherObserverSettled).not.toHaveBeenCalled();
       await expect(closingObserver).resolves.toEqual({ status: "pending" });
       await observer.drain();
       expect(manager.get(record.id)?.status).toBe("pending");
@@ -476,13 +458,11 @@ describe("QuestionManager", () => {
     expect(await waiting).toEqual({ status: "expired" });
     expect(onResolved).toHaveBeenCalledOnce();
 
-    let stopped = false;
-    const stopping = scheduler.stop().then(() => {
-      stopped = true;
-    });
+    const stopped = vi.fn();
+    const stopping = scheduler.stop().then(stopped);
     try {
       await Promise.resolve();
-      expect(stopped).toBe(false);
+      expect(stopped).not.toHaveBeenCalled();
       publication.resolve();
       await Promise.all([waking, stopping]);
       await clock.advanceBy(60_000);
@@ -577,16 +557,9 @@ describe("answer canonicalization", () => {
     async (value) => {
       const record = askQuestion({
         questions: [
-          {
-            questionId: "secret_value",
-            header: "Secret",
-            question: "Enter a synthetic secret.",
-            options: [],
-            isSecret: true,
-          },
+          ...questionList({ questionId: "secret_value", options: [], isSecret: true }),
           ...questions,
         ],
-        timeoutMs: 10_000,
       });
       const waiting = manager.waitAnswer(record.id);
       manager.resolve(record.id, { answers: { secret_value: [value], choice: ["  Two  "] } });
@@ -623,12 +596,10 @@ it.each(["fulfilled", "rejected"] as const)(
     expect(releaseWait).toHaveBeenCalledWith(true);
     expect(await waiting).toEqual(answerResult);
     manager.close();
-    let drained = false;
-    const closing = manager.drain().then(() => {
-      drained = true;
-    });
+    const drained = vi.fn();
+    const closing = manager.drain().then(drained);
     await Promise.resolve();
-    expect(drained).toBe(false);
+    expect(drained).not.toHaveBeenCalled();
     expect(getActiveGatewayRootWorkCount()).toBe(1);
     try {
       gate.resolve();
@@ -657,7 +628,7 @@ it.each(["fulfilled", "rejected", "reset", "close", "reused id"] as const)(
     const { id } = await request({
       timeoutMs: 60_000,
       sessionAccess: sessionAccess(releaseSession),
-      onResolved: async (event: QuestionResolvedEvent, observation: QuestionObservation) => {
+      onResolved: async (event, observation) => {
         await gate.promise;
         if (outcome === "rejected") {
           throw new Error("Question publication fixture failure");
