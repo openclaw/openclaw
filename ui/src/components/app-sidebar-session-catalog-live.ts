@@ -293,6 +293,7 @@ export class SessionCatalogLiveState {
       currentCatalog !== undefined &&
       currentCatalog.label === nextCatalog.label &&
       JSON.stringify(currentCatalog.capabilities) === JSON.stringify(nextCatalog.capabilities) &&
+      currentCatalog.pending === nextCatalog.pending &&
       JSON.stringify(currentCatalog.error) === JSON.stringify(nextCatalog.error);
     if (sameCatalogMetadata && JSON.stringify(currentHost) === JSON.stringify(nextHost)) {
       return null;

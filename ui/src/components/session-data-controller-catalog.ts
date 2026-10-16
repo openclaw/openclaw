@@ -135,6 +135,7 @@ export function areSessionCatalogsSettled(
         owner.loadingMoreSessionCatalogIds.size === 0 &&
         owner.sessionCatalogs.every(
           (catalog) =>
+            !catalog.pending &&
             !catalog.error &&
             catalog.hosts.every((entry) => !entry.pending && !entry.error && !entry.nextCursor),
         )))

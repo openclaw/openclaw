@@ -40,6 +40,22 @@ describe("SessionCatalogShareRouteSchema", () => {
 });
 
 describe("SessionsCatalogListResultSchema", () => {
+  it("distinguishes pending empty discovery from a completed empty catalog", () => {
+    const catalog = {
+      id: "fixture",
+      label: "Fixture",
+      capabilities: { continueSession: false, archive: false },
+      hosts: [],
+    };
+    expect(Value.Check(SessionsCatalogListResultSchema, { catalogs: [catalog] })).toBe(true);
+    expect(
+      Value.Check(SessionsCatalogListResultSchema, { catalogs: [{ ...catalog, pending: true }] }),
+    ).toBe(true);
+    expect(
+      Value.Check(SessionsCatalogListResultSchema, { catalogs: [{ ...catalog, pending: "true" }] }),
+    ).toBe(false);
+  });
+
   it("accepts a closed catalog result with hosts", () => {
     expect(
       Value.Check(SessionsCatalogListResultSchema, {

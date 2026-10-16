@@ -66,10 +66,11 @@ export function preserveExpandedCatalogHost(
     return freshHost;
   }
   const { sessions: _freshSessions, nextCursor: _freshNextCursor, ...freshDetails } = freshHost;
-  const { nextCursor, pending: _pending, ...previousDetails } = previous;
+  const { nextCursor, pending: _pending, error: previousError, ...previousDetails } = previous;
   return {
     ...previousDetails,
     ...freshDetails,
+    ...(freshHost.pending && !freshHost.error && previousError ? { error: previousError } : {}),
     ...(nextCursor !== undefined ? { nextCursor } : {}),
   };
 }

@@ -34,6 +34,42 @@ function catalog(id: string, hostCount: number): SessionCatalog {
 }
 
 describe("SessionCatalogLiveState", () => {
+  it("retains failure status while pending and applies catalog pending changes", () => {
+    const live = new SessionCatalogLiveState();
+    const { progressId } = live.beginRequest(1);
+    const current = catalog("codex", 1);
+    current.hosts[0]!.error = { code: "NODE_INVOKE_FAILED", message: "Fixture node failed" };
+    const pendingCatalog = {
+      ...current,
+      pending: true,
+      hosts: [{ ...current.hosts[0]!, pending: true }],
+    };
+    const pending = live.applyHost({
+      payload: { progressId, agentId: "main", catalog: pendingCatalog },
+      agentId: "main",
+      catalogs: [current],
+      pageDepths: new Map(),
+    });
+    expect(pending?.catalogs[0]?.pending).toBe(true);
+    expect(pending?.catalogs[0]?.hosts[0]).toMatchObject({
+      pending: true,
+      error: { code: "NODE_INVOKE_FAILED" },
+    });
+
+    const recovered = live.applyHost({
+      payload: {
+        progressId,
+        agentId: "main",
+        catalog: { ...current, hosts: [catalog("codex", 1).hosts[0]!] },
+      },
+      agentId: "main",
+      catalogs: pending!.catalogs,
+      pageDepths: new Map(),
+    });
+    expect(recovered?.catalogs[0]).not.toHaveProperty("pending");
+    expect(recovered?.catalogs[0]?.hosts[0]).not.toHaveProperty("error");
+  });
+
   it.each(["final", "incremental"] as const)(
     "retains rows and cursors for a pending host in %s publications",
     async (publication) => {
