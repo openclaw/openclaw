@@ -1,4 +1,5 @@
 /** Acyclic contracts for capabilities stored in the installed plugin registry. */
+import type { SessionDiscussionInfo } from "../../packages/gateway-protocol/src/schema/session-discussion.js";
 import type { EmbeddingInput } from "../../packages/memory-host-sdk/src/engine-embeddings.js";
 import type { ConversationRecallContext } from "../agents/conversation-recall.types.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
@@ -375,12 +376,10 @@ export type MemoryPluginCapabilityRegistration = {
   memorySlotSelected?: boolean;
 };
 
-export type SessionDiscussionState = "none" | "available" | "open";
-export type SessionDiscussionInfo = {
-  state: SessionDiscussionState;
-  embedUrl?: string;
-  openUrl?: string;
-};
+export type {
+  SessionDiscussionInfo,
+  SessionDiscussionState,
+} from "../../packages/gateway-protocol/src/schema/session-discussion.js";
 
 export type SessionDiscussionProvider = {
   id: string;

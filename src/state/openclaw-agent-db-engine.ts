@@ -16,7 +16,7 @@ import {
   AGENT_WRITE_LAYOUT_SCHEMA_VERSION,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "./openclaw-agent-db-contract.js";
-import { assertAgentDatabaseMaintenanceAuthority } from "./openclaw-agent-db-lease.js";
+import { assertAgentDatabaseMaintenanceAuthority } from "./openclaw-agent-db-maintenance-authority.js";
 import {
   publishAgentSchemaMetadata,
   readExistingAgentSchemaMeta,

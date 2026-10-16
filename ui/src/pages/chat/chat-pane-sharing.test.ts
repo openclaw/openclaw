@@ -186,7 +186,7 @@ describe("public session sharing", () => {
       const row = sessionRow();
       setSharingAuthorization(pane, { scopes: [scope] });
       const states = pane.sessionSharingStates;
-      const updates = vi.spyOn(getPaneTestRuntime(pane), "requestUpdate");
+      const updates = vi.spyOn(getPaneTestRuntime(pane), "invalidate");
       const workspace = createPaneHeaderWorkspaceFixture(state);
 
       pane.renderPaneHeader(workspace, row, false, undefined, false, null);

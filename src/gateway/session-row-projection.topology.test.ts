@@ -2,7 +2,6 @@ import { symlinkSync } from "node:fs";
 import { copyFile, rename } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
@@ -44,6 +43,7 @@ import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { ready } from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
+import { seedRow, waitForRead } from "./session-row-projection.read-fixture.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -85,13 +85,11 @@ it.for(["publication", "source", "dispose"] as const)(
       const reading = projection.prepareMembership();
       const settled = Promise.allSettled([reading]);
       try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            entered.promise,
-            reading,
-            "Cold admission bypassed the worker read",
-          ),
+        await waitForRead(
+          entered.promise,
+          reading,
           signal,
+          "Cold admission bypassed the worker read",
         );
         const query = { agentId: scope.agentId, key: scope.sessionKey };
         expect(projection.capture(query)).toBeUndefined();
@@ -177,10 +175,7 @@ it("reconciles a resident reset while a topology store snapshot awaits its worke
     const pending = projection.prepareMembership();
     const settled = Promise.allSettled([pending]);
     try {
-      await withinTest(
-        awaitGateBeforeSettlement(entered.promise, pending, "Topology bypassed its store worker"),
-        signal,
-      );
+      await waitForRead(entered.promise, pending, signal, "Topology bypassed its store worker");
       const query = { agentId: scope.agentId, key: scope.sessionKey };
       const captured = projection.capture(query);
       emitSessionIdentityMutation({
@@ -315,10 +310,7 @@ it("admits a committed update without host SQL while a marker awaits prepared me
     const settled = Promise.allSettled(tasks);
     try {
       // Bind waits to the test signal so a stall still releases held topology work below.
-      await withinTest(
-        awaitGateBeforeSettlement(entered.promise, marker, "Marker membership did not prepare"),
-        signal,
-      );
+      await waitForRead(entered.promise, marker, signal, "Marker membership did not prepare");
       expect(projection.needsMembershipPreparation()).toBe(false);
       sessionChanges.emit({ all: true, scope: "catalog" });
       expect(projection.dirtyRowCount).toBeGreaterThan(0);
@@ -442,13 +434,11 @@ it.for([
             });
       const settled = Promise.allSettled([pending]);
       try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            entered.promise,
-            pending,
-            "Event did not await original topology",
-          ),
+        await waitForRead(
+          entered.promise,
+          pending,
           signal,
+          "Event did not await original topology",
         );
         if (change === "same-id-reset") {
           const next = {
@@ -526,10 +516,7 @@ it.for(["dispose", "source", "integrity confirmation"] as const)(
         agents: { entries: { main: { identity: { name: "Original" } } } },
       };
       const query = { agentId: "main", key: "agent:main:topology" };
-      replaceSessionEntrySync(
-        { agentId: query.agentId, sessionKey: query.key },
-        { sessionId: "topology", updatedAt: 1 },
-      );
+      seedRow(query, { sessionId: "topology", updatedAt: 1 });
       const releaseForeground = retainSessionListForegroundWork();
       const projection = await createSessionRowProjection({
         cfg,
@@ -546,13 +533,11 @@ it.for(["dispose", "source", "integrity confirmation"] as const)(
       const pending = projection.prepareMembership();
       const settled = Promise.allSettled([pending]);
       try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            entered.promise,
-            pending,
-            "Topology snapshot did not reach its owner",
-          ),
+        await waitForRead(
+          entered.promise,
+          pending,
           signal,
+          "Topology snapshot did not reach its owner",
         );
         expect(projection.capture(query)).toBe(captured);
         if (change === "dispose") {
@@ -661,13 +646,11 @@ it.for(["chat.startup", "sessions.resolve"] as const)(
       );
       const settled = Promise.allSettled([pending]);
       try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            entered.promise,
-            pending,
-            "Request did not await topology readiness",
-          ),
+        await waitForRead(
+          entered.promise,
+          pending,
           signal,
+          "Request did not await topology readiness",
         );
         active = false;
         release.resolve();

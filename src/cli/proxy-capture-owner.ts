@@ -32,7 +32,6 @@ export function withProxyCaptureOwner<T>(
               input: CaptureWorkerOperations[K]["input"],
               wireInput: unknown = input,
             ): Promise<CaptureWorkerOperations[K]["output"]> => {
-              const command = structuredClone({ type, input });
               const result = queue.then(() =>
                 runWithLocalStateOwner<CaptureWorkerOperations[K]["output"]>({
                   method: "debugProxy.capture",
@@ -43,7 +42,7 @@ export function withProxyCaptureOwner<T>(
                   runLocal: ({ assertCurrent: assertOwnerCurrent }) =>
                     runOpenClawStateWorkerOperation(
                       captureOpenClawStateWorkerContext({ env }),
-                      (scope) => scope.execute(command),
+                      (scope) => scope.execute({ type, input }),
                       { assertCurrent: assertOwnerCurrent },
                     ),
                 }),

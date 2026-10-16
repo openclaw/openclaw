@@ -49,10 +49,12 @@ the **+** button starts another tab. Up to ten tabs stay in memory. Closing the
 page discards the documents and history. The reader follows the session panel’s
 responsive layout; on a phone it can sit below chat or expand with the panel.
 
-The reader includes descriptions, discussion comments, published inline PR
-review comments with file and diff context, commit comments, and expandable
-file diffs. The header separates the item state, author, change counts, and PR
-branches. **Overview**, **Checks**, **Files**, and **Discussion** shortcuts jump
+The reader shows the title and description first, while checks and discussion
+load independently. A quiet skeleton keeps the layout recognizable on a cold
+open. File diffs load when you select **Files** or scroll near that section.
+The reader includes discussion comments, published inline PR review comments
+with file and diff context, commit comments, and expandable file diffs. The
+header separates the item state, author, change counts, and PR branches. **Overview**, **Checks**, **Files**, and **Discussion** shortcuts jump
 to the relevant section without leaving the reader.
 
 Pull requests show check runs and commit statuses for the exact head commit.
@@ -60,7 +62,11 @@ Expand the checks summary to inspect individual results and open their source
 logs. Failed checks expand by default. Pending, failed, passed, skipped, empty,
 and unavailable results remain distinct; a partial response never implies that
 all checks passed. These results describe CI, not approval or merge readiness.
-Use **Refresh** to fetch the current PR and its checks again.
+Use **Refresh** to fetch the current PR and its checks again. The previous
+document stays readable while refreshing, with previous results labeled until
+replaced. A changed head never inherits checks or diffs from the old head.
+Retryable section failures stay beside the affected content; access or identity
+failures clear the document.
 
 Descriptions and replies render named emoji shortcodes such as `:white_check_mark:`
 and `:rocket:` in prose, tables, link labels, and disclosure summaries. Code, URLs,

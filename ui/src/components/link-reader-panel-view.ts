@@ -1,4 +1,7 @@
-import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
+import type {
+  ControlUiLinkReaderDocument,
+  ControlUiLinkReaderDeferredSection,
+} from "../../../src/shared/control-ui-link-reader.js";
 import { t } from "../i18n/index.ts";
 import { createDockPanelLayout } from "./dock-panel-layout.ts";
 import { iconData, type IconName } from "./icon-data.ts";
@@ -35,10 +38,45 @@ export function readerIcon(name: string | undefined, ownerDocument: Document) {
   return createIconElement(icon, ownerDocument);
 }
 
+export type ReaderSection = ControlUiLinkReaderDeferredSection;
+export type ReaderReadyView = {
+  status: "ready";
+  detail: ControlUiLinkReaderDocument;
+  images?: LinkReaderImages;
+  refreshing?: boolean;
+  message?: string;
+  sections: Partial<Record<ReaderSection, "idle" | "loading" | "error">>;
+};
+
+export function createReaderReadyView(
+  detail: ControlUiLinkReaderDocument,
+  previous?: ReaderReadyView,
+): ReaderReadyView {
+  const next: ReaderReadyView = { status: "ready", detail, sections: {} };
+  for (const deferred of detail.deferredSections ?? []) {
+    next.sections[deferred] = "idle";
+  }
+  // Same-revision refreshes retain loaded sections until their replacements arrive.
+  if (previous && previous.detail.revision === detail.revision) {
+    const old = previous.detail;
+    next.detail = {
+      ...detail,
+      ...(next.sections.checks && old.checks ? { checks: old.checks } : {}),
+      ...(next.sections.files && old.files
+        ? { files: old.files, filesTruncated: old.filesTruncated }
+        : {}),
+      ...(next.sections.discussion && old.comments
+        ? { comments: old.comments, commentsTruncated: old.commentsTruncated }
+        : {}),
+    };
+  }
+  return next;
+}
+
 type PanelView =
   | { status: "idle" | "loading" }
   | { status: "error"; message: string }
-  | { status: "ready"; detail: ControlUiLinkReaderDocument; images?: LinkReaderImages };
+  | ReaderReadyView;
 export type ReaderTab = { id: string; history: LinkReaderTarget[]; index: number; view: PanelView };
 export function tabTarget(tab: ReaderTab | undefined): LinkReaderTarget | null {
   return tab?.history[tab.index] ?? null;

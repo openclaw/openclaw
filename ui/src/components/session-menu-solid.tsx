@@ -92,7 +92,7 @@ function SessionMenuContent(
     (action) => props.onAction(action),
     close,
   );
-  const view = useSessionMenuEntries(host, actions, readState);
+  const view = useSessionMenuEntries(actions, readState);
   const shortcut = (event: KeyboardEvent) => {
     if (!actions.handleKeydown(event, view.appearance)) {
       activateMenuShortcut(host, event);

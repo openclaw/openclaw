@@ -626,8 +626,12 @@ export function createPluginNativeCaptureRoot(
 }
 
 /** The producer retains this root until its worker has confirmed exit. */
-export function createPluginSourceCaptureRoot(stateDir: string, prefix: string) {
-  const instance = retainPluginSourceCaptureInstance(stateDir);
+export function createPluginSourceCaptureRoot(
+  stateDir: string,
+  prefix: string,
+  placement?: PluginSourceCaptureStorage["placement"],
+) {
+  const instance = retainPluginSourceCaptureInstance(stateDir, placement);
   try {
     const directory = instance.createDirectory(prefix);
     return {
