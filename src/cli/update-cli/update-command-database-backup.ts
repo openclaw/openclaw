@@ -187,6 +187,10 @@ export async function restoreFailedUpdateDatabases(params: {
   const refuse = async (reason: string) => {
     params.backup.restoreRefusal ??= reason;
     params.result.reason = "state-migrated-no-rollback";
+    if (params.result.recovery?.serviceRestartSafe !== false) {
+      params.result.recovery = { serviceRestartSafe: false, reason: "state-migration-started" };
+    }
+    params.result.recovery.dataAtRisk ??= "state-migrated-no-rollback";
     params.result.rollbackOutcome = { status: "not-attempted", reason };
     const step: UpdateStepResult = {
       name: "database rollback",
@@ -209,7 +213,11 @@ export async function restoreFailedUpdateDatabases(params: {
     if (hasCommandProcessCleanupError(error)) {
       throw error;
     }
-    params.result.recovery = { serviceRestartSafe: false, reason: "source-rollback-failed" };
+    if (params.result.recovery?.serviceRestartSafe === false) {
+      params.result.recovery.reason = "source-rollback-failed";
+    } else {
+      params.result.recovery = { serviceRestartSafe: false, reason: "source-rollback-failed" };
+    }
     return await refuse(formatErrorMessage(error));
   }
   params.assertCurrent();
@@ -250,8 +258,13 @@ export async function restoreFailedUpdateDatabases(params: {
   } catch (cause) {
     // A partly restored shared ledger must never be reopened by candidate
     // finalization: that would migrate the recovery image again.
+    params.result.recovery = {
+      serviceRestartSafe: false,
+      reason: "state-migration-started",
+      dataAtRisk: "rollback-state-unverified",
+    };
     throw new UpdateCommandRecoveryPendingError(
-      `Database rollback could not finish; keep the Gateway stopped. Preserve ${params.backup.directory} and <database>.migrated-${params.runId}. Run the compatible candidate's Doctor to inspect recovery before restarting.`,
+      `Database rollback could not finish (data at risk: rollback-state-unverified); keep the Gateway stopped. Preserve ${params.backup.directory} and <database>.migrated-${params.runId}. Run the compatible candidate's Doctor to inspect recovery before restarting.`,
       { cause },
     );
   }

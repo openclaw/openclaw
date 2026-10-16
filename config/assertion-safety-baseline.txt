@@ -33,7 +33,7 @@ extensions/browser/src/browser-node-proxy.ts	2
 extensions/browser/src/browser-proxy-upload.ts	1
 extensions/browser/src/browser-tool-binding.ts	3
 extensions/browser/src/browser-tool-session-tabs.ts	1
-extensions/browser/src/browser-tool.actions.ts	6
+extensions/browser/src/browser-tool.actions.ts	1
 extensions/browser/src/browser-tool.ts	5
 extensions/browser/src/browser/bridge-server.ts	2
 extensions/browser/src/browser/cdp-page-session.ts	3
@@ -130,7 +130,6 @@ extensions/codex/src/app-server/native-skill-isolation.ts	1
 extensions/codex/src/app-server/plugin-activation.ts	1
 extensions/codex/src/app-server/plugin-inventory.ts	6
 extensions/codex/src/app-server/plugin-metadata-cache.ts	5
-extensions/codex/src/app-server/protocol-validators.ts	3
 extensions/codex/src/app-server/run-attempt-context.ts	2
 extensions/codex/src/app-server/run-attempt-resources.ts	12
 extensions/codex/src/app-server/run-attempt-runtime.ts	1
@@ -181,7 +180,7 @@ extensions/cua-computer/src/commands.ts	2
 extensions/cua-computer/src/driver-artifact-verification.ts	1
 extensions/cua-computer/src/driver-artifacts.ts	1
 extensions/cua-computer/src/driver-client.ts	9
-extensions/cua-computer/src/driver-result.ts	4
+extensions/cua-computer/src/driver-result.ts	3
 extensions/cua-computer/src/mcp-driver-client.ts	3
 extensions/cua-computer/src/window-actions.ts	3
 extensions/deepinfra/provider-models.ts	1
@@ -286,7 +285,6 @@ extensions/discord/src/voice/realtime-turns.ts	3
 extensions/discord/src/voice/receive-recovery.ts	1
 extensions/discord/src/voice/sdk-runtime.ts	1
 extensions/discord/src/voice/segment.ts	1
-extensions/duckduckgo/src/ddg-search-provider.ts	1
 extensions/elevenlabs/config-compat.ts	2
 extensions/exa/src/exa-web-search-provider.runtime.ts	1
 extensions/fal/video-generation-provider.ts	3
@@ -327,9 +325,6 @@ extensions/feishu/src/tool-account.ts	1
 extensions/feishu/src/typing-backoff.ts	2
 extensions/feishu/src/wiki.ts	1
 extensions/file-transfer/index.ts	4
-extensions/file-transfer/src/node-host/dir-fetch.ts	1
-extensions/file-transfer/src/node-host/dir-list.ts	1
-extensions/file-transfer/src/node-host/file-fetch.ts	1
 extensions/file-transfer/src/node-host/file-write.ts	2
 extensions/file-transfer/src/shared/node-invoke-policy.ts	2
 extensions/file-transfer/src/shared/policy.ts	6
@@ -359,7 +354,7 @@ extensions/google/embedding-batch.ts	3
 extensions/google/music-generation-provider.ts	1
 extensions/google/oauth-token-shared.ts	1
 extensions/google/provider-registration.ts	2
-extensions/google/realtime-voice-provider.ts	4
+extensions/google/realtime-voice-provider.ts	3
 extensions/google/transport-stream.ts	11
 extensions/google/vertex-adc.ts	4
 extensions/google/video-generation-provider.ts	13
@@ -396,7 +391,6 @@ extensions/irc/src/send.ts	1
 extensions/irc/src/setup-core.ts	4
 extensions/irc/src/setup-surface.ts	24
 extensions/kilocode/provider-models.ts	3
-extensions/kilocode/stream.ts	1
 extensions/kimi-coding/provider-policy-api.ts	2
 extensions/line/src/accounts.ts	3
 extensions/line/src/actions.ts	4
@@ -506,7 +500,7 @@ extensions/memory-core/src/dreaming.ts	1
 extensions/memory-core/src/memory/hybrid.ts	1
 extensions/memory-core/src/memory/manager-db.ts	2
 extensions/memory-core/src/memory/manager-embedding-errors.ts	2
-extensions/memory-core/src/memory/manager-search.ts	4
+extensions/memory-core/src/memory/manager-search.ts	1
 extensions/memory-core/src/memory/manager-vector-rebuild-state.ts	1
 extensions/memory-core/src/migration/doctor-host-event-sources.ts	1
 extensions/memory-core/src/migration/doctor-memory-sidecar-import.ts	6
@@ -577,7 +571,6 @@ extensions/msteams/src/sdk-proactive.ts	3
 extensions/msteams/src/sdk.ts	3
 extensions/msteams/src/sqlite-state.ts	1
 extensions/msteams/src/user-agent.ts	1
-extensions/mxc/src/fs-bridge.ts	1
 extensions/nextcloud-talk/src/approval-auth.ts	1
 extensions/nextcloud-talk/src/channel.ts	2
 extensions/nextcloud-talk/src/gateway.ts	2
@@ -615,7 +608,6 @@ extensions/openai/index.ts	2
 extensions/openai/native-web-search.ts	1
 extensions/openai/openai-chatgpt-oauth-token.runtime.ts	1
 extensions/openai/provider-policy-api.ts	2
-extensions/opencode-go/stream-termination.ts	3
 extensions/opencode/provider-catalog.ts	2
 extensions/opencode/session-catalog-plugin.ts	1
 extensions/opencode/stream.ts	3
@@ -737,7 +729,7 @@ extensions/qa-lab/web/src/capture-saved-view.ts	1
 extensions/qa-lab/web/src/http.ts	1
 extensions/qa-lab/web/src/ui-render-utils.ts	1
 extensions/qwen/models.ts	1
-extensions/qwen/stream.ts	2
+extensions/qwen/stream.ts	1
 extensions/raft/src/accounts.ts	1
 extensions/raft/src/inbound.ts	1
 extensions/raft/src/setup.ts	2
@@ -1076,14 +1068,12 @@ packages/memory-host-sdk/src/host/batch-http.ts	2
 packages/memory-host-sdk/src/host/batch-output.ts	1
 packages/memory-host-sdk/src/host/batch-upload.ts	1
 packages/memory-host-sdk/src/host/config-utils.ts	2
-packages/memory-host-sdk/src/host/memory-schema-fts.ts	2
 packages/memory-host-sdk/src/host/memory-schema-recall.ts	1
 packages/memory-host-sdk/src/host/memory-schema.ts	7
 packages/memory-host-sdk/src/host/multimodal.ts	1
 packages/memory-host-sdk/src/host/read-retry.ts	1
 packages/memory-host-sdk/src/host/session-files.ts	8
 packages/memory-host-sdk/src/host/session-reset-recall.ts	1
-packages/memory-host-sdk/src/host/sqlite-vec.ts	3
 packages/memory-host-sdk/src/host/sqlite.ts	1
 packages/model-catalog-core/src/model-catalog-normalize.ts	5
 packages/model-catalog-core/src/model-catalog-types.ts	1
@@ -2261,7 +2251,7 @@ src/plugin-sdk/provider-auth-result.ts	3
 src/plugin-sdk/provider-auth-runtime.ts	1
 src/plugin-sdk/provider-catalog-shared.ts	1
 src/plugin-sdk/provider-entry.ts	1
-src/plugin-sdk/provider-stream-shared.ts	7
+src/plugin-sdk/provider-stream-shared.ts	4
 src/plugin-sdk/provider-stream.ts	1
 src/plugin-sdk/provider-tools.ts	4
 src/plugin-sdk/qa-runtime.ts	5
@@ -2591,7 +2581,6 @@ ui/src/components/terminal/terminal-controller-lifecycle.ts	1
 ui/src/components/terminal/terminal-panel-upload.ts	2
 ui/src/components/terminal/terminal-panel.ts	2
 ui/src/components/terminal/terminal-pending-actions.ts	1
-ui/src/components/web-awesome.ts	2
 ui/src/i18n/lib/translate.ts	1
 ui/src/lib/agents/display.ts	5
 ui/src/lib/board/gateway-provider.ts	2
@@ -2632,8 +2621,7 @@ ui/src/pages/chat/chat-thread-items.ts	1
 ui/src/pages/chat/components/chat-message-attachment-availability.ts	1
 ui/src/pages/chat/components/chat-selection-popup.ts	1
 ui/src/pages/chat/components/chat-session-workspace.ts	1
-ui/src/pages/chat/components/chat-thread-interactions.ts	2
-ui/src/pages/chat/components/widget-card.ts	3
+ui/src/pages/chat/components/chat-thread-interactions.ts	1
 ui/src/pages/chat/components/widget-export.ts	1
 ui/src/pages/chat/connect-error.ts	1
 ui/src/pages/chat/export.ts	1

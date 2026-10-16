@@ -4,7 +4,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { root as fsSafeRoot } from "@openclaw/fs-safe/root";
-import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/host/sqlite-vec.js";
+import { loadSqliteVecExtension } from "../infra/database-engine/sqlite-vec.js";
 import { requireDirectorySync, syncDirectory } from "../infra/directory-durability.js";
 import { copyFileHandle } from "../infra/file-descriptor.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";

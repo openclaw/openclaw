@@ -907,6 +907,7 @@ function samplerToolingLog(
 }
 
 type SamplerFixture = {
+  changedUiFiles?: string[];
   observedAt?: string;
   runs: ReturnType<typeof samplerRun>[];
   jobs: ReturnType<typeof samplerJob>[];
@@ -945,7 +946,14 @@ function withSamplerFixture(
     writeFileSync(requests, "");
     writeFileSync(
       clock,
-      `const OriginalDate = Date;
+      `const childProcess = require("node:child_process");
+const execFileSync = childProcess.execFileSync;
+childProcess.execFileSync = (file, args, options) =>
+  file === "git" && args[0] === "diff"
+    ? ${JSON.stringify((fixture.changedUiFiles ?? []).join("\0"))}
+    : execFileSync(file, args, options);
+require("node:module").syncBuiltinESMExports();
+const OriginalDate = Date;
 global.Date = class extends OriginalDate {
   constructor(...args) { super(...(args.length ? args : [${JSON.stringify(sampleNow)}])); }
   static now() { return OriginalDate.parse(${JSON.stringify(fixture.observedAt ?? sampleNow)}); }
@@ -2135,6 +2143,35 @@ describe("CI timing sampler provenance", () => {
       );
     },
   );
+
+  it("retains changed UI file prices until matching-source samples arrive", () => {
+    const changed = "ui/src/e2e/optimized.e2e.test.ts";
+    const runs = [1, 2, 3].map((id) => samplerRun(id));
+    withSamplerFixture(
+      {
+        runs,
+        changedUiFiles: [changed],
+        baseline: {
+          ...baseline,
+          uiE2e: { ...baseline.uiE2e, fileSeconds: { [changed]: 8, [measuredFile]: 100 } },
+        },
+        jobs: runs.flatMap(({ id }) => [
+          samplerJob(id * 10, id),
+          samplerJob(id * 10 + 1, id, {
+            name: "checks-ui-e2e (1/9)",
+            log: uiLog({ [changed]: 69, [measuredFile]: 130 }),
+          }),
+        ]),
+      },
+      (fixture) => {
+        const result = fixture.invoke(false, 3);
+        expect(result.status, result.stderr).toBe(0);
+        const timings = ciTestTimingsSchema.parse(JSON.parse(fixture.contents()));
+        expect(timings.uiE2e.fileSeconds).toEqual({ [changed]: 8, [measuredFile]: 130 });
+        expect(result.stdout).toContain("UI file samples excluded after source changes: 1");
+      },
+    );
+  });
 
   it("seeks compact contributors past docs-only and unparseable runs, preserving all attempts and unchanged bytes", () => {
     const releaseRuns = [10, 11].map((id) =>

@@ -97,7 +97,7 @@ export class DiffArtifactStore {
     };
     const entry = await this.registerUnique(compressedHtml, metadata, ttlMs);
     this.scheduleCleanup();
-    return viewerEntryToMeta(entry, token);
+    return viewerEntryToMeta(entry, token, metadata);
   }
 
   async readAuthorizedViewer(id: string, token: string) {
@@ -124,7 +124,7 @@ export class DiffArtifactStore {
       throw new Error(`Diff artifact ${id} decoded size does not match its metadata.`);
     }
     return {
-      artifact: viewerEntryToMeta(entry, token),
+      artifact: viewerEntryToMeta(entry, token, entry.metadata),
       html,
     };
   }
@@ -308,20 +308,18 @@ export class DiffArtifactStore {
 function viewerEntryToMeta(
   entry: PluginBlobEntry<DiffArtifactBlobMetadata>,
   token: string,
+  metadata: DiffViewerArtifactMetadata,
 ): DiffArtifactMeta {
-  if (!isViewerMetadata(entry.metadata)) {
-    throw new Error(`Diff artifact ${entry.key} is not a viewer.`);
-  }
   return {
     id: entry.key,
     token,
     createdAt: timestampMsToIsoString(entry.createdAt) ?? "1970-01-01T00:00:00.000Z",
     expiresAt: resolveEntryExpiresAt(entry),
-    title: entry.metadata.title,
-    inputKind: entry.metadata.inputKind,
-    fileCount: entry.metadata.fileCount,
+    title: metadata.title,
+    inputKind: metadata.inputKind,
+    fileCount: metadata.fileCount,
     viewerPath: `${VIEWER_PREFIX}/${entry.key}/${token}`,
-    ...(entry.metadata.context ? { context: entry.metadata.context } : {}),
+    ...(metadata.context ? { context: metadata.context } : {}),
   };
 }
 

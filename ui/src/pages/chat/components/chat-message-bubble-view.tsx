@@ -43,7 +43,7 @@ import type { MarkdownMedia } from "./chat-message-media-markdown.ts";
 import { prepareMarkdownMedia } from "./chat-message-media-markdown.ts";
 import { type AttachmentItem, schedulePairingQrExpiryRefresh } from "./chat-message-media.ts";
 import { MarkdownText, MessageJson, MessageMarkdown } from "./chat-message-text-view.tsx";
-import { renderReplyLine } from "./chat-reply-attribution.ts";
+import { ReplyLineView } from "./chat-reply-attribution.tsx";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import {
   ChatToolApprovalReviews,
@@ -55,7 +55,7 @@ import {
 import { ChatToolContent, ChatToolRawOutput, ChatToolOutcome } from "./chat-tool-content.solid.tsx";
 import { toolResultSurfaceProps } from "./chat-tool-render-model.ts";
 import { renderWorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.ts";
-import { renderToolPreview } from "./widget-card.ts";
+import { ToolPreview } from "./widget-card.ts";
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
@@ -119,7 +119,7 @@ export function GroupedMessage(props: GroupedMessageProps) {
             prop:messageActions={props.options.messageActions}
           >
             <Show when={props.options.replyLine}>
-              <LitContent value={renderReplyLine(props.options.replyLine!, props.options, true)} />
+              <ReplyLineView line={props.options.replyLine!} actions={props.options} inline />
             </Show>
             <Switch>
               <Match when={state().onlyToolCards}>
@@ -256,8 +256,10 @@ function AssistantViews(props: ContentProps) {
       <For each={props.state().assistantViewBlocks} keyed={false}>
         {(block) => (
           <div class="chat-tool-card__widget-host">
-            <LitContent
-              value={renderToolPreview(block().preview, "chat_message", {
+            <ToolPreview
+              preview={block().preview}
+              surface="chat_message"
+              options={{
                 rawText: block().rawText ?? null,
                 canvasPluginSurfaceUrl: props.options.canvasPluginSurfaceUrl,
                 boardProvider: props.options.boardProvider,
@@ -266,7 +268,7 @@ function AssistantViews(props: ContentProps) {
                 allowExternalEmbedUrls: props.options.allowExternalEmbedUrls,
                 sessionKey: props.options.sessionKey,
                 messageTimestamp: messageTimestamp(),
-              })}
+              }}
             />
             <Show when={block().rawText}>
               <div class="chat-tool-card__widget-raw">

@@ -13,6 +13,7 @@ export type WorkerRetirementReason =
   | "shutdown"
   | "crash"
   | "gc-thrash"
+  | "gc-storm"
   | "rotation"
   | "cancelled"
   | "failure"

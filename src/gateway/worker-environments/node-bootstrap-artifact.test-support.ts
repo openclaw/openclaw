@@ -116,9 +116,12 @@ export function useNodeBootstrapArtifactFixtures() {
       },
     };
     await write(packageRoot, "package.json", sourcePackage);
-    await fs.writeFile(path.join(packageRoot, "openclaw.mjs"), 'import "./dist/entry.js";', {
-      mode: 0o755,
-    });
+    await fs.writeFile(
+      path.join(packageRoot, "openclaw.mjs"),
+      'import "./cli-invocation.mjs"; import "./dist/entry.js";',
+      { mode: 0o755 },
+    );
+    await fs.copyFile("cli-invocation.mjs", path.join(packageRoot, "cli-invocation.mjs"));
     await write(packageRoot, "node-version.mjs", "export const supported = true;");
     await write(packageRoot, "node-sqlite.mjs", "export const probe = true;");
     await write(packageRoot, "node-runtime-update.mjs", "export const update = true;");

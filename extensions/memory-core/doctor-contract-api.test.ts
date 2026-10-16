@@ -17,7 +17,7 @@ import {
   resetDoctorPluginState,
   type RawLegacyDoctorConfig,
 } from "./doctor-contract-api.test-support.js";
-import { runVectorKnnQuery } from "./src/memory/manager-search-knn.js";
+import { runVectorKnnQuery } from "./src/memory/manager-search-knn.test-support.js";
 import { searchKeyword } from "./src/memory/manager-search.js";
 import { resetMemoryCoreDreamingStateForTests } from "./src/test-helpers.js";
 
@@ -280,14 +280,14 @@ async function searchMigratedVectorRows(agentPath: string) {
   using db = new DatabaseSync(agentPath, { allowExtension: true });
   const loaded = await loadSqliteVecExtension({ db });
   expect(loaded.ok, loaded.error).toBe(true);
-  return runVectorKnnQuery(db, {
-    vectorTable: "memory_index_chunks_vec",
+  const { rows } = await runVectorKnnQuery(db, {
     providerModels: ["embed-model"],
     queryVec: [1, 0, 0],
     limit: 1,
     snippetMaxChars: 200,
     sourceFilter: { sql: "", params: [] },
-  }).rows;
+  });
+  return rows;
 }
 
 async function searchMigratedKeywordRows(agentPath: string, query: string) {

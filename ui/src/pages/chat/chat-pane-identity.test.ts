@@ -13,6 +13,7 @@ import { emptyLegacyContent } from "../../lit/solid-content.tsx";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import {
@@ -606,7 +607,11 @@ describe("global chat pane feature ownership", () => {
         await draw();
         expect(pane.chatProps?.gatewayQuestionPrompts).not.toBe(pendingQuestions);
         expect(container.querySelector(".chat-question-panel")).toBeNull();
-        expect(container.querySelector(".chat-question-summary")?.textContent).toContain("Skipped");
+        await waitForSolid(() =>
+          expect(container.querySelector(".chat-question-summary")?.textContent).toContain(
+            "Skipped",
+          ),
+        );
         await expectStableQuestions();
 
         select("main");

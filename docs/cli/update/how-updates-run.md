@@ -698,6 +698,16 @@ The new version can be running while verification fails. Recovery guidance uses 
 latest observed service state and names the running version when known; an
 earlier activation stop does not mean the service remains stopped.
 
+If update recovery finds its managed service still stopped, an unverified service
+definition or installer backup receipt does not prohibit starting the installed
+runtime. The updater preserves the existing definition, revalidates service
+ownership, restarts through the service owner, and verifies normal readiness.
+Successful recovery completes with a warning and retains package backups for
+`openclaw update repair`. Failed startup reports its concrete error and directs
+you to `openclaw update repair` and `openclaw gateway status --deep`.
+Only named data risks, such as unsettled Doctor writers or unverified migrated
+state, instruct you to keep the Gateway stopped.
+
 Respawn and update verification use the same progress-aware readiness wait as
 Gateway restart. Startup that continues making progress can use the existing
 five-minute startup lease. If that lease ends while the same Gateway is still

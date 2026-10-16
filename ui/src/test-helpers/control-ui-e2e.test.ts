@@ -342,29 +342,44 @@ describe("shared proof capture", () => {
   );
 
   it.each([
-    { shardIndex: "5", shardCount: "6", failure: "none", sendLabel: "Send message" },
-    { shardIndex: undefined, shardCount: undefined, failure: "none", sendLabel: "Loading chat" },
+    {
+      shardIndex: "5",
+      shardCount: "6",
+      failure: "none",
+      sendLabel: "Send message",
+      catalogSource: "snapshot",
+    },
+    {
+      shardIndex: undefined,
+      shardCount: undefined,
+      failure: "none",
+      sendLabel: "Loading chat",
+      catalogSource: "none",
+    },
     {
       shardIndex: undefined,
       shardCount: undefined,
       failure: "evaluation",
       sendLabel: "Send message",
+      catalogSource: "list",
     },
     {
       shardIndex: undefined,
       shardCount: undefined,
       failure: "screenshot",
       sendLabel: "private-label",
+      catalogSource: "list",
     },
     {
       shardIndex: undefined,
       shardCount: undefined,
       failure: "storage",
       sendLabel: "Sending message...",
+      catalogSource: "list",
     },
   ])(
-    "retains safe failure state despite $failure failure ($sendLabel; $shardIndex/$shardCount)",
-    async ({ shardIndex, shardCount, failure, sendLabel }) => {
+    "retains safe failure state despite $failure failure ($sendLabel; $shardIndex/$shardCount; $catalogSource catalog)",
+    async ({ shardIndex, shardCount, failure, sendLabel, catalogSource }) => {
       vi.useFakeTimers();
       const parent = tempDirs.make("control-ui-failure-proof-");
       const diagnosticParent = failure === "storage" ? path.join(parent, "blocked") : parent;
@@ -467,9 +482,23 @@ describe("shared proof capture", () => {
         return widget;
       });
       document.body.append(app, composer, send, providerHead, agentPage, ...canvasWidgets);
+      const snapshot =
+        catalogSource === "snapshot"
+          ? {
+              event: "models.snapshot",
+              payload: {
+                scope: { agentId: "private-agent" },
+                catalog: {
+                  models: [{ id: "private-model", available: true }],
+                  pendingProviders: ["private-provider"],
+                  providerOutcomes: [{ provider: "private-provider", status: "ready" }],
+                },
+              },
+            }
+          : undefined;
       const modelResponses =
-        failure === "none"
-          ? {}
+        catalogSource !== "list"
+          ? { snapshot }
           : {
               list: {
                 ok: true,
@@ -721,6 +750,17 @@ describe("shared proof capture", () => {
           models: {
             listSeen: failure !== "none",
             listOk: failure === "none" ? null : true,
+            snapshot: {
+              seen: snapshot !== undefined,
+              models: snapshot ? 1 : null,
+              available: snapshot ? 1 : null,
+              unavailable: snapshot ? 0 : null,
+              unknownAvailability: snapshot ? 0 : null,
+              pendingProviders: snapshot ? 1 : null,
+              providerOutcomes: snapshot
+                ? { ready: 1, "auth-rejected": 0, unavailable: 0, unknown: 0 }
+                : null,
+            },
             models: failure === "none" ? null : failure === "screenshot" ? 0 : 3,
             available: failure === "none" ? null : failure === "screenshot" ? 0 : 1,
             unavailable: failure === "none" ? null : failure === "screenshot" ? 0 : 1,

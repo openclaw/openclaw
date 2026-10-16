@@ -1,4 +1,3 @@
-import type { LegacyTemplateResult } from "../lit/solid-content.tsx";
 import { isTooltipTriggerElement } from "./tooltip-content.ts";
 import {
   TooltipController,
@@ -8,9 +7,6 @@ import {
 
 export { consumeTooltipEscape };
 
-export interface TooltipProps extends TooltipPolicyProps {
-  contentTemplate?: LegacyTemplateResult;
-}
 export interface TooltipRuntime {
   request(open: boolean): boolean;
   update(): void;
@@ -79,7 +75,6 @@ export class TooltipProvider extends HTMLElement {
 
 const defaults = {
   content: "",
-  contentTemplate: undefined,
   placement: "top",
   closeDelay: 100,
   hoverDismissDelay: undefined,
@@ -106,10 +101,9 @@ type MountTooltipView = typeof import("./solid/tooltip.tsx").mountTooltipView;
 let viewImport: Promise<MountTooltipView> | undefined;
 
 /** Policy and descriptions are eager; presentation loads only for actual reveal intent. */
-export class TooltipElement extends HTMLElement implements TooltipProps {
+export class TooltipElement extends HTMLElement implements TooltipPolicyProps {
   static observedAttributes = [...attributes.keys()];
   declare content: string;
-  declare contentTemplate: LegacyTemplateResult | undefined;
   declare placement: TooltipPolicyProps["placement"];
   declare closeDelay: number;
   declare hoverDismissDelay: number | undefined;

@@ -231,6 +231,33 @@ describe("compileMemoryWikiVault", () => {
     expect(maxActivePageReads).toBeLessThanOrEqual(16);
   });
 
+  it("rejects publication when a source changes after its compiled bytes were read", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+      config: { render: { createBacklinks: false, createDashboards: false } },
+    });
+    const sourcePath = path.join(rootDir, "sources", "edited.md");
+    await fs.writeFile(sourcePath, "# Before\n", "utf8");
+    const readFile = fs.readFile.bind(fs);
+    let edited = false;
+    vi.spyOn(fs, "readFile").mockImplementation(async (...args: Parameters<typeof fs.readFile>) => {
+      const value = await readFile(...args);
+      if (args[0] === sourcePath && !edited) {
+        edited = true;
+        await fs.writeFile(sourcePath, "# After\n", "utf8");
+      }
+      return value;
+    });
+
+    await expect(compileMemoryWikiVault(config)).rejects.toThrow(
+      "vault changed while its compiled cache was being published",
+    );
+    await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
+    await expect(readMemoryWikiDashboardState(config)).resolves.toEqual({ state: "failed" });
+    await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe("# After\n");
+  });
+
   it("does not rewrite empty source pages into related-only stubs", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),

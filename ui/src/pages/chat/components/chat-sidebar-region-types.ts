@@ -36,7 +36,9 @@ export type SidebarRegionCallbacks = {
 
 export type RegionProps = {
   panelIdPrefix: string;
-  conversationTab?: Pick<SidebarPanelDefinition, "label" | "icon">;
+  conversationTab?: Pick<SidebarPanelDefinition, "label"> & {
+    icon: LegacyTemplateResult | LegacyDirectiveResult;
+  };
   layout: SidebarLayout;
   panelDefinitions: SidebarPanelDefinition[];
   fetchFavicon?: LinkFaviconFetcher;

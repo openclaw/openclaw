@@ -324,12 +324,10 @@ export class MemoryFileWatcher {
               scopes,
               policy: this.policy,
               invalidate: (hint) => {
-                this.options.runInBackgroundContext(() => this.dirty(member.group, hint));
+                this.deliver(() => this.dirty(member.group, hint));
               },
               health: (health) => {
-                this.options.runInBackgroundContext(() =>
-                  this.onHealth(health, mode, pollIntervalMs),
-                );
+                this.deliver(() => this.onHealth(health, mode, pollIntervalMs));
               },
               isolate: () => {
                 if (!this.isolatedRoots.has(group.root)) {
@@ -338,7 +336,7 @@ export class MemoryFileWatcher {
                 }
               },
               unavailable: (error, code) => {
-                this.options.runInBackgroundContext(() => this.unavailable(error, code));
+                this.deliver(() => this.unavailable(error, code));
               },
             };
             const shared = acquireObservation(
@@ -364,6 +362,26 @@ export class MemoryFileWatcher {
           void this.refresh();
         }
       }));
+  }
+
+  private deliver(run: () => void): void {
+    let admitted = false;
+    try {
+      this.options.runInBackgroundContext(() => {
+        admitted = true;
+        run();
+      });
+    } catch (error) {
+      if (admitted) {
+        throw error;
+      }
+      // Native notifications can arrive after admission closes but before cleanup joins them.
+      this.retryExhausted = true;
+      this.unavailable(error);
+      clearTimeout(this.watchTimer);
+      this.watchTimer = undefined;
+      this.pendingChange = false;
+    }
   }
 
   private dirty(group: MemoryObservation, hint: WatchInvalidation): void {
@@ -440,7 +458,7 @@ export class MemoryFileWatcher {
     const retirement = this.retire([...this.observations.values()]);
     this.recovering = retirement.finally(() => {
       this.recovering = undefined;
-      if (this.closed || this.degraded || this.closeErrors.length) {
+      if (this.closed || this.degraded || this.closeErrors.length || this.retryExhausted) {
         return;
       }
       const delay = RETRY_DELAYS_MS[this.retries++];

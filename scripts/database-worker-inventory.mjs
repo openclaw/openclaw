@@ -3112,6 +3112,7 @@ const workerModules = new Set([
   "extensions/memory-core/src/memory/manager-chunk-writer.ts", // Only manager-source-index-kernel.ts calls this writer, from manager-publication.worker.ts.
   "extensions/memory-core/src/memory/manager-source-index-kernel.ts", // Hash reads and source mutations are called only by manager-publication.worker.ts.
   "extensions/memory-core/src/memory/manager-retrieval-read.ts", // Search and publication workers own all SQL; host imports are types or the metadata key.
+  "extensions/memory-core/src/memory/manager-search.ts", // Only manager-search.worker.ts executes keyword SQL; host imports are the pure prepareExactPathMatcher helper or types.
   "extensions/memory-core/src/memory/manager-vector-rebuild-state.ts", // Retrieval, source-index and database-publication kernels run in the search/publication workers; the host consumes published vector facts.
 
   "extensions/team-reports/src/store-database.ts", // Only store.worker.ts and offline port workers admit this schema.

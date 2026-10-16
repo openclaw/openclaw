@@ -209,10 +209,7 @@ export async function startGatewayBonjourAdvertiser(
     const labelEnd = dotIndex === -1 ? hostnameWithoutLocal.length : dotIndex;
     const hostnameLabel = hostnameWithoutLocal.slice(0, labelEnd).trim() || "openclaw";
     const hostname = truncateToDnsLabel(hostnameLabel, "openclaw");
-    const instanceName =
-      typeof opts.instanceName === "string" && opts.instanceName.trim()
-        ? opts.instanceName.trim()
-        : `${hostname} (OpenClaw)`;
+    const instanceName = opts.instanceName?.trim() || `${hostname} (OpenClaw)`;
     const displayName = prettifyInstanceName(instanceName);
 
     const txtBase: Record<string, string> = {
@@ -230,10 +227,10 @@ export async function startGatewayBonjourAdvertiser(
     if (opts.gatewayDirectReachable) {
       txtBase.gatewayDirectReachable = "1";
     }
-    if (!opts.minimal && typeof opts.tailnetDns === "string" && opts.tailnetDns.trim()) {
+    if (!opts.minimal && opts.tailnetDns?.trim()) {
       txtBase.tailnetDns = opts.tailnetDns.trim();
     }
-    if (!opts.minimal && typeof opts.cliPath === "string" && opts.cliPath.trim()) {
+    if (!opts.minimal && opts.cliPath?.trim()) {
       txtBase.cliPath = opts.cliPath.trim();
     }
 

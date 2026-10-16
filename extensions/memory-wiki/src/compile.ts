@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
@@ -31,7 +31,6 @@ import {
 } from "./claim-health.js";
 import {
   readMemoryWikiDashboardState,
-  resolveMemoryWikiCompiledCacheGeneration,
   setMemoryWikiDashboardState,
   writeMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
@@ -43,6 +42,7 @@ import {
 } from "./import-insights.js";
 import {
   appendMemoryWikiLog,
+  hashMemoryWikiVaultSources,
   loadMemoryWikiValidatedVaultIdentity,
   loadMemoryWikiVaultIdentity,
   resolveMemoryWikiVaultSourceGeneration,
@@ -152,10 +152,10 @@ const DASHBOARD_PAGES: Record<string, DashboardPageDefinition> = {
     title: "Low Confidence",
     buildBody: ({ config, pages, now, sourceRelativeTo }) => {
       const pageMatches = pages
-        .filter((page) => typeof page.confidence === "number" && page.confidence < 0.5)
+        .filter((page) => page.confidence !== undefined && page.confidence < 0.5)
         .toSorted((left, right) => (left.confidence ?? 1) - (right.confidence ?? 1));
       const claimMatches = collectWikiClaimHealth(pages, now)
-        .filter((claim) => typeof claim.confidence === "number" && claim.confidence < 0.5)
+        .filter((claim) => claim.confidence !== undefined && claim.confidence < 0.5)
         .toSorted((left, right) => (left.confidence ?? 1) - (right.confidence ?? 1));
       return renderCountedSections("No low-confidence pages or claims right now.", [
         [
@@ -345,21 +345,23 @@ async function readPageSummaries(rootDir: string, signal?: AbortSignal) {
     )
   ).flat();
   signal?.throwIfAborted();
+  const sourceDigests: Array<[string, Buffer]> = [];
 
   const readResult = await runTasksWithConcurrency({
     tasks: filePaths.map((relativePath) => async () => {
       signal?.throwIfAborted();
       const absolutePath = path.join(rootDir, relativePath);
-      const raw = await retryTransientMemoryRead(
-        () => fs.readFile(absolutePath, "utf8"),
+      const bytes = await retryTransientMemoryRead(
+        () => fs.readFile(absolutePath),
         `read wiki page ${absolutePath}`,
       );
       signal?.throwIfAborted();
+      sourceDigests.push([relativePath, createHash("sha256").update(bytes).digest()]);
       // Large imported pages are parsed off the request path, but the compiler
       // still yields between pages so background recovery cannot starve Gateway ticks.
       await yieldToEventLoop();
       signal?.throwIfAborted();
-      const scan = scanWikiPageSummary({ absolutePath, relativePath, raw });
+      const scan = scanWikiPageSummary({ absolutePath, relativePath, raw: bytes.toString("utf8") });
       if (scan.status !== "valid") {
         return { scan, importInsight: null, overviewItem: null };
       }
@@ -379,6 +381,7 @@ async function readPageSummaries(rootDir: string, signal?: AbortSignal) {
   signal?.throwIfAborted();
 
   return {
+    sourceGeneration: hashMemoryWikiVaultSources(sourceDigests),
     pages: readResult.results
       .flatMap(({ scan }) => (scan.status === "valid" ? [scan.page] : []))
       .toSorted((left, right) => left.title.localeCompare(right.title)),
@@ -475,8 +478,8 @@ function formatRelationshipLine(
 ): string {
   const details = [
     relationship.kind ?? "related",
-    typeof relationship.weight === "number" ? `weight ${relationship.weight.toFixed(2)}` : null,
-    typeof relationship.confidence === "number"
+    relationship.weight !== undefined ? `weight ${relationship.weight.toFixed(2)}` : null,
+    relationship.confidence !== undefined
       ? `confidence ${relationship.confidence.toFixed(2)}`
       : null,
     relationship.evidenceKind ? `evidence ${relationship.evidenceKind}` : null,
@@ -579,7 +582,7 @@ function formatClaimHealthLine(
 ): string {
   const details = [
     `status ${claim.status}`,
-    typeof claim.confidence === "number" ? `confidence ${claim.confidence.toFixed(2)}` : null,
+    claim.confidence !== undefined ? `confidence ${claim.confidence.toFixed(2)}` : null,
     claim.missingEvidence ? "missing evidence" : `${claim.evidenceCount} evidence`,
     formatFreshnessLabel(claim.freshness),
   ].filter(Boolean);
@@ -876,7 +879,7 @@ function buildCompiledCacheSnapshot(
           const summary = Object.assign(
             claim.id ? { id: claim.id } : {},
             { text: claim.text, status: normalizeClaimStatus(claim.status) },
-            typeof claim.confidence === "number" ? { confidence: claim.confidence } : {},
+            claim.confidence !== undefined ? { confidence: claim.confidence } : {},
             { freshnessLevel: freshness.level },
           );
           return { claim, freshness, summary };
@@ -986,10 +989,6 @@ async function compileMemoryWikiVaultUnlocked(
       throw new Error(message);
     }
   };
-  assertCompilationCurrent(
-    await loadMemoryWikiVaultIdentity(rootDir),
-    "Memory Wiki vault changed before its compiled cache scan began.",
-  );
   const sourceSyncState = await readMemoryWikiSourceSyncState(rootDir);
   const managedImportedSourcePagePaths = new Set(
     Object.values(sourceSyncState.entries).map((entry) => entry.pagePath.split(path.sep).join("/")),
@@ -1021,7 +1020,6 @@ async function compileMemoryWikiVaultUnlocked(
   }
   const compiledSnapshot = buildCompiledCacheSnapshot(scan);
   const counts = compiledSnapshot.dashboards.overview.pageCounts;
-  const compiledCacheGeneration = resolveMemoryWikiCompiledCacheGeneration(compiledSnapshot);
   const compiledCachePublicationId = randomUUID();
   let compiledCacheSourceGeneration: string | undefined;
 
@@ -1057,7 +1055,6 @@ async function compileMemoryWikiVaultUnlocked(
   await writeMemoryWikiCompiledCache(
     config,
     compiledSnapshot,
-    compiledCacheGeneration,
     compiledCachePublicationId,
     compiledInputIdentity.compiledCachePublicationId,
     async () => {
@@ -1066,16 +1063,8 @@ async function compileMemoryWikiVaultUnlocked(
         await loadMemoryWikiVaultIdentity(rootDir),
         "Memory Wiki vault changed while its compiled cache was being built.",
       );
-      const sourceGenerationBeforeScan = await resolveMemoryWikiVaultSourceGeneration(rootDir);
-      const verifiedScan = await readPageSummaries(rootDir, options?.signal);
-      const verifiedGeneration = resolveMemoryWikiCompiledCacheGeneration(
-        buildCompiledCacheSnapshot(verifiedScan),
-      );
       const sourceGenerationAfterScan = await resolveMemoryWikiVaultSourceGeneration(rootDir);
-      if (
-        verifiedGeneration !== compiledCacheGeneration ||
-        sourceGenerationAfterScan !== sourceGenerationBeforeScan
-      ) {
+      if (sourceGenerationAfterScan !== scan.sourceGeneration) {
         throw new Error("Memory Wiki vault changed while its compiled cache was being published.");
       }
       compiledCacheSourceGeneration = sourceGenerationAfterScan;

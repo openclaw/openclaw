@@ -181,17 +181,18 @@ for (const entry of workspaceEntries) {
     moduleEntries.push(candidate.split(path.sep).join("/"));
   }
 }
-const workerEntries = discoverStandaloneWorkers({
-  runtimeRoot,
-  moduleEntries,
-  runtimeEntrypoints: createRuntimeProcessEntrypoints(import.meta.url),
-});
 moduleEntries.push(
   ...fs
     .readdirSync(runtimeRoot)
     .filter((entry) => entry.endsWith(".mjs"))
     .toSorted(),
 );
+const workerEntries = discoverStandaloneWorkers({
+  runtimeRoot,
+  moduleEntries,
+  runtimeEntrypoints: createRuntimeProcessEntrypoints(import.meta.url),
+  parse,
+});
 const native = createStandaloneNativeAdapter({ runtimeRoot, parse });
 native.discover(moduleEntries);
 moduleEntries.push(...native.additionalModuleEntries);

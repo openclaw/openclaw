@@ -56,12 +56,20 @@ describe("Memory observation lifecycle", () => {
       agentId = "main",
       workspaceDir = state.workspaceDir,
       images = false,
-    }: { agentId?: string; workspaceDir?: string; images?: boolean } = {},
+      runInBackgroundContext = AsyncLocalStorage.snapshot(),
+    }: {
+      agentId?: string;
+      workspaceDir?: string;
+      images?: boolean;
+      runInBackgroundContext?: ConstructorParameters<
+        typeof MemoryFileWatcher
+      >[0]["runInBackgroundContext"];
+    } = {},
   ) {
     const onDirty = vi.fn();
     const onUnavailable = vi.fn();
     const watcher = new MemoryFileWatcher({
-      runInBackgroundContext: AsyncLocalStorage.snapshot(),
+      runInBackgroundContext,
       workspaceDir,
       agentId,
       settings: {
@@ -183,6 +191,108 @@ describe("Memory observation lifecycle", () => {
     expect(replacement.onDirty).toHaveBeenCalledOnce();
     expect(original.onDirty).not.toHaveBeenCalled();
     expect(replacement.onUnavailable).not.toHaveBeenCalled();
+  });
+
+  it.each(["invalidate", "health", "unavailable"] as const)(
+    "retires rejected %s delivery without stranding a shared peer or retrying",
+    async (notification) => {
+      let accepting = true;
+      const failure = new Error("plugin instance retired");
+      const retired = owner(undefined, 0, [], {
+        runInBackgroundContext: (run) => {
+          if (!accepting) {
+            throw failure;
+          }
+          return run();
+        },
+      });
+      const healthy = owner(undefined, 0, [], { agentId: "healthy" });
+      await retired.watcher.start();
+      await healthy.watcher.start();
+      expect(observer.observations).toHaveLength(1);
+      const shared = observer.observations[0]!;
+      accepting = false;
+      try {
+        expect(() => {
+          if (notification === "invalidate") {
+            shared.dirty();
+          } else {
+            shared.health({ state: notification === "health" ? "ready" : "unavailable" });
+          }
+        }).not.toThrow();
+      } finally {
+        accepting = true;
+      }
+      expect(retired.onUnavailable).toHaveBeenCalledOnce();
+      expect(retired.onDirty).toHaveBeenCalledOnce();
+      expect(retired.watcher.health()).toEqual([]);
+      if (notification !== "unavailable") {
+        expect(healthy.onUnavailable).not.toHaveBeenCalled();
+        expect(shared.close).not.toHaveBeenCalled();
+      }
+
+      // Cleanup may enter the owner again; that must not restart ordinary observation.
+      const recovered = createDeferred<void>();
+      if (notification === "unavailable") {
+        observer.created = () => recovered.resolve();
+      }
+      await vi.advanceTimersByTimeAsync(20_000);
+      if (notification === "unavailable") {
+        await recovered.promise;
+      }
+      expect(observer.observations).toHaveLength(notification === "unavailable" ? 2 : 1);
+      expect(retired.watcher.health()).toEqual([]);
+      expect(retired.onChange).not.toHaveBeenCalled();
+      const before = healthy.onDirty.mock.calls.length;
+      observer.observations.at(-1)!.dirty();
+      expect(healthy.onDirty).toHaveBeenCalledTimes(before + 1);
+      expect(retired.onDirty).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("joins physical retirement failures after background admission closes", async () => {
+    let accepting = true;
+    const physical = createDeferred<void>();
+    observer.closeBarrier = physical.promise;
+    const { watcher } = owner(undefined, 0, [], {
+      runInBackgroundContext: (run) => {
+        if (!accepting) {
+          throw new Error("plugin instance retired");
+        }
+        return run();
+      },
+    });
+    await watcher.start();
+    accepting = false;
+    try {
+      expect(() => observer.observations[0]!.dirty()).not.toThrow();
+    } catch (error) {
+      physical.resolve();
+      throw error;
+    } finally {
+      accepting = true;
+    }
+    let settled = false;
+    const closing = watcher.close().finally(() => {
+      settled = true;
+    });
+    const failure = new Error("physical teardown failed");
+    const rejected = expect(closing).rejects.toMatchObject({ errors: [failure] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false);
+    physical.reject(failure);
+    await rejected;
+  });
+
+  it("preserves errors from an admitted notification callback", async () => {
+    const { watcher, onDirty, onUnavailable } = owner();
+    await watcher.start();
+    const failure = new Error("admitted callback failed");
+    onDirty.mockImplementationOnce(() => {
+      throw failure;
+    });
+    expect(() => observer.observations[0]!.dirty()).toThrow(failure);
+    expect(onUnavailable).not.toHaveBeenCalled();
   });
 
   it("unions shared scopes and exclusions without widening an agent's selections", async () => {

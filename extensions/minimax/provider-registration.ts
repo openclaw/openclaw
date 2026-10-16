@@ -37,7 +37,6 @@ import type { MiniMaxRegion } from "./oauth.js";
 import { applyMinimaxApiConfig, applyMinimaxApiConfigCn } from "./onboard.js";
 import {
   buildMinimaxModelDiscovery,
-  buildMinimaxPortalProvider,
   buildMinimaxProvider,
   resolveMinimaxCatalogBaseUrl,
 } from "./provider-catalog.js";
@@ -164,8 +163,8 @@ async function resolvePortalCatalog(ctx: ProviderCatalogContext): Promise<Provid
   const explicitBaseUrl = normalizeOptionalString(explicitProvider?.baseUrl);
 
   const providerConfig = {
-    ...buildMinimaxPortalProvider(),
-    baseUrl: explicitBaseUrl || buildMinimaxPortalProvider(ctx.env).baseUrl,
+    ...buildMinimaxProvider(ctx.env),
+    ...(explicitBaseUrl ? { baseUrl: explicitBaseUrl } : {}),
     apiKey,
   };
   return await buildOpenAICompatibleLiveProviderCatalog({
@@ -328,7 +327,7 @@ function buildMinimaxPortalProviderPlugin(readBaseUrl: () => string | undefined)
     },
     staticCatalog: {
       run: async (ctx) => ({
-        providers: { [PORTAL_PROVIDER_ID]: buildMinimaxPortalProvider(ctx.env) },
+        providers: { [PORTAL_PROVIDER_ID]: buildMinimaxProvider(ctx.env) },
       }),
     },
     auth: [createMinimaxOAuthMethod("global"), createMinimaxOAuthMethod("cn")],

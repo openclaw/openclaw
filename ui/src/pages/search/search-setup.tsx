@@ -86,7 +86,7 @@ export function SearchSetup(
       : null;
   const values = () => asNullableRecord(readConfigValue(config(), props.provider.configPath));
   const credential = () => props.provider.credential;
-  const fields = () =>
+  const fields = createMemo(() =>
     Object.entries(schema()?.properties ?? {}).filter(([key]) => {
       const descriptor = credential();
       return (
@@ -95,7 +95,8 @@ export function SearchSetup(
         !props.provider.configPath.every((segment, index) => segment === descriptor.path[index]) ||
         descriptor.path.at(-1) !== key
       );
-    });
+    }),
+  );
   return (
     <>
       <SettingsRow
@@ -184,10 +185,11 @@ export function AdvancedSearchSettings(props: SearchSettingsProps) {
   const schema = () => analysis().schema?.properties?.tools?.properties?.web?.properties?.search;
   const config = () => currentConfigObject(props.state());
   const value = () => asNullableRecord(readConfigValue(config(), ["tools", "web", "search"]));
-  const fields = () =>
+  const fields = createMemo(() =>
     Object.entries(schema()?.properties ?? {}).filter(
       ([key]) => key !== "enabled" && key !== "provider",
-    );
+    ),
+  );
   return (
     <Show when={fields().length > 0}>
       <details class="settings-section config-advanced-disclosure">
