@@ -75,6 +75,46 @@ describe("generic preview portal lifecycle", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
+  it("forwards the pane session only to opted-in readers and retires private cached metadata", async () => {
+    const href = "https://ghe.example.test/example/project/pull/7";
+    const { provider, anchor } = createLink(href);
+    provider.readers = [
+      {
+        ...TEST_LINK_READER,
+        linkReader: {
+          ...TEST_LINK_READER.linkReader,
+          hosts: ["ghe.example.test"],
+          sessionScoped: true,
+          previewMethod: "github.sessionPreview",
+        },
+      },
+    ];
+    provider.agentId = "main";
+    provider.sessionKey = "agent:main:first";
+    const request = vi
+      .fn()
+      .mockResolvedValue(testLinkPreview({ url: href, title: "Session private card" }));
+    // SAFETY: This fixture supplies only the request/connection facts consumed by the owner.
+    provider.client = {
+      request,
+      connectionGeneration: 1,
+      recoveryScope: "signed-in-person",
+    } as unknown as GatewayBrowserClient;
+    await hover(anchor);
+    expect(request).toHaveBeenCalledWith(
+      "github.sessionPreview",
+      { url: href, agentId: "main", sessionKey: "agent:main:first" },
+      { signal: expect.any(AbortSignal) },
+    );
+    expect(titleLinkInCard()?.textContent).toBe("Session private card");
+    leave(anchor);
+    await vi.advanceTimersByTimeAsync(120);
+    provider.sessionKey = "agent:main:second";
+    await hover(anchor);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ sessionKey: "agent:main:second" });
+  });
+
   it.each(["immediate rejection", "late rejection"])(
     "reopens an abandoned request without poisoning its replacement cache: %s",
     async (settlement) => {

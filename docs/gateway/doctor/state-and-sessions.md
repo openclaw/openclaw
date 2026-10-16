@@ -9,6 +9,19 @@ read_when:
 Checks 3-7b cover legacy on-disk state migrations, session integrity, model
 auth health, sandbox images, and plugin installs.
 
+## Legacy data and PostgreSQL
+
+Run `openclaw doctor --fix` before porting SQLite stores to PostgreSQL. Port
+preflight names any pending declared legacy migrations and refuses until they
+are complete. This covers native Codex task assignments, Matrix inbound dedupe,
+and legacy memory index sidecars.
+
+For families already using PostgreSQL, Doctor records an intentional non-outcome
+for these SQLite-only migrations and leaves the engine anchor alone. Legacy
+memory sidecars remain unchanged; normal reindexing uses the authoritative
+memory sources to rebuild the PostgreSQL index and may re-embed them. See
+[Database engines](/reference/database-engines#legacy-data-and-postgresql).
+
 ## Checks 3-7b
 
 <AccordionGroup>

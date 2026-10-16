@@ -13,6 +13,7 @@ import "../../../plugins/control-ui-view.solid.tsx";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { prepareGroupMessage } from "./chat-message-group-frame.ts";
 import {
   ActivityGroup,
   MessageGroup,
@@ -106,6 +107,24 @@ it.each([
   expect(onReply.mock.calls.map(([target]) => target.messageId)).toEqual(
     answered ? ["answer"] : [],
   );
+});
+
+it("does not give provider speech unframed answer actions", () => {
+  const speech = {
+    role: "assistant",
+    content: "It exited with code zero.",
+    stopReason: "stop",
+    timestamp: 1000,
+    __openclaw: { id: "spoken", voiceTranscript: "provider-owned" },
+  };
+  const group = createMessageGroup(speech, "assistant");
+  const prepared = prepareGroupMessage(group, group.messages[0]!, {
+    showReasoning: false,
+    onReply: vi.fn(),
+  });
+  expect(prepared.ownsActions).toBe(false);
+  expect(prepared.actions?.replyTarget).toBeUndefined();
+  expect(prepared.source.displayMarkdown).toBe(speech.content);
 });
 
 it("keeps distinct peer avatars and focused message content across group updates", async () => {

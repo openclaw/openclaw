@@ -7,11 +7,18 @@ import {
   Show,
   untrack,
 } from "solid-js";
+import {
+  availableLinkReaders,
+  availableLinkPreviewReaders,
+} from "../../app/link-reader-routing.ts";
 import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
+import { LinkReaderHovercard } from "../../components/link-reader-hovercard.ts";
+import { projectGateway } from "../../lib/reactive/application.ts";
 import { projectProgressCard } from "../../lib/reactive/domain-keyed.ts";
 import { i18nRevision } from "../../lib/reactive/i18n.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
+import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { ChatComposerCapabilityDialogs } from "./chat-composer-capability-host.tsx";
 import { PaneLayout } from "./chat-pane-layout-view.tsx";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
@@ -25,6 +32,8 @@ import { createSolidRenderLifecycle } from "./solid-render-lifecycle.ts";
 
 function MountedChatPaneRuntime(props: { runtime: ChatPaneRuntime }) {
   const runtime = untrack(() => props.runtime);
+  const context = runtime.context;
+  const gateway = projectGateway(context.gateway);
   runtime.mountPanelActions();
   runtime.mountToolIcons();
   const owner = projectOwner(runtime, (value) => value);
@@ -107,14 +116,29 @@ function MountedChatPaneRuntime(props: { runtime: ChatPaneRuntime }) {
     },
   );
   onCleanup(unsubscribe);
+  const sessionKey = () => {
+    frame();
+    return runtime.sessionKey;
+  };
+  const agentId = () => {
+    frame();
+    return runtime.agentId ?? parseAgentSessionKey(runtime.sessionKey)?.agentId;
+  };
   return (
-    <>
+    <LinkReaderHovercard
+      client={gateway.read().snapshot.phase === "connected" ? gateway.read().snapshot.client : null}
+      readers={availableLinkPreviewReaders(gateway.read().snapshot)}
+      claimedReaders={availableLinkReaders(gateway.read().snapshot)}
+      pagePreviewContext={context}
+      agentId={agentId()}
+      sessionKey={sessionKey()}
+    >
       <PaneLayout layout={frame().layout} />
       <ChatProviderReviewDialog owner={providerReview} />
       <Show when={frame().capabilityDialogs}>
         {(dialogs) => <ChatComposerCapabilityDialogs {...dialogs()} />}
       </Show>
-    </>
+    </LinkReaderHovercard>
   );
 }
 

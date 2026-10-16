@@ -147,6 +147,20 @@ current-schema shared state, agent databases, Workboard, Logbook, and Team Repor
 shared state with `openclaw doctor --fix` using a compatible binary before porting.
 Do not remove existing data to switch engines.
 
+### Legacy data and PostgreSQL
+
+Before porting SQLite stores to PostgreSQL, run `openclaw doctor --fix` while
+those stores still use SQLite. The port preflight refuses pending declared
+legacy migrations and names the repairs required before retrying the port.
+This includes native Codex task assignments, Matrix inbound dedupe, and legacy
+memory index sidecars.
+
+These migrations are SQLite-only. On PostgreSQL, Doctor records that they are
+not applicable instead of opening the local engine anchor as an application
+database. A legacy memory sidecar found after selecting PostgreSQL stays
+unchanged; normal memory reindexing rebuilds the index from authoritative memory
+sources and may re-embed them. Keep those sources available.
+
 ### Mixed engines (experimental)
 
 Use family overrides to choose engines for fresh stores. The five configurable

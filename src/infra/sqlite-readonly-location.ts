@@ -30,11 +30,7 @@ import {
   readSqliteSchemaHeaderFromSnapshot,
 } from "./sqlite-schema-header.js";
 import type { SqliteFileContent } from "./sqlite-snapshot-file.js";
-import {
-  createSnapshotAttemptReporter,
-  MAX_SNAPSHOT_ATTEMPTS,
-  waitForSnapshotRetrySync,
-} from "./sqlite-snapshot-policy.js";
+import { MAX_SNAPSHOT_ATTEMPTS, waitForSnapshotRetrySync } from "./sqlite-snapshot-policy.js";
 import {
   createSqliteSnapshotStagingDirectory,
   createSqliteSnapshotStagingDirectorySync,
@@ -546,10 +542,8 @@ async function prepareReadOnlySourceInProcess(
 ): Promise<PreparedSqliteReadOnlyLocation> {
   signal?.throwIfAborted();
   const canonicalPath = fs.realpathSync.native(pathname);
-  const report = createSnapshotAttemptReporter(canonicalPath);
   for (let attempt = 0; ; attempt += 1) {
     signal?.throwIfAborted();
-    let operation: "raw-copy" | "online-backup" = "online-backup";
     try {
       const journalMode = readSourceJournalMode(canonicalPath);
       const sidecars = readSourceSidecars(canonicalPath);
@@ -557,7 +551,6 @@ async function prepareReadOnlySourceInProcess(
       if (journalMode === "empty" || (journalMode === "wal" && (!sidecars.wal || !sidecars.shm))) {
         // Incomplete inactive families need one private recovery copy so opening
         // SQLite cannot create or recover coordination files beside the source.
-        operation = "raw-copy";
         prepared = await createStableReadOnlyCopy(canonicalPath, journalMode, stagingRoot, signal);
       } else {
         try {
@@ -579,15 +572,12 @@ async function prepareReadOnlySourceInProcess(
           }
           // Hot rollback recovery must operate on private files. A native
           // read-only open refuses before backup starts, so this is the only copy.
-          operation = "raw-copy";
           prepared = await createStableReadOnlyCopy(canonicalPath, "rollback", stagingRoot, signal);
         }
       }
-      report(operation, "success", prepared);
       return prepared;
     } catch (error) {
       if (!(error instanceof SqliteSourceChangedError) || attempt + 1 >= MAX_SNAPSHOT_ATTEMPTS) {
-        report(operation, "error", undefined, error);
         throw error;
       }
       // An inactive family can become active while its private copy is prepared.

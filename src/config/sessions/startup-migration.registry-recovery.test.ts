@@ -34,7 +34,7 @@ import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journ
 import { withEnvAsync } from "../../test-utils/env.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.js";
+import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.native.js";
 import { replaceSessionEntry } from "./session-accessor.js";
 import {
   readCanonicalSessionMainKey,

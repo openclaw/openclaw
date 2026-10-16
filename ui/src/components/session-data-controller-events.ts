@@ -231,7 +231,6 @@ export function refreshSidebarSessionList(
 type SessionGatewayEventOwner = {
   publishPresence(payload: unknown): void;
   handleSessionCatalogHostEvent(payload: unknown): void;
-  handleSessionCatalogChanged(payload: unknown): void;
 };
 
 export function subscribeSessionDataGatewayEvents(
@@ -242,12 +241,6 @@ export function subscribeSessionDataGatewayEvents(
     if (event.event === "sessions.catalog.host") {
       if (canCallGatewayMethod(gateway.snapshot, "sessions.catalog.list", "operator.read")) {
         owner.handleSessionCatalogHostEvent(event.payload);
-      }
-      return;
-    }
-    if (event.event === "sessions.catalog.changed") {
-      if (canCallGatewayMethod(gateway.snapshot, "sessions.catalog.list", "operator.read")) {
-        owner.handleSessionCatalogChanged(event.payload);
       }
       return;
     }
