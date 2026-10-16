@@ -15,6 +15,20 @@ suite.define(() => {
       const gateway = await installMockGateway(page, { sessionKey });
       await page.goto(suite.server.baseUrl + "chat");
       await gateway.waitForRequest("chat.startup");
+      const text = (value: string) => page.getByText(value, { exact: true });
+      const userText = (value: string) =>
+        page.locator(".chat-group.user").getByText(value, { exact: true });
+      const snapshot = (name: string) =>
+        page.screenshot({ path: `${suite.artifactDir}/${name}.png` });
+      const button = (name: string) => page.getByRole("button", { name, exact: true });
+      const user = <T>(content: T) => ({ role: "user", content });
+      const receipt = (runId: string) => ({ runId, state: "pending", queued: true });
+      const settled = () =>
+        gateway.emitGatewayEvent("sessions.changed", {
+          sessionKey,
+          agentId: "main",
+          reason: "agent.input.settled",
+        });
       await gateway.setOnline(false);
       await page.locator(".agent-chat__input--offline").waitFor();
       await waitForControlUiGatewayReconnecting(page);
@@ -24,14 +38,18 @@ suite.define(() => {
       expect(await statusBand.count()).toBe(0);
       await composer.fill(prompt);
       expect(await statusBand.count()).toBe(0);
-      await page.getByRole("button", { name: "Send message", exact: true }).click();
+      await button("Send message").click();
       const queue = page.locator(".chat-queue__item");
+      const promotedBubble = page
+        .locator('.chat-bubble[data-entry-id="composer-queued-input"]')
+        .getByText(prompt, { exact: true });
+      const cancellationNotice = text(
+        "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
+      );
       await queue.getByText(prompt, { exact: true }).waitFor();
       expect(await queue.count()).toBe(1);
       await queue.getByText("Waiting for reconnect", { exact: true }).waitFor();
-      expect(
-        await page.locator(".chat-group.user").getByText(prompt, { exact: true }).count(),
-      ).toBe(0);
+      expect(await userText(prompt).count()).toBe(0);
       expect(await composer.inputValue()).toBe("");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       expect(await statusBand.count()).toBe(0);
@@ -42,8 +60,7 @@ suite.define(() => {
       expect(request.params).toMatchObject({ sessionKey, message: prompt });
       const runId = requireString(requireRecord(request.params).idempotencyKey, "queued send id");
       const pendingMessage = {
-        role: "user",
-        content: prompt,
+        ...user(prompt),
         timestamp: Date.now(),
         __openclaw: { id: "pending:composer-queued-input" },
       };
@@ -63,14 +80,10 @@ suite.define(() => {
       await gateway.setMethodResponse("chat.history", {
         ...history,
         pendingInputs: { items: [pending], total: 1, queuedCount: 1 },
-        inputReceipts: [{ runId, state: "pending", queued: true }],
+        inputReceipts: [receipt(runId)],
       });
       await gateway.resolveDeferred("chat.send", { runId, status: "queued" });
-      await gateway.emitGatewayEvent("sessions.changed", {
-        sessionKey,
-        agentId: "main",
-        reason: "agent.input.settled",
-      });
+      await settled();
       // Accepted custody has no persisted entry ID until the input is consumed.
       await page.waitForFunction(
         ({ runId: expectedRunId, sessionId: expectedSessionId }) =>
@@ -86,16 +99,14 @@ suite.define(() => {
         { runId, sessionId },
       );
       await queue.getByText(prompt, { exact: true }).waitFor();
-      expect(await page.getByText(prompt, { exact: true }).count()).toBe(1);
+      expect(await text(prompt).count()).toBe(1);
       expect(await queue.count()).toBe(1);
-      expect(
-        await page.locator(".chat-group.user").getByText(prompt, { exact: true }).count(),
-      ).toBe(0);
+      expect(await userText(prompt).count()).toBe(0);
       expect(
         await queue.locator(".chat-queue__steer, .chat-queue__retry, .chat-queue__grip").count(),
       ).toBe(0);
       expect(await statusBand.count()).toBe(0);
-      await page.screenshot({ path: suite.artifactDir + "/queued-message.png" });
+      await snapshot("queued-message");
 
       await reconnectMockGateway(page, gateway);
       await queue.getByText(prompt, { exact: true }).waitFor();
@@ -108,20 +119,17 @@ suite.define(() => {
         ...pending,
         id: "other-client-input",
         runId: cancelRunId,
-        message: {
-          role: "user",
-          content: [
-            { type: "text", text: cancelText },
-            {
-              type: "attachment",
-              attachment: {
-                kind: "document",
-                label: cancelPrompt,
-                url: "/media/upgrade-notes.pdf",
-              },
+        message: user([
+          { type: "text", text: cancelText },
+          {
+            type: "attachment",
+            attachment: {
+              kind: "document",
+              label: cancelPrompt,
+              url: "/media/upgrade-notes.pdf",
             },
-          ],
-        },
+          },
+        ]),
       };
       const olderText = "An earlier cancelled request.";
       const olderHistory = {
@@ -134,86 +142,72 @@ suite.define(() => {
               runId: "earlier-run",
               queued: undefined,
               state: "cancelled",
-              message: { role: "user", content: olderText },
+              message: user(olderText),
             },
           ],
           total: 3,
         },
       };
-      const historyResponses = <
+      const setHistory = <
         T extends {
           pendingInputs: { total: number; queuedCount: number };
           inputReceipts: unknown[];
         },
       >(
         latest: T,
-      ) => ({
-        cases: [
-          {
-            match: { pendingBefore: 21 },
-            response: {
-              ...olderHistory,
-              pendingInputs: {
-                ...olderHistory.pendingInputs,
-                total: latest.pendingInputs.total,
-                queuedCount: latest.pendingInputs.queuedCount,
+      ) =>
+        gateway.setMethodResponse("chat.history", {
+          cases: [
+            {
+              match: { pendingBefore: 21 },
+              response: {
+                ...olderHistory,
+                pendingInputs: {
+                  ...olderHistory.pendingInputs,
+                  total: latest.pendingInputs.total,
+                  queuedCount: latest.pendingInputs.queuedCount,
+                },
+                // Exact custody receipts cover all requested inputs, independent of pagination.
+                inputReceipts: latest.inputReceipts,
               },
-              // Exact custody receipts cover all requested inputs, independent of pagination.
-              inputReceipts: latest.inputReceipts,
             },
-          },
-          { match: {}, response: latest },
-        ],
-      });
-      await gateway.setMethodResponse(
-        "chat.history",
-        historyResponses({
-          ...history,
-          pendingInputs: {
-            items: [pending, cancelInput],
-            total: 3,
-            nextBefore: 21,
-            queuedCount: 2,
-          },
-          inputReceipts: [
-            { runId, state: "pending", queued: true },
-            { runId: cancelRunId, state: "pending", queued: true },
+            { match: {}, response: latest },
           ],
-        }),
-      );
-      await gateway.emitGatewayEvent("sessions.changed", {
-        sessionKey,
-        agentId: "main",
-        reason: "agent.input.settled",
+        });
+      await setHistory({
+        ...history,
+        pendingInputs: {
+          items: [pending, cancelInput],
+          total: 3,
+          nextBefore: 21,
+          queuedCount: 2,
+        },
+        inputReceipts: [receipt(runId), receipt(cancelRunId)],
       });
+      await settled();
       await page.locator('[data-chat-queue-item="pending-input:other-client-input"]').waitFor();
-      await page.screenshot({ path: suite.artifactDir + "/queued-attachment.png" });
+      await snapshot("queued-attachment");
       await queue.getByText(cancelText, { exact: true }).waitFor();
       expect(await queue.count()).toBe(2);
-      await page.getByRole("button", { name: "Show earlier messages", exact: true }).click();
-      await page.locator(".chat-group.user").getByText(olderText, { exact: true }).waitFor();
+      await button("Show earlier messages").click();
+      await userText(olderText).waitFor();
       expect(await queue.count()).toBe(2);
       expect(await queue.getByText(prompt, { exact: true }).count()).toBe(1);
       expect(await queue.getByText(cancelText, { exact: true }).count()).toBe(1);
-      expect(
-        await page.locator(".chat-group.user").getByText(prompt, { exact: true }).count(),
-      ).toBe(0);
-      await page.screenshot({ path: suite.artifactDir + "/queued-attachment-history.png" });
+      expect(await userText(prompt).count()).toBe(0);
+      await snapshot("queued-attachment-history");
 
       const promoted = {
         ...pendingMessage,
         __openclaw: { id: "composer-queued-input", seq: 1, idempotencyKey: runId + ":user" },
       };
-      await gateway.setMethodResponse(
-        "chat.history",
-        historyResponses({
-          ...history,
-          messages: [promoted],
-          pendingInputs: { items: [cancelInput], total: 2, nextBefore: 21, queuedCount: 1 },
-          // Ordinary consumption deletes the pending row rather than retaining a receipt.
-          inputReceipts: [{ runId: cancelRunId, state: "pending", queued: true }],
-        }),
-      );
+      await setHistory({
+        ...history,
+        messages: [promoted],
+        pendingInputs: { items: [cancelInput], total: 2, nextBefore: 21, queuedCount: 1 },
+        // Ordinary consumption deletes the pending row rather than retaining a receipt.
+        inputReceipts: [receipt(cancelRunId)],
+      });
       await gateway.emitGatewayEvent("session.message", {
         sessionKey,
         message: promoted,
@@ -221,11 +215,8 @@ suite.define(() => {
         messageSeq: 1,
         clientRunId: runId,
       });
-      await page
-        .locator('.chat-bubble[data-entry-id="composer-queued-input"]')
-        .getByText(prompt, { exact: true })
-        .waitFor();
-      expect(await page.getByText(prompt, { exact: true }).count()).toBe(1);
+      await promotedBubble.waitFor();
+      expect(await text(prompt).count()).toBe(1);
       expect(await queue.count()).toBe(1);
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
 
@@ -243,14 +234,14 @@ suite.define(() => {
         hasMore: true,
         nextOffset: 1,
         pendingInputs: { items: [cancelInput], total: 2, nextBefore: 21, queuedCount: 1 },
-        inputReceipts: [{ runId: cancelRunId, state: "pending", queued: true }],
+        inputReceipts: [receipt(cancelRunId)],
       };
-      await gateway.setMethodResponse("chat.history", historyResponses(recentHistory));
+      await setHistory(recentHistory);
       // Case-based history responses are not copied into the mock's startup method.
       await gateway.setMethodResponse("chat.startup", recentHistory);
       await reconnectMockGateway(page, gateway);
       await page.locator(".chat-group.assistant").getByText(recentReply, { exact: true }).waitFor();
-      await page.screenshot({ path: suite.artifactDir + "/queue-after-consumption-reconnect.png" });
+      await snapshot("queue-after-consumption-reconnect");
       expect(await queue.getByText(prompt, { exact: true }).count()).toBe(0);
       expect(await queue.count()).toBe(1);
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
@@ -286,32 +277,20 @@ suite.define(() => {
         },
         inputReceipts: [{ runId: cancelRunId, state: "pending", cancelled: true }],
       };
-      await gateway.setMethodResponse("chat.history", historyResponses(cancelledHistory));
+      await setHistory(cancelledHistory);
       await gateway.resolveDeferred("chat.abort", { aborted: true, runIds: [cancelRunId] });
       await queue.waitFor({ state: "detached" });
-      await page.getByRole("button", { name: "Show latest messages", exact: true }).click();
-      await page
-        .getByRole("button", { name: "Show latest messages", exact: true })
-        .waitFor({ state: "detached" });
+      await button("Show latest messages").click();
+      await button("Show latest messages").waitFor({ state: "detached" });
       const expectRemoved = async () => {
-        await page
-          .locator('.chat-bubble[data-entry-id="composer-queued-input"]')
-          .getByText(prompt, { exact: true })
-          .waitFor();
+        await promotedBubble.waitFor();
         expect(await queue.count()).toBe(0);
-        expect(await page.getByText(cancelText, { exact: true }).count()).toBe(0);
-        expect(await page.getByText(cancelPrompt, { exact: true }).count()).toBe(0);
-        expect(
-          await page
-            .getByText(
-              "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
-              { exact: true },
-            )
-            .count(),
-        ).toBe(0);
+        expect(await text(cancelText).count()).toBe(0);
+        expect(await text(cancelPrompt).count()).toBe(0);
+        expect(await cancellationNotice.count()).toBe(0);
       };
       await expectRemoved();
-      await page.screenshot({ path: suite.artifactDir + "/removed-message.png" });
+      await snapshot("removed-message");
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
 
       await gateway.setMethodResponse("chat.startup", cancelledHistory);
@@ -323,7 +302,7 @@ suite.define(() => {
       await gateway.waitForRequest("chat.startup");
       await expectRemoved();
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      await page.screenshot({ path: suite.artifactDir + "/removed-message-after-reload.png" });
+      await snapshot("removed-message-after-reload");
 
       const stopRunId = "ordinary-stopped-input";
       const stopText = "Keep this stopped request available to send again.";
@@ -332,7 +311,7 @@ suite.define(() => {
         id: "stopped-input",
         runId: stopRunId,
         queued: undefined,
-        message: { role: "user", content: stopText },
+        message: user(stopText),
       };
       const activeHistory = {
         ...cancelledHistory,
@@ -349,10 +328,10 @@ suite.define(() => {
           total: 3,
         },
       };
-      await gateway.setMethodResponse("chat.history", historyResponses(activeHistory));
+      await setHistory(activeHistory);
       await gateway.setMethodResponse("chat.startup", activeHistory);
       await reconnectMockGateway(page, gateway);
-      const stop = page.getByRole("button", { name: "Stop generating", exact: true });
+      const stop = button("Stop generating");
       await stop.waitFor();
 
       const stoppedHistory = {
@@ -364,29 +343,20 @@ suite.define(() => {
           items: [...cancelledHistory.pendingInputs.items, { ...stoppedInput, state: "cancelled" }],
         },
       };
-      await gateway.setMethodResponse("chat.history", historyResponses(stoppedHistory));
+      await setHistory(stoppedHistory);
       await gateway.setMethodResponse("chat.startup", stoppedHistory);
       await gateway.setMethodResponse("chat.abort", { aborted: true, runIds: [stopRunId] });
       await stop.click();
       const stopped = await gateway.waitForRequest("chat.abort");
       expect(stopped.params).toEqual({ sessionKey, runId: stopRunId });
       await stop.waitFor({ state: "detached" });
-      await gateway.emitGatewayEvent("sessions.changed", {
-        sessionKey,
-        agentId: "main",
-        reason: "agent.input.settled",
-      });
-      await page.getByText(stopText, { exact: true }).waitFor();
-      await page
-        .getByText(
-          "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
-          { exact: true },
-        )
-        .waitFor();
-      expect(await page.getByText(cancelText, { exact: true }).count()).toBe(0);
-      expect(await page.getByText(cancelPrompt, { exact: true }).count()).toBe(0);
+      await settled();
+      await text(stopText).waitFor();
+      await cancellationNotice.waitFor();
+      expect(await text(cancelText).count()).toBe(0);
+      expect(await text(cancelPrompt).count()).toBe(0);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      await page.screenshot({ path: suite.artifactDir + "/stopped-message-retained.png" });
+      await snapshot("stopped-message-retained");
     });
   });
 });
