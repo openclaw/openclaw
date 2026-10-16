@@ -27,6 +27,11 @@ function entry(id: string, parentId: string | null, message: unknown) {
   return { type: "message", id, parentId, message };
 }
 
+function brokenActivity(id: string, startOrder: number, details: Record<string, unknown>) {
+  const message = activity(id, "dispatch-anchor", startOrder);
+  return { ...message, details: { ...message.details, ...details } };
+}
+
 function metadata(message: unknown) {
   return (message as { __openclaw: Record<string, unknown> })["__openclaw"];
 }
@@ -36,6 +41,7 @@ function positions(messages: unknown[]) {
 }
 
 const timestamp = "2026-08-28T00:00:00.000Z";
+const notice = "This turn ended before a reply.";
 function custom(
   id: string,
   parentId: string,
@@ -48,6 +54,12 @@ function custom(
 
 function placement(afterRawSeq: number | null, startOrder: number) {
   return { afterRawSeq, scopeId: "archive-scope", startOrder };
+}
+
+function serialize(sessionId: string, records: unknown[]) {
+  return [{ type: "session", version: 3, id: sessionId }, ...records]
+    .map((record) => JSON.stringify(record))
+    .join("\n");
 }
 
 describe("archive transcript display positions", () => {
@@ -66,12 +78,7 @@ describe("archive transcript display positions", () => {
     generation = "2026-08-28T00-00-00.000Z",
   ) {
     const file = path.join(dir, `${sessionId}.jsonl.reset.${generation}`);
-    fs.writeFileSync(
-      file,
-      [{ type: "session", version: 3, id: sessionId }, ...records]
-        .map((record) => JSON.stringify(record))
-        .join("\n"),
-    );
+    fs.writeFileSync(file, serialize(sessionId, records));
     return file;
   }
 
@@ -87,21 +94,9 @@ describe("archive transcript display positions", () => {
       entry("later-progress", "slow", { role: "assistant", content: "still working" }),
       entry("later", "later-progress", activity("later", "fast", 2)),
       entry("unknown", "later", activity("unknown", "missing-anchor", 3)),
-      entry("invalid", "unknown", {
-        ...activity("invalid", "dispatch-anchor", 4),
-        details: { ...activity("invalid", "dispatch-anchor", 4).details, startOrder: -1 },
-      }),
-      entry("missing", "invalid", {
-        ...activity("missing", "dispatch-anchor", 5),
-        details: { ...activity("missing", "dispatch-anchor", 5).details, afterEntryId: undefined },
-      }),
-      custom(
-        "notice",
-        "missing",
-        "run-failed-before-reply",
-        "This turn ended before a reply.",
-        true,
-      ),
+      entry("invalid", "unknown", brokenActivity("invalid", 4, { startOrder: -1 })),
+      entry("missing", "invalid", brokenActivity("missing", 5, { afterEntryId: undefined })),
+      custom("notice", "missing", "run-failed-before-reply", notice, true),
       custom("hidden", "notice", "private-report", "PRIVATE_REPORT", false),
       custom("missing-display", "hidden", "private-report", "PRIVATE_REPORT"),
       custom(
@@ -139,19 +134,11 @@ describe("archive transcript display positions", () => {
 
     expect(source).toEqual(expect.any(String));
     expect(source).not.toContain(dir);
-    expect(full.map((message) => metadata(message).id)).toEqual([
-      "root",
-      "progress",
-      "fast",
-      "slow",
-      "later-progress",
-      "later",
-      "unknown",
-      "invalid",
-      "missing",
-      "notice",
-      "final",
-    ]);
+    expect(full.map((message) => metadata(message).id)).toEqual(
+      "root progress fast slow later-progress later unknown invalid missing notice final".split(
+        " ",
+      ),
+    );
     const expected = [
       { source, rawSeq: 2 },
       { source, rawSeq: 5 },
@@ -177,8 +164,8 @@ describe("archive transcript display positions", () => {
     expect(full.at(-2)).toMatchObject({
       role: "custom",
       customType: "run-failed-before-reply",
-      content: "This turn ended before a reply.",
-      timestamp: Date.parse("2026-08-28T00:00:00.000Z"),
+      content: notice,
+      timestamp: Date.parse(timestamp),
     });
     for (const id of ["hidden", "missing-display", "runtime-context"]) {
       expect(await reader.readById(id)).toMatchObject({ found: false });
@@ -192,9 +179,7 @@ describe("archive transcript display positions", () => {
       const byId = await reader.readById(id);
       const around = await reader.readAroundId({ messageId: id, maxMessages: 2 });
       expect(byId).toMatchObject({ found: true, oversized: false });
-      expect(metadata(byId.message).transcriptPosition).toEqual(
-        metadata(message).transcriptPosition,
-      );
+      expect(positions([byId.message])).toEqual(positions([message]));
       expect(around).toMatchObject({ found: true, displaySource: source });
       expect(around.messages.find((row) => metadata(row).id === id)).toEqual(message);
     }
@@ -207,14 +192,16 @@ describe("archive transcript display positions", () => {
       ["notice", "newer", 1, full.slice(9, 10), 1],
     ] as const) {
       const directionalPage = await reader.readAroundId({ messageId, direction, maxMessages });
-      expect(directionalPage).toMatchObject({
-        found: true,
-        displaySource: source,
-        totalMessages: 11,
-        hasOverreadContext: false,
-        offset,
-      });
-      expect(directionalPage.messages).toEqual(messages);
+      expect(directionalPage).toEqual(
+        expect.objectContaining({
+          found: true,
+          displaySource: source,
+          totalMessages: 11,
+          hasOverreadContext: false,
+          offset,
+          messages,
+        }),
+      );
     }
   });
 
@@ -222,7 +209,7 @@ describe("archive transcript display positions", () => {
     const sessionId = "reset-placement";
     writeArchive(sessionId, [
       entry("old", null, { role: "user", content: "old prompt" }),
-      { type: "reset", id: "reset", parentId: "old", timestamp: "2026-08-28T00:00:00.000Z" },
+      { type: "reset", id: "reset", parentId: "old", timestamp },
       entry("kept", "reset", activity("kept", "old", 0)),
       entry("beginning", "kept", activity("beginning", null, 1)),
     ]);
@@ -260,9 +247,7 @@ describe("archive transcript display positions", () => {
         await readPage();
       }
       const initialStat = fs.statSync(file);
-      const replacement = [{ type: "session", version: 3, id: sessionId }, control, root, nested]
-        .map((record) => JSON.stringify(record))
-        .join("\n");
+      const replacement = serialize(sessionId, [control, root, nested]);
       let rewritten = false;
       const rewrite = () => {
         if (rewritten) {
@@ -315,10 +300,7 @@ describe("archive transcript display positions", () => {
       try {
         const result =
           phase === "index scan" ? readPage() : reader.readRecentWithStats({ maxMessages: 10 });
-        const failure = await result.then(
-          () => undefined,
-          (error: unknown) => error,
-        );
+        const failure = await result.catch((error: unknown) => error);
         expect(rewritten).toBe(true);
         expect(failure).toBeInstanceOf(SessionTranscriptProjectionUnavailableError);
         expect(failure).toMatchObject({ sessionId });

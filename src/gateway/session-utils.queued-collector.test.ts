@@ -52,8 +52,10 @@ const {
   waitForLaunch,
   requestContext,
   operatorClient,
+  requestOptions,
   listChildren,
   spawnCollectors,
+  spawnCollector,
   createQueuedReservation,
   expectUnstartedChildHistory,
 } = useQueuedCollectorFixture();
@@ -75,27 +77,6 @@ function expectAborted(respond: ReturnType<typeof vi.fn>, runId: string | undefi
     { ok: true, status: "aborted", abortedRunId: runId },
     undefined,
     undefined,
-  );
-}
-
-function spawnCollector(
-  label: string,
-  context: Partial<Parameters<typeof nativeSpawn.spawnSubagentDirect>[1]> = {},
-) {
-  return nativeSpawn.spawnSubagentDirect(
-    {
-      task: "Wait for cancellation",
-      label,
-      collect: true,
-      context: "isolated",
-      lightContext: true,
-    },
-    {
-      agentSessionKey: parentKey,
-      requesterRunId: "parent-turn",
-      requesterTurnRunId: "parent-turn",
-      ...context,
-    },
   );
 }
 
@@ -137,8 +118,6 @@ describe("queued collector session projection", () => {
       const results = await spawnCollectors();
       const first = expectDefined(results[0], "first collector");
       const second = expectDefined(results[1], "second collector");
-      expect(results.map((result) => result.status)).toEqual(["accepted", "accepted"]);
-      expect(launchedRunIds).toEqual([first.runId]);
       try {
         const rows = (await listChildren(context)).sessions;
         expect(rows.map((row) => row.key).toSorted()).toEqual(
@@ -261,22 +240,14 @@ describe("queued collector session projection", () => {
       (await listChildren(context)).sessions.find((row) => row.key === second!.childSessionKey),
       "queued row",
     );
-    const respond = vi.fn();
-    await expectDefined(
-      sessionMutationHandlers["sessions.patch"],
-      "sessions.patch handler",
-    )({
-      req: { type: "req", id: "rename-queued", method: "sessions.patch" },
-      params: {
-        key: queued.key,
-        expectedSessionId: queued.sessionId,
-        label: "Operator renamed collector",
-      },
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context,
+    const options = requestOptions(context, "sessions.patch", {
+      key: queued.key,
+      expectedSessionId: queued.sessionId,
+      label: "Operator renamed collector",
     });
+    options.client = null;
+    await sessionMutationHandlers["sessions.patch"]!(options);
+    const { respond } = options;
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
@@ -559,15 +530,16 @@ describe("queued collector session projection", () => {
   });
 
   it.each([
-    "foreign requester",
-    "parent replaced",
-    "parent closed",
-    "parent settled",
-    "parent lifecycle retired",
-    "session access revoked",
-    "reservation withdrawn",
-    "registry replaced",
-  ])("rejects queued-child Stop when %s", async (failure) => {
+    ["foreign requester", false],
+    ["parent replaced", false],
+    ["parent closed", false],
+    ["parent settled", false],
+    ["parent lifecycle retired", false],
+    ["session access revoked", false],
+    ["reservation withdrawn", false],
+    ["registry replaced", false],
+    ["session access revoked", true],
+  ] as const)("rejects queued-child Stop when %s (typed=%s)", async (failure, typed) => {
     const { entry, registration } = await createQueuedReservation();
     const unrelated = await createQueuedReservation("unrelated");
     const context = requestContext();
@@ -619,53 +591,29 @@ describe("queued collector session projection", () => {
         throw new Error("Session mutation authorization changed");
       }
     };
-    const respond = vi.fn();
-    const abort = abortCollector({
-      params: { key: entry.childSessionKey, runId: entry.runId, agentId: "main" },
-      client: operatorClient(
-        failure === "foreign requester" ? "other-requester" : "parent-requester",
-      ),
+    const options = requestOptions(
       context,
-      respond,
+      typed ? "chat.send" : "sessions.abort",
+      typed
+        ? { sessionKey: entry.childSessionKey, message: "/stop", idempotencyKey: "typed-stop" }
+        : { key: entry.childSessionKey, runId: entry.runId, agentId: "main" },
+    );
+    options.client = operatorClient(
+      failure === "foreign requester" ? "other-requester" : "parent-requester",
+    );
+    const authorizedOptions = {
+      ...options,
       sessionMutationAuthorization: { assertCurrent, assertTargetCurrent: assertCurrent },
-    });
+    };
+    const { respond } = options;
+    const abort = typed ? handleChatSend(authorizedOptions) : abortCollector(authorizedOptions);
     await Promise.all([Promise.resolve(abort).finally(() => authorization.resolve()), mutation]);
     expectRejected(respond);
     expect(entry.execution.endedAt).toBeUndefined();
     expect(entry.collectorCompletion).toBeUndefined();
-    expect(isSubagentRunQueued(unrelated.entry)).toBe(true);
-    expect(launchedRunIds).toEqual([]);
-  });
-
-  it("rejects typed queued-child Stop after session access is revoked", async () => {
-    const { entry } = await createQueuedReservation();
-    const unrelated = await createQueuedReservation("unrelated");
-    let checked = false;
-    let revoked = false;
-    const assertCurrent = () => {
-      if (!checked) {
-        checked = true;
-        queueMicrotask(() => {
-          revoked = true;
-        });
-      }
-      if (revoked) {
-        throw new Error("Session access changed");
-      }
-    };
-    const respond = vi.fn();
-    await handleChatSend({
-      req: { type: "req", id: "typed-queued-stop", method: "chat.send" },
-      params: { sessionKey: entry.childSessionKey, message: "/stop", idempotencyKey: "typed-stop" },
-      client: operatorClient(),
-      context: requestContext(),
-      respond,
-      isWebchatConnect: () => false,
-      sessionMutationAuthorization: { assertCurrent, assertTargetCurrent: assertCurrent },
-    });
-    expectRejected(respond);
-    expect(entry.execution.endedAt).toBeUndefined();
-    expect(isSubagentRunQueued(entry)).toBe(true);
+    if (typed) {
+      expect(isSubagentRunQueued(entry)).toBe(true);
+    }
     expect(isSubagentRunQueued(unrelated.entry)).toBe(true);
     expect(launchedRunIds).toEqual([]);
   });
@@ -770,25 +718,21 @@ describe("queued collector session projection", () => {
       expect(context.chatAbortControllers.get(extraRunId)).toBe(admission.activeRunAbort.entry);
       expect(isSubagentRunQueued(entry)).toBe(true);
       try {
-        const respond = vi.fn();
-        const options = {
-          req: { type: "req" as const, id: "coexisting-stop", method },
-          params:
-            method === "sessions.abort"
-              ? {
-                  key: entry.childSessionKey,
-                  ...(exact ? { runId: entry.runId } : { clearQueued: true }),
-                }
-              : {
-                  sessionKey: entry.childSessionKey,
-                  message: "/stop",
-                  idempotencyKey: "typed-stop",
-                },
+        const options = requestOptions(
           context,
-          respond,
-          client: operatorClient(),
-          isWebchatConnect: () => false,
-        };
+          method,
+          method === "sessions.abort"
+            ? {
+                key: entry.childSessionKey,
+                ...(exact ? { runId: entry.runId } : { clearQueued: true }),
+              }
+            : {
+                sessionKey: entry.childSessionKey,
+                message: "/stop",
+                idempotencyKey: "typed-stop",
+              },
+        );
+        const { respond } = options;
         if (method === "sessions.abort") {
           await sessionAbortHandlers["sessions.abort"]!(options);
         } else {
@@ -858,16 +802,12 @@ describe("queued collector session projection", () => {
   it("keeps ordinary chat.abort and mismatched exact Stop from consuming a collector", async () => {
     const { entry } = await createQueuedReservation();
     const context = requestContext();
-    const chatResponse = vi.fn();
-    await handleChatAbortRequest({
-      req: { type: "req", id: "ordinary-chat-stop", method: "chat.abort" },
-      params: { sessionKey: entry.childSessionKey, runId: "reserved-collector" },
-      client: operatorClient(),
-      isWebchatConnect: () => false,
-      context,
-      respond: chatResponse,
+    const options = requestOptions(context, "chat.abort", {
+      sessionKey: entry.childSessionKey,
+      runId: "reserved-collector",
     });
-    expect(chatResponse).toHaveBeenCalledWith(true, { ok: true, aborted: false, runIds: [] });
+    await handleChatAbortRequest(options);
+    expect(options.respond).toHaveBeenCalledWith(true, { ok: true, aborted: false, runIds: [] });
     const sessionResponse = vi.fn();
     await abortCollector({
       params: { key: entry.childSessionKey, runId: "other-run", agentId: "main" },

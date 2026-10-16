@@ -32,18 +32,14 @@ function createRowThinkingFixture(runtimeRoute = false) {
       defaults: { model: `${provider}/reasoner`, thinkingDefault: "off", utilityModel: "" },
     },
   };
-  let policyCalls = 0;
-  const policy = (): ProviderThinkingProfile => {
-    policyCalls++;
-    return {
-      levels: [
-        { id: "off", label: "Off", rank: 0 },
-        { id: "high", label: "Deep", rank: 10 },
-        { id: "low", label: "Light", rank: 40 },
-      ],
-      defaultLevel: "low",
-    };
-  };
+  const policy = vi.fn((): ProviderThinkingProfile => ({
+    levels: [
+      { id: "off", label: "Off", rank: 0 },
+      { id: "high", label: "Deep", rank: 10 },
+      { id: "low", label: "Light", rank: 40 },
+    ],
+    defaultLevel: "low",
+  }));
   const pluginRegistry: PluginRegistry = {
     ...createEmptyPluginRegistry(),
     providers: [
@@ -115,7 +111,7 @@ function createRowThinkingFixture(runtimeRoute = false) {
     }).inputs.thinkingProjection;
   return {
     cfg,
-    policyCalls: () => policyCalls,
+    policyCalls: () => policy.mock.calls.length,
     catalog,
     modelCatalog,
     model,
@@ -126,45 +122,35 @@ function createRowThinkingFixture(runtimeRoute = false) {
   };
 }
 
-function expectWarmedThinking(
-  fixture: ReturnType<typeof createRowThinkingFixture>,
-  catalog: Parameters<typeof fixture.read>[1],
-  warmCalls: number,
-) {
-  expect(fixture.read("medium", catalog, 1)).toMatchObject({
-    thinkingLevel: "medium",
-    effectiveThinkingLevel: "medium",
-    thinkingDefault: "off",
-    thinkingOptions: ["Off", "Deep", "Light", "ultra"],
-  });
-  expect(fixture.policyCalls()).toBe(warmCalls);
-}
-
-test.each(["missing", "identity-only"] as const)(
+test.each(["missing", "identity-only", "runtime-route"] as const)(
   "preserves a stored level with a %s catalog after warming thinking facts",
   async (kind) => {
     await withStateDirEnv("openclaw-row-thinking-incomplete-", async () => {
-      const fixture = createRowThinkingFixture();
-      fixture.read(undefined, kind === "missing" ? fixture.catalog.entries : fixture.modelCatalog);
-      const warmCalls = fixture.policyCalls();
-      expectWarmedThinking(
-        fixture,
-        kind === "missing" ? undefined : fixture.wrap({ entries: [fixture.model] }),
-        warmCalls,
+      const fixture = createRowThinkingFixture(kind === "runtime-route");
+      const warmed = fixture.read(
+        undefined,
+        kind === "missing" ? fixture.catalog.entries : fixture.modelCatalog,
       );
+      if (kind === "runtime-route") {
+        expect(warmed.catalogEntry?.nativeRuntime).toBe("openclaw");
+      }
+      const warmCalls = fixture.policyCalls();
+      const catalog =
+        kind === "missing"
+          ? undefined
+          : fixture.wrap({
+              entries: kind === "identity-only" ? [fixture.model] : [],
+            });
+      expect(fixture.read("medium", catalog, 1)).toMatchObject({
+        thinkingLevel: "medium",
+        effectiveThinkingLevel: "medium",
+        thinkingDefault: "off",
+        thinkingOptions: ["Off", "Deep", "Light", "ultra"],
+      });
+      expect(fixture.policyCalls()).toBe(warmCalls);
     });
   },
 );
-
-test("retains warmed runtime-route thinking facts when a prepared catalog omits the model", async () => {
-  await withStateDirEnv("openclaw-row-thinking-runtime-route-", async () => {
-    const fixture = createRowThinkingFixture(true);
-    const warmed = fixture.read(undefined, fixture.modelCatalog);
-    expect(warmed.catalogEntry?.nativeRuntime).toBe("openclaw");
-    const warmCalls = fixture.policyCalls();
-    expectWarmedThinking(fixture, fixture.wrap({ entries: [] }), warmCalls);
-  });
-});
 
 test("rebuilds resident thinking facts on config and catalog publication", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -255,7 +241,7 @@ test.each([
         ],
       ]);
       const metadata = await import("../plugins/current-plugin-metadata-snapshot.js");
-      const lookup = vi.spyOn(metadata, "getCurrentPluginMetadataSnapshot");
+      using lookup = vi.spyOn(metadata, "getCurrentPluginMetadataSnapshot");
       const project = async (count: number) => {
         const store: Record<string, SessionEntry> = Object.fromEntries(
           Array.from({ length: count }, (_, index) => [
@@ -281,14 +267,10 @@ test.each([
         expect(result.sessions.every((session) => session.model === "list-model")).toBe(true);
         return lookup.mock.calls.length;
       };
-      try {
-        await project(1);
-        const small = await project(16);
-        const large = await project(128);
-        expect(large).toBeLessThanOrEqual(small + 4);
-      } finally {
-        lookup.mockRestore();
-      }
+      await project(1);
+      const small = await project(16);
+      const large = await project(128);
+      expect(large).toBeLessThanOrEqual(small + 4);
     });
   },
 );

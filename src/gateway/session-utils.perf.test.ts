@@ -52,6 +52,10 @@ function atImmediate(callback: () => void) {
   });
 }
 
+function ownedProjection<T extends { dispose(): void }>(projection: T) {
+  return Object.assign(projection, { [Symbol.dispose]: () => projection.dispose() });
+}
+
 // Resolver call counts protect O(unique model tuples), without CI wall-clock noise.
 describe("session list resolver cache", () => {
   test("bounds dirty-refresh roster work across config publication", async () => {
@@ -99,17 +103,16 @@ describe("session list resolver cache", () => {
       let projection: SessionRowProjection | undefined;
       let refreshBatch = 0;
       const createDrain = projectionWork.createSessionProjectionDrain;
-      const drains = vi
-        .spyOn(projectionWork, "createSessionProjectionDrain")
-        .mockImplementation((params) =>
-          createDrain({
-            ...params,
-            refresh() {
-              refreshBatch++;
-              return params.refresh();
-            },
-          }),
-        );
+      const drains = vi.spyOn(projectionWork, "createSessionProjectionDrain");
+      drains.mockImplementation((params) =>
+        createDrain({
+          ...params,
+          refresh() {
+            refreshBatch++;
+            return params.refresh();
+          },
+        }),
+      );
       try {
         projection = await createSessionRowProjection({ cfg });
         let projectedRows = 0;
@@ -190,7 +193,8 @@ describe("session list resolver cache", () => {
         let projectedRows = 0;
         let rowsAtControl = 0;
         let control: Promise<void> | undefined;
-        const clock = vi.spyOn(performance, "now").mockImplementation(() => workMs);
+        const clock = vi.spyOn(performance, "now");
+        clock.mockImplementation(() => workMs);
         const readInputs = rowProjection.readSessionRowInputs;
         const rows = vi
           .spyOn(rowProjection, "readSessionRowInputs")
@@ -291,7 +295,7 @@ describe("session list resolver cache", () => {
           });
         }
       }
-      const catalogSpy = vi.spyOn(modelCatalogLookup, "findModelCatalogEntry");
+      using catalogSpy = vi.spyOn(modelCatalogLookup, "findModelCatalogEntry");
       let projection: SessionRowProjection | undefined;
       try {
         for (const revision of [1, 2]) {
@@ -334,15 +338,13 @@ describe("session list resolver cache", () => {
           }
           // Acquisition shares both hits and misses; defaults retain their separate lookup.
           expect(catalogSpy.mock.calls.length).toBeLessThanOrEqual(10);
-          const inputs = vi.spyOn(rowProjection, "readSessionRowInputs");
           catalogSpy.mockClear();
           let warmCatalogReads: number;
-          try {
+          {
+            using inputs = vi.spyOn(rowProjection, "readSessionRowInputs");
             await listProjectedSessions({ projection, opts: { limit: 80 } });
             expect(inputs).not.toHaveBeenCalled();
             warmCatalogReads = catalogSpy.mock.calls.length;
-          } finally {
-            inputs.mockRestore();
           }
           catalogSpy.mockClear();
           const updatedKey = "agent:main:dashboard:catalog-2";
@@ -376,7 +378,6 @@ describe("session list resolver cache", () => {
         }
       } finally {
         projection?.dispose();
-        catalogSpy.mockRestore();
       }
     });
   });
@@ -400,11 +401,11 @@ describe("session list resolver cache", () => {
         });
         // Measure resident row work independently of asynchronous identity-file admission.
         const identityRuntime = await import("../agents/identity-file-runtime.js");
-        const identityReads = vi
-          .spyOn(identityRuntime, "prepareIdentityFile")
-          .mockResolvedValue({ kind: "missing" });
+        const identityReads = vi.spyOn(identityRuntime, "prepareIdentityFile");
+        identityReads.mockResolvedValue({ kind: "missing" });
         let workMs = 0;
-        const clock = vi.spyOn(performance, "now").mockImplementation(() => workMs);
+        const clock = vi.spyOn(performance, "now");
+        clock.mockImplementation(() => workMs);
         const readInputs = rowProjection.readSessionRowInputs;
         const rows = vi
           .spyOn(rowProjection, "readSessionRowInputs")
@@ -442,14 +443,6 @@ describe("session list resolver cache", () => {
   );
 
   test("bounds owner-first transcript fields without starving shared rows", async () => {
-    const scenario = {
-      count: 480,
-      owned: 240,
-      limit: 240,
-      rows: 300,
-      enriched: 160,
-      sharedTail: 99,
-    };
     await withStateDirEnv("openclaw-perf-title-batch-", async ({ stateDir }) => {
       const cfg: OpenClawConfig = {
         agents: { defaults: { model: { primary: "openai/gpt-5" }, thinkingDefault: "off" } },
@@ -460,32 +453,30 @@ describe("session list resolver cache", () => {
       using _ = {
         [Symbol.dispose]: (await prepareUserProfileCatalog()).release,
       };
-      const store = makeStore(scenario.count, (index) => {
-        const sessionId = `title-batch-${index}`;
-        const entry: SessionEntry = {
-          sessionId,
+      // Half the roster belongs to this owner, behind newer shared sessions.
+      const store = makeStore(480, (index) => [
+        `agent:main:title-batch-${index}`,
+        {
+          sessionId: `title-batch-${index}`,
           updatedAt: 1_000 - index,
-          ...(index >= scenario.count - scenario.owned
+          ...(index >= 240
             ? {
                 createdVia: "operator",
                 createdActor: { type: "human", source: "profile", id: ownerId },
               }
             : {}),
-        };
-        return [`agent:main:${sessionId}`, entry];
-      });
+        },
+      ]);
 
       const titleFieldsBySessionKey = new Map(
-        Array.from(
-          { length: scenario.count },
-          (_value, index) =>
+        Object.keys(store).map(
+          (key, index) =>
             [
-              `agent:main:title-batch-${index}`,
+              key,
               { firstUserMessage: `title ${index}`, lastMessagePreview: `last ${index}` },
             ] as const,
         ),
       );
-      let projection: ReturnType<typeof createSessionRowProjectionFixture> | undefined;
       const client: GatewayClient = {
         connect: {
           minProtocol: 1,
@@ -507,58 +498,43 @@ describe("session list resolver cache", () => {
         },
       };
       prepareGatewayRecipientProfile(client);
-      try {
-        projection = createSessionRowProjectionFixture({
+      using projection = ownedProjection(
+        createSessionRowProjectionFixture({
           cfg,
           storePath,
           store,
           titleFieldsBySessionKey,
-        });
-        const result = await listProjectedSessions({
+        }),
+      );
+      const list = (include: boolean) =>
+        listProjectedSessions({
           projection,
           client,
           opts: {
             ownerFirst: true,
-            includeDerivedTitles: true,
-            includeLastMessage: true,
-            limit: scenario.limit,
+            includeDerivedTitles: include,
+            includeLastMessage: include,
+            limit: 240,
           },
         });
+      const result = await list(true);
 
-        expect(result.sessions).toHaveLength(scenario.rows);
-        expect(result.sessions.filter((row) => row.derivedTitle !== undefined)).toHaveLength(
-          scenario.enriched,
-        );
-        expect(result.sessions.filter((row) => row.lastMessagePreview !== undefined)).toHaveLength(
-          scenario.enriched,
-        );
-        const sessionsByKey = new Map(result.sessions.map((session) => [session.key, session]));
-        expect(sessionsByKey.get("agent:main:title-batch-0")).toMatchObject({
-          derivedTitle: "Title 0",
-          lastMessagePreview: "last 0",
+      expect(result.sessions).toHaveLength(300);
+      for (const field of ["derivedTitle", "lastMessagePreview"] as const) {
+        expect(result.sessions.filter((row) => row[field] !== undefined)).toHaveLength(160);
+      }
+      const sessionsByKey = new Map(result.sessions.map((session) => [session.key, session]));
+      for (const index of [0, 99]) {
+        expect(sessionsByKey.get(`agent:main:title-batch-${index}`)).toMatchObject({
+          derivedTitle: `Title ${index}`,
+          lastMessagePreview: `last ${index}`,
         });
-        expect(sessionsByKey.get(`agent:main:title-batch-${scenario.sharedTail}`)).toMatchObject({
-          derivedTitle: `Title ${scenario.sharedTail}`,
-          lastMessagePreview: `last ${scenario.sharedTail}`,
-        });
+      }
 
-        const withoutTranscriptFields = await listProjectedSessions({
-          projection,
-          client,
-          opts: {
-            ownerFirst: true,
-            includeDerivedTitles: false,
-            includeLastMessage: false,
-            limit: scenario.limit,
-          },
-        });
-        expect(withoutTranscriptFields.sessions).toHaveLength(scenario.rows);
-        for (const row of withoutTranscriptFields.sessions) {
-          expect(row.derivedTitle).toBeUndefined();
-          expect(row.lastMessagePreview).toBeUndefined();
-        }
-      } finally {
-        projection?.dispose();
+      const withoutTranscriptFields = await list(false);
+      expect(withoutTranscriptFields.sessions).toHaveLength(300);
+      for (const row of withoutTranscriptFields.sessions) {
+        expect([row.derivedTitle, row.lastMessagePreview]).toEqual([undefined, undefined]);
       }
     });
   });

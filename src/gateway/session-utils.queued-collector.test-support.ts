@@ -6,6 +6,7 @@ import {
   registerSubagentRun,
   resetSubagentRegistryForTests,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import type { SpawnSubagentContext } from "../agents/subagents/spawn/subagent-spawn-contract.js";
 import { createInitialSubagentSession } from "../agents/subagents/spawn/subagent-spawn-session-patch.js";
 import { spawnSubagentDirect } from "../agents/subagents/spawn/subagent-spawn.js";
 import { testing as spawnTesting } from "../agents/subagents/spawn/subagent-spawn.test-support.js";
@@ -102,30 +103,26 @@ export function useQueuedCollectorFixture() {
         const runId = String(params.idempotencyKey);
         const sessionKey = String(params.sessionKey);
         const { storePath, entry } = await loadGatewaySessionEntryReadOnlyAsync(sessionKey);
-        await upsertSessionEntryCore(
-          { storePath, sessionKey },
-          (
-            await buildAgentSessionPatch({
-              freshEntry: entry,
-              initialEntry: entry,
-              cfg: getRuntimeConfig(),
-              sessionAgentId: "main",
-              canonicalSessionKey: sessionKey,
-              storePath,
-              requestLabel: typeof params.label === "string" ? params.label : undefined,
-              normalizedSpawned: {},
-              requestDeliveryHint: undefined,
-              expectedExistingSessionId: entry?.sessionId,
-              hasRestoredCronContinuation: false,
-              resetPolicy: resolveSessionResetPolicy({ resetType: "direct" }),
-              now: Date.now(),
-              isSystemGatewayRun: true,
-              visibleRequest: false,
-              fallbackSessionId: expectDefined(entry?.sessionId, "created child identity"),
-              touchInteraction: false,
-            })
-          ).patch,
-        );
+        const { patch } = await buildAgentSessionPatch({
+          freshEntry: entry,
+          initialEntry: entry,
+          cfg: getRuntimeConfig(),
+          sessionAgentId: "main",
+          canonicalSessionKey: sessionKey,
+          storePath,
+          requestLabel: typeof params.label === "string" ? params.label : undefined,
+          normalizedSpawned: {},
+          requestDeliveryHint: undefined,
+          expectedExistingSessionId: entry?.sessionId,
+          hasRestoredCronContinuation: false,
+          resetPolicy: resolveSessionResetPolicy({ resetType: "direct" }),
+          now: Date.now(),
+          isSystemGatewayRun: true,
+          visibleRequest: false,
+          fallbackSessionId: expectDefined(entry?.sessionId, "created child identity"),
+          touchInteraction: false,
+        });
+        await upsertSessionEntryCore({ storePath, sessionKey }, patch);
         launchedRunIds.push(runId);
         registerAgentRunContext(runId, { sessionKey, projectSessionActive: true });
         emitAgentEvent({
@@ -148,9 +145,7 @@ export function useQueuedCollectorFixture() {
     await closeSwarmScheduler();
     await flushPendingSessionsChangedEvents();
     schedulerTesting.reset();
-    for (const runId of launchedRunIds.splice(0)) {
-      clearAgentRunContext(runId);
-    }
+    launchedRunIds.splice(0).forEach((runId) => clearAgentRunContext(runId));
     launchSignals.clear();
     await resetSubagentRegistryForTests({ persist: false });
     spawnTesting.setDepsForTest();
@@ -192,29 +187,53 @@ export function useQueuedCollectorFixture() {
     } as GatewayRequestHandlerOptions["client"];
   }
 
-  async function listChildren(context: GatewayRequestContext): Promise<SessionsListResult> {
-    const respond = vi.fn();
-    await expectDefined(
-      sessionReadHandlers["sessions.list"],
-      "sessions.list handler",
-    )({
-      req: { type: "req", id: "queued-list", method: "sessions.list" },
-      params: {
-        agentId: "main",
-        spawnedBy: parentKey,
-        limit: 10,
-        includeDerivedTitles: false,
-        includeLastMessage: false,
-      },
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
+  function requestOptions(
+    context: GatewayRequestContext,
+    method: string,
+    params: Record<string, unknown>,
+  ) {
+    return {
+      req: { type: "req" as const, id: method, method },
+      params,
       context,
+      client: operatorClient(),
+      isWebchatConnect: () => false,
+      respond: vi.fn(),
+    };
+  }
+
+  async function listChildren(context: GatewayRequestContext): Promise<SessionsListResult> {
+    const options = requestOptions(context, "sessions.list", {
+      agentId: "main",
+      spawnedBy: parentKey,
+      limit: 10,
+      includeDerivedTitles: false,
+      includeLastMessage: false,
     });
-    expect(respond).toHaveBeenCalledOnce();
-    expect(respond.mock.calls[0]?.[0]).toBe(true);
-    expect(respond.mock.calls[0]?.[2]).toBeUndefined();
-    return respond.mock.calls[0]![1] as SessionsListResult;
+    options.client = null;
+    await sessionReadHandlers["sessions.list"]!(options);
+    expect(options.respond).toHaveBeenCalledOnce();
+    expect(options.respond.mock.calls[0]?.[0]).toBe(true);
+    expect(options.respond.mock.calls[0]?.[2]).toBeUndefined();
+    return options.respond.mock.calls[0]![1] as SessionsListResult;
+  }
+
+  function spawnCollector(label: string, context: Partial<SpawnSubagentContext> = {}) {
+    return spawnSubagentDirect(
+      {
+        task: "Wait for cancellation",
+        label,
+        collect: true,
+        context: "isolated",
+        lightContext: true,
+      },
+      {
+        agentSessionKey: parentKey,
+        requesterRunId: "parent-turn",
+        requesterTurnRunId: "parent-turn",
+        ...context,
+      },
+    );
   }
 
   async function spawnCollectors(
@@ -223,24 +242,9 @@ export function useQueuedCollectorFixture() {
   ) {
     const results: Awaited<ReturnType<typeof spawnSubagentDirect>>[] = [];
     for (const label of labels) {
-      const result = await spawnSubagentDirect(
-        {
-          task: "Wait for cancellation",
-          label,
-          collect: true,
-          context: "isolated",
-          lightContext: true,
-        },
-        {
-          agentSessionKey: parentKey,
-          completionOwnerKey,
-          requesterRunId: "parent-turn",
-          requesterTurnRunId: "parent-turn",
-        },
-      );
+      const result = await spawnCollector(label, { completionOwnerKey });
       expect(result.status).toBe("accepted");
       results.push(result);
-      // Establish occupied capacity before creating the collector expected to queue.
       if (results.length === 1) {
         await waitForLaunch(expectDefined(result.runId, "first collector run"));
       }
@@ -279,7 +283,6 @@ export function useQueuedCollectorFixture() {
       swarmGroupId: groupId,
       collect: true,
     });
-    expect(created.status).toBe("ok");
     if (created.status !== "ok") {
       throw new Error(created.error);
     }
@@ -309,18 +312,14 @@ export function useQueuedCollectorFixture() {
     sessionKey: string,
     activeRunIds: string[],
   ) {
-    const respond = vi.fn();
-    await expectDefined(
-      chatHistoryHandlers["chat.history"],
-      "chat.history handler",
-    )({
-      req: { type: "req", id: "queued-history", method: "chat.history" },
-      params: { sessionKey, agentId: "main", offset: 0, limit: 20 },
-      client: operatorClient(),
-      isWebchatConnect: () => false,
-      respond,
-      context,
+    const options = requestOptions(context, "chat.history", {
+      sessionKey,
+      agentId: "main",
+      offset: 0,
+      limit: 20,
     });
+    await chatHistoryHandlers["chat.history"]!(options);
+    const { respond } = options;
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
@@ -334,10 +333,9 @@ export function useQueuedCollectorFixture() {
         }),
       }),
     );
-    const payload = respond.mock.calls[0]?.[1];
-    expect(payload).not.toHaveProperty("inFlightRun");
-    expect(payload?.sessionInfo.startedAt).toBeUndefined();
-    expect(payload?.sessionInfo.runtimeMs).toBeUndefined();
+    expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("inFlightRun");
+    expect(respond.mock.calls[0]?.[1]?.sessionInfo.startedAt).toBeUndefined();
+    expect(respond.mock.calls[0]?.[1]?.sessionInfo.runtimeMs).toBeUndefined();
   }
 
   return {
@@ -346,8 +344,10 @@ export function useQueuedCollectorFixture() {
     waitForLaunch,
     requestContext,
     operatorClient,
+    requestOptions,
     listChildren,
     spawnCollectors,
+    spawnCollector,
     createQueuedReservation,
     expectUnstartedChildHistory,
   };
