@@ -5,6 +5,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import * as fsSafe from "../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import { resolveMediaAttachmentLocalRoots } from "./runner.attachments.js";
 
@@ -44,6 +45,27 @@ function mockRemote(base: string, fileName = "photo.png") {
   vi.mocked(resolvePreferredOpenClawTmpDir).mockReturnValue(base);
   readRemoteMediaBufferMock.mockResolvedValue({ buffer: PNG_1X1, fileName });
 }
+async function mediaFile(base: string, name: string, content: Buffer | string = PNG_1X1) {
+  const file = path.join(base, name);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, content);
+  return file;
+}
+async function withRemoteCache(
+  run: (base: string, cache: MediaAttachmentCache) => Promise<void>,
+  fileName = "photo.png",
+) {
+  await withTestDir({ prefix: "openclaw-media-cache-" }, async (base) => {
+    mockRemote(base, fileName);
+    const cache = new MediaAttachmentCache([remoteAttachment]);
+    try {
+      await run(base, cache);
+    } finally {
+      await cache.cleanup();
+    }
+    expect(await fs.readdir(base)).toEqual([]);
+  });
+}
 
 describe("media understanding attachment cache", () => {
   it.each(["canonical", "directory alias"] as const)(
@@ -52,17 +74,11 @@ describe("media understanding attachment cache", () => {
       await withTestDir({ prefix: "openclaw-media-cache-session-scoped-" }, async (base) => {
         const stateDir = path.join(base, "state");
         const sessionWorkspaceDir = path.join(stateDir, "sandboxes", "session-a");
-        const siblingDir = path.join(stateDir, "sandboxes", "session-b");
-        const sharedWorkspaceDir = path.join(stateDir, "workspace");
-        for (const dir of [sessionWorkspaceDir, siblingDir, sharedWorkspaceDir]) {
-          await fs.mkdir(dir, { recursive: true });
-        }
-        const ownFile = path.join(sessionWorkspaceDir, "own.txt");
-        const siblingFile = path.join(siblingDir, "sibling.txt");
-        const hostWorkspaceFile = path.join(sharedWorkspaceDir, "host-secret.txt");
-        await fs.writeFile(ownFile, "OWN-SANDBOX-CONTENT");
-        await fs.writeFile(siblingFile, "SIBLING-SANDBOX-CONTENT");
-        await fs.writeFile(hostWorkspaceFile, "SHARED-HOST-WORKSPACE-CONTENT");
+        const files = [
+          await mediaFile(sessionWorkspaceDir, "own.txt", "OWN-SANDBOX-CONTENT"),
+          await mediaFile(stateDir, "sandboxes/session-b/sibling.txt", "SIBLING-SANDBOX-CONTENT"),
+          await mediaFile(stateDir, "workspace/host-secret.txt", "SHARED-HOST-WORKSPACE-CONTENT"),
+        ];
         let sourceStateDir = stateDir;
         if (spelling === "directory alias") {
           sourceStateDir = path.join(base, "state-alias");
@@ -75,8 +91,7 @@ describe("media understanding attachment cache", () => {
         const sourcePath = (file: string) =>
           path.join(sourceStateDir, path.relative(stateDir, file));
 
-        vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-        try {
+        await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
           const roots = resolveMediaAttachmentLocalRoots({
             cfg: {} as never,
             ctx: {} as never,
@@ -84,25 +99,18 @@ describe("media understanding attachment cache", () => {
           });
           // Session roots must not regain the sessionless shared-workspace defaults.
           const cache = new MediaAttachmentCache(
-            [
-              { index: 0, path: sourcePath(ownFile) },
-              { index: 1, path: sourcePath(siblingFile) },
-              { index: 2, path: sourcePath(hostWorkspaceFile) },
-            ],
+            files.map((file, index) => ({ index, path: sourcePath(file) })),
             { localPathRoots: roots, includeDefaultLocalPathRoots: false },
           );
 
           const own = await cache.getBuffer(request);
           expect(own.buffer.toString()).toBe("OWN-SANDBOX-CONTENT");
-          await expect(cache.getBuffer({ ...request, attachmentIndex: 1 })).rejects.toThrow(
-            /outside allowed roots/i,
-          );
-          await expect(cache.getBuffer({ ...request, attachmentIndex: 2 })).rejects.toThrow(
-            /outside allowed roots/i,
-          );
-        } finally {
-          vi.unstubAllEnvs();
-        }
+          for (const attachmentIndex of [1, 2]) {
+            await expect(cache.getBuffer({ ...request, attachmentIndex })).rejects.toThrow(
+              /outside allowed roots/i,
+            );
+          }
+        });
       });
     },
   );
@@ -141,8 +149,7 @@ describe("media understanding attachment cache", () => {
     "closes one bounded local read when the file is %s",
     async (behavior) => {
       await withTestDir({ prefix: "openclaw-media-cache-growth-" }, async (base) => {
-        const attachmentPath = path.join(base, "growing.png");
-        await fs.writeFile(attachmentPath, PNG_1X1);
+        const attachmentPath = await mediaFile(base, "growing.png");
         const maxBytes = PNG_1X1.length;
         const open = fs.open.bind(fs);
         let consumed = 0;
@@ -207,8 +214,7 @@ describe("media understanding attachment cache", () => {
         timeoutMs: number;
       }>();
       await withTestDir({ prefix: "openclaw-media-cache-path-limit-" }, async (base) => {
-        const attachmentPath = path.join(base, "photo.png");
-        await fs.writeFile(attachmentPath, PNG_1X1);
+        const attachmentPath = await mediaFile(base, "photo.png");
         mockRemote(base);
         const attachment =
           source === "local" ? { index: 0, path: attachmentPath } : remoteAttachment;
@@ -231,37 +237,29 @@ describe("media understanding attachment cache", () => {
   ])(
     "restages $fileName with a safe suffix after cache cleanup",
     async ({ fileName, extension, removeBeforeCleanup }) => {
-      await withTestDir({ prefix: "openclaw-media-cache-restage-" }, async (base) => {
-        mockRemote(base, fileName);
-        const cache = new MediaAttachmentCache([remoteAttachment]);
-        try {
-          const first = await cache.getPath(pngRequest);
-          expect(path.extname(first)).toBe(extension);
-          if (removeBeforeCleanup) {
-            await fs.unlink(first);
-          }
-          await cache.cleanup();
-          await expect(fs.stat(first)).rejects.toMatchObject({ code: "ENOENT" });
-          expect(await fs.readdir(base)).toEqual([]);
-          const second = await cache.getPath(pngRequest);
-          expect(second).not.toBe(first);
-          expect(path.extname(second)).toBe(extension);
-          await expect(fs.readFile(second)).resolves.toEqual(PNG_1X1);
-          expect(await cache.getPath(pngRequest)).toBe(second);
-          expect(readRemoteMediaBufferMock).toHaveBeenCalledTimes(1);
-        } finally {
-          await cache.cleanup();
+      await withRemoteCache(async (base, cache) => {
+        const first = await cache.getPath(pngRequest);
+        expect(path.extname(first)).toBe(extension);
+        if (removeBeforeCleanup) {
+          await fs.unlink(first);
         }
+        await cache.cleanup();
+        await expect(fs.stat(first)).rejects.toMatchObject({ code: "ENOENT" });
         expect(await fs.readdir(base)).toEqual([]);
-      });
+        const second = await cache.getPath(pngRequest);
+        expect(second).not.toBe(first);
+        expect(path.extname(second)).toBe(extension);
+        await expect(fs.readFile(second)).resolves.toEqual(PNG_1X1);
+        expect(await cache.getPath(pngRequest)).toBe(second);
+        expect(readRemoteMediaBufferMock).toHaveBeenCalledTimes(1);
+      }, fileName);
     },
   );
 
   it("keeps buffer-only and local-path access lazy without releasing borrowed bytes", async () => {
     await withTestDir({ prefix: "openclaw-media-cache-lazy-" }, async (base) => {
       vi.mocked(resolvePreferredOpenClawTmpDir).mockReturnValue(base);
-      const localPath = path.join(base, "photo.png");
-      await fs.writeFile(localPath, PNG_1X1);
+      const localPath = await mediaFile(base, "photo.png");
       readRemoteMediaBufferMock.mockResolvedValue({
         buffer: PNG_1X1,
         fileName: "photo.png",
@@ -297,8 +295,7 @@ describe("media understanding attachment cache", () => {
     async (hasFallback) => {
       await withTestDir({ prefix: "openclaw-media-cache-open-failure-" }, async (base) => {
         mockRemote(base, "remote.png");
-        const attachmentPath = path.join(base, "local.png");
-        await fs.writeFile(attachmentPath, PNG_1X1);
+        const attachmentPath = await mediaFile(base, "local.png");
         const open = fs.open.bind(fs);
         vi.spyOn(fs, "open").mockImplementation(async (...args) => {
           if (args[0] === attachmentPath) {
@@ -370,9 +367,7 @@ describe("media understanding attachment cache", () => {
   );
 
   it("keeps a successful concurrent path when another staging attempt fails", async () => {
-    await withTestDir({ prefix: "openclaw-media-cache-concurrent-" }, async (base) => {
-      mockRemote(base);
-      const cache = new MediaAttachmentCache([remoteAttachment]);
+    await withRemoteCache(async (base, cache) => {
       const started = createDeferred();
       const finish = createDeferred();
       const writeError = Object.assign(new Error("disk full"), { code: "ENOSPC" });
@@ -395,24 +390,20 @@ describe("media understanding attachment cache", () => {
       } finally {
         finish.resolve();
         await failed;
-        await cache.cleanup();
       }
-      expect(await fs.readdir(base)).toEqual([]);
     });
   });
 
   it("retries failed cleanup without losing earlier staging when a later attempt succeeds", async () => {
-    await withTestDir({ prefix: "openclaw-media-cache-cleanup-retry-" }, async (base) => {
+    await withRemoteCache(async (base, cache) => {
       const writeError = Object.assign(new Error("disk full"), { code: "ENOSPC" });
       const cleanupError = Object.assign(new Error("permission denied"), { code: "EACCES" });
       const writeFile = fs.writeFile.bind(fs);
-      mockRemote(base);
       const writeFileSpy = vi.spyOn(fs, "writeFile").mockImplementationOnce(async (file) => {
         await writeFile(file, PNG_1X1.subarray(0, 4));
         throw writeError;
       });
       const unlink = vi.spyOn(fs, "unlink").mockRejectedValueOnce(cleanupError);
-      const cache = new MediaAttachmentCache([remoteAttachment]);
 
       await expect(cache.getPath(request)).rejects.toBe(writeError);
       expect(await fs.readdir(base)).toHaveLength(1);
@@ -433,9 +424,7 @@ describe("media understanding attachment cache", () => {
   });
 
   it("retains files staged after cleanup takes its snapshot", async () => {
-    await withTestDir({ prefix: "openclaw-media-cache-cleanup-snapshot-" }, async (base) => {
-      mockRemote(base);
-      const cache = new MediaAttachmentCache([remoteAttachment]);
+    await withRemoteCache(async (base, cache) => {
       const first = await cache.getPath(request);
       const started = createDeferred();
       const finish = createDeferred();
@@ -457,9 +446,7 @@ describe("media understanding attachment cache", () => {
       } finally {
         finish.resolve();
         await cleaning;
-        await cache.cleanup();
       }
-      expect(await fs.readdir(base)).toEqual([]);
     });
   });
 });

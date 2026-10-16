@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { toInboundMediaFacts } from "../channels/inbound-event/media.js";
@@ -27,6 +27,17 @@ vi.mock("../plugins/capability-provider-runtime.js", async () => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let fetchSpy: ReturnType<typeof vi.spyOn<typeof globalThis, "fetch">>;
+beforeEach(() => {
+  fetchSpy = vi.spyOn(globalThis, "fetch");
+});
+afterEach(() => fetchSpy.mockRestore());
+function documentContext(url: string, contentType: string): MsgContext {
+  return {
+    Body: "<media:document>",
+    media: toInboundMediaFacts([{ url, contentType, kind: "document" }]),
+  };
+}
 
 function createOpenAiAudioCfg(): OpenClawConfig {
   return {
@@ -88,53 +99,24 @@ async function withStoredCache(
 describe("inbound media-store references in the attachment url field", () => {
   it("extracts a stored document when remote URLs are disabled", async () => {
     await withStoredInbound(Buffer.from("stored document text"), "text/plain", async (saved) => {
-      const fetchSpy = vi.spyOn(globalThis, "fetch");
-      const ctx: MsgContext = {
-        Body: "<media:document>",
-        media: toInboundMediaFacts([
-          {
-            url: `media://inbound/${saved.id}`,
-            contentType: "text/plain",
-            kind: "document",
-          },
-        ]),
-      };
-
-      try {
-        await applyMediaUnderstanding({ ctx, cfg: createUrlDisabledFileCfg() });
-
-        expect(ctx.Body).toContain("stored document text");
-        expect(fetchSpy).not.toHaveBeenCalled();
-      } finally {
-        fetchSpy.mockRestore();
-      }
+      const ctx = documentContext(`media://inbound/${saved.id}`, "text/plain");
+      await applyMediaUnderstanding({ ctx, cfg: createUrlDisabledFileCfg() });
+      expect(ctx.Body).toContain("stored document text");
+      expect(fetchSpy).not.toHaveBeenCalled();
     });
   });
 
   it("never renders signed URL query credentials as attachment names", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-    const ctx: MsgContext = {
-      Body: "<media:document>",
-      media: toInboundMediaFacts([
-        {
-          url: "https://cdn.example.test/docs/report.docx?X-Amz-Signature=SECRETSIG&X-Amz-Credential=AKIA123",
-          contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-          kind: "document",
-        },
-      ]),
-    };
-
-    try {
-      await applyMediaUnderstanding({ ctx, cfg: createUrlDisabledFileCfg() });
-
-      expect(ctx.Body).toContain("[Attachment skipped: URL file sources are disabled]");
-      expect(ctx.Body).toContain('name="report.docx"');
-      expect(ctx.Body).not.toContain("SECRETSIG");
-      expect(ctx.Body).not.toContain("AKIA123");
-      expect(fetchSpy).not.toHaveBeenCalled();
-    } finally {
-      fetchSpy.mockRestore();
-    }
+    const ctx = documentContext(
+      "https://cdn.example.test/docs/report.docx?X-Amz-Signature=SECRETSIG&X-Amz-Credential=AKIA123",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    );
+    await applyMediaUnderstanding({ ctx, cfg: createUrlDisabledFileCfg() });
+    expect(ctx.Body).toContain("[Attachment skipped: URL file sources are disabled]");
+    expect(ctx.Body).toContain('name="report.docx"');
+    expect(ctx.Body).not.toContain("SECRETSIG");
+    expect(ctx.Body).not.toContain("AKIA123");
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("prefers the media:// alias when the supplied path is blocked", async () => {
@@ -202,14 +184,9 @@ describe("inbound media-store references in the attachment url field", () => {
   });
 
   it("rejects malformed media:// aliases without attempting a remote fetch", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
     const cache = new MediaAttachmentCache([{ index: 0, url: "media://inbound/%" }]);
 
-    try {
-      await expect(cache.getBuffer(request)).rejects.toMatchObject({ reason: "empty" });
-      expect(fetchSpy).not.toHaveBeenCalled();
-    } finally {
-      fetchSpy.mockRestore();
-    }
+    await expect(cache.getBuffer(request)).rejects.toMatchObject({ reason: "empty" });
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

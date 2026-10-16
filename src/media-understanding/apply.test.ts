@@ -72,13 +72,24 @@ function createGroqAudioConfig(audio: MediaUnderstandingCapabilityConfig = {}): 
   });
 }
 
-function createGroqProviders(transcribedText = "transcribed text") {
-  return {
-    groq: {
-      id: "groq",
-      transcribeAudio: async () => ({ text: transcribedText }),
-    },
-  };
+type TranscribeAudio = NonNullable<MediaUnderstandingProvider["transcribeAudio"]>;
+function createGroqProviders(transcript: string | TranscribeAudio = "transcribed text") {
+  const transcribeAudio =
+    typeof transcript === "string" ? async () => ({ text: transcript }) : transcript;
+  return { groq: { id: "groq", transcribeAudio } };
+}
+type ApplyOptions = Parameters<typeof applyMediaUnderstanding>[0];
+function applyAudio(
+  ctx: MsgContext,
+  transcript: string | TranscribeAudio = "transcribed text",
+  options: Partial<Omit<ApplyOptions, "ctx" | "providers">> = {},
+) {
+  return applyMediaUnderstanding({
+    ctx,
+    cfg: createGroqAudioConfig(),
+    ...options,
+    providers: createGroqProviders(transcript),
+  });
 }
 
 function createRegistryMediaProviders(): Record<string, MediaUnderstandingProvider> {
@@ -182,22 +193,18 @@ async function withMediaAutoDetectEnv<T>(
   );
 }
 
-async function createAudioCtx(params?: {
+async function createAudioCtx({
+  body = "",
+  fileName = "note.ogg",
+  mediaType = "audio/ogg",
+  content = createSafeAudioFixtureBuffer(2048),
+}: {
   body?: string;
   fileName?: string;
   mediaType?: string;
   content?: Buffer | string;
-}): Promise<MsgContext> {
-  return mediaCtx(
-    [
-      await attachment(
-        params?.fileName ?? "note.ogg",
-        params?.content ?? createSafeAudioFixtureBuffer(2048),
-        params?.mediaType ?? "audio/ogg",
-      ),
-    ],
-    params?.body,
-  );
+} = {}): Promise<MsgContext> {
+  return mediaCtx([await attachment(fileName, content, mediaType)], body);
 }
 
 function mockWhisperCliTranscript(transcript: string) {
@@ -219,7 +226,6 @@ async function applyFile(params: {
   content: Buffer | string;
   fileName: string;
   mediaType?: string;
-  senderFileName?: string;
   body?: string;
   cfg?: OpenClawConfig;
 }) {
@@ -229,7 +235,6 @@ async function applyFile(params: {
       {
         path: await createTempMediaFile(params.fileName, params.content),
         contentType: params.mediaType,
-        ...(params.senderFileName ? { fileName: params.senderFileName } : {}),
       },
     ],
   };
@@ -239,18 +244,6 @@ async function applyFile(params: {
     selfServeLocalPaths: true,
   });
   return ctx;
-}
-
-// Local-file fixtures render trusted self-serve guidance plus a separately
-// fenced on-disk path.
-function expectUnsupportedFileApplied(params: { ctx: MsgContext; mime?: string }) {
-  expect(params.ctx.Body).toContain("<file");
-  expect(params.ctx.Body).toContain(
-    params.mime
-      ? `[Unsupported document format: ${params.mime}. The approved local file path follows as external attachment metadata.`
-      : "[Unsupported document format. The approved local file path follows as external attachment metadata.",
-  );
-  expect(params.ctx.Body).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
 }
 
 function expectPolicyRejectedFileApplied(params: { ctx: MsgContext; mime: string }) {
@@ -272,12 +265,10 @@ describe("applyMediaUnderstanding", () => {
         if (auth?.apiKey) {
           return auth.apiKey;
         }
-        const err = new Error(
-          `No API key resolved for provider "${provider}" (auth mode: ${auth?.mode}).`,
+        throw Object.assign(
+          new Error(`No API key resolved for provider "${provider}" (auth mode: ${auth?.mode}).`),
+          { code: "missing-api-key", provider },
         );
-        (err as { code?: string; provider?: string }).code = "missing-api-key";
-        (err as { code?: string; provider?: string }).provider = provider;
-        throw err;
       },
     }));
     vi.doMock("../channels/message/runtime.js", () => ({
@@ -315,28 +306,12 @@ describe("applyMediaUnderstanding", () => {
       const registryProviders = createRegistryMediaProviders();
       return {
         ...actual,
-        buildMediaUnderstandingRegistry: (
-          overrides?: Record<string, MediaUnderstandingProvider>,
-        ) => {
-          const registry = new Map<string, MediaUnderstandingProvider>(
-            Object.entries(registryProviders),
-          );
-          for (const [key, provider] of Object.entries(overrides ?? {})) {
-            const normalizedKey = actual.normalizeMediaProviderId(key);
-            const existing = registry.get(normalizedKey);
-            registry.set(
-              normalizedKey,
-              existing
-                ? {
-                    ...existing,
-                    ...provider,
-                    capabilities: provider.capabilities ?? existing.capabilities,
-                  }
-                : provider,
-            );
-          }
-          return registry;
-        },
+        buildMediaUnderstandingRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
+          actual.buildMediaUnderstandingRegistry(
+            overrides,
+            undefined,
+            Object.values(registryProviders),
+          ),
       };
     });
     ({ applyMediaUnderstanding } = await import("./apply.js"));
@@ -390,11 +365,7 @@ describe("applyMediaUnderstanding", () => {
   it("echoes an enabled audio transcript to the originating account", async () => {
     const ctx = await createAudioCtx();
     Object.assign(ctx, { Provider: "voicechat", From: "+10000000001", AccountId: "acc1" });
-    await applyMediaUnderstanding({
-      ctx,
-      cfg: createGroqAudioConfig({ echoTranscript: true }),
-      providers: createGroqProviders("hello world"),
-    });
+    await applyAudio(ctx, "hello world", { cfg: createGroqAudioConfig({ echoTranscript: true }) });
     expect(mockDeliverOutboundPayloads).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         channel: "voicechat",
@@ -408,11 +379,7 @@ describe("applyMediaUnderstanding", () => {
   it("keeps tiny audio-MIME text files eligible for extraction", async () => {
     const ctx = await createAudioCtx({ fileName: "note.txt", content: "recoverable file text" });
     const transcribeAudio = vi.fn(async () => ({ text: "must not run" }));
-    await applyMediaUnderstanding({
-      ctx,
-      cfg: createGroqAudioConfig(),
-      providers: { groq: { id: "groq", transcribeAudio } },
-    });
+    await applyAudio(ctx, transcribeAudio);
 
     expect(transcribeAudio).not.toHaveBeenCalled();
     expect(ctx.Transcript).toBe(
@@ -430,8 +397,7 @@ describe("applyMediaUnderstanding", () => {
       .fn<NonNullable<MediaUnderstandingProvider["transcribeAudio"]>>()
       .mockRejectedValueOnce(new MediaUnderstandingSkipError("tooSmall", "provider rejected clip"))
       .mockResolvedValue({ text: "recovered transcript" });
-    await applyMediaUnderstanding({
-      ctx,
+    await applyAudio(ctx, transcribeAudio, {
       cfg: mediaConfig({
         models: [
           { provider: "groq", model: "primary", capabilities: ["audio"] },
@@ -439,7 +405,6 @@ describe("applyMediaUnderstanding", () => {
         ],
         audio: { enabled: true },
       }),
-      providers: { groq: { id: "groq", transcribeAudio } },
     });
 
     expect(transcribeAudio).toHaveBeenCalledTimes(2);
@@ -470,11 +435,7 @@ describe("applyMediaUnderstanding", () => {
   it("keeps caption for command parsing when audio has user text", async () => {
     const ctx = await createAudioCtx({ body: "/capture status" });
     ctx.CommandAuthorized = false;
-    await applyMediaUnderstanding({
-      ctx,
-      cfg: createGroqAudioConfig(),
-      providers: createGroqProviders(),
-    });
+    await applyAudio(ctx);
 
     expectTranscriptApplied(
       ctx,
@@ -499,11 +460,7 @@ describe("applyMediaUnderstanding", () => {
       },
     });
 
-    await applyMediaUnderstanding({
-      ctx,
-      cfg,
-      providers: createGroqProviders("remote transcript"),
-    });
+    await applyAudio(ctx, "remote transcript", { cfg });
 
     expect(ctx.Transcript).toBe("remote transcript");
     expect(ctx.Body).toBe("[Audio]\nTranscript:\nremote transcript");
@@ -518,12 +475,7 @@ describe("applyMediaUnderstanding", () => {
     const transcribeAudio = vi.fn(async () => ({ text: "should-not-run" }));
     const cfg = createGroqAudioConfig({ maxBytes: 4 });
 
-    await applyMediaUnderstanding({
-      ctx,
-      cfg,
-      processingMode: "audio-only",
-      providers: { groq: { id: "groq", transcribeAudio } },
-    });
+    await applyAudio(ctx, transcribeAudio, { cfg, processingMode: "audio-only" });
 
     expect(ctx.MediaUnderstanding).toBeUndefined();
     expect(ctx.Transcript).toBeUndefined();
@@ -537,9 +489,7 @@ describe("applyMediaUnderstanding", () => {
     const providers = createGroqProviders();
     vi.spyOn(providers.groq, "transcribeAudio").mockRejectedValue(new Error("boom"));
     runExecMock.mockResolvedValue({ stdout: "cli transcript\n", stderr: "" });
-    await applyMediaUnderstanding({
-      ctx,
-      providers,
+    await applyAudio(ctx, providers.groq.transcribeAudio, {
       cfg: mediaConfig({
         models: [
           { provider: "groq", capabilities: ["audio"] },
@@ -690,65 +640,54 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.BodyForCommands).toBe("show Dom");
   });
 
-  it("uses the agent workspace as a fallback for relative media paths", async () => {
-    const workspaceDir = await createTempMediaDir();
-    const relativeImagePath = path.join("media", "inbound", "workspace.jpg");
-    const imagePath = path.join(workspaceDir, relativeImagePath);
-    await fs.mkdir(path.dirname(imagePath), { recursive: true });
-    await fs.writeFile(imagePath, "image-bytes");
-    const describeImage = vi.fn(async () => ({ text: "workspace image" }));
-    const ctx = mediaCtx([{ path: relativeImagePath, contentType: "image/jpeg" }]);
-    const cfg = createImageConfig();
-
-    await applyMediaUnderstanding({
-      ctx,
-      cfg,
-      agentDir: "/tmp/openclaw-agent",
-      workspaceDir,
-      providers: imageProviders(describeImage),
-    });
-
-    expect(ctx.Body).toBe("[Image]\nDescription:\nworkspace image");
-    expect(describeImage).toHaveBeenCalledWith(
-      expect.objectContaining({
+  it.each(["workspace", "heic-sequence"] as const)(
+    "describes %s images through the image provider",
+    async (source) => {
+      const heic = source === "heic-sequence";
+      const fileName = heic ? "photo.heic" : "workspace.jpg";
+      const content = heic
+        ? Buffer.from("000000186674797068657663000000000000000000000000", "hex")
+        : "image-bytes";
+      const workspaceDir = heic ? undefined : await createTempMediaDir();
+      const mediaPath = workspaceDir
+        ? path.join("media", "inbound", fileName)
+        : await createTempMediaFile(fileName, content);
+      if (workspaceDir) {
+        const target = path.join(workspaceDir, mediaPath);
+        await fs.mkdir(path.dirname(target), { recursive: true });
+        await fs.writeFile(target, content);
+      }
+      const text = heic ? "normalized image" : "workspace image";
+      const describeImage = vi.fn(async () => ({ text }));
+      const ctx = mediaCtx([
+        { path: mediaPath, contentType: heic ? "image/heic-sequence" : "image/jpeg" },
+      ]);
+      await applyMediaUnderstanding({
+        ctx,
+        cfg: createImageConfig(),
         agentDir: "/tmp/openclaw-agent",
         workspaceDir,
-        fileName: "workspace.jpg",
-        provider: "openai",
-        model: "gpt-5.4",
-      }),
-    );
-  });
-
-  it.each([
-    {
-      name: "HEIC sequence",
-      fileName: "photo.heic",
-      mime: "image/heic-sequence",
-      bytes: Buffer.from("000000186674797068657663000000000000000000000000", "hex"),
+        providers: imageProviders(describeImage),
+      });
+      expect(ctx.Body).toBe("[Image]\nDescription:\n" + text);
+      expect(describeImage).toHaveBeenCalledWith(
+        expect.objectContaining(
+          heic
+            ? { buffer: Buffer.from("jpeg-normalized"), fileName, mime: "image/jpeg" }
+            : {
+                agentDir: "/tmp/openclaw-agent",
+                workspaceDir,
+                fileName,
+                provider: "openai",
+                model: "gpt-5.4",
+              },
+        ),
+      );
+      if (heic) {
+        expect(convertHeicToJpegMock).toHaveBeenCalledWith(content);
+      }
     },
-  ])("normalizes $name images before tools.media.image provider execution", async (testCase) => {
-    const describeImage = vi.fn(async () => ({ text: "normalized image" }));
-    const ctx = mediaCtx([await attachment(testCase.fileName, testCase.bytes, testCase.mime)]);
-    const cfg = createImageConfig();
-
-    await applyMediaUnderstanding({
-      ctx,
-      cfg,
-      agentDir: "/tmp/openclaw-agent",
-      providers: imageProviders(describeImage),
-    });
-
-    expect(convertHeicToJpegMock).toHaveBeenCalledWith(testCase.bytes);
-    expect(describeImage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        buffer: Buffer.from("jpeg-normalized"),
-        fileName: testCase.fileName,
-        mime: "image/jpeg",
-      }),
-    );
-    expect(ctx.Body).toBe("[Image]\nDescription:\nnormalized image");
-  });
+  );
 
   it("renders recorded outcomes for every image candidate when no model is configured", async () => {
     const ctx: MsgContext = {
@@ -787,11 +726,9 @@ describe("applyMediaUnderstanding", () => {
 
   it("uses the active audio provider when models are missing", async () => {
     const ctx = await createAudioCtx({ fileName: "fallback.ogg" });
-    await applyMediaUnderstanding({
-      ctx,
+    await applyAudio(ctx, "fallback transcript", {
       cfg: mediaConfig({ audio: { enabled: true } }),
       activeModel: { provider: "groq", model: "whisper-large-v3" },
-      providers: createGroqProviders("fallback transcript"),
     });
     expect(ctx.Transcript).toBe("fallback transcript");
   });
@@ -806,11 +743,7 @@ describe("applyMediaUnderstanding", () => {
       Transcript: "preflight transcript",
       media: [{ path: audioPath, contentType: "audio/ogg", transcribed: true }],
     };
-    await applyMediaUnderstanding({
-      ctx,
-      cfg: createGroqAudioConfig({ maxBytes: undefined }),
-      providers: { groq: { id: "groq", transcribeAudio } },
-    });
+    await applyAudio(ctx, transcribeAudio, { cfg: createGroqAudioConfig({ maxBytes: undefined }) });
 
     expect(transcribeAudio).not.toHaveBeenCalled();
     expect(ctx.Transcript).toBe("preflight transcript");
@@ -827,35 +760,24 @@ describe("applyMediaUnderstanding", () => {
   });
 
   it("orders real and too-small audio transcripts with last preference", async () => {
-    const ctx: MsgContext = {
-      Body: "",
-      media: [
-        await attachment("valid.ogg", createSafeAudioFixtureBuffer(2048), "audio/ogg"),
-        await attachment("tiny.ogg", Buffer.alloc(100), "audio/ogg"),
-      ],
-    };
+    const ctx = mediaCtx([
+      await attachment("valid.ogg", createSafeAudioFixtureBuffer(2048), "audio/ogg"),
+      await attachment("tiny.ogg", Buffer.alloc(100), "audio/ogg"),
+    ]);
     const cfg = createGroqAudioConfig({
       maxBytes: undefined,
       attachments: { mode: "all", maxAttachments: 2, prefer: "last" },
     });
 
-    await applyMediaUnderstanding({
-      ctx,
+    await applyAudio(ctx, async (req) => ({ text: `transcribed ${req.fileName ?? "unknown"}` }), {
       cfg,
-      providers: {
-        groq: {
-          id: "groq",
-          transcribeAudio: async (req) => ({ text: `transcribed ${req.fileName ?? "unknown"}` }),
-        },
-      },
     });
 
     expect(ctx.MediaUnderstanding?.map((output) => output.attachmentIndex)).toEqual([1, 0]);
     const expectedTexts = [
-      "transcribed valid.ogg",
       "[Voice note could not be transcribed because the audio attachment was too small]",
+      "transcribed valid.ogg",
     ];
-    expectedTexts.reverse();
     expect(ctx.Transcript).toBe(`Audio 1:\n${expectedTexts[0]}\n\nAudio 2:\n${expectedTexts[1]}`);
     expect(ctx.Body).toBe(
       `[Audio 1/2]\nTranscript:\n${expectedTexts[0]}\n\n[Audio 2/2]\nTranscript:\n${expectedTexts[1]}`,
@@ -865,15 +787,12 @@ describe("applyMediaUnderstanding", () => {
   it("honors audio scope while leaving native image, video and file inputs untouched", async () => {
     const describeImage = vi.fn(async () => ({ text: "image ok" }));
     const transcribeAudio = vi.fn(async () => ({ text: "audio ok" }));
-    const ctx: MsgContext = {
-      Body: "",
-      media: [
-        await attachment("photo.jpg", "image-bytes", "image/jpeg"),
-        { url: "https://example.test/clip.mp4", contentType: "video/mp4" },
-        await attachment("note.ogg", createSafeAudioFixtureBuffer(2048), "audio/ogg"),
-        await attachment("notes.txt", "file text", "text/plain"),
-      ],
-    };
+    const ctx = mediaCtx([
+      await attachment("photo.jpg", "image-bytes", "image/jpeg"),
+      { url: "https://example.test/clip.mp4", contentType: "video/mp4" },
+      await attachment("note.ogg", createSafeAudioFixtureBuffer(2048), "audio/ogg"),
+      await attachment("notes.txt", "file text", "text/plain"),
+    ]);
     const result = await applyMediaUnderstanding({
       ctx,
       processingMode: "audio-only",
@@ -897,14 +816,11 @@ describe("applyMediaUnderstanding", () => {
 
   it("orders synthetic too-small audio output between image and video", async () => {
     const dir = await createTempMediaDir();
-    const ctx: MsgContext = {
-      Body: "",
-      media: [
-        await attachment("photo.jpg", "image-bytes", "image/jpeg"),
-        await attachment("silent.ogg", Buffer.alloc(100), "audio/ogg"),
-        await attachment("clip.mp4", "video-bytes", "video/mp4"),
-      ],
-    };
+    const ctx = mediaCtx([
+      await attachment("photo.jpg", "image-bytes", "image/jpeg"),
+      await attachment("silent.ogg", Buffer.alloc(100), "audio/ogg"),
+      await attachment("clip.mp4", "video-bytes", "video/mp4"),
+    ]);
     const cfg = mediaConfig({
       models: [
         { provider: "openai", model: "gpt-5.4", capabilities: ["image"] },
@@ -921,18 +837,9 @@ describe("applyMediaUnderstanding", () => {
       cfg,
       agentDir: dir,
       providers: {
-        openai: {
-          id: "openai",
-          describeImage: async () => ({ text: "image ok" }),
-        },
-        groq: {
-          id: "groq",
-          transcribeAudio: async () => ({ text: "audio should not run" }),
-        },
-        google: {
-          id: "google",
-          describeVideo: async () => ({ text: "video ok" }),
-        },
+        openai: { id: "openai", describeImage: async () => ({ text: "image ok" }) },
+        groq: { id: "groq", transcribeAudio: async () => ({ text: "audio should not run" }) },
+        google: { id: "google", describeVideo: async () => ({ text: "video ok" }) },
       },
     });
 
@@ -946,9 +853,11 @@ describe("applyMediaUnderstanding", () => {
         "[Video]\nDescription:\nvideo ok",
       ].join("\n\n"),
     );
-    expect(ctx.Transcript).toBe(placeholder);
-    expect(ctx.CommandBody).toBe(placeholder);
-    expect(ctx.BodyForCommands).toBe(placeholder);
+    expect(ctx).toMatchObject({
+      Transcript: placeholder,
+      CommandBody: placeholder,
+      BodyForCommands: placeholder,
+    });
   });
 
   it("does not coerce ZIP central-directory headers into text/plain", async () => {
@@ -959,7 +868,11 @@ describe("applyMediaUnderstanding", () => {
         0x5a, 0x00, 0x00, 0x00, 0x00,
       ]),
     });
-    expectUnsupportedFileApplied({ ctx });
+    expect(ctx.Body).toContain("<file");
+    expect(ctx.Body).toContain(
+      "[Unsupported document format. The approved local file path follows as external attachment metadata.",
+    );
+    expect(ctx.Body).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
   });
 
   it("extracts inbound files above the 5MB OpenResponses default", async () => {
@@ -1020,13 +933,11 @@ describe("applyMediaUnderstanding", () => {
       });
       vi.useFakeTimers();
       try {
-        const application = applyMediaUnderstanding({
-          ctx,
+        const application = applyAudio(ctx, transcribeAudio, {
           cfg: {
             ...createGroqAudioConfig(),
             gateway: { http: { endpoints: { responses: { files: { timeoutMs: 10 } } } } },
           },
-          providers: { groq: { id: "groq", transcribeAudio } },
         });
         await started.promise;
         if (outcome === "timed-out") {
@@ -1083,42 +994,41 @@ describe("applyMediaUnderstanding", () => {
     });
     expect(ctx.Body).toContain('<file name="notes.txt" mime="text/plain">');
     expect(ctx.Body).toContain("[No extractable text]");
-    expect(ctx.agentText).toBe(ctx.Body);
-    expect(ctx.BodyForAgent).toBe(ctx.Body);
-    expect(ctx.BodyForCommands).toBe(ctx.Body);
+    expect(ctx).toMatchObject({
+      agentText: ctx.Body,
+      BodyForAgent: ctx.Body,
+      BodyForCommands: ctx.Body,
+    });
   });
 
-  it.each(["files-only"] as const)(
-    "delivers pasted text without image interpretation in %s mode",
-    async (processingMode) => {
-      const describeImage = vi.fn(async () => ({ text: "image description" }));
-      const ctx: MsgContext = {
-        Body: "Is this related?",
-        media: [
-          await attachment(
-            "pasted-text-123.txt",
-            "Synthetic diagnostic: connection refused",
-            "text/plain",
-          ),
-          await attachment("photo.jpg", "image", "image/jpeg"),
-        ],
-      };
-      await applyMediaUnderstanding({
-        ctx,
-        cfg: createImageConfig(),
-        providers: { openai: { id: "openai", describeImage } },
-        processingMode,
-      });
-      expect(ctx.MediaUnderstandingDecisions?.map((decision) => decision.capability)).toEqual(
-        processingMode === "files-only" ? undefined : ["audio"],
-      );
-      expect(ctx.agentText).toContain("Is this related?");
-      expect(ctx.agentText).toContain("Synthetic diagnostic: connection refused");
-      expect(ctx.agentText).toContain('<<<EXTERNAL_UNTRUSTED_CONTENT id="');
-      expect(describeImage).not.toHaveBeenCalled();
-      expect(ctx.MediaUnderstanding).toBeUndefined();
-    },
-  );
+  it("delivers pasted text without image interpretation in files-only mode", async () => {
+    const describeImage = vi.fn(async () => ({ text: "image description" }));
+    const ctx: MsgContext = {
+      Body: "Is this related?",
+      media: [
+        await attachment(
+          "pasted-text-123.txt",
+          "Synthetic diagnostic: connection refused",
+          "text/plain",
+        ),
+        await attachment("photo.jpg", "image", "image/jpeg"),
+      ],
+    };
+    await applyMediaUnderstanding({
+      ctx,
+      cfg: createImageConfig(),
+      providers: { openai: { id: "openai", describeImage } },
+      processingMode: "files-only",
+    });
+    expect(ctx.MediaUnderstandingDecisions?.map((decision) => decision.capability)).toEqual(
+      undefined,
+    );
+    expect(ctx.agentText).toContain("Is this related?");
+    expect(ctx.agentText).toContain("Synthetic diagnostic: connection refused");
+    expect(ctx.agentText).toContain('<<<EXTERNAL_UNTRUSTED_CONTENT id="');
+    expect(describeImage).not.toHaveBeenCalled();
+    expect(ctx.MediaUnderstanding).toBeUndefined();
+  });
 
   it("uses classified MIME for allowedMimes when declared metadata disagrees", async () => {
     const ctx = await applyFile({
@@ -1212,31 +1122,27 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toContain("[2 more attachments skipped]");
   });
 
-  describe("renderInboundDocumentContext", () => {
-    it("returns rendered PDF page images for a scanned document", async () => {
-      const { renderInboundDocumentContext } = await import("./file-context.js");
-      extractFileContentFromBufferMock.mockResolvedValueOnce({
-        text: "",
-        images: [
-          { type: "image", data: "page-1-bytes", mimeType: "image/png" },
-          { type: "image", data: "page-2-bytes", mimeType: "image/png" },
-        ],
-      });
-      const ctx = mediaCtx(
-        [await attachment("scan.pdf", "%PDF-1.4\n", "application/pdf")],
-        "see attached",
-      );
-
-      const context = await renderInboundDocumentContext({ ctx, cfg: createMediaDisabledConfig() });
-
-      // The marker alone would tell the model the document exists while the
-      // injected images channel carries nothing; the pages must ride along.
-      expect(context?.text).toContain("[PDF content rendered to images]");
-      expect(context?.images).toEqual([
-        { type: "image", data: "page-1-bytes", mimeType: "image/png", attachmentIndex: 0 },
-        { type: "image", data: "page-2-bytes", mimeType: "image/png", attachmentIndex: 0 },
-      ]);
+  it("returns rendered PDF page images for a scanned document", async () => {
+    const { renderInboundDocumentContext } = await import("./file-context.js");
+    extractFileContentFromBufferMock.mockResolvedValueOnce({
+      text: "",
+      images: [
+        { type: "image", data: "page-1-bytes", mimeType: "image/png" },
+        { type: "image", data: "page-2-bytes", mimeType: "image/png" },
+      ],
     });
+    const ctx = mediaCtx(
+      [await attachment("scan.pdf", "%PDF-1.4\n", "application/pdf")],
+      "see attached",
+    );
+
+    const context = await renderInboundDocumentContext({ ctx, cfg: createMediaDisabledConfig() });
+
+    expect(context?.text).toContain("[PDF content rendered to images]");
+    expect(context?.images).toEqual([
+      { type: "image", data: "page-1-bytes", mimeType: "image/png", attachmentIndex: 0 },
+      { type: "image", data: "page-2-bytes", mimeType: "image/png", attachmentIndex: 0 },
+    ]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { Context, Model, ProviderStreamOptions } from "../llm/types.js";
 import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/sentinel.js";
 import {
@@ -23,7 +24,6 @@ const {
   acquireAgentRunPreparedModelRuntimeMock,
   releasePreparedModelRuntimeMock,
   resolveModelAsyncMock,
-  shouldPreferProviderRuntimeResolvedModelMock,
 } = imageRuntimeMocks;
 
 const resolveProviderRuntimePluginHandleMock = vi.hoisted(() => vi.fn());
@@ -123,14 +123,8 @@ describe("describeImageWithModelCore", () => {
       mode: "token",
       profileId: "github-copilot:backup",
     });
-    shouldPreferProviderRuntimeResolvedModelMock.mockReturnValueOnce(true);
     completeMock.mockResolvedValue(
-      imageCompletion(
-        "openai-responses",
-        "github-copilot",
-        "gpt-5.6-sol",
-        "profile-scoped image ok",
-      ),
+      imageCompletion("openai-responses", "github-copilot", "gpt-5.6-sol", "ok"),
     );
 
     await describeImage("github-copilot", "gpt-5.6-sol", { profile: "github-copilot:preferred" });
@@ -141,40 +135,33 @@ describe("describeImageWithModelCore", () => {
       modelRegistry,
       authProfileId: "github-copilot:backup",
     });
-    const [completionModel, , completionOptions] = expectDefined(
-      completeMock.mock.calls[0],
-      "complete call 0",
-    );
+    const [model, , options] = expectDefined(completeMock.mock.calls[0], "completion");
     const requestSignal = acquireAgentRunPreparedModelRuntimeMock.mock.calls[0]?.[1].abortSignal;
     expect(requestSignal).toBeInstanceOf(AbortSignal);
     expect(resolveModelAsyncMock.mock.calls[0]?.[4].abortSignal).toBe(requestSignal);
     expect(resolveModelAsyncMock.mock.calls[1]?.[4].abortSignal).toBe(requestSignal);
-    expect(completionOptions.signal).toBe(requestSignal);
-    expect(completionModel).toMatchObject({ contextWindow: 1_050_000, maxTokens: 128_000 });
+    expect(options.signal).toBe(requestSignal);
+    expect(model).toMatchObject({ contextWindow: 1_050_000, maxTokens: 128_000 });
   });
 
   it("places image prompt in user content for github-copilot provider", async () => {
-    const providerStreamResult = imageCompletion(
-      "openai-completions",
-      "github-copilot",
-      "gemini-3.1-pro-preview",
-      "A solid red square.",
-    );
-    const providerStreamFn = vi.fn((_model: unknown, _context: unknown, _options: unknown) => ({
-      result: vi.fn(async () => providerStreamResult),
+    const ref = { provider: "github-copilot", model: "gemini-3.1-pro-preview" };
+    const response = imageCompletion("openai-completions", ref.provider, ref.model, "ok");
+    const stream = vi.fn((_m: Model, _ctx: Context, _opts: ProviderStreamOptions) => ({
+      result: vi.fn(async () => response),
     }));
-    registerProviderStreamForModelMock.mockReturnValueOnce(providerStreamFn);
+    registerProviderStreamForModelMock.mockReturnValueOnce(stream);
     mockImageModel({
-      provider: "github-copilot",
-      id: "gemini-3.1-pro-preview",
+      provider: ref.provider,
+      id: ref.model,
       api: "openai-completions",
       baseUrl: "https://stale.example.test",
     });
 
-    await describeImage("github-copilot", "gemini-3.1-pro-preview");
+    await describeImage(ref.provider, ref.model);
 
     expect(completeMock).not.toHaveBeenCalled();
-    expect(providerStreamFn).toHaveBeenCalledOnce();
+    expect(stream).toHaveBeenCalledOnce();
     expect(prepareProviderRuntimeAuthMock).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "github-copilot",
@@ -186,21 +173,17 @@ describe("describeImageWithModelCore", () => {
     expect(looksLikeSecretSentinel(storedValue)).toBe(true);
     expect(storedValue).not.toBe("test-token");
     expect(resolveSecretSentinel(storedValue)).toBe("test-token");
-    const [completionModel, context, options] = providerStreamFn.mock.calls[0] as unknown as [
-      { baseUrl?: string; headers?: Record<string, string> },
-      { systemPrompt?: string; messages?: Array<{ role: string; content: unknown[] }> },
-      { apiKey?: string; headers?: Record<string, string> },
-    ];
-    expect(completionModel.baseUrl).toBe("https://api.githubcopilot.com");
-    expect(completionModel.headers).toMatchObject({
+    const [model, context, options] = expectDefined(stream.mock.calls[0], "stream");
+    expect(model.baseUrl).toBe("https://api.githubcopilot.com");
+    expect(model.headers).toMatchObject({
       "Copilot-Integration-Id": "copilot-developer-cli",
       "Editor-Version": "vscode/1.107.0",
       "Openai-Organization": "github-copilot",
       "User-Agent": "GitHubCopilotChat/0.35.0",
     });
-    expect(
-      Object.values(completionModel.headers ?? {}).some((value) => looksLikeSecretSentinel(value)),
-    ).toBe(false);
+    expect(Object.values(model.headers ?? {}).some((value) => looksLikeSecretSentinel(value))).toBe(
+      false,
+    );
     expect(options.apiKey).toBe(storedValue);
     expect(options.headers).toMatchObject({
       "Copilot-Vision-Request": "true",
@@ -208,70 +191,61 @@ describe("describeImageWithModelCore", () => {
     });
     expect(context.systemPrompt).toBeUndefined();
     const userMessage = context.messages?.find((m) => m.role === "user");
-    expect(userMessage).toBeDefined();
-    const contentTypes = userMessage!.content.map((block) => (block as { type: string }).type);
+    const contentTypes = Array.isArray(userMessage?.content)
+      ? userMessage.content.map((block) => block.type)
+      : [];
     expect(contentTypes).toContain("text");
     expect(contentTypes).toContain("image");
   });
 
-  it("derives workspaceDir from agentId when workspaceDir is undefined", async () => {
-    mockGoogleCompletion("workspace ok");
-    const cfg = {
-      agents: {
-        entries: {
-          "vision-agent": { agentDir: "/tmp/openclaw-agent", workspace: "/tmp/openclaw-workspace" },
-        },
-      },
-    };
-
-    await describeImage("google", "gemini-2.5-flash", {
-      cfg,
-      agentId: "vision-agent",
-      buffer: Buffer.alloc(1),
-    });
-
-    expect(acquireAgentRunPreparedModelRuntimeMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceDir: "/tmp/openclaw-workspace",
-        loadRuntimePlugins: true,
-      }),
-      expect.objectContaining({ catalogMode: "static", abortSignal: expect.any(AbortSignal) }),
-    );
-    expect(resolveModelAsyncMock).toHaveBeenCalledWith(
-      "google",
-      "gemini-2.5-flash",
-      "/tmp/openclaw-agent",
-      cfg,
-      expect.objectContaining({ workspaceDir: "/tmp/openclaw-workspace" }),
-    );
-  });
-
-  it("reuses a parent run generation without acquiring another image lease", async () => {
-    const cfg: OpenClawConfig = { logging: { level: "info" } };
-    mockGoogleCompletion("parent runtime");
-    const preparedModelRuntime = {
-      agentDir: "/tmp/parent-agent",
-      config: cfg,
-      workspaceDir: "/tmp/parent-workspace",
-      metadataSnapshot: createEmptyPluginMetadataSnapshot("/tmp/parent-workspace"),
-      configuredRuntimeModels: [],
-      inlineProviderModels: [],
-      createStores: () => ({ authStorage: preparedAuthStorage, modelRegistry: {} }),
-    } as never;
-
-    const result = await describeImage("google", "gemini-2.5-flash", {
-      cfg,
-      agentDir: "/tmp/parent-agent",
-      workspaceDir: "/tmp/parent-workspace",
-      preparedModelRuntime,
-      buffer: Buffer.alloc(1),
-    });
-
-    expect(result.text).toBe("parent runtime");
-    expect(acquireAgentRunPreparedModelRuntimeMock).not.toHaveBeenCalled();
-    expect(releasePreparedModelRuntimeMock).not.toHaveBeenCalled();
-    for (const call of resolveModelAsyncMock.mock.calls) {
-      expect(call[4]).toMatchObject({ preparedModelRuntime });
-    }
-  });
+  it.each([false, true])(
+    "uses the correct workspace/runtime owner (parent supplied: %s)",
+    async (supplied) => {
+      const agentDir = supplied ? "/tmp/parent-agent" : "/tmp/openclaw-agent";
+      const workspaceDir = supplied ? "/tmp/parent-workspace" : "/tmp/openclaw-workspace";
+      const cfg: OpenClawConfig = supplied
+        ? { logging: { level: "info" } }
+        : {
+            agents: { entries: { "vision-agent": { agentDir, workspace: workspaceDir } } },
+          };
+      const text = supplied ? "parent runtime" : "workspace ok";
+      mockGoogleCompletion(text);
+      const preparedModelRuntime = supplied
+        ? {
+            agentDir,
+            workspaceDir,
+            config: cfg,
+            metadataSnapshot: createEmptyPluginMetadataSnapshot(workspaceDir),
+            createStores: () => ({ authStorage: preparedAuthStorage, modelRegistry: {} }),
+          }
+        : undefined;
+      const result = await describeImage("google", "gemini-2.5-flash", {
+        cfg,
+        buffer: Buffer.alloc(1),
+        ...(supplied
+          ? { agentDir, workspaceDir, preparedModelRuntime }
+          : { agentId: "vision-agent" }),
+      });
+      if (supplied) {
+        expect(result.text).toBe(text);
+        expect(acquireAgentRunPreparedModelRuntimeMock).not.toHaveBeenCalled();
+        expect(releasePreparedModelRuntimeMock).not.toHaveBeenCalled();
+        for (const call of resolveModelAsyncMock.mock.calls) {
+          expect(call[4]).toMatchObject({ preparedModelRuntime });
+        }
+      } else {
+        expect(acquireAgentRunPreparedModelRuntimeMock).toHaveBeenCalledWith(
+          expect.objectContaining({ workspaceDir, loadRuntimePlugins: true }),
+          expect.objectContaining({ catalogMode: "static", abortSignal: expect.any(AbortSignal) }),
+        );
+        expect(resolveModelAsyncMock).toHaveBeenCalledWith(
+          "google",
+          "gemini-2.5-flash",
+          agentDir,
+          cfg,
+          expect.objectContaining({ workspaceDir }),
+        );
+      }
+    },
+  );
 });

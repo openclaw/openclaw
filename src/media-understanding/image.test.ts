@@ -20,7 +20,6 @@ import {
 const {
   completeMock,
   acquireAgentRunPreparedModelRuntimeMock,
-  shouldPreferProviderRuntimeResolvedModelMock,
   prepareProviderRuntimeAuthMock,
   releasePreparedModelRuntimeMock,
   getApiKeyForModelMock,
@@ -79,23 +78,16 @@ describe("describeImageWithModelCore", () => {
     const controller = new AbortController();
     fetchMock.mockImplementationOnce(async () => {
       controller.abort(new Error("caller cancelled MiniMax image batch"));
-      return Response.json({
-        base_resp: { status_code: 0 },
-        content: "first image",
-      });
+      return Response.json({ base_resp: { status_code: 0 }, content: "first image" });
     });
 
     await expect(
       describeImagesWithModelCore({
-        cfg: {},
-        agentDir: "/tmp/openclaw-agent",
-        provider: "minimax-portal",
-        model: "MiniMax-VL-01",
+        ...request(minimax),
         images: [
           { buffer: Buffer.from("first"), fileName: "first.png", mime: "image/png" },
           { buffer: Buffer.from("second"), fileName: "second.png", mime: "image/png" },
         ],
-        timeoutMs: 1000,
         signal: controller.signal,
       }),
     ).rejects.toThrow("caller cancelled MiniMax image batch");
@@ -114,9 +106,7 @@ describe("describeImageWithModelCore", () => {
             input: ["text", "image"],
             baseUrl: "https://custom-minimax.example.com/anthropic",
           },
-          {
-            proxy: { mode: "explicit-proxy", url: "https://proxy.example.com" },
-          },
+          { proxy: { mode: "explicit-proxy", url: "https://proxy.example.com" } },
         ),
       ),
     });
@@ -156,13 +146,14 @@ describe("describeImageWithModelCore", () => {
   });
 
   it("describes images keyless when amazon-bedrock resolves aws-sdk auth", async () => {
+    const bedrock = { provider: "amazon-bedrock", model: "us.anthropic.claude-sonnet-4-6-v1" };
+    const api = "bedrock-converse-stream";
     getApiKeyForModelMock.mockResolvedValueOnce({
       [API_KEY_FIELD]: "",
       source: "profile:amazon-bedrock:default",
       mode: "aws-sdk",
     });
-    // Faithful to runtime: requireApiKey throws on an empty resolved key. The
-    // aws-sdk carve-out must return before reaching it.
+    // An empty key must bypass the normal key-required boundary.
     requireApiKeyMock.mockImplementation((auth: { apiKey?: string; mode?: string }) => {
       const key = auth.apiKey?.trim();
       if (!key) {
@@ -173,33 +164,17 @@ describe("describeImageWithModelCore", () => {
       return key;
     });
     mockImageModel({
-      provider: "amazon-bedrock",
-      id: "us.anthropic.claude-sonnet-4-6-v1",
-      api: "bedrock-converse-stream",
+      provider: bedrock.provider,
+      id: bedrock.model,
+      api,
       baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
     });
     completeMock.mockResolvedValue(
-      imageCompletion(
-        "bedrock-converse-stream",
-        "amazon-bedrock",
-        "us.anthropic.claude-sonnet-4-6-v1",
-        "an orange tabby cat",
-      ),
+      imageCompletion(api, bedrock.provider, bedrock.model, "an orange tabby cat"),
     );
 
-    const result = await describeImageWithModelCore({
-      ...imageRequestDefaults(),
-      provider: "amazon-bedrock",
-      model: "us.anthropic.claude-sonnet-4-6-v1",
-      prompt: "Describe the image.",
-    });
-
-    expect(result).toEqual({
-      text: "an orange tabby cat",
-      model: "us.anthropic.claude-sonnet-4-6-v1",
-    });
-    // The carve-out returns before requireApiKey and skips persisting an
-    // empty-string secret; the empty key flows through to the model runtime.
+    const result = await describeImageWithModelCore(request(bedrock));
+    expect(result).toEqual({ text: "an orange tabby cat", model: bedrock.model });
     expect(requireApiKeyMock).not.toHaveBeenCalled();
     expect(setRuntimeApiKeyMock).not.toHaveBeenCalled();
     const completeCall = expectDefined(completeMock.mock.calls[0], "complete call 0");
@@ -207,53 +182,41 @@ describe("describeImageWithModelCore", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("uses canonical MiniMax CN baseUrl for VLM alias fallback", async () => {
-    mockUnknownMinimax();
-    await describeCn(
-      {
-        minimax: {
-          [API_KEY_FIELD]: "test-api-key",
-          baseUrl: "https://api.minimaxi.com/anthropic",
-          models: [],
+  it.each(["canonical", "secret-ref", "global-url"] as const)(
+    "resolves MiniMax CN fallback with %s configuration",
+    async (mode) => {
+      mockUnknownMinimax();
+      const alias = mode === "secret-ref";
+      const provider = alias ? "minimax-cn" : "minimax";
+      const workspaceDir = mode === "canonical" ? "/tmp/openclaw-workspace" : undefined;
+      const apiKey: Providers[string]["apiKey"] = alias
+        ? { source: "file", provider: "default", id: "/providers/minimax-cn/apiKey" }
+        : mode === "canonical"
+          ? "test-api-key"
+          : undefined;
+      await describeCn(
+        {
+          [provider]: {
+            baseUrl:
+              mode === "global-url"
+                ? "https://api.minimax.io/anthropic"
+                : "https://api.minimaxi.com/anthropic",
+            models: [],
+            ...(apiKey ? { apiKey } : {}),
+          },
         },
-      },
-      "/tmp/openclaw-workspace",
-    );
-
-    expect(resolveApiKeyForProviderCoreMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "minimax",
-        agentDir: "/tmp/openclaw-agent",
-        workspaceDir: "/tmp/openclaw-workspace",
-      }),
-    );
-  });
-
-  it("uses MiniMax CN alias auth when the alias apiKey is a SecretRef", async () => {
-    mockUnknownMinimax();
-    await describeCn({
-      "minimax-cn": {
-        [API_KEY_FIELD]: {
-          source: "file",
-          provider: "default",
-          id: "/providers/minimax-cn/apiKey",
-        },
-        baseUrl: "https://api.minimaxi.com/anthropic",
-        models: [],
-      },
-    });
-
-    expect(resolveApiKeyForProviderCoreMock).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "minimax-cn" }),
-    );
-  });
-
-  it("does not inherit global MiniMax baseUrl for CN VLM aliases", async () => {
-    mockUnknownMinimax();
-    await describeCn({
-      minimax: { baseUrl: "https://api.minimax.io/anthropic", models: [] },
-    });
-  });
+        workspaceDir,
+      );
+      if (mode !== "global-url") {
+        expect(resolveApiKeyForProviderCoreMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            provider,
+            ...(workspaceDir ? { agentDir: "/tmp/openclaw-agent", workspaceDir } : {}),
+          }),
+        );
+      }
+    },
+  );
 });
 
 describe("image runtime cancellation and retries", () => {
@@ -294,13 +257,7 @@ describe("image runtime cancellation and retries", () => {
       completeMock
         .mockResolvedValueOnce({
           ...completion,
-          content: [
-            {
-              type: "thinking",
-              thinking: "image reasoning",
-              thinkingSignature: "reasoning_content",
-            },
-          ],
+          content: [{ type: "thinking", thinking: "x", thinkingSignature: "reasoning_content" }],
         })
         .mockImplementationOnce(async (model, _context, options) => {
           const onPayload = expectDefined(options.onPayload, "retry payload transform");
@@ -446,7 +403,6 @@ describe("image runtime cancellation and retries", () => {
         modelRegistry: {},
       };
       resolveModelAsyncMock.mockResolvedValue(resolved);
-      shouldPreferProviderRuntimeResolvedModelMock.mockReturnValue(stage === "credential-model");
       if (stage === "admission") {
         acquireAgentRunPreparedModelRuntimeMock.mockImplementationOnce(() =>
           delay({

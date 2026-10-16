@@ -212,12 +212,24 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     plugins: { allow: [id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
   };
   const agentDir = path.join(dir, "agent");
+  const resume = () => {
+    for (const gate of [
+      state.finish,
+      state.resumeSetup,
+      state.finishCleanup,
+      state.finishWork,
+      state.finishSetupTail,
+    ]) {
+      gate.resolve();
+    }
+  };
   return {
     dir,
     id,
     config,
     agentDir,
     state,
+    resume,
     request: {
       cfg: config,
       agentDir,
@@ -239,11 +251,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         run,
       ),
     cleanup() {
-      state.finish.resolve();
-      state.resumeSetup.resolve();
-      state.finishCleanup.resolve();
-      state.finishWork.resolve();
-      state.finishSetupTail.resolve();
+      resume();
       for (const connection of connections) {
         if (connection.database.isOpen) {
           connection.database.close();
@@ -255,16 +263,53 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
 }
 
 type NativeFixture = ReturnType<typeof nativeImageFixture>;
-async function withNativeImage(fixture: NativeFixture, run: () => Promise<void>) {
+async function withNativeImage(fixture: NativeFixture, run: (work: NativeWork) => Promise<void>) {
+  const parent = new AsyncWorkScope();
+  let lease: Awaited<ReturnType<typeof acquireFixtureRuntime>> | undefined;
+  let pending: Promise<unknown> | undefined;
+  let closing: Promise<void> | undefined;
+  const work = {
+    parent,
+    async acquire() {
+      return (lease = await acquireFixtureRuntime(fixture, fixture.request.model));
+    },
+    start(task: () => Promise<unknown>, tracked = true) {
+      return (pending = (tracked ? parent.track(task) : task()).catch((error: unknown) => error));
+    },
+    async retire() {
+      await lease?.[Symbol.asyncDispose]();
+      closing ??= closePreparedModelRuntimeSnapshots();
+    },
+    async drain() {
+      await parent.drain();
+      await closing;
+    },
+  };
   try {
     await fixture.environment(async () => {
       useNoBundledPlugins();
-      await run();
+      try {
+        await run(work);
+      } finally {
+        fixture.resume();
+        await pending;
+        await parent.drain();
+        await lease?.[Symbol.asyncDispose]();
+        await closing;
+        await closePreparedModelRuntimeSnapshots();
+      }
     });
   } finally {
     fixture.cleanup();
   }
 }
+type NativeWork = {
+  parent: AsyncWorkScope;
+  acquire: () => ReturnType<typeof acquireFixtureRuntime>;
+  start: (task: () => Promise<unknown>, tracked?: boolean) => Promise<unknown>;
+  retire: () => Promise<void>;
+  drain: () => Promise<void>;
+};
 function describeFixture(
   fixture: NativeFixture,
   lease: Awaited<ReturnType<typeof acquireFixtureRuntime>>,
@@ -285,8 +330,7 @@ async function awaitEntered(entered: Promise<void>, outcome: Promise<unknown>, m
   ]);
 }
 function expectClosed(connection: NativeFixture["state"]["connections"][number]) {
-  expect(connection.disposals).toBe(1);
-  expect(connection.database.isOpen).toBe(false);
+  expect(connection).toMatchObject({ disposals: 1, database: { isOpen: false } });
 }
 function expectPersisted(connection: NativeFixture["state"]["connections"][number]) {
   const reopened = new DatabaseSync(connection.dbPath, { readOnly: true });
@@ -455,81 +499,66 @@ it.each(["timeout", "cancellation", "late-rejection"] as const)(
   },
 );
 
-it("releases only its borrow while the supplying generation remains open", async () => {
-  const fixture = nativeImageFixture();
-  await withNativeImage(fixture, async () => {
-    const lease = await acquireFixtureRuntime(fixture, "image-model");
-    try {
+it.each([false, true])(
+  "leaves the supplying registry with its caller (raw: %s)",
+  async (rawRegistry) => {
+    const fixture = nativeImageFixture();
+    await withNativeImage(fixture, async (work) => {
+      const raw = rawRegistry ? loadPluginRegistryHandle({ config: fixture.config }) : undefined;
+      if (raw) {
+        setActivePluginRegistry(raw);
+      }
+      const lease = await work.acquire();
       fixture.state.finish.resolve();
-      expect(await describeFixture(fixture, lease)).toMatchObject({ text: "native image 42" });
-      expect(fixture.state.connections[0]!.database.isOpen).toBe(true);
-      expect(fixture.state.connections[0]!.disposals).toBe(0);
-    } finally {
-      await lease[Symbol.asyncDispose]();
-      await closePreparedModelRuntimeSnapshots();
-    }
-    expect(fixture.state.connections[0]!.disposals).toBe(1);
-  });
-});
-
-it("leaves a raw supplied registry with its caller", async () => {
-  const fixture = nativeImageFixture();
-  await withNativeImage(fixture, async () => {
-    const raw = loadPluginRegistryHandle({ config: fixture.config });
-    setActivePluginRegistry(raw);
-    const lease = await acquireFixtureRuntime(fixture, "image-model");
-    try {
-      fixture.state.finish.resolve();
-      const snapshot = { ...lease.snapshot, pluginRegistry: raw };
       expect(
-        await describeImageWithModelCore({ ...fixture.request, preparedModelRuntime: snapshot }),
+        await describeFixture(
+          fixture,
+          lease,
+          raw
+            ? {
+                preparedModelRuntime: { ...lease.snapshot, pluginRegistry: raw },
+              }
+            : {},
+        ),
       ).toMatchObject({ text: "native image 42" });
-      expect(fixture.state.connections[0]!.disposals).toBe(0);
-      expect(fixture.state.connections[0]!.database.isOpen).toBe(true);
-    } finally {
-      await lease[Symbol.asyncDispose]();
-      await closePreparedModelRuntimeSnapshots();
-    }
-  });
-});
+      expect(fixture.state.connections[0]).toMatchObject({
+        disposals: 0,
+        database: { isOpen: true },
+      });
+      await work.retire();
+      await work.drain();
+      if (!rawRegistry) {
+        expect(fixture.state.connections[0]!.disposals).toBe(1);
+      }
+    });
+  },
+);
 
 it.each(["setup", "retry"] as const)(
   "refuses new provider work after process close during %s",
   async (phase) => {
     const fixture = nativeImageFixture();
-    await withNativeImage(fixture, async () => {
-      const lease = await acquireFixtureRuntime(fixture, "image-model");
-      let closing: Promise<void> | undefined;
-      let outcome: Promise<unknown> | undefined;
-      try {
-        fixture.state.holdSetup = phase === "setup";
-        fixture.state.reasoningOnly = phase === "retry";
-        outcome = describeFixture(fixture, lease).catch((error: unknown) => error);
-        const entered = phase === "setup" ? fixture.state.setupStarted : fixture.state.started;
-        await awaitEntered(entered.promise, outcome, "Image request settled before the held phase");
-        await lease[Symbol.asyncDispose]();
-        closing = closePreparedModelRuntimeSnapshots();
-        expect(fixture.state.connections[0]!.database.isOpen).toBe(true);
-        fixture.state.resumeSetup.resolve();
-        fixture.state.finish.resolve();
-        expect(await outcome).toEqual(
-          expect.objectContaining({
-            message: "Prepared plugin registry resources have been released",
-          }),
-        );
-        await closing;
-        expect(fixture.state.calls).toBe(phase === "setup" ? 0 : 1);
-        expect(fixture.state.setupReads).toBe(phase === "setup" ? 1 : 0);
-        expect(fixture.state.connections[0]!.lateReads).toBe(phase === "setup" ? 0 : 1);
-        expect(fixture.state.connections[0]!.disposals).toBe(1);
-      } finally {
-        fixture.state.resumeSetup.resolve();
-        fixture.state.finish.resolve();
-        await outcome;
-        await lease[Symbol.asyncDispose]();
-        await closing;
-        await closePreparedModelRuntimeSnapshots();
-      }
+    await withNativeImage(fixture, async (work) => {
+      const lease = await work.acquire();
+      fixture.state.holdSetup = phase === "setup";
+      fixture.state.reasoningOnly = phase === "retry";
+      const outcome = work.start(() => describeFixture(fixture, lease), false);
+      const entered = phase === "setup" ? fixture.state.setupStarted : fixture.state.started;
+      await awaitEntered(entered.promise, outcome, "Image request settled before the held phase");
+      await work.retire();
+      expect(fixture.state.connections[0]!.database.isOpen).toBe(true);
+      fixture.state.resumeSetup.resolve();
+      fixture.state.finish.resolve();
+      expect(await outcome).toEqual(
+        expect.objectContaining({
+          message: "Prepared plugin registry resources have been released",
+        }),
+      );
+      await work.drain();
+      expect(fixture.state.calls).toBe(phase === "setup" ? 0 : 1);
+      expect(fixture.state.setupReads).toBe(phase === "setup" ? 1 : 0);
+      expect(fixture.state.connections[0]!.lateReads).toBe(phase === "setup" ? 0 : 1);
+      expect(fixture.state.connections[0]!.disposals).toBe(1);
     });
   },
 );
@@ -538,70 +567,54 @@ it.each(["parent", "normal", "admitted-tail"] as const)(
   "preserves MCP cancellation and cleanup context during %s closure",
   async (mode) => {
     const fixture = nativeImageFixture();
-    await withNativeImage(fixture, async () => {
-      const lease = await acquireFixtureRuntime(fixture, "image-model");
-      const parent = new AsyncWorkScope();
-      let result: Promise<unknown> | undefined;
-      let closing: Promise<void> | undefined;
-      try {
-        fixture.state.watchCancellation = true;
-        fixture.state.holdWork = mode === "admitted-tail";
-        result = parent.track(() =>
-          withPluginRuntimeGenerationScope(lease.snapshot, () => describeFixture(fixture, lease)),
+    await withNativeImage(fixture, async (work) => {
+      const lease = await work.acquire();
+      fixture.state.watchCancellation = true;
+      fixture.state.holdWork = mode === "admitted-tail";
+      const result = work.start(() =>
+        withPluginRuntimeGenerationScope(lease.snapshot, () => describeFixture(fixture, lease)),
+      );
+      await awaitEntered(
+        fixture.state.started.promise,
+        result,
+        "Provider did not enter before reporting its result",
+      );
+      if (mode === "parent") {
+        const reason = new Error("synthetic parent close");
+        withPluginRuntimeGenerationScope(
+          {
+            metadataSnapshot: lease.snapshot.metadataSnapshot,
+            pluginRegistry: createEmptyPluginRegistry(),
+          },
+          () => work.parent.beginClose(reason),
         );
-        await awaitEntered(
-          fixture.state.started.promise,
-          result,
-          "Provider did not enter before reporting its result",
-        );
-        if (mode === "parent") {
-          const reason = new Error("synthetic parent close");
-          withPluginRuntimeGenerationScope(
-            {
-              metadataSnapshot: lease.snapshot.metadataSnapshot,
-              pluginRegistry: createEmptyPluginRegistry(),
-            },
-            () => parent.beginClose(reason),
-          );
-          expect(fixture.state.cancellation.signal?.aborted).toBe(true);
-          expect(fixture.state.cancellation.signal?.reason).toBe(reason);
-        } else {
-          fixture.state.finish.resolve();
-          expect(await result).toMatchObject({ text: "native image 42" });
-          if (mode === "admitted-tail") {
-            expect(fixture.state.cancellation.signal?.aborted).toBe(false);
-            fixture.state.finishWork.resolve();
-            await fixture.state.workSettled.promise;
-          }
-        }
-        await fixture.state.cleanupStarted.promise;
-        expect(fixture.state.cancellation.cleanupSignal?.aborted).toBe(true);
-        expect(fixture.state.cancellation.cleanupSignal?.reason).toBe(
-          fixture.state.cancellation.signal?.reason,
-        );
-        expect(fixture.state.cancellation.registry).toBe(lease.snapshot.pluginRegistry);
-        await lease[Symbol.asyncDispose]();
-        closing = closePreparedModelRuntimeSnapshots();
-        expect(fixture.state.connections[0]!.database.isOpen).toBe(true);
+        expect(fixture.state.cancellation.signal?.aborted).toBe(true);
+        expect(fixture.state.cancellation.signal?.reason).toBe(reason);
+      } else {
         fixture.state.finish.resolve();
         expect(await result).toMatchObject({ text: "native image 42" });
-        fixture.state.finishCleanup.resolve();
-        await parent.drain();
-        await closing;
-        expect(fixture.state.cancellation.failure).toBeUndefined();
-        expect(fixture.state.cancellation.afterRegistry).toBe(lease.snapshot.pluginRegistry);
-        expect(fixture.state.connections[0]!.cleanupReads).toBe(1);
-        expect(fixture.state.connections[0]!.disposals).toBe(1);
-      } finally {
-        fixture.state.finish.resolve();
-        fixture.state.finishWork.resolve();
-        fixture.state.finishCleanup.resolve();
-        await result;
-        await parent.drain();
-        await lease[Symbol.asyncDispose]();
-        await closing;
-        await closePreparedModelRuntimeSnapshots();
+        if (mode === "admitted-tail") {
+          expect(fixture.state.cancellation.signal?.aborted).toBe(false);
+          fixture.state.finishWork.resolve();
+          await fixture.state.workSettled.promise;
+        }
       }
+      await fixture.state.cleanupStarted.promise;
+      expect(fixture.state.cancellation.cleanupSignal?.aborted).toBe(true);
+      expect(fixture.state.cancellation.cleanupSignal?.reason).toBe(
+        fixture.state.cancellation.signal?.reason,
+      );
+      expect(fixture.state.cancellation.registry).toBe(lease.snapshot.pluginRegistry);
+      await work.retire();
+      expect(fixture.state.connections[0]!.database.isOpen).toBe(true);
+      fixture.state.finish.resolve();
+      expect(await result).toMatchObject({ text: "native image 42" });
+      fixture.state.finishCleanup.resolve();
+      await work.drain();
+      expect(fixture.state.cancellation.failure).toBeUndefined();
+      expect(fixture.state.cancellation.afterRegistry).toBe(lease.snapshot.pluginRegistry);
+      expect(fixture.state.connections[0]!.cleanupReads).toBe(1);
+      expect(fixture.state.connections[0]!.disposals).toBe(1);
     });
   },
 );
@@ -610,65 +623,48 @@ it.each(["success", "failure", "timeout"] as const)(
   "retains native resources through auth descendants after setup %s",
   async (mode) => {
     const fixture = nativeImageFixture();
-    await withNativeImage(fixture, async () => {
-      const lease = await acquireFixtureRuntime(fixture, "image-model");
-      const parent = new AsyncWorkScope();
-      let outcome: Promise<unknown> | undefined;
-      let closing: Promise<void> | undefined;
-      try {
-        fixture.state.holdSetup = true;
-        fixture.state.holdSetupTail = true;
-        fixture.state.rejectSetup = mode === "failure";
-        fixture.state.finish.resolve();
-        vi.useFakeTimers();
-        outcome = parent
-          .track(() => describeFixture(fixture, lease, { timeoutMs: 25 }))
-          .catch((error: unknown) => error);
-        await awaitEntered(
-          fixture.state.setupStarted.promise,
-          outcome,
-          "Setup did not enter the auth hook",
+    await withNativeImage(fixture, async (work) => {
+      const lease = await work.acquire();
+      fixture.state.holdSetup = true;
+      fixture.state.holdSetupTail = true;
+      fixture.state.rejectSetup = mode === "failure";
+      fixture.state.finish.resolve();
+      vi.useFakeTimers();
+      const outcome = work.start(() => describeFixture(fixture, lease, { timeoutMs: 25 }));
+      await awaitEntered(
+        fixture.state.setupStarted.promise,
+        outcome,
+        "Setup did not enter the auth hook",
+      );
+      if (mode === "timeout") {
+        await vi.advanceTimersByTimeAsync(25);
+        expect(await outcome).toEqual(
+          expect.objectContaining({
+            message: expect.stringContaining("image description setup timed out"),
+          }),
         );
-        if (mode === "timeout") {
-          await vi.advanceTimersByTimeAsync(25);
-          expect(await outcome).toEqual(
-            expect.objectContaining({
-              message: expect.stringContaining("image description setup timed out"),
-            }),
-          );
-        }
-        fixture.state.resumeSetup.resolve();
-        const result = await outcome;
-        if (mode === "success") {
-          expect(result).toMatchObject({ text: "native image 42" });
-        } else if (mode === "failure") {
-          expect(result).toEqual(expect.objectContaining({ message: "synthetic setup failure" }));
-        }
-        // Let the auth callback return after its deadline while its descendant is still held.
-        await vi.advanceTimersByTimeAsync(0);
-        expect(fixture.state.setupReads).toBe(1);
-        expect(fixture.state.calls).toBe(mode === "success" ? 1 : 0);
-        await lease[Symbol.asyncDispose]();
-        closing = closePreparedModelRuntimeSnapshots();
-        await vi.advanceTimersByTimeAsync(0);
-        expect(fixture.state.connections[0]!.database.isOpen).toBe(true);
-        fixture.state.finishSetupTail.resolve();
-        await fixture.state.setupTailSettled.promise;
-        await parent.drain();
-        await closing;
-        expect(fixture.state.cancellation.failure).toBeUndefined();
-        expect(fixture.state.setupTailReads).toBe(1);
-        expect(fixture.state.connections[0]!.disposals).toBe(1);
-        expectPersisted(fixture.state.connections[0]!);
-      } finally {
-        fixture.state.resumeSetup.resolve();
-        fixture.state.finishSetupTail.resolve();
-        await outcome;
-        await parent.drain();
-        await lease[Symbol.asyncDispose]();
-        await closing;
-        vi.useRealTimers();
       }
+      fixture.state.resumeSetup.resolve();
+      const result = await outcome;
+      if (mode === "success") {
+        expect(result).toMatchObject({ text: "native image 42" });
+      } else if (mode === "failure") {
+        expect(result).toEqual(expect.objectContaining({ message: "synthetic setup failure" }));
+      }
+      // Let the auth callback return after its deadline while its descendant is still held.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fixture.state.setupReads).toBe(1);
+      expect(fixture.state.calls).toBe(mode === "success" ? 1 : 0);
+      await work.retire();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fixture.state.connections[0]!.database.isOpen).toBe(true);
+      fixture.state.finishSetupTail.resolve();
+      await fixture.state.setupTailSettled.promise;
+      await work.drain();
+      expect(fixture.state.cancellation.failure).toBeUndefined();
+      expect(fixture.state.setupTailReads).toBe(1);
+      expect(fixture.state.connections[0]!.disposals).toBe(1);
+      expectPersisted(fixture.state.connections[0]!);
     });
   },
 );
@@ -683,9 +679,8 @@ it.each(["open", "resolved", "fallback"] as const)(
     });
     const entered = createDeferredCore();
     const resume = createDeferredCore();
-    await withNativeImage(fixture, async () => {
-      const lease = await acquireFixtureRuntime(fixture, fixture.request.model);
-      const parent = new AsyncWorkScope();
+    await withNativeImage(fixture, async (work) => {
+      const lease = await work.acquire();
       const read = () =>
         fixture.state.connections[0]!.database.prepare("SELECT value FROM proof").get()?.value;
       const request = vi
@@ -711,21 +706,17 @@ it.each(["open", "resolved", "fallback"] as const)(
               })
           : undefined;
       let outcome: Promise<unknown> | undefined;
-      let closing: Promise<void> | undefined;
       try {
-        outcome = parent
-          .track(() =>
-            describeImagesWithModelCore({
-              ...fixture.request,
-              preparedModelRuntime: lease.snapshot,
-              images: [fixture.request, fixture.request],
-            }),
-          )
-          .catch((error: unknown) => error);
+        outcome = work.start(() =>
+          describeImagesWithModelCore({
+            ...fixture.request,
+            preparedModelRuntime: lease.snapshot,
+            images: [fixture.request, fixture.request],
+          }),
+        );
         if (mode !== "open") {
           await awaitEntered(entered.promise, outcome, "MiniMax did not enter the held boundary");
-          await lease[Symbol.asyncDispose]();
-          closing = closePreparedModelRuntimeSnapshots();
+          await work.retire();
           expect(read()).toBe(42);
           resume.resolve();
           expect(await outcome).toEqual(
@@ -739,18 +730,14 @@ it.each(["open", "resolved", "fallback"] as const)(
           });
         }
         expect(request).toHaveBeenCalledTimes(mode === "open" ? 2 : mode === "resolved" ? 1 : 0);
-        await parent.drain();
-        await lease[Symbol.asyncDispose]();
-        await closing;
-        await closePreparedModelRuntimeSnapshots();
+        await work.retire();
+        await work.drain();
         expect(fixture.state.connections[0]!.disposals).toBe(1);
         expectPersisted(fixture.state.connections[0]!);
       } finally {
         resume.resolve();
         await outcome;
-        await parent.drain();
-        await lease[Symbol.asyncDispose]();
-        await closing;
+        await work.drain();
         request.mockRestore();
         auth?.mockRestore();
       }
