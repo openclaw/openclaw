@@ -14,6 +14,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { rewriteTranscriptEntriesInSessionManager } from "../embedded-agent-runner/transcript-rewrite.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
@@ -57,7 +58,7 @@ it("keeps deprecated sync rewrite publication ahead of synchronous commit observ
     agentId: scope.agentId,
     path: resolveSessionTranscriptDatabasePath(scope),
   });
-  database.db.function("queue_observer_append", () => {
+  requireNativeSqliteDatabase(database.db).function("queue_observer_append", () => {
     expect(
       deferOpenClawAgentPostCommitPublication(database, () => {
         manager.appendMessage({ role: "user", content: "observer", timestamp: 3 });

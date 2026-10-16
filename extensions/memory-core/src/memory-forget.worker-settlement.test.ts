@@ -3,6 +3,7 @@ import path from "node:path";
 import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
+import { requireNativeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listMemoryEntryOrigins, recordMemoryEntryOrigins } from "./memory-entry-origins.js";
 import { observeMemoryForgetWorker } from "./memory-forget-fault.test-support.js";
@@ -26,7 +27,9 @@ describe("memory forget worker settlement", () => {
 
   async function seedSelectedMemory(withOrigins: boolean) {
     await seedMemoryForgetSession("target");
-    const { db } = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" });
+    const db = requireNativeSqliteDatabase(
+      sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" }).db,
+    );
     if (withOrigins) {
       await recordMemoryEntryOrigins({
         agentId: "main",

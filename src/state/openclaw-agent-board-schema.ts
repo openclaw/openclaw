@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
@@ -62,9 +62,12 @@ function normalizeBoardWidgetsCreateSql(sql: string): string {
 }
 
 /** Repair the v14 board constraint inside the caller's schema/write transaction. */
-export function ensureOpenClawAgentBoardSchemaInTransaction(db: DatabaseSync): void {
+export function ensureOpenClawAgentBoardSchemaInTransaction(db: EngineConnection): void {
   if (!db.isTransaction) {
     throw new Error("board schema ensure requires an active transaction");
+  }
+  if (isPostgresSqlConnection(db)) {
+    return;
   }
   ensureBoardTables(db);
   const sql =

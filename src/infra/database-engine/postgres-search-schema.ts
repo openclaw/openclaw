@@ -4,6 +4,7 @@ import {
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
 } from "../sqlite-database-admission.js";
+import { DatabaseSearchCapabilityUnavailableError } from "./capability-unavailable.js";
 import type { SearchSchema } from "./contract.js";
 
 export const pgSearchName = (name: string) => `"${name.replaceAll('"', '""')}"`;
@@ -58,7 +59,8 @@ export function admitPostgresSearch(
         : found.extname
           ? `Configure the store's extensionSchema as ${String(found.nspname)}, or have a database administrator relocate the extension; installation SQL is`
           : "Have a database administrator run";
-      throw new Error(
+      throw new DatabaseSearchCapabilityUnavailableError(
+        name === "vector" ? "vector" : "fullText",
         `PostgreSQL ${name} capability unavailable. ${action}: CREATE EXTENSION IF NOT EXISTS ${pgSearchName(name)} WITH SCHEMA ${pgSearchName(extensionSchema)};${name === "vector" ? ' For keyword-only memory explicitly set memory.search.provider to "none".' : ""}`,
       );
     }

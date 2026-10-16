@@ -12,6 +12,8 @@ vi.mock("./client.js", async (importOriginal) => ({
 }));
 
 const child = "agent:maintainer:work:example";
+const descendant = "agent:worker:dashboard:descendant";
+const helper = "agent:worker:subagent:helper";
 const origin: Parameters<ReturnType<typeof openXWorkOrigins>["registerIfAbsent"]>[1] = {
   accountId: "default",
   postId: "501",
@@ -25,6 +27,22 @@ const expectedGuidance =
 
 beforeEach(() => client.getXApi.mockReset());
 afterEach(() => clearRuntimeConfigSnapshot());
+
+function installSpawnLineage(test: ReturnType<typeof fixture>) {
+  const entries: Record<string, { createdVia: "spawn"; spawnedBy: string }> = {
+    [descendant]: { createdVia: "spawn", spawnedBy: helper },
+    [helper]: { createdVia: "spawn", spawnedBy: child },
+  };
+  Object.assign(test.runtime, {
+    config: { current: () => config },
+    agent: {
+      session: {
+        resolveStorePath: () => "/synthetic/sessions.json",
+        getSessionEntryAsync: async ({ sessionKey }: { sessionKey: string }) => entries[sessionKey],
+      },
+    },
+  });
+}
 
 describe("X work-session origin", () => {
   it("contributes exact stable system guidance only to the recorded session", async () => {
@@ -62,17 +80,26 @@ describe("X work-session origin", () => {
       { target: "502", conversation: "500", allowed: true },
       { target: "503", conversation: "600", allowed: false },
     ].flatMap(({ target, conversation, allowed }) =>
-      ["action", "outbound"].map((route) => ({ target, conversation, allowed, route })),
+      ["action", "outbound"].flatMap((route) =>
+        [child, descendant].map((sessionKey) => ({
+          target,
+          conversation,
+          allowed,
+          route,
+          sessionKey,
+        })),
+      ),
     ),
   )(
-    "limits child replies to origin/conversation: $target via $route",
-    async ({ target, conversation, allowed, route }) => {
+    "limits $sessionKey replies to origin/conversation: $target via $route",
+    async ({ target, conversation, allowed, route, sessionKey }) => {
       const mention = {
         ...post(target, "10"),
         conversation_id: conversation,
         entities: { mentions: [{ id: "100", username: "roboclawbot" }] },
       };
       const test = fixture({ posts: [mention] });
+      installSpawnLineage(test);
       await openXWorkOrigins(test.runtime).registerIfAbsent(child, origin);
       const reply =
         route === "action"
@@ -80,14 +107,14 @@ describe("X work-session origin", () => {
               channel: "x",
               action: "send",
               cfg: config,
-              sessionKey: child,
+              sessionKey,
               params: { to: `https://x.com/config_maintainer/status/${target}`, message: "Fixed." },
             })
           : xPlugin.outbound!.sendText!({
               cfg: config,
               to: `x:${target}`,
               text: "Fixed.",
-              sessionKey: child,
+              sessionKey,
             });
       if (allowed) {
         await expect(reply).resolves.toBeDefined();
@@ -98,6 +125,24 @@ describe("X work-session origin", () => {
       }
     },
   );
+
+  it("gives visible descendants their origin's approval guidance before the first turn", async () => {
+    const test = fixture({ posts: [] });
+    installSpawnLineage(test);
+    await openXWorkOrigins(test.runtime).registerIfAbsent(child, origin);
+    const on = vi.fn<OpenClawPluginApi["on"]>();
+    registerXWorkOriginGuidance({ on, runtime: test.runtime });
+    const handler = on.mock.calls[0]![1] as (
+      event: { prompt: string; messages: unknown[] },
+      ctx: { sessionKey: string },
+    ) => Promise<{ appendSystemContext: string } | undefined>;
+    expect(await handler({ prompt: "continue", messages: [] }, { sessionKey: descendant })).toEqual(
+      {
+        appendSystemContext: expectedGuidance,
+      },
+    );
+    expect(await openXWorkOrigins(test.runtime).lookup(descendant)).toEqual(origin);
+  });
 
   it("does not accept a quote-only sibling or model-supplied session identity", async () => {
     const sibling = {

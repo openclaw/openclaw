@@ -25,6 +25,7 @@ import {
 } from "./subagent-registry-state.fixture.test-support.js";
 import { registerSubagentDismissedRetentionCases } from "./subagent-registry.persistence.retention.test-support.js";
 import {
+  prepareSubagentRecoveryFixture,
   gateSubagentRequesterSettlement,
   observeSubagentRequesterWake,
   settleSubagentRegistryPersistenceWork,
@@ -153,6 +154,7 @@ describe("subagent registry persistence resume", () => {
           },
           cleanupHandled: false,
         });
+        await prepareSubagentRecoveryFixture(run, { stateDir });
         saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
         await writeChildSession(stateDir, run.childSessionKey, `sess-pending-${label}-delivery`);
 
@@ -170,8 +172,9 @@ describe("subagent registry persistence resume", () => {
   );
 
   it("replays one required completion after restart without the child session", async () => {
-    await withRegistryState(async () => {
+    await withRegistryState(async (stateDir) => {
       const run = createOrphanedRequiredDelivery("pending");
+      await prepareSubagentRecoveryFixture(run, { stateDir });
       saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
       const settlement = gateSubagentRequesterSettlement(
         requesterSettleModule.maybeWakeRequesterAfterAllChildrenSettled,

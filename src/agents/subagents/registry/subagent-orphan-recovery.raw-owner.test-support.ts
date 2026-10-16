@@ -20,6 +20,7 @@ import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { recoverInterruptedSubagentRow } from "./subagent-registry-restart-recovery.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
+import { prepareSubagentRecoveryFixture } from "./subagent-registry.persistence.test-support.js";
 import {
   addSubagentRunForTests,
   initSubagentRegistry,
@@ -201,23 +202,23 @@ export function registerRawChildRestoreOwnershipTest(
       status: "interrupted",
       abortedLastRun: true,
     });
-    await addSubagentRunForTests(
-      makeRunRecord({
-        runId,
-        childSessionKey,
-        childAgentId: "research",
-        childSessionIdentity: {
-          sessionId: "research-restore-session",
-          lifecycleRevision: "research-restore-revision",
-        },
-        createdAt: startedAt,
-        expectsCompletionMessage: true,
-        endedReason: "subagent-complete",
-        execution: { status: "terminal", startedAt, endedAt, outcome: { status: "ok" } },
-        completion: { required: true, resultText: "Research result", capturedAt: endedAt },
-        delivery: { status: "pending" },
-      }),
-    );
+    const recovered = makeRunRecord({
+      runId,
+      childSessionKey,
+      childAgentId: "research",
+      childSessionIdentity: {
+        sessionId: "research-restore-session",
+        lifecycleRevision: "research-restore-revision",
+      },
+      createdAt: startedAt,
+      expectsCompletionMessage: true,
+      endedReason: "subagent-complete",
+      execution: { status: "terminal", startedAt, endedAt, outcome: { status: "ok" } },
+      completion: { required: true, resultText: "Research result", capturedAt: endedAt },
+      delivery: { status: "pending" },
+    });
+    await prepareSubagentRecoveryFixture(recovered, { stateDir: fixture.stateDir });
+    await addSubagentRunForTests(recovered);
     await fixture.settle();
     await resetSubagentRegistryForTests({ persist: false });
     rotateAgentEventLifecycleGeneration();

@@ -1,4 +1,3 @@
-import { readAcpSessionControlInWorker } from "../../../acp/runtime/session-meta-source.worker.js";
 import { requestSessionEntryCurrentAdmission } from "../../../config/sessions/session-entry-current-admission.worker.js";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../../../infra/kysely-sync.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../../../infra/sql-connection.js";
@@ -164,24 +163,17 @@ export function persistSubagentRunChangesInWorker(
   try {
     return runOpenClawStateWriteTransaction((writer): SubagentRegistryWriteReceipt => {
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: writeId });
-      const admitEvents = (stage: "transaction" | "commit") => {
-        for (const [eventIndex, event] of terminalEvents.entries()) {
-          requestSessionEntryCurrentAdmission(event.sessionEntryCurrentSource, {
-            stage,
-            facts: { writeId, eventIndex },
-          });
-          if (event.acpControl && !readAcpSessionControlInWorker(writer, event.acpControl).row) {
-            throw new Error("ACP task owner could not be verified.");
-          }
-        }
-      };
-      admitEvents("transaction");
       writeSubagentRunValuesInDatabase(writer, values, deleteRunIds);
       const notices: SessionStateNotice[] = [];
       for (const { event, now } of terminalEvents) {
         notices.push(...recordSessionStateEventInDatabase(writer.db, event, now).notices);
       }
-      admitEvents("commit");
+      for (const [eventIndex, event] of terminalEvents.entries()) {
+        requestSessionEntryCurrentAdmission(event.sessionEntryCurrentSource, {
+          stage: "commit",
+          facts: { writeId, eventIndex },
+        });
+      }
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: writeId });
       const receipt: SubagentRegistryWriteReceipt = {
         writeId,

@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { lstatSync, statSync } from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
@@ -72,7 +71,7 @@ function registeredPathKey(source: {
 
 /** Physical schema admission does not register a newly used lexical alias. */
 export function hasRegisteredOpenClawAgentDatabasePath(
-  database: { db: DatabaseSync; agentId: string; path: string },
+  database: { db: EngineConnection; agentId: string; path: string },
   options: OpenClawStateDatabaseOptions,
 ): boolean {
   const { identity } = readOpenClawAgentDatabaseIdentity(database);

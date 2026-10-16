@@ -1,11 +1,6 @@
 // Lazy promise tests cover single-flight loading and error reuse behavior.
 import { describe, expect, it, vi } from "vitest";
-import {
-  createLazyImportLoader,
-  createLazyPromise,
-  createLazyPromiseLoader,
-  getOrCreatePromise,
-} from "./lazy-promise.js";
+import { createLazyPromise, createLazyPromiseLoader, getOrCreatePromise } from "./lazy-promise.js";
 
 describe("getOrCreatePromise", () => {
   it("evicts only rejected loads when rejection caching is disabled", async () => {
@@ -110,13 +105,5 @@ describe("createLazyPromiseLoader", () => {
     loader.clear();
     expect(loader.peek()).toBeUndefined();
     await expect(loader.load()).resolves.toBe("loaded-2");
-  });
-});
-
-describe("createLazyImportLoader", () => {
-  it("wraps import-shaped loaders", async () => {
-    const loader = createLazyImportLoader(async () => ({ value: "module" }));
-
-    await expect(loader.load()).resolves.toEqual({ value: "module" });
   });
 });

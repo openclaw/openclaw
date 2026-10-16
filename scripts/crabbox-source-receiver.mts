@@ -97,8 +97,15 @@ try {
   }
   git(["init", "-q"]);
   git(["remote", "add", "origin", "https://github.com/openclaw/openclaw.git"]);
-  git(["fetch", "-q", "--depth=2", "origin", expected.baseSha + ":refs/remotes/origin/main"],
-    { phase: "base-fetch" });
+  const preparedGit = path.join(cwd, ".git");
+  const reuseBase = stat(preparedGit)?.isDirectory() &&
+    git(["for-each-ref", "--format=%(objectname)", "refs/remotes/origin/main"], {
+      env: { ...env, GIT_DIR: preparedGit, GIT_INDEX_FILE: path.join(preparedGit, "index") }
+    }).trim() === expected.baseSha;
+  // A reused lease already owns this exact base. Fetch its objects into the new
+  // private Git directory; no alternates may survive replacement of preparedGit.
+  git(["fetch", "-q", "--depth=2", reuseBase ? preparedGit : "origin",
+    expected.baseSha + ":refs/remotes/origin/main"], { phase: "base-fetch" });
   if (git(["rev-parse", "refs/remotes/origin/main"]).trim() !== expected.baseSha)
     fail("source base mismatch");
   git(["fetch", "-q", bundle, "refs/openclaw/source-capsule:refs/heads/openclaw-source"],
