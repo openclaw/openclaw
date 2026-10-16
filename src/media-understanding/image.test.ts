@@ -53,6 +53,9 @@ function mockOpenAi() {
     baseUrl: "https://api.openai.com/v1",
   });
 }
+function openAiCompletion(text: string) {
+  return imageCompletion("openai-responses", openai.provider, openai.model, text);
+}
 function mockUnknownMinimax() {
   resolveModelAsyncMock.mockResolvedValue({
     authStorage: preparedAuthStorage,
@@ -223,17 +226,16 @@ describe("image runtime cancellation and retries", () => {
   installImageRuntimeTestHooks();
 
   it("reports the resolved model input when an image model is text-only", async () => {
+    const ref = { provider: "lmstudio", model: "text-only" };
     mockImageModel({
-      provider: "lmstudio",
-      id: "text-only",
+      provider: ref.provider,
+      id: ref.model,
       api: "openai-completions",
       input: ["text"],
       baseUrl: "http://127.0.0.1:1234",
     });
 
-    await expect(
-      describeImageWithModelCore(request({ provider: "lmstudio", model: "text-only" })),
-    ).rejects.toThrow(
+    await expect(describeImageWithModelCore(request(ref))).rejects.toThrow(
       "Model does not support images: lmstudio/text-only (resolved lmstudio/text-only input: text)",
     );
     expect(completeMock).not.toHaveBeenCalled();
@@ -246,7 +248,7 @@ describe("image runtime cancellation and retries", () => {
     "applies caller transforms after retry stripping ($asyncTransform, $replace)",
     async ({ asyncTransform, replace }) => {
       mockOpenAi();
-      const completion = imageCompletion("openai-responses", "openai", "gpt-5.4-mini", "retry ok");
+      const completion = openAiCompletion("retry ok");
       const stripped = { reasoning: { effort: "none" } };
       const replacement = { custom: "provider option" };
       const transform = vi.fn((payload: unknown) => {
@@ -283,7 +285,7 @@ describe("image runtime cancellation and retries", () => {
     completeMock.mockImplementationOnce(async () => {
       controller.abort(new Error("caller cancelled image description"));
       return {
-        ...imageCompletion("openai-responses", "openai", "gpt-5.4-mini", ""),
+        ...openAiCompletion(""),
         content: [{ type: "thinking", thinking: "internal", thinkingSignature: "reasoning" }],
       };
     });
@@ -346,14 +348,8 @@ describe("image runtime cancellation and retries", () => {
     await vi.advanceTimersByTimeAsync(slowSetupMs);
     await Promise.resolve();
     expect(completeMock).toHaveBeenCalledTimes(1);
-    const firstCall = expectDefined(
-      completeMock.mock.calls[0],
-      "slow setup image completion call 0",
-    );
-    const options = firstCall[2];
-    if (!options?.signal) {
-      throw new Error("Expected image completion abort signal");
-    }
+    const options = expectDefined(completeMock.mock.calls[0], "slow setup completion")[2];
+    const signal = expectDefined(options?.signal, "image completion abort signal");
     expect(options.timeoutMs).toBe(1000);
 
     const assertion = expect(result).rejects.toThrow(
@@ -361,7 +357,7 @@ describe("image runtime cancellation and retries", () => {
     );
     await vi.advanceTimersByTimeAsync(1000);
     await assertion;
-    expect(options.signal.aborted).toBe(true);
+    expect(signal.aborted).toBe(true);
   });
 
   it.each([

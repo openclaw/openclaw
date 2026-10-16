@@ -39,24 +39,19 @@ function documentContext(url: string, contentType: string): MsgContext {
   };
 }
 
-function createOpenAiAudioCfg(): OpenClawConfig {
-  return {
-    models: { providers: { openai: { apiKey: "test-key", models: [] } } },
-  } as unknown as OpenClawConfig;
-}
-
-function createUrlDisabledFileCfg(): OpenClawConfig {
-  return {
-    tools: {
-      media: {
-        audio: { enabled: false },
-        image: { enabled: false },
-        video: { enabled: false },
-      },
+const audioCfg = {
+  models: { providers: { openai: { apiKey: "test-key", models: [] } } },
+} as unknown as OpenClawConfig;
+const urlDisabledFileCfg: OpenClawConfig = {
+  tools: {
+    media: {
+      audio: { enabled: false },
+      image: { enabled: false },
+      video: { enabled: false },
     },
-    gateway: { http: { endpoints: { responses: { files: { allowUrl: false } } } } },
-  };
-}
+  },
+  gateway: { http: { endpoints: { responses: { files: { allowUrl: false } } } } },
+};
 
 async function withStoredInboundAudio<T>(
   run: (saved: { id: string; path: string }, stateDir: string) => Promise<T>,
@@ -71,9 +66,9 @@ async function withStoredInbound<T>(
 ): Promise<T> {
   // Store paths are canonical; match them even when macOS aliases os.tmpdir().
   const stateDir = await fs.realpath(tempDirs.make("openclaw-media-store-ref-", os.tmpdir()));
-  return await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir, PATH: "" }, async () => {
-    return await run(await saveMediaBuffer(buffer, mime, "inbound"), stateDir);
-  });
+  return withEnvAsync({ OPENCLAW_STATE_DIR: stateDir, PATH: "" }, async () =>
+    run(await saveMediaBuffer(buffer, mime, "inbound"), stateDir),
+  );
 }
 
 const request = { attachmentIndex: 0, maxBytes: 4096, timeoutMs: 1000 };
@@ -100,7 +95,7 @@ describe("inbound media-store references in the attachment url field", () => {
   it("extracts a stored document when remote URLs are disabled", async () => {
     await withStoredInbound(Buffer.from("stored document text"), "text/plain", async (saved) => {
       const ctx = documentContext(`media://inbound/${saved.id}`, "text/plain");
-      await applyMediaUnderstanding({ ctx, cfg: createUrlDisabledFileCfg() });
+      await applyMediaUnderstanding({ ctx, cfg: urlDisabledFileCfg });
       expect(ctx.Body).toContain("stored document text");
       expect(fetchSpy).not.toHaveBeenCalled();
     });
@@ -111,7 +106,7 @@ describe("inbound media-store references in the attachment url field", () => {
       "https://cdn.example.test/docs/report.docx?X-Amz-Signature=SECRETSIG&X-Amz-Credential=AKIA123",
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     );
-    await applyMediaUnderstanding({ ctx, cfg: createUrlDisabledFileCfg() });
+    await applyMediaUnderstanding({ ctx, cfg: urlDisabledFileCfg });
     expect(ctx.Body).toContain("[Attachment skipped: URL file sources are disabled]");
     expect(ctx.Body).toContain('name="report.docx"');
     expect(ctx.Body).not.toContain("SECRETSIG");
@@ -143,14 +138,16 @@ describe("inbound media-store references in the attachment url field", () => {
       try {
         const result = await runCapability({
           capability: "audio",
-          cfg: createOpenAiAudioCfg(),
+          cfg: audioCfg,
           ctx,
           attachments: cache,
           media,
           providerRegistry,
         });
-        expect(result.decision.outcome).toBe("success");
-        expect(result.outputs[0]?.text).toBe("hello from the voice note");
+        expect(result).toMatchObject({
+          decision: { outcome: "success" },
+          outputs: [expect.objectContaining({ text: "hello from the voice note" })],
+        });
         expect(transcribeAudio).toHaveBeenCalledTimes(1);
         expect(transcribeAudio.mock.calls[0]?.[0].buffer).toEqual(
           createSafeAudioFixtureBuffer(2048, 0x52),

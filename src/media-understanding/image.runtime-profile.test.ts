@@ -61,8 +61,7 @@ describe("describeImageWithModelCore", () => {
 
   it("normalizes deprecated google flash ids and keeps profile model/auth selection", async () => {
     const findMock = vi.fn((provider: string, modelId: string) => {
-      expect(provider).toBe("google");
-      expect(modelId).toBe("gemini-3-flash-preview");
+      expect([provider, modelId]).toEqual(["google", "gemini-3-flash-preview"]);
       return {
         provider: "google",
         id: "gemini-3-flash-preview",
@@ -138,8 +137,9 @@ describe("describeImageWithModelCore", () => {
     const [model, , options] = expectDefined(completeMock.mock.calls[0], "completion");
     const requestSignal = acquireAgentRunPreparedModelRuntimeMock.mock.calls[0]?.[1].abortSignal;
     expect(requestSignal).toBeInstanceOf(AbortSignal);
-    expect(resolveModelAsyncMock.mock.calls[0]?.[4].abortSignal).toBe(requestSignal);
-    expect(resolveModelAsyncMock.mock.calls[1]?.[4].abortSignal).toBe(requestSignal);
+    for (const call of resolveModelAsyncMock.mock.calls) {
+      expect(call[4].abortSignal).toBe(requestSignal);
+    }
     expect(options.signal).toBe(requestSignal);
     expect(model).toMatchObject({ contextWindow: 1_050_000, maxTokens: 128_000 });
   });
@@ -174,28 +174,28 @@ describe("describeImageWithModelCore", () => {
     expect(storedValue).not.toBe("test-token");
     expect(resolveSecretSentinel(storedValue)).toBe("test-token");
     const [model, context, options] = expectDefined(stream.mock.calls[0], "stream");
-    expect(model.baseUrl).toBe("https://api.githubcopilot.com");
-    expect(model.headers).toMatchObject({
-      "Copilot-Integration-Id": "copilot-developer-cli",
-      "Editor-Version": "vscode/1.107.0",
-      "Openai-Organization": "github-copilot",
-      "User-Agent": "GitHubCopilotChat/0.35.0",
+    expect(model).toMatchObject({
+      baseUrl: "https://api.githubcopilot.com",
+      headers: {
+        "Copilot-Integration-Id": "copilot-developer-cli",
+        "Editor-Version": "vscode/1.107.0",
+        "Openai-Organization": "github-copilot",
+        "User-Agent": "GitHubCopilotChat/0.35.0",
+      },
     });
     expect(Object.values(model.headers ?? {}).some((value) => looksLikeSecretSentinel(value))).toBe(
       false,
     );
-    expect(options.apiKey).toBe(storedValue);
-    expect(options.headers).toMatchObject({
-      "Copilot-Vision-Request": "true",
-      "x-initiator": "user",
+    expect(options).toMatchObject({
+      apiKey: storedValue,
+      headers: { "Copilot-Vision-Request": "true", "x-initiator": "user" },
     });
     expect(context.systemPrompt).toBeUndefined();
     const userMessage = context.messages?.find((m) => m.role === "user");
     const contentTypes = Array.isArray(userMessage?.content)
       ? userMessage.content.map((block) => block.type)
       : [];
-    expect(contentTypes).toContain("text");
-    expect(contentTypes).toContain("image");
+    expect(contentTypes).toEqual(expect.arrayContaining(["text", "image"]));
   });
 
   it.each([false, true])(
