@@ -216,63 +216,36 @@ describe("bedrock embedding endpoint routing", () => {
 });
 
 describe("hasAwsCredentials", () => {
-  it("accepts static AWS key credentials without loading the credential chain", async () => {
-    const loadCredentialProvider = vi.fn();
-
-    await expect(
-      hasAwsCredentials(
-        {
-          AWS_ACCESS_KEY_ID: "access-key",
-          AWS_SECRET_ACCESS_KEY: "secret-key",
-        },
-        loadCredentialProvider,
-      ),
-    ).resolves.toBe(true);
-
-    expect(loadCredentialProvider).not.toHaveBeenCalled();
-  });
-
-  it("accepts the Bedrock bearer token without loading the credential chain", async () => {
-    const loadCredentialProvider = vi.fn();
-
-    await expect(
-      hasAwsCredentials(
-        {
-          AWS_BEARER_TOKEN_BEDROCK: "bearer-token",
-        },
-        loadCredentialProvider,
-      ),
-    ).resolves.toBe(true);
-
-    expect(loadCredentialProvider).not.toHaveBeenCalled();
-  });
-
-  it("requires AWS profile credentials to resolve through the credential chain", async () => {
-    const loadCredentialProvider = vi
-      .fn()
-      .mockResolvedValue(() => async () => ({ accessKeyId: "resolved-access-key" }));
-
-    await expect(hasAwsCredentials({ AWS_PROFILE: "work" }, loadCredentialProvider)).resolves.toBe(
+  it.each([
+    [
+      "static keys",
+      { AWS_ACCESS_KEY_ID: "access-key", AWS_SECRET_ACCESS_KEY: "secret-key" },
+      undefined,
       true,
-    );
-
-    expect(loadCredentialProvider).toHaveBeenCalledOnce();
-  });
-
-  it("rejects AWS profile markers when the credential chain cannot resolve", async () => {
-    const loadCredentialProvider = vi.fn().mockResolvedValue(() => async () => {
-      throw new Error("Could not load credentials from any providers");
-    });
-
-    await expect(
-      hasAwsCredentials({ AWS_PROFILE: "missing" }, loadCredentialProvider),
-    ).resolves.toBe(false);
-  });
-
-  it("returns false when the AWS credential provider package is unavailable", async () => {
-    const loadCredentialProvider = vi.fn().mockResolvedValue(null);
-
-    await expect(hasAwsCredentials({}, loadCredentialProvider)).resolves.toBe(false);
+      0,
+    ],
+    ["bearer token", { AWS_BEARER_TOKEN_BEDROCK: "bearer-token" }, undefined, true, 0],
+    [
+      "resolved profile",
+      { AWS_PROFILE: "work" },
+      () => async () => ({ accessKeyId: "resolved-access-key" }),
+      true,
+      1,
+    ],
+    [
+      "unresolved profile",
+      { AWS_PROFILE: "missing" },
+      () => async () => {
+        throw new Error("Could not load credentials from any providers");
+      },
+      false,
+      1,
+    ],
+    ["unavailable package", {}, null, false, 1],
+  ] as const)("handles %s", async (_name, env, loadedProvider, expected, calls) => {
+    const loadCredentialProvider = vi.fn().mockResolvedValue(loadedProvider);
+    await expect(hasAwsCredentials(env, loadCredentialProvider)).resolves.toBe(expected);
+    expect(loadCredentialProvider).toHaveBeenCalledTimes(calls);
   });
 });
 

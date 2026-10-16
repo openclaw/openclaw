@@ -1,4 +1,3 @@
-// Amazon Bedrock tests cover discovery plugin behavior.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { discoverBedrockModels, resolveImplicitBedrockProvider } from "./api.js";
@@ -66,6 +65,18 @@ function buildBedrockProfile(
   };
 }
 
+const sonnetId = "anthropic.claude-sonnet-4-6";
+const sonnetSummary = () =>
+  buildActiveAnthropicSummary(sonnetId, "Claude Sonnet 4.6", ["TEXT", "IMAGE"]);
+function mockProfileOnly(
+  id: string,
+  name: string,
+  foundation: string[],
+  options?: Parameters<typeof buildBedrockProfile>[3],
+) {
+  mockBedrockDiscovery([], [buildBedrockProfile(id, name, foundation, options)]);
+}
+
 function mockSingleActiveSummary(overrides: Partial<typeof baseActiveAnthropicSummary> = {}): void {
   mockBedrockDiscovery([{ ...baseActiveAnthropicSummary, ...overrides }]);
 }
@@ -75,7 +86,7 @@ function expectModelFields(model: unknown, expected: Record<string, unknown>): v
 }
 
 function discoverFreshBedrockModels(
-  params: Parameters<typeof discoverBedrockModels>[0],
+  params: Parameters<typeof discoverBedrockModels>[0] = { region: "us-east-1" },
 ): ReturnType<typeof discoverBedrockModels> {
   return discoverBedrockModels({
     ...params,
@@ -115,7 +126,7 @@ describe("bedrock discovery", () => {
       },
     ]);
 
-    const models = await discoverFreshBedrockModels({ region: "us-east-1" });
+    const models = await discoverFreshBedrockModels();
     expect(models).toHaveLength(1);
     expectModelFields(models[0], {
       id: "anthropic.claude-3-7-sonnet-20250219-v1:0",
@@ -139,16 +150,11 @@ describe("bedrock discovery", () => {
   });
 
   it("keeps the conservative fallback for unknown inference profiles", async () => {
-    mockBedrockDiscovery(
-      [],
-      [
-        buildBedrockProfile(
-          "jp.example.unknown-text-v1:0",
-          "JP Example Unknown Text",
-          ["example.unknown-text-v1:0"],
-          { region: "ap-northeast-1" },
-        ),
-      ],
+    mockProfileOnly(
+      "jp.example.unknown-text-v1:0",
+      "JP Example Unknown Text",
+      ["example.unknown-text-v1:0"],
+      { region: "ap-northeast-1" },
     );
 
     const models = await discoverFreshBedrockModels({ region: "ap-northeast-1" });
@@ -162,63 +168,37 @@ describe("bedrock discovery", () => {
     });
   });
 
-  it("applies the Opus 5 contract to inference-profile-only discovery", async () => {
-    mockBedrockDiscovery(
-      [],
-      [
-        buildBedrockProfile("global.anthropic.claude-opus-5", "Global Claude Opus 5", [
-          "anthropic.claude-opus-5",
-        ]),
-      ],
-    );
-
-    const models = await discoverFreshBedrockModels({ region: "us-east-1" });
-
-    expectModelFields(models[0], {
-      id: "global.anthropic.claude-opus-5",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-      params: { canonicalModelId: "claude-opus-5" },
-    });
-  });
-
-  it("applies the Sonnet 5 contract to inference-profile-only discovery", async () => {
-    mockBedrockDiscovery(
-      [],
-      [
-        buildBedrockProfile("global.anthropic.claude-sonnet-5", "Global Claude Sonnet 5", [
-          "anthropic.claude-sonnet-5",
-        ]),
-      ],
-    );
-
-    const models = await discoverFreshBedrockModels({ region: "us-east-1" });
-
-    expectModelFields(models[0], {
-      id: "global.anthropic.claude-sonnet-5",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-      thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
-      params: { canonicalModelId: "claude-sonnet-5" },
-    });
-  });
+  it.each([
+    ["opus", "Opus", { xhigh: "xhigh", max: "max" }],
+    ["sonnet", "Sonnet", { off: "low", minimal: "low", xhigh: "xhigh", max: "max" }],
+  ] as const)(
+    "applies the %s 5 inference-profile-only contract",
+    async (family, title, thinkingLevelMap) => {
+      const canonicalModelId = `claude-${family}-5`;
+      const id = `global.anthropic.${canonicalModelId}`;
+      mockBedrockDiscovery(
+        [],
+        [buildBedrockProfile(id, `Global Claude ${title} 5`, [`anthropic.${canonicalModelId}`])],
+      );
+      const models = await discoverFreshBedrockModels();
+      expectModelFields(models[0], {
+        id,
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+        thinkingLevelMap,
+        params: { canonicalModelId },
+      });
+    },
+  );
 
   it("skips Mythos Preview inference profiles because Mantle owns that route", async () => {
-    mockBedrockDiscovery(
-      [],
-      [
-        buildBedrockProfile("us.anthropic.claude-mythos-preview", "US Claude Mythos Preview", [
-          "anthropic.claude-mythos-preview",
-        ]),
-      ],
-    );
+    mockProfileOnly("us.anthropic.claude-mythos-preview", "US Claude Mythos Preview", [
+      "anthropic.claude-mythos-preview",
+    ]);
 
-    const models = await discoverFreshBedrockModels({ region: "us-east-1" });
+    const models = await discoverFreshBedrockModels();
 
     expect(models).toEqual([]);
   });
@@ -233,7 +213,7 @@ describe("bedrock discovery", () => {
       ],
     );
 
-    const models = await discoverFreshBedrockModels({ region: "us-east-1" });
+    const models = await discoverFreshBedrockModels();
 
     expectModelFields(
       models.find((model) => model.id === "anthropic.claude-opus-4.8-v1:0"),
@@ -268,7 +248,7 @@ describe("bedrock discovery", () => {
       ],
     );
 
-    const models = await discoverFreshBedrockModels({ region: "us-east-1" });
+    const models = await discoverFreshBedrockModels();
     const expected = {
       reasoning: true,
       contextWindow: 1_000_000,
@@ -344,7 +324,7 @@ describe("bedrock discovery", () => {
       ],
     );
 
-    const models = await discoverFreshBedrockModels({ region: "us-east-1" });
+    const models = await discoverFreshBedrockModels();
 
     expect(models).toHaveLength(3);
     expect(models[0]?.id).toBe("global.anthropic.claude-sonnet-4-6");
@@ -474,12 +454,7 @@ describe("bedrock discovery", () => {
 
   it("keeps matching inference profiles when provider filters are enabled", async () => {
     mockBedrockDiscovery(
-      [
-        buildActiveAnthropicSummary("anthropic.claude-sonnet-4-6", "Claude Sonnet 4.6", [
-          "TEXT",
-          "IMAGE",
-        ]),
-      ],
+      [sonnetSummary()],
       [
         buildBedrockProfile(
           "global.anthropic.claude-sonnet-4-6",
@@ -500,32 +475,19 @@ describe("bedrock discovery", () => {
     ]);
   });
 
-  it.each([
-    {
-      name: "plugin default when both region env overrides are blank",
-      env: { AWS_REGION: "", AWS_DEFAULT_REGION: "   " },
-      expectedRegion: "us-east-1",
-    },
-  ])("uses $name", async ({ env, expectedRegion }) => {
+  it("uses the plugin default when both region env overrides are blank", async () => {
     mockSingleActiveSummary();
-
     const provider = await resolveImplicitBedrockProvider({
       pluginConfig: { discovery: { enabled: true, refreshInterval: 0 } },
-      env,
+      env: { AWS_REGION: "", AWS_DEFAULT_REGION: "   " },
     });
-
-    expect(provider?.baseUrl).toBe(`https://bedrock-runtime.${expectedRegion}.amazonaws.com`);
+    expect(provider?.baseUrl).toBe("https://bedrock-runtime.us-east-1.amazonaws.com");
   });
 
   // Ported from #65449 by @alickgithub2 — extended to also cover apac. prefix
   it("resolves au. and apac. prefixes for regional inference profiles", async () => {
     mockBedrockDiscovery(
-      [
-        buildActiveAnthropicSummary("anthropic.claude-sonnet-4-6", "Claude Sonnet 4.6", [
-          "TEXT",
-          "IMAGE",
-        ]),
-      ],
+      [sonnetSummary()],
       [
         // Empty model ARNs intentionally force the regional prefix fallback.
         buildBedrockProfile("au.anthropic.claude-sonnet-4-6", "AU Anthropic Claude Sonnet 4.6"),

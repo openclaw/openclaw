@@ -37,8 +37,11 @@ function bedrockModel(overrides: Record<string, unknown>) {
   } as never;
 }
 
-function signedThinkingContext(modelId: string) {
-  const highSurrogate = String.fromCharCode(0xd83d);
+function signedThinkingContext(
+  modelId: string,
+  thinking = `private${String.fromCharCode(0xd83d)}reasoning`,
+  thinkingSignature = "sig-1",
+) {
   return {
     messages: [
       {
@@ -49,8 +52,8 @@ function signedThinkingContext(modelId: string) {
         content: [
           {
             type: "thinking",
-            thinking: `private${highSurrogate}reasoning`,
-            thinkingSignature: "sig-1",
+            thinking,
+            thinkingSignature,
           },
         ],
       },
@@ -58,6 +61,24 @@ function signedThinkingContext(modelId: string) {
   } as never;
 }
 
+const startEvent = { messageStart: { role: ConversationRole.ASSISTANT } };
+const stopEvent = { messageStop: { stopReason: BedrockStopReason.END_TURN } };
+const userContext = (content = "Hello") => ({
+  messages: [{ role: "user" as const, content, timestamp: 0 }],
+});
+const textBlock = (text: string) => ({ type: "text" as const, text });
+function toolResult(toolCallId: string, content: unknown[], toolName = "inspect", isError = false) {
+  return { role: "toolResult", toolCallId, toolName, content, isError };
+}
+function wireToolResult(toolUseId: string, content: unknown[], status = "success") {
+  return { toolResult: { toolUseId, status, content } };
+}
+function mockStream(events: unknown[]) {
+  return vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+    $metadata: { httpStatusCode: 200 },
+    stream: streamEvents(events),
+  } as never);
+}
 async function* streamEvents(events: unknown[]) {
   yield* events;
 }
@@ -75,13 +96,7 @@ async function capturePayload(
   context: Parameters<typeof streamSimpleBedrock>[1],
   options: BedrockOptions = {},
 ) {
-  const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
-    $metadata: { httpStatusCode: 200 },
-    stream: streamEvents([
-      { messageStart: { role: ConversationRole.ASSISTANT } },
-      { messageStop: { stopReason: BedrockStopReason.END_TURN } },
-    ]),
-  } as never);
+  const send = mockStream([startEvent, stopEvent]);
   await streamBedrockForTest(model, context, options).result();
   const command = send.mock.calls.at(-1)?.[0];
   if (!(command instanceof ConverseStreamCommand)) {
@@ -109,26 +124,23 @@ describe("Bedrock reasoning replay", () => {
     const opaqueReasoning = Uint8Array.from([0xde, 0xad, 0xbe, 0xef]);
     const model = bedrockModel({ id: modelId, name: "Claude Haiku 4.5" });
     const encodeOpaqueReasoning = vi.spyOn(globalThis, "btoa");
-    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
-      $metadata: { httpStatusCode: 200 },
-      stream: streamEvents([
-        { messageStart: { role: ConversationRole.ASSISTANT } },
-        {
-          contentBlockDelta: {
-            contentBlockIndex: 0,
-            delta: { reasoningContent: { redactedContent: opaqueReasoning.slice(0, 2) } },
-          },
+    const send = mockStream([
+      startEvent,
+      {
+        contentBlockDelta: {
+          contentBlockIndex: 0,
+          delta: { reasoningContent: { redactedContent: opaqueReasoning.slice(0, 2) } },
         },
-        {
-          contentBlockDelta: {
-            contentBlockIndex: 0,
-            delta: { reasoningContent: { redactedContent: opaqueReasoning.slice(2) } },
-          },
+      },
+      {
+        contentBlockDelta: {
+          contentBlockIndex: 0,
+          delta: { reasoningContent: { redactedContent: opaqueReasoning.slice(2) } },
         },
-        { contentBlockStop: { contentBlockIndex: 0 } },
-        { messageStop: { stopReason: BedrockStopReason.END_TURN } },
-      ]),
-    } as never);
+      },
+      { contentBlockStop: { contentBlockIndex: 0 } },
+      stopEvent,
+    ]);
 
     const result = await streamBedrockForTest(model, {
       messages: [{ role: "user", content: "Think privately", timestamp: 0 }],
@@ -146,10 +158,7 @@ describe("Bedrock reasoning replay", () => {
 
     send.mockResolvedValueOnce({
       $metadata: { httpStatusCode: 200 },
-      stream: streamEvents([
-        { messageStart: { role: ConversationRole.ASSISTANT } },
-        { messageStop: { stopReason: BedrockStopReason.END_TURN } },
-      ]),
+      stream: streamEvents([startEvent, stopEvent]),
     } as never);
     await streamBedrockForTest(model, {
       messages: [result, { role: "user", content: "Continue", timestamp: 1 }],
@@ -175,23 +184,10 @@ describe("Bedrock reasoning replay", () => {
 
   it("preserves signature-only Fable reasoning blocks", async () => {
     const modelId = "anthropic.claude-fable-5";
-    const messages = await captureMessages(bedrockModel({ id: modelId, name: "Claude Fable 5" }), {
-      messages: [
-        {
-          role: "assistant",
-          api: "bedrock-converse-stream",
-          provider: "amazon-bedrock",
-          model: modelId,
-          content: [
-            {
-              type: "thinking",
-              thinking: "",
-              thinkingSignature: " sig-fable ",
-            },
-          ],
-        },
-      ],
-    } as never);
+    const messages = await captureMessages(
+      bedrockModel({ id: modelId, name: "Claude Fable 5" }),
+      signedThinkingContext(modelId, "", " sig-fable "),
+    );
 
     expect(messages[0]?.content).toEqual([
       {
@@ -207,23 +203,10 @@ describe("Bedrock reasoning replay", () => {
 
   it("drops synthetic reasoning placeholders from Claude replay", async () => {
     const modelId = "anthropic.claude-fable-5";
-    const messages = await captureMessages(bedrockModel({ id: modelId, name: "Claude Fable 5" }), {
-      messages: [
-        {
-          role: "assistant",
-          api: "bedrock-converse-stream",
-          provider: "amazon-bedrock",
-          model: modelId,
-          content: [
-            {
-              type: "thinking",
-              thinking: "hidden compatibility reasoning",
-              thinkingSignature: "reasoning_content",
-            },
-          ],
-        },
-      ],
-    } as never);
+    const messages = await captureMessages(
+      bedrockModel({ id: modelId, name: "Claude Fable 5" }),
+      signedThinkingContext(modelId, "hidden compatibility reasoning", "reasoning_content"),
+    );
 
     expect(messages).toEqual([]);
   });
@@ -408,83 +391,77 @@ describe("Bedrock prompt cache ownership", () => {
     ]);
   });
 
-  it.each([{ label: "v2026.9.7", facts: { runtimeContextCarrier: true } }])(
-    "never includes a $label runtime-context carrier in a later cached prefix",
-    async ({ facts }) => {
-      const messages = await captureMessages(
-        model(),
-        {
-          messages: [
-            { role: "user", content: "stable operator request", timestamp: 0 },
-            {
-              role: "user",
-              content: "OpenClaw runtime context:\nvolatile current-turn metadata",
-              timestamp: 1,
-              ...facts,
-            },
-            {
-              role: "toolResult",
-              toolCallId: "call_follow_up",
-              toolName: "read",
-              content: [{ type: "text", text: "later stable tool output" }],
-              isError: false,
-              timestamp: 2,
-            },
-          ],
-        } as never,
-        { cacheRetention: "long" },
-      );
-
-      expect(messages[0]?.content).toEqual([
-        { text: "stable operator request" },
-        { cachePoint: { type: "default", ttl: "1h" } },
-      ]);
-      expect(messages[1]?.content).toEqual([
-        { text: "OpenClaw runtime context:\nvolatile current-turn metadata" },
-      ]);
-      expect(messages[2]?.content).toEqual([
-        {
-          toolResult: {
-            toolUseId: "call_follow_up",
-            content: [{ text: "later stable tool output" }],
-            status: "success",
+  it("never includes a v2026.9.7 runtime-context carrier in a later cached prefix", async () => {
+    const messages = await captureMessages(
+      model(),
+      {
+        messages: [
+          { role: "user", content: "stable operator request", timestamp: 0 },
+          {
+            role: "user",
+            content: "OpenClaw runtime context:\nvolatile current-turn metadata",
+            timestamp: 1,
+            runtimeContextCarrier: true,
           },
+          {
+            role: "toolResult",
+            toolCallId: "call_follow_up",
+            toolName: "read",
+            content: [{ type: "text", text: "later stable tool output" }],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+      } as never,
+      { cacheRetention: "long" },
+    );
+
+    expect(messages[0]?.content).toEqual([
+      { text: "stable operator request" },
+      { cachePoint: { type: "default", ttl: "1h" } },
+    ]);
+    expect(messages[1]?.content).toEqual([
+      { text: "OpenClaw runtime context:\nvolatile current-turn metadata" },
+    ]);
+    expect(messages[2]?.content).toEqual([
+      {
+        toolResult: {
+          toolUseId: "call_follow_up",
+          content: [{ text: "later stable tool output" }],
+          status: "success",
         },
-      ]);
-    },
-  );
+      },
+    ]);
+  });
 });
 
 describe("Bedrock token usage", () => {
   it("prices one-hour cache writes from the provider's authoritative TTL breakdown", async () => {
-    vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
-      $metadata: { httpStatusCode: 200 },
-      stream: streamEvents([
-        { messageStart: { role: ConversationRole.ASSISTANT } },
-        {
-          metadata: {
-            usage: {
-              inputTokens: 20,
-              outputTokens: 5,
-              totalTokens: 25,
-              cacheReadInputTokens: 70,
-              cacheWriteInputTokens: 10,
-              cacheDetails: [
-                { ttl: CacheTTL.ONE_HOUR, inputTokens: 6 },
-                { ttl: CacheTTL.FIVE_MINUTES, inputTokens: 4 },
-              ],
-            },
+    mockStream([
+      startEvent,
+      {
+        metadata: {
+          usage: {
+            inputTokens: 20,
+            outputTokens: 5,
+            totalTokens: 25,
+            cacheReadInputTokens: 70,
+            cacheWriteInputTokens: 10,
+            cacheDetails: [
+              { ttl: CacheTTL.ONE_HOUR, inputTokens: 6 },
+              { ttl: CacheTTL.FIVE_MINUTES, inputTokens: 4 },
+            ],
           },
         },
-        { messageStop: { stopReason: BedrockStopReason.END_TURN } },
-      ]),
-    } as never);
+      },
+      stopEvent,
+    ]);
 
     const result = await streamBedrockForTest(
       bedrockModel({
         cost: { input: 1_000_000, output: 2_000_000, cacheRead: 500_000, cacheWrite: 1_250_000 },
       }),
-      { messages: [{ role: "user", content: "Hello", timestamp: 0 }] } as never,
+      userContext(),
     ).result();
 
     expect(result.usage).toMatchObject({
@@ -507,111 +484,61 @@ describe("Bedrock token usage", () => {
 });
 
 describe("Bedrock tool-result images", () => {
-  it.each(["us.openai.gpt-5.6-sol"])(
-    "lifts tool images into user content for %s while preserving result associations",
-    async (id) => {
-      const png =
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
-      const image = { type: "image", mimeType: "image/png", data: png };
-      const context = {
-        messages: [
-          {
-            role: "toolResult",
-            toolCallId: "call_first",
-            toolName: "inspect",
-            content: [{ type: "text", text: "first result" }, image, image],
-            isError: false,
-          },
-          {
-            role: "toolResult",
-            toolCallId: "call_second",
-            toolName: "inspect",
-            content: [image],
-            isError: true,
-          },
-          {
-            role: "toolResult",
-            toolCallId: "call_text",
-            toolName: "read",
-            content: [{ type: "text", text: "plain result" }],
-            isError: false,
-          },
+  it("lifts tool images into user content for OpenAI while preserving result associations", async () => {
+    const id = "us.openai.gpt-5.6-sol";
+    const png =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const image = { type: "image", mimeType: "image/png", data: png };
+    const context = {
+      messages: [
+        toolResult("call_first", [textBlock("first result"), image, image]),
+        toolResult("call_second", [image], "inspect", true),
+        toolResult("call_text", [textBlock("plain result")], "read"),
+      ],
+    };
+    const before = structuredClone(context);
+    const input = await capturePayload(
+      bedrockModel({ id, input: ["text", "image"] }),
+      context as never,
+    );
+    const expectedImage = {
+      image: { format: "png", source: { bytes: new Uint8Array(Buffer.from(png, "base64")) } },
+    };
+    const placeholder = (toolCallId: string) => ({
+      text: `(see attached images labeled "Images from tool result ${toolCallId}")`,
+    });
+    expect(input.messages).toEqual([
+      {
+        role: ConversationRole.USER,
+        content: [
+          wireToolResult("call_first", [{ text: "first result" }, placeholder("call_first")]),
+          wireToolResult("call_second", [placeholder("call_second")], "error"),
+          wireToolResult("call_text", [{ text: "plain result" }]),
+          { text: "Images from tool result call_first:" },
+          expectedImage,
+          expectedImage,
+          { text: "Images from tool result call_second:" },
+          expectedImage,
         ],
-      };
-      const before = structuredClone(context);
-      const input = await capturePayload(
-        bedrockModel({ id, input: ["text", "image"] }),
-        context as never,
-      );
-      const expectedImage = {
-        image: { format: "png", source: { bytes: new Uint8Array(Buffer.from(png, "base64")) } },
-      };
-      const placeholder = (toolCallId: string) => ({
-        text: `(see attached images labeled "Images from tool result ${toolCallId}")`,
-      });
-      expect(input.messages).toEqual([
-        {
-          role: ConversationRole.USER,
-          content: [
-            {
-              toolResult: {
-                toolUseId: "call_first",
-                status: "success",
-                content: [{ text: "first result" }, placeholder("call_first")],
-              },
-            },
-            {
-              toolResult: {
-                toolUseId: "call_second",
-                status: "error",
-                content: [placeholder("call_second")],
-              },
-            },
-            {
-              toolResult: {
-                toolUseId: "call_text",
-                status: "success",
-                content: [{ text: "plain result" }],
-              },
-            },
-            { text: "Images from tool result call_first:" },
-            expectedImage,
-            expectedImage,
-            { text: "Images from tool result call_second:" },
-            expectedImage,
-          ],
-        },
-      ]);
-      expect(context).toEqual(before);
+      },
+    ]);
+    expect(context).toEqual(before);
 
-      const unaffected = await capturePayload(
-        bedrockModel({ input: ["text", "image"] }),
-        context as never,
-      );
-      expect(unaffected.messages).toEqual([
-        {
-          role: ConversationRole.USER,
-          content: [
-            {
-              toolResult: {
-                toolUseId: "call_first",
-                status: "success",
-                content: [{ text: "first result" }, expectedImage, expectedImage],
-              },
-            },
-            { toolResult: { toolUseId: "call_second", status: "error", content: [expectedImage] } },
-            {
-              toolResult: {
-                toolUseId: "call_text",
-                status: "success",
-                content: [{ text: "plain result" }],
-              },
-            },
-          ],
-        },
-      ]);
-    },
-  );
+    const unaffected = await capturePayload(
+      bedrockModel({ input: ["text", "image"] }),
+      context as never,
+    );
+    expect(unaffected.messages).toEqual([
+      {
+        role: ConversationRole.USER,
+        content: [
+          wireToolResult("call_first", [{ text: "first result" }, expectedImage, expectedImage]),
+          wireToolResult("call_second", [expectedImage], "error"),
+          wireToolResult("call_text", [{ text: "plain result" }]),
+        ],
+      },
+    ]);
+  });
 });
 
 function bedrockEvent(type: string, payload: unknown): Buffer {
@@ -896,18 +823,12 @@ describe("Bedrock stream client lifecycle", () => {
   }
 
   it("destroys the client after a successful stream", async () => {
-    let markStreamBlocked!: () => void;
-    const streamBlocked = new Promise<void>((resolve) => {
-      markStreamBlocked = resolve;
-    });
-    let releaseStream!: () => void;
-    const streamReleased = new Promise<void>((resolve) => {
-      releaseStream = resolve;
-    });
+    const streamBlocked = createDeferred<void>();
+    const streamReleased = createDeferred<void>();
     async function* successfulStream() {
       yield { messageStart: { role: ConversationRole.ASSISTANT } };
-      markStreamBlocked();
-      await streamReleased;
+      streamBlocked.resolve();
+      await streamReleased.promise;
       yield { messageStop: { stopReason: BedrockStopReason.END_TURN } };
     }
     const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
@@ -920,10 +841,10 @@ describe("Bedrock stream client lifecycle", () => {
     const options = withProviderAcceptanceObserver({ onResponse }, acceptanceObserver);
 
     const resultPromise = streamDefaultBedrock(options).result();
-    await streamBlocked;
+    await streamBlocked.promise;
     expect(destroy).not.toHaveBeenCalled();
 
-    releaseStream();
+    streamReleased.resolve();
     const result = await resultPromise;
 
     expect(result.stopReason).toBe("stop");
