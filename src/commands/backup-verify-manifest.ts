@@ -1,7 +1,10 @@
+import { isUtf8 } from "node:buffer";
 import path from "node:path";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import * as tar from "tar";
 import { z } from "zod";
 import {
   isArchivePathWithin,
@@ -11,7 +14,7 @@ import {
 } from "../infra/backup-archive-path-policy.js";
 import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
 import { UpdateRunDriverSchema } from "../infra/update-run-driver-schema.js";
-import { buildBackupArchivePath } from "./backup-shared.js";
+import { BACKUP_MAX_DECOMPRESSION_RATIO, buildBackupArchivePath } from "./backup-shared.js";
 
 const recoveryPath = z
   .string()
@@ -244,6 +247,8 @@ export type BackupManifest = {
   }>;
   /** Capture-time canonical database inventory; absent in legacy archives. */
   sqliteSnapshots?: BackupManifestSqliteSnapshot[];
+  /** Physical PostgreSQL captures; absent in legacy archives. */
+  postgresSnapshots?: Array<{ sourcePath: string }>;
   externalSymbolicLinks?: BackupSymbolicLink[];
   skipped?: Array<{
     kind?: string;
@@ -353,6 +358,34 @@ function parseBackupManifestSqliteSnapshots(
   });
 }
 
+function parseBackupManifestPostgresSnapshots(
+  value: unknown,
+): Array<{ sourcePath: string }> | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error("Backup manifest postgresSnapshots must be an array.");
+  }
+  const paths = new Set<string>();
+  return value.map((snapshot) => {
+    if (
+      !isRecord(snapshot) ||
+      Object.keys(snapshot).length !== 1 ||
+      !Object.hasOwn(snapshot, "sourcePath")
+    ) {
+      throw new Error("Backup manifest contains an invalid PostgreSQL snapshot.");
+    }
+    const sourcePath = parseBackupManifestSourcePath(snapshot.sourcePath, "PostgreSQL snapshot");
+    const key = sourcePath.replaceAll("\\", "/").normalize("NFC").toLowerCase();
+    if (paths.has(key)) {
+      throw new Error("Backup manifest contains duplicate PostgreSQL snapshot paths.");
+    }
+    paths.add(key);
+    return { sourcePath };
+  });
+}
+
 function readRequiredManifestString(
   record: Record<string, unknown>,
   key: string,
@@ -432,6 +465,7 @@ export function parseBackupManifest(raw: string): BackupManifest {
       : undefined,
     assets,
     sqliteSnapshots: parseBackupManifestSqliteSnapshots(parsed.sqliteSnapshots),
+    postgresSnapshots: parseBackupManifestPostgresSnapshots(parsed.postgresSnapshots),
     ...(parsed.externalSymbolicLinks === undefined ? {} : { externalSymbolicLinks }),
   };
 }
@@ -494,4 +528,99 @@ export function verifyBackupSqliteCoverage(
       throw new Error(`Backup lacks verified SQLite database coverage for ${required.sourcePath}.`);
     }
   }
+}
+
+export type NormalizedArchiveEntry = {
+  raw: string;
+  normalized: string;
+  size?: number;
+  type?: string;
+};
+
+export async function extractManifest(params: {
+  archivePath: string;
+  manifestEntryPath: string;
+}): Promise<string> {
+  let manifestContentPromise: Promise<Buffer | Error> | undefined;
+  await tar.t({
+    file: params.archivePath,
+    gzip: true,
+    maxDecompressionRatio: BACKUP_MAX_DECOMPRESSION_RATIO,
+    filter: (entryPath) => entryPath === params.manifestEntryPath,
+    onReadEntry: (entry) => {
+      manifestContentPromise = Promise.resolve(
+        backupManifestSizeError(entry.size) ??
+          entry.concat().catch((error: unknown) => toStringifiedError(error)),
+      );
+    },
+  });
+
+  if (!manifestContentPromise) {
+    throw new Error(`Archive is missing manifest entry: ${params.manifestEntryPath}`);
+  }
+  const content = await manifestContentPromise;
+  if (content instanceof Error) {
+    throw content;
+  }
+  if (!isUtf8(content)) {
+    throw new Error("Backup manifest must be valid UTF-8.");
+  }
+  return content.toString("utf8");
+}
+
+export function isRegularArchiveFile(entryType: string | undefined): boolean {
+  return entryType === "File" || entryType === "OldFile" || entryType === "ContiguousFile";
+}
+
+export async function resolvePostgresRestoreEntries(
+  archivePath: string,
+  entries: NormalizedArchiveEntry[],
+  manifest: BackupManifest,
+): Promise<Array<{ directoryPath: string; anchorPath: string }>> {
+  const captures = (manifest.postgresSnapshots ?? []).map(({ sourcePath }) => {
+    const anchorPath = buildBackupArchivePath(manifest.archiveRoot, sourcePath);
+    return { anchorPath, directoryPath: `${anchorPath}.postgres` };
+  });
+  if (manifest.postgresSnapshots === undefined) {
+    const { parsePostgresEnvelope } = await import("../snapshot/export-envelope.js");
+    // Older archives record PG identity only inside the generated capsule.
+    for (const entry of entries) {
+      if (
+        !isRegularArchiveFile(entry.type) ||
+        !entry.normalized.endsWith(".postgres/manifest.json")
+      ) {
+        continue;
+      }
+      let value: unknown;
+      try {
+        value = JSON.parse(await extractManifest({ archivePath, manifestEntryPath: entry.raw }));
+      } catch {
+        // Ordinary user files may share this name; only PG envelopes claim a store.
+        continue;
+      }
+      if (!isRecord(value) || !isRecord(value.source) || value.source.engine !== "postgres") {
+        continue;
+      }
+      const directoryPath = path.posix.dirname(entry.normalized);
+      const envelope = parsePostgresEnvelope(value, path.posix.basename(directoryPath));
+      if (envelope.profile === "user-backup") {
+        captures.push({ directoryPath, anchorPath: directoryPath.slice(0, -".postgres".length) });
+      }
+    }
+  }
+  const byPath = new Map(entries.map((entry) => [entry.normalized, entry]));
+  for (const { directoryPath, anchorPath } of captures) {
+    for (const required of [
+      anchorPath,
+      ...["manifest.json", "anchor.sqlite", "database.sqlite"].map((name) =>
+        path.posix.join(directoryPath, name),
+      ),
+    ]) {
+      const entry = byPath.get(required);
+      if (!entry || !isRegularArchiveFile(entry.type)) {
+        throw new Error(`PostgreSQL backup is missing a regular matched artifact: ${required}`);
+      }
+    }
+  }
+  return captures;
 }

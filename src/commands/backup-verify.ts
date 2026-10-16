@@ -1,9 +1,7 @@
-import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import * as tar from "tar";
 import {
   recordArchiveSymbolicLink,
@@ -26,9 +24,12 @@ import type { BackupSqliteSnapshotFact } from "./backup-resource-inventory.js";
 import { BACKUP_MAX_DECOMPRESSION_RATIO, buildBackupArchivePath } from "./backup-shared.js";
 import {
   type BackupManifest,
-  backupManifestSizeError,
+  type NormalizedArchiveEntry,
+  extractManifest,
+  isRegularArchiveFile,
   isRootBackupManifestEntry,
   parseBackupManifest,
+  resolvePostgresRestoreEntries,
   verifyBackupManifestEntries,
   verifyBackupSqliteCoverage,
 } from "./backup-verify-manifest.js";
@@ -45,16 +46,9 @@ type ArchiveEntry = {
   type?: string;
 };
 
-type NormalizedArchiveEntry = {
-  raw: string;
-  normalized: string;
-  size?: number;
-  type?: string;
-};
-
 type SqliteSnapshotIdentity = { role: "global" } | { role: "agent"; agentId: string };
 
-type SqliteSnapshotEntry = NormalizedArchiveEntry & SqliteSnapshotIdentity;
+type SqliteSnapshotEntry = NormalizedArchiveEntry & SqliteSnapshotOwner;
 
 async function listArchiveEntries(archivePath: string) {
   const entries: ArchiveEntry[] = [];
@@ -79,37 +73,6 @@ async function listArchiveEntries(archivePath: string) {
     },
   });
   return { entries, invalidReason };
-}
-
-async function extractManifest(params: {
-  archivePath: string;
-  manifestEntryPath: string;
-}): Promise<string> {
-  let manifestContentPromise: Promise<Buffer | Error> | undefined;
-  await tar.t({
-    file: params.archivePath,
-    gzip: true,
-    maxDecompressionRatio: BACKUP_MAX_DECOMPRESSION_RATIO,
-    filter: (entryPath) => entryPath === params.manifestEntryPath,
-    onReadEntry: (entry) => {
-      manifestContentPromise = Promise.resolve(
-        backupManifestSizeError(entry.size) ??
-          entry.concat().catch((error: unknown) => toStringifiedError(error)),
-      );
-    },
-  });
-
-  if (!manifestContentPromise) {
-    throw new Error(`Archive is missing manifest entry: ${params.manifestEntryPath}`);
-  }
-  const content = await manifestContentPromise;
-  if (content instanceof Error) {
-    throw content;
-  }
-  if (!isUtf8(content)) {
-    throw new Error("Backup manifest must be valid UTF-8.");
-  }
-  return content.toString("utf8");
 }
 
 function formatResult(result: BackupVerifyResult): string {
@@ -144,10 +107,6 @@ function findPortableArchiveEntryPathCollision(
     seen.set(key, entry.normalized);
   }
   return undefined;
-}
-
-function isRegularArchiveFile(entryType: string | undefined): boolean {
-  return entryType === "File" || entryType === "OldFile" || entryType === "ContiguousFile";
 }
 
 function resolveExtractionBytes(
@@ -207,11 +166,13 @@ type SqliteSnapshotOwner = { archivePath: string } & SqliteSnapshotIdentity;
 function listSqliteSnapshotEntries(
   entries: NormalizedArchiveEntry[],
   owners: SqliteSnapshotOwner[],
+  postgresAnchors: ReadonlySet<string>,
 ): SqliteSnapshotEntry[] {
   const ownersByPath = new Map(
     owners.map((owner) => [resolvePortableArchivePathKey(owner.archivePath), owner]),
   );
   const snapshots: SqliteSnapshotEntry[] = [];
+  const byPath = new Map(entries.map((entry) => [entry.normalized, entry]));
   for (const entry of entries) {
     const portablePath = resolvePortableArchivePathKey(entry.normalized);
     for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
@@ -234,7 +195,14 @@ function listSqliteSnapshotEntries(
     if (!isRegularArchiveFile(entry.type)) {
       throw new Error(`SQLite snapshot must be a regular archive file: ${entry.normalized}`);
     }
-    snapshots.push({ ...entry, ...owner });
+    const exportPath = `${entry.normalized}.postgres`;
+    const image = postgresAnchors.has(entry.normalized)
+      ? byPath.get(`${exportPath}/database.sqlite`)
+      : entry;
+    if (!image || !isRegularArchiveFile(image.type)) {
+      throw new Error(`PostgreSQL snapshot is missing its portable database: ${exportPath}`);
+    }
+    snapshots.push({ ...image, ...owner });
   }
   return snapshots;
 }
@@ -343,6 +311,7 @@ async function verifySqliteSnapshots(params: {
   archivePath: string;
   entries: NormalizedArchiveEntry[];
   manifest: BackupManifest;
+  postgresAnchors: ReadonlySet<string>;
 }): Promise<SqliteSnapshotOwner[]> {
   const verifiedOwners: SqliteSnapshotOwner[] = [];
   const stateDir =
@@ -375,7 +344,11 @@ async function verifySqliteSnapshots(params: {
         archivePath: buildBackupArchivePath(params.manifest.archiveRoot, sourcePath),
       })),
   ];
-  const initialEntries = listSqliteSnapshotEntries(params.entries, declaredOwners);
+  const initialEntries = listSqliteSnapshotEntries(
+    params.entries,
+    declaredOwners,
+    params.postgresAnchors,
+  );
   if (initialEntries.length === 0) {
     return verifiedOwners;
   }
@@ -442,7 +415,7 @@ async function verifySqliteSnapshots(params: {
           } else {
             assertExpectedSqliteRole(database, entry.normalized, entry.role);
           }
-          verifiedOwners.push({ ...entry, archivePath: entry.normalized });
+          verifiedOwners.push({ ...entry });
           if (entry.role === "global") {
             const agentOwners = readArchivedAgentDatabaseOwners(
               database,
@@ -471,7 +444,11 @@ async function verifySqliteSnapshots(params: {
               }
               ownerByPath.set(ownerKey, owner);
             }
-            const agentEntries = listSqliteSnapshotEntries(params.entries, agentOwners).filter(
+            const agentEntries = listSqliteSnapshotEntries(
+              params.entries,
+              agentOwners,
+              params.postgresAnchors,
+            ).filter(
               (candidate) => !extractedEntries.some((extracted) => extracted.raw === candidate.raw),
             );
             if (agentEntries.length > 0) {
@@ -647,7 +624,17 @@ async function verifyResolvedBackupArchive(
   ) {
     throw new Error("Backup manifest external symbolic links do not match archive entries.");
   }
-  const verifiedSnapshots = await verifySqliteSnapshots({ archivePath, entries, manifest });
+  const databaseRestoreCandidates = await resolvePostgresRestoreEntries(
+    archivePath,
+    entries,
+    manifest,
+  );
+  const verifiedSnapshots = await verifySqliteSnapshots({
+    archivePath,
+    entries,
+    manifest,
+    postgresAnchors: new Set(databaseRestoreCandidates.map(({ anchorPath }) => anchorPath)),
+  });
   verifyBackupSqliteCoverage(manifest, requiredSnapshots, verifiedSnapshots);
   const regularFileExtractionBytes = resolveExtractionBytes(entries);
 
@@ -669,6 +656,7 @@ async function verifyResolvedBackupArchive(
     hardlinkTargets,
     symbolicLinks: preparedSymbolicLinks,
     regularFileExtractionBytes,
+    databaseRestoreCandidates,
   };
 }
 

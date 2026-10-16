@@ -50,7 +50,7 @@ export type SnapshotExportEnvelope =
   | { engine: "sqlite"; manifest: SnapshotManifest }
   | { engine: "postgres"; manifest: PostgresExportEnvelope };
 
-function parsePostgresEnvelope(value: unknown, expectedId: string): PostgresExportEnvelope {
+export function parsePostgresEnvelope(value: unknown, expectedId: string): PostgresExportEnvelope {
   const manifest = postgresEnvelope.parse(value);
   if (manifest.snapshotId !== expectedId) {
     throw new Error("Export manifest id does not match its directory");

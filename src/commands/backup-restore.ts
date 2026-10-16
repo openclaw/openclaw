@@ -137,6 +137,93 @@ async function extractBackupArchive(
   }
 }
 
+async function restorePostgresExports(
+  targetPath: string,
+  candidates: Array<{ directoryPath: string; anchorPath: string }>,
+): Promise<void> {
+  if (candidates.length === 0) {
+    return;
+  }
+  const {
+    discardPostgresRestores,
+    preparePostgresRestore,
+    readBackupEngineImage,
+    runOfflineDatabaseBackup,
+  } = await import("../snapshot/database-backup.js");
+  const { publishVerifiedSqliteFile } = await import("../infra/sqlite-snapshot.js");
+  const postgres: Array<{
+    directoryPath: string;
+    anchorPath: string;
+    source: { storeId: string; namespace: string };
+  }> = [];
+  for (const entry of candidates) {
+    const anchorPath = path.join(targetPath, entry.anchorPath);
+    const source = readBackupEngineImage(anchorPath, anchorPath);
+    if (source.engine !== "postgres") {
+      throw new Error(`PostgreSQL backup artifact has no matched anchor: ${entry.anchorPath}`);
+    }
+    postgres.push({ ...entry, source });
+  }
+  await runOfflineDatabaseBackup(targetPath, async ({ config, assertCurrent }) => {
+    const staging = await fs.mkdtemp(path.join(targetPath, ".postgres-restore-"));
+    const prepared: Array<{
+      sourcePath: string;
+      targetPath: string;
+      content: Awaited<ReturnType<typeof preparePostgresRestore>>;
+    }> = [];
+    try {
+      for (const [index, entry] of postgres.entries()) {
+        const anchorPath = path.join(targetPath, entry.anchorPath);
+        const sourcePath = path.join(staging, `${index}.sqlite`);
+        const content = await preparePostgresRestore({
+          directory: path.join(targetPath, entry.directoryPath),
+          anchorPath: sourcePath,
+          config,
+          profile: "user-backup",
+          expectedSource: entry.source,
+          assertCurrent,
+        });
+        prepared.push({ sourcePath, targetPath: anchorPath, content });
+      }
+      // Every store has passed provider verification before any captured anchor is replaced.
+      for (const entry of prepared) {
+        assertCurrent();
+        await fs.unlink(entry.targetPath);
+        await publishVerifiedSqliteFile({
+          sourcePath: entry.sourcePath,
+          sourceIdentity: await fs.lstat(entry.sourcePath, { bigint: true }),
+          targetPath: entry.targetPath,
+          expectedContent: entry.content,
+          requireAtomicPublication: true,
+          beforePublish: async () => assertCurrent(),
+          afterPublish: (guard) => guard.assertTargetMatchesExpectedContent(assertCurrent),
+        });
+      }
+      for (const { directoryPath } of postgres) {
+        for (const name of ["manifest.json", "anchor.sqlite", "database.sqlite"]) {
+          await fs.unlink(path.join(targetPath, directoryPath, name));
+        }
+      }
+      await fs.rm(staging, { recursive: true, force: true });
+    } catch (error) {
+      try {
+        await discardPostgresRestores(
+          config,
+          prepared.map(({ content }) => content.namespace),
+        );
+      } catch (cleanupError) {
+        // oxlint-disable-next-line preserve-caught-error -- AggregateError.errors retains the cleanup failure.
+        throw new AggregateError(
+          [error, cleanupError],
+          `PostgreSQL restore failed and its scratch namespaces could not be cleaned: ${formatErrorMessage(cleanupError)}`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+  });
+}
+
 function formatRestoreResult(result: BackupRestoreResult): string {
   return [
     `Backup archive restored to staging: ${shortenHomePath(result.targetPath)}`,
@@ -163,6 +250,7 @@ export async function backupRestoreCommand(
     hardlinkTargets,
     symbolicLinks,
     regularFileExtractionBytes,
+    databaseRestoreCandidates,
   } = await prepareBackupArchive(options.archive);
   assertRestoreCapacity(targetPath, regularFileExtractionBytes);
   const target = await prepareRestoreTarget(targetPath);
@@ -182,6 +270,7 @@ export async function backupRestoreCommand(
     for (const { entryPath, linkpath } of symbolicLinks) {
       await fs.symlink(linkpath, path.join(targetPath, entryPath));
     }
+    await restorePostgresExports(targetPath, databaseRestoreCandidates);
   } catch (extractionError) {
     try {
       await cleanupFailedRestore(targetPath, target.created);
@@ -194,9 +283,10 @@ export async function backupRestoreCommand(
         { cause: extractionError },
       );
     }
-    throw new Error(`Backup restore failed; the incomplete target was cleaned: ${targetPath}`, {
-      cause: extractionError,
-    });
+    throw new Error(
+      `Backup restore failed; the incomplete target was cleaned: ${targetPath}. ${formatErrorMessage(extractionError)}`,
+      { cause: extractionError },
+    );
   }
 
   const result = {

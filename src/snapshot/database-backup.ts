@@ -37,6 +37,7 @@ import {
   exportPostgresBackup,
   restorePostgresBackup,
   fingerprintPostgresDatabase,
+  discardPostgresNamespace,
 } from "./database-backup-core.worker.js";
 import {
   readSnapshotExportEnvelope,
@@ -203,51 +204,59 @@ async function preparePostgresRestoreInWorker(params: {
       pluginOwners: params.pluginOwners,
     });
     const { namespace } = await restorePostgresBackup({ ...params, client, descriptor, manifest });
-    const input = getScopedDatabaseEngineSelection()?.postgres;
-    params.assertCurrent();
-    await descriptor.admit?.(params.anchorPath, input);
-    if (params.preserveUpdateHistory) {
-      if (!params.expectedSource) {
-        throw new Error("PostgreSQL update rollback requires its captured source identity.");
-      }
-      const source = params.expectedSource.namespace;
-      const historySchema = [descriptor, ...(descriptor.fragments ?? [])].find((schema) =>
-        schema.tables.some((entry) => entry.name === "update_runs"),
-      );
-      const table = historySchema?.tables.find((entry) => entry.name === "update_runs");
-      if (!historySchema || !table) {
-        throw new Error("PostgreSQL rollback cannot preserve the current update history contract.");
-      }
-      const expected = historySchema.expectedCatalog.filter((fact) => fact.table === table.name);
-      const catalog = readPostgresCatalog(
-        (await client.query(postgresCatalogQuery(source))).rows[0].catalog,
-      );
-      assertPostgresCatalog(
-        catalog.filter((fact) => fact.table === table.name),
-        expected,
-      );
-      const columns = table.columns.map(({ name }) => quote(name)).join(", ");
-      await client.query("BEGIN; SET LOCAL synchronous_commit = on");
-      try {
-        await client.query(`DELETE FROM ${quote(namespace)}.update_runs`);
-        await client.query(
-          `INSERT INTO ${quote(namespace)}.update_runs (${columns}) SELECT ${columns} FROM ${quote(source)}.update_runs`,
+    try {
+      const input = getScopedDatabaseEngineSelection()?.postgres;
+      params.assertCurrent();
+      await descriptor.admit?.(params.anchorPath, input);
+      if (params.preserveUpdateHistory) {
+        if (!params.expectedSource) {
+          throw new Error("PostgreSQL update rollback requires its captured source identity.");
+        }
+        const source = params.expectedSource.namespace;
+        const historySchema = [descriptor, ...(descriptor.fragments ?? [])].find((schema) =>
+          schema.tables.some((entry) => entry.name === "update_runs"),
         );
-        await client.query("COMMIT");
-      } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
+        const table = historySchema?.tables.find((entry) => entry.name === "update_runs");
+        if (!historySchema || !table) {
+          throw new Error(
+            "PostgreSQL rollback cannot preserve the current update history contract.",
+          );
+        }
+        const expected = historySchema.expectedCatalog.filter((fact) => fact.table === table.name);
+        const catalog = readPostgresCatalog(
+          (await client.query(postgresCatalogQuery(source))).rows[0].catalog,
+        );
+        assertPostgresCatalog(
+          catalog.filter((fact) => fact.table === table.name),
+          expected,
+        );
+        const columns = table.columns.map(({ name }) => quote(name)).join(", ");
+        await client.query("BEGIN; SET LOCAL synchronous_commit = on");
+        try {
+          await client.query(`DELETE FROM ${quote(namespace)}.update_runs`);
+          await client.query(
+            `INSERT INTO ${quote(namespace)}.update_runs (${columns}) SELECT ${columns} FROM ${quote(source)}.update_runs`,
+          );
+          await client.query("COMMIT");
+        } catch (error) {
+          await client.query("ROLLBACK");
+          throw error;
+        }
       }
+      // Owner admission can change anchor journal mode; bind the final bytes for publication.
+      const { sha256, size: sizeBytes } = await captureDatabaseArtifact(params.anchorPath);
+      return { namespace, sha256, sizeBytes };
+    } catch (error) {
+      await discardPostgresNamespace(client, namespace);
+      throw error;
     }
-    // Owner admission can change anchor journal mode; bind the final bytes for publication.
-    const { sha256, size: sizeBytes } = await captureDatabaseArtifact(params.anchorPath);
-    return { namespace, sha256, sizeBytes };
   });
 }
 
 type Capture = Parameters<typeof capturePostgresBackupInWorker>[0];
 type Restore = Parameters<typeof preparePostgresRestoreInWorker>[0];
 type BackupTask =
+  | { operation: "discard"; params: { config: OpenClawConfig; namespaces: string[] } }
   | { operation: "capture"; params: Omit<Capture, "assertCurrent"> }
   | { operation: "restore"; params: Omit<Restore, "assertCurrent"> }
   | {
@@ -267,6 +276,7 @@ type BackupTask =
       };
     };
 type BackupReply =
+  | void
   | PostgresExportEnvelope
   | string
   | Awaited<ReturnType<typeof preparePostgresRestoreInWorker>>;
@@ -356,6 +366,10 @@ export async function captureGitPostgresBackup(params: {
   return manifest;
 }
 
+export function discardPostgresRestores(config: OpenClawConfig, namespaces: string[]) {
+  return runBackupTask<void>({ operation: "discard", params: { config, namespaces } }, () => {});
+}
+
 export function preparePostgresRestore({ assertCurrent, ...params }: Restore) {
   return runBackupTask<Awaited<ReturnType<typeof preparePostgresRestoreInWorker>>>(
     { operation: "restore", params },
@@ -384,6 +398,16 @@ if (parentPort && workerData?.openclawDatabaseBackup === true) {
   serveWorkerTasks<BackupReply>((value, _channel, control) => {
     // SAFETY: The private one-shot host is the sole producer of this structured-clone payload.
     const task = value as BackupTask;
+    if (task.operation === "discard") {
+      return control.runNativeSection(() =>
+        withDatabasePortConnection(task.params.config, async (client) => {
+          for (const namespace of task.params.namespaces) {
+            control.throwIfCancelled();
+            await discardPostgresNamespace(client, namespace);
+          }
+        }),
+      );
+    }
     if (task.operation === "fingerprint" || task.operation === "family") {
       const anchor = readBackupEngine(task.params.sourcePath);
       if (anchor.engine !== "postgres") {

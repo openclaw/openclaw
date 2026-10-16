@@ -34,7 +34,7 @@ async function repack(root: string, archiveRoot: string, name: string, omit: str
   return archivePath;
 }
 
-async function writeSmallArchive(sqliteSnapshots: unknown) {
+async function writeSmallArchive(sqliteSnapshots: unknown, postgresSnapshots?: unknown) {
   const root = tempDirs.make("backup-inventory-contract-");
   const archiveRoot = "backup";
   const stateDir = "/synthetic/state";
@@ -51,6 +51,7 @@ async function writeSmallArchive(sqliteSnapshots: unknown) {
     paths: { stateDir },
     assets: [{ kind: "state", sourcePath: stateDir, archivePath: payload }],
     sqliteSnapshots,
+    ...(postgresSnapshots === undefined ? {} : { postgresSnapshots }),
   };
   await fs.writeFile(path.join(root, archiveRoot, "manifest.json"), JSON.stringify(manifest));
   return {
@@ -216,6 +217,7 @@ describe("standalone backup database completeness", () => {
           await fs.readFile(path.join(extracted, archive.archiveRoot, "manifest.json"), "utf8"),
         );
         expect(manifest.sqliteSnapshots).toEqual([]);
+        expect(manifest.postgresSnapshots).toEqual([]);
         await expect(verifyBackupArchive(archive.archivePath)).resolves.toMatchObject({
           ok: true,
           sqliteInventoryVerified: true,
@@ -269,6 +271,33 @@ describe("standalone backup database completeness", () => {
     },
   ])("rejects $name inventory metadata", async ({ value, error }) => {
     const { archivePath } = await writeSmallArchive(value);
+    await expect(verifyBackupArchive(archivePath)).rejects.toThrow(error);
+  });
+
+  it.each([
+    { name: "non-array", value: {}, error: "postgresSnapshots must be an array" },
+    {
+      name: "relative path",
+      value: [{ sourcePath: "plugin.sqlite" }],
+      error: "must be absolute and normalized",
+    },
+    {
+      name: "duplicate path",
+      value: [{ sourcePath: "/plugin.sqlite" }, { sourcePath: "/PLUGIN.sqlite" }],
+      error: "duplicate PostgreSQL snapshot paths",
+    },
+    {
+      name: "extra identity",
+      value: [{ sourcePath: "/plugin.sqlite", namespace: "unknown" }],
+      error: "invalid PostgreSQL snapshot",
+    },
+    {
+      name: "missing capsule",
+      value: [{ sourcePath: "/plugin.sqlite" }],
+      error: "missing a regular matched artifact",
+    },
+  ])("rejects $name PostgreSQL inventory", async ({ value, error }) => {
+    const { archivePath } = await writeSmallArchive([], value);
     await expect(verifyBackupArchive(archivePath)).rejects.toThrow(error);
   });
 });

@@ -317,10 +317,12 @@ export async function createBackupSqliteSnapshotPlan(params: {
 }): Promise<{
   inventory: BackupResourceInventory;
   snapshots: SqliteBackupAsset[];
+  postgresSnapshots: Array<{ sourcePath: string }>;
   discoveredSourcePaths: Set<string>;
 }> {
   const capturedSnapshots = new Map<BackupSqliteSourceGroup, string>();
   const snapshots: SqliteBackupAsset[] = [];
+  const postgresSnapshots: Array<{ sourcePath: string }> = [];
   let capturedAgents: Array<{ role: "agent"; agentId: string; sourcePath: string }> = [];
   function captureAgentRegistry(database: DatabaseSync, archiveSourcePath: string) {
     capturedAgents = readOpenClawAgentDatabaseRegistryRows(database, archiveSourcePath).map(
@@ -462,6 +464,7 @@ export async function createBackupSqliteSnapshotPlan(params: {
         archiveSourcePath,
         skippedSourcePaths: new Set(resolveSqliteDatabaseFilePaths(sourceDatabasePath)),
       });
+      postgresSnapshots.push({ sourcePath: archiveSourcePath });
       return;
     }
     snapshots.push({
@@ -600,5 +603,10 @@ export async function createBackupSqliteSnapshotPlan(params: {
       throw new Error(`Canonical SQLite path changed after discovery: ${source.sourcePath}`);
     }
   }
-  return { inventory, snapshots, discoveredSourcePaths: discovery.discoveredSourcePaths };
+  return {
+    inventory,
+    snapshots,
+    postgresSnapshots,
+    discoveredSourcePaths: discovery.discoveredSourcePaths,
+  };
 }

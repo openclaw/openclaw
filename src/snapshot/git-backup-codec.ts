@@ -99,7 +99,9 @@ function normalizeIdentity(identity: GitBackupIdentity): GitBackupIdentity {
     return identity;
   }
   if (identity.role === "generic") {
-    requireSafeTableName(identity.id);
+    if (!/^[A-Za-z_][A-Za-z0-9_-]*$/.test(identity.id)) {
+      throw new Error(`Git backup store id is not filesystem-safe: ${identity.id}`);
+    }
     return identity;
   }
   const agentId = normalizeAgentId(identity.agentId);
