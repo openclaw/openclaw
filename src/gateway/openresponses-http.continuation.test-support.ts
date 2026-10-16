@@ -26,7 +26,11 @@ export function registerOpenResponsesContinuationTests({
   ensureResponseConsumed,
 }: {
   getPort: () => number;
-  postResponses(port: number, body: unknown, headers?: Record<string, string>): Promise<Response>;
+  postResponses: (
+    port: number,
+    body: unknown,
+    headers?: Record<string, string>,
+  ) => Promise<Response>;
   mockAgentOnce: (payloads: Array<{ text: string }>) => void;
   firstAgentOpts: (callIndex?: number) => Record<string, unknown>;
   expectInvalidRequest: (response: Response, pattern: RegExp) => Promise<unknown>;

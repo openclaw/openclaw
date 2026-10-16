@@ -79,6 +79,7 @@ vi.mock("./media-helpers.js", async (importOriginal) => ({
   extractMessageId: () => "message-1",
 }));
 
+// mock-isolation: capture outbound messages without opening a live Teams transport.
 vi.mock("./messenger.js", () => ({
   sendMSTeamsMessages: mockState.sendMSTeamsMessages,
   buildConversationReference: ({
@@ -107,6 +108,7 @@ vi.mock("./graph-upload.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: fixture file cards must not call the Graph transport.
 vi.mock("./graph-chat.js", () => ({ buildTeamsFileInfoCard: mockState.buildTeamsFileInfoCard }));
 
 vi.mock("./sdk-proactive.js", () => ({

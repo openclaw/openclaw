@@ -31,12 +31,16 @@ vi.mock("node:child_process", async () => {
   );
 });
 
+// mock-isolation: binary availability belongs to the controlled watcher fixture.
 vi.mock("../skills/loading/config.js", () => ({ hasBinary: mocks.hasBinary }));
 
+// mock-isolation: resolve synthetic executables without inspecting host installations.
 vi.mock("../infra/executable-path.js", () => ({ resolveExecutable: mocks.resolveExecutable }));
 
+// mock-isolation: command completion is driven by the fixture, not real tools.
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: mocks.runCommandWithTimeout }));
 
+// mock-isolation: terminate only the fixture's fake child processes.
 vi.mock("../process/kill-tree.js", () => ({ killProcessTree: mocks.killProcessTree }));
 
 const { startGmailWatcher, stopGmailWatcher } = await import("./gmail-watcher.js");

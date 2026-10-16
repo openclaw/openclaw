@@ -461,7 +461,7 @@ it("runs old package doctors without fix mode when the service belongs to anothe
   const doctorCall = checks.doctorCommandCall();
   expect(doctorCall?.[0]).toEqual([nodeExecutable, entryPath, "doctor", "--non-interactive"]);
   expectDoctorEnv({ OPENCLAW_UPDATE_IN_PROGRESS: "1" });
-  expect(doctorCall?.[1].env?.OPENCLAW_SERVICE_REPAIR_POLICY).toBeUndefined();
+  expect(doctorCall?.[1].env).not.toHaveProperty("OPENCLAW_SERVICE_REPAIR_POLICY");
   const doctorIndex = checks.doctorCommandCallIndex();
   const snapshotOrder = mocks.createPreUpdateConfigSnapshotMock.mock.invocationCallOrder[0];
   const doctorOrder = vi.mocked(cli.runCommandWithTimeout).mock.invocationCallOrder[doctorIndex];

@@ -10,6 +10,7 @@ import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 const itUnix = process.platform === "win32" ? it.skip : it;
 const { runCommand } = vi.hoisted(() => ({ runCommand: vi.fn() }));
 
+// mock-isolation: setup command results are synthetic and must not invoke real cloud tools.
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: runCommand }));
 
 const success = {

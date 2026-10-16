@@ -53,7 +53,7 @@ describe("summarizeParentMessage", () => {
       from: { user: { displayName: "Carol" } },
       body: { content: "line one\n  line two\t\ttrailing", contentType: "text" },
     };
-    expect(summarizeParentMessage(msg)).toEqual({
+    expect(parentContext.summarizeParentMessage(msg)).toEqual({
       sender: "Carol",
       text: "line one line two trailing",
     });
@@ -94,8 +94,8 @@ describe("fetchParentMessageCached", () => {
   it("caches undefined (Graph error) so failures do not re-fetch on burst", async () => {
     const fetcher = fetchChannelMessage.mockImplementation(async () => undefined);
 
-    const first = await fetchParentMessageCached("tok", "g1", "c1", "p1");
-    const second = await fetchParentMessageCached("tok", "g1", "c1", "p1");
+    const first = await parentContext.fetchParentMessageCached("tok", "g1", "c1", "p1");
+    const second = await parentContext.fetchParentMessageCached("tok", "g1", "c1", "p1");
 
     expect(first).toBeUndefined();
     expect(second).toBeUndefined();
@@ -134,25 +134,25 @@ describe("fetchParentMessageCached", () => {
 
     // Fill cache with 100 distinct parents.
     for (let i = 0; i < 100; i += 1) {
-      await fetchParentMessageCached("tok", "g1", "c1", `p${i}`);
+      await parentContext.fetchParentMessageCached("tok", "g1", "c1", `p${i}`);
     }
     expect(fetcher).toHaveBeenCalledTimes(100);
 
     // First entry should still be cached (no evictions yet).
-    await fetchParentMessageCached("tok", "g1", "c1", "p0");
+    await parentContext.fetchParentMessageCached("tok", "g1", "c1", "p0");
     expect(fetcher).toHaveBeenCalledTimes(100);
 
     // Push one more distinct parent to trigger an eviction.
     // The just-touched p0 is now the newest; the next-oldest (p1) should be evicted.
-    await fetchParentMessageCached("tok", "g1", "c1", "p100");
+    await parentContext.fetchParentMessageCached("tok", "g1", "c1", "p100");
     expect(fetcher).toHaveBeenCalledTimes(101);
 
     // Fetching p1 again should miss the cache.
-    await fetchParentMessageCached("tok", "g1", "c1", "p1");
+    await parentContext.fetchParentMessageCached("tok", "g1", "c1", "p1");
     expect(fetcher).toHaveBeenCalledTimes(102);
 
     // p0 is still cached because we refreshed it.
-    await fetchParentMessageCached("tok", "g1", "c1", "p0");
+    await parentContext.fetchParentMessageCached("tok", "g1", "c1", "p0");
     expect(fetcher).toHaveBeenCalledTimes(102);
   });
 });

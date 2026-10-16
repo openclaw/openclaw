@@ -54,7 +54,7 @@ export function useReclaimFixtures() {
     tempDirs.cleanup();
   });
   return {
-    makeRoot: tempDirs.make,
+    makeRoot: (prefix: string) => tempDirs.make(prefix),
     async createSession(
       root: string,
       options: {

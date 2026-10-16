@@ -14,7 +14,7 @@ export function commandGate(abortCode?: number | null) {
     get signal() {
       return signal;
     },
-    run(options: { signal?: AbortSignal }) {
+    run: (options: { signal?: AbortSignal }) => {
       signal = options.signal;
       if (abortCode !== undefined) {
         const aborted = { code: abortCode, stdout: "", stderr: abortCode === 0 ? "" : "aborted" };

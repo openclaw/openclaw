@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
   } satisfies Pick<WorkerEnvironmentService, "ready" | "stop">,
 }));
 
+// mock-isolation: observe lazy startup without launching worker processes.
 vi.mock("./worker-environments/service.js", () => ({
   createWorkerEnvironmentService: (options: ServiceOptions) => {
     mocks.options = options;

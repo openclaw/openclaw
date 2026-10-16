@@ -72,6 +72,7 @@ vi.mock("../../channels/registry.js", () => ({
   normalizeChannelId: vi.fn((value?: string) => value),
 }));
 
+// mock-isolation: exercise config write authorization against fixture state, not operator config.
 vi.mock("../../config/config.js", () => {
   const transformConfigFileWithRetry = async (params: {
     afterWrite?: unknown;

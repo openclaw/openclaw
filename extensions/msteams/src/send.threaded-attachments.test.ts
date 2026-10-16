@@ -66,6 +66,7 @@ vi.mock("./graph-upload.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: fixture file cards must not call the Graph transport.
 vi.mock("./graph-chat.js", () => ({ buildTeamsFileInfoCard: mockState.buildTeamsFileInfoCard }));
 
 vi.mock("./messenger.js", async (importOriginal) => ({

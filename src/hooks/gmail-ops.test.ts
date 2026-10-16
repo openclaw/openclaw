@@ -27,8 +27,10 @@ vi.mock("node:child_process", async () => {
   );
 });
 
+// mock-isolation: all command completion and cancellation is controlled by this fixture.
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: mocks.runCommandWithTimeout }));
 
+// mock-isolation: terminate only the fixture's fake child processes.
 vi.mock("../process/kill-tree.js", () => ({ killProcessTree: mocks.killProcessTree }));
 
 vi.mock("../config/config.js", async () => {
@@ -39,6 +41,7 @@ vi.mock("../config/config.js", async () => {
   };
 });
 
+// mock-isolation: capture service output and exit instead of affecting this test process.
 vi.mock("../runtime.js", () => ({ defaultRuntime: mocks.defaultRuntime }));
 
 vi.mock("./gmail-setup-utils.js", () => ({

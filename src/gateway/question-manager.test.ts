@@ -1,6 +1,10 @@
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Question, QuestionAnswers } from "../../packages/gateway-protocol/src/index.js";
+import type {
+  Question,
+  QuestionAnswers,
+  QuestionResolvedEvent,
+} from "../../packages/gateway-protocol/src/index.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -17,6 +21,7 @@ import {
   QuestionManager,
   QuestionManagerError,
   QuestionManagerErrorCodes,
+  type QuestionObservation,
 } from "./question-manager.js";
 
 const QUESTION_RESOLVED_ENTRY_GRACE_MS = 15_000;
@@ -30,69 +35,58 @@ const questions: Question[] = [
     questionId: "choice",
     header: "Choice",
     question: "Which option?",
-    options: [{ label: "One" }, { label: "Two" }],
+    options: [
+      { label: "One", description: "First" },
+      { label: "Two", description: "Second" },
+    ],
     isOther: true,
   },
 ];
 const answers = { answers: { choice: ["Two"] } };
-const answerResult = { status: "answered", answers };
-const receiptResult = (resolutionId: string) => ({ ...answerResult, resolutionId });
-const questionList = (overrides: Partial<Question>) => [{ ...questions[0]!, ...overrides }];
-const choiceAnswer = (...values: string[]) => ({ answers: { choice: values } });
 
-const invalidAnswerCases: Array<[string, QuestionAnswers, Question[]?, string?]> = [
-  ["prototype id", { answers: {} }, questionList({ questionId: "constructor" }), "constructor"],
-  ["unknown id", { answers: { choice: ["Two"], unknown: ["value"] } }, undefined, "unknown"],
-  ["missing answer", answers, [...questions, ...questionList({ questionId: "second" })], "second"],
-  ["empty string", choiceAnswer("  ")],
-  ["empty secret", choiceAnswer(""), questionList({ options: [], isSecret: true })],
-  ["multiple single-select values", choiceAnswer("One", "Two")],
-  ["undeclared option", choiceAnswer("Three"), questionList({ isOther: false })],
+const invalidAnswerCases: Array<[string, Question[], QuestionAnswers, string]> = [
+  [
+    "a prototype-key question id with no submitted answer",
+    [{ ...questions[0]!, questionId: "constructor" }],
+    { answers: {} },
+    "constructor",
+  ],
+  [
+    "an unknown question id",
+    questions,
+    { answers: { choice: ["Two"], unknown: ["value"] } },
+    "unknown",
+  ],
+  [
+    "a missing question answer",
+    [...questions, { ...questions[0]!, questionId: "second" }],
+    answers,
+    "second",
+  ],
+  ["an empty string", questions, { answers: { choice: ["  "] } }, "choice"],
+  [
+    "an empty secret value",
+    [{ ...questions[0]!, options: [], isSecret: true }],
+    { answers: { choice: [""] } },
+    "choice",
+  ],
+  [
+    "multiple values for a single-select question",
+    questions,
+    { answers: { choice: ["One", "Two"] } },
+    "choice",
+  ],
+  [
+    "a value outside the declared options",
+    [{ ...questions[0]!, isOther: false }],
+    { answers: { choice: ["Three"] } },
+    "choice",
+  ],
 ];
 
 let manager: QuestionManager;
-let onResolved: ReturnType<typeof vi.fn>;
 let clock: ReturnType<typeof createGatewaySchedulerClock>;
 let scheduler: ReturnType<typeof createTestGatewayScheduler>;
-
-function askQuestion(overrides: Partial<Parameters<QuestionManager["request"]>[0]> = {}) {
-  return manager.request({ questions, timeoutMs: 10_000, ...overrides });
-}
-
-function sessionAccess(release: () => void) {
-  return {
-    agentId: "main",
-    sessionKey: "agent:main:own",
-    canSelect: () => true,
-    assertSourceCurrent: () => {},
-    assertCurrent: () => {},
-    release,
-  };
-}
-
-function publicationRoot(label: string) {
-  resetGatewayWorkAdmission();
-  const failure = vi.fn();
-  manager = new QuestionManager(scheduler, failure);
-  const parent = tryBeginGatewayRootWorkAdmission(label);
-  expect(parent).not.toBeNull();
-  const releaseWait = vi.fn(() => parent!.release());
-  const request = (overrides: Partial<PublicQuestionRequest>) =>
-    parent!.run(async () =>
-      askQuestion({
-        questions,
-        timeoutMs: 10_000,
-        registerHumanInputWait: () => releaseWait,
-        ...overrides,
-      } satisfies PublicQuestionRequest),
-    );
-  return { parent, failure, releaseWait, request };
-}
-
-function expectManagerError(run: () => unknown, code: QuestionManagerError["code"]) {
-  expect(run).toThrowError(QuestionManagerError);
-  expect(run).toThrowError(expect.objectContaining({ code }));
-}
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -100,7 +94,6 @@ beforeEach(() => {
   clock = createGatewaySchedulerClock(1_000);
   scheduler = createTestGatewayScheduler(clock.clock);
   manager = new QuestionManager(scheduler);
-  onResolved = vi.fn();
 });
 
 afterEach(async () => {
@@ -113,7 +106,8 @@ afterEach(async () => {
 describe("QuestionManager", () => {
   it("hides a committing question on reset and settles it without touching a reused id", async () => {
     const commit = createDeferredCore();
-    const original = askQuestion({ onResolved });
+    const onResolved = vi.fn();
+    const original = manager.request({ questions, timeoutMs: 10_000, onResolved });
     const waiting = manager.waitAnswer(original.id);
     const pending = manager.resolveWithCommit(original.id, answers, undefined, {
       commit: () => commit.promise,
@@ -123,12 +117,12 @@ describe("QuestionManager", () => {
       manager.reset();
       expect(manager.get(original.id)).toBeNull();
       expect(manager.list()).toEqual([]);
-      successor = askQuestion({ id: original.id });
+      successor = manager.request({ id: original.id, questions, timeoutMs: 10_000 });
     } finally {
       commit.resolve();
       await pending;
     }
-    await expect(waiting).resolves.toEqual(answerResult);
+    await expect(waiting).resolves.toEqual({ status: "answered", answers });
     expect(manager.get(original.id)).toBe(successor);
     expect(successor?.status).toBe("pending");
     expect(onResolved).not.toHaveBeenCalled();
@@ -138,33 +132,47 @@ describe("QuestionManager", () => {
     "retains private read facts through completion and releases them on %s",
     async (retirement) => {
       const release = vi.fn();
-      const access = sessionAccess(release);
+      const sessionAccess = {
+        agentId: "main",
+        sessionKey: "agent:main:own",
+        canSelect: () => true,
+        assertSourceCurrent: () => {},
+        assertCurrent: () => {},
+        release,
+      };
       let requesterActive = true;
-      const record = askQuestion({
-        sessionAccess: access,
+      const onResolved = vi.fn();
+      const record = manager.request({
+        questions,
+        timeoutMs: 10_000,
+        sessionAccess,
         onResolved,
         isRequesterActive: () => requesterActive,
       });
       const observation = manager.observe(record.id)!;
       manager.resolve(record.id, answers);
       requesterActive = false;
-      expect(observation.record).toMatchObject(answerResult);
+      expect(observation.record).toMatchObject({ status: "answered", answers });
       expect(observation.isCurrent()).toBe(true);
       expect(observation.ordinary).toBe(true);
-      expect(observation.sessionAccess).toBe(access);
-      expect(onResolved.mock.calls[0]?.[1].sessionAccess).toBe(access);
+      expect(observation.sessionAccess).toBe(sessionAccess);
+      expect(onResolved.mock.calls[0]?.[1].sessionAccess).toBe(sessionAccess);
       expect(release).not.toHaveBeenCalled();
       if (retirement === "cleanup") {
         await manager.drain();
         await clock.advanceBy(15_000);
-      } else {
-        manager[retirement]();
+      }
+      if (retirement === "reset") {
+        manager.reset();
+      }
+      if (retirement === "close") {
+        manager.close();
       }
       expect(release).toHaveBeenCalledOnce();
       expect(observation.isCurrent()).toBe(false);
-      expect(observation.record).toMatchObject(answerResult);
+      expect(observation.record).toMatchObject({ status: "answered", answers });
       if (retirement !== "close") {
-        askQuestion({ id: record.id });
+        manager.request({ id: record.id, questions, timeoutMs: 10_000 });
         expect(observation.isCurrent()).toBe(false);
       }
     },
@@ -172,8 +180,8 @@ describe("QuestionManager", () => {
 
   it("keeps secret classification immutable and observes without settling expiry", () => {
     const secret = { ...questions[0]!, isSecret: true };
-
-    const record = askQuestion({ questions: [secret], timeoutMs: 10, onResolved });
+    const onResolved = vi.fn();
+    const record = manager.request({ questions: [secret], timeoutMs: 10, onResolved });
     const observation = manager.observe(record.id)!;
     secret.isSecret = false;
     clock.setTime(2_000);
@@ -185,12 +193,13 @@ describe("QuestionManager", () => {
   });
 
   it("does not resolve a successor installed synchronously by the original expiry callback", () => {
-    const original = askQuestion({
+    const original = manager.request({
       id: "reused",
+      questions,
       timeoutMs: 10,
       onResolved: () => {
         manager.reset();
-        askQuestion({ id: "reused", questions, timeoutMs: 1_000 });
+        manager.request({ id: "reused", questions, timeoutMs: 1_000 });
       },
     });
     const observation = manager.observe(original.id)!;
@@ -201,40 +210,58 @@ describe("QuestionManager", () => {
   });
 
   it("accepts a unique client id and rejects reuse during the grace window", () => {
-    const first = askQuestion({ id: "ask_client_id" });
+    const first = manager.request({ id: "ask_client_id", questions, timeoutMs: 10_000 });
 
     expect(first.id).toBe("ask_client_id");
-    expectManagerError(() => askQuestion({ id: first.id }), QuestionManagerErrorCodes.ID_IN_USE);
+    expect(() =>
+      manager.request({ id: "ask_client_id", questions, timeoutMs: 10_000 }),
+    ).toThrowError(QuestionManagerError);
+    try {
+      manager.request({ id: "ask_client_id", questions, timeoutMs: 10_000 });
+    } catch (error) {
+      expect(error).toMatchObject({ code: QuestionManagerErrorCodes.ID_IN_USE });
+    }
   });
 
   it("keeps resolution receipts opt-in for simultaneous and late waiters", async () => {
-    const { id } = askQuestion({ onResolved });
-    const legacy = manager.waitAnswer(id);
-    const tracked = manager.waitAnswer(id, undefined, true);
+    const onResolved = vi.fn();
+    const record = manager.request({ questions, timeoutMs: 10_000, onResolved });
+    const legacy = manager.waitAnswer(record.id);
+    const tracked = manager.waitAnswer(record.id, undefined, true);
     const resolutionId = "candidate-resolution";
-    const receipt = receiptResult(resolutionId);
 
-    expect(manager.resolve(id, answers, "plain-text", { resolutionId })).toEqual(answerResult);
-    await expect(legacy).resolves.toEqual(answerResult);
-    await expect(tracked).resolves.toEqual(receipt);
-    await expect(manager.waitAnswer(id)).resolves.toEqual(answerResult);
-    await expect(manager.waitAnswer(id, undefined, true)).resolves.toEqual(receipt);
-    expect(manager.get(id)).toMatchObject({ status: "answered", resolvedBy: "plain-text" });
-    expect(manager.get(id)).not.toHaveProperty("resolutionId");
+    expect(manager.resolve(record.id, answers, "plain-text", { resolutionId })).toEqual({
+      status: "answered",
+      answers,
+    });
+    await expect(legacy).resolves.toEqual({ status: "answered", answers });
+    await expect(tracked).resolves.toEqual({ status: "answered", answers, resolutionId });
+    await expect(manager.waitAnswer(record.id)).resolves.toEqual({ status: "answered", answers });
+    await expect(manager.waitAnswer(record.id, undefined, true)).resolves.toEqual({
+      status: "answered",
+      answers,
+      resolutionId,
+    });
+    expect(manager.get(record.id)).toMatchObject({ status: "answered", resolvedBy: "plain-text" });
+    expect(manager.get(record.id)).not.toHaveProperty("resolutionId");
     expect(onResolved).toHaveBeenCalledOnce();
-    expect(onResolved.mock.calls[0]?.[0]).toEqual({ id, ...answerResult });
+    expect(onResolved.mock.calls[0]?.[0]).toEqual({
+      id: record.id,
+      status: "answered",
+      answers,
+    });
     expect(() =>
-      manager.resolve(id, answers, "other", { resolutionId: "other-resolution" }),
+      manager.resolve(record.id, answers, "other", { resolutionId: "other-resolution" }),
     ).toThrowError(QuestionManagerError);
     await manager.drain();
     await clock.advanceBy(QUESTION_RESOLVED_ENTRY_GRACE_MS);
-    expect(manager.get(id)).toBeNull();
+    expect(manager.get(record.id)).toBeNull();
     // Already-delivered proof survives terminal-record cleanup, without a later lookup.
-    await expect(tracked).resolves.toEqual(receipt);
+    await expect(tracked).resolves.toEqual({ status: "answered", answers, resolutionId });
   });
 
   it("does not stamp a receipt when the synchronous commit fails", async () => {
-    const record = askQuestion();
+    const record = manager.request({ questions, timeoutMs: 10_000 });
     const waiting = manager.waitAnswer(record.id, undefined, true);
     expect(() =>
       manager.resolve(record.id, answers, "failed", {
@@ -246,68 +273,115 @@ describe("QuestionManager", () => {
     ).toThrow("commit failed");
     expect(manager.get(record.id)?.status).toBe("pending");
     manager.resolve(record.id, answers, "legacy");
-    await expect(waiting).resolves.toEqual(answerResult);
+    await expect(waiting).resolves.toEqual({ status: "answered", answers });
   });
 
   it.each(invalidAnswerCases)(
     "rejects %s without terminalizing",
-    (_name, invalid, requestQuestions = questions, questionId = "choice") => {
-      const record = askQuestion({ questions: [...requestQuestions] });
+    (_name, requestQuestions, invalid, questionId) => {
+      const record = manager.request({ questions: [...requestQuestions], timeoutMs: 10_000 });
 
       expect(() => manager.resolve(record.id, invalid)).toThrow(`question '${questionId}'`);
       expect(manager.get(record.id)?.status).toBe("pending");
     },
   );
 
-  it.each<[string, Partial<Question>, string]>([
-    ["trimmed option", { isOther: false }, "  Two  "],
-    ["Other text", {}, "custom"],
-    ["free text", { options: [], isOther: false }, "custom"],
-  ])("accepts %s", (_name, overrides, value) => {
-    const record = askQuestion({ questions: questionList(overrides) });
-    expect(manager.resolve(record.id, choiceAnswer(value))).toMatchObject({ status: "answered" });
+  it("accepts trimmed option labels and free text when allowed", () => {
+    const strict = manager.request({
+      questions: [{ ...questions[0]!, isOther: false }],
+      timeoutMs: 10_000,
+    });
+    expect(manager.resolve(strict.id, { answers: { choice: ["  Two  "] } })).toMatchObject({
+      status: "answered",
+    });
+
+    const open = manager.request({ questions, timeoutMs: 10_000 });
+    expect(manager.resolve(open.id, { answers: { choice: ["custom"] } })).toMatchObject({
+      status: "answered",
+    });
+
+    const freeText = manager.request({
+      questions: [{ ...questions[0]!, options: [], isOther: false }],
+      timeoutMs: 10_000,
+    });
+    expect(manager.resolve(freeText.id, { answers: { choice: ["custom"] } })).toMatchObject({
+      status: "answered",
+    });
   });
 
-  it.each(["reset", "close"] as const)(
-    "retires local questions on %s without cancelling truth",
-    async (retirement) => {
-      const releaseHumanInputWait = vi.fn();
-      const releaseSessionAccess = vi.fn();
-      const record = askQuestion({
-        onResolved,
-        sessionAccess: sessionAccess(releaseSessionAccess),
-        registerHumanInputWait: () => releaseHumanInputWait,
-      });
-      const waiting = retirement === "reset" ? manager.waitAnswer(record.id, 5_000) : undefined;
-      manager[retirement]();
-      if (retirement === "close") {
-        manager.reset();
-        manager.close();
-      }
-      expect(manager.get(record.id)).toBeNull();
-      expect(releaseHumanInputWait).toHaveBeenCalledExactlyOnceWith(false);
-      expect(releaseSessionAccess).toHaveBeenCalledOnce();
-      if (retirement === "close") {
-        expect(() => askQuestion()).toThrow("Question manager is closed");
-        expect(clock.armedAtMs).toBeNull();
-      } else {
-        await expect(waiting).resolves.toEqual({ status: "pending" });
-        expect(record.status).toBe("pending");
-        expect(manager.observe(record.id)?.sessionAccess).toBeUndefined();
-        await clock.advanceBy(10_000 + QUESTION_RESOLVED_ENTRY_GRACE_MS);
-        expect(releaseSessionAccess).toHaveBeenCalledOnce();
-        expect(askQuestion({ id: record.id }).status).toBe("pending");
-      }
-      expect(onResolved).not.toHaveBeenCalled();
-    },
-  );
+  it("retires local questions without cancelling truth or refreshing human-input recovery", async () => {
+    const onResolved = vi.fn();
+    const releaseHumanInputWait = vi.fn();
+    const releaseSessionAccess = vi.fn();
+    const record = manager.request({
+      questions,
+      timeoutMs: 10_000,
+      onResolved,
+      sessionAccess: {
+        agentId: "main",
+        sessionKey: "agent:main:own",
+        canSelect: () => true,
+        assertSourceCurrent: () => {},
+        assertCurrent: () => {},
+        release: releaseSessionAccess,
+      },
+      registerHumanInputWait: () => releaseHumanInputWait,
+    });
+    const waiting = manager.waitAnswer(record.id, 5_000);
+
+    manager.reset();
+    await expect(waiting).resolves.toEqual({ status: "pending" });
+    expect(record.status).toBe("pending");
+    expect(manager.get(record.id)).toBeNull();
+    expect(releaseHumanInputWait).toHaveBeenCalledExactlyOnceWith(false);
+    expect(releaseSessionAccess).toHaveBeenCalledOnce();
+    expect(manager.observe(record.id)?.sessionAccess).toBeUndefined();
+    await clock.advanceBy(10_000 + QUESTION_RESOLVED_ENTRY_GRACE_MS);
+    expect(onResolved).not.toHaveBeenCalled();
+    expect(releaseSessionAccess).toHaveBeenCalledOnce();
+    expect(manager.request({ id: record.id, questions, timeoutMs: 10_000 }).status).toBe("pending");
+  });
+
+  it("permanently closes admission without reset reopening the retired owner", () => {
+    const releaseHumanInputWait = vi.fn();
+    const releaseSessionAccess = vi.fn();
+    const onResolved = vi.fn();
+    const record = manager.request({
+      questions,
+      timeoutMs: 10_000,
+      onResolved,
+      sessionAccess: {
+        agentId: "main",
+        sessionKey: "agent:main:own",
+        canSelect: () => true,
+        assertSourceCurrent: () => {},
+        assertCurrent: () => {},
+        release: releaseSessionAccess,
+      },
+      registerHumanInputWait: () => releaseHumanInputWait,
+    });
+    manager.close();
+    manager.reset();
+    manager.close();
+    expect(() => manager.request({ questions, timeoutMs: 10_000 })).toThrow(
+      "Question manager is closed",
+    );
+    expect(manager.get(record.id)).toBeNull();
+    expect(releaseHumanInputWait).toHaveBeenCalledExactlyOnceWith(false);
+    expect(releaseSessionAccess).toHaveBeenCalledOnce();
+    expect(onResolved).not.toHaveBeenCalled();
+    expect(clock.armedAtMs).toBeNull();
+  });
 
   it.each(["replacement", "answer"] as const)(
     "keeps a reentrant %s intact when refreshing the original requester",
     (transition) => {
       let armed = false;
-      const original = askQuestion({
+      const onResolved = vi.fn();
+      const original = manager.request({
         id: "reentrant-liveness",
+        questions,
+        timeoutMs: 10_000,
         onResolved,
         isRequesterActive: () => {
           if (!armed) {
@@ -316,7 +390,7 @@ describe("QuestionManager", () => {
           armed = false;
           if (transition === "replacement") {
             manager.reset();
-            askQuestion({ id: "reentrant-liveness" });
+            manager.request({ id: "reentrant-liveness", questions, timeoutMs: 10_000 });
           } else {
             manager.resolve("reentrant-liveness", answers);
           }
@@ -334,7 +408,7 @@ describe("QuestionManager", () => {
         expect(onResolved).not.toHaveBeenCalled();
       } else {
         expect(observation.isCurrent()).toBe(true);
-        expect(observation.record).toMatchObject(answerResult);
+        expect(observation.record).toMatchObject({ status: "answered", answers });
         expect(onResolved).toHaveBeenCalledOnce();
       }
     },
@@ -344,14 +418,25 @@ describe("QuestionManager", () => {
     const replacementRelease = vi.fn();
     const replacementWaitRelease = vi.fn();
     const release = vi.fn(() => {
-      askQuestion({
+      manager.request({
         id: "reentrant-reset",
-        sessionAccess: sessionAccess(replacementRelease),
+        questions,
+        timeoutMs: 10_000,
+        sessionAccess: {
+          agentId: "main",
+          sessionKey: "agent:main:own",
+          canSelect: () => true,
+          assertSourceCurrent: () => {},
+          assertCurrent: () => {},
+          release: replacementRelease,
+        },
         registerHumanInputWait: () => replacementWaitRelease,
       });
     });
-    const original = askQuestion({
+    const original = manager.request({
       id: "reentrant-reset",
+      questions,
+      timeoutMs: 10_000,
       registerHumanInputWait: () => release,
     });
     const observation = manager.observe(original.id)!;
@@ -372,8 +457,12 @@ describe("QuestionManager", () => {
   });
 
   it("does not recreate a retention timer when resolution closes the manager reentrantly", () => {
-    const record = askQuestion({ onResolved: () => manager.close() });
-    expect(manager.resolve(record.id, answers)).toEqual(answerResult);
+    const record = manager.request({
+      questions,
+      timeoutMs: 10_000,
+      onResolved: () => manager.close(),
+    });
+    expect(manager.resolve(record.id, answers)).toEqual({ status: "answered", answers });
     expect(manager.get(record.id)).toBeNull();
     expect(clock.armedAtMs).toBeNull();
   });
@@ -381,18 +470,25 @@ describe("QuestionManager", () => {
   it("preserves an answer recorded before human-input release reentrantly closes its observer", async () => {
     const observer = new AsyncWorkScope();
     const releaseHumanInputWait = vi.fn(() => observer.beginClose());
-    const record = askQuestion({
+    const onResolved = vi.fn();
+    const record = manager.request({
+      questions,
+      timeoutMs: 10_000,
       onResolved,
       registerHumanInputWait: () => releaseHumanInputWait,
     });
     const waiting = observer.track(() => manager.waitAnswer(record.id));
     try {
       manager.resolve(record.id, answers);
-      await expect(waiting).resolves.toEqual(answerResult);
-      expect(manager.get(record.id)).toMatchObject(answerResult);
+      await expect(waiting).resolves.toEqual({ status: "answered", answers });
+      expect(manager.get(record.id)).toMatchObject({ status: "answered", answers });
       expect(releaseHumanInputWait).toHaveBeenCalledExactlyOnceWith(true);
       expect(onResolved).toHaveBeenCalledOnce();
-      expect(onResolved.mock.calls[0]?.[0]).toEqual({ id: record.id, ...answerResult });
+      expect(onResolved.mock.calls[0]?.[0]).toEqual({
+        id: record.id,
+        status: "answered",
+        answers,
+      });
     } finally {
       manager.close();
       await waiting;
@@ -402,23 +498,31 @@ describe("QuestionManager", () => {
 
   it("detaches only the closing observer without releasing the question's human-input wait", async () => {
     const observer = new AsyncWorkScope();
-
+    const onResolved = vi.fn();
     const releaseHumanInputWait = vi.fn();
-    const record = askQuestion({
+    const record = manager.request({
+      questions,
+      timeoutMs: 10_000,
       onResolved,
       registerHumanInputWait: () => releaseHumanInputWait,
     });
-    const closingObserverSettled = vi.fn();
-    const otherObserverSettled = vi.fn();
-    const closingObserver = observer.track(() => manager.waitAnswer(record.id, 5_000));
-    const otherObserver = manager.waitAnswer(record.id, 5_000);
-    void closingObserver.then(closingObserverSettled);
-    void otherObserver.then(otherObserverSettled);
+    let closingObserverSettled = false;
+    let otherObserverSettled = false;
+    const closingObserver = observer
+      .track(() => manager.waitAnswer(record.id, 5_000))
+      .then((result) => {
+        closingObserverSettled = true;
+        return result;
+      });
+    const otherObserver = manager.waitAnswer(record.id, 5_000).then((result) => {
+      otherObserverSettled = true;
+      return result;
+    });
     try {
       observer.beginClose();
       await vi.advanceTimersByTimeAsync(0);
-      expect(closingObserverSettled).toHaveBeenCalledOnce();
-      expect(otherObserverSettled).not.toHaveBeenCalled();
+      expect(closingObserverSettled).toBe(true);
+      expect(otherObserverSettled).toBe(false);
       await expect(closingObserver).resolves.toEqual({ status: "pending" });
       await observer.drain();
       expect(manager.get(record.id)?.status).toBe("pending");
@@ -426,10 +530,14 @@ describe("QuestionManager", () => {
       expect(releaseHumanInputWait).not.toHaveBeenCalled();
 
       manager.resolve(record.id, answers);
-      await expect(otherObserver).resolves.toEqual(answerResult);
+      await expect(otherObserver).resolves.toEqual({ status: "answered", answers });
       expect(releaseHumanInputWait).toHaveBeenCalledExactlyOnceWith(true);
       expect(onResolved).toHaveBeenCalledOnce();
-      expect(onResolved.mock.calls[0]?.[0]).toEqual({ id: record.id, ...answerResult });
+      expect(onResolved.mock.calls[0]?.[0]).toEqual({
+        id: record.id,
+        status: "answered",
+        answers,
+      });
     } finally {
       // Owner retirement is post-observer cleanup, not the cancellation mechanism being tested.
       manager.close();
@@ -439,7 +547,7 @@ describe("QuestionManager", () => {
   });
 
   it("times out one waiter without resolving the question", async () => {
-    const record = askQuestion();
+    const record = manager.request({ questions, timeoutMs: 10_000 });
     const waiting = manager.waitAnswer(record.id, 50);
 
     await vi.advanceTimersByTimeAsync(50);
@@ -450,19 +558,21 @@ describe("QuestionManager", () => {
 
   it("expires once after sleep and joins the terminal publication when the scheduler closes", async () => {
     const publication = createDeferredCore();
-    onResolved = vi.fn(() => publication.promise);
-    const record = askQuestion({ timeoutMs: 50, onResolved });
+    const onResolved = vi.fn(() => publication.promise);
+    const record = manager.request({ questions, timeoutMs: 50, onResolved });
     const waiting = manager.waitAnswer(record.id);
     clock.setTime(70_000);
     const waking = clock.wake();
     expect(await waiting).toEqual({ status: "expired" });
     expect(onResolved).toHaveBeenCalledOnce();
 
-    const stopped = vi.fn();
-    const stopping = scheduler.stop().then(stopped);
+    let stopped = false;
+    const stopping = scheduler.stop().then(() => {
+      stopped = true;
+    });
     try {
       await Promise.resolve();
-      expect(stopped).not.toHaveBeenCalled();
+      expect(stopped).toBe(false);
       publication.resolve();
       await Promise.all([waking, stopping]);
       await clock.advanceBy(60_000);
@@ -476,25 +586,32 @@ describe("QuestionManager", () => {
   });
 
   it("rejects double resolve and resolve after expiry with typed errors", async () => {
-    const answered = askQuestion();
+    const answered = manager.request({ questions, timeoutMs: 10_000 });
     manager.resolve(answered.id, answers);
 
-    expectManagerError(
-      () => manager.resolve(answered.id, answers),
-      QuestionManagerErrorCodes.ALREADY_TERMINAL,
-    );
+    expect(() => manager.resolve(answered.id, answers)).toThrowError(QuestionManagerError);
+    try {
+      manager.resolve(answered.id, answers);
+    } catch (error) {
+      expect(error).toMatchObject({ code: QuestionManagerErrorCodes.ALREADY_TERMINAL });
+    }
 
-    const expired = askQuestion({ timeoutMs: 10 });
+    const expired = manager.request({ questions, timeoutMs: 10 });
     await clock.advanceBy(10);
-    expect(() => manager.resolve(expired.id, answers)).toThrowError(
-      expect.objectContaining({ code: QuestionManagerErrorCodes.ALREADY_TERMINAL }),
-    );
+    try {
+      manager.resolve(expired.id, answers);
+      throw new Error("expected resolve to fail");
+    } catch (error) {
+      expect(error).toMatchObject({ code: QuestionManagerErrorCodes.ALREADY_TERMINAL });
+    }
   });
 
   it("retains authority sweeping for legacy requesters without a run selector", () => {
     let active = true;
     const resolved = vi.fn();
-    const record = askQuestion({
+    const record = manager.request({
+      questions,
+      timeoutMs: 10_000,
       isRequesterActive: () => active,
       onResolved: resolved,
     });
@@ -516,30 +633,42 @@ describe("answer canonicalization", () => {
     { label: "Blue", value: "blue-1" },
     { label: "Blue", value: "blue-2" },
   ];
-  const form: Partial<Question> = { presentation: "form" };
-  const conflicts = [
-    { label: "a", value: "b" },
-    { label: "b", value: "c" },
+  const valuedAnswerCases: Array<
+    [string, Partial<Question>, Question["options"], string, string | undefined]
+  > = [
+    ["installed form label", { presentation: "form" }, valuedOptions, "Blue", "blue-1"],
+    ["form value", { presentation: "form" }, valuedOptions, "blue-1", "blue-1"],
+    ["unknown form label", { presentation: "form" }, valuedOptions, "Green", undefined],
+    ["inexact form label", { presentation: "form" }, valuedOptions, " Blue ", undefined],
+    [
+      "value before a conflicting label",
+      { presentation: "form" },
+      [
+        { label: "a", value: "b" },
+        { label: "b", value: "c" },
+      ],
+      "b",
+      "b",
+    ],
+    ["trimmed ordinary label", {}, valuedOptions, "  Blue  ", "blue-1"],
+    ["inexact secret label", { isSecret: true }, valuedOptions, " Blue ", undefined],
+    [
+      "Other form text preserves exact bytes",
+      { presentation: "form", isOther: true },
+      valuedOptions,
+      "\tanything else\n",
+      "\tanything else\n",
+    ],
+    ["ambiguous form label", { presentation: "form" }, duplicateLabels, "Blue", undefined],
+    ["first duplicate-label value", { presentation: "form" }, duplicateLabels, "blue-1", "blue-1"],
+    ["ambiguous trimmed ordinary label", {}, duplicateLabels, " Blue ", undefined],
   ];
-  const otherText = "\tanything else\n";
-  const valuedAnswerCases: Array<[string, Partial<Question>, string, string | undefined]> = [
-    ["installed form label", form, "Blue", "blue-1"],
-    ["form value", form, "blue-1", "blue-1"],
-    ["unknown form label", form, "Green", undefined],
-    ["inexact form label", form, " Blue ", undefined],
-    ["value before conflicting label", { ...form, options: conflicts }, "b", "b"],
-    ["trimmed ordinary label", {}, "  Blue  ", "blue-1"],
-    ["inexact secret label", { isSecret: true }, " Blue ", undefined],
-    ["Other form bytes", { ...form, isOther: true }, otherText, otherText],
-    ["ambiguous form label", { ...form, options: duplicateLabels }, "Blue", undefined],
-    ["duplicate-label value", { ...form, options: duplicateLabels }, "blue-1", "blue-1"],
-    ["ambiguous trimmed label", { options: duplicateLabels }, " Blue ", undefined],
-  ];
-  it.each(valuedAnswerCases)("resolves %s", (_name, overrides, submitted, expected) => {
-    const record = askQuestion({
-      questions: questionList({ options: valuedOptions, isOther: false, ...overrides }),
+  it.each(valuedAnswerCases)("resolves %s", (_name, overrides, options, submitted, expected) => {
+    const record = manager.request({
+      questions: [{ ...questions[0]!, options, isOther: false, ...overrides }],
+      timeoutMs: 10_000,
     });
-    const resolve = () => manager.resolve(record.id, choiceAnswer(submitted));
+    const resolve = () => manager.resolve(record.id, { answers: { choice: [submitted] } });
     if (expected === undefined) {
       expect(resolve).toThrowError(
         expect.objectContaining({ code: QuestionManagerErrorCodes.INVALID_ANSWER }),
@@ -547,7 +676,7 @@ describe("answer canonicalization", () => {
     } else {
       expect(resolve()).toEqual({
         status: "answered",
-        answers: choiceAnswer(expected),
+        answers: { answers: { choice: [expected] } },
       });
     }
   });
@@ -555,11 +684,18 @@ describe("answer canonicalization", () => {
   it.each(["\tsynthetic-secret\n", "   "])(
     "preserves exact secret bytes while normalizing ordinary answers: %j",
     async (value) => {
-      const record = askQuestion({
+      const record = manager.request({
         questions: [
-          ...questionList({ questionId: "secret_value", options: [], isSecret: true }),
+          {
+            questionId: "secret_value",
+            header: "Secret",
+            question: "Enter a synthetic secret.",
+            options: [],
+            isSecret: true,
+          },
           ...questions,
         ],
+        timeoutMs: 10_000,
       });
       const waiting = manager.waitAnswer(record.id);
       manager.resolve(record.id, { answers: { secret_value: [value], choice: ["  Two  "] } });
@@ -574,19 +710,31 @@ describe("answer canonicalization", () => {
 it.each(["fulfilled", "rejected"] as const)(
   "joins %s terminal publication on the original root while admission and the owner close",
   async (outcome) => {
-    const { parent, failure, releaseWait, request } = publicationRoot("question-publication");
+    resetGatewayWorkAdmission();
+    const failure = vi.fn();
+    manager = new QuestionManager(scheduler, failure);
+    const parent = tryBeginGatewayRootWorkAdmission("question-publication");
+    expect(parent).not.toBeNull();
     const gate = createDeferredCore();
     const entered = vi.fn();
-    const { id } = await request({
-      onResolved: async () => {
-        entered();
-        expect(getActiveGatewayRootWorkCount()).toBe(1);
-        await gate.promise;
-        if (outcome === "rejected") {
-          throw new Error("private fixture failure");
-        }
-        return { published: true };
-      },
+    const releaseWait = vi.fn(() => parent!.release());
+    let id = "";
+    await parent!.run(async () => {
+      const request = {
+        questions,
+        timeoutMs: 10_000,
+        registerHumanInputWait: () => releaseWait,
+        onResolved: async () => {
+          entered();
+          expect(getActiveGatewayRootWorkCount()).toBe(1);
+          await gate.promise;
+          if (outcome === "rejected") {
+            throw new Error("private fixture failure");
+          }
+          return { published: true };
+        },
+      };
+      id = manager.request(request satisfies PublicQuestionRequest).id;
     });
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspension?.commit()).toBe(true);
@@ -594,12 +742,14 @@ it.each(["fulfilled", "rejected"] as const)(
     manager.resolve(id, answers);
     expect(entered).toHaveBeenCalledOnce();
     expect(releaseWait).toHaveBeenCalledWith(true);
-    expect(await waiting).toEqual(answerResult);
+    expect(await waiting).toEqual({ status: "answered", answers });
     manager.close();
-    const drained = vi.fn();
-    const closing = manager.drain().then(drained);
+    let drained = false;
+    const closing = manager.drain().then(() => {
+      drained = true;
+    });
     await Promise.resolve();
-    expect(drained).not.toHaveBeenCalled();
+    expect(drained).toBe(false);
     expect(getActiveGatewayRootWorkCount()).toBe(1);
     try {
       gate.resolve();
@@ -619,38 +769,54 @@ it.each(["fulfilled", "rejected"] as const)(
 it.each(["fulfilled", "rejected", "reset", "close", "reused id"] as const)(
   "holds terminal grace through %s publication",
   async (outcome) => {
-    const { parent, failure, releaseWait, request } = publicationRoot(
-      "question-delayed-publication",
-    );
+    resetGatewayWorkAdmission();
+    const failure = vi.fn();
+    manager = new QuestionManager(scheduler, failure);
+    const parent = tryBeginGatewayRootWorkAdmission("question-delayed-publication");
+    expect(parent).not.toBeNull();
     const gate = createDeferredCore();
     const delivered = vi.fn();
     const releaseSession = vi.fn();
-    const { id } = await request({
-      timeoutMs: 60_000,
-      sessionAccess: sessionAccess(releaseSession),
-      onResolved: async (event, observation) => {
-        await gate.promise;
-        if (outcome === "rejected") {
-          throw new Error("Question publication fixture failure");
-        }
-        if (observation.isCurrent()) {
-          delivered(event);
-        }
-      },
+    const releaseWait = vi.fn(() => parent!.release());
+    let id = "";
+    await parent!.run(async () => {
+      const request = {
+        questions,
+        timeoutMs: 60_000,
+        registerHumanInputWait: () => releaseWait,
+        sessionAccess: {
+          agentId: "main",
+          sessionKey: "agent:main:own",
+          canSelect: () => true,
+          assertSourceCurrent: () => {},
+          assertCurrent: () => {},
+          release: releaseSession,
+        },
+        onResolved: async (event: QuestionResolvedEvent, observation: QuestionObservation) => {
+          await gate.promise;
+          if (outcome === "rejected") {
+            throw new Error("Question publication fixture failure");
+          }
+          if (observation.isCurrent()) {
+            delivered(event);
+          }
+        },
+      };
+      id = manager.request(request satisfies PublicQuestionRequest).id;
     });
     const observation = manager.observe(id)!;
     const waiting = manager.waitAnswer(id);
-    expect(manager.resolve(id, answers)).toEqual(answerResult);
+    expect(manager.resolve(id, answers)).toEqual({ status: "answered", answers });
     expect(releaseWait).toHaveBeenCalledExactlyOnceWith(true);
-    expect(await waiting).toEqual(answerResult);
+    expect(await waiting).toEqual({ status: "answered", answers });
     try {
       await clock.advanceBy(QUESTION_RESOLVED_ENTRY_GRACE_MS + 1);
       expect(observation.isCurrent()).toBe(true);
-      expect(observation.record).toMatchObject(answerResult);
+      expect(observation.record).toMatchObject({ status: "answered", answers });
       expect(releaseSession).not.toHaveBeenCalled();
       expect(delivered).not.toHaveBeenCalled();
       expect(getActiveGatewayRootWorkCount()).toBe(1);
-      expect(() => askQuestion({ id, questions, timeoutMs: 60_000 })).toThrow("already exists");
+      expect(() => manager.request({ id, questions, timeoutMs: 60_000 })).toThrow("already exists");
       const retired = outcome === "reset" || outcome === "close" || outcome === "reused id";
       if (retired) {
         if (outcome === "close") {
@@ -662,7 +828,7 @@ it.each(["fulfilled", "rejected", "reset", "close", "reused id"] as const)(
         expect(releaseSession).toHaveBeenCalledOnce();
       }
       const replacement =
-        outcome === "reused id" ? askQuestion({ id, questions, timeoutMs: 60_000 }) : null;
+        outcome === "reused id" ? manager.request({ id, questions, timeoutMs: 60_000 }) : null;
       gate.resolve();
       await manager.drain();
       expect(getActiveGatewayRootWorkCount()).toBe(0);
@@ -696,12 +862,30 @@ it.each(["fulfilled", "rejected", "reset", "close", "reused id"] as const)(
 it.each(["answered", "cancelled", "expired"] as const)(
   "settles local %s waiters when reset retired the original publication root",
   async (status) => {
-    const { parent, failure, releaseWait, request } = publicationRoot("question-reset-publication");
+    resetGatewayWorkAdmission();
+    const failure = vi.fn();
+    manager = new QuestionManager(scheduler, failure);
+    const parent = tryBeginGatewayRootWorkAdmission("question-reset-publication");
+    expect(parent).not.toBeNull();
+    const releaseWait = vi.fn(() => parent!.release());
     const releaseSession = vi.fn();
-    const { id } = await request({
-      timeoutMs: 1_000,
-      onResolved,
-      sessionAccess: sessionAccess(releaseSession),
+    const onResolved = vi.fn();
+    let id = "";
+    await parent!.run(async () => {
+      id = manager.request({
+        questions,
+        timeoutMs: 1_000,
+        registerHumanInputWait: () => releaseWait,
+        onResolved,
+        sessionAccess: {
+          agentId: "main",
+          sessionKey: "agent:main:own",
+          canSelect: () => true,
+          assertSourceCurrent: () => {},
+          assertCurrent: () => {},
+          release: releaseSession,
+        },
+      }).id;
     });
     const settled = vi.fn();
     const waiting = manager.waitAnswer(id).then(settled);

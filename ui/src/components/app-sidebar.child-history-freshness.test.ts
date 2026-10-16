@@ -143,7 +143,7 @@ it.each(["away and back", "during publication"] as const)(
             refreshedFirst.label
           ) {
             stopReentry();
-            select(second.key);
+            void select(second.key);
           }
         });
       } else {

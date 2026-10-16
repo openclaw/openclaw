@@ -132,7 +132,7 @@ describe("loader", () => {
   });
 
   it("registers unknown event keys anyway (advisory warning, not a load failure)", async () => {
-    await writeDiscoveredHook("typo-hook", {
+    writeDiscoveredHook("typo-hook", {
       events: ["command:nwe", "command:new"],
     });
 
@@ -146,10 +146,10 @@ describe("loader", () => {
 
   it("retains the committed hook generation after failed import", async () => {
     const handlerCode = 'throw new Error("candidate import failed");';
-    await writeDiscoveredHook("original");
+    writeDiscoveredHook("original");
     await commitPreparedHooks(createHooksConfig(["original"]));
-    await writeDiscoveredHook("replacement");
-    await writeDiscoveredHook("broken", { handlerCode });
+    writeDiscoveredHook("replacement");
+    writeDiscoveredHook("broken", { handlerCode });
 
     await expect(
       commitPreparedHooks(createHooksConfig(["replacement", "broken"])),
@@ -159,7 +159,7 @@ describe("loader", () => {
   });
 
   it("keeps committed hooks serving while replacement imports are pending", async () => {
-    await writeDiscoveredHook("original");
+    writeDiscoveredHook("original");
     await commitPreparedHooks(createHooksConfig([], true));
     const importStarted = createDeferredCore();
     const releaseImport = createDeferredCore();
@@ -167,7 +167,7 @@ describe("loader", () => {
       started: importStarted.resolve,
       wait: releaseImport.promise,
     });
-    await writeDiscoveredHook("replacement", {
+    writeDiscoveredHook("replacement", {
       handlerCode:
         'globalThis.openclawHookImportGate.started(); await globalThis.openclawHookImportGate.wait; export default async function(event) { event.messages.push("replacement"); }',
     });
@@ -188,7 +188,7 @@ describe("loader", () => {
   it.each(["missing", "outside hook directory"])(
     "retains active handlers when a selected handler becomes %s before sibling reload",
     async (failure) => {
-      const hookDir = await writeDiscoveredHook("original");
+      const hookDir = writeDiscoveredHook("original");
       const config = createHooksConfig(["original"]);
       await commitPreparedHooks(config);
       await expectMessages(["original"]);
@@ -200,7 +200,7 @@ describe("loader", () => {
         await fs.writeFile(outside, "export default async function() {}\n");
         await fs.symlink(outside, handlerPath);
       }
-      await writeDiscoveredHook("sibling");
+      writeDiscoveredHook("sibling");
       await expect(
         commitPreparedHooks(createHooksConfig(["original", "sibling"])),
       ).rejects.toThrow();
@@ -212,7 +212,7 @@ describe("loader", () => {
     "retains active handlers when its configured source loses %s before sibling reload",
     async (failure) => {
       const extraDir = path.join(tmpDir, "extra-hooks");
-      const original = await writeDiscoveredHook("original", {
+      const original = writeDiscoveredHook("original", {
         sourceDir: extraDir,
         hookKey: "selected-name",
       });
@@ -231,15 +231,15 @@ describe("loader", () => {
             : "---\nname: original\nmetadata: {invalid\n---\n",
         );
       }
-      await writeDiscoveredHook("sibling", { sourceDir: extraDir });
+      writeDiscoveredHook("sibling", { sourceDir: extraDir });
       await expect(commitPreparedHooks(config, sourceOptions)).rejects.toThrow();
       await expectMessages(["original"]);
     },
   );
 
   it("ignores a missing handler for a collision loser during atomic reload", async () => {
-    await writeDiscoveredHook("valid");
-    const broken = await writeDiscoveredHook("valid", { sourceDir: path.join(tmpDir, "hooks") });
+    writeDiscoveredHook("valid");
+    const broken = writeDiscoveredHook("valid", { sourceDir: path.join(tmpDir, "hooks") });
     await fs.unlink(path.join(broken, "handler.js"));
 
     await expect(
@@ -251,12 +251,12 @@ describe("loader", () => {
   it("does not activate a shadowed hook when its ineligible override loses its handler", async () => {
     const bundledHooksDir = path.join(tmpDir, "bundled-hooks");
     const sourceOptions = { bundledHooksDir, managedHooksDir };
-    await writeDiscoveredHook("overridden", {
+    writeDiscoveredHook("overridden", {
       sourceDir: bundledHooksDir,
       hookKey: "bundled-selection",
       handlerCode: 'export default async function(event) { event.messages.push("bundled"); }',
     });
-    const overriding = await writeDiscoveredHook("overridden", {
+    const overriding = writeDiscoveredHook("overridden", {
       hookKey: "managed-selection",
       requires: { config: ["browser.enabled"] },
     });
@@ -272,7 +272,7 @@ describe("loader", () => {
     await expectMessages([]);
 
     await fs.unlink(path.join(overriding, "handler.js"));
-    await writeDiscoveredHook("sibling");
+    writeDiscoveredHook("sibling");
     await commitPreparedHooks(
       {
         ...config,
@@ -289,12 +289,12 @@ describe("loader", () => {
       const bundledHooksDir = path.join(tmpDir, "bundled-hooks");
       const extraDir = path.join(tmpDir, "extra-hooks");
       const sourceOptions = { bundledHooksDir, managedHooksDir };
-      await writeDiscoveredHook("original", {
+      writeDiscoveredHook("original", {
         sourceDir: bundledHooksDir,
         hookKey: "lower-name",
         handlerCode: 'export default async function(event) { event.messages.push("lower"); }',
       });
-      const original = await writeDiscoveredHook("original", {
+      const original = writeDiscoveredHook("original", {
         sourceDir: extraDir,
         hookKey: "selected-name",
         requires: { config: ["browser.enabled"] },
@@ -315,7 +315,7 @@ describe("loader", () => {
       try {
         await commitPreparedHooks(config, sourceOptions);
         await fs.rm(original, { recursive: true });
-        await writeDiscoveredHook("sibling");
+        writeDiscoveredHook("sibling");
         const entries: Record<string, { enabled?: boolean }> = {
           ...config.hooks?.internal?.entries,
           sibling: { enabled: true },
@@ -392,13 +392,13 @@ describe("loader", () => {
         started.resolve();
         await release.promise;
       });
-      await writeDiscoveredHook("original");
+      writeDiscoveredHook("original");
       await commitPreparedHooks(createHooksConfig([], true));
       const originalEvent = createInternalHookEvent("command", "new", "test-session");
       const dispatch = triggerInternalHook(originalEvent);
       try {
         await started.promise;
-        await writeDiscoveredHook("replacement");
+        writeDiscoveredHook("replacement");
         await commitPreparedHooks(
           createHooksConfig(["replacement"], change !== "disable"),
           options,
@@ -413,7 +413,7 @@ describe("loader", () => {
   );
 
   it("keeps configured hooks across plugin cleanup and retires them on Gateway restart", async () => {
-    await writeDiscoveredHook("managed");
+    writeDiscoveredHook("managed");
     await commitPreparedHooks(createHooksConfig([], true), { managedHooksDir });
     const unrelated = vi.fn();
     registerInternalHook("command:new", unrelated);
@@ -428,7 +428,7 @@ describe("loader", () => {
   });
 
   it("should support named exports", async () => {
-    await writeDiscoveredHook("named-export", {
+    writeDiscoveredHook("named-export", {
       exportName: "myHandler",
       handlerCode: "export const myHandler = async function() {};\n",
     });
@@ -439,11 +439,11 @@ describe("loader", () => {
   });
 
   it("skips invalid handlers while preserving valid siblings during best-effort startup", async () => {
-    await writeDiscoveredHook("bad-export", {
+    writeDiscoveredHook("bad-export", {
       handlerCode: 'export default "not a function";\n',
     });
 
-    await writeDiscoveredHook("valid");
+    writeDiscoveredHook("valid");
     const count = await commitPreparedHooks(createHooksConfig(["bad-export", "valid"], true), {
       ...options,
       failureMode: "best-effort",
@@ -453,7 +453,7 @@ describe("loader", () => {
   });
 
   it("keeps workspace hooks disabled by default until explicitly enabled", async () => {
-    await writeDiscoveredHook("workspace-hook", { sourceDir: path.join(tmpDir, "hooks") });
+    writeDiscoveredHook("workspace-hook", { sourceDir: path.join(tmpDir, "hooks") });
 
     const disabledCount = await commitPreparedHooks(createHooksConfig([], true));
     expect(disabledCount).toBe(0);
@@ -468,10 +468,10 @@ describe("loader", () => {
   });
 
   it("keeps managed hooks active when a workspace hook reuses the same name", async () => {
-    await writeDiscoveredHook("session-memory", {
+    writeDiscoveredHook("session-memory", {
       handlerCode: 'export default async function(event) { event.messages.push("managed"); }\n',
     });
-    await writeDiscoveredHook("session-memory", {
+    writeDiscoveredHook("session-memory", {
       sourceDir: path.join(tmpDir, "hooks"),
       handlerCode:
         'export default async function(event) { event.messages.push("workspace-override"); }\n',

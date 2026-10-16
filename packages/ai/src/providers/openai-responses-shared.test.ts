@@ -120,12 +120,12 @@ type StreamFixtureOptions = {
   observe?: (event: AssistantMessageEvent) => void;
 };
 
-function startResponses<T>(input: readonly T[], params: StreamFixtureOptions = {}) {
+function startResponses(input: readonly unknown[], params: StreamFixtureOptions = {}) {
   const model = params.model ?? nativeOpenAIModel;
   const output = { ...createResponsesAssistantOutput(model, model.api), timestamp: 0 };
   const { stream, events } = createCapturedAssistantMessageEventStream(params.observe);
   const done = processResponsesStream(
-    streamResponsesEvents<T>(input),
+    streamResponsesEvents(input),
     output,
     stream,
     model,
