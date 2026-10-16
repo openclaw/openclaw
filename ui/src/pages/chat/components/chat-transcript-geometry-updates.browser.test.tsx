@@ -11,7 +11,7 @@ import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 import { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.ts";
 
-// Exercise the runtime's commit cadence independently of the full pane renderer.
+// mock-isolation: Exercise runtime commit cadence without initializing the full pane renderer.
 vi.mock("../chat-pane-layout-view.tsx", () => import("../chat-pane-layout.test-support.tsx"));
 
 class GeometryPane extends ChatPaneRuntime {

@@ -9,7 +9,7 @@ import {
 import { createPageState } from "./chat-state-page.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
 
-// Exercise the runtime's commit cadence independently of the full pane renderer.
+// mock-isolation: Exercise runtime commit cadence without initializing the full pane renderer.
 vi.mock("./chat-pane-layout-view.tsx", () => import("./chat-pane-layout.test-support.tsx"));
 
 function FrameLayout(props: { label?: string; id?: string; stream?: string | null }) {
