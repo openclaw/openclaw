@@ -1,17 +1,23 @@
-import { nothing, render } from "lit";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { renderMessageImages } from "../pages/chat/components/chat-message-images.ts";
-import { renderMessageMarkdown } from "../pages/chat/components/chat-message-text.test-support.ts";
+import { MessageImages } from "../pages/chat/components/chat-message-images-solid.tsx";
+import {
+  MessageMarkdown,
+  type MessageMarkdownProps,
+} from "../pages/chat/components/chat-message-text-view.tsx";
 import { exportWidget } from "../pages/chat/components/widget-export.ts";
+import { cleanupSolid } from "../test-helpers/mount-solid.ts";
+import { mountSolid } from "../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import "../pages/chat/components/browser-tab-card.tsx";
-import { renderCopyAsMarkdownButton } from "./copy-button.ts";
+import { copyMarkdownLabel } from "./copy-button-state.ts";
 import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
 import "./markdown-mermaid.tsx";
 import { handleMarkdownTableInteraction, releaseMarkdownTables } from "./markdown-tables.ts";
+import { CopyButton } from "./solid/copy-button.tsx";
 
 const owners: HTMLElement[] = [];
+const markdownViews = new Map<HTMLElement, ReturnType<typeof mountSolid<MessageMarkdownProps>>>();
 const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 let clipboard = "original clipboard";
 const writeText = vi.fn<(text: string) => Promise<void>>();
@@ -37,9 +43,12 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  for (const owner of owners.splice(0)) {
+  for (const owner of owners) {
     releaseMarkdownTables(owner);
-    render(nothing, owner);
+  }
+  cleanupSolid();
+  markdownViews.clear();
+  for (const owner of owners.splice(0)) {
     owner.remove();
   }
   vi.restoreAllMocks();
@@ -60,33 +69,36 @@ async function waitForDiagram(diagram: HTMLElement) {
   await diagram.querySelector("img")!.decode();
 }
 
+function renderMarkdown(owner: HTMLElement, props: MessageMarkdownProps) {
+  const view = markdownViews.get(owner);
+  if (view) {
+    view.update(props);
+  } else {
+    markdownViews.set(owner, mountSolid(MessageMarkdown, props, owner));
+  }
+}
+
 async function mountCopy(surface: "code" | "table" | "mermaid" | "message") {
   const owner = document.body.appendChild(document.createElement("section"));
   owners.push(owner);
   owner.className = "chat-text";
   let button: HTMLButtonElement | null;
   if (surface === "code") {
-    render(
-      renderMessageMarkdown(
-        "```ts\nconst answer = 42;",
-        "stream",
-        { role: "assistant", isStreaming: true },
-        {},
-      ),
-      owner,
-    );
+    renderMarkdown(owner, {
+      markdown: "```ts\nconst answer = 42;",
+      messageKey: "stream",
+      options: { role: "assistant", isStreaming: true },
+      markdownOptions: {},
+    });
     owner.addEventListener("click", handleMarkdownCodeBlockClick);
     button = owner.querySelector(".code-block-copy");
   } else if (surface === "table") {
-    render(
-      renderMessageMarkdown(
-        "| Name |\n| --- |\n| Alpha",
-        "stream",
-        { role: "assistant", isStreaming: true },
-        { tableInteractions: "enabled" },
-      ),
-      owner,
-    );
+    renderMarkdown(owner, {
+      markdown: "| Name |\n| --- |\n| Alpha",
+      messageKey: "stream",
+      options: { role: "assistant", isStreaming: true },
+      markdownOptions: { tableInteractions: "enabled" },
+    });
     owner.addEventListener("click", handleMarkdownTableInteraction);
     button = owner.querySelector(".markdown-table__copy");
   } else if (surface === "mermaid") {
@@ -97,7 +109,11 @@ async function mountCopy(surface: "code" | "table" | "mermaid" | "message") {
     await waitForDiagram(diagram);
     button = diagram.querySelector(".copy-button");
   } else {
-    render(renderCopyAsMarkdownButton("Current message"), owner);
+    mountSolid(
+      CopyButton,
+      { text: "Current message", idleLabel: copyMarkdownLabel(), bare: true },
+      owner,
+    );
     button = owner.querySelector("button");
   }
   if (!button) {
@@ -179,13 +195,16 @@ describe("Markdown clipboard operation lifetime", () => {
         });
         const owner = document.body.appendChild(document.createElement("section"));
         owners.push(owner);
-        render(
-          renderMessageImages([
-            {
-              url: `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`,
-              alt: "Synthetic image",
-            },
-          ]),
+        mountSolid(
+          MessageImages,
+          {
+            images: [
+              {
+                url: `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`,
+                alt: "Synthetic image",
+              },
+            ],
+          },
           owner,
         );
         await waitForSolid(() => expect(owner.querySelector(".chat-image-action")).not.toBeNull());
@@ -316,17 +335,15 @@ describe("Markdown clipboard operation lifetime", () => {
       const { owner, button } = await mountCopy(surface);
       const idleLabel = button.getAttribute("aria-label");
       button.click();
-      render(
-        renderMessageMarkdown(
+      renderMarkdown(owner, {
+        markdown:
           surface === "code"
             ? "```ts\nconst answer = 42;\nconst next = 43;"
             : "| Name |\n| --- |\n| Alpha continued |",
-          "stream",
-          { role: "assistant", isStreaming: true },
-          { tableInteractions: "enabled" },
-        ),
-        owner,
-      );
+        messageKey: "stream",
+        options: { role: "assistant", isStreaming: true },
+        markdownOptions: { tableInteractions: "enabled" },
+      });
       expect(
         owner.querySelector(surface === "code" ? ".code-block-copy" : ".markdown-table__copy"),
       ).toBe(button);
@@ -350,10 +367,12 @@ describe("Markdown clipboard operation lifetime", () => {
     const pending = delayFirstWrite();
     const older = await mountCopy("code");
     const newer = await mountCopy("code");
-    render(
-      renderMessageMarkdown("```ts\n```", "empty", { role: "assistant", isStreaming: false }, {}),
-      newer.owner,
-    );
+    renderMarkdown(newer.owner, {
+      markdown: "```ts\n```",
+      messageKey: "empty",
+      options: { role: "assistant", isStreaming: false },
+      markdownOptions: {},
+    });
     older.button.click();
     newer.owner.querySelector<HTMLButtonElement>(".code-block-copy")!.click();
     expect(writeText).toHaveBeenCalledOnce();
