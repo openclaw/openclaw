@@ -268,6 +268,23 @@ describe("shared worktree receipt observation", () => {
     }
   });
 
+  it("borrows prepared session custody for receipt reads and rejects its release", async () => {
+    const { prepareGitHubPublicationSession } =
+      await import("./github-publication-availability.js");
+    await persistPublicationTestSession();
+    using selected = await prepareGitHubPublicationSession(SESSION_KEY, { agentId: "main" });
+    const entry = selected.readCurrent().entry!;
+    const identity = { ...session, lifecycleRevision: entry.lifecycleRevision ?? null };
+    const coordinator = sharedPublicationCoordinator();
+    expect(
+      await coordinator.latestShared(identity, undefined, undefined, () => selected.readCurrent()),
+    ).toBeNull();
+    selected.release();
+    await expect(
+      coordinator.latestShared(identity, undefined, undefined, () => selected.readCurrent()),
+    ).rejects.toThrow("session lifecycle changed");
+  });
+
   it("rehydrates a real publication from immutable receipts without Git, credentials, replay, or events", async () => {
     const coordinator = sharedPublicationCoordinator();
     const published = await coordinator.requestForSessionV2({

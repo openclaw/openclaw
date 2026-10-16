@@ -41,6 +41,7 @@ function workspaceSelection(
 export async function readSharedGitHubPublication(
   session: PublicationSessionIdentity,
   selector: SharedGitHubPublicationSelector,
+  preparedRead?: Awaited<ReturnType<typeof prepareGitHubPublicationSession>>["readCurrent"],
 ) {
   const capturedSelector = { ...selector };
   let workspaceIndependent = false;
@@ -92,16 +93,27 @@ export async function readSharedGitHubPublication(
     }
     return row;
   }
-  using selected = await prepareGitHubPublicationSession(session.sessionKey, {
-    agentId: session.agentId,
-    // Terminal receipts retain session authority independently of the current workspace.
-    fields: ["sessionId", "lifecycleRevision", "owner", "createdActor", "visibility", "incognito"],
-  });
-  const entry = selected.loaded.entry;
+  using selected = preparedRead
+    ? undefined
+    : await prepareGitHubPublicationSession(session.sessionKey, {
+        agentId: session.agentId,
+        // Terminal receipts retain session authority independently of the current workspace.
+        fields: [
+          "sessionId",
+          "lifecycleRevision",
+          "owner",
+          "createdActor",
+          "visibility",
+          "incognito",
+        ],
+      });
+  const readCurrent = preparedRead ?? (() => selected!.readCurrent());
+  const loaded = readCurrent();
+  const entry = loaded.entry;
   if (
     !entry ||
-    selected.loaded.agentId !== session.agentId ||
-    selected.loaded.canonicalKey !== session.sessionKey ||
+    loaded.agentId !== session.agentId ||
+    loaded.canonicalKey !== session.sessionKey ||
     entry.sessionId !== session.sessionId ||
     (session.lifecycleRevision !== undefined &&
       (entry.lifecycleRevision ?? null) !== session.lifecycleRevision)
@@ -109,7 +121,7 @@ export async function readSharedGitHubPublication(
     throw new GitHubPublicationSessionChangedError();
   }
   const row = await observe(entry);
-  const current = selected.readCurrent().entry;
+  const current = readCurrent().entry;
   if (
     !current ||
     current.sessionId !== entry.sessionId ||

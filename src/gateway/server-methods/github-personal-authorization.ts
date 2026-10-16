@@ -261,6 +261,7 @@ export async function prepareGitHubPublicationOptionsRead(
       [Symbol.dispose]: () => preparedSession.release(),
       sessionScoped: authority.sessionScope === "operator.sessions.read",
       currentSession: readCurrent,
+      currentSessionRead: preparedSession.readCurrent,
       // Callbacks may refresh live facts, but must not replace the response's archive snapshot.
       assertSessionUnchanged: (snapshot: ReturnType<typeof readCurrent>): void => {
         const current = readCurrent();
