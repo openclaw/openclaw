@@ -95,6 +95,9 @@ function isoBmffFixture(...handlerTypes: Array<"soun" | "vide">): Buffer {
 function installRuntime(saved: { id: string; path: string; size: number; contentType: string }) {
   const coreRuntime = createPluginRuntimeMock();
   coreRuntime.channel.media.saveRemoteMedia = vi.fn(async () => saved);
+  coreRuntime.channel.media.deleteMediaBuffer = vi.fn(async (id) => {
+    await fs.rm(path.join(path.dirname(saved.path), id));
+  });
   setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
   return coreRuntime;
 }
@@ -335,6 +338,7 @@ describe("nextcloud-talk native voice media", () => {
     expect(coreRuntime.channel.media.deleteMediaBuffer).toHaveBeenCalledWith(
       "contradictory-voice.mp4",
     );
+    await expect(fs.stat(stagedPath)).rejects.toMatchObject({ code: "ENOENT" });
     const context = requireBuildContextCall(coreRuntime);
     expect(context).not.toHaveProperty("media");
     expect(context.message).toMatchObject({
@@ -383,5 +387,139 @@ describe("nextcloud-talk native voice media", () => {
 
     expect(coreRuntime.channel.media.deleteMediaBuffer).toHaveBeenCalledWith("cancelled-voice.m4a");
     expect(coreRuntime.channel.inbound.buildContext).not.toHaveBeenCalled();
+    await expect(fs.stat(stagedPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(stagedPath.replace(/\.mp3$/u, ".m4a"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("retires the original staged file when voice canonicalization cannot rename it", async () => {
+    const fixture = isoBmffFixture("soun");
+    const stagedPath = await writeFixture("rename-failure.mp3", fixture);
+    const canonicalPath = stagedPath.replace(/\.mp3$/u, ".m4a");
+    await fs.mkdir(canonicalPath);
+    const coreRuntime = installRuntime({
+      id: path.basename(stagedPath),
+      path: stagedPath,
+      size: fixture.byteLength,
+      contentType: "video/mp4",
+    });
+    mockAuthenticatedSource("rename-failure.mp3", "voice");
+
+    await handleNextcloudTalkInbound({
+      message: createMessage("rename-failure.mp3", "audio/mpeg", "inspect this"),
+      account: createAccount(),
+      config,
+      runtime: runtimeEnv(),
+    });
+
+    await expect(fs.stat(stagedPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await fs.stat(canonicalPath)).isDirectory()).toBe(true);
+    const context = requireBuildContextCall(coreRuntime);
+    expect(context).not.toHaveProperty("media");
+    expect(context.message.bodyForAgent).toContain("attachment unavailable");
+    expect(coreRuntime.channel.inbound.dispatch).toHaveBeenCalledOnce();
+  });
+
+  it.each(["authority", "context"] as const)(
+    "retires staged media when final %s preparation throws",
+    async (failurePoint) => {
+      const fixture = isoBmffFixture("soun");
+      const stagedPath = await writeFixture("pre-dispatch.m4a", fixture);
+      const coreRuntime = installRuntime({
+        id: path.basename(stagedPath),
+        path: stagedPath,
+        size: fixture.byteLength,
+        contentType: "audio/mp4",
+      });
+      const failure = new Error(`injected ${failurePoint} failure`);
+      if (failurePoint === "authority") {
+        const resolveStable = coreRuntime.channel.inbound.ingress.resolveStable;
+        coreRuntime.channel.inbound.ingress.resolveStable = vi.fn(async (params) => {
+          if (vi.mocked(coreRuntime.channel.media.saveRemoteMedia).mock.calls.length > 0) {
+            throw failure;
+          }
+          return await resolveStable(params);
+        });
+      } else {
+        vi.mocked(coreRuntime.channel.inbound.buildContext).mockImplementation(() => {
+          throw failure;
+        });
+      }
+      mockAuthenticatedSource("pre-dispatch.m4a");
+
+      await expect(
+        handleNextcloudTalkInbound({
+          message: createMessage("pre-dispatch.m4a", "audio/mp4"),
+          account: createAccount(),
+          config,
+          runtime: runtimeEnv(),
+        }),
+      ).rejects.toBe(failure);
+
+      await expect(fs.stat(stagedPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(coreRuntime.channel.inbound.dispatch).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retires staged media if the sender is revoked after storage", async () => {
+    const fixture = isoBmffFixture("soun");
+    const stagedPath = await writeFixture("revoked.m4a", fixture);
+    const saved = {
+      id: path.basename(stagedPath),
+      path: stagedPath,
+      size: fixture.byteLength,
+      contentType: "audio/mp4",
+    };
+    const coreRuntime = installRuntime(saved);
+    const account = createAccount();
+    account.config.dmPolicy = "pairing";
+    account.config.allowFrom = [];
+    let pairedSenders = ["user-1"];
+    createChannelPairingControllerMock.mockReturnValue({
+      readStoreForDmPolicy: vi.fn(async () => pairedSenders),
+      issueChallenge: vi.fn(),
+    });
+    coreRuntime.channel.media.saveRemoteMedia = vi.fn(async () => {
+      pairedSenders = [];
+      return saved;
+    });
+    mockAuthenticatedSource("revoked.m4a");
+
+    await handleNextcloudTalkInbound({
+      message: createMessage("revoked.m4a", "audio/mp4"),
+      account,
+      config,
+      runtime: runtimeEnv(),
+    });
+
+    await expect(fs.stat(stagedPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(coreRuntime.channel.inbound.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("does not retire media after handing it to the dispatcher even if dispatch rejects", async () => {
+    const fixture = isoBmffFixture("soun");
+    const stagedPath = await writeFixture("adopted.m4a", fixture);
+    const coreRuntime = installRuntime({
+      id: path.basename(stagedPath),
+      path: stagedPath,
+      size: fixture.byteLength,
+      contentType: "audio/mp4",
+    });
+    const failure = new Error("dispatcher failed after accepting the context");
+    vi.mocked(coreRuntime.channel.inbound.dispatch).mockRejectedValueOnce(failure);
+    mockAuthenticatedSource("adopted.m4a");
+
+    await expect(
+      handleNextcloudTalkInbound({
+        message: createMessage("adopted.m4a", "audio/mp4"),
+        account: createAccount(),
+        config,
+        runtime: runtimeEnv(),
+      }),
+    ).rejects.toBe(failure);
+
+    await expect(fs.readFile(stagedPath)).resolves.toEqual(fixture);
+    expect(coreRuntime.channel.media.deleteMediaBuffer).not.toHaveBeenCalled();
   });
 });

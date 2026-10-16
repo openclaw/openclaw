@@ -57,6 +57,8 @@ export type NextcloudTalkInboundMessage = {
   senderId: string;
   senderName: string;
   text: string;
+  /** Caption text with referenced user mentions resolved, excluding file metadata. */
+  mentionText?: string;
   mediaType: string;
   timestamp: number;
   isGroupChat: boolean;

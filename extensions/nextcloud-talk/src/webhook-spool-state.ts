@@ -52,6 +52,7 @@ export function requiredString(value: unknown, field: string): string {
 
 export type ParsedNextcloudTalkFileShare = {
   text: string;
+  mentionText: string;
   attachment?: NextcloudTalkInboundAttachment;
   attachmentIssue?: "media_missing_metadata";
 };
@@ -123,8 +124,18 @@ export function parseNextcloudTalkFileSharedActivity(
   }
   const message = typeof contentRecord?.message === "string" ? contentRecord.message : "";
   const text = message.trim() === "{file}" ? "" : message;
+  // Only referenced user placeholders contribute to mention gating. Actor and
+  // file metadata may contain the bot name without addressing the bot.
+  const mentionText = text.replace(/\{([^{}]+)\}/gu, (placeholder, key: string) => {
+    const parameter = Object.hasOwn(parameters, key) ? parameters[key] : undefined;
+    return isRecord(parameter) && parameter.type === "user" && typeof parameter.name === "string"
+      ? `@${parameter.name}`
+      : placeholder;
+  });
   const attachment = parseFileAttachment(parameters.file);
-  return attachment ? { text, attachment } : { text, attachmentIssue: "media_missing_metadata" };
+  return attachment
+    ? { text, mentionText, attachment }
+    : { text, mentionText, attachmentIssue: "media_missing_metadata" };
 }
 
 export function inspectNextcloudTalkWebhookEnvelope(

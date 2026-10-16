@@ -15,7 +15,7 @@ openclaw plugins install @openclaw/nextcloud-talk
 
 Use the bare package spec to follow the current official release tag. Pin an exact version only when you need a reproducible install.
 
-Inbound attachments require a host that provides the staged-media cleanup contract used by this plugin. No minimum unmodified released host has been qualified for attachment support by this change. The package compatibility requirements do not establish that capability, and a plugin-only update is not sufficient. Install attachment support only with a host release explicitly qualified for the accepted cleanup contract.
+Inbound attachments require a host that provides `runtime.channel.media.deleteMediaBuffer`. A source checkout passing tests is not proof that an already published host provides this API. Use the coordinated host/plugin release qualified below, not a standalone build of this plugin with its historical compatibility metadata.
 
 From a local checkout (dev workflows):
 
@@ -220,12 +220,54 @@ the main Gateway port keeps its existing JSON check responses.
 ## Inbound file shares
 
 - Share the file into the Talk conversation to notify the bot. Uploading it only to Nextcloud Files, or creating a Files share without posting it in Talk, does not emit a supported Talk file-share webhook.
-- `channels.nextcloud-talk.mediaAllowFrom` is an account-level allowlist of Nextcloud user IDs whose attachments may be downloaded and processed. It fails closed when omitted or empty; use `["*"]` only when every otherwise-authorized sender may send media.
+- `channels.nextcloud-talk.mediaAllowFrom` is an account-level allowlist of Nextcloud user IDs whose attachments may be downloaded and processed. It fails closed when omitted or empty at the channel root. Named accounts inherit the root setting when omitted; an explicit empty list denies that account’s media. Use `["*"]` only when every otherwise-authorized sender may send media.
 - This media gate never expands access. The ordinary DM/group, room, sender, and mention requirements must admit the message first. When only the media gate denies an attachment, the file is not downloaded, but an otherwise-admissible caption continues through the ordinary text path.
 - `channels.nextcloud-talk.mediaMaxMb` limits inbound staging and outbound media size. When unset, it falls back to `agents.defaults.mediaMaxMb` (default: 20 MB).
 - Talk's webhook link must be on the exact configured `baseUrl` origin (same scheme, hostname, and effective port). Because Talk room shares are participant-only, OpenClaw uses the configured `apiUser`/API password to reread the exact room message without changing its read, notification, or online state; verify its file metadata against the signed webhook; resolve the account's canonical Nextcloud user ID; and verify the WebDAV file ID before retrieving the file. The API account must be able to access the room share; no sender credentials are requested or used.
 - Authenticated attachment requests never follow redirects. Talk's `hide-download` restriction, the existing SSRF/private-network policy, and the configured byte limit remain enforced before or during staging.
 - After media authorization, a hidden, malformed, wrong-origin, unavailable, or oversize file is omitted from media context. Its caption continues with a generic attachment-unavailable marker for the agent, while the specific bounded reason is logged for operators.
+
+## Release qualification for attachment support
+
+The release owner must qualify the first host release containing
+`runtime.channel.media.deleteMediaBuffer` before publishing this plugin with
+attachment support. This change does not assign that future release number or
+claim that an existing registry artifact contains the API.
+
+Use the existing full-release candidate and publication workflow, not a separate
+plugin-only publication:
+
+1. Select the actual new host release version and run the normal version sync.
+   `scripts/sync-plugin-versions.ts` raises this official plugin’s version,
+   `openclaw.compat.pluginApi`, peer requirement, and build version to that release.
+   It intentionally leaves `openclaw.install.minHostVersion` unchanged: the
+   release-aligned **plugin API floor** is what excludes hosts missing this API.
+   Do not publish the attachment implementation with the old API floor.
+2. Qualify the exact host and plugin tarballs bound by the immutable full-release
+   candidate manifest. Require the SDK surface report and its explicit release
+   acknowledgement through the existing release gates. A manifest or a successful
+   source test alone does not establish stock-runtime compatibility.
+3. Test the exact artifacts together: the new host must load the new plugin and
+   stage, retain accepted, and delete rejected/cancelled attachments through the
+   public runtime API. The previous supported host must reject an explicit new
+   plugin install before activation. Also test a host downgrade with the new
+   plugin already installed: external-plugin discovery must skip the incompatible
+   API floor and preserve its configuration. Check the new host with the previous
+   plugin and the unpinned stable installer’s compatible-version fallback.
+4. Preserve the existing publication ordering. The combined workflow publishes
+   plugin npm artifacts before core npm, with ClawHub publication started alongside
+   plugins. Those registries are not an atomic transaction. During the gap, the
+   new plugin’s API floor must prevent activation on an old host; an unpinned
+   stable install can select an older compatible plugin instead. Publishing the
+   host first is not a substitute for this compatibility contract.
+5. Before declaring the release available, read back the exact published host and
+   plugin artifacts, npm dist-tags, and ClawHub version/compatibility metadata.
+   Verify them against the qualified manifest and repeat the stock-artifact
+   compatibility checks. A queued ClawHub publication is not metadata availability.
+
+The package-version sync and install/discovery regression tests exercise the
+local enforcement path. Registry readback, actual stock-runtime tests, and release
+SDK acknowledgement remain release-time responsibilities.
 
 ## Capabilities
 
@@ -256,7 +298,7 @@ Provider options:
 - `channels.nextcloud-talk.webhookPublicUrl`: externally reachable webhook URL.
 - `channels.nextcloud-talk.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing). `open` requires `allowFrom=["*"]`.
 - `channels.nextcloud-talk.allowFrom`: DM allowlist (user IDs).
-- `channels.nextcloud-talk.mediaAllowFrom`: account-level inbound attachment allowlist (user IDs); omitted or empty fails closed and never bypasses ordinary authorization or mention gating.
+- `channels.nextcloud-talk.mediaAllowFrom`: inbound attachment allowlist (user IDs); omitted or empty at the root fails closed. Named accounts inherit the root list unless overridden; an explicit empty list denies media. It never bypasses ordinary authorization or mention gating.
 - `channels.nextcloud-talk.groupPolicy`: `allowlist | open | disabled` (default: allowlist).
 - `channels.nextcloud-talk.groupAllowFrom`: room sender allowlist (user IDs); falls back to `allowFrom` when unset.
 - `channels.nextcloud-talk.rooms`: per-room settings and allowlist (see above).

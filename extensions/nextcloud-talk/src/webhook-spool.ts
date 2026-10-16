@@ -89,6 +89,7 @@ function parseClaimedMessage(payload: NextcloudTalkIngressPayload, claimedId: st
     senderId: webhook.actor.id,
     senderName: webhook.actor.name,
     text: fileShare ? fileShare.text : webhook.object.content || webhook.object.name,
+    ...(fileShare ? { mentionText: fileShare.mentionText } : {}),
     mediaType: webhook.object.mediaType || "text/plain",
     timestamp: payload.receivedAt,
     // Activity Streams does not distinguish Talk room kinds. Runtime lookup refines this.

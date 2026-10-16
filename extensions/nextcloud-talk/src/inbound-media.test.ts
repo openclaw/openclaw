@@ -68,6 +68,16 @@ describe("Nextcloud Talk inbound media policy", () => {
       shareUrl: "https://nextcloud.example/cloud/s/redacted-token",
     },
     {
+      label: "root index.php share",
+      baseUrl: "https://nextcloud.example",
+      shareUrl: "https://nextcloud.example/index.php/s/redacted-token",
+    },
+    {
+      label: "subpath index.php share",
+      baseUrl: "https://nextcloud.example/cloud/",
+      shareUrl: "https://nextcloud.example/cloud/index.php/s/redacted-token",
+    },
+    {
       label: "root file link",
       baseUrl: "https://nextcloud.example",
       shareUrl: "https://nextcloud.example/index.php/f/9001",
@@ -523,7 +533,17 @@ describe("Nextcloud Talk inbound media policy", () => {
     expect(fetchGuarded).not.toHaveBeenCalled();
   });
 
-  it("rejects authenticated message metadata that does not match the signed webhook", async () => {
+  it.each([
+    { field: "actor", message: { actorId: "mallory" } },
+    { field: "message ID", message: { id: 4243 } },
+    { field: "room", message: { token: "another-room" } },
+    { field: "file ID", file: { id: "9002" } },
+    { field: "MIME", file: { mimetype: "text/plain" } },
+    { field: "size", file: { size: "2049" } },
+    { field: "download restriction", file: { "hide-download": "yes" } },
+    { field: "path traversal", file: { path: "Talk/../receipt.pdf" } },
+    { field: "recipient name/path consistency", file: { path: "Talk/other.pdf" } },
+  ])("rejects a mismatched $field independently of other metadata", async ({ message, file }) => {
     const fetchGuarded = vi
       .fn()
       .mockResolvedValueOnce({
@@ -542,8 +562,19 @@ describe("Nextcloud Talk inbound media policy", () => {
                   id: 4242,
                   token: "room-token",
                   actorType: "users",
-                  actorId: "mallory",
-                  messageParameters: { file: {} },
+                  actorId: "alice",
+                  ...message,
+                  messageParameters: {
+                    file: {
+                      type: "file",
+                      id: "9001",
+                      name: "receipt.pdf",
+                      mimetype: "application/pdf",
+                      size: "2048",
+                      path: "Talk/receipt.pdf",
+                      ...file,
+                    },
+                  },
                 },
               ],
             },
@@ -576,5 +607,82 @@ describe("Nextcloud Talk inbound media policy", () => {
       fetchGuarded,
     });
     expect(result).toEqual({ ok: false, reason: "media_message_mismatch" });
+    expect(fetchGuarded).toHaveBeenCalledTimes(2);
   });
+
+  it.each([
+    { webDavId: "9001", accepted: true },
+    { webDavId: "9002", accepted: false },
+  ])(
+    "uses the recipient collision-renamed mount only with matching WebDAV identity ($webDavId)",
+    async ({ webDavId, accepted }) => {
+      const fetchGuarded = vi
+        .fn()
+        .mockResolvedValueOnce({
+          response: Response.json({ ocs: { data: { id: "bob" } } }),
+          release: vi.fn(),
+        })
+        .mockResolvedValueOnce({
+          response: Response.json({
+            ocs: {
+              data: [
+                {
+                  id: 4242,
+                  token: "room-token",
+                  actorType: "users",
+                  actorId: "alice",
+                  messageParameters: {
+                    file: {
+                      type: "file",
+                      id: "9001",
+                      name: "receipt (2).pdf",
+                      mimetype: "application/pdf",
+                      size: "2048",
+                      path: "Talk/receipt (2).pdf",
+                    },
+                  },
+                },
+              ],
+            },
+          }),
+          release: vi.fn(),
+        })
+        .mockResolvedValueOnce({ response: webDavFileIdResponse(webDavId), release: vi.fn() });
+
+      const result = await resolveNextcloudTalkAuthenticatedMediaSource({
+        baseUrl: "https://nextcloud.example",
+        roomToken: "room-token",
+        messageId: "4242",
+        senderId: "users/alice",
+        attachment: {
+          fileId: "9001",
+          name: "receipt.pdf",
+          mimeType: "application/pdf",
+          declaredSizeBytes: 2048,
+          shareUrl: "https://nextcloud.example/s/redacted-token",
+          hideDownload: false,
+        },
+        accountConfig: { apiUser: "bob", apiPassword: "test-password" },
+        reference: {
+          ok: true,
+          origin: "https://nextcloud.example",
+          hostname: "nextcloud.example",
+          fileName: "receipt.pdf",
+        },
+        fetchGuarded,
+      });
+
+      expect(fetchGuarded.mock.calls[2]?.[0].url).toBe(
+        "https://nextcloud.example/remote.php/dav/files/bob/Talk/receipt%20(2).pdf",
+      );
+      if (accepted) {
+        expect(result).toMatchObject({
+          ok: true,
+          url: "https://nextcloud.example/remote.php/dav/files/bob/Talk/receipt%20(2).pdf",
+        });
+      } else {
+        expect(result).toEqual({ ok: false, reason: "media_message_mismatch" });
+      }
+    },
+  );
 });

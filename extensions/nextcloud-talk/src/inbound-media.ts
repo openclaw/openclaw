@@ -125,16 +125,10 @@ export function resolveNextcloudTalkAttachmentReference(params: {
   }
 
   const basePath = base.pathname.replace(/\/+$/u, "");
-  const sharePrefix = `${basePath}/s/`;
-  const filePrefix = `${basePath}/index.php/f/`;
-  const shortFilePrefix = `${basePath}/f/`;
-  const suffix = share.pathname.startsWith(sharePrefix)
-    ? share.pathname.slice(sharePrefix.length)
-    : share.pathname.startsWith(filePrefix)
-      ? share.pathname.slice(filePrefix.length)
-      : share.pathname.startsWith(shortFilePrefix)
-        ? share.pathname.slice(shortFilePrefix.length)
-        : "";
+  const prefix = ["/s/", "/index.php/s/", "/index.php/f/", "/f/"]
+    .map((route) => `${basePath}${route}`)
+    .find((route) => share.pathname.startsWith(route));
+  const suffix = prefix ? share.pathname.slice(prefix.length) : "";
   if (!suffix || suffix.includes("/")) {
     return { ok: false, reason: "media_invalid_link" };
   }
@@ -239,7 +233,7 @@ function resolveExactHistoryMedia(params: {
   if (
     !/^\d+$/u.test(fileId) ||
     (params.attachment.fileId && fileId !== params.attachment.fileId) ||
-    name !== params.attachment.name ||
+    !name ||
     mimeType !== params.attachment.mimeType ||
     parseHistorySize(file.size) !== params.attachment.declaredSizeBytes ||
     (hideDownload !== undefined && hideDownload !== "yes" && hideDownload !== "no") ||
@@ -254,7 +248,7 @@ function resolveExactHistoryMedia(params: {
       (segment) =>
         !segment || segment === "." || segment === ".." || containsControlCharacter(segment),
     ) ||
-    segments.at(-1) !== params.attachment.name
+    segments.at(-1) !== name
   ) {
     return undefined;
   }

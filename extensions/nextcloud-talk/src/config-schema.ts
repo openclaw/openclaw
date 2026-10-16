@@ -89,7 +89,7 @@ export const NextcloudTalkChannelConfigSchema = buildChannelConfigSchema(
       },
       "accounts.*.mediaAllowFrom": {
         label: "Nextcloud Talk Account Inbound Media Allowlist",
-        help: 'Per-account attachment allowlist. Omitted or empty denies all media; use ["*"] for every otherwise-authorized sender.',
+        help: 'Per-account attachment allowlist. Omitted inherits the root allowlist; an empty list denies all media; use ["*"] for every otherwise-authorized sender.',
       },
     },
   },
