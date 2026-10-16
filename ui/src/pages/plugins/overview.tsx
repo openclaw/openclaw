@@ -43,7 +43,12 @@ export function renderPluginCompatibilityNotices(
               : t("pluginsPage.compatibilityDeprecatedUndated");
           },
           link: notice.migrationGuideUrl
-            ? { href: notice.migrationGuideUrl, text: t("pluginsPage.compatibilityDetails") }
+            ? {
+                href: notice.migrationGuideUrl,
+                get text() {
+                  return t("pluginsPage.compatibilityDetails");
+                },
+              }
             : undefined,
           details:
             showApis && notice.apis.length ? (
@@ -93,13 +98,12 @@ function pluginRepository(
   return { href: url.href, name: url.hostname + url.pathname.replace(/\/$/u, ""), github };
 }
 
-export function renderPluginPublisher(
-  result: PluginDiscoveryDetailResult | undefined,
-  localName?: string,
-): JSX.Element | undefined {
-  const author = result?.detail.author;
-  const handle = author?.handle ?? result?.plugin.catalog.author;
-  const name = author?.displayName ?? localName;
+export function renderPublisherIdentity(options: {
+  name?: string;
+  handle?: string;
+  official?: boolean;
+}): JSX.Element | undefined {
+  const { name, handle, official } = options;
   if (!name && !handle) {
     return undefined;
   }
@@ -107,11 +111,23 @@ export function renderPluginPublisher(
     <div class="plugin-catalog-detail__publisher">
       <span class="plugin-catalog-detail__publisher-name">
         {name ? <strong>{name}</strong> : renderPluginAuthor(handle, { linked: true })}
-        {author?.official === true ? renderPluginOfficialBadge() : undefined}
+        {official ? renderPluginOfficialBadge() : undefined}
       </span>
       {name ? renderPluginAuthor(handle, { linked: true }) : undefined}
     </div>
   );
+}
+
+export function renderPluginPublisher(
+  result: PluginDiscoveryDetailResult | undefined,
+  localName?: string,
+): JSX.Element | undefined {
+  const author = result?.detail.author;
+  return renderPublisherIdentity({
+    name: author?.displayName ?? localName,
+    handle: author?.handle ?? result?.plugin.catalog.author,
+    official: author?.official === true,
+  });
 }
 
 export function renderPluginMetadata(
@@ -224,60 +240,56 @@ export function renderPluginCapabilitySection(
   }>,
   icon: () => JSX.Element,
 ): JSX.Element {
-  return (
-    <>
-      {values.length ? (
-        <section class="plugin-capabilities">
-          <h2>
-            {title}
-            <span>{values.length}</span>
-          </h2>
-          <div>
-            <For each={values}>
-              {(value) => {
-                const open = value.onOpen;
-                const content = (
-                  <>
-                    <span class="plugin-capability__icon" aria-hidden="true">
-                      {icon()}
-                    </span>
-                    <span class="plugin-capability__copy">
-                      <strong>{value.name}</strong>
-                      {value.description ? <span>{value.description}</span> : undefined}
-                    </span>
-                    {value.trailing ? (
-                      <span class="plugin-capability__trailing">{value.trailing}</span>
-                    ) : undefined}
-                    {open || value.details ? (
-                      <span class="plugin-capability__chevron" aria-hidden="true">
-                        {<Icon name="chevronRight" />}
-                      </span>
-                    ) : undefined}
-                  </>
-                );
-                return (
-                  <div class="plugin-capability">
-                    {value.details ? (
-                      <details class="plugin-capability__disclosure">
-                        <summary>{content}</summary>
-                        <div class="plugin-capability__details">{value.details}</div>
-                      </details>
-                    ) : open ? (
-                      <button type="button" onClick={open}>
-                        {content}
-                      </button>
-                    ) : (
-                      <div class="plugin-capability__static">{content}</div>
-                    )}
-                  </div>
-                );
-              }}
-            </For>
-          </div>
-        </section>
-      ) : undefined}
-    </>
-  );
+  return values.length ? (
+    <section class="plugin-capabilities">
+      <h2>
+        {title}
+        <span>{values.length}</span>
+      </h2>
+      <div>
+        <For each={values}>
+          {(value) => {
+            const open = value.onOpen;
+            const content = (
+              <>
+                <span class="plugin-capability__icon" aria-hidden="true">
+                  {icon()}
+                </span>
+                <span class="plugin-capability__copy">
+                  <strong>{value.name}</strong>
+                  {value.description ? <span>{value.description}</span> : undefined}
+                </span>
+                {value.trailing ? (
+                  <span class="plugin-capability__trailing">{value.trailing}</span>
+                ) : undefined}
+                {open || value.details ? (
+                  <span class="plugin-capability__chevron" aria-hidden="true">
+                    {<Icon name="chevronRight" />}
+                  </span>
+                ) : undefined}
+              </>
+            );
+            return (
+              <div class="plugin-capability">
+                {value.details ? (
+                  <details class="plugin-capability__disclosure">
+                    <summary>{content}</summary>
+                    <div class="plugin-capability__details">{value.details}</div>
+                  </details>
+                ) : open ? (
+                  <button type="button" onClick={open}>
+                    {content}
+                  </button>
+                ) : (
+                  <div class="plugin-capability__static">{content}</div>
+                )}
+              </div>
+            );
+          }}
+        </For>
+      </div>
+    </section>
+  ) : undefined;
 }
 
 function renderPluginMcpServers(

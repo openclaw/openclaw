@@ -1,23 +1,18 @@
-import { html, nothing, type TemplateResult } from "lit";
 import { LazyCustomElementRequestController } from "../../../app/lazy-custom-element.ts";
 import { isStaleChunkImportError } from "../../../app/stale-chunk-reload.ts";
-import { renderLazyViewError } from "../../../components/lazy-view-error.ts";
-import { t } from "../../../i18n/index.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
-import type {
-  SidebarContent,
-  AttachmentSidebarRuntime,
-  SessionFileSource,
-} from "./chat-sidebar-content-types.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import type { PreviewProps, SourceFallbackProps } from "./chat-html-preview-view.tsx";
+import type { SidebarContent, AttachmentSidebarRuntime } from "./chat-sidebar-content-types.ts";
 export type FileHtmlPreviewControls = {
   source: boolean;
-  presentation: TemplateResult | typeof nothing;
-  sourceFallback?: TemplateResult;
+  presentation: PreviewProps | null;
+  sourceFallback?: SourceFallbackProps;
   onToggle: () => void;
 };
 
-registerFilePreviewEnglish();
+registerEnglishCatalog(registerFilePreviewEnglish);
 
 export function isHtmlDocument(mimeType: string, filename: string): boolean {
   return (
@@ -32,40 +27,6 @@ export const htmlPreviewElement = {
   },
   loadModule: () => import("./chat-html-preview-element.tsx"),
 };
-
-function renderHtmlPreview(
-  loader: LazyCustomElementRequestController,
-  content: string,
-  sourceIdentity: string,
-  title: string,
-  embedSandboxMode: EmbedSandboxMode,
-  sessionFileSource?: SessionFileSource,
-) {
-  loader.requestWhileActive(htmlPreviewElement, true);
-  const state = loader.visibleState;
-  // Registration is globally deduplicated, while this owner keeps the same DOM
-  // through unrelated parent renders and presents an explicit load retry.
-  return html`
-    ${
-      state?.status === "error"
-        ? renderLazyViewError({
-            error: state.error,
-            stale: state.stale,
-            onRetry: () => loader.retry(),
-          })
-        : state
-          ? html`<div role="status">${t("common.loading")}</div>`
-          : nothing
-    }
-    <openclaw-chat-html-preview
-      .html=${content}
-      .sourceIdentity=${sourceIdentity}
-      .title=${title}
-      .embedSandboxMode=${embedSandboxMode}
-      .sessionFileSource=${sessionFileSource}
-    ></openclaw-chat-html-preview>
-  `;
-}
 
 /** Owns file HTML presentation while the detail panel owns its editor and draft. */
 export class FileHtmlPreviewController {
@@ -133,31 +94,38 @@ export class FileHtmlPreviewController {
     if (!file) {
       return undefined;
     }
+    if (this.preview !== null) {
+      this.loader.requestWhileActive(htmlPreviewElement, true);
+    }
     return {
       source: this.source,
       onToggle: options.onToggle,
       presentation:
         this.preview === null
-          ? nothing
-          : renderHtmlPreview(
-              this.loader,
-              this.preview,
-              file.draftKey ??
+          ? null
+          : {
+              state: this.loader.visibleState,
+              onRetry: () => this.loader.retry(),
+              content: this.preview,
+              sourceIdentity:
+                file.draftKey ??
                 [
                   options.runtime.sessionKey ?? "",
                   options.runtime.agentId ?? "",
                   file.root ?? "",
                   file.path,
                 ].join(String.fromCharCode(0)),
-              file.name,
-              options.mode,
-              file.sessionFileSource,
-            ),
+              title: file.name,
+              embedSandboxMode: options.mode,
+              sessionFileSource: file.sessionFileSource,
+            },
       sourceFallback: options.error
-        ? html`
-            ${renderLazyViewError({ error: options.error, stale: isStaleChunkImportError(options.error), onRetry: options.onRetry })}
-            <pre class="sidebar-attachment-preview__text">${this.text()}</pre>
-          `
+        ? {
+            error: options.error,
+            stale: isStaleChunkImportError(options.error),
+            onRetry: options.onRetry,
+            text: this.text(),
+          }
         : undefined,
     };
   }

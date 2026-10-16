@@ -247,25 +247,41 @@ export function SidebarAgentRoster(props: RosterProps) {
                 runVisibility,
               });
               const access = () => roster.host().readNewSessionAccess();
+              const collapseLabel = () =>
+                t(isCollapsed() ? "agentsHome.expandAgent" : "agentsHome.collapseAgent", {
+                  agent: card().name,
+                });
               return (
                 <section
                   class="sidebar-agent-roster__group"
                   data-agent-group={card().id}
                   aria-label={card().name}
                 >
-                  <div class="sidebar-agent-roster__header session-row-host">
-                    <Show when={hasSessions()}>
+                  <div
+                    class={`sidebar-agent-roster__header session-row-host${active() ? " sidebar-agent-roster__header--current" : ""}`}
+                  >
+                    {/* The avatar doubles as the collapse toggle (it shows a chevron on
+                        hover/focus), so the header needs no separate disclosure column. */}
+                    <Show
+                      when={hasSessions()}
+                      fallback={
+                        <span class="sidebar-agent-roster__avatar" aria-hidden="true">
+                          <AgentIdentityAvatar agent={card()} />
+                        </span>
+                      }
+                    >
                       <button
                         type="button"
-                        class="sidebar-agent-roster__action sidebar-agent-roster__chevron"
+                        class="sidebar-agent-roster__toggle"
                         data-agent-collapse={card().id}
-                        aria-label={t(
-                          isCollapsed() ? "agentsHome.expandAgent" : "agentsHome.collapseAgent",
-                          { agent: card().name },
-                        )}
+                        aria-label={collapseLabel()}
+                        title={collapseLabel()}
                         aria-expanded={isCollapsed() ? "false" : "true"}
                         onClick={() => toggleAgent(card().id)}
                       >
+                        <span class="sidebar-agent-roster__avatar" aria-hidden="true">
+                          <AgentIdentityAvatar agent={card()} />
+                        </span>
                         <span class="sidebar-agent-roster__chevron" aria-hidden="true">
                           <Icon name={isCollapsed() ? "chevronRight" : "chevronDown"} />
                         </span>
@@ -284,9 +300,6 @@ export function SidebarAgentRoster(props: RosterProps) {
                         }
                       }}
                     >
-                      <span class="sidebar-agent-roster__avatar" aria-hidden="true">
-                        <AgentIdentityAvatar agent={card()} />
-                      </span>
                       <span class="sidebar-agent-roster__copy">
                         <span>{card().name}</span>
                       </span>
@@ -320,7 +333,7 @@ export function SidebarAgentRoster(props: RosterProps) {
                         get agentId() {
                           return card().id;
                         },
-                        className: "sidebar-agent-roster__action sidebar-agent-roster__new",
+                        class: "sidebar-agent-roster__action sidebar-agent-roster__new",
                         get label() {
                           return `${t("agentChip.newConversation")}: ${card().name}`;
                         },

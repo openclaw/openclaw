@@ -2661,11 +2661,18 @@ describe("EmbeddedTuiBackend", () => {
       expectedText: "MEDIA:./image.png",
     },
     {
-      name: "short replies after suppressing lead-fragment deltas",
+      name: "prepared short replies",
       streamedText: "No",
-      suppressDeltas: true,
+      expectStream: true,
       finalPayloads: [{ text: "No" }],
       expectedText: "No",
+    },
+    {
+      name: "a prepared literal silence marker",
+      streamedText: "NO_REPLY",
+      expectStream: true,
+      finalPayloads: [{ text: "NO_REPLY" }],
+      expectedText: "NO_REPLY",
     },
   ])(
     "preserves $name in the final answer",
@@ -2674,7 +2681,7 @@ describe("EmbeddedTuiBackend", () => {
       expectedText,
       streamedText = "Draft answer",
       mediaUrls,
-      suppressDeltas,
+      expectStream,
     }) => {
       const pending = deferred<EmbeddedAgentResult>();
       agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
@@ -2698,7 +2705,7 @@ describe("EmbeddedTuiBackend", () => {
       const chatPayloads = events
         .filter((event) => event.event === "chat")
         .map((event) => event.payload);
-      if (suppressDeltas) {
+      if (expectStream) {
         const nonEmptyDeltas = chatPayloads.filter((entry) => {
           const payload = entry as {
             state?: string;
@@ -2706,7 +2713,7 @@ describe("EmbeddedTuiBackend", () => {
           };
           return payload.state === "delta" && payload.message?.content?.[0]?.text;
         });
-        expect(nonEmptyDeltas).toHaveLength(0);
+        expect(nonEmptyDeltas).toHaveLength(1);
       }
       expect(chatPayloads.at(-1)).toStrictEqual({
         runId,

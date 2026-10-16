@@ -308,7 +308,7 @@ export async function fixture(
   const run = vi.fn<NonNullable<ActivateSetupInferenceDeps["runEmbeddedAgent"]>>(async (params) =>
     reply(params),
   );
-  // Revalidation must reload the same prepared provider used by login and the probe.
+  // Every setup generation resolves the same provider used by login and the probe.
   vi.spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandle").mockReturnValue(pluginRegistry);
   const deps: ActivateSetupInferenceDeps = {
     resolvePluginProviders: () => [provider],

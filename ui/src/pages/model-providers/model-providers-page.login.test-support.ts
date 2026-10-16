@@ -111,6 +111,11 @@ export async function openPicker(page: ModelProvidersPageTestElement) {
 }
 
 export async function selectProvider(page: ModelProvidersPageTestElement, provider: string) {
+  await waitForSolid(() =>
+    expect(
+      page.querySelector<HTMLButtonElement>(`[data-models-login-provider="${provider}"]`)?.disabled,
+    ).toBe(false),
+  );
   page.querySelector<HTMLButtonElement>(`[data-models-login-provider="${provider}"]`)!.click();
   await page.updateComplete;
 }

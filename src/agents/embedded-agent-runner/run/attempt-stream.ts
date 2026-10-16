@@ -419,6 +419,7 @@ export function installEmbeddedAttemptStreamGuards(
     contentCapture: resolveDiagnosticModelContentCapturePolicy(attempt.config),
     nextCallId: () => `${attempt.runId}:model:${(modelCallSequence.value += 1)}`,
     ownerGeneration: callbacks.diagnosticOwner.generation,
+    onAgentEvent: attempt.onAgentEvent,
     onSucceeded: contextGuards.recordCacheTouch,
     onTerminal: () => {
       modelResponseTerminal = true;
@@ -446,9 +447,9 @@ export function installEmbeddedAttemptStreamGuards(
   });
   return {
     /** Returns the measured predecessor that may anchor this exact request's pressure. */
-    onModelRequest: (...args: Parameters<typeof cacheObserver.onModelRequest>) => {
+    onModelRequest: async (...args: Parameters<typeof cacheObserver.onModelRequest>) => {
       const previous = cacheObserver.getContextUsage();
-      const request = cacheObserver.onModelRequest(...args);
+      const request = await cacheObserver.onModelRequest(...args);
       const previousRequest =
         previous?.requestIndex === request.requestIndex - 1 &&
         request.prefixUnchanged &&

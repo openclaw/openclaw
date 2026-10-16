@@ -252,6 +252,18 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     };
     this.providerRequirement = params.providerRequirement;
     this.providerLifecycle = { mode: "pending", requestedProvider: this.settings.provider };
+    const source = params.maintenanceSource;
+    const cachedProbe = source?.embeddingProbeCache.get(source.cacheKey);
+    if (
+      source?.embeddingBootstrapFailure &&
+      cachedProbe?.result.ok === false &&
+      cachedProbe.expireAtMs > Date.now()
+    ) {
+      // Detached maintenance inherits the remaining cooldown, never a fresh deadline.
+      this.embeddingBootstrapFailure = source.embeddingBootstrapFailure;
+      this.providerUnavailableReason = source.embeddingBootstrapFailure.reason;
+      this.embeddingProbeCache.set(this.cacheKey, cachedProbe);
+    }
     for (const memorySource of effectiveSettings.sources) {
       this.sources.add(memorySource);
     }
@@ -338,6 +350,14 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
             acquireLocalService: this.acquireLocalService,
             maintenanceSource: this,
           }),
+      }).catch((error: unknown) => {
+        if (
+          this.providerRequirement.mode === "optional" &&
+          isMemoryEmbeddingOperationError(error)
+        ) {
+          this.markEmbeddingBootstrapFailure(error, { retainProvider: this.provider !== null });
+        }
+        throw error;
       }),
     );
   }

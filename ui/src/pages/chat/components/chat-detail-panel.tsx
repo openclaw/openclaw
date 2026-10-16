@@ -14,8 +14,8 @@ import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { SolidBridgeElement } from "../../../lit/solid-bridge.ts";
 import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
 import { createSolidRenderLifecycle } from "../solid-render-lifecycle.ts";
-import { AttachmentDownloadController } from "./chat-attachment-download-controller.ts";
-import { FileCopyController } from "./chat-file-copy-controller.ts";
+import { createAttachmentDownload } from "./chat-attachment-download.ts";
+import { createFileCopy } from "./chat-file-copy.ts";
 import { captureFileEditorDraft, readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
 import { FileHtmlPreviewController } from "./chat-html-preview.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
@@ -68,7 +68,10 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
   let fileSearchQuery = "";
   let fileSearchMatchIndex = 0;
   let fileEditorMenuOpen = false;
-  const fileCopy = new FileCopyController(updatingHost, () => visibleContent);
+  const fileCopy = createFileCopy(
+    () => visibleContent,
+    () => updatingHost.isConnected,
+  );
   let fileEditorLoading = false;
   let fileEditing = false;
   let fileDirty = false;
@@ -89,10 +92,10 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
   let fileDraftContent: string | null = null;
   let fileSavedContent = "";
   let fileHash = "";
-  const attachmentDownload = new AttachmentDownloadController(
-    updatingHost,
+  const attachmentDownload = createAttachmentDownload(
     () => (props.content === visibleContent ? props.content : null),
     () => props.attachmentRuntime,
+    () => updatingHost.isConnected,
   );
 
   function updateSelection(
@@ -635,7 +638,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
           runtime: props.attachmentRuntime,
           mode: props.embedSandboxMode,
         }),
-        copyFeedback: fileCopy.feedback,
+        copyFeedback: fileCopy.feedback(),
         currentMatchIndex,
         dirty: fileDirty,
         execNode: props.execNode,
@@ -708,8 +711,6 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
   onCleanup(() => {
     disposed = true;
     unsubscribeNativeGateway?.();
-    attachmentDownload.cancel();
-    fileCopy.dispose();
     htmlPreview.dispose();
     document.removeEventListener("pointerdown", handleDocumentPointerDown);
     if (fileDirty) {
@@ -743,5 +744,15 @@ export const ChatDetailPanel = defineSolidBridge("openclaw-chat-detail-panel", D
 declare global {
   interface HTMLElementTagNameMap {
     "openclaw-chat-detail-panel": ChatDetailPanel;
+  }
+}
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-chat-detail-panel": HTMLAttributes<ChatDetailPanel> & {
+        [Key in keyof ChatDetailPanelProps as `prop:${Key}`]?: ChatDetailPanelProps[Key];
+      };
+    }
   }
 }

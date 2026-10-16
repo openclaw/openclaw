@@ -3,6 +3,16 @@ import { hashCronJobDefinition } from "./definition-hash.js";
 import { projectCronJobThroughStorageCodec } from "./store/row-codec.js";
 import type { CronJob } from "./types.js";
 
+export class CronJobConfigRevisionConflictError extends Error {
+  constructor(
+    readonly expectedConfigRevision: string,
+    readonly actualConfigRevision: string,
+  ) {
+    super("cron job definition no longer matches the loaded version");
+    this.name = "CronJobConfigRevisionConflictError";
+  }
+}
+
 function configRevisionDefinition(projected: CronJob) {
   const { updatedAtMs: _updatedAtMs, state: _state, ...definition } = projected;
   return definition;

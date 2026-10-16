@@ -7,6 +7,7 @@ import { handleMarkdownTableInteraction } from "../../components/markdown-tables
 import { OptionCard } from "../../components/option-card.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.tsx";
+import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import "../../components/openclaw-mascot.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import type { MessageGroup as MessageGroupData } from "../../lib/chat/chat-types.ts";
@@ -17,7 +18,7 @@ import { formatUiExternalText } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
-import { defineSolidBridge, LitContent, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import "../../styles/chat/startup-layout.css";
 import "../../styles/chat/grouped.css";
 import "../../styles/chat/layout.css";
@@ -31,14 +32,13 @@ import {
   disconnectTextareaOverflowObserver,
   observeTextareaOverflow,
 } from "../chat/components/chat-composer-dom.ts";
-import { renderChatDivider } from "../chat/components/chat-divider.ts";
+import { ChatDivider } from "../chat/components/chat-divider.tsx";
 import { MessageGroup } from "../chat/components/chat-message-group-view.tsx";
 import { CustodianAlertCard } from "./custodian-alert-card.tsx";
 import { custodianAlertStore } from "./custodian-alert-store.ts";
 import { CustodianChannelOnboardingNudge, CustodianEventNudgeView } from "./custodian-nudge.tsx";
 import { custodianSessionStore, type CustodianSessionStore } from "./custodian-session-store.ts";
 import { CustodianSetupCard } from "./custodian-setup-card.tsx";
-import { renderCustodianWizardControls } from "./custodian-surface.ts";
 import {
   createPluginHelpRequest,
   currentPluginHelpReference,
@@ -94,15 +94,13 @@ function TranscriptEntry(props: {
         />
       </Show>
       <Show when={props.message.id === props.store().earlierBoundaryAfterId}>
-        <LitContent
-          render={() =>
-            renderChatDivider({
-              kind: "divider",
-              key: "custodian-earlier",
-              label: t("custodian.earlier"),
-              timestamp: props.message.at,
-            })
-          }
+        <ChatDivider
+          item={{
+            kind: "divider",
+            key: "custodian-earlier",
+            label: t("custodian.earlier"),
+            timestamp: props.message.at,
+          }}
         />
       </Show>
       <Show when={question() && !props.store().dismissedQuestions.has(questionKey())}>
@@ -134,8 +132,27 @@ function TranscriptEntry(props: {
             <Show when={step().title}>
               <strong class="custodian__wizard-title">{formatUiExternalText(step().title!)}</strong>
             </Show>
-            <LitContent
-              render={() => renderCustodianWizardControls(props.store(), props.message, step())}
+            <WizardStepControls
+              step={step()}
+              value={props.store().wizardValue}
+              busy={!props.store().canSend}
+              inputId={`custodian-wizard-input-${props.message.id}`}
+              sensitiveRevealed={props.store().wizardSecretVisible}
+              onValueChange={(value) => props.store().setWizardValue(value)}
+              onAnswer={(value) => props.store().answerWizardStep(props.message, value)}
+              onToggleSensitiveVisibility={() => props.store().toggleWizardSecretVisibility()}
+              leadingAction={
+                props.store().wizardCancelAvailable ? (
+                  <button
+                    class="btn btn--ghost custodian__wizard-cancel"
+                    type="button"
+                    disabled={!props.store().canSend}
+                    onClick={() => props.store().cancelWizardStep(props.message)}
+                  >
+                    {t("custodian.cancel")}
+                  </button>
+                ) : undefined
+              }
             />
           </section>
         )}

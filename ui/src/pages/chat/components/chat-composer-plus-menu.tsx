@@ -1,6 +1,5 @@
 import { createMemo, createUniqueId, Show, untrack } from "solid-js";
 import { pathForRoute } from "../../../app-route-paths.ts";
-import { icons } from "../../../components/icons.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import {
   Menu,
@@ -23,7 +22,7 @@ import {
 import { uploadsEnabled } from "../../../lib/uploads.ts";
 import { handleChatAttachmentMenuSelection } from "./chat-attachment-inputs.ts";
 import { useSingleAttachmentPicker } from "./chat-attachment-picker-policy.ts";
-import { LitContent } from "./chat-composer-interop.tsx";
+import { ComposerContent } from "./chat-composer-content.tsx";
 import {
   handleComposerLibrarySelection,
   composerLibraryMenuItems,
@@ -45,7 +44,6 @@ import type {
   ChatComposerPlusMenuProps,
   ChatComposerPlusMenuView,
 } from "./chat-composer-plus-menu.types.ts";
-import { closeOtherChatComposerPickers } from "./chat-picker-overlay.ts";
 
 registerEnglishCatalog(registerMcpEnglish);
 
@@ -129,7 +127,7 @@ function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
           : !menu.webSearchBaseEnabled
             ? t("chat.composer.menu.webSearchGloballyDisabled")
             : ""),
-      icon: icons.globe,
+      icon: "globe",
       checkbox: true,
     }),
     menuDivider("manage-divider"),
@@ -342,10 +340,7 @@ function handleMenuSelection(
   const value = item.id;
   if (
     uploadsEnabled(props.attachments.uploadConfig) &&
-    handleChatAttachmentMenuSelection(
-      { currentTarget: surface, detail: { item: { value } } },
-      pickerAnchor,
-    )
+    handleChatAttachmentMenuSelection(surface, value, pickerAnchor)
   ) {
     return;
   }
@@ -542,7 +537,6 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
               );
             }
           }}
-          onBeforeShow={() => closeOtherChatComposerPickers(host)}
           onNavigate={({ value }) =>
             props.menu.onNavigate(value === "manage-skills" ? "skills" : "plugins")
           }
@@ -557,8 +551,8 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
           }}
         />
       </div>
-      <LitContent value={props.menu.addServerDialog} />
-      <LitContent value={props.menu.libraryDialog} />
+      <ComposerContent>{props.menu.addServerDialog}</ComposerContent>
+      <ComposerContent>{props.menu.libraryDialog}</ComposerContent>
     </>
   );
 }

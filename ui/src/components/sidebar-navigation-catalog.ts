@@ -1,13 +1,13 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { ApplicationContext } from "../app/context.ts";
 import type {
   SessionListOptions,
   SessionListSnapshot,
 } from "../lib/sessions/session-capability.ts";
 import { dashboardSessionListQuery } from "../lib/sessions/session-requests.ts";
+import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
 
 /** Read-only catalog projection. Managed session queries own access, freshness, and pagination. */
-export class SidebarNavigationCatalog implements ReactiveController {
+export class SidebarNavigationCatalog implements SolidController {
   dashboards: SessionListSnapshot | null = null;
   private source?: ApplicationContext["sessions"];
   private client?: ApplicationContext["gateway"]["snapshot"]["client"];
@@ -15,7 +15,7 @@ export class SidebarNavigationCatalog implements ReactiveController {
   private pages?: ReturnType<ApplicationContext["sessions"]["observeList"]>;
 
   constructor(
-    private readonly host: ReactiveControllerHost & {
+    private readonly host: SolidControllerHost & {
       navigationView: string;
       readonly isConnected: boolean;
     },

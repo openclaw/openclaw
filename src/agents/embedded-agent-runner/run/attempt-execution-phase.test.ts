@@ -94,7 +94,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
             changedSystem && index === 1 ? "changed instructions" : "stable instructions",
           messages: [],
         };
-        guards.onModelRequest(testModel, context);
+        await guards.onModelRequest(testModel, context);
         const stream = await runtime.agentSession.activeSession.agent.streamFn(testModel, context);
         await stream.result();
         guards.onModelUsage({ input: 8_000, cacheRead });
@@ -218,6 +218,84 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     },
   );
 
+  it("keeps history metadata and subsequent messages in the resident transcript actor", async () => {
+    await withOpenClawTestState({ label: "history-metadata-owner" }, async (testState) => {
+      setRuntimeConfigSnapshot({});
+      const fixture = await createFixture({ exerciseTerminalMerges: false });
+      const target = {
+        agentId: "main",
+        sessionKey: "agent:main:history-metadata-owner",
+        sessionId: "history-metadata-owner",
+        storePath: path.join(testState.agentDir(), "openclaw-agent.sqlite"),
+      };
+      replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
+      Object.assign(fixture.input.attempt, {
+        ...target,
+        sessionTarget: target,
+        sessionFile: target.sessionKey,
+      });
+      const writer = await claimAgentSessionWriter({
+        ...target,
+        sessionTarget: target,
+        runId: fixture.input.attempt.runId,
+        workspaceDir: testState.workspaceDir,
+        prompt: "reply",
+        timeoutMs: 30_000,
+      });
+      const selected = { ...target, ...writer };
+      fixture.input.attempt.sessionTarget = selected;
+      const transcript = await prepareEmbeddedAttemptTranscriptLifecycle({
+        attempt: fixture.input.attempt,
+        externalAbortController: { arm: () => {}, throwIfFiredAfterPrepCleanup: async () => {} },
+      });
+      fixture.input.sessionLock = transcript;
+      try {
+        const manager = await transcript.withOwnedTranscriptWrite(() =>
+          SessionManager.openAsync(selected, testState.workspaceDir),
+        );
+        fixture.input.prepared.sessionRuntime.sessionManager = manager;
+        const actor = transcript.ownedTranscriptWriteContext.sessionActor?.actor;
+        if (!actor) {
+          throw new Error("Expected the attempt's durable transcript actor");
+        }
+        const authority = {
+          assertCurrent: () => actor.assertCurrent(),
+          authorize: () => actor.assertCurrent(),
+        };
+        const before = await actor.read(authority);
+        const snapshot = { provider: "test", modelId: "test-model", timestamp: 1 };
+        let metadataId: string | undefined;
+        mocks.prepareHistory.mockImplementation(async () => {
+          metadataId = await manager.appendCustomEntryAsync("model-snapshot", snapshot);
+          return { contextEnginePromptAuthority: "assembled" };
+        });
+        mocks.runSettledPhase.mockResolvedValue(fixture.result);
+
+        await runEmbeddedAttemptExecutionPhase(fixture.input);
+
+        const after = actor.snapshot(authority);
+        expect(after?.version.epoch).toBe(before.version.epoch);
+        expect(after?.transcript.watermark.maxSeq).toBe(1);
+        expect(manager.getEntries()).toMatchObject([
+          { id: metadataId, type: "custom", customType: "model-snapshot", data: snapshot },
+        ]);
+        const message = { role: "user" as const, content: "after history", timestamp: 2 };
+        const messageId = await transcript.withOwnedTranscriptWrite(() =>
+          manager.appendMessageAsync(message),
+        );
+        const reopened = await transcript.withOwnedTranscriptWrite(() =>
+          SessionManager.openAsync(selected, testState.workspaceDir),
+        );
+        expect(reopened.getEntries()).toMatchObject([
+          { id: metadataId, parentId: null, type: "custom", data: snapshot },
+          { id: messageId, parentId: metadataId, type: "message", message },
+        ]);
+      } finally {
+        await transcript.transcriptLifecycle.dispose();
+      }
+    });
+  });
+
   it.each([
     ["stop", 10_000],
     ["toolUse", 10_000],
@@ -326,7 +404,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
           },
         ],
       };
-      guards.onModelRequest?.(testModel, context);
+      await guards.onModelRequest?.(testModel, context);
       await runAgentLoop(
         [{ role: "user", content: "Read once", timestamp: 0 }],
         context,

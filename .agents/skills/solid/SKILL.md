@@ -5,13 +5,13 @@ description: Write, port, review, or test Solid 2 UI in OpenClaw (Control UI, pl
 
 # Solid 2 in OpenClaw
 
-The Control UI, plugin views (`extensions/x`, `extensions/workboard`), and the Canvas A2UI hosts render with **Solid 2** (`solid-js`, `@solidjs/web`, `@solidjs/signals`, compiled by `@solidjs/vite-plugin`/`@solidjs/compiler`). Lit 3 and Web Awesome are being removed. Until the last Lit file is gone, ported Solid code runs next to unported Lit at every commit.
+The Control UI, plugin views (`extensions/x`, `extensions/workboard`), and the Canvas A2UI hosts render with **Solid 2** (`solid-js`, `@solidjs/web`, `@solidjs/signals`, compiled by `@solidjs/vite-plugin`/`@solidjs/compiler`). Web Awesome is removed, and the last Lit interop modules are retiring; new code is Solid only.
 
 Read [ui/AGENTS.md](../../../ui/AGENTS.md) first; its state-ownership rules apply to Solid unchanged. Use the exact installed Solid pins from the owning `package.json`: the runtime and compiler are `2.0.0-rc.14`, and `@solidjs/vite-plugin` is `3.0.0-next.49`. `solid-js` and `@solidjs/*` are exempt from the repository's seven-day release-age gate (Peter, 2026-10-11); third-party Solid ecosystem packages remain subject to it.
 
 ## Rules that keep the UI correct
 
-For new code or a Solid audit, read [idioms](references/idioms.md) and [lessons](references/lessons.md). Check `node_modules/solid-js/CHEATSHEET.md`, its `types/client/flow.d.ts`, and the installed `@solidjs/signals` / `@solidjs/web` types when choosing an API. Solid 2 is not Solid 1: rc.14 has no `createAsync`; asynchronous values are ordinary computations returning promises or async iterables.
+**Before your first edit**, read the installed `ui/node_modules/solid-js/CHEATSHEET.md`, especially its "What changed from 1.x" list. It is the rc.14 API contract, written as a guard against React and Solid 1 priors, the two dominant bug sources. For new code or a Solid audit, then read [idioms](references/idioms.md) and [lessons](references/lessons.md); to refactor or review existing code, also use the [refactor checklist](references/refactor-checklist.md). Check `solid-js/types/client/flow.d.ts` and the installed `@solidjs/signals` / `@solidjs/web` types when choosing an API. rc.14 has no `createAsync`: asynchronous values are ordinary computations returning promises or async iterables.
 
 1. **Domain owners stay plain TypeScript.** The Gateway store, capabilities, `lib/sessions/*`, caches, persistence, and mutation authority keep synchronous mutate-then-read semantics. Solid 2 writes become visible only after a microtask flush, so authoritative state never lives in a signal. → [state and ownership](references/state-and-ownership.md)
 2. **Components consume projections** from `ui/src/lib/reactive/` (one per owner and scope, never a second store) and `useApplication()` for the application context. Add a thin adapter only with its first production caller; subscribe to ordered events directly.
@@ -19,6 +19,7 @@ For new code or a Solid audit, read [idioms](references/idioms.md) and [lessons]
 4. **One implementation per registered tag.** A Solid component must never render a tag that a Lit class still registers. When you port a custom element, delete its Lit class; remaining Lit callers reach the Solid version through `defineSolidBridge`. → [Lit interop](references/lit-interop.md)
 5. **One renderer per DOM region**, and one lifecycle owner per overlay surface. → [overlays](references/overlays.md)
 6. **Derive, don't synchronize.** `createMemo` before `createSignal`; no copies of owner state; no defensive guards for states the owner already excludes. Prefer smaller code than the Lit you replace.
+7. **Replace controller lifecycles at their owner.** Follow the [controller-to-Solid recipe](references/idioms.md#replace-lit-era-controllers), including its worked example. Delete the class and host adapter wiring together; do not wrap a controller in revision signals as the final design.
 
 ## Component skeleton
 
@@ -57,6 +58,9 @@ Use `jsxImportSource: "@solidjs/web"` and its JSX types, not Solid 1's `solid-js
 - Ref callbacks run **unowned**: `onCleanup` inside them does nothing.
 - ARIA enumerations are typed strings: `aria-pressed={pressed() ? "true" : "false"}`, never a boolean.
 - Solid 1 APIs (`createResource`, `onMount`, `mergeProps`, `Context.Provider`) don't carry over: use async computations, `onSettled`, `merge`, and the context component itself.
+- Writing a signal or store from a memo, an effect compute phase, or a component body throws in dev. `untrack` doesn't exempt it (the guard checks the owner); derive instead, or write from a handler, `onSettled`, or effect apply.
+- Class strings built with template literals or `.filter(Boolean).join(" ")` lose composable reactivity: use `class={["base", { active: active() }]}`.
+- `createRenderEffect` is for render-phase runtime bindings, and `flush()` in production code usually hides a write-then-read: feature code uses `createEffect` and derivations.
 
 More, each with its root cause: [lessons learned](references/lessons.md).
 
@@ -66,15 +70,16 @@ More, each with its root cause: [lessons learned](references/lessons.md).
 
 ## References
 
-| Topic                                                    | Read when                                                                            |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| [idioms](references/idioms.md)                           | derivations, props, lifecycle, local stores, keys, async values, and lint decisions  |
-| [components](references/components.md)                   | porting or writing components: Lit → Solid table, JSX bindings, events, refs, styles |
-| [state and ownership](references/state-and-ownership.md) | touching owners, projections, async reads, lifetimes, parking, chat render lifecycle |
-| [Lit interop](references/lit-interop.md)                 | a Lit caller uses your component, or your component hosts unported Lit               |
-| [overlays](references/overlays.md)                       | menus, popovers, tooltips, dialogs, focus, positioning, the platform floor           |
-| [testing](references/testing.md)                         | unit, browser, E2E, WebKit, parity, retention suites                                 |
-| [performance](references/performance.md)                 | startup bundle, lazy loading, render budgets                                         |
-| [plugins](references/plugins.md)                         | building a plugin's Control UI view in Solid                                         |
-| [migration](references/migration.md)                     | porting the remaining Lit, the final sweep, the inventory                            |
-| [lessons learned](references/lessons.md)                 | before a new kind of change; most entries cost a failed CI run to learn              |
+| Topic                                                    | Read when                                                                                      |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| [idioms](references/idioms.md)                           | choosing a primitive, derivations, props, lifecycle, stores, keys, async, context, diagnostics |
+| [refactor checklist](references/refactor-checklist.md)   | refactoring or reviewing existing Solid: measurable smells, replacements, before/after         |
+| [components](references/components.md)                   | porting or writing components: Lit → Solid table, JSX bindings, events, refs, styles           |
+| [state and ownership](references/state-and-ownership.md) | touching owners, projections, async reads, lifetimes, parking, chat render lifecycle           |
+| [Lit interop](references/lit-interop.md)                 | a Lit caller uses your component, or your component hosts unported Lit                         |
+| [overlays](references/overlays.md)                       | menus, popovers, tooltips, dialogs, focus, positioning, the platform floor                     |
+| [testing](references/testing.md)                         | unit, browser, E2E, WebKit, parity, retention suites                                           |
+| [performance](references/performance.md)                 | startup bundle, lazy loading, render budgets                                                   |
+| [plugins](references/plugins.md)                         | building a plugin's Control UI view in Solid                                                   |
+| [migration](references/migration.md)                     | porting the remaining Lit, the final sweep, the inventory                                      |
+| [lessons learned](references/lessons.md)                 | before a new kind of change; most entries cost a failed CI run to learn                        |

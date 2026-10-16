@@ -38,6 +38,59 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("publishes successive replacement identities without changing folded siblings", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:matrix:channel:!Room:example.org",
+      storePath: database.path,
+    };
+    const siblingKey = scope.sessionKey.toLowerCase();
+    replaceSessionEntrySync(scope, {
+      sessionId: "original",
+      lifecycleRevision: "first",
+      updatedAt: 1,
+    });
+    replaceSessionEntrySync(
+      { ...scope, sessionKey: siblingKey },
+      {
+        sessionId: "sibling",
+        updatedAt: 1,
+      },
+    );
+    const mutations: SessionIdentityMutation[] = [];
+    const observed: Array<string | undefined> = [];
+    const stop = onSessionIdentityMutation((mutation) => {
+      mutations.push(mutation);
+      observed.push(readExactSessionEntryRow(database, scope.sessionKey)?.entry.label);
+    });
+    try {
+      replaceSessionEntrySync(scope, {
+        sessionId: "original",
+        lifecycleRevision: "second",
+        updatedAt: 2,
+        label: "reset",
+      });
+      replaceSessionEntrySync(scope, {
+        sessionId: "replacement",
+        lifecycleRevision: "third",
+        updatedAt: 3,
+        label: "replaced",
+      });
+      expect(mutations.map((mutation) => mutation.kind)).toEqual(["reset", "replace"]);
+      expect(mutations.map((mutation) => mutation.previous.sessionKeys)).toEqual([
+        [scope.sessionKey],
+        [scope.sessionKey],
+      ]);
+      expect(observed).toEqual(["reset", "replaced"]);
+      expect(readExactSessionEntryRow(database, siblingKey)?.entry.sessionId).toBe("sibling");
+    } finally {
+      stop();
+    }
+  });
+});
+
 it("settles publication before a successor writer and preserves metadata after worker retirement", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });

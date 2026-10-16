@@ -43,6 +43,7 @@ import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../state/openclaw-state-db-contract.js";
+import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import { needsOpenClawStateDatabaseSchemaRepair } from "../state/openclaw-state-db-fast-path.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveSchemaMigrationBackupTables } from "../state/schema-migration-backup-scope.js";
@@ -71,7 +72,11 @@ export async function backupDoctorMigrationDatabases(params: {
 > {
   const sharedPath = resolveOpenClawStateSqlitePath(params.env);
   const pending = new Set(params.pendingDatabasePaths);
-  if (existsSync(sharedPath) && needsOpenClawStateDatabaseSchemaRepair(sharedPath)) {
+  if (
+    !isStatePostgres() &&
+    existsSync(sharedPath) &&
+    needsOpenClawStateDatabaseSchemaRepair(sharedPath)
+  ) {
     pending.add(sharedPath);
   }
   if (pending.size === 0) {
@@ -83,7 +88,7 @@ export async function backupDoctorMigrationDatabases(params: {
   }
   const migrationTables = new Map<string, readonly string[]>();
   // Shipped updater checkpoints and general Doctor repairs keep full images.
-  if (params.versionMigrationsOnly && !isUpdateDoctorLintPass(params.env)) {
+  if (params.versionMigrationsOnly && !isStatePostgres() && !isUpdateDoctorLintPass(params.env)) {
     for (const pathname of pending) {
       const migration = params.pendingMigrations?.find((entry) => entry.path === pathname);
       const tables = migration && resolveSchemaMigrationBackupTables(migration);
@@ -183,6 +188,11 @@ export async function backupDoctorSqliteDatabases(params: {
   // The registry and migration receipts must roll back with their agent databases.
   const sharedPath = resolveOpenClawStateSqlitePath(params.env);
   if (existsSync(sharedPath)) {
+    if (isStatePostgres()) {
+      throw new Error(
+        "Doctor schema migrations require PostgreSQL state-family backup support, which is not available yet. Keep the current database and retry with an OpenClaw version that supports state-family PostgreSQL backups.",
+      );
+    }
     pending.add(sharedPath);
   }
   const { authority } = params;

@@ -39,6 +39,7 @@ const { values } = parseArgs({
     runs: { type: "string", default: "30" },
     seconds: { type: "string", default: "300" },
     "poll-ms": { type: "string", default: "5000" },
+    "writer-reads": { type: "boolean", default: false },
   },
 });
 if (!values["state-dir"]) {
@@ -73,8 +74,13 @@ cfg.memory = { ...cfg.memory, search: { enabled: false } };
 cfg.tools = { codeMode: false };
 cfg.plugins = {
   ...cfg.plugins,
+  enabled: true,
   entries: { "memory-core": { config: { dreaming: { enabled: false } } } },
 };
+if (values["writer-reads"]) {
+  cfg.diagnostics = { ...cfg.diagnostics, enabled: true };
+  cfg.plugins.entries["diagnostics-prometheus"] = { enabled: true };
+}
 const catalogId = "synthetic-restart-catalog";
 const pluginDir = path.join(output, catalogId);
 mkdirSync(pluginDir);
@@ -90,9 +96,18 @@ writeFileSync(
   path.join(pluginDir, "index.mjs"),
   `export default {
   id: '${catalogId}', register(api) {
+    ${
+      values["writer-reads"]
+        ? `const store = api.runtime.state.openKeyedStoreV2({ namespace: 'restart-catalog', maxEntries: 10, overflowPolicy: 'reject-new' });
+    api.registerService({ id: 'synthetic-catalog-state', async start() {
+      if (!(await store.lookup('metadata'))) await store.register('metadata', { label: 'Synthetic metadata' });
+    } });`
+        : ""
+    }
     api.registerSessionCatalog({ id: '${catalogId}', label: 'Synthetic restart metadata catalog',
       audience: 'gateway-operators', supportsProcessHomeIsolation: true,
       list: async (query) => {
+        ${values["writer-reads"] ? `if (!(await store.lookup('metadata'))) throw new Error('Synthetic catalog state missing');` : ""}
         const entries = query.sessionEntries?.entriesForAgent(query.agentId ?? 'main');
         if (!entries?.length) throw new Error('Synthetic catalog requires populated session metadata');
         return [{ hostId: 'gateway:local', label: 'Synthetic metadata', kind: 'gateway', connected: true,
@@ -528,7 +543,7 @@ async function connect(index: number) {
     clearTimeout(challengeTimer);
   }
 }
-const shapes = [
+const shapes: Array<{ method: string; params: Record<string, unknown> }> = [
   {
     method: "sessions.list",
     params: {
@@ -675,9 +690,17 @@ try {
   });
   const initial = launch("gateway-before-crash");
   await ready(initial);
-  const initialClients = await Promise.all(
-    Array.from({ length: clientCount }, (_, index) => connect(index)),
-  );
+  const initialClients: Awaited<ReturnType<typeof connect>>[] = [];
+  // Pair devices before the measured restart without exhausting the per-IP preauth budget.
+  for (let offset = 0; offset < clientCount; offset += 32) {
+    initialClients.push(
+      ...(await Promise.all(
+        Array.from({ length: Math.min(32, clientCount - offset) }, (_, index) =>
+          connect(offset + index),
+        ),
+      )),
+    );
+  }
   const sender = initialClients[0];
   if (!sender) {
     throw new Error("No synthetic sender connected");
@@ -692,6 +715,9 @@ try {
       visibility: "shared",
       displayName: "Synthetic interrupted restart run",
     });
+  }
+  if (values["writer-reads"]) {
+    shapes.push({ method: "sessions.github.options", params: { sessionKey: keys[0] } });
   }
   const runIds = keys.map(() => randomUUID());
   await Promise.all(
@@ -769,6 +795,34 @@ try {
   const readyMs = performance.now() - restartAt;
   console.log(`PHASE restarted-ready ${readyMs.toFixed(1)}ms`);
   loadStartedAt = performance.now();
+  const writerMetrics = values["writer-reads"]
+    ? delay(
+        Math.max(0, Math.min(durationMs, 300_000) - (performance.now() - restartAt)),
+        undefined,
+        { ref: false },
+      ).then(async () => {
+        const response = await fetch(`http://127.0.0.1:${port}/api/diagnostics/prometheus`, {
+          headers: { authorization: `Bearer ${token}` },
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!response.ok) {
+          throw new Error(`Writer metrics scrape failed: ${response.status}`);
+        }
+        const metrics = await response.text();
+        writeFileSync(path.join(output, "writer-metrics.prom"), metrics);
+        return metrics
+          .split("\n")
+          .filter(
+            (line) =>
+              /^openclaw_worker_queue_wait_seconds_(sum|count)\{/.test(line) &&
+              line.includes('kind="sqlite_writer"'),
+          );
+      })
+    : Promise.resolve(undefined);
+  // Observe a failed scrape immediately while the reconnect cohort is still running.
+  void writerMetrics.catch((error: unknown) => {
+    failure ??= error instanceof Error ? error : new Error(String(error));
+  });
   await Promise.all(Array.from({ length: clientCount }, (_, index) => observeClient(index)));
   assertAlive();
   const summarize = (rows: typeof timings) => {
@@ -794,6 +848,7 @@ try {
     runCount,
     durationMs,
     pollMs,
+    writerQueueMetrics: await writerMetrics,
     readyMs,
     initialPrimaryArrivals: initialArrivals.size,
     activePrimaryHoldsAtCrash,

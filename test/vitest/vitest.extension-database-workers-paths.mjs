@@ -30,6 +30,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/msteams/src/monitor-handler/message-handler.media.test.ts",
   "extensions/nextcloud-talk/src/inbound.authz.test.ts",
   "extensions/nextcloud-talk/src/inbound.behavior.test.ts",
+  "extensions/nextcloud-talk/src/inbound-media.mentions.test.ts",
   "extensions/qa-channel/src/inbound.dispatch-lifecycle.test.ts",
   "extensions/qa-channel/src/inbound.test.ts",
   "extensions/litellm/index.test.ts",

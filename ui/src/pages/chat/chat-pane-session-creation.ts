@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SessionsRecoverParams } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -24,13 +26,19 @@ import {
   NEW_SESSION_LIST_LOADING_MESSAGE,
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
-import { canCreateChatSession } from "./chat-state-route.ts";
+import { canCreateChatSession, selectedChatSessionRow } from "./chat-state-route.ts";
 import { resolveChatPaneParentSession } from "./components/chat-pane-header.ts";
 
 /** Creates or resets a conversation while guarding its asynchronous ownership. */
 export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentation {
   protected recoveringSession = false;
   protected creatingIncognitoSession = false;
+  private restartRecoveryFallback: {
+    key: string;
+    sessionId: string;
+    recoveryCycleId: string;
+    generation: number;
+  } | null = null;
 
   protected sessionDisabledBanner(params: {
     catalogDisabledReason: string | null | undefined;
@@ -127,9 +135,18 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     const agentId =
       scopedAgentParamsForSession(state, state.sessionKey).agentId ??
       resolveAgentIdFromSessionKey(state.sessionKey);
+    const session = selectedChatSessionRow(state);
+    const fallback =
+      this.restartRecoveryFallback?.key === state.sessionKey &&
+      this.restartRecoveryFallback.sessionId === session?.sessionId &&
+      this.restartRecoveryFallback.recoveryCycleId === session?.restartRecoveryCycleId &&
+      this.restartRecoveryFallback.generation === this.connectionGeneration;
     const params = {
       ...(agentId ? { agentId } : {}),
       key: state.sessionKey,
+      mode: fallback ? ("new-session" as const) : ("in-place" as const),
+      sessionId: session?.sessionId,
+      recoveryCycleId: session?.restartRecoveryCycleId,
     };
     const access = readSessionMethodAccess(this.context.gateway.snapshot, {
       method: "sessions.recover",
@@ -138,23 +155,25 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     return {
       kind: "composer-replacement" as const,
       title: t("chat.restartRecoveryTitle"),
-      text: t("chat.restartRecoveryDisabled"),
+      text: t(fallback ? "chat.restartRecoveryNewSession" : "chat.restartRecoveryDisabled"),
       tone: "neutral" as const,
       icon: "warning" as const,
-      actionLabel: t("chat.resumeInNewSession"),
+      actionLabel: t(fallback ? "chat.resumeInNewSession" : "chat.resumeSession"),
       actionStyle: "primary" as const,
       busy: this.recoveringSession,
       busyLabel: t("chat.resumingSession"),
       disabledReason: access.allowed || this.recoveringSession ? undefined : access.reason,
       onAction: () => {
         if (access.allowed && !this.recoveringSession) {
-          void this.recoverSession();
+          void this.recoverSession(params);
         }
       },
     };
   }
 
-  protected readonly recoverSession = async (): Promise<boolean> => {
+  protected readonly recoverSession = async (
+    identity?: Pick<SessionsRecoverParams, "mode" | "sessionId" | "recoveryCycleId">,
+  ): Promise<boolean> => {
     const state = this.state;
     if (!state || !state.client || !state.connected || this.recoveringSession) {
       return false;
@@ -169,9 +188,13 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     const agentId =
       scopedAgentParamsForSession(state, sourceSessionKey).agentId ??
       resolveAgentIdFromSessionKey(sourceSessionKey);
+    const session = selectedChatSessionRow(state);
     const params = {
       ...(agentId ? { agentId } : {}),
       key: sourceSessionKey,
+      mode: identity?.mode ?? ("in-place" as const),
+      sessionId: identity ? identity.sessionId : session?.sessionId,
+      recoveryCycleId: identity ? identity.recoveryCycleId : session?.restartRecoveryCycleId,
     };
     const access = readSessionMethodAccess(context.gateway.snapshot, {
       method: "sessions.recover",
@@ -195,10 +218,30 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
         return false;
       }
       if (recovery.continuation.status === "rejected") {
+        if (
+          params.mode === "in-place" &&
+          params.sessionId &&
+          params.recoveryCycleId &&
+          recovery.key === sourceSessionKey &&
+          recovery.sessionId === params.sessionId &&
+          isRecord(recovery.continuation.error.details) &&
+          recovery.continuation.error.details.reason === "restart-safe-tools-unavailable"
+        ) {
+          this.restartRecoveryFallback = {
+            key: sourceSessionKey,
+            sessionId: params.sessionId,
+            recoveryCycleId: params.recoveryCycleId,
+            generation: this.connectionGeneration,
+          };
+        }
         setChatError(state, formatUiError(recovery.continuation.error.message), true);
         return false;
       }
+      this.restartRecoveryFallback = null;
       const nextSessionKey = recovery.key;
+      if (areUiSessionKeysEquivalent(nextSessionKey, sourceSessionKey)) {
+        return true;
+      }
       if (this.onPaneSessionChange?.(this.paneId, nextSessionKey) === false) {
         return false;
       }

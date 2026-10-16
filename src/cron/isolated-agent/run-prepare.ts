@@ -220,6 +220,7 @@ export async function prepareCronRunContext(params: {
       cronSession,
       agentSessionKey,
       runSessionKey,
+      usesDetachedRunSession,
       signal: input.abortSignal ?? input.signal,
       onInterrupt: params.onLifecycleInterrupt,
     });
@@ -246,6 +247,7 @@ export async function prepareCronRunContext(params: {
       });
       workspaceLease = selectedWorkspace.lease;
       const workspaceDir = selectedWorkspace.workspaceDir;
+      let baseSessionMaintenanceStarted = false;
       const persistCronSessionRow: CronSessionRowWriter = async ({
         storePath,
         sessionKey,
@@ -279,9 +281,14 @@ export async function prepareCronRunContext(params: {
           {
             fallbackEntry,
             replaceEntry: true,
+            // The maintenance owner follows later writes through its receipt subscription.
+            skipMaintenance: baseSessionMaintenanceStarted || sessionKey !== agentSessionKey,
             workerGuard: { assertCurrent: assertCommitAllowed },
           },
         );
+        if (sessionKey === agentSessionKey) {
+          baseSessionMaintenanceStarted = true;
+        }
       };
       const persistSessionEntry = createPersistCronSessionEntry({
         cronSession,

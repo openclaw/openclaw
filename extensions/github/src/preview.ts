@@ -5,6 +5,7 @@ import {
   isRecord,
   readNonBlankString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import {
   ControlUiGitHubError,
   discardResponse,
@@ -34,6 +35,8 @@ const CO_AUTHOR_FACE_LIMIT = 3;
 const CO_AUTHOR_TRAILER =
   /^co-authored-by:[^<\r\n\u2028\u2029]*<(?<id>\d{1,12})\+(?<login>[a-z\d](?:[a-z\d-]{0,38}))@users\.noreply\.github\.com>[^\S\r\n\u2028\u2029]*$/gimu;
 const SUCCESS_CACHE_MS = 60_000;
+// Avatars can change without changing the item or commit ETag.
+const DECORATION_CACHE_MS = 5 * 60_000;
 const FAILURE_CACHE_MS = 30_000;
 const CACHE_LIMIT = 200;
 const log = createSubsystemLogger("github/preview");
@@ -62,6 +65,13 @@ type CachedPreview = {
 const previewCaches = new WeakMap<
   typeof fetch,
   ReturnType<typeof createStaleWhileRevalidateCache<CachedPreview>>
+>();
+
+// Public avatar bytes carry no repository or credential state. Share them across
+// items and identities, but keep injected transports in their own API environment.
+const avatarCaches = new WeakMap<
+  typeof fetch,
+  ReturnType<typeof createStaleWhileRevalidateCache<string | undefined>>
 >();
 
 export const parseControlUiGitHubPreviewTarget = parseGitHubItemTarget;
@@ -242,22 +252,41 @@ async function fetchAvatarDataUrl(
     return undefined;
   }
   try {
-    const response = await fetchImpl(url, {
-      headers: { Accept: "image/webp,image/png,image/jpeg,image/gif" },
-      redirect: "error",
-      signal,
-    });
-    const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim();
-    if (
-      !response.ok ||
-      !contentType ||
-      !["image/gif", "image/jpeg", "image/png", "image/webp"].includes(contentType)
-    ) {
-      await discardResponse(response);
-      return undefined;
+    let cache = avatarCaches.get(fetchImpl);
+    if (!cache) {
+      cache = createStaleWhileRevalidateCache<string | undefined>({
+        maxEntries: CACHE_LIMIT,
+        ttlMs: DECORATION_CACHE_MS,
+        cacheable: (value) => value !== undefined,
+      });
+      avatarCaches.set(fetchImpl, cache);
     }
-    const body = await readBoundedResponse(response, GITHUB_AVATAR_MAX_BYTES);
-    return `data:${contentType};base64,${body.toString("base64")}`;
+    const { value } = await racePromiseWithAbortSignal(
+      cache.read(
+        url.href,
+        async () => {
+          const response = await fetchImpl(url, {
+            headers: { Accept: "image/webp,image/png,image/jpeg,image/gif" },
+            redirect: "error",
+            signal: AbortSignal.timeout(GITHUB_PREVIEW_TIMEOUT_MS),
+          });
+          const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim();
+          if (
+            !response.ok ||
+            !contentType ||
+            !["image/gif", "image/jpeg", "image/png", "image/webp"].includes(contentType)
+          ) {
+            await discardResponse(response);
+            return undefined;
+          }
+          const body = await readBoundedResponse(response, GITHUB_AVATAR_MAX_BYTES);
+          return `data:${contentType};base64,${body.toString("base64")}`;
+        },
+        { allowStale: false },
+      ),
+      signal,
+    );
+    return value;
   } catch {
     return undefined;
   }

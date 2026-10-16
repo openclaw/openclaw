@@ -114,7 +114,7 @@ suite.define(() => {
         await stop.waitFor({ state: "visible" });
         const menuText = (await stop.textContent())?.trim();
         await captureDeviceRuntimeUiProof(suite, page, "device-startup-menu.png", {
-          surface: page.locator('.chat-pane__placement-menu [part="menu"]'),
+          surface: page.locator('.chat-pane__placement-menu > [role="menu"]'),
           content: [stop],
         });
         await stop.click();

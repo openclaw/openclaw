@@ -6,7 +6,6 @@ import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import type { NewSessionPreference } from "./preferences.ts";
-import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
 export function createRepositoryFixture(
   options: {
@@ -73,20 +72,16 @@ export function createRepositoryFixture(
     persistPreference,
     readPreference,
   } as unknown as DraftGatewayState;
-  const browser = new DraftPlaceBrowser(
-    new TestReactiveControllerHost(),
-    gateway,
-    () => ({ context, isAdmin: true }),
-    {
-      requestUpdate,
-      onProjectMissing: vi.fn(),
-      onSelectProject: vi.fn(),
-      onApprovedListing: vi.fn(),
-      querySelector: () => null,
-      activeElement: () => null,
-      body: () => null,
-    },
-  );
+  const browser = new DraftPlaceBrowser(gateway, () => ({ context, isAdmin: true }), {
+    requestUpdate,
+    updateComplete: () => Promise.resolve(),
+    onProjectMissing: vi.fn(),
+    onSelectProject: vi.fn(),
+    onApprovedListing: vi.fn(),
+    querySelector: () => null,
+    activeElement: () => null,
+    body: () => null,
+  });
   const state = new DraftPlaceState(
     gateway,
     browser,

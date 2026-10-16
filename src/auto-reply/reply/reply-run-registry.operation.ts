@@ -48,8 +48,6 @@ import {
   retainStateUntilCompleteOperations,
   type ReplyRunAdmissionBarrier,
   startReplyOperationSuccessorBarriers,
-  updateFollowupAdmissionSessionId,
-  updateSuccessorAdmissionSessionId,
 } from "./reply-run-registry.state.js";
 import { createReplyOperationToolAuthority } from "./reply-run-registry.tool-authority.js";
 
@@ -215,7 +213,6 @@ export function createReplyOperation(params: {
         )
       : pendingClearBarrier;
     pendingClearBarrier = undefined;
-    updateFollowupAdmissionSessionId(operation);
     // Recovery-owner handoff must begin before the old slot wakes a successor;
     // otherwise that successor can snapshot durable state the handoff then mutates.
     startReplyOperationSuccessorBarriers(operation);
@@ -226,7 +223,7 @@ export function createReplyOperation(params: {
       return;
     }
     void registeredBarrier.settled.then(() =>
-      flushReplyOperationAfterClear(operation, registeredBarrier.source.sessionId),
+      flushReplyOperationAfterClear(operation, registeredBarrier.operation.sessionId),
     );
   };
 
@@ -353,7 +350,7 @@ export function createReplyOperation(params: {
       return lastActivityAtMs;
     },
     captureOwnedSessionIds() {
-      return new Set(ownedSessionIds);
+      return ownedSessionIds;
     },
     recordActivity() {
       finalizationLease.recordActivity();
@@ -441,8 +438,6 @@ export function createReplyOperation(params: {
       replyRunState.waitKeysBySessionId.set(currentSessionId, currentSessionKey);
       currentSessionId = normalizedNextSessionId;
       ownedSessionIds.add(currentSessionId);
-      updateFollowupAdmissionSessionId(operation);
-      updateSuccessorAdmissionSessionId(operation, currentSessionId);
       replyRunState.activeKeysBySessionId.set(currentSessionId, currentSessionKey);
       replyRunState.waitKeysBySessionId.set(currentSessionId, currentSessionKey);
       notifyGatewayWorkMetricsChanged();

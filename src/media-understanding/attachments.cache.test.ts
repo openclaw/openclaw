@@ -16,6 +16,7 @@ vi.mock("../media/fetch.js", async () => {
   return {
     ...actual,
     readRemoteMediaBuffer: readRemoteMediaBufferMock,
+    readRemoteMediaBufferWithHeaders: readRemoteMediaBufferMock,
   };
 });
 

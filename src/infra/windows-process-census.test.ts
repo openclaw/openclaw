@@ -1,17 +1,34 @@
 import { ProcSafeError } from "@openclaw/proc-safe/errors";
 import type { ProcessSnapshot } from "@openclaw/proc-safe/inspect";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
-const { list } = vi.hoisted(() => ({ list: vi.fn() }));
+const { list, identity, spawn } = vi.hoisted(() => ({
+  list: vi.fn(),
+  identity: vi.fn(),
+  spawn: vi.fn(),
+}));
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawnSync: spawn,
+}));
+vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/proc-safe/identity")>()),
+  readProcessIdentity: identity,
+}));
 vi.mock("@openclaw/proc-safe/inspect", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/proc-safe/inspect")>()),
   listProcesses: list,
 }));
 import { readWindowsProcessCensus } from "./windows-process-census.js";
+import { readWindowsUserSid } from "./windows-user-sid.js";
 
 beforeEach(() => {
   list.mockReset();
+  identity.mockReset().mockReturnValue(null);
+  spawn.mockReset();
 });
+afterEach(() => vi.restoreAllMocks());
 
 it("preserves command facts and the existing millisecond start identity", () => {
   list.mockReturnValue([
@@ -55,6 +72,29 @@ it.each(["same", "different", "unknown"] as const)(
     ]);
   },
 );
+
+it.each(["access-denied", "layout-mismatch", "operation-failed"] as const)(
+  "distinguishes native %s from an unrelated inaccessible process",
+  (code) => {
+    list.mockReturnValue([{ pid: 12, owner: "unknown" }]);
+    identity.mockImplementation(() => {
+      throw new ProcSafeError(code, "Unreadable process");
+    });
+    expect(readWindowsProcessCensus(1_000)).toEqual([
+      { pid: 12, ...(code === "access-denied" ? { accessDenied: true } : {}) },
+    ]);
+  },
+);
+
+it.each([
+  { status: 0, stdout: "S-1-5-21-100\r\n", expected: "S-1-5-21-100" },
+  { status: 1, stdout: "S-1-5-21-100", expected: undefined },
+  { status: 0, stdout: "unresolved account", expected: undefined },
+])("reads the launching token SID ($status, $stdout)", ({ status, stdout, expected }) => {
+  mockProcessPlatform("win32");
+  spawn.mockReturnValue({ status, stdout });
+  expect(readWindowsUserSid()).toBe(expected);
+});
 
 it("omits only kernel processes and proven exited identities", () => {
   list.mockReturnValue([

@@ -13,9 +13,15 @@ Gateway keep supported stores in PostgreSQL while other stores stay on SQLite.
 The adapter owns connection setup, schema admission, transaction behavior, and
 commit notifications; stores keep their existing data and operation contracts.
 
+Daemon runtime pins stay local on every engine, in
+`<state-root>/control/services.sqlite`. The daemon owner supplies typed runtime
+intent to the macOS app without requiring a running Gateway or PostgreSQL
+connection. Shared-state engine selection does not move this store.
+No release stored runtime pins in PostgreSQL shared state, so PostgreSQL installs have no legacy pin source to migrate.
+
 ## Configure PostgreSQL
 
-Use a PostgreSQL database dedicated to OpenClaw and a role that can create schemas
+Use a PostgreSQL database and a role that can create schemas
 and tables. PostgreSQL 16 or newer and UTF8 server and client encoding are required;
 admission checks these once per physical store load. No extensions are installed
 by the engine. Put its connection DSN in a secret, then configure a SecretRef:
@@ -79,6 +85,13 @@ The supported PostgreSQL families are:
 A supported store never silently falls back to SQLite when its PostgreSQL
 connection or admission fails.
 
+Doctor can acquire offline maintenance custody and run data-only state migrations
+on PostgreSQL. A live or unverifiable Gateway owner still prevents maintenance;
+state writes use the existing PostgreSQL writer advisory lock. State schema
+migrations remain blocked until PostgreSQL state-family backup support is
+available. Keep the current database and retry with a version that supports those
+backups.
+
 Use `openclaw database port` to move existing supported data between engines.
 Changing `database.engine` alone does not migrate existing data. Omitting
 `database` preserves the SQLite default, so ordinary updates require no
@@ -90,6 +103,72 @@ Workboard, Logbook, and Team Reports; shared-state porting is not available yet.
 installations on SQLite until that support lands, or use a fresh state directory
 for experimental PostgreSQL shared state. Do not remove existing data to switch
 engines.
+
+## Search on PostgreSQL
+
+The experimental engine search contract supports native PostgreSQL full text,
+literal trigram contains, and exact cosine search. This is engine-level support;
+agent memory and session transcript physical storage still follow the support
+matrix above. It does not enable PostgreSQL for an unported store.
+
+For a store that declares search indexes, install these extensions in the
+database before opening it. The default extension namespace is `public`:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS unaccent WITH SCHEMA public;
+CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;
+CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
+```
+
+`unaccent` is required for full text, `pg_trgm` for a declared trigram index,
+and `vector` for semantic search. Extensions are database-wide; the store's
+schema declaration identifies their namespace when it differs from `public`.
+The engine checks availability and privileges once at store admission. It never
+installs extensions automatically. An unavailable capability refuses admission
+with its extension name and operator SQL; it does not return empty search results
+or switch storage engines. Extension installation may require a database
+administrator. The runtime role needs `CREATE` in the store schema, or database
+`CREATE` privilege when bootstrapping a new schema, plus ownership/access to its
+tables, indexes, functions, and text-search configuration.
+
+The existing explicit keyword-only memory setting is `memory.search.provider: "none"`
+(or the corresponding agent-specific override). During the agent storage cutover,
+the memory owner maps that setting to the keyword-only engine schema, which requires no pgvector
+extension and exposes no vector capability. Disabling only the native vector
+index is not a PostgreSQL JavaScript-scan fallback. An embedding-provider failure
+does not silently authorize keyword-only PostgreSQL admission.
+
+Full text uses a named `simple` plus `unaccent` configuration, a stored generated
+`tsvector`, and GIN. Queries bind literal terms and compile conjunctions,
+disjunctions, adjacent phrases, and final-lexeme prefixes. User text is never
+interpreted as PostgreSQL query operators. Ranking uses `ts_rank_cd` with
+normalization 2: scores are engine-local, higher is better, and ordering differs
+from SQLite BM25. Tokenization also differs for punctuation, compound words, and
+Unicode. Snippets use `ts_headline` only after a materialized, bounded candidate
+selection, with a word budget of 2–48, a character cap of 500, and empty highlight markers. Trigram
+contains uses its own GIN index and escaped literal `ILIKE`; it is not a universal
+fallback for full-text queries.
+
+Semantic search uses exact float32 `vector(n)` cosine distance, with model and
+source eligibility in the same query before ordering and limit. The canonical
+embedding remains its original little-endian binary64 BLOB; source-transaction
+triggers maintain the derived float32 projection. Exact vectors support up to
+16,000 dimensions. A dimension change requires a matching schema and a derived
+index rebuild. There is no ANN, HNSW, IVFFlat, half-precision storage, or transfer
+of the PostgreSQL corpus into JavaScript for per-query scoring.
+
+Generated columns, GIN indexes, vector projection tables, trigger functions, and
+the named text-search mappings participate in the store's exact schema-drift
+fingerprint. Rebuilds run under the owning writer transaction. PostgreSQL search
+remains experimental while product-flow conformance and agent storage cutover
+are completed.
+
+Managed-service documentation lists pgvector for Amazon RDS, Google Cloud SQL,
+Neon, and Supabase, but this is not a tenant availability guarantee. RDS support
+depends on the instance patch and extension version; Cloud SQL versions vary by
+PostgreSQL major; Neon requires per-database enablement and version verification;
+Supabase's setup guide does not guarantee a numeric version. Verify all required
+extensions and privileges for the actual database.
 
 ## Port existing stores
 
@@ -164,9 +243,51 @@ or Homebrew: those paths bypass `openclaw update` engine compatibility checks.
 An old SQLite capture is historical and does not contain later PostgreSQL writes.
 See the [CLI reference](/cli#database).
 
+## Several Gateways on one PostgreSQL server
+
+Several independent installations can share one PostgreSQL server. Each
+installation must have its own state directory and exactly one Gateway.
+Sharing one installation across Gateways, including failover and active-active
+operation, is not supported: each store has one live owner.
+
+### Recommended: one database per Gateway
+
+Use a separate PostgreSQL database and connection DSN for each Gateway. This
+provides the strongest isolation between installations. Install the required
+search extensions in **each database**, as described in
+[Search on PostgreSQL](#search-on-postgresql); extensions installed in one database
+are not available in another. Each installation can use the default
+`database.postgres.schemaPrefix` because their databases are separate.
+
+A database administrator creates the databases and may need to install extensions.
+The runtime role needs `CONNECT` and database `CREATE` privilege to bootstrap its
+store schemas, plus ownership/access to its store objects and `USAGE` on the
+extension schema.
+
+### One database with separate namespaces
+
+Give each Gateway a distinct `database.postgres.schemaPrefix`, such as
+`installation_a` and `installation_b`. Each store gets a separate anchor UUID and
+namespace; its writer advisory lock uses that UUID. Keep each local anchor with
+its matching PostgreSQL namespace. Pairing one installation's anchor with another
+installation's namespace refuses admission. Changing the configured prefix does
+not move an existing anchor.
+
+Install `unaccent`, `pg_trgm`, and `vector` once in the shared database's `public`
+schema (or the explicitly declared extension schema). All installations reuse
+those extensions; admission checks them and never recreates them. Text-search
+configurations are schema-qualified, and generated columns, indexes, vector
+projections, and functions belong to each store namespace.
+
+The runtime role needs `CONNECT` on the shared database and database `CREATE`
+privilege to bootstrap namespaces, plus ownership/access to its store objects and
+`USAGE` on the extension schema. Use separate roles and schema grants when
+installations also need a PostgreSQL permission boundary; schema prefixes alone
+do not restrict a role's access.
+
 ## Isolation and durability
 
-One Gateway owns each store. PostgreSQL does not enable multiple active Gateways,
+One Gateway owns each store. PostgreSQL does not enable multiple active owners of one store,
 external writers, replication management, or connection-pool management.
 
 Writers use `READ COMMITTED` and a transaction-scoped advisory lock derived from

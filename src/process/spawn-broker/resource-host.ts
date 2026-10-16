@@ -1,8 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { randomBytes } from "node:crypto";
-import { chmodSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { deserialize, serialize } from "node:v8";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { decodeNativeWorkerFailure } from "../../infra/worker-native-error.js";
@@ -314,6 +310,13 @@ export class BrokerResourceClaims {
     return this.sealPromise;
   }
 
+  /** The broker reported refused initialization and its process and pipes have joined. */
+  closeBeforeStartup(): void {
+    for (const claim of this.claims.values()) {
+      this.receive({ type: "resource-closed", id: claim.attachment.id, requestId: 0 });
+    }
+  }
+
   fail(error: Error): void {
     this.failure ??= error;
     const failed = [...this.claims.values()].filter((claim) => this.rejectClaim(claim, error));
@@ -362,33 +365,4 @@ export class BrokerResourceClaims {
     this.claims.delete(claim.attachment.id);
     this.host.refreshReference();
   }
-}
-
-const UNIX_SOCKET_PATH_BYTES = 103;
-
-function createNativeResourceDirectory(): string {
-  const directory = mkdtempSync(join(tmpdir(), "oc-br-"));
-  if (
-    process.platform === "win32" ||
-    Buffer.byteLength(join(directory, "resource.sock")) <= UNIX_SOCKET_PATH_BYTES
-  ) {
-    return directory;
-  }
-  // A configured temp root can exceed Darwin's sockaddr_un even for a short private socket.
-  rmSync(directory, { recursive: true, force: true });
-  return mkdtempSync("/tmp/oc-br-");
-}
-
-export function createNativeResourceAuthority() {
-  const directory = createNativeResourceDirectory();
-  chmodSync(directory, 0o700);
-  const secret = randomBytes(32).toString("hex");
-  return {
-    directory,
-    secret,
-    endpoint:
-      process.platform === "win32"
-        ? `\\\\.\\pipe\\oc-br-${secret}`
-        : join(directory, "resource.sock"),
-  };
 }

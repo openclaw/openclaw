@@ -207,9 +207,13 @@ it("keeps match filters and active anchors authoritative across worker payload e
           ...message,
         },
       });
-      const answer = assistant("answer", "completed-run");
+      const answer = assistant("answer", "completed-run", { display: true });
       const finalMirror = assistant("final-source-reply", "mirror-run", {
-        openclawDeliveryMirror: { kind: "message-tool-source-reply", final: true },
+        openclawDeliveryMirror: {
+          kind: "message-tool-source-reply",
+          sourceTurnId: "mirror-run",
+          final: true,
+        },
       });
       const deliveryMirror = assistant("delivery-mirror", "delivery-run", {
         idempotencyKey: "shared-key",

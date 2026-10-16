@@ -2,7 +2,7 @@ import { asNullableRecord, readStringField } from "@openclaw/normalization-core/
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import type { ChannelStatus } from "../../api/types.ts";
-import { renderChannelIcon } from "../../components/channel-icon.ts";
+import { ChannelIcon } from "../../components/solid/channel-icon.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { resolveChannelAccounts } from "../../lib/channels/index.ts";
@@ -10,7 +10,6 @@ import { formatUiExternalText } from "../../lib/format-error.ts";
 import "../../components/modal-dialog.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { channelDetailPresentations } from "./detail-presentation.ts";
 import { channelDocsUrl } from "./hub-meta.ts";
 import { ChannelConfig } from "./view.config.tsx";
@@ -207,12 +206,11 @@ export function renderChannelDetail(params: {
     >
       <div class="channels-detail">
         <div class="channels-detail__header">
-          <LitContent
-            render={() =>
-              renderChannelIcon(params.channelId, params.label, "cover", {
-                pluginIconUrl: params.pluginIconUrl,
-              })
-            }
+          <ChannelIcon
+            channelId={params.channelId}
+            label={params.label}
+            variant="cover"
+            pluginIconUrl={params.pluginIconUrl}
           />
           <div class="channels-detail__header-actions">
             <button
@@ -226,7 +224,7 @@ export function renderChannelDetail(params: {
           </div>
         </div>
         <div class="channels-detail__body">
-          {params.props.wizardHost.blockedByDirtyConfig && params.props.config.configFormDirty ? (
+          {params.props.wizardHost.blockedByDirtyConfig() && params.props.config.configFormDirty ? (
             <div class="callout warn">{t("channels.hub.saveBeforeSetup")}</div>
           ) : undefined}
           <For each={statusIssues()}>

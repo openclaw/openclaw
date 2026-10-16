@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { migrateDaemonRuntimePins } from "../infra/state-migrations.daemon-runtime-pins.js";
 import { resolveUpdateInstallRoot } from "../infra/update-install-root.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { VERSION } from "../version.js";
@@ -71,6 +72,7 @@ describe("update-cli", () => {
   beforeEach(() => runtimeRecovery.stubNodeRuntime());
 
   it("updates the invoking package and rebinds its owned Gateway after a Node-prefix switch", async () => {
+    expect((await migrateDaemonRuntimePins(process.env)).warnings).toEqual([]);
     const invokingVersion = "2026.5.18";
     const oldInstall = await setupServicePackageAtPrefix({
       prefix: tempDirs.make("openclaw-node-a-"),
@@ -339,9 +341,11 @@ describe("update-cli", () => {
           run: { status: "failed" },
         });
         expect(inferenceRepair).not.toHaveBeenCalled();
-        expect(freshRestartCalls()).toHaveLength(0);
+        expect(freshRestartCalls()).toHaveLength(1);
         expect(serviceRestart).not.toHaveBeenCalled();
         expect((await serviceReadCommand(process.env))?.programArguments[0]).toBe(serviceNode);
+        expect(getErrorOutput()).toContain("openclaw update repair");
+        expect(getLogOutput() + getErrorOutput()).not.toMatch(/keep the gateway stopped/i);
       }
       expect(packageInstallCommandCall()).toBeUndefined();
     },

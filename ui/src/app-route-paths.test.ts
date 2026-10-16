@@ -8,11 +8,14 @@ import { describe, expect, it, vi } from "vitest";
 import {
   agentRouteFromPath,
   APP_ROUTE_IDS,
+  clawCatalogPackageNameFromPath,
   CONTROL_UI_DOCUMENT_ROUTE_PATHS,
+  dynamicRouteFromPath,
   inferBasePathFromPathname,
   memoryTabFromPath,
   pathForMemoryTab,
   pathForAgentPanel,
+  pathForClawCatalogEntry,
   pathForPluginSettings,
   pathForWorkboardBoard,
   pathForTerminalSession,
@@ -537,6 +540,27 @@ describe("Plugin Settings route paths", () => {
     expect(pluginSettingsIdFromPath(reservedIdPath)).toBe("discover");
     expect(routeIdFromPath(reservedIdPath)).toBe("plugin-settings");
     expect(pluginSettingsIdFromPath("/settings/plugins/calendar/extra")).toBeNull();
+  });
+});
+
+describe("Claw detail route paths", () => {
+  it("uses a public package slug and restores its official package identity", () => {
+    const pathname = pathForClawCatalogEntry("@openclaw/workflow-operator", "/ui");
+    expect(pathname).toBe("/ui/agents/claws/workflow-operator");
+    expect(clawCatalogPackageNameFromPath(pathname, "/ui")).toBe("@openclaw/workflow-operator");
+    expect(routeIdFromPath(pathname, "/ui")).toBe("claws");
+    expect(dynamicRouteFromPath(pathname, "/ui")).toEqual([
+      "claws",
+      "__openclawClawsPath",
+      pathname,
+    ]);
+  });
+
+  it("rejects malformed or non-OpenClaw package routes", () => {
+    expect(() => pathForClawCatalogEntry("@community/travel-planner")).toThrow(
+      "Only official Claws",
+    );
+    expect(clawCatalogPackageNameFromPath("/agents/claws/@openclaw/workflow-operator")).toBeNull();
   });
 });
 

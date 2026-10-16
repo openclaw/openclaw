@@ -3,6 +3,7 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import JSZip from "jszip";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -34,6 +35,7 @@ describe("media store", () => {
   });
 
   afterEach(() => {
+    __setFsSafeTestHooksForTest(undefined);
     vi.restoreAllMocks();
   });
 
@@ -238,6 +240,35 @@ describe("media store", () => {
       expect(read.size).toBe(contents.length);
       expect(read.buffer.toString("utf8")).toBe(contents);
     }
+  });
+
+  it("finishes short nonblocking media reads", async () => {
+    const content = Buffer.from("synthetic media bytes");
+    const saved = await store.saveMediaBuffer(content, "text/plain");
+    let shortened = false;
+    __setFsSafeTestHooksForTest({
+      afterOpen: (filePath, handle) => {
+        if (path.basename(filePath) !== saved.id) {
+          return;
+        }
+        __setFsSafeTestHooksForTest(undefined);
+        const read = handle.read.bind(handle);
+        vi.spyOn(handle, "read").mockImplementationOnce((async (
+          buffer: Buffer,
+          offset: number,
+          length: number,
+          position: number | null,
+        ) => {
+          shortened = true;
+          return await read(buffer, offset, Math.min(1, length), position);
+        }) as typeof handle.read);
+      },
+    });
+
+    const result = await store.readMediaBuffer(saved.id);
+    expect(shortened).toBe(true);
+    expect(result.buffer.toString("utf8")).toBe(content.toString("utf8"));
+    expect(result.size).toBe(content.length);
   });
 
   it("retries local-source writes when cleanup prunes the target directory", async () => {

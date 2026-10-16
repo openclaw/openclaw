@@ -3,7 +3,6 @@ import {
   resolveGeneratedMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
@@ -12,7 +11,7 @@ import {
   postJsonRequest,
   readProviderJsonObjectResponse,
   resolveProviderOperationTimeoutMs,
-  resolveProviderHttpRequestConfig,
+  resolveProviderApiKeyHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   isRecord,
@@ -245,38 +244,27 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
       },
     },
     async generateVideo(req): Promise<VideoGenerationResult> {
-      const auth = await resolveApiKeyForProvider({
-        provider: "runway",
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
-      });
-      if (!auth.apiKey) {
-        throw new Error("Runway API key missing");
-      }
-
       const fetchFn = fetch;
-      const deadline = createProviderOperationDeadline({
-        timeoutMs: req.timeoutMs,
-        label: "Runway video generation",
-      });
       const endpoint = resolveEndpoint(req);
       const requestBody = buildCreateBody(req, endpoint);
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
+        await resolveProviderApiKeyHttpRequestConfig({
+          req,
+          missingApiKeyMessage: "Runway API key missing",
           baseUrl:
             normalizeOptionalString(req.cfg?.models?.providers?.runway?.baseUrl) ??
             DEFAULT_RUNWAY_BASE_URL,
           defaultBaseUrl: DEFAULT_RUNWAY_BASE_URL,
           defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-            "Content-Type": "application/json",
             "X-Runway-Version": RUNWAY_API_VERSION,
           },
           provider: "runway",
           capability: "video",
-          transport: "http",
         });
+      const deadline = createProviderOperationDeadline({
+        timeoutMs: req.timeoutMs,
+        label: "Runway video generation",
+      });
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}${endpoint}`,
         headers,

@@ -44,7 +44,18 @@ const rawSqliteAllowPathGroups = {
     "src/infra/kysely-sync-cache-state.ts",
     "src/infra/kysely-sync.ts",
   ],
+  "admitted search indexes own native FTS schema, triggers, and rebuilds": [
+    "src/infra/database-engine/sqlite-search-schema.ts",
+  ],
+  "sqlite-vec native extension probe, candidate queries, and index writes": [
+    "src/infra/database-engine/sqlite-vec.ts",
+    "src/infra/database-engine/sqlite-vector.ts",
+  ],
+  "isolated vector reader owns connection-local query-only and busy-timeout pragmas": [
+    "src/infra/database-engine/sqlite-vector.child.ts",
+  ],
   "SQLite database lifecycle, schema, transactions, and pragmas": [
+    "src/daemon/runtime-pin-store.ts",
     // Engine admission owns anchor metadata and schema bootstrap, not application queries.
     "src/infra/database-engine/adapters.ts",
     "src/infra/database-engine/open.ts",
@@ -130,6 +141,7 @@ const rawSqliteAllowPathGroups = {
     "extensions/memory-core/src/memory/manager-status-presence.ts",
   ],
   "doctor SQLite maintenance and legacy state migration": [
+    "src/infra/state-migrations.daemon-runtime-pins.ts",
     "src/commands/doctor-agent-memory-schema.ts",
     "src/commands/doctor-sqlite-compact.ts",
     // Exclusive Doctor maintenance reads auto-vacuum and page-size PRAGMAs.
