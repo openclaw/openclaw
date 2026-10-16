@@ -1195,7 +1195,6 @@ src/agents/embedded-agent-runner/cache-ttl.ts	2
 src/agents/embedded-agent-runner/cli-backend-dispatch-transcript.ts	1
 src/agents/embedded-agent-runner/cli-backend-dispatch.ts	1
 src/agents/embedded-agent-runner/compact.hooks.harness.ts	7
-src/agents/embedded-agent-runner/compaction-diagnostics.ts	5
 src/agents/embedded-agent-runner/context-engine-maintenance.ts	1
 src/agents/embedded-agent-runner/delivery-evidence.ts	1
 src/agents/embedded-agent-runner/extensions.ts	1
@@ -1322,7 +1321,7 @@ src/agents/prepared-model-catalog.worker.ts	1
 src/agents/prepared-model-runtime.configured.ts	1
 src/agents/prepared-model-runtime.facts.ts	1
 src/agents/prepared-model-runtime.ts	1
-src/agents/provider-attribution.ts	6
+src/agents/provider-attribution.ts	5
 src/agents/provider-auth-aliases.ts	1
 src/agents/provider-http-errors.ts	1
 src/agents/provider-local-service.ts	1
@@ -2614,7 +2613,6 @@ ui/src/pages/chat/chat-pane-lifecycle.ts	3
 ui/src/pages/chat/chat-queue.ts	1
 ui/src/pages/chat/chat-send-ack.ts	2
 ui/src/pages/chat/chat-send-composer.ts	1
-ui/src/pages/chat/chat-send-timing.ts	1
 ui/src/pages/chat/chat-state-events.ts	6
 ui/src/pages/chat/chat-state-page.ts	2
 ui/src/pages/chat/chat-thread-items.ts	1

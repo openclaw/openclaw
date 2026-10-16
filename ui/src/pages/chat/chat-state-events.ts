@@ -42,7 +42,6 @@ import {
   requiresChatInputConsumption,
   retireDeliveredQueuedUserTurn,
 } from "./chat-send-support.ts";
-import { recordChatSendServerTiming } from "./chat-send-timing.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { applyChatModelCatalogSnapshot } from "./chat-state-refresh.ts";
@@ -562,10 +561,6 @@ export function handlePageGatewayEvent(
   if (event.event === "session.operation") {
     handleSessionOperationEvent(state as never, event.payload as never);
     requestChatPageUpdate(state, "animation-frame");
-    return;
-  }
-  if (event.event === "chat.send_timing") {
-    recordChatSendServerTiming(state, event.payload);
     return;
   }
   if (event.event === "session.message" || event.event === "sessions.changed") {

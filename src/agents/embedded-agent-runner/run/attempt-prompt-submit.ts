@@ -100,8 +100,6 @@ export async function submitEmbeddedAttemptPrompt(input: {
         }
       >
     | undefined;
-  /** Observes only the first admitted foreground dispatch, not preflight/compaction. */
-  onPrimaryModelRequest?: (tools: NonNullable<Parameters<StreamFn>[1]["tools"]>) => void;
   onModelRequest?: (
     model: Parameters<StreamFn>[0],
     context: Parameters<StreamFn>[1],
@@ -141,7 +139,6 @@ export async function submitEmbeddedAttemptPrompt(input: {
       ? (userTurnRecorder.getPersistedMessage?.() ?? userTurnRecorder.message)?.idempotencyKey
       : undefined;
 
-  let primaryRequestObserved = false;
   const installProviderPromptHistoryTransform = (): (() => void) => {
     const baseStreamFn = activeSession.agent.streamFn;
     const basePrepareNextTurn = activeSession.agent.prepareNextTurnWithContext;
@@ -263,10 +260,6 @@ export async function submitEmbeddedAttemptPrompt(input: {
               };
               input.onModelRequest?.(model, requestContext);
             }
-          }
-          if (foregroundRequest && !primaryRequestObserved) {
-            primaryRequestObserved = true;
-            input.onPrimaryModelRequest?.(requestContext.tools ?? []);
           }
           assertRequestCurrent();
           input.assertHostActive?.();
