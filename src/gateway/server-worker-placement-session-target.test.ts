@@ -79,27 +79,39 @@ async function createActor(sessionKey: string, entry: InternalSessionEntry) {
     { assertCurrent() {}, authorize() {} },
   );
   expect(result.kind).toBe("committed");
-  return { actor, owner };
+  return { owner, [Symbol.asyncDispose]: () => actor.release() };
+}
+
+const sessionIdentity = (sessionKey: string, sessionId: string) => ({
+  agentId: "main",
+  sessionKey,
+  sessionId,
+});
+
+async function withoutHostSql<T>(run: () => T | Promise<T>) {
+  const sql = observeHostDataSql();
+  try {
+    const result = await run();
+    expect(sql.queries).toEqual([]);
+    return result;
+  } finally {
+    sql.restore();
+  }
 }
 
 test("guards a durable workspace with committed facts and no host session SQL", async () => {
   await withStateDirEnv("durable-placement-source-", async () => {
     setRuntimeConfigSnapshot({});
-    const identity = {
-      agentId: "main",
-      sessionKey: "agent:main:placement-source",
-      sessionId: "placement-source",
-    };
+    const identity = sessionIdentity("agent:main:placement-source", "placement-source");
     await replaceSessionEntry(identity, {
       sessionId: identity.sessionId,
       updatedAt: 1,
       lifecycleRevision: "original",
       worktree: { id: "original", branch: "synthetic", repoRoot: "/synthetic" },
     });
-    const sql = observeHostDataSql();
     let resolved: Awaited<ReturnType<typeof resolveWorkerPlacementSessionTarget>> | undefined;
     try {
-      try {
+      const current = await withoutHostSql(async () => {
         resolved = await resolveWorkerPlacementSessionTarget({
           ...identity,
           config: {},
@@ -112,22 +124,14 @@ test("guards a durable workspace with committed facts and no host session SQL", 
         });
         expect(resolved.workspace).toEqual({ kind: "local", path: "/synthetic" });
         resolved.assertCurrent();
-        expect(sql.queries).toEqual([]);
-      } finally {
-        sql.restore();
-      }
+        return resolved;
+      });
       await patchSessionEntryCore(identity, () => ({ label: "unrelated" }));
-      expect(resolved.assertCurrent).not.toThrow();
+      expect(current.assertCurrent).not.toThrow();
       await patchSessionEntryCore(identity, () => ({
         worktree: { id: "replacement", branch: "synthetic", repoRoot: "/synthetic" },
       }));
-      const effectSql = observeHostDataSql();
-      try {
-        expect(resolved.assertCurrent).toThrow("placement source changed");
-        expect(effectSql.queries).toEqual([]);
-      } finally {
-        effectSql.restore();
-      }
+      await withoutHostSql(() => expect(current.assertCurrent).toThrow("placement source changed"));
     } finally {
       resolved?.[Symbol.dispose]();
     }
@@ -137,13 +141,12 @@ test("guards a durable workspace with committed facts and no host session SQL", 
 test("prepares an actor workspace and guards exact placement metadata without host session SQL", async () => {
   await withStateDirEnv("actor-placement-source-", async () => {
     setRuntimeConfigSnapshot({});
-    const identity = {
-      agentId: "main",
-      sessionKey: "agent:main:dashboard:incognito-placement-source",
-      sessionId: "placement-source",
-    };
+    const identity = sessionIdentity(
+      "agent:main:dashboard:incognito-placement-source",
+      "placement-source",
+    );
     const worktree = await createWorktree("actor-placement", identity.sessionKey);
-    const { actor, owner } = await createActor(identity.sessionKey, {
+    await using memory = await createActor(identity.sessionKey, {
       sessionId: identity.sessionId,
       updatedAt: Date.now(),
       lifecycleRevision: "placement-window",
@@ -151,8 +154,7 @@ test("prepares an actor workspace and guards exact placement metadata without ho
       projectId: "full-planning-project",
       worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
     });
-    const sql = observeHostDataSql();
-    try {
+    await withoutHostSql(async () => {
       using resolved = await resolveWorkerPlacementSessionTarget({
         ...identity,
         config: {},
@@ -161,18 +163,14 @@ test("prepares an actor workspace and guards exact placement metadata without ho
       });
       expect(resolved.workspace).toEqual({ kind: "local", path: worktree.path });
       expect(resolved.entry.projectId).toBe("full-planning-project");
-      const scope = { ...identity, storePath: owner.path };
+      const scope = { ...identity, storePath: memory.owner.path };
       await patchSessionEntryCore(scope, () => ({ label: "unrelated title" }));
-      expect(() => resolved.assertCurrent()).not.toThrow();
+      expect(resolved.assertCurrent).not.toThrow();
       await patchSessionEntryCore(scope, () => ({
         worktree: { id: "replacement", branch: worktree.branch, repoRoot: worktree.repoRoot },
       }));
-      expect(() => resolved.assertCurrent()).toThrow("placement source changed");
-      expect(sql.queries).toEqual([]);
-    } finally {
-      sql.restore();
-      await actor.release();
-    }
+      expect(resolved.assertCurrent).toThrow("placement source changed");
+    });
   });
 });
 
@@ -191,11 +189,7 @@ test.each([
         cloudWorkers: { profiles: { development: profile } },
       };
       setRuntimeConfigSnapshot(individual, individual);
-      const identity = {
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        sessionId: "captured-main-window",
-      };
+      const identity = sessionIdentity("agent:main:main", "captured-main-window");
       const storePath = resolveSessionStorePathCore(undefined, { agentId: identity.agentId });
       if (inherited) {
         await replaceSessionEntry(
@@ -528,12 +522,11 @@ test("resolves consecutive placement workspaces without decoding unrelated sessi
 test("resolves a device folder without consulting Git or the managed-worktree registry", async () => {
   await withStateDirEnv("device-folder-target-", async () => {
     setRuntimeConfigSnapshot({});
-    const identity = {
-      agentId: "main",
-      sessionKey: "agent:main:dashboard:incognito-device-folder",
-      sessionId: "device-folder-session",
-    };
-    const { actor, owner } = await createActor(identity.sessionKey, {
+    const identity = sessionIdentity(
+      "agent:main:dashboard:incognito-device-folder",
+      "device-folder-session",
+    );
+    await using memory = await createActor(identity.sessionKey, {
       sessionId: identity.sessionId,
       updatedAt: 1,
       lifecycleRevision: "folder-generation",
@@ -541,26 +534,22 @@ test("resolves a device folder without consulting Git or the managed-worktree re
       deviceFolder: { deviceId: "paired-device", path: "/existing/non-git" },
     });
     const findLiveByOwner = vi.fn(async () => undefined);
-    try {
-      using resolved = await resolveWorkerPlacementSessionTarget({
-        ...identity,
-        config: {},
-        errorMessage: "folder binding changed",
-        sessionRuntime: sessionRuntime(findLiveByOwner),
-      });
-      expect(resolved.workspace).toEqual({
-        kind: "device-folder",
-        deviceId: "paired-device",
-        path: "/existing/non-git",
-      });
-      expect(findLiveByOwner).not.toHaveBeenCalled();
-      await patchSessionEntryCore({ ...identity, storePath: owner.path }, () => ({
-        deviceFolder: { deviceId: "another-device", path: "/existing/non-git" },
-      }));
-      expect(() => resolved.assertCurrent()).toThrow("folder binding changed");
-    } finally {
-      await actor.release();
-    }
+    using resolved = await resolveWorkerPlacementSessionTarget({
+      ...identity,
+      config: {},
+      errorMessage: "folder binding changed",
+      sessionRuntime: sessionRuntime(findLiveByOwner),
+    });
+    expect(resolved.workspace).toEqual({
+      kind: "device-folder",
+      deviceId: "paired-device",
+      path: "/existing/non-git",
+    });
+    expect(findLiveByOwner).not.toHaveBeenCalled();
+    await patchSessionEntryCore({ ...identity, storePath: memory.owner.path }, () => ({
+      deviceFolder: { deviceId: "another-device", path: "/existing/non-git" },
+    }));
+    expect(() => resolved.assertCurrent()).toThrow("folder binding changed");
   });
 });
 
@@ -615,11 +604,7 @@ test("retains workspace ownership across row-cache invalidation and observes lat
   await withStateDirEnv("worker-retained-workspace-", async () => {
     const config: OpenClawConfig = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(config, config);
-    const identity = {
-      agentId: "main",
-      sessionKey: "agent:main:retained-workspace",
-      sessionId: "retained-workspace-session",
-    };
+    const identity = sessionIdentity("agent:main:retained-workspace", "retained-workspace-session");
     const storePath = resolveSessionStorePathCore(undefined, { agentId: identity.agentId });
     const scope = { ...identity, storePath };
     await replaceSessionEntry(scope, {
@@ -654,10 +639,10 @@ test("retains workspace ownership across row-cache invalidation and observes lat
     });
     expect(resolved.workspace).toEqual({ kind: "local", path: "/synthetic/workspace" });
     await patchSessionEntryCore(scope, () => ({ label: "updated during placement" }));
-    expect(() => resolved.assertCurrent()).not.toThrow();
+    expect(resolved.assertCurrent).not.toThrow();
     await patchSessionEntryCore(scope, () => ({
       worktree: { id: "replacement-worktree", branch: "synthetic", repoRoot: "/synthetic" },
     }));
-    expect(() => resolved.assertCurrent()).toThrow("workspace owner changed");
+    expect(resolved.assertCurrent).toThrow("workspace owner changed");
   });
 });
