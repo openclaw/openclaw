@@ -34,20 +34,35 @@ const session = (key: string, label: string, extra: Record<string, unknown> = {}
 const mask = (label: Locator) => label.evaluate((element) => getComputedStyle(element).maskImage);
 
 async function openChat(
-  key = firstKey,
-  methodResponses: NonNullable<Parameters<typeof installMockGateway>[1]>["methodResponses"] = {},
-  settings: { preview?: boolean; locale?: string } = {},
+  rows = chatSessionListResponse().sessions,
+  settings: {
+    key?: string;
+    preview?: boolean;
+    locale?: string;
+    page?: Page;
+    identity?: Record<string, unknown>;
+  } = {},
 ) {
-  const page = await newChatPage(suite);
-  await page.addInitScript(({ preview, locale }) => {
-    if (preview) {
-      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
-    }
-    if (locale) {
-      localStorage.setItem("openclaw.i18n.locale", locale);
-    }
-  }, settings);
-  const gateway = await installMockGateway(page, { methodResponses, sessionKey: key });
+  const { key = firstKey, identity } = settings;
+  const page = settings.page ?? (await newChatPage(suite));
+  await page.addInitScript(
+    ({ preview, locale }) => {
+      if (preview) {
+        localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
+      }
+      if (locale) {
+        localStorage.setItem("openclaw.i18n.locale", locale);
+      }
+    },
+    { preview: settings.preview, locale: settings.locale },
+  );
+  const gateway = await installMockGateway(page, {
+    methodResponses: {
+      "sessions.list": chatSessionListResponse(rows),
+      ...(identity ? { "agent.identity.get": identity } : {}),
+    },
+    sessionKey: key,
+  });
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
   return { page, gateway };
 }
@@ -126,13 +141,10 @@ suite.define(() => {
         status: "running",
       });
     const { page, gateway } = await openChat(
-      firstKey,
-      {
-        "sessions.list": chatSessionListResponse([
-          running(firstKey, "First running session", "run-first", 2),
-          running(secondKey, "Second running session", "run-second"),
-        ]),
-      },
+      [
+        running(firstKey, "First running session", "run-first", 2),
+        running(secondKey, "Second running session", "run-second"),
+      ],
       { preview: true },
     );
     const secondRow = sessionRow(page, secondKey);
@@ -144,21 +156,17 @@ suite.define(() => {
       )
       .toBe(true);
     const narrationText = "Checking the running session";
-    await gateway.emitGatewayEvent("chat", {
-      sessionKey: secondKey,
-      runId: "run-second",
+    const emit = (event: string, payload: Record<string, unknown>) =>
+      gateway.emitGatewayEvent(event, { sessionKey: secondKey, runId: "run-second", ...payload });
+    await emit("chat", {
       state: "delta",
       message: chatMessage("assistant", narrationText),
     });
-    await gateway.emitGatewayEvent("agent", {
-      sessionKey: secondKey,
-      runId: "run-second",
+    await emit("agent", {
       stream: "tool",
       data: { name: "bash", toolCallId: "sidebar-tool", phase: "start" },
     });
-    await gateway.emitGatewayEvent("agent", {
-      sessionKey: secondKey,
-      runId: "run-second",
+    await emit("agent", {
       stream: "item",
       data: {
         kind: "tool",
@@ -167,7 +175,7 @@ suite.define(() => {
         name: "bash",
         phase: "update",
         title: "Shell",
-        progressText: "Checking the running session",
+        progressText: narrationText,
       },
     });
     const narration = secondRow.getByText(narrationText, { exact: true });
@@ -192,12 +200,11 @@ suite.define(() => {
   });
 
   it("replaces an intermediate running subtitle with the unread final digest", async () => {
-    const key = firstKey;
     const runId = "run-sidebar-metadata";
     const roster = (revision: number, headline: string, health: string, extra = {}) => {
       const updatedAt = Date.now() + revision - 1;
       return chatSessionListResponse([
-        session(key, "Sidebar metadata repair", {
+        session(firstKey, "Sidebar metadata repair", {
           updatedAt,
           activeRunIds: revision === 1 ? [runId] : [],
           hasActiveRun: revision === 1,
@@ -211,8 +218,8 @@ suite.define(() => {
     const completed = roster(2, "Repair landed cleanly", "done", {
       lastMessagePreview: "The repaired sidebar now shows the final reply.",
     });
-    const { page, gateway } = await openChat(key, { "sessions.list": running }, { preview: true });
-    const row = sessionRow(page, key);
+    const { page, gateway } = await openChat(running.sessions, { preview: true });
+    const row = sessionRow(page, firstKey);
     await row.getByText("Implementing the repair").waitFor();
 
     await waitForSessionRosterHydration(page);
@@ -227,7 +234,7 @@ suite.define(() => {
       messageId: "terminal-sidebar-reply",
       messageSeq: 2,
       session: expectDefined(completed.sessions[0], "completed sidebar session fixture"),
-      sessionKey: key,
+      sessionKey: firstKey,
       status: "done",
     });
     await row.getByText("Repair landed cleanly").waitFor();
@@ -252,11 +259,10 @@ suite.define(() => {
   ])(
     "reveals overflowing $direction sidebar titles with pointer and keyboard controls",
     async ({ locale, direction, title }) => {
-      const sessions = chatSessionListResponse([
-        session(firstKey, "Short", { updatedAt: 2 }),
-        session(secondKey, title),
-      ]);
-      const { page } = await openChat(firstKey, { "sessions.list": sessions }, { locale });
+      const { page } = await openChat(
+        [session(firstKey, "Short", { updatedAt: 2 }), session(secondKey, title)],
+        { locale },
+      );
       await expect.poll(() => page.locator("html").getAttribute("dir")).toBe(direction);
       const row = sessionRow(page, secondKey);
       const label = part(row, "name");
@@ -304,13 +310,14 @@ suite.define(() => {
   );
 
   it("keeps session titles on the first line and collapses rows that have no second line", async () => {
-    const busyKey = "agent:main:busy-session";
-    const plainKey = "agent:main:plain-session";
-    const longKey = "agent:main:long-title-session";
-    const unreadKey = "agent:main:unread-session";
-    const runningKey = "agent:main:running-session";
-    const { page } = await openChat(plainKey, {
-      "sessions.list": chatSessionListResponse([
+    const key = (name: string) => `agent:main:${name}-session`;
+    const busyKey = key("busy");
+    const plainKey = key("plain");
+    const longKey = key("long-title");
+    const unreadKey = key("unread");
+    const runningKey = key("running");
+    const { page } = await openChat(
+      [
         session(unreadKey, "Movies and recommendations for the weekend", {
           icon: "🎬",
           updatedAt: 3,
@@ -338,8 +345,9 @@ suite.define(() => {
           "An extremely long single-line session title that keeps going and going far past the sidebar width",
           { incognito: true, hasActiveRun: false, status: "done", unread: true },
         ),
-      ]),
-    });
+      ],
+      { key: plainKey },
+    );
     const busyRow = sessionRow(page, busyKey);
     const plainRow = sessionRow(page, plainKey);
     await busyRow.locator(".session-row-badges").waitFor();
@@ -376,7 +384,6 @@ suite.define(() => {
     }
     const shellNav = page.locator(".shell-nav");
     const sidebarResizer = page.getByRole("separator", { name: "Resize sidebar" });
-    const badgeSizes = [];
     for (const sidebarWidth of [258, 240]) {
       if (sidebarWidth === 240) {
         await sidebarResizer.focus();
@@ -385,10 +392,7 @@ suite.define(() => {
       await expect
         .poll(() =>
           shellNav.evaluate((element) => {
-            const rail = element.querySelector(".sidebar-rail");
-            if (!rail) {
-              throw new Error("Expected the persistent rail");
-            }
+            const rail = element.querySelector(".sidebar-rail")!;
             return Math.round(
               element.getBoundingClientRect().width - rail.getBoundingClientRect().width,
             );
@@ -397,30 +401,25 @@ suite.define(() => {
         .toBe(sidebarWidth);
       await page.mouse.move(900, 400);
 
-      badgeSizes.push(
-        await ordinaryBadge.evaluate((element) => {
-          const { height, width } = element.getBoundingClientRect();
-          return { height, width };
-        }),
-      );
+      expect(await ordinaryBadge.boundingBox()).toMatchObject({ height: 12, width: 12 });
     }
 
     const layout = await rowLayout(busyRow);
     const badges = await busyRow.locator(".session-row-badges").boundingBox();
     const badgeBox = expectDefined(badges, "badges");
     const subtitleBox = expectDefined(await part(busyRow, "subtitle").boundingBox(), "subtitle");
-    const plain = await plainRow.evaluate((row) => ({
-      height: row.getBoundingClientRect().height,
-      singleLine: row.classList.contains("sidebar-recent-session--single-line"),
-      nameLeft: row.querySelector(".sidebar-recent-session__name")!.getBoundingClientRect().left,
-    }));
-
-    expect(plain.singleLine).toBe(true);
+    const plain = expectDefined(await plainRow.boundingBox(), "plain row");
+    const nameLeft = expectDefined(await part(plainRow, "name").boundingBox(), "plain title").x;
+    expect(
+      await plainRow.evaluate((row) =>
+        row.classList.contains("sidebar-recent-session--single-line"),
+      ),
+    ).toBe(true);
     expect(plain.height).toBeLessThan(layout.row.height);
     expect(badgeBox.y).toBeGreaterThanOrEqual(layout.name.bottom - 1);
     expect(layout.name.right).toBeGreaterThan(badgeBox.x);
     expect(badgeBox.y + badgeBox.height / 2).toBeCloseTo(subtitleBox.y + subtitleBox.height / 2, 1);
-    expectUnreadLayout(layout, plain.nameLeft);
+    expectUnreadLayout(layout, nameLeft);
     expect(await busyRow.locator(".session-row-state").count()).toBe(0);
     expect(layout.atoms).toHaveLength(1);
     for (const atom of layout.atoms) {
@@ -438,37 +437,35 @@ suite.define(() => {
     const intrinsicAtomWidth = longLayout.atoms.reduce((sum, atom) => sum + atom.width, 0);
     expect(intrinsicAtomWidth).toBeGreaterThan(0);
     expect(longLayout.endcap.width).toBeGreaterThanOrEqual(intrinsicAtomWidth);
-    expectUnreadLayout(longLayout, plain.nameLeft);
+    expectUnreadLayout(longLayout, nameLeft);
 
     const unreadRow = sessionRow(page, unreadKey);
     const unreadBadge = unreadRow.locator(
       ".sidebar-session-indicator .session-glyph__badge--unread",
     );
     const unreadTitle = part(unreadRow, "name");
-    const titleWidth = () => unreadTitle.evaluate((element) => element.clientWidth);
-    await unreadBadge.waitFor({ state: "visible" });
-    const restingBadge = await unreadBadge.boundingBox();
-    const restingTitle = await unreadTitle.boundingBox();
-    const restingWidth = await titleWidth();
+    const placement = async () => {
+      await unreadBadge.waitFor({ state: "visible" });
+      return {
+        badge: await unreadBadge.boundingBox(),
+        titleLeft: (await unreadTitle.boundingBox())?.x,
+        width: await unreadTitle.evaluate((element) => element.clientWidth),
+      };
+    };
+    const resting = await placement();
     await unreadRow.hover();
-
-    await unreadBadge.waitFor({ state: "visible" });
-    expect(await unreadBadge.boundingBox()).toEqual(restingBadge);
-    expect((await unreadTitle.boundingBox())?.x).toBe(restingTitle?.x);
-    const hoverWidth = await titleWidth();
+    const hovered = await placement();
+    expect(hovered).toMatchObject({ badge: resting.badge, titleLeft: resting.titleLeft });
     const actionReserve = await unreadRow.evaluate((element) =>
       Number.parseFloat(
         getComputedStyle(element).getPropertyValue("--session-row-actions-reserve"),
       ),
     );
-    expect(restingWidth - hoverWidth).toBeCloseTo(actionReserve, 0);
+    expect(resting.width - hovered.width).toBeCloseTo(actionReserve, 0);
     await page.mouse.move(900, 400);
     await unreadBadge.waitFor({ state: "visible" });
     await archive(unreadRow).focus();
-    await unreadBadge.waitFor({ state: "visible" });
-    expect(await unreadBadge.boundingBox()).toEqual(restingBadge);
-    expect((await unreadTitle.boundingBox())?.x).toBe(restingTitle?.x);
-    expect(await titleWidth()).toBe(hoverWidth);
+    expect(await placement()).toEqual(hovered);
     await sidebarResizer.focus();
     await unreadBadge.waitFor({ state: "visible" });
 
@@ -481,9 +478,6 @@ suite.define(() => {
     }
 
     await plainRow.waitFor();
-    for (const size of badgeSizes) {
-      expect(size).toEqual({ height: 12, width: 12 });
-    }
   });
 
   it("keeps the authenticated assistant avatar stable across same-agent switches", async () => {
@@ -497,19 +491,15 @@ suite.define(() => {
       avatarAuthorizations.push(route.request().headers().authorization);
       return route.fulfill({ contentType: "image/png", body: avatarBody });
     });
-    await installMockGateway(page, {
-      methodResponses: {
-        "agent.identity.get": {
-          agentId: "main",
-          name: "OpenClaw",
-          avatar: "/avatar/main?v=fixture",
-          avatarStatus: "local",
-        },
-        "sessions.list": chatSessionListResponse(),
+    await openChat(undefined, {
+      page,
+      identity: {
+        agentId: "main",
+        name: "OpenClaw",
+        avatar: "/avatar/main?v=fixture",
+        avatarStatus: "local",
       },
-      sessionKey: firstKey,
     });
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, firstKey));
     const documentMarker = await page.evaluate(
       () => (document.documentElement.dataset.avatarTestDocument = crypto.randomUUID()),
     );

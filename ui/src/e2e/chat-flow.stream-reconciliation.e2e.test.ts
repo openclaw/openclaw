@@ -72,6 +72,8 @@ function runEvents(gateway: Gateway, runId: string, key = sessionKey) {
       emit("chat", { state, message, ...extra }),
     final: (text: string, displayContent: ReturnType<typeof textContent> = []) =>
       emit("chat", { state: "final", message: terminalMessage(text, displayContent) }),
+    agent: (stream: string, data: object, seq: number) =>
+      emit("agent", { stream, data, seq, ts: Date.now() }),
     persist: (message: ReturnType<typeof savedAnswer>, extra = {}) =>
       emit("session.message", {
         hasActiveRun: true,
@@ -197,7 +199,6 @@ suite.define(() => {
       await gateway.emitGatewayEvent("agent", toolEvent);
       await gateway.emitGatewayEvent("agent", itemEvent);
     }
-    const persist = () => events.persist(message);
     const snapshot = {
       messages: historyMessages,
       inFlightRun,
@@ -207,7 +208,7 @@ suite.define(() => {
     await gateway.deferNext("chat.startup");
     const startupCount = await reconnect(gateway);
     if (order !== "after hydration") {
-      await persist();
+      await events.persist(message);
       // A commit during the in-flight read retires it; the Gateway answers one fresh read.
       await gateway.deferNext("chat.startup");
     }
@@ -224,7 +225,7 @@ suite.define(() => {
     });
     await page.locator(".chat-group.assistant .chat-text", { hasText: text }).waitFor();
     if (order !== "before hydration") {
-      await persist();
+      await events.persist(message);
     }
     await gateway.deferNext("chat.history");
     await events.final(
@@ -328,25 +329,15 @@ suite.define(() => {
       },
     });
     await page.locator(".chat-group.assistant .chat-text", { hasText: text }).waitFor();
-    await gateway.emitGatewayEvent("agent", {
-      sessionKey: "main",
-      runId,
-      seq: 3,
-      ts: Date.now(),
-      stream: "lifecycle",
-      data: { phase: "finishing" },
-    });
+    await events.agent("lifecycle", { phase: "finishing" }, 3);
     await expect.poll(() => page.locator(".chat-bubble.streaming").count()).toBe(0);
     await expectReconciled(page, [text]);
     expect(await stopButton(page).isEnabled()).toBe(true);
     await page.locator(".chat-working-indicator").waitFor({ state: "hidden" });
 
     const errorMessage = "Workspace reconciliation failed: the destination is read-only.";
-    await events.chat(
-      terminal,
-      terminalMessage(text),
-      terminal === "error" ? { errorMessage } : {},
-    );
+    const terminalDetails = terminal === "error" ? { errorMessage } : {};
+    await events.chat(terminal, terminalMessage(text), terminalDetails);
     await stopButton(page).waitFor({ state: "hidden" });
     await page.locator(".chat-working-indicator").waitFor({ state: "hidden" });
     if (terminal === "error") {

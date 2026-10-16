@@ -1,9 +1,6 @@
-import { writeFile } from "node:fs/promises";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   chatSessionListResponse,
@@ -44,6 +41,14 @@ const profileStartup = (
   sessionId,
   thinkingLevel: null,
 });
+
+const generatedModels = (count: number, idPrefix = "model", namePrefix = "Model") =>
+  Array.from({ length: count }, (_, index) => ({
+    id: `${idPrefix}-${index + 1}`,
+    name: `${namePrefix} ${index + 1}`,
+    provider: "openai",
+  }));
+
 const basicModels = [
   { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
   { id: "claude-opus-4.5", name: "Claude Opus 4.5", provider: "bedrock" },
@@ -60,7 +65,7 @@ async function openChat(
       ? controlUiSessionUrl(suite.server.baseUrl, sessionKey)
       : `${suite.server.baseUrl}chat`,
   );
-  return { page, gateway };
+  return { page, gateway, main: page.getByRole("main") };
 }
 
 const visible = { state: "visible", timeout: 10_000 } as const;
@@ -68,6 +73,15 @@ const control = (root: Page | Locator, name: string) => root.locator(`[data-chat
 const option = (root: Page | Locator, model: string) =>
   root.locator(`[data-chat-model-option="${model}"]`);
 const attribute = (locator: Locator, name: string) => expect.poll(() => locator.getAttribute(name));
+
+const positionControls = (controls: Locator) =>
+  controls.evaluate((element) => {
+    Object.assign((element as HTMLElement).style, {
+      position: "fixed",
+      right: "80px",
+      top: "640px",
+    });
+  });
 
 async function switchSession(page: Page, pane: Locator, key: string, label: string) {
   await page
@@ -97,28 +111,6 @@ async function expectMenuPlacement(
       };
     })
     .toEqual({ placed: true, withinViewport: true });
-}
-
-async function createReasoningProofPage(scope: string) {
-  const parent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-  const artifactDir = parent ? createControlUiE2eArtifactDir(scope, parent) : undefined;
-  const viewport = { height: 900, width: 1280 };
-  const context = await suite.newBrowserContext({
-    locale: "en-US",
-    serviceWorkers: "block",
-    viewport,
-    ...(artifactDir ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
-  });
-  const page = await context.newPage();
-  const capture = async (fileName: string, surface: Locator, content: Locator) => {
-    if (artifactDir) {
-      await writeFile(
-        `${artifactDir}/${fileName}.png`,
-        await takeControlUiViewportScreenshot(page, surface, [content]),
-      );
-    }
-  };
-  return { page, capture };
 }
 
 suite.define(() => {
@@ -185,11 +177,7 @@ suite.define(() => {
 
   it("keeps picker menus in the viewport while preferring the space above", async () => {
     const { page, gateway } = await openChat({
-      models: Array.from({ length: 12 }, (_, index) => ({
-        id: `model-${index + 1}`,
-        name: `Model ${index + 1}`,
-        provider: "openai",
-      })),
+      models: generatedModels(12),
     });
 
     await gateway.waitForRequest("chat.startup");
@@ -206,13 +194,7 @@ suite.define(() => {
       },
     ]) {
       await page.setViewportSize({ height: 900, width: 1280 });
-      await controls.evaluate((element) => {
-        Object.assign((element as HTMLElement).style, {
-          position: "fixed",
-          right: "80px",
-          top: "640px",
-        });
-      });
+      await positionControls(controls);
       const trigger = controls.locator(picker.trigger);
       const menu = controls.locator(picker.menu);
       await trigger.click();
@@ -248,25 +230,14 @@ suite.define(() => {
   it("keeps high-velocity model scrolling inside the picker", async () => {
     const models = [
       { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
-      ...Array.from({ length: 32 }, (_value, index) => ({
-        id: `scroll-model-${index + 1}`,
-        name: `Scroll Model ${index + 1}`,
-        provider: "openai",
-      })),
+      ...generatedModels(32, "scroll-model", "Scroll Model"),
     ];
-    const { page } = await openChat({
+    const { page, main } = await openChat({
       models,
       sessionKey: "agent:main:main",
     });
 
-    const main = page.getByRole("main");
-    await main.locator(".chat-composer-model-control").evaluate((element) => {
-      Object.assign((element as HTMLElement).style, {
-        position: "fixed",
-        right: "80px",
-        top: "640px",
-      });
-    });
+    await positionControls(main.locator(".chat-composer-model-control"));
     await page.evaluate(() => {
       document.documentElement.style.overflowY = "auto";
       document.body.style.height = "1800px";
@@ -290,7 +261,7 @@ suite.define(() => {
   });
 
   it("keeps long model names and metadata inside the picker grid", async () => {
-    const { page } = await openChat(
+    const { main } = await openChat(
       {
         models: [
           {
@@ -310,7 +281,6 @@ suite.define(() => {
       },
     );
 
-    const main = page.getByRole("main");
     await control(main, "model-select").click();
     const menu = main.locator(".chat-controls__model-menu");
     await expect.poll(() => menu.isVisible()).toBe(true);
@@ -334,12 +304,9 @@ suite.define(() => {
         ".chat-controls__model-options",
         ":scope",
       ];
-      const containers = selectors.map((selector) => {
+      const containers = selectors.filter((selector) => {
         const element = selector === ":scope" ? root : root.querySelector<HTMLElement>(selector);
-        return {
-          overflow: Math.max(0, (element?.scrollWidth ?? 0) - (element?.clientWidth ?? 0)),
-          selector,
-        };
+        return (element?.scrollWidth ?? 0) - (element?.clientWidth ?? 0) > 1;
       });
       const leafStyles = [
         ".chat-controls__model-option-name",
@@ -347,38 +314,19 @@ suite.define(() => {
       ].map((selector) => {
         const element = root.querySelector<HTMLElement>(selector)!;
         const style = getComputedStyle(element);
-        return { overflowX: style.overflowX, selector, textOverflow: style.textOverflow };
+        return [style.overflowX, style.textOverflow];
       });
       return { containers, leafStyles };
     });
-    expect(
-      overflow.containers.filter((entry) => entry.overflow > 1),
-      JSON.stringify(overflow),
-    ).toEqual([]);
-    expect(overflow.leafStyles).toEqual(
-      [".chat-controls__model-option-name", ".chat-controls__model-option-meta"].map(
-        (selector) => ({
-          overflowX: "hidden",
-          selector,
-          textOverflow: "ellipsis",
-        }),
-      ),
-    );
-
-    const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactDirParent
-      ? createControlUiE2eArtifactDir("chat-flow.models-reasoning", artifactDirParent)
-      : undefined;
-    if (artifactDir) {
-      await menu.screenshot({
-        animations: "disabled",
-        path: `${artifactDir}/model-picker-long-content.png`,
-      });
-    }
+    expect(overflow.containers, JSON.stringify(overflow)).toEqual([]);
+    expect(overflow.leafStyles).toEqual([
+      ["hidden", "ellipsis"],
+      ["hidden", "ellipsis"],
+    ]);
   });
 
   it("keeps a session model override selected after switching away and back", async () => {
-    const { page, gateway } = await openChat(
+    const { page, gateway, main } = await openChat(
       {
         methodResponses: {
           "sessions.list": chatSessionListResponse(),
@@ -389,7 +337,6 @@ suite.define(() => {
       sessionA,
     );
 
-    const main = page.getByRole("main");
     const activePane = main.locator('openclaw-chat-pane[aria-hidden="false"]');
     const modelSelect = control(activePane, "model-select");
     const selectModel = async (value: string) => {
@@ -436,7 +383,7 @@ suite.define(() => {
       { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
       { id: "claude-opus-4-5", name: "Claude Opus 4.5", provider: "anthropic" },
     ];
-    const { page, gateway } = await openChat(
+    const { gateway, main } = await openChat(
       {
         assistantAgentId: "ops",
         defaultAgentId: "ops",
@@ -451,7 +398,6 @@ suite.define(() => {
       "agent:ops:session-a",
     );
 
-    const main = page.getByRole("main");
     const modelSelect = control(main, "model-select").first();
     await modelSelect.waitFor(visible);
     expect(await modelSelect.textContent()).toContain("Claude Opus 4.5");
@@ -491,7 +437,7 @@ suite.define(() => {
   });
 
   it("shows one canonical default model with matching inherited reasoning", async () => {
-    const { page, capture } = await createReasoningProofPage("chat-flow.models-reasoning");
+    const page = await newChatPage(suite);
     const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].map(
       (id) => ({ id, label: id }),
     );
@@ -542,7 +488,6 @@ suite.define(() => {
     const main = page.getByRole("main");
     const activePane = main.locator('openclaw-chat-pane[aria-hidden="false"]');
     const modelSelect = control(activePane, "model-select");
-    const modelPopup = activePane.locator(".chat-controls__model-picker > [data-anchored-overlay]");
     const modelOption = option(activePane, "openai/gpt-5.6-sol");
     const effortSelect = control(activePane, "thinking-select");
     const thinkingSlider = control(activePane, "thinking-slider");
@@ -551,7 +496,7 @@ suite.define(() => {
     await modelSelect.waitFor(visible);
     expect(await modelSelect.textContent()).toContain("GPT-5.6 Sol");
     expect(await modelSelect.textContent()).not.toContain("@openai:");
-    const captureProfile = async (name: string) => {
+    const inspectProfile = async () => {
       await modelSelect.click();
       await expect.poll(() => modelOption.count()).toBe(1);
       expect(
@@ -562,14 +507,13 @@ suite.define(() => {
       const value = await effortSelect.getAttribute("data-chat-thinking-value");
       await modelSelect.click();
       await revealChatModelOption(modelOption);
-      await capture(name, modelPopup, modelOption);
       return value;
     };
-    const defaultThinkingValue = await captureProfile("default-sol");
+    const defaultThinkingValue = await inspectProfile();
 
     await page.keyboard.press("Escape");
     await switchSession(page, activePane, "agent:main:session-explicit", "Explicit Sol");
-    expect(await captureProfile("explicit-sol")).toBe(defaultThinkingValue);
+    expect(await inspectProfile()).toBe(defaultThinkingValue);
 
     expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
   });
@@ -588,7 +532,7 @@ suite.define(() => {
       patch: { permissionMode: "full" },
     },
   ])("shows a pending send while a $label update is still pending", async (setting) => {
-    const { page, gateway } = await openChat(
+    const { page, gateway, main } = await openChat(
       {
         deferredMethods: ["sessions.patch"],
         methodResponses: {
@@ -605,7 +549,6 @@ suite.define(() => {
       sessionA,
     );
 
-    const main = page.getByRole("main");
     await main.locator(setting.trigger).click();
     if (setting.label === "model override") {
       await revealChatModelOption(main.locator(setting.option));
@@ -644,7 +587,7 @@ suite.define(() => {
       thinkingLevel: "high",
       thinkingLevels: ["off", "low", "medium", "high", "ultra"].map((id) => ({ id, label: id })),
     });
-    const { page, gateway } = await openChat(
+    const { page, gateway, main } = await openChat(
       {
         methodResponses: {
           "sessions.list": chatSessionListResponse([session]),
@@ -658,7 +601,6 @@ suite.define(() => {
       sessionKey,
     );
 
-    const main = page.getByRole("main");
     const modelPicker = control(main, "model-select").first();
     const effortPicker = control(main, "thinking-select").first();
     await effortPicker.click();
