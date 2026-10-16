@@ -12,14 +12,17 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import { bindPluginRegistryResourceOwner } from "../plugins/registry-lifecycle.js";
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
-import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeRegistryScope as withRegistry } from "../plugins/runtime/gateway-request-scope.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { createTranscriptsAutoStartService } from "./auto-start.js";
-import { prepareTranscriptCaptureDisable } from "./capture-startup.js";
-import type { TranscriptSourceProvider, TranscriptStartRequest } from "./provider-types.js";
+import { prepareTranscriptCaptureDisable as prepareDisable } from "./capture-startup.js";
+import type {
+  TranscriptSourceProvider as Provider,
+  TranscriptStartRequest as Start,
+} from "./provider-types.js";
 import {
   transcriptStatusRoom as room,
   useTranscriptStatusFixture,
@@ -27,6 +30,28 @@ import {
 import { TranscriptsStore } from "./store.js";
 
 const tempDirs = createTempDirTracker();
+const stopSuccessfully: NonNullable<Provider["stop"]> = async ({ sessionId }) => ({
+  ok: true,
+  sessionId,
+});
+function captureActions(tool: NonNullable<ReturnType<typeof createTranscriptsTool>>) {
+  return {
+    start: (params: Record<string, unknown>) =>
+      tool.execute("start", { action: "start", ...params }),
+    stop: (sessionId: string) => tool.execute("stop", { action: "stop", sessionId }),
+    status: async () => (await tool.execute("status", { action: "status" })).details,
+  };
+}
+function captureTools(stateDir: string, options: Parameters<typeof createTranscriptsTool>[0]) {
+  return {
+    ...captureActions(createTranscriptsTool({ ...options, stateDir })),
+    store: new TranscriptsStore(path.join(stateDir, "transcripts"), {
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    }),
+  };
+}
+const expectDisabled = (tool: Pick<ReturnType<typeof captureTools>, "start">) =>
+  expect(tool.start(room)).rejects.toThrow("transcripts are disabled");
 afterEach(async () => {
   vi.restoreAllMocks();
   await closeOpenClawStateDatabaseAsync();
@@ -44,11 +69,11 @@ describe("transcript provider cleanup custody", () => {
     "retains $owner cleanup after a $failure failure with provider $registryChange",
     async ({ owner, failure, registryChange }) => {
       const stateDir = tempDirs.make("transcript-stop-custody-");
-      const requests: TranscriptStartRequest[] = [];
+      const requests: Start[] = [];
       const registered = createDeferred();
       let subscribed = false;
       let failing = true;
-      const stop = vi.fn<NonNullable<TranscriptSourceProvider["stop"]>>(async ({ sessionId }) => {
+      const stop = vi.fn<NonNullable<Provider["stop"]>>(async ({ sessionId }) => {
         if (failing) {
           if (failure === "thrown") {
             throw new Error("cleanup unavailable");
@@ -58,7 +83,7 @@ describe("transcript provider cleanup custody", () => {
         subscribed = false;
         return { ok: true, sessionId };
       });
-      const provider: TranscriptSourceProvider = {
+      const provider: Provider = {
         id: "cleanup-capture",
         name: "Cleanup capture",
         sourceKinds: ["live-caption"],
@@ -71,8 +96,9 @@ describe("transcript provider cleanup custody", () => {
         stop,
       };
       const registry = createEmptyPluginRegistry();
+      const providers = registry.transcriptSourceProviders;
       const registration = { pluginId: provider.id, provider, source: import.meta.url };
-      registry.transcriptSourceProviders.push(registration);
+      providers.push(registration);
       const ctx = {
         stateDir,
         agentId: "main",
@@ -83,30 +109,20 @@ describe("transcript provider cleanup custody", () => {
         logger: { warn: vi.fn() },
         caller: { kind: "operator" as const, source: "local" as const },
       };
-      const tool = createTranscriptsTool(ctx);
+      const tool = captureTools(stateDir, ctx);
       const service = createTranscriptsAutoStartService(ctx);
-      const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      });
-      const replacementStop = vi.fn<NonNullable<TranscriptSourceProvider["stop"]>>(
-        async ({ sessionId }) => ({ ok: true, sessionId }),
-      );
-      await withPluginRuntimeRegistryScope(registry, async () => {
+      const { store } = tool;
+      const replacementStop = vi.fn(stopSuccessfully);
+      await withRegistry(registry, async () => {
         try {
           if (owner !== "tool") {
             service.start();
             await registered.promise;
             await vi.waitFor(async () =>
-              expect(await tool.execute("status", { action: "status" })).toMatchObject({
-                details: { active: [{ sessionId: "notes" }] },
-              }),
+              expect(await tool.status()).toMatchObject({ active: [{ sessionId: "notes" }] }),
             );
           } else {
-            await tool.execute("start", {
-              action: "start",
-              providerId: provider.id,
-              sessionId: "notes",
-            });
+            await tool.start({ providerId: provider.id, sessionId: "notes" });
           }
           const request = requests[0]!;
           await request.onUtterance({ text: "Saved before stop" });
@@ -116,16 +132,12 @@ describe("transcript provider cleanup custody", () => {
               .soft(ctx.logger.warn)
               .toHaveBeenCalledWith(expect.stringMatching(/stop failed.*cleanup unavailable/));
           } else {
-            await expect
-              .soft(tool.execute("stop", { action: "stop", sessionId: "notes" }))
-              .rejects.toThrow("cleanup unavailable");
+            await expect.soft(tool.stop("notes")).rejects.toThrow("cleanup unavailable");
           }
           expect.soft(subscribed).toBe(true);
-          await expect.soft(tool.execute("status", { action: "status" })).resolves.toMatchObject({
-            details: {
-              active: [{ sessionId: "notes", cleanupPending: true }],
-              pendingFinalization: [],
-            },
+          await expect.soft(tool.status()).resolves.toMatchObject({
+            active: [{ sessionId: "notes", cleanupPending: true }],
+            pendingFinalization: [],
           });
           expect.soft((await store.readSession("notes"))?.stoppedAt).toBeUndefined();
           await request.onUtterance({ text: "Too late after failed stop" });
@@ -134,24 +146,21 @@ describe("transcript provider cleanup custody", () => {
             .toEqual(["Saved before stop"]);
           if (registryChange === "removed") {
             ctx.config.plugins.enabled = false;
-            registry.transcriptSourceProviders.splice(0);
+            providers.splice(0);
           } else if (registryChange === "replaced") {
-            registry.transcriptSourceProviders[0] = {
+            providers[0] = {
               ...registration,
               provider: { ...provider, stop: replacementStop },
             };
           }
           failing = false;
-          if (owner !== "tool") {
-            await service.stop();
-          } else {
-            await tool.execute("retry-stop", { action: "stop", sessionId: "notes" });
-          }
+          await (owner !== "tool" ? service.stop() : tool.stop("notes"));
           expect.soft(stop).toHaveBeenCalledTimes(2);
           expect.soft(replacementStop).not.toHaveBeenCalled();
           expect.soft(subscribed).toBe(false);
-          await expect(tool.execute("status", { action: "status" })).resolves.toMatchObject({
-            details: { active: [], pendingFinalization: [] },
+          await expect(tool.status()).resolves.toMatchObject({
+            active: [],
+            pendingFinalization: [],
           });
           expect((await store.readSummary(request.session)).summary?.transcript).toEqual([
             "Saved before stop",
@@ -159,14 +168,10 @@ describe("transcript provider cleanup custody", () => {
         } finally {
           failing = false;
           ctx.config.plugins.enabled = true;
-          registry.transcriptSourceProviders.splice(
-            0,
-            registry.transcriptSourceProviders.length,
-            registration,
-          );
+          providers.splice(0, providers.length, registration);
           await service.stop();
           if (requests.length) {
-            await tool.execute("cleanup", { action: "stop", sessionId: "notes" });
+            await tool.stop("notes");
           }
         }
       });
@@ -175,7 +180,11 @@ describe("transcript provider cleanup custody", () => {
 });
 
 describe("live transcript capture policy", () => {
-  const fixture = useTranscriptStatusFixture();
+  const makeFixture = useTranscriptStatusFixture();
+  const fixture = (config?: Parameters<typeof makeFixture>[0]) => {
+    const f = makeFixture(config);
+    return { ...f, actions: captureActions(f.tool) };
+  };
   it("checks a revoked account against current config through a previously created tool", async () => {
     const config = {
       transcripts: { enabled: true },
@@ -183,11 +192,10 @@ describe("live transcript capture policy", () => {
     };
     setRuntimeConfigSnapshot(config);
     const f = fixture(config);
-    const authorize = vi.fn<NonNullable<TranscriptSourceProvider["accessControl"]>["authorize"]>(
-      async ({ cfg }) =>
-        cfg?.channels?.discord?.accounts?.work?.enabled === false
-          ? { ok: false, error: "capture account disabled" }
-          : { ok: true, value: undefined },
+    const authorize = vi.fn<NonNullable<Provider["accessControl"]>["authorize"]>(async ({ cfg }) =>
+      cfg?.channels?.discord?.accounts?.work?.enabled === false
+        ? { ok: false, error: "capture account disabled" }
+        : { ok: true, value: undefined },
     );
     f.provider.accessControl!.authorize = authorize;
     const start = vi.spyOn(f.provider, "start");
@@ -197,9 +205,7 @@ describe("live transcript capture policy", () => {
     };
     setRuntimeConfigSnapshot(current);
 
-    await expect(f.tool.execute("retained-tool", { action: "start", ...room })).rejects.toThrow(
-      "capture account disabled",
-    );
+    await expect(f.actions.start(room)).rejects.toThrow("capture account disabled");
     expect(authorize.mock.calls[0]?.[0].cfg).toBe(current);
     expect(start).not.toHaveBeenCalled();
   });
@@ -210,14 +216,11 @@ describe("live transcript capture policy", () => {
       const config = { transcripts: { enabled: true } };
       setRuntimeConfigSnapshot(config);
       const f = fixture(config);
-      const started = createDeferred<TranscriptStartRequest>();
+      const started = createDeferred<Start>();
       const releaseStart = createDeferred();
       const appendEntered = createDeferred();
       const releaseAppend = createDeferred();
-      const stop = vi.fn<NonNullable<typeof f.provider.stop>>(async ({ sessionId }) => ({
-        ok: true,
-        sessionId,
-      }));
+      const stop = vi.fn(stopSuccessfully);
       f.provider.stop = stop;
       f.provider.start = async (request) => {
         started.resolve(request);
@@ -230,17 +233,15 @@ describe("live transcript capture policy", () => {
         await releaseAppend.promise;
         return append(...args);
       });
-      const startup = f.start({ ...room, sessionId: "policy-capture" }).then(
-        (result) => result,
-        (error: unknown) => error,
-      );
+      const startup = f
+        .start({ ...room, sessionId: "policy-capture" })
+        .catch((error: unknown) => error);
       const request = await Promise.race([
         started.promise,
         startup.then((result) => {
-          if (result instanceof Error) {
-            throw result;
-          }
-          throw new Error("Capture startup settled without entering the fixture provider");
+          throw result instanceof Error
+            ? result
+            : new Error("Capture startup settled without entering the fixture provider");
         }),
       ]);
       if (phase === "active") {
@@ -250,12 +251,10 @@ describe("live transcript capture policy", () => {
       const accepted = Promise.resolve(request.onUtterance({ text: "Accepted before disable" }));
       await appendEntered.promise;
       const disabled = { transcripts: { enabled: false } };
-      const policy = prepareTranscriptCaptureDisable(f.ctx.stateDir);
+      const policy = prepareDisable(f.ctx.stateDir);
       const drained = policy.drain();
       try {
-        await expect(
-          f.tool.execute("start-during-drain", { action: "start", ...room }),
-        ).rejects.toThrow("transcripts are disabled");
+        await expectDisabled(f.actions);
         await request.onUtterance({ text: "Speech after disable" });
         expect(await f.store.readUtterancesForSession(request.session)).toEqual([]);
         releaseStart.resolve();
@@ -273,14 +272,12 @@ describe("live transcript capture policy", () => {
         );
         setRuntimeConfigSnapshot(disabled);
         policy.resume();
-        await expect(f.tool.execute("retained-tool", { action: "start", ...room })).rejects.toThrow(
-          "transcripts are disabled",
-        );
+        await expectDisabled(f.actions);
         setRuntimeConfigSnapshot(config);
-        await expect(
-          f.tool.execute("reenabled-tool", { action: "start", ...room, sessionId: "reenabled" }),
-        ).resolves.toMatchObject({ details: { sessionId: "reenabled" } });
-        await f.tool.execute("cleanup", { action: "stop", sessionId: "reenabled" });
+        await expect(f.actions.start({ ...room, sessionId: "reenabled" })).resolves.toMatchObject({
+          details: { sessionId: "reenabled" },
+        });
+        await f.actions.stop("reenabled");
       } finally {
         releaseStart.resolve();
         releaseAppend.resolve();
@@ -295,14 +292,14 @@ describe("live transcript capture policy", () => {
     const stop = vi.fn(f.provider.stop!);
     f.provider.stop = stop;
     await f.start({ ...room, sessionId: "configured" }, true);
-    const policy = prepareTranscriptCaptureDisable(f.ctx.stateDir);
+    const policy = prepareDisable(f.ctx.stateDir);
     try {
       await policy.drain();
       expect(stop).not.toHaveBeenCalled();
       expect((await f.store.readSession("configured"))?.stoppedAt).toBeUndefined();
     } finally {
       policy.resume();
-      await f.tool.execute("cleanup", { action: "stop", sessionId: "configured" });
+      await f.actions.stop("configured");
     }
   });
 
@@ -319,9 +316,9 @@ describe("live transcript capture policy", () => {
     });
     f.provider.stop = stop;
     await f.start({ ...room, sessionId: "user-stopping" });
-    const userStop = f.tool.execute("stop", { action: "stop", sessionId: "user-stopping" });
+    const userStop = f.actions.stop("user-stopping");
     await stopping.promise;
-    const policy = prepareTranscriptCaptureDisable(f.ctx.stateDir);
+    const policy = prepareDisable(f.ctx.stateDir);
     let drainComplete = false;
     const drained = policy.drain().then(() => {
       drainComplete = true;
@@ -342,20 +339,14 @@ describe("live transcript capture policy", () => {
   it("keeps each state directory fenced until its preparation resumes", async () => {
     const first = fixture();
     const second = fixture();
-    const policies = [first, second].map((f) => prepareTranscriptCaptureDisable(f.ctx.stateDir));
+    const policies = [first, second].map((f) => prepareDisable(f.ctx.stateDir));
     try {
       for (const f of [first, second]) {
-        await expect(f.tool.execute("start", { action: "start", ...room })).rejects.toThrow(
-          "transcripts are disabled",
-        );
+        await expectDisabled(f.actions);
       }
       policies[0]!.resume();
-      await expect(first.tool.execute("status", { action: "status" })).resolves.toMatchObject({
-        details: { active: [] },
-      });
-      await expect(second.tool.execute("start", { action: "start", ...room })).rejects.toThrow(
-        "transcripts are disabled",
-      );
+      await expect(first.actions.status()).resolves.toMatchObject({ active: [] });
+      await expectDisabled(second.actions);
     } finally {
       for (const policy of policies) {
         policy.resume();
@@ -381,9 +372,9 @@ it.each(["inspection", "prepared"] as const)(
     const instance = getPluginInstance(record)!;
     const disposed = vi.fn();
     instance.lifecycle.onDispose(disposed);
-    let request: TranscriptStartRequest | undefined;
+    let request: Start | undefined;
     let failStop = true;
-    const stop = vi.fn<NonNullable<TranscriptSourceProvider["stop"]>>(async ({ sessionId }) => {
+    const stop = vi.fn<NonNullable<Provider["stop"]>>(async ({ sessionId }) => {
       if (failStop) {
         throw new Error("caption transport stop failed");
       }
@@ -408,9 +399,9 @@ it.each(["inspection", "prepared"] as const)(
     owner.registry.plugins.push(siblingRecord);
     owner.createApi(siblingRecord, { config: {} }).registerTranscriptSourceProvider({
       id: siblingRecord.id,
-      aliases: [record.id],
       name: "Unrelated captions",
       sourceKinds: ["live-caption"],
+      aliases: [record.id],
       async start() {
         throw new Error("The unrelated source must not start");
       },
@@ -440,25 +431,15 @@ it.each(["inspection", "prepared"] as const)(
       releaseRegistry = release;
     }
     const agent = new PluginInvocationScope(registry, [instance, sibling], { retained: true });
-    const config = { transcripts: { enabled: true } };
-    const tool = createTranscriptsTool({
-      config,
-      stateDir,
+    const tool = captureTools(stateDir, {
+      config: { transcripts: { enabled: true } },
       caller: { kind: "operator", source: "local" },
     });
-    const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
-    let disabled: ReturnType<typeof prepareTranscriptCaptureDisable> | undefined;
+    const { store } = tool;
+    let disabled: ReturnType<typeof prepareDisable> | undefined;
     try {
-      await withPluginRuntimeRegistryScope(registry, () =>
-        agent.run(() =>
-          tool.execute("start", {
-            action: "start",
-            providerId: record.id,
-            sessionId: "retained-capture",
-          }),
-        ),
+      await withRegistry(registry, () =>
+        agent.run(() => tool.start({ providerId: record.id, sessionId: "retained-capture" })),
       );
       agent.release();
       await releaseRegistry();
@@ -466,7 +447,7 @@ it.each(["inspection", "prepared"] as const)(
       expect(sibling.retainedWorkCount).toBe(0);
       expect(instance.retainedWorkCount).toBeGreaterThan(0);
       await request!.onUtterance({ text: "Speech after the agent turn finished" });
-      disabled = prepareTranscriptCaptureDisable(stateDir);
+      disabled = prepareDisable(stateDir);
       await expect(disabled.drain()).rejects.toThrow("Transcript capture policy drainage failed");
       expect(disposed).not.toHaveBeenCalled();
       expect(instance.retainedWorkCount).toBeGreaterThan(0);
@@ -482,7 +463,7 @@ it.each(["inspection", "prepared"] as const)(
     } finally {
       failStop = false;
       agent.release();
-      disabled ??= prepareTranscriptCaptureDisable(stateDir);
+      disabled ??= prepareDisable(stateDir);
       await disabled.drain();
       disabled.resume();
       await releaseRegistry();

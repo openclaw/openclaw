@@ -5,8 +5,8 @@ import { setImmediate } from "node:timers/promises";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  TRANSCRIPTS_EXPORT_MAX_BYTES,
-  TRANSCRIPTS_RESULT_MAX_BYTES,
+  TRANSCRIPTS_EXPORT_MAX_BYTES as EXPORT_LIMIT,
+  TRANSCRIPTS_RESULT_MAX_BYTES as READ_LIMIT,
 } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -23,6 +23,7 @@ import {
   createTranscriptLibraryStoreFixture,
   transcriptLibrarySession as session,
 } from "./library.store.test-support.js";
+import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 import { deriveMeetingTranscriptSummaryColumns } from "./store-columns.js";
 import { meetingTranscriptDb } from "./store-sqlite.js";
 import { transcriptSessionSelector } from "./store.js";
@@ -49,19 +50,19 @@ function fixture() {
     ) => getTranscriptLibrary(store, { selector, ...params }),
     download: (selector: string, format: "markdown" | "jsonl") =>
       exportTranscriptLibrary(store, { selector, format }),
+    async seed(target: TranscriptSessionDescriptor, utterances: TranscriptUtterance[] = []) {
+      await store.writeSession(target);
+      for (const utterance of utterances) {
+        await store.appendUtteranceForSession(target, utterance);
+      }
+    },
+    summary: (target: TranscriptSessionDescriptor, utterances: TranscriptUtterance[]) =>
+      store.writeSummary(summarizeTranscripts({ session: target, utterances }), target),
   };
 }
 
 function contents(exported: { data: string }) {
   return Buffer.from(exported.data, "base64").toString("utf8");
-}
-
-async function saveSummary(
-  store: ReturnType<typeof fixture>["store"],
-  target: Parameters<typeof summarizeTranscripts>[0]["session"],
-  utterances: Parameters<typeof summarizeTranscripts>[0]["utterances"],
-) {
-  await store.writeSummary(summarizeTranscripts({ session: target, utterances }), target);
 }
 
 describe("transcript library SQLite reads", () => {
@@ -82,13 +83,13 @@ describe("transcript library SQLite reads", () => {
   });
 
   it("skips empty transcription artifacts without losing pagination or rewriting the archive", async () => {
-    const { store, get, download } = fixture();
+    const { store, get, download, seed } = fixture();
     const target = session("transcription-artifacts");
-    await store.writeSession(target);
     const texts = ["context:", "###", "Transcribe the audio.", "Context: ship the fix.", "はい。"];
-    for (const text of texts) {
-      await store.appendUtteranceForSession(target, { text });
-    }
+    await seed(
+      target,
+      texts.map((text) => ({ text })),
+    );
     let cursor: string | undefined;
     const visible: string[] = [];
     do {
@@ -180,15 +181,16 @@ describe("transcript library SQLite reads", () => {
   });
 
   it("preserves ID-only stored speakers across legacy reads, pages, and exports", async () => {
-    const { store, database, get, download } = fixture();
+    const { database, get, download, seed } = fixture();
     const target = session("speaker-id-only");
     const selector = transcriptSessionSelector(target);
-    await store.writeSession(target);
-    await store.appendUtteranceForSession(target, {
-      id: "speech-id",
-      text: "Saved speech",
-      speaker: { id: "speaker-id", label: "Stored label" },
-    });
+    await seed(target, [
+      {
+        id: "speech-id",
+        text: "Saved speech",
+        speaker: { id: "speaker-id", label: "Stored label" },
+      },
+    ]);
     const db = database();
     executeSqliteQuerySync(
       db,
@@ -196,7 +198,7 @@ describe("transcript library SQLite reads", () => {
         .updateTable("meeting_transcript_utterances")
         .set({
           speaker_label: null,
-          metadata_json: JSON.stringify({ private: "x".repeat(2 * TRANSCRIPTS_RESULT_MAX_BYTES) }),
+          metadata_json: JSON.stringify({ private: "x".repeat(2 * READ_LIMIT) }),
         })
         .where("session_id", "=", target.sessionId)
         .where("session_started_at", "=", target.startedAt),
@@ -262,7 +264,7 @@ describe("transcript library SQLite reads", () => {
   });
 
   it("preserves full canonical handles and pages/searches durable utterances without reading exports", async () => {
-    const { store, stateDir, list, get, download } = fixture();
+    const { store, stateDir, list, get, download, seed, summary } = fixture();
     const hidden = [
       "fixture-user-amber",
       "fixture-pass-cobalt",
@@ -286,7 +288,6 @@ describe("transcript library SQLite reads", () => {
       },
       metadata: { private: "not-for-ui" },
     });
-    await store.writeSession(target);
     const utterances = [
       {
         text: "First decision: approved.",
@@ -301,10 +302,8 @@ describe("transcript library SQLite reads", () => {
         metadata: { private: "not-for-ui" },
       },
     ];
-    for (const utterance of utterances) {
-      await store.appendUtteranceForSession(target, utterance);
-    }
-    await saveSummary(store, target, utterances);
+    await seed(target, utterances);
+    await summary(target, utterances);
     // Reopen a raw legacy-shaped URL row without Doctor or read-time normalization.
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
@@ -379,12 +378,10 @@ describe("transcript library SQLite reads", () => {
   });
 
   it("rejects malformed and cross-filter, cross-transcript or cross-method cursors", async () => {
-    const { store, list, get } = fixture();
+    const { list, get, seed } = fixture();
     for (const id of ["one", "two"]) {
       const target = session(id);
-      await store.writeSession(target);
-      await store.appendUtteranceForSession(target, { text: "a" });
-      await store.appendUtteranceForSession(target, { text: "b" });
+      await seed(target, [{ text: "a" }, { text: "b" }]);
     }
     const listed = await list({ limit: 1 });
     const selector = listed.sessions[0]!.selector;
@@ -401,18 +398,20 @@ describe("transcript library SQLite reads", () => {
   it.each(["structured-only", "markdown-only"] as const)(
     "exports full canonical content with %s notes even when the stored summary covers only a tail",
     async (notesKind) => {
-      const { store, stateDir, database, get, download } = fixture();
+      const { store, stateDir, database, get, download, seed, summary } = fixture();
       const target = session("download");
-      await store.writeSession(target);
-      await store.appendUtteranceForSession(target, {
-        text: "Opening context",
-        id: "utterance-1",
-        speaker: { label: "Alex", id: "speaker-1" },
-        startedAt: "2026-08-20T10:01:00.000Z",
-        metadata: { recordingPath: "/private/provider/audio.wav", private: "provider-only" },
-      });
-      await store.appendUtteranceForSession(target, { text: "Action: verify downloads" });
-      await saveSummary(store, target, [{ text: "Action: verify downloads" }]);
+      const action = { text: "Action: verify downloads" };
+      await seed(target, [
+        {
+          text: "Opening context",
+          id: "utterance-1",
+          speaker: { label: "Alex", id: "speaker-1" },
+          startedAt: "2026-08-20T10:01:00.000Z",
+          metadata: { recordingPath: "/private/provider/audio.wav", private: "provider-only" },
+        },
+        action,
+      ]);
+      await summary(target, [action]);
       const canonicalMarkdown =
         "# Historical notes\r\n\r\nKeep this exact historical decision.\r\n";
       const db = database();
@@ -470,24 +469,24 @@ describe("transcript library SQLite reads", () => {
     expect((await get(selector)).summary).toBeUndefined();
     expect(contents(await download(selector, "markdown"))).not.toContain("## Overview");
     await store.appendUtteranceForSession(target, {
-      text: "x".repeat(TRANSCRIPTS_RESULT_MAX_BYTES + 1),
+      text: "x".repeat(READ_LIMIT + 1),
     });
     await expect(get(selector, { includeUtterances: true, limit: 50 })).rejects.toThrow(
       expect.objectContaining({ type: "transcript_result_too_large" }),
     );
     for (const format of ["jsonl", "markdown"] as const) {
       const exported = await download(selector, format);
-      expect(exported.sizeBytes).toBeGreaterThan(TRANSCRIPTS_RESULT_MAX_BYTES);
-      expect(exported.sizeBytes).toBeLessThan(TRANSCRIPTS_EXPORT_MAX_BYTES);
+      expect(exported.sizeBytes).toBeGreaterThan(READ_LIMIT);
+      expect(exported.sizeBytes).toBeLessThan(EXPORT_LIMIT);
     }
     await store.appendUtteranceForSession(target, {
-      text: "x".repeat(TRANSCRIPTS_EXPORT_MAX_BYTES),
+      text: "x".repeat(EXPORT_LIMIT),
     });
     for (const format of ["jsonl", "markdown"] as const) {
       await expect(download(selector, format)).rejects.toThrow(
         expect.objectContaining({
           type: "transcript_export_too_large",
-          maxBytes: TRANSCRIPTS_EXPORT_MAX_BYTES,
+          maxBytes: EXPORT_LIMIT,
         }),
       );
     }
@@ -500,36 +499,36 @@ describe("transcript library asynchronous reads", () => {
   it.each(["list", "get", "export"] as const)(
     "keeps a delayed composed %s response coherent after a peer update",
     async (kind) => {
-      const { store, list, get, download } = fixture();
+      const { store, list, get, download, seed, summary } = fixture();
       const target = session("delayed-read", { title: "Original meeting" });
       const utterance = { text: "Original saved note" };
-      await store.writeSession(target);
-      await store.appendUtteranceForSession(target, utterance);
-      await saveSummary(store, target, [utterance]);
+      await seed(target, [utterance]);
+      await summary(target, [utterance]);
       const selector = transcriptSessionSelector(target);
       const gate = createDeferred();
       const reading = createDeferred();
-      async function delay<T>(snapshot: Promise<T>): Promise<T> {
-        const value = await snapshot;
-        reading.resolve();
-        await gate.promise;
-        return value;
+      function delayed<T extends (...args: never[]) => Promise<unknown>>(operation: T): T {
+        return new Proxy(operation, {
+          async apply(invoke, receiver, args) {
+            const snapshot = await Reflect.apply(invoke, receiver, args);
+            reading.resolve();
+            await gate.promise;
+            return snapshot;
+          },
+        });
       }
       if (kind === "list") {
-        const read = store.listReadEntries.bind(store);
         vi.spyOn(store, "listReadEntries").mockImplementationOnce(
-          new Proxy(read, {
-            apply: (operation, receiver, args) => delay(Reflect.apply(operation, receiver, args)),
-          }),
+          delayed(store.listReadEntries.bind(store)),
         );
       } else if (kind === "get") {
-        const read = store.readLibraryEntry.bind(store);
-        vi.spyOn(store, "readLibraryEntry").mockImplementationOnce((...args) =>
-          delay(read(...args)),
+        vi.spyOn(store, "readLibraryEntry").mockImplementationOnce(
+          delayed(store.readLibraryEntry.bind(store)),
         );
       } else {
-        const stream = store.streamExport.bind(store);
-        vi.spyOn(store, "streamExport").mockImplementationOnce((...args) => delay(stream(...args)));
+        vi.spyOn(store, "streamExport").mockImplementationOnce(
+          delayed(store.streamExport.bind(store)),
+        );
       }
       const read = async () =>
         kind === "list"
@@ -546,9 +545,8 @@ describe("transcript library asynchronous reads", () => {
         await reading.promise;
         await setImmediate();
         expect(settled).not.toHaveBeenCalled();
-        await store.writeSession(replacement);
-        await store.appendUtteranceForSession(replacement, added);
-        await saveSummary(store, replacement, [utterance, added]);
+        await seed(replacement, [added]);
+        await summary(replacement, [utterance, added]);
       } finally {
         gate.resolve();
         await settlement;
