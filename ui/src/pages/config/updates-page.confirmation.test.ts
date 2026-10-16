@@ -65,7 +65,7 @@ it.each(["loading", "open"] as const)(
     );
     const updateButton = () => {
       const button = [...mounted.container.querySelectorAll<HTMLButtonElement>("button")].find(
-        (candidate) => candidate.textContent?.trim() === "Update now",
+        (candidate) => candidate.textContent?.trim() === "Update Gateway…",
       );
       expect(button).toBeDefined();
       expect(button!.disabled).toBe(false);

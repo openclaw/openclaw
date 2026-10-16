@@ -14,6 +14,7 @@ import type { NativeDeviceSettingsCapability } from "../../app/native-device-set
 import type { UpdateFailureReportNotice } from "../../app/overlays-types.ts";
 import {
   formatUpdateCampaignLabel,
+  formatUpdateTargetLabel,
   getUpdateGitComparison,
   isUpdateActionable,
 } from "../../app/update-schedule-projection.ts";
@@ -76,7 +77,7 @@ function DeviceUpdates(props: { capability?: NativeDeviceSettingsCapability | nu
             title={t("updates.device.check")}
             control={
               <button
-                class="btn btn--sm"
+                class="btn primary"
                 type="button"
                 onClick={() => props.capability!.checkForUpdates()}
               >
@@ -478,6 +479,18 @@ export function Updates(props: UpdatesViewProps) {
         : checkRequired()
           ? t("updates.page.checkRequired")
           : "";
+  const gatewayUpdateDescription = () => {
+    if (formatUpdateTargetLabel(props.update.updateSchedule, props.update.updateAvailable)) {
+      return t("updates.page.updateNowDescription");
+    }
+    if (props.update.updateStatusRefreshing || props.update.updateStatusCheckBanner) {
+      return t("updates.page.updateStatusUnknownDescription");
+    }
+    const install = props.update.updateSchedule?.install;
+    return install?.kind === "package" || install?.git?.status === "current"
+      ? t("updates.page.reinstallDescription")
+      : t("updates.page.updateStatusUnknownDescription");
+  };
   return (
     <div id="config-section-update">
       <SettingsPage>
@@ -638,11 +651,11 @@ export function Updates(props: UpdatesViewProps) {
           </Show>
           <SettingsRow
             title={t("updates.page.updateNow")}
-            description={t("updates.page.updateNowDescription")}
+            description={gatewayUpdateDescription()}
             control={
               <button
                 type="button"
-                class="btn primary"
+                class="btn"
                 title={updateButtonTitle()}
                 disabled={
                   props.updateBusy ||

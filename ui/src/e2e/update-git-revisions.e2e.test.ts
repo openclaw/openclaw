@@ -79,7 +79,7 @@ suite.define(() => {
               path: path.join(proofDir, `refreshed-status-${width}.png`),
             });
           }
-          await page.getByRole("button", { name: "Update now", exact: true }).click();
+          await page.getByRole("button", { name: "Update Gateway…", exact: true }).click();
           await page.getByRole("dialog", { name: "Update Gateway", exact: true }).waitFor();
           const modal = page.locator("openclaw-modal-dialog");
           await page.screenshot({

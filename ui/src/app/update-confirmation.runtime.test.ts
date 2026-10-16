@@ -87,6 +87,17 @@ function startUpdate(
   return { settled, startGatewayUpdate };
 }
 
+it.each([
+  { updateAvailable: UPDATE_AVAILABLE, message: "Installs the available update" },
+  { updateAvailable: null, message: "The current version may be reinstalled." },
+])("describes the Gateway confirmation for $message", async ({ updateAvailable, message }) => {
+  const { settled } = startUpdate({ updateAvailable });
+  const { modal } = await getRenderedModalDialog(document.body);
+  expect(modal.textContent).toContain(message);
+  findButton("Cancel").click();
+  await settled;
+});
+
 beforeEach(() => {
   restoreDialogPolyfill = installDialogPolyfill();
   originalWebkit = Object.getOwnPropertyDescriptor(window, "webkit");

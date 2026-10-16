@@ -142,7 +142,7 @@ suite.define(() => {
           const updateRuns = () => traffic.filter(({ method }) => method === "update.run");
           expect((await page.goto(`${suite.server.baseUrl}settings/updates`))?.status()).toBe(200);
           await gateway.waitForRequest("update.status");
-          await page.getByRole("button", { name: "Update now", exact: true }).waitFor();
+          await page.getByRole("button", { name: "Update Gateway…", exact: true }).waitFor();
           if (source === "automatic") {
             const now = Date.now();
             await gateway.emitGatewayEvent("update.available", {
@@ -159,7 +159,7 @@ suite.define(() => {
             });
             await page.getByText("Applying update…", { exact: true }).waitFor();
           } else {
-            await page.getByRole("button", { name: "Update now", exact: true }).click();
+            await page.getByRole("button", { name: "Update Gateway…", exact: true }).click();
             await page
               .locator("openclaw-modal-dialog")
               .getByRole("button", { name: "Update and restart", exact: true })

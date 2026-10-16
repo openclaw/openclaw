@@ -159,7 +159,11 @@ export async function confirmAndStartUpdateRuntime(
           }
         : {
             confirmLabel: t("updates.confirm.action"),
-            message: t("updates.confirm.message"),
+            message: t(
+              formatUpdateTargetLabel(updateSchedule, updateAvailable)
+                ? "updates.confirm.message"
+                : "updates.confirm.noKnownUpdateMessage",
+            ),
             title: t("chat.sidebar.updateGateway"),
           };
 

@@ -33,7 +33,7 @@ describe("renderUpdates", () => {
       props: { update: { updateStatusRefreshing: true } },
       status: "Checking for updates…",
       tone: "muted",
-      label: "Update now",
+      label: "Update Gateway…",
       disabled: true,
       title: "Checking for updates…",
     },
@@ -59,7 +59,7 @@ describe("renderUpdates", () => {
       },
       status: "Could not check for updates: timeout",
       tone: "warn",
-      label: "Update now",
+      label: "Update Gateway…",
       disabled: false,
       title: "",
     },
@@ -83,7 +83,7 @@ describe("renderUpdates", () => {
       },
       status: "Could not check for updates: timeout",
       tone: "warn",
-      label: "Update now",
+      label: "Update Gateway…",
       disabled: false,
       title: "",
     },
@@ -110,7 +110,7 @@ describe("renderUpdates", () => {
       },
       status: "Could not check for updates: timeout",
       tone: "warn",
-      label: "Update now",
+      label: "Update Gateway…",
       disabled: false,
       title: "",
     },
@@ -129,7 +129,7 @@ describe("renderUpdates", () => {
       },
       status: "Could not check for updates: timeout",
       tone: "warn",
-      label: "Update now",
+      label: "Update Gateway…",
       disabled: true,
       title: "Check for updates successfully before starting an update.",
     },
@@ -143,7 +143,7 @@ describe("renderUpdates", () => {
       },
       status: "Up to date",
       tone: "ok",
-      label: "Update now",
+      label: "Update Gateway…",
       disabled: false,
       title: "",
     },
@@ -152,7 +152,7 @@ describe("renderUpdates", () => {
       props: {},
       status: "Update available v2026.8.2",
       tone: "accent",
-      label: "Update now",
+      label: "Update Gateway…",
       disabled: false,
       title: "",
     },
@@ -163,7 +163,7 @@ describe("renderUpdates", () => {
       },
       status: "Update error: build failed",
       tone: "danger",
-      label: "Update now",
+      label: "Update Gateway…",
       disabled: false,
       title: "",
     },
@@ -201,7 +201,7 @@ describe("renderUpdates", () => {
     expect(statusRow.querySelector(".settings-status")?.className).toBe(
       tone === "muted" ? "settings-status" : `settings-status settings-status--${tone}`,
     );
-    const button = row("Update now").querySelector<HTMLButtonElement>("button")!;
+    const button = row("Update Gateway…").querySelector<HTMLButtonElement>("button")!;
     expect(button.textContent?.trim()).toBe(label);
     expect(button.disabled).toBe(disabled);
     expect(button.title).toBe(title);
@@ -236,6 +236,36 @@ describe("renderUpdates", () => {
     },
   );
 
+  it.each([
+    {
+      name: "available",
+      update: {},
+      description: "Install the available update and restart the Gateway.",
+    },
+    {
+      name: "up to date",
+      update: {
+        updateSchedule: {
+          channel: "stable" as const,
+          autoEnabled: false,
+          install: { kind: "package" as const },
+        },
+        updateAvailable: null,
+      },
+      description: "Reinstall the current Gateway version and restart.",
+    },
+    {
+      name: "status unavailable",
+      update: { updateSchedule: null, updateAvailable: null },
+      description: "Run the Gateway updater and restart; update availability is unknown.",
+    },
+  ])("identifies the Gateway action and its $name outcome", ({ update, description }) => {
+    mountUpdates(createProps({ update }));
+    const action = row("Update Gateway…");
+    expect(action.textContent).toContain(description);
+    expect(action.querySelector("button")?.classList.contains("primary")).toBe(false);
+  });
+
   it.each(["ios", "waiting"])(
     "keeps Gateway updates without an advertised device updater: %s",
     (host) => {
@@ -259,7 +289,7 @@ describe("renderUpdates", () => {
       expect(container.textContent).not.toContain("App version");
       expect(container.textContent).not.toContain("Check for updates automatically");
       expect(row("Gateway version").textContent).toContain("2026.8.1");
-      row("Update now").querySelector<HTMLButtonElement>("button")?.click();
+      row("Update Gateway…").querySelector<HTMLButtonElement>("button")?.click();
       expect(props.onUpdateNow).toHaveBeenCalledOnce();
       expect(nativeDeviceSettings.checkForUpdates).not.toHaveBeenCalled();
     },
@@ -295,7 +325,9 @@ describe("renderUpdates", () => {
     automatic.checked = false;
     automatic.dispatchEvent(new Event("change"));
     expect(nativeDeviceSettings.set).toHaveBeenCalledWith("updates.automatic", false);
-    row("Check for Updates…").querySelector("button")?.click();
+    const appUpdateButton = row("Check for Updates…").querySelector<HTMLButtonElement>("button")!;
+    expect(appUpdateButton.classList.contains("primary")).toBe(true);
+    appUpdateButton.click();
     expect(nativeDeviceSettings.checkForUpdates).toHaveBeenCalledOnce();
     nativeDeviceSettings.snapshot = {
       ...nativeDeviceSettings.snapshot,
@@ -359,7 +391,7 @@ describe("renderUpdates", () => {
     automatic.dispatchEvent(new Event("change"));
     expect(onAutomaticUpdatesChange).toHaveBeenCalledWith(true);
 
-    row("Update now").querySelector<HTMLButtonElement>("button")?.click();
+    row("Update Gateway…").querySelector<HTMLButtonElement>("button")?.click();
     expect(onUpdateNow).toHaveBeenCalledOnce();
 
     mountUpdates(
@@ -973,7 +1005,7 @@ describe("renderUpdates", () => {
     expect(
       row("Check for updates").querySelector('input[role="switch"]')?.hasAttribute("disabled"),
     ).toBe(true);
-    expect(row("Update now").querySelector<HTMLButtonElement>("button")?.disabled).toBe(true);
+    expect(row("Update Gateway…").querySelector<HTMLButtonElement>("button")?.disabled).toBe(true);
     expect(row("Status").querySelector("button")).toBeNull();
     expect(row("Gateway version").textContent).toContain("2026.8.1");
   });

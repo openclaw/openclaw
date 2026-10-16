@@ -901,8 +901,11 @@ const enSettings = {
       checking: "Checking for updates…",
       checkRequired: "Check for updates successfully before starting an update.",
       updating: "Updating…",
-      updateNow: "Update now",
+      updateNow: "Update Gateway…",
       updateNowDescription: "Install the available update and restart the Gateway.",
+      reinstallDescription: "Reinstall the current Gateway version and restart.",
+      updateStatusUnknownDescription:
+        "Run the Gateway updater and restart; update availability is unknown.",
       latestAttempt: "Latest update attempt",
       attemptedAt: "Attempted",
       beforeUpdate: "Before update",
