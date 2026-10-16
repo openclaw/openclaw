@@ -21,6 +21,16 @@ const request = {
   argv: ["openclaw-internal-workspace-seed"],
 };
 const key = "a".repeat(64);
+const seed = { action: "apply", key };
+const download = { direction: "download", token: "token", manifestRef: `sha256:${key}` };
+const upload = {
+  direction: "upload",
+  token: "token",
+  baseManifestRef: `sha256:${key}`,
+  referenceManifestRef: `sha256:${"b".repeat(64)}`,
+};
+const deviceFolder = "/projects/example";
+const validation = { deviceFolder, argv: [NODE_WORKSPACE_VALIDATE_DEVICE_FOLDER_COMMAND] };
 const completedResult = {
   workspaceDir: "/workspace",
   stdout: "",
@@ -32,6 +42,11 @@ const completedResult = {
 };
 const parse = (fields: Record<string, unknown>) =>
   parseNodeWorkerWorkspaceExecInput(JSON.stringify({ ...request, ...fields }));
+function rejects(fields: Record<string, unknown>[], reason?: string, base = {}) {
+  for (const field of fields) {
+    expect(() => parse({ ...base, ...field })).toThrow(reason);
+  }
+}
 
 it("preserves admitted host results but rejects malformed or inherited fields", () => {
   for (const workspaceDir of ["/workspace", "C:\\workspace"]) {
@@ -78,110 +93,76 @@ it.each([
   {
     command: NODE_WORKSPACE_DRAIN_COMMAND,
     owner: "drain",
-    mutations: [
-      { input: "payload" },
-      { resetWorkspace: true },
-      { seed: { action: "apply", key } },
-      { transfer: { direction: "download", token: "token", manifestRef: `sha256:${key}` } },
-    ],
+    mutations: [{ input: "payload" }, { resetWorkspace: true }, { seed }, { transfer: download }],
   },
   {
     command: WORKSPACE_INSPECTION_COMMAND,
     owner: "inspection",
-    mutations: [
-      { resetWorkspace: false },
-      { seed: { action: "apply", key } },
-      {
-        transfer: {
-          direction: "upload",
-          token: "token",
-          baseManifestRef: `sha256:${key}`,
-          referenceManifestRef: `sha256:${key}`,
-        },
-      },
-    ],
+    mutations: [{ resetWorkspace: false }, { seed }, { transfer: upload }],
   },
 ])(
   "admits $owner only without conflicting operation authority",
   ({ command, owner, mutations }) => {
     const operation = { argv: [command] };
     expect(parse(operation)).toEqual({ ...request, ...operation });
-    for (const mutation of [{ argv: [command, "extra"] }, ...mutations]) {
-      expect(() => parse({ ...operation, ...mutation })).toThrow(
-        `workspace ${owner} owns its operation`,
-      );
-    }
+    rejects(
+      [{ argv: [command, "extra"] }, ...mutations],
+      `workspace ${owner} owns its operation`,
+      operation,
+    );
   },
 );
 
 it("admits prepared seeds only for downloads and requires an independent upload reference", () => {
-  const download = {
-    direction: "download",
-    token: "token",
-    manifestRef: `sha256:${key}`,
-    seedKey: key,
-  };
-  const upload = {
-    direction: "upload",
-    token: "token",
-    baseManifestRef: `sha256:${key}`,
-    referenceManifestRef: `sha256:${"b".repeat(64)}`,
-  };
-  for (const transfer of [download, upload]) {
+  const seededDownload = { ...download, seedKey: key };
+  for (const transfer of [seededDownload, upload]) {
     expect(parse({ transfer }).transfer).toEqual(transfer);
   }
   for (const transfer of [
-    { ...download, seedKey: "../outside" },
-    { ...download, seedKey: "A".repeat(64) },
-    { ...download, attachments: true },
+    { ...seededDownload, seedKey: "../outside" },
+    { ...seededDownload, seedKey: "A".repeat(64) },
+    { ...seededDownload, attachments: true },
     { ...upload, seedKey: key },
   ]) {
     expect(() => parse({ transfer })).toThrow("INVALID_REQUEST:");
   }
-  for (const referenceManifestRef of [
-    undefined,
-    null,
-    "",
-    "../outside",
-    `sha256:${"B".repeat(64)}`,
-  ]) {
-    expect(() => parse({ transfer: { ...upload, referenceManifestRef } })).toThrow(
-      "workspace transfer is invalid",
-    );
-  }
+  rejects(
+    [undefined, null, "", "../outside", `sha256:${"B".repeat(64)}`].map((referenceManifestRef) => ({
+      transfer: { ...upload, referenceManifestRef },
+    })),
+    "workspace transfer is invalid",
+  );
 });
 
 it("admits only closed seed operations with bounded age and exclusive mutation ownership", () => {
-  for (const seed of [
-    { action: "apply", key },
+  for (const operation of [
+    seed,
     { action: "store", key, maxAgeMs: 0 },
     { action: "store", key, maxAgeMs: Number.MAX_SAFE_INTEGER },
   ]) {
-    expect(parse({ seed })).toEqual({ ...request, seed });
+    expect(parse({ seed: operation })).toEqual({ ...request, seed: operation });
   }
-  for (const fields of [
-    ...[
-      { action: "apply", key: "../outside" },
-      { action: "apply", key: "A".repeat(64) },
-      { action: "remove", key },
-      { action: "apply", key, maxAgeMs: 0 },
-      { action: "store", key, maxAgeMs: 0, extra: true },
-      { action: "store", key },
-      ...[-1, Number.MAX_SAFE_INTEGER + 1, 0.5].map((maxAgeMs) => ({
-        action: "store",
-        key,
-        maxAgeMs,
-      })),
-    ].map((seed) => ({ seed })),
-    { seed: { action: "apply", key }, resetWorkspace: true },
-    { seed: { action: "apply", key }, resetWorkspace: false },
-    {
-      seed: { action: "store", key, maxAgeMs: 0 },
-      transfer: { direction: "download", token: "transfer-token", manifestRef: `sha256:${key}` },
-    },
-  ]) {
-    expect(() => parse(fields)).toThrow("INVALID_REQUEST:");
-  }
+  rejects(
+    [
+      ...[
+        { action: "apply", key: "../outside" },
+        { action: "apply", key: "A".repeat(64) },
+        { action: "remove", key },
+        { action: "apply", key, maxAgeMs: 0 },
+        { action: "store", key, maxAgeMs: 0, extra: true },
+        { action: "store", key },
+        ...[-1, Number.MAX_SAFE_INTEGER + 1, 0.5].map((maxAgeMs) => ({
+          action: "store",
+          key,
+          maxAgeMs,
+        })),
+      ].map((operation) => ({ seed: operation })),
+      { seed, resetWorkspace: true },
+      { seed, resetWorkspace: false },
+      { seed: { action: "store", key, maxAgeMs: 0 }, transfer: download },
+    ],
+    "INVALID_REQUEST:",
+  );
 });
 
 it("allows larger bounded inspection payloads without widening ordinary command limits", () => {
@@ -237,17 +218,19 @@ it("admits bounded quiescence lifecycle operations without an arbitrary command"
   ]) {
     const input = { argv, quiescence };
     expect(parse(input)).toEqual({ ...request, ...input });
-    for (const invalid of [
-      { argv: ["node", "-e", "arbitrary script"] },
-      { input: "payload" },
-      { resetWorkspace: false },
-      { seed: { action: "apply", key } },
-      { process: { action: "start", processId: "app" } },
-      { quiescence: { ...quiescence, nonce: "../other-lease" } },
-      { quiescence: { action: "acquire", nonce, timeoutMs: 720_001 } },
-    ]) {
-      expect(() => parse({ ...input, ...invalid })).toThrow();
-    }
+    rejects(
+      [
+        { argv: ["node", "-e", "arbitrary script"] },
+        { input: "payload" },
+        { resetWorkspace: false },
+        { seed },
+        { process: { action: "start", processId: "app" } },
+        { quiescence: { ...quiescence, nonce: "../other-lease" } },
+        { quiescence: { action: "acquire", nonce, timeoutMs: 720_001 } },
+      ],
+      undefined,
+      input,
+    );
   }
   expect(() => parse({ argv })).toThrow("quiescence owns its operation");
 });
@@ -256,39 +239,33 @@ it("keeps foreground ownership opt-in and rejects combining operation owners", (
   const foreground = { argv: ["node", "-e", "0"] };
   expect(parse(foreground)).toEqual({ ...request, ...foreground });
   expect(parse({ ...foreground, nativeProcessOwner: true }).nativeProcessOwner).toBe(true);
-  for (const conflicting of [
-    { nativeProcessOwner: false },
-    { nativeProcessOwner: true, process: { action: "start", processId: "app" } },
-    { nativeProcessOwner: true, seed: { action: "apply", key } },
-    {
-      nativeProcessOwner: true,
-      argv: [NODE_WORKSPACE_QUIESCENCE_COMMAND, "/workspace"],
-      quiescence: { action: "release", nonce: "a".repeat(32) },
-    },
-  ]) {
-    expect(() => parse({ ...foreground, ...conflicting })).toThrow();
-  }
+  rejects(
+    [
+      { nativeProcessOwner: false },
+      { nativeProcessOwner: true, process: { action: "start", processId: "app" } },
+      { nativeProcessOwner: true, seed },
+      {
+        nativeProcessOwner: true,
+        argv: [NODE_WORKSPACE_QUIESCENCE_COMMAND, "/workspace"],
+        quiescence: { action: "release", nonce: "a".repeat(32) },
+      },
+    ],
+    undefined,
+    foreground,
+  );
 });
 
 it("preserves device-folder requests and rejects managed mutations and malformed validation", () => {
-  expect(
-    parse({
-      deviceFolder: "/projects/example",
-      argv: [NODE_WORKSPACE_VALIDATE_DEVICE_FOLDER_COMMAND],
-    }).deviceFolder,
-  ).toBe("/projects/example");
-  for (const extra of [
-    { deviceFolder: "" },
-    { deviceFolder: "/projects/example", resetWorkspace: false },
-    { deviceFolder: "/projects/example", seed: { action: "apply", key } },
-    { deviceFolder: "/projects/example", preparationKey: key },
-    { argv: [NODE_WORKSPACE_VALIDATE_DEVICE_FOLDER_COMMAND] },
-    {
-      deviceFolder: "/projects/example",
-      argv: [NODE_WORKSPACE_VALIDATE_DEVICE_FOLDER_COMMAND],
-      input: "x",
-    },
-  ]) {
-    expect(() => parse(extra)).toThrow("INVALID_REQUEST");
-  }
+  expect(parse(validation).deviceFolder).toBe(deviceFolder);
+  rejects(
+    [
+      { deviceFolder: "" },
+      { deviceFolder, resetWorkspace: false },
+      { deviceFolder, seed },
+      { deviceFolder, preparationKey: key },
+      { argv: [NODE_WORKSPACE_VALIDATE_DEVICE_FOLDER_COMMAND] },
+      { ...validation, input: "x" },
+    ],
+    "INVALID_REQUEST",
+  );
 });

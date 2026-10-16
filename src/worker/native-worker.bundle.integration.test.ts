@@ -1,12 +1,7 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { copyFile, mkdir, readFile, readdir } from "node:fs/promises";
-import {
-  createServer,
-  type IncomingHttpHeaders,
-  type Server,
-  type ServerResponse,
-} from "node:http";
+import { createServer, type Server } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -30,7 +25,13 @@ import {
   workerBundleArchiveRelativePath,
 } from "../shared/worker-bundle-hash.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { nodeWorkerBundleTransferPath } from "./node-bundle-install-protocol.js";
+import {
+  closeNativeServers,
+  expectNativeRequests,
+  expectNoProxyInference,
+  listenNativeServer,
+  nativeProviderFixture,
+} from "./native-worker.test-support.js";
 import { nodeWorkerPlanHash, type NodeWorkerLaunchInput } from "./node-supervisor-protocol.js";
 import {
   ComposedGatewayHarness,
@@ -54,12 +55,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     try {
       await supervisor?.close();
       supervisor = undefined;
-      for (const server of servers.splice(0)) {
-        server.closeAllConnections();
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
-      }
+      await closeNativeServers(servers);
       await gateway?.close();
       gateway = undefined;
     } finally {
@@ -71,86 +67,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-async function listen(server: Server): Promise<number> {
-  servers.push(server);
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Expected a loopback TCP fixture");
-  }
-  return address.port;
-}
-
-function frame(response: ServerResponse, delta: object, finish: string | null = null) {
-  response.write(
-    "data: " +
-      JSON.stringify({
-        id: "bundled-native-response",
-        object: "chat.completion.chunk",
-        created: 1,
-        model: MODEL.model,
-        choices: [{ index: 0, delta, finish_reason: finish }],
-        ...(finish ? { usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 } } : {}),
-      }) +
-      "\n\n",
-  );
-}
-
-async function providerFixture(effectPath: string) {
-  const requests: Array<{
-    headers: IncomingHttpHeaders;
-    body: Record<string, unknown>;
-    url?: string;
-  }> = [];
-  const errors: unknown[] = [];
-  const server = createServer((request, response) => {
-    void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.from(chunk));
-      }
-      requests.push({
-        headers: request.headers,
-        body: JSON.parse(Buffer.concat(chunks).toString()),
-        url: request.url,
-      });
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      if (requests.length === 1) {
-        frame(response, {
-          role: "assistant",
-          tool_calls: [
-            {
-              index: 0,
-              id: "bundled-write",
-              type: "function",
-              function: {
-                name: "write",
-                arguments: JSON.stringify({ path: effectPath, content: EFFECT }),
-              },
-            },
-          ],
-        });
-        frame(response, {}, "tool_calls");
-      } else {
-        frame(response, { role: "assistant", content: FINAL });
-        frame(response, {}, "stop");
-      }
-      response.end("data: [DONE]\n\n");
-    })().catch((error: unknown) => {
-      errors.push(error);
-      response.destroy(error instanceof Error ? error : new Error(String(error)));
-    });
-  });
-  const port = await listen(server);
-  return { requests, errors, baseUrl: "http://127.0.0.1:" + port + "/v1" };
-}
-
-// Explicit opt-in owns the build prerequisite. Missing artifacts fail when opted in;
-// ordinary source suites skip this lane rather than accepting an expected failure.
-// The shared composed Gateway uses Unix-domain admission, so this proof is POSIX-only.
+// Opt-in requires built artifacts; Unix-domain Gateway admission requires POSIX.
 describe.skipIf(process.env.TEST_NATIVE_WORKER_BUNDLE !== "1" || process.platform === "win32")(
   "built native worker through the production node supervisor",
   () => {
@@ -178,31 +95,14 @@ describe.skipIf(process.env.TEST_NATIVE_WORKER_BUNDLE !== "1" || process.platfor
         protocolFeatures: [...artifact.protocolFeatures],
       };
 
-      // Only archive delivery is a fixture: the installer checks/extracts/hashes and
-      // publishes the actual producer archive, with no substituted worker source.
       const transferToken = "t".repeat(43);
-      const transfers: string[] = [];
-      const transferErrors: unknown[] = [];
-      const transferPort = await listen(
+      const transfers: Array<string | undefined> = [];
+      const transferPort = await listenNativeServer(
         createServer((request, response) => {
-          if (
-            request.method !== "GET" ||
-            request.url !== nodeWorkerBundleTransferPath(build.bundleHash) ||
-            request.headers.authorization !== "Bearer " + transferToken
-          ) {
-            response.writeHead(403).end();
-            return;
-          }
           transfers.push(request.url);
-          response.writeHead(200, { "content-length": artifact.tarballBytes });
-          const stream = createReadStream(artifact.tarballPath);
-          stream.once("error", (error) => {
-            transferErrors.push(error);
-            response.destroy(error);
-          });
-          response.once("close", () => stream.destroy());
-          stream.pipe(response);
+          response.writeHead(500).end();
         }),
+        servers,
       );
       const env: NodeJS.ProcessEnv = {
         PATH: process.env.PATH,
@@ -243,7 +143,6 @@ describe.skipIf(process.env.TEST_NATIVE_WORKER_BUNDLE !== "1" || process.platfor
           gatewayUrl: "ws://127.0.0.1:" + transferPort,
         }),
       ).toEqual(build);
-      expect(transferErrors).toEqual([]);
       expect(transfers).toEqual([]);
       expect(await installer.inspect({ gatewayNamespace, bundleHash: build.bundleHash })).toEqual({
         bundleHash: build.bundleHash,
@@ -267,7 +166,15 @@ describe.skipIf(process.env.TEST_NATIVE_WORKER_BUNDLE !== "1" || process.platfor
       descriptor.assignment.workspaceDir = workspace;
       descriptor.assignment.toolAuthority = { allowedToolNames: ["write"] };
       const effectPath = path.join(workspace, "proof.txt");
-      const provider = await providerFixture(effectPath);
+      const provider = await nativeProviderFixture(
+        servers,
+        MODEL.model,
+        (request) =>
+          request === 1
+            ? { name: "write", id: "bundled-write", args: { path: effectPath, content: EFFECT } }
+            : FINAL,
+        FINAL,
+      );
       const config = {
         models: {
           providers: {
@@ -352,53 +259,44 @@ describe.skipIf(process.env.TEST_NATIVE_WORKER_BUNDLE !== "1" || process.platfor
       });
       expect(await readFile(effectPath, "utf8")).toBe(EFFECT);
       expect(await readdir(workspace)).toEqual(["proof.txt"]);
-      expect(provider.errors).toEqual([]);
-      expect(provider.requests).toHaveLength(2);
-      for (const request of provider.requests) {
-        expect(request.url).toBe("/v1/chat/completions");
-        expect(request.headers.authorization).toBe("Bearer " + KEY);
-        expect(request.headers["x-native-registry"]).toBe("supervisor-snapshot");
-        expect(request.body).toMatchObject({ model: MODEL.model, max_completion_tokens: 173 });
-      }
+      expectNativeRequests(provider, 2, {
+        url: "/v1/chat/completions",
+        headers: { authorization: "Bearer " + KEY, "x-native-registry": "supervisor-snapshot" },
+        body: { model: MODEL.model, max_completion_tokens: 173 },
+      });
       expect(owner.admissions).toHaveLength(1);
       expect(owner.admissions[0]).toMatchObject({
         bundleHash: artifact.bundleHash,
         sessionId: descriptor.admission.sessionId,
         ownerEpoch: descriptor.admission.ownerEpoch,
       });
-      expect(owner.providerCalls).toBe(0);
+      expectNoProxyInference(owner);
       expect(owner.replacementProviderCalls).toBe(0);
-      expect(
-        owner.requests.filter((request) => request.method.startsWith("worker.inference.")),
-      ).toEqual([]);
-      expect(messages.map((message) => message.role)).toEqual([
-        "user",
-        "assistant",
-        "toolResult",
-        "assistant",
+      expect(messages).toMatchObject([
+        { role: "user" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "bundled-write",
+              name: "write",
+              arguments: { path: effectPath, content: EFFECT },
+            },
+          ],
+        },
+        { role: "toolResult", toolName: "write", isError: false },
+        {
+          role: "assistant",
+          provider: MODEL.provider,
+          model: MODEL.model,
+          content: [{ type: "text", text: FINAL }],
+          stopReason: "stop",
+        },
       ]);
-      expect(messages[1]).toMatchObject({
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "bundled-write",
-            name: "write",
-            arguments: { path: effectPath, content: EFFECT },
-          },
-        ],
-      });
-      expect(messages[2]).toMatchObject({ role: "toolResult", toolName: "write", isError: false });
-      expect(messages[3]).toMatchObject({
-        role: "assistant",
-        provider: MODEL.provider,
-        model: MODEL.model,
-        content: [{ type: "text", text: FINAL }],
-        stopReason: "stop",
-      });
-      expect(JSON.stringify(owner.requests)).not.toContain(KEY);
-      expect(JSON.stringify(messages)).not.toContain(KEY);
-      expect(JSON.stringify(receipt)).not.toContain(KEY);
+      for (const value of [owner.requests, messages, receipt]) {
+        expect(JSON.stringify(value)).not.toContain(KEY);
+      }
       await processOwner.close();
       expect(await processOwner.hasActiveWork()).toBe(false);
     }, 120_000);

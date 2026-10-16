@@ -1,18 +1,19 @@
 import { readFile, writeFile } from "node:fs/promises";
-import {
-  createServer,
-  type IncomingHttpHeaders,
-  type Server,
-  type ServerResponse,
-} from "node:http";
+import type { Server } from "node:http";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WorkerLiveEventParams } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import type { NativeInferenceStartup } from "./native-inference-startup.js";
+import {
+  closeNativeServers,
+  expectNativeRequests,
+  expectNoProxyInference,
+  nativeProviderFixture,
+} from "./native-worker.test-support.js";
 import { ComposedGatewayHarness, SESSION_ID } from "./worker-fault-injection.test-support.js";
 import { parseWorkerProcessMessage } from "./worker-process-protocol.js";
 import {
@@ -32,12 +33,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async ({ signal }) => {
     try {
       await workers.close(signal);
-      for (const server of servers.splice(0)) {
-        server.closeAllConnections();
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
-      }
+      await closeNativeServers(servers);
       await gateway?.close();
       gateway = undefined;
     } finally {
@@ -121,122 +117,37 @@ function result(exit: WorkerProcessTestExit) {
   const lines = exit.stdout.trim().split("\n");
   expect(lines, exit.stderr).toHaveLength(1);
   const parsed = parseWorkerProcessMessage(JSON.parse(lines[0]!));
-  expect(parsed?.type, exit.stderr).toBe("result");
   if (parsed?.type !== "result") {
     throw new Error("Native worker did not emit a terminal result");
   }
   return parsed;
 }
 
-type HttpRequest = { headers: IncomingHttpHeaders; body: Record<string, unknown>; url?: string };
-async function providerFixture(mode: "tools" | "pending" = "tools") {
-  const requests: HttpRequest[] = [];
-  const entered = createDeferred();
-  const disconnected = createDeferred();
-  let held: ServerResponse | undefined;
-  const errors: unknown[] = [];
-  const frame = (response: ServerResponse, delta: object, finish: string | null = null) => {
-    response.write(
-      "data: " +
-        JSON.stringify({
-          id: "local-worker-response",
-          object: "chat.completion.chunk",
-          created: 1,
-          model: MODEL.model,
-          choices: [{ index: 0, delta, finish_reason: finish }],
-          ...(finish
-            ? { usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 } }
-            : {}),
-        }) +
-        "\n\n",
-    );
-  };
-  const complete = (response: ServerResponse) => {
-    frame(response, { role: "assistant", content: "Local worker completed." });
-    frame(response, {}, "stop");
-    response.end("data: [DONE]\n\n");
-  };
-  const tool = (response: ServerResponse, name: string, args: object) => {
-    frame(response, {
-      role: "assistant",
-      tool_calls: [
-        {
-          index: 0,
-          id: `local-${name}`,
-          type: "function",
-          function: { name, arguments: JSON.stringify(args) },
-        },
-      ],
-    });
-    frame(response, {}, "tool_calls");
-    response.end("data: [DONE]\n\n");
-  };
-  const server = createServer((request, response) => {
-    void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.from(chunk));
-      }
-      requests.push({
-        headers: request.headers,
-        body: JSON.parse(Buffer.concat(chunks).toString()),
-        url: request.url,
-      });
-      response.writeHead(200, { "content-type": "text/event-stream" });
+function providerFixture(mode: "tools" | "pending" = "tools") {
+  const final = "Local worker completed.";
+  return nativeProviderFixture(
+    servers,
+    MODEL.model,
+    (request) => {
       if (mode === "pending") {
-        held = response;
-        response.flushHeaders();
-        response.once("close", () => disconnected.resolve());
-        entered.resolve();
-        return;
+        return undefined;
       }
-      entered.resolve();
-      if (requests.length === 1) {
-        const command =
-          JSON.stringify(process.execPath) +
-          " " +
-          JSON.stringify(path.join(owner().root, "tool-proof.mjs")) +
-          " " +
-          workers.lastPid();
-        tool(response, "exec", { command, yieldMs: 10000 });
-      } else if (requests.length === 2) {
-        tool(response, "read", { path: path.join(owner().root, "tool-proof.json") });
-      } else {
-        complete(response);
+      if (request === 1) {
+        return {
+          name: "exec",
+          args: {
+            command: `${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(owner().root, "tool-proof.mjs"))} ${workers.lastPid()}`,
+            yieldMs: 10000,
+          },
+        };
       }
-    })().catch((error: unknown) => {
-      errors.push(error);
-      response.destroy(error instanceof Error ? error : new Error(String(error)));
-    });
-  });
-  servers.push(server);
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Expected loopback TCP provider");
-  }
-  return {
-    requests,
-    errors,
-    entered: entered.promise,
-    disconnected: disconnected.promise,
-    baseUrl: "http://127.0.0.1:" + address.port + "/v1",
-    release: () => {
-      if (held && !held.destroyed) {
-        complete(held);
+      if (request === 2) {
+        return { name: "read", args: { path: path.join(owner().root, "tool-proof.json") } };
       }
+      return final;
     },
-  };
-}
-
-function expectNoProxyInference() {
-  expect(
-    owner().requests.filter((request) => request.method.startsWith("worker.inference.")),
-  ).toEqual([]);
-  expect(owner().providerCalls).toBe(0);
+    final,
+  );
 }
 
 async function pendingWorker() {
@@ -280,7 +191,6 @@ describe.skipIf(process.platform === "win32")(
       const worker = await launch(descriptor, registry);
       const outcome = result(await worker.finish());
       expect(outcome).toMatchObject({
-        type: "result",
         retainWorker: false,
         result: { status: "completed" },
       });
@@ -296,44 +206,35 @@ describe.skipIf(process.platform === "win32")(
       if (process.platform === "linux") {
         expect(proof.ancestors).toContain(worker.child.pid);
       }
-      expect(provider.errors).toEqual([]);
-      expect(provider.requests).toHaveLength(3);
-      for (const request of provider.requests) {
-        expect(request).toMatchObject({
-          url: "/v1/chat/completions",
-          headers: { authorization: "Bearer " + LOCAL_KEY, "x-local-registry": "worker-startup" },
-          body: { model: MODEL.model, max_completion_tokens: 173, reasoning_effort: "low" },
-        });
-      }
+      expectNativeRequests(provider, 3, {
+        url: "/v1/chat/completions",
+        headers: { authorization: "Bearer " + LOCAL_KEY, "x-local-registry": "worker-startup" },
+        body: { model: MODEL.model, max_completion_tokens: 173, reasoning_effort: "low" },
+      });
       expect(JSON.stringify(provider.requests[2]!.body.messages)).toContain("startupPresent");
-      expectNoProxyInference();
+      expectNoProxyInference(owner());
       expect(owner().admissions).toHaveLength(1);
       const transcript = messages();
-      expect(transcript.map((message) => message.role)).toEqual([
-        "user",
-        "assistant",
-        "toolResult",
-        "assistant",
-        "toolResult",
-        "assistant",
-      ]);
-      expect(transcript.filter((message) => message.role === "toolResult")).toEqual([
-        expect.objectContaining({ toolName: "exec", isError: false }),
-        expect.objectContaining({ toolName: "read", isError: false }),
-      ]);
-      expect(transcript.at(-1)).toMatchObject({
-        role: "assistant",
-        provider: MODEL.provider,
-        model: MODEL.model,
-        api: "openai-completions",
-        content: [{ type: "text", text: "Local worker completed." }],
-        stopReason: "stop",
-        usage: {
-          input: 10,
-          output: 3,
-          cost: { input: expect.closeTo(0.00002, 10), output: expect.closeTo(0.000021, 10) },
+      expect(transcript).toMatchObject([
+        { role: "user" },
+        { role: "assistant" },
+        { role: "toolResult", toolName: "exec", isError: false },
+        { role: "assistant" },
+        { role: "toolResult", toolName: "read", isError: false },
+        {
+          role: "assistant",
+          provider: MODEL.provider,
+          model: MODEL.model,
+          api: "openai-completions",
+          content: [{ type: "text", text: "Local worker completed." }],
+          stopReason: "stop",
+          usage: {
+            input: 10,
+            output: 3,
+            cost: { input: expect.closeTo(0.00002, 10), output: expect.closeTo(0.000021, 10) },
+          },
         },
-      });
+      ]);
       expect(outcome.result).toMatchObject({
         transcriptLeafId: SessionManager.open(owner().sessionTarget).getLeafId(),
       });
@@ -342,8 +243,13 @@ describe.skipIf(process.platform === "win32")(
       expect(JSON.stringify(transcript)).not.toContain(LOCAL_KEY);
     }, 40_000);
 
-    it.each(["missing model config", "unknown model", "wrong workspace"] as const)(
-      "rejects %s before provider HTTP or Gateway admission",
+    it.each([
+      "missing model config",
+      "unknown model",
+      "wrong workspace",
+      "unsupported reasoning",
+    ] as const)(
+      "rejects %s before provider HTTP",
       async (scenario) => {
         const provider = await providerFixture();
         const descriptor = await localDescriptor();
@@ -358,43 +264,31 @@ describe.skipIf(process.platform === "win32")(
         if (scenario === "wrong workspace") {
           startup.config.workspace = path.dirname(startup.config.workspace);
         }
+        if (scenario === "unsupported reasoning") {
+          descriptor.assignment.inferenceOptions = { reasoning: "high" };
+        }
         const worker = await launch(
           descriptor,
           scenario === "missing model config" ? undefined : startup,
         );
         const exit = await worker.finish();
-        expect({
-          code: exit.code,
-          httpRequests: provider.requests.length,
-          admissions: owner().admissions.length,
-        }).toEqual({ code: 1, httpRequests: 0, admissions: 0 });
+        expect(exit.code).toBe(1);
         expect(exit.stderr).toContain(
           scenario === "missing model config"
             ? "no node-local model configuration"
-            : "does not match the admitted workspace or model",
+            : scenario === "unsupported reasoning"
+              ? "thinking level is not supported"
+              : "does not match the admitted workspace or model",
         );
         expect(provider.requests).toEqual([]);
-        expect(owner().admissions).toEqual([]);
-        expect(messages()).toEqual([]);
-        expectNoProxyInference();
+        if (scenario !== "unsupported reasoning") {
+          expect(owner().admissions).toEqual([]);
+          expect(messages()).toEqual([]);
+        }
+        expectNoProxyInference(owner());
       },
       40_000,
     );
-
-    it("rejects unsupported local reasoning before provider HTTP", async () => {
-      const provider = await providerFixture();
-      const descriptor = await localDescriptor();
-      descriptor.assignment.inferenceOptions = {
-        ...descriptor.assignment.inferenceOptions,
-        reasoning: "high",
-      };
-      const worker = await launch(descriptor, startupFor(descriptor, provider.baseUrl));
-      const exit = await worker.finish();
-      expect(exit.code).toBe(1);
-      expect(exit.stderr).toContain("thinking level is not supported");
-      expect(provider.requests).toEqual([]);
-      expectNoProxyInference();
-    }, 40_000);
 
     it("cancels pending native HTTP and settles without submitting new transcript messages", async () => {
       const { provider, worker } = await pendingWorker();
@@ -420,58 +314,54 @@ describe.skipIf(process.platform === "win32")(
       expect(owner().placementStore.get(SESSION_ID)?.lastLiveEventAckCursor).toBe(
         finishing[0]!.seq,
       );
-      expectNoProxyInference();
+      expectNoProxyInference(owner());
     }, 40_000);
 
-    it("closes native provider HTTP during a held Gateway outage before revoked placement can readmit", async () => {
-      const { provider, worker } = await pendingWorker();
-      const admitted = owner().admissions.length;
-      const before = messages();
-      const resume = owner().pauseConnections();
-      try {
-        await owner().reclaimWithCredential(
-          "synthetic-outage-replacement",
-          "replacement-outage-run",
-        );
-        // This assertion precedes reopening admission, releasing HTTP, or stopping the child.
-        await withinTest(provider.disconnected, activeTestSignal);
+    it.each(["held Gateway outage", "placement replacement"])(
+      "fences pending native HTTP after %s",
+      async (scenario) => {
+        const { provider, descriptor, worker } = await pendingWorker();
+        const admitted = owner().admissions.length;
+        const before = messages();
+        if (scenario === "held Gateway outage") {
+          const resume = owner().pauseConnections();
+          try {
+            await owner().reclaimWithCredential(
+              "synthetic-outage-replacement",
+              "replacement-outage-run",
+            );
+            // Prove disconnection before reopening admission or stopping the child.
+            await withinTest(provider.disconnected, activeTestSignal);
+            expect(owner().admissions).toHaveLength(admitted);
+            expect(provider.requests).toHaveLength(1);
+            expect(messages()).toEqual(before);
+            expectNoProxyInference(owner());
+          } finally {
+            resume();
+          }
+        } else {
+          const epoch = await owner().reclaimWithCredential(
+            "synthetic-replacement-credential",
+            "replacement-run",
+          );
+          expect(epoch).toBeGreaterThan(descriptor.admission.ownerEpoch);
+          owner().partition();
+        }
+        expect(result(await worker.finish())).toMatchObject({
+          result: { status: "failed", reason: "node-lost" },
+          retainWorker: false,
+        });
         expect(owner().admissions).toHaveLength(admitted);
         expect(provider.requests).toHaveLength(1);
+        await withinTest(provider.disconnected, activeTestSignal);
+        if (scenario === "placement replacement") {
+          provider.release();
+        }
         expect(messages()).toEqual(before);
-        expectNoProxyInference();
-      } finally {
-        resume();
-      }
-      const outcome = await worker.finish();
-      expect(result(outcome)).toMatchObject({
-        result: { status: "failed", reason: "node-lost" },
-        retainWorker: false,
-      });
-      expect(provider.requests).toHaveLength(1);
-    }, 40_000);
-
-    it("fences a pending local producer after placement replacement without committing stale output", async () => {
-      const { provider, descriptor, worker } = await pendingWorker();
-      const before = messages();
-      const admitted = owner().admissions.length;
-      const epoch = await owner().reclaimWithCredential(
-        "synthetic-replacement-credential",
-        "replacement-run",
-      );
-      expect(epoch).toBeGreaterThan(descriptor.admission.ownerEpoch);
-      owner().partition();
-      const outcome = await worker.finish();
-      expect(result(outcome)).toMatchObject({
-        result: { status: "failed", reason: "node-lost" },
-        retainWorker: false,
-      });
-      expect(owner().admissions).toHaveLength(admitted);
-      expect(provider.requests).toHaveLength(1);
-      await withinTest(provider.disconnected, activeTestSignal);
-      provider.release();
-      expect(messages()).toEqual(before);
-      expectNoProxyInference();
-    }, 40_000);
+        expectNoProxyInference(owner());
+      },
+      40_000,
+    );
 
     it("keeps an unselected sibling Gateway-proxied even when local startup is provisioned", async () => {
       const provider = await providerFixture();
