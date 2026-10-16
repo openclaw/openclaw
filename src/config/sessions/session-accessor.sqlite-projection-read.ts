@@ -28,7 +28,10 @@ import { retainTranscriptContextFacts } from "./session-transcript-context-facts
 import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
 import { readSessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts-scope.js";
 import { projectSessionTranscriptFacts } from "./session-transcript-projection-facts.js";
-import type { SessionTranscriptContextMetadata } from "./session-transcript-projection-facts.types.js";
+import type {
+  SessionTranscriptContextMetadata,
+  SessionTranscriptContextStats,
+} from "./session-transcript-projection-facts.types.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { readTranscriptPayload, type TranscriptPayloadRecord } from "./transcript-payload.js";
 
@@ -58,6 +61,7 @@ export type CurrentTranscriptProjection = {
   resolved: ReturnType<typeof resolveSqliteTranscriptReadScope>;
   state: SessionTranscriptProjectionState;
   contextMetadata?: SessionTranscriptContextMetadata;
+  contextStats?: SessionTranscriptContextStats;
 };
 
 export type SessionTranscriptMessageEvent = {
@@ -398,16 +402,18 @@ function readProjectionSnapshot(database: TranscriptReadDatabase, sessionId: str
     return {
       ...projectSessionTranscriptFacts(actor),
       contextMetadata: projectSessionActorContextMetadata(actor),
+      contextStats: actor.transcript.contextStats,
     };
   }
   const retained = readSessionTranscriptProjectionReceipt(database, sessionId);
-  if (retained && !retained.contextOnly) {
-    return retained.facts;
+  if (retained?.facts && !retained.contextOnly) {
+    return { ...retained.facts, contextStats: retained.contextStats };
   }
   const row = projectionSnapshotReader(database.db)(sessionId).rows[0]!;
   return {
     cold: Boolean(row.is_cold),
-    contextMetadata: retained?.facts.contextMetadata,
+    contextMetadata: retained?.facts?.contextMetadata,
+    contextStats: actor?.transcript.contextStats ?? retained?.contextStats,
     generation: row.generation ?? undefined,
     updatedAt: row.transcript_updated_at ?? null,
     hasUnclassified: Boolean(row.has_unclassified),
@@ -488,6 +494,7 @@ export function readCurrentProjectionSnapshot<T>(
         resolved,
         state,
         contextMetadata: snapshot.contextMetadata,
+        contextStats: snapshot.contextStats,
       }),
     };
   };
