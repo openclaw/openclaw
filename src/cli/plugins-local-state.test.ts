@@ -62,8 +62,6 @@ vi.mock("../plugins/management-uninstall.js", async (importOriginal) => ({
       requestedPluginId: "alpha",
       pluginIds: ["alpha"],
       name: "alpha",
-      installRecords: {},
-      snapshot: { config: {} },
       plan: { actions: cli.createEmptyUninstallActions(), directoryRemoval: null },
     },
   }),
@@ -81,10 +79,8 @@ vi.mock("./hook-install-persistence.js", async (importOriginal) => ({
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const run = (...args: string[]) => cli.runPluginsCommand(["plugins", ...args]);
 
-beforeAll(() => {
-  // The shared synthetic storage fixture skips custody; this suite exercises the real guard.
-  vi.doUnmock("./plugins-local-state.js");
-});
+// The shared synthetic storage fixture skips custody; exercise the real guard here.
+beforeAll(() => vi.doUnmock("./plugins-local-state.js"));
 
 beforeEach(() => {
   cli.resetPluginsCliTestState();
@@ -124,23 +120,23 @@ describe("local plugin command ownership", () => {
     expect(effect).not.toHaveBeenCalled();
   });
 
-  it.each(commands)("refuses $args while another process owns state", async ({ args, effect }) => {
-    boundary.foreign = true;
-    await expect(run(...args)).rejects.toThrow(/stop the Gateway/i);
-    if (effect) {
-      expect(effect).not.toHaveBeenCalled();
-    }
-    expect(cli.pluginsCliRuntimeLogs.join("\n")).not.toContain("No tracked plugins");
-  });
-
-  it.each(commands)("runs $args while the Gateway is stopped", async ({ args, effect, output }) => {
-    await run(...args);
-    if (effect) {
-      expect(effect).toHaveBeenCalledOnce();
-    }
-    if (output) {
-      expect(cli.pluginsCliRuntimeLogs).toContain(output);
-    }
+  describe.each([true, false])("foreign state owner=%s", (foreign) => {
+    it.each(commands)("authorizes $args", async ({ args, effect, output }) => {
+      boundary.foreign = foreign;
+      const command = run(...args);
+      if (foreign) {
+        await expect(command).rejects.toThrow(/stop the Gateway/i);
+        expect(cli.pluginsCliRuntimeLogs.join("\n")).not.toContain("No tracked plugins");
+      } else {
+        await command;
+        if (output) {
+          expect(cli.pluginsCliRuntimeLogs).toContain(output);
+        }
+      }
+      if (effect) {
+        expect(effect).toHaveBeenCalledTimes(foreign ? 0 : 1);
+      }
+    });
   });
 
   it.each(commands.slice(0, 4))("keeps the existing $args Gateway route", async ({ args }) => {
@@ -179,12 +175,10 @@ describe("local plugin command ownership", () => {
     const command = run("install", "npm:synthetic-hooks", "--force");
     if (foreign) {
       await expect(command).rejects.toThrow(/stop the Gateway/i);
-      expect(cli.installHooksFromNpmSpecMock).not.toHaveBeenCalled();
-      expect(boundary.persistHook).not.toHaveBeenCalled();
     } else {
       await command;
-      expect(cli.installHooksFromNpmSpecMock).toHaveBeenCalledOnce();
-      expect(boundary.persistHook).toHaveBeenCalledOnce();
     }
+    expect(cli.installHooksFromNpmSpecMock).toHaveBeenCalledTimes(foreign ? 0 : 1);
+    expect(boundary.persistHook).toHaveBeenCalledTimes(foreign ? 0 : 1);
   });
 });

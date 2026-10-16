@@ -388,15 +388,12 @@ vi.mock("../plugins/enable.js", async (importOriginal) => ({
   ),
 }));
 
-vi.mock("../plugins/installs.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/installs.js")>();
-  return {
-    ...actual,
-    recordPluginInstall: forwardMock<
-      (typeof import("../plugins/installs.js"))["recordPluginInstall"]
-    >(() => recordPluginInstallMock),
-  };
-});
+vi.mock("../plugins/installs.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/installs.js")>()),
+  recordPluginInstall: forwardMock<
+    (typeof import("../plugins/installs.js"))["recordPluginInstall"]
+  >(() => recordPluginInstallMock),
+}));
 
 vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) => {
   const actual =
@@ -426,37 +423,25 @@ vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) =
   };
 });
 
-vi.mock("../plugins/installed-plugin-index-record-reader.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../plugins/installed-plugin-index-record-reader.js")>();
-  return {
-    ...actual,
-    loadInstalledPluginIndexInstallRecordsSync: () =>
-      structuredClone(mockInstalledPluginIndexInstallRecords),
-  };
-});
+vi.mock("../plugins/installed-plugin-index-record-reader.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/installed-plugin-index-record-reader.js")>()),
+  loadInstalledPluginIndexInstallRecordsSync: () =>
+    structuredClone(mockInstalledPluginIndexInstallRecords),
+}));
 
-vi.mock("../plugins/installed-plugin-index-store.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../plugins/installed-plugin-index-store.js")>();
-  return {
-    ...actual,
-    readPersistedInstalledPluginIndex: forwardMock<UnknownFn>(
-      () => readPersistedInstalledPluginIndexMock,
-    ),
-  };
-});
+vi.mock("../plugins/installed-plugin-index-store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/installed-plugin-index-store.js")>()),
+  readPersistedInstalledPluginIndex: forwardMock<UnknownFn>(
+    () => readPersistedInstalledPluginIndexMock,
+  ),
+}));
 
-vi.mock("../plugins/installed-plugin-index-store-write.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../plugins/installed-plugin-index-store-write.js")>();
-  return {
-    ...actual,
-    restorePersistedInstalledPluginIndexIfCurrent: forwardMock<UnknownFn>(
-      () => restorePersistedInstalledPluginIndexIfCurrentMock,
-    ),
-  };
-});
+vi.mock("../plugins/installed-plugin-index-store-write.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/installed-plugin-index-store-write.js")>()),
+  restorePersistedInstalledPluginIndexIfCurrent: forwardMock<UnknownFn>(
+    () => restorePersistedInstalledPluginIndexIfCurrentMock,
+  ),
+}));
 
 function createPluginsCliMetadataSnapshot(
   params: Parameters<
@@ -565,15 +550,12 @@ vi.mock("../plugins/plugin-registry.js", () => ({
   ),
 }));
 
-vi.mock("../plugins/plugin-registry-refresh.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/plugin-registry-refresh.js")>();
-  return {
-    ...actual,
-    refreshPluginRegistry: forwardMock<
-      (typeof import("../plugins/plugin-registry-refresh.js"))["refreshPluginRegistry"]
-    >(() => refreshPluginRegistryMock),
-  };
-});
+vi.mock("../plugins/plugin-registry-refresh.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-registry-refresh.js")>()),
+  refreshPluginRegistry: forwardMock<
+    (typeof import("../plugins/plugin-registry-refresh.js"))["refreshPluginRegistry"]
+  >(() => refreshPluginRegistryMock),
+}));
 
 vi.mock("../plugins/loader.js", () => ({
   clearPluginRegistryLoadCache: forwardMock<UnknownFn>(() => clearPluginRegistryLoadCacheMock),
@@ -593,24 +575,18 @@ vi.mock("../plugins/slots.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../plugins/uninstall.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/uninstall.js")>();
-  return {
-    ...actual,
-    planPluginUninstall: planPluginUninstallMock,
-    applyPluginUninstallDirectoryRemoval: applyPluginUninstallDirectoryRemovalMock,
-  };
-});
+vi.mock("../plugins/uninstall.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/uninstall.js")>()),
+  planPluginUninstall: planPluginUninstallMock,
+  applyPluginUninstallDirectoryRemoval: applyPluginUninstallDirectoryRemovalMock,
+}));
 
-vi.mock("../plugins/update.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/update.js")>();
-  return {
-    ...actual,
-    updateNpmInstalledPlugins: forwardMock<
-      (typeof import("../plugins/update.js"))["updateNpmInstalledPlugins"]
-    >(() => updateNpmInstalledPluginsMock),
-  };
-});
+vi.mock("../plugins/update.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/update.js")>()),
+  updateNpmInstalledPlugins: forwardMock<
+    (typeof import("../plugins/update.js"))["updateNpmInstalledPlugins"]
+  >(() => updateNpmInstalledPluginsMock),
+}));
 
 vi.mock("../hooks/update.js", () => ({
   updateNpmInstalledHookPacks: forwardMock<
@@ -655,15 +631,12 @@ vi.mock("../plugins/bundled-sources.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../plugins/git-install.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/git-install.js")>();
-  return {
-    ...actual,
-    installPluginFromGitSpec: artifactMock<
-      (typeof import("../plugins/git-install.js"))["installPluginFromGitSpec"]
-    >(() => installPluginFromGitSpecMock),
-  };
-});
+vi.mock("../plugins/git-install.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/git-install.js")>()),
+  installPluginFromGitSpec: artifactMock<
+    (typeof import("../plugins/git-install.js"))["installPluginFromGitSpec"]
+  >(() => installPluginFromGitSpecMock),
+}));
 
 vi.mock("../hooks/install.js", () => ({
   HOOK_INSTALL_ERROR_CODE: {

@@ -48,6 +48,48 @@ async function unpack(archive: string, parent: string, name = "extracted") {
   return path.join(cwd, "package");
 }
 
+const readJson = async (root: string, name: string) => JSON.parse(await readText(root, name));
+const readText = (root: string, name: string) => fs.readFile(path.join(root, name), "utf8");
+const browserModule = (root: string, entry: string) =>
+  import(pathToFileURL(path.join(root, entry)).href);
+function captureJson() {
+  const output: unknown[] = [];
+  defaultRuntime.writeJson = (value) => {
+    output.push(value);
+  };
+  return output;
+}
+const bundleOptions = {
+  bundle: true,
+  platform: "node",
+  format: "esm",
+  external: ["openclaw/*"],
+  logLevel: "silent",
+} satisfies Parameters<typeof build>[0];
+function installedEntry(
+  packageDir: string,
+  manifest: Parameters<typeof resolvePackageSetupSource>[0]["manifest"],
+  extensions: string[],
+) {
+  const resolution = {
+    packageDir,
+    manifest,
+    origin: "global" as const,
+    sourceLabel: packageDir,
+    diagnostics: [],
+  };
+  const [entryPath] = resolvePackageRuntimeExtensionSources({ ...resolution, extensions });
+  return { resolution, entryPath: entryPath! };
+}
+async function expectPackRejected(
+  root: string,
+  out: string,
+  error: Parameters<typeof assert.rejects>[1],
+) {
+  await assert.rejects(runPluginsPackCommand({ root, out }), error);
+  await assert.rejects(fs.stat(out), { code: "ENOENT" });
+}
+
 function sourceLoader(entryPath: string) {
   return getCachedPluginModuleLoader({
     modulePath: entryPath,
@@ -77,14 +119,10 @@ async function createPristineFixture() {
   await runPluginsInitCommand("draft-review", { directory: rootDir, type: "feature" });
   await fs.symlink(path.resolve("node_modules"), path.join(rootDir, "node_modules"), "dir");
   await build({
+    ...bundleOptions,
     absWorkingDir: rootDir,
     entryPoints: ["src/index.ts"],
     outfile: "dist/index.js",
-    bundle: true,
-    platform: "node",
-    format: "esm",
-    external: ["openclaw/*"],
-    logLevel: "silent",
   });
   await fs.writeFile(
     path.join(rootDir, "dist/name.cjs"),
@@ -137,10 +175,7 @@ void describe("plugin artifact authoring", () => {
       path.join(rootDir, "dist/name.cjs"),
       '\nif (typeof require("openclaw/plugin-sdk/feature-plugin").defineFeaturePlugin !== "function") throw new Error("CommonJS SDK dependency failed");\n',
     );
-    const jsonOutput: unknown[] = [];
-    defaultRuntime.writeJson = (value) => {
-      jsonOutput.push(value);
-    };
+    const jsonOutput = captureJson();
     const archive = path.join(await fs.realpath(rootDir), "draft-review.tgz");
     await runPluginsPackCommand({ root: rootDir, json: true });
     const bytes = await fs.readFile(archive);
@@ -155,18 +190,13 @@ void describe("plugin artifact authoring", () => {
       },
     ]);
     const packageRoot = await unpack(archive, parent);
-    const metadata = JSON.parse(await fs.readFile(path.join(packageRoot, "package.json"), "utf8"));
-    assert.equal(metadata.dependencies, undefined);
-    assert.equal(metadata.scripts, undefined);
-    assert.equal(metadata.openclaw.controlUi, undefined);
-    const manifest = JSON.parse(
-      await fs.readFile(path.join(packageRoot, "openclaw.plugin.json"), "utf8"),
+    const metadata = await readJson(packageRoot, "package.json");
+    assert.deepEqual(
+      [metadata.dependencies, metadata.scripts, metadata.openclaw.controlUi],
+      [undefined, undefined, undefined],
     );
-    assert.ok(
-      (await fs.readFile(path.join(packageRoot, manifest.controlUi.entry), "utf8")).includes(
-        "Draft composer",
-      ),
-    );
+    const manifest = await readJson(packageRoot, "openclaw.plugin.json");
+    assert.ok((await readText(packageRoot, manifest.controlUi.entry)).includes("Draft composer"));
     assert.deepEqual(await collectPluginsValidationResult({ root: packageRoot }), {
       valid: true,
       pluginId: "draft-review",
@@ -212,13 +242,9 @@ void describe("plugin artifact authoring", () => {
         type: "module",
         openclaw: {
           extensions: [inferred ? "./src/index.ts" : "./dist/index.js"],
-          ...(runtime ? { runtimeExtensions: ["./dist/compiled.js"] } : {}),
-          ...(setup
-            ? {
-                setupEntry: "./dist/setup-source.js",
-                ...(runtime ? { runtimeSetupEntry: "./dist/setup-runtime.js" } : {}),
-              }
-            : {}),
+          runtimeExtensions: runtime ? ["./dist/compiled.js"] : undefined,
+          setupEntry: setup ? "./dist/setup-source.js" : undefined,
+          runtimeSetupEntry: setup && runtime ? "./dist/setup-runtime.js" : undefined,
           compat: { pluginApi: ">=2026.5.17" },
         },
       };
@@ -245,15 +271,12 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
       });
       await runPluginsBuildCommand({ root: rootDir });
       const sourceManifest = await fs.readFile(path.join(rootDir, "openclaw.plugin.json"));
-      const jsonOutput: unknown[] = [];
-      defaultRuntime.writeJson = (value) => {
-        jsonOutput.push(value);
-      };
+      const jsonOutput = captureJson();
       await runPluginsPackCommand({ root: rootDir, json: true });
       const archive = path.join(rootDir, filename);
       assert.partialDeepStrictEqual(jsonOutput.at(-1), { pluginId: id, path: archive });
       const packageDir = await unpack(archive, parent);
-      const manifest = JSON.parse(await fs.readFile(path.join(packageDir, "package.json"), "utf8"));
+      const manifest = await readJson(packageDir, "package.json");
       assert.deepEqual(
         await fs.readFile(path.join(packageDir, "openclaw.plugin.json")),
         sourceManifest,
@@ -267,18 +290,8 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
         }),
         { ok: true },
       );
-      const resolution = {
-        packageDir,
-        manifest,
-        origin: "global" as const,
-        sourceLabel: packageDir,
-        diagnostics: [],
-      };
-      const [entryPath] = resolvePackageRuntimeExtensionSources({
-        ...resolution,
-        extensions: manifest.openclaw.extensions,
-      });
-      const loaded = await loadToolPlugin({ rootDir: packageDir, entryPath: entryPath! });
+      const { entryPath } = installedEntry(packageDir, manifest, manifest.openclaw.extensions);
+      const loaded = await loadToolPlugin({ rootDir: packageDir, entryPath });
       assert.partialDeepStrictEqual(loaded.entry, {
         artifactMarker: runtime || inferred ? "runtime" : "source",
       });
@@ -289,20 +302,16 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
       if (setup) {
         // Keep plugin entry evaluation independent while reusing the native host SDK.
         const sourcePackageDir = await unpack(archive, parent, "source-extracted");
-        const sourceResolution = {
-          ...resolution,
-          packageDir: sourcePackageDir,
-          sourceLabel: sourcePackageDir,
-        };
-        const [sourceEntryPath] = resolvePackageRuntimeExtensionSources({
-          ...sourceResolution,
-          extensions: manifest.openclaw.extensions,
-        });
-        const setupPath = resolvePackageSetupSource(sourceResolution);
+        const { resolution, entryPath: sourceEntryPath } = installedEntry(
+          sourcePackageDir,
+          manifest,
+          manifest.openclaw.extensions,
+        );
+        const setupPath = resolvePackageSetupSource(resolution);
         assert.ok(setupPath);
         withPluginCache(createPluginCache(), () => {
-          const load = sourceLoader(sourceEntryPath!);
-          assert.partialDeepStrictEqual(load(sourceEntryPath!), {
+          const load = sourceLoader(sourceEntryPath);
+          assert.partialDeepStrictEqual(load(sourceEntryPath), {
             default: { shared: { ready: true } },
           });
           assert.partialDeepStrictEqual(load(setupPath!), {
@@ -325,23 +334,19 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
   void it("rejects opaque prebundles with guidance to use the regular package-install flow", async () => {
     const { rootDir, parent } = await fixture();
     const result = await build({
+      ...bundleOptions,
       absWorkingDir: rootDir,
       entryPoints: ["dist/index.js"],
       outfile: "dist/prebundled.js",
-      bundle: true,
-      platform: "node",
-      format: "esm",
-      external: ["openclaw/*"],
       write: false,
-      logLevel: "silent",
     });
     await fs.writeFile(path.join(rootDir, "dist/index.js"), result.outputFiles[0]!.contents);
     const archive = path.join(parent, "prebundled.tgz");
-    await assert.rejects(
-      runPluginsPackCommand({ root: rootDir, out: archive }),
+    await expectPackRejected(
+      rootDir,
+      archive,
       /Indirect calls to "require" will not be bundled[\s\S]*regular package-install flow/u,
     );
-    await assert.rejects(fs.stat(archive), { code: "ENOENT" });
   });
 
   runCases(
@@ -364,38 +369,27 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
       );
       assert.equal(runOriginal(), expected);
       const archive = path.join(parent, "runtime-dependency.tgz");
-      await assert.rejects(
-        runPluginsPackCommand({ root: rootDir, out: archive }),
-        hasMessage(diagnostic),
-      );
-      await assert.rejects(fs.stat(archive), { code: "ENOENT" });
+      await expectPackRejected(rootDir, archive, hasMessage(diagnostic));
     },
   );
 
   void it("packs standard-builder lazy chunks for use without source or dependencies", async () => {
     const { rootDir, parent } = await fixture();
-    const metadata = JSON.parse(await fs.readFile(path.join(rootDir, "package.json"), "utf8"));
+    const metadata = await readJson(rootDir, "package.json");
     const source = path.resolve(rootDir, metadata.openclaw.controlUi);
-    await fs.writeFile(
-      source,
-      'export async function loadPage() { return (await import("./lazy-page.js")).page; }',
-    );
-    await fs.writeFile(
-      path.join(path.dirname(source), "lazy-page.js"),
-      'export const page = "Packed page ready";',
-    );
+    await writeFiles(path.dirname(source), {
+      [path.basename(source)]:
+        'export async function loadPage() { return (await import("./lazy-page.js")).page; }',
+      "lazy-page.js": 'export const page = "Packed page ready";',
+    });
     await runPluginsBuildCommand({ root: rootDir });
     const archive = path.join(parent, "lazy-page.tgz");
     await runPluginsPackCommand({ root: rootDir, out: archive });
     const packageRoot = await unpack(archive, parent);
-    const manifest = JSON.parse(
-      await fs.readFile(path.join(packageRoot, "openclaw.plugin.json"), "utf8"),
-    );
+    const manifest = await readJson(packageRoot, "openclaw.plugin.json");
     const assets = await fs.readdir(path.dirname(path.join(packageRoot, manifest.controlUi.entry)));
     assert.ok(assets.some((name) => name.startsWith("chunk-")));
-    const browser = await import(
-      pathToFileURL(path.join(packageRoot, manifest.controlUi.entry)).href
-    );
+    const browser = await browserModule(packageRoot, manifest.controlUi.entry);
     assert.equal(await browser.loadPage(), "Packed page ready");
     await assert.rejects(fs.stat(path.join(packageRoot, "node_modules")), { code: "ENOENT" });
   });
@@ -403,11 +397,11 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
   void it("preserves prebuilt browser dependencies without packing unrelated files", async () => {
     const { rootDir, parent } = await fixture();
     const packagePath = path.join(rootDir, "package.json");
-    const metadata = JSON.parse(await fs.readFile(packagePath, "utf8"));
+    const metadata = await readJson(rootDir, "package.json");
     delete metadata.openclaw.controlUi;
     await fs.writeFile(packagePath, JSON.stringify(metadata));
     const manifestPath = path.join(rootDir, "openclaw.plugin.json");
-    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+    const manifest = await readJson(rootDir, "openclaw.plugin.json");
     const directory = "dist/control-ui/prebuilt";
     manifest.controlUi = {
       entry: `${directory}/index.js`,
@@ -427,9 +421,7 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
     };
     await writeFiles(path.join(rootDir, directory), files);
     const activate = async (packageRoot: string) => {
-      const browser = await import(
-        pathToFileURL(path.join(packageRoot, manifest.controlUi.entry)).href
-      );
+      const browser = await browserModule(packageRoot, manifest.controlUi.entry);
       return browser.default.activate();
     };
     assert.equal(await activate(rootDir), "Prebuilt ready");
@@ -438,14 +430,9 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
     await runPluginsPackCommand({ root: rootDir, out: archive });
     const packageRoot = await unpack(archive, parent);
     assert.equal(await activate(packageRoot), "Prebuilt ready");
-    assert.equal(
-      await fs.readFile(path.join(packageRoot, directory, "theme.css"), "utf8"),
-      files["theme.css"],
-    );
-    assert.equal(
-      await fs.readFile(path.join(packageRoot, directory, "styles/palette.css"), "utf8"),
-      files["styles/palette.css"],
-    );
+    for (const name of ["theme.css", "styles/palette.css"] as const) {
+      assert.equal(await readText(path.join(packageRoot, directory), name), files[name]);
+    }
     for (const name of ["index.js.map", "source.ts", ".hidden.js"]) {
       await assert.rejects(fs.stat(path.join(packageRoot, directory, name)), {
         code: "ENOENT",
@@ -478,9 +465,7 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
     async ({ file, source }) => {
       const { rootDir, parent } = await fixture();
       const resources = path.join(rootDir, "dist/runtime");
-      await fs.mkdir(resources);
-      await fs.writeFile(path.join(resources, "template.txt"), "required template");
-      await fs.writeFile(path.join(resources, file), source);
+      await writeFiles(resources, { "template.txt": "required template", [file]: source });
       await fs.appendFile(
         path.join(rootDir, "dist/index.js"),
         `\nimport { resource } from "./runtime/${file}"; if (resource !== "required template") throw new Error("Backend resource failed");\n`,
@@ -491,11 +476,7 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
         errors: [],
       });
       const archive = path.join(parent, "runtime-resource.tgz");
-      await assert.rejects(
-        runPluginsPackCommand({ root: rootDir, out: archive }),
-        hasMessage("module-relative runtime files"),
-      );
-      await assert.rejects(fs.stat(archive), { code: "ENOENT" });
+      await expectPackRejected(rootDir, archive, hasMessage("module-relative runtime files"));
     },
   );
 
