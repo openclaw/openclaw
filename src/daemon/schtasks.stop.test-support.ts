@@ -167,7 +167,7 @@ function mockWindowsTaskkillSuccess() {
   // succeeds and the follow-up tasklist probe reports the PID as gone.
   spawnSync.mockImplementation((exe: unknown, args) => {
     const exeText = String(exe);
-    if (args?.includes("-EncodedCommand")) {
+    if (args?.includes("-EncodedCommand") || (args?.join(" ") ?? "").includes("Schedule.Service")) {
       return scheduledTaskProbeResult();
     }
     if (/taskkill\.exe$/i.test(exeText)) {
@@ -211,7 +211,10 @@ function expectTaskkill(pid: number) {
 function setTaskStateProbeResult(state: number | null | (() => number | null)) {
   const previous = spawnSync.getMockImplementation();
   spawnSync.mockImplementation((command, args, options) => {
-    if (command.toLowerCase().endsWith("powershell.exe") && args?.includes("-EncodedCommand")) {
+    if (
+      command.toLowerCase().endsWith("powershell.exe") &&
+      (args?.includes("-EncodedCommand") || (args?.join(" ") ?? "").includes("Schedule.Service"))
+    ) {
       const current = typeof state === "function" ? state() : state;
       return current === null
         ? spawnSyncResult("-2147024894", 1)
@@ -259,7 +262,7 @@ beforeEach(() => {
   vi.spyOn(Date, "now").mockImplementation(() => timeState.now);
   spawnSync.mockReset();
   spawnSync.mockImplementation((_exe, args) =>
-    args?.includes("-EncodedCommand")
+    args?.includes("-EncodedCommand") || (args?.join(" ") ?? "").includes("Schedule.Service")
       ? scheduledTaskProbeResult()
       : spawnSyncResult("-2147024891", 1),
   );

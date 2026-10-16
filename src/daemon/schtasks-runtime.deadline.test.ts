@@ -74,7 +74,7 @@ beforeEach(() => {
   native.mockReset();
   native.mockImplementation((_executable, args) => {
     const script = args?.join(" ") ?? "";
-    if (args?.includes("-EncodedCommand")) {
+    if (args?.includes("-EncodedCommand") || (args?.join(" ") ?? "").includes("Schedule.Service")) {
       now += schedulerElapsed;
       return schedulerMissing ? result("-2147024894", 1) : result('{"state":4}');
     }

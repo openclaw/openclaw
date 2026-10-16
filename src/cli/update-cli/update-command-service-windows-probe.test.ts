@@ -72,7 +72,12 @@ it.each([
     const taskResponses = [...scenario.responses];
     vi.mocked(spawnSync).mockImplementation((_command, args) => {
       const processProbe = args?.some((arg) => arg.includes("Get-CimInstance Win32_Process"));
-      if (!processProbe && !args?.includes("-EncodedCommand")) {
+      // The Task Scheduler probe now spawns a fixed literal `-Command` body instead
+      // of an encoded one, so accept that shape as the task probe.
+      const taskProbe =
+        args?.includes("-EncodedCommand") === true ||
+        (args?.join(" ").includes("Schedule.Service") ?? false);
+      if (!processProbe && !taskProbe) {
         throw new Error("Unexpected native inspection");
       }
       const response = processProbe ? "found" : taskResponses.shift();

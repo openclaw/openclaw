@@ -61,14 +61,23 @@ export function registerWindowsTaskAdmissionTests(
       serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
       const nativeSpawn = childProcess.spawnSync;
       let queriedScript = "";
+      let queriedTaskName = "";
       vi.spyOn(childProcess, "spawnSync").mockImplementation((command, args, options) => {
-        if (!args?.includes("-EncodedCommand")) {
+        const argv = args ?? [];
+        const encodedAt = argv.indexOf("-EncodedCommand");
+        // The shared probe now spawns a fixed literal `-Command` body and carries the
+        // task name as base64 data on stdin, so recognise that shape too.
+        const literalProbe =
+          argv.includes("-Command") && argv.join(" ").includes("Schedule.Service");
+        if (encodedAt < 0 && !literalProbe) {
           return nativeSpawn(command, args, options);
         }
-        queriedScript = Buffer.from(
-          args[args.indexOf("-EncodedCommand") + 1] ?? "",
-          "base64",
-        ).toString("utf16le");
+        queriedScript =
+          encodedAt >= 0
+            ? Buffer.from(argv[encodedAt + 1] ?? "", "base64").toString("utf16le")
+            : (argv[argv.indexOf("-Command") + 1] ?? "");
+        const stdin = options?.input;
+        queriedTaskName = typeof stdin === "string" ? stdin.trim() : "";
         const stdout = facts
           ? JSON.stringify(facts)
           : scenario === "access denied"
@@ -123,16 +132,21 @@ export function registerWindowsTaskAdmissionTests(
         );
         expect(packageInstallCommandCall()).toBeUndefined();
       }
-      expect(
-        vi
-          .mocked(childProcess.spawnSync)
-          .mock.calls.filter(([, args]) => args?.includes("-EncodedCommand")),
-      ).toHaveLength(1);
-      expect(childProcess.spawnSync).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.arrayContaining(["-EncodedCommand"]),
-        expect.objectContaining({ timeout: 60_000 }),
-      );
+      // Count only the Task Scheduler probe: `readWindowsProcessSnapshot` also spawns a
+      // bare `-Command` body, so the switch flag alone is not a discriminator.
+      const probeCalls = vi
+        .mocked(childProcess.spawnSync)
+        .mock.calls.filter(([, args]) => (args?.join(" ") ?? "").includes("Schedule.Service"));
+      expect(probeCalls).toHaveLength(1);
+      expect(probeCalls[0]?.[1]).toEqual(expect.arrayContaining(["-Command"]));
+      expect(probeCalls[0]?.[1]).not.toEqual(expect.arrayContaining(["-EncodedCommand"]));
+      expect(probeCalls[0]?.[2]).toEqual(expect.objectContaining({ timeout: 60_000 }));
+      // The task name rides on stdin, so it never appears on the command line.
+      const queriedName = Buffer.from(queriedTaskName, "base64").toString("utf8");
+      expect(queriedName.length).toBeGreaterThan(0);
+      const commandLine = probeCalls[0]?.[1]?.join(" ") ?? "";
+      expect(commandLine).toContain("Schedule.Service");
+      expect(commandLine).not.toContain(queriedName);
     },
   );
 }
