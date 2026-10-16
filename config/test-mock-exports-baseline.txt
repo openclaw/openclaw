@@ -5946,7 +5946,6 @@
 ["src/commands/startup-plugin-source-captures.test.ts","../infra/state-migrations.messages.js","521898b9d335d6469f7d35f7a2bcf404f2dd81166d5a0c10d75bb05234463b67",1]
 ["src/commands/startup-plugin-source-captures.test.ts","../plugins/plugin-source-capture-report.js","3ab072c0847462bef1445c8ba72fbe4b48ca53065d4aa44d91660d0edc941722",1]
 ["src/commands/startup-plugin-source-captures.test.ts","../plugins/runtime-degraded-state.js","d5db030250c295cbe5cf8ffa3482e7a7debfab02874c991268a589e168cb1144",1]
-["src/commands/startup-plugin-source-captures.test.ts","../state/openclaw-state-db-readonly.js","999fdb07564479141955d11aae7aabc11b01721c2a2a5fe4ebaa294468dfdb09",1]
 ["src/commands/startup-plugin-source-captures.test.ts","./doctor-config-preflight-plugin-verification.js","e1dbe589984eb69d382b0d333018ffe6a26c20822bc2a51d323b4f67bf0003f7",1]
 ["src/commands/status-all/channels.test.ts","../../channels/account-inspection.js","50c38baffcd9f5c6e800693d9793cd1ac8a25af98d79aa0261ef38b1da22fe69",1]
 ["src/commands/status-all/channels.test.ts","../../channels/plugins/read-only.js","9905b542608e502eaaa6faaa352526e5cd2bc174fe7a9b714a79fe3cef5359ed",1]
