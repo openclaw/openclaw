@@ -3453,8 +3453,12 @@ html[dir="rtl"] .chat-attachment-loading > span {
 .agent-chat__welcome-avatar {
   width: 96px;
   height: 96px;
-  border-radius: 50%;
   object-fit: cover;
+}
+
+.agent-chat__welcome-avatar,
+.agent-chat__welcome-avatar .identity-avatar--agent {
+  border-radius: 50%;
 }
 
 .agent-chat__welcome-avatar .identity-avatar__text {

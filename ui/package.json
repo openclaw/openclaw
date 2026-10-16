@@ -9,7 +9,6 @@
     "test": "node ../scripts/run-node-package-bin.mts vitest run --config vitest.config.ts"
   },
   "dependencies": {
-    "@awesome.me/webawesome": "3.14.0",
     "@codemirror/commands": "6.11.1",
     "@codemirror/language": "6.13.1",
     "@codemirror/language-data": "6.5.2",

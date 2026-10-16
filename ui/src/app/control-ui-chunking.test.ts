@@ -253,7 +253,7 @@ describe("Control UI build chunking", () => {
     ).toBe("node_modules/nanoid/index.browser.js");
     expect(
       controlUiBootManifestKey(
-        "/repo/node_modules/@awesome.me/webawesome/node_modules/nanoid/index.browser.js",
+        "/repo/node_modules/@example/control/node_modules/nanoid/index.browser.js",
       ),
     ).toBe("node_modules/nanoid/index.browser.js");
     expect(controlUiBootManifestKey("/repo/ui/src/main.ts?html-proxy&index=0.js")).not.toContain(

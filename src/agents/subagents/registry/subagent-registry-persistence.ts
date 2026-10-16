@@ -21,7 +21,13 @@ import {
 } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../../state/openclaw-state-worker-store.js";
-import { immutableSubagentRun, subagentRuns } from "./subagent-registry-memory.js";
+import {
+  compactSubagentRunForMemory,
+  immutableSubagentRun,
+  isSubagentRunPayloadEvicted,
+  restoreSubagentRunPayload,
+  subagentRuns,
+} from "./subagent-registry-memory.js";
 import type { SubagentRunMutation } from "./subagent-registry-mutation.types.js";
 import type {
   PendingRegistryWrite,
@@ -31,6 +37,7 @@ import type {
   SubagentRegistryWorkerWrite,
   SubagentRunMutationOptions,
 } from "./subagent-registry-persistence.types.js";
+import { readFullSubagentRuns } from "./subagent-registry-read-cache.js";
 import {
   consumeFreshSubagentRegistryRows,
   publishSubagentRunsAfterAtomicStore,
@@ -172,7 +179,7 @@ function publishRows(
   for (const [runId, next] of postimages) {
     if (next) {
       retainSubagentRunRuntimeOwner(runs.get(runId), next);
-      runs.set(runId, immutableSubagentRun(next));
+      runs.set(runId, compactSubagentRunForMemory(next));
     } else {
       runs.delete(runId);
     }
@@ -426,6 +433,26 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
         rows.set(runId, immutableSubagentRun(entry));
       }
     }
+    const evictedIds = [...rows.values()]
+      .filter(isSubagentRunPayloadEvicted)
+      .map((row) => row.runId);
+    if (evictedIds.length) {
+      const payloads = await readFullSubagentRuns(
+        context,
+        { kind: "ids", runIds: evictedIds },
+        { current: true },
+      );
+      authority.assertCurrent();
+      for (const runId of evictedIds) {
+        const payload = payloads.get(runId);
+        if (!payload) {
+          throw new SubagentRegistryMutationRejectedError(
+            "Retained subagent payload is unavailable",
+          );
+        }
+        rows.set(runId, restoreSubagentRunPayload(rows.get(runId)!, payload));
+      }
+    }
     const planned = plan(rows);
     if (isPromiseLike(planned)) {
       void Promise.resolve(planned).catch(() => {});
@@ -557,7 +584,7 @@ export async function restoreSubagentRunsFromDisk(params: {
           continue;
         }
         retainSubagentRunRuntimeOwner(params.runs.get(runId), entry);
-        params.runs.set(runId, entry);
+        params.runs.set(runId, compactSubagentRunForMemory(entry));
         rememberRestoredSubagentRunNotification(entry);
         subagentRuns.settleCommittedOwnership(entry);
         added += 1;
@@ -621,7 +648,7 @@ function reconcileRetiredSubagentRegistryWrites(
       const row = restored.get(id);
       if (row) {
         retainSubagentRunRuntimeOwner(runs.get(id), row);
-        runs.set(id, immutableSubagentRun(row));
+        runs.set(id, compactSubagentRunForMemory(row));
       } else {
         runs.delete(id);
       }

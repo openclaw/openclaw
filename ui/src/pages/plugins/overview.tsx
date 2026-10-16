@@ -43,7 +43,12 @@ export function renderPluginCompatibilityNotices(
               : t("pluginsPage.compatibilityDeprecatedUndated");
           },
           link: notice.migrationGuideUrl
-            ? { href: notice.migrationGuideUrl, text: t("pluginsPage.compatibilityDetails") }
+            ? {
+                href: notice.migrationGuideUrl,
+                get text() {
+                  return t("pluginsPage.compatibilityDetails");
+                },
+              }
             : undefined,
           details:
             showApis && notice.apis.length ? (
@@ -235,60 +240,56 @@ export function renderPluginCapabilitySection(
   }>,
   icon: () => JSX.Element,
 ): JSX.Element {
-  return (
-    <>
-      {values.length ? (
-        <section class="plugin-capabilities">
-          <h2>
-            {title}
-            <span>{values.length}</span>
-          </h2>
-          <div>
-            <For each={values}>
-              {(value) => {
-                const open = value.onOpen;
-                const content = (
-                  <>
-                    <span class="plugin-capability__icon" aria-hidden="true">
-                      {icon()}
-                    </span>
-                    <span class="plugin-capability__copy">
-                      <strong>{value.name}</strong>
-                      {value.description ? <span>{value.description}</span> : undefined}
-                    </span>
-                    {value.trailing ? (
-                      <span class="plugin-capability__trailing">{value.trailing}</span>
-                    ) : undefined}
-                    {open || value.details ? (
-                      <span class="plugin-capability__chevron" aria-hidden="true">
-                        {<Icon name="chevronRight" />}
-                      </span>
-                    ) : undefined}
-                  </>
-                );
-                return (
-                  <div class="plugin-capability">
-                    {value.details ? (
-                      <details class="plugin-capability__disclosure">
-                        <summary>{content}</summary>
-                        <div class="plugin-capability__details">{value.details}</div>
-                      </details>
-                    ) : open ? (
-                      <button type="button" onClick={open}>
-                        {content}
-                      </button>
-                    ) : (
-                      <div class="plugin-capability__static">{content}</div>
-                    )}
-                  </div>
-                );
-              }}
-            </For>
-          </div>
-        </section>
-      ) : undefined}
-    </>
-  );
+  return values.length ? (
+    <section class="plugin-capabilities">
+      <h2>
+        {title}
+        <span>{values.length}</span>
+      </h2>
+      <div>
+        <For each={values}>
+          {(value) => {
+            const open = value.onOpen;
+            const content = (
+              <>
+                <span class="plugin-capability__icon" aria-hidden="true">
+                  {icon()}
+                </span>
+                <span class="plugin-capability__copy">
+                  <strong>{value.name}</strong>
+                  {value.description ? <span>{value.description}</span> : undefined}
+                </span>
+                {value.trailing ? (
+                  <span class="plugin-capability__trailing">{value.trailing}</span>
+                ) : undefined}
+                {open || value.details ? (
+                  <span class="plugin-capability__chevron" aria-hidden="true">
+                    {<Icon name="chevronRight" />}
+                  </span>
+                ) : undefined}
+              </>
+            );
+            return (
+              <div class="plugin-capability">
+                {value.details ? (
+                  <details class="plugin-capability__disclosure">
+                    <summary>{content}</summary>
+                    <div class="plugin-capability__details">{value.details}</div>
+                  </details>
+                ) : open ? (
+                  <button type="button" onClick={open}>
+                    {content}
+                  </button>
+                ) : (
+                  <div class="plugin-capability__static">{content}</div>
+                )}
+              </div>
+            );
+          }}
+        </For>
+      </div>
+    </section>
+  ) : undefined;
 }
 
 function renderPluginMcpServers(

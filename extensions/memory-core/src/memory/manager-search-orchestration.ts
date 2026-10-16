@@ -7,7 +7,6 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   readMemoryFile,
-  MEMORY_INDEX_VECTOR_TABLE as VECTOR_TABLE,
   MEMORY_SEARCH_DEADLINE_CONTROL,
   type MemoryReadResult,
   type MemorySearchManager,
@@ -31,7 +30,7 @@ import {
 } from "./manager-keyword-retrieval.js";
 import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
 import type { MemoryRetrievalIndexState } from "./manager-retrieval-read.js";
-import { runVectorKnnInSubprocess } from "./manager-search-knn-subprocess.js";
+import { admitMemoryVectorIndex, searchMemoryVectorIndex } from "./manager-search-knn.js";
 import { searchVector } from "./manager-search-vector.js";
 import { prepareExactPathMatcher } from "./manager-search.js";
 import type { MemoryKeywordWorkerResult } from "./manager-search.worker.js";
@@ -645,8 +644,10 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         },
         signal,
       );
+    const vectorIndex = admitMemoryVectorIndex({
+      databasePath: resolveUserPath(this.settings.store.databasePath),
+    });
     const results = await searchVector({
-      vectorTable: VECTOR_TABLE,
       ...query,
       signal,
       ensureVectorReady: async () => {
@@ -664,12 +665,15 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       },
       runFallback: readVectorRows,
       runVectorKnn: async (request, knnSignal) => {
-        const response = await runVectorKnnInSubprocess({
-          databasePath: resolveUserPath(this.settings.store.databasePath),
-          extensionPath: this.vector.extensionPath,
+        const response = await searchMemoryVectorIndex(
+          vectorIndex.capability,
+          vectorIndex.index,
           request,
-          signal: knnSignal,
-        });
+          {
+            extensionPath: this.vector.extensionPath,
+            signal: knnSignal,
+          },
+        );
         if (!response.fallbackScanRequired) {
           this.vector.available = true;
           this.vector.semanticAvailable = true;

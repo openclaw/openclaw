@@ -43,6 +43,9 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
     is disabled, and inclusion does not guarantee execution access.
   - The projection can use cached inventory while refreshing it. Unsaved UI
     edits are not inputs, and saved or runtime changes may not appear immediately.
+  - A saved `toolOverrides.webSearch=false` excludes core `web_search`. Changing
+    this override selects the matching preview instead of reusing the other
+    state's cached inventory.
   - `tools.effective` is read-only for MCP: it may project a warm session MCP
     catalog through the final tool policy, but does not create MCP runtimes,
     connect transports, or issue `tools/list`. If no matching warm catalog

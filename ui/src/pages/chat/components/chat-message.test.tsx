@@ -6,12 +6,11 @@ import { projectAgentToolActivity } from "../../../../../src/infra/agent-activit
 import * as markdown from "../../../components/markdown.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { setAvatarGatewayOrigin } from "../../../lib/identity-avatar-context.ts";
-import { solidContent } from "../../../lit/solid-content.tsx";
 import * as localStorageModule from "../../../local-storage.ts";
 import { prepareChatHistoryFixture } from "../../../test-helpers/chat-activity-fixtures.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import * as chatAvatar from "../chat-avatar.ts";
+import * as chatAvatar from "../chat-avatar-view.tsx";
 import { attachHistoryActivity } from "../chat-history-request.ts";
 import { buildCachedChatItems } from "../chat-thread.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
@@ -81,9 +80,7 @@ beforeEach(() => {
   vi.spyOn(localStorageModule, "getSafeLocalStorage").mockImplementation(getSafeLocalStorageMock);
   vi.spyOn(markdown, "toSanitizedMarkdownHtml").mockImplementation(markdownRenderMock);
   vi.spyOn(markdown, "toStreamingMarkdownParts").mockImplementation(streamingMarkdownRenderMock);
-  vi.spyOn(chatAvatar, "renderChatAvatar").mockImplementation((role) =>
-    solidContent(TestAvatar, { role }),
-  );
+  vi.spyOn(chatAvatar, "ChatAvatar").mockImplementation(TestAvatar);
 });
 
 type RenderMessageGroupOptions = NativeMessageGroupOptions;

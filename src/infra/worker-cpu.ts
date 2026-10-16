@@ -1,4 +1,5 @@
 import "../../worker-heap-flag.mjs";
+import { channel } from "node:diagnostics_channel";
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainThread, MessagePort, Worker } from "node:worker_threads";
@@ -378,7 +379,18 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
   };
   port.on(
     "message",
-    (record: WorkerMemorySample | { gc: GcSample[] } | { gcStorm: WorkerGcStorm }) => {
+    (
+      record:
+        | WorkerMemorySample
+        | { gc: GcSample[] }
+        | { gcStorm: WorkerGcStorm }
+        | { retireWorkerId: string },
+    ) => {
+      if ("retireWorkerId" in record) {
+        recordWorkerMessage("memory", "from_worker");
+        channel("openclaw.code-mode.gc-storm").publish(record.retireWorkerId);
+        return;
+      }
       if ("gcStorm" in record) {
         recordWorkerMessage("memory", "from_worker");
         // Capture registry-owned identity before a native exit can free this slot.

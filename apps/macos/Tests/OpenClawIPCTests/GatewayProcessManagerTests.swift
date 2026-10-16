@@ -1882,6 +1882,7 @@ struct GatewayProcessManagerTests {
         let port = try self.availableGatewayPort()
         let url = try #require(URL(string: "ws://example.invalid"))
         let inspectedService = Mutex(false)
+        let inspection = AsyncTestGate()
         let inspectionError = "launchctl inspection failed"
         let guidance = "openclaw gateway status --deep"
         let healthError = "fixture health rejected"
@@ -1895,6 +1896,7 @@ struct GatewayProcessManagerTests {
             commandHook: { arguments in
                 if arguments.first == "status" {
                     inspectedService.withLock { $0 = true }
+                    inspection.open()
                 }
             }) {
                 try #require(GatewayEnvironment.gatewayPort() == port)
@@ -1932,8 +1934,13 @@ struct GatewayProcessManagerTests {
                 defer { manager.desiredActive = false }
 
                 manager.startIfNeeded()
+                // Initial attachment must expire before service inspection starts the separate startup budget.
+                // Either the probe timeout or retry sleep can register first.
+                await clock.waitForSleep()
+                clock.advance(by: .seconds(2))
+                await inspection.wait()
                 if outcome == "unresolved" {
-                    await clock.waitForSleep(until: clock.now.advanced(by: .milliseconds(300)))
+                    await clock.waitForSleep()
                     clock.advance(by: .seconds(GatewayLaunchAgentManager.reusedLaunchdColdStartTolerance))
                 }
                 await manager.waitForStartupAttempt()

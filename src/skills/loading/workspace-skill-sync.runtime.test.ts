@@ -1,8 +1,11 @@
 // Workspace skill sync runtime tests cover sandbox synchronization and plugin-provided skills.
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { createNestedGitEnv } from "../../../test/helpers/temp-repo.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -213,6 +216,69 @@ describe("syncWorkspaceSkills", () => {
     expect(second).toEqual(first);
     expect(await pathExists(path.join(targetWorkspace, "skills", "alpha", "SKILL.md"))).toBe(true);
     expect(await pathExists(path.join(targetWorkspace, "skills", "hidden", "SKILL.md"))).toBe(true);
+  });
+
+  it("keeps generated skills out of Git discovery across sync, cached reuse and refresh", async () => {
+    const workspace = await createCaseDir("git-workspace");
+    const targetWorkspace = path.join(workspace, ".openclaw", "sandbox-skills");
+    const sourceSkillDir = path.join(workspace, "skills", "alpha");
+    const generatedSkill = ".openclaw/sandbox-skills/skills/alpha/SKILL.md";
+    const generatedRoot = path.join(targetWorkspace, "skills");
+    const git = async (...args: string[]) =>
+      (
+        await promisify(execFile)("git", args, { cwd: workspace, env: createNestedGitEnv() })
+      ).stdout.trim();
+    await writeSkill({ dir: sourceSkillDir, name: "alpha", description: "Original skill" });
+    await fs.mkdir(targetWorkspace, { recursive: true });
+    await fs.writeFile(path.join(workspace, "README.md"), "original\n");
+    await git("init", "--quiet");
+    await git("add", "README.md");
+    await fs.writeFile(path.join(workspace, "README.md"), "changed\n");
+    await fs.writeFile(path.join(workspace, ".openclaw", "project.txt"), "project\n");
+    await fs.writeFile(path.join(targetWorkspace, "notes.txt"), "ordinary sibling\n");
+    const options = {
+      config: isolatedConfig,
+      bundledSkillsDir: path.join(workspace, ".bundled"),
+      managedSkillsDir: path.join(workspace, ".managed"),
+    };
+    const params = {
+      ...options,
+      sourceWorkspaceDir: workspace,
+      targetWorkspaceDir: targetWorkspace,
+      skillsSnapshot: await buildSkillSnapshot(workspace, {
+        ...options,
+        snapshotVersion: getSkillsSnapshotVersion(workspace),
+      }),
+    };
+    const expectProjectChanges = async () => {
+      expect(await git("ls-files", "--others", "--exclude-standard")).toBe(
+        ".openclaw/project.txt\n.openclaw/sandbox-skills/notes.txt\nskills/alpha/SKILL.md",
+      );
+      expect(await git("diff", "--name-only")).toContain("README.md");
+    };
+
+    await syncWorkspaceSkills(params);
+    await expectProjectChanges();
+    await git("add", "--force", generatedSkill);
+    await fs.appendFile(path.join(workspace, generatedSkill), "\ntracked edit\n");
+    const cachedMarker = path.join(generatedRoot, "alpha", "cached.txt");
+    await fs.writeFile(cachedMarker, "retained by cache\n");
+    await fs.rm(path.join(generatedRoot, ".gitignore"));
+
+    await syncWorkspaceSkills(params);
+    await expectProjectChanges();
+    expect(await pathExists(cachedMarker)).toBe(true);
+    expect(await git("diff", "--name-only")).toContain(generatedSkill);
+
+    await writeSkill({ dir: sourceSkillDir, name: "alpha", description: "Refreshed skill" });
+    await refreshSkillsDiscovery({ workspaceDir: workspace });
+    await syncWorkspaceSkills(params);
+    await expectProjectChanges();
+    expect(await pathExists(cachedMarker)).toBe(false);
+    expect(await fs.readFile(path.join(workspace, generatedSkill), "utf8")).toContain(
+      "Refreshed skill",
+    );
+    expect(await git("diff", "--name-only")).toContain(generatedSkill);
   });
 
   it.each([
