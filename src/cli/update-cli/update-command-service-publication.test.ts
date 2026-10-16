@@ -49,12 +49,16 @@ async function writeRuntimeRoot(root: string) {
   await fs.writeFile(path.join(root, "dist", "entry.js"), "export {};\n");
 }
 
-const publicationOptions = (root: string, env: NodeJS.ProcessEnv) => ({
-  root,
-  env,
-  timeoutMs: 200,
-  assertCurrent() {},
-});
+function createPublication(root: string, env: NodeJS.ProcessEnv) {
+  return <T>(
+    effect: (assertCurrent: () => Promise<void>) => Promise<T>,
+    options: Partial<Parameters<typeof withGatewayRuntimeArtifactPublication>[0]> = {},
+  ) =>
+    withGatewayRuntimeArtifactPublication(
+      { root, env, timeoutMs: 200, assertCurrent() {}, ...options },
+      effect,
+    );
+}
 const serviceRuntime = (status: "running" | "stopped" | "unknown") => ({
   status,
   systemd: { managerUid: 2001 },
@@ -72,6 +76,7 @@ async function withRuntimePublicationFixture(
     env: NodeJS.ProcessEnv;
     service: GatewayService;
     databasePath: string;
+    publish: ReturnType<typeof createPublication>;
   }) => Promise<void>,
 ): Promise<void> {
   await withServiceHome(async (home) => {
@@ -91,7 +96,14 @@ async function withRuntimePublicationFixture(
     mocks.service.mockReturnValue(service);
     vi.spyOn(gatewayLocks, "readActiveGatewayLockIdentity").mockResolvedValue(undefined);
     vi.spyOn(portProbe, "probePortUsage").mockResolvedValue("free");
-    await run({ home, root, env, service, databasePath: resolveOpenClawStateSqlitePath(env) });
+    await run({
+      home,
+      root,
+      env,
+      service,
+      databasePath: resolveOpenClawStateSqlitePath(env),
+      publish: createPublication(root, env),
+    });
     expect(service.stop).not.toHaveBeenCalled();
     expect(service.start).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();
@@ -348,7 +360,7 @@ it.each([
   "unknown listener",
   "lock after coordinator",
 ])("refuses changed runtime publication with %s", (scenario) =>
-  withRuntimePublicationFixture(async ({ root, env, service }) => {
+  withRuntimePublicationFixture(async ({ root, service, publish }) => {
     if (scenario === "unknown runtime") {
       vi.mocked(service.readRuntime).mockResolvedValue(serviceRuntime("unknown"));
     } else if (scenario === "unknown command") {
@@ -379,51 +391,44 @@ it.each([
     } else if (scenario === "unknown listener") {
       vi.mocked(portProbe.probePortUsage).mockResolvedValue("unknown");
     }
-    const publish = vi.fn(async () => "published");
-    await expect(
-      withGatewayRuntimeArtifactPublication(publicationOptions(root, env), publish),
-    ).rejects.toThrow(
+    const effect = vi.fn(async () => "published");
+    await expect(publish(effect)).rejects.toThrow(
       /affected Gateway.*openclaw gateway status --deep.*openclaw gateway stop.*retry the original command/,
     );
-    expect(publish).not.toHaveBeenCalled();
+    expect(effect).not.toHaveBeenCalled();
   }),
 );
 
 it("refuses changed runtime publication while another process owns Gateway presence", () =>
-  withRuntimePublicationFixture(async ({ root, env, databasePath }) => {
+  withRuntimePublicationFixture(async ({ databasePath, publish }) => {
     const other = tryAcquireGatewayStateOwner(databasePath);
     expect(other).not.toBeNull();
-    const publish = vi.fn(async () => "published");
+    const effect = vi.fn(async () => "published");
     try {
-      await expect(
-        withGatewayRuntimeArtifactPublication(publicationOptions(root, env), publish),
-      ).rejects.toThrow(/affected Gateway/);
-      expect(publish).not.toHaveBeenCalled();
+      await expect(publish(effect)).rejects.toThrow(/affected Gateway/);
+      expect(effect).not.toHaveBeenCalled();
     } finally {
       other?.release();
     }
   }));
 
 it("publishes changed artifacts for an affirmatively absent Gateway", () =>
-  withRuntimePublicationFixture(async ({ root, env, service, databasePath }) => {
+  withRuntimePublicationFixture(async ({ service, databasePath, publish }) => {
     service.isAbsent = vi.fn(async () => true);
     await expect(
-      withGatewayRuntimeArtifactPublication(
-        publicationOptions(root, env),
-        async (assertCurrent) => {
-          await Promise.resolve();
-          await assertCurrent();
-          expect(tryAcquireGatewayStateOwner(databasePath)).toBeNull();
-          return "published";
-        },
-      ),
+      publish(async (assertCurrent) => {
+        await Promise.resolve();
+        await assertCurrent();
+        expect(tryAcquireGatewayStateOwner(databasePath)).toBeNull();
+        return "published";
+      }),
     ).resolves.toBe("published");
   }));
 
 it.each(["shared SDK alias", "nested shared output"])(
   "distinguishes physical runtime paths from current/releases ownership: %s",
   (scenario) =>
-    withRuntimePublicationFixture(async ({ home, root, env, service, databasePath }) => {
+    withRuntimePublicationFixture(async ({ home, root, service, databasePath, publish }) => {
       const snapshot = path.join(home, "releases", "previous");
       await writeRuntimeRoot(snapshot);
       const current = path.join(home, "current");
@@ -447,17 +452,14 @@ it.each(["shared SDK alias", "nested shared output"])(
       vi.mocked(portProbe.probePortUsage).mockResolvedValue("busy");
       const other = tryAcquireGatewayStateOwner(databasePath);
       expect(other).not.toBeNull();
-      const publish = vi.fn(async (assertCurrent: () => Promise<void>) => {
+      const effect = vi.fn(async (assertCurrent: () => Promise<void>) => {
         await assertCurrent();
         return "published";
       });
       try {
-        const result = withGatewayRuntimeArtifactPublication(
-          publicationOptions(root, env),
-          publish,
-        );
+        const result = publish(effect);
         await expect(result).rejects.toThrow(/affected Gateway/);
-        expect(publish).not.toHaveBeenCalled();
+        expect(effect).not.toHaveBeenCalled();
       } finally {
         other?.release();
       }
@@ -473,7 +475,7 @@ it.each([
   },
   { label: "physically disjoint", late: false, output: "dist-runtime", shared: undefined },
 ])("fences runtime-only publication against a sibling that is $label", ({ late, output, shared }) =>
-  withRuntimePublicationFixture(async ({ home, root, env, service }) => {
+  withRuntimePublicationFixture(async ({ home, root, service, publish }) => {
     const sibling = path.join(home, "sibling");
     await writeRuntimeRoot(sibling);
     await fs.mkdir(path.join(root, output), { recursive: true });
@@ -504,8 +506,7 @@ it.each([
     }));
     const artifact = path.join(root, output, "published.txt");
     await fs.writeFile(artifact, "original");
-    const publication = withGatewayRuntimeArtifactPublication(
-      { ...publicationOptions(root, env), outputPaths: [output] },
+    const publication = publish(
       async (assertPublicationCurrent) => {
         if (late) {
           await discoverSibling();
@@ -513,6 +514,7 @@ it.each([
         await assertPublicationCurrent();
         await fs.writeFile(artifact, "candidate");
       },
+      { outputPaths: [output] },
     );
     const overlaps = shared === output;
     if (overlaps) {
@@ -524,80 +526,62 @@ it.each([
   }),
 );
 
-it.each(["inspection", "publication"])(
-  "retains the caller's publication lease across %s awaits",
-  (when) =>
-    withRuntimePublicationFixture(async ({ root, env, service }) => {
+it.each(["inspection lease", "publication lease", "running", "disjoint becomes unknown"])(
+  "rechecks publication authority after an awaited boundary: %s",
+  (change) =>
+    withRuntimePublicationFixture(async ({ root, service, publish }) => {
+      const callerLease = change.endsWith("lease");
       let current = true;
-      if (when === "inspection") {
+      if (change === "inspection lease") {
         vi.mocked(service.readRuntime).mockImplementation(async () => {
           await Promise.resolve();
           current = false;
           return serviceRuntime("stopped");
         });
-      }
-      const mutate = vi.fn();
-      await expect(
-        withGatewayRuntimeArtifactPublication(
-          {
-            ...publicationOptions(root, env),
-            assertCurrent() {
-              if (!current) {
-                throw new Error("publication lease lost");
-              }
-            },
-          },
-          async (assertCurrent) => {
-            await Promise.resolve();
-            current = false;
-            await assertCurrent();
-            mutate();
-          },
-        ),
-      ).rejects.toThrow("publication lease lost");
-      expect(mutate).not.toHaveBeenCalled();
-    }),
-);
-
-it.each(["running", "disjoint becomes unknown"])(
-  "rechecks publication authority after an awaited boundary: %s",
-  (change) =>
-    withRuntimePublicationFixture(async ({ root, env, service }) => {
-      if (change.startsWith("disjoint")) {
+      } else if (change === "disjoint becomes unknown") {
         const snapshot = path.join(root, ".artifacts", "serving");
         await writeRuntimeRoot(snapshot);
         vi.mocked(service.readCommand).mockResolvedValue({
           programArguments: serviceCommand(snapshot),
         });
       }
-      const untouched = path.join(root, "dist-runtime", "unchanged.txt");
-      await fs.writeFile(untouched, "original");
-      const beforePersistentEffect = async () => {
-        await Promise.resolve();
-        if (change === "running") {
-          vi.mocked(service.readRuntime).mockResolvedValue(serviceRuntime("running"));
-        } else if (change === "disjoint becomes unknown") {
-          vi.mocked(service.readCommand).mockResolvedValue(null);
-        }
-      };
+      const artifact = path.join(root, "dist-runtime", "unchanged.txt");
+      await fs.writeFile(artifact, "original");
+      const mutate = vi.fn(async () => {
+        await fs.writeFile(artifact, "published");
+      });
       await expect(
-        withGatewayRuntimeArtifactPublication(
-          publicationOptions(root, env),
-          async (assertPublicationCurrent) => {
-            await beforePersistentEffect();
-            await assertPublicationCurrent();
-            await fs.writeFile(untouched, "published");
+        publish(
+          async (assertCurrent) => {
+            await Promise.resolve();
+            if (callerLease) {
+              current = false;
+            } else if (change === "running") {
+              vi.mocked(service.readRuntime).mockResolvedValue(serviceRuntime("running"));
+            } else {
+              vi.mocked(service.readCommand).mockResolvedValue(null);
+            }
+            await assertCurrent();
+            await mutate();
+          },
+          {
+            assertCurrent() {
+              if (!current) {
+                throw new Error("publication lease lost");
+              }
+            },
           },
         ),
-      ).rejects.toThrow(/affected Gateway/);
-      expect(await fs.readFile(untouched, "utf8")).toBe("original");
+      ).rejects.toThrow(callerLease ? "publication lease lost" : /affected Gateway/);
+      expect(mutate).not.toHaveBeenCalled();
+      expect(await fs.readFile(artifact, "utf8")).toBe("original");
     }),
 );
 
 it.each(["repository", "existing alias parent", "missing alias parent"])(
   "rejects an awaited physical target redirection with no native service: %s",
   (change) =>
-    withRuntimePublicationFixture(async ({ home, root, env, service }) => {
+    withRuntimePublicationFixture(async ({ home, root, service, publish }) => {
       service.isAbsent = vi.fn(async () => true);
       const parent = path.join(root, "dist", "extensions", "node_modules");
       const replacement = path.join(home, "replacement");
@@ -606,76 +590,67 @@ it.each(["repository", "existing alias parent", "missing alias parent"])(
         await fs.mkdir(parent, { recursive: true });
       }
       await expect(
-        withGatewayRuntimeArtifactPublication(
-          publicationOptions(root, env),
-          async (assertPublicationCurrent) => {
-            await Promise.resolve();
-            if (change === "repository") {
-              await fs.rename(root, `${root}-before`);
-              await fs.symlink(replacement, root, "junction");
+        publish(async (assertPublicationCurrent) => {
+          await Promise.resolve();
+          if (change === "repository") {
+            await fs.rename(root, `${root}-before`);
+            await fs.symlink(replacement, root, "junction");
+          } else {
+            if (change === "existing alias parent") {
+              await fs.rename(parent, `${parent}-before`);
             } else {
-              if (change === "existing alias parent") {
-                await fs.rename(parent, `${parent}-before`);
-              } else {
-                await fs.mkdir(path.dirname(parent), { recursive: true });
-              }
-              await fs.symlink(replacement, parent, "junction");
+              await fs.mkdir(path.dirname(parent), { recursive: true });
             }
-            await assertPublicationCurrent();
-            await fs.writeFile(path.join(replacement, "published.txt"), "changed");
-          },
-        ),
+            await fs.symlink(replacement, parent, "junction");
+          }
+          await assertPublicationCurrent();
+          await fs.writeFile(path.join(replacement, "published.txt"), "changed");
+        }),
       ).rejects.toThrow(/affected Gateway/);
       expect(await fs.readdir(replacement)).toEqual([]);
     }),
 );
 
 it("permits its output-root replacement and new alias descendants while retaining parent identity", () =>
-  withRuntimePublicationFixture(async ({ root, env }) => {
+  withRuntimePublicationFixture(async ({ root, publish }) => {
     const runtime = path.join(root, "dist-runtime");
     const previous = path.join(root, "previous-runtime");
     const alias = path.join(root, "dist", "extensions", "node_modules", "openclaw");
-    await withGatewayRuntimeArtifactPublication(
-      publicationOptions(root, env),
-      async (assertCurrent) => {
-        await assertCurrent();
-        await fs.rename(runtime, previous);
-        await assertCurrent();
-        await fs.mkdir(runtime);
-        await assertCurrent();
-        await fs.mkdir(alias, { recursive: true });
-        await assertCurrent();
-        await fs.writeFile(path.join(runtime, "published.txt"), "new runtime");
-      },
-    );
+    await publish(async (assertCurrent) => {
+      await assertCurrent();
+      await fs.rename(runtime, previous);
+      await assertCurrent();
+      await fs.mkdir(runtime);
+      await assertCurrent();
+      await fs.mkdir(alias, { recursive: true });
+      await assertCurrent();
+      await fs.writeFile(path.join(runtime, "published.txt"), "new runtime");
+    });
     expect(await fs.readFile(path.join(runtime, "published.txt"), "utf8")).toBe("new runtime");
     expect((await fs.stat(alias)).isDirectory()).toBe(true);
   }));
 
 it("holds native and Gateway exclusion through publication rollback and closes its assertion", () =>
-  withRuntimePublicationFixture(async ({ root, env, databasePath }) => {
+  withRuntimePublicationFixture(async ({ env, databasePath, publish }) => {
     let retainedAssertion: (() => Promise<void>) | undefined;
     let rolledBack = false;
     await expect(
-      withGatewayRuntimeArtifactPublication(
-        publicationOptions(root, env),
-        async (assertCurrent) => {
-          retainedAssertion = assertCurrent;
-          try {
+      publish(async (assertCurrent) => {
+        retainedAssertion = assertCurrent;
+        try {
+          await assertCurrent();
+          expect(tryAcquireGatewayStateOwner(databasePath)).toBeNull();
+          throw new Error("publication failed");
+        } finally {
+          await withGatewayServiceOperationLock(env, async (assertNative) => {
+            await Promise.resolve();
             await assertCurrent();
+            assertNative();
             expect(tryAcquireGatewayStateOwner(databasePath)).toBeNull();
-            throw new Error("publication failed");
-          } finally {
-            await withGatewayServiceOperationLock(env, async (assertNative) => {
-              await Promise.resolve();
-              await assertCurrent();
-              assertNative();
-              expect(tryAcquireGatewayStateOwner(databasePath)).toBeNull();
-              rolledBack = true;
-            });
-          }
-        },
-      ),
+            rolledBack = true;
+          });
+        }
+      }),
     ).rejects.toThrow("publication failed");
     expect(rolledBack).toBe(true);
     await expect(retainedAssertion!()).rejects.toThrow(/ownership has closed/);
@@ -685,7 +660,7 @@ it("holds native and Gateway exclusion through publication rollback and closes i
   }));
 
 it("settles cleanup writes and releases publication custody after disposal fails", () =>
-  withRuntimePublicationFixture(async ({ root, env, databasePath }) => {
+  withRuntimePublicationFixture(async ({ env, databasePath, publish }) => {
     openOpenClawStateDatabase({ env });
     const entered = createDeferredCore();
     const resume = createDeferredCore();
@@ -693,28 +668,25 @@ it("settles cleanup writes and releases publication custody after disposal fails
     let accepted: Promise<void> | undefined;
     let settled = false;
     let observedError: unknown;
-    const publication = withGatewayRuntimeArtifactPublication(
-      publicationOptions(root, env),
-      async () => {
-        const maintenance = getOpenClawDatabaseMaintenanceScope();
-        if (!maintenance) {
-          throw new Error("Expected publication maintenance authority");
-        }
-        maintenance.own({}, "shared-resources", () => {
-          accepted = maintenance.run(async () => {
-            entered.resolve();
-            await resume.promise;
-            openOpenClawStateDatabase({ env })
-              .db.prepare(
-                "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES ('publication-cleanup-proof', 'true', 1)",
-              )
-              .run();
-          });
-          throw cleanupFailure;
+    const publication = publish(async () => {
+      const maintenance = getOpenClawDatabaseMaintenanceScope();
+      if (!maintenance) {
+        throw new Error("Expected publication maintenance authority");
+      }
+      maintenance.own({}, "shared-resources", () => {
+        accepted = maintenance.run(async () => {
+          entered.resolve();
+          await resume.promise;
+          openOpenClawStateDatabase({ env })
+            .db.prepare(
+              "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES ('publication-cleanup-proof', 'true', 1)",
+            )
+            .run();
         });
-        return "published";
-      },
-    ).then(
+        throw cleanupFailure;
+      });
+      return "published";
+    }).then(
       () => {
         settled = true;
       },

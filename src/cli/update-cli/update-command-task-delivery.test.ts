@@ -62,7 +62,19 @@ function seededOrphans() {
   expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
   expect(db.prepare("PRAGMA foreign_key_check").all()).toHaveLength(18);
   db.close();
-  return { root, env, filename, rows };
+  return {
+    root,
+    env,
+    filename,
+    rows,
+    createRun: () => createUpdateRun({ trigger: "cli" }, { env }),
+    exec: (sql: string) => inspect(filename, (connection) => connection.exec(sql)),
+    all: (sql: string) => inspect(filename, (connection) => connection.prepare(sql).all()),
+    count: (table: string) =>
+      inspect(filename, (connection) =>
+        connection.prepare(`SELECT count(*) AS count FROM ${table}`).get(),
+      ),
+  };
 }
 
 function inspect<T>(filename: string, run: (db: DatabaseSync) => T): T {
@@ -118,14 +130,12 @@ it("admits cascade-owned task-delivery orphans with preservation and a durable r
   inspect(path.join(directory, "database.sqlite"), (db) => {
     expect(db.prepare("PRAGMA foreign_key_check").all()).toHaveLength(18);
   });
-  inspect(f.filename, (db) => {
-    expect(db.prepare("SELECT task_id FROM task_delivery_state").all()).toEqual([
-      { task_id: "kept-task" },
-    ]);
-    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-    expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-    expect(db.prepare("SELECT count(*) AS count FROM update_runs").get()).toEqual({ count: 1 });
-  });
+  expect(f.all("SELECT task_id FROM task_delivery_state")).toEqual([{ task_id: "kept-task" }]);
+  expect(f.all("PRAGMA foreign_key_check")).toEqual([]);
+  inspect(f.filename, (db) =>
+    expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" }),
+  );
+  expect(f.count("update_runs")).toEqual({ count: 1 });
   completeUpdateCommandRun({ status: "ok", mode: "npm", durationMs: 1, steps: [] }, run);
   const record = getUpdateRun(run.runId, { env: f.env });
   expect(record?.status).toBe("succeeded");
@@ -137,49 +147,46 @@ it("admits cascade-owned task-delivery orphans with preservation and a durable r
   expect(recovery?.detail).toContain(directories[0]);
 });
 
-it.each(["non-cascade", "structural"] as const)(
-  "refuses %s damage without admission or recovery",
-  (damage) => {
+it.each([
+  ["non-cascade", /foreign_key_check failed/, 0],
+  ["structural", /integrity_check failed/, 0],
+  ["dependent", /foreign_key_check failed/, undefined],
+  ["ledger trigger", /unknown_ledger_trigger/, 1],
+] as const)(
+  "refuses %s damage without changing ledger or task rows",
+  (damage, error, recoveryCount) => {
     const f = seededOrphans();
     if (damage === "non-cascade") {
-      inspect(f.filename, (db) =>
-        db.exec(`PRAGMA foreign_keys = OFF;
+      f.exec(`PRAGMA foreign_keys = OFF;
       CREATE TABLE unrelated_parent (id TEXT PRIMARY KEY);
       CREATE TABLE unrelated_child (id TEXT REFERENCES unrelated_parent(id));
-      INSERT INTO unrelated_child VALUES ('missing');`),
-      );
-    } else {
+      INSERT INTO unrelated_child VALUES ('missing');`);
+    } else if (damage === "structural") {
       createUnsafeIndexDrift(f.filename);
+    } else if (damage === "dependent") {
+      f.exec(`CREATE TABLE dependent (
+    task_id TEXT REFERENCES task_delivery_state(task_id) ON DELETE CASCADE);
+    INSERT INTO dependent VALUES ('missing-task-0');`);
+    } else {
+      f.exec(`CREATE TRIGGER unknown_ledger_trigger
+    BEFORE INSERT ON update_runs BEGIN SELECT RAISE(ABORT, 'reject ledger insert'); END;`);
     }
-    expect(() => createUpdateRun({ trigger: "cli" }, { env: f.env })).toThrow(
-      damage === "non-cascade" ? /foreign_key_check failed/ : /integrity_check failed/,
-    );
-    inspect(f.filename, (db) => {
-      expect(db.prepare("SELECT count(*) AS count FROM task_delivery_state").get()).toEqual({
-        count: 19,
-      });
-      expect(db.prepare("SELECT count(*) AS count FROM update_runs").get()).toEqual({ count: 0 });
-    });
-    expect(recoveryDirectories(f.filename)).toEqual([]);
+    expect(f.createRun).toThrow(error);
+    if (damage === "non-cascade" || damage === "structural") {
+      expect(f.count("task_delivery_state")).toEqual({ count: 19 });
+    }
+    expect(f.count("update_runs")).toEqual({ count: 0 });
+    if (recoveryCount !== undefined) {
+      expect(recoveryDirectories(f.filename)).toHaveLength(recoveryCount);
+    }
+    if (damage === "dependent") {
+      expect(f.all("SELECT * FROM dependent")).toEqual([{ task_id: "missing-task-0" }]);
+    }
+    if (damage === "dependent" || damage === "ledger trigger") {
+      expect(f.all("PRAGMA foreign_key_check")).toHaveLength(18);
+    }
   },
 );
-
-it("preserves inbound CASCADE dependents when recovery is refused", () => {
-  const f = seededOrphans();
-  inspect(f.filename, (db) =>
-    db.exec(`CREATE TABLE dependent (
-    task_id TEXT REFERENCES task_delivery_state(task_id) ON DELETE CASCADE);
-    INSERT INTO dependent VALUES ('missing-task-0');`),
-  );
-  expect(() => createUpdateRun({ trigger: "cli" }, { env: f.env })).toThrow(
-    /foreign_key_check failed/,
-  );
-  inspect(f.filename, (db) => {
-    expect(db.prepare("SELECT * FROM dependent").all()).toEqual([{ task_id: "missing-task-0" }]);
-    expect(db.prepare("PRAGMA foreign_key_check").all()).toHaveLength(18);
-    expect(db.prepare("SELECT count(*) AS count FROM update_runs").get()).toEqual({ count: 0 });
-  });
-});
 
 it("reports repairable orphans and Doctor next action for foreign-gateway admission", () => {
   const f = seededOrphans();
@@ -199,24 +206,9 @@ it("reports repairable orphans and Doctor next action for foreign-gateway admiss
     parsePayload: parseGatewayLockPayload,
   });
   try {
-    expect(() => createUpdateRun({ trigger: "cli" }, { env: f.env })).toThrow(
-      /repairable[\s\S]*openclaw doctor --fix/iu,
-    );
+    expect(f.createRun).toThrow(/repairable[\s\S]*openclaw doctor --fix/iu);
     expectUnadmitted(f.filename);
   } finally {
     owner?.release();
   }
-});
-
-it("rolls back recovered rows when ledger schema refuses admission", () => {
-  const f = seededOrphans();
-  inspect(f.filename, (db) =>
-    db.exec(`CREATE TRIGGER unknown_ledger_trigger
-    BEFORE INSERT ON update_runs BEGIN SELECT RAISE(ABORT, 'reject ledger insert'); END;`),
-  );
-  expect(() => createUpdateRun({ trigger: "cli" }, { env: f.env })).toThrow(
-    /unknown_ledger_trigger/,
-  );
-  expectUnadmitted(f.filename);
-  expect(recoveryDirectories(f.filename)).toHaveLength(1);
 });
