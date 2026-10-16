@@ -319,11 +319,15 @@ describe("link reader document content", () => {
     await Promise.resolve();
     expect(firstImage.hasAttribute("src")).toBe(false);
     expect(secondImage.hasAttribute("src")).toBe(false);
+    firstImage.dispatchEvent(new Event("error"));
+    expect(firstImage.hidden).toBe(false);
 
     mounted.unmount();
     pending.get("https://images.example/second.png")!("blob:second");
     await Promise.resolve();
     expect(secondImage.hasAttribute("src")).toBe(false);
+    secondImage.dispatchEvent(new Event("error"));
+    expect(secondImage.hidden).toBe(false);
   });
 
   it("never creates image requests for unsafe/local sources or activates remote document instructions", () => {
