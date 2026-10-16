@@ -50,6 +50,8 @@ function providerIdentity(source: ProviderIdentitySource, provider: string): unk
   const { providers: _providers, ...models } = config.models ?? {};
   return {
     models,
+    // Config env may hold any provider's key; an edit hides every provider until republication.
+    env: config.env,
     provider: forProvider(config.models?.providers),
     authProfiles: Object.entries(config.auth?.profiles ?? {}).filter(
       ([, profile]) => normalizeProviderId(profile.provider) === provider,

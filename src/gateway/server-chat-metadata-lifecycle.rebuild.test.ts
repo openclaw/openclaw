@@ -115,6 +115,11 @@ it("serves the published list while a provider never answers and hides a removed
       agents: { ...config.agents, defaults: { ...config.agents?.defaults, models: {} } },
     };
     expect(await read()).not.toContain("openai/gpt-5.4");
+    activeConfig = config;
+    expect(await read()).toContain("openai/gpt-5.4");
+    // An edit to the config env section may remove a provider key.
+    activeConfig = { ...config, env: { vars: { OPENAI_API_KEY: "" } } };
+    expect(await read()).not.toContain("openai/gpt-5.4");
   } finally {
     discovery.resolve({ entries: [model], routeVariants: [] });
     await rebuild;
