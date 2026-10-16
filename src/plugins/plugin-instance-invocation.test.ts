@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import {
   bindPluginMetadataSnapshotCache,
@@ -20,26 +20,19 @@ import {
   withPluginRuntimeGenerationScope,
 } from "./runtime/generation-scope.js";
 
+afterEach(() => vi.restoreAllMocks());
+
 it("reuses one identity descriptor per instance across repeated invocations", async () => {
-  const instances = [
-    createOwnedTestInstance("paired-scope"),
-    createOwnedTestInstance("other-scope"),
-  ];
+  const instances = ["paired-scope", "other-scope"].map((id) => createOwnedTestInstance(id));
   const scopes = vi.spyOn(gatewayScope, "withPluginRuntimePluginScope");
-  try {
-    for (const instance of instances) {
-      for (let index = 0; index < 100; index++) {
-        instance.run(() => {
-          expect(getScope()?.pluginId).toBe(instance.pluginId);
-        });
-      }
+  for (const instance of instances) {
+    for (let index = 0; index < 100; index++) {
+      instance.run(() => expect(getScope()?.pluginId).toBe(instance.pluginId));
     }
-    const identities = scopes.mock.calls.map(([scope]) => scope);
-    expect(identities).toHaveLength(200);
-    expect(new Set(identities).size).toBe(2);
-  } finally {
-    scopes.mockRestore();
   }
+  const identities = scopes.mock.calls.map(([scope]) => scope);
+  expect(identities).toHaveLength(200);
+  expect(new Set(identities).size).toBe(2);
 });
 
 it.each(["ordinary", "consumer"] as const)(
@@ -47,6 +40,7 @@ it.each(["ordinary", "consumer"] as const)(
   async (kind) => {
     const instance = createOwnedTestInstance("paired-scope");
     const consumer = kind === "consumer" ? instance.retainConsumer() : undefined;
+    onTestFinished(() => consumer?.release());
     let retained: (() => void) | undefined;
     let outer: ReturnType<typeof getScope>;
     let calls = 0;
@@ -57,29 +51,23 @@ it.each(["ordinary", "consumer"] as const)(
       expect(getScope()).toBe(outer);
     });
     const frames = vi.spyOn(AsyncLocalStorage.prototype, "run");
-    try {
-      hook(() => {
-        calls++;
-        const scope = getScope();
-        expect(scope?.pluginId).toBe(instance.pluginId);
-        expect(scope).not.toBe(outer);
-      });
-      // One plugin invocation plus one independently admitted caller callback.
-      expect(frames).toHaveBeenCalledTimes(2);
-      frames.mockRestore();
-      expect(getScope()).toBeUndefined();
-      if (consumer) {
-        consumer.release();
-        expect(instance.run(() => "still open")).toBe("still open");
-      } else {
-        await instance.dispose();
-      }
-      expect(() => retained!()).toThrow(consumer ? "consumer is closed" : "reloaded or disabled");
-      expect(calls).toBe(1);
-    } finally {
-      frames.mockRestore();
-      consumer?.release();
+    hook(() => {
+      calls++;
+      const scope = getScope();
+      expect(scope?.pluginId).toBe(instance.pluginId);
+      expect(scope).not.toBe(outer);
+    });
+    expect(frames).toHaveBeenCalledTimes(2);
+    frames.mockRestore();
+    expect(getScope()).toBeUndefined();
+    if (consumer) {
+      consumer.release();
+      expect(instance.run(() => "still open")).toBe("still open");
+    } else {
+      await instance.dispose();
     }
+    expect(() => retained!()).toThrow(consumer ? "consumer is closed" : "reloaded or disabled");
+    expect(calls).toBe(1);
   },
 );
 
@@ -130,8 +118,7 @@ it("preserves Gateway and generation context through invocation exit and rejecti
               expect(getScope()).toBe(gateway);
               expectGeneration();
             });
-            expect(pluginInstanceInvocation.getStore()).toBeUndefined();
-            expect(getScope()).toBe(gateway);
+            expectContext(undefined, gateway);
             throw failure;
           }),
         ).rejects.toBe(failure);

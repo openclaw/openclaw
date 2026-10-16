@@ -20,6 +20,7 @@ import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
 import { PluginInstance } from "./plugin-instance.js";
 import {
   chunks,
+  createTestInstance,
   drainTimeout,
   expectUnavailable,
   throwing,
@@ -121,34 +122,61 @@ async function consume(kind: "agent" | "summary" | "branch" | "model-summary", s
   return typeof result.value === "string" ? result.value : result.value.summary;
 }
 
-it.each([false, true])(
-  "rechecks retained authority for results after forced retirement (released: %s)",
-  async (released) => {
+it.each([
+  { mode: "result", released: false },
+  { mode: "result", released: true },
+  { mode: "callback", released: false },
+] as const)(
+  "retains $mode call authority through retirement (released: $released)",
+  async ({ mode, released }) => {
     vi.useFakeTimers();
-    const instance = new PluginInstance("retained-result");
+    const instance = new PluginInstance("retained-call");
     const consumer = instance.retainConsumer();
     const finish = createDeferredCore<string>();
-    const operation = instance.wrap(() => finish.promise);
-    const pending = consumer.run(operation);
+    const entered = createDeferredCore();
+    const helper = instance.wrap(() => "original-owner");
+    const invokeCallback = instance.wrap(
+      async (callback: () => Promise<string>) => await callback(),
+    );
+    const call =
+      mode === "result"
+        ? instance.wrap(() => finish.promise)
+        : () =>
+            invokeCallback(async () => {
+              entered.resolve();
+              await finish.promise;
+              return helper();
+            });
+    const pending = consumer.run(call);
     void pending.catch(() => {});
+    if (mode === "callback") {
+      await entered.promise;
+    }
     const retirement = instance.dispose();
     let settlement: Promise<void> | undefined;
     try {
-      await vi.advanceTimersByTimeAsync(5_000);
-      const timeout = drainTimeout((await retirement).errors[0]);
-      settlement = timeout.settled;
-      expectUnavailable(() => instance.run(() => "fresh"));
+      await vi.advanceTimersByTimeAsync(mode === "callback" ? 4_999 : 5_000);
+      if (mode === "result") {
+        settlement = drainTimeout((await retirement).errors[0]).settled;
+        expectUnavailable(() => instance.run(() => "fresh"));
+      }
       if (released) {
         consumer.release();
       }
       finish.resolve("completed");
+      if (mode === "callback") {
+        await vi.advanceTimersByTimeAsync(0);
+      }
       if (released) {
         await expect(pending).rejects.toBeInstanceOf(PluginInstanceUnavailableError);
       } else {
-        await expect(pending).resolves.toBe("completed");
-        consumer.release();
+        await expect(pending).resolves.toBe(mode === "result" ? "completed" : "original-owner");
       }
-      expect(() => consumer.run(operation)).toThrow("consumer is closed");
+      if (mode === "callback") {
+        expectUnavailable(helper);
+      }
+      consumer.release();
+      expect(() => consumer.run(call)).toThrow("consumer is closed");
       await settlement;
     } finally {
       finish.resolve("completed");
@@ -198,15 +226,13 @@ it("admits an async stream factory through recovery before retirement can finish
     return source;
   });
   const stream = wrapAnthropicStreamWithRecovery(factory, { id: "async-factory-fixture" });
-  const output = consume("summary", stream).then(
-    (value) => ({ status: "fulfilled", value }),
-    (error: unknown) => ({ status: "rejected", error }),
-  );
+  const output = consume("summary", stream);
+  void output.catch(() => {});
   await factoryStarted.promise;
   const closing = instance.dispose();
   try {
     releaseFactory.resolve();
-    expect(await output).toEqual({ status: "fulfilled", value: "Synthetic summary" });
+    await expect(output).resolves.toBe("Synthetic summary");
     await closing;
   } finally {
     releaseFactory.resolve();
@@ -244,10 +270,8 @@ it.each(["agent", "branch", "model-summary"] as const)(
     const output = consume(
       kind,
       instance.wrap(() => source),
-    ).then(
-      (value) => ({ status: "fulfilled", value }),
-      (error: unknown) => ({ status: "rejected", error }),
     );
+    void output.catch(() => {});
     try {
       await Promise.race([iteratorFinishing.promise, output]);
       const retirement = trackCompletion(instance.dispose());
@@ -258,10 +282,7 @@ it.each(["agent", "branch", "model-summary"] as const)(
       expect(events).toEqual(["iterate", "iteration-ended", "result-started"]);
       expect(retirement.done).toBe(false);
       terminal.resolve();
-      expect(await output).toMatchObject({
-        status: "fulfilled",
-        value: expect.stringContaining("Synthetic summary"),
-      });
+      await expect(output).resolves.toContain("Synthetic summary");
       await closing;
       expect(retirement.done).toBe(true);
     } finally {
@@ -274,7 +295,7 @@ it.each(["agent", "branch", "model-summary"] as const)(
 );
 
 it("aborts an error response before invoking its decorated result hook", async () => {
-  const instance = new PluginInstance("terminal-order");
+  const instance = createTestInstance("terminal-order");
   const failure = { ...message, stopReason: "error" as const, errorMessage: "synthetic failure" };
   let signal: AbortSignal | undefined;
   const result = vi.fn(async () => {
@@ -289,12 +310,8 @@ it("aborts an error response before invoking its decorated result hook", async (
       result,
     };
   });
-  try {
-    await consume("agent", stream);
-    expect(result).toHaveBeenCalledOnce();
-  } finally {
-    await instance.dispose();
-  }
+  await consume("agent", stream);
+  expect(result).toHaveBeenCalledOnce();
 });
 
 it("rejects consumption after the exact stream owner has disposed", async () => {
@@ -348,38 +365,6 @@ it("keeps retained consumers separate from ordinary drain when cleanup rejects",
     first.release();
     second.release();
     await (closing ?? instance.dispose());
-    vi.useRealTimers();
-  }
-});
-
-it("keeps wrapped callback continuations in their retained consumer", async () => {
-  vi.useFakeTimers();
-  const instance = new PluginInstance("nested-consumer");
-  const consumer = instance.retainConsumer();
-  const entered = createDeferredCore();
-  const resume = createDeferredCore();
-  const helper = instance.wrap(() => "original-owner");
-  const invokeCallback = instance.wrap(async (callback: () => Promise<string>) => await callback());
-  const operation = consumer.run(() =>
-    invokeCallback(async () => {
-      entered.resolve();
-      await resume.promise;
-      return helper();
-    }),
-  );
-  void operation.catch(() => {});
-  await entered.promise;
-  const closing = instance.dispose();
-  try {
-    await vi.advanceTimersByTimeAsync(4_999);
-    resume.resolve();
-    await vi.advanceTimersByTimeAsync(0);
-    await expect(operation).resolves.toBe("original-owner");
-    expectUnavailable(() => helper());
-  } finally {
-    consumer.release();
-    resume.resolve();
-    await Promise.allSettled([operation, closing]);
     vi.useRealTimers();
   }
 });

@@ -19,6 +19,10 @@ import {
 } from "./registry-lifecycle.js";
 import { getPluginRuntimeGatewayRequestScope as getScope } from "./runtime/gateway-request-scope.js";
 
+class RetainedRegistry {
+  readonly fixtureLabel = "RetainedRegistry";
+}
+
 it.each([
   { kind: "run", reject: false },
   { kind: "run", reject: true },
@@ -27,15 +31,12 @@ it.each([
 ] as const)(
   "retains an adopted selection through a pending $kind (reject: $reject)",
   async ({ kind, reject }) => {
-    class PendingRegistry {
-      readonly fixtureLabel = "PendingRegistry";
-    }
     const { record, instance } = createOwnedInstance("retention");
     const consumer = kind === "consumer" ? instance.retainConsumer() : undefined;
     const resume = createDeferredCore();
     const failure = new Error("callback failed");
     let observed: string | undefined;
-    selectRegistry(record, "intermediate", new PendingRegistry());
+    selectRegistry(record, "intermediate", new RetainedRegistry());
     const pending = (consumer ?? instance).run(async () => {
       await resume.promise;
       observed = readRegistryLabel();
@@ -45,25 +46,21 @@ it.each([
       return observed;
     });
     selectRegistry(record, "successor");
-    const outcome = pending.then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    );
+    void pending.catch(() => {});
     try {
-      await expectLiveObjects(PendingRegistry, 1);
+      await expectLiveObjects(RetainedRegistry, 1);
       resume.resolve();
-      expect(await outcome).toEqual(reject ? { error: failure } : { value: "intermediate" });
-      expect(observed).toBe("intermediate");
-      await expectLiveObjects(PendingRegistry, 0);
       if (reject) {
         await expect(pending).rejects.toBe(failure);
       } else {
         await expect(pending).resolves.toBe("intermediate");
       }
+      expect(observed).toBe("intermediate");
+      await expectLiveObjects(RetainedRegistry, 0);
       expect((consumer ?? instance).run(readRegistryLabel)).toBe("successor");
     } finally {
       resume.resolve();
-      await outcome;
+      await pending.catch(() => {});
       consumer?.release();
       await instance.dispose();
     }
@@ -71,9 +68,6 @@ it.each([
 );
 
 it("keeps resolved value identity and independent registry custody for concurrent consumer calls", async () => {
-  class PendingRegistry {
-    readonly fixtureLabel = "PendingRegistry";
-  }
   const { record, instance } = createOwnedInstance("retention");
   const consumer = instance.retainConsumer();
   const nestedResume = createDeferredCore();
@@ -81,13 +75,13 @@ it("keeps resolved value identity and independent registry custody for concurren
   const nestedValue = Object.freeze({ selection: "nested" });
   const concurrentValue = Object.freeze({ selection: "concurrent" });
   const startNested = () => {
-    selectRegistry(record, "nested", new PendingRegistry());
+    selectRegistry(record, "nested", new RetainedRegistry());
     const nested = instance.run(async () => {
       await nestedResume.promise;
       expect(readRegistryLabel()).toBe("nested");
       return nestedValue;
     });
-    selectRegistry(record, "concurrent", new PendingRegistry());
+    selectRegistry(record, "concurrent", new RetainedRegistry());
     return nested;
   };
   const first = consumer.run(async () => await startNested());
@@ -98,15 +92,13 @@ it("keeps resolved value identity and independent registry custody for concurren
   });
   adoptPluginRegistryRecords({ ...createEmptyPluginRegistry(), plugins: [record] });
   try {
-    await expectLiveObjects(PendingRegistry, 2);
+    await expectLiveObjects(RetainedRegistry, 2);
     nestedResume.resolve();
     await expect(first).resolves.toBe(nestedValue);
-    await expectLiveObjects(PendingRegistry, 1);
+    await expectLiveObjects(RetainedRegistry, 1);
     concurrentResume.resolve();
     await expect(second).resolves.toBe(concurrentValue);
-    await expectLiveObjects(PendingRegistry, 0);
-    await expect(first).resolves.toBe(nestedValue);
-    await expect(second).resolves.toBe(concurrentValue);
+    await expectLiveObjects(RetainedRegistry, 0);
   } finally {
     nestedResume.resolve();
     concurrentResume.resolve();
@@ -119,9 +111,6 @@ it("keeps resolved value identity and independent registry custody for concurren
 it.each(["sync", "promise", "thenable"] as const)(
   "releases completed nested %s custody while its outer monitor remains active",
   async (kind) => {
-    class NestedRegistry {
-      readonly fixtureLabel = "NestedRegistry";
-    }
     const { record, instance } = createOwnedInstance("retention");
     const consumer = instance.retainConsumer();
     const outerFinish = createDeferredCore();
@@ -144,7 +133,7 @@ it.each(["sync", "promise", "thenable"] as const)(
       expect(instance.hasActiveCall).toBe(true);
       observed = readRegistryLabel();
     };
-    selectRegistry(record, "nested", new NestedRegistry());
+    selectRegistry(record, "nested", new RetainedRegistry());
     const nested = resource.runInAsyncScope(() =>
       instance.run(() => {
         if (kind === "sync") {
@@ -182,17 +171,14 @@ it.each(["sync", "promise", "thenable"] as const)(
       if (kind === "sync") {
         expect(nested).toBe(payload);
       }
-      await expectLiveObjects(NestedRegistry, kind === "sync" ? 0 : 1);
-      expect(outerSettled).toBe(false);
-      expect(instance.ordinaryCallCount).toBe(0);
+      await expectLiveObjects(RetainedRegistry, kind === "sync" ? 0 : 1);
+      expect([outerSettled, instance.ordinaryCallCount]).toEqual([false, 0]);
       nestedFinish.resolve();
       expect(await outcome).toBe(payload);
       expect(observed).toBe("nested");
-      expect(thenReads).toBe(kind === "thenable" ? 1 : 0);
-      expect(thenCalls).toBe(kind === "thenable" ? 1 : 0);
-      await expectLiveObjects(NestedRegistry, 0);
+      expect([thenReads, thenCalls]).toEqual(kind === "thenable" ? [1, 1] : [0, 0]);
+      await expectLiveObjects(RetainedRegistry, 0);
       expect(outerSettled).toBe(false);
-      expect(await outcome).toBe(payload);
     } finally {
       nestedFinish.resolve();
       await Promise.allSettled([outcome]);
@@ -206,14 +192,11 @@ it.each(["sync", "promise", "thenable"] as const)(
 );
 
 it("gives a completed consumer context fresh finite custody when it re-enters", async () => {
-  class PendingRegistry {
-    readonly fixtureLabel = "PendingRegistry";
-  }
   const { record, instance } = createOwnedInstance("retention");
   const consumer = instance.retainConsumer();
   const resource = consumer.run(() => new AsyncResource("completed-consumer-scope"));
   const resume = createDeferredCore();
-  selectRegistry(record, "late", new PendingRegistry());
+  selectRegistry(record, "late", new RetainedRegistry());
   const pending = resource.runInAsyncScope(() =>
     instance.run(async () => {
       await resume.promise;
@@ -222,11 +205,10 @@ it("gives a completed consumer context fresh finite custody when it re-enters", 
   );
   adoptPluginRegistryRecords({ ...createEmptyPluginRegistry(), plugins: [record] });
   try {
-    await expectLiveObjects(PendingRegistry, 1);
+    await expectLiveObjects(RetainedRegistry, 1);
     resume.resolve();
     await expect(pending).resolves.toBe("late");
-    await expectLiveObjects(PendingRegistry, 0);
-    await expect(pending).resolves.toBe("late");
+    await expectLiveObjects(RetainedRegistry, 0);
     expect(resource.runInAsyncScope(() => instance.run(() => "still admitted"))).toBe(
       "still admitted",
     );
@@ -241,8 +223,7 @@ it("gives a completed consumer context fresh finite custody when it re-enters", 
 
 it("releases the adopted registry only after consumer and module cleanup settle", async () => {
   const { registry, record, instance } = createOwnedInstance("retention");
-  const replacement = createEmptyPluginRegistry();
-  replacement.plugins.push(record);
+  const replacement = { ...createEmptyPluginRegistry(), plugins: [record] };
   adoptPluginRegistryRecords(replacement);
   const value = instance.adopt({ execute: () => "owned" });
   const call = instance.wrap(value.execute);
@@ -282,8 +263,7 @@ it("releases the adopted registry only after consumer and module cleanup settle"
 it("does not reacquire borrowed authority after its lender releases registry custody", async () => {
   const { registry, record, instance } = createOwnedInstance("retention");
   markPluginRegistryActive(registry);
-  const borrower = createEmptyPluginRegistry();
-  borrower.plugins.push(record);
+  const borrower = { ...createEmptyPluginRegistry(), plugins: [record] };
   markPluginRecordBorrowed(borrower, record);
   markPluginRegistryActive(borrower);
   const authority = capturePluginLifecycleAuthority(borrower, record);

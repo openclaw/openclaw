@@ -16,6 +16,8 @@ import { runPluginCleanup } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
 import {
   chunks,
+  createOwnedInstance,
+  createTestInstance,
   drainTimeout,
   expectUnavailable,
   iterable,
@@ -30,7 +32,6 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "./runtime/gateway-request-scope.js";
 import { withPluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
-import { createPluginRecord } from "./status.test-helpers.js";
 import type { OpenClawPluginApi } from "./types.js";
 
 afterEach(() => vi.useRealTimers());
@@ -182,16 +183,12 @@ it("admits teardown only from its host owner and fences retained cleanup after d
     return: helper,
   });
   instance.quiesce();
-  for (const method of Object.values(service)) {
-    expectUnavailable(() => method());
-  }
+  expectUnavailable(...Object.values(service));
   await runPluginCleanup(service, () => service.stop());
   expect(called).toHaveBeenCalledOnce();
   await instance.dispose();
   expect(() => runPluginCleanup(service, () => service.stop())).toThrow("retiring");
-  for (const method of Object.values(service)) {
-    expectUnavailable(() => method());
-  }
+  expectUnavailable(...Object.values(service));
   expect(called).toHaveBeenCalledOnce();
 });
 
@@ -218,10 +215,7 @@ it("preserves class receivers and fences callable re-exports, including frozen g
     static get reader() {
       return () => this.#label;
     }
-    #value: number;
-    constructor(value: number) {
-      this.#value = value;
-    }
+    #value = 2;
     get read() {
       return () => this.#value;
     }
@@ -233,7 +227,7 @@ it("preserves class receivers and fences callable re-exports, including frozen g
   const label: () => string = Reflect.get(WrappedCounter, "label");
   const readLabel = WrappedCounter.reader;
   expect([label(), readLabel()]).toEqual(["counter", "counter"]);
-  const counter = new WrappedCounter(2);
+  const counter = new WrappedCounter();
   const readExport = vi.fn(() => counter.read);
   const exports = instance.wrap(
     Object.freeze({
@@ -253,7 +247,7 @@ it("preserves class receivers and fences callable re-exports, including frozen g
   expectUnavailable(
     read,
     () => exports.read,
-    () => new WrappedCounter(4),
+    () => new WrappedCounter(),
     label,
     readLabel,
     () => WrappedCounter.reader,
@@ -264,32 +258,28 @@ it("preserves class receivers and fences callable re-exports, including frozen g
 it.each(["before wrapping", "after growing"] as const)(
   "preserves cross-realm array descriptors frozen %s",
   async (freezeAt) => {
-    const instance = new PluginInstance("frozen-array");
+    const instance = createTestInstance("frozen-array");
     const source: Array<{ execute(): string }> = runInNewContext(
       '[{ execute() { return "current"; } }]',
     );
-    try {
-      if (freezeAt === "before wrapping") {
-        Object.freeze(source);
-      }
-      const view = instance.wrap(source);
-      if (freezeAt === "after growing") {
-        source.push({ execute: () => "second" });
-      }
+    if (freezeAt === "before wrapping") {
       Object.freeze(source);
-      expect(Array.isArray(view)).toBe(true);
-      expect(Object.keys(view)).toEqual(Object.keys(source));
-      expect(Object.getOwnPropertyDescriptor(view, "length")).toEqual(
-        Object.getOwnPropertyDescriptor(source, "length"),
-      );
-      expect(view.length).toBe(source.length);
-      const execute: () => string = Reflect.get(view[0]!, "execute");
-      expect(execute()).toBe("current");
-      await instance.dispose();
-      expectUnavailable(() => execute());
-    } finally {
-      await instance.dispose();
     }
+    const view = instance.wrap(source);
+    if (freezeAt === "after growing") {
+      source.push({ execute: () => "second" });
+    }
+    Object.freeze(source);
+    expect(Array.isArray(view)).toBe(true);
+    expect(Object.keys(view)).toEqual(Object.keys(source));
+    expect(Object.getOwnPropertyDescriptor(view, "length")).toEqual(
+      Object.getOwnPropertyDescriptor(source, "length"),
+    );
+    expect(view.length).toBe(source.length);
+    const execute: () => string = Reflect.get(view[0]!, "execute");
+    expect(execute()).toBe("current");
+    await instance.dispose();
+    expectUnavailable(() => execute());
   },
 );
 
@@ -323,20 +313,14 @@ it.each(["iteratorMember", "asyncSourceMethod"] as const)(
   async (target) => {
     const instance = new PluginInstance("stream-values");
     const read = vi.fn(() => "owned value");
-    // A helper's data is not an iterator completion signal.
     const payload = { read, done: true };
     const iterator = Object.assign(chunks(payload), { member: payload });
     const stream = instance.wrap({
       [Symbol.asyncIterator]: () => iterator,
-      member: payload,
-      helper: () => read,
       helperAsync: async () => read,
     });
     const view = stream[Symbol.asyncIterator]();
-    const first = await view.next();
-    if (first.done) {
-      throw new Error("Expected the fixture's first chunk");
-    }
+    await expect(view.next()).resolves.toMatchObject({ done: false, value: { done: true } });
     const readers = {
       iteratorMember: () => view.member.read,
       asyncSourceMethod: () => stream.helperAsync(),
@@ -356,10 +340,9 @@ it.each(["source", "iterator"] as const)(
     const instance = new PluginInstance("stream-helper");
     const proceed = createDeferredCore();
     const events: string[] = [];
-    const cleaned = vi.fn(() => {
+    instance.lifecycle.onDispose(() => {
       events.push("cleanup");
     });
-    instance.lifecycle.onDispose(cleaned);
     const read = instance.wrap(() => "owned value");
     const inspect = async () => {
       await proceed.promise;
@@ -376,7 +359,7 @@ it.each(["source", "iterator"] as const)(
       await expect(iterator.next()).resolves.toEqual({ value: undefined, done: true });
       const disposing = instance.dispose();
       await Promise.resolve();
-      expect(cleaned).not.toHaveBeenCalled();
+      expect(events).toEqual([]);
       proceed.resolve();
       await expect(pending).resolves.toBe("owned value");
       await disposing;
@@ -404,13 +387,12 @@ it("releases a directly consumed async generator when its consumer returns early
   await stream.return(undefined);
   await draining;
   expect(finished).toHaveBeenCalledOnce();
-  await instance.dispose();
 });
 
 it.each(["completion", "failure"] as const)(
   "permits terminal return after %s without reentering plugin code",
   async (outcome) => {
-    const instance = new PluginInstance("terminal-return");
+    const instance = createTestInstance("terminal-return");
     const finished = vi.fn();
     const failure = new Error("generator failed");
     const source = (async function* () {
@@ -430,31 +412,27 @@ it.each(["completion", "failure"] as const)(
     const stream = instance.wrap(source);
     const iterator = stream[Symbol.asyncIterator]();
     const retainedReturn = iterator.return.bind(iterator);
-    try {
-      await expect(iterator.next()).resolves.toEqual({ done: false, value: "chunk" });
-      if (outcome === "failure") {
-        await expect(iterator.next()).rejects.toBe(failure);
-      } else {
-        await expect(iterator.next()).resolves.toEqual({ done: true, value: "original result" });
-      }
-      await instance.dispose();
-      for (const getClose of [
-        () => retainedReturn,
-        () => iterator.return.bind(iterator),
-        () => stream.return.bind(stream),
-      ]) {
-        await expect(getClose()(Promise.resolve("closed"))).resolves.toEqual({
-          done: true,
-          value: "closed",
-        });
-      }
-      expect(readReturn).toHaveBeenCalledOnce();
-      expect(finished).toHaveBeenCalledOnce();
-      await expect(iterator.next()).rejects.toThrow("was reloaded or disabled");
-      await expect(iterator.throw(failure)).rejects.toThrow("was reloaded or disabled");
-    } finally {
-      await instance.dispose();
+    await expect(iterator.next()).resolves.toEqual({ done: false, value: "chunk" });
+    if (outcome === "failure") {
+      await expect(iterator.next()).rejects.toBe(failure);
+    } else {
+      await expect(iterator.next()).resolves.toEqual({ done: true, value: "original result" });
     }
+    await instance.dispose();
+    for (const close of [
+      retainedReturn,
+      iterator.return.bind(iterator),
+      stream.return.bind(stream),
+    ]) {
+      await expect(close(Promise.resolve("closed"))).resolves.toEqual({
+        done: true,
+        value: "closed",
+      });
+    }
+    expect(readReturn).toHaveBeenCalledOnce();
+    expect(finished).toHaveBeenCalledOnce();
+    await expect(iterator.next()).rejects.toThrow("was reloaded or disabled");
+    await expect(iterator.throw(failure)).rejects.toThrow("was reloaded or disabled");
   },
 );
 
@@ -479,7 +457,6 @@ it("joins every explicitly admitted iterator and terminal result", async () => {
   expect(draining.done).toBe(false);
   await expect(second.next()).resolves.toEqual({ value: undefined, done: true });
   await draining.promise;
-  await instance.dispose();
 });
 
 it.each(["iteration", "result", "failure"] as const)(
@@ -490,12 +467,7 @@ it.each(["iteration", "result", "failure"] as const)(
     const cleanupFailure = new Error("owned cleanup failed");
     const cleanup = throwing(cleanupFailure);
     instance.lifecycle.onDispose(
-      terminal === "failure"
-        ? cleanup
-        : async () => {
-            await Promise.resolve();
-            cleanup();
-          },
+      terminal === "failure" ? cleanup : () => Promise.resolve().then(cleanup),
     );
     const iterate = async function* () {
       await instance.dispose();
@@ -621,18 +593,16 @@ it.each(["resolve", "reject"] as const)(
       });
       expect(result.errors).toEqual([timeout, cleanupFailure]);
       expect(cleanup).toHaveBeenCalledOnce();
-      let settled = false;
-      const settlement = timeout.settled.catch((error: unknown) => {
-        settled = true;
-        expect(error).toBeInstanceOf(AggregateError);
-        expect((error as AggregateError).errors).toEqual([cleanupFailure]);
-      });
+      const settlement = trackCompletion(
+        timeout.settled.catch((error: unknown) => {
+          expect(error).toBeInstanceOf(AggregateError);
+          expect((error as AggregateError).errors).toEqual([cleanupFailure]);
+        }),
+      );
       await Promise.resolve();
-      // Disposal revoked and cleared ordinary admission; neither action means
-      // the original promise returned or released its actual call lease.
       expect(instance.lifecycle.signal.aborted).toBe(true);
       expectUnavailable(() => instance.run(() => "retired"));
-      expect(settled).toBe(false);
+      expect(settlement.done).toBe(false);
       if (completion === "resolve") {
         pending.resolve("finished");
       } else {
@@ -643,8 +613,8 @@ it.each(["resolve", "reject"] as const)(
           ? { error: new PluginInstanceUnavailableError("late-call") }
           : { error: callFailure },
       );
-      await settlement;
-      expect(settled).toBe(true);
+      await settlement.promise;
+      expect(settlement.done).toBe(true);
       expect(await instance.dispose()).toBe(result);
       expect(result.errors).toEqual([timeout, cleanupFailure]);
     } finally {
@@ -682,11 +652,8 @@ it("keeps a host prelude guard exceptional while attempting explicit cleanup", a
 });
 
 it("preserves prepared caller scope and follows an adopted instance for detached work", async () => {
-  const record = createPluginRecord({ id: "owned" });
-  const first = createEmptyPluginRegistry();
-  first.plugins.push(record);
+  const { record, registry: first, instance } = createOwnedInstance("owned");
   const next = { ...createEmptyPluginRegistry(), plugins: [record] };
-  const instance = new PluginInstance(record.id, { record, registry: first });
   let observed: ReturnType<typeof getScope>;
   const callback = instance.wrap(() => {
     observed = getScope();
@@ -759,10 +726,7 @@ it("owns flat and grouped SDK registrations after repeated facade attachment", a
 });
 
 it("owns direct SDK registrations in the candidate registry and fences retained callbacks", async () => {
-  const registry = createEmptyPluginRegistry();
-  const record = createPluginRecord({ id: "direct" });
-  registry.plugins.push(record);
-  const instance = new PluginInstance(record.id, { record, registry });
+  const { registry, record, instance } = createOwnedInstance("direct");
   instance.run(() => {
     expect(
       registerPluginCommandInRegistry(registry, record.id, {

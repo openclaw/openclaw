@@ -100,9 +100,7 @@ it.each(["next", "throw"] as const)(
     }
     expect(open()).toBe(wrapped);
     expect(wrapped[Symbol.asyncIterator]()).toBe(wrapped);
-    expect(instance.ordinaryCallCount).toBe(0);
-    expect(acquisitions).toBe(1);
-    expect(factoryReads).toBe(1);
+    expect([instance.ordinaryCallCount, acquisitions, factoryReads]).toEqual([0, 1, 1]);
     const supplied = new Error("caller-supplied terminal reason");
     const [expected, actual] = await Promise.allSettled([
       native[method](supplied),
@@ -122,7 +120,6 @@ it("finishes iteration during retirement with a terminal proxy result", async ()
   const instance = owner();
   const started = createDeferredCore();
   const finish = createDeferredCore();
-  const readDone = vi.fn(() => true);
   const readValue = vi.fn(throwing(new Error("Iteration must not read the terminal value")));
   const terminal = {
     done: true,
@@ -132,7 +129,7 @@ it("finishes iteration during retirement with a terminal proxy result", async ()
   };
   const result = new Proxy(terminal, {
     get(target, key, receiver) {
-      return key === "done" ? readDone() : Reflect.get(target, key, receiver);
+      return key === "done" ? true : Reflect.get(target, key, receiver);
     },
   });
   const stream = instance.wrap(
@@ -159,7 +156,7 @@ it("finishes iteration during retirement with a terminal proxy result", async ()
 });
 
 it.each(["inner", "outer"] as const)(
-  "stops pending and future stream work when the %s consumer closes while delivered data stays readable",
+  "closes pending/future streams, preserving delivered data, when the %s consumer closes",
   async (closed) => {
     const instance = owner();
     const consumer = instance.retainConsumer();
@@ -205,7 +202,7 @@ it.each(
     { phase, operation: "iterator", sourceKind: "self" },
   ]),
 )(
-  "settles a $phase $sourceKind stream lease when its closed cleanup scope rejects $operation",
+  "settles $phase $sourceKind streams when closed cleanup rejects $operation",
   async ({ phase, operation, sourceKind }) => {
     const instance = owner();
     const finish = createDeferredCore<IteratorResult<string>>();
@@ -252,8 +249,10 @@ it.each(
       await expect(iterator.return()).resolves.toEqual({ done: true, value: undefined });
       expect(instance.ordinaryCallCount).toBe(phase === "pending" ? 1 : 0);
       expect(returned).not.toHaveBeenCalled();
-      expect(calls).toBe(phase === "pending" ? 2 : 1);
-      expect(acquisitions).toBe(sourceKind === "self" ? 1 : 0);
+      expect([calls, acquisitions]).toEqual([
+        phase === "pending" ? 2 : 1,
+        sourceKind === "self" ? 1 : 0,
+      ]);
       finish.resolve({ done: true, value: "finished" });
       await pending?.catch(() => {});
       expect(instance.ordinaryCallCount).toBe(0);
@@ -418,7 +417,7 @@ it.each(
     (["next", "iterator"] as const).map((operation) => ({ custody, operation })),
   ),
 )(
-  "keeps the original $custody authority after renewal when a late $operation resumes",
+  "retains $custody authority across renewal and late $operation",
   async ({ custody, operation }) => {
     const instance = owner();
     const origin =
@@ -543,12 +542,9 @@ it("disposes an unconsumed iterable without starting its terminal work", async (
   instance.lifecycle.onDispose(cleanup);
   instance.wrap({ [Symbol.asyncIterator]: iterator, result });
 
-  const disposed = instance.dispose().then(
-    () => ({ status: "fulfilled" }),
-    (error: unknown) => ({ status: "rejected", error }),
-  );
+  const disposed = expect(instance.dispose()).resolves.toEqual({ errors: [] });
   await vi.runAllTimersAsync();
-  expect(await disposed).toEqual({ status: "fulfilled" });
+  await disposed;
   expect(cleanup).toHaveBeenCalledOnce();
   expect(iterator).not.toHaveBeenCalled();
   expect(result).not.toHaveBeenCalled();
