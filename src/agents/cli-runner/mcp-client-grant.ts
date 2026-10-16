@@ -18,7 +18,7 @@ export async function mintCliMcpClientGrant(
   run: Parameters<typeof resolveCliMcpMemoryAudience>[0],
   agentId: string,
   params: CliMcpClientGrantParams,
-) {
+): Promise<{ grant: ReturnType<typeof mintMcpLoopbackClientGrant>; cleanup: () => Promise<void> }> {
   const { memoryAudience, release } = await resolveCliMcpMemoryAudience(run, {
     agentId,
     sessionKey: params.context.sessionKey,
