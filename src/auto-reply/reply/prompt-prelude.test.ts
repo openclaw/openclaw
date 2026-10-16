@@ -9,15 +9,16 @@ import {
 } from "./inbound-meta.js";
 import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
 
-function countOccurrences(text: string | undefined, needle: string): number {
-  return (text?.split(needle).length ?? 1) - 1;
-}
+type Options = Parameters<typeof buildReplyPromptEnvelope>[0];
+const context = (Body: string, fields: Options["ctx"] = {}) =>
+  finalizeInboundContext({ Body, BodyStripped: Body, ...fields });
+const currentPrompt = (envelope: ReturnType<typeof buildReplyPromptEnvelope>) =>
+  buildCurrentInboundPrompt({
+    context: envelope.currentInboundContext,
+    prompt: envelope.prefixedCommandBody,
+  });
 
-type EnvelopeOptions = Parameters<typeof buildReplyPromptEnvelope>[0];
-function envelopeFor(
-  sessionCtx: EnvelopeOptions["sessionCtx"],
-  options: Partial<EnvelopeOptions> = {},
-) {
+function envelopeFor(sessionCtx: Options["sessionCtx"], options: Partial<Options> = {}) {
   return buildReplyPromptEnvelope({
     ctx: sessionCtx,
     sessionCtx,
@@ -31,32 +32,35 @@ function envelopeFor(
 }
 
 describe("buildReplyPromptEnvelope", () => {
-  it("keeps bare reset runtime context in the model prompt and out of transcript/current-turn context", () => {
-    const sessionCtx = finalizeInboundContext({
-      Body: "",
-      BodyStripped: "",
-      Provider: "telegram",
-      ChatType: "direct",
-      SenderId: "telegram-user-1",
-    });
-
-    const envelope = envelopeFor(sessionCtx, {
-      baseBody: "A new session was started via /new or /reset.",
-      inboundUserContext: "Conversation info:\nsender_id=telegram-user-1",
-      isBareSessionReset: true,
-      startupAction: "reset",
-      startupContextPrelude: "Startup context",
-    });
-
-    expect(envelope.prefixedCommandBody).toContain("sender_id=telegram-user-1");
-    expect(envelope.prefixedCommandBody).toContain("Startup context");
-    expect(envelope.transcriptCommandBody).toBe("[OpenClaw session reset]");
-    expect(envelope.currentInboundContext).toBeUndefined();
-  });
+  it.each([
+    ["telegram", ""],
+    ["slack", "re-read persona files"],
+  ])(
+    "keeps %s reset notes visible and startup context out of transcripts",
+    (Provider, softResetTail) => {
+      const sessionCtx = context("", { Provider, ChatType: "direct", SenderId: "telegram-user-1" });
+      const inboundUserContext = "Conversation info:\nsender_id=telegram-user-1";
+      const envelope = envelopeFor(sessionCtx, {
+        baseBody: softResetTail ? "" : "A new session was started via /new or /reset.",
+        inboundUserContext,
+        isBareSessionReset: true,
+        startupAction: "reset",
+        startupContextPrelude: "Startup context",
+        softResetTail,
+      });
+      for (const text of [inboundUserContext, "Startup context", softResetTail]) {
+        expect(envelope.prefixedCommandBody).toContain(text);
+      }
+      expect(envelope).toMatchObject({
+        transcriptCommandBody: softResetTail || "[OpenClaw session reset]",
+        currentInboundContext: undefined,
+      });
+      expect(envelope.transcriptCommandBody).not.toContain("Startup context");
+    },
+  );
 
   it("keeps Telegram reply text beside its marker", () => {
-    const sessionCtx = finalizeInboundContext({
-      Body: "Tldr",
+    const sessionCtx = context("Tldr", {
       Provider: "telegram",
       ChatType: "group",
       MessageSid: "42",
@@ -71,10 +75,7 @@ describe("buildReplyPromptEnvelope", () => {
       sourceReplyDeliveryMode: "message_tool_only",
       systemEventBlocks: ["System: Scheduled digest."],
     });
-    const prompt = buildCurrentInboundPrompt({
-      context: envelope.currentInboundContext,
-      prompt: envelope.prefixedCommandBody,
-    });
+    const prompt = currentPrompt(envelope);
     expect(prompt).toContain('[Replying to: "The restore finished."]\n#42: Tldr');
     expect(envelope.transcriptCommandBody).toBe("Tldr");
     for (const text of ["System: Scheduled digest.", MESSAGE_TOOL_ONLY_DELIVERY_HINT]) {
@@ -85,24 +86,13 @@ describe("buildReplyPromptEnvelope", () => {
 
   it("labels the current message after thread starter", () => {
     const threadNote = "[Thread starter - for context]\nPlanning the picnic next month.";
-    const sessionCtx = finalizeInboundContext({
-      Body: "Can you pick a date?",
-      BodyStripped: "Can you pick a date?",
-      Provider: "discord",
-      ChatType: "channel",
-    });
-
-    const envelope = envelopeFor(sessionCtx, {
+    const envelope = envelopeFor(context("Can you pick a date?"), {
       inboundUserContext: "Conversation info:\nchat_id=123",
       threadContextNote: threadNote,
       systemEventBlocks: ["System: reaction added"],
     });
 
-    const prompt = buildCurrentInboundPrompt({
-      context: envelope.currentInboundContext,
-      prompt: envelope.prefixedCommandBody,
-    });
-    expect(prompt).toBe(
+    expect(currentPrompt(envelope)).toBe(
       [
         "Conversation info:\nchat_id=123",
         threadNote,
@@ -119,9 +109,7 @@ describe("buildReplyPromptEnvelope", () => {
   });
 
   it("keeps recent room history in the initial prompt but not the resumed prompt", () => {
-    const sessionCtx = finalizeInboundContext({
-      Body: "Current room event",
-      BodyStripped: "Current room event",
+    const sessionCtx = context("Current room event", {
       Provider: "slack",
       ChatType: "group",
       InboundEventKind: "room_event",
@@ -139,10 +127,12 @@ describe("buildReplyPromptEnvelope", () => {
       systemEventBlocks: ["System event"],
     });
 
-    expect(envelope.prefixedCommandBody).toBe("#35676 Alice: Current room event");
-    expect(envelope.queuedBody).toBe(envelope.transcriptCommandBody);
-    expect(envelope.transcriptCommandBody).toBe("#35676 Alice: Current room event");
-    expect(countOccurrences(envelope.currentInboundContext?.text, "Earlier room activity")).toBe(1);
+    expect(envelope).toMatchObject({
+      prefixedCommandBody: "#35676 Alice: Current room event",
+      queuedBody: "#35676 Alice: Current room event",
+      transcriptCommandBody: "#35676 Alice: Current room event",
+    });
+    expect(envelope.currentInboundContext?.text.split("Earlier room activity")).toHaveLength(2);
     expect(envelope.currentInboundContext?.resumableText).not.toContain("Earlier room activity");
     for (const text of [
       envelope.currentInboundContext?.text,
@@ -163,13 +153,9 @@ describe("buildReplyPromptEnvelope", () => {
   });
 
   it("uses the raw current body for room-event current event text", () => {
-    const sessionCtx = finalizeInboundContext({
-      Body: "[Chat history]\nAlice: old context\n\nBob: current note",
-      BodyStripped: "[Chat history]\nAlice: old context\n\nBob: current note",
+    const sessionCtx = context("[Chat history]\nAlice: old context\n\nBob: current note", {
       RawBody: "current note",
       CommandBody: "current note",
-      Provider: "telegram",
-      ChatType: "group",
       InboundEventKind: "room_event",
       MessageSid: "2002",
       SenderName: "Bob",
@@ -197,8 +183,7 @@ describe("buildReplyPromptEnvelope", () => {
     const transcript = "turn left at the next light";
     const agentText = `[Audio]\nTranscript:\n${transcript}`;
     const transportEnvelope = "[Discord channel #ambient]\n[media attached: voice-message.ogg]";
-    const ctx = finalizeInboundContext({
-      Body: transportEnvelope,
+    const ctx = context(transportEnvelope, {
       BodyForAgent: agentText,
       RawBody: transportEnvelope,
       CommandBody: transportEnvelope,
@@ -232,9 +217,7 @@ describe("buildReplyPromptEnvelope", () => {
   });
 
   it("keeps media-only notes in ordinary user request transcripts", () => {
-    const sessionCtx = finalizeInboundContext({
-      Body: "",
-      BodyStripped: "",
+    const sessionCtx = context("", {
       Provider: "telegram",
       ChatType: "group",
       MediaPaths: ["/tmp/openclaw-photo.jpg"],
@@ -252,8 +235,7 @@ describe("buildReplyPromptEnvelope", () => {
 
   it("keeps sparse inbound positions separate from appended preprojected media", () => {
     const sharedPath = "/tmp/shared.png";
-    const sessionCtx = finalizeInboundContext({
-      Body: "inspect these",
+    const sessionCtx = context("inspect these", {
       media: [
         {},
         { path: "/tmp/voice.ogg", contentType: "audio/ogg", transcribed: true },
@@ -261,9 +243,7 @@ describe("buildReplyPromptEnvelope", () => {
         { path: sharedPath, contentType: "image/png" },
       ],
     });
-    const params = {
-      media: [{ path: "/tmp/preprojected.pdf", contentType: "application/pdf" }],
-    };
+    const params = { media: [{ path: "/tmp/preprojected.pdf", contentType: "application/pdf" }] };
     const first = envelopeFor(sessionCtx, params);
     const rebuilt = envelopeFor(sessionCtx, {
       ...params,
@@ -289,28 +269,5 @@ describe("buildReplyPromptEnvelope", () => {
       sharedPath,
       sharedPath,
     ]);
-  });
-
-  it("keeps soft reset user notes visible without leaking startup context into transcripts", () => {
-    const sessionCtx = finalizeInboundContext({
-      Body: "",
-      BodyStripped: "",
-      Provider: "slack",
-      ChatType: "direct",
-    });
-
-    const envelope = envelopeFor(sessionCtx, {
-      inboundUserContext: 'Conversation info:\n{"sender":{"id":"U123"}}',
-      isBareSessionReset: true,
-      startupAction: "reset",
-      startupContextPrelude: "Startup context",
-      softResetTail: "re-read persona files",
-    });
-
-    expect(envelope.prefixedCommandBody).toContain("Conversation info:");
-    expect(envelope.prefixedCommandBody).toContain("Startup context");
-    expect(envelope.prefixedCommandBody).toContain("re-read persona files");
-    expect(envelope.transcriptCommandBody).toBe("re-read persona files");
-    expect(envelope.transcriptCommandBody).not.toContain("Startup context");
   });
 });

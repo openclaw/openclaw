@@ -28,6 +28,7 @@ import {
   createQueueTestRun as createRun,
   createDrainRecorder,
   createQueueSettings,
+  clearFollowupQueueForTest,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
 import { clearFollowupDrainCallback, kickFollowupDrainIfIdle } from "./queue/drain.js";
@@ -43,8 +44,8 @@ beforeEach(() => {
   key = `drain-restart-${++sequence}`;
 });
 afterEach(() => {
-  clearFollowupQueue(key);
-  clearFollowupDrainCallback(key);
+  vi.useRealTimers();
+  clearFollowupQueueForTest(key);
   resetGatewayWorkAdmission();
 });
 const nextTurn = () =>
@@ -53,9 +54,15 @@ const nextTurn = () =>
   });
 
 function start(prompt: string, run: (run: FollowupRun) => Promise<void>, settings = defaults) {
-  enqueueFollowupRun(key, createRun({ prompt }), settings);
+  enqueue(prompt, settings);
   scheduleFollowupDrain(key, run);
 }
+function enqueue(prompt: string, settings = defaults) {
+  enqueueFollowupRun(key, createRun({ prompt }), settings);
+}
+const queuedState = () => getExistingFollowupQueue(key);
+const waitForRoots = (count = 0) =>
+  vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(count));
 
 function restartFenceAttempt() {
   const refused =
@@ -132,16 +139,14 @@ describe("followup queue drain restart after idle window", () => {
         expect(attempts).toBe(2);
         if (stillClosed) {
           expect(delivered).not.toHaveBeenCalled();
-          expect(getExistingFollowupQueue(key)?.items).toEqual([queued]);
-          expect(getExistingFollowupQueue(key)?.draining).toBe(false);
+          expect(queuedState()).toMatchObject({ items: [queued], draining: false });
         } else {
           expect(delivered).toHaveBeenCalledExactlyOnceWith(queued);
-          expect(getExistingFollowupQueue(key)).toBeUndefined();
+          expect(queuedState()).toBeUndefined();
         }
         expect(getActiveGatewayRootWorkCount()).toBe(0);
       } finally {
         release.resolve();
-        vi.useRealTimers();
       }
     },
   );
@@ -162,26 +167,21 @@ describe("followup queue drain restart after idle window", () => {
       }
       assertAgentDatabaseResourceAdmission(target);
     };
-    try {
-      await withAgentDatabaseCloseFence(target, async () => {
-        enqueueFollowupRun(key, queued, defaults);
-        scheduleFollowupDrain(key, runFollowup);
-        await vi.advanceTimersByTimeAsync(0);
-
-        expect(attempts).toBe(1);
-        expect(getExistingFollowupQueue(key)?.items).toEqual([queued]);
-        expect(getExistingFollowupQueue(key)?.draining).toBe(false);
-        expect(getActiveGatewayRootWorkCount()).toBe(0);
-        expect(settled).not.toHaveBeenCalled();
-      });
-      closing = false;
-      kickFollowupDrainIfIdle(key);
+    await withAgentDatabaseCloseFence(target, async () => {
+      enqueueFollowupRun(key, queued, defaults);
+      scheduleFollowupDrain(key, runFollowup);
       await vi.advanceTimersByTimeAsync(0);
-      expect(attempts).toBe(2);
-      expect(getExistingFollowupQueue(key)).toBeUndefined();
-    } finally {
-      vi.useRealTimers();
-    }
+
+      expect(attempts).toBe(1);
+      expect(queuedState()).toMatchObject({ items: [queued], draining: false });
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      expect(settled).not.toHaveBeenCalled();
+    });
+    closing = false;
+    kickFollowupDrainIfIdle(key);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(attempts).toBe(2);
+    expect(queuedState()).toBeUndefined();
   });
 
   it("keeps a detached drain on a live root after its enqueue request returns", async () => {
@@ -191,10 +191,7 @@ describe("followup queue drain restart after idle window", () => {
     if (!parent) {
       throw new Error("expected parent Gateway work admission");
     }
-    let suspensionStarted = false;
-    let subordinateAdmissionClosed: boolean | undefined;
-    let activeRootCountDuringDrain: number | undefined;
-    let generationDuringDrain: unknown;
+    let observed: unknown;
     const predecessorGeneration = {
       remoteCatalog: null,
       configuredCatalogEntries: [],
@@ -205,15 +202,16 @@ describe("followup queue drain restart after idle window", () => {
       await withPreparedModelRuntimePluginGenerationScope(predecessorGeneration, () =>
         parent.run(async () => {
           expect(getPreparedModelRuntimePluginGeneration()).toBe(predecessorGeneration);
-          enqueueFollowupRun(key, createRun({ prompt: "detached" }), defaults);
-          scheduleFollowupDrain(key, async () => {
+          start("detached", async () => {
             await parentReleased.promise;
             const suspension = tryBeginGatewaySuspendAdmission(() => {});
-            suspensionStarted = suspension !== null;
             try {
-              generationDuringDrain = getPreparedModelRuntimePluginGeneration();
-              subordinateAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
-              activeRootCountDuringDrain = getActiveGatewayRootWorkCount();
+              observed = {
+                suspension: suspension !== null,
+                generation: getPreparedModelRuntimePluginGeneration(),
+                closed: isGatewaySubordinateWorkAdmissionClosed(),
+                roots: getActiveGatewayRootWorkCount(),
+              };
             } finally {
               suspension?.rollback();
               drained.resolve();
@@ -226,11 +224,13 @@ describe("followup queue drain restart after idle window", () => {
       parentReleased.resolve();
       await drained.promise;
 
-      expect(suspensionStarted).toBe(true);
-      expect(subordinateAdmissionClosed).toBe(false);
-      expect(activeRootCountDuringDrain).toBe(1);
-      expect(generationDuringDrain).toBeUndefined();
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      expect(observed).toEqual({
+        suspension: true,
+        generation: undefined,
+        closed: false,
+        roots: 1,
+      });
+      await waitForRoots();
     } finally {
       parent.release();
       parentReleased.resolve();
@@ -242,15 +242,13 @@ describe("followup queue drain restart after idle window", () => {
     setTestEnvValue("OPENCLAW_TEST_FAST", "0");
     try {
       start("clear during debounce", async () => {}, { ...defaults, debounceMs: 60_000 });
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
+      await waitForRoots(1);
 
-      clearFollowupQueue(key);
-      clearFollowupDrainCallback(key);
+      clearFollowupQueueForTest(key);
 
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await waitForRoots();
     } finally {
-      clearFollowupQueue(key);
-      clearFollowupDrainCallback(key);
+      clearFollowupQueueForTest(key);
       env.restore();
     }
   });
@@ -259,7 +257,7 @@ describe("followup queue drain restart after idle window", () => {
     const stale = createDrainRecorder();
     const fresh = createDrainRecorder();
     scheduleFollowupDrain(key, stale.runFollowup);
-    enqueueFollowupRun(key, createRun({ prompt: "after-empty-schedule" }), defaults);
+    enqueue("after-empty-schedule");
     await nextTurn();
     expect(stale.calls).toHaveLength(0);
     scheduleFollowupDrain(key, fresh.runFollowup);
@@ -277,35 +275,22 @@ describe("followup queue drain restart after idle window", () => {
       import.meta.url,
       "./queue/enqueue.js?scope=restart-b",
     );
-    const calls: FollowupRun[] = [];
-    const firstProcessed = createDeferred();
-
+    const recorder = createDrainRecorder();
     resetRecentQueuedMessageIdDedupe();
-
     try {
-      const runFollowup = async (run: FollowupRun) => {
-        calls.push(run);
-        if (calls.length === 1) {
-          firstProcessed.resolve();
-        }
-      };
-
       enqueueB.enqueueFollowupRun(key, createRun({ prompt: "before-idle" }), defaults);
-      drainA.scheduleFollowupDrain(key, runFollowup);
-      await firstProcessed.promise;
-
+      drainA.scheduleFollowupDrain(key, recorder.runFollowup);
+      await recorder.done.promise;
       await nextTurn();
-
       enqueueB.enqueueFollowupRun(
         key,
         createRun({ prompt: "after-idle" }),
         defaults,
         "message-id",
-        runFollowup,
+        recorder.runFollowup,
       );
-
-      await vi.waitFor(() => expect(calls).toHaveLength(2), { timeout: 1_000 });
-      expect(calls.map((run) => run.prompt)).toEqual(["before-idle", "after-idle"]);
+      await vi.waitFor(() => expect(recorder.calls).toHaveLength(2), { timeout: 1_000 });
+      expect(recorder.calls.map((run) => run.prompt)).toEqual(["before-idle", "after-idle"]);
     } finally {
       clearFollowupQueue(key);
       drainA.clearFollowupDrainCallback(key);
@@ -327,7 +312,7 @@ describe("followup queue drain restart after idle window", () => {
 
     start("retry while admission is open", runFollowup);
     await delivered.promise;
-    await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
+    await vi.waitFor(() => expect(queuedState()).toBeUndefined());
     expect(attempts).toBe(2);
   });
 
@@ -336,9 +321,9 @@ describe("followup queue drain restart after idle window", () => {
     start("queued during restart commit", attempt.run);
     await attempt.refused.promise;
     markGatewayRestartDraining();
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await waitForRoots();
     expect(attempt.attempts()).toBe(1);
-    expect(getExistingFollowupQueue(key)).toBeUndefined();
+    expect(queuedState()).toBeUndefined();
   });
 
   it("waits for a normal drain kick after a restart signal rolls back", async () => {
@@ -347,46 +332,34 @@ describe("followup queue drain restart after idle window", () => {
     const signal = await attempt.refused.promise;
     await nextTurn();
     expect(attempt.attempts()).toBe(1);
-    expect(getExistingFollowupQueue(key)?.items).toHaveLength(1);
+    expect(queuedState()?.items).toHaveLength(1);
     expect(signal.rollback()).toBe(true);
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await waitForRoots();
     expect(attempt.attempts()).toBe(1);
-    expect(getExistingFollowupQueue(key)?.draining).toBe(false);
+    expect(queuedState()?.draining).toBe(false);
     kickFollowupDrainIfIdle(key);
     await attempt.delivered.promise;
     expect(attempt.attempts()).toBe(2);
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-    expect(getExistingFollowupQueue(key)).toBeUndefined();
+    await waitForRoots();
+    expect(queuedState()).toBeUndefined();
   });
 
   it("refreshes the callback used by a deferred active-drain retry", async () => {
     const firstStarted = createDeferred();
     const releaseFirst = createDeferred();
-    const retried = createDeferred();
-    const staleCalls: FollowupRun[] = [];
-    const freshCalls: FollowupRun[] = [];
-
-    const staleFollowup = async (run: FollowupRun) => {
-      staleCalls.push(run);
+    const fresh = createDrainRecorder();
+    const stale = vi.fn(async () => {
       firstStarted.resolve();
       await releaseFirst.promise;
       throw new FollowupRunDeferredError("reply lane busy");
-    };
-    const freshFollowup = async (run: FollowupRun) => {
-      freshCalls.push(run);
-      retried.resolve();
-    };
-
-    start("wait-for-lane", staleFollowup);
+    });
+    start("wait-for-lane", stale);
     await firstStarted.promise;
-
-    scheduleFollowupDrain(key, freshFollowup);
+    scheduleFollowupDrain(key, fresh.runFollowup);
     releaseFirst.resolve();
-    await retried.promise;
-
-    expect(staleCalls).toHaveLength(1);
-    expect(freshCalls).toHaveLength(1);
-    expect(freshCalls[0]?.prompt).toBe("wait-for-lane");
+    await fresh.done.promise;
+    expect(stale).toHaveBeenCalledOnce();
+    expect(fresh.calls).toMatchObject([{ prompt: "wait-for-lane" }]);
   });
 
   it("bounds overflow identities across repeated deferred retries", async () => {
@@ -516,7 +489,7 @@ describe("followup queue drain restart after idle window", () => {
   it("retires queued followups and callbacks when one-way restart drain begins", async () => {
     const abandoned = vi.fn();
     const settled = vi.fn();
-    const staleCalls: FollowupRun[] = [];
+    const stale = vi.fn(async () => {});
     const queued = createRun({ prompt: "retire on lifecycle restart" });
     queued.turnAdoptionLifecycle = {
       admission: "cancel-only",
@@ -525,28 +498,19 @@ describe("followup queue drain restart after idle window", () => {
       onSettled: settled,
     };
 
-    enqueueFollowupRun(
-      key,
-      queued,
-      defaults,
-      "message-id",
-      async (run) => {
-        staleCalls.push(run);
-      },
-      false,
-    );
-    expect(getExistingFollowupQueue(key)?.items).toEqual([queued]);
+    enqueueFollowupRun(key, queued, defaults, "message-id", stale, false);
+    expect(queuedState()?.items).toEqual([queued]);
 
     markGatewayRestartDraining();
 
-    expect(getExistingFollowupQueue(key)).toBeUndefined();
+    expect(queuedState()).toBeUndefined();
     expect(abandoned).toHaveBeenCalledOnce();
     expect(settled).toHaveBeenCalledOnce();
     resetGatewayWorkAdmission();
-    enqueueFollowupRun(key, createRun({ prompt: "fresh lifecycle" }), defaults);
+    enqueue("fresh lifecycle");
     await nextTurn();
-    expect(staleCalls).toHaveLength(0);
-    expect(getExistingFollowupQueue(key)?.items).toHaveLength(1);
+    expect(stale).not.toHaveBeenCalled();
+    expect(queuedState()?.items).toHaveLength(1);
   });
   it.each([
     { mode: "collect", kind: "external_user", senderIsOwner: true, owner: true },

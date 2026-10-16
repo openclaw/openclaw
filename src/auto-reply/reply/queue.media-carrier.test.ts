@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   attachToolAllowlistIntersection,
   readToolAllowlistIntersection,
@@ -33,6 +32,16 @@ import { createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler } from "./typing-mode.js";
 const queueKeys = new Set<string>();
 const evidenceCleanups = new Set<() => void>();
+function trackedQueue(...args: Parameters<typeof createQueueCase>) {
+  const q = createQueueCase(...args);
+  queueKeys.add(q.key);
+  return q;
+}
+const image = (data: string, mimeType: string) => ({ type: "image" as const, data, mimeType });
+const skill = (name: string, directory = name) => ({
+  name,
+  path: `/tmp/skills/${directory}/SKILL.md`,
+});
 const carrierRun = {
   provider: "openai",
   model: "gpt-route",
@@ -70,7 +79,7 @@ describe("followup prompt metadata carrier", () => {
       prompt: "  preserve this caption\n",
       messageId: "media-fallback",
     });
-    run.images = [{ type: "image", data: "inline-png", mimeType: "image/png" }];
+    run.images = [image("inline-png", "image/png")];
     run.imageOrder = ["offloaded", "inline"];
     run.media = [{ path: "/tmp/stored.png", contentType: "image/png" }, { kind: "image" }];
     const expectedMedia = structuredClone([run.prompt, run.images, run.imageOrder, run.media]);
@@ -101,10 +110,9 @@ describe("followup prompt metadata carrier", () => {
       messageInjection: { isAvailable: () => true, queueMessage: reject },
     });
     operation.setPhase("running");
-    const delivered = createDeferred<FollowupRun>();
-    const runFollowup = vi.fn(async (queued: FollowupRun) => {
-      delivered.resolve(queued);
-    });
+    const runFollowup = vi
+      .fn<(queued: FollowupRun) => Promise<void>>()
+      .mockResolvedValue(undefined);
     const typing = createMockTypingController();
     try {
       await expect(
@@ -129,7 +137,7 @@ describe("followup prompt metadata carrier", () => {
       expect(persist).not.toHaveBeenCalled();
       operation.complete();
       await vi.waitFor(() => expect(runFollowup).toHaveBeenCalledOnce());
-      const fallback = await delivered.promise;
+      const fallback = runFollowup.mock.calls[0]![0];
       expect([fallback.prompt, fallback.images, fallback.imageOrder, fallback.media]).toEqual(
         expectedMedia,
       );
@@ -144,25 +152,22 @@ describe("followup prompt metadata carrier", () => {
   it.each(["same", "mixed"] as const)(
     "keeps collected facts stable across deferred %s-participant admission",
     async (kind) => {
+      const mixed = kind === "mixed";
       const audit = createChannelAdmissionAudit({ enabled: true });
       evidenceCleanups.add(() => audit.close());
-      const q = createQueueCase({ mode: "collect", debounceMs: 0 }, 1);
-      queueKeys.add(q.key);
-      const media = [
-        { path: "/tmp/a.png", contentType: "image/png" },
-        { path: "/tmp/b.pdf", contentType: "application/pdf" },
-      ];
-      for (const [index, skillName, label] of [
-        [0, "a", "first"],
-        [1, "b", "second"],
-      ] as const) {
-        const { path, contentType } = media[index]!;
+      const q = trackedQueue({ mode: "collect", debounceMs: 0 }, 1);
+      const turns = [
+        ["a", "first", "/tmp/a.png", "image/png"],
+        ["b", "second", "/tmp/b.pdf", "application/pdf"],
+      ] as const;
+      const media = turns.map((turn) => ({ path: turn[2], contentType: turn[3] }));
+      for (const [skillName, label, path, contentType] of turns) {
         const prompt = `[media attached: ${path} (${contentType})]\n${label}`;
         const run = createQueueTestRun({ prompt });
         run.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"], ["exec", "message"]]);
         run.disableTools = true;
         run.run = { ...run.run, ...structuredClone(carrierRun) };
-        if (kind === "mixed") {
+        if (mixed) {
           Object.assign(run, { originatingChannel: "test", originatingTo: "room:shared" });
           Object.assign(run.run, {
             senderId: "ambiguous-transport-sender",
@@ -174,17 +179,17 @@ describe("followup prompt metadata carrier", () => {
             ownerNumbers: ["+15550000000"],
           });
         }
-        run.images = [{ type: "image", data: path, mimeType: contentType }];
+        run.images = [image(path, contentType)];
         run.imageOrder = ["inline"];
         run.media = [{ path, contentType }];
         run.explicitSkillSelections = [
-          { name: skillName, path: `/tmp/skills/${skillName}/SKILL.md` },
-          { name: `shared-${index === 0 ? "first" : "last"}`, path: "/tmp/skills/shared/SKILL.md" },
+          skill(skillName),
+          skill(`shared-${skillName === "a" ? "first" : "last"}`, "shared"),
         ];
         run.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
           audit,
           channelId: "test",
-          participantId: kind === "mixed" ? skillName : "person-1",
+          participantId: mixed ? skillName : "person-1",
         });
         q.add(run);
       }
@@ -196,38 +201,34 @@ describe("followup prompt metadata carrier", () => {
         q.done.resolve();
       });
       await q.done.promise;
-      const senderSuffix = kind === "mixed" ? " (from Ambiguous Sender)" : "";
+      const senderSuffix = mixed ? " (from Ambiguous Sender)" : "";
       const expectedPrompt = [
         "[Queued messages while agent was busy]",
-        `---\nQueued #1${senderSuffix}\n[media attached: /tmp/a.png (image/png)]\nfirst`,
-        `---\nQueued #2${senderSuffix}\n[media attached: /tmp/b.pdf (application/pdf)]\nsecond`,
+        ...turns.map(
+          ([, label, path, type], i) =>
+            `---\nQueued #${i + 1}${senderSuffix}\n[media attached: ${path} (${type})]\n${label}`,
+        ),
       ].join("\n\n");
       expect(q.calls.map((run) => run.prompt)).toEqual([expectedPrompt, expectedPrompt]);
       for (const run of q.calls) {
-        expect(run.media).toEqual(media);
-        expect(run.images).toEqual(
-          media.map(({ path, contentType }) => ({
-            type: "image",
-            data: path,
-            mimeType: contentType,
-          })),
-        );
-        expect([run.imageOrder, run.toolsAllow, run.disableTools]).toEqual([
+        expect([run.media, run.images, run.imageOrder, run.toolsAllow, run.disableTools]).toEqual([
+          media,
+          media.map(({ path, contentType }) => image(path, contentType)),
           ["inline", "inline"],
           ["exec"],
           true,
         ]);
         expect(run.explicitSkillSelections).toEqual([
-          { name: "a", path: "/tmp/skills/a/SKILL.md" },
-          { name: "shared-last", path: "/tmp/skills/shared/SKILL.md" },
-          { name: "b", path: "/tmp/skills/b/SKILL.md" },
+          skill("a"),
+          skill("shared-last", "shared"),
+          skill("b"),
         ]);
         expect(run.toolsAllow ? readToolAllowlistIntersection(run.toolsAllow) : undefined).toEqual([
           ["exec"],
           ["exec", "message"],
         ]);
         expect(run.run).toMatchObject(carrierRun);
-        if (kind === "mixed") {
+        if (mixed) {
           expect(run.run).toMatchObject({
             senderId: undefined,
             senderName: undefined,
@@ -263,12 +264,12 @@ describe("followup prompt metadata carrier", () => {
   ] as const)(
     "keeps conflicting turn $name choices in separate collected replies",
     async ({ first, second }) => {
-      const q = createQueueCase({ cap: 20 }, 3);
-      queueKeys.add(q.key);
+      const q = trackedQueue({ cap: 20 }, 3);
       for (const [index, settings] of [first, second, second, first].entries()) {
-        const run = createQueueTestRun({ prompt: `task ${index}`, messageId: `choice-${index}` });
-        run.run = { ...run.run, traceAuthorized: true, ...settings };
-        q.add(run);
+        q.enqueue(
+          { prompt: `task ${index}`, messageId: `choice-${index}` },
+          { traceAuthorized: true, ...settings },
+        );
       }
       await q.drain();
       expect(q.calls).toHaveLength(3);
@@ -320,11 +321,37 @@ describe("queued Gateway attach evidence", () => {
       profile: { profileId },
       isLocalClient: false,
     });
+  function expectAdmission(profileId?: string) {
+    expect(admissions).toMatchObject([
+      {
+        kind: "capture",
+        envelope: {
+          ingress: {
+            kind: "gateway-client",
+            boundary: "gateway.ws.authenticated-connect",
+            state: profileId ? "present" : "unknown",
+            ...(profileId ? { rawSourceRef: profileId } : {}),
+          },
+          invoker: profileId
+            ? { state: "present", kind: "person", rawPrincipalRef: profileId }
+            : { state: "unknown" },
+          assurance: profileId
+            ? [
+                {
+                  kind: "durable-profile",
+                  rawEvidenceRef: profileId,
+                  strength: "boundary-verified",
+                },
+              ]
+            : expect.not.arrayContaining([expect.objectContaining({ kind: "durable-profile" })]),
+        },
+      },
+    ]);
+  }
   it.each(["matching", "mixed"] as const)(
     "collects %s attach snapshots without changing sender authority",
     async (kind) => {
-      const q = createQueueCase({ cap: 20 });
-      queueKeys.add(q.key);
+      const q = trackedQueue({ cap: 20 });
       for (const index of [0, 1]) {
         const run = createQueueTestRun({ prompt: `queued ${index}` });
         run.gatewayLocalUserIngress = prepareIngress(
@@ -338,53 +365,13 @@ describe("queued Gateway attach evidence", () => {
       expect(collected.prompt).toContain("queued 0");
       expect(collected.prompt).toContain("queued 1");
       await admit(collected);
-      expect(admissions).toMatchObject([
-        {
-          kind: "capture",
-          envelope:
-            kind === "matching"
-              ? {
-                  ingress: {
-                    kind: "gateway-client",
-                    boundary: "gateway.ws.authenticated-connect",
-                    state: "present",
-                    rawSourceRef: "person-1",
-                  },
-                  invoker: { state: "present", kind: "person", rawPrincipalRef: "person-1" },
-                  assurance: [
-                    {
-                      kind: "durable-profile",
-                      rawEvidenceRef: "person-1",
-                      strength: "boundary-verified",
-                    },
-                  ],
-                }
-              : {
-                  ingress: {
-                    kind: "gateway-client",
-                    boundary: "gateway.ws.authenticated-connect",
-                    state: "unknown",
-                  },
-                  invoker: { state: "unknown" },
-                },
-        },
-      ]);
-      const captured = admissions[0];
-      if (kind !== "matching" && captured?.kind === "capture") {
-        expect(captured.envelope.assurance).not.toEqual(
-          expect.arrayContaining([expect.objectContaining({ kind: "durable-profile" })]),
-        );
-      }
+      expectAdmission(kind === "matching" ? "person-1" : undefined);
       expect(collected.run).toMatchObject({ senderId: "transport", senderIsOwner: true });
     },
   );
 
   it("retains the original attach snapshot when overflow delivery retries after profile replacement", async () => {
-    const q = createQueueCase(
-      { mode: "collect", debounceMs: 0, cap: 1, dropPolicy: "summarize" },
-      1,
-    );
-    queueKeys.add(q.key);
+    const q = trackedQueue({ mode: "collect", debounceMs: 0, cap: 1, dropPolicy: "summarize" }, 1);
     const client = {};
     attachGatewayLocalUserIngress(client, prepareIngress("original-person"));
     const source = createQueueTestRun({ prompt: "overflow source" });
@@ -407,15 +394,6 @@ describe("queued Gateway attach evidence", () => {
     await q.done.promise;
     expect(attempts).toBe(2);
     expect(admissions).toHaveLength(1);
-    expect(admissions).toMatchObject([
-      {
-        kind: "capture",
-        envelope: {
-          ingress: { kind: "gateway-client", state: "present", rawSourceRef: "original-person" },
-          invoker: { state: "present", kind: "person", rawPrincipalRef: "original-person" },
-          assurance: [{ kind: "durable-profile", rawEvidenceRef: "original-person" }],
-        },
-      },
-    ]);
+    expectAdmission("original-person");
   });
 });

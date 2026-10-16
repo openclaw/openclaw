@@ -86,21 +86,15 @@ describe("followup queue durable input consumption", () => {
     });
     recorders.push(recorder);
     expect(await recorder.stageApproved?.({ runId, assertCurrent: () => {} })).toBe(true);
-    const run: FollowupRun = {
-      ...createQueueTestRun({ prompt: `${runId} approved`, messageId: runId }),
+    const run = createQueueTestRun({ prompt: `${runId} approved`, messageId: runId });
+    Object.assign(run, {
       // A stale display projection must not undo the approval when sources combine.
       transcriptPrompt: `${runId} private source`,
       userTurnTranscriptRecorder: recorder,
       currentInboundContext: { text: `${runId} runtime context` },
       turnAdoptionLifecycle: { admission: "cancel-only", onAdopted: async () => {} },
-      run: {
-        ...createQueueTestRun({ prompt: "" }).run,
-        agentId: "main",
-        sessionKey,
-        sessionId,
-        config,
-      },
-    };
+    } satisfies Partial<FollowupRun>);
+    Object.assign(run.run, { agentId: "main", sessionKey, sessionId, config });
     return { run, beforeMessageWrite };
   };
 
@@ -139,10 +133,19 @@ describe("followup queue durable input consumption", () => {
     (await loadTranscriptEvents(scope()))
       .filter(isRecord)
       .filter((event) => event.type === "message");
+  const expectWrites = (...sources: Awaited<ReturnType<typeof createStagedRun>>[]) => {
+    for (const { beforeMessageWrite } of sources) {
+      expect(beforeMessageWrite).toHaveBeenCalledOnce();
+    }
+  };
+  const pending = () => listSessionPendingInputs(scope());
+  const pair = async () =>
+    [await createStagedRun("first"), await createStagedRun("second")] as const;
+  const collected = (...texts: string[]) =>
+    `[Queued messages while agent was busy]\n\n${texts.map((text, i) => `---\nQueued #${i + 1}\n${text}`).join("\n\n")}`;
 
   it("preserves the committed prefix when a native batch falls back after a later source write fails", async () => {
-    const first = await createStagedRun("first");
-    const second = await createStagedRun("second");
+    const [first, second] = await pair();
     await persistQueuedRun(first.run);
     fault.enable();
     try {
@@ -166,13 +169,12 @@ describe("followup queue durable input consumption", () => {
     const after = await loadTranscriptEvents(scope());
     expect(after.slice(0, before.length)).toEqual(before);
     const messages = after.filter(isRecord).filter((event) => event.type === "message");
-    expect(messages.map((event) => event.message)).toEqual([
-      expect.objectContaining({ content: "first approved", idempotencyKey: "first:user" }),
-      expect.objectContaining({ content: "second approved", idempotencyKey: "second:user" }),
+    expect(messages.map((event) => event.message)).toMatchObject([
+      { content: "first approved", idempotencyKey: "first:user" },
+      { content: "second approved", idempotencyKey: "second:user" },
     ]);
     expect((await listSessionPendingInputs(scope())).items).toEqual([]);
-    expect(first.beforeMessageWrite).toHaveBeenCalledOnce();
-    expect(second.beforeMessageWrite).toHaveBeenCalledOnce();
+    expectWrites(first, second);
   });
 
   it("keeps unstaged input out of an already-approved collect group", async () => {
@@ -191,18 +193,16 @@ describe("followup queue durable input consumption", () => {
     enqueue(staged.run, unstaged);
     const calls = await drain();
 
-    expect(calls.map((run) => run.prompt)).toEqual([
-      "[Queued messages while agent was busy]\n\n---\nQueued #1\nstaged approved",
-      "[Queued messages while agent was busy]\n\n---\nQueued #1\nunstaged runtime body",
-    ]);
+    expect(calls.map((run) => run.prompt)).toEqual(
+      ["staged approved", "unstaged runtime body"].map((text) => collected(text)),
+    );
     expect(calls[1]?.transcriptPrompt).toContain("unstaged transcript body");
   });
 
   it.for([false, true])(
     "binds collected custody before runtime append (cancel during preparation: %s)",
     async (abortDuringPreparation, { signal }) => {
-      const first = await createStagedRun("first");
-      const second = await createStagedRun("second");
+      const [first, second] = await pair();
       first.run.prompt = "first private source";
       second.run.prompt = "second private source";
       enqueue(first.run, second.run);
@@ -227,7 +227,7 @@ describe("followup queue durable input consumption", () => {
         const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
         const typing = createTypingController({});
         try {
-          pendingTotals.push((await listSessionPendingInputs(scope())).total);
+          pendingTotals.push((await pending()).total);
           await admitFollowupRunLifecycle(run);
           if (abortDuringPreparation) {
             const recorder = second.run.userTurnTranscriptRecorder!;
@@ -257,7 +257,7 @@ describe("followup queue durable input consumption", () => {
             onToolResult: async () => {},
             onCompactionNoticePayload: async () => {},
           });
-          pendingTotals.push((await listSessionPendingInputs(scope())).total);
+          pendingTotals.push((await pending()).total);
         } catch (error) {
           failures.push(error);
         } finally {
@@ -272,32 +272,23 @@ describe("followup queue durable input consumption", () => {
       expect(pendingTotals).toEqual(abortDuringPreparation ? [2] : [2, 0]);
       expect(calls).toHaveLength(1);
       expect(executeAgentTurn).toHaveBeenCalledTimes(abortDuringPreparation ? 0 : 1);
-      const expected =
-        "[Queued messages while agent was busy]\n\n---\nQueued #1\nfirst approved\n\n---\nQueued #2\nsecond approved";
-      expect(calls[0]?.prompt).toBe(expected);
-      expect(calls[0]?.transcriptPrompt).toBe(expected);
+      const expected = collected("first approved", "second approved");
+      expect(calls[0]).toMatchObject({ prompt: expected, transcriptPrompt: expected });
       expect(calls[0]?.currentInboundContext?.text).toBe(
         "Queued #1 context:\nfirst runtime context\n\nQueued #2 context:\nsecond runtime context",
       );
       const persisted = await loadMessages();
-      expect(persisted).toHaveLength(abortDuringPreparation ? 0 : 1);
-      if (!abortDuringPreparation) {
-        expect(persisted[0]?.message).toMatchObject({ role: "user", content: expected });
-      }
-      expect((await listSessionPendingInputs(scope())).total).toBe(abortDuringPreparation ? 2 : 0);
-      expect(first.beforeMessageWrite).toHaveBeenCalledOnce();
-      expect(second.beforeMessageWrite).toHaveBeenCalledOnce();
+      expect(persisted).toMatchObject(
+        abortDuringPreparation ? [] : [{ message: { role: "user", content: expected } }],
+      );
+      expect((await pending()).total).toBe(abortDuringPreparation ? 2 : 0);
+      expectWrites(first, second);
     },
   );
 
   it("retains elided and retried overflow sources until their summary commits", async () => {
     const sources = await Promise.all(["first", "second", "third"].map(createStagedRun));
-    const settings = {
-      mode: "followup" as const,
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize" as const,
-    };
+    const settings = { mode: "followup", debounceMs: 0, cap: 1, dropPolicy: "summarize" } as const;
     for (const source of sources) {
       source.run.summaryLine = `${source.run.messageId} private summary`;
       expect(enqueueFollowupRun(sessionKey, source.run, settings)).toBe(true);
@@ -309,9 +300,7 @@ describe("followup queue durable input consumption", () => {
       }
       await admitFollowupRunLifecycle(run);
       await persistQueuedRun(run);
-      pendingRunIds.push(
-        (await listSessionPendingInputs(scope())).items.map((input) => input.runId),
-      );
+      pendingRunIds.push((await pending()).items.map((input) => input.runId));
     });
     expect(calls).toHaveLength(3);
     expect(calls[1]?.prompt).toBe(
@@ -319,9 +308,10 @@ describe("followup queue durable input consumption", () => {
     );
     expect(pendingRunIds).toEqual([["third"], []]);
     const persisted = await loadMessages();
-    expect(persisted).toHaveLength(2);
-    expect(persisted[0]?.message).toMatchObject({ content: calls[1]?.prompt });
-    expect(persisted[1]?.message).toMatchObject({ content: "third approved" });
-    expect(sources.map((source) => source.beforeMessageWrite.mock.calls.length)).toEqual([1, 1, 1]);
+    expect(persisted).toMatchObject([
+      { message: { content: calls[1]?.prompt } },
+      { message: { content: "third approved" } },
+    ]);
+    expectWrites(...sources);
   });
 });
