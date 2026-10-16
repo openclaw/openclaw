@@ -10,6 +10,7 @@ import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { generateStoredDeviceIdentity } from "../infra/device-identity-store.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { invalidateSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { ensureOpenClawAgentDatabaseSchema } from "../state/openclaw-agent-db.js";
 import { repairAuditEventsSchema } from "../state/openclaw-state-db-audit-migration.js";
@@ -476,6 +477,9 @@ async function seedMalformedDatabase(
   const databasePath = shared
     ? statePath
     : path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+  if (shared) {
+    invalidateSqliteDatabaseCleanClose(databasePath);
+  }
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
   const database = new DatabaseSync(databasePath);
   try {
