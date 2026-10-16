@@ -34,8 +34,8 @@ import {
   verifyBackupSqliteCoverage,
 } from "./backup-verify-manifest.js";
 
-const MAX_SQLITE_SNAPSHOT_EXTRACT_BYTES = 64 * 1024 * 1024 * 1024;
-const SQLITE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES = 256 * 1024 * 1024;
+const MAX_DATABASE_SNAPSHOT_EXTRACT_BYTES = 64 * 1024 * 1024 * 1024;
+const DATABASE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES = 256 * 1024 * 1024;
 
 type BackupVerifyResult = Awaited<ReturnType<typeof verifyBackupArchive>>;
 
@@ -225,15 +225,17 @@ function readArchivedAgentDatabaseOwners(
   }));
 }
 
-function assertSqliteExtractionBudget(params: {
-  entries: SqliteSnapshotEntry[];
+function assertSnapshotExtractionBudget(params: {
+  entries: NormalizedArchiveEntry[];
+  postgres?: boolean;
   tempRoot: string;
   extractedBytes?: number;
 }): void {
-  const totalBytes = resolveExtractionBytes(params.entries, true);
-  if (totalBytes > MAX_SQLITE_SNAPSHOT_EXTRACT_BYTES) {
+  const label = params.postgres ? "PostgreSQL artifacts" : "SQLite snapshots";
+  const totalBytes = resolveExtractionBytes(params.entries, !params.postgres);
+  if (totalBytes > MAX_DATABASE_SNAPSHOT_EXTRACT_BYTES) {
     throw new Error(
-      `SQLite snapshots require ${formatDiskSpaceBytes(totalBytes)} of extraction space; the verification limit is ${formatDiskSpaceBytes(MAX_SQLITE_SNAPSHOT_EXTRACT_BYTES)}.`,
+      `${label} require ${formatDiskSpaceBytes(totalBytes)} of extraction space; the verification limit is ${formatDiskSpaceBytes(MAX_DATABASE_SNAPSHOT_EXTRACT_BYTES)}.`,
     );
   }
 
@@ -241,10 +243,10 @@ function assertSqliteExtractionBudget(params: {
   const diskSpace = tryReadDiskSpace(params.tempRoot);
   if (
     diskSpace &&
-    remainingBytes + SQLITE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES > diskSpace.availableBytes
+    remainingBytes + DATABASE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES > diskSpace.availableBytes
   ) {
     throw new Error(
-      `SQLite snapshots require ${formatDiskSpaceBytes(remainingBytes)} of extraction space, but only ${formatDiskSpaceBytes(diskSpace.availableBytes)} is available near ${params.tempRoot}; verification reserves ${formatDiskSpaceBytes(SQLITE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES)} for the host.`,
+      `${label} require ${formatDiskSpaceBytes(remainingBytes)} of extraction space, but only ${formatDiskSpaceBytes(diskSpace.availableBytes)} is available near ${params.tempRoot}; verification reserves ${formatDiskSpaceBytes(DATABASE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES)} for the host.`,
     );
   }
 }
@@ -307,6 +309,74 @@ async function assertSqliteSnapshotFileShape(
   }
 }
 
+async function extractDatabaseArtifacts(
+  archivePath: string,
+  tempDir: string,
+  entries: NormalizedArchiveEntry[],
+): Promise<void> {
+  const byRawPath = new Map(entries.map((entry) => [entry.raw, entry]));
+  await tar.x({
+    file: archivePath,
+    gzip: true,
+    maxDecompressionRatio: BACKUP_MAX_DECOMPRESSION_RATIO,
+    cwd: tempDir,
+    strict: true,
+    preserveOwner: false,
+    filter: (entryPath, archiveEntry) => {
+      const expected = byRawPath.get(entryPath);
+      if (!expected) {
+        return false;
+      }
+      if (archiveEntry.size !== expected.size) {
+        throw new Error(`Database artifact size changed during verification: ${entryPath}`);
+      }
+      return true;
+    },
+  });
+  for (const entry of entries) {
+    const stat = await fs.lstat(path.join(tempDir, ...entry.normalized.split("/")));
+    if (!stat.isFile() || stat.size !== entry.size) {
+      throw new Error(`Extracted database artifact does not match archive: ${entry.normalized}`);
+    }
+  }
+}
+
+async function verifyPostgresSnapshots(
+  archivePath: string,
+  entries: NormalizedArchiveEntry[],
+  captures: Awaited<ReturnType<typeof resolvePostgresRestoreEntries>>,
+): Promise<void> {
+  if (!captures.length) {
+    return;
+  }
+  const paths = new Set(
+    captures.flatMap(({ directoryPath, anchorPath }) => [
+      anchorPath,
+      ...["manifest.json", "anchor.sqlite", "database.sqlite", ".pending"].map(
+        (name) => `${directoryPath}/${name}`,
+      ),
+    ]),
+  );
+  const artifacts = entries.filter((entry) => paths.has(entry.normalized));
+  const tempRoot = os.tmpdir();
+  assertSnapshotExtractionBudget({ entries: artifacts, tempRoot, postgres: true });
+  const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-backup-verify-postgres-"));
+  try {
+    await extractDatabaseArtifacts(archivePath, tempDir, artifacts);
+    const { readBackupEngineImage, verifyMatchedPostgresBackup } =
+      await import("../snapshot/database-backup.js");
+    for (const { directoryPath, anchorPath } of captures) {
+      const anchor = readBackupEngineImage(path.join(tempDir, anchorPath), anchorPath);
+      if (anchor.engine !== "postgres") {
+        throw new Error(`PostgreSQL backup has an invalid outer anchor: ${anchorPath}`);
+      }
+      await verifyMatchedPostgresBackup(path.join(tempDir, directoryPath), "user-backup", anchor);
+    }
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+}
+
 async function verifySqliteSnapshots(params: {
   archivePath: string;
   entries: NormalizedArchiveEntry[];
@@ -354,7 +424,7 @@ async function verifySqliteSnapshots(params: {
   }
   assertCanonicalStateAssetRoot(params.manifest);
   const tempRoot = os.tmpdir();
-  assertSqliteExtractionBudget({ entries: initialEntries, tempRoot });
+  assertSnapshotExtractionBudget({ entries: initialEntries, tempRoot });
   const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-backup-verify-sqlite-"));
   try {
     const batches = [initialEntries];
@@ -363,43 +433,16 @@ async function verifySqliteSnapshots(params: {
       const extractedBytes = resolveExtractionBytes(extractedEntries, true);
       extractedEntries.push(...sqliteEntries);
       if (extractedBytes > 0) {
-        assertSqliteExtractionBudget({ entries: extractedEntries, tempRoot, extractedBytes });
+        assertSnapshotExtractionBudget({ entries: extractedEntries, tempRoot, extractedBytes });
       }
-      const sqliteEntriesByRawPath = new Map(sqliteEntries.map((entry) => [entry.raw, entry]));
-      await tar.x({
-        file: params.archivePath,
-        gzip: true,
-        maxDecompressionRatio: BACKUP_MAX_DECOMPRESSION_RATIO,
-        cwd: tempDir,
-        strict: true,
-        preserveOwner: false,
-        filter: (entryPath, archiveEntry) => {
-          const expected = sqliteEntriesByRawPath.get(entryPath);
-          if (!expected) {
-            return false;
-          }
-          if (archiveEntry.size !== expected.size) {
-            throw new Error(`SQLite snapshot size changed during verification: ${entryPath}`);
-          }
-          return true;
-        },
-      });
+      await extractDatabaseArtifacts(params.archivePath, tempDir, sqliteEntries);
 
       for (const entry of sqliteEntries) {
         const extractedPath = path.join(tempDir, ...entry.normalized.split("/"));
-        const extractedStat = await fs.lstat(extractedPath);
-        if (!extractedStat.isFile()) {
-          throw new Error(`Extracted SQLite snapshot is not a regular file: ${entry.normalized}`);
-        }
-        if (extractedStat.size !== entry.size) {
-          throw new Error(
-            `Extracted SQLite snapshot size does not match archive: ${entry.normalized}`,
-          );
-        }
 
         let database: DatabaseSync | undefined;
         try {
-          await assertSqliteSnapshotFileShape(extractedPath, entry.normalized, extractedStat.size);
+          await assertSqliteSnapshotFileShape(extractedPath, entry.normalized, entry.size!);
           database = openNodeSqliteDatabase(extractedPath, {
             allowExtension: true,
             readOnly: true,
@@ -629,6 +672,7 @@ async function verifyResolvedBackupArchive(
     entries,
     manifest,
   );
+  await verifyPostgresSnapshots(archivePath, entries, databaseRestoreCandidates);
   const verifiedSnapshots = await verifySqliteSnapshots({
     archivePath,
     entries,

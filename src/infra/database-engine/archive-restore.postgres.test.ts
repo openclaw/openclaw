@@ -408,29 +408,23 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
           },
         );
 
-        // A later corrupt export must not leave the already prepared namespaces behind.
+        // A later unavailable provider must clean namespaces already prepared for earlier stores.
         const corruptRoot = state.path("corrupt");
         await fs.mkdir(corruptRoot);
         await tar.x({ file: backup.archivePath, cwd: corruptRoot });
-        const storesByEntry = new Map(
-          stores.map((store) => [buildBackupArchivePath(backup.archiveRoot, store.file), store]),
-        );
-        const capturedEntries: string[] = [];
-        await tar.t({
-          file: backup.archivePath,
-          onReadEntry(entry) {
-            if (storesByEntry.has(entry.path)) {
-              capturedEntries.push(entry.path);
-            }
-          },
-        });
-        const last = storesByEntry.get(capturedEntries.at(-1)!)!;
-        const corruptImage = path.join(
+        const archiveManifest = JSON.parse(
+          await fs.readFile(path.join(corruptRoot, backup.archiveRoot, "manifest.json"), "utf8"),
+        ) as { postgresSnapshots: Array<{ sourcePath: string }> };
+        const lastPath = archiveManifest.postgresSnapshots.at(-1)!.sourcePath;
+        const corruptManifest = path.join(
           corruptRoot,
-          `${buildBackupArchivePath(backup.archiveRoot, last.file)}.postgres`,
-          "database.sqlite",
+          `${buildBackupArchivePath(backup.archiveRoot, lastPath)}.postgres`,
+          "manifest.json",
         );
-        await fs.appendFile(corruptImage, "corrupt");
+        const originalManifest = await fs.readFile(corruptManifest, "utf8");
+        const unavailableProvider = JSON.parse(originalManifest);
+        unavailableProvider.source.owner = "missing-backup-owner";
+        await fs.writeFile(corruptManifest, JSON.stringify(unavailableProvider));
         const corruptArchive = state.path("corrupt.tar.gz");
         await tar.c({ file: corruptArchive, cwd: corruptRoot, gzip: true }, [backup.archiveRoot]);
         const before = (
@@ -454,14 +448,7 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
           ).rows,
         ).toEqual(before);
 
-        await fs.copyFile(
-          path.join(
-            capturedRoot,
-            `${buildBackupArchivePath(backup.archiveRoot, last.file)}.postgres`,
-            "database.sqlite",
-          ),
-          corruptImage,
-        );
+        await fs.writeFile(corruptManifest, originalManifest);
         await fs.unlink(
           path.join(
             corruptRoot,

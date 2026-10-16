@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { PostgresExportEnvelope } from "../snapshot/export-envelope.js";
 import {
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
@@ -300,4 +302,96 @@ describe("standalone backup database completeness", () => {
     const { archivePath } = await writeSmallArchive([], value);
     await expect(verifyBackupArchive(archivePath)).rejects.toThrow(error);
   });
+});
+
+describe("archive PostgreSQL capsule verification", () => {
+  it.each(["image", "manifest", "inner anchor", "outer anchor", "pending capture"])(
+    "rejects a damaged %s in a plugin-only archive before restore",
+    async (damage) => {
+      const sourcePath = "/synthetic/plugins/workboard.sqlite";
+      const fixture = await writeSmallArchive([], [{ sourcePath }]);
+      const anchorPath = buildBackupArchivePath(fixture.archiveRoot, sourcePath);
+      const directoryPath = `${anchorPath}.postgres`;
+      const directory = path.join(fixture.root, directoryPath);
+      await fs.mkdir(directory, { recursive: true });
+      const anchor = path.join(fixture.root, anchorPath);
+      const storeId = "64c70dfe-1d42-4ae2-b7f1-197ff7eb3339";
+      {
+        using db = new DatabaseSync(anchor);
+        db.exec("CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT)");
+        db.prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', 'original')").run(
+          storeId,
+        );
+      }
+      await fs.copyFile(anchor, path.join(directory, "anchor.sqlite"));
+      {
+        using db = new DatabaseSync(path.join(directory, "database.sqlite"));
+        db.exec("CREATE TABLE notes (body TEXT); INSERT INTO notes VALUES ('retained')");
+      }
+      const artifact = async (name: string) => {
+        const bytes = await fs.readFile(path.join(directory, name));
+        return {
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+          sizeBytes: bytes.length,
+        };
+      };
+      const envelope: PostgresExportEnvelope = {
+        schemaVersion: 2,
+        snapshotId: path.basename(directory),
+        createdAt: "2026-10-16T00:00:00.000Z",
+        profile: "user-backup",
+        source: {
+          engine: "postgres",
+          storeId,
+          namespace: "original",
+          owner: "workboard",
+          schemaVersion: 1,
+        },
+        exportSchemaVersion: 1,
+        activeFragments: [],
+        verification: { tables: {}, allocations: {} },
+        sanitizedDifferences: [],
+        artifacts: {
+          "database.sqlite": await artifact("database.sqlite"),
+          "anchor.sqlite": await artifact("anchor.sqlite"),
+        },
+      };
+      const manifestPath = path.join(directory, "manifest.json");
+      await fs.writeFile(manifestPath, JSON.stringify(envelope));
+      const archiveManifestPath = path.join(fixture.root, fixture.archiveRoot, "manifest.json");
+      const manifest: BackupManifest = JSON.parse(await fs.readFile(archiveManifestPath, "utf8"));
+      delete manifest.paths;
+      manifest.assets = [
+        {
+          kind: "plugin",
+          sourcePath: "/synthetic",
+          archivePath: buildBackupArchivePath(fixture.archiveRoot, "/synthetic"),
+        },
+      ];
+      await fs.writeFile(archiveManifestPath, JSON.stringify(manifest));
+      await expect(
+        verifyBackupArchive(await repack(fixture.root, fixture.archiveRoot, "valid")),
+      ).resolves.toMatchObject({ ok: true });
+      if (damage === "pending capture") {
+        await fs.writeFile(path.join(directory, ".pending"), "");
+      } else if (damage === "image") {
+        await fs.appendFile(path.join(directory, "database.sqlite"), "corrupt");
+      } else if (damage === "manifest") {
+        await fs.writeFile(manifestPath, '{"source":{"engine":"postgres"}}');
+      } else {
+        const file = damage === "inner anchor" ? path.join(directory, "anchor.sqlite") : anchor;
+        {
+          using db = new DatabaseSync(file);
+          db.exec("UPDATE openclaw_engine_anchor SET schema = 'different'");
+        }
+        if (damage === "inner anchor") {
+          envelope.artifacts["anchor.sqlite"] = await artifact("anchor.sqlite");
+          await fs.writeFile(manifestPath, JSON.stringify(envelope));
+        }
+      }
+      await expect(
+        verifyBackupArchive(await repack(fixture.root, fixture.archiveRoot, "damaged")),
+      ).rejects.toThrow(/verification failed/);
+    },
+  );
 });

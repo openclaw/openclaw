@@ -194,7 +194,7 @@ describe.skipIf(!connection)("PostgreSQL Git backup discovery and verification",
     }
   });
 
-  it("keeps each discovered family and redacted Matrix resource in a distinct Git scope", async () => {
+  it("keeps distinct family scopes and prunes removed Matrix stores without losing extras or history", async () => {
     const repositoryPath = path.join(root, "all-repository");
     const result = await createGitBackup({
       repositoryPath,
@@ -249,6 +249,46 @@ describe.skipIf(!connection)("PostgreSQL Git backup discovery and verification",
         false,
       );
     }
+
+    const extras = matrix.map(({ id }) => `stores/${id}/postgres/operator-note.txt`);
+    for (const file of extras) {
+      await fs.writeFile(path.join(repositoryPath, file), "operator document\n");
+    }
+    await requireGitCommand(repositoryPath, ["add", "--", ...extras]);
+    await fs.rm(path.join(stateDir, "matrix/accounts/one/state/openclaw.sqlite"));
+    const refreshed = await createGitBackup({
+      repositoryPath,
+      stateDir,
+      databases: [{ path: shared, identity: { role: "global" } }],
+      all: true,
+      excludeSecrets: true,
+      gitEnv,
+    });
+    expect(refreshed.manifests).toHaveLength(4);
+    const removed = matrix.filter(
+      ({ id }) =>
+        !refreshed.manifests.some(
+          ({ identity }) => identity.role === "generic" && identity.id === id,
+        ),
+    );
+    expect(removed).toHaveLength(1);
+    const identity = removed[0]!.manifest.identity;
+    await expect(verifyGitBackupRef({ repositoryPath, identity })).rejects.toThrow(
+      "does not contain",
+    );
+    await expect(
+      verifyGitBackupRef({ repositoryPath, identity, ref: result.commit }),
+    ).resolves.toMatchObject({ manifest: removed[0]!.manifest });
+    for (const file of extras) {
+      await expect(fs.readFile(path.join(repositoryPath, file), "utf8")).resolves.toBe(
+        "operator document\n",
+      );
+    }
+    expect(
+      (await requireGitCommand(repositoryPath, ["diff", "--cached", "--name-only"]))
+        .split("\n")
+        .toSorted(),
+    ).toEqual(extras.toSorted());
   }, 120_000);
 
   it("verifies matched artifacts without creating server namespaces, including corrupt artifacts", async () => {

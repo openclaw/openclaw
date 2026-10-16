@@ -29,7 +29,7 @@ import {
   applyScopeUpdate,
   gitBackupArtifactFiles,
   prepareScopeUpdate,
-  prepareStaleAgentUpdates,
+  prepareStaleScopeUpdates,
   readGitBackupRepositoryState,
   type GitBackupScopeUpdate,
 } from "./git-backup-artifacts.js";
@@ -395,14 +395,9 @@ export async function createGitBackup(params: {
       }
     }
     if (params.all) {
-      // Selection is the configured roster, including agents whose snapshot failed.
+      // Retain every selected store, including configured agents whose snapshot failed.
       updates.push(
-        ...(await prepareStaleAgentUpdates(
-          repositoryPath,
-          new Set(params.databases.map(({ identity }) => gitBackupScopePath(identity))),
-          repositoryState,
-          params.gitEnv,
-        )),
+        ...(await prepareStaleScopeUpdates(repositoryPath, scopes, repositoryState, params.gitEnv)),
       );
     }
     for (const update of updates) {

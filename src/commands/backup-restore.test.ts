@@ -150,6 +150,7 @@ describe("backupRestoreCommand", () => {
           damaged.write("SQLite format 3\0");
           const files = new Map([
             ["notes.postgres/manifest.json", Buffer.from("user document\n")],
+            ["lookalike.postgres/manifest.json", Buffer.from('{"source":{"engine":"postgres"}}')],
             ["ordinary.sqlite", await fs.readFile(databasePath)],
             ["ordinary.sqlite.postgres/manifest.json", Buffer.from("another user document\n")],
             ["text.sqlite", Buffer.from("plain text named sqlite\n")],

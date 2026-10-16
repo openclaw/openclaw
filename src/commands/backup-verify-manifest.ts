@@ -591,18 +591,17 @@ export async function resolvePostgresRestoreEntries(
       ) {
         continue;
       }
-      let value: unknown;
+      const directoryPath = path.posix.dirname(entry.normalized);
+      let envelope;
       try {
-        value = JSON.parse(await extractManifest({ archivePath, manifestEntryPath: entry.raw }));
+        const value: unknown = JSON.parse(
+          await extractManifest({ archivePath, manifestEntryPath: entry.raw }),
+        );
+        envelope = parsePostgresEnvelope(value, path.posix.basename(directoryPath));
       } catch {
         // Ordinary user files may share this name; only PG envelopes claim a store.
         continue;
       }
-      if (!isRecord(value) || !isRecord(value.source) || value.source.engine !== "postgres") {
-        continue;
-      }
-      const directoryPath = path.posix.dirname(entry.normalized);
-      const envelope = parsePostgresEnvelope(value, path.posix.basename(directoryPath));
       if (envelope.profile === "user-backup") {
         captures.push({ directoryPath, anchorPath: directoryPath.slice(0, -".postgres".length) });
       }

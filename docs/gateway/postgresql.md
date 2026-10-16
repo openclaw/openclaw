@@ -357,6 +357,10 @@ backup. Neither a server dump alone nor a copied anchor covers the installation.
 
 ### Restore all PostgreSQL stores
 
+`openclaw backup verify <archive>` checks every PostgreSQL capsule’s manifest,
+artifact hashes, and binding to its captured anchor, including plugin stores and
+retained Matrix roots.
+
 `openclaw backup restore <archive> --target <directory>` verifies and extracts
 into a fresh staging directory, then imports every captured PostgreSQL store into
 a fresh namespace: shared state, agents, Workboard, Logbook, Team Reports, and
