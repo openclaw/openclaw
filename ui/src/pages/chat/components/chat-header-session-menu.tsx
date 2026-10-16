@@ -50,7 +50,7 @@ type HeaderMenuProps = {
   onboarding: boolean;
   preferencesBrowserOnly: boolean;
   compact: boolean;
-  prewarm: boolean;
+  prewarm?: boolean;
   bubbleModeEnabled: boolean;
   mainKey: string;
   copyMarkdownAllowed: boolean;

@@ -132,8 +132,8 @@ describe("Solid menu branch lifetime", () => {
         ),
       })),
     });
-    await vi.advanceTimersToNextFrame();
-    await vi.advanceTimersToNextFrame();
+    vi.advanceTimersToNextFrame();
+    vi.advanceTimersToNextFrame();
     await vi.advanceTimersByTimeAsync(50);
     flush();
     expect(avatar.mock.calls.length).toBeGreaterThan(0);

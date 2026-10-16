@@ -411,6 +411,8 @@ export function Menu(props: BranchProps): JSX.Element {
                   ),
                   role: itemRole(item().type),
                   "aria-label": item().label,
+                  "aria-checked": item().type ? (item().checked ? "true" : "false") : undefined,
+                  "aria-disabled": item().disabled ? "true" : undefined,
                   "data-value": item().id,
                 }));
                 return renderCustom ? (
@@ -436,8 +438,6 @@ export function Menu(props: BranchProps): JSX.Element {
                     class={["oc-menu-item", item().class]}
                     value={item().attributes?.value ?? item().id}
                     data-variant={item().variant}
-                    aria-checked={item().type ? (item().checked ? "true" : "false") : undefined}
-                    aria-disabled={item().disabled ? "true" : undefined}
                     disabled={item().href === undefined ? item().disabled : undefined}
                   >
                     <Show when={item().type}>
