@@ -4,7 +4,16 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { Bot } from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { listSessionEntries } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  createEmptyPluginRegistry,
+  mockPublishedModelRuntimeForTest,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  getSessionEntryAsync,
+  listSessionEntries,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
@@ -41,9 +50,10 @@ function sendJson(response: ServerResponse, result: unknown): void {
 describe("Telegram model callback loopback", () => {
   afterEach(() => {
     resetTelegramClientOptionsCacheForTests();
+    resetPluginRuntimeStateForTest();
   });
 
-  it("sends, authorizes, resolves, persists, answers, and edits an opaque callback", async () => {
+  it("browses prepared model routes and persists a selected opaque callback over HTTP", async () => {
     const stateDir = sessionDirs.make();
     const requests: TelegramApiRequest[] = [];
     let sentMessage: Record<string, unknown> | undefined;
@@ -81,11 +91,12 @@ describe("Telegram model callback loopback", () => {
       } else if (method === "answerCallbackQuery") {
         sendJson(response, true);
       } else if (method === "editMessageText") {
-        sendJson(response, {
+        sentMessage = {
           ...sentMessage,
           text: payload.text,
           reply_markup: payload.reply_markup,
-        });
+        };
+        sendJson(response, sentMessage);
       } else {
         response.writeHead(404, { "content-type": "application/json" });
         response.end(JSON.stringify({ ok: false, error_code: 404, description: method }));
@@ -109,7 +120,7 @@ describe("Telegram model callback loopback", () => {
           defaults: {
             model: "anthropic/claude-opus-4-6",
             models: {
-              "anthropic/claude-opus-4-6": {},
+              "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
               [`${PROVIDER}/${MODEL}`]: {},
             },
           },
@@ -119,53 +130,56 @@ describe("Telegram model callback loopback", () => {
         },
         session: { store: storePath },
       };
-      const buttons = buildModelsKeyboard({
-        provider: PROVIDER,
-        models: [MODEL],
-        currentPage: 1,
-        totalPages: 1,
+      const registry = createEmptyPluginRegistry();
+      registry.cliBackends.push({
+        pluginId: "anthropic",
+        source: "fixture",
+        backend: {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          config: { command: "unused-fixture-cli" },
+        },
       });
-      await sendMessageTelegram(String(CHAT_ID), "Select a model:", {
+      setActivePluginRegistry(registry);
+      const catalog = [
+        { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus" },
+        { provider: "claude-cli", id: "claude-opus-4-6", name: "Claude Opus (CLI)" },
+        { provider: PROVIDER, id: MODEL, name: MODEL, api: "ollama" as const },
+      ];
+      // Only external prepared inventory/auth facts are fixed. The catalog decisions,
+      // provider grouping, callbacks, serialization and session selection stay real.
+      await mockPublishedModelRuntimeForTest({
+        config,
+        facts: {
+          authModes: { "claude-cli": "api_key" },
+          modelCatalog: { entries: catalog, routeVariants: catalog },
+        },
+        paths: { agentDir: join(stateDir, "agent"), workspaceDir: stateDir },
+        authStore: {
+          version: 1,
+          profiles: Object.fromEntries(
+            ["anthropic", "claude-cli", PROVIDER].map((provider) => [
+              provider,
+              { type: "api_key" as const, provider, key: "synthetic-key" },
+            ]),
+          ),
+        },
+      });
+      await sendMessageTelegram(String(CHAT_ID), "Browse models:", {
         cfg: config,
         token: TOKEN,
-        buttons,
+        buttons: [[{ text: "Browse providers", callback_data: "mdl_prov" }]],
       });
-
-      const callbackData = (
-        sentMessage?.reply_markup as {
-          inline_keyboard?: Array<Array<{ callback_data?: string }>>;
-        }
-      )?.inline_keyboard?.[0]?.[0]?.callback_data;
-      expect(callbackData).toMatch(/^mdl1~m:[A-Za-z0-9_-]{43}$/);
-      expect(Buffer.byteLength(callbackData ?? "", "utf8")).toBeLessThanOrEqual(64);
 
       const callbackSteps: string[] = [];
       const bot = new Bot(TOKEN, { botInfo: telegramBotInfoForTest, client: { apiRoot } });
       const telegramDeps = {
         ...defaultTelegramBotDeps,
-        buildModelsProviderData: async (): ReturnType<
-          TelegramBotDeps["buildModelsProviderData"]
-        > => {
+        buildModelsProviderData: async (
+          ...args: Parameters<TelegramBotDeps["buildModelsProviderData"]>
+        ) => {
           callbackSteps.push("catalog");
-          return {
-            byProvider: new Map([
-              ["anthropic", new Set(["claude-opus-4-6"])],
-              [PROVIDER, new Set([MODEL])],
-            ]),
-            providers: ["anthropic", PROVIDER],
-            resolvedDefault: { provider: "anthropic", model: "claude-opus-4-6" },
-            modelNames: new Map<string, string>(),
-            modelCatalog: [
-              {
-                provider: PROVIDER,
-                id: MODEL,
-                name: MODEL,
-                api: "ollama",
-                contextWindow: 32_768,
-                reasoning: true,
-              },
-            ],
-          };
+          return defaultTelegramBotDeps.buildModelsProviderData(...args);
         },
         getRuntimeConfig: () => config,
       };
@@ -192,14 +206,17 @@ describe("Telegram model callback loopback", () => {
         processMessageWithReplyChain: async () => {
           throw new Error("model callback must not enter generic callback dispatch");
         },
-        resolveTelegramSessionState: async () => ({
-          agentId: "main",
-          bindingMode: { kind: "none" },
-          sessionEntry: undefined,
-          sessionKey: "agent:main:telegram:direct:1234",
-          storePath,
-          model: undefined,
-        }),
+        resolveTelegramSessionState: async () => {
+          const sessionKey = "agent:main:telegram:direct:1234";
+          return {
+            agentId: "main",
+            bindingMode: { kind: "none" },
+            sessionEntry: await getSessionEntryAsync({ agentId: "main", sessionKey, storePath }),
+            sessionKey,
+            storePath,
+            model: undefined,
+          };
+        },
       } as unknown as TelegramCallbackMessageRuntime;
       const router = createTelegramCallbackRouter({
         params: {
@@ -215,23 +232,52 @@ describe("Telegram model callback loopback", () => {
       bot.on("callback_query", async (context) => {
         await router.route(context);
       });
-      await bot.handleUpdate({
-        update_id: 1,
-        callback_query: {
-          id: "loopback-callback",
-          chat_instance: "loopback-chat",
-          data: callbackData,
-          from: { id: 9, is_bot: false, first_name: "Operator", username: "operator" },
-          message: sentMessage as never,
-        },
-      });
+      let updateId = 0;
+      const tap = (data: string) =>
+        bot.handleUpdate({
+          update_id: ++updateId,
+          callback_query: {
+            id: `loopback-callback-${updateId}`,
+            chat_instance: "loopback-chat",
+            data,
+            from: { id: 9, is_bot: false, first_name: "Operator", username: "operator" },
+            message: sentMessage as never,
+          },
+        });
+      const renderedButtons = () =>
+        (
+          sentMessage?.reply_markup as {
+            inline_keyboard?: Array<Array<{ text: string; callback_data: string }>>;
+          }
+        )?.inline_keyboard?.flat() ?? [];
+
+      await tap("mdl_prov");
+      expect(renderedButtons().map((button) => button.text)).toEqual([
+        "anthropic (1)",
+        "ollama (1)",
+      ]);
+      const providerButton = renderedButtons().find((button) => button.text === "ollama (1)");
+      expect(providerButton).toBeDefined();
+      await tap(providerButton!.callback_data);
+      const modelButton = renderedButtons().find((button) =>
+        button.callback_data.startsWith("mdl1~m:"),
+      );
+      expect(modelButton?.callback_data).toMatch(/^mdl1~m:[A-Za-z0-9_-]{43}$/);
+      expect(Buffer.byteLength(modelButton?.callback_data ?? "", "utf8")).toBeLessThanOrEqual(64);
+      await tap(modelButton!.callback_data);
 
       expect(requests.map(({ method }) => method)).toEqual([
         "sendMessage",
         "answerCallbackQuery",
         "editMessageText",
+        "answerCallbackQuery",
+        "editMessageText",
+        "answerCallbackQuery",
+        "editMessageText",
       ]);
-      expect(callbackSteps).toEqual(["context", "sender", "model", "catalog"]);
+      expect(callbackSteps).toEqual(
+        Array(3).fill(["context", "sender", "model", "catalog"]).flat(),
+      );
       expect(listSessionEntries({ storePath })[0]?.entry).toMatchObject({
         providerOverride: PROVIDER,
         modelOverride: MODEL,

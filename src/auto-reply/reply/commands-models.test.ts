@@ -178,6 +178,129 @@ function buildParams(
 }
 
 describe("handleModelsCommand", () => {
+  it.each([
+    { name: "configured equivalent CLI route", runtime: "claude-cli", expectedCli: false },
+    { name: "distinct API and CLI routes", runtime: "openclaw", expectedCli: true },
+    { name: "explicit all browse", runtime: "claude-cli", view: "all" as const, expectedCli: true },
+    { name: "CLI-only role policy", runtime: "claude-cli", roleOnly: true, expectedCli: true },
+  ])("preserves route choice for $name", async ({ runtime, view, roleOnly, expectedCli }) => {
+    modelCatalogMocks.loadModelCatalog.mockReturnValue([
+      { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
+      { provider: "claude-cli", id: "claude-opus-4-5", name: "Claude Opus (CLI)" },
+    ]);
+    setCredentials(["anthropic", "claude-cli"]);
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: "anthropic/claude-opus-4-5",
+          models: { "anthropic/claude-opus-4-5": { agentRuntime: { id: runtime } } },
+        },
+      },
+      ...(roleOnly
+        ? {
+            gateway: {
+              roles: {
+                definitions: {
+                  cli: {
+                    sessions: { others: "none" },
+                    agents: "*",
+                    scopes: ["operator.read"],
+                    modelPolicy: { allow: ["claude-cli/*"] },
+                  },
+                },
+              },
+            },
+          }
+        : {}),
+    };
+    const result = await handleModelsCommand(
+      buildParams(view ? "/models claude-cli all" : "/models", config),
+      true,
+    );
+    if (view) {
+      expect(result?.reply?.text).toContain("claude-cli/claude-opus-4-5");
+      return;
+    }
+    expect(result?.reply?.text).toContain("- anthropic (1)");
+    if (expectedCli) {
+      expect(result?.reply?.text).toContain("- claude-cli (1)");
+    } else {
+      expect(result?.reply?.text).not.toContain("- claude-cli");
+    }
+  });
+
+  it("restores the CLI choice when the latest native readiness no longer qualifies its canonical twin", async () => {
+    modelCatalogMocks.loadModelCatalog.mockReturnValue([
+      { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
+      { provider: "claude-cli", id: "claude-opus-4-5", name: "Claude Opus (CLI)" },
+    ]);
+    setCredentials(["anthropic", "claude-cli"]);
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: "anthropic/claude-opus-4-5",
+          models: { "anthropic/claude-opus-4-5": { agentRuntime: { id: "claude-cli" } } },
+        },
+      },
+    };
+    const available = await buildPreparedModelsProviderData(config, "main");
+    expect(available.providers).toEqual(["anthropic"]);
+
+    // A later published auth snapshot no longer confirms the native login.
+    // The independently available explicit CLI profile must stay selectable.
+    authModes = Object.fromEntries(
+      Object.entries(authModes).filter(([provider]) => provider !== "claude-cli"),
+    );
+    const unavailable = await buildPreparedModelsProviderData(config, "main");
+    expect(unavailable.providers).toEqual(["anthropic", "claude-cli"]);
+    expect(unavailable.modelMenu?.byProvider.get("anthropic")?.available).toBe(0);
+    expect(unavailable.modelMenu?.byProvider.get("claude-cli")?.available).toBe(1);
+  });
+
+  it("keeps the only allowed CLI route even when the canonical default is configured", async () => {
+    modelCatalogMocks.loadModelCatalog.mockReturnValue([
+      { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
+      { provider: "claude-cli", id: "claude-opus-4-5", name: "Claude Opus (CLI)" },
+    ]);
+    setCredentials(["claude-cli"]);
+    const result = await handleModelsCommand(
+      buildParams("/models", {
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-5",
+            models: { "anthropic/claude-opus-4-5": { agentRuntime: { id: "claude-cli" } } },
+            modelPolicy: { allow: ["claude-cli/*"] },
+          },
+        },
+      }),
+      true,
+    );
+    expect(result?.reply?.text).toContain("- claude-cli (1)");
+    expect(result?.reply?.text).not.toContain("- anthropic");
+  });
+
+  it("retains a distinct model under the CLI provider after removing its equivalent twin", async () => {
+    modelCatalogMocks.loadModelCatalog.mockReturnValue([
+      { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
+      { provider: "claude-cli", id: "claude-opus-4-5", name: "Claude Opus (CLI)" },
+      { provider: "claude-cli", id: "claude-sonnet-4-5", name: "Claude Sonnet (CLI)" },
+    ]);
+    setCredentials(["anthropic", "claude-cli"]);
+    const result = await handleModelsCommand(
+      buildParams("/models claude-cli", {
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-5",
+            models: { "anthropic/claude-opus-4-5": { agentRuntime: { id: "claude-cli" } } },
+          },
+        },
+      }),
+      true,
+    );
+    expect(result?.reply?.text).toContain("claude-cli/claude-sonnet-4-5");
+    expect(result?.reply?.text).not.toContain("claude-cli/claude-opus-4-5");
+  });
+
   it("labels the default route after clearing the session runtime pin", async () => {
     setCredentials(["anthropic", "claude-cli"]);
     const data = await buildPreparedModelsProviderData(
