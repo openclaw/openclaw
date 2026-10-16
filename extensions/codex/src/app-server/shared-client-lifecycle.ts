@@ -5,67 +5,6 @@ import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
 import type { CodexDesktopGeneration } from "./desktop-generation-owner.js";
 
-export type CodexAppServerAcquireBoundary =
-  | "context"
-  | "entry-selection"
-  | "transport-registration"
-  | "initialize"
-  | "catalog-observation"
-  | "runtime-binding"
-  | "auth-handoff"
-  | "ready"
-  | "cleanup";
-
-export type CodexAppServerAcquireObservation = {
-  boundary: CodexAppServerAcquireBoundary;
-  startup?: "created-shared" | "joined-shared" | "ready-cache-hit" | "isolated";
-};
-
-type AcquireObserverOptions = {
-  onAcquireObservation?: (observation: CodexAppServerAcquireObservation) => void;
-};
-
-export function observeAcquire(
-  options: AcquireObserverOptions | undefined,
-  observation: CodexAppServerAcquireObservation,
-): void {
-  try {
-    options?.onAcquireObservation?.(observation);
-  } catch {
-    // Diagnostics do not own startup, cancellation, or a shared client's lifetime.
-  }
-}
-
-export function observeSharedClientAcquire(
-  entry: SharedCodexAppServerClientEntry,
-  options: AcquireObserverOptions | undefined,
-): () => void {
-  const observer = (boundary: CodexAppServerAcquireBoundary) =>
-    observeAcquire(options, { boundary });
-  if (options?.onAcquireObservation) {
-    (entry.acquireBoundaryObservers ??= new Set()).add(observer);
-  }
-  observeAcquire(options, {
-    boundary: entry.acquireBoundary ?? "entry-selection",
-    startup: entry.startup
-      ? entry.acquireBoundary === "ready"
-        ? "ready-cache-hit"
-        : "joined-shared"
-      : "created-shared",
-  });
-  return () => entry.acquireBoundaryObservers?.delete(observer);
-}
-
-export function recordSharedClientAcquireBoundary(
-  entry: SharedCodexAppServerClientEntry,
-  boundary: CodexAppServerAcquireBoundary,
-): void {
-  entry.acquireBoundary = boundary;
-  for (const observer of entry.acquireBoundaryObservers ?? []) {
-    observer(boundary);
-  }
-}
-
 export type SharedCodexAppServerClientEntry = {
   /** Moves only through rekeySharedClientEntry. */
   key: string;
@@ -80,8 +19,6 @@ export type SharedCodexAppServerClientEntry = {
   idleTimer?: ReturnType<typeof setTimeout>;
   hasOwnedThreads?: () => boolean;
   onStartedClientCallbacks: Set<(client: CodexAppServerClient) => void>;
-  acquireBoundary?: CodexAppServerAcquireBoundary;
-  acquireBoundaryObservers?: Set<(boundary: CodexAppServerAcquireBoundary) => void>;
 };
 
 export type SharedCodexAppServerClientStartup = {
