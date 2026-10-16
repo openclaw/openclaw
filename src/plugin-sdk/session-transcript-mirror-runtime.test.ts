@@ -32,17 +32,28 @@ describe("private session transcript mirror runtime", () => {
   let storePath: string;
 
   beforeEach(() => {
-    const tempDir = sessionDirs.make();
-    storePath = path.join(tempDir, "sessions.json");
+    storePath = path.join(sessionDirs.make(), "sessions.json");
   });
 
+  const target = (name: string) => ({
+    agentId: "main",
+    sessionId: `${name}-session`,
+    sessionKey: `agent:main:${name}`,
+    storePath,
+  });
+  const message = (role: string, text: string, idempotencyKey: string, timestamp: number) => ({
+    role,
+    content: [{ type: "text", text }],
+    idempotencyKey,
+    timestamp,
+  });
+  const userFacts = {
+    existingIdempotencyKeys: new Set(["mirror-user"]),
+    messagesByIdempotencyKey: new Map([["mirror-user", expect.objectContaining({ role: "user" })]]),
+  };
+
   it("rechecks idempotency and publishes only committed visible sequences", async () => {
-    const scope = {
-      agentId: "main",
-      sessionId: "indexed-mirror-session",
-      sessionKey: "agent:main:indexed-mirror",
-      storePath,
-    };
+    const scope = target("indexed-mirror");
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
 
     await withCodexSessionTranscriptMirrorWriteLock(scope, async (locked) => {
@@ -53,31 +64,18 @@ describe("private session transcript mirror runtime", () => {
       });
       const first = await locked.appendMessageWithMessageSequence({
         idempotencyLookup: "scan",
-        message: {
-          role: "user",
-          content: [{ type: "text", text: "persist once" }],
-          idempotencyKey: "mirror-user",
-          timestamp: 1,
-        },
+        message: message("user", "persist once", "mirror-user", 1),
       });
       expect(first).toMatchObject({
         messageSeq: 1,
         result: { appended: true, message: { role: "user" } },
       });
-      expect(await locked.readMessageFacts({ idempotencyKeys: ["mirror-user"] })).toMatchObject({
-        existingIdempotencyKeys: new Set(["mirror-user"]),
-        messagesByIdempotencyKey: new Map([
-          ["mirror-user", expect.objectContaining({ role: "user" })],
-        ]),
-      });
+      expect(await locked.readMessageFacts({ idempotencyKeys: ["mirror-user"] })).toMatchObject(
+        userFacts,
+      );
       const replay = await locked.appendMessageWithMessageSequence({
         idempotencyLookup: "scan",
-        message: {
-          role: "user",
-          content: [{ type: "text", text: "persist once" }],
-          idempotencyKey: "mirror-user",
-          timestamp: 2,
-        },
+        message: message("user", "persist once", "mirror-user", 2),
       });
       expect(replay).toMatchObject({
         result: {
@@ -91,21 +89,11 @@ describe("private session transcript mirror runtime", () => {
         throw new Error("expected initial mirror append");
       }
       await locked.appendMessage({
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "abandoned branch" }],
-          idempotencyKey: "mirror-abandoned",
-          timestamp: 3,
-        },
+        message: message("assistant", "abandoned branch", "mirror-abandoned", 3),
         parentId: first.result.messageId,
       });
       const activeBranch = await locked.appendMessageWithMessageSequence({
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "final active branch" }],
-          idempotencyKey: "mirror-active",
-          timestamp: 4,
-        },
+        message: message("assistant", "final active branch", "mirror-active", 4),
         parentId: first.result.messageId,
       });
       expect(activeBranch).toMatchObject({
@@ -128,12 +116,7 @@ describe("private session transcript mirror runtime", () => {
     });
     await withCodexSessionTranscriptMirrorWriteLock(scope, async (locked) => {
       const afterReconcile = await locked.appendMessageWithMessageSequence({
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "after active branch" }],
-          idempotencyKey: "mirror-after-reconcile",
-          timestamp: 5,
-        },
+        message: message("assistant", "after active branch", "mirror-after-reconcile", 5),
       });
       expect(afterReconcile).toMatchObject({
         messageSeq: 3,
@@ -157,20 +140,12 @@ describe("private session transcript mirror runtime", () => {
     );
 
     await withCodexSessionTranscriptMirrorWriteLock(scope, async (locked) => {
-      expect(await locked.readMessageFacts({ idempotencyKeys: ["mirror-user"] })).toMatchObject({
-        existingIdempotencyKeys: new Set(["mirror-user"]),
-        messagesByIdempotencyKey: new Map([
-          ["mirror-user", expect.objectContaining({ role: "user" })],
-        ]),
-      });
+      expect(await locked.readMessageFacts({ idempotencyKeys: ["mirror-user"] })).toMatchObject(
+        userFacts,
+      );
       const dirtyProjection = await locked.appendMessageWithMessageSequence({
         idempotencyLookup: "scan",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "projection fallback" }],
-          idempotencyKey: "mirror-dirty",
-          timestamp: 6,
-        },
+        message: message("assistant", "projection fallback", "mirror-dirty", 6),
       });
       expect(dirtyProjection).toMatchObject({
         result: { appended: true, message: { role: "assistant" } },
@@ -180,12 +155,7 @@ describe("private session transcript mirror runtime", () => {
   });
 
   it("publishes the append's lifecycle after the session row is replaced", async () => {
-    const scope = {
-      agentId: "main",
-      sessionId: "owned-mirror-session",
-      sessionKey: "agent:main:owned-mirror",
-      storePath,
-    };
+    const scope = target("owned-mirror");
     const entry = {
       sessionId: scope.sessionId,
       activeWriterRunId: "mirror-writer",
@@ -245,17 +215,8 @@ describe("private session transcript mirror runtime", () => {
   });
 
   it("rejects an admission receipt for a different transcript target", async () => {
-    const admittedScope = {
-      agentId: "main",
-      sessionId: "admitted-session",
-      sessionKey: "agent:main:admitted-session",
-      storePath,
-    };
-    const requestedScope = {
-      ...admittedScope,
-      sessionId: "requested-session",
-      sessionKey: "agent:main:requested-session",
-    };
+    const admittedScope = target("admitted");
+    const requestedScope = target("requested");
     await upsertSessionEntryCore(admittedScope, {
       sessionId: admittedScope.sessionId,
       updatedAt: 1,

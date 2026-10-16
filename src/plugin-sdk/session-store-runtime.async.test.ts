@@ -39,6 +39,20 @@ const tempDirs = createTempDirTracker();
 const authority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
 const databases: { agentId: string; path: string }[] = [];
+const makeScope = (prefix: string) => ({
+  agentId: "main",
+  env: { OPENCLAW_STATE_DIR: tempDirs.make(prefix) },
+});
+async function withoutHostSql<T>(run: () => Promise<T>): Promise<T> {
+  const sql = observeHostDataSql();
+  try {
+    const result = await run();
+    expect(sql.queries).toEqual([]);
+    return result;
+  } finally {
+    sql.restore();
+  }
+}
 beforeEach(() => {
   setRuntimeConfigSnapshot({});
 });
@@ -99,19 +113,10 @@ it("resolves historical transcript keys off the host after the current session c
   expectTypeOf<typeof resolveTranscriptSessionKeyBySessionIdAsync>().parameters.toEqualTypeOf<
     Parameters<typeof resolveTranscriptSessionKeyBySessionId>
   >();
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("sdk-historical-transcript-key-") };
-  const scope = { agentId: "main", env };
+  const scope = makeScope("sdk-historical-transcript-key-");
   const sessionKey = "agent:main:history";
-  const read = async (sessionId: string) => {
-    const sql = observeHostDataSql();
-    try {
-      const resolved = await resolveTranscriptSessionKeyBySessionIdAsync({ ...scope, sessionId });
-      expect(sql.queries).toEqual([]);
-      return resolved;
-    } finally {
-      sql.restore();
-    }
-  };
+  const read = (sessionId: string) =>
+    withoutHostSql(() => resolveTranscriptSessionKeyBySessionIdAsync({ ...scope, sessionId }));
   expect(await read("missing")).toBeUndefined();
   expect(existsSync(resolveOpenClawAgentSqlitePath(scope))).toBe(false);
   await upsertSessionEntry({
@@ -151,29 +156,16 @@ it("lists current public metadata off the host after an owner write without crea
   expectTypeOf<
     PluginRuntime["agent"]["session"]["listSessionEntriesAsync"]
   >().parameters.toEqualTypeOf<Parameters<typeof listSessionEntriesAsync>>();
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("sdk-async-list-") };
-  const scope = { agentId: "main", env };
+  const scope = makeScope("sdk-async-list-");
   const sessionKey = "agent:main:listed";
   await expect(listSessionEntriesAsync(scope)).resolves.toEqual([]);
   expect(existsSync(resolveOpenClawAgentSqlitePath(scope))).toBe(false);
 
   replaceSessionEntrySync(
     { ...scope, sessionKey },
-    {
-      ...completeEntry,
-      initializationPending: true,
-    },
+    { ...completeEntry, initializationPending: true },
   );
-  const read = async () => {
-    const sql = observeHostDataSql();
-    try {
-      const entries = await listSessionEntriesAsync(scope);
-      expect(sql.queries).toEqual([]);
-      return entries;
-    } finally {
-      sql.restore();
-    }
-  };
+  const read = () => withoutHostSql(() => listSessionEntriesAsync(scope));
   const before = await read();
   expect(before).toEqual([
     {
@@ -203,43 +195,30 @@ it("lists current public metadata off the host after an owner write without crea
 });
 
 it("reads committed watermark updates off the host and ignores a reset predecessor", async () => {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("sdk-async-watermark-") };
-  const scope = { agentId: "main", env, sessionKey: "agent:main:telegram:group:room" };
+  const scope = {
+    ...makeScope("sdk-async-watermark-"),
+    sessionKey: "agent:main:telegram:group:room",
+  };
   const key = resolveAmbientTranscriptWatermarkKey({
     channel: "telegram",
     accountId: "default",
     conversationId: "room",
   });
-  let entry = {
+  const entry = (messageId: string, updatedAt: number) => ({
     sessionId: "before-reset",
     updatedAt: 1,
     ambientTranscriptWatermarks: {
-      [key]: { sessionId: "before-reset", messageId: "11", updatedAt: 1 },
+      [key]: { sessionId: "before-reset", messageId, updatedAt },
     },
-  };
-  const read = async () => {
-    const sql = observeHostDataSql();
-    try {
-      const watermark = await readAmbientTranscriptWatermarkAsync({ ...scope, key });
-      expect(sql.queries).toEqual([]);
-      return watermark;
-    } finally {
-      sql.restore();
-    }
-  };
-  await upsertSessionEntry({ ...scope, entry });
+  });
+  const read = () => withoutHostSql(() => readAmbientTranscriptWatermarkAsync({ ...scope, key }));
+  await upsertSessionEntry({ ...scope, entry: entry("11", 1) });
   expect(await read()).toMatchObject({ messageId: "11" });
 
-  entry = {
-    ...entry,
-    ambientTranscriptWatermarks: {
-      [key]: { sessionId: "before-reset", messageId: "12", updatedAt: 2 },
-    },
-  };
-  await upsertSessionEntry({ ...scope, entry });
+  await upsertSessionEntry({ ...scope, entry: entry("12", 2) });
   expect(await read()).toMatchObject({ messageId: "12" });
 
-  await upsertSessionEntry({ ...scope, entry: { ...entry, sessionId: "after-reset" } });
+  await upsertSessionEntry({ ...scope, entry: { ...entry("12", 2), sessionId: "after-reset" } });
   expect(await read()).toBeUndefined();
 });
 
@@ -249,7 +228,7 @@ it.each(["durable", "memory"] as const)(
     expectTypeOf<
       PluginRuntime["agent"]["session"]["getSessionEntryByIdAsync"]
     >().parameters.toEqualTypeOf<Parameters<typeof getSessionEntryByIdAsync>>();
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make(`sdk-id-order-${mode}-`) };
+    const { env } = makeScope(`sdk-id-order-${mode}-`);
     const scope = {
       agentId: "main",
       env,
@@ -277,23 +256,19 @@ it.each(["durable", "memory"] as const)(
         replaceSessionEntrySync({ ...scope, sessionKey }, entry);
       }
     }
-    await expect(
-      getSessionEntryByIdAsync({ ...scope, sessionId: "duplicate" }),
-    ).resolves.toMatchObject({ sessionKey: `${prefix}a-old` });
-    await expect(
-      getSessionEntryByIdAsync({ ...scope, sessionId: "duplicate", orderBy: "updatedAt" }),
-    ).resolves.toMatchObject({ sessionKey: `${prefix}m-tied` });
-    await expect(
-      getSessionEntryByIdAsync({ ...scope, sessionId: "legacy" }),
-    ).resolves.toMatchObject({ sessionKey: `${prefix}b-exact` });
-    await expect(
-      getSessionEntryByIdAsync({ ...scope, sessionId: "legacy", orderBy: "updatedAt" }),
-    ).resolves.toMatchObject({ sessionKey: `${prefix}n-trimmed` });
+    const expectId = (sessionId: string, suffix: string, orderBy?: "updatedAt") =>
+      expect(getSessionEntryByIdAsync({ ...scope, sessionId, orderBy })).resolves.toMatchObject({
+        sessionKey: `${prefix}${suffix}`,
+      });
+    await expectId("duplicate", "a-old");
+    await expectId("duplicate", "m-tied", "updatedAt");
+    await expectId("legacy", "b-exact");
+    await expectId("legacy", "n-trimmed", "updatedAt");
   },
 );
 
 it("keeps the complete public projection for durable and memory entry reads", async () => {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("sdk-async-entry-") };
+  const { env } = makeScope("sdk-async-entry-");
   const durable = { agentId: "main", env, sessionKey: "agent:main:durable" };
   await expect(
     getSessionEntryByIdAsync({ ...durable, sessionId: "missing" }),
@@ -322,8 +297,7 @@ it("keeps the complete public projection for durable and memory entry reads", as
     ...completeEntry,
     incognito: true,
   });
-  const sql = observeHostDataSql();
-  try {
+  await withoutHostSql(async () => {
     const entry = await getSessionEntryAsync(scope);
     expect(entry).toEqual({ ...publicEntry, incognito: true });
     expect(getSessionEntry(scope)).toEqual(entry);
@@ -334,23 +308,19 @@ it("keeps the complete public projection for durable and memory entry reads", as
     await expect(
       getSessionEntryByIdAsync({ ...scope, sessionId: "missing" }),
     ).resolves.toBeUndefined();
-    expect(sql.queries).toEqual([]);
-  } finally {
-    sql.restore();
-  }
+  });
 });
 
 it("cleans an unbound private recall helper selected through its configured durable path", async () => {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("sdk-cleanup-memory-") };
-  const scope = { agentId: "main", env };
+  const scope = makeScope("sdk-cleanup-memory-");
+  const { env } = scope;
   const storePath = resolveOpenClawAgentSqlitePath(scope);
   const sessionKey = "agent:main:subagent:incognito-helper";
   const durableKey = "agent:main:durable-helper";
   const entry = { sessionId: "helper", updatedAt: 1, pluginOwnerId: "active-memory" };
   replaceSessionEntrySync({ ...scope, sessionKey: durableKey }, entry);
   await createMemoryEntry(env, sessionKey, { ...entry, incognito: true });
-  const sql = observeHostDataSql();
-  try {
+  await withoutHostSql(async () => {
     await expect(
       cleanupSessionLifecycleArtifacts({
         ...scope,
@@ -363,15 +333,12 @@ it("cleans an unbound private recall helper selected through its configured dura
       }),
     ).resolves.toEqual({ removedEntries: 1, archivedTranscriptArtifacts: 0 });
     await expect(getSessionEntryAsync({ ...scope, sessionKey })).resolves.toBeUndefined();
-    expect(sql.queries).toEqual([]);
-  } finally {
-    sql.restore();
-  }
+  });
   expect(getSessionEntry({ ...scope, sessionKey: durableKey })).toMatchObject(entry);
 });
 
 it("keeps absent and closed memory owners absent without allocating a database", async () => {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("sdk-memory-absent-") };
+  const { env } = makeScope("sdk-memory-absent-");
   const scope = { agentId: "main", env, sessionKey: "agent:main:dashboard:incognito-absent" };
   const database = { agentId: "main", path: resolveIncognitoOpenClawAgentSqlitePath(scope) };
   await expect(getSessionEntryAsync(scope)).resolves.toBeUndefined();
@@ -405,15 +372,14 @@ it("keeps absent and closed memory owners absent without allocating a database",
 });
 
 it("keeps exact memory policy guards current without treating unrelated metadata as revocation", async () => {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("sdk-policy-current-") };
+  const { env } = makeScope("sdk-policy-current-");
   const target = await createMemoryEntry(env, "agent:main:dashboard:incognito-policy", {
     ...completeEntry,
     incognito: true,
     execHost: "node",
     execNode: "original-node",
   });
-  const sql = observeHostDataSql();
-  try {
+  await withoutHostSql(async () => {
     const prepared = await captureSessionEntryCurrentCheckAsync({
       ...target,
       fields: ["execHost", "execNode"],
@@ -436,8 +402,5 @@ it("keeps exact memory policy guards current without treating unrelated metadata
         expected: { sessionId: "selected", execNode: "original-node" },
       }),
     ).rejects.toThrow("selected session changed");
-    expect(sql.queries).toEqual([]);
-  } finally {
-    sql.restore();
-  }
+  });
 });

@@ -33,11 +33,66 @@ import {
   normalizeSessionDeliveryState,
   patchSessionEntry,
   upsertSessionEntry,
+  type SessionEntry,
 } from "./session-store-runtime.js";
 
 describe("current conversation session binding", () => {
   let tempDir: string;
   let storePath: string;
+
+  const addressFor = (
+    options: { agentId: string; storePath?: string; env?: NodeJS.ProcessEnv } = {
+      agentId: "main",
+      storePath,
+    },
+    peerId = "room",
+  ) => ({
+    ...options,
+    channel: "reef",
+    accountId: "default",
+    kind: "group" as const,
+    peerId,
+    threadId: "first",
+  });
+  const deliveryFor = (peerId = "room", threadId = "first") =>
+    normalizeSessionDeliveryState({
+      context: { channel: "reef", accountId: "default", to: `group:${peerId}`, threadId },
+    });
+  async function seedConversation(
+    options: { agentId: string; storePath?: string; env?: NodeJS.ProcessEnv } = {
+      agentId: "main",
+      storePath,
+    },
+    entry: Partial<SessionEntry> = {},
+  ) {
+    const scope = { ...options, sessionKey: "agent:main:reef:group:room" };
+    const delivery = deliveryFor();
+    await upsertSessionEntry({
+      ...scope,
+      entry: { sessionId: "original", updatedAt: 100, chatType: "group", delivery, ...entry },
+    });
+    return {
+      scope,
+      delivery,
+      address: addressFor(options),
+      replacementScope: { ...scope, sessionKey: `${scope.sessionKey}:thread:first` },
+    };
+  }
+  async function withoutEntrySql(run: () => Promise<void>, conversations = false) {
+    const sql = observeHostDataSql();
+    try {
+      await run();
+    } finally {
+      sql.restore();
+    }
+    expect(
+      sql.queries.filter(
+        (query) =>
+          isSessionEntryDataSql(query) ||
+          (conversations && /\bconversations\b|\bconversation_sessions\b/.test(query)),
+      ),
+    ).toEqual([]);
+  }
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-conversation-"));
@@ -60,42 +115,19 @@ describe("current conversation session binding", () => {
   it.each(["policy", "conversation"] as const)(
     "observes committed %s changes in async effect checks without host SQLite",
     async (change) => {
-      const scope = { agentId: "main", storePath, sessionKey: "agent:main:reef:group:room" };
-      const address = {
-        ...scope,
-        channel: "reef",
-        accountId: "default",
-        kind: "group" as const,
-        peerId: "room",
-        threadId: "first",
-      };
-      const delivery = normalizeSessionDeliveryState({
-        context: { channel: "reef", accountId: "default", to: "group:room", threadId: "first" },
-      });
-      await upsertSessionEntry({
-        ...scope,
-        entry: {
-          sessionId: "original",
-          updatedAt: 100,
-          permissionMode: "workspace",
-          chatType: "group",
-          delivery,
-        },
+      const { scope, address, delivery } = await seedConversation(undefined, {
+        permissionMode: "workspace",
       });
       const current = await captureSessionEntryCurrentCheckAsync({
         ...scope,
         fields: ["permissionMode"],
         alternatives: [{ conversations: [{ ...address, sessionKey: scope.sessionKey }] }],
       });
-      const hostSql = observeHostDataSql();
-      try {
+      await withoutEntrySql(async () => {
         await expect(current.isCurrent()).resolves.toBe(true);
         await expect(current.assertCurrent()).resolves.toBeUndefined();
         current.source.assertScopeCurrent();
-      } finally {
-        hostSql.restore();
-      }
-      expect(hostSql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+      });
       await upsertSessionEntry({
         ...scope,
         sessionKey:
@@ -108,36 +140,16 @@ describe("current conversation session binding", () => {
           delivery,
         },
       });
-      const changedSql = observeHostDataSql();
-      try {
+      await withoutEntrySql(async () => {
         await expect(current.isCurrent()).resolves.toBe(false);
         await expect(current.assertCurrent()).rejects.toThrow("selected session changed");
-      } finally {
-        changedSql.restore();
-      }
-      expect(changedSql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+      });
     },
   );
 
   it("reads conversation changes inside their owning transaction and respects rollback", async () => {
     const databaseOptions = { agentId: "main", env: { OPENCLAW_STATE_DIR: tempDir } };
-    const scope = { ...databaseOptions, sessionKey: "agent:main:reef:group:room" };
-    const replacementScope = { ...scope, sessionKey: `${scope.sessionKey}:thread:first` };
-    const address = {
-      ...databaseOptions,
-      channel: "reef",
-      accountId: "default",
-      kind: "group" as const,
-      peerId: "room",
-      threadId: "first",
-    };
-    const delivery = normalizeSessionDeliveryState({
-      context: { channel: "reef", accountId: "default", to: "group:room", threadId: "first" },
-    });
-    await upsertSessionEntry({
-      ...scope,
-      entry: { sessionId: "original", updatedAt: 100, chatType: "group", delivery },
-    });
+    const { scope, replacementScope, address, delivery } = await seedConversation(databaseOptions);
     const rollback = new Error("Roll back the conversation reassignment");
     expect(() =>
       runOpenClawAgentWriteTransaction(() => {
@@ -159,8 +171,7 @@ describe("current conversation session binding", () => {
       sessionId: "original",
     });
     expect(getSessionEntry(replacementScope)).toBeUndefined();
-    const hostSql = observeHostDataSql();
-    try {
+    await withoutEntrySql(async () => {
       expect(await getConversationSessionAsync(address)).toEqual({
         sessionKey: scope.sessionKey,
         sessionId: "original",
@@ -173,10 +184,7 @@ describe("current conversation session binding", () => {
         sessionKey: replacementScope.sessionKey,
         sessionId: "replacement",
       });
-    } finally {
-      hostSql.restore();
-    }
-    expect(hostSql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+    });
   });
 
   it("keeps prepared guards on the canonical row selected by shorthand and normalized keys", async () => {
@@ -188,8 +196,7 @@ describe("current conversation session binding", () => {
     for (const sessionKey of [" main ", " AGENT:MAIN:main "]) {
       const current = await captureSessionEntryCurrentCheckAsync({ ...scope, sessionKey });
       await expect(current.isCurrent()).resolves.toBe(true);
-      const hostSql = observeHostDataSql();
-      try {
+      await withoutEntrySql(async () => {
         await patchSessionEntry({
           ...scope,
           sessionKey,
@@ -197,10 +204,7 @@ describe("current conversation session binding", () => {
           assertCommitAllowed: current.source,
           update: () => ({ displayName: sessionKey }),
         });
-      } finally {
-        hostSql.restore();
-      }
-      expect(hostSql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+      });
       expect(getSessionEntry(scope)?.displayName).toBe(sessionKey);
     }
   });
@@ -215,23 +219,11 @@ describe("current conversation session binding", () => {
     const secondDirectory = path.join(tempDir, "foreign-second");
     const aliasDirectory = path.join(tempDir, "foreign-alias");
     const conversationKey = "agent:main:reef:group:foreign-room";
-    const address = {
-      agentId: "main",
-      storePath: path.join(aliasDirectory, "sessions.sqlite"),
-      channel: "reef",
-      accountId: "default",
-      kind: "group" as const,
-      peerId: "foreign-room",
-      threadId: "first",
-    };
-    const delivery = normalizeSessionDeliveryState({
-      context: {
-        channel: "reef",
-        accountId: "default",
-        to: "group:foreign-room",
-        threadId: "first",
-      },
-    });
+    const address = addressFor(
+      { agentId: "main", storePath: path.join(aliasDirectory, "sessions.sqlite") },
+      "foreign-room",
+    );
+    const delivery = deliveryFor("foreign-room");
     for (const [index, directory] of [firstDirectory, secondDirectory].entries()) {
       fs.mkdirSync(directory);
       await upsertSessionEntry({
@@ -302,24 +294,7 @@ describe("current conversation session binding", () => {
   it.each(["opaque", "prepared", "composed"] as const)(
     "rejects a %s title guard when another session takes its conversation before commit",
     async (guardKind) => {
-      const scope = { agentId: "main", storePath, sessionKey: "agent:main:reef:group:room" };
-      const replacementScope = { ...scope, sessionKey: `${scope.sessionKey}:thread:first` };
-      const address = {
-        agentId: "main",
-        storePath,
-        channel: "reef",
-        accountId: "default",
-        kind: "group" as const,
-        peerId: "room",
-        threadId: "first",
-      };
-      const delivery = normalizeSessionDeliveryState({
-        context: { channel: "reef", accountId: "default", to: "group:room", threadId: "first" },
-      });
-      await upsertSessionEntry({
-        ...scope,
-        entry: { sessionId: "original", updatedAt: 100, chatType: "group", delivery },
-      });
+      const { scope, replacementScope, address, delivery } = await seedConversation();
       const current =
         guardKind !== "opaque"
           ? await captureSessionEntryCurrentCheckAsync({
@@ -335,8 +310,7 @@ describe("current conversation session binding", () => {
           ? composeSessionEntryCommitGuards([current.source])
           : current.source);
       if (current) {
-        const hostSql = observeHostDataSql();
-        try {
+        await withoutEntrySql(async () => {
           await patchSessionEntry({
             ...scope,
             skipMaintenance: true,
@@ -344,15 +318,7 @@ describe("current conversation session binding", () => {
             assertCommitAllowed: assertCurrent,
             update: () => ({ displayName: "Current owner title" }),
           });
-        } finally {
-          hostSql.restore();
-        }
-        expect(
-          hostSql.queries.filter(
-            (sql) =>
-              isSessionEntryDataSql(sql) || /\bconversations\b|\bconversation_sessions\b/.test(sql),
-          ),
-        ).toEqual([]);
+        }, true);
       }
       const original = getSessionEntry(scope);
       const replacement = {
@@ -391,15 +357,7 @@ describe("current conversation session binding", () => {
   it("does not let a later parent turn replace an existing thread owner", async () => {
     const parentKey = "agent:main:reef:group:room";
     const threadKey = `${parentKey}:thread:first`;
-    const address = {
-      agentId: "main",
-      storePath,
-      channel: "reef",
-      accountId: "default",
-      kind: "group" as const,
-      peerId: "room",
-      threadId: "first",
-    };
+    const address = addressFor();
     for (const [sessionKey, sessionId, threadId, updatedAt] of [
       [parentKey, "parent", "first", 100],
       [threadKey, "thread", "first", 200],
@@ -413,9 +371,7 @@ describe("current conversation session binding", () => {
           sessionId,
           updatedAt,
           chatType: "group",
-          delivery: normalizeSessionDeliveryState({
-            context: { channel: "reef", accountId: "default", to: "group:room", threadId },
-          }),
+          delivery: deliveryFor("room", threadId),
         },
       });
     }

@@ -71,8 +71,7 @@ afterEach(() => {
 });
 
 it("retains durable callback ordering and warns once per plugin across legacy writes and reloads", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const f = await seed(env);
+  await withSeed(async (f) => {
     const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
     const instances = [
       new PluginInstance("transcript-compat-first"),
@@ -130,27 +129,27 @@ it("refuses legacy incognito callbacks while prepared unbound writes use the mem
     const locked = vi.fn();
     const message = { role: "assistant", content: "private" };
     const expected = /preparation\.prepareMessage \/ preparation\.source/u;
-    await expect(
-      appendSessionTranscriptMessageByIdentityStrict({
-        ...target,
-        message,
-        prepareMessageAfterIdempotencyCheck: prepare,
-      }),
-    ).rejects.toThrow(expected);
-    await expect(
-      appendSessionTranscriptMessageByIdentity({
-        ...target,
-        message,
-        beforeFreshMessageCommit: guard,
-      }),
-    ).rejects.toThrow(expected);
-    await expect(withSessionTranscriptWriteLock(target, locked)).rejects.toThrow(expected);
-    await expect(withCodexSessionTranscriptMirrorWriteLock(target, locked)).rejects.toThrow(
-      expected,
-    );
-    expect(prepare).not.toHaveBeenCalled();
-    expect(guard).not.toHaveBeenCalled();
-    expect(locked).not.toHaveBeenCalled();
+    for (const operation of [
+      () =>
+        appendSessionTranscriptMessageByIdentityStrict({
+          ...target,
+          message,
+          prepareMessageAfterIdempotencyCheck: prepare,
+        }),
+      () =>
+        appendSessionTranscriptMessageByIdentity({
+          ...target,
+          message,
+          beforeFreshMessageCommit: guard,
+        }),
+      () => withSessionTranscriptWriteLock(target, locked),
+      () => withCodexSessionTranscriptMirrorWriteLock(target, locked),
+    ]) {
+      await expect(operation()).rejects.toThrow(expected);
+    }
+    for (const callback of [prepare, guard, locked]) {
+      expect(callback).not.toHaveBeenCalled();
+    }
     const location = {
       agentId: target.agentId,
       path: resolveIncognitoOpenClawAgentSqlitePath(target),
@@ -222,11 +221,19 @@ async function seed(env: NodeJS.ProcessEnv) {
   return {
     database,
     scope: { ...target, storePath: database.path },
-    events: () =>
-      readTranscriptEventRows(database, target.sessionId).map((row) => JSON.parse(row.eventJson)),
+    messages: () =>
+      readTranscriptEventRows(database, target.sessionId)
+        .map((row) => JSON.parse(row.eventJson))
+        .filter((event) => event.type === "message"),
   };
 }
 
+type Fixture = Awaited<ReturnType<typeof seed>>;
+const appendExternal = (scope: Fixture["scope"], eventId: string, message: unknown) =>
+  expect(appendTranscriptMessageSnapshotSync(scope, { eventId, message }).ok).toBe(true);
+function withSeed(run: (fixture: Fixture) => Promise<void>) {
+  return withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => run(await seed(env)));
+}
 it("prepares strict appends without caller-thread SQL and retains the released sync callback type", async () => {
   type Message = { role: string; content: string; idempotencyKey: string };
   type Params = Parameters<typeof appendSessionTranscriptMessageByIdentityStrict<Message>>[0];
@@ -236,8 +243,7 @@ it("prepares strict appends without caller-thread SQL and retains the released s
   expectTypeOf<NonNullable<Params["prepareMessageAfterIdempotencyCheckAsync"]>>().toEqualTypeOf<
     (message: Message) => Promise<Message | undefined>
   >();
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const { database, scope } = await seed(env);
+  await withSeed(async ({ scope, messages }) => {
     const prepare = vi.fn(async (message: Message) => ({ ...message, content: "prepared" }));
     const sql = observeHostDataSql();
     try {
@@ -251,24 +257,18 @@ it("prepares strict appends without caller-thread SQL and retains the released s
         result: { appended: true, message: { content: "prepared" } },
       });
       expect(prepare).toHaveBeenCalledOnce();
-      const executions = sql.calls.slice(1).reduce((sum, call) => sum + call.mock.calls.length, 0);
-      expect(sql.queries, `MAIN strict turn: ${executions} SQL executions`).toEqual([]);
+      expect(sql.queries).toEqual([]);
     } finally {
       sql.restore();
     }
-    expect(
-      readTranscriptEventRows(database, scope.sessionId).filter(
-        (row) => JSON.parse(row.eventJson).type === "message",
-      ),
-    ).toHaveLength(1);
+    expect(messages()).toHaveLength(1);
   });
 });
 
 it.each([false, true])(
   "checks fresh sources after a foreign replay decision (foreignReplay=%s)",
   async (foreignReplay) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-      const { database, scope } = await seed(env);
+    await withSeed(async ({ database, scope, messages }) => {
       const message = { role: "assistant", content: "accepted", idempotencyKey: "foreign-key" };
       const identity = readOpenClawAgentDatabaseIdentity(database);
       const legacyGuard = vi.fn(() => {
@@ -278,10 +278,7 @@ it.each([false, true])(
         async prepareSessionSource() {
           // This separate native connection commits after the worker's first duplicate check.
           if (foreignReplay) {
-            expect(
-              appendTranscriptMessageSnapshotSync(scope, { message, eventId: "foreign-message" })
-                .ok,
-            ).toBe(true);
+            appendExternal(scope, "foreign-message", message);
           }
           replaceSessionEntrySync(scope, {
             sessionId: scope.sessionId,
@@ -325,26 +322,16 @@ it.each([false, true])(
         await expect(appending).rejects.toThrow("Prepared transcript source changed");
       }
       expect(legacyGuard).not.toHaveBeenCalled();
-      expect(
-        readTranscriptEventRows(database, scope.sessionId).filter(
-          (row) => JSON.parse(row.eventJson).type === "message",
-        ),
-      ).toHaveLength(foreignReplay ? 1 : 0);
+      expect(messages()).toHaveLength(foreignReplay ? 1 : 0);
     });
   },
 );
 
 it("rejects an async prepared message after a foreign transcript write", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const f = await seed(env);
+  await withSeed(async (f) => {
     const prepare = vi.fn(async (message: unknown) => {
       if (prepare.mock.calls.length === 1) {
-        expect(
-          appendTranscriptMessageSnapshotSync(f.scope, {
-            message: { role: "assistant", content: "foreign" },
-            eventId: "foreign",
-          }).ok,
-        ).toBe(true);
+        appendExternal(f.scope, "foreign", { role: "assistant", content: "foreign" });
       }
       return message;
     });
@@ -360,30 +347,17 @@ it("rejects an async prepared message after a foreign transcript write", async (
       ],
     });
     await expect(appending).rejects.toThrow("SQLite transcript changed while preparing rewrite");
-    expect(
-      f
-        .events()
-        .filter((event) => event.type === "message")
-        .map((event) => event.id),
-    ).toEqual(["foreign"]);
+    expect(f.messages().map((event) => event.id)).toEqual(["foreign"]);
   });
 });
 
 it("replays a skipped async preparation after a foreign transcript append", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const f = await seed(env);
+  await withSeed(async (f) => {
     const message = { role: "assistant", content: "original", idempotencyKey: "existing" };
-    expect(appendTranscriptMessageSnapshotSync(f.scope, { message, eventId: "existing" }).ok).toBe(
-      true,
-    );
+    appendExternal(f.scope, "existing", message);
     delivery.beforeTurnCommit = () => {
       delivery.beforeTurnCommit = undefined;
-      expect(
-        appendTranscriptMessageSnapshotSync(f.scope, {
-          message: { role: "assistant", content: "foreign" },
-          eventId: "foreign",
-        }).ok,
-      ).toBe(true);
+      appendExternal(f.scope, "foreign", { role: "assistant", content: "foreign" });
     };
     const prepare = vi.fn(async (value: unknown) => value);
     await expect(
@@ -396,11 +370,6 @@ it("replays a skipped async preparation after a foreign transcript append", asyn
       }),
     ).resolves.toMatchObject({ appendedMessages: [{ appended: false, messageId: "existing" }] });
     expect(prepare).not.toHaveBeenCalled();
-    expect(
-      f
-        .events()
-        .filter((event) => event.type === "message")
-        .map((event) => event.id),
-    ).toEqual(["existing", "foreign"]);
+    expect(f.messages().map((event) => event.id)).toEqual(["existing", "foreign"]);
   });
 });
