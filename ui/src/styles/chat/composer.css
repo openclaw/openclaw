@@ -588,7 +588,6 @@
     );
     background-size: 200% 100%;
     background-repeat: repeat-x;
-    -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
     -webkit-text-fill-color: transparent;
@@ -1251,7 +1250,6 @@
   .agent-chat__input:has(.chat-controls__inline-select[open]),
   .agent-chat__input:has(.context-usage details[open]) {
     backdrop-filter: none;
-    -webkit-backdrop-filter: none;
   }
 }
 
@@ -2796,7 +2794,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 .chat-controls__reasoning-range {
-  -webkit-appearance: none;
   appearance: none;
   position: relative;
   z-index: 1;
