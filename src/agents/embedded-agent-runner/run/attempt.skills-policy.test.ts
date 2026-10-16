@@ -76,6 +76,7 @@ function tool(name: string, execute: AnyAgentTool["execute"]): AnyAgentTool {
   };
 }
 const ok = () => ({ content: [{ type: "text" as const, text: "ok" }], details: undefined });
+const fulfilledText = (text: unknown) => ({ status: "fulfilled", value: { content: [{ text }] } });
 const promptInput = () => hoisted.embeddedSystemPromptInputs.at(-1);
 async function tempDir() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-policy-"));
@@ -108,16 +109,18 @@ function toolDigest(tools: AnyAgentTool[], systemPrompt: string, session = foreg
   }).snapshot.toolDigest;
 }
 
-function run(
-  overrides: Omit<
-    Parameters<typeof createContextEngineAttemptRunner>[0],
-    "contextEngine" | "tempPaths"
-  >,
-) {
+type AttemptOptions = Parameters<typeof createContextEngineAttemptRunner>[0];
+function run({
+  sessionKey = "agent:main:main",
+  sessionPrompt,
+  ...attemptOverrides
+}: NonNullable<AttemptOptions["attemptOverrides"]> & Pick<AttemptOptions, "sessionPrompt">) {
   return createContextEngineAttemptRunner({
     contextEngine: createContextEngineBootstrapAndAssemble(),
     tempPaths,
-    ...overrides,
+    sessionKey,
+    sessionPrompt,
+    attemptOverrides,
   });
 }
 
@@ -132,13 +135,11 @@ describe("runEmbeddedAttempt skill policy projections", () => {
 
     await run({
       sessionKey: "agent:main:guildchat:channel:test-ctx-engine",
-      attemptOverrides: {
-        skillsSnapshot: {
-          prompt:
-            "<available_skills><skill><location>~/.openclaw/skills/smaug/SKILL.md</location></skill></available_skills>",
-          skills: [{ name: "smaug" }],
-          resolvedSkills: [createFixtureSkillEntry("smaug").skill],
-        },
+      skillsSnapshot: {
+        prompt:
+          "<available_skills><skill><location>~/.openclaw/skills/smaug/SKILL.md</location></skill></available_skills>",
+        skills: [{ name: "smaug" }],
+        resolvedSkills: [createFixtureSkillEntry("smaug").skill],
       },
     });
 
@@ -225,39 +226,32 @@ describe("runEmbeddedAttempt skill policy projections", () => {
             ]);
           }
         },
-        attemptOverrides: {
-          disableTools: false,
-          disableToolSearch: true,
-          disableMessageTool: false,
-          reasoningLevel: "on",
-          sessionId: session.sessionId,
-          sandboxSessionKey: foregroundSession.sessionKey,
-          promptCacheKey: "foreground-cache-prefix",
-          sessionFile: transcriptFile,
-          sessionTarget: { agentId: "main", ...session, storePath: storeFile },
-          ...(review
-            ? {
-                sessionPersistence: "detached" as const,
-                toolExecutionAllow: ["skill_workshop"],
-                skillWorkshopReviewOf: "agent:main:main",
-                disableTrajectory: true,
-                verboseLevel: "off" as const,
-                trigger: "user" as const,
-              }
-            : {}),
-        },
+        disableTools: false,
+        disableToolSearch: true,
+        disableMessageTool: false,
+        reasoningLevel: "on",
+        sessionId: session.sessionId,
+        sandboxSessionKey: foregroundSession.sessionKey,
+        promptCacheKey: "foreground-cache-prefix",
+        sessionFile: transcriptFile,
+        sessionTarget: { agentId: "main", ...session, storePath: storeFile },
+        ...(review
+          ? {
+              sessionPersistence: "detached" as const,
+              toolExecutionAllow: ["skill_workshop"],
+              skillWorkshopReviewOf: "agent:main:main",
+              disableTrajectory: true,
+              verboseLevel: "off" as const,
+              trigger: "user" as const,
+            }
+          : {}),
       });
       expect(sessionTools().some((entry) => entry.name === "message")).toBe(true);
       expect(promptInput()).toMatchObject({ skillsPrompt: review ? "" : skillsPrompt });
       digests.push(toolDigest(sessionTools(), hoisted.systemPromptTexts.at(-1) ?? "", session));
     }
     expect(reviewReadOutcomes).toMatchObject([
-      {
-        status: "fulfilled",
-        value: {
-          content: [{ text: formatToolExecutionGatedMessage("read", ["skill_workshop"]) }],
-        },
-      },
+      fulfilledText(formatToolExecutionGatedMessage("read", ["skill_workshop"])),
     ]);
     expect(execute).not.toHaveBeenCalled();
     expect(digests[1]).toBe(digests[0]);
@@ -300,11 +294,9 @@ describe("runEmbeddedAttempt skill policy projections", () => {
             });
           }
         },
-        attemptOverrides: {
-          disableTools: false,
-          ...policy,
-          config: { tools: { codeMode: true } },
-        },
+        disableTools: false,
+        ...policy,
+        config: { tools: { codeMode: true } },
       });
       expect(promptInput()).toMatchObject({ skillsPrompt: expectedPrompt });
       const description = sessionTool("exec").description;
@@ -351,7 +343,6 @@ describe("runEmbeddedAttempt skill policy projections", () => {
     });
     let outcomes: PromiseSettledResult<unknown>[] = [];
     await run({
-      sessionKey: "agent:main:main",
       sessionPrompt: async () => {
         const toolCall = sessionTool("dispatch_action");
         outcomes = await Promise.allSettled([
@@ -359,18 +350,16 @@ describe("runEmbeddedAttempt skill policy projections", () => {
           toolCall.execute("call-workshop", { id: "skill_workshop" }),
         ]);
       },
-      attemptOverrides: {
-        config: { tools: { toolSearch: { enabled: true, mode: "tools" } } },
-        disableTools: false,
-        sessionManager,
-        sessionPersistence: "detached",
-        toolExecutionAllow: ["skill_workshop"],
-      },
+      config: { tools: { toolSearch: { enabled: true, mode: "tools" } } },
+      disableTools: false,
+      sessionManager,
+      sessionPersistence: "detached",
+      toolExecutionAllow: ["skill_workshop"],
     });
     expect(executed).toEqual(["skill_workshop"]);
     const denial = formatToolExecutionGatedMessage("read", ["skill_workshop"]);
     expect(outcomes).toMatchObject([
-      { status: "fulfilled", value: { content: [{ text: expect.stringContaining(denial) }] } },
+      fulfilledText(expect.stringContaining(denial)),
       { status: "fulfilled" },
     ]);
     const activities = sessionManager.getEntries().flatMap((entry) => {

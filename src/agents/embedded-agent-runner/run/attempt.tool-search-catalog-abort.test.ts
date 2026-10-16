@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
@@ -39,6 +40,7 @@ const hoisted = getHoisted();
 const tempPaths: string[] = [];
 
 type AttemptOptions = Parameters<typeof createContextEngineAttemptRunner>[0];
+type ToolOptions = NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>;
 function runAttempt({
   sessionKey = "agent:main:main",
   createSession,
@@ -55,7 +57,7 @@ function runAttempt({
 function registerCleanup(tools = [createStubTool("read")]) {
   const cleanup = vi.fn(async (_reason: string) => {});
   hoisted.createOpenClawCodingToolsMock.mockImplementation((options) => {
-    const toolOptions = options as NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>;
+    const toolOptions = options as ToolOptions;
     toolOptions.registerRunCleanup?.(cleanup);
     return tools;
   });
@@ -71,20 +73,8 @@ function completedEvents(runId: string) {
   return { events, unsubscribe };
 }
 
-function requireAttemptCatalogRef(): ToolSearchCatalogRef {
-  const options = hoisted.createOpenClawCodingToolsMock.mock.calls.at(-1)?.[0] as
-    | { toolSearchCatalogRef?: ToolSearchCatalogRef }
-    | undefined;
-  if (!options?.toolSearchCatalogRef) {
-    throw new Error("Expected the embedded attempt to own its Tool Search catalog");
-  }
-  return options.toolSearchCatalogRef;
-}
-
 describe("runEmbeddedAttempt tool boundaries", () => {
-  beforeAll(async () => {
-    await preloadRunEmbeddedAttemptForTests();
-  });
+  beforeAll(preloadRunEmbeddedAttemptForTests);
 
   beforeEach(() => {
     resetEmbeddedAttemptHarness();
@@ -231,7 +221,10 @@ describe("runEmbeddedAttempt tool boundaries", () => {
       const abortController = new AbortController();
       let catalogRef: ToolSearchCatalogRef | undefined;
       const logDiagnostics = vi.fn(() => {
-        catalogRef = requireAttemptCatalogRef();
+        const options = hoisted.createOpenClawCodingToolsMock.mock.calls.at(-1)?.[0] as
+          | ToolOptions
+          | undefined;
+        catalogRef = expectDefined(options?.toolSearchCatalogRef, "attempt catalog");
         expect(catalogRef.current?.entries).toContainEqual(
           expect.objectContaining({ name: "cataloged_probe_tool" }),
         );
@@ -398,9 +391,8 @@ describe("runEmbeddedAttempt tool boundaries", () => {
       const controller = new AbortController();
       const reason = new Error(`LSP preparation ${kind}`);
       reason.name = errorName;
-      const createLsp = vi
-        .spyOn(bundleLspTools, "createBundleLspToolRuntime")
-        .mockImplementationOnce(({ abortSignal }) => {
+      vi.spyOn(bundleLspTools, "createBundleLspToolRuntime").mockImplementationOnce(
+        ({ abortSignal }) => {
           const onAbort = () => acquisition.reject(abortSignal?.reason);
           abortSignal?.addEventListener("abort", onAbort, { once: true });
           if (abortSignal?.aborted) {
@@ -410,7 +402,8 @@ describe("runEmbeddedAttempt tool boundaries", () => {
           return acquisition.promise.finally(() =>
             abortSignal?.removeEventListener("abort", onAbort),
           );
-        });
+        },
+      );
       const cleanup = registerCleanup();
       const runId = `run-lsp-acquisition-${kind}`;
       const { events: completed, unsubscribe } = completedEvents(runId);
@@ -464,7 +457,6 @@ describe("runEmbeddedAttempt tool boundaries", () => {
           await waitForDiagnosticEventsDrained();
         } finally {
           unsubscribe();
-          createLsp.mockRestore();
         }
       }
     },

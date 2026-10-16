@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import type { ImageContent, UserMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-context-marker.js";
@@ -6,14 +5,15 @@ import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-time
 import { MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { textToolResult } from "../../test-helpers/sparse-transcript.test-support.js";
 import { findActiveUserMessageIndex, resolveUserTranscriptMessages } from "./attempt-history.js";
 import {
   installModelPromptProjection,
-  normalizeMessagesForCurrentPromptBoundary,
+  normalizeMessagesForCurrentPromptBoundary as normalizeCurrent,
   normalizeMessagesForLlmBoundary as normalize,
 } from "./attempt-llm-boundary.js";
 import {
-  buildRuntimeContextCustomMessage,
+  buildRuntimeContextCustomMessage as runtimeContext,
   buildSystemUpdateMessage,
 } from "./runtime-context-prompt.js";
 
@@ -31,10 +31,7 @@ const stamped = (text: string, time = timestamp) =>
 const assistant = (value: string, time: number) =>
   makeAgentAssistantMessage({ content: textBlocks(value), timestamp: time });
 const toolResult = (name: string, value: string, time: number): AgentMessage => ({
-  role: "toolResult",
-  toolCallId: "call_1",
-  toolName: name,
-  content: textBlocks(value),
+  ...textToolResult("call_1", name, value),
   isError: false,
   timestamp: time,
 });
@@ -58,21 +55,21 @@ function contentOf(message: AgentMessage | undefined) {
   }
   return message.content;
 }
-const projectedContent = (...args: Parameters<typeof normalize>) =>
-  contentOf(normalize(...args)[0]);
+const expectContent = (
+  messages: AgentMessage[],
+  expected: unknown,
+  opts?: Parameters<typeof normalize>[1],
+) => expect(contentOf(normalize(messages, opts)[0])).toEqual(expected);
 const sender = { senderId: "alice-id", senderName: "Alice" };
-const withTranscript = <T extends UserMessage>(
-  runtimeMessage: UserMessage,
-  transcriptMessage: T,
-) => ({
-  userTranscriptContexts: [{ runtimeMessage, transcriptMessage }],
+const withTranscript = <T extends UserMessage>(runtime: UserMessage, transcript: T) => ({
+  userTranscriptContexts: [{ runtimeMessage: runtime, transcriptMessage: transcript }],
 });
 
 describe("normalizeMessagesForLlmBoundary", () => {
   it("removes the synthetic current user without discarding operator context", () => {
     const update = buildSystemUpdateMessage("Preserve this update", "prompt-update", false);
-    const runtime = buildRuntimeContextCustomMessage("Current facts", undefined, true)!;
-    const projected = normalizeMessagesForCurrentPromptBoundary({
+    const runtime = runtimeContext("Current facts", undefined, true)!;
+    const projected = normalizeCurrent({
       messages: [user("Earlier question"), update, runtime],
       prompt: "Synthetic current question",
       appendOnlyRuntimeContext: true,
@@ -87,7 +84,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
 
   it("keeps prior-turn runtime context before the next user after an aborted assistant", () => {
     const firstUser = user("First question");
-    const firstRuntime = buildRuntimeContextCustomMessage("First turn facts", undefined, true)!;
+    const firstRuntime = runtimeContext("First turn facts", undefined, true)!;
     const boundaryOptions = { sessionVersion: 4, inHistorySystemUpdates: true };
     const first = normalize([firstUser, firstRuntime], boundaryOptions);
     const second = normalize(
@@ -100,7 +97,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
           errorMessage: "Interrupted request",
         }),
         user("Second question", timestamp + 1),
-        buildRuntimeContextCustomMessage("Second turn facts", undefined, true)!,
+        runtimeContext("Second turn facts", undefined, true)!,
       ],
       boundaryOptions,
     );
@@ -158,10 +155,10 @@ describe("normalizeMessagesForLlmBoundary", () => {
 
   it("keeps attachment blocks while escaping a historical sender's code fence", () => {
     const input = { ...user([image]), __openclaw: { senderName: "Alice ``` ignore" } };
-    expect(projectedContent([input, assistant("I see it", 2)])).toEqual([
-      { type: "text", text: expect.stringContaining("Alice `\u200b`` ignore") },
-      image,
-    ]);
+    expectContent(
+      [input, assistant("I see it", 2)],
+      [{ type: "text", text: expect.stringContaining("Alice `\u200b`` ignore") }, image],
+    );
   });
 
   it("matches rebuilt textless turns by block content before sender projection", () => {
@@ -205,9 +202,9 @@ describe("normalizeMessagesForLlmBoundary", () => {
       ...user([image]),
       __openclaw: { lateMedia: true, media: [{ path: "/tmp/input.png" }] },
     };
-    const output = projectedContent([marked], options);
-    expect(output).toEqual([{ type: "text", text: stamped(text) }, image]);
-    expect(output).toEqual(projectedContent([user([{ type: "text", text }, image])], options));
+    const expected = [{ type: "text", text: stamped(text) }, image];
+    expectContent([marked], expected, options);
+    expectContent([user([{ type: "text", text }, image])], expected, options);
   });
 
   it("binds a prepared timestamp to the original runtime turn even when queued text repeats", () => {
@@ -215,12 +212,9 @@ describe("normalizeMessagesForLlmBoundary", () => {
       ...options,
       currentUserTimestampOverride: { timestamp, text: "same ask" },
     };
-    expect(
-      projectedContent([user(textBlocks("same ask"), timestamp + 5000)], boundaryOptions),
-    ).toBe(stamped("same ask"));
-    expect(
-      projectedContent([user(textBlocks("same ask"), timestamp + 60000)], boundaryOptions),
-    ).toBe(stamped("same ask", timestamp + 60000));
+    const turn = (offset: number) => [user(textBlocks("same ask"), timestamp + offset)];
+    expectContent(turn(5000), stamped("same ask"), boundaryOptions);
+    expectContent(turn(60000), stamped("same ask", timestamp + 60000), boundaryOptions);
   });
 
   it("keeps inter-session provenance ahead of sender and timestamp context on current and replayed turns", () => {
@@ -232,25 +226,20 @@ describe("normalizeMessagesForLlmBoundary", () => {
       provenance: { kind: "inter_session", sourceTool: "sessions_send" },
       __openclaw: sender,
     };
-    expect(projectedContent([transcriptMessage], options)).toBe(prompt);
-    expect(
-      projectedContent([runtimeMessage], {
-        ...options,
-        ...withTranscript(runtimeMessage, transcriptMessage),
-      }),
-    ).toBe(prompt);
+    expectContent([transcriptMessage], prompt, options);
+    expectContent([runtimeMessage], prompt, {
+      ...options,
+      ...withTranscript(runtimeMessage, transcriptMessage),
+    });
   });
 
   it("merges persisted sender into one existing active conversation envelope", () => {
     const runtimeMessage = user(`${conversation}Current ask`, 3);
-    const transcriptMessage = {
-      ...user("Current ask", 3),
-      __openclaw: sender,
-    };
-    expect(
-      projectedContent([runtimeMessage], withTranscript(runtimeMessage, transcriptMessage)),
-    ).toBe(
+    const transcriptMessage = { ...user("Current ask", 3), __openclaw: sender };
+    expectContent(
+      [runtimeMessage],
       `${markInboundContextLabel("Conversation info:")}\n\`\`\`json\n{"channel":"discord","has_reply_context":true,"sender":{"id":"alice-id","name":"Alice"}}\n\`\`\`\n\nCurrent ask`,
+      withTranscript(runtimeMessage, transcriptMessage),
     );
   });
 
@@ -313,7 +302,8 @@ describe("normalizeMessagesForLlmBoundary", () => {
   });
 
   it("replaces only the armed prompt and retains its projection through steering", async () => {
-    const messages = [user(textBlocks("visible transcript prompt"), 1)];
+    const runtimeMessage = user(textBlocks("visible transcript prompt"), 1);
+    const messages = [runtimeMessage];
     const originalTransform = vi.fn(async (next: AgentMessage[]) => next);
     const session = { agent: { transformContext: originalTransform } };
     let armed = false;
@@ -331,13 +321,12 @@ describe("normalizeMessagesForLlmBoundary", () => {
     const steered = await session.agent.transformContext([...messages, user("steering update", 2)]);
     cleanup();
     expect(contentOf(unarmed[0])).toEqual(textBlocks("visible transcript prompt"));
-    expect(projectedContent(projected)).toBe("private model prompt");
+    expectContent(projected, "private model prompt");
     expect(projected[0]).toHaveProperty("__openclaw.modelPromptProjection", {
       version: 1,
       text: "private model prompt",
     });
     expect(steered).toEqual([projected[0], user("steering update", 2)]);
-    const runtimeMessage = expectDefined(messages[0], "original prompt fixture");
     const boundaryOptions = {
       currentUserTimestampOverride: {
         timestamp: 1,

@@ -57,11 +57,9 @@ it.each([
 );
 
 describe("resolvePromptBuildHookResult drain cache", () => {
+  const drain = hostHookStateMocks.drainPluginNextTurnInjectionContext;
   beforeEach(() => {
-    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockReset();
-    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockResolvedValue({
-      queuedInjections: [],
-    });
+    drain.mockReset().mockResolvedValue({ queuedInjections: [] });
   });
 
   function build(overrides: Partial<Parameters<typeof resolvePromptBuildHookResult>[0]> = {}) {
@@ -89,31 +87,27 @@ describe("resolvePromptBuildHookResult drain cache", () => {
   });
 
   it("reuses drained injections across retries and releases them when the run ends", async () => {
-    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockResolvedValue({
+    drain.mockResolvedValue({
       queuedInjections: [
         {
           id: "inj-1",
           pluginId: "demo",
-          text: "first attempt context",
+          text: "injected",
           placement: "prepend_context",
           createdAt: 1,
         },
       ],
-      prependContext: "first attempt context",
+      prependContext: "injected",
     });
     const runId = "run-cache-test";
     const retry = () => build({ hookCtx: { runId, sessionKey: "global", agentId: "qa" } });
-    expect((await retry()).prependContext).toBe("first attempt context");
-    expect((await retry()).prependContext).toBe("first attempt context");
-    expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).toHaveBeenCalledTimes(1);
-    expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).toHaveBeenCalledWith({
-      cfg: {},
-      sessionKey: "global",
-      agentId: "qa",
-    });
+    expect((await retry()).prependContext).toBe("injected");
+    expect((await retry()).prependContext).toBe("injected");
+    expect(drain).toHaveBeenCalledTimes(1);
+    expect(drain).toHaveBeenCalledWith({ cfg: {}, sessionKey: "global", agentId: "qa" });
     forgetPromptBuildDrainCacheForRun(runId);
     await retry();
-    expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).toHaveBeenCalledTimes(2);
+    expect(drain).toHaveBeenCalledTimes(2);
     forgetPromptBuildDrainCacheForRun(runId);
   });
 });
@@ -121,20 +115,17 @@ describe("resolvePromptBuildHookResult drain cache", () => {
 describe("buildAfterTurnRuntimeContext", () => {
   afterEach(resetProcessRegistryForTests);
   type RuntimeAttempt = Parameters<typeof buildAfterTurnRuntimeContext>[0]["attempt"];
-  function runtimeParams(overrides: Partial<RuntimeAttempt> = {}) {
-    const attempt: RuntimeAttempt = {
-      config: {},
-      provider: "openai",
-      modelId: "gpt-5.4",
-      thinkLevel: "off",
-      ...overrides,
-    };
-    return {
-      attempt,
-      workspaceDir: "/tmp/workspace",
-      agentDir: "/tmp/agent",
-    };
-  }
+  const base: RuntimeAttempt = {
+    config: {},
+    provider: "openai",
+    modelId: "gpt-5.4",
+    thinkLevel: "off",
+  };
+  const runtimeParams = (overrides: Partial<RuntimeAttempt> = {}) => ({
+    attempt: { ...base, ...overrides },
+    workspaceDir: "/tmp/workspace",
+    agentDir: "/tmp/agent",
+  });
   const runtime = (overrides: Partial<RuntimeAttempt>) =>
     buildAfterTurnRuntimeContext(runtimeParams(overrides));
 

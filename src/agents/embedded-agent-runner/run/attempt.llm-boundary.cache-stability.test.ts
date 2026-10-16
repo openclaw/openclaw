@@ -7,7 +7,7 @@ import {
   captureAnthropicRequest,
   registerParityHostLifecycle,
 } from "../../../../packages/ai/src/provider-transport-parity.test-support.js";
-import { createOpenAIResponsesTransportStreamFn } from "../../../../packages/ai/src/transports/openai-responses-client.js";
+import { createOpenAIResponsesTransportStreamFn as responsesTransport } from "../../../../packages/ai/src/transports/openai-responses-client.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import {
@@ -35,7 +35,7 @@ import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
-  relocateCurrentRuntimeContextCarrierToTail,
+  relocateCurrentRuntimeContextCarrierToTail as relocate,
 } from "../../internal-runtime-context.js";
 import { Agent, type AgentMessage } from "../../runtime/index.js";
 import {
@@ -48,6 +48,7 @@ import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import { textToolResult } from "../../test-helpers/sparse-transcript.test-support.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "../../tool-search-catalog.js";
 import type { TranscriptPolicy } from "../../transcript-policy.types.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
@@ -58,14 +59,14 @@ import {
   prepareSessionSystemPrompt,
 } from "../session-prompt-state.js";
 import {
-  installRuntimeContextMessageForPrompt,
+  installRuntimeContextMessageForPrompt as installContext,
   installModelPromptProjection,
   normalizeMessagesForLlmBoundary as normalize,
 } from "./attempt-llm-boundary.js";
 import { createUserTranscriptContextRegistry } from "./attempt-user-transcript-context-registry.js";
 import {
   attachSteeringRuntimeContext,
-  buildRuntimeContextCustomMessage,
+  buildRuntimeContextCustomMessage as runtimeCarrier,
   buildSystemUpdateMessage,
 } from "./runtime-context-prompt.js";
 
@@ -92,7 +93,7 @@ const model = makeProviderModelFixture<"openai-completions">({
 });
 
 type TransportApi = "anthropic-messages" | "openai-responses";
-type RequestContext = Parameters<ReturnType<typeof createOpenAIResponsesTransportStreamFn>>[1];
+type RequestContext = Parameters<ReturnType<typeof responsesTransport>>[1];
 type BoundaryOptions = NonNullable<Parameters<typeof normalize>[1]>;
 const llmHistory = (messages: AgentMessage[], opts: BoundaryOptions) =>
   convertToLlm(normalize(messages, opts));
@@ -104,17 +105,14 @@ const providerAnswer = (api: TransportApi | "openai-completions") => ({
 });
 const toolCall = (id: string) => ({ type: "toolCall" as const, id, name: "read", arguments: {} });
 const toolResult = (id: string, text: string, timestamp: number): AgentMessage => ({
-  role: "toolResult",
-  toolCallId: id,
-  toolName: "read",
-  content: [textBlock(text)],
+  ...textToolResult(id, "read", text),
   isError: false,
   timestamp,
 });
 async function capturePayload(
   start: (
     onPayload: (payload: unknown) => void,
-  ) => ReturnType<ReturnType<typeof createOpenAIResponsesTransportStreamFn>>,
+  ) => ReturnType<ReturnType<typeof responsesTransport>>,
 ) {
   let captured: Record<string, unknown> | undefined;
   const stream = await start((payload) => {
@@ -135,7 +133,7 @@ async function captureTransport(api: TransportApi, context: RequestContext) {
     ).payload;
   }
   return capturePayload((onPayload) =>
-    createOpenAIResponsesTransportStreamFn()({ ...model, api, reasoning: true }, context, {
+    responsesTransport()({ ...model, api, reasoning: true }, context, {
       apiKey: "fixture-transport-value",
       onPayload,
     }),
@@ -149,18 +147,6 @@ const carrier = (content: string, timestamp = TS): AgentMessage => ({
   details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
   timestamp,
 });
-function toolRound(round: number, api: "openai-completions" | "openai-responses"): AgentMessage[] {
-  const id = `call_${round}`;
-  return [
-    {
-      ...providerAnswer(api),
-      stopReason: "toolUse",
-      content: [toolCall(id)],
-      timestamp: TS + round,
-    },
-    toolResult(id, `result ${round}`, TS + round),
-  ];
-}
 async function capture(
   api: "openai-completions" | "openai-responses",
   messages: AgentMessage[],
@@ -168,9 +154,7 @@ async function capture(
 ) {
   const context = {
     systemPrompt: "Stable system prompt",
-    messages: convertToLlm(
-      relocateCurrentRuntimeContextCarrierToTail(normalize(messages, boundaryOptions)),
-    ),
+    messages: convertToLlm(relocate(normalize(messages, boundaryOptions))),
   };
   return capturePayload((onPayload) => {
     const opts = { apiKey: "fixture-transport-value", cacheRetention: "none" as const, onPayload };
@@ -193,7 +177,6 @@ describe("prompt-cache boundary regressions", () => {
 
   describe("in-history prompt updates", () => {
     registerParityHostLifecycle();
-
     it.each(["anthropic-messages", "openai-responses"] as const)(
       "%s preserves the request prefix across fresh attempts and refreshed prompt sections",
       async (api) => {
@@ -286,7 +269,6 @@ describe("prompt-cache boundary regressions", () => {
 
   describe("cross-run failure and queued-input replay", () => {
     registerParityHostLifecycle();
-
     it.each([
       { api: "openai-responses", stopReason: "error", contentKind: "partial" },
       { api: "openai-responses", stopReason: "error", contentKind: "completed-tool" },
@@ -389,16 +371,9 @@ describe("prompt-cache boundary regressions", () => {
           }),
         );
         expect(JSON.stringify(before)).toContain("Staged follow-up");
-        for (const value of [
-          "private provider diagnostic",
-          "first-run",
-          "first-item",
-          "recovered-run",
-          "recovered-item",
-        ]) {
-          expect(JSON.stringify(first)).not.toContain(value);
-          expect(JSON.stringify(second)).not.toContain(value);
-        }
+        expect(JSON.stringify([first, second])).not.toMatch(
+          /private provider diagnostic|first-run|first-item|recovered-run|recovered-item/,
+        );
         expect(failed.errorMessage).toBe("private provider diagnostic");
       },
     );
@@ -473,17 +448,23 @@ describe("prompt-cache boundary regressions", () => {
       content: `${buildTimestampPrefix(new Date(TS), options)}[media attached: ${mediaPath}]`,
     });
     const projection = buildLateMediaAttachedProjection(late);
-    expect(projection.text).toBe(`[media attached: ${mediaPath}]`);
-    expect(projection.media).toEqual([
-      expect.objectContaining({ path: mediaPath, contentType: "image/png", kind: "image" }),
-    ]);
+    expect(projection).toMatchObject({
+      text: `[media attached: ${mediaPath}]`,
+      media: [{ path: mediaPath, contentType: "image/png", kind: "image" }],
+    });
   });
 
   it("preserves the full-history provider prefix through a completed tool loop on the next user turn", async () => {
     const active = [
       carrier("sender=Bob"),
       user("Check the deployment."),
-      ...toolRound(1, "openai-completions"),
+      {
+        ...providerAnswer("openai-completions"),
+        stopReason: "toolUse" as const,
+        content: [toolCall("call_1")],
+        timestamp: TS + 1,
+      },
+      toolResult("call_1", "result 1", TS + 1),
     ];
     const previous = await capture("openai-completions", active);
     const next = await capture("openai-completions", [
@@ -573,15 +554,30 @@ function createSession() {
 }
 const originalUser = (): UserMessage => ({ role: "user", content: "original", timestamp: 1 });
 const steeringUser = (): UserMessage => ({ role: "user", content: "steering", timestamp: 1 });
-const installPrompt = (session: Parameters<typeof installModelPromptProjection>[0]["session"]) =>
-  installModelPromptProjection({
+function installPrompt(
+  session: Parameters<typeof installContext>[0]["session"],
+  persistedUserIdempotencyKey?: string,
+) {
+  const cleanupPrompt = installModelPromptProjection({
     session,
     transcriptPrompt: "original",
     prependContext: "before",
     shouldCapturePrompt: () => true,
   });
+  const message = runtimeContext();
+  const cleanupContext = installContext({
+    session,
+    message,
+    ...(persistedUserIdempotencyKey ? { persistedUserIdempotencyKey } : {}),
+  });
+  const cleanup = () => {
+    cleanupContext();
+    cleanupPrompt();
+  };
+  return { message, cleanup };
+}
 const runtimeContext = () =>
-  expectDefined(buildRuntimeContextCustomMessage("original context"), "runtime context fixture");
+  expectDefined(runtimeCarrier("original context"), "runtime context fixture");
 
 describe("active prompt steering context", () => {
   it("restores the unkeyed source user after an existing context hook projects it", async () => {
@@ -629,8 +625,7 @@ describe("active prompt steering context", () => {
     const settled = createAssistant(testModel, [textBlock("done")]);
     const third = quoted("third", 3);
     const next = JSON.stringify(normalize([first, second, settled, third]));
-    expect(next).not.toContain("first quoted context");
-    expect(next).not.toContain("second quoted context");
+    expect(next).not.toMatch(/first quoted context|second quoted context/);
     expect(next).toContain("third quoted context");
   });
 
@@ -654,17 +649,14 @@ describe("active prompt steering context", () => {
     };
     const originalPrompt = agent.prompt.bind(agent);
     agent.prompt = originalPrompt;
-    const cleanupPrompt = installPrompt(session);
-    const message = runtimeContext();
-    const cleanupCarrier = installRuntimeContextMessageForPrompt({ session, message });
+    const { message, cleanup } = installPrompt(session);
     const retainedPrompt = agent.prompt.bind(agent);
     manager.appendCompaction("Older history summarized.", kept, 100);
     agent.state.messages = manager.buildSessionContext().messages;
     agent.steer({ role: "user", content: "steering", timestamp: 2 });
     await agent.prompt({ role: "user", content: "original", timestamp: 2 });
     const activeMessages = agent.state.messages;
-    cleanupCarrier();
-    cleanupPrompt();
+    cleanup();
     expect(requests).toHaveLength(1);
     expect(requests[0]).toContain("before\\n\\noriginal");
     expect(requests[0]).not.toContain("before\\n\\nsteering");
@@ -681,13 +673,10 @@ describe("active prompt steering context", () => {
       const manager = SessionManager.inMemory();
       const contexts = createUserTranscriptContextRegistry();
       const session = createSession();
-      const message = runtimeContext();
-      const cleanupPrompt = installPrompt(session);
-      const cleanup = installRuntimeContextMessageForPrompt({
+      const { message, cleanup } = installPrompt(
         session,
-        message,
-        ...(mode === "rewritten key" ? { persistedUserIdempotencyKey: "before-hook-key" } : {}),
-      });
+        mode === "rewritten key" ? "before-hook-key" : undefined,
+      );
       session.agent.state.messages.push(original);
       await session.agent.transformContext(session.messages);
       const capturedPrompt = session.messages.at(-1);
@@ -709,7 +698,6 @@ describe("active prompt steering context", () => {
       const retry = session.messages;
       const projected = normalize(await session.agent.transformContext(retry));
       cleanup();
-      cleanupPrompt();
       expect(persisted.message).not.toBe(original);
       expect(retry.slice(-3)).toEqual([message, persisted.message, steering.message]);
       expect(projected.at(-2)).toMatchObject({ content: "before\n\noriginal" });
@@ -721,11 +709,7 @@ describe("active prompt steering context", () => {
   it("does not adopt same-time steering after compaction removes the owned prompt", async () => {
     const original = originalUser();
     const session = createSession();
-    const cleanupPrompt = installPrompt(session);
-    const cleanupCarrier = installRuntimeContextMessageForPrompt({
-      session,
-      message: runtimeContext(),
-    });
+    const { cleanup } = installPrompt(session);
     session.agent.state.messages.push(original);
     await session.agent.transformContext(session.messages);
     const manager = SessionManager.inMemory();
@@ -735,15 +719,14 @@ describe("active prompt steering context", () => {
     session.agent.state.messages = manager.buildSessionContext().messages;
     await session.agent.continue();
     const projected = await session.agent.transformContext(session.messages);
-    cleanupCarrier();
-    cleanupPrompt();
+    cleanup();
     expect(projected.at(-1)).toBe(kept.message);
   });
 
   it("preserves user metadata through steering and runtime-context cleanup", () => {
     const session = createSession();
     const message = runtimeContext();
-    const cleanup = installRuntimeContextMessageForPrompt({ session, message });
+    const cleanup = installContext({ session, message });
     const promptText =
       'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"channel":"discord"}\n```\n\nOriginal ask';
     session.agent.state.messages.push({
@@ -755,8 +738,7 @@ describe("active prompt steering context", () => {
       timezone: "UTC",
       currentUserTimestampOverride: { timestamp: 1717570800000, text: promptText },
     };
-    const project = () =>
-      relocateCurrentRuntimeContextCarrierToTail(normalize(session.messages, boundaryOptions));
+    const project = () => relocate(normalize(session.messages, boundaryOptions));
     const prefix = project();
     session.agent.state.messages.push(makeUserMessage("new requirement", 1717570860000));
     const steered = project();
@@ -767,9 +749,7 @@ describe("active prompt steering context", () => {
       content: expect.stringContaining("new requirement"),
     });
     expect(session.messages).not.toContain(message);
-    expect(project()[0]).toMatchObject({
-      content: expect.stringContaining("Conversation info:"),
-    });
+    expect(project()[0]).toMatchObject({ content: expect.stringContaining("Conversation info:") });
     session.agent.state.messages.unshift(message);
     expect(project()).not.toContain(message);
   });
