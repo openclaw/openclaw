@@ -26,17 +26,11 @@ import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-su
 const { discordPlugin, discordSetupPlugin } = await loadBundledPluginFacade<{
   discordPlugin: ChannelPlugin;
   discordSetupPlugin: ChannelPlugin;
-}>({
-  pluginId: "discord",
-  artifactBasename: "api.ts",
-});
+}>({ pluginId: "discord", artifactBasename: "api.ts" });
 const { telegramPlugin, telegramSetupPlugin } = await loadBundledPluginFacade<{
   telegramPlugin: ChannelPlugin;
   telegramSetupPlugin: ChannelPlugin;
-}>({
-  pluginId: "telegram",
-  artifactBasename: "api.ts",
-});
+}>({ pluginId: "telegram", artifactBasename: "api.ts" });
 const registry = createTestRegistry([
   { pluginId: "discord", plugin: discordPlugin, source: "test" },
   { pluginId: "telegram", plugin: telegramPlugin, source: "test" },

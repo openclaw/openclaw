@@ -36,24 +36,22 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-function status(overrides: Partial<ShellCompletionStatus> = {}): ShellCompletionStatus {
-  return {
-    shell: "zsh",
-    profileInstalled: true,
-    cacheExists: true,
-    cachePath: "/tmp/openclaw.zsh",
-    usesSlowPattern: false,
-    ...overrides,
-  };
+function completionEffect(action: string, kind = "state", target = "/tmp/openclaw.zsh") {
+  return { kind, action, target, dryRunSafe: kind === "state" };
+}
+
+function setupBashHome() {
+  const homeDir = tempDirs.make("openclaw-doctor-home-");
+  const stateDir = tempDirs.make("openclaw-doctor-state-");
+  setTestEnvValue("HOME", homeDir);
+  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+  setTestEnvValue("SHELL", "/bin/bash");
+  return { homeDir, stateDir };
 }
 
 describe("shell completion health mapping", () => {
   it("reports slow dynamic Bash completion from the documented login profile", async () => {
-    const homeDir = tempDirs.make("openclaw-bash-slow-profile-home-");
-    const stateDir = tempDirs.make("openclaw-bash-slow-profile-state-");
-    setTestEnvValue("HOME", homeDir);
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    setTestEnvValue("SHELL", "/bin/bash");
+    const { homeDir, stateDir } = setupBashHome();
 
     await fs.writeFile(
       path.join(homeDir, ".bash_profile"),
@@ -70,74 +68,54 @@ describe("shell completion health mapping", () => {
     });
   });
 
-  it("reports slow dynamic shell completion with dry-run effects", () => {
-    const current = status({ usesSlowPattern: true, cacheExists: false });
-
-    expect(shellCompletionStatusToHealthFindings(current)).toEqual([
-      expect.objectContaining({
-        checkId: "core/doctor/shell-completion",
-        severity: "info",
-        path: "shellCompletion.zsh",
-      }),
-    ]);
-    expect(shellCompletionStatusToRepairEffects(current)).toEqual([
-      {
-        kind: "state",
-        action: "would-generate-completion-cache",
-        target: "/tmp/openclaw.zsh",
-        dryRunSafe: true,
-      },
-      {
-        kind: "file",
-        action: "would-upgrade-shell-profile-completion",
-        target: "zsh",
-        dryRunSafe: false,
-      },
-    ]);
-  });
-
-  it("reports missing completion cache with a dry-run cache effect", () => {
-    const current = status({ profileInstalled: true, cacheExists: false });
-
-    expect(shellCompletionStatusToHealthFindings(current)).toEqual([
-      expect.objectContaining({
-        severity: "info",
+  it.each([
+    {
+      name: "slow dynamic completion",
+      usesSlowPattern: true,
+      finding: { checkId: "core/doctor/shell-completion", path: "shellCompletion.zsh" },
+      effects: [
+        completionEffect("would-generate-completion-cache"),
+        completionEffect("would-upgrade-shell-profile-completion", "file", "zsh"),
+      ],
+    },
+    {
+      name: "missing cache",
+      usesSlowPattern: false,
+      finding: {
         message: expect.stringContaining("cache is missing"),
         fixHint: expect.stringContaining("openclaw doctor --fix"),
-      }),
-    ]);
-    expect(shellCompletionStatusToRepairEffects(current)).toEqual([
-      {
-        kind: "state",
-        action: "would-regenerate-completion-cache",
-        target: "/tmp/openclaw.zsh",
-        dryRunSafe: true,
       },
+      effects: [completionEffect("would-regenerate-completion-cache")],
+    },
+  ])("reports $name with dry-run effects", ({ usesSlowPattern, finding, effects }) => {
+    const current: ShellCompletionStatus = {
+      shell: "zsh",
+      profileInstalled: true,
+      cacheExists: false,
+      cachePath: "/tmp/openclaw.zsh",
+      usesSlowPattern,
+    };
+    expect(shellCompletionStatusToHealthFindings(current)).toEqual([
+      expect.objectContaining({ severity: "info", ...finding }),
     ]);
+    expect(shellCompletionStatusToRepairEffects(current)).toEqual(effects);
   });
 });
 
 const installCompletionMock = vi.hoisted(() => vi.fn());
 const spawnSyncMock = vi.hoisted(() => vi.fn(() => ({ status: 0 })));
 vi.mock("node:child_process", () => ({ spawnSync: spawnSyncMock }));
-vi.mock("../cli/completion-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../cli/completion-runtime.js")>();
-  return {
-    ...actual,
-    installCompletion: installCompletionMock,
-  };
-});
+vi.mock("../cli/completion-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/completion-runtime.js")>()),
+  installCompletion: installCompletionMock,
+}));
 
 function expectCompletionNote(text: string) {
   expect(noteModule.note).toHaveBeenCalledWith(expect.stringContaining(text), "Shell completion");
 }
 
 async function setupDoctorCompletionTest(usesSlowPattern: boolean) {
-  const homeDir = tempDirs.make("openclaw-doctor-home-");
-  const stateDir = tempDirs.make("openclaw-doctor-state-");
-  setTestEnvValue("HOME", homeDir);
-  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-  setTestEnvValue("SHELL", "/bin/bash");
+  const { homeDir, stateDir } = setupBashHome();
 
   const profilePath = path.join(homeDir, usesSlowPattern ? ".bashrc" : ".bash_profile");
   if (usesSlowPattern) {
@@ -191,10 +169,7 @@ describe("doctorShellCompletion", () => {
       setTestEnvValue(COMPLETION_SKIP_PLUGIN_COMMANDS_ENV, "1");
 
       await expect(
-        ensureCompletionCacheExists("openclaw", {
-          shell: "powershell",
-          generationMode,
-        }),
+        ensureCompletionCacheExists("openclaw", { shell: "powershell", generationMode }),
       ).resolves.toBe(true);
 
       expect(spawnSyncMock).toHaveBeenCalledWith(

@@ -14,14 +14,9 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const mocks = vi.hoisted(() => ({
-  ensureAuthProfileStore: vi.fn(),
-  note: vi.fn(),
-}));
+const mocks = vi.hoisted(() => ({ ensureAuthProfileStore: vi.fn(), note: vi.fn() }));
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({
-  note: mocks.note,
-}));
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
 
 vi.mock("../agents/auth-profiles.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/auth-profiles.js")>()),
@@ -114,9 +109,7 @@ describe("doctor auth hints", () => {
     writePersistedAuthProfileStoreRaw(
       {
         version: 1,
-        profiles: {
-          "openai:default": { type: "api_key", provider: "openai", key: "test-key" },
-        },
+        profiles: { "openai:default": { type: "api_key", provider: "openai", key: "test-key" } },
       },
       resolveSharedMainAuthAgentDir(env),
     );

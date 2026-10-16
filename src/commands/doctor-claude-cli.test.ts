@@ -1,10 +1,10 @@
 import childProcess from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
@@ -35,11 +35,12 @@ const defaultClaudeConfig = {
     entries: { main: {} },
   },
 };
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function withTempHome<T>(
   run: (params: { homeDir: string; workspaceDir: string; commandPath: string }) => Promise<T> | T,
 ): Promise<T> {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-claude-cli-"));
+  const root = tempDirs.make("openclaw-doctor-claude-cli-");
   const homeDir = path.join(root, "home");
   const workspaceDir = path.join(root, "workspace");
   fs.mkdirSync(homeDir, { recursive: true });
@@ -48,31 +49,20 @@ async function withTempHome<T>(
   fs.mkdirSync(binDir);
   const commandPath = path.join(binDir, "claude");
   fs.writeFileSync(commandPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-  try {
-    return await withEnvAsync(
-      {
-        HOME: homeDir,
-        OPENCLAW_HOME: homeDir,
-        OPENCLAW_STATE_DIR: path.join(homeDir, ".openclaw"),
-        PATH: binDir,
-      },
-      () => Promise.resolve(run({ homeDir, workspaceDir, commandPath })),
-    );
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+  return await withEnvAsync(
+    {
+      HOME: homeDir,
+      OPENCLAW_HOME: homeDir,
+      OPENCLAW_STATE_DIR: path.join(homeDir, ".openclaw"),
+      PATH: binDir,
+    },
+    () => Promise.resolve(run({ homeDir, workspaceDir, commandPath })),
+  );
 }
 
 function authResult(loggedIn: boolean) {
   const stdout = JSON.stringify({ loggedIn });
-  return {
-    pid: 1,
-    status: 0,
-    signal: null,
-    stdout,
-    stderr: "",
-    output: [null, stdout, ""],
-  };
+  return { pid: 1, status: 0, signal: null, stdout, stderr: "", output: [null, stdout, ""] };
 }
 
 function mockClaudeAuthentication(loggedIn: boolean) {
@@ -122,10 +112,7 @@ describe("noteClaudeCliHealth", () => {
       resolveCliBackendConfigMock.mockReturnValue({
         id: "claude-cli",
         pluginId: "anthropic",
-        config: {
-          command: "claude",
-          clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
-        },
+        config: { command: "claude", clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"] },
       });
       const spawn = mockClaudeAuthentication(true);
       vi.stubEnv("ANTHROPIC_API_KEY", "ambient-api-key");
@@ -180,10 +167,7 @@ describe("noteClaudeCliHealth", () => {
 
   it("lists Claude CLI agents only when a problem is reported", async () => {
     await withTempHome(({ workspaceDir }) => {
-      resolveModelAgentRuntimeMetadataMock.mockReturnValue({
-        id: "claude-cli",
-        source: "model",
-      });
+      resolveModelAgentRuntimeMetadataMock.mockReturnValue({ id: "claude-cli", source: "model" });
       const root = path.dirname(workspaceDir);
       const alphaWorkspace = path.join(root, "workspace-alpha");
       const zetaWorkspace = path.join(root, "workspace-zeta");
@@ -216,17 +200,13 @@ describe("noteClaudeCliHealth", () => {
     });
   });
 
-  // Registered CLI entry; routed by test/vitest/vitest.commands.config.ts.
   it.each(["cyclic project", "native installation"])(
     "doctor --lint --only core/doctor/claude-cli reports %s at final output",
     async (scenario) => {
       clearHealthChecksForTest();
       await withTempHome(async ({ homeDir, workspaceDir, commandPath }) => {
         const configPath = path.join(homeDir, "openclaw.json");
-        const projectDir = resolveClaudeCliProjectDirForWorkspace({
-          workspaceDir,
-          homeDir,
-        });
+        const projectDir = resolveClaudeCliProjectDirForWorkspace({ workspaceDir, homeDir });
         fs.mkdirSync(path.dirname(projectDir), { recursive: true });
         if (scenario === "cyclic project") {
           fs.symlinkSync(projectDir, projectDir, process.platform === "win32" ? "junction" : "dir");
@@ -277,9 +257,6 @@ describe("noteClaudeCliHealth", () => {
         const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
         await withEnvAsync(
           {
-            HOME: homeDir,
-            OPENCLAW_HOME: homeDir,
-            OPENCLAW_STATE_DIR: path.join(homeDir, ".openclaw"),
             OPENCLAW_CONFIG_PATH: configPath,
           },
           async () => {

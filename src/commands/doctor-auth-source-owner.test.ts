@@ -1,4 +1,3 @@
-// Doctor must discover, import, verify, and archive auth sources from one selected owner.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -207,13 +206,11 @@ describe("Doctor auth migration source ownership", () => {
 
     const result = await migrate(selected);
 
-    expect
-      .soft(loadPersistedAuthProfileStore(selected.agentDir()))
-      .toMatchObject(
-        sourceName === "auth-state.json"
-          ? { usageStats: { [profileId]: { lastUsed: 20 } } }
-          : { profiles: { [profileId]: { key: selectedKey } } },
-      );
+    const expectedStore =
+      sourceName === "auth-state.json"
+        ? { usageStats: { [profileId]: { lastUsed: 20 } } }
+        : { profiles: { [profileId]: { key: selectedKey } } };
+    expect.soft(loadPersistedAuthProfileStore(selected.agentDir())).toMatchObject(expectedStore);
     expect.soft(result).toMatchObject({ detected: [selectedSource.sourcePath], warnings: [] });
     expect.soft(fs.existsSync(ambientSource.sourcePath)).toBe(true);
     if (fs.existsSync(ambientSource.sourcePath)) {
