@@ -117,8 +117,8 @@ test("users.prefs reads merged-profile accents while an unrelated writer reply i
     const context = captureOpenClawStateWorkerContext();
     const readWriterObservation = () =>
       executeOpenClawStateWorker(context, {
-        type: "deviceAuth.read",
-        input: { deviceId: "preference-reader-test", role: "operator", readOnly: false },
+        type: "agentProvenance.readBatch",
+        input: { agentIds: ["preference-reader-test"] },
       });
     await readWriterObservation();
     const replyReady = createDeferredCore();
@@ -137,9 +137,10 @@ test("users.prefs reads merged-profile accents while an unrelated writer reply i
         const command: unknown = deserialize(request.input);
         if (
           isRecord(command) &&
-          command.type === "deviceAuth.read" &&
+          command.type === "agentProvenance.readBatch" &&
           isRecord(command.input) &&
-          command.input.deviceId === "preference-reader-test"
+          Array.isArray(command.input.agentIds) &&
+          command.input.agentIds[0] === "preference-reader-test"
         ) {
           selected = { worker: this, id: request.id };
         }
