@@ -479,7 +479,7 @@ describe("diagnostic-events", () => {
     };
     const eventInput = { type: "message.queued" as const, source: "plugin", extra };
     onDiagnosticEvent((event) => {
-      const captured = (event as typeof eventInput).extra;
+      const captured = (event as DiagnosticEventPayload & typeof eventInput).extra;
       captured.map.set("value", 0);
       captured.date.setTime(0);
       captured.set.clear();
@@ -490,7 +490,7 @@ describe("diagnostic-events", () => {
     emitDiagnosticEvent(eventInput);
 
     expect(observed).toHaveLength(1);
-    const captured = (observed[0] as typeof eventInput).extra;
+    const captured = (observed[0] as DiagnosticEventPayload & typeof eventInput).extra;
     expect(captured.map.get("value")).toBe(42);
     expect(captured.date.getTime()).toBe(123);
     expect([...captured.set]).toEqual([42]);
@@ -506,14 +506,14 @@ describe("diagnostic-events", () => {
     const input = { type: "message.queued" as const, source: "plugin", extra };
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     onDiagnosticEvent((event) => {
-      (event as typeof input).extra.children.extra.value = 0;
+      (event as DiagnosticEventPayload & typeof input).extra.children.extra.value = 0;
     });
     const observed: DiagnosticEventPayload[] = [];
     onDiagnosticEvent((event) => observed.push(event));
 
     emitDiagnosticEvent(input);
 
-    const captured = (observed[0] as typeof input).extra;
+    const captured = (observed[0] as DiagnosticEventPayload & typeof input).extra;
     expect(captured.children.extra.value).toBe(42);
     expect(captured.self).toBe(captured);
     expect(Object.isFrozen(captured.children.extra)).toBe(true);
