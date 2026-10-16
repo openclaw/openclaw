@@ -81,7 +81,7 @@ export {
 export {
   loadSqliteVecExtension,
   loadSqliteVecExtensionFromPath,
-} from "../../../src/infra/database-engine/sqlite-vec.js";
+} from "./host/openclaw-runtime-sqlite.js";
 export {
   readCuratedProjectMemoryCandidates,
   readCuratedMemoryTriggerCandidates,

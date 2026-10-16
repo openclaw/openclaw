@@ -1627,6 +1627,9 @@ importers:
       json5:
         specifier: 2.2.3
         version: 2.2.3
+      kysely:
+        specifier: 0.29.6
+        version: 0.29.6
       p-limit:
         specifier: 7.3.3
         version: 7.3.3
