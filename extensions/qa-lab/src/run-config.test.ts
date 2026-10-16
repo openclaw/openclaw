@@ -14,50 +14,35 @@ import {
   type QaScorecardTaxonomyReport,
 } from "./scorecard-taxonomy.js";
 
-const profiles: QaScorecardTaxonomyReport["profiles"] = [
-  {
-    id: "smoke-ci",
-    evidenceMode: "slim",
-    channelDriver: "crabline",
-    categoryIds: [],
-    coverageIds: [],
-    scenarioRefs: [],
-  },
-  {
-    id: "release",
-    evidenceMode: "full",
-    channelDriver: "live",
-    categoryIds: [],
-    coverageIds: [],
-    scenarioRefs: [],
-  },
-  {
-    id: "all",
-    evidenceMode: "full",
-    channelDriver: "live",
-    categoryIds: [],
-    coverageIds: [],
-    scenarioRefs: [],
-  },
-];
+const profiles: QaScorecardTaxonomyReport["profiles"] = (
+  [
+    { id: "smoke-ci", evidenceMode: "slim", channelDriver: "crabline" },
+    { id: "release", evidenceMode: "full", channelDriver: "live" },
+    { id: "all", evidenceMode: "full", channelDriver: "live" },
+  ] as const
+).map(({ id, evidenceMode, channelDriver }) => ({
+  id,
+  evidenceMode,
+  channelDriver,
+  categoryIds: [],
+  coverageIds: [],
+  scenarioRefs: [],
+}));
 
 const scenarios = [
-  {
-    id: "dm-chat-baseline",
-    title: "DM baseline",
-    surface: "dm",
-    objective: "test DM",
-    successCriteria: ["reply"],
+  ...(
+    [
+      ["dm-chat-baseline", "DM baseline", "dm", "test DM", "reply"],
+      ["thread-lifecycle", "Thread lifecycle", "thread", "test thread", "thread reply"],
+    ] as const
+  ).map(([id, title, surface, objective, criterion]) => ({
+    id,
+    title,
+    surface,
+    objective,
+    successCriteria: [criterion],
     execution: { kind: "flow" as const },
-  },
-  {
-    id: "thread-lifecycle",
-    title: "Thread lifecycle",
-    surface: "thread",
-    objective: "test thread",
-    successCriteria: ["thread reply"],
-    execution: { kind: "flow" as const },
-  },
+  })),
   {
     id: "control-ui-chat-flow-playwright",
     title: "Control UI Playwright",
@@ -74,20 +59,27 @@ const scenarios = [
 describe("qa run config", () => {
   const catalog = readQaScenarioPack();
   const scorecardReport = readQaScorecardTaxonomyReport(catalog.scenarios);
+  const select = (input: unknown) => normalizeQaRunSelection(input, scenarios, profiles);
+  const selectCatalog = (input: unknown) =>
+    normalizeQaRunSelection(input, catalog.scenarios, scorecardReport.profiles);
+  const planFor = (
+    selection: ReturnType<typeof normalizeQaRunSelection>,
+    options: Omit<
+      Parameters<typeof resolveQaLabRunPlan>[0],
+      "selection" | "scenarios" | "scorecardReport"
+    > = {},
+  ) =>
+    resolveQaLabRunPlan({ selection, scenarios: catalog.scenarios, scorecardReport, ...options });
 
   it("normalizes live selections and deduplicates scenario ids", () => {
     expect(
-      normalizeQaRunSelection(
-        {
-          providerMode: "live-frontier",
-          primaryModel: "openai/gpt-5.6-luna",
-          alternateModel: "",
-          fastMode: false,
-          scenarioIds: ["thread-lifecycle", "thread-lifecycle"],
-        },
-        scenarios,
-        profiles,
-      ),
+      select({
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "",
+        fastMode: false,
+        scenarioIds: ["thread-lifecycle", "thread-lifecycle"],
+      }),
     ).toEqual({
       profile: "all",
       channel: null,
@@ -105,13 +97,9 @@ describe("qa run config", () => {
 
   it("rejects removed provider compatibility names", () => {
     expect(() =>
-      normalizeQaRunSelection(
-        {
-          providerMode: "live-openai",
-        },
-        scenarios,
-        profiles,
-      ),
+      select({
+        providerMode: "live-openai",
+      }),
     ).toThrow("unknown QA provider mode: live-openai");
   });
 
@@ -120,47 +108,33 @@ describe("qa run config", () => {
     expect(snapshot.status).toBe("idle");
     expect(snapshot.selection.scenarioIds).toBeNull();
     expect(snapshot.plan).toBeNull();
-    expect(() => normalizeQaRunSelection({ scenarioIds: [] }, scenarios, profiles)).toThrow(
-      "scenarioIds must be a non-empty array",
-    );
+    expect(() => select({ scenarioIds: [] })).toThrow("scenarioIds must be a non-empty array");
   });
 
   it("fails closed on unknown explicit scenario ids", () => {
     expect(() =>
-      normalizeQaRunSelection(
-        {
-          scenarioIds: ["thread-lifecycle", "missing"],
-        },
-        scenarios,
-        profiles,
-      ),
+      select({
+        scenarioIds: ["thread-lifecycle", "missing"],
+      }),
     ).toThrow("unknown QA scenario id(s): missing");
   });
 
   it("fails closed on malformed explicit profiles", () => {
     for (const profile of [false, ""] as const) {
       expect(() =>
-        normalizeQaRunSelection(
-          {
-            profile,
-            scenarioIds: ["thread-lifecycle"],
-          },
-          scenarios,
-          profiles,
-        ),
+        select({
+          profile,
+          scenarioIds: ["thread-lifecycle"],
+        }),
       ).toThrow("QA runner profile must be a non-empty string");
     }
   });
 
   it("rejects a reversed runtime pair instead of silently changing its order", () => {
     expect(() =>
-      normalizeQaRunSelection(
-        {
-          runtimePair: ["codex", "openclaw"],
-        },
-        scenarios,
-        profiles,
-      ),
+      select({
+        runtimePair: ["codex", "openclaw"],
+      }),
     ).toThrow('runtimePair must be ["openclaw", "codex"]');
   });
 
@@ -193,76 +167,34 @@ describe("qa run config", () => {
       "thread-follow-up",
       "thread-isolation",
     ]);
-    expect(
-      Object.fromEntries(
-        execution.excludedScenarios.map(({ scenario, reasons }) => [scenario.id, reasons]),
-      ),
-    ).toEqual({
-      "matrix-approval-channel-target-both": [
-        "module flow unsupported by implementation=crabline:matrix",
-      ],
-      "matrix-approval-deny-reaction": [
-        "module flow unsupported by implementation=crabline:matrix",
-      ],
-      "matrix-approval-exec-metadata-chunked": [
-        "module flow unsupported by implementation=crabline:matrix",
-      ],
-      "matrix-approval-exec-metadata-single-event": [
-        "module flow unsupported by implementation=crabline:matrix",
-      ],
-      "matrix-approval-plugin-metadata-single-event": [
-        "module flow unsupported by implementation=crabline:matrix",
-      ],
-      "matrix-approval-thread-target": [
-        "module flow unsupported by implementation=crabline:matrix",
-      ],
-      "matrix-mxid-prefixed-command-block": [
-        "module flow unsupported by implementation=crabline:matrix",
-      ],
-      "slack-codex-approval-exec-native": [
-        "module flow unsupported by implementation=crabline:slack",
-      ],
-      "slack-codex-approval-plugin-native": [
-        "module flow unsupported by implementation=crabline:slack",
-      ],
-    });
+    expect(execution.excludedScenarios.map(({ scenario }) => scenario.id).toSorted()).toEqual(
+      [...scenarioIds].filter((id) => !id.startsWith("thread-")).toSorted(),
+    );
+    for (const { scenario, reasons } of execution.excludedScenarios) {
+      const channel = scenario.id.startsWith("matrix-") ? "matrix" : "slack";
+      expect(reasons).toEqual([`module flow unsupported by implementation=crabline:${channel}`]);
+    }
   });
 
   it("resolves mixed execution kinds and reports runtime-pair-lane exclusions", () => {
-    const mixedSelection = normalizeQaRunSelection(
-      {
-        profile: "all",
-        channelDriver: "qa-channel",
-        providerMode: "live-frontier",
-        scenarioIds: ["dm-chat-baseline", "browser-talk-start-stop"],
-      },
-      catalog.scenarios,
-      scorecardReport.profiles,
-    );
-    const mixedPlan = resolveQaLabRunPlan({
-      selection: mixedSelection,
-      scenarios: catalog.scenarios,
-      scorecardReport,
+    const mixedSelection = selectCatalog({
+      profile: "all",
+      channelDriver: "qa-channel",
+      providerMode: "live-frontier",
+      scenarioIds: ["dm-chat-baseline", "browser-talk-start-stop"],
     });
+    const mixedPlan = planFor(mixedSelection);
     expect(mixedPlan.status).toBe("ready");
     expect(mixedPlan.executionKinds).toEqual(["flow", "playwright"]);
 
-    const pairSelection = normalizeQaRunSelection(
-      {
-        profile: "all",
-        channelDriver: "qa-channel",
-        providerMode: "mock-openai",
-        runtimePair: ["openclaw", "codex"],
-        runtimePairLane: "core",
-      },
-      catalog.scenarios,
-      scorecardReport.profiles,
-    );
-    const pairPlan = resolveQaLabRunPlan({
-      selection: pairSelection,
-      scenarios: catalog.scenarios,
-      scorecardReport,
+    const pairSelection = selectCatalog({
+      profile: "all",
+      channelDriver: "qa-channel",
+      providerMode: "mock-openai",
+      runtimePair: ["openclaw", "codex"],
+      runtimePairLane: "core",
     });
+    const pairPlan = planFor(pairSelection);
     expect(pairPlan.status).toBe("ready");
     expect(pairPlan.selectedScenarios.map((scenario) => scenario.id)).toContain(
       "runtime-first-hour-20-turn",
@@ -279,40 +211,28 @@ describe("qa run config", () => {
 
   it("validates explicit runtime-pair-lane selections without expanding them", () => {
     const selectedId = "runtime-first-hour-20-turn";
-    const selection = normalizeQaRunSelection(
-      {
-        profile: "all",
-        channelDriver: "qa-channel",
-        providerMode: "mock-openai",
-        runtimePair: ["openclaw", "codex"],
-        runtimePairLane: "core",
-        scenarioIds: [selectedId],
-      },
-      catalog.scenarios,
-      scorecardReport.profiles,
-    );
+    const selection = selectCatalog({
+      profile: "all",
+      channelDriver: "qa-channel",
+      providerMode: "mock-openai",
+      runtimePair: ["openclaw", "codex"],
+      runtimePairLane: "core",
+      scenarioIds: [selectedId],
+    });
 
-    const plan = resolveQaLabRunPlan({ selection, scenarios: catalog.scenarios, scorecardReport });
+    const plan = planFor(selection);
 
     expect(plan.status).toBe("ready");
     expect(plan.selectedScenarios.map((scenario) => scenario.id)).toEqual([selectedId]);
 
-    const outsideLaneSelection = normalizeQaRunSelection(
-      {
-        profile: "all",
-        channelDriver: "qa-channel",
-        providerMode: "mock-openai",
-        runtimePairLane: "core",
-        scenarioIds: ["dm-chat-baseline"],
-      },
-      catalog.scenarios,
-      scorecardReport.profiles,
-    );
-    const outsideLanePlan = resolveQaLabRunPlan({
-      selection: outsideLaneSelection,
-      scenarios: catalog.scenarios,
-      scorecardReport,
+    const outsideLaneSelection = selectCatalog({
+      profile: "all",
+      channelDriver: "qa-channel",
+      providerMode: "mock-openai",
+      runtimePairLane: "core",
+      scenarioIds: ["dm-chat-baseline"],
     });
+    const outsideLanePlan = planFor(outsideLaneSelection);
     expect(outsideLanePlan.status).toBe("invalid");
     expect(outsideLanePlan.selectedScenarios).toEqual([]);
     expect(outsideLanePlan.exclusions).toEqual(
@@ -326,20 +246,13 @@ describe("qa run config", () => {
   });
 
   it("preserves canonical unresolved live dispatch and rejects unsupported driver channels", () => {
-    const liveSelection = normalizeQaRunSelection(
-      {
-        profile: "all",
-        channelDriver: "live",
-        providerMode: "live-frontier",
-        scenarioIds: ["dm-chat-baseline"],
-      },
-      catalog.scenarios,
-      scorecardReport.profiles,
-    );
-    const unresolvedLivePlan = resolveQaLabRunPlan({
-      selection: liveSelection,
-      scenarios: catalog.scenarios,
-      scorecardReport,
+    const liveSelection = selectCatalog({
+      profile: "all",
+      channelDriver: "live",
+      providerMode: "live-frontier",
+      scenarioIds: ["dm-chat-baseline"],
+    });
+    const unresolvedLivePlan = planFor(liveSelection, {
       supportsChannel: () => true,
     });
     expect(unresolvedLivePlan.status).toBe("ready");
@@ -347,21 +260,14 @@ describe("qa run config", () => {
       expect.objectContaining({ id: "dm-chat-baseline", effectiveChannel: null }),
     ]);
 
-    const crablineSelection = normalizeQaRunSelection(
-      {
-        profile: "all",
-        channel: "qa-channel",
-        channelDriver: "crabline",
-        providerMode: "live-frontier",
-        scenarioIds: ["dm-chat-baseline"],
-      },
-      catalog.scenarios,
-      scorecardReport.profiles,
-    );
-    const unsupportedCrablinePlan = resolveQaLabRunPlan({
-      selection: crablineSelection,
-      scenarios: catalog.scenarios,
-      scorecardReport,
+    const crablineSelection = selectCatalog({
+      profile: "all",
+      channel: "qa-channel",
+      channelDriver: "crabline",
+      providerMode: "live-frontier",
+      scenarioIds: ["dm-chat-baseline"],
+    });
+    const unsupportedCrablinePlan = planFor(crablineSelection, {
       defaultChannel: "telegram",
       supportsChannel: (channel) => channel === "telegram",
     });
@@ -381,18 +287,14 @@ describe("qa run config", () => {
       (entry) => entry.execution.channel && entry.execution.channel !== "qa-channel",
     );
     expect(scenario).toBeDefined();
-    const selection = normalizeQaRunSelection(
-      {
-        profile: "all",
-        channelDriver: "qa-channel",
-        providerMode: "live-frontier",
-        scenarioIds: [scenario!.id],
-      },
-      catalog.scenarios,
-      scorecardReport.profiles,
-    );
+    const selection = selectCatalog({
+      profile: "all",
+      channelDriver: "qa-channel",
+      providerMode: "live-frontier",
+      scenarioIds: [scenario!.id],
+    });
 
-    const plan = resolveQaLabRunPlan({ selection, scenarios: catalog.scenarios, scorecardReport });
+    const plan = planFor(selection);
 
     expect(plan.status).toBe("invalid");
     expect(plan.exclusions).toEqual(
@@ -402,22 +304,15 @@ describe("qa run config", () => {
   });
 
   it("returns an invalid resolved plan for a qa-channel execution override", () => {
-    const selection = normalizeQaRunSelection(
-      {
-        profile: "all",
-        channel: "telegram",
-        channelDriver: "qa-channel",
-        providerMode: "mock-openai",
-        scenarioIds: ["dm-chat-baseline"],
-      },
-      catalog.scenarios,
-      scorecardReport.profiles,
-    );
+    const selection = selectCatalog({
+      profile: "all",
+      channel: "telegram",
+      channelDriver: "qa-channel",
+      providerMode: "mock-openai",
+      scenarioIds: ["dm-chat-baseline"],
+    });
 
-    const plan = resolveQaLabRunPlan({
-      selection,
-      scenarios: catalog.scenarios,
-      scorecardReport,
+    const plan = planFor(selection, {
       defaultChannel: "qa-channel",
     });
 
@@ -431,21 +326,14 @@ describe("qa run config", () => {
   });
 
   it("distinguishes declared constraints from the suite-resolved effective channel", () => {
-    const selection = normalizeQaRunSelection(
-      {
-        profile: "all",
-        channelDriver: "crabline",
-        providerMode: "live-frontier",
-        scenarioIds: ["dm-chat-baseline", "browser-talk-start-stop"],
-      },
-      catalog.scenarios,
-      scorecardReport.profiles,
-    );
+    const selection = selectCatalog({
+      profile: "all",
+      channelDriver: "crabline",
+      providerMode: "live-frontier",
+      scenarioIds: ["dm-chat-baseline", "browser-talk-start-stop"],
+    });
 
-    const plan = resolveQaLabRunPlan({
-      selection,
-      scenarios: catalog.scenarios,
-      scorecardReport,
+    const plan = planFor(selection, {
       defaultChannel: "telegram",
     });
 
@@ -469,9 +357,9 @@ describe("qa run config", () => {
     expect(() => normalizeQaRunSelection(null, scenarios, profiles)).toThrow(
       "request must be a JSON object",
     );
-    expect(() =>
-      normalizeQaRunSelection({ channelDriver: "renamed-cli-policy" }, scenarios, profiles),
-    ).toThrow("unknown QA channel driver: renamed-cli-policy");
+    expect(() => select({ channelDriver: "renamed-cli-policy" })).toThrow(
+      "unknown QA channel driver: renamed-cli-policy",
+    );
   });
 
   it("fails closed when required canonical profiles are missing", () => {

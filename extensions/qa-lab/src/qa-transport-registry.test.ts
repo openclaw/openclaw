@@ -55,16 +55,13 @@ async function createCleanupAdapter(
   cleanup?: () => Promise<void>,
   cleanupAfterGatewayStop?: () => Promise<void>,
 ) {
-  const definition = createAdapterDefinition(cleanup, cleanupAfterGatewayStop);
   return await createQaTransportAdapter(
     createFactoryContext({ channelId: "cleanup", driver: "live" }),
     [
       {
         id: "cleanup",
         matches: () => true,
-        async create() {
-          return definition;
-        },
+        create: async () => createAdapterDefinition(cleanup, cleanupAfterGatewayStop),
       },
     ],
   );
@@ -101,12 +98,7 @@ describe("qa transport registry", () => {
   it("reads module-flow support from the selected factory", () => {
     const factories: QaTransportAdapterFactory[] = [
       { id: "skipped", matches: () => false, create: vi.fn() },
-      {
-        id: "selected",
-        supportsModuleFlows: true,
-        matches: () => true,
-        create: vi.fn(),
-      },
+      { id: "selected", supportsModuleFlows: true, matches: () => true, create: vi.fn() },
     ];
 
     expect(
@@ -177,44 +169,20 @@ describe("qa transport registry", () => {
       throw new Error("pre-cleanup failed");
     });
     const cleanupAfterGatewayStop = vi.fn(async () => undefined);
-    const definition = createAdapterDefinition(cleanup, cleanupAfterGatewayStop);
-    const created = await createQaTransportAdapter(
-      createFactoryContext({ channelId: "cleanup", driver: "live" }),
-      [
-        {
-          id: "cleanup",
-          matches: () => true,
-          async create() {
-            return definition;
-          },
-        },
-      ],
-    );
+    const created = await createCleanupAdapter(cleanup, cleanupAfterGatewayStop);
 
     await expect(created.cleanupWithoutGateway()).rejects.toThrow("pre-cleanup failed");
     expect(cleanupAfterGatewayStop).toHaveBeenCalledOnce();
   });
 
   it("aggregates failures from both gateway-less cleanup phases", async () => {
-    const definition = createAdapterDefinition(
+    const created = await createCleanupAdapter(
       async () => {
         throw new Error("pre-cleanup failed");
       },
       async () => {
         throw new Error("post-cleanup failed");
       },
-    );
-    const created = await createQaTransportAdapter(
-      createFactoryContext({ channelId: "cleanup", driver: "live" }),
-      [
-        {
-          id: "cleanup",
-          matches: () => true,
-          async create() {
-            return definition;
-          },
-        },
-      ],
     );
 
     const cleanupError = await created.cleanupWithoutGateway().catch((error: unknown) => error);

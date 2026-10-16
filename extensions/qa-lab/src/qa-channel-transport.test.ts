@@ -1,17 +1,29 @@
 // Qa Lab tests cover qa channel transport plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
 
 describe("qa channel transport", () => {
-  it("creates gateway action config for qa-channel", () => {
-    const transport = createQaChannelTransport(createQaBusState());
+  const conversation = { id: "alice", kind: "direct" as const };
+  let state: ReturnType<typeof createQaBusState>;
+  let transport: ReturnType<typeof createQaChannelTransport>;
+  beforeEach(() => {
+    state = createQaBusState();
+    transport = createQaChannelTransport(state);
+  });
 
-    expect(
-      transport.createGatewayConfig({
-        baseUrl: "http://127.0.0.1:43123",
-      }),
-    ).toEqual({
+  const waitReady = (call: ReturnType<typeof vi.fn>) =>
+    transport.waitReady({ gateway: { call }, timeoutMs: 5, pollIntervalMs: 1 });
+  const addFailure = (text: string) =>
+    transport.state.addOutboundMessage({
+      accountId: "default",
+      to: "dm:qa-operator",
+      isError: true,
+      text: `⚠️ agent failed before reply: ${text}`,
+    });
+
+  it("creates gateway action config for qa-channel", () => {
+    expect(transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:43123" })).toEqual({
       channels: {
         "qa-channel": {
           enabled: true,
@@ -33,7 +45,7 @@ describe("qa channel transport", () => {
   });
 
   it("maps declared transport policy without inspecting scenario ids", () => {
-    const transport = createQaChannelTransport(createQaBusState(), {
+    transport = createQaChannelTransport(state, {
       requireGroupMention: true,
       senderAllowlist: ["driver"],
     });
@@ -51,8 +63,6 @@ describe("qa channel transport", () => {
   });
 
   it("builds agent delivery params for qa-channel replies", () => {
-    const transport = createQaChannelTransport(createQaBusState());
-
     expect(transport.buildAgentDelivery({ target: "dm:qa-operator" })).toEqual({
       channel: "qa-channel",
       replyChannel: "qa-channel",
@@ -61,26 +71,14 @@ describe("qa channel transport", () => {
   });
 
   it("waits until the qa-channel default account is connected and ready", async () => {
-    const transport = createQaChannelTransport(createQaBusState());
+    const ready = { accountId: "default", connected: true, lifecycle: "ready", running: true };
     const statuses = [
       { accountId: "default", connected: false, lifecycle: "stopped", running: false },
       { accountId: "default", connected: false, lifecycle: "starting", running: true },
       { accountId: "default", connected: true, lifecycle: "starting", running: true },
       { accountId: "default", connected: true, lifecycle: "blocked", running: true },
-      {
-        accountId: "default",
-        connected: true,
-        lifecycle: "ready",
-        restartPending: true,
-        running: true,
-      },
-      {
-        accountId: "default",
-        connected: true,
-        lifecycle: "ready",
-        restartPending: false,
-        running: true,
-      },
+      { ...ready, restartPending: true },
+      { ...ready, restartPending: false },
     ];
     const call = vi.fn(async () => ({
       channelAccounts: { "qa-channel": [statuses.shift()] },
@@ -96,55 +94,36 @@ describe("qa channel transport", () => {
   });
 
   it("does not report another running account as the default account", async () => {
-    const transport = createQaChannelTransport(createQaBusState());
     const call = vi.fn().mockResolvedValue({
       channelAccounts: {
         "qa-channel": [{ accountId: "other", running: true, restartPending: false }],
       },
     });
 
-    await expect(
-      transport.waitReady({ gateway: { call }, timeoutMs: 5, pollIntervalMs: 1 }),
-    ).rejects.toThrow('qa-channel account "default" not reported; available accounts: other');
+    await expect(waitReady(call)).rejects.toThrow(
+      'qa-channel account "default" not reported; available accounts: other',
+    );
   });
 
   it("surfaces the last reported qa-channel account status on timeout", async () => {
-    const transport = createQaChannelTransport(createQaBusState());
     const call = vi.fn().mockResolvedValue({
       channelAccounts: {
         "qa-channel": [{ accountId: "default", running: false, restartPending: true }],
       },
     });
 
-    await expect(
-      transport.waitReady({
-        gateway: { call },
-        timeoutMs: 5,
-        pollIntervalMs: 1,
-      }),
-    ).rejects.toThrow(
+    await expect(waitReady(call)).rejects.toThrow(
       'timed out after 5ms waiting for qa-channel ready; last status: {"accountId":"default","running":false,"connected":null,"lifecycle":null,"restartPending":true,"lastError":null}',
     );
   });
 
   it("surfaces the last check error on timeout", async () => {
-    const transport = createQaChannelTransport(createQaBusState());
     const call = vi.fn().mockRejectedValue(new Error("channels.status exploded"));
 
-    await expect(
-      transport.waitReady({
-        gateway: { call },
-        timeoutMs: 5,
-        pollIntervalMs: 1,
-      }),
-    ).rejects.toThrow("last check error: channels.status exploded");
+    await expect(waitReady(call)).rejects.toThrow("last check error: channels.status exploded");
   });
 
   it("implements the portable scenario transport actions", async () => {
-    const state = createQaBusState();
-    const transport = createQaChannelTransport(state);
-    const conversation = { id: "alice", kind: "direct" as const };
-
     await transport.sendInbound({
       conversation,
       senderId: "alice",
@@ -165,10 +144,6 @@ describe("qa channel transport", () => {
   });
 
   it("keeps outbound verdicts bound to the selected account", async () => {
-    const state = createQaBusState();
-    const transport = createQaChannelTransport(state);
-    const conversation = { id: "alice", kind: "direct" as const };
-
     state.addOutboundMessage({
       accountId: "other",
       to: "dm:alice",
@@ -191,27 +166,22 @@ describe("qa channel transport", () => {
     ).resolves.toMatchObject({ accountId: "default", id: expected.id });
   });
 
-  it.each([{ command: "queue collect please help", name: "queue" }])(
-    "injects /$name with its complete command and token-only metadata",
-    async ({ command, name }) => {
-      const transport = createQaChannelTransport(createQaBusState());
+  it("injects /queue with its complete command and token-only metadata", async () => {
+    const command = "queue collect please help";
+    await transport.sendNativeCommand({
+      command,
+      conversation,
+      senderId: "alice",
+    });
 
-      await transport.sendNativeCommand({
-        command,
-        conversation: { id: "alice", kind: "direct" },
-        senderId: "alice",
-      });
-
-      const [message] = transport.state.getSnapshot().messages;
-      expect(message).toMatchObject({
-        text: `/${command}`,
-        nativeCommand: { name },
-      });
-    },
-  );
+    const [message] = transport.state.getSnapshot().messages;
+    expect(message).toMatchObject({
+      text: `/${command}`,
+      nativeCommand: { name: "queue" },
+    });
+  });
 
   it("inherits the shared failure-aware wait helper", async () => {
-    const transport = createQaChannelTransport(createQaBusState());
     let injected = false;
 
     await expect(
@@ -219,12 +189,7 @@ describe("qa channel transport", () => {
         async () => {
           if (!injected) {
             injected = true;
-            await transport.state.addOutboundMessage({
-              accountId: "default",
-              to: "dm:qa-operator",
-              isError: true,
-              text: "⚠️ agent failed before reply: synthetic failure for wait helper",
-            });
+            await addFailure("synthetic failure for wait helper");
           }
           return undefined;
         },
@@ -235,21 +200,12 @@ describe("qa channel transport", () => {
   });
 
   it("captures a fresh failure cursor for each wait helper call", async () => {
-    const transport = createQaChannelTransport(createQaBusState());
-
-    await transport.state.addOutboundMessage({
-      accountId: "default",
-      to: "dm:qa-operator",
-      isError: true,
-      text: "⚠️ agent failed before reply: stale failure should not leak",
-    });
+    await addFailure("stale failure should not leak");
 
     await expect(transport.waitForCondition(async () => "ok", 50, 10)).resolves.toBe("ok");
   });
 
   it("keeps oversized wait helper intervals within the timeout", async () => {
-    const transport = createQaChannelTransport(createQaBusState());
-
     await expect(
       transport.waitForCondition(async () => undefined, 5, Number.MAX_SAFE_INTEGER),
     ).rejects.toThrow("timed out after 5ms");
