@@ -66,53 +66,68 @@ describe("GitHub preview decoration cache", () => {
     );
   });
 
-  it("keeps an older preview's deadline when joining a newer preview's avatar fetch", async () => {
-    vi.useFakeTimers();
-    const deadlines: AbortController[] = [];
-    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
-      const controller = new AbortController();
-      if (ms === 2_000) {
-        deadlines.push(controller);
-      }
-      return controller.signal;
-    });
-    const metadata = createDeferred<Response>();
-    const avatar = createDeferred<Response>();
-    const avatarStarted = createDeferred<void>();
-    let avatarReads = 0;
-    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
-      const url = requestUrl(input);
-      if (url.includes("avatars.githubusercontent.com")) {
-        avatarReads += 1;
-        avatarStarted.resolve();
-        return avatar.promise;
-      }
-      return url.endsWith("/issues/1") ? metadata.promise : githubJson(previewPayload());
-    });
-    const settled = vi.fn();
-    const older = loadControlUiGitHubPreview(previewTarget(1), undefined, fetchMock).then(settled);
-    const newer = loadControlUiGitHubPreview(previewTarget(2), undefined, fetchMock);
-    try {
-      await avatarStarted.promise;
-      metadata.resolve(githubJson(previewPayload()));
-      await vi.advanceTimersByTimeAsync(0);
-      deadlines[0]!.abort(new DOMException("Timed out", "TimeoutError"));
-      await vi.advanceTimersByTimeAsync(0);
-      expect(settled).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ login: "steipete" }),
+  it.each(["older", "newer"] as const)(
+    "keeps independent deadlines when the %s preview starts a shared avatar fetch",
+    async (initiator) => {
+      vi.useFakeTimers();
+      const deadlines: AbortController[] = [];
+      vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+        const controller = new AbortController();
+        if (ms === 2_000) {
+          deadlines.push(controller);
+        }
+        return controller.signal;
+      });
+      const metadata = createDeferred<Response>();
+      const avatar = createDeferred<Response>();
+      const avatarStarted = createDeferred<void>();
+      let avatarReads = 0;
+      const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+        const url = requestUrl(input);
+        if (url.includes("avatars.githubusercontent.com")) {
+          avatarReads += 1;
+          avatarStarted.resolve();
+          const signal = init?.signal;
+          return new Promise<Response>((resolve, reject) => {
+            const onAbort = () => reject(signal?.reason);
+            signal?.addEventListener("abort", onAbort, { once: true });
+            void avatar.promise.then((response) => {
+              signal?.removeEventListener("abort", onAbort);
+              resolve(response);
+            });
+          });
+        }
+        return url.endsWith(`/issues/${initiator === "older" ? 2 : 1}`)
+          ? metadata.promise
+          : githubJson(previewPayload());
+      });
+      const settled = vi.fn();
+      const older = loadControlUiGitHubPreview(previewTarget(1), undefined, fetchMock).then(
+        settled,
       );
-      expect(settled.mock.calls[0]?.[0].avatarDataUrl).toBeUndefined();
-      expect(deadlines[1]!.signal.aborted).toBe(false);
-      avatar.resolve(pngResponse());
-      expect((await newer).avatarDataUrl).toBe("data:image/png;base64,iVBORw==");
-      expect(avatarReads).toBe(1);
-    } finally {
-      metadata.resolve(githubJson(previewPayload()));
-      avatar.resolve(pngResponse());
-      await Promise.all([older, newer]);
-      vi.useRealTimers();
-    }
-  });
+      const newer = loadControlUiGitHubPreview(previewTarget(2), undefined, fetchMock);
+      try {
+        await avatarStarted.promise;
+        metadata.resolve(githubJson(previewPayload()));
+        await vi.advanceTimersByTimeAsync(0);
+        deadlines[0]!.abort(new DOMException("Timed out", "TimeoutError"));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(settled).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ login: "steipete" }),
+        );
+        expect(settled.mock.calls[0]?.[0].avatarDataUrl).toBeUndefined();
+        expect(deadlines[1]!.signal.aborted).toBe(false);
+        avatar.resolve(pngResponse());
+        expect((await newer).avatarDataUrl).toBe("data:image/png;base64,iVBORw==");
+        expect(avatarReads).toBe(1);
+      } finally {
+        metadata.resolve(githubJson(previewPayload()));
+        avatar.resolve(pngResponse());
+        await Promise.all([older, newer]);
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("retries failed avatars and evicts the oldest of 200 retained images", async () => {
     let avatarReads = 0;

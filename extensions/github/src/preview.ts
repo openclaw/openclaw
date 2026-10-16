@@ -268,7 +268,7 @@ async function fetchAvatarDataUrl(
           const response = await fetchImpl(url, {
             headers: { Accept: "image/webp,image/png,image/jpeg,image/gif" },
             redirect: "error",
-            signal,
+            signal: AbortSignal.timeout(GITHUB_PREVIEW_TIMEOUT_MS),
           });
           const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim();
           if (
