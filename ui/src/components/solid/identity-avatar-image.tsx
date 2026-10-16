@@ -1,6 +1,5 @@
 import { createEffect, createMemo, onCleanup, type Accessor } from "solid-js";
 import { retainAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
-import { listen } from "../../lib/reactive/listener.ts";
 
 type IdentityAvatarImageProps = {
   view: { imageUrl: string | Promise<string | null> | null };
@@ -40,11 +39,11 @@ export function identityAvatarState(
 }
 
 /** The existing loader owns image resources; this binding owns DOM state and events. */
-function bindIdentityAvatarImage(input: Accessor<IdentityAvatarImageProps>) {
+export function IdentityAvatarImage(props: IdentityAvatarImageProps) {
   let image: HTMLImageElement;
   let release: (() => void) | undefined;
   const state = (value: "pending" | "loaded" | "failed") => {
-    const frame = image.closest(input().fallbackSelector);
+    const frame = image.closest(props.fallbackSelector);
     if (frame) {
       setIdentityAvatarState(frame, value);
     }
@@ -52,10 +51,10 @@ function bindIdentityAvatarImage(input: Accessor<IdentityAvatarImageProps>) {
   const load = () => state("loaded");
   const error = () => {
     state("failed");
-    input().onImageError?.();
+    props.onImageError?.();
   };
   // Keep the pending resource opaque: returning its Promise would make this an async memo.
-  const source = createMemo(() => ({ result: input().view.imageUrl }), {
+  const source = createMemo(() => ({ result: props.view.imageUrl }), {
     equals: (previous, next) => previous.result === next.result,
   });
   createEffect(source, ({ result }) => {
@@ -99,18 +98,12 @@ function bindIdentityAvatarImage(input: Accessor<IdentityAvatarImageProps>) {
       active = false;
     };
   });
-  const cleanup = [() => release?.()];
-  onCleanup(() => cleanup.forEach((stop) => stop()));
-  return (element: HTMLImageElement) => {
-    image = element;
-    cleanup.push(listen(image, "load", load), listen(image, "error", error));
-  };
-}
-
-export function IdentityAvatarImage(props: IdentityAvatarImageProps) {
+  onCleanup(() => release?.());
   return (
     <img
-      ref={bindIdentityAvatarImage(() => props)}
+      ref={(element) => (image = element)}
+      onLoad={load}
+      onError={error}
       class={props.class}
       alt={props.alt ?? ""}
       aria-hidden={props.ariaHidden ? "true" : undefined}

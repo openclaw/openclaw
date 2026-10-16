@@ -212,7 +212,7 @@ function renderProviderUsageWindow(window: UsageWindow) {
         <strong>{remainingLabel()}</strong>
       </div>
       <div
-        class={`provider-usage-progress provider-usage-progress--${remainingTone}`}
+        class={["provider-usage-progress", `provider-usage-progress--${remainingTone}`]}
         role="progressbar"
         aria-label={window.label}
         aria-valuemin="0"
