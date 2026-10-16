@@ -52,8 +52,12 @@ it.each([
         this.server = { hostIp: "127.0.0.1", port: 0, stop, urlFor: () => "" };
       }
 
-      run(): Promise<void> {
-        return this.runLanesAndFinish().finally(() => this.cleanupArtifacts());
+      async run(): Promise<void> {
+        try {
+          await this.runLanesAndFinish();
+        } finally {
+          await this.cleanupArtifacts();
+        }
       }
 
       protected async runFreshLane(): Promise<void> {
