@@ -25,6 +25,25 @@ import { getFreePort } from "./test-port.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+async function routeSnapshot(routes: ReturnType<typeof createBrowserRouteApp>, targetId?: string) {
+  const response = createBrowserRouteResponse();
+  await routes.getHandlers.get("/snapshot")!(
+    { params: {}, query: { format: "ai", ...(targetId ? { targetId } : {}) } },
+    response.res,
+  );
+  expect(response.statusCode, JSON.stringify(response.body)).toBe(200);
+  return response.body as { targetId: string; refs: Record<string, { name?: string }> };
+}
+
+async function act(
+  routes: ReturnType<typeof createBrowserRouteApp>,
+  body: Record<string, unknown>,
+) {
+  const response = createBrowserRouteResponse();
+  await routes.postHandlers.get("/act")!({ params: {}, query: {}, body }, response.res);
+  expect(response.statusCode, JSON.stringify(response.body)).toBe(200);
+}
+
 function snapshotRef(root: ChromeMcpSnapshotNode, role: string, name: string): string {
   const nodes = [root];
   while (nodes.length) {
@@ -174,51 +193,21 @@ describe.runIf(process.env.OPENCLAW_BROWSER_MCP_E2E === "1")(
         const context = createBrowserRouteContext({ getState: () => state });
         registerBrowserAgentSnapshotRoutes(routes.app, context);
         registerBrowserAgentActRoutes(routes.app, context);
-        const snapshotResponse = createBrowserRouteResponse();
-        await routes.getHandlers.get("/snapshot")!(
-          { params: {}, query: { format: "ai" } },
-          snapshotResponse.res,
-        );
-        expect(snapshotResponse.statusCode, JSON.stringify(snapshotResponse.body)).toBe(200);
-        const snapshot = snapshotResponse.body as {
-          targetId: string;
-          refs: Record<string, { name?: string }>;
-        };
+        const snapshot = await routeSnapshot(routes);
+        const target = { profileName, profile, targetId: snapshot.targetId };
         const ref = Object.entries(snapshot.refs).find(([, value]) => value.name === "Run")?.[0];
         expect(ref).toBeTypeOf("string");
-        const waitResponse = createBrowserRouteResponse();
-        await routes.postHandlers.get("/act")!(
-          {
-            params: {},
-            query: {},
-            body: {
-              kind: "wait",
-              targetId: snapshot.targetId,
-              timeoutMs: 10_000,
-              fn: `() => {
+        await act(routes, {
+          kind: "wait",
+          targetId: snapshot.targetId,
+          timeoutMs: 10_000,
+          fn: `() => {
             const polls = Number(document.body.dataset.polls ?? 0) + 1;
             document.body.dataset.polls = String(polls);
             return polls >= 2;
           }`,
-            },
-          },
-          waitResponse.res,
-        );
-        expect(waitResponse.statusCode, JSON.stringify(waitResponse.body)).toBe(200);
-        const clickResponse = createBrowserRouteResponse();
-        await routes.postHandlers.get("/act")!(
-          {
-            params: {},
-            query: {},
-            body: {
-              kind: "click",
-              targetId: snapshot.targetId,
-              ref,
-            },
-          },
-          clickResponse.res,
-        );
-        expect(clickResponse.statusCode, JSON.stringify(clickResponse.body)).toBe(200);
+        });
+        await act(routes, { kind: "click", targetId: snapshot.targetId, ref });
         expect(await page.evaluate(() => document.body.dataset.clicked)).toBe("original");
         expect(
           Number(await page.evaluate(() => document.body.dataset.polls)),
@@ -227,9 +216,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_MCP_E2E === "1")(
         await page.goto(replacementUrl);
         await expect(
           evaluateChromeMcpScript({
-            profileName,
-            profile,
-            targetId: snapshot.targetId,
+            ...target,
             timeoutMs: 10_000,
             args: [ref!],
             fn: `(element) => {
@@ -240,54 +227,28 @@ describe.runIf(process.env.OPENCLAW_BROWSER_MCP_E2E === "1")(
         ).rejects.toThrow(/Element (?:with )?uid .* (?:not found|no longer exists)/);
         expect(await page.evaluate(() => document.body.dataset.staleRefExecuted)).toBeUndefined();
 
-        const replacementWait = createBrowserRouteResponse();
-        await routes.postHandlers.get("/act")!(
-          {
-            params: {},
-            query: {},
-            body: {
-              kind: "wait",
-              targetId: snapshot.targetId,
-              timeoutMs: 10_000,
-              fn: '() => document.body.dataset.phase === "replacement"',
-            },
-          },
-          replacementWait.res,
-        );
-        expect(replacementWait.statusCode, JSON.stringify(replacementWait.body)).toBe(200);
+        await act(routes, {
+          kind: "wait",
+          targetId: snapshot.targetId,
+          timeoutMs: 10_000,
+          fn: '() => document.body.dataset.phase === "replacement"',
+        });
         await expect(
           evaluateChromeMcpScript({
-            profileName,
-            profile,
-            targetId: snapshot.targetId,
+            ...target,
             args: [ref!],
             fn: "(element) => element.textContent",
           }),
         ).rejects.toThrow(/Unknown ref/);
 
-        const replacementResponse = createBrowserRouteResponse();
-        await routes.getHandlers.get("/snapshot")!(
-          { params: {}, query: { format: "ai", targetId: snapshot.targetId } },
-          replacementResponse.res,
-        );
-        expect(replacementResponse.statusCode, JSON.stringify(replacementResponse.body)).toBe(200);
-        const replacementSnapshot = replacementResponse.body as typeof snapshot;
+        const replacementSnapshot = await routeSnapshot(routes, snapshot.targetId);
         expect(replacementSnapshot.targetId).toBe(snapshot.targetId);
         const replacementRef = Object.entries(replacementSnapshot.refs).find(
           ([, value]) => value.name === "Run",
         )?.[0];
         expect(replacementRef).toBeTypeOf("string");
         expect(replacementRef).not.toBe(ref);
-        const replacementClick = createBrowserRouteResponse();
-        await routes.postHandlers.get("/act")!(
-          {
-            params: {},
-            query: {},
-            body: { kind: "click", targetId: snapshot.targetId, ref: replacementRef },
-          },
-          replacementClick.res,
-        );
-        expect(replacementClick.statusCode, JSON.stringify(replacementClick.body)).toBe(200);
+        await act(routes, { kind: "click", targetId: snapshot.targetId, ref: replacementRef });
         expect(await page.evaluate(() => document.body.dataset.clicked)).toBe("replacement");
       });
     }, 120_000);

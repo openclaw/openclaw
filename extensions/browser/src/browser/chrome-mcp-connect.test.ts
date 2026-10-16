@@ -150,6 +150,12 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       await expect(attempt).rejects.toThrow("fixture attach failed");
       await expect(attempt).rejects.toThrow("~/profiles/fixture-profile");
       await expect(attempt).rejects.toThrow("~/chrome/Profile 1");
+      await expect(attempt).rejects.toThrow("Chrome MCP existing-session attach failed");
+      await expect(attempt).rejects.toThrow(
+        ephemeral
+          ? "the configured Chromium user data dir (~/chrome/Profile 1)"
+          : /the configured Chrome endpoint \(wss:\/\/browser\.example\/chrome\?token=/,
+      );
       await expect(attempt).rejects.not.toThrow(/fixture-user|fixture-password|fixture-token/);
       await expect(attempt).rejects.not.toThrow(homeDir);
       if (ownsDescendant) {

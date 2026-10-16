@@ -3,6 +3,7 @@ import { afterEach, beforeEach, vi } from "vitest";
 import * as chromeMcpConnect from "./chrome-mcp-connect.js";
 import type {
   ChromeMcpSession,
+  ChromeMcpToolResult,
   NormalizedChromeMcpProfileOptions,
 } from "./chrome-mcp-contracts.js";
 import { closeChromeMcpSession } from "./chrome-mcp-session.js";
@@ -56,16 +57,18 @@ export type ToolCallMock = {
 };
 
 export function fakeListPagesResult() {
-  return {
-    content: [{ type: "text", text: "## Pages\n1: https://example.com [selected]" }],
-  };
+  return textResult("## Pages\n1: https://example.com [selected]");
+}
+
+export function textResult(text: string, isError = false): ChromeMcpToolResult {
+  return { ...(isError ? { isError } : {}), content: [{ type: "text", text }] };
 }
 
 export type SessionPage = { id: number; url: string; selected?: boolean };
 
 export function createPageSession(params: {
-  pages: SessionPage[];
-  pid: number;
+  pages?: SessionPage[];
+  pid?: number;
   onTool?: (call: ToolCall) => unknown;
 }): ChromeMcpSession {
   const callTool = vi.fn(async (call: ToolCall) => {
@@ -76,12 +79,14 @@ export function createPageSession(params: {
     if (call.name === "list_pages") {
       return {
         structuredContent: {
-          pages: params.pages.map(({ id, url, selected }) => ({ id, url, selected })),
+          pages: (params.pages ?? [{ id: 1, url: "https://a.example" }]).map(
+            ({ id, url, selected }) => ({ id, url, selected }),
+          ),
         },
       };
     }
     if (call.name === "evaluate_script") {
-      return { content: [{ type: "text", text: "```json\nnull\n```" }] };
+      return textResult("```json\nnull\n```");
     }
     throw new Error(`unexpected tool ${call.name}`);
   });
@@ -93,7 +98,7 @@ export function createPageSession(params: {
   };
   return {
     client,
-    transport: { pid: params.pid },
+    transport: { pid: params.pid ?? 141 },
     closeTransport: () => client.close(),
     ready: Promise.resolve(),
   } as unknown as ChromeMcpSession;
@@ -116,13 +121,11 @@ export function installChromeMcpSessionTestHooks() {
 
 export const FAKE_TARGET_1 = "chrome-mcp:000000000001:1";
 const FAKE_TARGET_2 = "chrome-mcp:000000000001:2";
-const FAKE_TARGET_3 = "chrome-mcp:000000000001:3";
 const FAKE_REF = "mcp-ref:000000000001:1";
 
-export function createFakeSession(screenshotError?: string): ChromeMcpSession {
+export function createFakeSession(): ChromeMcpSession {
   let currentUrl =
     "https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session";
-  let createdPageOpen = false;
   const readUrlArg = (value: unknown, fallback: string) =>
     typeof value === "string" && value.trim() ? value : fallback;
   const callTool = vi.fn(async ({ name, arguments: args }: ToolCall) => {
@@ -132,48 +135,14 @@ export function createFakeSession(screenshotError?: string): ChromeMcpSession {
         `1: ${currentUrl} [selected]`,
         "2: https://github.com/openclaw/openclaw/pull/45318",
       ];
-      if (createdPageOpen) {
-        pageLines.push(`3: ${currentUrl}`);
-      }
-      return {
-        content: [
-          {
-            type: "text",
-            text: pageLines.join("\n"),
-          },
-        ],
-      };
-    }
-    if (name === "new_page") {
-      currentUrl = readUrlArg(args?.url, "about:blank");
-      createdPageOpen = true;
-      return {
-        content: [
-          {
-            type: "text",
-            text: [
-              "## Pages",
-              "1: https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session",
-              "2: https://github.com/openclaw/openclaw/pull/45318",
-              `3: ${currentUrl} [selected]`,
-            ].join("\n"),
-          },
-        ],
-      };
+      return textResult(pageLines.join("\n"));
     }
     if (name === "navigate_page") {
       currentUrl = readUrlArg(args?.url, currentUrl);
-      return { content: [{ type: "text", text: "navigated" }] };
+      return textResult("navigated");
     }
     if (name === "evaluate_script") {
-      return {
-        content: [
-          {
-            type: "text",
-            text: "```json\n123\n```",
-          },
-        ],
-      };
+      return textResult("```json\n123\n```");
     }
     if (name === "take_screenshot") {
       const filePath = typeof args?.filePath === "string" ? args.filePath : undefined;
@@ -182,10 +151,7 @@ export function createFakeSession(screenshotError?: string): ChromeMcpSession {
         throw new Error("missing filePath");
       }
       await fs.writeFile(`${filePath}.${format}`, Buffer.from(`screenshot:${format}`));
-      if (screenshotError) {
-        throw new Error(screenshotError);
-      }
-      return { content: [{ type: "text", text: `Saved screenshot to ${filePath}.${format}.` }] };
+      return textResult(`Saved screenshot to ${filePath}.${format}.`);
     }
     throw new Error(`unexpected tool ${name}`);
   });
@@ -198,9 +164,7 @@ export function createFakeSession(screenshotError?: string): ChromeMcpSession {
   };
   return {
     client,
-    transport: {
-      pid: 123,
-    },
+    transport: { pid: 123 },
     closeTransport: () => client.close(),
     ready: Promise.resolve(),
     // Legacy cases exercise unrelated call plumbing. Seed one real-shaped
@@ -211,9 +175,8 @@ export function createFakeSession(screenshotError?: string): ChromeMcpSession {
       targetIdByPageId: new Map([
         [1, FAKE_TARGET_1],
         [2, FAKE_TARGET_2],
-        [3, FAKE_TARGET_3],
       ]),
-      nextTargetHandleId: 4,
+      nextTargetHandleId: 3,
       snapshotsByTarget: new Map([
         [FAKE_TARGET_1, { documentUid: "root-1", refs: new Map([[FAKE_REF, { uid: "btn-1" }]]) }],
       ]),
