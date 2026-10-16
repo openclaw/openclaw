@@ -9,12 +9,12 @@ import {
   type SessionIdentityMutation,
 } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteTransaction as writeTransaction } from "../../state/openclaw-agent-db.js";
 import { emitUserProfilesChanged } from "../../state/user-profile-events.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { readTranscriptContextVersionInTransaction as readVersion } from "./session-accessor.sqlite-transcript-state.js";
 import {
   readPreparedSessionTranscriptChange,
   publishUnchangedSessionTranscriptAuthority,
@@ -83,31 +83,26 @@ it.each(["native", "worker"] as const)(
         }
         expect(values.length).toBeGreaterThan(count);
         expect(values.at(-1)).toMatchObject({
-          ...readTranscriptContextVersionInTransaction(database, scope.sessionId),
+          ...readVersion(database, scope.sessionId),
           sessionId: scope.sessionId,
           sessionKey: scope.sessionKey,
         });
         expect(values.at(-1)?.lastMessagePreview).toBe(lastMessagePreview);
       };
+      const message = (content: string, timestamp: number) => ({
+        role: "user" as const,
+        content,
+        timestamp,
+      });
       await invoke(
-        () => manager.appendMessage({ role: "user", content: "seed", timestamp: 1 }),
-        () => manager.appendMessageAsync({ role: "user", content: "seed", timestamp: 1 }),
+        () => manager.appendMessage(message("seed", 1)),
+        () => manager.appendMessageAsync(message("seed", 1)),
         "seed",
       );
       const seed = manager.getLeafId()!;
       await invoke(
-        () =>
-          manager.appendMessageWithTranscriptAnchor({
-            role: "user",
-            content: "second",
-            timestamp: 2,
-          }),
-        () =>
-          manager.appendMessageWithTranscriptAnchorAsync({
-            role: "user",
-            content: "second",
-            timestamp: 2,
-          }),
+        () => manager.appendMessageWithTranscriptAnchor(message("second", 2)),
+        () => manager.appendMessageWithTranscriptAnchorAsync(message("second", 2)),
         "second",
       );
       await invoke(
@@ -158,18 +153,8 @@ it.each(["native", "worker"] as const)(
         () => manager.persistAsync(raw),
       );
       await invoke(
-        () =>
-          SessionManager.appendMessageToTranscript(scope, {
-            role: "user",
-            content: "static",
-            timestamp: 3,
-          }),
-        () =>
-          SessionManager.appendMessageToTranscriptAsync(scope, {
-            role: "user",
-            content: "static",
-            timestamp: 3,
-          }),
+        () => SessionManager.appendMessageToTranscript(scope, message("static", 3)),
+        () => SessionManager.appendMessageToTranscriptAsync(scope, message("static", 3)),
       );
       const refreshed =
         realm === "native" ? SessionManager.open(scope) : await SessionManager.openAsync(scope);
@@ -250,7 +235,7 @@ it("installs final transcript facts before entry observers and discards nested r
     replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const manager = SessionManager.open(scope);
     manager.appendMessage({ role: "user", content: "seed", timestamp: 1 });
-    const before = readTranscriptContextVersionInTransaction(database, scope.sessionId);
+    const before = readVersion(database, scope.sessionId);
     const values = observe(scope.sessionKey);
     let observed = false;
     releases.push(
@@ -259,14 +244,12 @@ it("installs final transcript facts before entry observers and discards nested r
           return;
         }
         observed = true;
-        expect(values.at(-1)).toMatchObject(
-          readTranscriptContextVersionInTransaction(database, scope.sessionId),
-        );
+        expect(values.at(-1)).toMatchObject(readVersion(database, scope.sessionId));
         throw new Error("Synthetic public observer failure");
       }),
     );
     const options = { agentId: scope.agentId, path: database.path, env: state.env };
-    runOpenClawAgentWriteTransaction(() => {
+    writeTransaction(() => {
       replaceSessionEntrySync(scope, {
         sessionId: scope.sessionId,
         updatedAt: 2,
@@ -274,7 +257,7 @@ it("installs final transcript facts before entry observers and discards nested r
       });
       manager.appendCustomEntry("retained");
       expect(() =>
-        runOpenClawAgentWriteTransaction(() => {
+        writeTransaction(() => {
           manager.appendCustomEntry("rolled-back");
           throw new Error("Synthetic rollback");
         }, options),
@@ -286,7 +269,7 @@ it("installs final transcript facts before entry observers and discards nested r
     expect(values[0]?.rawSeq).toBe((before.rawSeq ?? -1) + 1);
     values.length = 0;
     expect(() =>
-      runOpenClawAgentWriteTransaction(() => {
+      writeTransaction(() => {
         manager.appendCustomEntry("outer-rollback");
         throw new Error("Outer rollback");
       }, options),
@@ -300,7 +283,7 @@ it("does not publish a tentative typed write inside an unmanaged raw outer trans
     replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const manager = SessionManager.open(scope);
     manager.appendMessage({ role: "user", content: "seed", timestamp: 1 });
-    const before = readTranscriptContextVersionInTransaction(database, scope.sessionId);
+    const before = readVersion(database, scope.sessionId);
     const values = observe(scope.sessionKey);
     database.db.exec("BEGIN IMMEDIATE");
     try {
@@ -310,7 +293,7 @@ it("does not publish a tentative typed write inside an unmanaged raw outer trans
       database.db.exec("ROLLBACK");
     }
     expect(values).toEqual([]);
-    expect(readTranscriptContextVersionInTransaction(database, scope.sessionId)).toEqual(before);
+    expect(readVersion(database, scope.sessionId)).toEqual(before);
   });
 });
 
@@ -380,7 +363,7 @@ it("keeps a delayed worker mutation postimage after native content-preserving pu
             interposed = true;
             // The real worker has committed; delay only host delivery while the native owner
             // publishes the same unchanged-content fact used by cold materialization/reconcile.
-            runOpenClawAgentWriteTransaction(
+            writeTransaction(
               (current) => {
                 publishUnchangedSessionTranscriptAuthority(current, scope.sessionKey);
               },
@@ -395,9 +378,7 @@ it("keeps a delayed worker mutation postimage after native content-preserving pu
     await manager.appendCustomEntryAsync("delayed-authority");
     expect(interposed).toBe(true);
     expect(values).toHaveLength(1);
-    expect(values[0]).toMatchObject(
-      readTranscriptContextVersionInTransaction(database, scope.sessionId),
-    );
+    expect(values[0]).toMatchObject(readVersion(database, scope.sessionId));
   });
 });
 
@@ -466,7 +447,7 @@ it("keeps captured context current after a granted worker append rolls back at C
     replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const manager = await SessionManager.openAsync(scope);
     await manager.appendMessageAsync({ role: "user", content: "seed", timestamp: 1 });
-    const before = readTranscriptContextVersionInTransaction(database, scope.sessionId);
+    const before = readVersion(database, scope.sessionId);
     rollbackFault.enable();
     let commitGranted = false;
     let native: workerAdmission.SqliteWorkerOperationAdmission | undefined;
@@ -505,9 +486,7 @@ it("keeps captured context current after a granted worker append rolls back at C
         expect(commitGranted).toBe(true);
         expect(native?.committed).toBeUndefined();
         expect(native?.settlement?.kind).toBe("completed");
-        expect(readTranscriptContextVersionInTransaction(database, scope.sessionId)).toEqual(
-          before,
-        );
+        expect(readVersion(database, scope.sessionId)).toEqual(before);
         return "still-current";
       }),
     ).resolves.toBe("still-current");

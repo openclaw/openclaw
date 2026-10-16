@@ -14,26 +14,19 @@ import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-wr
 import { transcriptScope } from "./session-transcript-fixture.test-support.js";
 import * as targetWorker from "./session-transcript-read-worker-runtime.js";
 
+function message(id: string, parentId: string | null, role: string, content: string) {
+  return {
+    type: "message",
+    id,
+    parentId,
+    message: { role, content },
+  };
+}
 const events = [
   { type: "session", id: "raw-events", version: 3 },
-  {
-    type: "message",
-    id: "question",
-    parentId: null,
-    message: { role: "user", content: "雪🦞" },
-  },
-  {
-    type: "message",
-    id: "first-branch",
-    parentId: "question",
-    message: { role: "assistant", content: "first answer" },
-  },
-  {
-    type: "message",
-    id: "sibling-branch",
-    parentId: "question",
-    message: { role: "assistant", content: "alternate answer" },
-  },
+  message("question", null, "user", "雪🦞"),
+  message("first-branch", "question", "assistant", "first answer"),
+  message("sibling-branch", "question", "assistant", "alternate answer"),
   { type: "leaf", id: "selected-leaf", parentId: "first-branch" },
 ];
 
@@ -41,27 +34,29 @@ it("appends entry-less raw events off-thread and resolves parents from current w
   await withOpenClawTestState({ label: "transcript-events-append-worker" }, async (state) => {
     const scope = transcriptScope(state.env, "raw-append", state.statePath("transcript.sqlite"));
     const header = { type: "session", id: scope.sessionId, version: 3 };
-    const first = { type: "custom", id: "first", parentId: null, customType: "raw" };
-    const second = { type: "custom", id: "second", parentId: "first", customType: "raw" };
-    const sibling = { type: "custom", id: "sibling", parentId: "first", customType: "raw" };
+    const custom = (id: string, parentId: string | null) => ({
+      type: "custom",
+      id,
+      parentId,
+      customType: "raw",
+    });
+    const first = custom("first", null);
+    const second = custom("second", "first");
+    const sibling = custom("sibling", "first");
     const hostSql = observeHostDataSql();
     try {
       for (const event of [header, first, second, sibling]) {
         await expect(appendTranscriptEvent(scope, event)).resolves.toBe(true);
       }
       await expect(
-        appendTranscriptEvent(
-          scope,
-          { type: "custom", id: "current", parentId: "first", customType: "raw" },
-          { appendIntent: "active-branch" },
-        ),
+        appendTranscriptEvent(scope, custom("current", "first"), { appendIntent: "active-branch" }),
       ).resolves.toBe(true);
       await expect(loadTranscriptEvents(scope)).resolves.toEqual([
         header,
         first,
         second,
         sibling,
-        { type: "custom", id: "current", parentId: "sibling", customType: "raw" },
+        custom("current", "sibling"),
       ]);
       expect(hostSql.queries).toEqual([]);
     } finally {

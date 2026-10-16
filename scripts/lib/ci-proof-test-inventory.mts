@@ -4597,7 +4597,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "src/config/sessions/session-entry-read.worker.test.ts",
   "src/config/sessions/session-history-eviction.lifecycle-contention.test.ts",
   "src/config/sessions/session-logical-entry-read.worker.test.ts",
-  "src/config/sessions/session-transcript-context-eligibility.test.ts",
   "src/config/sessions/session-transcript-reconcile-pool.test.ts",
   "src/config/sessions/session-transcript-reconcile.bootstrap.test.ts",
   "src/config/utility-model-separation-migration.io.test.ts",

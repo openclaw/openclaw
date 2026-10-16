@@ -13,9 +13,7 @@ import {
   getOpenClawAgentDatabaseValidationForTransfer,
   releaseOpenClawAgentDatabaseReadValidation,
 } from "../../state/openclaw-agent-db-validation-cache.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceSessionEntrySync } from "./session-accessor.js";
 import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
 import type { ChatHistoryPageParams } from "./session-history-types.js";
@@ -53,25 +51,14 @@ vi.mock("../../infra/worker-task-server.js", async (importOriginal) => ({
 import "./session-transcript.worker.js";
 
 it("borrows canonical writer proof without a native reader and still fences foreign changes", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const options = { agentId: "main", env };
-    const opened = openOpenClawAgentDatabase(options);
+  await withTranscriptDatabase("writer-proof", async ({ database: opened, scope }) => {
     const database = { agentId: opened.agentId, path: opened.path };
-    const sessionKey = "agent:main:writer-proof";
-    replaceSessionEntrySync(
-      { ...options, sessionKey },
-      { sessionId: "writer-proof", updatedAt: 1 },
-    );
+    const { sessionId, sessionKey } = scope;
+    replaceSessionEntrySync(scope, { sessionId, updatedAt: 1 });
     const retained = getOpenClawAgentDatabaseValidationForTransfer(database);
     assert(retained);
-    const validation = {
-      agentId: retained.agentId,
-      identity: retained.identity,
-      birthtime: retained.birthtime,
-      receiptId: retained.receiptId,
-      valid: retained.valid,
-      canonicalReady: retained.canonicalReady,
-    };
+    const { agentId, identity, birthtime, receiptId, valid, canonicalReady } = retained;
+    const validation = { agentId, identity, birthtime, receiptId, valid, canonicalReady };
     await closeOpenClawAgentDatabaseByPathAsync(database.path);
     // A reader worker starts without the writer's process-local validation metadata.
     releaseOpenClawAgentDatabaseReadValidation([{ path: database.path }]);
@@ -79,7 +66,7 @@ it("borrows canonical writer proof without a native reader and still fences fore
     const request = {
       kind: "session-entry-read" as const,
       database,
-      scope: { ...options, sessionKey, storePath: database.path, databaseAgentId: "main" },
+      scope: { ...scope, databaseAgentId: "main" },
       validation,
     };
     const reads = observeSqliteReadSql(nodeSqlite.requireNodeSqlite().StatementSync.prototype);
@@ -239,21 +226,17 @@ it.for([
 ])(
   "keeps admitted format and observes row availability after a foreign $change",
   async ({ sql, error }, { signal }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const options = { agentId: "main", env: state.env };
-      const { path } = openOpenClawAgentDatabase(options);
-      const sessionKey = "agent:main:main";
-      replaceSessionEntrySync(
-        { ...options, sessionKey },
-        { sessionId: "retained-listing", updatedAt: 1 },
-      );
+    await withTranscriptDatabase("retained-listing", async ({ state, database: opened, scope }) => {
+      const { path } = opened;
+      const database = { agentId: opened.agentId, path };
+      const { sessionKey, sessionId } = scope;
+      replaceSessionEntrySync(scope, { sessionId, updatedAt: 1 });
       // The registered handler must use its real retained read-only scope, not a host writer.
       await closeOpenClawAgentDatabaseByPathAsync(path);
-      const database = { agentId: "main", path };
       const request: SessionTranscriptWorkerInput = {
         kind: "session-entry-list",
         database,
-        scope: { ...options, storePath: path, projection: "list" },
+        scope: { agentId: "main", env: state.env, storePath: path, projection: "list" },
       };
       const expected = {
         ok: true,

@@ -6,14 +6,13 @@ import {
 } from "./session-transcript-report-facts.js";
 
 const base = { id: "entry", parentId: "parent", timestamp: "2026-01-01T00:00:00.000Z" };
-type ProjectionCase = { name: string; raw: unknown; expected: SessionTranscriptReportFacts };
+type ProjectionCase = { raw: unknown; expected: SessionTranscriptReportFacts };
 function canonical(
-  name: string,
   raw: unknown,
   entry: Extract<SessionTranscriptReportFacts, { kind: "canonical" }>["entry"],
   hasParentId = true,
 ): ProjectionCase {
-  return { name, raw, expected: { kind: "canonical", hasParentId, entry } };
+  return { raw, expected: { kind: "canonical", hasParentId, entry } };
 }
 
 it.each<ProjectionCase>([
@@ -32,7 +31,6 @@ it.each<ProjectionCase>([
     ] as const
   ).map((entry) =>
     canonical(
-      `${entry.type} navigation excludes the body`,
       { ...base, ...entry },
       entry.type === "custom_message"
         ? { ...base, type: entry.type, customType: "report" }
@@ -41,23 +39,19 @@ it.each<ProjectionCase>([
   ),
   ...["branch label", "", undefined].map((label) =>
     canonical(
-      `label ${String(label)}`,
       { ...base, type: "label", targetId: "parent", label },
       { ...base, type: "label", targetId: "parent", ...(label !== undefined ? { label } : {}) },
     ),
   ),
-  ...[
-    {
-      responseId: "",
-      runId: " run-1 ",
-      expected: { assistantResponseId: "", assistantRunId: "run-1" },
-    },
-    { responseId: "  ", runId: "", expected: { assistantResponseId: "  " } },
-    { responseId: "response", runId: 42, expected: { assistantResponseId: "response" } },
-    { responseId: 42, runId: "  ", expected: {} },
-  ].map(({ responseId, runId, expected }) =>
+  ...(
+    [
+      ["", " run-1 ", { assistantResponseId: "", assistantRunId: "run-1" }],
+      ["  ", "", { assistantResponseId: "  " }],
+      ["response", 42, { assistantResponseId: "response" }],
+      [42, "  ", {}],
+    ] as const
+  ).map(([responseId, runId, expected]) =>
     canonical(
-      `assistant suppression identities ${JSON.stringify(responseId)} / ${JSON.stringify(runId)}`,
       {
         ...base,
         type: "message",
@@ -67,7 +61,6 @@ it.each<ProjectionCase>([
     ),
   ),
   canonical(
-    "tool results have no assistant suppression identity",
     {
       ...base,
       type: "message",
@@ -91,17 +84,8 @@ it.each<ProjectionCase>([
     };
     const message = { role: "custom", content: "hook" };
     return [
-      canonical(
-        `parentless append mode ${JSON.stringify(appendMode)}`,
-        { ...entry, message },
-        entry,
-        false,
-      ),
-      canonical(
-        `null parent append mode ${JSON.stringify(appendMode)}`,
-        { ...entry, message, parentId: null },
-        { ...entry, parentId: null },
-      ),
+      canonical({ ...entry, message }, entry, false),
+      canonical({ ...entry, message, parentId: null }, { ...entry, parentId: null }),
     ];
   }),
   ...[
@@ -111,7 +95,6 @@ it.each<ProjectionCase>([
     },
     { type: "future", payload: "body" },
   ].map((raw): ProjectionCase => ({
-    name: `opaque ${raw.type} keeps its link`,
     raw: { ...base, ...raw },
     expected: { kind: "link", id: base.id, parentId: base.parentId },
   })),
@@ -121,7 +104,6 @@ it.each<ProjectionCase>([
     { ...base, type: "leaf", targetId: null, appendMode: "future" },
     { type: "message", message: { role: "user", content: "Legacy row without an ID" } },
   ].map((raw): ProjectionCase => ({
-    name: `ignored ${JSON.stringify(raw)}`,
     raw,
     expected: { kind: "ignored" },
   })),
@@ -130,25 +112,22 @@ it.each<ProjectionCase>([
     { targetId: "parent", appendParentId: null },
     { targetId: "parent", appendParentId: "opaque", appendMode: "side" as const },
   ].map((control): ProjectionCase => ({
-    name: `leaf ${JSON.stringify(control)}`,
     raw: { ...base, type: "leaf", ...control },
     expected: { kind: "leaf", entry: { id: base.id, parentId: base.parentId, ...control } },
   })),
   canonical(
-    "JavaScript selects the last duplicate member",
     JSON.parse(`{"type":"message","id":"first","id":"last","parentId":null,
       "message":{"role":"assistant","content":42,"responseId":"wrong"},
       "message":{"role":"assistant","content":"valid","responseId":"wrong","responseId":" "}}`),
     { id: "last", parentId: null, type: "message", assistantResponseId: " " },
   ),
   {
-    name: "a malformed last duplicate message stays opaque",
     raw: JSON.parse(`{"type":"message","id":"last","parentId":null,
       "message":{"role":"assistant","content":"valid","responseId":"wrong"},
       "message":{"role":"assistant","content":42}}`),
     expected: { kind: "link", id: "last", parentId: null },
   },
-])("projects report facts: $name", ({ raw, expected }) => {
+])("projects and round-trips report facts: $raw", ({ raw, expected }) => {
   const facts = projectSessionTranscriptReportFacts(raw);
   expect(decodeSessionTranscriptReportFacts(facts)).toStrictEqual(facts);
   const serializedFacts = JSON.stringify(facts);
