@@ -13,22 +13,6 @@ import {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
-  it("opens a git-backed agent draft from the sidebar new-session action", async () => {
-    const page = await newChatPage(suite);
-    const gateway = await installMockGateway(page, { workspaceGit: true });
-
-    await page.goto(`${suite.server.baseUrl}chat`);
-    const newSessionButton = page.locator(
-      "openclaw-app-sidebar .sidebar-rail .sidebar-new-session",
-    );
-    await newSessionButton.waitFor({ state: "visible", timeout: 10_000 });
-    await newSessionButton.click();
-
-    await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-    await expect.poll(() => new URL(page.url()).searchParams.get("agent")).toBe("main");
-    expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-  });
-
   it("waits for configured inference before sending the first chat turn", async () => {
     const page = await newChatPage(suite);
     const gateway = await installMockGateway(page, {

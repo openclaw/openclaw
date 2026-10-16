@@ -15,20 +15,22 @@ import {
 
 const suite = createChatFlowE2eSuite();
 
+async function offlineQueue() {
+  const page = await newChatPage(suite);
+  const gateway = await installMockGateway(page);
+  await page.goto(`${suite.server.baseUrl}chat`);
+  const composer = page.locator(".agent-chat__composer-combobox textarea");
+  await composer.waitFor({ state: "visible", timeout: 15_000 });
+  await page.locator(".agent-chat__welcome").waitFor({ state: "visible" });
+  await gateway.setOnline(false);
+  await gateway.closeLatest();
+  await queueMessages(page);
+  return { page, gateway, composer };
+}
+
 suite.define(() => {
   it("edits a queued message in its row and returns it to its place", async () => {
-    const page = await newChatPage(suite);
-    const gateway = await installMockGateway(page);
-
-    await page.goto(`${suite.server.baseUrl}chat`);
-    const composer = page.locator(".agent-chat__composer-combobox textarea");
-    await composer.waitFor({ state: "visible", timeout: 15_000 });
-    await page.locator(".agent-chat__welcome").waitFor({ state: "visible" });
-
-    // Offline holds the queue still, so the round-trip stays observable.
-    await gateway.setOnline(false);
-    await gateway.closeLatest();
-    await queueMessages(page);
+    const { page, gateway, composer } = await offlineQueue();
     const queueText = () =>
       page.locator(".chat-queue__item").evaluateAll((rows) =>
         rows.map((row) => {
@@ -39,6 +41,7 @@ suite.define(() => {
         }),
       );
     expect(await queueText()).toEqual([...QUEUED]);
+    expect(await page.locator(".chat-queue__grip").count()).toBe(QUEUED.length);
 
     await composer.fill("a separate composer draft");
 
@@ -71,15 +74,7 @@ suite.define(() => {
   });
 
   it("puts the row back untouched when the edit is cancelled", async () => {
-    const page = await newChatPage(suite);
-    const gateway = await installMockGateway(page);
-
-    await page.goto(`${suite.server.baseUrl}chat`);
-    const composer = page.locator(".agent-chat__composer-combobox textarea");
-    await composer.waitFor({ state: "visible", timeout: 15_000 });
-    await gateway.setOnline(false);
-    await gateway.closeLatest();
-    await queueMessages(page);
+    const { page, composer } = await offlineQueue();
 
     await composer.fill("a separate composer draft");
     const row = page.locator(".chat-queue__item").nth(1);
@@ -99,15 +94,7 @@ suite.define(() => {
   });
 
   it("keeps a normal composer send separate from an open row edit", async () => {
-    const page = await newChatPage(suite);
-    const gateway = await installMockGateway(page);
-
-    await page.goto(`${suite.server.baseUrl}chat`);
-    const composer = page.locator(".agent-chat__composer-combobox textarea");
-    await composer.waitFor({ state: "visible", timeout: 15_000 });
-    await gateway.setOnline(false);
-    await gateway.closeLatest();
-    await queueMessages(page);
+    const { page, composer } = await offlineQueue();
 
     const row = page.locator(".chat-queue__item").nth(1);
     await row.dblclick();

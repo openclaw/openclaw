@@ -535,11 +535,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/chat-send-contract.ts"],
   ),
   pageWatch(
-    "ui/src/e2e/chat-flow.local-media-dollar-home.e2e.test.ts",
-    ["chat"],
-    ["ui/src/pages/chat/components/chat-audio-player.ts"],
-  ),
-  pageWatch(
     "ui/src/e2e/chat-flow.local-media-policy.e2e.test.ts",
     ["chat"],
     ["ui/src/pages/chat/components/chat-audio-player.ts"],
@@ -554,13 +549,11 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["chat", "config", "model-providers"],
     ["ui/src/pages/chat/chat-pane.ts"],
   ),
-  pageWatch("ui/src/e2e/chat-flow.model-switch-reasoning.e2e.test.ts", ["chat"]),
   pageWatch(
     "ui/src/e2e/chat-flow.models-reasoning.e2e.test.ts",
     ["chat"],
     ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/route-draft-focus-handoff.ts"],
   ),
-  pageWatch("ui/src/e2e/chat-flow.pending-settings.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-flow.queue-edit.e2e.test.ts", ["chat", "config"]),
   pageWatch(
     "ui/src/e2e/chat-flow.queue-reorder.e2e.test.ts",

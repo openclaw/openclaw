@@ -249,80 +249,47 @@ suite.define(() => {
     },
   );
 
-  it("renders a failed history load in the transcript and retries it", async () => {
+  it.each(["retry", "reconnect"] as const)("recovers failed history after %s", async (recovery) => {
     const page = await newChatPage(suite);
+    const marker = `Transcript recovered after ${recovery}.`;
+    const failure =
+      recovery === "retry"
+        ? "Chat history is temporarily unavailable."
+        : "Chat history will recover after reconnect.";
     const gateway = await installMockGateway(page, {
       deferredMethods: ["chat.startup"],
-      historyMessages: [
-        chatMessage("assistant", "Transcript recovered after retry.", {
-          timestamp: Date.now(),
-        }),
-      ],
+      historyMessages: [chatMessage("assistant", marker, { timestamp: Date.now() })],
     });
 
     await page.goto(`${suite.server.baseUrl}chat`);
     await gateway.waitForRequest("chat.startup");
     await gateway.rejectDeferred("chat.startup", {
       code: "GATEWAY_UNAVAILABLE",
-      message: "Chat history is temporarily unavailable.",
+      message: failure,
+      ...(recovery === "reconnect" ? { retryable: true } : {}),
     });
 
     const historyError = page.locator(".chat-history-error");
     await historyError.waitFor({ state: "visible", timeout: 5_000 });
-    expect(await historyError.textContent()).toContain("Chat history is temporarily unavailable.");
+    expect(await historyError.textContent()).toContain(failure);
     expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
 
-    await gateway.deferNext("chat.startup");
-    await historyError.getByRole("button", { name: "Retry" }).click();
-    await gateway.waitForRequest("chat.startup", { after: 1 });
-    await historyError.waitFor({ state: "detached" });
-    await page
-      .locator('.chat-thread openclaw-panel-loading-skeleton[data-panel-skeleton="chat"]')
-      .waitFor({ state: "visible" });
-    await gateway.resolveDeferred("chat.startup");
-    await page
-      .locator(".chat-thread")
-      .getByText("Transcript recovered after retry.")
-      .waitFor({ state: "visible" });
-
-    expect(await gateway.getRequests("chat.startup")).toHaveLength(2);
-    expect(await page.locator(".chat-history-error").count()).toBe(0);
-  });
-
-  it("automatically resumes retryable history failures once after reconnect", async () => {
-    const page = await newChatPage(suite);
-    const gateway = await installMockGateway(page, {
-      deferredMethods: ["chat.startup"],
-      historyMessages: [
-        chatMessage("assistant", "Transcript recovered after reconnect.", {
-          timestamp: Date.now(),
-        }),
-      ],
-    });
-
-    await page.goto(`${suite.server.baseUrl}chat`);
-    await gateway.waitForRequest("chat.startup");
-    await gateway.rejectDeferred("chat.startup", {
-      code: "GATEWAY_UNAVAILABLE",
-      message: "Chat history will recover after reconnect.",
-      retryable: true,
-    });
-
-    const historyError = page.locator(".chat-history-error");
-    await historyError.waitFor({ state: "visible", timeout: 5_000 });
-    expect(await historyError.textContent()).toContain(
-      "Chat history will recover after reconnect.",
-    );
-    expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
-
-    await gateway.setOnline(false);
-    expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
-    await gateway.setOnline(true);
-    await gateway.waitForRequest("chat.startup", { after: 1 });
-    await page
-      .locator(".chat-thread")
-      .getByText("Transcript recovered after reconnect.")
-      .waitFor({ state: "visible" });
+    if (recovery === "retry") {
+      await gateway.deferNext("chat.startup");
+      await historyError.getByRole("button", { name: "Retry" }).click();
+      await gateway.waitForRequest("chat.startup", { after: 1 });
+      await historyError.waitFor({ state: "detached" });
+      await page
+        .locator('.chat-thread openclaw-panel-loading-skeleton[data-panel-skeleton="chat"]')
+        .waitFor({ state: "visible" });
+      await gateway.resolveDeferred("chat.startup");
+    } else {
+      await gateway.setOnline(false);
+      expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
+      await gateway.setOnline(true);
+      await gateway.waitForRequest("chat.startup", { after: 1 });
+    }
+    await page.locator(".chat-thread").getByText(marker).waitFor({ state: "visible" });
 
     expect(await gateway.getRequests("chat.startup")).toHaveLength(2);
     expect(await page.locator(".chat-history-error").count()).toBe(0);

@@ -48,6 +48,11 @@ suite.define(() => {
       ticket: "ticket-bootstrap-structured-audio",
       structured: true,
     },
+    ...[
+      "~/media/report-voice.mp3",
+      "/workspace/project/../media/report-voice.mp3",
+      "C:\\workspace\\project\\..\\media\\report-voice.mp3",
+    ].map((source) => ({ kind: "audio", source, ticket: "ticket-dollar-home", attachment: true })),
   ] as const)(
     "renders local assistant $kind through server metadata",
     async ({ kind, source: fixtureSource, ticket, ...options }) => {
@@ -118,9 +123,22 @@ suite.define(() => {
                 id: "assistant-bootstrap-local-audio",
                 role: "assistant",
                 content:
-                  "structured" in options
-                    ? (await buildLocalWebchatAudioMessage(source)).content
-                    : [{ type: "text", text: `Your recording\nMEDIA:${source}` }],
+                  "attachment" in options
+                    ? [
+                        { type: "text", text: "Your recording" },
+                        {
+                          type: "attachment",
+                          attachment: {
+                            kind: "audio",
+                            label: "report-voice.mp3",
+                            mimeType: "audio/mpeg",
+                            url: source,
+                          },
+                        },
+                      ]
+                    : "structured" in options
+                      ? (await buildLocalWebchatAudioMessage(source)).content
+                      : [{ type: "text", text: `Your recording\nMEDIA:${source}` }],
                 timestamp: Date.now(),
               },
         ],
@@ -139,13 +157,19 @@ suite.define(() => {
         .poll(() => requestedMediaUrls.length, { timeout: 10_000 })
         .toBeGreaterThanOrEqual(2);
       expect(requestedMediaUrls[0]?.searchParams.get("meta")).toBe("1");
+      expect(requestedMediaUrls[0]?.searchParams.get("source")).toBe(expectedSource);
       expect(
         requestedMediaUrls.slice(1).some((url) => url.searchParams.get("mediaTicket") === ticket),
       ).toBe(true);
       if (kind === "audio") {
-        expect(
-          await media.locator(".chat-assistant-attachment-card__download").getAttribute("href"),
-        ).toContain(`mediaTicket=${ticket}`);
+        const href = await media
+          .locator(".chat-assistant-attachment-card__download")
+          .getAttribute("href");
+        expect(href).toBeTruthy();
+        expect(href).toContain(`mediaTicket=${ticket}`);
+        const download = new URL(href ?? "", suite.server.baseUrl);
+        expect(download.searchParams.get("mediaTicket")).toBe(ticket);
+        expect(download.searchParams.get("source")).toBe(expectedSource);
         await expect
           .poll(() =>
             media.locator("audio").evaluate((element) => (element as HTMLMediaElement).readyState),

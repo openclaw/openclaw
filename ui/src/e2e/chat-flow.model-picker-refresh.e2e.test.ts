@@ -1,11 +1,15 @@
 import { expect, it } from "vitest";
-import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
+import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   newChatPage,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
   requireRecord,
+  thinkingLevels,
+  chatSessionListResponse,
+  expectRequestCountStable,
+  waitForRequests,
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -223,60 +227,6 @@ suite.define(() => {
     await picker.locator('[data-chat-model-select="true"]').click();
   });
 
-  it("keeps picker opens cached and the warm list interactive during a catalog publication", async () => {
-    const page = await newChatPage(suite);
-    const gateway = await installMockGateway(page, {
-      models: [
-        { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
-        { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
-        { id: "fable-5", name: "Claude Fable 5", provider: "anthropic" },
-      ],
-      sessionKey: "agent:main:main",
-    });
-
-    await page.goto(`${suite.server.baseUrl}chat`);
-    const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
-    const picker = pane.locator(".chat-controls__model-picker");
-    await picker.locator("[data-chat-model-option]").first().waitFor({ state: "attached" });
-
-    await gateway.deferNext("models.list", { view: "configured" });
-    await picker.locator('[data-chat-model-select="true"]').click();
-    await revealChatModelOption(picker.locator('[data-chat-model-option="openai/gpt-5.6-luna"]'));
-    await revealChatModelOption(picker.locator('[data-chat-model-option="anthropic/fable-5"]'));
-    await picker.getByRole("option", { name: "GPT-5.6 Luna", exact: true }).waitFor();
-    expect(await gateway.getRequests("models.list")).toHaveLength(1);
-
-    await gateway.emitGatewayEvent("chat.metadata.changed", {});
-    const request = await gateway.waitForRequest("models.list", { after: 1 });
-    expect(requireRecord(request.params)).toMatchObject({
-      sessionKey: "agent:main:main",
-      view: "configured",
-    });
-    expect(request.params).not.toHaveProperty("refresh");
-
-    // The warm list stays rendered and selectable with no refresh/loading interstitial.
-    await expect
-      .poll(() => picker.locator("[data-chat-model-option]:visible").count())
-      .toBeGreaterThanOrEqual(3);
-
-    expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
-    expect(
-      await picker.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').isDisabled(),
-    ).toBe(false);
-
-    // The direct scoped response owns model readiness; commands remain independent.
-    await gateway.resolveDeferred("models.list", {
-      models: [
-        { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
-        { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai" },
-      ],
-    });
-    await picker
-      .locator('[data-chat-model-option="openai/gpt-5.6-terra"]')
-      .waitFor({ state: "visible" });
-    expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
-  });
-
   it("reconciles the current model search when an open catalog replaces its results", async () => {
     const page = await newChatPage(suite);
 
@@ -302,7 +252,11 @@ suite.define(() => {
     expect(await previous.isVisible()).toBe(true);
     expect(await gateway.getRequests("models.list")).toHaveLength(discoveryCount);
     await gateway.emitGatewayEvent("chat.metadata.changed", {});
-    await gateway.waitForRequest("models.list", { after: discoveryCount });
+    const publication = await gateway.waitForRequest("models.list", { after: discoveryCount });
+    expect(publication.params).toMatchObject({ sessionKey: "agent:main:main", view: "configured" });
+    expect(publication.params).not.toHaveProperty("refresh");
+    expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
+    expect(await previous.isDisabled()).toBe(false);
 
     const refreshedModels = [
       { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
@@ -314,6 +268,7 @@ suite.define(() => {
     const replacement = picker.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]');
     await replacement.waitFor({ state: "attached" });
     await previous.waitFor({ state: "detached" });
+    expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
 
     expect(await search.inputValue()).toBe("anthropic");
     await expect
@@ -342,5 +297,238 @@ suite.define(() => {
       model: "anthropic/claude-sonnet-4-6",
     });
     await expect.poll(() => picker.getAttribute("open")).toBe(null);
+  });
+
+  it("applies provider-specific reasoning after the selected model is saved", async () => {
+    const page = await newChatPage(suite);
+    const sessionKey = "agent:main:session-a";
+    const fableSession = {
+      key: sessionKey,
+      kind: "direct",
+      label: "Session A",
+      model: "claude-fable-5",
+      modelProvider: "anthropic",
+      thinkingDefault: "high",
+      thinkingLevel: "high",
+      thinkingLevels: thinkingLevels("off", "adaptive", "high", "xhigh", "max"),
+      updatedAt: 2,
+    };
+    const solSession = {
+      ...fableSession,
+      model: "gpt-5.6-sol",
+      modelProvider: "openai",
+      thinkingLevels: thinkingLevels("off", "low", "medium", "high", "ultra"),
+    };
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["sessions.patch"],
+      methodResponses: {
+        "sessions.list": chatSessionListResponse([fableSession]),
+      },
+      models: [
+        { id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic" },
+        { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
+      ],
+      sessionKey,
+    });
+
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+
+    const main = page.getByRole("main");
+    await main.locator('[data-chat-model-select="true"]').click();
+    await selectChatModelOption(main.locator('[data-chat-model-option="openai/gpt-5.6-sol"]'));
+
+    const modelPatch = await gateway.waitForRequest("sessions.patch");
+    expect(requireRecord(modelPatch.params)).toMatchObject({
+      key: sessionKey,
+      model: "openai/gpt-5.6-sol",
+    });
+    const thinkingSlider = main.locator('[data-chat-thinking-slider="true"]');
+    const effortSelect = main.locator('[data-chat-thinking-select="true"]');
+    await effortSelect.evaluate((trigger) => {
+      const details = trigger.closest("details")!;
+      details.open = true;
+      details.dispatchEvent(new Event("toggle"));
+    });
+    await expect
+      .poll(async () => ({
+        effortDisabled: await effortSelect.getAttribute("data-chat-thinking-disabled"),
+        effortAriaDisabled: await effortSelect.getAttribute("aria-disabled"),
+        sliderDisabled: await thinkingSlider.isDisabled(),
+      }))
+      .toEqual({
+        effortDisabled: "true",
+        effortAriaDisabled: "true",
+        sliderDisabled: true,
+      });
+    await thinkingSlider.evaluate((input) => {
+      const slider = input as HTMLInputElement;
+      slider.value = slider.max;
+      slider.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await expectRequestCountStable(gateway, "sessions.patch", 1);
+    await page.keyboard.press("Escape");
+
+    await gateway.setMethodResponse("sessions.list", chatSessionListResponse([solSession]));
+    const sessionsListCount = (await gateway.getRequests("sessions.list")).length;
+    await gateway.resolveDeferred("sessions.patch");
+    await expect
+      .poll(async () => (await gateway.getRequests("sessions.list")).length)
+      .toBeGreaterThan(sessionsListCount);
+    await main.locator('[data-chat-thinking-select="true"]').click();
+    await expect
+      .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
+      .toContain("ultra");
+    await expect.poll(() => thinkingSlider.isEnabled()).toBe(true);
+
+    await thinkingSlider.evaluate((input) => {
+      const slider = input as HTMLInputElement;
+      const values = (slider.dataset.chatThinkingValues ?? "").split(",");
+      slider.value = String(values.indexOf("ultra"));
+      slider.dispatchEvent(new Event("input", { bubbles: true }));
+      slider.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    const patches = await waitForRequests(gateway, "sessions.patch", 2);
+    expect(requireRecord(patches[1]?.params)).toMatchObject({
+      key: sessionKey,
+      thinkingLevel: "ultra",
+    });
+    await expect.poll(() => page.getByText(/not supported for/u).count()).toBe(0);
+  });
+
+  it("saves model, reasoning, and speed while the admitted reply continues", async () => {
+    await suite.withPage({ viewport: { width: 1200, height: 853 } }, async ({ page }) => {
+      const key = "agent:main:live-preferences";
+      const levels = [
+        { id: "low", label: "Low" },
+        { id: "high", label: "High" },
+      ];
+      const row = {
+        key,
+        sessionId: "live-preferences",
+        kind: "direct",
+        updatedAt: 1,
+        model: "example-a",
+        modelProvider: "example",
+        modelOverrideSource: "user",
+        thinkingLevel: "low",
+        thinkingDefault: "low",
+        thinkingLevels: levels,
+      };
+      const gateway = await installMockGateway(page, {
+        sessionKey: key,
+        agentModel: "example/example-a",
+        sessions: [row],
+        models: ["a", "b"].map((id) => ({
+          id: "example-" + id,
+          name: "Example " + id.toUpperCase(),
+          provider: "example",
+          thinkingLevels: levels,
+          thinkingDefault: "low",
+          supportsFastMode: true,
+        })),
+        methodResponses: {
+          "sessions.list": {
+            ts: 1,
+            path: "",
+            count: 1,
+            defaults: {
+              model: "example-a",
+              modelProvider: "example",
+              thinkingLevels: levels,
+              thinkingDefault: "low",
+            },
+            sessions: [row],
+          },
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
+      await page
+        .locator(".agent-chat__composer-combobox textarea")
+        .fill("Keep explaining the garden plan.");
+      await page.getByRole("button", { name: "Send message", exact: true }).click();
+      const send = await gateway.waitForRequest("chat.send");
+      const runId = (send.params as { idempotencyKey: string }).idempotencyKey;
+      const emitText = (text: string) =>
+        gateway.emitGatewayEvent("chat", {
+          sessionKey: key,
+          runId,
+          state: "delta",
+          message: { role: "assistant", content: [{ type: "text", text }] },
+        });
+      await emitText("The first reply is still running.");
+      await page
+        .locator(".chat-bubble")
+        .getByText("The first reply is still running.", { exact: true })
+        .waitFor();
+      const main = page.getByRole("main");
+      const model = main.locator("[data-chat-model-select]");
+      const effort = main.locator("[data-chat-thinking-select]");
+      await gateway.deferNext("sessions.patch");
+      await model.click();
+      await selectChatModelOption(main.locator('[data-chat-model-option="example/example-b"]'));
+      expect((await gateway.waitForRequest("sessions.patch")).params).toMatchObject({
+        key,
+        model: "example/example-b",
+      });
+      await expect.poll(() => model.textContent()).toContain("Example B");
+      expect(await effort.getAttribute("aria-disabled")).toBe("true");
+      await gateway.resolveDeferred("sessions.patch");
+      await expect.poll(() => effort.getAttribute("aria-disabled")).toBe("false");
+      // Execution metadata belongs to the existing run, not the preference selector.
+      const saved = await gateway.getSessionRow(key);
+      await gateway.emitGatewayEvent("sessions.changed", {
+        sessionKey: key,
+        runId,
+        phase: "model",
+        agentId: "main",
+        session: {
+          ...saved,
+          hasActiveRun: true,
+          activeRunIds: [runId],
+          activeModel: "example-a",
+          activeModelProvider: "example",
+          updatedAt: Date.now(),
+        },
+      });
+      await effort.click();
+      const slider = main.locator("[data-chat-thinking-slider]");
+      // The mounted slider is enabled before the popup can receive keyboard focus.
+      await expect.poll(() => slider.isVisible()).toBe(true);
+      await expect.poll(() => slider.isEnabled()).toBe(true);
+      const speed = main.locator("[data-chat-speed-option=on]");
+      expect(await speed.isEnabled()).toBe(true);
+      await speed.click();
+      const speedPatch = await gateway.waitForRequest("sessions.patch", { after: 1 });
+      expect(speedPatch.params).toMatchObject({ key, fastMode: true });
+      await speed.and(main.locator('[aria-checked="true"]')).waitFor({ state: "visible" });
+      await slider.press("End");
+      const thinking = await gateway.waitForRequest("sessions.patch", { after: 2 });
+      expect(thinking.params).toMatchObject({ key, thinkingLevel: "high" });
+      await emitText(
+        "The first reply is still running. Its next chunk arrived after the settings changed.",
+      );
+      await page
+        .locator(".chat-bubble")
+        .getByText(/Its next chunk arrived after the settings changed/)
+        .waitFor();
+      await expect.poll(() => model.textContent()).toContain("Example B");
+      await expect.poll(() => effort.textContent()).toContain("High");
+      expect(await gateway.getSessionRow(key)).toMatchObject({
+        model: "example/example-b",
+        thinkingLevel: "high",
+        fastMode: true,
+      });
+      expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      expect(await page.getByRole("button", { name: "Stop generating", exact: true }).count()).toBe(
+        1,
+      );
+      await gateway.emitChatFinal({ runId, text: "The first reply finished normally." });
+      await page
+        .locator(".chat-bubble")
+        .getByText("The first reply finished normally.", { exact: true })
+        .waitFor();
+      await expect.poll(() => model.textContent()).toContain("Example B");
+    });
   });
 });

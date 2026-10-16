@@ -1,6 +1,7 @@
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
+import type { TaskSuggestion } from "../../../packages/gateway-protocol/src/schema/task-suggestions.js";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { createControlUiMockBootstrapConfig } from "../test-helpers/control-ui-e2e.ts";
 import { resolveRenderedColors, type RenderedColor } from "../test-helpers/rendered-colors.ts";
@@ -15,6 +16,26 @@ import {
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+
+function makeSuggestion(
+  fields: Pick<TaskSuggestion, "id" | "title" | "prompt" | "tldr"> & Partial<TaskSuggestion>,
+): TaskSuggestion {
+  return {
+    cwd: "/projects/example",
+    sessionKey: "main",
+    agentId: "main",
+    createdAt: Date.now(),
+    ...fields,
+  };
+}
+
+const suggestionMethods = [
+  "chat.metadata",
+  "chat.startup",
+  "taskSuggestions.list",
+  "taskSuggestions.accept",
+  "taskSuggestions.dismiss",
+];
 
 async function expectReadableButton(button: Locator) {
   const raw = await button.evaluate((element) => ({
@@ -47,16 +68,12 @@ suite.define(() => {
       ...createControlUiE2eContextOptions(),
       colorScheme: mode === "worktree" ? "dark" : "light",
     });
-    const suggestion = {
+    const suggestion = makeSuggestion({
       id: "task_123",
       title: "Remove stale adapter",
       prompt: "Delete the stale adapter in src/example.ts and update tests.",
       tldr: "The adapter is unreachable and adds maintenance cost.",
-      cwd: "/projects/example",
-      sessionKey: "main",
-      agentId: "main",
-      createdAt: Date.now(),
-    };
+    });
     const gateway = await installMockGateway(page, {
       deferredMethods: ["taskSuggestions.list"],
       featureCapabilities: [GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES],
@@ -188,16 +205,13 @@ suite.define(() => {
 
   it("dismisses suggested tasks immediately and restores a rejected dismissal without changing selection", async () => {
     const page = await newChatPage(suite);
-    const suggestion = {
+    const suggestion = makeSuggestion({
       id: "task_dismiss",
       title: "Remove stale adapter",
       prompt: "Delete the stale adapter and update its tests.",
       tldr: "This follow-up is no longer needed.",
-      cwd: "/projects/example",
-      sessionKey: "main",
-      agentId: "main",
       createdAt: 2,
-    };
+    });
     const nextSuggestion = {
       ...suggestion,
       id: "task_next",
@@ -207,13 +221,7 @@ suite.define(() => {
       createdAt: 1,
     };
     const gateway = await installMockGateway(page, {
-      featureMethods: [
-        "chat.metadata",
-        "chat.startup",
-        "taskSuggestions.list",
-        "taskSuggestions.accept",
-        "taskSuggestions.dismiss",
-      ],
+      featureMethods: suggestionMethods,
       methodResponses: {
         "taskSuggestions.list": { suggestions: [suggestion, nextSuggestion] },
       },
@@ -268,27 +276,18 @@ suite.define(() => {
   it("clears model-suggested follow-ups while switching sessions", async () => {
     const page = await newChatPage(suite);
     const gateway = await installMockGateway(page, {
-      featureMethods: [
-        "chat.metadata",
-        "chat.startup",
-        "taskSuggestions.list",
-        "taskSuggestions.accept",
-        "taskSuggestions.dismiss",
-      ],
+      featureMethods: suggestionMethods,
       methodResponses: {
         "sessions.list": chatSessionListResponse(),
         "taskSuggestions.list": {
           suggestions: [
-            {
+            makeSuggestion({
               id: "task_session_a",
               title: "Follow up from session A",
               prompt: "Complete the follow-up discovered in session A.",
               tldr: "This suggestion belongs only to session A.",
-              cwd: "/projects/example",
               sessionKey: "agent:main:session-a",
-              agentId: "main",
-              createdAt: Date.now(),
-            },
+            }),
           ],
         },
       },
@@ -317,16 +316,12 @@ suite.define(() => {
       methodResponses: {
         "taskSuggestions.list": {
           suggestions: [
-            {
+            makeSuggestion({
               id: "task_list_only",
               title: "Read-only follow-up",
               prompt: "Copy this suggestion without mutating it.",
               tldr: "Listing alone still exposes the client-local copy action.",
-              cwd: "/projects/example",
-              sessionKey: "main",
-              agentId: "main",
-              createdAt: Date.now(),
-            },
+            }),
           ],
         },
       },
@@ -371,24 +366,17 @@ suite.define(() => {
         serviceWorkers: "block",
         viewport: { height, width },
       });
-      const suggestions = Array.from({ length: 12 }, (_, index) => ({
-        id: `task_overflow_${index}`,
-        title: `Follow-up ${index}`,
-        prompt: "Inspect the related implementation and tests. ".repeat(12),
-        tldr: "The attached tool fails in coordination mode even with all selectors omitted, while a classless fixed-lease CLI warmup succeeds. Make the adapter preserve omitted selectors so both entry points select the same default and the follow-up can run without extra configuration.",
-        cwd: "/projects/example",
-        sessionKey: "main",
-        agentId: "main",
-        createdAt: Date.now() + index,
-      }));
+      const suggestions = Array.from({ length: 12 }, (_, index) =>
+        makeSuggestion({
+          id: `task_overflow_${index}`,
+          title: `Follow-up ${index}`,
+          prompt: "Inspect the related implementation and tests. ".repeat(12),
+          tldr: "The attached tool fails in coordination mode even with all selectors omitted, while a classless fixed-lease CLI warmup succeeds. Make the adapter preserve omitted selectors so both entry points select the same default and the follow-up can run without extra configuration.",
+          createdAt: Date.now() + index,
+        }),
+      );
       const gateway = await installMockGateway(page, {
-        featureMethods: [
-          "chat.metadata",
-          "chat.startup",
-          "taskSuggestions.list",
-          "taskSuggestions.accept",
-          "taskSuggestions.dismiss",
-        ],
+        featureMethods: suggestionMethods,
         methodResponses: {
           "taskSuggestions.list": { suggestions },
         },
