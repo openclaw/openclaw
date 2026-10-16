@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
@@ -7,6 +8,7 @@ import {
   selectChatLayoutAction,
 } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -867,6 +869,57 @@ suite.define(() => {
         const gateway = await installMockGateway(page, scenario());
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await page.locator(".chat-group").first().waitFor();
+        const mainComposer = page.getByRole("textbox", { name: "Chat composer", exact: true });
+        await mainComposer.fill("Keep this draft while switching tools");
+        const header = page.locator(".chat-pane__header");
+        const chat = header.getByRole("button", { name: "Chat", exact: true });
+        for (const viewport of [
+          { width: 390, height: 844 },
+          { width: 844, height: 390 },
+          { width: 320, height: 568 },
+        ]) {
+          await page.setViewportSize(viewport);
+          for (const [action, slot] of [
+            ["Toggle browser panel", "browser"],
+            ["Toggle desktop panel", "desktop"],
+          ] as const) {
+            await selectChatLayoutAction(page, action);
+            const panel = sidePanel(page).locator(`[data-panel-slot="${slot}"]:not([hidden])`);
+            await panel.waitFor();
+            expect(await mainComposer.isVisible()).toBe(false);
+            if (proofDir) {
+              const frame = await takeControlUiScreenshotFrame(page, header, [header, panel], {
+                animations: "disabled",
+              });
+              await writeFile(
+                path.join(proofDir, `mobile-${slot}-${viewport.width}.png`),
+                frame.png,
+              );
+            }
+            expect(await chat.isVisible()).toBe(true);
+            const bounds = await chat.boundingBox();
+            if (!bounds) {
+              throw new Error("Expected a visible Chat control");
+            }
+            expect(bounds.x).toBeGreaterThanOrEqual(0);
+            expect(bounds.x + bounds.width).toBeLessThanOrEqual(viewport.width);
+            expect(bounds.height).toBeGreaterThanOrEqual(44);
+            await chat.click();
+            await mainComposer.waitFor();
+            expect(await mainComposer.inputValue()).toBe("Keep this draft while switching tools");
+            await selectChatLayoutAction(page, "Side panel");
+            await panel.waitFor();
+            await chat.click();
+          }
+        }
+        await page.setViewportSize({ width: 1440, height: 960 });
+        await selectChatLayoutAction(page, "Side panel");
+        await sidePanel(page).locator('[data-panel-slot="desktop"]:not([hidden])').waitFor();
+        expect(await mainComposer.isVisible()).toBe(true);
+        expect(await chat.isVisible()).toBe(false);
+        await selectChatLayoutAction(page, "Close Desktop");
+        await selectChatLayoutAction(page, "Close Browser");
+        await page.setViewportSize({ width: 390, height: 844 });
         await activateChatHeaderPanelAction(page, "Show session files");
         await openFromPlus(page, "Terminal");
         await openFromPlus(page, "Side chat");
@@ -897,9 +950,8 @@ suite.define(() => {
         expect(companionGeometry.railTop).toBeGreaterThanOrEqual(companionGeometry.bodyTop - 1);
         expect(companionGeometry.railBottom).toBeLessThanOrEqual(companionGeometry.bodyBottom + 1);
 
-        const mainComposer = page.getByRole("textbox", { name: "Chat composer", exact: true });
         expect(await mainComposer.isVisible()).toBe(false);
-        await selectChatLayoutAction(page, "Minimize side panel");
+        await chat.click();
         await mainComposer.click();
         expect(await mainComposer.evaluate((element) => element === document.activeElement)).toBe(
           true,

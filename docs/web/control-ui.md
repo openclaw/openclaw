@@ -180,8 +180,11 @@ failures still show their failure notice.
 
 The chat header keeps **Share**, **Layout**, and the session menu together.
 **Layout** contains focus, split, swap, panel selection, and dock-position actions,
-with their keyboard shortcuts. Open **Subagents** there or from the side-panel
-**+** menu to inspect child runs, including swarm workers. An empty conversation
+with their keyboard shortcuts. On phones, an open side panel fills the conversation
+area. Select **Chat** in the header to return to the conversation without closing
+its tool tabs; use **Panels** to reopen the side panel or switch tools.
+Open **Subagents** from **Layout** or the side-panel **+** menu to inspect child runs,
+including swarm workers. An empty conversation
 starts with the panel closed. The first running batch adds it automatically,
 preserving another panel you selected; closing it keeps it closed for that batch.
 Finished results stay open until you close them. While the parent waits on

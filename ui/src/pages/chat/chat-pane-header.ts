@@ -579,10 +579,13 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       detailsControl,
       onOpenDetails: detailsControl ? this.onHeaderDetails : undefined,
       conversationVisible: detailsControl?.conversationVisible,
-      onToggleConversation:
-        currentLayout && detailsControl?.externalTrigger
+      onToggleConversation: currentLayout
+        ? detailsControl?.externalTrigger
           ? () => this.toggleConversationPanel(currentLayout)
-          : undefined,
+          : this.mergedChrome && !this.isSlotShown(currentLayout, "conversation")
+            ? () => this.setChatSidePanelOpen(false, currentLayout)
+            : undefined
+        : undefined,
       runAction: subagentStop,
       presence: viewers?.length ? { staticUsers: viewers, personActivity } : undefined,
       sharingControl:
