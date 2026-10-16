@@ -293,12 +293,7 @@
         }
       },
       "claude-cli": {
-        "modelsDev": {
-          "provider": "anthropic"
-        },
-        "liteLLM": {
-          "provider": "anthropic"
-        }
+        "priceAs": "anthropic"
       }
     }
   },

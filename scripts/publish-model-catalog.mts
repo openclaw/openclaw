@@ -40,7 +40,6 @@ type ModelCatalogManifestInput = {
   manifestPath: string;
   manifest: {
     providers?: string[];
-    cliBackends?: string[];
     modelCatalog?: {
       providers?: Record<string, unknown>;
       modelsDev?: Record<string, unknown>;
@@ -436,19 +435,10 @@ function buildPricingCandidates(
   return [...new Set(candidates)];
 }
 
-// CLI backends own pricing policies as they own catalog rows: their usage needs an estimate too.
-function readPricingOwners(manifest: ModelCatalogManifestInput["manifest"]): Set<string> {
-  return new Set(
-    [...(manifest.providers ?? []), ...(manifest.cliBackends ?? [])].map(
-      normalizeModelCatalogProviderId,
-    ),
-  );
-}
-
 function readPricingPolicies(manifests: ModelCatalogManifestInput[]): PricingPolicies {
   const policies: PricingPolicies = new Map();
   for (const { manifest } of manifests) {
-    const owners = readPricingOwners(manifest);
+    const owners = new Set((manifest.providers ?? []).map(normalizeModelCatalogProviderId));
     for (const [rawId, value] of Object.entries(manifest.modelPricing?.providers ?? {})) {
       const id = normalizeModelCatalogProviderId(rawId);
       const policy = owners.has(id) ? normalizeModelPricingProvider(value) : undefined;
@@ -467,7 +457,7 @@ function readModelsDevPricingProviders(
 ): Map<string, string> {
   const providers = new Map<string, string>();
   for (const { manifest } of manifests) {
-    const ownedProviders = readPricingOwners(manifest);
+    const ownedProviders = new Set((manifest.providers ?? []).map(normalizeModelCatalogProviderId));
     // The metadata mapping names the same billing entry unless pricing policy overrides it.
     const mapped = normalizeModelCatalog(manifest.modelCatalog, { ownedProviders })?.modelsDev;
     for (const providerId of ownedProviders) {

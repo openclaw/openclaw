@@ -268,6 +268,45 @@ describe("hosted model pricing", () => {
     expect(cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
   });
 
+  // The bundled Anthropic manifest prices its claude-cli backend as anthropic.
+  async function resolveClaudeCliCost(pricing: Record<string, unknown>) {
+    const agentDir = tempDirs.make("openclaw-price-as-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", agentDir);
+    const config: OpenClawConfig = {};
+    readStoredCatalog.mockReturnValue({
+      source_url: "https://catalog.openclaw.ai/models/v2/catalog.json",
+      bundle_json: JSON.stringify({
+        schemaVersion: 1,
+        generatedAt: 200,
+        sourceCommit: "price-as",
+        providers: {},
+        pricing,
+      }),
+    });
+    setRemoteModelCatalogOverlaySourcesForTest({
+      bundledGeneratedAt: () => 100,
+      readStoredCatalog,
+    });
+    await prepareRemoteModelCatalogStartupSnapshot();
+    await prepareModelPricingContext(config);
+    const resolve = (provider: string) =>
+      resolveModelCostConfig({ config, agentDir, provider, model: "claude-opus-5-5" });
+    return { cli: resolve("claude-cli"), anthropic: resolve("anthropic") };
+  }
+
+  it("prices a priceAs provider with its target's catalog row", async () => {
+    const { cli, anthropic } = await resolveClaudeCliCost({});
+    expect(cli).toMatchObject({ input: 4, output: 20 });
+    expect(cli).toEqual(anthropic);
+  });
+
+  it("keeps a priceAs provider's own price ahead of its target's", async () => {
+    const { cli } = await resolveClaudeCliCost({
+      "claude-cli/claude-opus-5-5": { input: 1, output: 2 },
+    });
+    expect(cli).toMatchObject({ input: 1, output: 2 });
+  });
+
   const catalogRates = { input: 2, output: 8, cacheRead: 0.5, cacheWrite: 1 };
   const catalogTiers = [
     { ...catalogRates, range: [0, 201] },

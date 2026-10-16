@@ -83,8 +83,8 @@ describe("plugin manifest model catalog", () => {
       cliBackends: ["claude-cli"],
       modelPricing: {
         providers: {
-          "claude-cli": { modelsDev: { provider: "anthropic" } },
-          unowned: { modelsDev: { provider: "anthropic" } },
+          "claude-cli": { priceAs: " Anthropic " },
+          unowned: { priceAs: "anthropic" },
         },
       },
       configSchema: { type: "object" },
@@ -94,6 +94,8 @@ describe("plugin manifest model catalog", () => {
     if (!result.ok) {
       throw new Error(result.error);
     }
-    expect(Object.keys(result.manifest.modelPricing?.providers ?? {})).toEqual(["claude-cli"]);
+    expect(result.manifest.modelPricing?.providers).toEqual({
+      "claude-cli": { priceAs: "anthropic" },
+    });
   });
 });

@@ -42,7 +42,6 @@ function fixtureRoot(videoOnlySeeds = 0) {
         "openrouter",
         "moonshot",
       ],
-      cliBackends: ["fixture-cli"],
       modelCatalog: {
         modelsDev: { "fixture-native": "upstream" },
         providers: {
@@ -89,8 +88,6 @@ function fixtureRoot(videoOnlySeeds = 0) {
           openrouter: { openRouter: { provider: "openrouter" }, modelsDev: false, liteLLM: false },
           // models.dev names this vendor differently from its OpenClaw provider.
           moonshot: { modelsDev: { provider: "moonshotai" } },
-          // A CLI backend estimates at the API rate of the vendor that serves it.
-          "fixture-cli": { modelsDev: { provider: "openai" } },
         },
       },
     }),
@@ -557,11 +554,6 @@ describe("publish model catalog v2", () => {
     expect(v2.providerPricing?.["mygate/openai/seed-1"]).toEqual({
       input: 3,
       output: 9,
-      source: "modelsDev",
-    });
-    expect(v2.providerPricing?.["fixture-cli/seed-1"]).toEqual({
-      input: 4,
-      output: 20,
       source: "modelsDev",
     });
     expect(v1.pricing?.["gateway/openai/seed-1"]).toMatchObject({ input: 4, output: 20 });

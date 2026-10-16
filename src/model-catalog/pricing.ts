@@ -37,6 +37,8 @@ type ExternalPricingPolicy = {
   authoritative: boolean;
   /** Sources whose vendor/model rates this provider charges unchanged, as for gateways. */
   passthroughSources: readonly string[];
+  /** Provider whose rows price this one's models when it has no price of its own. */
+  priceAs?: string;
 };
 export type PricingContext = {
   config: OpenClawConfig;
@@ -142,6 +144,7 @@ function buildPricingContext(
           const source = policy[id];
           return source && source.passthroughProviderModel ? [id] : [];
         }),
+        ...(policy.priceAs ? { priceAs: policy.priceAs } : {}),
       });
     }
   }
@@ -320,8 +323,29 @@ function isPrivateOrLoopbackUrl(value: string | undefined): boolean {
   }
 }
 
-/** Resolves catalog-first pricing for a key prepared by this metadata context. */
+/**
+ * Resolves catalog-first pricing for a key prepared by this metadata context. A provider without
+ * a price of its own falls back to its `priceAs` provider's row for the same model, one hop only.
+ */
 export function resolveModelPricing(
+  context: PricingContext,
+  key: string,
+): PricingValue | undefined {
+  const own = resolveProviderModelPricing(context, key);
+  if (own) {
+    return own;
+  }
+  const provider = key.slice(0, key.indexOf("/"));
+  const priceAs = context.policies.get(provider)?.priceAs;
+  return priceAs && priceAs !== provider
+    ? resolveProviderModelPricing(
+        context,
+        context.normalizeKey(priceAs, key.slice(provider.length + 1)),
+      )
+    : undefined;
+}
+
+function resolveProviderModelPricing(
   context: PricingContext,
   key: string,
 ): PricingValue | undefined {
