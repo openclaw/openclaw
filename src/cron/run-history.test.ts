@@ -314,7 +314,7 @@ it("pages large history without reading off-page payloads or changing completion
         for (const [id, partition] of [
           ["other-job", storeKey],
           ["other-store", "unrelated"],
-        ]) {
+        ] as const) {
           insert.run(
             id,
             "other",

@@ -88,7 +88,6 @@ serveWorkerTasks(async (input, _channel, control): Promise<CronReadOnlyResult> =
           !isRecord(input.history) ||
           (input.history.jobId !== undefined && typeof input.history.jobId !== "string") ||
           (input.history.query !== undefined && typeof input.history.query !== "string") ||
-          (input.history.jobNameById !== undefined && !isStringRecord(input.history.jobNameById)) ||
           (input.history.taskIds !== undefined &&
             (!Array.isArray(input.history.taskIds) ||
               input.history.taskIds.length > 200 ||
@@ -110,6 +109,9 @@ serveWorkerTasks(async (input, _channel, control): Promise<CronReadOnlyResult> =
     }
     const { location, storeKey, stagingRoot } = input;
     const jobNameById = input.history?.jobNameById;
+    if (jobNameById !== undefined && !isStringRecord(jobNameById)) {
+      throw new Error("Cron read-only worker requires string history job names");
+    }
     return await control.runNativeSection(() => {
       // Copying stays in a separate process; the parent owns every unpublished child artifact.
       const connection = stagingRoot
