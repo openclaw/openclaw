@@ -1,5 +1,7 @@
 import { createEffect, createMemo } from "solid-js";
+import { listen } from "../../lib/reactive/listener.ts";
 import { createDesktopFullscreen } from "../desktop-fullscreen.ts";
+import { DESKTOP_PANEL_TOGGLE_EVENT } from "../panel-toggle-contract.ts";
 import { usePanelController } from "../solid-panel-controller.ts";
 import { createDesktopAppLauncher } from "./desktop-app-launcher.ts";
 import { createDesktopAudio } from "./desktop-audio.ts";
@@ -23,6 +25,10 @@ export function DesktopPanelContent(props: { controller: DesktopPanelController 
   controller.fullscreenMode = fullscreen;
   createEffect(fullscreen.active, () => controller.dockLayout.syncReservation());
   usePanelController(controller);
+  const standalone = createMemo(() => !controller.read().embedded);
+  createEffect(standalone, (active) =>
+    active ? listen(window, DESKTOP_PANEL_TOGGLE_EVENT, controller.handleToggleRequest) : undefined,
+  );
   const sessionClient = createMemo(() => {
     const current = controller.read();
     return current.available && current.suppliedEnvironments === null ? current.client : null;
