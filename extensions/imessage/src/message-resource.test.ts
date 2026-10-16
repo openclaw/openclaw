@@ -65,6 +65,9 @@ afterEach(() => {
 });
 
 type Authorization = Parameters<MessageResourceModule["authorizeIMessageResourceReference"]>[0];
+const PHONE_CHAT = "iMessage;-;+15550001111";
+const EMAIL_CHAT = "iMessage;-;üser@example.com";
+const OTHER_CHAT = "iMessage;+;other";
 
 function authorize(overrides: Partial<Authorization> = {}) {
   return authorizeIMessageResourceReference({
@@ -147,15 +150,15 @@ describe("iMessage provider resource binding", () => {
               replyToId: "message-guid",
               conversationReadOrigin,
             });
-      await invoke("iMessage;-;+15550001111");
-      expect(entrypoint === "action" ? nativeSend : request).toHaveBeenCalledOnce();
-      await expect(invoke("iMessage;+;other")).rejects.toThrow(
-        "does not belong to the selected conversation",
-      );
-      await expect(invoke("iMessage;+;other", "direct-operator")).rejects.toThrow(
-        "does not belong to the selected conversation",
-      );
-      expect(entrypoint === "action" ? nativeSend : request).toHaveBeenCalledOnce();
+      const sent = entrypoint === "action" ? nativeSend : request;
+      await invoke(PHONE_CHAT);
+      expect(sent).toHaveBeenCalledOnce();
+      for (const origin of ["delegated", "direct-operator"] as const) {
+        await expect(invoke(OTHER_CHAT, origin)).rejects.toThrow(
+          "does not belong to the selected conversation",
+        );
+      }
+      expect(sent).toHaveBeenCalledOnce();
       expect(prepare.mock.calls.filter(([sql]) => /\bFROM\s+"?message"?\b/iu.test(sql))).toEqual(
         [],
       );
@@ -201,14 +204,10 @@ describe("iMessage provider resource binding", () => {
         }
       },
     });
-    void sending.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
+    const markSettled = () => {
+      settled = true;
+    };
+    void sending.then(markSettled, markSettled);
     try {
       await Promise.race([closing.promise, sending]);
       expect(settled).toBe(false);
@@ -222,23 +221,19 @@ describe("iMessage provider resource binding", () => {
   });
 
   it("only treats canonical handles as authoritative chat identifiers", () => {
-    const context = (
-      to: string,
-      service: "auto" | "sms" | "imessage" = "auto",
-      effectiveService?: "sms",
-    ) => chatContextFromIMessageTarget({ kind: "handle", to, service }, effectiveService);
-    expect(context("Jane Appleseed")).toEqual({});
-    expect(context("206 555 0100")).toEqual({});
-    expect(context("+1 (206) 555-0100")).toEqual({});
-    expect(context("+1 (206) 555-0100", "auto", "sms")).toEqual({
-      chatIdentifier: "SMS;-;+12065550100",
-    });
-    expect(context("+1 (206) 555-0100", "imessage", "sms")).toEqual({
-      chatIdentifier: "iMessage;-;+12065550100",
-    });
-    expect(context("User@Example.com", "sms")).toEqual({
-      chatIdentifier: "SMS;-;user@example.com",
-    });
+    const formatted = "+1 (206) 555-0100";
+    for (const [to, service, effective, identifier] of [
+      ["Jane Appleseed", "auto", undefined, undefined],
+      ["206 555 0100", "auto", undefined, undefined],
+      [formatted, "auto", undefined, undefined],
+      [formatted, "auto", "sms", "SMS;-;+12065550100"],
+      [formatted, "imessage", "sms", "iMessage;-;+12065550100"],
+      ["User@Example.com", "sms", undefined, "SMS;-;user@example.com"],
+    ] as const) {
+      expect(chatContextFromIMessageTarget({ kind: "handle", to, service }, effective)).toEqual(
+        identifier ? { chatIdentifier: identifier } : {},
+      );
+    }
   });
 
   it("requires a current positive account and chat cache match", async () => {
@@ -247,69 +242,51 @@ describe("iMessage provider resource binding", () => {
       context: Authorization["chatContext"] & { accountId?: string },
     ) => resolveIMessageCachedResourceBinding(messageId, { accountId: "work", ...context });
     await remember("bound-guid", { chatIdentifier: "+15550001111", chatId: 1 });
-    expect(await cached("bound-guid", { chatIdentifier: "iMessage;-;+15550001111" })).toBe("match");
     await remember("mixed-case-email-guid", { chatGuid: "any;-;User@Example.com" });
-    expect(
-      await cached("mixed-case-email-guid", { chatIdentifier: "iMessage;-;user@example.com" }),
-    ).toBe("match");
-    expect(
-      await cached("bound-guid", {
-        accountId: "personal",
-        chatIdentifier: "iMessage;-;+15550001111",
-      }),
-    ).toBe("mismatch");
     await remember("guid-only");
-    expect(await cached("guid-only", { chatId: 1 })).toBe("unknown");
-    expect(await cached("bound-guid", { chatId: 99 })).toBe("mismatch");
-    expect(
-      await cached("bound-guid", {
-        chatGuid: "iMessage;+;other",
-        chatIdentifier: "iMessage;-;+15550001111",
-      }),
-    ).toBe("mismatch");
     await remember("stale-guid", {
       accountId: "default",
       chatGuid: undefined,
       chatId: 42,
       timestamp: Date.now() - 7 * 60 * 60 * 1000,
     });
-    expect(await cached("stale-guid", { accountId: "default", chatId: 42 })).toBe("unknown");
+    for (const [id, context, expected] of [
+      ["bound-guid", { chatIdentifier: PHONE_CHAT }, "match"],
+      ["mixed-case-email-guid", { chatIdentifier: "iMessage;-;user@example.com" }, "match"],
+      ["bound-guid", { accountId: "personal", chatIdentifier: PHONE_CHAT }, "mismatch"],
+      ["guid-only", { chatId: 1 }, "unknown"],
+      ["bound-guid", { chatId: 99 }, "mismatch"],
+      ["bound-guid", { chatGuid: OTHER_CHAT, chatIdentifier: PHONE_CHAT }, "mismatch"],
+      ["stale-guid", { accountId: "default", chatId: 42 }, "unknown"],
+    ] as const) {
+      expect(await cached(id, context)).toBe(expected);
+    }
   });
 
   it("matches part-prefixed message ids only in their database chat", async () => {
-    expect(await check({ chatId: 1 }, "p:0/message-guid")).toBe("match");
-    expect(await check({ chatGuid: "imessage;-;+15550001111" })).toBe("match");
-    expect(await check({ chatGuid: "sms;-;+15550002222" }, "sms-message-guid")).toBe("match");
-    expect(
-      await check({ chatIdentifier: "iMessage;-;üser@example.com" }, "email-message-guid"),
-    ).toBe("match");
-    expect(await check({ chatGuid: "iMessage;-;üser@example.com" }, "email-message-guid")).toBe(
-      "match",
-    );
-    expect(
-      await check({ chatIdentifier: "iMessage;-;other@example.com" }, "email-message-guid"),
-    ).toBe("mismatch");
-    expect(await check({ chatId: 2 })).toBe("mismatch");
-    expect(await check({ chatGuid: "iMessage;+;+15550001111" })).toBe("mismatch");
-    expect(await check({ chatGuid: "iMessage;+;Some@example.com" }, "other-message-guid")).toBe(
-      "match",
-    );
-    expect(await check({ chatGuid: "iMessage;+;some@example.com" }, "other-message-guid")).toBe(
-      "mismatch",
-    );
-    expect(await check({ chatIdentifier: "SMS;-;+15550001111" })).toBe("mismatch");
-    expect(
-      await check({
-        chatId: 1,
-        chatGuid: "any;-;+15550001111",
-        chatIdentifier: "iMessage;-;+15550001111",
-      }),
-    ).toBe("match");
-    expect(
-      await check({ chatGuid: "iMessage;+;other", chatIdentifier: "iMessage;-;+15550001111" }),
-    ).toBe("mismatch");
-    expect(await check({ chatId: 1, chatGuid: "iMessage;+;other" })).toBe("mismatch");
-    expect(await check({ chatIdentifier: "unknown;-;+15550001111" })).toBe("mismatch");
+    for (const [context, id, expected] of [
+      [{ chatId: 1 }, "p:0/message-guid", "match"],
+      [{ chatGuid: "imessage;-;+15550001111" }, undefined, "match"],
+      [{ chatGuid: "sms;-;+15550002222" }, "sms-message-guid", "match"],
+      [{ chatIdentifier: EMAIL_CHAT }, "email-message-guid", "match"],
+      [{ chatGuid: EMAIL_CHAT }, "email-message-guid", "match"],
+      [{ chatIdentifier: "iMessage;-;other@example.com" }, "email-message-guid", "mismatch"],
+      [{ chatId: 2 }, undefined, "mismatch"],
+      [{ chatGuid: "iMessage;+;+15550001111" }, undefined, "mismatch"],
+      [{ chatGuid: "iMessage;+;Some@example.com" }, "other-message-guid", "match"],
+      [{ chatGuid: "iMessage;+;some@example.com" }, "other-message-guid", "mismatch"],
+      [{ chatIdentifier: "SMS;-;+15550001111" }, undefined, "mismatch"],
+      [
+        { chatId: 1, chatGuid: "any;-;+15550001111", chatIdentifier: PHONE_CHAT },
+        undefined,
+        "match",
+      ],
+      [{ chatGuid: OTHER_CHAT, chatIdentifier: PHONE_CHAT }, undefined, "mismatch"],
+      [{ chatId: 1, chatGuid: OTHER_CHAT }, undefined, "mismatch"],
+      [{ chatIdentifier: "unknown;-;+15550001111" }, undefined, "mismatch"],
+    ] as const) {
+      expect(await check(context, id)).toBe(expected);
+    }
   });
 
   const remote = {
@@ -323,7 +300,7 @@ describe("iMessage provider resource binding", () => {
     const params = {
       ...remote,
       accountId: "work",
-      chatContext: { chatIdentifier: "iMessage;-;+15550001111" },
+      chatContext: { chatIdentifier: PHONE_CHAT },
       messageId: "remote-guid",
       conversationReadOrigin: "delegated",
     };
@@ -334,48 +311,36 @@ describe("iMessage provider resource binding", () => {
     );
   });
 
-  it("does not use an account-ambiguous local database for delegated authorization", async () => {
-    const params = {
-      accountId: "work",
-      chatContext: { chatIdentifier: "iMessage;-;+15550001111" },
-      hasExclusiveLocalDatabase: false,
-    };
-    await expect(authorize({ ...params, conversationReadOrigin: "delegated" })).rejects.toThrow(
-      "require a current same-account conversation binding",
-    );
-    await expect(
-      authorize({ ...params, conversationReadOrigin: "direct-operator" }),
-    ).resolves.toBeUndefined();
-  });
-
-  it.each(["missing", "malformed"] as const)(
-    "preserves delegated refusal when the Messages database is %s",
-    async (databaseState) => {
-      fs.rmSync(dbPath);
-      if (databaseState === "malformed") {
-        fs.writeFileSync(dbPath, "synthetic invalid database");
+  it.each(["account-ambiguous", "missing", "malformed", "handle alias"])(
+    "refuses delegated authorization without attestation: %s",
+    async (state) => {
+      const params: Partial<Authorization> = {};
+      if (state === "account-ambiguous") {
+        Object.assign(params, {
+          accountId: "work",
+          chatContext: { chatIdentifier: PHONE_CHAT },
+          hasExclusiveLocalDatabase: false,
+        });
+      } else if (state === "handle alias") {
+        params.chatContext = {};
+        expect(await check({})).toBe("unavailable");
+      } else {
+        fs.rmSync(dbPath);
+        if (state === "malformed") {
+          fs.writeFileSync(dbPath, "synthetic invalid database");
+        }
       }
-      await expect(authorize()).rejects.toThrow(
+      await expect(authorize({ ...params, conversationReadOrigin: "delegated" })).rejects.toThrow(
         "require a current same-account conversation binding",
       );
       await expect(
-        authorize({ conversationReadOrigin: "direct-operator" }),
+        authorize({ ...params, conversationReadOrigin: "direct-operator" }),
       ).resolves.toBeUndefined();
-      if (databaseState === "missing") {
+      if (state === "missing") {
         expect(fs.existsSync(dbPath)).toBe(false);
       }
     },
   );
-
-  it("treats provider-resolved handle aliases as unavailable binding evidence", async () => {
-    expect(await check({})).toBe("unavailable");
-    await expect(
-      authorize({ chatContext: {}, conversationReadOrigin: "direct-operator" }),
-    ).resolves.toBeUndefined();
-    await expect(
-      authorize({ chatContext: {}, conversationReadOrigin: "delegated" }),
-    ).rejects.toThrow("require a current same-account conversation binding");
-  });
 
   it("does not treat a configured database as local for an SSH imsg wrapper", async () => {
     const wrapperPath = path.join(tempDir, "wrapper", "imsg");

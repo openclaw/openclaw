@@ -1,4 +1,3 @@
-// Imessage tests cover monitor.gating plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it } from "vitest";
 import { parseIMessageNotification } from "./monitor/parse-notification.js";
@@ -55,21 +54,6 @@ function quotedMessage(overrides: Partial<IMessagePayload> = {}) {
   });
 }
 
-async function resolve(params: {
-  cfg?: OpenClawConfig;
-  message: IMessagePayload;
-  storeAllowFrom?: string[];
-}) {
-  const cfg = params.cfg ?? baseCfg();
-  return resolveDecision({
-    cfg,
-    message: params.message,
-    groupPolicy: cfg.channels?.imessage?.groupPolicy ?? "open",
-    dmPolicy: cfg.channels?.imessage?.dmPolicy ?? "pairing",
-    storeAllowFrom: params.storeAllowFrom ?? [],
-  });
-}
-
 async function resolveDecision(params: {
   cfg: OpenClawConfig;
   message: IMessagePayload;
@@ -109,13 +93,7 @@ async function resolveDispatchDecision(params: Parameters<typeof resolveDecision
   return { decision, groupHistories };
 }
 
-async function buildDispatchContextPayload(params: {
-  cfg: OpenClawConfig;
-  message: IMessagePayload;
-  allowFrom?: string[];
-  groupAllowFrom?: string[];
-  groupPolicy?: string;
-}) {
+async function buildDispatchContextPayload(params: Parameters<typeof resolveDecision>[0]) {
   const { cfg, message: inbound } = params;
   const { decision, groupHistories } = await resolveDispatchDecision(params);
 
@@ -204,7 +182,8 @@ describe("imessage monitor gating + envelope builders", () => {
   });
 
   it("drops group messages without mention by default", async () => {
-    const decision = await resolve({
+    const decision = await resolveDecision({
+      cfg: baseCfg(),
       message: message({ id: 1, chat_id: 99, sender: "+15550001111", text: "hello group" }),
     });
     expect(decision).toMatchObject({ kind: "drop", reason: "no mention" });

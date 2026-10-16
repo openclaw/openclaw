@@ -1,4 +1,3 @@
-// Imessage tests cover monitor.plugin payload plugin behavior.
 import path from "node:path";
 import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -11,18 +10,18 @@ import {
   setActivePluginRegistry,
   withPluginRuntimeRegistryScope,
 } from "openclaw/plugin-sdk/channel-test-helpers";
-import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRegistryOwner } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
-import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { imessagePlugin } from "./channel.js";
 import type { createIMessageRpcClient } from "./client.js";
 import { createIMessageConversationBindingManagerV2 } from "./conversation-bindings.js";
 import { monitorIMessageProvider } from "./monitor.js";
+import { runInboundWithDispatch } from "./monitor.last-route.test-support.js";
+import type { IMessagePayload } from "./monitor/types.js";
 import { setCachedIMessagePrivateApiStatus } from "./private-api-status.js";
 import { getIMessageRuntime } from "./runtime.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
@@ -80,10 +79,40 @@ vi.mock("./monitor/abort-handler.js", () => ({
 }));
 
 describe("iMessage plugin payload attachments", () => {
+  let message: IMessagePayload;
+  let afterNotify: () => Promise<void>;
+  let nativeClient:
+    | { request: (method: string) => Promise<unknown>; stop: () => Promise<void> }
+    | undefined;
   beforeEach(() => {
     installIMessageStateRuntimeForTest();
     waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);
-    createIMessageRpcClientMock.mockReset();
+    message = {
+      id: 1,
+      guid: "plugin-payload-guid-1",
+      chat_id: 123,
+      sender: "+15550001111",
+      is_from_me: false,
+      is_group: false,
+    };
+    afterNotify = async () => {};
+    nativeClient = undefined;
+    createIMessageRpcClientMock.mockReset().mockImplementation(async (params) => {
+      if (!params?.onNotification) {
+        if (!nativeClient) {
+          throw new Error("expected iMessage notification handler");
+        }
+        return nativeClient as never;
+      }
+      return {
+        request: vi.fn(async () => ({ subscription: 1 })),
+        waitForClose: vi.fn(async () => {
+          params.onNotification?.({ method: "message", params: { message } });
+          await afterNotify();
+        }),
+        stop: vi.fn(async () => {}),
+      } as never;
+    });
     shouldDebounceTextInboundMock.mockReset().mockReturnValue(false);
     directDeliveryProof.flush = false;
     directDeliveryProof.onFlushed = undefined;
@@ -96,45 +125,20 @@ describe("iMessage plugin payload attachments", () => {
   });
 
   it("does not count Apple rich-link plugin payloads as user media", async () => {
-    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
-    const client = {
-      request: vi.fn(async () => ({ subscription: 1 })),
-      waitForClose: vi.fn(async () => {
-        onNotification?.({
-          method: "message",
-          params: {
-            message: {
-              id: 1,
-              guid: "plugin-payload-guid-1",
-              chat_id: 123,
-              sender: "+15550001111",
-              is_from_me: false,
-              text: "https://example.com/article",
-              attachments: [
-                {
-                  original_path:
-                    "/Users/openclaw/Library/Messages/Attachments/AA/BB/link.pluginPayloadAttachment",
-                  mime_type: null,
-                  missing: false,
-                  transfer_name: "link.pluginPayloadAttachment",
-                  uti: "com.apple.messages.pluginPayloadAttachment",
-                },
-              ],
-              is_group: false,
-            },
-          },
-        });
-        await Promise.resolve();
-      }),
-      stop: vi.fn(async () => {}),
+    message = {
+      ...message,
+      text: "https://example.com/article",
+      attachments: [
+        {
+          original_path:
+            "/Users/openclaw/Library/Messages/Attachments/AA/BB/link.pluginPayloadAttachment",
+          mime_type: null,
+          missing: false,
+          transfer_name: "link.pluginPayloadAttachment",
+          uti: "com.apple.messages.pluginPayloadAttachment",
+        },
+      ],
     };
-    createIMessageRpcClientMock.mockImplementation(async (params) => {
-      if (!params?.onNotification) {
-        throw new Error("expected iMessage notification handler");
-      }
-      onNotification = params.onNotification;
-      return client as never;
-    });
 
     await monitorIMessageProvider({
       scheduler: createTestPluginServiceScheduler(),
@@ -207,36 +211,16 @@ describe("iMessage plugin payload attachments", () => {
           counts: { tool: 1, block: 0, final: 0 },
         };
       });
-      const runActual = channelInbound.runChannelInboundEvent;
       vi.spyOn(channelInbound, "runChannelInboundEvent").mockImplementation(async (params) =>
-        runActual({
-          ...params,
-          adapter: {
-            ...params.adapter,
-            resolveTurn: async (input, eventClass, preflight) => {
-              const turn = await params.adapter.resolveTurn(input, eventClass, preflight);
-              if (!("route" in turn) || !("delivery" in turn)) {
-                throw new Error("expected assembled iMessage delivery turn");
-              }
-              if (kind === "final") {
-                expect(turn.delivery.durable).toMatchObject({ to: expect.any(String) });
-                expect(turn.delivery.durable).not.toHaveProperty("prepareRuntimeHandoff");
-              }
-              const { route, ...resolvedTurn } = turn;
-              return {
-                ...resolvedTurn,
-                agentId: route.agentId,
-                routeSessionKey: route.sessionKey,
-                storePath: resolveStorePath(turn.cfg.session?.store, { agentId: route.agentId }),
-                recordInboundSession,
-                dispatchReplyWithBufferedBlockDispatcher: dispatch,
-              };
-            },
-          },
+        runInboundWithDispatch(params, dispatch, (durable) => {
+          if (kind === "final") {
+            expect(durable).toMatchObject({ to: expect.any(String) });
+            expect(durable).not.toHaveProperty("prepareRuntimeHandoff");
+          }
         }),
       );
 
-      const nativeClient = {
+      nativeClient = {
         request: vi.fn(async (method: string) => {
           if (method !== "send") {
             throw new Error(`unexpected native iMessage method ${method}`);
@@ -245,36 +229,14 @@ describe("iMessage plugin payload attachments", () => {
         }),
         stop: vi.fn(async () => {}),
       };
-      let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
-      const watchClient = {
-        request: vi.fn(async () => ({ subscription: 1 })),
-        waitForClose: vi.fn(async () => {
-          onNotification?.({
-            method: "message",
-            params: {
-              message: {
-                id: 91,
-                guid: `monitor-${kind}-${visible}-guid`,
-                chat_id: 123,
-                sender: "+15550001111",
-                is_from_me: false,
-                text: "exercise actual direct delivery",
-                is_group: false,
-                created_at: new Date().toISOString(),
-              },
-            },
-          });
-          await flushed.promise;
-        }),
-        stop: vi.fn(async () => {}),
+      message = {
+        ...message,
+        id: 91,
+        guid: `monitor-${kind}-${visible}-guid`,
+        text: "exercise actual direct delivery",
+        created_at: new Date().toISOString(),
       };
-      createIMessageRpcClientMock.mockImplementation(async (params) => {
-        if (params?.onNotification) {
-          onNotification = params.onNotification;
-          return watchClient as never;
-        }
-        return nativeClient as never;
-      });
+      afterNotify = () => flushed.promise;
 
       try {
         await withPluginRuntimeRegistryScope(registry, () =>
@@ -312,8 +274,7 @@ describe("iMessage plugin payload attachments", () => {
         expect.objectContaining({ text }),
         expect.any(Object),
       );
-      expect(messageSent).toHaveBeenCalledOnce();
-      expect(messageSent).toHaveBeenCalledWith(
+      expect(messageSent).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ content: text, success: true, messageId: `native-${kind}-guid` }),
         expect.objectContaining({ channelId: "imessage" }),
       );
@@ -329,10 +290,8 @@ describe("iMessage plugin payload attachments", () => {
             "SELECT value_json FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ?",
           )
           .all("imessage", "imessage.sent-echoes");
-        expect(persisted).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ value_json: expect.stringContaining(`native-${kind}-guid`) }),
-          ]),
+        expect(persisted).toContainEqual(
+          expect.objectContaining({ value_json: expect.stringContaining(`native-${kind}-guid`) }),
         );
       } finally {
         database.close();

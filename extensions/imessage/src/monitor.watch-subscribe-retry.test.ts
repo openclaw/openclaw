@@ -8,7 +8,7 @@ import type { createIMessageRpcClient, IMessageRpcClient } from "./client.js";
 import { monitorIMessageProvider } from "./monitor.js";
 import type { attachIMessageMonitorAbortHandler } from "./monitor/abort-handler.js";
 import { rememberPersistedIMessageEcho } from "./monitor/persisted-echo-cache.js";
-import type { MonitorIMessageOpts } from "./monitor/types.js";
+import type { IMessagePayload, MonitorIMessageOpts } from "./monitor/types.js";
 import {
   installIMessageFailingStateRuntimeForTest,
   installIMessageStateRuntimeForTest,
@@ -52,6 +52,39 @@ function createRpcClient(overrides?: {
   return client as unknown as MockIMessageRpcClient;
 }
 
+function subscribeFailure(message: string, entered?: () => void) {
+  return createRpcClient({
+    request: async () => {
+      entered?.();
+      throw new Error(message);
+    },
+  });
+}
+
+function arrangeMessages(messages: IMessagePayload[], afterNotify = async () => {}) {
+  createIMessageRpcClientMock.mockImplementation(async (params) =>
+    createRpcClient({
+      waitForClose: async () => {
+        for (const message of messages) {
+          await params?.onNotification?.({
+            method: "message",
+            params: {
+              message: {
+                sender: "+15550001111",
+                is_from_me: false,
+                is_group: true,
+                created_at: new Date().toISOString(),
+                ...message,
+              },
+            },
+          });
+        }
+        await afterNotify();
+      },
+    }),
+  );
+}
+
 function runMonitor(
   runtime = createRuntimeSpies(),
   statusSink?: MonitorIMessageOpts["statusSink"],
@@ -89,12 +122,10 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
     const runtime = createRuntimeSpies();
     const statusSink = vi.fn();
     const firstSubscribe = createDeferred<void>();
-    const firstClient = createRpcClient({
-      request: async () => {
-        firstSubscribe.resolve();
-        throw new Error("imsg rpc timeout (watch.subscribe)");
-      },
-    });
+    const firstClient = subscribeFailure(
+      "imsg rpc timeout (watch.subscribe)",
+      firstSubscribe.resolve,
+    );
     const secondClient = createRpcClient();
 
     createIMessageRpcClientMock
@@ -151,12 +182,7 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
     const statusSink = vi.fn();
     const firstSubscribe = createDeferred<void>();
     createIMessageRpcClientMock.mockImplementation(async () =>
-      createRpcClient({
-        request: async () => {
-          firstSubscribe.resolve();
-          throw new Error("imsg rpc timeout (watch.subscribe)");
-        },
-      }),
+      subscribeFailure("imsg rpc timeout (watch.subscribe)", firstSubscribe.resolve),
     );
 
     const monitorErrorPromise = runMonitor(runtime, statusSink).catch((error: unknown) => error);
@@ -184,13 +210,7 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
 
   it("publishes blocked for a non-retriable watch.subscribe failure", async () => {
     const statusSink = vi.fn();
-    createIMessageRpcClientMock.mockResolvedValueOnce(
-      createRpcClient({
-        request: async () => {
-          throw new Error("permission denied");
-        },
-      }),
-    );
+    createIMessageRpcClientMock.mockResolvedValueOnce(subscribeFailure("permission denied"));
 
     await expect(runMonitor(undefined, statusSink)).rejects.toThrow("permission denied");
 
@@ -209,41 +229,26 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
       vi.useRealTimers();
       installIMessageStateRuntimeForTest();
       const runtime = createRuntimeSpies();
-      let onNotification:
-        | ((message: { method: string; params: unknown }) => void | Promise<void>)
-        | undefined;
       const runId = Date.now();
-      const client = createRpcClient({
-        waitForClose: async () => {
-          for (const [id, chatId, guid] of [
+      arrangeMessages(
+        (
+          [
             [43, 456, `p:0/outbound-guid-${runId}`],
             [44, 456, `p:0/second-outbound-guid-${runId}`],
             [45, 457, `p:0/other-chat-guid-${runId}`],
-          ] as const) {
-            await onNotification?.({
-              method: "message",
-              params: {
-                message: {
-                  id,
-                  chat_id: chatId,
-                  guid,
-                  sender: "+15550001111",
-                  is_from_me: reason === "from me",
-                  is_group: true,
-                  text: "private message text",
-                  created_at: new Date().toISOString(),
-                },
-              },
-            });
-          }
+          ] as const
+        ).map(([id, chat_id, guid]) => ({
+          id,
+          chat_id,
+          guid,
+          is_from_me: reason === "from me",
+          text: "private message text",
+        })),
+        async () => {
           await Promise.resolve();
           await Promise.resolve();
         },
-      });
-      createIMessageRpcClientMock.mockImplementation(async (params) => {
-        onNotification = params?.onNotification;
-        return client;
-      });
+      );
 
       await runMonitor(runtime, undefined, {
         agents: { entries: { main: { identity: { name: "Claw" } } } },
@@ -300,38 +305,15 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
     const chatId = 456;
     const scope = `default:chat_id:${chatId}`;
     await rememberPersistedIMessageEcho({ scope, text: "loop echo" });
-    let onNotification:
-      | ((message: { method: string; params: unknown }) => void | Promise<void>)
-      | undefined;
-    const notify = async (id: number, text: string) => {
-      await onNotification?.({
-        method: "message",
-        params: {
-          message: {
-            id,
-            guid: `p:0/message-${id}`,
-            chat_id: chatId,
-            sender,
-            is_from_me: false,
-            is_group: true,
-            text,
-            created_at: new Date().toISOString(),
-          },
-        },
-      });
-    };
-    const client = createRpcClient({
-      waitForClose: async () => {
-        for (let id = 1; id <= 5; id += 1) {
-          await notify(id, "loop echo");
-        }
-        await notify(6, "legitimate inbound");
-      },
-    });
-    createIMessageRpcClientMock.mockImplementation(async (params) => {
-      onNotification = params?.onNotification;
-      return client;
-    });
+    arrangeMessages(
+      Array.from({ length: 6 }, (_, index) => ({
+        id: index + 1,
+        guid: `p:0/message-${index + 1}`,
+        chat_id: chatId,
+        sender,
+        text: index < 5 ? "loop echo" : "legitimate inbound",
+      })),
+    );
 
     await runMonitor(runtime, undefined, { channels: { imessage: { groupPolicy: "open" } } });
 

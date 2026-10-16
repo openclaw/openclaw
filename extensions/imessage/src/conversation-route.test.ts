@@ -1,4 +1,3 @@
-import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   testing as sessionBindingTesting,
@@ -13,10 +12,7 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  matchIMessageAcpConversation,
-  normalizeIMessageAcpConversationId,
-} from "./conversation-id.js";
+import { imessagePlugin } from "./channel.js";
 import { resolveIMessageConversationRoute } from "./conversation-route.js";
 
 const baseCfg = {
@@ -60,11 +56,11 @@ function createBinding(overrides: Partial<SessionBindingRecord> = {}): SessionBi
   };
 }
 
-function bindingAdapter(
+function registerBinding(
   binding: SessionBindingRecord | null,
   overrides: Partial<SessionBindingAdapter> = {},
 ): SessionBindingAdapter {
-  return {
+  const adapter: SessionBindingAdapter = {
     channel: "imessage",
     accountId: "default",
     listBySession: () => (binding ? [binding] : []),
@@ -73,34 +69,24 @@ function bindingAdapter(
     touchAsync: vi.fn(async () => {}),
     ...overrides,
   };
-}
-
-function registerBinding(binding: SessionBindingRecord | null) {
-  const touchAsync = vi.fn(async () => {});
-  registerSessionBindingAdapter(bindingAdapter(binding, { touchAsync }));
-  return touchAsync;
+  registerSessionBindingAdapter(adapter);
+  return adapter;
 }
 
 function resolve(cfg: OpenClawConfig = baseCfg) {
   return resolveIMessageConversationRoute({ ...directMessage, cfg });
 }
 
-const bindings: NonNullable<ChannelPlugin["bindings"]> = {
-  compileConfiguredBinding: ({ conversationId }) =>
-    normalizeIMessageAcpConversationId(conversationId),
-  matchInboundConversation: ({ compiledBinding, conversationId }) =>
-    matchIMessageAcpConversation({
-      bindingConversationId: compiledBinding.conversationId,
-      conversationId,
-    }),
-};
-
 describe("resolveIMessageConversationRoute", () => {
   beforeEach(() => {
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
     setActivePluginRegistry(
       createTestRegistry([
-        { pluginId: "imessage", source: "test", plugin: { id: "imessage", bindings } },
+        {
+          pluginId: "imessage",
+          source: "test",
+          plugin: { id: "imessage", bindings: imessagePlugin.bindings },
+        },
       ]),
     );
   });
@@ -113,7 +99,7 @@ describe("resolveIMessageConversationRoute", () => {
   it.each(["ambiguous", "conflicting"] as const)(
     "selects the bound agent before %s ordinary routing",
     async (routing) => {
-      const touch = registerBinding(createBinding());
+      const { touchAsync: touch } = registerBinding(createBinding());
       const cfg: OpenClawConfig = {
         ...baseCfg,
         session: { mainKey: "home", dmScope: "per-account-channel-peer", groupScope: "main" },
@@ -165,7 +151,7 @@ describe("resolveIMessageConversationRoute", () => {
       binding: createBinding({ targetSessionKey: "agent:bound:cron:job:run:proof" }),
     },
   ])("preserves configured readiness for $name runtime bindings", async ({ binding }) => {
-    const touch = registerBinding(binding);
+    const { touchAsync: touch } = registerBinding(binding);
     const result = await resolve(configuredCfg);
     expect(result.route.agentId).toBe("codex");
     expect(result.bindingResolution?.record.targetSessionKey).toBe(result.route.sessionKey);
@@ -182,7 +168,7 @@ describe("resolveIMessageConversationRoute", () => {
   });
 
   it("touches plugin-owned bindings without routing to their opaque target", async () => {
-    const touch = registerBinding(
+    const { touchAsync: touch } = registerBinding(
       createBinding({
         targetSessionKey: "plugin-binding:synthetic:target",
         metadata: {
@@ -199,7 +185,7 @@ describe("resolveIMessageConversationRoute", () => {
   });
 
   it("rejects malformed targets before recording activity", async () => {
-    const touch = registerBinding(createBinding({ targetSessionKey: "agent:" }));
+    const { touchAsync: touch } = registerBinding(createBinding({ targetSessionKey: "agent:" }));
     await expect(resolve(configuredCfg)).rejects.toThrow("Malformed agent session key");
     expect(touch).not.toHaveBeenCalled();
   });
@@ -212,12 +198,10 @@ describe("resolveIMessageConversationRoute", () => {
     const inspect = vi.fn<NonNullable<SessionBindingAdapter["inspectByConversationAsync"]>>(
       async (ref) => (ref.conversationId === "42" ? binding : null),
     );
-    registerSessionBindingAdapter(
-      bindingAdapter(binding, {
-        resolveByConversation: () => null,
-        inspectByConversationAsync: inspect,
-      }),
-    );
+    registerBinding(binding, {
+      resolveByConversation: () => null,
+      inspectByConversationAsync: inspect,
+    });
     const result = await resolveIMessageConversationRoute({
       ...directMessage,
       isGroup: true,
@@ -241,17 +225,15 @@ describe("resolveIMessageConversationRoute", () => {
     const release = Promise.withResolvers<void>();
     let current = binding;
     let settled = false;
-    registerSessionBindingAdapter(
-      bindingAdapter(binding, {
-        listBySession: () => [current],
-        resolveByConversation: () => current,
-        inspectByConversationAsync: async () => current,
-        touchAsync: async () => {
-          entered.resolve();
-          await release.promise;
-        },
-      }),
-    );
+    registerBinding(binding, {
+      listBySession: () => [current],
+      resolveByConversation: () => current,
+      inspectByConversationAsync: async () => current,
+      touchAsync: async () => {
+        entered.resolve();
+        await release.promise;
+      },
+    });
     const pending = resolve().then((result) => {
       settled = true;
       return result;
@@ -277,17 +259,14 @@ describe("resolveIMessageConversationRoute", () => {
   });
 
   it("rejects an inspection whose adapter retired before it settled", async () => {
-    const touch = vi.fn(async () => {});
     const binding = createBinding();
-    const adapter = bindingAdapter(binding, {
+    const adapter = registerBinding(binding, {
       inspectByConversationAsync: async () => {
         unregisterSessionBindingAdapter({ channel: "imessage", accountId: "default", adapter });
         return binding;
       },
-      touchAsync: touch,
     });
-    registerSessionBindingAdapter(adapter);
     await expect(resolve()).rejects.toThrow("binding owner is temporarily unavailable");
-    expect(touch).not.toHaveBeenCalled();
+    expect(adapter.touchAsync).not.toHaveBeenCalled();
   });
 });

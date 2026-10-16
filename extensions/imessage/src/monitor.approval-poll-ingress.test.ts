@@ -71,18 +71,10 @@ vi.mock("./monitor/ingress.js", () => ({
     (opts: Parameters<typeof createIMessageDurableIngress>[0]) => ({
       receive: async (raw: { message: IMessagePayload }) => {
         try {
-          const lifecycle = {
-            abortSignal: new AbortController().signal,
-            ...ingressLifecycleMocks,
-          };
-          const priorityResult = await opts.dispatchPriority?.(
-            raw.message,
-            lifecycle,
-            Date.now(),
-            {},
-          );
-          const result =
-            priorityResult ?? (await opts.dispatch(raw.message, lifecycle, Date.now(), {}));
+          const abortSignal = new AbortController().signal;
+          const lifecycle = { abortSignal, ...ingressLifecycleMocks };
+          const args = [raw.message, lifecycle, Date.now(), {}] as const;
+          const result = (await opts.dispatchPriority?.(...args)) ?? (await opts.dispatch(...args));
           if (result && result.kind === "completed") {
             await ingressLifecycleMocks.onAdopted();
           }
@@ -117,9 +109,8 @@ describe("iMessage approval poll durable ingress", () => {
     for (const mock of Object.values(ingressLifecycleMocks)) {
       mock.mockClear();
     }
-    ingressHarness.done = new Promise<void>((resolve) => {
-      ingressHarness.resolveDone = () => resolve();
-    });
+    const { promise: done, resolve: resolveDone } = Promise.withResolvers<void>();
+    Object.assign(ingressHarness, { done, resolveDone });
   });
 
   function arrangeNotification(overrides: Partial<IMessagePayload> = {}) {
@@ -132,7 +123,7 @@ describe("iMessage approval poll durable ingress", () => {
             params: {
               message: {
                 id: 42,
-                guid: "approval-poll-vote-guid",
+                guid: "approval-ingress-guid",
                 chat_id: 7,
                 chat_guid: "iMessage;-;redacted-peer",
                 chat_identifier: "redacted-peer",
@@ -190,8 +181,6 @@ describe("iMessage approval poll durable ingress", () => {
 
   it("routes a valid approval command ahead of the conversation debounce lane", async () => {
     arrangeNotification({
-      id: 43,
-      guid: "approval-command-guid",
       destination_caller_id: "redacted-agent",
       text: "/approve reject exec-1",
       poll: undefined,
