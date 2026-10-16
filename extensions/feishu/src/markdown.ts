@@ -1,8 +1,141 @@
-import { fromMarkdown } from "mdast-util-from-markdown";
+import { fromMarkdown, type CompileContext, type Extension } from "mdast-util-from-markdown";
 import { gfmTableFromMarkdown } from "mdast-util-gfm-table";
 import { gfmTable } from "micromark-extension-gfm-table";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { MentionTarget } from "./mention-target.types.js";
+
+const FEISHU_LIST_MARKER = /^(?:[-*+]|\d{1,9}[.)])(?=[ \t])/u;
+// `.` skips a carriage return, so the info string is matched as everything but the feed.
+const FEISHU_FENCE_MARKER = /^(`{3,}|~{3,})([^\n]*)$/u;
+
+/**
+ * Whether a line is a fence marker behind any quote markers, list markers and indentation. This
+ * only finds the markers a chunk must deliver whole and the chunks worth asking the parser about,
+ * so how far a marker is indented does not matter here. A backtick fence carries no backtick in
+ * its info string, which keeps an inline run in ordinary prose from reading as a marker, and a
+ * tilde fence carries anything.
+ */
+function isFenceMarkerLine(line: string): boolean {
+  let rest = line;
+  for (;;) {
+    rest = rest.replace(/^[ \t]+/u, "");
+    if (rest.startsWith(">")) {
+      rest = rest.slice(1);
+      continue;
+    }
+    const list = FEISHU_LIST_MARKER.exec(rest);
+    if (!list?.[0]) {
+      break;
+    }
+    rest = rest.slice(list[0].length);
+  }
+  const marker = FEISHU_FENCE_MARKER.exec(rest);
+  return Boolean(marker?.[1]) && !(marker?.[1]?.startsWith("`") && marker[2]?.includes("`"));
+}
+
+/**
+ * A chunk that opens a fence nothing closes renders worse than the table it replaced, so the
+ * conversion only runs when every chunk closes what it opened. Whether a line closes a fence
+ * depends on every quote and list item around it, including a list the chunk opened before the
+ * fence, and on what follows the marker, so the parser answers it rather than a second reading
+ * of the rules. micromark emits one fence sequence for an opener and one for a closer, which
+ * makes a code node with two of them a closed block. A chunk with no marker line has no fence to
+ * ask about, which keeps the parse off ordinary prose.
+ */
+function fencesBalance(chunk: string): boolean {
+  if (!chunk.split("\n").some(isFenceMarkerLine)) {
+    return true;
+  }
+  const sequences = new Map<object, number>();
+  parseFeishuMarkdown(chunk, {
+    exit: {
+      codeFencedFenceSequence(this: CompileContext) {
+        const code = this.stack.toReversed().find((node) => node.type === "code");
+        if (code) {
+          sequences.set(code, (sequences.get(code) ?? 0) + 1);
+        }
+      },
+    },
+  });
+  return [...sequences.values()].every((count) => count === 2);
+}
+
+/**
+ * The zero-based lines that sit in a code block, fenced or indented, markers included. Table
+ * conversion and routing read Markdown with HTML switched off, where a `<div>` line is plain text
+ * and cannot take the fence after it, so this parse switches the HTML constructs off to agree with
+ * them. Which character closes a fence, and at what length, is the parser's answer and not a
+ * second one. The parser drops a leading byte order mark, which would shift its offsets, so the
+ * text must already be trimmed.
+ */
+export function codeBlockLines(text: string): Set<number> {
+  const lines = new Set<number>();
+  // A code block needs a fence run or four columns of indentation, which prose seldom has.
+  if (!/`{3}|~{3}|\t| {4}/u.test(text)) {
+    return lines;
+  }
+  const root = fromMarkdown(text, {
+    extensions: [gfmTable(), { disable: { null: ["htmlFlow", "htmlText"] } }],
+    mdastExtensions: [gfmTableFromMarkdown()],
+  });
+  // Lines are counted from offsets. The parser's own line numbers also count a lone carriage
+  // return, and a block its container ends stops at the start of the next line.
+  const feeds: number[] = [];
+  for (let at = text.indexOf("\n"); at >= 0; at = text.indexOf("\n", at + 1)) {
+    feeds.push(at);
+  }
+  const lineAt = (offset: number) => {
+    let low = 0;
+    let high = feeds.length;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if ((feeds[middle] ?? offset) < offset) {
+        low = middle + 1;
+      } else {
+        high = middle;
+      }
+    }
+    return low;
+  };
+  visitFeishuMarkdown(root, (node) => {
+    if (node.type !== "code") {
+      return;
+    }
+    const start = node.position?.start.offset ?? 0;
+    const last = lineAt(Math.max(start, (node.position?.end.offset ?? text.length) - 1));
+    for (let line = lineAt(start); line <= last; line += 1) {
+      lines.add(line);
+    }
+  });
+  return lines;
+}
+
+/**
+ * `code` mode wraps each table in a fence, and the chunker closes and reopens that fence
+ * at every boundary it cuts. It cannot do that for every shape. A cell's backticks
+ * lengthen the marker, an indent widens the line the chunker has to fit twice, and a
+ * quote prefix hides the marker from the fence scanner entirely, which no limit repairs.
+ * Below a handful of characters the cut lands inside the marker and delivers backtick
+ * fragments instead. Rather than model that budget, cut the converted text the way the
+ * send will and ask three things of the pieces: each one stays inside the limit, each one
+ * closes what it opened, and every marker arrives whole.
+ */
+export function fencesSurvive(converted: string, chunks: readonly string[]): boolean {
+  if (!chunks.every(fencesBalance)) {
+    return false;
+  }
+  const delivered = new Set(
+    chunks.flatMap((chunk) => chunk.split("\n")).map((line) => line.trim()),
+  );
+  return converted
+    .split("\n")
+    .every((line) => !isFenceMarkerLine(line) || delivered.has(line.trim()));
+}
+
+export function chunkedFencesBalance(converted: string, limit: number, mode: ChunkMode): boolean {
+  const chunks = chunkMarkdownTextWithMode(converted, limit, mode);
+  return chunks.every((chunk) => chunk.length <= limit) && fencesSurvive(converted, chunks);
+}
 
 export type FeishuMarkdownNode = {
   type: string;
@@ -22,15 +155,14 @@ type FeishuPostMessageElement =
 
 const FEISHU_POST_MAX_BYTES = 30 * 1024;
 
-export function shouldUseFeishuCard(text: string): boolean {
-  return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
-}
-
-/** One parser contract for Feishu message and document Markdown decisions. */
-export function parseFeishuMarkdown(text: string): FeishuMarkdownNode {
+/**
+ * One parser contract for Feishu message and document Markdown decisions. An observer extension
+ * sees the same parse and changes nothing about it.
+ */
+export function parseFeishuMarkdown(text: string, ...observers: Extension[]): FeishuMarkdownNode {
   return fromMarkdown(text, {
     extensions: [gfmTable()],
-    mdastExtensions: [gfmTableFromMarkdown()],
+    mdastExtensions: [gfmTableFromMarkdown(), ...observers],
   }) as FeishuMarkdownNode;
 }
 
@@ -93,8 +225,12 @@ export function buildFeishuPostMessageContent(params: {
   });
 }
 
+export function feishuPostWithinEnvelope(content: string): boolean {
+  return Buffer.byteLength(content, "utf8") <= FEISHU_POST_MAX_BYTES;
+}
+
 export function assertFeishuPostWithinEnvelope(content: string, label: string): void {
-  if (Buffer.byteLength(content, "utf8") > FEISHU_POST_MAX_BYTES) {
+  if (!feishuPostWithinEnvelope(content)) {
     throw new Error(`${label} exceeds the 30 KB rich-post API limit`);
   }
 }
@@ -191,6 +327,16 @@ export function chunkFeishuPostMarkdown(params: FeishuMarkdownChunkOptions): str
         ...(isFirst ? (params.firstChunkMentions ?? []) : []),
       ]),
   });
+}
+
+/**
+ * The post chunker owns its own envelope, so the size question is already settled and only
+ * the markers are in doubt. A quote-prefixed marker is invisible to the fence scanner, so
+ * a converted blockquoted table cannot be closed and reopened at a cut and its two markers
+ * land in different messages.
+ */
+export function postFencesSurvive(converted: string, params: FeishuMarkdownChunkOptions): boolean {
+  return fencesSurvive(converted, chunkFeishuPostMarkdown(params));
 }
 
 /** Measure the actual transport envelope, including UTF-8, JSON escapes and fence wrappers. */

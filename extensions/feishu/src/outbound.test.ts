@@ -120,7 +120,6 @@ const implicitReply = {
   replyToIdSource: "implicit",
   replyToMode: "first",
 } as const;
-const cardConfig: ClawdbotConfig = { channels: { feishu: { renderMode: "card" } } };
 const card = {
   schema: "2.0",
   header: { title: { tag: "plain_text", content: "Raw card" } },
@@ -189,12 +188,6 @@ function oversizedPresentation() {
     presentation: tablePresentation(),
     capabilities: feishuOutbound.presentationCapabilities,
   });
-}
-
-function tableText(count: number) {
-  return Array.from({ length: count }, (_, i) => "| a" + i + " | b |\n| - | - |\n| 1 | 2 |").join(
-    "\n\n",
-  );
 }
 
 function textCall(index = 0) {
@@ -322,22 +315,6 @@ describe("Feishu text delivery", () => {
       replyToMessageId: "om_reply",
     });
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps card text intact and strips prose from identity emoji in threaded headers", async () => {
-    const text = "| a | b |\n| - | - |";
-    const result = await sendText(text, {
-      cfg: cardConfig,
-      threadId: "om_topic",
-      identity: { name: "Agent", emoji: "根据心情/语气自由切换 😊🇺🇸👍🏽👨‍👩‍👧‍👦" },
-    });
-    expect(sendStructuredCardFeishuMock.mock.calls[0]?.[0]).toMatchObject({
-      text,
-      replyToMessageId: "om_topic",
-      replyInThread: true,
-      header: { title: "😊🇺🇸👍🏽👨‍👩‍👧‍👦 Agent", template: "blue" },
-    });
-    expectResult(result, "card_msg");
   });
 });
 
@@ -737,22 +714,6 @@ describe("Feishu native presentation delivery", () => {
       );
     }
     expect(sendCardFeishuMock).not.toHaveBeenCalled();
-  });
-
-  it("falls back to post mode above five markdown tables even in card mode", async () => {
-    await sendText(tableText(6), { cfg: cardConfig });
-    expect(sendMessageFeishuMock).toHaveBeenCalled();
-    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
-  });
-
-  it("refuses a presentation card above five markdown tables", async () => {
-    await sendPayload({
-      text: tableText(6),
-      presentation: buttons([{ label: "Confirm", action: { type: "command", command: "/ok" } }]),
-    });
-    expect(sendCardFeishuMock).not.toHaveBeenCalled();
-    expect(sendMessageFeishuMock).toHaveBeenCalled();
-    expect(textCall()?.text).toContain("`".repeat(3));
   });
 });
 

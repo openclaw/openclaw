@@ -1,5 +1,12 @@
+import type { MarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import type { RuntimeEnv } from "../runtime-api.js";
+import { literalizeFeishuCardTables } from "./card-table-shapes.js";
 import type { FeishuStreamingSession } from "./streaming-card.js";
+
+/** What a streaming card shows for `text`: off mode escapes its tables to literal rows. */
+export function projectFeishuStreamingCardText(text: string, tableMode: MarkdownTableMode): string {
+  return tableMode === "off" ? literalizeFeishuCardTables(text) : text;
+}
 
 /** Admit captured snapshots in order while the session owns provider writes. */
 export function queueFeishuStreamingUpdate(params: {
@@ -7,10 +14,18 @@ export function queueFeishuStreamingUpdate(params: {
   session: FeishuStreamingSession | null;
   startPromise: Promise<void> | null;
   text: string;
+  tableMode: MarkdownTableMode;
+  textChunkLimit: number;
   accountId: string;
   runtime: RuntimeEnv;
 }): Promise<void> {
   const { queue, session, startPromise, text, accountId, runtime } = params;
+  // Keep authored state and receipt keys intact; only the card's display projection
+  // escapes off-mode tables, including the separately accumulated reasoning stream.
+  const displayed = projectFeishuStreamingCardText(text, params.tableMode);
+  if (displayed !== text && displayed.length > params.textChunkLimit) {
+    return queue;
+  }
   return queue.then(async () => {
     if (startPromise) {
       await startPromise;
@@ -20,7 +35,7 @@ export function queueFeishuStreamingUpdate(params: {
       // and replacement; awaiting transport here would serialize obsolete snapshots.
       // Its retained write queue still propagates failures through awaited close/discard.
       void session
-        .update(text)
+        .update(displayed)
         .catch((error: unknown) =>
           runtime.error?.(`feishu[${accountId}] streaming update failed: ${String(error)}`),
         );
