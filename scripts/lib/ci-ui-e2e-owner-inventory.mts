@@ -554,6 +554,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["chat"],
     ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/route-draft-focus-handoff.ts"],
   ),
+  pageWatch("ui/src/e2e/chat-flow.pending-settings.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-flow.queue-edit.e2e.test.ts", ["chat", "config"]),
   pageWatch(
     "ui/src/e2e/chat-flow.queue-reorder.e2e.test.ts",

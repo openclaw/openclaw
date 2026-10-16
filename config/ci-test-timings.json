@@ -3073,6 +3073,7 @@
       "ui/src/e2e/chat-flow.model-picker-refresh.e2e.test.ts": 9,
       "ui/src/e2e/chat-flow.models-reasoning.e2e.test.ts": 19,
       "ui/src/e2e/chat-flow.navigation-presentation.e2e.test.ts": 27,
+      "ui/src/e2e/chat-flow.pending-settings.e2e.test.ts": 6,
       "ui/src/e2e/chat-flow.queue-edit.e2e.test.ts": 20,
       "ui/src/e2e/chat-flow.queue-reorder.e2e.test.ts": 18,
       "ui/src/e2e/chat-flow.session-start.e2e.test.ts": 6,
