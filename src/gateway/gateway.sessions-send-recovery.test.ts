@@ -304,19 +304,18 @@ it(
             ]),
           { timeout: 60_000, interval: 200 },
         );
+        await vi.waitFor(
+          () => expect(gateway.logs()).toContain("Session delivery recovery blocked for "),
+          { timeout: 30_000 },
+        );
         const after = await client.request<{ pendingInputs: ChatPendingInputsPage }>(
           "chat.history",
           { sessionKey: target },
           { signal },
         );
-        // Explicit cancellation withdraws the row from display; the two blocked
-        // source deliveries remain inspectable and were not sent to the model.
-        expect(after.pendingInputs.items.map((item) => item.state)).toEqual([
-          "interrupted",
-          "interrupted",
-        ]);
+        // Reset sources are terminal; permission failures remain retryable.
+        expect(after.pendingInputs.items.map((item) => item.state)).toEqual(["interrupted"]);
         expect(after.pendingInputs.items.map((item) => item.runId)).toEqual([
-          accepted.get("RESET_SOURCE_UPDATE"),
           accepted.get("REVOKED_UPDATE"),
         ]);
         await client.stopAndWait();
@@ -326,6 +325,9 @@ it(
         const previousRecoveryWarnings = gateway
           .logs()
           .split("Session delivery recovery blocked for ").length;
+        const previousReplacementWarnings = gateway
+          .logs()
+          .split("Session delivery endpoint was replaced").length;
         await gateway.startGateway();
         client = await connect();
         await vi.waitFor(
@@ -334,6 +336,9 @@ it(
               gateway.logs().split("Session delivery recovery blocked for ").length,
             ).toBeGreaterThan(previousRecoveryWarnings),
           { timeout: 30_000 },
+        );
+        expect(gateway.logs().split("Session delivery endpoint was replaced")).toHaveLength(
+          previousReplacementWarnings,
         );
         const finalHistory = await client.request(
           "chat.history",
