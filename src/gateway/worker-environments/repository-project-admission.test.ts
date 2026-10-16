@@ -43,11 +43,7 @@ const recipe = "d".repeat(40);
 const repositoryUrl = "https://github.com/acme/project.git";
 let observedRepositoryUrl = repositoryUrl;
 const agent = { agentId: "main", provenance: null };
-const admission = {
-  namespace: "test-gateway",
-  getConfig: () => ({}),
-  assertCurrent: () => {},
-};
+const admission = { namespace: "test-gateway", getConfig: () => ({}), assertCurrent: () => {} };
 const initial = { ...admission, repository: { agentId: "main", url: repositoryUrl } };
 type InitialRequest = Extract<
   Parameters<typeof prepareRepositoryWorkerProjectSource>[0],
@@ -120,41 +116,37 @@ describe("repository project admission", () => {
       };
     });
     fetchImpl = vi.fn<typeof fetch>(async (input) => {
-      const url = new URL(new Request(input).url);
-      let value: unknown;
-      if (url.pathname === "/graphql") {
-        if (unavailable) {
-          return new Response(null, { status: 404 });
-        }
-        value = { data: { node: repositoryNode() } };
-      } else if (url.pathname === "/repos/acme/project") {
-        if (unavailable) {
-          return new Response(null, { status: 404 });
-        }
-        value = {
+      const pathname = new URL(new Request(input).url).pathname;
+      const metadata: Record<string, unknown> = {
+        "/graphql": { data: { node: repositoryNode() } },
+        "/repos/acme/project": {
           node_id: repositoryId,
           clone_url: observedRepositoryUrl,
           private: privateRepository,
           default_branch: "main",
-        };
-      } else if (url.pathname.startsWith("/repos/acme/project/commits/")) {
-        value = { sha: commit, commit: { tree: { sha: rootTree } } };
-      } else if (url.pathname === `/repos/acme/project/git/commits/${commit}`) {
-        value = { sha: commit, tree: { sha: rootTree } };
-      } else if (url.pathname === `/repos/acme/project/git/trees/${rootTree}`) {
-        value = {
+        },
+        [`/repos/acme/project/git/commits/${commit}`]: { sha: commit, tree: { sha: rootTree } },
+        [`/repos/acme/project/git/trees/${rootTree}`]: {
           sha: rootTree,
           truncated,
           tree: rootEntries,
-        };
-      } else if (url.pathname === `/repos/acme/project/git/trees/${setupTree}`) {
-        value = {
+        },
+        [`/repos/acme/project/git/trees/${setupTree}`]: {
           sha: setupTree,
           truncated,
           tree: [{ path: "worktree-setup.sh", type: "blob", mode: recipeMode, sha: recipe }],
-        };
-      } else if (url.pathname.startsWith("/repos/acme/project/git/blobs/")) {
-        const sha = url.pathname.split("/").at(-1) ?? "";
+        },
+      };
+      if (unavailable && (pathname === "/graphql" || pathname === "/repos/acme/project")) {
+        return new Response(null, { status: 404 });
+      }
+      let value: unknown;
+      if (Object.hasOwn(metadata, pathname)) {
+        value = metadata[pathname];
+      } else if (pathname.startsWith("/repos/acme/project/commits/")) {
+        value = { sha: commit, commit: { tree: { sha: rootTree } } };
+      } else if (pathname.startsWith("/repos/acme/project/git/blobs/")) {
+        const sha = pathname.split("/").at(-1) ?? "";
         const content = blobs[sha];
         if (content === undefined) {
           throw new Error("Unexpected fixture blob request");
@@ -168,7 +160,7 @@ describe("repository project admission", () => {
       } else {
         throw new Error("Unexpected fixture metadata request");
       }
-      return new Response(JSON.stringify(value));
+      return jsonResponse(value);
     });
     vi.stubGlobal("fetch", fetchImpl);
   });

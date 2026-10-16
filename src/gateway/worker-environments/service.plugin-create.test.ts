@@ -1,8 +1,5 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
-import { requireGit } from "../../agents/worktrees/git.js";
 import type { GatewayRequestHandlerOptions as CoreHandler } from "../../plugin-sdk/core.js";
 import type { GatewayRequestHandlerOptions as RuntimeHandler } from "../../plugin-sdk/gateway-runtime.js";
 import {
@@ -98,37 +95,18 @@ describe("worker creation through the shipped plugin Gateway context", () => {
   });
 
   it("preserves all eight positions and joins caller cancellation before allocation", async () => {
-    const projectPath = path.join(support.testState.root, "plugin-project");
-    await fs.mkdir(projectPath);
-    await requireGit(projectPath, ["init", "--quiet"]);
-    await requireGit(projectPath, ["config", "user.name", "Plugin Test"]);
-    await requireGit(projectPath, ["config", "user.email", "plugin@example.invalid"]);
-    await fs.writeFile(path.join(projectPath, "input.txt"), "plugin project\n");
-    await fs.mkdir(path.join(projectPath, ".openclaw"));
-    await fs.writeFile(
-      path.join(projectPath, ".openclaw", "worktree-setup.sh"),
-      "#!/bin/sh\nexit 77\n",
-      { mode: 0o755 },
-    );
-    await requireGit(projectPath, ["add", "."]);
-    await requireGit(projectPath, ["commit", "--quiet", "-m", "fixture"]);
+    const root = await support.createProjectFixture("plugin-project", "#!/bin/sh\nexit 77\n");
     type PrepareOptions = Parameters<NonNullable<WorkerProvider["prepareProvision"]>>[2];
     const entered = createDeferredCore<PrepareOptions>();
     const released = createDeferredCore();
-    const allocate = vi.fn(async () => ({
-      leaseId: "must-not-allocate",
-      ssh: support.SSH_ENDPOINT,
-    }));
+    const allocate = vi.fn(async () => {
+      throw new Error("Unexpected worker allocation");
+    });
     const prepareNodeEnrollment = vi.fn<
       NonNullable<support.WorkerEnvironmentServiceOptions["prepareNodeEnrollment"]>
-    >(async () => ({
-      mode: "resume",
-      deviceId: "plugin-node",
-      displayName: "Plugin worker",
-      openclawVersion: support.NODE_BOOTSTRAP.openclawVersion,
-      nodeBootstrap: support.NODE_BOOTSTRAP,
-      waitForDeviceId: async () => "plugin-node",
-    }));
+    >(async () => {
+      throw new Error("Unexpected node enrollment");
+    });
     const closeNodeEnrollment = vi.fn();
     const service = support.createService(
       support.createProvider({
@@ -145,33 +123,14 @@ describe("worker creation through the shipped plugin Gateway context", () => {
         projectNamespace: "plugin-proof",
         prepareNodeEnrollment,
         closeNodeEnrollment,
-        prepareNodeArtifacts: async () => ({
-          artifacts: {
-            nodeBootstrapSha256: support.NODE_BOOTSTRAP.sha256,
-            enabledPluginIds: [...support.NODE_BOOTSTRAP.enabledPluginIds],
-            workerBundleHash: support.BUNDLE_HASH,
-            workerArchiveSha256: support.BUNDLE_ARTIFACT.tarballSha256,
-            openclawVersion: support.BUNDLE_ARTIFACT.openclawVersion,
-            protocolFeatures: [...support.BUNDLE_ARTIFACT.protocolFeatures],
-          },
-          assertCurrent: () => {},
-        }),
+        prepareNodeArtifacts: support.createNodeArtifacts,
       },
     );
     const caller = new AbortController();
     const stopReason = new Error("Plugin caller stopped creation");
     await withRegisteredCreator(
       service,
-      [
-        "development",
-        "plugin-options",
-        "large",
-        "remote-exec",
-        projectPath,
-        caller.signal,
-        "linux",
-        false,
-      ],
+      ["development", "options", "large", "remote-exec", root, caller.signal, "linux", false],
       async (invoke) => {
         const creation = invoke();
         const settled = creation.catch((error: unknown) => error);
@@ -191,10 +150,7 @@ describe("worker creation through the shipped plugin Gateway context", () => {
             os: "linux",
           });
           const project = expectDefined(options.project, "provider project");
-          expect(project).toMatchObject({
-            root: projectPath,
-            preparation: { purpose: "session" },
-          });
+          expect(project).toMatchObject({ root, preparation: { purpose: "session" } });
           expect(support.testState.store.list()).toMatchObject([
             {
               profileId: "development",
@@ -202,7 +158,7 @@ describe("worker creation through the shipped plugin Gateway context", () => {
                 machineClass: "large",
                 executionMode: "remote-exec",
                 os: "linux",
-                project: { root: projectPath, preparation: { runSetupScript: false } },
+                project: { root, preparation: { runSetupScript: false } },
               },
             },
           ]);

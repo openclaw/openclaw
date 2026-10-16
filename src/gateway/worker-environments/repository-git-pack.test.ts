@@ -12,6 +12,21 @@ import {
 } from "./repository-git-pack.test-support.js";
 import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "./workspace-inventory-limits.js";
 
+async function expectAbsent(file: string) {
+  expect(await fs.stat(file).catch(() => undefined)).toBeUndefined();
+}
+
+async function beforeSettlement(event: Promise<unknown>, result: Promise<unknown>) {
+  await Promise.race([
+    event,
+    result.then((outcome) => {
+      throw outcome instanceof Error
+        ? outcome
+        : new Error("Operation settled before expected event");
+    }),
+  ]);
+}
+
 describe("private repository preparation", () => {
   it("fetches only the pinned tree under its selected identity without inherited credentials or hooks", async () => {
     const f = await fixture();
@@ -21,9 +36,7 @@ describe("private repository preparation", () => {
     await fs.writeFile(path.join(poisonHome, ".netrc"), "default login unrelated password wrong\n");
     await fs.writeFile(
       path.join(poisonHome, ".gitconfig"),
-      "[http]\nextraHeader = Authorization: Basic unrelated\n[trace2]\neventTarget = " +
-        trace +
-        "\n",
+      `[http]\nextraHeader = Authorization: Basic unrelated\n[trace2]\neventTarget = ${trace}\n`,
     );
     for (const [name, value] of Object.entries({
       HOME: poisonHome,
@@ -46,7 +59,7 @@ describe("private repository preparation", () => {
     expect(f.requests.every((authorization) => authorization === AUTHORIZATION)).toBe(true);
     expect(JSON.stringify(f.fetches)).not.toContain(TOKEN);
     expect(JSON.stringify(f.fetches)).not.toContain(AUTHORIZATION.slice(6));
-    expect(await fs.stat(trace).catch(() => undefined)).toBeUndefined();
+    await expectAbsent(trace);
     await assertNoCredentialFiles(f.scratch);
     const unpacked = path.join(f.root, "unpacked");
     await fs.mkdir(unpacked);
@@ -61,9 +74,7 @@ describe("private repository preparation", () => {
     expect(
       await fs.readdir(path.join(f.scratch, "repository.git", "hooks")).catch(() => []),
     ).toEqual([]);
-    expect(
-      await fs.stat(path.join(f.scratch, "repository.git", "input.txt")).catch(() => undefined),
-    ).toBeUndefined();
+    await expectAbsent(path.join(f.scratch, "repository.git", "input.txt"));
   });
 
   it("discards failed authenticated Git diagnostics including encoded credentials", async () => {
@@ -85,22 +96,13 @@ describe("private repository preparation", () => {
     const controller = new AbortController();
     const reason = new Error("preparation owner replaced");
     const result = f.preparePack(controller.signal).catch((error: unknown) => error);
-    await Promise.race([
-      f.received,
-      result.then((outcome) => {
-        throw outcome instanceof Error
-          ? outcome
-          : new Error("Fetch settled before contacting the synthetic endpoint");
-      }),
-    ]);
+    await beforeSettlement(f.received, result);
     controller.abort(reason);
     expect(await result).toBe(reason);
     expect(f.fetches).toHaveLength(1);
     expect(f.fetches[0]?.settled).toBe(true);
     await f.disconnected;
-    expect(
-      await fs.stat(path.join(f.scratch, `${f.baseCommit}.pack`)).catch(() => undefined),
-    ).toBeUndefined();
+    await expectAbsent(path.join(f.scratch, `${f.baseCommit}.pack`));
     await assertNoCredentialFiles(f.scratch);
   });
 
@@ -158,26 +160,17 @@ describe("private repository preparation", () => {
         .finally(() => {
           settled = true;
         });
-      await Promise.race([
-        published.promise,
-        result.then((outcome) => {
-          throw outcome instanceof Error
-            ? outcome
-            : new Error("Preparation settled before publishing its pack");
-        }),
-      ]);
+      await beforeSettlement(published.promise, result);
       expect(await fs.stat(localPack!)).toBeDefined();
       expect(settled).toBe(false);
       releaseUpload.resolve();
       expect(await result).toBe(reason);
       expect(publicationJoined).toBe(true);
-      expect(await fs.stat(path.dirname(localPack!)).catch(() => undefined)).toBeUndefined();
+      await expectAbsent(path.dirname(localPack!));
       expect(await fs.stat(remotePack!)).toBeDefined();
       expect(f.scripts).toHaveLength(1);
       expect(operation.getPreparedWorkspace()).toBeUndefined();
-      expect(
-        await fs.stat(path.join(f.home, ".openclaw-worker/prepared")).catch(() => undefined),
-      ).toBeUndefined();
+      await expectAbsent(path.join(f.home, ".openclaw-worker/prepared"));
       await assertNoCredentialFiles(f.home);
     } finally {
       releaseUpload.resolve();
@@ -206,7 +199,7 @@ describe("private repository preparation", () => {
         "Project Git pack exceeds the workspace byte limit",
       );
       expect(temporaryRoot).toBeDefined();
-      expect(await fs.stat(temporaryRoot!).catch(() => undefined)).toBeUndefined();
+      await expectAbsent(temporaryRoot!);
       expect(upload).not.toHaveBeenCalled();
       expect(f.scripts).toHaveLength(1);
       expect(operation.getPreparedWorkspace()).toBeUndefined();

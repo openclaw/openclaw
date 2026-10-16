@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
@@ -23,18 +22,7 @@ describe("on-demand prepared worker admission", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
   async function fixture() {
-    const projectPath = path.join(support.testState.root, "project");
-    await fs.mkdir(projectPath);
-    await requireGit(projectPath, ["init", "--quiet"]);
-    await requireGit(projectPath, ["config", "user.name", "Project Test"]);
-    await requireGit(projectPath, ["config", "user.email", "project@example.invalid"]);
-    await requireGit(projectPath, ["config", "commit.gpgsign", "false"]);
-    await fs.mkdir(path.join(projectPath, ".openclaw"));
-    await fs.writeFile(path.join(projectPath, ".openclaw/worktree-setup.sh"), "#!/bin/sh\ntrue\n", {
-      mode: 0o755,
-    });
-    await requireGit(projectPath, ["add", "."]);
-    await requireGit(projectPath, ["commit", "--quiet", "-m", "base"]);
+    const projectPath = await support.createProjectFixture();
     const provision = vi.fn<WorkerProvider["provision"]>(async () => {
       throw new Error("Synthetic provider unavailable");
     });
@@ -52,17 +40,7 @@ describe("on-demand prepared worker admission", () => {
       prepareNodeEnrollment: async () => {
         throw new Error("Synthetic provider must not enroll");
       },
-      prepareNodeArtifacts: async () => ({
-        artifacts: {
-          nodeBootstrapSha256: support.NODE_BOOTSTRAP.sha256,
-          enabledPluginIds: ["runtime-plugin"],
-          workerBundleHash: support.BUNDLE_HASH,
-          workerArchiveSha256: support.BUNDLE_ARTIFACT.tarballSha256,
-          openclawVersion: support.BUNDLE_ARTIFACT.openclawVersion,
-          protocolFeatures: [],
-        },
-        assertCurrent: () => {},
-      }),
+      prepareNodeArtifacts: support.createNodeArtifacts,
     });
     return {
       service,
@@ -99,6 +77,7 @@ describe("on-demand prepared worker admission", () => {
       expect(record).toMatchObject({
         profileId: "development",
         attachedSessionIds: [],
+        destroyRequestedAtMs: null,
         profileSnapshot: {
           executionMode: "worker-turn",
           project: {
@@ -117,7 +96,6 @@ describe("on-demand prepared worker admission", () => {
         /^[a-f0-9]{40}$/u,
       );
       expect(f.provision).toHaveBeenCalledOnce();
-      expect(support.testState.store.get(record.environmentId)?.destroyRequestedAtMs).toBeNull();
       expect(f.service.list()[0]?.preparation).toEqual({
         purpose: "build",
         key: result.preparationKey,
