@@ -10,7 +10,8 @@ import {
   registerMemoryCapability,
 } from "../../plugins/memory-state.test-fixtures.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
-import { runSessionCompactionIfNeeded as runSessionCompactionIfNeededRaw } from "./agent-runner-memory.js";
+import { runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
+import { createMemoryFlushPlan } from "./agent-runner-memory.test-support.js";
 import {
   createTestFollowupRun,
   withTestModelContextTokens,
@@ -37,23 +38,6 @@ vi.mock("./queue.js", async (importOriginal) => ({
   refreshQueuedFollowupSession: vi.fn(),
 }));
 
-type PreflightCompactionTestParams = Parameters<typeof runSessionCompactionIfNeededRaw>[0] & {
-  modelContextTokens?: number;
-};
-
-async function runSessionCompactionIfNeeded(params: PreflightCompactionTestParams) {
-  const { modelContextTokens, ...runParams } = params;
-  return await runSessionCompactionIfNeededRaw({
-    ...runParams,
-    cfg: withTestModelContextTokens({
-      cfg: runParams.cfg,
-      followupRun: runParams.followupRun,
-      defaultModel: runParams.defaultModel,
-      contextTokens: modelContextTokens,
-    }),
-  });
-}
-
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-preflight-stale-");
 
 describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
@@ -61,16 +45,7 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
 
   beforeEach(() => {
     rootDir = sessionDirs.make();
-    registerMemoryCapability("memory-core", {
-      flushPlanResolver: () => ({
-        softThresholdTokens: 4_000,
-        forceFlushTranscriptBytes: 1_000_000_000,
-        reserveTokensFloor: 20_000,
-        prompt: "Pre-compaction memory flush.\nNO_REPLY",
-        systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
-        relativePath: "memory/2023-11-14.md",
-      }),
-    });
+    registerMemoryCapability("memory-core", { flushPlanResolver: createMemoryFlushPlan });
     compactEmbeddedAgentSessionMock.mockReset().mockResolvedValue({
       ok: true,
       compacted: true,
@@ -84,26 +59,39 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
     clearMemoryPluginState();
   });
 
-  async function runWithEntry(sessionEntry: SessionEntry, sessionFile: string) {
-    return await runSessionCompactionIfNeeded({
-      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
-      followupRun: createTestFollowupRun({
+  async function runWithEntry(
+    sessionEntry: SessionEntry,
+    sessionFile: string,
+    overrides: Partial<Parameters<typeof runSessionCompactionIfNeeded>[0]> = {},
+  ) {
+    const followupRun =
+      overrides.followupRun ??
+      createTestFollowupRun({
         sessionId: "session",
         sessionFile,
         sessionKey: "agent:main:main",
-      }),
-      defaultModel: "anthropic/claude-opus-4-6",
-      modelContextTokens: 100_000,
+      });
+    const defaultModel = "anthropic/claude-opus-4-6";
+    return await runSessionCompactionIfNeeded({
+      followupRun,
+      defaultModel,
       sessionEntry,
       sessionStore: { "agent:main:main": sessionEntry },
       sessionKey: "agent:main:main",
       storePath: path.join(rootDir, "sessions.json"),
       isHeartbeat: false,
       abortSignal: new AbortController().signal,
+      ...overrides,
+      cfg: withTestModelContextTokens({
+        cfg: overrides.cfg ?? { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+        followupRun,
+        defaultModel,
+        contextTokens: 100_000,
+      }),
     });
   }
 
-  it("compacts fresh token totals above the model budget", async () => {
+  async function writeFreshEntry(sessionKey = "agent:main:main") {
     const sessionFile = path.join(rootDir, "session.jsonl");
     await fs.writeFile(
       sessionFile,
@@ -118,11 +106,12 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
       totalTokensFresh: true,
       totalTokensVersion: 1,
     };
-    await writeTestSessionStore(
-      path.join(rootDir, "sessions.json"),
-      "agent:main:main",
-      sessionEntry,
-    );
+    await writeTestSessionStore(path.join(rootDir, "sessions.json"), sessionKey, sessionEntry);
+    return { sessionEntry, sessionFile };
+  }
+
+  it("compacts fresh token totals above the model budget", async () => {
+    const { sessionEntry, sessionFile } = await writeFreshEntry();
     await runWithEntry(sessionEntry, sessionFile);
     expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledOnce();
   });
@@ -145,24 +134,8 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
   ])(
     "resolves an unscoped session key with $name",
     async ({ expectedAgentId, provider, model, expectsCompaction }) => {
-      const sessionFile = path.join(rootDir, "session.jsonl");
-      const storePath = path.join(rootDir, "sessions.json");
-      await fs.writeFile(
-        sessionFile,
-        `${JSON.stringify({ message: { role: "user", content: "x".repeat(2_000) } })}\n`,
-        "utf8",
-      );
-      const sessionEntry: SessionEntry = {
-        sessionId: "session",
-        sessionFile,
-        updatedAt: Date.now(),
-        totalTokens: 200_000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      };
-      await writeTestSessionStore(storePath, "main", sessionEntry);
-
-      const result = await runSessionCompactionIfNeeded({
+      const { sessionEntry, sessionFile } = await writeFreshEntry("main");
+      const result = await runWithEntry(sessionEntry, sessionFile, {
         cfg: {
           agents: {
             entries: { ops: {} },
@@ -177,14 +150,8 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
           provider,
           model,
         }),
-        defaultModel: "anthropic/claude-opus-4-6",
-        modelContextTokens: 100_000,
-        sessionEntry,
         sessionStore: { main: sessionEntry },
         sessionKey: "main",
-        storePath,
-        isHeartbeat: false,
-        abortSignal: new AbortController().signal,
       });
 
       expect(result).toBe(sessionEntry);

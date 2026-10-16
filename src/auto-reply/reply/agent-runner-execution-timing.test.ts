@@ -21,6 +21,18 @@ import {
 } from "./agent-runner-execution.test-support.js";
 
 const state = await setupAgentRunnerExecutionTestState();
+type TranscriptStart = Awaited<
+  ReturnType<typeof transcriptWatermarks.readSessionTranscriptStartAsync>
+>;
+const transcriptStartFor = (generation: string, maxSeq = 11) => ({
+  agentId: "main",
+  sessionId: "session",
+  sessionKey: "main",
+  storePath: "/synthetic/sessions.json",
+  generation,
+  maxSeq,
+});
+const completed = (text = "done") => ({ payloads: [{ text }], meta: {} });
 
 it("settles the turn's attribution before model-routing hooks run", async () => {
   const executeAgentTurn = await getRawExecuteAgentTurnForTest();
@@ -42,7 +54,7 @@ it("settles the turn's attribution before model-routing hooks run", async () => 
       return capture.promise;
     },
   };
-  state.runEmbeddedAgentMock.mockResolvedValue({ payloads: [{ text: "answer" }], meta: {} });
+  state.runEmbeddedAgentMock.mockResolvedValue(completed("answer"));
   const pending = executeAgentTurn(turn);
   try {
     await awaitGateBeforeSettlement(entered.promise, pending, "Model routing skipped attribution");
@@ -70,14 +82,7 @@ it("announces a remote native run before its worker starts writing replies", asy
       defaults: { models: { "anthropic/claude": { agentRuntime: { id: "openclaw" } } } },
     },
   };
-  const transcriptStart = {
-    agentId: "main",
-    sessionId: "session",
-    sessionKey: "main",
-    storePath: "/synthetic/sessions.json",
-    generation: "worker-start",
-    maxSeq: 7,
-  };
+  const transcriptStart = transcriptStartFor("worker-start", 7);
   const prepare = vi
     .spyOn(transcriptWatermarks, "readSessionTranscriptStartAsync")
     .mockResolvedValue(transcriptStart);
@@ -86,7 +91,7 @@ it("announces a remote native run before its worker starts writing replies", asy
     await params.onExecutionStarted?.({ backend: "cloud-worker" });
     params.onExecutionPhase?.({ phase: "process_spawned", backend: "cloud-worker" });
     startsBeforeReply = onAgentRunStart.mock.calls.length;
-    return { payloads: [{ text: "worker answer" }], meta: {} };
+    return completed("worker answer");
   });
   try {
     const result = await executeAgentTurn(turn);
@@ -123,18 +128,8 @@ it.each(["settled", "pending"] as const)(
       { provider: "anthropic", id: fallbackModel, input: ["text"] },
     ];
     const entered = createDeferred();
-    const retiredRead =
-      createDeferred<
-        Awaited<ReturnType<typeof transcriptWatermarks.readSessionTranscriptStartAsync>>
-      >();
-    const priorStart = {
-      agentId: "main",
-      sessionId: "session",
-      sessionKey: "main",
-      storePath: "/synthetic/sessions.json",
-      generation: "transcript-generation",
-      maxSeq: 7,
-    };
+    const retiredRead = createDeferred<TranscriptStart>();
+    const priorStart = transcriptStartFor("transcript-generation", 7);
     const currentStart = { ...priorStart, maxSeq: 11 };
     const prepare = vi
       .spyOn(transcriptWatermarks, "readSessionTranscriptStartAsync")
@@ -168,7 +163,7 @@ it.each(["settled", "pending"] as const)(
         await currentPreparation;
         startsBeforeCurrentPhase = onAgentRunStart.mock.calls.length;
         params.onExecutionPhase?.({ phase: "model_call_started" });
-        return { payloads: [{ text: "done" }], meta: {} };
+        return completed();
       },
     );
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
@@ -204,18 +199,8 @@ it("keeps native start facts when an earlier event's preparation settles late", 
   const executeAgentTurn = await getRawExecuteAgentTurnForTest();
   const onAgentRunStart = vi.fn();
   const entered = createDeferred();
-  const fallback =
-    createDeferred<
-      Awaited<ReturnType<typeof transcriptWatermarks.readSessionTranscriptStartAsync>>
-    >();
-  const nativeStart = {
-    agentId: "main",
-    sessionId: "session",
-    sessionKey: "main",
-    storePath: "/synthetic/sessions.json",
-    generation: "native-start",
-    maxSeq: 11,
-  };
+  const fallback = createDeferred<TranscriptStart>();
+  const nativeStart = transcriptStartFor("native-start");
   const prepare = vi
     .spyOn(transcriptWatermarks, "readSessionTranscriptStartAsync")
     .mockImplementationOnce(() => {
@@ -234,7 +219,7 @@ it("keeps native start facts when an earlier event's preparation settles late", 
     });
     fallback.resolve({ ...nativeStart, generation: "earlier-read", maxSeq: 8 });
     await early;
-    return { payloads: [{ text: "done" }], meta: {} };
+    return completed();
   });
   try {
     await executeAgentTurn(createMinimalRunAgentTurnParams({ opts: { onAgentRunStart } }));
@@ -263,14 +248,7 @@ it.each(["embedded preparation", "fallback preparation"])(
       Object.assign(session, deriveGatewaySessionLifecycleSnapshot({ session, event }));
     });
     const onAgentRunStart = vi.fn();
-    const transcriptStart = {
-      agentId: "main",
-      sessionId: "session",
-      sessionKey: "main",
-      storePath: "/synthetic/sessions.json",
-      generation: "prompt-start-generation",
-      maxSeq: 11,
-    };
+    const transcriptStart = transcriptStartFor("prompt-start-generation");
     const turn = createMinimalRunAgentTurnParams({ opts: { onAgentRunStart } });
     const run = (runId: string) =>
       executeAgentTurn({
@@ -289,7 +267,7 @@ it.each(["embedded preparation", "fallback preparation"])(
       expect(session.runtimeMs).toBeUndefined();
       expect(session.endedAt).toBeUndefined();
       now += 11_192;
-      return { payloads: [{ text: "done" }], meta: {} };
+      return completed();
     };
     try {
       state.runEmbeddedAgentMock.mockImplementationOnce(succeed);

@@ -1,5 +1,3 @@
-import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
-import type { MemoryFlushToolRunContext } from "../../agents/agent-tools.memory-flush.types.js";
 import { createAssistantErrorTranscript } from "../../agents/assistant-error-transcript.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
@@ -7,12 +5,13 @@ import type { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runt
 import type { ModelFallbackAttemptProvenance } from "../../agents/model-fallback.types.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
-import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
-import type { MemoryAudience } from "../../plugins/memory-provider-types.js";
 import type { MemoryFlushPlan } from "../../plugins/registry-contribution-types.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
+
+export type { RunEmbeddedAgentInternalParams as EmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
+export type { CompactEmbeddedAgentSessionRuntimeParams as CompactEmbeddedAgentSessionParams } from "../../agents/embedded-agent-runner/compact.types.js";
 
 export async function seedMemoryAccountingTranscript(
   scope: SessionTranscriptRuntimeTarget,
@@ -63,7 +62,6 @@ export async function seedMemoryAccountingTranscript(
 
 type FileFlushPlan = Extract<MemoryFlushPlan, { relativePath: string }>;
 
-/** File-arm fixture shared by the runner's flush scenarios. */
 export function createMemoryFlushPlan(): FileFlushPlan {
   return {
     softThresholdTokens: 4_000,
@@ -75,7 +73,6 @@ export function createMemoryFlushPlan(): FileFlushPlan {
   };
 }
 
-/** Override a file-arm fixture without admitting incompatible tools-arm fields. */
 export function createModifiedMemoryFlushPlan(overrides: Partial<FileFlushPlan>): MemoryFlushPlan {
   return { ...createMemoryFlushPlan(), ...overrides };
 }
@@ -169,58 +166,3 @@ export function createMemoryRunEntryMockImplementation(deps: {
     };
   };
 }
-
-export type EmbeddedAgentParams = {
-  sessionId?: string;
-  sessionKey?: string;
-  sessionPersistence?: "detached";
-  senderIsOwner?: boolean;
-  sandboxSessionKey?: string;
-  memoryAudience?: MemoryAudience;
-  memoryFlushTools?: MemoryFlushToolRunContext;
-  preparedRunAdmission?: PreparedAgentRunAdmission;
-  sessionManager?: SessionManager;
-  provider?: string;
-  model?: string;
-  thinkLevel?: string;
-  agentHarnessId?: string;
-  agentHarnessRuntimeOverride?: string;
-  authProfileId?: unknown;
-  authProfileIdSource?: unknown;
-  prompt?: string;
-  transcriptPrompt?: string;
-  memoryFlushWritePath?: string;
-  silentExpected?: boolean;
-  allowEmptyAssistantReplyAsSilent?: boolean;
-  terminalReplyExpectation?: "required" | "optional";
-  extraSystemPrompt?: string;
-  bootstrapPromptWarningSignaturesSeen?: string[];
-  bootstrapPromptWarningSignature?: string;
-  abortSignal?: AbortSignal;
-  isFinalFallbackAttempt?: boolean;
-  onAgentEvent?: (evt: {
-    stream: string;
-    data: { completed?: boolean; isError?: boolean; name?: string; phase?: string };
-  }) => void;
-};
-
-export type CompactEmbeddedAgentSessionParams = {
-  agentId?: string;
-  agentHarnessId?: string;
-  authProfileId?: string;
-  authProfileIdSource?: "auto" | "user";
-  contextTokenBudget?: number;
-  sessionKey?: string;
-  sandboxSessionKey?: string;
-  currentTokenCount?: number;
-  cwd?: string;
-  force?: boolean;
-  forcePreflight?: boolean;
-  modelSelectionLocked?: boolean;
-  preflightRequired?: boolean;
-  preflightCompactionTrigger?: string;
-  sessionEntry?: SessionEntry;
-  sessionFile?: string;
-  sessionId?: string;
-  trigger?: string;
-};

@@ -2,7 +2,7 @@ import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { text as readBody } from "node:stream/consumers";
 import { expect, it } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   acquireSessionMcpRuntime,
@@ -193,6 +193,7 @@ it.each(["completed", "interrupted"] as const)(
         sessionKey: "agent:main:main",
         storePath: path.join(state.sessionsDir(), "sessions.json"),
       };
+      const modelRoute = { provider: "test-provider", model: "owner-model" };
       const cfg: OpenClawConfig = {
         agents: {
           entries: { main: { workspace: state.workspaceDir } },
@@ -240,8 +241,7 @@ it.each(["completed", "interrupted"] as const)(
         transcript.appendMessage(makeUserMessage("Remember the Cedar project receipt.", 1));
         transcript.appendMessage(
           makeAssistantMessageFixture({
-            provider: "test-provider",
-            model: "owner-model",
+            ...modelRoute,
             api: "openai-completions",
             content: [{ type: "text", text: "Cedar receipt saved." }],
             stopReason: "stop",
@@ -262,8 +262,7 @@ it.each(["completed", "interrupted"] as const)(
           agentDir: state.agentDir(),
           workspaceDir: state.workspaceDir,
           config: cfg,
-          provider: "test-provider",
-          model: "owner-model",
+          ...modelRoute,
           messageProvider: "webchat",
           thinkLevel: "off",
           timeoutMs: 30_000,
@@ -274,8 +273,7 @@ it.each(["completed", "interrupted"] as const)(
           sessionEntry: entry,
           cfg,
           sessionKey: scope.sessionKey,
-          provider: "test-provider",
-          model: "owner-model",
+          ...modelRoute,
           auth: {},
         });
         installAgentRunnerMemoryFixture(() => ({
@@ -311,12 +309,11 @@ it.each(["completed", "interrupted"] as const)(
             abortSignal: interrupted.signal,
           }),
         );
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           entered.promise,
-          flush.then(() => {
-            throw new Error("Memory run ended before reaching inference");
-          }),
-        ]);
+          flush,
+          "Memory run ended before reaching inference",
+        );
         await waitForDiagnosticEventsDrained();
         expect(missingPrivateSessionId).toBe(false);
         const firstPrivateSessionIds = [...privateSessionIds];
