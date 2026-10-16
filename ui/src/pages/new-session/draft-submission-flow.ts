@@ -2,7 +2,7 @@ import type { ProjectsAddResult } from "../../../../packages/gateway-protocol/sr
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
-import { createComposerDraftSource } from "../../lib/chat/composer-draft.ts";
+import { createComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import {

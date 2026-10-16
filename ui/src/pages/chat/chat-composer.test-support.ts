@@ -3,7 +3,7 @@ import { expect, onTestFinished, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
-import { createComposerDraftSource } from "../../lib/chat/composer-draft.ts";
+import { createComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import {

@@ -11,7 +11,7 @@ import {
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
-import type { ComposerDraftSource } from "../../lib/chat/composer-draft.ts";
+import type { ComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import {
   clearCompositionEnd,

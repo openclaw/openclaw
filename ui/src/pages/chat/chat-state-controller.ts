@@ -1,7 +1,7 @@
 import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatQueueItem, HumanMention } from "../../lib/chat/chat-types.ts";
-import { createComposerDraftSource } from "../../lib/chat/composer-draft.ts";
+import { createComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { parseStoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";

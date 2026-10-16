@@ -21,7 +21,7 @@ import type {
   ChatReplyTarget,
   HumanMention,
 } from "../../../lib/chat/chat-types.ts";
-import type { ComposerDraftSource } from "../../../lib/chat/composer-draft.ts";
+import type { ComposerDraftSource } from "../../../lib/chat/composer-draft-changes.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import type { HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
 import type { PresentationBinding } from "../../../lib/presentation.ts";
