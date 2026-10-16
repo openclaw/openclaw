@@ -36,6 +36,24 @@ import {
   wrapToolWithGatewayCallerIdentity,
 } from "./gateway-caller-context.js";
 
+type CallerIdentity = NonNullable<Parameters<typeof withGatewayToolCallerIdentity>[0]>;
+const defaultCaller = { agentId: "main", sessionKey: "agent:main:session" };
+const agentCaller = { agentId: "agent-a", sessionKey: "agent-a:session" };
+
+function withCaller<T>(identity: Partial<CallerIdentity>, run: () => T | Promise<T>) {
+  return withGatewayToolCallerIdentity({ ...defaultCaller, ...identity }, run);
+}
+
+function makeTool(): AnyAgentTool {
+  return {
+    name: "plugin_tool",
+    label: "Plugin tool",
+    description: "plugin tool",
+    parameters: Type.Object({}),
+    execute: vi.fn(async () => ({ content: [], details: {} })),
+  };
+}
+
 describe("gateway caller context wrapper", () => {
   it("keeps prepared caller authority live through personal selection without synchronous source reads", async () => {
     const refusal = new Error("requesting session authority was revoked");
@@ -53,10 +71,8 @@ describe("gateway caller context wrapper", () => {
         prepareSessionSource: async () => ({ assertCurrent: assertSourceCurrent, checks: [] }),
       }),
     });
-    await withGatewayToolCallerIdentity(
+    await withCaller(
       {
-        agentId: "main",
-        sessionKey: "agent:main:source",
         operationalRunInstance: { instanceId: "source-instance", runId: "source-run" },
         operatorAuthority,
         receiptAuthority: () => true,
@@ -99,11 +115,6 @@ describe("gateway caller context wrapper", () => {
           : narrower === "inner"
             ? worker
             : root;
-      const caller = {
-        agentId: "main",
-        sessionKey: "agent:main:scope",
-        operationalRunInstance: run,
-      };
       const entered = vi.fn(() => {
         const retained = expectDefined(
           getGatewayToolCallerIdentity()?.approvalAuthority,
@@ -115,8 +126,8 @@ describe("gateway caller context wrapper", () => {
         expect(validateAgentRunDelegatedAuthority(root)).toBe(true);
       });
       try {
-        const pending = withGatewayToolCallerIdentity({ ...caller, approvalAuthority: outer }, () =>
-          withGatewayToolCallerIdentity({ ...caller, approvalAuthority: inner }, entered),
+        const pending = withCaller({ operationalRunInstance: run, approvalAuthority: outer }, () =>
+          withCaller({ operationalRunInstance: run, approvalAuthority: inner }, entered),
         );
         if (narrower === "unrelated") {
           await expect(pending).rejects.toThrow("approval scopes do not retain the same source");
@@ -132,10 +143,8 @@ describe("gateway caller context wrapper", () => {
   );
 
   it("preserves every delegated tool restriction through same-run wrappers", async () => {
-    const identity = { agentId: "main", sessionKey: "agent:main:preview" };
-    await withGatewayToolCallerIdentity(
+    await withCaller(
       {
-        ...identity,
         sessionEventToolsAllow: ["read", "process"],
         sessionEventSettings: {
           permissionMode: "workspace",
@@ -148,9 +157,8 @@ describe("gateway caller context wrapper", () => {
         },
       },
       () =>
-        withGatewayToolCallerIdentity(
+        withCaller(
           {
-            ...identity,
             sessionEventToolsAllow: ["read", "exec"],
             sessionEventSettings: {
               permissionMode: "full",
@@ -163,7 +171,7 @@ describe("gateway caller context wrapper", () => {
             },
           },
           () =>
-            withGatewayToolCallerIdentity(identity, () => {
+            withCaller({}, () => {
               const caller = getGatewayToolCallerIdentity();
               expect(caller?.sessionEventToolsAllow).toEqual(["read"]);
               expect(caller?.sessionEventSettings).toEqual({
@@ -181,13 +189,9 @@ describe("gateway caller context wrapper", () => {
   it.each(["full", "guarded"] as const)(
     "retains a captured default posture through a nested %s permission wrapper",
     async (permissionMode) => {
-      const identity = { agentId: "main", sessionKey: "agent:main:default-permission" };
       const execute = vi.fn(() => getGatewayToolCallerIdentity()?.sessionEventSettings);
-      const wrapped = withGatewayToolCallerIdentity({ ...identity, sessionEventSettings: {} }, () =>
-        withGatewayToolCallerIdentity(
-          { ...identity, sessionEventSettings: { permissionMode } },
-          () => withGatewayToolCallerIdentity(identity, execute),
-        ),
+      const wrapped = withCaller({ sessionEventSettings: {} }, () =>
+        withCaller({ sessionEventSettings: { permissionMode } }, () => withCaller({}, execute)),
       );
       if (permissionMode === "guarded") {
         await expect(wrapped).rejects.toThrow("changed between default and explicit permissions");
@@ -202,47 +206,24 @@ describe("gateway caller context wrapper", () => {
   it.each(["outer", "inner"] as const)(
     "preserves the %s caller's automatic-delivery restriction through delegation",
     async (restricted) => {
-      const identity = { agentId: "main", sessionKey: "agent:main:private-followup" };
-      await withGatewayToolCallerIdentity(
-        {
-          ...identity,
-          ...(restricted === "outer" ? { sessionEventDelivery: false as const } : {}),
-        },
-        () =>
-          withGatewayToolCallerIdentity(
-            {
-              ...identity,
-              ...(restricted === "inner" ? { sessionEventDelivery: false as const } : {}),
-            },
-            () =>
-              withGatewayToolCallerIdentity(identity, () => {
-                expect(getGatewayToolCallerIdentity()?.sessionEventDelivery).toBe(false);
-              }),
-          ),
+      await withCaller(restricted === "outer" ? { sessionEventDelivery: false } : {}, () =>
+        withCaller(restricted === "inner" ? { sessionEventDelivery: false } : {}, () =>
+          withCaller({}, () => {
+            expect(getGatewayToolCallerIdentity()?.sessionEventDelivery).toBe(false);
+          }),
+        ),
       );
     },
   );
 
   it("preserves tool metadata used by policy and presentation layers", () => {
-    const tool: AnyAgentTool = {
-      name: "plugin_tool",
-      label: "Plugin tool",
-      description: "plugin tool",
-      parameters: Type.Object({}),
-      execute: vi.fn(async () => ({
-        content: [{ type: "text" as const, text: "ok" }],
-        details: {},
-      })),
-    };
+    const tool = makeTool();
     setPluginToolMeta(tool, { pluginId: "plugin-a", optional: false });
     setChannelAgentToolMeta(tool as never, { channelId: "telegram" });
     setToolTerminalPresentation(tool, () => ({ text: "done" }));
 
     const beforeWrapped = wrapToolWithBeforeToolCallHook(tool);
-    const wrapped = wrapToolWithGatewayCallerIdentity(beforeWrapped, {
-      agentId: "agent-a",
-      sessionKey: "agent-a:session",
-    });
+    const wrapped = wrapToolWithGatewayCallerIdentity(beforeWrapped, agentCaller);
 
     expect(getPluginToolMeta(wrapped)).toEqual({ pluginId: "plugin-a", optional: false });
     expect(getChannelAgentToolMeta(wrapped as never)).toEqual({ channelId: "telegram" });
@@ -252,29 +233,19 @@ describe("gateway caller context wrapper", () => {
 
   it("applies caller identity to private preparation and execution", async () => {
     const seen: unknown[] = [];
-    const tool = attachInternalToolExecutionPreparer(
-      {
-        name: "plugin_tool",
-        label: "Plugin tool",
-        description: "plugin tool",
-        parameters: Type.Object({}),
-        execute: vi.fn(async () => ({ content: [], details: {} })),
-      },
-      async () => {
-        seen.push(getGatewayToolCallerIdentity());
-        return {
-          kind: "ready",
-          args: {},
-          execute: async () => {
-            seen.push(getGatewayToolCallerIdentity());
-            return { content: [], details: {} };
-          },
-          dispose: vi.fn(),
-        };
-      },
-    );
-    const identity = { agentId: "agent-a", sessionKey: "agent-a:session" };
-    const wrapped = wrapToolWithGatewayCallerIdentity(tool as never, identity);
+    const tool = attachInternalToolExecutionPreparer(makeTool(), async () => {
+      seen.push(getGatewayToolCallerIdentity());
+      return {
+        kind: "ready",
+        args: {},
+        execute: async () => {
+          seen.push(getGatewayToolCallerIdentity());
+          return { content: [], details: {} };
+        },
+        dispose: vi.fn(),
+      };
+    });
+    const wrapped = wrapToolWithGatewayCallerIdentity(tool, agentCaller);
     const preparer = expectDefined(
       getInternalToolExecutionPreparer(wrapped),
       "gateway-adapted preparer",
@@ -286,7 +257,7 @@ describe("gateway caller context wrapper", () => {
       await prepared.execute();
     }
 
-    expect(seen).toEqual([identity, identity]);
+    expect(seen).toEqual([agentCaller, agentCaller]);
   });
 
   it("pins caller identity to the Gateway present at admission", async () => {
@@ -299,8 +270,7 @@ describe("gateway caller context wrapper", () => {
 
     const first = await withGatewayToolCallerIdentity(
       {
-        agentId: "agent-a",
-        sessionKey: "agent-a:session",
+        ...agentCaller,
         gatewayContextResolver: selectGateway,
       },
       () => {
@@ -316,8 +286,7 @@ describe("gateway caller context wrapper", () => {
     );
     const second = await withGatewayToolCallerIdentity(
       {
-        agentId: "agent-a",
-        sessionKey: "agent-a:session",
+        ...agentCaller,
         gatewayContextResolver: selectGateway,
       },
       () =>
@@ -338,10 +307,8 @@ describe("gateway caller context wrapper", () => {
     let nestedOwner: string | undefined;
     let restoredOwner: string | undefined;
 
-    await withGatewayToolCallerIdentity(
+    await withCaller(
       {
-        agentId: "main",
-        sessionKey: "agent:main:session-1",
         operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
         approvalOwnerPluginId: "codex",
       },
@@ -418,13 +385,10 @@ describe("gateway caller context wrapper", () => {
     [true, false, false],
     [false, true, false],
   ])("narrows same-run Full Access from %s and %s to %s", async (outer, inner, expected) => {
-    await withGatewayToolCallerIdentity(
-      { agentId: "main", sessionKey: "agent:main:session", fullPermission: outer },
-      () =>
-        withGatewayToolCallerIdentity(
-          { agentId: "main", sessionKey: "agent:main:session", fullPermission: inner },
-          () => expect(getGatewayToolCallerIdentity()?.fullPermission).toBe(expected),
-        ),
+    await withCaller({ fullPermission: outer }, () =>
+      withCaller({ fullPermission: inner }, () =>
+        expect(getGatewayToolCallerIdentity()?.fullPermission).toBe(expected),
+      ),
     );
   });
 

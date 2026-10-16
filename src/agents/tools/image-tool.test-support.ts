@@ -1,23 +1,10 @@
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as defaults from "../../media-understanding/defaults.js";
-import type {
-  resolveAutoMediaKeyProviders,
-  resolveDefaultMediaModel,
-} from "../../media-understanding/defaults.js";
 import * as descriptions from "../../media-understanding/image-runtime.js";
 import * as registry from "../../media-understanding/provider-registry.js";
-import type {
-  buildMediaUnderstandingRegistry,
-  getMediaUnderstandingProvider,
-} from "../../media-understanding/provider-registry.js";
 import * as media from "../../media/web-media.js";
-import type { ImageCompressionPolicy, WebMediaResult } from "../../media/web-media.js";
-import type {
-  describeImageWithModel,
-  describeImagesWithModel,
-  MediaUnderstandingProvider,
-} from "../../plugin-sdk/media-understanding.js";
+import type { MediaUnderstandingProvider } from "../../plugin-sdk/media-understanding.js";
 import * as capabilities from "../../plugins/capability-provider-runtime.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import * as models from "../embedded-agent-runner/model.js";
@@ -31,42 +18,27 @@ import {
 import * as execution from "./image-tool.model-execution.js";
 import "./image-tool.js";
 
-type ResolveModelAsync = (typeof import("../embedded-agent-runner/model.js"))["resolveModelAsync"];
-
-type ImageToolLoadWebMediaOptions = Exclude<
-  Parameters<typeof media.loadWebMedia>[1],
-  number | undefined
->;
-
 type ImageWebMediaRuntime = {
-  loadWebMedia(mediaUrl: string, options?: ImageToolLoadWebMediaOptions): Promise<WebMediaResult>;
+  loadWebMedia(
+    mediaUrl: string,
+    options?: Exclude<Parameters<typeof media.loadWebMedia>[1], number | undefined>,
+  ): ReturnType<typeof media.loadWebMedia>;
   optimizeImageBufferForWebMedia: typeof media.optimizeImageBufferForWebMedia;
 };
 
-type ResolveImageCompressionPolicy = (params: {
-  abortSignal?: AbortSignal;
-  cfg?: OpenClawConfig;
-  imageModelConfig?: ImageModelConfig | null;
-  modelOverride?: string;
-  imageCount: number;
-  agentDir?: string;
-  workspaceDir?: string;
-  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
-}) => Promise<ImageCompressionPolicy>;
-
 type ImageToolProviderDeps = {
-  buildProviderRegistry: typeof buildMediaUnderstandingRegistry;
-  getMediaUnderstandingProvider: typeof getMediaUnderstandingProvider;
-  describeImageWithModel: typeof describeImageWithModel;
-  describeImagesWithModel: typeof describeImagesWithModel;
-  resolveAutoMediaKeyProviders: typeof resolveAutoMediaKeyProviders;
-  resolveDefaultMediaModel: typeof resolveDefaultMediaModel;
-  resolveModelAsync: ResolveModelAsync;
+  buildProviderRegistry: typeof registry.buildMediaUnderstandingRegistry;
+  getMediaUnderstandingProvider: typeof registry.getMediaUnderstandingProvider;
+  describeImageWithModel: typeof descriptions.describeImageWithModel;
+  describeImagesWithModel: typeof descriptions.describeImagesWithModel;
+  resolveAutoMediaKeyProviders: typeof defaults.resolveAutoMediaKeyProviders;
+  resolveDefaultMediaModel: typeof defaults.resolveDefaultMediaModel;
+  resolveModelAsync: typeof models.resolveModelAsync;
   resolveRegisteredMediaUnderstandingProvider(params: {
     providerId: string;
     cfg?: OpenClawConfig;
   }): MediaUnderstandingProvider | undefined;
-  resolveImageCompressionPolicy: ResolveImageCompressionPolicy;
+  resolveImageCompressionPolicy: typeof execution.prepareImageCompressionPolicy;
   loadImageWebMediaRuntime: () => Promise<ImageWebMediaRuntime>;
 };
 
@@ -88,75 +60,52 @@ function getTestApi(): ImageToolTestApi {
   return api as ImageToolTestApi;
 }
 
-const restoreSpies: Array<() => void> = [];
+const restoreSpies: Array<{ mockRestore(): void }> = [];
 
-function setProviderDepsForTest(overrides?: Partial<ImageToolProviderDeps>): void {
+function stub<T>(value: T | undefined, install: (value: T) => { mockRestore(): void }) {
+  if (value) {
+    restoreSpies.push(install(value));
+  }
+}
+
+function setProviderDepsForTest(overrides: Partial<ImageToolProviderDeps> = {}): void {
   for (const restore of restoreSpies.splice(0)) {
-    restore();
+    restore.mockRestore();
   }
-  if (!overrides) {
-    return;
-  }
-  if (overrides.buildProviderRegistry) {
-    const spy = vi
-      .spyOn(registry, "buildMediaUnderstandingRegistry")
-      .mockImplementation(overrides.buildProviderRegistry);
-    restoreSpies.push(() => spy.mockRestore());
-  }
-  if (overrides.getMediaUnderstandingProvider) {
-    const spy = vi
-      .spyOn(registry, "getMediaUnderstandingProvider")
-      .mockImplementation(overrides.getMediaUnderstandingProvider);
-    restoreSpies.push(() => spy.mockRestore());
-  }
-  if (overrides.describeImageWithModel) {
-    const spy = vi
-      .spyOn(descriptions, "describeImageWithModel")
-      .mockImplementation(overrides.describeImageWithModel);
-    restoreSpies.push(() => spy.mockRestore());
-  }
-  if (overrides.describeImagesWithModel) {
-    const spy = vi
-      .spyOn(descriptions, "describeImagesWithModel")
-      .mockImplementation(overrides.describeImagesWithModel);
-    restoreSpies.push(() => spy.mockRestore());
-  }
-  if (overrides.resolveAutoMediaKeyProviders) {
-    const spy = vi
-      .spyOn(defaults, "resolveAutoMediaKeyProviders")
-      .mockImplementation(overrides.resolveAutoMediaKeyProviders);
-    restoreSpies.push(() => spy.mockRestore());
-  }
-  if (overrides.resolveDefaultMediaModel) {
-    const spy = vi
-      .spyOn(defaults, "resolveDefaultMediaModel")
-      .mockImplementation(overrides.resolveDefaultMediaModel);
-    restoreSpies.push(() => spy.mockRestore());
-  }
-  if (overrides.resolveModelAsync) {
-    const spy = vi
-      .spyOn(models, "resolveModelAsync")
-      .mockImplementation(overrides.resolveModelAsync);
-    restoreSpies.push(() => spy.mockRestore());
-  }
-  if (overrides.resolveImageCompressionPolicy) {
-    const spy = vi
-      .spyOn(execution, "prepareImageCompressionPolicy")
-      .mockImplementation(overrides.resolveImageCompressionPolicy);
-    restoreSpies.push(() => spy.mockRestore());
-  }
-  if (overrides.resolveRegisteredMediaUnderstandingProvider) {
-    const resolve = overrides.resolveRegisteredMediaUnderstandingProvider;
+  stub(overrides.buildProviderRegistry, (fn) =>
+    vi.spyOn(registry, "buildMediaUnderstandingRegistry").mockImplementation(fn),
+  );
+  stub(overrides.getMediaUnderstandingProvider, (fn) =>
+    vi.spyOn(registry, "getMediaUnderstandingProvider").mockImplementation(fn),
+  );
+  stub(overrides.describeImageWithModel, (fn) =>
+    vi.spyOn(descriptions, "describeImageWithModel").mockImplementation(fn),
+  );
+  stub(overrides.describeImagesWithModel, (fn) =>
+    vi.spyOn(descriptions, "describeImagesWithModel").mockImplementation(fn),
+  );
+  stub(overrides.resolveAutoMediaKeyProviders, (fn) =>
+    vi.spyOn(defaults, "resolveAutoMediaKeyProviders").mockImplementation(fn),
+  );
+  stub(overrides.resolveDefaultMediaModel, (fn) =>
+    vi.spyOn(defaults, "resolveDefaultMediaModel").mockImplementation(fn),
+  );
+  stub(overrides.resolveModelAsync, (fn) =>
+    vi.spyOn(models, "resolveModelAsync").mockImplementation(fn),
+  );
+  stub(overrides.resolveImageCompressionPolicy, (fn) =>
+    vi.spyOn(execution, "prepareImageCompressionPolicy").mockImplementation(fn),
+  );
+  stub(overrides.resolveRegisteredMediaUnderstandingProvider, (resolve) => {
     const original = capabilities.resolvePluginCapabilityProvider;
-    const spy = vi
+    return vi
       .spyOn(capabilities, "resolvePluginCapabilityProvider")
       .mockImplementation((params) =>
         params.key === "mediaUnderstandingProviders"
           ? (resolve(params) as never)
           : original(params),
       );
-    restoreSpies.push(() => spy.mockRestore());
-  }
+  });
   if (overrides.loadImageWebMediaRuntime) {
     const load = overrides.loadImageWebMediaRuntime;
     const loadSpy = vi.spyOn(media, "loadWebMedia").mockImplementation(async (url, options) => {
@@ -170,10 +119,7 @@ function setProviderDepsForTest(overrides?: Partial<ImageToolProviderDeps>): voi
       .mockImplementation(async (...args) =>
         (await load()).optimizeImageBufferForWebMedia(...args),
       );
-    restoreSpies.push(
-      () => loadSpy.mockRestore(),
-      () => optimizeSpy.mockRestore(),
-    );
+    restoreSpies.push(loadSpy, optimizeSpy);
   }
 }
 
@@ -201,15 +147,11 @@ export function createMinimaxImageConfig(): OpenClawConfig {
         imageModel: { primary: "minimax/MiniMax-VL-01" },
       },
     },
-    plugins: {
-      entries: {
-        minimax: { enabled: true },
-      },
-    },
+    plugins: { entries: { minimax: { enabled: true } } },
   };
 }
 
-export const resolveConfiguredImageModelForTest: ResolveModelAsync = async (
+export const resolveConfiguredImageModelForTest: typeof models.resolveModelAsync = async (
   provider,
   model,
   _agentDir,

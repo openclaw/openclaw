@@ -103,6 +103,21 @@ function createBedrockSdkConfig(): OpenClawConfig {
   };
 }
 
+function createDeferredTool(config: OpenClawConfig, agentDir: string) {
+  return createImageTool({
+    config,
+    agentDir,
+    deferAutoModelResolution: true,
+    modelHasVision: false,
+    authProfileStore: createAuthProfileStoreFixture({}),
+  });
+}
+
+const inlineRequest = {
+  prompt: "Read this screenshot.",
+  path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+};
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("image custom provider auth regression", () => {
@@ -154,13 +169,9 @@ describe("image custom provider auth regression", () => {
     expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
       primary: `${BEDROCK_PROVIDER}/${BEDROCK_VISION_MODEL}`,
     });
-    expect(
-      resolveImageToolFactoryAvailable({
-        config: cfg,
-        agentDir,
-        modelHasVision: true,
-      }),
-    ).toBe(true);
+    expect(resolveImageToolFactoryAvailable({ config: cfg, agentDir, modelHasVision: true })).toBe(
+      true,
+    );
   });
 
   it("executes deferred fallback discovery with config-backed auth and runtime key resolution", async () => {
@@ -180,23 +191,13 @@ describe("image custom provider auth regression", () => {
     expect(auth.apiKey).toBe(CONFIG_API_KEY);
     expect(auth.source).toContain("models.json");
 
-    const tool = createImageTool({
-      config: cfg,
-      agentDir,
-      deferAutoModelResolution: true,
-      modelHasVision: false,
-      authProfileStore: createAuthProfileStoreFixture({}),
-    });
+    const tool = createDeferredTool(cfg, agentDir);
     expect(typeof tool?.execute).toBe("function");
     expect(tool?.name).toBe("view_image");
 
-    const result = await tool!.execute("regression-1", {
-      prompt: "Read this screenshot.",
-      path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
-    });
+    const result = await tool!.execute("regression-1", inlineRequest);
 
-    const payload = result as { content?: Array<{ type?: string; text?: string }> };
-    const text = payload.content?.find((entry) => entry.type === "text")?.text ?? "";
+    const text = result.content.find((entry) => entry.type === "text")?.text ?? "";
     expect(text).toContain(`seen:${USER_PRIMARY}`);
     expect(text).not.toMatch(/No image model is configured/i);
     expect(mediaRuntimeMock.optimizeImageBufferForWebMedia).toHaveBeenCalledTimes(1);
@@ -208,19 +209,10 @@ describe("image custom provider auth regression", () => {
     expect(hasProviderAuthForTool({ provider: USER_PROVIDER, cfg })).toBe(false);
     expect(resolveImageModelConfigForTool({ cfg, agentDir })).toBeNull();
 
-    const tool = createImageTool({
-      config: cfg,
-      agentDir,
-      deferAutoModelResolution: true,
-      modelHasVision: false,
-      authProfileStore: createAuthProfileStoreFixture({}),
-    });
-    await expect(
-      tool!.execute("regression-2", {
-        prompt: "Read this screenshot.",
-        path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
-      }),
-    ).rejects.toThrow(/No image model is configured/);
+    const tool = createDeferredTool(cfg, agentDir);
+    await expect(tool!.execute("regression-2", inlineRequest)).rejects.toThrow(
+      /No image model is configured/,
+    );
   });
 });
 
@@ -241,12 +233,7 @@ async function executeImage(params: {
 }) {
   const config: OpenClawConfig = {
     agents: {
-      defaults: {
-        imageModel: {
-          primary: "selected/vision",
-          ...(params.fallbacks ? { fallbacks: params.fallbacks } : {}),
-        },
-      },
+      defaults: { imageModel: { primary: "selected/vision", fallbacks: params.fallbacks } },
     },
   };
   if (params.configuredProvider) {

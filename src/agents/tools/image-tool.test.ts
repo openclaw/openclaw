@@ -364,7 +364,7 @@ async function withTempWorkspacePng(
     const workspaceDir = path.join(workspaceParent, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
     const imagePath = path.join(workspaceDir, "photo.png");
-    await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+    await writePng(imagePath);
     await cb({ workspaceDir, imagePath });
   } finally {
     await fs.rm(workspaceParent, { recursive: true, force: true });
@@ -461,36 +461,26 @@ async function readMockResponseText(response: Response): Promise<string> {
 }
 
 async function describeGenericImageWithModel(
-  params: ImageDescriptionRequest,
+  params: ImageDescriptionRequest | ImagesDescriptionRequest,
 ): Promise<{ text: string; model: string }> {
-  const response = await global.fetch("https://example.invalid/media-image", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      provider: params.provider,
-      model: params.model,
-      prompt: params.prompt,
-      mime: params.mime,
-    }),
-  });
+  const multiple = "images" in params;
+  const response = await global.fetch(
+    `https://example.invalid/media-${multiple ? "images" : "image"}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        provider: params.provider,
+        model: params.model,
+        prompt: params.prompt,
+        ...(multiple ? { imageCount: params.images.length } : { mime: params.mime }),
+      }),
+    },
+  );
   return { text: await readMockResponseText(response), model: params.model };
 }
 
-async function describeGenericImagesWithModel(
-  params: ImagesDescriptionRequest,
-): Promise<{ text: string; model: string }> {
-  const response = await global.fetch("https://example.invalid/media-images", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      provider: params.provider,
-      model: params.model,
-      prompt: params.prompt,
-      imageCount: params.images.length,
-    }),
-  });
-  return { text: await readMockResponseText(response), model: params.model };
-}
+const describeGenericImagesWithModel = describeGenericImageWithModel;
 
 const codexMediaProvider = {
   id: "codex",
@@ -500,24 +490,14 @@ const codexMediaProvider = {
 
 function installImageUnderstandingProviderDeps(
   providers: MediaUnderstandingProvider[],
-  options?: {
-    describeImageWithModel?: NonNullable<
-      Parameters<typeof testing.setProviderDepsForTest>[0]
-    >["describeImageWithModel"];
-    describeImagesWithModel?: NonNullable<
-      Parameters<typeof testing.setProviderDepsForTest>[0]
-    >["describeImagesWithModel"];
-    loadImageWebMediaRuntime?: NonNullable<
-      Parameters<typeof testing.setProviderDepsForTest>[0]
-    >["loadImageWebMediaRuntime"];
-    resolveImageCompressionPolicy?: NonNullable<
-      Parameters<typeof testing.setProviderDepsForTest>[0]
-    >["resolveImageCompressionPolicy"];
-    resolveModelAsync?: NonNullable<
-      Parameters<typeof testing.setProviderDepsForTest>[0]
-    >["resolveModelAsync"];
-    useDefaultResolveModelAsync?: boolean;
-  },
+  options?: Pick<
+    NonNullable<Parameters<typeof testing.setProviderDepsForTest>[0]>,
+    | "describeImageWithModel"
+    | "describeImagesWithModel"
+    | "loadImageWebMediaRuntime"
+    | "resolveImageCompressionPolicy"
+    | "resolveModelAsync"
+  > & { useDefaultResolveModelAsync?: boolean },
 ) {
   imageProviderHarness.setProviders(providers);
   const defaultImageModels = new Map<string, string>([
@@ -533,12 +513,8 @@ function installImageUnderstandingProviderDeps(
     ["zai", "glm-4.6v"],
   ]);
   testing.setProviderDepsForTest({
-    buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
-      imageProviderHarness.buildProviderRegistry(overrides),
-    getMediaUnderstandingProvider: (
-      id: string,
-      registry: Map<string, MediaUnderstandingProvider>,
-    ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+    buildProviderRegistry: imageProviderHarness.buildProviderRegistry,
+    getMediaUnderstandingProvider: imageProviderHarness.getMediaUnderstandingProvider,
     describeImageWithModel: options?.describeImageWithModel ?? describeGenericImageWithModel,
     describeImagesWithModel: options?.describeImagesWithModel ?? describeGenericImagesWithModel,
     resolveAutoMediaKeyProviders: ({ capability }) =>
@@ -615,6 +591,21 @@ function installFastLocalImageProviderStubs(...providers: MediaUnderstandingProv
       },
     }),
   });
+}
+
+function imageProvider(
+  id: string,
+  describeImage: MediaUnderstandingProvider["describeImage"],
+): MediaUnderstandingProvider {
+  return { id, capabilities: ["image"], describeImage };
+}
+
+function makeImageDescriptionSpy() {
+  return vi.fn(async (params: ImageDescriptionRequest) => ({ text: "ok", model: params.model }));
+}
+
+async function writePng(filePath: string) {
+  await fs.writeFile(filePath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
 }
 
 function makeModelDefinition(id: string, input: Array<"text" | "image">): ModelDefinitionConfig {
@@ -831,12 +822,8 @@ describe("image tool implicit imageModel config", () => {
       const resolveDefaultMediaModelSpy = vi.fn(() => "gpt-5.4-mini");
       const resolveAutoMediaKeyProvidersSpy = vi.fn(() => ["openai"]);
       testing.setProviderDepsForTest({
-        buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
-          imageProviderHarness.buildProviderRegistry(overrides),
-        getMediaUnderstandingProvider: (
-          id: string,
-          registry: Map<string, MediaUnderstandingProvider>,
-        ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+        buildProviderRegistry: imageProviderHarness.buildProviderRegistry,
+        getMediaUnderstandingProvider: imageProviderHarness.getMediaUnderstandingProvider,
         describeImageWithModel: describeGenericImageWithModel,
         describeImagesWithModel: describeGenericImagesWithModel,
         resolveDefaultMediaModel: resolveDefaultMediaModelSpy,
@@ -864,11 +851,7 @@ describe("image tool implicit imageModel config", () => {
         text: `ok ${params.provider}/${params.model}`,
         model: params.model,
       }));
-      installFastLocalImageProviderStubs({
-        id: "opencode-go",
-        capabilities: ["image"],
-        describeImage,
-      });
+      installFastLocalImageProviderStubs(imageProvider("opencode-go", describeImage));
       const cfg: OpenClawConfig = {
         agents: { defaults: { model: { primary: "opencode-go/kimi-k2.6" } } },
       };
@@ -893,15 +876,8 @@ describe("image tool implicit imageModel config", () => {
 
   it("carries the scoped auth store into image provider execution", async () => {
     await withTempAgentDir(async (agentDir) => {
-      const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
-        text: "ok",
-        model: params.model,
-      }));
-      installImageUnderstandingProviderStubs({
-        id: "codex",
-        capabilities: ["image"],
-        describeImage,
-      });
+      const describeImage = makeImageDescriptionSpy();
+      installImageUnderstandingProviderStubs(imageProvider("codex", describeImage));
       const authProfileStore = makeAuthStore({
         "openai:scoped": openAiOAuthProfile(),
       });
@@ -934,12 +910,8 @@ describe("image tool implicit imageModel config", () => {
           ["openai", "gpt-5.4-mini"],
         ]);
         testing.setProviderDepsForTest({
-          buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
-            imageProviderHarness.buildProviderRegistry(overrides),
-          getMediaUnderstandingProvider: (
-            id: string,
-            registry: Map<string, MediaUnderstandingProvider>,
-          ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+          buildProviderRegistry: imageProviderHarness.buildProviderRegistry,
+          getMediaUnderstandingProvider: imageProviderHarness.getMediaUnderstandingProvider,
           describeImageWithModel: describeGenericImageWithModel,
           describeImagesWithModel: describeGenericImagesWithModel,
           resolveAutoMediaKeyProviders: ({ capability }) =>
@@ -990,15 +962,8 @@ describe("image tool implicit imageModel config", () => {
   ])("uses $name for provider calls", async ({ modelTimeout, expected }) => {
     await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
       await withTempAgentDir(async (agentDir) => {
-        const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
-          text: "ok",
-          model: params.model,
-        }));
-        installFastLocalImageProviderStubs({
-          id: "ollama",
-          capabilities: ["image"],
-          describeImage,
-        });
+        const describeImage = makeImageDescriptionSpy();
+        installFastLocalImageProviderStubs(imageProvider("ollama", describeImage));
         const model = "gemma4:26b-a4b-it-q4_K_M";
         const cfg: OpenClawConfig = {
           agents: { defaults: { imageModel: { primary: `ollama/${model}` } } },
@@ -1272,14 +1237,15 @@ describe("image tool implicit imageModel config", () => {
     },
   );
 
-  it.each([{ name: "image", input: { image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}` } }])(
-    "does not accept the legacy $name argument",
-    async ({ input }) => {
-      await withMinimaxImageToolFromTempAgentDir(async (tool) => {
-        await expect(tool.execute("legacy-image-arg", input)).rejects.toThrow("path required");
-      });
-    },
-  );
+  it("does not accept the legacy image argument", async () => {
+    await withMinimaxImageToolFromTempAgentDir(async (tool) => {
+      await expect(
+        tool.execute("legacy-image-arg", {
+          image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        }),
+      ).rejects.toThrow("path required");
+    });
+  });
 
   it("preserves the unsupported image reference result contract", async () => {
     await withMinimaxImageToolFromTempAgentDir(async (tool) => {
@@ -1315,7 +1281,7 @@ describe("image tool implicit imageModel config", () => {
             await expectImageToolExecOk(tool, imagePath);
             expect(fetch).toHaveBeenCalledTimes(1);
             deniedPath = path.join(path.dirname(workspaceDir), "secret.png");
-            await fs.writeFile(deniedPath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+            await writePng(deniedPath);
           }
           await expect(
             tool.execute("denied", { prompt: "Describe.", path: deniedPath }),
@@ -1334,22 +1300,15 @@ describe("image tool implicit imageModel config", () => {
 
   it("allows current iMessage account attachments", async () => {
     await withTempAgentDir(async (agentDir) => {
-      const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
-        text: "ok",
-        model: params.model,
-      }));
-      installFastLocalImageProviderStubs({
-        id: "ollama",
-        capabilities: ["image"],
-        describeImage,
-      });
+      const describeImage = makeImageDescriptionSpy();
+      installFastLocalImageProviderStubs(imageProvider("ollama", describeImage));
       const attachmentRootParent = await fs.mkdtemp(
         path.join(os.tmpdir(), "openclaw-imessage-root-"),
       );
       const attachmentRoot = attachmentRootParent;
       const imagePath = path.join(attachmentRoot, "photo.png");
       await fs.mkdir(attachmentRoot, { recursive: true });
-      await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+      await writePng(imagePath);
       try {
         const cfg: OpenClawConfig = {
           agents: { defaults: { imageModel: { primary: "ollama/moondream" } } },
@@ -1447,12 +1406,9 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
-  it.each(["FILE:/workspace/img.png"])("reads a mounted image from %s", async (image) => {
+  it("reads a mounted image from FILE:/workspace/img.png", async () => {
     await withTempSandboxState(async ({ agentDir, sandboxRoot }) => {
-      await fs.writeFile(
-        path.join(sandboxRoot, "img.png"),
-        Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
-      );
+      await writePng(path.join(sandboxRoot, "img.png"));
       const bridge = createContainerWorkspaceSandboxFsBridge(sandboxRoot);
       stubMinimaxOkFetch();
       const tool = createRequiredImageTool({
@@ -1463,16 +1419,13 @@ describe("image tool implicit imageModel config", () => {
         fsPolicy: { workspaceOnly: true },
       });
 
-      await expectImageToolExecOk(tool, image);
+      await expectImageToolExecOk(tool, "FILE:/workspace/img.png");
     });
   });
 
   it("applies workspace-only policy to image paths in sandbox mode", async () => {
     await withTempSandboxState(async ({ agentDir, sandboxRoot }) => {
-      await fs.writeFile(
-        path.join(agentDir, "secret.png"),
-        Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
-      );
+      await writePng(path.join(agentDir, "secret.png"));
       const sandbox = createUnsafeMountedSandbox({ sandboxRoot, agentRoot: agentDir });
       const bridge = sandbox.fsBridge;
       if (!bridge) {
@@ -1501,21 +1454,11 @@ describe("image tool implicit imageModel config", () => {
       await fs.mkdir(path.join(sandboxRoot, "media", "inbound"), {
         recursive: true,
       });
-      await fs.writeFile(
-        path.join(sandboxRoot, "media", "inbound", "photo.png"),
-        Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
-      );
+      await writePng(path.join(sandboxRoot, "media", "inbound", "photo.png"));
 
       const fetch = stubMinimaxOkFetch();
 
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            model: { primary: "minimax/MiniMax-M2.7" },
-            imageModel: { primary: "minimax/MiniMax-VL-01" },
-          },
-        },
-      };
+      const cfg = { agents: createMinimaxImageConfig().agents };
       const sandbox = { root: sandboxRoot, bridge: createHostSandboxFsBridge(sandboxRoot) };
       const tool = createRequiredImageTool({ config: cfg, agentDir, sandbox });
 
@@ -1533,10 +1476,7 @@ describe("image tool implicit imageModel config", () => {
     await withTempSandboxState(async ({ agentDir, sandboxRoot }) => {
       const stagedPath = "media/inbound/openclaw-staged-proof/input-file_upload.png";
       await fs.mkdir(path.dirname(path.join(sandboxRoot, stagedPath)), { recursive: true });
-      await fs.writeFile(
-        path.join(sandboxRoot, stagedPath),
-        Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
-      );
+      await writePng(path.join(sandboxRoot, stagedPath));
 
       const fetch = stubMinimaxOkFetch();
       const sandbox = {
@@ -1555,10 +1495,7 @@ describe("image tool implicit imageModel config", () => {
       expect(fetch).toHaveBeenCalledTimes(1);
       expect(res.details).toMatchObject({ rewrittenFrom: "file_upload" });
 
-      await fs.writeFile(
-        path.join(sandboxRoot, "file_upload"),
-        Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
-      );
+      await writePng(path.join(sandboxRoot, "file_upload"));
       const direct = await tool.execute("t2", { path: "file_upload" });
 
       expect(fetch).toHaveBeenCalledTimes(2);
@@ -1629,12 +1566,7 @@ describe("image tool MiniMax VLM routing", () => {
     });
 
     expect(fetch).toHaveBeenCalledTimes(2);
-    const dedupedDetails = deduped.details as
-      | {
-          images?: Array<{ image: string }>;
-        }
-      | undefined;
-    expect(dedupedDetails?.images).toHaveLength(2);
+    expect(deduped.details).toMatchObject({ images: [expect.any(Object), expect.any(Object)] });
 
     const tooMany = await tool.execute("t2", {
       prompt: "Compare these images.",
@@ -1644,16 +1576,7 @@ describe("image tool MiniMax VLM routing", () => {
     });
 
     expect(fetch).toHaveBeenCalledTimes(2);
-    const tooManyDetails = tooMany.details as
-      | {
-          error?: string;
-          count?: number;
-          max?: number;
-        }
-      | undefined;
-    expect(tooManyDetails?.error).toBe("too_many_images");
-    expect(tooManyDetails?.count).toBe(2);
-    expect(tooManyDetails?.max).toBe(1);
+    expect(tooMany.details).toMatchObject({ error: "too_many_images", count: 2, max: 1 });
   });
 
   it("rejects invalid image cap values before loading images", async () => {
@@ -1738,98 +1661,61 @@ describe("image tool response validation", () => {
     };
   }
 
-  it.each([
-    {
-      name: "surfaces provider errors from image-model responses",
-      message: createAssistantMessage({
-        stopReason: "error",
-        errorMessage: "boom",
-      }) as never,
-      expectedError: /boom/i,
-      expectedText: undefined,
-    },
-    {
-      name: "returns trimmed text from image-model responses",
-      message: createAssistantMessage({
-        api: "anthropic-messages",
-        provider: "anthropic",
-        model: "claude-opus-4-6",
-        content: [{ type: "text", text: "  hello  " }],
-      }) as never,
-      expectedError: undefined,
-      expectedText: "hello",
-    },
-  ])("$name", ({ message, expectedError, expectedText }) => {
-    const coerce = () =>
+  it("surfaces provider errors from image-model responses", () => {
+    expect(() =>
       testing.coerceImageAssistantText({
-        provider: expectedError ? "openai" : "anthropic",
-        model: expectedError ? "gpt-5.4-mini" : "claude-opus-4-6",
-        message,
-      });
-    if (expectedError) {
-      expect(coerce).toThrow(expectedError);
-    } else {
-      expect(coerce()).toBe(expectedText);
-    }
+        provider: "openai",
+        model: "gpt-5.4-mini",
+        message: createAssistantMessage({ stopReason: "error", errorMessage: "boom" }) as never,
+      }),
+    ).toThrow(/boom/i);
   });
 
-  it.each<{
-    name: string;
-    signature: unknown;
-    expected: boolean;
-    thinking?: string;
-    precedingBlocks?: number;
-    rejectText?: boolean;
-  }>([
-    {
-      name: "reasoning_content",
-      signature: "reasoning_content",
-      expected: true,
-      rejectText: true,
-    },
-    {
-      name: "Responses JSON",
-      signature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
-      expected: true,
-      rejectText: true,
-    },
-    {
-      name: "Responses object",
-      signature: { id: "rs_456", type: "reasoning.encrypted" },
-      expected: true,
-      rejectText: true,
-    },
-    {
-      name: "oversized Responses JSON",
-      signature: JSON.stringify({
+  it("returns trimmed text from image-model responses", () => {
+    expect(
+      testing.coerceImageAssistantText({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        message: createAssistantMessage({
+          api: "anthropic-messages",
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          content: [{ type: "text", text: "  hello  " }],
+        }) as never,
+      }),
+    ).toBe("hello");
+  });
+
+  it.each<[string, unknown, boolean, boolean, number]>([
+    ["reasoning_content", "reasoning_content", true, true, 0],
+    ["Responses JSON", JSON.stringify({ id: "rs_123", type: "reasoning" }), true, true, 0],
+    ["Responses object", { id: "rs_456", type: "reasoning.encrypted" }, true, true, 0],
+    [
+      "oversized Responses JSON",
+      JSON.stringify({
         id: "rs_123",
         summary: [{ text: "x".repeat(2_100) }],
         type: "reasoning",
       }),
-      expected: true,
-    },
-    {
-      name: "signature after bounded block scan",
-      signature: "reasoning_content",
-      precedingBlocks: 50,
-      expected: false,
-    },
+      true,
+      false,
+      0,
+    ],
+    ["signature after bounded block scan", "reasoning_content", false, false, 50],
   ])(
-    "detects image reasoning-only responses: $name",
-    ({
-      signature,
-      expected,
-      thinking = "  <think>private</think> maybe a cat  ",
-      precedingBlocks = 0,
-      rejectText,
-    }) => {
+    "detects image reasoning-only responses: %s",
+    (_name, signature, expected, rejectText, precedingBlocks) => {
       const message = createAssistantMessage({
         content: [
           ...Array.from({ length: precedingBlocks }, () => ({
             type: "thinking",
             thinking: "untagged",
           })),
-          { type: "thinking", thinking, thinkingSignature: signature },
+          {
+            type: "thinking",
+            thinking: "  <think>private</think> maybe a cat  ",
+            thinkingSignature: signature,
+          },
         ],
       });
       expect(testing.hasImageReasoningOnlyResponse(message as never)).toBe(expected);
@@ -1847,56 +1733,25 @@ describe("image tool response validation", () => {
 });
 
 describe("image compression policy", () => {
-  const cfgWithImageModelMetadata = {
-    agents: {
-      defaults: {
-        imageQuality: "high",
-      },
-    },
+  const cfgWithImageModelMetadata: OpenClawConfig = {
+    agents: { defaults: { imageQuality: "high" } },
     models: {
       providers: {
         anthropic: {
           baseUrl: "https://api.anthropic.com",
           api: "anthropic-messages",
-          models: [
-            {
-              id: "claude-opus-4-7",
-              name: "Claude Opus 4.7",
-              reasoning: true,
-              input: ["text", "image"],
-              contextWindow: 1_000_000,
-              maxTokens: 64_000,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              mediaInput: {
-                image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
-              },
-            },
-            {
-              id: "claude-opus-4-6",
-              name: "Claude Opus 4.6",
-              reasoning: true,
-              input: ["text", "image"],
-              contextWindow: 1_000_000,
-              maxTokens: 64_000,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              mediaInput: {
-                image: { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
-              },
-            },
-          ],
+          models: [makeModelDefinition("claude-opus-4-6", ["text", "image"])],
         },
         openai: {
           baseUrl: "https://api.openai.com/v1",
           api: "openai-responses",
           models: [
             {
-              id: "gpt-5.5",
+              ...makeModelDefinition("gpt-5.5", ["text", "image"]),
               name: "GPT-5.5",
               reasoning: true,
-              input: ["text", "image"],
               contextWindow: 272_000,
               maxTokens: 128_000,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               mediaInput: {
                 image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
               },
@@ -1905,7 +1760,7 @@ describe("image compression policy", () => {
         },
       },
     },
-  } satisfies OpenClawConfig;
+  };
 
   beforeEach(() => {
     installImageUnderstandingProviderStubs();
@@ -1916,83 +1771,80 @@ describe("image compression policy", () => {
     testing.setProviderDepsForTest();
   });
 
-  it.each([{ label: "static catalog", runtimeAugment: false, staticMaxSidePx: undefined }])(
-    "keeps image policy pinned to the prepared generation: $label",
-    async ({ runtimeAugment, staticMaxSidePx }) => {
-      const state = await createOpenClawTestState({ label: "image-model-generation" });
-      try {
-        const provider = "prepared-image-provider";
-        const model = "prepared-image-model";
-        const cfg = {} satisfies OpenClawConfig;
-        const generationA = createModelGenerationFixture({
+  it("keeps image policy pinned to the prepared generation: static catalog", async () => {
+    const state = await createOpenClawTestState({ label: "image-model-generation" });
+    try {
+      const provider = "prepared-image-provider";
+      const model = "prepared-image-model";
+      const cfg = {} satisfies OpenClawConfig;
+      const generation = (
+        label: string,
+        staticImagePolicy: Parameters<typeof createModelGenerationFixture>[0]["staticImagePolicy"],
+        maxSidePx: number,
+      ) =>
+        createModelGenerationFixture({
           agentDir: state.agentDir("prepared"),
           workspaceDir: state.workspaceDir,
           config: cfg,
-          label: "image-a",
+          label,
           provider,
           requestProvider: provider,
           modelId: model,
-          runtimeAugment,
-          staticImagePolicy: {
-            ...(staticMaxSidePx === undefined ? {} : { maxSidePx: staticMaxSidePx }),
+          runtimeAugment: false,
+          staticImagePolicy,
+          runtimeImagePolicy: { maxSidePx },
+        });
+      const generationA = generation(
+        "image-a",
+        {
+          maxBytes: 1_000_000,
+          preferredSidePx: 1_280,
+          tokenMode: "detail",
+        },
+        1_440,
+      );
+      const generationB = generation(
+        "image-b",
+        {
+          maxBytes: 2_000_000,
+          preferredSidePx: 2_560,
+          tokenMode: "provider",
+        },
+        2_880,
+      );
+      installImageUnderstandingProviderDeps([], {
+        useDefaultResolveModelAsync: true,
+      });
+      publishCurrentModelGeneration(generationB);
+
+      // Compression deliberately omits agentDir: real resolution uses the default
+      // agent, not the distinct "prepared" agent stored in the snapshot.
+      await expect(
+        testing.resolveImageCompressionPolicy({
+          cfg,
+          imageModelConfig: { primary: `${provider}/${model}` },
+          imageCount: 1,
+          preparedModelRuntime: generationA.preparedModelRuntime,
+          workspaceDir: generationA.preparedModelRuntime.workspaceDir,
+        }),
+      ).resolves.toEqual({
+        imageCount: 1,
+        models: [
+          {
+            maxSidePx: 1_440,
             maxBytes: 1_000_000,
             preferredSidePx: 1_280,
             tokenMode: "detail",
           },
-          runtimeImagePolicy: { maxSidePx: 1_440 },
-        });
-        const generationB = createModelGenerationFixture({
-          agentDir: state.agentDir("prepared"),
-          workspaceDir: state.workspaceDir,
-          config: cfg,
-          label: "image-b",
-          provider,
-          requestProvider: provider,
-          modelId: model,
-          runtimeAugment,
-          staticImagePolicy: {
-            maxBytes: 2_000_000,
-            preferredSidePx: 2_560,
-            tokenMode: "provider",
-          },
-          runtimeImagePolicy: { maxSidePx: 2_880 },
-        });
-        installImageUnderstandingProviderDeps([], {
-          useDefaultResolveModelAsync: true,
-        });
-        publishCurrentModelGeneration(generationB);
-
-        // Compression deliberately omits agentDir: real resolution uses the default
-        // agent, not the distinct "prepared" agent stored in the snapshot.
-        await expect(
-          testing.resolveImageCompressionPolicy({
-            cfg,
-            imageModelConfig: { primary: `${provider}/${model}` },
-            imageCount: 1,
-            preparedModelRuntime: generationA.preparedModelRuntime,
-            workspaceDir: generationA.preparedModelRuntime.workspaceDir,
-          }),
-        ).resolves.toEqual({
-          imageCount: 1,
-          models: [
-            {
-              maxSidePx: 1_440,
-              maxBytes: 1_000_000,
-              preferredSidePx: 1_280,
-              tokenMode: "detail",
-            },
-          ],
-        });
-        expect(generationA.resolveDynamicModel).toHaveBeenCalledTimes(
-          staticMaxSidePx === undefined ? 1 : 0,
-        );
-        expect(generationB.resolveDynamicModel).not.toHaveBeenCalled();
-      } finally {
-        resetModelGenerationFixtureState();
-        await state.cleanup();
-      }
-    },
-  );
+        ],
+      });
+      expect(generationA.resolveDynamicModel).toHaveBeenCalledOnce();
+      expect(generationB.resolveDynamicModel).not.toHaveBeenCalled();
+    } finally {
+      resetModelGenerationFixtureState();
+      await state.cleanup();
+    }
+  });
 
   it.each([
     { route: "override", supplied: "captured", expected: "captured", maxSidePx: 96 },

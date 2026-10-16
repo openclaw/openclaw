@@ -8,11 +8,7 @@ import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
 } from "../../media-understanding/provider-registry.js";
-import type {
-  ImageDescriptionRequest,
-  ImagesDescriptionRequest,
-  MediaUnderstandingProvider,
-} from "../../plugin-sdk/media-understanding.js";
+import type { MediaUnderstandingProvider } from "../../plugin-sdk/media-understanding.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
@@ -70,26 +66,19 @@ describe("image tool run abort", () => {
   });
 
   function makeDescribeSpies() {
-    const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
-      text: "ok",
-      model: params.model,
-    }));
-    const describeImages = vi.fn(async (params: ImagesDescriptionRequest) => ({
-      text: "ok",
-      model: params.model,
-    }));
-    return { describeImage, describeImages };
+    const describeModel = async ({ model }: { model: string }) => ({ text: "ok", model });
+    return { describeImage: vi.fn(describeModel), describeImages: vi.fn(describeModel) };
   }
 
   function installAbortImageDeps(
     loadWebMedia: MockImageLoadWebMedia,
-    spies: ReturnType<typeof makeDescribeSpies>,
     providers: MediaUnderstandingProvider[] = [
       { id: "minimax", capabilities: ["image"] },
       { id: "moonshot", capabilities: ["image"] },
     ],
     resolveModelAsync = resolveConfiguredImageModelForTest,
   ) {
+    const spies = makeDescribeSpies();
     const providerRegistry = buildProviderRegistry(undefined, undefined, providers);
     testing.setProviderDepsForTest({
       buildProviderRegistry: (overrides, cfg) => buildProviderRegistry(overrides, cfg, providers),
@@ -109,6 +98,7 @@ describe("image tool run abort", () => {
       describeImageWithModel: spies.describeImage,
       describeImagesWithModel: spies.describeImages,
     });
+    return spies;
   }
 
   it.each([
@@ -158,11 +148,9 @@ describe("image tool run abort", () => {
         active = scenario !== "retired after download";
         return imageMedia();
       });
-      const spies = makeDescribeSpies();
       const resolveModel = vi.fn(resolveConfiguredImageModelForTest);
-      installAbortImageDeps(
+      const spies = installAbortImageDeps(
         loadWebMedia,
-        spies,
         [{ id: "test-provider", capabilities: ["image"] }],
         resolveModel,
       );
@@ -245,8 +233,7 @@ describe("image tool run abort", () => {
   it("forwards the run signal through the provider request contract", async () => {
     vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
     const loadWebMedia: MockImageLoadWebMedia = vi.fn(async () => imageMedia());
-    const spies = makeDescribeSpies();
-    installAbortImageDeps(loadWebMedia, spies, [{ id: "minimax", capabilities: ["image"] }]);
+    const spies = installAbortImageDeps(loadWebMedia, [{ id: "minimax", capabilities: ["image"] }]);
     const controller = new AbortController();
 
     await executeAbortImage(controller.signal);
@@ -261,7 +248,6 @@ describe("image tool run abort", () => {
     async (phase) => {
       vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
       const loadWebMedia: MockImageLoadWebMedia = vi.fn(async () => imageMedia());
-      const spies = makeDescribeSpies();
       const controller = new AbortController();
       const reason = new Error("Image model selection cancelled");
       const modelStarted = createDeferredCore<AbortSignal | undefined>();
@@ -275,7 +261,7 @@ describe("image tool run abort", () => {
           return resolveConfiguredImageModelForTest(...args);
         });
       }
-      installAbortImageDeps(loadWebMedia, spies, undefined, resolveModel);
+      const spies = installAbortImageDeps(loadWebMedia, undefined, resolveModel);
 
       if (phase === "before execution") {
         controller.abort(reason);
@@ -317,8 +303,7 @@ describe("image tool run abort", () => {
         );
       });
     });
-    const spies = makeDescribeSpies();
-    installAbortImageDeps(loadWebMedia, spies);
+    const spies = installAbortImageDeps(loadWebMedia);
 
     const execution = executeAbortImage(controller.signal, [
       "https://example.test/a.png",
