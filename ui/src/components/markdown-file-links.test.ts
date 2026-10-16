@@ -1,4 +1,3 @@
-// Workspace file links share rendering across transcript and sidebar Markdown.
 import { describe, expect, it, vi } from "vitest";
 import { shortestFileLabels } from "./file-kind.ts";
 import type { MarkdownRenderOptions } from "./markdown-render-options.ts";
@@ -13,29 +12,43 @@ function fileLinks(fragment: ParentNode) {
   return [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")];
 }
 
+function workspaceLink(fragment: ParentNode, dataset: Record<string, string | undefined>) {
+  const link = fileLinks(fragment)[0];
+  expect(Object.keys(dataset).map((key) => link?.dataset[key])).toEqual(Object.values(dataset));
+  expect(["role", "tabindex", "href"].map((name) => link?.getAttribute(name))).toEqual([
+    "button",
+    "0",
+    null,
+  ]);
+  return link;
+}
+
+function linkInfo(input: string) {
+  return fileLinks(render(input)).map((link) => ({
+    path: link.dataset.filePath,
+    line: link.dataset.fileLine,
+    label: link.textContent,
+    title: link.getAttribute("title"),
+  }));
+}
+
 describe("file links", () => {
   it("links multi-segment paths only when enabled", () => {
     const enabled = render("see src/lib/foo.ts for details");
-    const link = enabled.querySelector<HTMLAnchorElement>("a.markdown-file-link");
-    expect(link?.dataset.filePath).toBe("src/lib/foo.ts");
-    expect(link?.hasAttribute("href")).toBe(false);
+    workspaceLink(enabled, { filePath: "src/lib/foo.ts" });
 
     const disabled = render("see src/lib/foo.ts and src/lib/foo.ts:42 for details", {});
     expect(disabled.querySelector("a[data-file-path]")).toBeNull();
   });
 
-  it.each<[string, string[], string[]]>([
+  it.each<[string, string[], string[]?]>([
     [
       "~/notes.md ./x.ts ../y.ts foo.ts inventory.csv",
       ["~/notes.md", "./x.ts", "../y.ts"],
       ["foo.ts", "inventory.csv"],
     ],
     ["rotated logs/app.log.1 but see src/lib/foo.ts.", ["src/lib/foo.ts"], ["logs/app.log.1"]],
-    [
-      "bumped 1.1/1.2 and `2026.9.2`, see v1.2/3.4 [part](assets/part.3mf)",
-      ["assets/part.3mf"],
-      [],
-    ],
+    ["bumped 1.1/1.2 and `2026.9.2`, see v1.2/3.4 [part](assets/part.3mf)", ["assets/part.3mf"]],
     [
       "`src/lib/foo.ts` `navigation.ts` `inventory.csv` `foo.bar()` `notes.xyz123`",
       ["src/lib/foo.ts", "navigation.ts", "inventory.csv"],
@@ -44,17 +57,15 @@ describe("file links", () => {
     [
       "`re\u0301sume\u0301.md` and `C:\\文档\\café.md:9`",
       ["re\u0301sume\u0301.md", "C:\\文档\\café.md"],
-      [],
     ],
     [
       "`café note.md` `emoji-🌱.md` `100% ready.txt` `reader's [draft] (v2).md` Read the notes/readme.md now.",
       ["notes/readme.md"],
-      [],
     ],
     ...["./portal.example/service.test", ".config/workflows/check.yml", "src.v2/app.ts"].map(
-      (path): [string, string[], string[]] => [path, [path], []],
+      (path): [string, string[]] => [path, [path]],
     ),
-  ])("recognizes workspace paths while preserving prose in %s", (input, paths, preserved) => {
+  ])("recognizes workspace paths while preserving prose in %s", (input, paths, preserved = []) => {
     const fragment = render(input);
     expect(fileLinks(fragment).map((link) => link.dataset.filePath)).toEqual(paths);
     expect(fragment.querySelectorAll("a[data-file-path]")).toHaveLength(paths.length);
@@ -71,34 +82,23 @@ describe("file links", () => {
         { path: "bar.ts", line: "7", label: "bar.ts:7:3" },
       ],
     ],
-    [
-      "`src/commands/auth-choice-options.static.ts:26-35`",
-      [{ path: "src/commands/auth-choice-options.static.ts", line: "26" }],
-    ],
+    ["`src/auth-options.static.ts:26-35`", [{ path: "src/auth-options.static.ts", line: "26" }]],
   ])("preserves line suffixes and targets their first line in %s", (input, expected) => {
-    expect(
-      fileLinks(render(input)).map((link) => ({
-        path: link.dataset.filePath,
-        line: link.dataset.fileLine,
-        label: link.textContent,
-      })),
-    ).toMatchObject(expected);
+    expect(linkInfo(input)).toMatchObject(expected);
   });
 
   it("converts explicit relative and absolute local file links", () => {
     const fragment = render("[foo.ts](src/utils/foo.ts:42) [x](/Users/a/b.ts)");
     const links = fileLinks(fragment);
     expect(links).toHaveLength(2);
-    expect(links[0]?.dataset).toMatchObject({
-      filePath: "src/utils/foo.ts",
-      fileLine: "42",
-    });
+    expect(links[0]?.dataset).toMatchObject({ filePath: "src/utils/foo.ts", fileLine: "42" });
     expect(links[1]?.dataset.filePath).toBe("/Users/a/b.ts");
     expect(links.every((link) => !link.hasAttribute("href"))).toBe(true);
 
     const disabled = render("[x](/Users/a/b.ts)", {});
-    expect(disabled.querySelector("a")?.hasAttribute("href")).toBe(false);
-    expect(disabled.querySelector("a")?.hasAttribute("data-file-path")).toBe(false);
+    expect(
+      ["href", "data-file-path"].map((name) => disabled.querySelector("a")?.hasAttribute(name)),
+    ).toEqual([false, false]);
   });
 
   it.each(["inventory.CSV", "inventory report.csv"])(
@@ -106,12 +106,8 @@ describe("file links", () => {
     (path) => {
       const markdown = `[Read inventory](${encodeURI(path)})`;
       const fragment = render(markdown);
-      const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-file-link");
-      expect(link?.dataset.filePath).toBe(path);
+      const link = workspaceLink(fragment, { filePath: path });
       expect(link?.textContent).toBe("Read inventory");
-      expect(link?.getAttribute("role")).toBe("button");
-      expect(link?.getAttribute("tabindex")).toBe("0");
-      expect(link?.hasAttribute("href")).toBe(false);
       document.body.append(fragment);
       try {
         link?.focus();
@@ -135,11 +131,7 @@ describe("file links", () => {
         `\`${path}:17\``,
         `Inspect ${path}:17 now.`,
       ]) {
-        const fragment = render(markdown);
-        const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-file-link");
-        expect(link?.dataset).toMatchObject({ filePath: path, fileLine: "17" });
-        expect(link?.getAttribute("role")).toBe("button");
-        expect(link?.hasAttribute("href")).toBe(false);
+        const link = workspaceLink(render(markdown), { filePath: path, fileLine: "17" });
         if (markdown.startsWith("[")) {
           expect(link?.textContent).toBe("Read file");
         }
@@ -152,12 +144,11 @@ describe("file links", () => {
     (name) => {
       for (const path of [name, `qa files/${name}`]) {
         for (const suffix of ["", ":17"]) {
-          const fragment = render(`[Read file](${encodeURI(path)}${suffix})`);
-          const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-file-link");
-          expect(link?.dataset.filePath).toBe(path);
-          expect(link?.dataset.fileLine).toBe(suffix ? "17" : undefined);
+          const link = workspaceLink(render(`[Read file](${encodeURI(path)}${suffix})`), {
+            filePath: path,
+            fileLine: suffix ? "17" : undefined,
+          });
           expect(link?.textContent).toBe("Read file");
-          expect(link?.hasAttribute("href")).toBe(false);
         }
       }
     },
@@ -207,14 +198,8 @@ describe("file links", () => {
 
   it.each<[string, { path?: string; line?: string; label?: string; title?: string | null }[]]>([
     [
-      "see src/components/Button.tsx for details",
-      [
-        {
-          path: "src/components/Button.tsx",
-          label: "Button.tsx",
-          title: "src/components/Button.tsx",
-        },
-      ],
+      "see src/ui/Button.tsx for details",
+      [{ path: "src/ui/Button.tsx", label: "Button.tsx", title: "src/ui/Button.tsx" }],
     ],
     ["`README.md`", [{ label: "README.md", title: null }]],
     [
@@ -243,19 +228,11 @@ describe("file links", () => {
       ],
     ]),
   ])("keeps file labels unambiguous and tooltips nonredundant in %s", (input, expected) => {
-    expect(
-      fileLinks(render(input)).map((link) => ({
-        path: link.dataset.filePath,
-        line: link.dataset.fileLine,
-        label: link.textContent,
-        title: link.getAttribute("title"),
-      })),
-    ).toMatchObject(expected);
+    expect(linkInfo(input)).toMatchObject(expected);
   });
 
   it("keeps per-path lookup cost linear as path count grows (performance contract)", () => {
-    // The pre-fix full-list rescan (#124230) used O(n^2) Map lookups.
-    // Count operations instead of timing work under variable CI load.
+    // #124230: detect the former O(n²) rescan without wall-clock timing.
     const countMapLookups = (pathCount: number): number => {
       const paths = Array.from(
         { length: pathCount },
@@ -289,13 +266,7 @@ describe("file links", () => {
     ["[Read file](/tmp/notes.__proto__)", "/tmp/notes.__proto__", "file"],
     ["skills/review/SKILL.md:12", "skills/review/SKILL.md", "skill", "12"],
   ])("classifies %s without changing workspace navigation", (input, path, kind, line) => {
-    const link = render(input).querySelector<HTMLAnchorElement>("a.markdown-file-link");
-    expect(link?.dataset.filePath).toBe(path);
-    expect(link?.dataset.fileKind).toBe(kind);
-    expect(link?.dataset.fileLine).toBe(line);
-    expect(link?.getAttribute("role")).toBe("button");
-    expect(link?.getAttribute("tabindex")).toBe("0");
-    expect(link?.hasAttribute("href")).toBe(false);
+    workspaceLink(render(input), { filePath: path, fileKind: kind, fileLine: line });
   });
 
   it.each([

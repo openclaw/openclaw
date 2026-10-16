@@ -5,17 +5,33 @@ import * as artworkLoader from "../pages/plugins/icon-loader.ts";
 import { getLobsterdex } from "./lobster-dex.ts";
 import { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
 import { planLobsterPasser, resolveLobsterPasserCrossMs } from "./lobster-pet-plans.ts";
-import { arrive, createPet, spritePresent } from "./lobster-pet.test-support.ts";
+import {
+  arrive,
+  createPet,
+  spritePresent,
+  type LobsterPetElement,
+} from "./lobster-pet.test-support.ts";
 
+const visitorPool = () => ["penguin", "fedora"] as const;
+const versionKey = "openclaw.control.lobsterpet.gatewayVersion.v1";
+const residentSelector = ".lobster-pet:not(.lobster-pet--passer)";
+const passerSelector = ".lobster-pet--passer";
 beforeEach(() => vi.useFakeTimers());
-async function tick(element: ReturnType<typeof createPet>, ms: number) {
+async function crossingPet(
+  seed = 21,
+  props: Partial<LobsterPetElement> = {},
+  mode: LobsterPetElement["mode"] = "idle",
+) {
+  const element = createPet(seed, mode);
+  await updatePet(element, { residentEnabled: false, critters: visitorPool(), ...props });
+  await tick(element, 9000);
+  return element;
+}
+async function tick(element: LobsterPetElement, ms: number) {
   await vi.advanceTimersByTimeAsync(ms);
   await element.updateComplete;
 }
-async function updatePet(
-  element: ReturnType<typeof createPet>,
-  props: Partial<ReturnType<typeof createPet>>,
-) {
+async function updatePet(element: LobsterPetElement, props: Partial<LobsterPetElement>) {
   Object.assign(element, props);
   await element.updateComplete;
 }
@@ -32,16 +48,13 @@ describe("theme visitors and resident presence", () => {
     "carries a bindle after an upgrade when the resident is enabled (initially %s)",
     async (residentEnabled) => {
       vi.setSystemTime(new Date("2026-07-09T12:00:00"));
-      vi.stubGlobal("localStorage", window.localStorage);
-      localStorage.setItem("openclaw.control.lobsterpet.gatewayVersion.v1", "2026.6.1");
+      localStorage.setItem(versionKey, "2026.6.1");
       const element = createPet(42);
       element.residentEnabled = residentEnabled;
       element.gatewayVersion = "2026.7.1";
       if (!residentEnabled) {
         await element.updateComplete;
-        expect(localStorage.getItem("openclaw.control.lobsterpet.gatewayVersion.v1")).toBe(
-          "2026.6.1",
-        );
+        expect(localStorage.getItem(versionKey)).toBe("2026.6.1");
         expect(element.querySelector(".lob-bindle")).toBeNull();
         element.residentEnabled = true;
       }
@@ -51,9 +64,7 @@ describe("theme visitors and resident presence", () => {
       expect(element.querySelector(".lobster-pet")?.getAttribute("title")).toContain(
         "just moved in",
       );
-      expect(localStorage.getItem("openclaw.control.lobsterpet.gatewayVersion.v1")).toBe(
-        "2026.7.1",
-      );
+      expect(localStorage.getItem(versionKey)).toBe("2026.7.1");
     },
   );
 
@@ -63,11 +74,9 @@ describe("theme visitors and resident presence", () => {
   ] as const)(
     "keeps independent visitor %s while the resident stays home",
     async (seed, selector) => {
-      const element = createPet(seed, "offline");
-      await updatePet(element, { residentEnabled: false, critters: ["penguin", "fedora"] });
-      await tick(element, 9000);
+      const element = await crossingPet(seed, {}, "offline");
       expect(element.querySelector(selector)).not.toBeNull();
-      expect(element.querySelector(".lobster-pet:not(.lobster-pet--passer)")).toBeNull();
+      expect(element.querySelector(residentSelector)).toBeNull();
       expect(getLobsterdex().size).toBe(0);
       await updatePet(element, { visitsEnabled: false });
       expect(element.querySelector(".lobster-pet, .lobster-bottle")).toBeNull();
@@ -81,42 +90,40 @@ describe("theme visitors and resident presence", () => {
     vi.advanceTimersToNextFrame();
     await element.updateComplete;
     expect(spritePresent(element)).toBe(true);
-    await updatePet(element, { residentEnabled: false });
-    expect(spritePresent(element)).toBe(false);
-    await updatePet(element, { mode: "busy" });
-    await tick(element, 600_500);
-    expect(spritePresent(element)).toBe(false);
-    await updatePet(element, { mode: "offline" });
-    expect(spritePresent(element)).toBe(false);
-    await updatePet(element, { residentEnabled: true });
-    expect(spritePresent(element)).toBe(true);
+    for (const [props, delay, present] of [
+      [{ residentEnabled: false }, 0, false],
+      [{ mode: "busy" }, 600_500, false],
+      [{ mode: "offline" }, 0, false],
+      [{ residentEnabled: true }, 0, true],
+    ] as const) {
+      await updatePet(element, props);
+      if (delay) {
+        await tick(element, delay);
+      }
+      expect(spritePresent(element)).toBe(present);
+    }
   });
 
   it.each(["penguin", "fedora"] as const)(
     "preserves a crossing's lifecycle when the refreshed visitor pool becomes %s",
     async (kind) => {
-      const element = createPet(21);
-      await updatePet(element, { residentEnabled: false, critters: ["penguin", "fedora"] });
-      await tick(element, 9000);
+      const element = await crossingPet();
       const crossing = element.querySelector(".lobster-pet--penguin");
       expect(crossing).not.toBeNull();
 
-      await updatePet(element, { critters: ["penguin", "fedora"] });
+      await updatePet(element, { critters: visitorPool() });
       expect(element.querySelector(".lobster-pet--penguin")).toBe(crossing);
 
       await updatePet(element, { critters: [kind] });
-      expect(element.querySelector(".lobster-pet--passer")).toBe(
-        kind === "penguin" ? crossing : null,
-      );
+      expect(element.querySelector(passerSelector)).toBe(kind === "penguin" ? crossing : null);
       await tick(element, 13_000);
-      expect(element.querySelector(".lobster-pet--passer")).toBeNull();
+      expect(element.querySelector(passerSelector)).toBeNull();
 
-      await updatePet(element, { critters: ["penguin", "fedora"] });
-      await tick(element, 10_000);
-      expect(element.querySelector(".lobster-pet--passer")).toBeNull();
-      await updatePet(element, { critters: ["penguin", "fedora"] });
-      await tick(element, 10_000);
-      expect(element.querySelector(".lobster-pet--passer")).toBeNull();
+      for (let refresh = 0; refresh < 2; refresh++) {
+        await updatePet(element, { critters: visitorPool() });
+        await tick(element, 10_000);
+        expect(element.querySelector(passerSelector)).toBeNull();
+      }
 
       const parent = element.parentElement!;
       element.remove();
@@ -124,7 +131,7 @@ describe("theme visitors and resident presence", () => {
       parent.append(element);
       await element.updateComplete;
       await tick(element, 10_000);
-      expect(element.querySelector(".lobster-pet--passer")).toBeNull();
+      expect(element.querySelector(passerSelector)).toBeNull();
 
       await updatePet(element, { seed: 55 });
       await tick(element, 9000);
@@ -142,7 +149,7 @@ describe("theme visitors and resident presence", () => {
     await element.updateComplete;
     // This load's stranger arrives at 8,403ms and crosses for 11 seconds.
     await tick(element, 13_902);
-    const resident = element.querySelector<HTMLElement>(".lobster-pet:not(.lobster-pet--passer)");
+    const resident = element.querySelector<HTMLElement>(residentSelector);
     expect(resident).not.toBeNull();
     expect(resident?.classList.contains("lobster-pet--act-wave")).toBe(false);
     await tick(element, 1);
@@ -151,27 +158,21 @@ describe("theme visitors and resident presence", () => {
 
   it("earns the golden ledge trim once the Lobsterdex is complete", async () => {
     vi.setSystemTime(new Date("2026-07-09T12:00:00"));
-    vi.stubGlobal("localStorage", window.localStorage);
-    localStorage.setItem(
-      "openclaw.control.lobsterdex.v1",
-      JSON.stringify(
-        Object.fromEntries(
-          LOBSTER_PET_PALETTES.map((palette) => [palette.id, { firstSeenAt: 1, name: "First" }]),
-        ),
-      ),
+    const dex = Object.fromEntries(
+      LOBSTER_PET_PALETTES.map(({ id }) => [id, { firstSeenAt: 1, name: "First" }]),
     );
+    localStorage.setItem("openclaw.control.lobsterdex.v1", JSON.stringify(dex));
     const element = createPet(42);
     await element.updateComplete;
     expect(element.hasAttribute("data-dex-complete")).toBe(true);
-
-    await updatePet(element, { residentEnabled: false });
-    expect(element.hasAttribute("data-dex-complete")).toBe(false);
-    await updatePet(element, { residentEnabled: true });
-    expect(element.hasAttribute("data-dex-complete")).toBe(true);
-
-    // The visits setting silences the trim like everything else.
-    await updatePet(element, { visitsEnabled: false });
-    expect(element.hasAttribute("data-dex-complete")).toBe(false);
+    for (const [props, complete] of [
+      [{ residentEnabled: false }, false],
+      [{ residentEnabled: true }, true],
+      [{ visitsEnabled: false }, false],
+    ] as const) {
+      await updatePet(element, props);
+      expect(element.hasAttribute("data-dex-complete")).toBe(complete);
+    }
   });
   it("plans plugin ids and resolves catalog, artwork, and default crossing durations", () => {
     expect(planLobsterPasser(21, { critters: ["ferris"], strangers: false })?.kind).toBe("ferris");
@@ -196,14 +197,10 @@ describe("theme visitors and resident presence", () => {
         .mockImplementation(async ({ url }) => `blob:${url}`);
       onTestFinished(() => fetchArtwork.mockRestore());
 
-      const element = createPet(21);
-      element.residentEnabled = false;
-      element.critters = [kind];
-      element.critterArtwork = {
-        [kind]: { url: `/${kind}?v=1`, title, crossMs: 5000 },
-      };
-      await element.updateComplete;
-      await tick(element, 9000);
+      const element = await crossingPet(21, {
+        critters: [kind],
+        critterArtwork: { [kind]: { url: `/${kind}?v=1`, title, crossMs: 5000 } },
+      });
       await vi.dynamicImportSettled();
       const passer = element.querySelector<HTMLElement>(`.lobster-pet--${kind}`)!;
       expect(passer.title).toBe(title);
@@ -214,7 +211,7 @@ describe("theme visitors and resident presence", () => {
       );
       expect(passer.querySelector("svg")).toBeNull();
       await updatePet(element, { critters: [...element.critters] });
-      expect(element.querySelector(".lobster-pet--passer")).toBe(passer);
+      expect(element.querySelector(passerSelector)).toBe(passer);
 
       if (kind === "ferris") {
         await updatePet(element, {
@@ -225,7 +222,7 @@ describe("theme visitors and resident presence", () => {
         expect(passer.querySelector("img")?.getAttribute("src")).toBe("blob:/ferris?v=2");
         expect(passer.style.getPropertyValue("--lob-cross")).toBe("5000ms");
         await updatePet(element, { critters: [] });
-        expect(element.querySelector(".lobster-pet--passer")).toBeNull();
+        expect(element.querySelector(passerSelector)).toBeNull();
       }
     },
   );

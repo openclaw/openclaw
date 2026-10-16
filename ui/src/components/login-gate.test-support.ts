@@ -6,6 +6,9 @@ export type LoginGateElement = HTMLElement & {
   props: Record<string, unknown>;
   updateComplete: Promise<boolean>;
 };
+export function gatePart<T extends HTMLElement = HTMLElement>(root: ParentNode, part: string) {
+  return root.querySelector<T>(`.login-gate__${part}`)!;
+}
 
 export async function mountFailure(lastError: string, lastErrorCode: string | null, secret = "") {
   const element = document.createElement("openclaw-login-gate") as LoginGateElement;

@@ -4,7 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes as Codes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { registerControlUiReloadGuard } from "../app/document-reload-guard.ts";
 import * as recovery from "../app/stale-chunk-reload.ts";
-import { mountFailure } from "./login-gate.test-support.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
+import { gatePart, mountFailure } from "./login-gate.test-support.ts";
 
 const retry = recovery.retryStaleChunkReloadWhenReachable;
 let reload: ReturnType<typeof vi.fn<() => void>>;
@@ -12,43 +13,28 @@ let probe: ReturnType<typeof vi.fn<() => Promise<{ ok: boolean }>>>;
 let storage: Storage;
 
 function refresh(element: HTMLElement) {
-  return element.querySelector<HTMLButtonElement>(".login-gate__failure-refresh")!;
+  return gatePart<HTMLButtonElement>(element, "failure-refresh");
 }
+const mountMismatch = () => mountFailure("protocol mismatch", Codes.PROTOCOL_MISMATCH);
+const expectAttempt = () => expect(recovery.retryStaleChunkReloadWhenReachable);
 function deferredProbe() {
-  let resolve!: (value: { ok: boolean }) => void;
-  probe.mockImplementationOnce(
-    () =>
-      new Promise<{ ok: boolean }>((done) => {
-        resolve = done;
-      }),
-  );
+  const { promise, resolve } = Promise.withResolvers<{ ok: boolean }>();
+  probe.mockReturnValueOnce(promise);
   return () => resolve({ ok: true });
 }
 async function pendingRefresh() {
   const finish = deferredProbe();
-  const element = await mountFailure("protocol mismatch", Codes.PROTOCOL_MISMATCH);
+  const element = await mountMismatch();
   refresh(element).click();
   return { element, finish };
 }
 async function expectCancelled() {
-  await vi.waitFor(() =>
-    expect(recovery.retryStaleChunkReloadWhenReachable).toHaveResolvedWith(false),
-  );
+  await vi.waitFor(() => expectAttempt().toHaveResolvedWith(false));
   expect(reload).not.toHaveBeenCalled();
 }
 
 beforeEach(() => {
-  const values = new Map<string, string>();
-  storage = {
-    get length() {
-      return values.size;
-    },
-    clear: () => values.clear(),
-    getItem: (key) => values.get(key) ?? null,
-    key: (index) => [...values.keys()][index] ?? null,
-    removeItem: (key) => void values.delete(key),
-    setItem: (key, value) => void values.set(key, value),
-  };
+  storage = createStorageMock();
   vi.stubGlobal("sessionStorage", storage);
   reload = vi.fn();
   probe = vi.fn().mockResolvedValue({ ok: false });
@@ -68,13 +54,15 @@ describe("login refresh ownership", () => {
   it("waits through a failed HEAD handoff probe and admits only one click", async () => {
     vi.useFakeTimers();
     probe.mockResolvedValueOnce({ ok: false }).mockResolvedValueOnce({ ok: true });
-    const element = await mountFailure("protocol mismatch", Codes.PROTOCOL_MISMATCH);
+    const element = await mountMismatch();
     refresh(element).click();
     refresh(element).click();
     await element.updateComplete;
-    expect(recovery.retryStaleChunkReloadWhenReachable).toHaveBeenCalledOnce();
-    expect(refresh(element).disabled).toBe(true);
-    expect(refresh(element).textContent).toContain("Refreshing");
+    expectAttempt().toHaveBeenCalledOnce();
+    expect(refresh(element)).toMatchObject({
+      disabled: true,
+      textContent: expect.stringContaining("Refreshing"),
+    });
     expect(reload).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(probe).toHaveBeenCalledTimes(2);
@@ -90,7 +78,7 @@ describe("login refresh ownership", () => {
   });
   it("returns to Retry after the bounded wait, then allows a successful attempt", async () => {
     vi.useFakeTimers();
-    const element = await mountFailure("protocol mismatch", Codes.PROTOCOL_MISMATCH);
+    const element = await mountMismatch();
     refresh(element).click();
     await vi.advanceTimersByTimeAsync(30_000);
     await element.updateComplete;
@@ -106,7 +94,7 @@ describe("login refresh ownership", () => {
     vi.mocked(recovery.retryStaleChunkReloadWhenReachable).mockRejectedValueOnce(
       new Error("probe failed"),
     );
-    const element = await mountFailure("protocol mismatch", Codes.PROTOCOL_MISMATCH);
+    const element = await mountMismatch();
     refresh(element).click();
     await vi.waitFor(() => expect(refresh(element).textContent?.trim()).toBe("Retry"));
     expect(refresh(element).disabled).toBe(false);
@@ -132,7 +120,7 @@ describe("login refresh ownership", () => {
     async (action) => {
       const { element, finish } = await pendingRefresh();
       if (action === "Connect") {
-        element.querySelector<HTMLButtonElement>(".login-gate__connect")!.click();
+        gatePart(element, "connect").click();
         expect(element.props.onConnect).toHaveBeenCalledOnce();
       } else if (action === "remove and reinsert") {
         element.remove();
@@ -163,7 +151,7 @@ describe("login refresh ownership", () => {
   it.each(["automatic first", "manual first"])("navigates once with %s", async (order) => {
     vi.spyOn(Math, "random").mockReturnValue(0);
     const finish = deferredProbe();
-    const element = await mountFailure("protocol mismatch", Codes.PROTOCOL_MISMATCH);
+    const element = await mountMismatch();
     let automatic: Promise<boolean>;
     if (order === "automatic first") {
       automatic = recovery.scheduleStaleChunkReload({ storage, buildId: "new-build", reload });
@@ -174,26 +162,21 @@ describe("login refresh ownership", () => {
     }
     finish();
     await automatic;
-    await vi.waitFor(() => expect(recovery.retryStaleChunkReloadWhenReachable).toHaveResolved());
+    await vi.waitFor(() => expectAttempt().toHaveResolved());
     expect(probe).toHaveBeenCalledOnce();
     expect(reload).toHaveBeenCalledOnce();
   });
   it("rechecks unsaved-input guards after the probe without discarding data", async () => {
-    const finish = deferredProbe();
-    const element = await mountFailure("protocol mismatch", Codes.PROTOCOL_MISMATCH);
     let unsaved = false;
     const explain = vi.fn();
     const release = registerControlUiReloadGuard(() => !unsaved, explain);
     try {
-      refresh(element).click();
+      const { finish } = await pendingRefresh();
       unsaved = true;
       finish();
-      await vi.waitFor(() =>
-        expect(recovery.retryStaleChunkReloadWhenReachable).toHaveResolvedWith(false),
-      );
+      await expectCancelled();
       expect(explain).toHaveBeenCalled();
       expect(unsaved).toBe(true);
-      expect(reload).not.toHaveBeenCalled();
     } finally {
       release();
     }
