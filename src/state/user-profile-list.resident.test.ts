@@ -27,7 +27,6 @@ import {
   hasMultipleResidentSessionSharingIdentities,
   getResidentUserProfileDisplay,
   captureResidentUserProfileAccess,
-  captureResidentUserProfileDisplaySnapshot,
   isUserProfileCatalogReady,
   resolveUserProfileReference,
 } from "./user-profile-list.js";
@@ -335,7 +334,6 @@ describe("resident profile display and reference catalog", () => {
         );
       }
       releases.push((await prepareUserProfileCatalog(options)).release);
-      const initialDisplaySnapshot = captureResidentUserProfileDisplaySnapshot(options);
       const merge = () =>
         producer === "email"
           ? linkEmail("first@example.test", second.id, options)
@@ -371,22 +369,8 @@ describe("resident profile display and reference catalog", () => {
       setUserProfileRole(first.id, "reader", options);
       expect(setAvatar(first.id, new Uint8Array([1, 2]), "image/png", options).ok).toBe(true);
       const native = vi.spyOn(openOpenClawStateDatabase(options).db, "prepare");
-      const snapshot = structuredClone(captureResidentUserProfileDisplaySnapshot(options));
-      expect(snapshot.revision).toBeGreaterThan(initialDisplaySnapshot.revision);
-      expect(initialDisplaySnapshot.displays.get(first.id)).toMatchObject({
-        id: first.id,
-        displayName: "first",
-        hasAvatar: false,
-      });
-      expect(snapshot.displays.has("missing")).toBe(false);
       for (const id of [first.id, second.id, head.value]) {
         expect(getUserProfileDisplay(id, options)).toMatchObject({
-          id: head.value,
-          displayName: "Current person",
-          hasAvatar: true,
-          avatarRevision: expect.stringMatching(/-png$/),
-        });
-        expect(snapshot.displays.get(id)).toMatchObject({
           id: head.value,
           displayName: "Current person",
           hasAvatar: true,

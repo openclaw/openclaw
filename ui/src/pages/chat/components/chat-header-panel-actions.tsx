@@ -3,8 +3,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
 import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
-import { ExternalPanelLink } from "../chat-pane-embedded-view.tsx";
+import { ClearCompanion, ExternalPanelLink } from "../chat-pane-embedded-view.tsx";
 import type { ChatPageHost } from "../chat-state-host.ts";
 import {
   ensureSidebarConversation,
@@ -154,6 +153,8 @@ function layoutModel(props: ChatPaneLayoutMenuProps) {
     allActions,
     mainHeaderAction: mainDefinition?.headerAction,
     sideHeaderAction: sideDefinition?.headerAction,
+    mainHeaderActionView: mainDefinition?.headerActionView,
+    sideHeaderActionView: sideDefinition?.headerActionView,
     mainHeaderLink: mainDefinition?.headerLink,
     sideHeaderLink: sideDefinition?.headerLink,
   };
@@ -167,9 +168,11 @@ export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
   const model = createMemo(() => layoutModel(props));
   const headerActions = (
     <Show when={opened() || model().allActions.length === 0}>
-      <LitContent value={model().mainHeaderAction} />
+      {model().mainHeaderAction}
+      <Show when={model().mainHeaderActionView}>{(view) => <ClearCompanion {...view()} />}</Show>
       <Show when={model().mainHeaderLink}>{(link) => <ExternalPanelLink {...link()} />}</Show>
-      <LitContent value={model().sideHeaderAction} />
+      {model().sideHeaderAction}
+      <Show when={model().sideHeaderActionView}>{(view) => <ClearCompanion {...view()} />}</Show>
       <Show when={model().sideHeaderLink}>{(link) => <ExternalPanelLink {...link()} />}</Show>
     </Show>
   );
@@ -198,12 +201,20 @@ export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
   });
   return (
     <Show
-      when={model().allActions.length > 0 || model().mainHeaderAction || model().mainHeaderLink}
+      when={
+        model().allActions.length > 0 ||
+        model().mainHeaderAction ||
+        model().mainHeaderActionView ||
+        model().mainHeaderLink
+      }
     >
       <Menu
         lazy
         id={id}
-        class={`chat-pane__layout-menu chat-panel-layout-menu${props.mobile ? " chat-panel-layout-menu--mobile" : ""}`}
+        class={[
+          "chat-pane__layout-menu chat-panel-layout-menu",
+          { "chat-panel-layout-menu--mobile": props.mobile },
+        ]}
         placement="bottom-end"
         label={t(props.mobile ? "chat.sessionHeader.panels" : "chat.sessionHeader.layout")}
         triggerClass="btn btn--ghost chat-pane__layout-trigger"

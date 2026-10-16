@@ -8,12 +8,12 @@ import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { isGatewayAvailable } from "../lib/gateway-availability.ts";
 import { projectPresencePayload } from "../lib/presence-users.ts";
+import type { SolidController } from "../lib/reactive/solid-controller-host.ts";
 import type { CatalogSessionContinuedDetail } from "../lib/sessions/catalog-key.ts";
 import { childSessionListQuery } from "../lib/sessions/child-session-data.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { SubscriptionsController } from "../lib/subscriptions-controller.ts";
-import type { SolidController } from "../lit/solid-controller-host.ts";
 import {
   discardEmptyChildSessionSnapshot,
   applySidebarChildSessionSnapshot,
@@ -33,7 +33,6 @@ import {
   archiveSessionCatalog as archiveSessionCatalogData,
   importSessionCatalog as importSessionCatalogData,
   applySessionCatalogHostEvent as applySessionCatalogHostEventToData,
-  applySessionCatalogChanged as applySessionCatalogChangedToData,
   invalidateSessionCatalogs as invalidateSessionCatalogData,
   loadMoreSessionCatalog as loadMoreSessionCatalogData,
   refreshSessionCatalogs as refreshSessionCatalogData,
@@ -397,8 +396,6 @@ export class SessionDataController implements SolidController, SessionCatalogDat
   }
 
   handleSessionCatalogHostEvent = applySessionCatalogHostEventToData.bind(null, this);
-
-  handleSessionCatalogChanged = applySessionCatalogChangedToData.bind(null, this);
 
   private readonly handleCatalogSessionContinued = (
     event: CustomEvent<CatalogSessionContinuedDetail>,

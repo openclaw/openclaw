@@ -27,6 +27,8 @@ export type ModelCatalogEntry = {
   contextWindows?: ModelCatalogContextWindowOption[];
   contextWindowDefault?: string;
   contextTokens?: number;
+  /** Provider/catalog-declared total parameter count. */
+  parameterCount?: number;
   /** Visible failed-acquisition starter; sizing comes from current static or accepted owner facts. */
   contextCapacitySource?: "unaccepted-starter";
   /** Provider-declared unknown-model estimate; not an authored or curated static limit. */

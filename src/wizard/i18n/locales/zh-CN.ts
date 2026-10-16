@@ -50,6 +50,8 @@ export const zh_CN = {
       modelAlias: "模型别名（可选）",
       modelAliasPlaceholder: "例如 local、ollama",
       modelId: "模型 ID",
+      modelIdManual: "手动输入模型 ID",
+      modelDiscoveryUnavailable: "无法从此端点发现模型。请检查基础 URL 和凭据，或手动输入模型 ID。",
       modelIdPlaceholder: "例如 llama3、claude-3-7-sonnet",
       modelIdRequired: "模型 ID 必填",
       noAuthConfirm: "未输入 API Key。是否将该端点设为免认证模式（请求不发送 Authorization 头）？",

@@ -23,6 +23,7 @@ export function isTransientCodexRestrictedTurn(
       params.toolsAllow !== undefined &&
       !(hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow))) ||
     params.delegationCapability === "report_only" ||
+    params.delegationCapability === "host_only" ||
     params.trigger === "memory"
   );
 }

@@ -93,7 +93,7 @@ function readProviderConfig(config: SpeechProviderConfig) {
 }
 
 function readOverrides(overrides: SpeechProviderOverrides | undefined): FishAudioOverrides {
-  const raw = asOptionalRecord(overrides) ?? {};
+  const raw = overrides ?? {};
   return {
     model: trimToUndefined(raw.model ?? raw.modelId)
       ? normalizeModel(raw.model ?? raw.modelId)

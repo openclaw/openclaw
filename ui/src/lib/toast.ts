@@ -46,6 +46,7 @@ function restingToastLayer() {
 // dropping it, so no caller's message disappears because it arrived too early.
 let queuedToast: ToastOptions | null = null;
 
+/** Keeps deadlines and queued outcomes alive across native host moves. */
 class ToastController {
   constructor(private readonly host: OpenClawToastHost) {}
   private readonly toastQueue: ToastOptions[] = [];

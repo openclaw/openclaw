@@ -1,5 +1,8 @@
 import { getEnvironmentData } from "node:worker_threads";
-import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import {
+  getDatabaseEngineInput,
+  getDatabaseEngineSelection,
+} from "../infra/database-engine/context.js";
 import type { PostgresSchemaFragment, StoreSchema } from "../infra/database-engine/contract.js";
 import { openEngineStore } from "../infra/database-engine/open.js";
 import {
@@ -37,9 +40,9 @@ const recovery =
   "Use the matching OpenClaw version or restore the matching PostgreSQL schema and anchor.";
 
 export function stateEngineInput() {
-  const selected = getDatabaseEngineSelection()?.input;
+  const selected = getDatabaseEngineSelection();
   if (selected) {
-    return selected;
+    return getDatabaseEngineInput("state");
   }
   const connection: unknown =
     process.env.NODE_ENV === "test"
@@ -156,6 +159,22 @@ export const stateEngineSchema: StoreSchema = {
       fromSchema: statePostgresSchema,
       schema: statePostgresSchema,
     },
+    {
+      version: 26,
+      // WITHOUT ROWID only changes SQLite storage; PostgreSQL keeps the same catalog.
+      fromSchema: statePostgresSchema,
+      schema: statePostgresSchema,
+      sql: `UPDATE schema_meta
+        SET schema_version = 26,
+          app_version = '${VERSION.replaceAll("'", "''")}',
+          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
+        WHERE meta_key = 'primary';
+        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+        VALUES ('state.schema.contentVersion', '26',
+          CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint))
+        ON CONFLICT (state_key) DO UPDATE
+          SET value_json = EXCLUDED.value_json, updated_at_ms = EXCLUDED.updated_at_ms;`,
+    },
   ],
 };
 
@@ -213,7 +232,7 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
   admitStatePostgres(db, false);
 }
 
-export function openStatePostgresReadConnection(pathname: string, expectedIdentity?: string) {
+export function openExistingStatePostgresConnection(pathname: string, expectedIdentity?: string) {
   const input = stateEngineInput();
   if (!input) {
     return undefined;
@@ -249,7 +268,7 @@ export function openStatePostgresReadConnection(pathname: string, expectedIdenti
             db: selected,
             path: pathname,
           }),
-          "PostgreSQL state reader cleanup failed.",
+          "PostgreSQL state connection cleanup failed.",
         );
         return !selected.isOpen && !anchor.isOpen;
       },
@@ -262,7 +281,7 @@ export function openStatePostgresReadConnection(pathname: string, expectedIdenti
     if (errors.length) {
       throw createSqliteLifecycleAggregateError(
         [error, ...errors],
-        "PostgreSQL state reader acquisition and cleanup failed.",
+        "PostgreSQL state connection acquisition and cleanup failed.",
         error,
       );
     }

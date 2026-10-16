@@ -5,6 +5,13 @@ export function warmReloadProbe() {
   const shifts: Array<{ at: number; value: number }> = [];
   const states: Array<{ at: number; state: string }> = [];
   const reads: Array<{ at: number; store: string; hit: boolean }> = [];
+  const transactions: Array<{
+    at: number;
+    label: string;
+    rows: number;
+    sidebarRows: number;
+    boardFrames: number;
+  }> = [];
   const rows = new Set<Element>();
   let removedRows = 0;
   let stopped = false;
@@ -31,6 +38,29 @@ export function warmReloadProbe() {
       }
     }
   });
+  // Correlate completion tasks with their actual cache owner in diagnostic traces.
+  const databasePrototype: {
+    transaction: (
+      this: IDBDatabase,
+      ...args: Parameters<IDBDatabase["transaction"]>
+    ) => ReturnType<IDBDatabase["transaction"]>;
+  } = IDBDatabase.prototype;
+  const transaction = databasePrototype.transaction;
+  IDBDatabase.prototype.transaction = function (this: IDBDatabase, ...args) {
+    const result = transaction.apply(this, args);
+    const label = `${this.name}:${[...result.objectStoreNames].join(",")}:${result.mode}`;
+    result.addEventListener("complete", () => {
+      performance.mark(`warm-idb:${label}`);
+      transactions.push({
+        at: performance.now(),
+        label,
+        rows: document.querySelectorAll(".chat-virtual-row").length,
+        sidebarRows: document.querySelectorAll(".sidebar-recent-session").length,
+        boardFrames: document.querySelectorAll(".board-widget__frame").length,
+      });
+    });
+    return result;
+  };
   // Preserve the native method so each probe call can pass its actual store as this.
   const storePrototype: {
     get: (
@@ -170,6 +200,7 @@ export function warmReloadProbe() {
       return {
         milestones,
         reads,
+        transactions,
         shifts,
         cls: shifts.reduce((sum, shift) => sum + shift.value, 0),
         lastLayoutShift: shifts.at(-1)?.at ?? null,

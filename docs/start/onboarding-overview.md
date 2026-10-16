@@ -100,6 +100,10 @@ connections in this order:
 5. Eligible loaded models in Ollama, LM Studio, or llama.cpp.
 
 The first connection that passes a live completion becomes the primary model.
+If Codex detection or runtime inspection fails, automatic setup shows the error
+and stops rather than selecting a local model. Fix the reported problem and
+retry, or choose another available provider manually. A missing Codex executable
+or login still allows the remaining connections to be tried.
 If none works, OpenClaw installs or enables the official Codex plugin and uses
 its existing login, or asks you to sign in with ChatGPT. Apple Foundation Models
 is a utility option and is never chosen as the primary model.

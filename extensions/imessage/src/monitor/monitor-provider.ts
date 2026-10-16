@@ -45,7 +45,6 @@ import {
   createNonExitingRuntime,
   danger,
   logVerbose,
-  shouldLogVerbose,
   sleepWithAbort,
   warn,
 } from "openclaw/plugin-sdk/runtime-env";
@@ -418,11 +417,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
               entries.length === 1
                 ? expectDefined(entries[0], "single iMessage dispatch entry").message
                 : combineIMessagePayloads(entries.map((entry) => entry.message));
-            if (entries.length > 1 && shouldLogVerbose()) {
-              logVerbose(
-                `[imessage] merged ${entries.length} debounced messages chars=${combined.text?.length ?? 0}`,
-              );
-            }
             await handleMessageNow(combined, admissionLifecycle);
             await settle();
           } catch (err) {
@@ -857,13 +851,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       allowFrom,
       normalizeEntry: normalizeIMessageHandle,
     });
-    if (shouldLogVerbose()) {
-      logVerbose(
-        `imessage inbound: chatId=${chatId ?? "unknown"} from=${ctxPayload.From} len=${
-          (ctxPayload.Body ?? "").length
-        }`,
-      );
-    }
 
     const sendReadReceipts = imessageCfg.sendReadReceipts !== false;
     const typingTarget = ctxPayload.To;

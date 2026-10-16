@@ -613,6 +613,9 @@ export function installGitHubPublicationTestHarness(
         if (command === `git symbolic-ref --quiet refs/heads/${BRANCH}`) {
           return commandResult("", 1);
         }
+        if (command === "git rev-parse --verify --quiet MERGE_HEAD") {
+          return commandResult("", 1);
+        }
         if (command === "git rev-parse --verify HEAD^{commit}") {
           return commandResult(`${OLD_HEAD}\n`);
         }

@@ -254,8 +254,6 @@ export class ShellOwner
   get isConnected() {
     return this.element.isConnected;
   }
-  // Temporary callback ABI used by unported lazy-element and chrome owners.
-  readonly requestUpdate = () => this.invalidate();
 
   replaceRuntime(runtime: ApplicationRuntime): void {
     if (runtime.context !== this.context) {
@@ -396,7 +394,7 @@ export class ShellOwner
     for (const cleanup of this.cleanups.splice(0).toReversed()) {
       cleanup();
     }
-    this.shellLayout.hostDisconnected();
+    this.shellLayout.dispose();
     this.shellChrome.disconnect();
     syncControlUiSystemChrome();
     this.outboxStoreImport.dispose();

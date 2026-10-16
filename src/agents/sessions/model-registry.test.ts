@@ -187,7 +187,7 @@ describe("ModelRegistry models.json auth", () => {
     );
   });
 
-  it.each(["persisted", "registered"] as const)("preserves %s prompt budgets", (source) => {
+  it.each(["persisted", "registered"] as const)("preserves %s model metadata", (source) => {
     // Synthetic providers deliberately share an id but not a prompt budget.
     // Native window and output capacity must remain separate from that budget.
     const providers: Record<string, ProviderConfigInput> = Object.fromEntries(
@@ -210,6 +210,7 @@ describe("ModelRegistry models.json auth", () => {
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               contextWindow,
               contextTokens,
+              parameterCount: 4_000_000_000,
               maxTokens: 128_000,
             },
           ],

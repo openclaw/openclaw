@@ -82,7 +82,6 @@ export default definePluginEntry({
         throw new Error("Team Reports requires an OpenClaw host with runtime entrypoint metadata");
       }
       const nextStore = await createTeamReportsStore({
-        config: ctx.config,
         stateDir: ctx.stateDir,
         workerModuleUrl: new URL(
           `./src/store.worker${path.extname(api.runtimeSource)}`,

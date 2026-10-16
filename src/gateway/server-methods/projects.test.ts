@@ -12,7 +12,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import * as combinedStoreRead from "../../config/sessions/combined-store-gateway-read.js";
-import { loadCombinedSessionStoreForGatewayCore } from "../../config/sessions/combined-store-gateway.js";
+import { loadCombinedSessionStoreForGatewayCore } from "../../config/sessions/combined-store-gateway.native.js";
 import {
   patchSessionEntryCore,
   replaceSessionEntrySync,

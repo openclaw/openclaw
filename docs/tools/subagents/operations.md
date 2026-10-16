@@ -86,6 +86,11 @@ interrupted and that partially completed actions need checking. A parent waiting
 for its child batch receives the settled results, including children that finished
 before the restart, and decides what work remains.
 
+Detached orphan reads, restored requester wakes, and cleanup share a bounded
+background budget per Gateway. A large retained backlog waits there instead of
+filling the reader task limit needed by reconnecting clients. Queued cleanup stays
+tracked through restart drain and checks its original ownership before proceeding.
+
 Operator-admitted children retain bounded source evidence with their run record.
 Before continuing the requester after restart, the Gateway revalidates the current
 operator profile, role, authentication policy, device identity, and access grant,

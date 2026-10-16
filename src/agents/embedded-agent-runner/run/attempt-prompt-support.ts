@@ -1,3 +1,4 @@
+import { logDecisionToolPrefilter } from "../../../decisions/diagnostics.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
@@ -75,21 +76,39 @@ export function createPromptBuildToolPolicy<
     return current;
   };
   const apply = (nextToolsAllow: string[] | undefined, nextDecisionIsCurrent?: () => boolean) => {
+    const modelFacingToolsBefore = current.effectiveTools.length;
     toolsAllow = nextToolsAllow;
     decisionIsCurrent = nextDecisionIsCurrent;
-    return applyCurrent();
+    const applied = applyCurrent();
+    if (decisionIsCurrent) {
+      logDecisionToolPrefilter({
+        effect: "applied",
+        modelFacingToolsBefore,
+        modelFacingToolsAfter: applied.effectiveTools.length,
+      });
+    }
+    return applied;
   };
   return {
     current,
     apply,
+    // The session baseline includes client tools and survives prompt-level pruning.
+    // Read its latest permission generation, not the previous turn's restricted surface.
+    hasBaselineTools: () => baseline.activeToolNames.length > 0,
     prepareForDispatch: <T>(prepareRestoredPrompt: () => Promise<T>): Promise<T> | undefined => {
       if (!decisionIsCurrent || decisionIsCurrent()) {
         return undefined;
       }
       // Drop only the optional Decision cap. The current host generation and
       // independent prompt-hook cap still own what is permitted.
+      const modelFacingToolsBefore = current.effectiveTools.length;
       decisionIsCurrent = undefined;
       applyCurrent();
+      logDecisionToolPrefilter({
+        effect: "restored",
+        modelFacingToolsBefore,
+        modelFacingToolsAfter: current.effectiveTools.length,
+      });
       return prepareRestoredPrompt();
     },
     refresh: () => {

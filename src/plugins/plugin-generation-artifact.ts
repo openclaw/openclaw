@@ -13,6 +13,7 @@ import {
   createPluginGenerationCapture,
   createPluginGenerationSourceLookup,
   createPluginSourceFacts,
+  markPluginSourceCaptureOperation,
   type PluginSourceCustodyFork,
   createPluginGenerationModuleLookup,
 } from "./plugin-generation-source-lookup.js";
@@ -672,7 +673,9 @@ function createPluginGenerationArtifact(
       // The receipt attests the initial snapshot; lazy imports retain their own copied bytes.
       sourceDigest: initialReceipt.sourceDigest,
       ...sourceLookup,
-      retainSourceCustody: () => sourceFacts.captureCustody(sourceLookup.captureRecoverySource),
+      retainSourceCustody: markPluginSourceCaptureOperation(() =>
+        sourceFacts.captureCustody(sourceLookup.captureRecoverySource),
+      ),
       ...createPluginGenerationModuleLookup({
         capturedPaths,
         originalSources,

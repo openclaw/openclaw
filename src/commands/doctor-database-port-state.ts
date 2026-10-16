@@ -4,7 +4,10 @@ import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveDatabaseEngineInput } from "../infra/database-engine/config.js";
 import { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
-import type { DatabaseEngineId } from "../infra/database-engine/registry.js";
+import {
+  resolveDatabaseFamilyEngines,
+  type DatabaseEngineId,
+} from "../infra/database-engine/registry.js";
 import type { DatabasePortRecoveryIntent } from "../infra/database-port-recovery.js";
 import { readBackupEngine } from "../snapshot/database-backup.js";
 import {
@@ -44,8 +47,12 @@ export async function selectDatabasePortEngine(
   config: OpenClawConfig,
   engine: DatabaseEngineId | undefined,
 ) {
-  ctx.engineSelection.input =
-    engine === "postgres" ? await resolveDatabaseEngineInput(postgresConfig(config)) : undefined;
+  // This task-scoped holder follows offline publication; boot selections remain frozen.
+  Object.assign(ctx.engineSelection, {
+    effectiveEngines: Object.freeze(resolveDatabaseFamilyEngines({ database: { engine } })),
+    postgres:
+      engine === "postgres" ? await resolveDatabaseEngineInput(postgresConfig(config)) : undefined,
+  });
 }
 
 export async function closeDatabasePortState(ctx: Context) {

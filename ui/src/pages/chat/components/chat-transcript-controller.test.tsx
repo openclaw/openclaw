@@ -22,7 +22,7 @@ import {
   contact,
   TranscriptTestHost,
 } from "../test-helpers/chat-transcript-native.tsx";
-import { ChatTranscriptController } from "./chat-transcript-controller.ts";
+import { createTranscriptTestOwner } from "./chat-transcript-owner.test-support.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -114,7 +114,7 @@ describe("chat transcript controller", () => {
     stubAnimationFrames();
     vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
     const host = new TranscriptTestHost();
-    const transcript = new ChatTranscriptController(host, () => "native-measured-tail");
+    const transcript = createTranscriptTestOwner(host, () => "native-measured-tail");
     const rows = numberedContentRows(6);
     const scroller = document.createElement("div");
     scroller.className = "chat-thread";
@@ -532,7 +532,7 @@ describe("chat transcript controller", () => {
     const onReaderScroll = vi.fn((towardEnd?: boolean) =>
       handleChatScrollTakeover(policy, towardEnd),
     );
-    const transcript = new ChatTranscriptController(host, () => "restore-retry", {
+    const transcript = createTranscriptTestOwner(host, () => "restore-retry", {
       canFollowEnd: () => !policy.chatFollowLocked,
       onReaderScroll,
     });
@@ -773,7 +773,7 @@ describe("chat transcript controller", () => {
     "retires an end index without losing newer native movement (%s px)",
     async (nativeGrowth) => {
       const flushFrames = stubAnimationFrames();
-      const transcript = new ChatTranscriptController(
+      const transcript = createTranscriptTestOwner(
         {
           addController: vi.fn(),
           removeController: vi.fn(),
@@ -905,7 +905,7 @@ describe("chat transcript controller", () => {
       const onViewportResize = vi.fn(() =>
         scheduleCommittedChatScroll(policy, false, false, { source: "resize" }),
       );
-      const transcript = new ChatTranscriptController(
+      const transcript = createTranscriptTestOwner(
         {
           addController: vi.fn(),
           removeController: vi.fn(),
@@ -1029,7 +1029,7 @@ describe("chat transcript controller", () => {
         requestUpdate: vi.fn(),
         updateComplete: Promise.resolve(true),
       };
-      const transcript = new ChatTranscriptController(host, () => `disclosure-${interrupt}`, {
+      const transcript = createTranscriptTestOwner(host, () => `disclosure-${interrupt}`, {
         geometryEventTarget,
       });
       const rows: TestContentRow[] = [

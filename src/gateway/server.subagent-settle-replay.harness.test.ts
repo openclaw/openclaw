@@ -6,7 +6,6 @@ import { buildRestartRecoveryTerminalDeliveryEvidence } from "../agents/agent-co
 import { buildAnnounceIdempotencyKey } from "../agents/announce-idempotency.js";
 import { prepareCommandSessionRecoveryEntry } from "../agents/command/session-preparation.js";
 import type { AgentCommandOpts } from "../agents/command/types.js";
-import type { AgentDeliveryEvidence } from "../agents/embedded-agent-runner/delivery-evidence.js";
 import { buildMainSessionRecoveryClearPatch } from "../agents/main-session-recovery/main-session-recovery-clear.js";
 import { recoverRestartAbortedMainSessions } from "../agents/main-session-recovery/main-session-restart-recovery.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../agents/subagents/announce/subagent-announce.requester-settle-wake.js";
@@ -878,7 +877,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
           command.onExecutionStarted?.();
           resumed.resolve();
           await resumedRelease.promise;
-          const rawEvidence: AgentDeliveryEvidence =
+          const rawEvidence =
             reply === "visible final"
               ? finalResult()
               : {
@@ -907,14 +906,31 @@ describe("public yielded settle replay with real Gateway admission", () => {
           gatewayRuntime: kernel.gatewayInstanceRuntime.recovery,
         });
         if (reply === "missing original authority" || reply === "unconsumed revoked cohort") {
-          await expect(recovery).resolves.toMatchObject({ started: 0, failed: 1 });
+          await expect(recovery).resolves.toMatchObject({ started: 0, settled: 1, failed: 0 });
           expect(agentCommandMock).toHaveBeenCalledTimes(1);
-          expect(loadSessionEntryReadOnly(scope)).toMatchObject({
+          const settled = loadSessionEntryReadOnly(scope);
+          expect(settled).toMatchObject({
+            sessionId: requesterSessionId,
             status: "interrupted",
-            abortedLastRun: true,
-            restartRecoveryRuns: [expect.objectContaining({ runId })],
-            restartRecoveryDeliverySourceRunId: runId,
+            abortedLastRun: false,
+            restartRecoveryTerminalRunIds: expect.arrayContaining([runId]),
           });
+          expect(settled?.mainRestartRecovery).toBeUndefined();
+          expect(settled?.restartRecoveryRuns).toBeUndefined();
+          expect(settled?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+          const transcript = loadTranscriptEventsSync(scope);
+          expect(transcript.at(-1)).toMatchObject({
+            message: { idempotencyKey: `main-session-restart-recovery:${runId}:interrupted` },
+          });
+          await expect(
+            recoverRestartAbortedMainSessions({
+              cfg: getRuntimeConfig(),
+              stateDir: process.env.OPENCLAW_STATE_DIR!,
+              gatewayRuntime: kernel.gatewayInstanceRuntime.recovery,
+            }),
+          ).resolves.toEqual({ started: 0, settled: 0, failed: 0, skipped: 0 });
+          expect(loadTranscriptEventsSync(scope)).toEqual(transcript);
+          expect(agentCommandMock).toHaveBeenCalledTimes(1);
           return;
         }
         await Promise.race([

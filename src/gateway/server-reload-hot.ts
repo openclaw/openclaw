@@ -112,12 +112,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       );
 
     if (plan.reloadHooks || plan.refreshHooksPolicy) {
-      try {
-        nextState.hooksConfig = resolveHooksConfig(nextConfig);
-      } catch (err) {
-        params.logHooks.warn(`hooks config reload failed: ${String(err)}`);
-        throw err;
-      }
+      nextState.hooksConfig = resolveHooksConfig(nextConfig);
     }
     nextState.hookClientIpConfig = resolveHookClientIpConfig(nextConfig);
     const internalHooks =
@@ -372,12 +367,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           cronReconciliation: params.cronReconciliation,
           reason: "reload",
           config: nextConfig,
-          afterStart: async () => {
-            await Promise.all([
-              nextState.cronState.reconcileExitWatchers(),
-              nextState.cronState.reconcileStreamWatchers(),
-            ]);
-          },
           logCron: params.logCron,
           onStartError: (err) => {
             if (!ownsCron()) {
@@ -634,15 +623,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         modelRuntime.complete();
       }
     } catch (err) {
-      if (
-        err instanceof PreparedModelRuntimePublicationSupersededError ||
-        ((publication?.hasNewerConfig?.() || publication?.isCurrent() === false) &&
-          !isRestartRetryStopped() &&
-          !plan.pluginLifecycle &&
-          !plan.disposeMcpRuntimes &&
-          !plan.restartGmailWatcher &&
-          channelReloadTargets().size === 0)
-      ) {
+      if (err instanceof PreparedModelRuntimePublicationSupersededError) {
         // The successor rebuilds stale owners even when its own edit is model-neutral.
         modelRuntime.defer();
         params.logReload.warn(

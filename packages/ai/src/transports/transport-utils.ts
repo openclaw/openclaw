@@ -21,10 +21,6 @@ export function streamFragmentError(
     : cause;
 }
 
-export function redactSensitiveText(text: string): string {
-  return getAiTransportHost().redactToolPayloadText(text);
-}
-
 export function resolveModelHeaderSentinels<TModel extends Model>(model: TModel): TModel {
   if (!model.headers) {
     return model;
@@ -93,15 +89,16 @@ export async function readResponseTextSnippet(
             ? readChunkWithIdleTimeout(reader, options.chunkTimeoutMs, options.onIdleTimeout)
             : reader.read(),
         onChunk: (chunk) => chunks.push(chunk),
-        onLimit: async () => {
-          await reader.cancel().catch(() => undefined);
+        onLimit: () => {
+          // Capture tees must not delay the byte limit or timeout outcome.
+          void reader.cancel().catch(() => undefined);
         },
       });
       bytes = Math.min(result.size, maxBytes);
       truncated = result.truncated;
     }
   } catch (error) {
-    await reader.cancel(error).catch(() => undefined);
+    void reader.cancel(error).catch(() => undefined);
     throw error;
   } finally {
     reader.releaseLock();

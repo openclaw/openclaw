@@ -17,7 +17,6 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { useUserProfileCatalogForTest } from "../../test-utils/user-profile-catalog.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createWorkerInferenceCancellationService } from "../worker-environments/inference-control.test-helpers.js";
 import { workerService } from "./environments.test-support.js";
@@ -144,7 +143,6 @@ function mockChatSuccess(mock: typeof chatAbortMock, payload: Record<string, unk
 }
 
 const projections = new Set<ReturnType<typeof createSessionRowProjectionFixture>>();
-const prepareProfileCatalog = useUserProfileCatalogForTest();
 
 function projectSession(
   context: GatewayRequestContext,
@@ -237,7 +235,6 @@ describe("sessions.abort agent scope", () => {
   });
 
   it("marks a listed session active when the embedded registry owns its session id", async () => {
-    await prepareProfileCatalog();
     const context = createContext({
       extra: { loadGatewayModelCatalog: vi.fn().mockResolvedValue([]) },
     });
@@ -505,14 +502,14 @@ describe("sessions.abort agent scope", () => {
   ])(
     "applies MCP stop ownership (clearQueued=$clearQueued, global=$globalScope)",
     async ({ clearQueued, globalScope }) => {
-      const { getOrCreateSessionMcpRuntime, unopenedMcpConfig } =
+      const { getOrCreateSessionMcpRuntime, getSessionMcpRuntimeTestManager, unopenedMcpConfig } =
         await import("../../agents/agent-bundle-mcp-manager.test-support.js");
-      const { getSessionMcpRuntimeManagerForTesting, setSessionMcpRuntimeScheduler } =
+      const { setSessionMcpRuntimeScheduler } =
         await import("../../agents/agent-bundle-mcp-manager-api.js");
       const scheduler = createTestGatewayScheduler();
       onTestFinished(() => scheduler.stop());
       await setSessionMcpRuntimeScheduler(scheduler);
-      const manager = getSessionMcpRuntimeManagerForTesting();
+      const manager = getSessionMcpRuntimeTestManager();
       const sessionKey = globalScope ? "global" : "agent:main:idle-mcp";
       mockChatSuccess(chatAbortMock, { ok: true, aborted: false, runIds: [] });
       loadSessionEntryMock.mockImplementationOnce(() => ({
@@ -674,7 +671,6 @@ describe("sessions.abort agent scope", () => {
       hasActiveRun: true,
     },
   ])("marks $name", async ({ runAgentId, agentId, hasActiveRun }) => {
-    await prepareProfileCatalog();
     const context = createContext({
       activeRuns: [["run-global", createActiveRun("global", { agentId: runAgentId })]],
       globalScope: true,

@@ -9,6 +9,7 @@ import {
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveDaemonRuntimePinStorePath } from "../../daemon/runtime-pin-store.js";
+import { resolveClientCredentialStorePath } from "../../infra/client-credential-store.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
@@ -81,6 +82,7 @@ export async function inspectActivatedUpdateState(
           (entry) =>
             entry !== shared &&
             !shared?.retainedAgentPaths?.includes(entry.path) &&
+            entry.path !== resolveClientCredentialStorePath(env) &&
             entry.path !== resolveDaemonRuntimePinStorePath(env) &&
             entry.userVersion !== null &&
             entry.userVersion !== candidateSchemaVersions.agent,

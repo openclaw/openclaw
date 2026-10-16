@@ -9,7 +9,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { requestCloudWorkerStop } from "../../components/cloud-worker-stop.runtime.ts";
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
-import { SessionDetailsController } from "../../components/session-details-controller.ts";
+import { SessionDetailsOwner } from "../../components/session-details-controller.ts";
 import { hasSessionArchiveDescendants } from "../../components/session-menu-descendants.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
 import "../../components/session-menu.ts";
@@ -194,7 +194,7 @@ export function createSessionsPage(
   let listRequest: Promise<void> | undefined;
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let appliedListResult: SessionsListResult | null | undefined;
-  const details = new SessionDetailsController(() => publish(), {
+  const details = new SessionDetailsOwner(() => publish(), {
     captureScope: captureRequestScope,
     isCurrent: isRequestScopeCurrent,
     row: () => state.result?.sessions.find((row) => row.key === state.expandedSessionKey),
@@ -1247,7 +1247,15 @@ export function createSessionsPage(
             break;
           }
           case "toggle-unread":
-            void actions.patchSession(row.key, { unread: row.unread !== true });
+            void actions.patchSession(
+              row.key,
+              { unread: row.unread !== true },
+              undefined,
+              row.sessionId,
+              {
+                sessionScope: true,
+              },
+            );
             break;
           case "rename":
             void renameSession(row);

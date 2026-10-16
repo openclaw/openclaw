@@ -50,7 +50,7 @@ it(
           const text = JSON.stringify(input[userIndex]?.content ?? "");
           requests.push(text.slice(0, 500));
           const sendMarker = text.match(
-            /SEND_(PEER_UPDATE_[0-9]+|CANCELLED_UPDATE|RESET_SOURCE_UPDATE|REVOKED_UPDATE)/u,
+            /SEND_(PEER_UPDATE_[0-9]+|CANCELLED_UPDATE|RESET_SOURCE_UPDATE|REVOKED_UPDATE|ARCHIVED_SOURCE_UPDATE)/u,
           )?.[1];
           if (sendMarker) {
             const outputIndex = input.findLastIndex((item) => item.type === "function_call_output");
@@ -114,7 +114,9 @@ it(
             return;
           }
           const marker = text
-            .match(/PEER_UPDATE_[0-9]+|CANCELLED_UPDATE|RESET_SOURCE_UPDATE|REVOKED_UPDATE/gu)
+            .match(
+              /PEER_UPDATE_[0-9]+|CANCELLED_UPDATE|RESET_SOURCE_UPDATE|REVOKED_UPDATE|ARCHIVED_SOURCE_UPDATE/gu,
+            )
             ?.at(-1);
           if (marker) {
             observed.push(marker);
@@ -180,6 +182,7 @@ it(
       const source = "agent:main:dashboard:peer-source";
       const resetSource = "agent:main:dashboard:reset-source";
       const revokedSource = "agent:main:dashboard:revoked-source";
+      const archivedSource = "agent:main:dashboard:archived-source";
       try {
         const provider = buildMockOpenAiResponsesProvider(`http://127.0.0.1:${address.port}/v1`);
         const config = {
@@ -224,12 +227,14 @@ it(
         await gateway.state.writeConfig(config);
         await gateway.startGateway();
         client = await connect();
-        for (const key of [target, source, resetSource, revokedSource]) {
-          await client.request(
+        const sessionIds = new Map<string, string>();
+        for (const key of [target, source, resetSource, revokedSource, archivedSource]) {
+          const created = await client.request<{ sessionId: string }>(
             "sessions.create",
             { key, agentId: "main", communication: { send: "always", receive: "always" } },
             { signal },
           );
+          sessionIds.set(key, created.sessionId);
         }
         await client.request(
           "agent",
@@ -269,18 +274,28 @@ it(
         const cancelled = await send(source, "CANCELLED_UPDATE");
         await send(resetSource, "RESET_SOURCE_UPDATE");
         await send(revokedSource, "REVOKED_UPDATE");
+        await send(archivedSource, "ARCHIVED_SOURCE_UPDATE");
         const before = await client.request<{ pendingInputs: ChatPendingInputsPage }>(
           "chat.history",
           { sessionKey: target },
           { signal },
         );
-        expect(before.pendingInputs.items).toHaveLength(8);
+        expect(before.pendingInputs.items).toHaveLength(9);
         expect(JSON.stringify(before)).not.toContain("sessionSendDelivery");
         await client.request("chat.abort", { sessionKey: target, runId: cancelled }, { signal });
         await client.request("sessions.reset", { key: resetSource }, { signal });
         await client.request(
           "sessions.patch",
           { key: revokedSource, communication: { send: "never", receive: "always" } },
+          { signal },
+        );
+        await client.request(
+          "sessions.patch",
+          {
+            key: archivedSource,
+            archived: true,
+            expectedSessionId: sessionIds.get(archivedSource),
+          },
           { signal },
         );
         const firstPid = gateway.child?.pid;
@@ -304,20 +319,25 @@ it(
             ]),
           { timeout: 60_000, interval: 200 },
         );
+        await vi.waitFor(
+          () => expect(gateway.logs()).toContain("Session delivery recovery blocked for "),
+          { timeout: 30_000 },
+        );
         const after = await client.request<{ pendingInputs: ChatPendingInputsPage }>(
           "chat.history",
           { sessionKey: target },
           { signal },
         );
-        // Explicit cancellation withdraws the row from display; the two blocked
-        // source deliveries remain inspectable and were not sent to the model.
+        // History retains the cancelled receipt; only permission failures can replay.
         expect(after.pendingInputs.items.map((item) => item.state)).toEqual([
+          "cancelled",
           "interrupted",
-          "interrupted",
+          "cancelled",
         ]);
         expect(after.pendingInputs.items.map((item) => item.runId)).toEqual([
           accepted.get("RESET_SOURCE_UPDATE"),
           accepted.get("REVOKED_UPDATE"),
+          accepted.get("ARCHIVED_SOURCE_UPDATE"),
         ]);
         await client.stopAndWait();
         client = undefined;
@@ -326,6 +346,9 @@ it(
         const previousRecoveryWarnings = gateway
           .logs()
           .split("Session delivery recovery blocked for ").length;
+        const previousReplacementWarnings = gateway
+          .logs()
+          .split("Session delivery endpoint was replaced").length;
         await gateway.startGateway();
         client = await connect();
         await vi.waitFor(
@@ -334,6 +357,9 @@ it(
               gateway.logs().split("Session delivery recovery blocked for ").length,
             ).toBeGreaterThan(previousRecoveryWarnings),
           { timeout: 30_000 },
+        );
+        expect(gateway.logs().split("Session delivery endpoint was replaced")).toHaveLength(
+          previousReplacementWarnings,
         );
         const finalHistory = await client.request(
           "chat.history",
@@ -344,7 +370,9 @@ it(
         expect(JSON.stringify(finalHistory)).toContain(
           "current session permissions do not allow automatic delivery",
         );
-        expect(JSON.stringify(finalHistory)).toContain("session was reset, archived, or replaced");
+        expect(JSON.stringify(finalHistory)).toContain("session was reset or replaced");
+        expect(JSON.stringify(finalHistory)).not.toContain(`From ${archivedSource}`);
+        expect(gateway.logs()).not.toContain('"archived":true');
         expect(observed).toEqual([
           "PEER_UPDATE_1",
           "PEER_UPDATE_2",

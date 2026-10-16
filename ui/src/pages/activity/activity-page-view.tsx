@@ -25,6 +25,7 @@ import {
   projectPresencePayload,
 } from "../../lib/presence-users.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import {
   isUiGlobalScopeConfigured,
   resolveUiConfiguredMainKey,
@@ -131,10 +132,7 @@ export function ActivityPageView(props: { page: ActivityPageState }) {
       setPresentationTime(Date.now());
     }
   };
-  onSettled(() => {
-    document.addEventListener("visibilitychange", visibilityChanged);
-    return () => document.removeEventListener("visibilitychange", visibilityChanged);
-  });
+  onSettled(() => listen(document, "visibilitychange", visibilityChanged));
   const expiry = createMemo(() => {
     props.page.revision();
     presentationTime();

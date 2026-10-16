@@ -43,7 +43,6 @@ import { hasUniformLineEndings } from "./chat-sidebar-file-view.tsx";
 registerFilePreviewEnglish();
 
 export { retireSessionWorkspaceCheckout } from "./chat-session-workspace-state.ts";
-export { renderSessionWorkspaceRail } from "./chat-session-workspace-rail.ts";
 export type {
   SessionWorkspaceHost,
   SessionWorkspaceProps,

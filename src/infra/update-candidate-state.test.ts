@@ -222,7 +222,8 @@ it("keeps absent stores explicit and observes newly created databases for rollba
   const before = await readUpdateStateSchemaVersions({ stateDir, config: {} });
   expect(before.every((entry) => entry.userVersion === null)).toBe(true);
   const daemon = path.join(stateDir, "control", "services.sqlite");
-  const legacy = before.filter((entry) => entry.path !== daemon);
+  const client = path.join(stateDir, "client", "credentials.sqlite");
+  const legacy = before.filter((entry) => entry.path !== daemon && entry.path !== client);
   expect(
     updateStateSchemaVersionsMatch(legacy, before, {
       sharedPath: path.join(stateDir, "state", "openclaw.sqlite"),
@@ -255,6 +256,11 @@ it("keeps absent stores explicit and observes newly created databases for rollba
   ).toBe(false);
   expect(updateStateSchemaVersionsMatch(after, withDaemon, candidate)).toBe(true);
   expect(updateStateSchemaVersionsMatch(withDaemon, after, candidate)).toBe(false);
+  await createDatabase(client, "PRAGMA user_version = 1;");
+  const withClient = await readUpdateStateSchemaVersions({ stateDir, config: {} });
+  expect(updateStateSchemaVersionsMatch(withDaemon, withClient, { sharedPath })).toBe(false);
+  expect(updateStateSchemaVersionsMatch(withDaemon, withClient, candidate)).toBe(true);
+  expect(updateStateSchemaVersionsMatch(withClient, withDaemon, candidate)).toBe(false);
 });
 
 it.runIf(process.platform !== "win32")(

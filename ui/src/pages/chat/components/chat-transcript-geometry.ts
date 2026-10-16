@@ -1,5 +1,4 @@
 import { measureElement, type Virtualizer } from "@tanstack/virtual-core";
-import type { SolidController, SolidControllerHost } from "../../../lit/solid-controller-host.ts";
 import { captureChatSessionScrollPosition, type ChatSessionScrollPosition } from "../scroll.ts";
 import type { TranscriptViewportMeasurement } from "./chat-transcript-scroll-events.ts";
 
@@ -198,39 +197,41 @@ export function maxTranscriptScrollOffset(element: HTMLElement | null): number |
     : null;
 }
 
-export class PositionRailGutterController implements SolidController {
-  private resizeObserver: ResizeObserver | null = null;
-  private viewport: HTMLDivElement | null = null;
-  private innerElement: HTMLDivElement | null = null;
-  private region: HTMLElement | null = null;
+export function createPositionRailGutter(
+  scrollElement: () => HTMLDivElement | null,
+  innerElement: () => HTMLDivElement | null,
+) {
+  let resizeObserver: ResizeObserver | null = null;
+  let observedViewport: HTMLDivElement | null = null;
+  let observedInner: HTMLDivElement | null = null;
+  let observedRegion: HTMLElement | null = null;
 
-  constructor(
-    private readonly host: SolidControllerHost & {
-      readonly scrollElement: HTMLDivElement | null;
-    },
-    private readonly inner: () => HTMLDivElement | null,
-  ) {
-    host.addController(this);
-  }
+  const disconnect = () => {
+    resizeObserver?.disconnect();
+    resizeObserver = null;
+    observedViewport = null;
+    observedInner = null;
+    observedRegion = null;
+  };
 
-  hostUpdated(): void {
-    const viewport = this.host.scrollElement;
-    const inner = this.inner();
+  const update = () => {
+    const viewport = scrollElement();
+    const inner = innerElement();
     const region = viewport?.closest<HTMLElement>(".chat-main__conversation") ?? viewport;
-    if (viewport === this.viewport && inner === this.innerElement && region === this.region) {
+    if (viewport === observedViewport && inner === observedInner && region === observedRegion) {
       return;
     }
-    this.hostDisconnected();
+    disconnect();
     if (!viewport?.isConnected || inner?.parentElement !== viewport || !region) {
       return;
     }
-    this.viewport = viewport;
-    this.innerElement = inner;
-    this.region = region;
+    observedViewport = viewport;
+    observedInner = inner;
+    observedRegion = region;
     const column = inner.querySelector<HTMLElement>(":scope > .chat-virtual-sizer") ?? inner;
     let innerWidth: number | undefined;
     let regionHeight: number | undefined;
-    this.resizeObserver = new ResizeObserver((entries) => {
+    resizeObserver = new ResizeObserver((entries) => {
       let changed = false;
       for (const entry of entries) {
         if (entry.target === column) {
@@ -244,26 +245,18 @@ export class PositionRailGutterController implements SolidController {
         }
       }
       if (changed) {
-        this.sync();
+        sync();
       }
     });
     // The virtual column has no flow height. Observing the owned range instead
     // feeds row measurements back into shallower ResizeObserver delivery.
-    this.resizeObserver.observe(column, { box: "border-box" });
-    this.resizeObserver.observe(region, { box: "border-box" });
-  }
+    resizeObserver.observe(column, { box: "border-box" });
+    resizeObserver.observe(region, { box: "border-box" });
+  };
 
-  hostDisconnected(): void {
-    this.resizeObserver?.disconnect();
-    this.resizeObserver = null;
-    this.viewport = null;
-    this.innerElement = null;
-    this.region = null;
-  }
-
-  read() {
-    const viewport = this.host.scrollElement;
-    const inner = this.inner();
+  const read = () => {
+    const viewport = scrollElement();
+    const inner = innerElement();
     if (!viewport?.isConnected || inner?.parentElement !== viewport) {
       return null;
     }
@@ -274,9 +267,9 @@ export class PositionRailGutterController implements SolidController {
     const columnWidth = inner.clientWidth;
     const region = viewport.closest<HTMLElement>(".chat-main__conversation") ?? viewport;
     return { viewport, gutter, columnWidth, regionHeight: region.clientHeight };
-  }
+  };
 
-  sync(geometry = this.read()): void {
+  const sync = (geometry = read()) => {
     if (!geometry) {
       return;
     }
@@ -289,5 +282,7 @@ export class PositionRailGutterController implements SolidController {
     // Reserve room for the compact left rail and breathing space, including
     // when a saved width fills the pane.
     viewport.toggleAttribute("data-position-rail-gutter", gutter >= 68);
-  }
+  };
+
+  return { update, disconnect, read, sync };
 }

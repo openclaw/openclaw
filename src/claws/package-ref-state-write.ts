@@ -20,13 +20,16 @@ export async function acquireMaintainedClawPackageLease(
   pkg: PlannedClawPackage,
   workspace: string,
   options: ClawAddStateOptions,
-  acquire: typeof acquireClawPackageLifecycleLease,
 ): Promise<MaintainedClawPackageLifecycleLease> {
   const artifact =
     pkg.kind === "skill"
       ? { kind: pkg.kind, source: pkg.source, ref: pkg.ref, workspace }
       : { kind: pkg.kind, source: pkg.source, ref: pkg.ref };
-  const lease = await acquire(artifact, { env: options.env, path: options.path, required: true });
+  const lease = await acquireClawPackageLifecycleLease(artifact, {
+    env: options.env,
+    path: options.path,
+    required: true,
+  });
   if (!lease) {
     throw new Error(`Could not acquire package lifecycle lease for ${pkg.ref}.`);
   }

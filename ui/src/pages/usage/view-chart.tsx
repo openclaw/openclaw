@@ -98,9 +98,6 @@ export function DailyChartCompact(props: {
       const isSelected = selectedDaySet.has(d.date);
       const showDateLabel =
         daily.length <= 14 || idx % Math.ceil(daily.length / 6) === 0 || idx === daily.length - 1;
-      const labelClass = showDateLabel
-        ? "daily-bar-label"
-        : "daily-bar-label daily-bar-label--hidden";
       const segments = stacked
         ? USAGE_TOKEN_CATEGORIES.map(({ key, className, labelKey }) => ({
             value: isTokenMode ? d[key] : (d[`${key}Cost`] ?? 0),
@@ -130,7 +127,7 @@ export function DailyChartCompact(props: {
         segments,
         segmentTotal,
         totalLabel,
-        labelClass,
+        labelClass: ["daily-bar-label", { "daily-bar-label--hidden": !showDateLabel }],
       };
     });
 
@@ -256,7 +253,7 @@ export function DailyChartCompact(props: {
                             <For each={bar().segments}>
                               {({ className, value }) => (
                                 <div
-                                  class={`cost-segment ${className}`}
+                                  class={["cost-segment", className]}
                                   style={{ height: `${(value / bar().segmentTotal) * 100}%` }}
                                 />
                               )}
@@ -312,7 +309,7 @@ export function CostBreakdownCompact(props: { totals: UsageTotals; mode: "tokens
         <For each={state().categories}>
           {({ className, labelKey, percentage, formatted }) => (
             <div
-              class={`cost-segment ${className}`}
+              class={["cost-segment", className]}
               style={{ width: `${percentage.toFixed(1)}%` }}
               title={`${t(labelKey)}: ${formatted}`}
             />
@@ -323,7 +320,7 @@ export function CostBreakdownCompact(props: { totals: UsageTotals; mode: "tokens
         <For each={state().categories}>
           {({ className, labelKey, formatted }) => (
             <span class="legend-item">
-              <span class={`legend-dot ${className}`} />
+              <span class={["legend-dot", className]} />
               {t(labelKey)} {formatted}
             </span>
           )}

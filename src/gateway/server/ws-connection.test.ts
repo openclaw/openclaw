@@ -128,6 +128,8 @@ describe("attachGatewayWsConnectionHandler", () => {
   it("keeps public worker sockets off the legacy challenge and plugin surface", async () => {
     const socket = createGatewayWsTestSocket();
     const previous = {
+      connId: "worker-previous",
+      connect: { client: { id: "openclaw-worker", mode: "worker" }, role: "worker" },
       socket: { terminate: vi.fn() },
       worker: { environmentId: "worker-1" },
     };
@@ -165,6 +167,7 @@ describe("attachGatewayWsConnectionHandler", () => {
       publicAdmission: { clientIp: "203.0.113.10", rateLimiter },
     });
     const client = {
+      connId: "worker-current",
       socket,
       connect: { client: { id: "openclaw-worker", mode: "worker" } },
       worker: { environmentId: "worker-1" },

@@ -44,6 +44,7 @@ backup and its matching build, not just reinstalling the older package.
 | 25      | Session writers validate their own rows; offline import and repair explicitly queue admission work instead of per-write invalidation triggers                                                                                                          | `Unreleased` |
 | 26      | Portable query columns for session maintenance, transcript navigation discriminators, and context-engine outbox state                                                                                                                                  | `Unreleased` |
 | 27      | Explicit context-engine outbox enqueue sequence preserving FIFO through SQLite rebuilds and PostgreSQL generation                                                                                                                                      | `Unreleased` |
+| 28      | Smaller transcript/conversation indexes and primary-key storage for memory origins                                                                                                                                                                     | `Unreleased` |
 
 Schema 1 first appeared in `v2026.5.30-beta.1` and was also written by the
 extended-stable `v2026.7.35`. Versions 2, 4, 5–6, and 7 were development-only
@@ -63,6 +64,32 @@ including shared agent registration. Run `openclaw doctor --fix` with OpenClaw
 be verified, follow the explicit agent-restoration instructions it reports, then
 rerun Doctor before upgrading the copy. Schema-8 and later session migrations
 remain supported.
+
+### Agent schema 28
+
+Schema 28 removes the unused transcript-parent index and narrows the partial
+conversation index on `session_windows` to `primary_conversation_id`. Existing
+reader indexes retain transcript navigation and conversation lookup behavior.
+SQLite stores `memory_entry_origins` as `STRICT, WITHOUT ROWID`, using its existing
+composite primary key directly instead of maintaining a second rowid tree.
+Logical keys, origin rows, constraints, and conflict handling are unchanged.
+An absent optional origins table stays absent until its first write.
+
+The schema owner applies the changes in one migration transaction. Its declared
+backup scope is `transcript_event_identities`, `session_windows`,
+`memory_entry_origins`, `sqlite_stat1`, and `sqlite_stat4`; backup machinery also
+includes schema metadata. Other pending migration or repair work can require a
+full backup. Source integrity admission still examines the complete database.
+Reclaimed pages are reusable free space; the migration does not vacuum or shrink
+the file. SQLite preserves compatible local columns, indexes, and triggers when
+rebuilding the origins table.
+
+PostgreSQL applies the same two index changes through its forward-migration
+runner. `WITHOUT ROWID` has no PostgreSQL equivalent, so origins keep their
+existing PostgreSQL table layout. The runner verifies the destination catalog
+and records its new drift fingerprint before publishing admission.
+Older builds refuse schema 28; rollback requires the verified pre-upgrade backup
+and its matching build.
 
 ### Context-engine outbox FIFO sequence
 

@@ -136,6 +136,9 @@ describe("memory entry origins", () => {
       expect(
         db.prepare("SELECT name FROM sqlite_schema WHERE name = 'memory_entry_origins'").get(),
       ).toEqual({ name: "memory_entry_origins" });
+      expect(
+        db.prepare("SELECT wr FROM pragma_table_list WHERE name = 'memory_entry_origins'").get(),
+      ).toEqual({ wr: 1 });
       expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual([]);
       expect(transactionAdmissions).toBe(2);
       await recordMemoryEntryOrigins({

@@ -249,6 +249,7 @@ async function runEmbeddedAgentForSession(
       let assistantErrorTranscript: ReturnType<typeof createAssistantErrorTranscript> | undefined;
       const ownsAssistantErrorTranscript = params.assistantErrorTranscript === undefined;
       const onAttemptStart = params.onAttemptStart;
+      const onAttemptTerminalReplaced = params.onAttemptTerminalReplaced;
       const runGeneration = async (): Promise<EmbeddedAgentRunResult> => {
         throwIfAborted();
         assertInitialOperatorModelPolicy(params, sessionAdmission?.entry);
@@ -384,8 +385,8 @@ async function runEmbeddedAgentForSession(
             ) {
               throw new Error("prepared model runtime replaced the admitted plugin generation");
             }
-            // A reload may complete while admission waits. The committed generation owns config,
-            // directories, model selection, hooks, fallbacks, and every later run projection.
+            // Admission follows committed config, directories, model selection, hooks, and fallbacks.
+            // Connection recovery may refresh transport while retaining this admitted run policy.
             const rebound = bindRunToPreparedModelRuntime({
               runParams: params,
               requestedWorkspaceResolution,
@@ -544,6 +545,10 @@ async function runEmbeddedAgentForSession(
                   onAttemptStart: () => {
                     runTerminal?.beginAttempt();
                     onAttemptStart?.();
+                  },
+                  onAttemptTerminalReplaced: () => {
+                    runTerminal?.replaceAttemptTerminal();
+                    onAttemptTerminalReplaced?.();
                   },
                   onAgentEvent: runTerminal
                     ? (event) => {

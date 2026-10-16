@@ -155,28 +155,20 @@ describe("catalog credential authority settlement", () => {
     }
   });
 
-  it.each(["failed", "generation-mismatch"] as const)(
-    "releases confirmed credential facts before rejecting a %s result",
-    async (status) => {
-      const current = fixture();
-      const pending = current.worker.loadAuth({ providerIds: [] });
-      const rejected = expect(pending).rejects.toThrow();
-      await current.dispatched.promise;
-      expect(() => current.authority.readCurrentCredential()).toThrow();
-      current.outcome.resolve(
-        status === "failed"
-          ? { status, error: "synthetic catalog failure", authCredentials: [] }
-          : {
-              status,
-              generationFingerprint: "captured",
-              reconstructedFingerprint: "mismatched",
-              authCredentials: [],
-            },
-      );
-      await rejected;
-      expect(current.authority.readCurrentCredential()).toEqual(current.credential);
-    },
-  );
+  it("releases confirmed credential facts before rejecting a failed result", async () => {
+    const current = fixture();
+    const pending = current.worker.loadAuth({ providerIds: [] });
+    const rejected = expect(pending).rejects.toThrow();
+    await current.dispatched.promise;
+    expect(() => current.authority.readCurrentCredential()).toThrow();
+    current.outcome.resolve({
+      status: "failed",
+      error: "synthetic catalog failure",
+      authCredentials: [],
+    });
+    await rejected;
+    expect(current.authority.readCurrentCredential()).toEqual(current.credential);
+  });
 
   it("keeps credential authority denied when the worker outcome is unknown", async () => {
     const current = fixture();

@@ -5,6 +5,7 @@ import { Socket } from "node:net";
 import type { webhook } from "@line/bot-sdk";
 import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { WEBHOOK_IN_FLIGHT_DEFAULTS } from "openclaw/plugin-sdk/webhook-request-guards";
@@ -368,6 +369,73 @@ describe("monitorLineProvider lifecycle", () => {
       }
     },
   );
+
+  it("refreshes direct-chat loading until a failed inbound turn settles", async () => {
+    const { messagingApi } = await import("@line/bot-sdk");
+    const { setLineRuntime } = await import("./runtime.js");
+    const entered = createDeferred<void>();
+    const finished = createDeferred<void>();
+    const loading = vi
+      .spyOn(messagingApi.MessagingApiClient.prototype, "showLoadingAnimation")
+      .mockResolvedValue({});
+    setLineRuntime({
+      channel: {
+        inbound: {
+          run: async () => {
+            entered.resolve();
+            await finished.promise;
+            throw new Error("turn failed");
+          },
+        },
+      },
+    } as unknown as Parameters<typeof setLineRuntime>[0]);
+    const monitor = await startMonitor();
+    const onMessage = createLineBotMock.mock.calls[0]?.[0]?.onMessage;
+    if (!onMessage) {
+      throw new Error("expected the LINE inbound message handler");
+    }
+    vi.useFakeTimers();
+    const task = onMessage(
+      {
+        ctxPayload: {
+          From: "line:U0123456789abcdef0123456789abcdef",
+          MessageSid: "m1",
+          RawBody: "hi",
+        },
+        route: {
+          accountId: "default",
+          agentId: "main",
+          sessionKey: "line:U0123456789abcdef0123456789abcdef",
+        },
+        isGroup: false,
+        userId: "U0123456789abcdef0123456789abcdef",
+        accountId: "default",
+        turn: { record: {} },
+      } as unknown as Parameters<typeof onMessage>[0],
+      {
+        cfg: { channels: { line: { channelAccessToken: "token" } } },
+      } as Parameters<typeof onMessage>[1],
+    );
+    try {
+      await entered.promise;
+      expect(loading).toHaveBeenCalledWith({
+        chatId: "U0123456789abcdef0123456789abcdef",
+        loadingSeconds: 20,
+      });
+      await vi.advanceTimersByTimeAsync(18_000);
+      expect(loading).toHaveBeenCalledTimes(2);
+      finished.resolve();
+      await expect(task).rejects.toThrow("turn failed");
+      await vi.advanceTimersByTimeAsync(18_000);
+      expect(loading).toHaveBeenCalledTimes(2);
+    } finally {
+      finished.resolve();
+      await Promise.resolve(task).catch(() => {});
+      await monitor.stop();
+      loading.mockRestore();
+      vi.useRealTimers();
+    }
+  });
 
   it("paces block replies with the humanDelay the turn's own config carries", async () => {
     // humanDelay lives on the agent, but only the dispatcher can act on it, so a

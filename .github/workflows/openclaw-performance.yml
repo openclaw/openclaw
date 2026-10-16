@@ -1481,7 +1481,7 @@ jobs:
         id: clawgrit_app_token
         if: ${{ needs.resolve_target.outputs.secret_eligible == 'true' && steps.prepare.outputs.ready == 'true' && steps.prepare.outputs.already_published != 'true' }}
         continue-on-error: ${{ env.REPORT_PUBLISH_REQUIRED != 'true' }}
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: Iv23liOECG0slfuhz093
           private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
@@ -1830,9 +1830,9 @@ jobs:
           set -euo pipefail
           pnpm_prefix="$RUNNER_TEMP/vitest-pair-pnpm"
           npm_config_cache="$RUNNER_TEMP/vitest-pair-npm-cache" \
-            npm install --global --prefix "$pnpm_prefix" pnpm@12.10.1
+            npm install --global --prefix "$pnpm_prefix" pnpm@12.11.1
           pnpm_bin="$pnpm_prefix/bin/pnpm"
-          [[ "$("$pnpm_bin" --version)" == "12.10.1" ]]
+          [[ "$("$pnpm_bin" --version)" == "12.11.1" ]]
           echo "VITEST_PAIR_PNPM_BIN=$pnpm_bin" >> "$GITHUB_ENV"
 
       - name: Run Vitest pair benchmark

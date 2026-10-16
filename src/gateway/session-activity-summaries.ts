@@ -15,9 +15,7 @@ import {
   readSessionActivitySummary,
   type SessionActivitySummary,
 } from "../config/sessions/activity-summary.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { applySessionEntryOperation } from "../config/sessions/session-accessor.sqlite-entry.js";
-import type { SessionEntryPatchCommitted } from "../config/sessions/session-entry-patch.types.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -39,7 +37,13 @@ import {
   type SessionLifecycleEvent,
 } from "../sessions/session-lifecycle-events.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import {
+  beginActivitySummaryCompletion,
+  type PendingSessionActivitySummaryCompletion,
+  type SessionActivitySummaryCompletion,
+} from "./session-activity-summary-completion.js";
 import {
   projectActivitySummaryEntry,
   subscribeActivitySummaryEntryReceipts,
@@ -47,6 +51,7 @@ import {
 import { readActivitySummarySource } from "./session-activity-summary-source.js";
 import {
   activitySummaryScope,
+  createActivitySummaryStorePaths,
   prepareSessionActivitySummaryView,
   resolveActivitySummaryEventTarget,
   sessionActivitySummaryOwnerIsCurrent,
@@ -96,6 +101,7 @@ type Tracked = ActivitySummaryTarget & {
   retryAt: number;
   windowStart: number;
   calls: number;
+  completion?: PendingSessionActivitySummaryCompletion;
 };
 class ActivitySummaryCancelledError extends Error {
   constructor() {
@@ -104,10 +110,11 @@ class ActivitySummaryCancelledError extends Error {
 }
 
 export type SessionActivitySummaryService = {
-  ensure: (
-    target: ActivitySummaryTarget,
+  beginCompletion(
+    target: { key: string; agentId?: string; storePath: string },
     entry: SessionEntry | undefined,
-  ) => Promise<ActivitySummaryView>;
+  ): SessionActivitySummaryCompletion | undefined;
+  ensure(target: ActivitySummaryTarget, entry?: SessionEntry): Promise<ActivitySummaryView>;
   handleEvent: (event: SessionObserverEvent) => void;
   handleTranscript: (event: InternalSessionTranscriptUpdate) => void;
   handleLifecycle: (event: SessionLifecycleEvent) => void;
@@ -133,18 +140,17 @@ export function createSessionActivitySummaries(deps: {
   const now = () => deps.scheduler.now();
   const modelRef = (target: ActivitySummaryTarget) =>
     resolveUtilityModelRefForAgent({ cfg: deps.getConfig(), agentId: target.agentId });
+  const storePathFor = createActivitySummaryStorePaths(deps.getConfig);
   const scope = (target: ActivitySummaryTarget) => ({
     agentId: target.agentId,
     sessionKey: target.key,
-    storePath: resolveSessionStorePathCore(deps.getConfig().session?.store, {
-      agentId: target.agentId,
-    }),
+    storePath: storePathFor(target.agentId),
   });
   const current = (state: Tracked) =>
     !disposed &&
     states.get(activitySummaryScope(state)) === state &&
     sessionActivitySummaryOwnerIsCurrent(state, owner) &&
-    scope(state).storePath === state.storePath;
+    storePathFor(state.agentId) === state.storePath;
   const publish = (state: Tracked, value: ActivitySummaryView["state"], force = false) => {
     if (!current(state)) {
       return;
@@ -167,6 +173,7 @@ export function createSessionActivitySummaries(deps: {
   };
   const drop = (state: Tracked) => {
     state.controller?.abort(new ActivitySummaryCancelledError());
+    state.completion?.release();
     states.delete(activitySummaryScope(state));
     const index = queue.indexOf(state);
     if (index >= 0) {
@@ -316,7 +323,7 @@ export function createSessionActivitySummaries(deps: {
     const ref = modelRef(state);
     const priorBackoff = ref ? modelBackoffs.get(ref) : undefined;
     let partial = false;
-    let ownedWork: Promise<string> | undefined;
+    const ownedWork = new AsyncWorkScope();
     try {
       if (!ref) {
         publish(state, "unavailable");
@@ -395,11 +402,12 @@ export function createSessionActivitySummaries(deps: {
             });
             return result.text;
           };
-          ownedWork = execute();
           text = truncateUtf16Safe(
             (
-              await racePromiseWithAbortSignal(ownedWork, controller.signal, (signal) =>
-                toErrorObject(signal.reason, "Activity recap cancelled"),
+              await racePromiseWithAbortSignal(
+                ownedWork.track(execute),
+                controller.signal,
+                (signal) => toErrorObject(signal.reason, "Activity recap cancelled"),
               )
             )
               .replace(/\s+/gu, " ")
@@ -413,7 +421,6 @@ export function createSessionActivitySummaries(deps: {
           clearTimeout(timer);
         }
       }
-      assertCurrentOwner(state, ref);
       if (omitted && text && !text.endsWith(OMISSION_NOTICE)) {
         text = `${truncateUtf16Safe(text, 449 - OMISSION_NOTICE.length)} ${OMISSION_NOTICE}`;
       }
@@ -431,46 +438,30 @@ export function createSessionActivitySummaries(deps: {
         totalMessages: snapshot.totalMessages,
         omittedContent: omitted,
       };
-      let committedTranscript: SessionEntryPatchCommitted["transcriptPredicate"];
-      const committed = await applySessionEntryOperation(
-        scope(state),
-        { kind: "activity-summary", summary, sessionKey: state.key },
-        {
-          preserveActivity: true,
-          onCommitted: (_entry, transcriptPredicate) => {
-            committedTranscript = transcriptPredicate;
-          },
-          workerGuard: {
-            assertCurrent: () => assertCurrentOwner(state, ref),
-            shouldCommitIf: {
-              kind: "transcript",
-              sessionId: state.sessionId,
-              generation: summary.generation,
-              leafEntryId: summary.leafEntryId,
+      const committed =
+        (await state.completion?.offer(summary)) ??
+        (await applySessionEntryOperation(
+          scope(state),
+          { kind: "activity-summary", summary, sessionKey: state.key },
+          {
+            preserveActivity: true,
+            workerGuard: {
+              assertCurrent: () => assertCurrentOwner(state, ref),
             },
           },
-        },
-      );
+        ));
       if (!committed || !current(state)) {
         state.dirty = true;
         return;
       }
-      if (!committedTranscript) {
-        throw new ActivitySummaryCancelledError();
-      }
       state.entry = { ...state.entry, activitySummary: committed.activitySummary };
-      assertCurrentOwner(state, ref);
-      if (committedTranscript?.sessionId !== state.sessionId) {
-        throw new Error("Activity recap patch omitted its transcript predicate receipt");
-      }
-      // This source-free field patch cannot change the transcript after its transaction guard.
-      const latest = committedTranscript.watermark;
       state.failures = 0;
       if (modelBackoffs.get(ref) === priorBackoff) {
         modelBackoffs.delete(ref);
       }
       partial = summary.coveredMessages < summary.totalMessages;
-      state.dirty ||= latest.generation !== summary.generation || latest.maxSeq !== summary.maxSeq;
+      // Transcript events mark this job dirty; a concurrent rewrite can leave a stale
+      // optional recap until refresh. Readers compare its saved source watermark.
       publish(state, partial || state.dirty ? "updating" : "current", true);
     } catch (error) {
       if (current(state)) {
@@ -520,8 +511,12 @@ export function createSessionActivitySummaries(deps: {
         });
       }
     } finally {
-      // Retain the slot until provider settlement, including after timeout or cancellation.
-      await ownedWork?.catch(() => undefined);
+      // Logical results can precede tracked cleanup. Retain this recap's slot
+      // through descendant settlement without draining its caller's scope.
+      await AsyncWorkScope.runWhenAllIdle(
+        () => [ownedWork],
+        () => ownedWork.drain(),
+      );
       state.controller = undefined;
       state.inFlight = false;
       if (current(state) && (state.retryPending || (!state.retryAt && (partial || state.dirty)))) {
@@ -567,7 +562,8 @@ export function createSessionActivitySummaries(deps: {
       if (!current(state)) {
         continue;
       }
-      const work = run(state)
+      // The per-recap scope must not detach cleanup from inherited connection work.
+      const work = trackAsyncWork(() => run(state))
         .catch((error: unknown) => {
           log.debug("Activity recap background work failed", { error: formatErrorMessage(error) });
         })
@@ -646,6 +642,11 @@ export function createSessionActivitySummaries(deps: {
     });
   };
   return {
+    beginCompletion(requested, entry) {
+      const target = eventTarget(requested.key, requested.agentId);
+      const state = target && admit(target, entry, requested.storePath);
+      return state ? beginActivitySummaryCompletion(state) : undefined;
+    },
     ensure,
     handleTranscript(event) {
       const target = eventTarget(
@@ -678,6 +679,7 @@ export function createSessionActivitySummaries(deps: {
         event.agentId ?? runContext?.agentId,
       );
       if (target) {
+        states.get(activitySummaryScope(target))?.completion?.markTerminal();
         requestInBackground(target);
       }
     },

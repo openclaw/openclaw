@@ -8,12 +8,6 @@ import {
   TerminalOpenUnusableSessionError,
 } from "./terminal-connection.ts";
 
-const TERMINAL_LIVENESS_IDLE_MS = 20_000;
-const TERMINAL_LIVENESS_PROBE_TIMEOUT_MS = 5_000;
-const TERMINAL_LIVENESS_FAILURE_RETRY_MS = 5_000;
-// Idle window elapses, then one probe times out: the interval after which a probe resolves failed.
-const IDLE_PLUS_PROBE_MS = TERMINAL_LIVENESS_IDLE_MS + TERMINAL_LIVENESS_PROBE_TIMEOUT_MS;
-
 type TerminalSink = Parameters<TerminalConnection["open"]>[1];
 type TerminalOpenParams = Parameters<TerminalConnection["open"]>[0];
 type TestSessionResult = {
@@ -50,7 +44,6 @@ function makeFakeClient() {
   const client: TerminalGatewayClient & {
     requests: typeof requests;
     emit: (event: string, payload: unknown) => void;
-    emitActivity: () => void;
     listenerCount: () => number;
     forceReconnects: string[];
     nextResponse: unknown;
@@ -58,7 +51,6 @@ function makeFakeClient() {
     requests,
     nextResponse: sessionResult(),
     forceReconnects,
-    inboundActivitySeq: 0,
     request: <T>(method: string, params?: unknown, options?: { timeoutMs?: number | null }) => {
       requests.push({ method, params, ...(options ? { options } : {}) });
       return Promise.resolve(client.nextResponse as T);
@@ -68,13 +60,9 @@ function makeFakeClient() {
       return () => listeners.delete(listener);
     },
     emit: (event, payload) => {
-      client.inboundActivitySeq! += 1;
       for (const l of listeners) {
         l({ event, payload });
       }
-    },
-    emitActivity: () => {
-      client.inboundActivitySeq! += 1;
     },
     forceReconnect: (reason) => forceReconnects.push(reason),
     listenerCount: () => listeners.size,
@@ -145,31 +133,6 @@ async function withFakeTimers(run: () => Promise<void>): Promise<void> {
   } finally {
     vi.useRealTimers();
   }
-}
-
-function setLivenessProbeOutcomes(
-  client: ReturnType<typeof makeFakeClient>,
-  outcomes: readonly ("success" | "timeout")[],
-): void {
-  const baseRequest = client.request.bind(client);
-  let probeIndex = 0;
-  client.request = (<T>(
-    method: string,
-    params?: unknown,
-    options?: { timeoutMs?: number | null },
-  ): Promise<T> => {
-    if (method !== "terminal.list") {
-      return baseRequest<T>(method, params, options);
-    }
-    client.requests.push({ method, params, ...(options ? { options } : {}) });
-    const outcome = outcomes[probeIndex++] ?? "timeout";
-    if (outcome === "success") {
-      return Promise.resolve({ sessions: [] } as T);
-    }
-    return new Promise<T>((_, reject) => {
-      setTimeout(() => reject(new Error("request timed out")), options?.timeoutMs ?? 0);
-    });
-  }) as typeof client.request;
 }
 
 describe("TerminalConnection", () => {
@@ -604,100 +567,79 @@ describe("TerminalConnection", () => {
     expect(await conn.list()).toEqual([]);
   });
 
-  it("forces exactly one reconnect after two consecutive failed liveness probes", () =>
+  it("retains an active stream and pending input while Gateway application responses are delayed", () =>
     withFakeTimers(async () => {
       const { client, conn } = makeHarness();
-      setLivenessProbeOutcomes(client, ["timeout", "timeout"]);
-      await openSession(conn);
+      const onData = vi.fn();
+      const onExit = vi.fn();
+      await openSession(conn, { onData, onExit });
 
-      await vi.advanceTimersByTimeAsync(IDLE_PLUS_PROBE_MS);
-      expect(client.forceReconnects).toEqual([]);
-      await vi.advanceTimersByTimeAsync(
-        TERMINAL_LIVENESS_FAILURE_RETRY_MS + TERMINAL_LIVENESS_PROBE_TIMEOUT_MS,
-      );
-      expect(client.forceReconnects).toEqual(["terminal liveness timeout"]);
-      conn.dispose();
+      const response = createDeferred<{ ok: boolean }>();
+      deferRequest(client, "terminal.input", response);
+      const baseRequest = client.request.bind(client);
+      client.request = <T>(
+        method: string,
+        params?: unknown,
+        options?: { timeoutMs?: number | null },
+      ): Promise<T> => {
+        const timeoutMs = options?.timeoutMs;
+        if (timeoutMs != null) {
+          client.requests.push({ method, params, options });
+          return new Promise<T>((_, reject) => {
+            setTimeout(
+              () => reject(new Error("Gateway application response timed out")),
+              timeoutMs,
+            );
+          });
+        }
+        return baseRequest<T>(method, params, options);
+      };
+
+      let settled = false;
+      const input = conn.input("s1", "echo ready\n").then(() => {
+        settled = true;
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(client.forceReconnects).toEqual([]);
+        expect(onExit).not.toHaveBeenCalled();
+        expect(conn.size).toBe(1);
+        expect(client.listenerCount()).toBe(1);
+        expect(settled).toBe(false);
+
+        response.resolve({ ok: true });
+        await input;
+        expect(settled).toBe(true);
+        emitData(client, 6, "ready\n");
+        expect(onData).toHaveBeenCalledExactlyOnceWith("ready\n");
+      } finally {
+        response.resolve({ ok: true });
+        await input;
+        conn.dispose();
+      }
     }));
 
-  it("resets liveness failures after a successful probe", () =>
-    withFakeTimers(async () => {
-      const { client, conn } = makeHarness();
-      setLivenessProbeOutcomes(client, ["timeout", "success", "timeout"]);
-      await openSession(conn);
-
-      // Probes: timeout (fail), success (clears the streak), timeout (fail again).
-      await vi.advanceTimersByTimeAsync(IDLE_PLUS_PROBE_MS);
-      await vi.advanceTimersByTimeAsync(TERMINAL_LIVENESS_FAILURE_RETRY_MS + IDLE_PLUS_PROBE_MS);
-      // The middle success reset the streak, so the later lone failure cannot reconnect.
-      expect(client.forceReconnects).toEqual([]);
-      conn.dispose();
-    }));
-
-  it("keeps the socket when other inbound traffic arrives during a failed probe", () =>
-    withFakeTimers(async () => {
-      const { client, conn } = makeHarness();
-      setLivenessProbeOutcomes(client, ["timeout", "timeout"]);
-      await openSession(conn);
-
-      await vi.advanceTimersByTimeAsync(TERMINAL_LIVENESS_IDLE_MS);
-      // A frame delivered mid-probe proves the socket alive, so the probe timeout is not counted.
-      client.emitActivity();
-      await vi.advanceTimersByTimeAsync(TERMINAL_LIVENESS_PROBE_TIMEOUT_MS + IDLE_PLUS_PROBE_MS);
-
-      expect(client.forceReconnects).toEqual([]);
-      conn.dispose();
-    }));
-
-  it("restarts the full idle window when inbound traffic arrives during the retry backoff", () =>
-    withFakeTimers(async () => {
-      const { client, conn } = makeHarness();
-      setLivenessProbeOutcomes(client, ["timeout", "timeout"]);
-      await openSession(conn);
-
-      const probeCount = () =>
-        client.requests.filter((request) => request.method === "terminal.list").length;
-      // First probe fails and schedules the short 5s retry.
-      await vi.advanceTimersByTimeAsync(IDLE_PLUS_PROBE_MS);
-      expect(probeCount()).toBe(1);
-
-      // A non-terminal frame proves the socket alive during the backoff: the next check treats it
-      // as fresh activity and waits a full idle window instead of re-probing on the short retry, so
-      // no second probe fires and no reconnect happens.
-      client.emitActivity();
-      await vi.advanceTimersByTimeAsync(
-        TERMINAL_LIVENESS_FAILURE_RETRY_MS + TERMINAL_LIVENESS_PROBE_TIMEOUT_MS,
-      );
-      expect(probeCount()).toBe(1);
-      expect(client.forceReconnects).toEqual([]);
-      conn.dispose();
-    }));
-
-  // A reply that lands after panel teardown races a dead owner. Registering its
-  // stream would retain the sink forever and arm the liveness probe loop
-  // against the replaced client, so the owner must refuse post-dispose work.
+  // A reply after panel teardown must not retain a sink or event subscription.
   it.each([
     ["attach", "terminal.attach"],
     ["open", "terminal.open"],
   ] as const)(
-    "a late %s reply after dispose() leaves no resurrected stream or liveness probes",
-    (kind, method) =>
-      withFakeTimers(async () => {
-        const { client, conn } = makeHarness();
-        const response = createDeferred<TestSessionResult & { buffer: string }>();
-        deferRequest(client, method, response);
-        const settle =
-          kind === "attach"
-            ? conn.attach("s1", testSink())
-            : conn.open({ cols: 80, rows: 24 }, testSink());
-        // Panel teardown (reconnect or element removal) discards the connection
-        // while the RPC is still in flight.
-        conn.dispose();
-        response.resolve({ ...sessionResult(), buffer: "replayed\n", seq: 9 });
-        await expect(settle).resolves.toMatchObject({ sessionId: "s1" });
-        expect(conn.size).toBe(0);
-        expect(client.listenerCount()).toBe(0);
-        await vi.advanceTimersByTimeAsync(IDLE_PLUS_PROBE_MS);
-        expect(client.requests.filter((request) => request.method === "terminal.list")).toEqual([]);
-      }),
+    "a late %s reply after dispose() leaves no resurrected stream or listener",
+    async (kind, method) => {
+      const { client, conn } = makeHarness();
+      const response = createDeferred<TestSessionResult & { buffer: string }>();
+      deferRequest(client, method, response);
+      const settle =
+        kind === "attach"
+          ? conn.attach("s1", testSink())
+          : conn.open({ cols: 80, rows: 24 }, testSink());
+      // Panel teardown (reconnect or element removal) discards the connection
+      // while the RPC is still in flight.
+      conn.dispose();
+      response.resolve({ ...sessionResult(), buffer: "replayed\n", seq: 9 });
+      await expect(settle).resolves.toMatchObject({ sessionId: "s1" });
+      expect(conn.size).toBe(0);
+      expect(client.listenerCount()).toBe(0);
+    },
   );
 });

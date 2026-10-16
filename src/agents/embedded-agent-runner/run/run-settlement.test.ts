@@ -188,14 +188,14 @@ async function withSettlementFixture(
 describe("MCP run lifetime", () => {
   it("retires a run-owned transient successor without a durable commit", async () => {
     await withSettlementFixture(async (fixture) => {
-      const { getOrCreateSessionMcpRuntime, unopenedMcpConfig } =
+      const { getOrCreateSessionMcpRuntime, getSessionMcpRuntimeTestManager, unopenedMcpConfig } =
         await import("../../agent-bundle-mcp-manager.test-support.js");
-      const { getSessionMcpRuntimeManagerForTesting, setSessionMcpRuntimeScheduler } =
+      const { setSessionMcpRuntimeScheduler } =
         await import("../../agent-bundle-mcp-manager-api.js");
       const scheduler = createTestGatewayScheduler();
       onTestFinished(() => scheduler.stop());
       await setSessionMcpRuntimeScheduler(scheduler);
-      const manager = getSessionMcpRuntimeManagerForTesting();
+      const manager = getSessionMcpRuntimeTestManager();
       const sessionId = randomUUID();
       fixture.input.runInput.runParams.cleanupBundleMcpOnRunEnd = true;
       fixture.input.compaction.durable = false;
@@ -222,14 +222,14 @@ describe("MCP run lifetime", () => {
 
   it.each([false, true])("retires only run-owned IDs when cleanup is %s", async (cleanup) => {
     await withSettlementFixture(async (fixture) => {
-      const { getOrCreateSessionMcpRuntime, unopenedMcpConfig } =
+      const { getOrCreateSessionMcpRuntime, getSessionMcpRuntimeTestManager, unopenedMcpConfig } =
         await import("../../agent-bundle-mcp-manager.test-support.js");
-      const { getSessionMcpRuntimeManagerForTesting, setSessionMcpRuntimeScheduler } =
+      const { setSessionMcpRuntimeScheduler } =
         await import("../../agent-bundle-mcp-manager-api.js");
       const scheduler = createTestGatewayScheduler();
       onTestFinished(() => scheduler.stop());
       await setSessionMcpRuntimeScheduler(scheduler);
-      const manager = getSessionMcpRuntimeManagerForTesting();
+      const manager = getSessionMcpRuntimeTestManager();
       fixture.input.runInput.runParams.cleanupBundleMcpOnRunEnd = cleanup;
       const create = (sessionId: string) =>
         getOrCreateSessionMcpRuntime({

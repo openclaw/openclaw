@@ -20,7 +20,7 @@ Shared app-server startup has its own budget of ten times
 control scope starts its request budget once the client is ready. A caller
 that cancels or exhausts a separate acquisition deadline stops waiting without
 closing the initializing client. Later calls can join that startup, including
-after all earlier waiters have left. The 30-second idle grace starts after the client is ready.
+after all earlier waiters have left. The five-minute idle grace starts after the client is ready.
 Isolated clients remain owned by their caller's deadline, and Gateway shutdown
 still cancels shared startup.
 

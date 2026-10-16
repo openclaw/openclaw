@@ -14,8 +14,8 @@ import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-l
 import { projectGatewayEventLog } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { canReadSystemInfo, SYSTEM_INFO_POLL_INTERVAL_MS } from "../../lib/system-info.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import "../../styles/debug-data.css";
 import { DebugOverlaySectionLoading } from "./debug-overlay-loading-view.tsx";
 import {

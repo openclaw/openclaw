@@ -4,12 +4,8 @@ import { steerableQueuedMessage } from "../chat-queue.ts";
 import { restoreHistoryCaret } from "./chat-composer-dom.ts";
 import type { GoalComposerController } from "./chat-composer-goal-mode.tsx";
 import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.tsx";
-import { handleSkillMenuKeydown, type SkillMenuHost } from "./chat-composer-skill-menu.tsx";
-import {
-  handleInlineSlashArgKeydown,
-  handleSlashMenuKeydown,
-  type SlashMenuHost,
-} from "./chat-composer-slash-menu.tsx";
+import type { SkillMenuHost } from "./chat-composer-skill-menu.tsx";
+import type { SlashMenuHost } from "./chat-composer-slash-menu.tsx";
 import { commitComposerDraft } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
@@ -61,11 +57,11 @@ export function createComposerKeyDownHandler({
       return;
     }
 
-    if (state.emojiMenu.handleKeydown(event, props.paneId, requestUpdate)) {
+    if (state.emojiMenu.handleKeydown(event, props.paneId)) {
       return;
     }
 
-    if (state.mentionMenu.handleKeydown(event, mentionMenuHost, requestUpdate)) {
+    if (state.mentionMenu.handleKeydown(event, mentionMenuHost)) {
       return;
     }
 
@@ -87,9 +83,8 @@ export function createComposerKeyDownHandler({
 
     if (
       props.connected &&
-      (handleSkillMenuKeydown(event, state, skillMenuHost, requestUpdate) ||
-        handleInlineSlashArgKeydown(event, state, slashMenuHost, requestUpdate, sendShortcut) ||
-        handleSlashMenuKeydown(event, state, slashMenuHost, requestUpdate))
+      (state.skillMenu.handleKeydown(event, skillMenuHost) ||
+        state.slashMenu.handleKeydown(event, slashMenuHost, sendShortcut))
     ) {
       return;
     }
@@ -143,8 +138,8 @@ export function createComposerKeyDownHandler({
 
     if (
       event.key === "Escape" &&
-      !state.skillMenuOpen &&
-      !state.slashMenuOpen &&
+      !state.skillMenu.state.skillMenuOpen &&
+      !state.slashMenu.state.slashMenuOpen &&
       !state.mentionMenu.open &&
       !props.replyTarget &&
       !state.dictation?.active &&

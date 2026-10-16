@@ -297,17 +297,8 @@ describe("ChatComposerCapabilityHost", () => {
 
     const props = host.props(context, state, session, "main");
     expect(props.mutationBlockedReason).toBeTruthy();
-    const result = await (
-      host as unknown as {
-        patch: (
-          context: ApplicationContext,
-          state: ChatPageHost,
-          next: { skills: Record<string, boolean> },
-        ) => Promise<{ ok: true } | { ok: false; error: string }>;
-      }
-    ).patch(context, state, { skills: { release: true } });
-
-    expect(result).toEqual({ ok: false, error: props.mutationBlockedReason });
+    props.onPatchToolOverrides?.({ skills: { release: true } });
+    await Promise.resolve();
     expect(request).not.toHaveBeenCalled();
   });
 

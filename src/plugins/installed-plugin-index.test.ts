@@ -4,6 +4,7 @@ import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { expectObjectFields as expectRecordFields } from "../test-utils/mock-call-assertions.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
 import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
@@ -48,12 +49,6 @@ function writeRuntimeEntry(rootDir: string) {
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
-
-function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
-}
 
 function expectSha256(value: unknown) {
   expect(typeof value).toBe("string");

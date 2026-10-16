@@ -10,12 +10,13 @@ import {
   LINK_READER_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../../../components/panel-toggle-contract.ts";
-import { Icon } from "../../../components/solid/icon.tsx";
+import { Icon, type IconName } from "../../../components/solid/icon.tsx";
+import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
 import { KeyboardShortcut } from "../../../components/solid/kbd.tsx";
 import { Menu, type MenuItem } from "../../../components/solid/menu.tsx";
 import "../../../components/tooltip.ts";
+import type { AgentIdentity } from "../../../lib/identity-avatar-view.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { LitContent, emptyLegacyContent } from "../../../lit/solid-content.tsx";
 import { readLinkFavicon } from "../link-favicon-cache.ts";
 import {
   sidebarActivePanel,
@@ -33,6 +34,13 @@ type SidebarRegionHeaderProps = RegionProps & {
   host: RegionElement;
   hostedRevision: () => number;
   refreshHostedTabs: () => void;
+};
+
+type RegionTab = SolidPanelTabStripTab & {
+  contentId: string;
+  hostedTab?: PanelHostedTab;
+  conversationAvatar?: AgentIdentity;
+  iconName?: IconName;
 };
 
 export function readRegionPanelHost(host: HTMLElement, slot: SidebarSlotId): Element | null {
@@ -173,7 +181,7 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
       }
       return null;
     };
-    const tabs = panels.flatMap((panel): (SolidPanelTabStripTab & { contentId: string })[] => {
+    const tabs = panels.flatMap((panel): RegionTab[] => {
       const contentId = `${props.panelIdPrefix}-${encodeURIComponent(panel.slot)}`;
       const canRestore =
         props.layout.expanded &&
@@ -189,7 +197,7 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
           label: tab.label,
           labelTooltip: tab.label,
           title: tab.title,
-          icon: <HostedIcon {...props} tab={tab} />,
+          hostedTab: tab,
           statusLabel: tab.statusLabel,
           badge: tab.badge,
           className: tab.className,
@@ -230,7 +238,8 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
             panel.slot === "dashboard" || canRestore
               ? () => props.callbacks?.togglePanelExpanded(panel.id)
               : undefined,
-          icon: conversation ? <LitContent value={conversation.icon} /> : <Icon name={type.icon} />,
+          conversationAvatar: conversation?.avatar,
+          iconName: conversation ? undefined : type.icon,
           closeLabel: t("chat.sidebarColumns.close", { panel: type.label }),
         },
       ];
@@ -244,7 +253,7 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
       : (active?.id ?? null);
     return { tabs, activeId, active, activeHosted, resolveHostedTab, column };
   });
-  const hostedActions = () => state().activeHosted?.element.hostedActions ?? emptyLegacyContent;
+  const hostedActions = () => state().activeHosted?.element.hostedActions;
   return (
     <header
       class="rail-header side-panel__header"
@@ -253,6 +262,21 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
     >
       <div class="side-panel__header-tabs">
         <PanelTabStrip
+          renderIcon={(tab) => (
+            <Show
+              when={tab().hostedTab}
+              fallback={
+                <Show
+                  when={tab().conversationAvatar}
+                  fallback={<Show when={tab().iconName}>{(name) => <Icon name={name()} />}</Show>}
+                >
+                  {(agent) => <AgentIdentityAvatar agent={agent()} />}
+                </Show>
+              }
+            >
+              {(hosted) => <HostedIcon {...props} tab={hosted()} />}
+            </Show>
+          )}
           tabs={state().tabs}
           activeId={state().activeId}
           ariaControls={(tab) => tab.contentId}
@@ -288,10 +312,8 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
         />
         <TypeMenu {...props} />
       </div>
-      <Show when={hostedActions() !== emptyLegacyContent}>
-        <div class="rail-header__actions side-panel__actions">
-          <LitContent value={hostedActions()} />
-        </div>
+      <Show when={hostedActions()}>
+        <div class="rail-header__actions side-panel__actions">{hostedActions()}</div>
       </Show>
     </header>
   );

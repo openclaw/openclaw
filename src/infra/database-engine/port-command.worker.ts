@@ -29,6 +29,7 @@ import {
   materializeDatabasePort,
   migrateDatabasePortSource,
   readPostgresPortCapabilities,
+  sqlitePortAllocations,
   type PortDescriptor,
   type PortVerification,
 } from "./port.worker.js";
@@ -92,7 +93,10 @@ async function inspectSqliteImage(
     pendingColumns: {},
   };
   if (allowMigration && migrationRequired) {
-    inspectSqlitePortSchema(db, descriptor, pendingColumns);
+    // The family owner validates its historical shape before the private migration.
+    if (!descriptor.migrateSqliteSource) {
+      inspectSqlitePortSchema(db, descriptor, pendingColumns);
+    }
     return { version, migrationRequired };
   }
   const { tables, allocations } = await inspectDatabasePort({ engine: "sqlite", db }, descriptor);
@@ -163,7 +167,19 @@ async function stage(
     refuse("observed unmigrated private source; required migrate phase before staging");
   }
   if (task.sourceVerification) {
-    compare(verification, task.sourceVerification);
+    compare(
+      verification,
+      task.to === "sqlite"
+        ? {
+            ...task.sourceVerification,
+            allocations: sqlitePortAllocations(
+              descriptor,
+              verification.allocations,
+              task.sourceVerification.allocations,
+            ),
+          }
+        : task.sourceVerification,
+    );
   }
   const occupied = await fs.stat(task.targetPath).then(
     () => true,

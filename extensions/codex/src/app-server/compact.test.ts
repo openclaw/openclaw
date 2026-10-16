@@ -102,7 +102,7 @@ function startCompaction(
   options: {
     currentTokenCount?: number;
     nativeToolSurface?: "unrestricted" | "host-isolated";
-    pluginConfig?: unknown;
+    pluginConfig?: Parameters<typeof maybeCompactCodexAppServerSessionImpl>[1]["pluginConfig"];
   } = {},
 ) {
   const { pluginConfig, ...paramsOptions } = options;

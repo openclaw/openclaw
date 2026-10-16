@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import { readCurrentProjectionSnapshot } from "./session-accessor.sqlite-projection-read.js";
@@ -11,7 +12,7 @@ import {
   createSessionActorReplica,
   readSessionActorProjectionReceipt,
 } from "./session-actor-replica.js";
-import { withActor, type Fixture } from "./session-actor-worker.test-support.js";
+import { withActor, type Fixture, type Mutation } from "./session-actor-worker.test-support.js";
 import { readSessionTranscriptAccountingFromProjection } from "./session-transcript-accounting.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { withSessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts-scope.js";
@@ -102,7 +103,7 @@ it("reads rewritten stored bytes from compact receipts and preserves committed t
     const context = reader(f);
     try {
       context.install();
-      expect(context.receipt().facts.contextMetadata).toBeUndefined();
+      expect(context.receipt().facts?.contextMetadata).toBeUndefined();
       expect(context.accounting()).toMatchObject({
         kind: "value",
         value: {
@@ -120,8 +121,8 @@ it("reads rewritten stored bytes from compact receipts and preserves committed t
           { seq: 1, expectedEventJson: questionJson, event: rewritten },
         ]);
       });
-      // The compact publication advances version facts; readers own stored byte selection.
-      expect(context.receipt().facts.contextMetadata).toBeUndefined();
+      // The compact publication updates exact totals without copying row metadata.
+      expect(context.receipt().facts?.contextMetadata).toBeUndefined();
       const expected = { eventCount: 2, byteSize: storedBytes(rewritten) + storedBytes(answer) };
       expect(context.accounting()).toMatchObject({ kind: "value", value: expected });
       expect(context.bounded()).toMatchObject({
@@ -161,7 +162,7 @@ it.each(["reset", "compaction", "leaf"] as const)(
       const context = reader(f);
       try {
         context.install();
-        expect(context.receipt().facts.contextMetadata).toBeUndefined();
+        expect(context.receipt().facts?.contextMetadata).toBeUndefined();
         const control =
           kind === "leaf"
             ? { type: kind, id: "control", parentId: "answer", targetId: "question" }
@@ -187,7 +188,7 @@ it.each(["reset", "compaction", "leaf"] as const)(
           reconcileSessionTranscriptIndexInTransaction(f.database.db, f.scope.sessionId);
         });
         context.install();
-        expect(context.receipt().facts.contextMetadata).toBeUndefined();
+        expect(context.receipt().facts?.contextMetadata).toBeUndefined();
         const counted =
           kind === "reset" ? [tail] : kind === "compaction" ? [control, tail] : [question, tail];
         expect(context.accounting()).toMatchObject({
@@ -209,9 +210,9 @@ it.each(["reset", "compaction", "leaf"] as const)(
   },
 );
 
-it("reads exact accounting and bounded history outside the actor's resident window", async () => {
-  await withActor((f) => {
-    const events = Array.from({ length: 4097 }, (_, index) => ({
+it("keeps exact accounting through appends and rewrites beyond the actor's resident window without rescanning", async () => {
+  await withActor(async (f) => {
+    const events = Array.from({ length: 600 }, (_, index) => ({
       type: "message",
       id: `message-${index}`,
       parentId: index === 0 ? null : `message-${index - 1}`,
@@ -225,26 +226,79 @@ it("reads exact accounting and bounded history outside the actor's resident wind
     const context = reader(f);
     try {
       context.install();
-      expect(
-        readCurrentProjectionSnapshot(f.database, f.scope, (projection) =>
-          readSessionTranscriptAccountingFromProjection(projection, {
-            includeByteSize: true,
-            includeUsage: false,
-          }),
-        ),
-      ).toMatchObject({
+      const stats = trackSqliteStatementExecutions(f.database.db, ["aggregate"], (sql) =>
+        /\bsum\(/iu.test(sql) && sql.includes('"transcript_events"') ? "aggregate" : null,
+      );
+      const originalBytes = events.reduce((total, event) => total + storedBytes(event), 0);
+      expect(context.accounting()).toMatchObject({
         kind: "value",
         value: {
           eventCount: events.length,
-          byteSize: events.reduce((total, event) => total + storedBytes(event), 0),
+          byteSize: originalBytes,
         },
       });
+      const appended = {
+        type: "message" as const,
+        id: "after-window",
+        parentId: events.at(-1)!.id,
+        timestamp: "2026-01-01T00:00:00.000Z",
+        message: question.message,
+      };
+      const command: Mutation = {
+        type: "session.actor.appendTranscriptEvent",
+        input: {
+          target: f.target,
+          commandId: "append-after-window",
+          phaseId: "append",
+          append: {
+            kind: "metadata",
+            input: {
+              scope: f.scope,
+              event: appended,
+              message: {
+                messageJson: JSON.stringify(appended.message),
+                cwd: "/synthetic",
+                validateTurn: false,
+              },
+              options: {},
+            },
+          },
+        },
+      };
+      const rewritten = {
+        ...appended,
+        message: { ...appended.message, __openclaw: { steerTargetRunId: "new-run" } },
+      };
+      try {
+        await f.prepare(command);
+        expect(f.mutate(command)).toMatchObject({ kind: "committed" });
+        context.install();
+        expect(context.accounting()).toMatchObject({
+          kind: "value",
+          value: { eventCount: events.length + 1, byteSize: originalBytes + storedBytes(appended) },
+        });
+        runSqliteImmediateTransactionSync(f.database.db, () => {
+          rewriteSqliteTranscriptEventRowsInTransaction(f.database, f.scope, [
+            { seq: events.length, expectedEventJson: JSON.stringify(appended), event: rewritten },
+          ]);
+        });
+        expect(context.accounting()).toMatchObject({
+          kind: "value",
+          value: {
+            eventCount: events.length + 1,
+            byteSize: originalBytes + storedBytes(rewritten),
+          },
+        });
+        expect(stats.counts.aggregate).toBe(0);
+      } finally {
+        stats.restore();
+      }
       expect(
         readSessionTranscriptBoundedActiveContextCore(f.scope, {
           maxBytes: 1024 * 1024,
           maxEvents: 100,
         }),
-      ).toMatchObject({ events: events.slice(-100), truncated: true });
+      ).toMatchObject({ events: [...events.slice(-99), rewritten], truncated: true });
     } finally {
       context.replica.close();
     }

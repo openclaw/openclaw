@@ -521,6 +521,7 @@ suite.define(() => {
     // below the visible icons in any of those production renderers.
     for (const width of [320, 390, 430]) {
       await page.setViewportSize({ height: 760, width });
+      await waitForChatScrollIdle(page);
       for (const group of [ownGroup, peerGroup, page.locator(".chat-group.assistant").last()]) {
         const restingHeight = (await group.boundingBox())?.height;
         await group.locator(".chat-bubble").dispatchEvent("pointerup", { pointerType: "touch" });
@@ -1008,9 +1009,8 @@ suite.define(() => {
       const userGroup = page.locator(".chat-group.user", {
         hasText: "Please keep my fallback avatar readable.",
       });
-      const slot = userGroup.locator(".chat-avatar-slot");
-      const image = slot.locator("img.chat-avatar.user");
-      const initials = slot.locator(".chat-avatar--sender-initials");
+      const image = userGroup.locator("img.chat-avatar.user");
+      const initials = userGroup.locator(".chat-avatar--sender-initials");
       expect(avatarRequests).toHaveLength(1);
       expect(
         avatarRequests.map((request) => ({
@@ -1018,8 +1018,7 @@ suite.define(() => {
           url: new URL(request.url).pathname + new URL(request.url).search,
         })),
       ).toEqual([{ resourceType: "fetch", url: viewer.avatarUrl }]);
-      await expect(slot).toHaveClass(/\bis-fallback\b/u);
-      await expect(slot.locator("img.chat-avatar.user[src]")).toHaveCount(0);
+      await expect(userGroup.locator("img.chat-avatar.user[src]")).toHaveCount(0);
       await expect(initials).toBeVisible();
       await expect(initials).toHaveText("H");
       await captureProof(page, "missing-local-avatar-after-404.png");
@@ -1039,13 +1038,10 @@ suite.define(() => {
       );
 
       expect(avatarRequests).toHaveLength(1);
-      await expect(slot).toHaveClass(/\bis-fallback\b/u);
-      await expect(slot.locator("img.chat-avatar.user[src]")).toHaveCount(0);
+      await expect(image).toHaveCount(0);
       await expect(initials).toBeVisible();
       await expect(initials).toHaveText("H");
       await captureProof(page, "missing-local-avatar-after-rerender.png");
-
-      await expect.poll(() => image.getAttribute("src")).toBeNull();
     } finally {
       await context.close();
     }

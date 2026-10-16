@@ -25,7 +25,6 @@ import { selectProfileAccessEntries } from "./user-profile-github-identity.js";
 import {
   profileCatalogPath,
   projectHasMultipleSessionSharingIdentities,
-  projectUserProfileDisplayFacts,
   resolveUserProfileReferenceInCatalog,
 } from "./user-profile-identity.read.js";
 import type { UserProfileEmailBindingChange } from "./user-profile-mutation.js";
@@ -181,8 +180,23 @@ export function readResidentUserProfileForEmail(email: string, pathname: string)
 
 /** Sharing pickers consume the session projection's committed display catalog. */
 export function listResidentUserProfileDisplayFacts(options: OpenClawStateDatabaseOptions = {}) {
-  const rows = requireResidentProfileCatalog(options);
-  return projectUserProfileDisplayFacts(rows, profileBindings.get(rows)!);
+  const catalog = profileCatalogs.get(profileCatalogPath(options));
+  const bindings = catalog && profileBindings.get(catalog.rows);
+  if (!catalog?.valid || !bindings) {
+    throw new Error("User profile catalog is not ready");
+  }
+  return [...catalog.rows.values()].map((profile) => ({
+    id: profile.id,
+    label:
+      profile.display_name?.trim() ||
+      profile.githubLogin ||
+      [...(bindings.emailsByProfile.get(profile.id) ?? [])].toSorted((left, right) =>
+        Buffer.compare(Buffer.from(left), Buffer.from(right)),
+      )[0] ||
+      profile.id,
+    hasAvatar: profile.has_avatar === 1,
+    updatedAt: profile.updated_at,
+  }));
 }
 
 /** Pass the prepared absolute database path for allocation-free checks of live owner state. */
@@ -719,22 +733,6 @@ export function getResidentUserProfileDisplay(
     throw new UserProfileNotFoundError(profileId);
   }
   return projectUserProfileDisplay(profile);
-}
-
-/** Transfer display facts and aliases at the owner's publication revision, never authority. */
-export function captureResidentUserProfileDisplaySnapshot(
-  options: OpenClawStateDatabaseOptions = {},
-) {
-  const rows = requireResidentProfileCatalog(options);
-  return {
-    revision: readUserProfileVersion(),
-    displays: new Map(
-      [...rows.keys()].map((id) => [
-        id,
-        projectUserProfileDisplay(resolveCatalogProfile(rows, id)!),
-      ]),
-    ),
-  };
 }
 
 /** Activity references are display navigation, never authentication identifiers. */

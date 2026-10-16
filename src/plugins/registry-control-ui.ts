@@ -51,6 +51,8 @@ function normalizeLinkReaderMetadata(value: unknown): ControlUiLinkReaderMetadat
   const previewMethod = value.previewMethod;
   const imageMethod = value.imageMethod;
   if (
+    (value.sessionScoped !== undefined && typeof value.sessionScoped !== "boolean") ||
+    (value.progressive !== undefined && typeof value.progressive !== "boolean") ||
     typeof detailMethod !== "string" ||
     !methodPattern.test(detailMethod) ||
     (previewMethod !== undefined &&
@@ -66,6 +68,8 @@ function normalizeLinkReaderMetadata(value: unknown): ControlUiLinkReaderMetadat
     detailMethod,
     ...(previewMethod !== undefined ? { previewMethod } : {}),
     ...(imageMethod !== undefined ? { imageMethod } : {}),
+    ...(value.sessionScoped !== undefined ? { sessionScoped: value.sessionScoped } : {}),
+    ...(value.progressive !== undefined ? { progressive: value.progressive } : {}),
   };
 }
 

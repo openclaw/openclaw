@@ -15,6 +15,7 @@ import {
   createOperatorClient,
 } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
+import { createMockGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime.test-support.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -57,12 +58,14 @@ import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixtur
 import {
   activateSubagentRegistry,
   initSubagentRegistry,
+  prepareRequesterSettleWakeRecoverySource,
   registerSubagentRun,
   replaceSubagentRunAfterSteerCore,
 } from "./subagent-registry.js";
 import { settleSubagentRegistryPersistenceWork } from "./subagent-registry.persistence.test-support.js";
 import { resetSubagentRegistryForTests, testing } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { buildRequesterSettleWakeIdentity } from "./subagent-requester-settle-identity.js";
 
 export function registerRequesterCompletionCustodyTests({
   registration,
@@ -79,8 +82,11 @@ export function registerRequesterCompletionCustodyTests({
     "overloaded then current",
     "overloaded then revoked",
     "overloaded then retired",
+    "unavailable policy then current",
     "revoked after restore",
     "missing source",
+    "missing parent source",
+    "mismatched source",
     "revoked grant",
     "mixed sources",
     "replaced requester",
@@ -88,7 +94,15 @@ export function registerRequesterCompletionCustodyTests({
     "revalidates %s for a cold-loaded interrupted child batch without widening the parent",
     async (recovery) => {
       const overloaded = recovery.startsWith("overloaded");
-      const canDispatch = recovery === "current" || recovery === "overloaded then current";
+      const unavailablePolicy = recovery === "unavailable policy then current";
+      const deferred = overloaded || unavailablePolicy;
+      const terminalRecovery =
+        recovery === "missing source" ||
+        recovery === "missing parent source" ||
+        recovery === "mismatched source" ||
+        recovery === "revoked grant";
+      const canDispatch =
+        recovery === "current" || recovery === "overloaded then current" || unavailablePolicy;
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const cfg = { session: { store: state.path("sessions.json") } };
         config.setRuntimeConfigSnapshot(cfg);
@@ -98,6 +112,8 @@ export function registerRequesterCompletionCustodyTests({
         const lifecycleRevision = "restart-requester-lifecycle";
         const requesterTurnRunId = "restart-parent-turn";
         const runIds: [string, string] = ["restart-child-a", "restart-child-b"];
+        const currentChild = (runId = runIds[0]) =>
+          expectDefined(subagentRuns.get(runId), "restored child");
         await upsertSessionEntryCore(
           { storePath: cfg.session.store, sessionKey: requesterSessionKey, agentId: "main" },
           { sessionId, lifecycleRevision, updatedAt: 1 },
@@ -118,6 +134,7 @@ export function registerRequesterCompletionCustodyTests({
         });
         const grantRef = { pluginId: "restart-access", grantId: "original-requester-grant" };
         let grantCurrent = true;
+        let policyReady = true;
         const grant = {
           grantId: grantRef.grantId,
           signal: new AbortController().signal,
@@ -127,9 +144,12 @@ export function registerRequesterCompletionCustodyTests({
             }
           },
         };
-        const resumeGrant = vi.fn(({ grantId }: { grantId: string }) =>
-          grantCurrent && grantId === grantRef.grantId ? grant : undefined,
-        );
+        const resumeGrant = vi.fn(({ grantId }: { grantId: string }) => {
+          if (!policyReady) {
+            throw new Error("Access policy is starting");
+          }
+          return grantCurrent && grantId === grantRef.grantId ? grant : undefined;
+        });
         const registry = createEmptyPluginRegistry();
         registry.plugins.push(createPluginRecord({ id: grantRef.pluginId }));
         registry.gatewayAccessPolicies.push({
@@ -208,26 +228,30 @@ export function registerRequesterCompletionCustodyTests({
               draft.cleanupCompletedAt = Date.now();
               draft.requesterTurnRunId = undefined;
               draft.requesterSettleWake = {
-                status: "pending",
-                attemptCount: 0,
+                status: terminalRecovery || unavailablePolicy ? "dispatching" : "pending",
+                attemptCount: terminalRecovery || unavailablePolicy ? 1 : 0,
                 rearmGeneration: 1,
                 batchRunIds: runIds,
                 nextAttemptAt: Date.now() + 60_000,
               };
               if (recovery === "missing source") {
                 delete draft.operatorRecoverySource;
+              } else if (recovery === "mismatched source") {
+                expectDefined(draft.operatorRecoverySource, "admitted source").sessionId =
+                  "another-requester-session";
               } else if (recovery === "mixed sources" && runId === runIds[1]) {
                 expectDefined(draft.operatorRecoverySource, "second admitted source").sourceRunId =
                   "another-requester-turn";
               }
             });
           }
-          const stale = expectDefined(subagentRuns.get(runIds[0]), "pre-restart child");
+          const stale = currentChild();
           source.release();
           getGatewayContextLifetime(context.resolveGatewayContext).abort();
           await resetSubagentRegistryForTests({ persist: false });
           rotateAgentEventLifecycleGeneration();
           grantCurrent = recovery !== "revoked grant";
+          policyReady = !unavailablePolicy;
           if (recovery === "replaced requester") {
             await upsertSessionEntryCore(
               { storePath: cfg.session.store, sessionKey: requesterSessionKey, agentId: "main" },
@@ -241,40 +265,106 @@ export function registerRequesterCompletionCustodyTests({
           const replacement = createContext();
           replacement.getRuntimeConfig = () => cfg;
           replacement.resolveGatewayContext = () => replacement;
+          replacement.recoveryRuntime = createMockGatewayRecoveryRuntime();
+          const recoveryTarget = {
+            ...buildRequesterSettleWakeIdentity({
+              requesterSessionKey,
+              requesterAgentId: "main",
+              batchRunIds: runIds,
+              rearmGeneration: 1,
+              sharedAttemptKey: true,
+            }),
+            requesterSessionKey,
+            requesterAgentId: "main",
+            sessionId,
+            lifecycleRevision,
+            storePath: cfg.session.store,
+            gatewayRuntime: replacement.recoveryRuntime,
+            ...(recovery === "missing parent source"
+              ? { requesterOperatorSourceMissing: true as const }
+              : {}),
+          };
+          const prepareRecovery = () => prepareRequesterSettleWakeRecoverySource(recoveryTarget);
           if (overloaded) {
             vi.spyOn(operatorRecovery, "restoreGatewayOperatorSource").mockRejectedValueOnce(
               new WorkerTaskError("worker task capacity reached", "overloaded"),
             );
           }
           await initSubagentRegistry();
+          if (terminalRecovery) {
+            const unbound = loadSubagentRegistryFromSqlite();
+            await expect(prepareRecovery()).rejects.toThrow("awaits its current Gateway binding");
+            expect(loadSubagentRegistryFromSqlite()).toEqual(unbound);
+          }
           await activateSubagentRegistry(() => replacement);
-          if (overloaded) {
+          if (terminalRecovery) {
+            await expect(prepareRecovery()).resolves.toEqual({
+              status: "unrestorable",
+              reason: expect.stringMatching(/original operator/),
+            });
+            const settled = loadSubagentRegistryFromSqlite();
+            for (const runId of runIds) {
+              expect(settled.get(runId)?.requesterSettleWake).toBeUndefined();
+              expect(settled.get(runId)?.completion?.resultText).toBe(
+                `${runId} interrupted by Gateway restart`,
+              );
+              expect(settled.get(runId)?.execution.outcome).toEqual({
+                status: "error",
+                error: "Gateway restarted",
+              });
+            }
+            await expect(prepareRecovery()).resolves.toBeUndefined();
+            expect(loadSubagentRegistryFromSqlite()).toEqual(settled);
+            getGatewayContextLifetime(replacement.resolveGatewayContext).abort();
+            await resetSubagentRegistryForTests({ persist: false });
+            rotateAgentEventLifecycleGeneration();
+            await initSubagentRegistry();
+            const nextGateway = createContext();
+            nextGateway.getRuntimeConfig = () => cfg;
+            nextGateway.resolveGatewayContext = () => nextGateway;
+            nextGateway.recoveryRuntime = createMockGatewayRecoveryRuntime();
+            await activateSubagentRegistry(() => nextGateway);
+            await expect(
+              prepareRequesterSettleWakeRecoverySource({
+                ...recoveryTarget,
+                gatewayRuntime: nextGateway.recoveryRuntime,
+              }),
+            ).resolves.toBeUndefined();
+            expect(loadSubagentRegistryFromSqlite()).toEqual(settled);
+            expect(deliver).not.toHaveBeenCalled();
+            return;
+          }
+          if (deferred) {
             const blockedEffect = vi.fn();
             expect(() =>
-              subagentRuns.runWithCompletionAuthority(
-                expectDefined(subagentRuns.get(runIds[0]), "overloaded restored child"),
-                blockedEffect,
-              ),
+              subagentRuns.runWithCompletionAuthority(currentChild(), blockedEffect),
             ).toThrow(/authority/);
             expect(blockedEffect).not.toHaveBeenCalled();
             expect(deliver).not.toHaveBeenCalled();
+            if (unavailablePolicy) {
+              const pending = loadSubagentRegistryFromSqlite();
+              await expect(prepareRecovery()).rejects.toThrow(/authority/);
+              expect(loadSubagentRegistryFromSqlite()).toEqual(pending);
+              policyReady = true;
+            }
             grantCurrent = recovery !== "overloaded then revoked";
             if (recovery === "overloaded then retired") {
-              subagentRuns.retireCompletionAuthority(
-                expectDefined(subagentRuns.get(runIds[0]), "retired restored child"),
-              );
+              subagentRuns.retireCompletionAuthority(currentChild());
             }
             // The same Gateway retries admitted inventory; no process restart or rebinding.
             await testing.sweepOnceForTests();
+            if (unavailablePolicy) {
+              const prepared = await prepareRecovery();
+              expect(prepared?.status).toBe("ready");
+              if (prepared?.status === "ready") {
+                expect(prepared.source).not.toThrow();
+              }
+            }
           }
           if (canDispatch || recovery === "mixed sources" || recovery === "revoked after restore") {
             for (const runId of runIds) {
               expect(
-                () =>
-                  subagentRuns.runWithCompletionAuthority(
-                    expectDefined(subagentRuns.get(runId), "freshly restored child"),
-                    () => {},
-                  ),
+                () => subagentRuns.runWithCompletionAuthority(currentChild(runId), () => {}),
                 `immediately after activation: ${runId}`,
               ).not.toThrow();
             }
@@ -282,15 +372,13 @@ export function registerRequesterCompletionCustodyTests({
           if (recovery === "revoked after restore") {
             grantCurrent = false;
           }
-          if (overloaded || recovery === "revoked after restore") {
+          if (deferred || recovery === "revoked after restore") {
             const resumedGrants = resumeGrant.mock.calls.length;
             await testing.sweepOnceForTests();
             expect(resumeGrant).toHaveBeenCalledTimes(resumedGrants);
           }
           await settleSubagentRegistryPersistenceWork();
-          if (recovery === "missing source") {
-            expect(resumeGrant).not.toHaveBeenCalled();
-          } else if (recovery !== "replaced requester") {
+          if (recovery !== "replaced requester") {
             expect(resumeGrant).toHaveBeenCalledWith(
               expect.objectContaining({ grantId: grantRef.grantId }),
             );
@@ -302,10 +390,7 @@ export function registerRequesterCompletionCustodyTests({
           expect(staleEffect).not.toHaveBeenCalled();
           if (!canDispatch && recovery !== "mixed sources") {
             expect(() =>
-              subagentRuns.runWithCompletionAuthority(
-                expectDefined(subagentRuns.get(runIds[0]), "restricted restored child"),
-                staleEffect,
-              ),
+              subagentRuns.runWithCompletionAuthority(currentChild(), staleEffect),
             ).toThrow(
               recovery === "revoked after restore"
                 ? /access policy is unavailable/
@@ -332,7 +417,7 @@ export function registerRequesterCompletionCustodyTests({
           const completeBatch = vi.fn();
           const delivered = await maybeWakeRequesterAfterAllChildrenSettled({
             requesterSessionKey,
-            settledEntry: expectDefined(subagentRuns.get(runIds[0]), "restored child"),
+            settledEntry: currentChild(),
             isSourceCurrent: () => true,
             transitionBatch: async (batch, wake, onPublished) => {
               for (const entry of batch) {
@@ -365,7 +450,7 @@ export function registerRequesterCompletionCustodyTests({
             );
           }
           if (recovery === "current") {
-            const completed = expectDefined(subagentRuns.get(runIds[0]), "completed child");
+            const completed = currentChild();
             expect(
               await replaceSubagentRunAfterSteerCore({
                 previousRunId: completed.runId,

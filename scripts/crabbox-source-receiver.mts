@@ -169,11 +169,14 @@ try {
       fs.mkdirSync(directory);
     }
   }
+  // Reuse only physically verified bytes, kinds, and executable bits. No source
+  // code runs before acceptance; lifecycle hooks still trigger a full recheck.
+  const changed = files.filter(entry => sourceMismatch(entry) !== null);
   // Batch raw blobs once; checkout/archive would apply attributes or export rules.
   const blobPath = path.join(temporary, "blobs");
   const output = fs.openSync(blobPath, "wx");
   try { git(["cat-file", "--batch"], {
-    input: files.map(entry => entry.oid + "\n").join(""), stdio: ["pipe", output, "pipe"]
+    input: changed.map(entry => entry.oid + "\n").join(""), stdio: ["pipe", output, "pipe"]
   }); } finally { fs.closeSync(output); }
   const input = fs.openSync(blobPath, "r");
   const buffer = Buffer.alloc(65536);
@@ -187,7 +190,7 @@ try {
     return chunk;
   }
   try {
-    for (const entry of files) {
+    for (const entry of changed) {
       let header = "";
       for (;;) {
         const byte = take(1)[0];
@@ -240,20 +243,24 @@ try {
     if (reachable(file) && stat(file)) fail("source deletion mismatch: " + file);
   }
   // Verify filesystem bytes, kind, and executable bit independently of either index.
-  function verify({ file, mode, oid }) {
-    if (!reachable(file)) fail("source parent mismatch: " + file);
+  function sourceMismatch({ file, mode, oid }) {
+    if (!reachable(file)) return "source parent mismatch";
     const info = stat(file);
     let actual;
     if (mode === "120000") {
-      if (!info?.isSymbolicLink()) fail("source kind mismatch: " + file);
+      if (!info?.isSymbolicLink()) return "source kind mismatch";
       const target = fs.readlinkSync(file, { encoding: "buffer" });
       actual = createHash("sha1").update("blob " + target.length + "\0").update(target).digest("hex");
     } else {
       if (!info?.isFile() || Boolean(info.mode & 0o100) !== (mode === "100755"))
-        fail("source mode mismatch: " + file);
+        return "source mode mismatch";
       actual = hashFile(file, "sha1", true);
     }
-    if (actual !== oid) fail("source bytes mismatch: " + file);
+    return actual === oid ? null : "source bytes mismatch";
+  }
+  function verify(entry) {
+    const mismatch = sourceMismatch(entry);
+    if (mismatch) fail(mismatch + ": " + entry.file);
   }
   if (expected.alias) git(["update-ref", expected.alias, expected.baseSha]);
   git(["symbolic-ref", "HEAD", "refs/heads/openclaw-source"]);
@@ -261,12 +268,12 @@ try {
   const sourceGit = stat(env.GIT_DIR);
   // The payload consumes Git identity as well as bytes. Lifecycle hooks may refresh
   // index caches or hooksPath, but cannot change source membership or comparison refs.
-  function verifySource() {
+  function verifySource(entries = files) {
     const currentGit = stat(env.GIT_DIR);
     if (!currentGit?.isDirectory() || currentGit.dev !== sourceGit.dev || currentGit.ino !== sourceGit.ino ||
         !stat(env.GIT_INDEX_FILE)?.isFile() || stat(path.join(env.GIT_DIR, "commondir")))
       fail("source Git owner mismatch");
-    for (const entry of files) verify(entry);
+    for (const entry of entries) verify(entry);
     for (const file of deleted) {
       if (reachable(file) && stat(file)) fail("source deletion mismatch: " + file);
     }
@@ -282,7 +289,7 @@ try {
       .split("\0").filter(file => file && !file.startsWith(path.basename(temporary) + "/"));
     if (extras.length) fail("unexpected source entry: " + extras[0]);
   }
-  verifySource();
+  verifySource(changed);
   // Publish Git identity only after verification; rejected source must retain
   // the prepared checkout revision for recovery. Renaming preserves its owner.
   fs.rmSync(".git", { recursive: true, force: true });

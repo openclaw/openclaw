@@ -15,7 +15,6 @@ import {
   runWithOwner,
   untrack,
 } from "solid-js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/link-reader-hovercard-registration.ts";
 import { LazyElementStateView, LazyViewError } from "../components/solid/lazy-view-error.tsx";
@@ -94,11 +93,24 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
   const onboarding = resolveOnboardingMode(globalThis.location?.search ?? "");
   const [startupPending, setStartupPending] = createSignal(true);
   // A submitted login keeps ownership until the Gateway admits the connection.
-  const [loginGatePinned, setLoginGatePinned] = createSignal(false);
-  const [loginGatewayUrl, setLoginGatewayUrl] = createSignal(context.gateway.connection.gatewayUrl);
-  const [loginToken, setLoginToken] = createSignal(context.gateway.connection.token);
-  const [loginPassword, setLoginPassword] = createSignal(context.gateway.connection.password);
-  const [loginShowGatewaySecret, setLoginShowGatewaySecret] = createSignal(false);
+  const [loginGatePinned, setLoginGatePinned] = createSignal<boolean>(
+    (previous) => !connected() && (previous ?? false),
+  );
+  // Drafts reset only for a replacement client, not same-client status publications.
+  const loginConnection = createMemo(
+    () => {
+      const current = gateway.read();
+      return { client: current.snapshot.client, ...current.connection };
+    },
+    { equals: (previous, next) => previous.client === next.client },
+  );
+  const [loginGatewayUrl, setLoginGatewayUrl] = createSignal(() => loginConnection().gatewayUrl);
+  const [loginToken, setLoginToken] = createSignal(() => loginConnection().token);
+  const [loginPassword, setLoginPassword] = createSignal(() => loginConnection().password);
+  const [loginShowGatewaySecret, setLoginShowGatewaySecret] = createSignal(() => {
+    loginConnection();
+    return false;
+  });
   const [pendingGatewayUrl, setPendingGatewayUrl] = createSignal(
     runtime.pendingGatewayConnection?.gatewayUrl ?? null,
   );
@@ -106,7 +118,6 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
     kind: "loading",
   });
   let active = true;
-  let loginConnectionClient: GatewayBrowserClient | null = context.gateway.snapshot.client;
   const focusDashboardAbort = new AbortController();
   const closeDocument = () => {
     if (globalThis.history.length > 1) {
@@ -140,24 +151,6 @@ function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }):
     void import("../styles/native-embed.css");
   }
   void import("../components/session-progress-hovercard-registration.ts");
-
-  createEffect(
-    () => gateway.read(),
-    (current) =>
-      // Nested Lit/Solid mounts can flush this imperative effect under their owner.
-      runWithOwner(null, () => {
-        if (current.snapshot.client !== loginConnectionClient) {
-          loginConnectionClient = current.snapshot.client;
-          setLoginShowGatewaySecret(false);
-          setLoginGatewayUrl(current.connection.gatewayUrl);
-          setLoginToken(current.connection.token);
-          setLoginPassword(current.connection.password);
-        }
-        if (current.snapshot.phase === "connected") {
-          setLoginGatePinned(false);
-        }
-      }),
-  );
 
   const initialConnectPending = () =>
     runtime.documentMode === null &&

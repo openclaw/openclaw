@@ -3,12 +3,12 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import * as sessionAccessor from "../config/sessions/session-accessor.sqlite-entry.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import {
   getAgentRunContext,
@@ -64,9 +64,9 @@ it.each([
       });
       const writePrepared = createDeferred();
       const releaseWrite = createDeferred();
-      const patch = sessionAccessor.patchSessionEntryTarget;
+      const patch = sessionAccessor.applySessionEntryTargetOperation;
       const spy = vi
-        .spyOn(sessionAccessor, "patchSessionEntryTarget")
+        .spyOn(sessionAccessor, "applySessionEntryTargetOperation")
         .mockImplementation(async (...args) => {
           if (args[0].target.canonicalKey === target.sessionKey) {
             writePrepared.resolve();

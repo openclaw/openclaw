@@ -5,6 +5,7 @@ import {
   type SlackInteractiveHandlerResult,
 } from "../../interactive-dispatch.js";
 import { parseSlackModalPrivateMetadata } from "../../modal-metadata.js";
+import type { SlackMessageEvent } from "../../types.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
 import { resolveSlackDeferredActionTarget } from "../deferred-action-routing.js";
@@ -176,7 +177,7 @@ async function emitSlackModalLifecycleEvent(params: {
 
   const dispatchPlugin = async (
     isAuthorizedSender: boolean,
-    channelType?: "im" | "mpim" | "channel" | "group",
+    channelType?: NonNullable<SlackMessageEvent["channel_type"]>,
   ) => {
     try {
       if (!pluginInteractiveData) {

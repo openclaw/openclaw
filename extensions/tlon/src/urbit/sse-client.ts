@@ -418,6 +418,7 @@ export class UrbitSSEClient {
     return await pokeUrbitChannel(this.channelRequestContext(), {
       ...params,
       auditContext: "tlon-urbit-poke",
+      timeoutMs: 30_000,
     });
   }
 

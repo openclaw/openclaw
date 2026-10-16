@@ -246,6 +246,7 @@ const enGitHub = {
     githubKindNative: "Native GitHub CLI",
     githubKindPat: "Managed personal access token",
     githubKindOAuth: "Managed GitHub authorization",
+    githubKindAppInstallation: "GitHub App installation",
     githubRefreshAvailable: "Available",
     githubRefreshExpired: "Expired — reconnect required",
     githubRefreshUnavailable: "Unavailable — reconnect required",

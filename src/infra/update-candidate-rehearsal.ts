@@ -58,6 +58,10 @@ function isolatedConfig(
   migrationPolicy?: "rehearse" | "startup-only",
 ): OpenClawConfigWithLegacyRoster {
   const copied = structuredClone(config);
+  if (copied.database?.engine === "postgres") {
+    // Provider exports are private SQLite images, never live PostgreSQL anchors.
+    copied.database = { engine: "sqlite" };
+  }
   const projectPluginPath = (value: string) => {
     const projected = pluginPaths[resolveUserPath(value, sourceEnv)];
     if (!projected) {

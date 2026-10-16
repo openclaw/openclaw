@@ -25,8 +25,16 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
 const log = createSubsystemLogger("agents/subagents");
-// Only worker admission defers initial restoration; revoked custody never re-arms itself.
+// Worker admission and unavailable policy startup retry; revoked custody never re-arms itself.
 const deferredCompletionSources = new WeakSet<object>();
+const unrestorableCompletionSources = new WeakMap<object, string>();
+
+/** Only the restoration owner may classify missing or denied original authority. */
+export function getUnrestorableSubagentCompletionSourceReason(
+  entry: SubagentRunRecord,
+): string | undefined {
+  return unrestorableCompletionSources.get(getSubagentRunRuntimeKey(entry));
+}
 
 async function restoreSubagentCompletionSource(
   entry: SubagentRunRecord,
@@ -35,6 +43,7 @@ async function restoreSubagentCompletionSource(
 ): Promise<void> {
   const runtimeKey = getSubagentRunRuntimeKey(entry);
   deferredCompletionSources.delete(runtimeKey);
+  unrestorableCompletionSources.delete(runtimeKey);
   if (
     entry.collect ||
     (entry.execution.status === "terminal" &&
@@ -45,6 +54,13 @@ async function restoreSubagentCompletionSource(
   }
   // A refused restoration must leave a restricted row, never a synthetic system caller.
   subagentRuns.requireCompletionAuthority(entry);
+  if (
+    entry.execution.status === "terminal" &&
+    !entry.requesterSettleWake &&
+    entry.suppressCompletionDelivery
+  ) {
+    return;
+  }
   let releaseRestored: (() => void) | undefined;
   let continuation:
     | Awaited<
@@ -55,17 +71,25 @@ async function restoreSubagentCompletionSource(
     | undefined;
   try {
     const source = entry.operatorRecoverySource;
-    const gateway = resolver();
-    const storePath = entry.requesterStorePath;
-    if (
-      !gateway ||
-      !source ||
-      !storePath ||
+    if (!source) {
+      unrestorableCompletionSources.set(
+        runtimeKey,
+        "The original operator source was not saved for this requester continuation",
+      );
+    } else if (
       source.agentId !== entry.requesterAgentId ||
       source.sessionKey !== entry.requesterSessionKey ||
       source.sessionId !== entry.completionRequesterSessionId ||
       source.lifecycleRevision !== entry.completionRequesterLifecycleRevision
     ) {
+      unrestorableCompletionSources.set(
+        runtimeKey,
+        "The original operator source does not match this requester continuation",
+      );
+    }
+    const gateway = resolver();
+    const storePath = entry.requesterStorePath;
+    if (!gateway || !source || !storePath || unrestorableCompletionSources.has(runtimeKey)) {
       throw new Error("Subagent restart recovery lacks its original operator source");
     }
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -146,6 +170,18 @@ async function restoreSubagentCompletionSource(
       deferredCompletionSources.add(runtimeKey);
       return;
     }
+    const { GatewayOperatorAccessDeniedError, GatewayOperatorAccessUnavailableError } =
+      await import("../../../gateway/operator-access-policy.js");
+    if (error instanceof GatewayOperatorAccessUnavailableError) {
+      deferredCompletionSources.add(runtimeKey);
+      return;
+    }
+    if (error instanceof GatewayOperatorAccessDeniedError) {
+      unrestorableCompletionSources.set(
+        runtimeKey,
+        "The original operator no longer has access to this requester continuation",
+      );
+    }
     log.warn("subagent completion authority was not restored", { runId: entry.runId, error });
   } finally {
     continuation?.release();
@@ -153,7 +189,7 @@ async function restoreSubagentCompletionSource(
   }
 }
 
-/** The existing sweep retries worker admission while retaining the original source restriction. */
+/** The existing sweep retries startup dependencies while retaining the original source restriction. */
 export function retryDeferredSubagentCompletionSource(
   entry: SubagentRunRecord,
 ): Promise<void> | undefined {

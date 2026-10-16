@@ -130,7 +130,7 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
     }
 
     const messages = payload.messages;
-    if (Array.isArray(messages)) {
+    if (messages) {
       Object.assign(event, summarizeMessages(messages));
       if (includeMessages) {
         // Full messages are optional; summaries/digests are always recorded when

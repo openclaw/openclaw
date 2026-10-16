@@ -19,7 +19,7 @@ import {
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { ChatQuestionCard } from "../chat/components/chat-question-card-view.tsx";
 import { createGatewayQuestionPanelProps } from "../chat/components/chat-question-card.ts";
 

@@ -458,10 +458,9 @@ export function readMockCallArg(
   mock: { mock: { calls: unknown[][] } },
   label: string,
   callIndex = 0,
-  argIndex = 0,
 ): Record<string, unknown> {
   const mockCall = mock.mock.calls[callIndex];
-  const value = mockCall?.[argIndex];
+  const value = mockCall?.[0];
   return requireLabeledRecord(value, label);
 }
 

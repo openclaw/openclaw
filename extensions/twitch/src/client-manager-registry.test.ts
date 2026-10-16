@@ -73,14 +73,12 @@ describe("client manager registry", () => {
         await disconnect();
         await cleanup.promise;
       });
-      const unregisterMessage = "Unregistered client manager for account: default";
       const removal = removeClientManager("default");
 
       try {
         expect(disconnectAll).toHaveBeenCalledOnce();
         expect(transport.quit).toHaveBeenCalledOnce();
         expect(getClientManager("default")).toBeUndefined();
-        expect(logger.info).not.toHaveBeenCalledWith(unregisterMessage);
 
         const replacement = getOrCreateClientManager("default", makeLogger());
         expect(replacement).not.toBe(firstManager);
@@ -96,7 +94,6 @@ describe("client manager registry", () => {
         }
 
         expect(getClientManager("default")).toBe(replacement);
-        expect(logger.info).toHaveBeenCalledWith(unregisterMessage);
       } finally {
         cleanup.resolve();
         await removal.catch(() => undefined);

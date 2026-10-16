@@ -24,7 +24,7 @@ import {
 import { cleanBlocksForDescendant, patchTable } from "./docx-table-ops.js";
 import type { FeishuDocxBlock, FeishuDocxBlockChild } from "./docx-types.js";
 import { resolveDocToolLocalRoots, resolveDocxUploadInput } from "./docx-upload-input.js";
-import { createFeishuToolClient, resolveFeishuToolAccount } from "./tool-account.js";
+import { resolveFeishuToolAccount } from "./tool-account.js";
 import { registerFeishuTool } from "./tool-registration.js";
 import { feishuExternalToolResult as json } from "./tool-result.js";
 
@@ -829,7 +829,6 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
           case "get_block":
             return json(await getBlock(client, p.doc_token, p.block_id));
           case "update_block": {
-            await getBlock(client, p.doc_token, p.block_id);
             const res = await client.docx.documentBlock.patch({
               path: { document_id: p.doc_token, block_id: p.block_id },
               data: {
@@ -892,13 +891,9 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
     description:
       "List current app permissions (scopes). Use to debug permission issues or check available capabilities.",
     parameters: Type.Object({}),
-    createExecute(ctx, cfg) {
+    createExecute(_ctx, _cfg, createClient) {
       return async (_params) => {
-        const client = createFeishuToolClient({
-          cfg,
-          defaultAccountId: ctx.agentAccountId,
-          requiredTool: { family: "scopes", label: "App Scopes" },
-        });
+        const client = createClient(undefined, "App Scopes");
         const res = await client.application.scope.list({});
         assertFeishuApiSuccess(res);
         const scopes = res.data?.scopes ?? [];

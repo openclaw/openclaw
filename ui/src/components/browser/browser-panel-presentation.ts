@@ -9,10 +9,7 @@ import {
 } from "../panel-toggle-contract.ts";
 import { SolidPanelController } from "../solid-panel-controller.ts";
 import { browserRequestReferencedTabs, type BrowserDashboardTarget } from "./browser-client.ts";
-import {
-  BrowserPanelController,
-  type BrowserPanelControllerHost,
-} from "./browser-panel-controller.ts";
+import { createBrowserPanel, type BrowserPanelHost } from "./browser-panel-owner.ts";
 import { browserPanelHostedTabs } from "./browser-panel-tabs.ts";
 import {
   browserTabKey,
@@ -22,10 +19,7 @@ import {
 } from "./browser-target.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
-export class BrowserPanelPresentation
-  extends SolidPanelController
-  implements BrowserPanelControllerHost
-{
+export class BrowserPanelPresentation extends SolidPanelController implements BrowserPanelHost {
   /** Gateway client used for browser.request RPCs; null until connected. */
   client: GatewayBrowserClient | null = null;
   /** Whether the connected gateway advertises browser.request to this operator. */
@@ -58,7 +52,7 @@ export class BrowserPanelPresentation
   private activeDashboardKey: string | undefined;
   private activeSessionTabsKey: string | undefined;
   private consumedPreferredRevision?: string;
-  readonly browserPanelController = new BrowserPanelController(this);
+  readonly browserPanelController = createBrowserPanel(this, () => this.invalidate());
   readonly dockLayout = new DockLayoutController(this, {
     layout: browserPanelLayout,
     reservationPrefix: "browser",

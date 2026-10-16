@@ -89,6 +89,7 @@ export function loadTypefaceStylesheet(face: TypefaceId): HTMLLinkElement | unde
   link.id = id;
   link.rel = "stylesheet";
   link.href = inferControlUiPublicAssetPath(asset);
+  link.addEventListener("error", () => link.remove(), { once: true });
   document.head.append(link);
   return link;
 }

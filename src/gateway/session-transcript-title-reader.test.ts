@@ -36,8 +36,11 @@ import {
 import { readSessionTitleFieldsFromTranscriptAsync } from "./session-transcript-title-reader.js";
 import { readSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.worker.js";
 
-vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
+vi.mock("../config/sessions/session-accessor.sqlite-active-events.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../config/sessions/session-accessor.sqlite-active-events.js")
+    >();
   return {
     ...actual,
     readSessionTranscriptBoundedMessageTailPage: vi.fn(
@@ -45,7 +48,6 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
     ),
     readSessionTranscriptMessageEventPage: vi.fn(actual.readSessionTranscriptMessageEventPage),
     readSessionTranscriptMessageEvents: vi.fn(actual.readSessionTranscriptMessageEvents),
-    readSessionTranscriptWatermark: vi.fn(actual.readSessionTranscriptWatermark),
   };
 });
 
@@ -404,9 +406,9 @@ describe("session transcript title hydration", () => {
       ...Array.from({ length: 18 }, () => ({ role: "assistant", content: "Older reply" })),
     ]);
     await sessionAccessor.replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const actual = await vi.importActual<typeof import("../config/sessions/session-accessor.js")>(
-      "../config/sessions/session-accessor.js",
-    );
+    const actual = await vi.importActual<
+      typeof import("../config/sessions/session-accessor.sqlite-active-events.js")
+    >("../config/sessions/session-accessor.sqlite-active-events.js");
     const pageReader = vi.mocked(sessionAccessor.readSessionTranscriptMessageEventPage);
     pageReader.mockImplementationOnce((readScope, options) => {
       expect(
@@ -526,9 +528,9 @@ describe("session transcript Markdown title previews", () => {
         },
         ...(widen ? Array.from({ length: 3 }, () => hiddenMessages).flat() : []),
       ]);
-      const actual = await vi.importActual<typeof import("../config/sessions/session-accessor.js")>(
-        "../config/sessions/session-accessor.js",
-      );
+      const actual = await vi.importActual<
+        typeof import("../config/sessions/session-accessor.sqlite-active-events.js")
+      >("../config/sessions/session-accessor.sqlite-active-events.js");
       const readOlderText = vi.fn(() => olderText);
       let observedRows = 0;
       const observeOlderContent = (

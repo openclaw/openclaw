@@ -158,20 +158,20 @@ export class ChatComposerCapabilityHost {
     context: ApplicationContext,
     state: ChatPageHost,
     next: SessionToolOverrides | null,
-  ): Promise<{ ok: true } | { ok: false; error: string }> {
+  ): Promise<string | undefined> {
     if (!state.connected || !state.client) {
-      return { ok: false, error: t("chat.composer.menu.offlineBlocked") };
+      return t("chat.composer.menu.offlineBlocked");
     }
     const access = readSessionMethodAccess(context.gateway.snapshot, {
       method: "sessions.patch",
       params: { key: state.sessionKey, toolOverrides: next },
     });
     if (!access.allowed) {
-      return { ok: false, error: access.reason };
+      return access.reason;
     }
     const sessionKey = state.sessionKey;
     if (this.patchTokens.has(sessionKey)) {
-      return { ok: false, error: t("chat.composer.menu.savingBlocked") };
+      return t("chat.composer.menu.savingBlocked");
     }
     const client = state.client;
     const patchToken = Symbol(sessionKey);
@@ -194,7 +194,7 @@ export class ChatComposerCapabilityHost {
       if (!result) {
         throw new Error(t("chat.composer.menu.offlineBlocked"));
       }
-      return { ok: true };
+      return undefined;
     } catch (error) {
       const message = formatUiError(error);
       if (isCurrentPatch()) {
@@ -208,7 +208,7 @@ export class ChatComposerCapabilityHost {
           state.chatError = message;
         }
       }
-      return { ok: false, error: message };
+      return message;
     } finally {
       if (this.patchTokens.get(sessionKey) === patchToken) {
         this.patchTokens.delete(sessionKey);
@@ -259,33 +259,23 @@ export class ChatComposerCapabilityHost {
       state.sessionKey === sessionKey &&
       scopedAgentListParamsForSession(state, sessionKey).agentId === agentId;
     if (!identityMatches()) {
-      return { ok: false as const, error: t("mcpServers.sessionChanged") };
+      throw new Error(t("mcpServers.sessionChanged"));
     }
-    try {
-      await refreshCurrentChatSessionList(state);
-    } catch (error) {
-      return {
-        ok: false as const,
-        error: formatUiError(error),
-      };
-    }
+    await refreshCurrentChatSessionList(state);
     if (!identityMatches()) {
-      return { ok: false as const, error: t("mcpServers.sessionChanged") };
+      throw new Error(t("mcpServers.sessionChanged"));
     }
     const sessions = state.sessions.state;
     if (sessions.error) {
-      return { ok: false as const, error: sessions.error };
+      throw new Error(sessions.error);
     }
     const row = sessions.result?.sessions.find((candidate) =>
       areUiSessionKeysEquivalent(candidate.key, sessionKey),
     );
     if (!row || (sessions.agentId ?? undefined) !== agentId) {
-      return {
-        ok: false as const,
-        error: t("mcpServers.sessionUnavailable"),
-      };
+      throw new Error(t("mcpServers.sessionUnavailable"));
     }
-    return { ok: true as const, overrides: row.toolOverrides };
+    return row.toolOverrides;
   }
 
   private async submitAddServer(
@@ -325,24 +315,15 @@ export class ChatComposerCapabilityHost {
     let stage: "config" | "session" = "config";
     let failure: string | undefined;
     try {
-      const globalResult = await patchMcpServers(context.runtimeConfig, {
+      await patchMcpServers(context.runtimeConfig, {
         buildPatch: (servers) => buildAddMcpServerPatch(servers, name, globalConfig),
         note: `composer connectors: add MCP server ${name}`,
       });
-      if (!globalResult.ok) {
-        failure = globalResult.error;
-      } else if (scope === "session") {
+      if (scope === "session") {
         stage = "session";
-        const loaded = await this.loadCurrentSessionOverrides(state, sessionKey, agentId);
-        if (!loaded.ok) {
-          failure = loaded.error;
-        } else {
-          const next = nextBooleanToolOverrides(loaded.overrides, "mcpServers", name, true, false);
-          const sessionResult = await this.patch(context, state, next);
-          if (!sessionResult.ok) {
-            failure = sessionResult.error;
-          }
-        }
+        const overrides = await this.loadCurrentSessionOverrides(state, sessionKey, agentId);
+        const next = nextBooleanToolOverrides(overrides, "mcpServers", name, true, false);
+        failure = await this.patch(context, state, next);
       }
     } catch (error) {
       failure = formatUiError(error);

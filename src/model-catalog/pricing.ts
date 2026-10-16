@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import { MODEL_PRICING_SOURCES } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
@@ -193,7 +194,7 @@ function buildPricingContext(
     upstream,
     normalizedHosted,
     policies,
-    fingerprint,
+    fingerprint: createHash("sha256").update(fingerprint).digest("hex"),
   };
 }
 

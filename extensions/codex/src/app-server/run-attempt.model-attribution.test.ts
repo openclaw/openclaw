@@ -23,6 +23,7 @@ import { resolveProviderIdForAuth } from "openclaw/plugin-sdk/provider-auth-alia
 import { describe, expect, it, vi } from "vitest";
 import plugin from "../../index.js";
 import { CodexAppServerClient } from "./client.js";
+import type { CodexPluginConfig } from "./config.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import { isJsonObject } from "./protocol.js";
@@ -82,7 +83,7 @@ describe("registered Codex harness model attribution", () => {
       },
       supervision: { enabled: true },
       sessionCatalog: { enabled: false },
-    };
+    } satisfies CodexPluginConfig;
     const openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
       createPluginStateSyncKeyedStoreForTests<T>("codex", {
         ...options,

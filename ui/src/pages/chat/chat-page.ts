@@ -1,6 +1,6 @@
 import { createComponent, untrack } from "solid-js";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { ChatPageBody } from "./chat-page-pane-render.tsx";
 import { createChatPageState } from "./chat-page-state.ts";
 import type { ChatPageHost, ChatPageProps } from "./chat-page-types.ts";

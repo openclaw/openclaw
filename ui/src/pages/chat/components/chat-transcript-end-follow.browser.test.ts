@@ -4,13 +4,13 @@ import "../../../styles.css";
 import "../../../styles/chat.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
 import { TranscriptTestHost } from "../test-helpers/chat-transcript-native.tsx";
-import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
+import { createTranscriptTestOwner } from "./chat-transcript-owner.test-support.ts";
 import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 
 class EndFollowFixture extends TranscriptTestHost {
   followEnabled = true;
-  readonly transcript = new ChatTranscriptController(this, () => "end-follow-browser", {
+  readonly transcript = createTranscriptTestOwner(this, () => "end-follow-browser", {
     canFollowEnd: () => this.followEnabled,
   });
   viewportHeight = 400;
@@ -546,4 +546,56 @@ it("publishes padding changes when either viewport box stays the same size", asy
   await expect.poll(() => thread.clientHeight).toBe(420);
   expect(getComputedStyle(thread).paddingBottom).toBe("60px");
   expect(distance()).toBe(0);
+});
+
+it("holds the canceled viewport after a smooth journey's automatic final approach", async () => {
+  const { host, thread, extent, distance } = await mountEndFollowFixture(0);
+  const earlier = host.querySelector<HTMLElement>('[data-virtual-row-key="earlier"]')!;
+  const nativeScrollTo = thread.scrollTo.bind(thread);
+  let finalApproach = false;
+  let grewNearEnd = false;
+  let canceledOffset: number | undefined;
+  function observeScroll(options?: ScrollToOptions): void;
+  function observeScroll(x: number, y: number): void;
+  function observeScroll(options: ScrollToOptions | number | undefined, y?: number): void {
+    if (typeof options === "number") {
+      nativeScrollTo(options, y ?? 0);
+    } else {
+      finalApproach ||= grewNearEnd && options?.behavior === "auto";
+      nativeScrollTo(options);
+    }
+  }
+  thread.scrollTo = observeScroll;
+  const listener = new AbortController();
+  const canceled = new Promise<number>((resolve) => {
+    thread.addEventListener(
+      "scroll",
+      () => {
+        if (canceledOffset !== undefined) {
+          return;
+        }
+        if (finalApproach) {
+          canceledOffset = thread.scrollTop;
+          earlier.style.height = "442px";
+          host.transcript.cancelScroll();
+          resolve(canceledOffset);
+        } else if (!grewNearEnd && distance() <= thread.clientHeight) {
+          grewNearEnd = true;
+          host.lastRowHeight += 48;
+          host.requestUpdate();
+        }
+      },
+      { capture: true, signal: listener.signal },
+    );
+  });
+  try {
+    host.transcript.scrollToEnd({ behavior: "smooth" });
+    const offset = await canceled;
+    await settleFrames();
+    expect(extent.offsetHeight).toBe(1390);
+    expect(thread.scrollTop).toBe(offset);
+  } finally {
+    listener.abort();
+    thread.scrollTo = nativeScrollTo;
+  }
 });

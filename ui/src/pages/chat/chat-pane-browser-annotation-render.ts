@@ -31,13 +31,13 @@ export abstract class ChatPaneBrowserAnnotationRender extends ChatPaneHeader {
         requestUpdate: () => this.state?.requestUpdate?.(),
         focusComposer: () =>
           focusAfterUpdate(() =>
-            this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR),
+            this.element.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR),
           ),
         focusRestoredAnnotation: (attachmentId) =>
           focusAfterUpdate(() => {
-            const card = [...this.querySelectorAll<HTMLElement>("[data-attachment-id]")].find(
-              (candidate) => candidate.dataset.attachmentId === attachmentId,
-            );
+            const card = [
+              ...this.element.querySelectorAll<HTMLElement>("[data-attachment-id]"),
+            ].find((candidate) => candidate.dataset.attachmentId === attachmentId);
             return card?.querySelector<HTMLButtonElement>("button");
           }),
       },

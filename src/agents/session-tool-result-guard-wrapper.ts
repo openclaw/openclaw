@@ -74,7 +74,7 @@ function publishPersistedUserEnvelope(
     return;
   }
   // Publish once, before model transforms. Replay must use the same envelope;
-  // runtime content and non-enumerable media/steering facts remain prepared.
+  // runtime content and symbol-carried media/steering facts remain prepared.
   const content = runtime.content;
   const imageFactIndexes = readPersistedImageBlockFactIndexes(runtime);
   for (const key of Object.keys(runtime)) {

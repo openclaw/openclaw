@@ -38,7 +38,6 @@ const {
   createThreadBindingManagerMock,
   getAcpSessionStatusMock,
   isNativeCommandsExplicitlyDisabledMock,
-  isVerboseMock,
   listNativeCommandSpecsForConfigMock,
   prepareSkillCommandsForAgentsMock,
   monitorLifecycleMock,
@@ -127,13 +126,6 @@ function expectMockLogContains(mock: unknown, expected: string): void {
 
 function expectMockLogNotContains(mock: unknown, expected: string): void {
   expect(mockMessages(mock).join("\n")).not.toContain(expected);
-}
-
-function expectMessagesContainAll(messages: string[], expected: string[]): void {
-  const joinedMessages = messages.join("\n");
-  for (const entry of expected) {
-    expect(joinedMessages).toContain(entry);
-  }
 }
 
 vi.mock("../voice/voice-runtime.js", () => {
@@ -295,7 +287,6 @@ describe("monitorDiscordProvider", () => {
     providerTesting.setPrepareSkillCommandsForAgents(
       (...args) => prepareSkillCommandsForAgentsMock(...args) as never,
     );
-    providerTesting.setIsVerbose(() => isVerboseMock());
     providerTesting.setShouldLogVerbose(() => shouldLogVerboseMock());
   });
 
@@ -887,40 +878,18 @@ describe("monitorDiscordProvider", () => {
     },
   );
 
-  it("logs Discord startup phases and early gateway debug events", async () => {
-    const runtime = baseRuntime();
-    const emitter = new EventEmitter();
-    const gateway = { emitter, isConnected: true, reconnectAttempts: 0 };
+  it("publishes ready and disconnected status across the gateway lifecycle", async () => {
+    const gateway = { emitter: new EventEmitter(), isConnected: true };
     clientGetPluginMock.mockImplementation((name: string) =>
       name === "gateway" ? gateway : undefined,
     );
-    clientFetchUserMock.mockImplementationOnce(async () => {
-      emitter.emit("debug", "Gateway websocket opened");
-      return { id: "bot-1", username: "Molty" };
-    });
-    isVerboseMock.mockReturnValue(true);
-
     const setStatus = vi.fn();
-    await runProvider({ runtime, setStatus });
+
+    await runProvider({ setStatus });
 
     expect(setStatus).toHaveBeenCalledWith(
       expect.objectContaining({ connected: true, lifecycle: "ready" }),
     );
     expect(setStatus).toHaveBeenCalledWith(expect.objectContaining({ connected: false }));
-    await vi.waitFor(() => expectMockLogContains(runtime.log, "deploy-commands:done"));
-
-    const messages = vi.mocked(runtime.log).mock.calls.map((call) => String(call[0]));
-    expectMessagesContainAll(messages, [
-      "fetch-application-id:start",
-      "fetch-application-id:done",
-      "deploy-commands:schedule",
-      "deploy-commands:scheduled",
-      "deploy-commands:done",
-      "fetch-bot-identity:start",
-      "fetch-bot-identity:done",
-    ]);
-    expect(
-      messages.some((message) => /gateway-debug.*Gateway websocket opened/.test(message)),
-    ).toBe(true);
   });
 });

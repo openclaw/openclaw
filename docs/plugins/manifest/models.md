@@ -215,11 +215,15 @@ flags do not establish conversational support.
 
 - `protocol`: a bounded provider-owned adapter identifier, not a URL or auth identity.
 - `input`: supported text/image modalities for this task.
-- `questions`: declared `boolean`, `choice`, `score`, `sort`, or `tags` kinds.
+- `questions`: optional declared `boolean`, `choice`, `score`, `sort`, or `tags` kinds.
+  Omission means unknown support; an explicit empty declaration is invalid.
   Each records probability semantics (`boolean`, `categorical`, `independent`,
-  or `none`) and whether it can abstain. Optional option bounds include a
-  separate image-input bound. Independent probabilities must not be normalized
-  to sum to one; abstention must not become an argmax.
+  `provider-defined`, or `none`) and whether it can abstain. Optional option bounds
+  include a separate image-input bound. `requiresCriteria` records whether Boolean
+  questions need an explicit rubric. Independent and provider-defined estimates
+  must not be normalized to sum to one; abstention must not become an argmax.
+- `confidence`: optional `provider-specific` or `none`. A provider-specific
+  confidence metric is distinct from a calibrated correctness probability.
 - `reasoning`: supported `auto`/`off`/`on` modes, optional default/applicable
   question kinds, and whether execution metadata is returned. This does not
   imply reasoning text or set the primary model effort.

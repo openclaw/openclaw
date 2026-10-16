@@ -22,14 +22,12 @@ import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { GitHubPublicationController } from "../../lib/sessions/github-publication-controller.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
-import { solidContent } from "../../lit/solid-content.tsx";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
 import { isChatBubbleMode } from "./chat-bubble-mode.ts";
 import { chatGoalRecovery, mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { resolveChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneLayoutRender } from "./chat-pane-layout-render.ts";
-import { PaneBootLayout } from "./chat-pane-layout-view.tsx";
 import { createChatPaneRails } from "./chat-pane-rails.ts";
 import {
   createChatPaneQueuedEditProps,
@@ -52,7 +50,7 @@ import {
   resolveChatPaneFollowUpMode,
   projectChatPaneTranscript,
 } from "./chat-pane-state.ts";
-import { ChatProviderReviewController } from "./chat-provider-review-controller.tsx";
+import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
 import { createChatQuestionActions } from "./chat-question-actions.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
 import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
@@ -72,16 +70,17 @@ import { lockChatScroll, scheduleChatScroll } from "./scroll.ts";
 import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
-const bootLayout = solidContent(PaneBootLayout, {});
-
 export class ChatPaneRuntime extends ChatPaneLayoutRender {
-  private readonly notify = () => this.requestUpdate();
-  readonly providerReview = new ChatProviderReviewController(this, () => this.state, this.notify);
+  private readonly notify = () => this.invalidate();
 
-  render() {
+  readProviderReviewState() {
+    return this.state;
+  }
+
+  render(readProviderReview?: () => ChatProviderReviewOwner) {
     const state = this.state;
     if (!state) {
-      return { layout: bootLayout, capabilityDialogs: undefined };
+      return { layout: null, capabilityDialogs: undefined, providerReviewSource: undefined };
     }
     const selectionConnectionGeneration = this.connectionGeneration;
     const selectedSession = selectedChatSessionRow(state);
@@ -171,7 +170,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       placementStartup !== null,
     );
     const canWriteProgressCard = state.connected && !sessionParticipationBlocked && hasWriteScope;
-    this.providerReview.sync(canWriteProgressCard && !selectedSessionArchived);
     const restartRecoveryTombstoned = selectedSession?.restartRecoveryStatus === "tombstoned";
     const multiIdentity = this.hasMultipleIdentities();
     const suggestionViewer =
@@ -405,8 +403,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
       providerPolicyNotice: catalogKey ? null : state.providerPolicyNotice,
-      providerReview: this.providerReview,
-      providerReviewRevision: {},
+      readProviderReview,
       progressCard: progressPresentation?.card ?? null,
       progressCardIdentity: progressPresentation?.identity,
       progressCardLifetime: progressPresentation?.lifetime,
@@ -523,7 +520,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
                 selectedSession.key,
                 visibleWorkspaceConflict.stagedResultRef,
               );
-              this.requestUpdate();
+              this.invalidate();
             }
           : undefined,
       sessions: state.sessionsResult,
@@ -687,6 +684,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       resourceBasePath: state.resourceBasePath,
     };
     return {
+      providerReviewSource: { state, canWrite: canWriteProgressCard && !selectedSessionArchived },
       capabilityDialogs: catalogKey
         ? undefined
         : {

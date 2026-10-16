@@ -2,10 +2,12 @@ import { AsyncLocalStorage, createHook } from "node:async_hooks";
 import fs from "node:fs";
 import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   closeOpenClawStateDatabaseAsync,
   getTrackedWorkerLifecycleSnapshot,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createManagerHarness, markCallAnswered } from "./manager.test-harness.js";
 import type { CallRecord } from "./types.js";
@@ -21,8 +23,11 @@ function fixtureWorkerCounts() {
   );
 }
 
-it("finalizes fixture calls and releases their timers, database workers, and directories", async () => {
+it("finalizes fixture calls and releases their timers, database workers, and directories", async ({
+  signal,
+}) => {
   const ownership = new AsyncLocalStorage<"duration" | "transcript">();
+  const transcriptAllocated = createDeferred<void>();
   const timerMs = { duration: 317_000, transcript: 43_100 };
   const timerDelay = new AsyncLocalStorage<number | undefined>();
   const schedule = globalThis.setTimeout;
@@ -43,6 +48,9 @@ it("finalizes fixture calls and releases their timers, database workers, and dir
         if (timerDelay.getStore() === timerMs[owner]) {
           allocated[owner]++;
           pending.set(id, owner);
+          if (owner === "transcript") {
+            transcriptAllocated.resolve();
+          }
         } else {
           pending.set(id, "database-timer");
         }
@@ -129,7 +137,15 @@ it("finalizes fixture calls and releases their timers, database workers, and dir
       );
     }
   }
-  await setImmediate();
+  // Durable call updates can span loop turns; wait for the actual transcript timer.
+  await withinTest(
+    awaitGateBeforeSettlement(
+      transcriptAllocated.promise,
+      Promise.all(turns),
+      "fixture turn settled before allocating its transcript timer",
+    ),
+    signal,
+  );
   expect(allocated).toEqual({ duration: 2, transcript: 1 });
   // Database admission workers can finish before fixture teardown; call timers must stay live.
   expect(

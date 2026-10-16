@@ -47,9 +47,7 @@ export function MutationButton(props: {
         class={
           props.variant === "link"
             ? "sw-link-button"
-            : props.variant === "danger"
-              ? "btn btn--sm danger"
-              : "btn btn--sm oc-action"
+            : ["btn btn--sm", props.variant === "danger" ? "danger" : "oc-action"]
         }
         title={props.title}
         disabled={props.view().pendingAction !== null}

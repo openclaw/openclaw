@@ -410,6 +410,25 @@ describe("openrouter provider hooks", () => {
     });
   });
 
+  it.each(["typesafe/jev-1.13", "openrouter/~typesafe/jev-latest"])(
+    "keeps %s out of dynamic chat resolution",
+    async (modelId) => {
+      getLoadedOpenRouterModelCapabilitiesMock.mockClear();
+      loadOpenRouterModelCapabilitiesMock.mockClear();
+      const provider = await registerSingleProviderPlugin(openrouterPlugin);
+      const context = {
+        provider: "openrouter",
+        modelId,
+        modelRegistry: { find: vi.fn(() => null) },
+      } as never;
+
+      await provider.prepareDynamicModel?.(context);
+      expect(provider.resolveDynamicModel?.(context)).toBeUndefined();
+      expect(loadOpenRouterModelCapabilitiesMock).not.toHaveBeenCalled();
+      expect(getLoadedOpenRouterModelCapabilitiesMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps native OpenRouter namespace ids for capability lookup", async () => {
     getLoadedOpenRouterModelCapabilitiesMock.mockReset();
     loadOpenRouterModelCapabilitiesMock.mockClear();

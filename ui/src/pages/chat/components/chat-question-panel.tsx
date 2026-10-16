@@ -4,7 +4,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { EXTERNAL_LINK_TARGET, buildExternalLinkRel } from "../../../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import {
   adjustTextareaHeight,
   disconnectTextareaOverflowObserver,

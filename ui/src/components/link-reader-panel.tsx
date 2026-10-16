@@ -5,12 +5,13 @@ import {
   createRenderEffect,
   createSignal,
   For,
+  Repeat,
   onCleanup,
   onSettled,
 } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { DockResizer } from "./dock-layout-solid.tsx";
 import { LinkReaderContent } from "./link-reader-content.tsx";
 import {
@@ -23,6 +24,7 @@ import {
   tabTarget,
   tabLabel,
   type ReaderTab,
+  type ReaderSection,
 } from "./link-reader-panel-view.ts";
 import { EMPTY_LINK_READERS } from "./link-reader-target.ts";
 import type { PanelHostedTabsElement } from "./panel-hosted-tabs.ts";
@@ -54,7 +56,36 @@ function HostedAction(props: { owner: LinkReaderPanelOwner; revision: number }) 
   );
 }
 
-function PanelContent(props: { tab: ReaderTab; available: boolean; refresh: () => void }) {
+function ReaderLoading(props: { url: string }) {
+  return (
+    <div class="lr-loading" role="status">
+      <div class="lr-eyebrow">{new URL(props.url).hostname + new URL(props.url).pathname}</div>
+      <p class="lr-loading-label">{t("linkReader.loadingPreview")}</p>
+      <div class="lr-skeleton" aria-hidden="true">
+        <div class="lr-skeleton-title" />
+        <div class="lr-skeleton-title lr-skeleton-short" />
+        <div class="lr-skeleton-meta" />
+        <div class="lr-skeleton-nav" />
+        <Repeat count={2}>
+          {() => (
+            <div class="lr-skeleton-paragraph">
+              <div />
+              <div />
+              <div class="lr-skeleton-short" />
+            </div>
+          )}
+        </Repeat>
+      </div>
+    </div>
+  );
+}
+
+function PanelContent(props: {
+  tab: ReaderTab;
+  available: boolean;
+  refresh: () => void;
+  loadSection: (section: ReaderSection) => void;
+}) {
   const target = () => tabTarget(props.tab);
   return (
     <>
@@ -88,15 +119,31 @@ function PanelContent(props: { tab: ReaderTab; available: boolean; refresh: () =
           </a>
         </div>
       ) : props.tab.view.status !== "ready" ? (
-        <p class="lr-status" role="status">
-          {t("linkReader.loadingPreview")}
-        </p>
+        <ReaderLoading url={target()!.href} />
       ) : (
-        <LinkReaderContent
-          detail={props.tab.view.detail}
-          target={target()!}
-          loadImage={props.tab.view.images?.load}
-        />
+        <>
+          {(props.tab.view.refreshing || props.tab.view.message) && (
+            <div class="lr-refresh-note" role="status">
+              <span>
+                {props.tab.view.refreshing
+                  ? t("linkReader.refreshingSaved")
+                  : props.tab.view.message}
+                {!props.tab.view.refreshing && (
+                  <button type="button" onClick={() => props.refresh()}>
+                    {t("linkReader.refresh")}
+                  </button>
+                )}
+              </span>
+            </div>
+          )}
+          <LinkReaderContent
+            detail={props.tab.view.detail}
+            target={target()!}
+            loadImage={props.tab.view.images?.load}
+            sections={props.tab.view.sections}
+            onLoadSection={(section) => props.loadSection(section)}
+          />
+        </>
       )}
     </>
   );
@@ -170,6 +217,12 @@ function PanelView(
   };
   const tab = () => view().activeTab;
   const target = () => view().target;
+  const loading = () => {
+    const current = tab()?.view;
+    return (
+      current?.status === "loading" || (current?.status === "ready" && current.refreshing === true)
+    );
+  };
   const tabStripTabs = createMemo(() =>
     view().hostedTabs.map((item) => ({
       id: item.id,
@@ -253,7 +306,7 @@ function PanelView(
               "refresh",
               t("linkReader.refresh"),
               () => owner.refresh(),
-              !target() || !props.available || !props.client || tab()!.view.status === "loading",
+              !target() || !props.available || !props.client || loading(),
             )}
             <input
               class="lr-url"
@@ -338,6 +391,7 @@ function PanelView(
                     tab={(revision(), item())}
                     available={props.available && Boolean(props.client)}
                     refresh={() => owner.refresh()}
+                    loadSection={(section) => owner.requestSection(section)}
                   />
                 </div>
               )}

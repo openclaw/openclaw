@@ -1,8 +1,9 @@
 /* @vitest-environment jsdom */
 
+import { createRoot } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
-import { ImageLightboxGalleryController } from "../../../components/image-lightbox-gallery.ts";
+import { createImageLightboxGallery } from "../../../components/image-lightbox-gallery.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
@@ -70,17 +71,26 @@ function imageResponse() {
 }
 
 function createGallery() {
-  const controller = new ImageLightboxGalleryController(vi.fn());
+  let controller: ReturnType<typeof createImageLightboxGallery>;
+  let close = () => {};
   let opened: ImageLightboxItem | undefined;
   return {
-    controller,
+    get controller() {
+      return controller;
+    },
+    close: () => close(),
     onOpenImage: vi.fn((item: ImageLightboxItem) => {
       opened?.release?.();
       opened = item;
+      close();
+      controller = createRoot((dispose) => {
+        close = dispose;
+        return createImageLightboxGallery();
+      });
       controller.reset(item.gallery, item);
     }),
     dispose: () => {
-      controller.dispose();
+      close();
       opened?.release?.();
     },
   };
@@ -218,7 +228,8 @@ describe("message image gallery loading", () => {
       url.includes("width=960") ? full.promise : Promise.resolve(imageResponse()),
     );
     vi.stubGlobal("fetch", fetch);
-    const { controller, onOpenImage, dispose } = createGallery();
+    const gallery = createGallery();
+    const { onOpenImage, dispose } = gallery;
     try {
       renderImages([{ url: source, alt: "Detailed screenshot" }], {
         onOpenImage,
@@ -229,18 +240,22 @@ describe("message image gallery loading", () => {
       tile.click();
 
       expect(onOpenImage).toHaveBeenCalledOnce();
-      expect(controller.current?.src).toBe(`${blobPrefix}-0`);
+      expect(gallery.controller.peek().current?.src).toBe(`${blobPrefix}-0`);
       full.resolve(imageResponse());
       await vi.waitFor(() => expect(decode).toHaveBeenCalledOnce());
-      expect(controller.current?.src).toBe(`${blobPrefix}-0`);
+      expect(gallery.controller.peek().current?.src).toBe(`${blobPrefix}-0`);
       decoded.resolve();
-      await vi.waitFor(() => expect(controller.current?.src).toBe(`${blobPrefix}-1`));
+      await vi.waitFor(() =>
+        expect(gallery.controller.peek().current?.src).toBe(`${blobPrefix}-1`),
+      );
 
-      controller.dispose();
+      gallery.close();
       tile.click();
       expect(onOpenImage).toHaveBeenCalledTimes(2);
-      expect(controller.current?.src).toBe(`${blobPrefix}-0`);
-      await vi.waitFor(() => expect(controller.current?.src).toBe(`${blobPrefix}-1`));
+      expect(gallery.controller.peek().current?.src).toBe(`${blobPrefix}-0`);
+      await vi.waitFor(() =>
+        expect(gallery.controller.peek().current?.src).toBe(`${blobPrefix}-1`),
+      );
       expect(fetch.mock.calls.map(([url]) => url)).toEqual([
         source.replace(/\/full$/u, "/thumbnail?v=4&width=480"),
         source.replace(/\/full$/u, "/thumbnail?v=4&width=960"),
@@ -261,7 +276,8 @@ describe("message image gallery loading", () => {
     stubImageDecoding(blobPrefix, decode);
     const fetch = vi.fn(async (_url: string) => imageResponse());
     vi.stubGlobal("fetch", fetch);
-    const { controller, onOpenImage, dispose } = createGallery();
+    const gallery = createGallery();
+    const { onOpenImage, dispose } = gallery;
     try {
       renderImages([{ url: source, alt: "Original in unsupported format" }], {
         onOpenImage,
@@ -271,13 +287,13 @@ describe("message image gallery loading", () => {
       const tile = container.querySelector<HTMLButtonElement>(".chat-message-image-button")!;
       tile.click();
       await vi.waitFor(() => expect(decode).toHaveBeenCalledOnce());
-      expect(controller.current?.src).toBe(`${blobPrefix}-0`);
+      expect(gallery.controller.peek().current?.src).toBe(`${blobPrefix}-0`);
 
-      controller.dispose();
+      gallery.close();
       tile.click();
-      expect(controller.current?.src).toBe(`${blobPrefix}-0`);
+      expect(gallery.controller.peek().current?.src).toBe(`${blobPrefix}-0`);
       await vi.waitFor(() => expect(decode).toHaveBeenCalledTimes(2));
-      expect(controller.current?.src).toBe(`${blobPrefix}-0`);
+      expect(gallery.controller.peek().current?.src).toBe(`${blobPrefix}-0`);
       expect(fetch.mock.calls.map(([url]) => url)).toEqual([
         source.replace(/\/full$/u, "/thumbnail?v=4&width=480"),
         source.replace(/\/full$/u, "/thumbnail?v=4&width=960"),
@@ -299,7 +315,8 @@ describe("message image gallery loading", () => {
         url.includes("width=960") ? fetchDisplay() : imageResponse(),
       );
       vi.stubGlobal("fetch", fetch);
-      const { controller, onOpenImage, dispose } = createGallery();
+      const gallery = createGallery();
+      const { onOpenImage, dispose } = gallery;
       try {
         renderImages(
           [
@@ -316,23 +333,23 @@ describe("message image gallery loading", () => {
         expect(fetch.mock.calls.map(([url]) => url)).toEqual([
           source.replace(/\/full$/u, "/thumbnail?v=4&width=480"),
         ]);
-        expect(await controller.move(1)).toBe(false);
+        expect(await gallery.controller.move(1)).toBe(false);
         expect(fetchDisplay).toHaveBeenCalledOnce();
-        expect(controller.current?.title).toBe("First image");
-        expect(controller.failed).toBe(true);
+        expect(gallery.controller.peek().current?.title).toBe("First image");
+        expect(gallery.controller.peek().failed).toBe(true);
         fetchDisplay.mockImplementation(async () => imageResponse());
         if (action === "navigation") {
-          expect(await controller.move(1)).toBe(true);
+          expect(await gallery.controller.move(1)).toBe(true);
         } else {
           tiles[1]!.click();
           await vi.advanceTimersByTimeAsync(0);
           expect(onOpenImage).toHaveBeenCalledTimes(2);
         }
         expect(fetchDisplay).toHaveBeenCalledTimes(2);
-        expect(controller.index).toBe(1);
-        expect(controller.current?.title).toBe("Managed neighbor");
-        expect(controller.current?.src).toBe(`${blobPrefix}-1`);
-        expect(controller.failed).toBe(false);
+        expect(gallery.controller.peek().index).toBe(1);
+        expect(gallery.controller.peek().current?.title).toBe("Managed neighbor");
+        expect(gallery.controller.peek().current?.src).toBe(`${blobPrefix}-1`);
+        expect(gallery.controller.peek().failed).toBe(false);
         expect(fetch.mock.calls.every(([url]) => url.includes("/thumbnail?v=4&width="))).toBe(true);
       } finally {
         dispose();

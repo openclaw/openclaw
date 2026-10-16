@@ -29,7 +29,6 @@ import {
 import type {
   ProfileDisplayRow,
   UserProfileEmailBinding,
-  UserProfileEmailBindingIndex,
   UserProfileIdentity,
   UserProfileAuthority,
 } from "./user-profiles.types.js";
@@ -132,7 +131,7 @@ export function readUserProfileAuthorityCommand(
       return {
         profileId: current.id,
         role: current.role ?? null,
-        githubLogin: githubIdentity?.login ?? null,
+        githubLogin: githubIdentity?.host ? null : (githubIdentity?.login ?? null),
         aliases: [current.id, ...aliases.map((alias) => alias.id)],
         display: projectUserProfileDisplay(display),
         ...(includeProfile
@@ -283,25 +282,6 @@ export function projectUserProfileDisplays(
       return profile ? [[id, projectUserProfileDisplay(profile)] as const] : [];
     }),
   );
-}
-
-/** Sharing picker labels include account and email fallbacks, unlike session attribution. */
-export function projectUserProfileDisplayFacts(
-  rows: ReadonlyMap<string, ProfileDisplayRow>,
-  bindings: UserProfileEmailBindingIndex,
-) {
-  return [...rows.values()].map((profile) => ({
-    id: profile.id,
-    label:
-      profile.display_name?.trim() ||
-      profile.githubLogin ||
-      [...(bindings.emailsByProfile.get(profile.id) ?? [])].toSorted((left, right) =>
-        Buffer.compare(Buffer.from(left), Buffer.from(right)),
-      )[0] ||
-      profile.id,
-    hasAvatar: profile.has_avatar === 1,
-    updatedAt: profile.updated_at,
-  }));
 }
 
 /** Resolve display navigation against the resident Gateway catalog. */

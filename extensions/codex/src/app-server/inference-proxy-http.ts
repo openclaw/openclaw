@@ -7,7 +7,7 @@ export const OVERLOAD_HEADERS = { "content-type": "application/json", "retry-aft
 export const OVERLOAD_BODY = JSON.stringify({
   type: "error",
   status: 503,
-  // Native treats backend server_is_overloaded as terminal; local saturation must retry.
+  // Backend overload without retry advice is terminal; keep local saturation distinct and explicitly retryable.
   error: { type: "server_error", code: "inference_relay_busy", message: OVERLOADED },
   headers: { "retry-after": "1" },
 });

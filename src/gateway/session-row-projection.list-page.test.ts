@@ -10,27 +10,18 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as topology from "../config/sessions/combined-store-gateway-read.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
-import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
-import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  identifiedClient,
   requestContext,
   sessionReadHandlers,
 } from "./server-methods/sessions-read-cache.test-support.js";
-import { createPreparedGatewayModelCatalog } from "./server-model-catalog-view.js";
-import * as listWorker from "./session-list-worker.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
-import { rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 import * as rowInputs from "./session-utils-row.js";
 import type { SessionsListResult } from "./session-utils.types.js";
@@ -147,85 +138,6 @@ it("retries failed catalog renewal without blocking lists on its replacement", a
     } finally {
       failure.resolve(catalog);
       replacement.resolve(catalog);
-      projection.dispose();
-      release();
-    }
-  });
-});
-
-it("keeps row and default model facts current when a catalog publishes during worker selection", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = {
-      agents: { entries: { main: {} }, defaults: { model: "unit-test/fixture" } },
-    };
-    setRuntimeConfigSnapshot(cfg);
-    const key = "agent:main:dashboard:catalog-publication";
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: key },
-      { sessionId: "catalog-publication", updatedAt: 1 },
-    );
-    const pluginRegistry = createEmptyPluginRegistry();
-    const metadataSnapshot = createPluginMetadataSnapshotFixture();
-    const catalog = (contextTokens: number) =>
-      new Map([
-        [
-          "main",
-          createPreparedGatewayModelCatalog({
-            entries: [{ provider: "unit-test", id: "fixture", name: "Fixture", contextTokens }],
-            pluginRegistry,
-            metadataSnapshot,
-          }),
-        ],
-      ]);
-    let catalogs = catalog(8_192);
-    const release = retainSessionListForegroundWork();
-    const projection = await createSessionRowProjection({
-      cfg,
-      getModelCatalog: async () => catalogs,
-    });
-    const selected = createDeferredCore();
-    const resume = createDeferredCore();
-    let pending: ReturnType<(typeof sessionReadHandlers)[string]> | undefined;
-    try {
-      await projection.ensureMaterialized();
-      const select = listWorker.selectSessionListPageInWorker;
-      vi.spyOn(listWorker, "selectSessionListPageInWorker").mockImplementationOnce(
-        async (...args) => {
-          const result = await select(...args);
-          selected.resolve();
-          await resume.promise;
-          return result;
-        },
-      );
-      const respond = vi.fn();
-      pending = sessionReadHandlers["sessions.list"]!({
-        req: { type: "req", id: "catalog-publication", method: "sessions.list" },
-        params: {},
-        client: null,
-        context: bindSessionRowProjection(requestContext(cfg), () => projection),
-        isWebchatConnect: () => false,
-        respond,
-      });
-      await selected.promise;
-      catalogs = catalog(16_384);
-      notifyPreparedModelRuntimePublication({
-        phase: "catalog-published",
-        modelFactsChanged: true,
-      });
-      await nextTurn();
-      expect(projection.state.modelCatalog).toBe(catalogs);
-      resume.resolve();
-      await pending;
-      expect(respond).toHaveBeenCalledExactlyOnceWith(
-        true,
-        expect.objectContaining({
-          sessions: [expect.objectContaining({ key, contextTokens: 16_384 })],
-          defaults: expect.objectContaining({ contextTokens: 16_384 }),
-        }),
-      );
-    } finally {
-      resume.resolve();
-      await pending;
       projection.dispose();
       release();
     }
@@ -480,194 +392,6 @@ it("selects fresh metadata and board facts without materializing the unselected 
       });
       expect(withoutBoard.sessions.map((row) => row.sessionId)).toEqual(["selection-1"]);
     } finally {
-      projection.dispose();
-      release();
-    }
-  });
-});
-
-it.each([
-  ["sharing", "selection"],
-  ["role", "selection"],
-  ["sharing", "presentation"],
-  ["role", "presentation"],
-] as const)(
-  "reselects rows and facets when %s is revoked during worker %s",
-  async (revocation, phase) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg = { ...rolePolicyConfig(), agents: { entries: { main: {} } } };
-      setRuntimeConfigSnapshot(cfg);
-      const viewer = ensureProfileForEmail("page-viewer@example.test");
-      const owner = ensureProfileForEmail("page-owner@example.test");
-      const client = identifiedClient(viewer.id);
-      const ownKey = "agent:main:dashboard:viewer-page";
-      const foreignKey = "agent:main:dashboard:foreign-page";
-      for (const [sessionKey, creator, updatedAt] of [
-        [ownKey, viewer.id, 1],
-        [foreignKey, owner.id, 2],
-      ] as const) {
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey },
-          {
-            sessionId: sessionKey,
-            updatedAt,
-            visibility: "shared",
-            createdActor: { type: "human", source: "profile", id: creator },
-          },
-        );
-      }
-      const release = retainSessionListForegroundWork();
-      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-      const selected = createDeferredCore();
-      const resume = createDeferredCore();
-      let pending: ReturnType<(typeof sessionReadHandlers)[string]> | undefined;
-      try {
-        await projection.ensureMaterialized();
-        const select = listWorker.selectSessionListPageInWorker;
-        // Hold a real worker result at its transport boundary; do not fabricate selection facts.
-        vi.spyOn(listWorker, "selectSessionListPageInWorker").mockImplementationOnce(
-          async (...args) => {
-            const result = await select(...args);
-            if (phase === "selection" || !result) {
-              selected.resolve();
-              await resume.promise;
-              return result;
-            }
-            return {
-              ...result,
-              async render(...renderArgs) {
-                const rows = await result.render(...renderArgs);
-                selected.resolve();
-                await resume.promise;
-                return rows;
-              },
-            };
-          },
-        );
-        const respond = vi.fn();
-        pending = sessionReadHandlers["sessions.list"]!({
-          req: { type: "req", id: "revoked-page", method: "sessions.list" },
-          params: { includePeople: true, includeOwnerSessionCounts: true },
-          client,
-          context: bindSessionRowProjection(requestContext(cfg), () => projection),
-          isWebchatConnect: () => false,
-          respond,
-        });
-        await selected.promise;
-        expect(respond).not.toHaveBeenCalled();
-        if (revocation === "role") {
-          setUserProfileRole(viewer.id, "none");
-        } else {
-          replaceSessionEntrySync(
-            { agentId: "main", sessionKey: foreignKey },
-            {
-              sessionId: foreignKey,
-              updatedAt: 2,
-              visibility: "draft",
-              createdActor: { type: "human", source: "profile", id: owner.id },
-            },
-          );
-        }
-        resume.resolve();
-        await pending;
-        expect(respond).toHaveBeenCalledOnce();
-        expect(respond.mock.calls[0]?.[0]).toBe(true);
-        const result = respond.mock.calls[0]?.[1] as SessionsListResult;
-        expect(result.sessions.map((row) => row.key)).toEqual([ownKey]);
-        expect(result.totalCount).toBe(1);
-        expect(result.owners?.map((person) => person.id)).toEqual([viewer.id]);
-        expect(result.people?.map((person) => person.identity.id)).toEqual([viewer.id]);
-        expect(result.ownerSessionCounts).toEqual([{ profileId: viewer.id, open: 1, running: 0 }]);
-      } finally {
-        resume.resolve();
-        await pending;
-        projection.dispose();
-        release();
-      }
-    });
-  },
-);
-
-it("reselects active rows and facets when a run retires during worker selection", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { entries: { main: {} } } };
-    setRuntimeConfigSnapshot(cfg);
-    const owners = [
-      ensureProfileForEmail("running-page@example.test"),
-      ensureProfileForEmail("retired-page@example.test"),
-    ];
-    const keys = ["agent:main:dashboard:running-page", "agent:main:dashboard:retired-page"];
-    const runIds = ["running-page-run", "retired-page-run"];
-    for (const [index, sessionKey] of keys.entries()) {
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: sessionKey,
-          updatedAt: index + 1,
-          visibility: "shared",
-          createdActor: { type: "human", source: "profile", id: owners[index]!.id },
-        },
-      );
-    }
-    const claims = runIds.map((runId, index) =>
-      claimAgentRunContext(
-        runId,
-        {
-          agentId: "main",
-          sessionKey: keys[index]!,
-          sessionId: keys[index]!,
-          projectSessionActive: true,
-        },
-        { trackOwner: true, ownsContext: true },
-      ),
-    );
-    const release = retainSessionListForegroundWork();
-    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-    const selected = createDeferredCore();
-    const resume = createDeferredCore();
-    let pending: ReturnType<(typeof sessionReadHandlers)[string]> | undefined;
-    try {
-      await projection.ensureMaterialized();
-      const select = listWorker.selectSessionListPageInWorker;
-      vi.spyOn(listWorker, "selectSessionListPageInWorker").mockImplementationOnce(
-        async (...args) => {
-          const result = await select(...args);
-          selected.resolve();
-          await resume.promise;
-          return result;
-        },
-      );
-      const respond = vi.fn();
-      pending = sessionReadHandlers["sessions.list"]!({
-        req: { type: "req", id: "retired-run-page", method: "sessions.list" },
-        params: { activeOnly: true, includePeople: true, includeOwnerSessionCounts: true },
-        client: null,
-        context: bindSessionRowProjection(requestContext(cfg), () => projection),
-        isWebchatConnect: () => false,
-        respond,
-      });
-      await selected.promise;
-      expect(respond).not.toHaveBeenCalled();
-      releaseAgentRunContext(runIds[1]!, claims[1]);
-      resume.resolve();
-      await pending;
-      expect(respond).toHaveBeenCalledOnce();
-      expect(respond.mock.calls[0]?.[0]).toBe(true);
-      const result = respond.mock.calls[0]?.[1] as SessionsListResult;
-      expect(result.sessions).toMatchObject([{ key: keys[0], hasActiveRun: true }]);
-      expect(result.sessions).toHaveLength(1);
-      expect(result.totalCount).toBe(1);
-      expect(result.owners?.map((owner) => owner.id)).toEqual([owners[0]!.id]);
-      expect(result.people?.map((person) => person.identity.id)).toEqual([owners[0]!.id]);
-      expect(result.ownerSessionCounts).toEqual([
-        { profileId: owners[0]!.id, open: 1, running: 1 },
-      ]);
-    } finally {
-      resume.resolve();
-      await pending;
-      for (const [index, runId] of runIds.entries()) {
-        releaseAgentRunContext(runId, claims[index]);
-      }
       projection.dispose();
       release();
     }

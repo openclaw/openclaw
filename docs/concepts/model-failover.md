@@ -89,6 +89,16 @@ policy. OpenClaw does not retry them with thinking disabled.
 
 Fallback execution is turn-local. The reply runner persists only fallback notice state so `/status` and transition notices can distinguish the selected model from the model that answered. It does not persist the fallback as the next turn's model selection.
 
+A fallback that only relays a completed task result cannot start new delegated work.
+A verified requester continuation after its child tasks settle is different: on
+the built-in and plugin harness paths, it retains the requester's authorized
+session tools so unfinished work can continue. The live settlement owner and
+persisted child lineage must still match; an active Goal or completion message
+alone does not grant that exception. The exception is host-mediated: native
+collaboration stays disabled because it does not carry the settlement owner’s
+final-effect authority check. Existing tool restrictions and Stop still apply.
+CLI backends that cannot enforce settlement authority keep the report-only restriction.
+
 Sessions placed on an OpenClaw cloud worker keep the OpenClaw runtime when
 automatic model selection advances to a fallback. The configured provider,
 model, and auth-profile fallback rules still apply. Explicit session or
@@ -383,7 +393,7 @@ Provider-busy signals such as `ModelNotReadyException` land in the overloaded bu
 
 The failover controller owns OpenClaw's transient recovery budget. Rate limits receive up to **10 total attempts per consecutive outage** before auth-profile rotation or model fallback. Jittered exponential waits cap at 30 seconds, while provider `retry-after` and `retry-after-ms` hints remain minimum waits even beyond that cap. Other transient failures retain eight retries and a 90-second window for consecutive outages. A completed successful model response resets that window, the retry count, and backoff; partial output and tool activity alone do not. Existing per-attempt timeouts and any independent outer deadline remain authoritative. Once that budget or window is exhausted, recovery proceeds to eligible auth-profile rotation, configured model fallback, or a visible error. Continuations preserve the transcript instead of replaying the original user request. Recovery and any fallback winner remain turn-local.
 
-The embedded runtime's existing session setting `retry.provider.maxRetries` overrides its recovery retry budget. `0` disables retries, and rate limits remain capped at 10 total attempts per consecutive outage. It is not an `openclaw.json` key and does not change a native harness's internal request retries. Native harnesses may finish their own request retries before OpenClaw starts continuation recovery. The reply runner does not add another whole-turn replay loop. See [Retry policy](/concepts/retry) for pacing and exclusions.
+The existing session setting `retry.provider.maxRetries` overrides OpenClaw's continuation retry count for the embedded runtime and participating local Codex, Copilot, and Muse runs. `0` disables these retries, and rate limits remain capped at 10 total attempts per consecutive outage. An omitted setting preserves the harness's existing retry count or OpenClaw's default. Remote/container execution and harnesses without an admitted local settings scope keep their existing budgets. This is not an `openclaw.json` key; it does not change native request retries, delays, or timeouts. The embedded-only `retry.provider.maxRetryDelayMs` and `timeoutMs` settings keep their existing scope. Native harnesses may finish their own request retries before OpenClaw starts continuation recovery. The reply runner does not add another whole-turn replay loop, and a zero retry count still permits tool-free finalization of completed work. See [Retry policy](/concepts/retry) for settings precedence, pacing, and exclusions.
 
 While waiting, the Control UI shows one transient **Retrying… n/10** indicator for rate limits. Retried failures do not become persisted assistant messages. Terminal failure retains one error. History hides recovered empty or reasoning-only errors without rewriting stored transcripts.
 

@@ -2,7 +2,7 @@ import { onCleanup, Show } from "solid-js";
 import { useApplication } from "../lib/reactive/context.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type {
   CommandPaletteOpenInput,
   CommandPaletteInputHandoff,

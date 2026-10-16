@@ -22,6 +22,7 @@ import {
 import {
   admitSqliteSchema,
   getAdmittedSqliteSchemaFacts,
+  invalidateSqliteSchemaFacts,
   isSqliteSchemaAdmissionCold,
 } from "../infra/sqlite-schema-facts.js";
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
@@ -51,6 +52,7 @@ import {
   AGENT_STORAGE_SCHEMA_VERSION,
   AGENT_JSON_PREDICATE_SCHEMA_VERSION,
   AGENT_OUTBOX_SEQUENCE_SCHEMA_VERSION,
+  AGENT_WRITE_LAYOUT_SCHEMA_VERSION,
   CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION,
   CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION,
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -61,6 +63,7 @@ import {
 import { registerOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import * as maintenanceAuthority from "./openclaw-agent-db-lease.js";
 import { migrateOpenClawAgentSchema } from "./openclaw-agent-db-legacy-schema.js";
+import { assertAgentDatabaseMaintenanceAuthority } from "./openclaw-agent-db-maintenance-authority.js";
 import { persistAgentSchemaMetadata } from "./openclaw-agent-db-metadata-write.js";
 import { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-permissions.js";
 import { registerOpenClawAgentDatabase } from "./openclaw-agent-db-registry.js";
@@ -113,6 +116,7 @@ import {
 import { withLegacyAgentStorageSchema } from "./openclaw-agent-storage-schema.js";
 import { migrateDeployedTranscriptFtsRowsInTransaction } from "./openclaw-agent-transcript-fts-schema.js";
 import { migrateTranscriptPayloadStorageInTransaction } from "./openclaw-agent-transcript-payload-migration.js";
+import { migrateAgentWriteLayoutInTransaction } from "./openclaw-agent-write-layout-migration.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -281,41 +285,6 @@ function ensureAgentSchema(
 ): void {
   const warnings: string[] = [];
   const schemaSql = getOpenClawAgentMigrationSchema(targetVersion);
-  const metadata = readExistingAgentSchemaMeta(db);
-  assertExistingAgentSchemaOwner(metadata, agentId, pathname);
-  const originalVersion = assertSupportedAgentSchemaVersion(db, pathname);
-  const isEmptyDatabase = originalVersion === 0 && !hasAgentDatabaseApplicationSchema(db);
-  const schemaMigration =
-    originalVersion < targetVersion && (originalVersion > 0 || metadata !== null);
-  const identityMigration = targetVersion >= 18 && schemaMigration;
-  if (identityMigration && metadata?.schemaVersion !== originalVersion) {
-    throw new Error(
-      `Agent schema markers disagree for ${pathname}; repair ownership metadata before migration.`,
-    );
-  }
-  if (originalVersion > targetVersion) {
-    throw new Error(
-      `OpenClaw agent database ${pathname} uses schema version ${originalVersion}; expected at most ${targetVersion} for this migration.`,
-    );
-  }
-  if (!isEmptyDatabase && originalVersion < targetVersion) {
-    assertSupportedAgentMigrationSchemas(db, pathname, originalVersion);
-  }
-  const assertMigration = () => {
-    if (!schemaMigration) {
-      return;
-    }
-    if (identityMigration) {
-      maintenanceAuthority.assertAgentDatabaseMaintenanceAuthority();
-    }
-    getOpenClawDatabaseMaintenanceScope()?.assertAgentSchemaMigration({
-      agentId,
-      path: pathname,
-      foundVersion: originalVersion,
-      supportedVersion: targetVersion,
-    });
-  };
-  assertMigration();
   // FK enforcement must be off before BEGIN: PRAGMA foreign_keys is a silent
   // no-op inside a transaction, and legacy owner-table rebuilds would otherwise
   // cascade-delete their children. Steady-state enforcement is restored below.
@@ -323,8 +292,44 @@ function ensureAgentSchema(
   let created = false;
   try {
     const mutate = () => {
-      // Gateway or offline maintenance owns this store throughout schema preparation.
-      const previousVersion = originalVersion;
+      // A competing initializer may claim an unowned file while BEGIN waits.
+      // Read its authoritative owner and schema only after acquiring the writer lock.
+      invalidateSqliteSchemaFacts(db);
+      const metadata = readExistingAgentSchemaMeta(db);
+      assertExistingAgentSchemaOwner(metadata, agentId, pathname);
+      const previousVersion = assertSupportedAgentSchemaVersion(db, pathname);
+      const isEmptyDatabase = previousVersion === 0 && !hasAgentDatabaseApplicationSchema(db);
+      const schemaMigration =
+        previousVersion < targetVersion && (previousVersion > 0 || metadata !== null);
+      const identityMigration = targetVersion >= 18 && schemaMigration;
+      if (identityMigration && metadata?.schemaVersion !== previousVersion) {
+        throw new Error(
+          `Agent schema markers disagree for ${pathname}; repair ownership metadata before migration.`,
+        );
+      }
+      if (previousVersion > targetVersion) {
+        throw new Error(
+          `OpenClaw agent database ${pathname} uses schema version ${previousVersion}; expected at most ${targetVersion} for this migration.`,
+        );
+      }
+      if (!isEmptyDatabase && previousVersion < targetVersion) {
+        assertSupportedAgentMigrationSchemas(db, pathname, previousVersion);
+      }
+      const assertMigration = () => {
+        if (!schemaMigration) {
+          return;
+        }
+        if (identityMigration) {
+          assertAgentDatabaseMaintenanceAuthority();
+        }
+        getOpenClawDatabaseMaintenanceScope()?.assertAgentSchemaMigration({
+          agentId,
+          path: pathname,
+          foundVersion: previousVersion,
+          supportedVersion: targetVersion,
+        });
+      };
+      assertMigration();
       if (isEmptyDatabase && targetVersion === OPENCLAW_AGENT_SCHEMA_VERSION) {
         // Canonical creation has no legacy rows or definitions to converge or repair.
         db.exec(schemaSql);
@@ -380,6 +385,13 @@ function ensureAgentSchema(
               elapsedMs,
             });
           }
+        }
+        if (
+          !isEmptyDatabase &&
+          previousVersion < AGENT_WRITE_LAYOUT_SCHEMA_VERSION &&
+          targetVersion >= AGENT_WRITE_LAYOUT_SCHEMA_VERSION
+        ) {
+          migrateAgentWriteLayoutInTransaction(db);
         }
         // Historical rebuilds also converge indexes. Later version steps own
         // only their declared tables; additive index repair stays at admission.

@@ -12,7 +12,7 @@ import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.
 import * as mediaLocalRoots from "../../../media/local-roots.js";
 import {
   attachRuntimePromptMediaFacts,
-  readRuntimePromptImageOrder,
+  readRuntimePromptMediaFacts,
 } from "../../../media/media-facts.js";
 import {
   buildPersistedUserTurnMessage,
@@ -719,7 +719,7 @@ describe("hydratePromptMediaMessages", () => {
       const restored = JSON.parse(serialized) as AgentMessage;
 
       try {
-        expect(readRuntimePromptImageOrder(restored)).toBeUndefined();
+        expect(readRuntimePromptMediaFacts(restored)).toBeUndefined();
         const result = await hydratePromptMediaMessages([restored], {
           workspaceDir,
           model: { input: ["text", "image"] },

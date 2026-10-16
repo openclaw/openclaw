@@ -3,7 +3,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/modal-dialog.ts";
 import { registerChatCameraEnglish } from "../../../i18n/locales/en-chat-camera.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { useNativeAttachmentCapture } from "./chat-attachment-picker-policy.ts";
 import "./chat-camera-capture.css";
 

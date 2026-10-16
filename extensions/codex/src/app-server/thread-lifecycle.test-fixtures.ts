@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -31,6 +32,20 @@ import { createClientHarness, createCodexTestModel } from "./test-support.js";
 import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
 
 export { createCodexRuntimePlanFixture } from "./test-support.js";
+
+export function createLifecycleRequest(
+  respond: (method: string, requestParams?: unknown) => Promise<unknown>,
+) {
+  return vi.fn((method: string, requestParams?: unknown) => {
+    if (method === "config/read") {
+      return Promise.resolve({ config: {}, origins: {}, layers: [] });
+    }
+    if (method === "configRequirements/read") {
+      return Promise.resolve({ requirements: null });
+    }
+    return respond(method, requestParams);
+  });
+}
 
 type NativeFixtureThread = {
   response: Record<string, unknown>;
@@ -117,6 +132,7 @@ export function createCodexLifecycleHarness(options: {
           method: "thread/status/changed",
           params: { threadId, status: { type: "notLoaded" } },
         });
+        harness.send({ method: "thread/closed", params: { threadId } });
       }
       return response;
     }
@@ -421,6 +437,10 @@ function stubEmptyCodexSkillCatalog(client: CodexAppServerClient): void {
   if (typeof client.addNotificationHandler !== "function") {
     client.addNotificationHandler = () => () => undefined;
   }
+  if (typeof client.getInstanceId !== "function") {
+    const instanceId = randomUUID();
+    client.getInstanceId = () => instanceId;
+  }
   clientsWithEmptySkillCatalog.add(client);
 }
 
@@ -485,17 +505,6 @@ export async function writeNativeCatalogFixture(
     rolloutPath,
     `${JSON.stringify({ type: "session_meta", payload: { id: threadId, dynamic_tools: dynamicTools } })}\n`,
   );
-}
-
-export function disabledMcpServerStatus(name: string) {
-  return {
-    name,
-    serverInfo: null,
-    tools: {},
-    resources: [],
-    resourceTemplates: [],
-    authStatus: "unsupported",
-  };
 }
 
 export function createAppServerOptions(): CodexAppServerRuntimeOptions {

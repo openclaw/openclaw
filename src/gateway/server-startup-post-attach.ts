@@ -119,6 +119,7 @@ export async function startGatewaySidecars(
     pluginMetadataSnapshot?: PluginMetadataSnapshot;
     deps: CliDeps;
     startChannels: () => Promise<void>;
+    trackStartupWork: <T>(run: (signal: AbortSignal) => Promise<T>) => Promise<T>;
     shouldStartChannels?: () => boolean;
     refreshChatMetadata?: () => Promise<void>;
     onChannelsStarted?: () => Awaitable<void>;
@@ -248,24 +249,29 @@ export async function startGatewaySidecars(
   await measureStartup(params.startupTrace, "sidecars.chat-metadata", async () => {
     await params.refreshChatMetadata?.();
   });
-  const shouldStartChannels = params.shouldStartChannels?.() !== false;
-  await measureStartup(params.startupTrace, "sidecars.channels", async () => {
-    const channelStart = skipChannels
-      ? measureStartup(params.startupTrace, "sidecars.channel-skip", () =>
-          params.logChannels.info(
-            "skipping channel start (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
-          ),
-        )
-      : shouldStartChannels
-        ? measureStartup(params.startupTrace, "sidecars.channel-start", params.startChannels).catch(
-            (err: unknown) => params.logChannels.error(`channel startup failed: ${String(err)}`),
-          )
-        : Promise.resolve();
-    // Account tasks can depend on this generation gate, so release it after
-    // their handoff is prepared but before waiting for that handoff to settle.
-    const accountStartGateRelease = shouldStartChannels ? params.onChannelsStarted?.() : undefined;
-    await Promise.all([accountStartGateRelease, channelStart]);
-  });
+  // Channel admission may wait for an individual agent database. Keep its producer
+  // in shutdown custody without holding independent services and recovery behind it.
+  void params
+    .trackStartupWork(() =>
+      measureStartup(params.startupTrace, "sidecars.channels", async () => {
+        const shouldStartChannels = params.shouldStartChannels?.() !== false;
+        const channelStart = skipChannels
+          ? measureStartup(params.startupTrace, "sidecars.channel-skip", () =>
+              params.logChannels.info(
+                "skipping channel start (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
+              ),
+            )
+          : shouldStartChannels
+            ? measureStartup(params.startupTrace, "sidecars.channel-start", params.startChannels)
+            : Promise.resolve();
+        // Release the generation gate before any account's preparation settles.
+        const accountStartGateRelease = shouldStartChannels
+          ? params.onChannelsStarted?.()
+          : undefined;
+        await Promise.all([accountStartGateRelease, channelStart]);
+      }),
+    )
+    .catch((err: unknown) => params.logChannels.error(`channel startup failed: ${String(err)}`));
 
   await startGatewayPluginServices(params);
   const shouldDispatchGatewayStartupInternalHook =
@@ -562,6 +568,7 @@ export async function startGatewayPostAttachRuntime(
   // The CLI's hidden capability flag supplies this typed internal handoff.
   // Rehearsal loads plugins without resuming copied jobs, services, or notices.
   const candidateCanary = params.updateCanary === true;
+  const subagentRecoverySettled = createDeferredCore();
   const controlUiRootLifecycle = params.controlUiRootLifecycle;
   const controlUiAssetsSidecar =
     !params.minimalTestGateway && controlUiRootLifecycle
@@ -776,6 +783,7 @@ export async function startGatewayPostAttachRuntime(
                   deps: params.deps,
                   getCronService: params.getCronService,
                   startChannels: params.startChannels,
+                  trackStartupWork: params.trackStartupWork,
                   shouldStartChannels: () => params.isClosing?.() !== true,
                   refreshChatMetadata: params.refreshChatMetadata,
                   log: params.log,
@@ -848,7 +856,9 @@ export async function startGatewayPostAttachRuntime(
                 getConfig: params.getConfig,
                 shouldContinue: () => params.isClosing?.() !== true,
                 startupCheckedStorePaths: params.mainSessionRecoveryStartupCheckedStorePaths,
-                waitForStart: params.waitForPostReadyWork,
+                // Requester continuations need the restored cohort's Gateway binding
+                // and operator authority before their first recovery attempt.
+                waitForStart: () => subagentRecoverySettled.promise,
                 gatewayRuntime: params.recoveryRuntime,
               });
             }
@@ -923,6 +933,7 @@ export async function startGatewayPostAttachRuntime(
             | undefined,
         isClosing: params.isClosing,
         waitForPostReadyWork: params.waitForPostReadyWork,
+        onSubagentRecoverySettled: subagentRecoverySettled.resolve,
         startupTrace: params.startupTrace,
         log: params.log,
         logHooks: params.logHooks,
@@ -935,7 +946,8 @@ export async function startGatewayPostAttachRuntime(
     })
     .catch((err: unknown) => {
       params.log.warn(`gateway sidecars failed to start: ${String(err)}`);
-    });
+    })
+    .finally(subagentRecoverySettled.resolve);
 
   if (params.sidecarStartup !== "defer") {
     await sidecarsPromise;

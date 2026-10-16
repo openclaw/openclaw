@@ -18,7 +18,7 @@ import { formatUiExternalText } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import "../../styles/chat/startup-layout.css";
 import "../../styles/chat/grouped.css";
 import "../../styles/chat/layout.css";

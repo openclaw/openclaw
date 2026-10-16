@@ -322,7 +322,7 @@ export function startGatewayMaintenanceTimers(params: {
   schedulePeriodic("dedupe", 60_000, () => {
     const AGENT_RUN_SEQ_MAX = 10_000;
     const now = scheduler.now();
-    pruneExpiredArtifactDownloads(params.clients, now);
+    pruneExpiredArtifactDownloads(now);
     params.chatRunState.toolEventRecipients.pruneExpired(now);
     const resolveDedupeRunId = (key: string, entry: DedupeEntry) => {
       const keyRunId = key.slice(key.indexOf(":") + 1);

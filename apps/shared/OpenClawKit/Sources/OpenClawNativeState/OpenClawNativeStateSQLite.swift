@@ -5,14 +5,21 @@ import Darwin
 #endif
 
 public struct OpenClawNativeStateError: Error, LocalizedError, Sendable {
+    public enum Code: Sendable {
+        case failure
+        case busy
+    }
+
     public let message: String
+    public let code: Code
 
     public var errorDescription: String? {
         self.message
     }
 
-    public init(_ message: String) {
+    public init(_ message: String, code: Code = .failure) {
         self.message = message
+        self.code = code
     }
 }
 
@@ -41,7 +48,7 @@ public enum OpenClawNativeStateSQLiteValueType: Equatable, Sendable {
 public final class OpenClawNativeStateSQLite: @unchecked Sendable {
     // Keep aligned with OPENCLAW_STATE_SCHEMA_VERSION for backend-owned native surfaces.
     // Device credentials have a separate, exact table contract. Native clients never upgrade this database.
-    private static let maximumSupportedSchemaVersion: Int64 = 25
+    private static let maximumSupportedSchemaVersion: Int64 = 26
     private static let defaultBusyTimeoutMilliseconds: Int32 = 5000
 
     private struct SchemaObject: Hashable {
@@ -603,7 +610,7 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         return keyColumns == table.indexColumns
     }
 
-    private static func secureDirectory(_ url: URL) throws {
+    static func secureDirectory(_ url: URL) throws {
         let fileManager = FileManager.default
         try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
         var attributes: [FileAttributeKey: Any] = [.posixPermissions: 0o700]

@@ -51,6 +51,7 @@ export type SessionEntryListWorkerInput = {
   database: { agentId: string; path: string };
   scope: SessionEntryListScope & {
     cleanupSession?: string;
+    mainSessionRecovery?: true;
     pendingInputRecovery?: true;
     pendingExecRecovery?: { afterSessionKey?: string; limit: number };
   };

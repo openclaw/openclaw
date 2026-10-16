@@ -63,6 +63,7 @@ const rawSqliteAllowPathGroups = {
     "src/infra/sqlite-index-schema.ts",
     "src/infra/sqlite-integrity.ts",
     "src/infra/sqlite-pragma.test-support.ts",
+    "src/infra/sqlite-schema-catalog.ts",
     "src/infra/sqlite-schema-contract.ts",
     // Cross-store reservations own native BEGIN/ROLLBACK, without application queries.
     "src/infra/sqlite-source-fence.ts",
@@ -90,6 +91,9 @@ const rawSqliteAllowPathGroups = {
     // Versioned payload rebuild preserves native bytes and 64-bit physical rowids.
     "src/state/openclaw-agent-transcript-payload-migration.ts",
     "src/state/openclaw-agent-transcript-fts-schema.ts",
+    // Versioned physical-layout migrations own captured schema and table reconstruction.
+    "src/state/openclaw-agent-write-layout-migration.ts",
+    "src/state/sqlite-table-layout-migration.ts",
     "src/state/openclaw-state-db-audit-migration.ts",
     "src/state/openclaw-state-db-delivery-queue-backfill.ts",
     "src/state/openclaw-state-db-legacy-backfills.ts",

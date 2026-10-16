@@ -14,7 +14,7 @@ vi.mock("openclaw/plugin-sdk/channel-join-intro-runtime", () => ({
   reportChannelRoomJoin: reportChannelRoomJoinMock,
 }));
 
-const { getChatSpy, getLoadConfigMock, getOnHandler, telegramBotDepsForTest } =
+const { getChatSpy, getLoadConfigMock, getOnHandler } =
   await import("./bot.create-telegram-bot.test-harness.js");
 const { createTelegramBotCore } = await import("./bot-core.js");
 const { runWithTelegramSpooledReplayUpdate, getTelegramSpooledReplayDeferredParticipant } =
@@ -51,7 +51,6 @@ async function registerJoinHandler(config: OpenClawConfig) {
   await createTelegramBotCore({
     token: "tok",
     botInfo: telegramBotInfoForTest,
-    telegramDeps: telegramBotDepsForTest,
   });
   return getOnHandler("my_chat_member");
 }

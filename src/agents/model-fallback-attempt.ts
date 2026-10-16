@@ -368,11 +368,7 @@ export async function runFallbackAttempt<T>(
       ? {
           exhaustionResult: {
             ...buildClassifiedResult(),
-            priority:
-              typeof classification.preserveResultPriority === "number" &&
-              Number.isFinite(classification.preserveResultPriority)
-                ? classification.preserveResultPriority
-                : 0,
+            priority: classification.preserveResultPriority ?? 0,
           },
         }
       : {}),
@@ -420,7 +416,7 @@ export function resolveNextFallbackCandidateIndex(params: {
 }
 
 export async function resolveModelFallbackCandidateHarnessAuthPrecheck(
-  params: ModelFallbackRuntimeContext & ModelCandidate,
+  params: ModelFallbackRuntimeContext & ModelCandidate & { skipAuthProfileRuntime?: boolean },
 ): Promise<{ skipsProviderAuthCooldown: boolean; agentHarnessRuntimeOverride?: string }> {
   const { agentHarnessRuntimeOverride, explicitAgentRuntime, runtime, runtimeSource } =
     resolveModelFallbackCandidateAgentRuntime(params);
@@ -428,7 +424,8 @@ export async function resolveModelFallbackCandidateHarnessAuthPrecheck(
     skipsProviderAuthCooldown,
     agentHarnessRuntimeOverride,
   });
-  if (!params.cfg) {
+  // Delegated attempts validate their own retained runtime registry after admission.
+  if (!params.cfg || params.skipAuthProfileRuntime) {
     return result(false);
   }
   if (!explicitAgentRuntime && isCliProvider(params.provider, params.cfg)) {
@@ -671,11 +668,7 @@ export async function resolveFallbackSoonestCooldownExpiry(params: {
     const candidateSoonest = params.authRuntime.getSoonestCooldownExpiry(refreshedStore, ids, {
       forModel: candidate.model,
     });
-    if (
-      typeof candidateSoonest === "number" &&
-      Number.isFinite(candidateSoonest) &&
-      (soonest === null || candidateSoonest < soonest)
-    ) {
+    if (candidateSoonest !== null && (soonest === null || candidateSoonest < soonest)) {
       soonest = candidateSoonest;
     }
   }

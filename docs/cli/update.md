@@ -849,8 +849,10 @@ updater's managed restart. The running Gateway restarts itself when its watcher
 detects the replaced installation, because the old runtime can lose required
 chunks during the package swap. Before publication, the updater prints this
 warning and includes it in JSON update history. It checks the observed Gateway
-version without waiting for startup; unavailable readiness or a version that has
-not switched yet leaves the package update successful with a warning. State
+version and, when available, the expected build ID without waiting for startup.
+A same-version Gateway on a different build is not verified as the replacement.
+Unavailable readiness or an identity that has not switched yet leaves the package
+update successful with a warning. State
 verification blocked by another process or handed off to the newer schema is
 deferred to the candidate. Keep recovery backups and run `openclaw update status`
 and `openclaw doctor` after startup completes. Unrelated update failures retain

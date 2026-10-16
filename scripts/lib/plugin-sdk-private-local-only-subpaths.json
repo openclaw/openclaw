@@ -79,6 +79,7 @@
   "markdown-table-runtime",
   "media-ffmpeg",
   "media-generation-runtime",
+  "meeting-config",
   "meeting-page-script-runtime",
   "memory-core-host-embedding-registry",
   "memory-core-host-engine-curated",

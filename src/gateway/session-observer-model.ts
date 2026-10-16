@@ -7,12 +7,14 @@ import {
   type SessionObserverPlanProgress,
 } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { normalizeAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
-import type { runIsolatedCompletion } from "../agents/isolated-completion.js";
 import {
   terminalHealthFor,
   type SessionActivityNoteState,
 } from "../agents/session-activity-notes.js";
-import type { prepareUtilityCompletionForAgent } from "../agents/utility-completion.js";
+import type {
+  runUtilityCompletion,
+  prepareUtilityCompletionForAgent,
+} from "../agents/utility-completion.js";
 import type { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { resolveSessionObserverDigestForLifecycle } from "../config/sessions/observer-digest.js";
 import {
@@ -53,7 +55,7 @@ export function sessionObserverScopeKey(sessionKey: string, agentId: string): st
     : `agent:${normalizeAgentId(agentId)}:${sessionKey}`;
 }
 type PrepareModel = typeof prepareUtilityCompletionForAgent;
-type CompleteModel = typeof runIsolatedCompletion;
+type CompleteModel = typeof runUtilityCompletion;
 type PreparedModel = Awaited<ReturnType<PrepareModel>>;
 
 type SessionObserverLifecycle = Pick<SessionObserverDigest, "sessionId" | "lifecycleRevision">;
@@ -253,8 +255,8 @@ export async function defaultPrepareModel(params: Parameters<PrepareModel>[0]) {
 }
 
 export async function defaultCompleteModel(params: Parameters<CompleteModel>[0]) {
-  const { runIsolatedCompletion } = await import("../agents/isolated-completion.js");
-  return await runIsolatedCompletion(params);
+  const { runUtilityCompletion } = await import("../agents/utility-completion.js");
+  return await runUtilityCompletion(params);
 }
 
 export const SESSION_OBSERVER_SYSTEM_PROMPT = [

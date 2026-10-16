@@ -14,7 +14,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as currentPluginMetadata from "../plugins/current-plugin-metadata-state.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
-import { useUserProfileCatalogForTest } from "../test-utils/user-profile-catalog.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import {
   loadDeferredCatalog,
@@ -38,7 +37,6 @@ const snapshot: ModelCatalogSnapshot = {
   entries: [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" }],
   routeVariants: [],
 };
-const prepareProfileCatalog = useUserProfileCatalogForTest();
 
 function ownerConfig(agentId = "main", extra: OpenClawConfig = {}): OpenClawConfig {
   return {
@@ -80,7 +78,6 @@ function ownerSnapshot(
 
 describe("gateway prepared model catalog", () => {
   it("keeps a prepared metadata miss separate from the current runtime generation", async () => {
-    await prepareProfileCatalog();
     const capturedMetadata = createPluginMetadataSnapshotFixture();
     const currentMetadata = createPluginMetadataSnapshotFixture({
       plugins: [
