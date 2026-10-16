@@ -5,7 +5,7 @@ import type { CodexCatalogPreviewCache } from "../session-catalog-native-project
 import { isCodexAppServerStartupError, resolveCodexStartupTimeoutMs } from "./attempt-timeouts.js";
 import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-profile.js";
 import type { CodexAppServerClient } from "./client.js";
-import { resolveCodexAppServerRequestTimeoutMs } from "./config-runtime.js";
+import { resolveCodexAppServerRequestTimeoutMs } from "./config-options.js";
 import type {
   CodexAppServerRequestMethod,
   CodexAppServerRequestParams,

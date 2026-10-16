@@ -16,12 +16,8 @@ export function useSessionMenuDetails(
   actions: SessionMenuActions,
   readState: () => MenuState,
   disabled: (kind: SessionManagementActionKind) => boolean,
-  revision: () => number,
 ) {
-  const ownerSnapshot = createMemo(() => {
-    revision();
-    return actions.ownerMenu.snapshot;
-  });
+  const ownerSnapshot = actions.ownerMenu.snapshot;
   const ownerStatus = (): MenuEntry[] => {
     const status = ownerSnapshot();
     if (!status.connected) {
@@ -150,10 +146,7 @@ export function useSessionMenuDetails(
       ...ownerStatus(),
     ];
   };
-  const communicationSnapshot = createMemo(() => {
-    revision();
-    return actions.advanced.communicationState();
-  });
+  const communicationSnapshot = createMemo(() => actions.advanced.communicationState());
   const policy = () => communicationSnapshot().session.communication;
   const effective = () => communicationSnapshot().session.effectiveCommunication;
   const reason = () => readState().actionDisabledReasons["set-communication"];
@@ -247,9 +240,6 @@ export function useSessionMenuDetails(
       : []),
     communicationEnd,
   ];
-  const error = createMemo(() => {
-    revision();
-    return actions.advanced.error;
-  });
+  const error = () => actions.advanced.error;
   return { ownerStatus, ownerOptions, communication, error };
 }

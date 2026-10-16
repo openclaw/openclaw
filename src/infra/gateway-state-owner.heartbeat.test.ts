@@ -267,6 +267,8 @@ it.each([
 ] as const)(
   "preserves unmarked $clock custody with seed age $age",
   async ({ clock, age, renew }) => {
+    // Bun workers have independent hrtime origins, so unmarked monotonic custody is refused.
+    const shouldRenew = renew && !(process.versions.bun && clock === "monotonic");
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
     vi.spyOn(process.hrtime, "bigint").mockReturnValue(500_000_000_000n);
@@ -286,10 +288,13 @@ it.each([
     const seed = BigInt((clock === "monotonic" ? 500_000 : Date.now()) - age);
     const runtime = await startRuntime({ [rootPath]: raw }, { clock: undefined, seed });
     try {
-      expect(vi.getTimerCount()).toBe(renew ? 1 : 0);
-      expect(fs.statSync(rootPath).mtimeMs).toBe(renew ? Date.now() : previous.getTime());
-      if (!renew) {
+      expect(vi.getTimerCount()).toBe(shouldRenew ? 1 : 0);
+      expect(fs.statSync(rootPath).mtimeMs).toBe(shouldRenew ? Date.now() : previous.getTime());
+      if (!shouldRenew) {
         expect(Atomics.load(runtime.lastBeat, 0)).toBe(seed);
+        expect(runtime.readEvents()).toEqual([
+          `${rootPath}: heartbeat clock could not be identified`,
+        ]);
       }
     } finally {
       await runtime.stop();

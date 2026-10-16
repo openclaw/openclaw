@@ -214,7 +214,7 @@ function ActivityEntryView(props: {
 }) {
   return (
     <details
-      class={`activity-entry activity-entry--${props.entry.status}`}
+      class={["activity-entry", `activity-entry--${props.entry.status}`]}
       prop:open={props.activity.expandedIds.has(props.entry.id)}
       onToggle={(event) => props.activity.onEntryToggle(props.entry.id, event.currentTarget.open)}
     >

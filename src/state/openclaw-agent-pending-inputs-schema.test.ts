@@ -12,11 +12,11 @@ import {
   stageSessionPendingInput,
 } from "../config/sessions/session-accessor.pending-inputs.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.test-support.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
-import { withoutCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
+import { canonicalSessionValidationSchemaSql } from "./openclaw-agent-canonical-validation-schema.js";
 import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -207,7 +207,7 @@ describe("pending input additive schema", () => {
           : new DatabaseSync(":memory:");
       try {
         database.exec(
-          withoutCanonicalSessionValidationSchema(OPENCLAW_AGENT_SCHEMA_SQL).replace(
+          OPENCLAW_AGENT_SCHEMA_SQL.replace(canonicalSessionValidationSchemaSql(), "").replace(
             "  consumed_event_id TEXT,\n",
             "",
           ),

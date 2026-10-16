@@ -207,18 +207,8 @@ describe("nextcloud-talk inbound authz", () => {
         attachment: TEST_ATTACHMENT,
       },
       account: {
-        accountId: "default",
-        enabled: true,
+        ...createAccount({ mediaAllowFrom: ["paired-user"] }),
         baseUrl: "https://cloud.example.com",
-        secret: "",
-        secretSource: "none",
-        config: {
-          dmPolicy: "pairing",
-          allowFrom: [],
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
-          mediaAllowFrom: ["paired-user"],
-        },
       },
       config: {
         channels: {
@@ -283,18 +273,8 @@ describe("nextcloud-talk inbound authz", () => {
         attachment: TEST_ATTACHMENT,
       },
       account: {
-        accountId: "default",
-        enabled: true,
+        ...createAccount({ mediaAllowFrom: ["paired-user"] }),
         baseUrl: "https://cloud.example.com",
-        secret: "",
-        secretSource: "none",
-        config: {
-          dmPolicy: "pairing",
-          allowFrom: [],
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
-          mediaAllowFrom: ["paired-user"],
-        },
       },
       config: {
         channels: {
@@ -362,18 +342,8 @@ describe("nextcloud-talk inbound authz", () => {
           attachment: TEST_ATTACHMENT,
         },
         account: {
-          accountId: "default",
-          enabled: true,
+          ...createAccount({ mediaAllowFrom: ["paired-user"] }),
           baseUrl: "https://cloud.example.com",
-          secret: "",
-          secretSource: "none",
-          config: {
-            dmPolicy: "pairing",
-            allowFrom: [],
-            groupPolicy: "allowlist",
-            groupAllowFrom: [],
-            mediaAllowFrom: ["paired-user"],
-          },
         },
         config: {
           channels: {
@@ -457,18 +427,8 @@ describe("nextcloud-talk inbound authz", () => {
         attachment: TEST_ATTACHMENT,
       },
       account: {
-        accountId: "default",
-        enabled: true,
+        ...createAccount({ mediaAllowFrom: ["paired-user"] }),
         baseUrl: "https://cloud.example.com",
-        secret: "",
-        secretSource: "none",
-        config: {
-          dmPolicy: "pairing",
-          allowFrom: [],
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
-          mediaAllowFrom: ["paired-user"],
-        },
       },
       config: {
         channels: {
@@ -576,19 +536,12 @@ describe("nextcloud-talk inbound authz", () => {
         attachment: TEST_ATTACHMENT,
       },
       account: {
-        accountId: "default",
-        enabled: true,
-        baseUrl: "https://cloud.example.com",
-        secret: "",
-        secretSource: "none",
-        config: {
-          dmPolicy: "pairing",
-          allowFrom: [],
-          groupPolicy: "allowlist",
+        ...createAccount({
           groupAllowFrom: ["trusted-user"],
           mediaAllowFrom: ["*"],
           rooms: { "room-disabled": { enabled: false } },
-        },
+        }),
+        baseUrl: "https://cloud.example.com",
       },
       config: {
         channels: {
@@ -628,19 +581,11 @@ describe("nextcloud-talk inbound authz", () => {
         attachment: TEST_ATTACHMENT,
       },
       account: {
-        accountId: "default",
-        enabled: true,
-        baseUrl: "https://cloud.example.com",
-        secret: "",
-        secretSource: "none",
-        config: {
-          dmPolicy: "pairing",
-          allowFrom: [],
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
+        ...createAccount({
           mediaAllowFrom: ["*"],
           rooms: { "room-locked": { allowFrom: ["trusted-user"] } },
-        },
+        }),
+        baseUrl: "https://cloud.example.com",
       },
       config: {
         channels: {

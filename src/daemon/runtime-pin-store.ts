@@ -19,19 +19,9 @@ import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion, writeSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { DAEMON_RUNTIME_PIN_SCHEMA_SQL } from "./runtime-pin-schema.js";
 
 export const DAEMON_RUNTIME_PIN_SCHEMA_VERSION = 1;
-const schema = `CREATE TABLE daemon_runtime_pins (
-  state_key TEXT PRIMARY KEY NOT NULL,
-  value_json TEXT NOT NULL,
-  updated_at_ms INTEGER NOT NULL
-) STRICT;
-CREATE TABLE daemon_runtime_pin_migration (
-  version INTEGER PRIMARY KEY CHECK (version = 1),
-  source_state TEXT NOT NULL,
-  phase TEXT NOT NULL CHECK (phase IN ('copied', 'complete')),
-  updated_at INTEGER NOT NULL
-) STRICT;`;
 export type DaemonRuntimePinDatabase = {
   daemon_runtime_pins: { state_key: string; value_json: string; updated_at_ms: number };
   daemon_runtime_pin_migration: {
@@ -123,7 +113,7 @@ export function withDaemonRuntimePinStore<T>(
         }
         db.exec("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL");
         runSqliteImmediateTransactionSync(db, () => {
-          db.exec(schema);
+          db.exec(DAEMON_RUNTIME_PIN_SCHEMA_SQL);
           writeSqliteUserVersion(db, DAEMON_RUNTIME_PIN_SCHEMA_VERSION);
         });
       } else if (version !== DAEMON_RUNTIME_PIN_SCHEMA_VERSION) {
@@ -132,7 +122,7 @@ export function withDaemonRuntimePinStore<T>(
         );
       }
       if (version !== 0) {
-        assertSqliteSchemaContains(db, "Runtime pin store", schema);
+        assertSqliteSchemaContains(db, "Runtime pin store", DAEMON_RUNTIME_PIN_SCHEMA_SQL);
         assertSqliteIntegrity(db, "Runtime pin store");
       }
       publishSqliteDatabaseAdmission(db, schemaAdmission, true);

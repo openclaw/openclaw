@@ -151,7 +151,8 @@ Manual CI dispatches expose an optional `test_runtime_policy` trial switch.
 Leaving it empty preserves every existing default: PRs use `bun-compatible`,
 main uses Node, and full release validation uses `dual`. Selecting `bun-all`
 runs every selected Linux test on Bun except the explicitly named Node-only
-contracts in `scripts/lib/ci-test-runtime.mts`. Selecting `dual-all` runs the
+contracts and confirmed fork defects in `scripts/lib/ci-test-runtime.mts`. Fork
+exclusions retain their API failure reason until a pinned fix is verified. Selecting `dual-all` runs the
 complete Node selection, then its Bun portion in the same runner slots. Both
 trials cover Control UI Chromium unit shards and extension batches, including
 runtime-build selections. They do not change macOS or Windows runtimes, shard

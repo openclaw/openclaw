@@ -12,6 +12,7 @@ import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-age
 import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { matchesPluginHostCleanupSession } from "./plugin-host-cleanup.js";
+import { hasMainSessionRecoveryClaim } from "./restart-recovery-state.js";
 import {
   listSqliteSessionEntriesFromDatabase,
   readSelectedSessionEntriesInDatabase,
@@ -47,6 +48,46 @@ export function readSessionEntryList(
     (database) =>
       readWithCanonicalSessionReaderContinuation(database, request.continuation, () => {
         source = captureSessionEntryReadSource(database, request.expectedIdentity);
+        if (scope.mainSessionRecovery) {
+          const keys = executeSqliteQuerySync(
+            database.db,
+            getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
+              .selectFrom("session_nodes")
+              .select("session_key")
+              .where((eb) =>
+                eb(jsonExtractText(database.db, eb.ref("entry_json"), "archivedAt"), "is", null),
+              )
+              .where((eb) =>
+                eb(
+                  jsonPathValue(
+                    database.db,
+                    eb.ref("entry_json"),
+                    eb.val("$.mainRestartRecovery.tombstone"),
+                  ),
+                  "is",
+                  null,
+                ),
+              )
+              .where((eb) =>
+                eb.or(
+                  [
+                    "mainRestartRecovery",
+                    "restartRecoveryRuns",
+                    "restartRecoveryDeliveryRunId",
+                    "pendingFinalDelivery",
+                  ].map((field) =>
+                    eb(jsonExtractText(database.db, eb.ref("entry_json"), field), "is not", null),
+                  ),
+                ),
+              ),
+          ).rows.map((row) => row.session_key);
+          // Terminal run fences alone are not custody; completed rows with remaining claims still settle.
+          return keys.length
+            ? readSelectedSessionEntriesInDatabase(database, keys).filter(({ entry }) =>
+                hasMainSessionRecoveryClaim(entry),
+              )
+            : [];
+        }
         if (scope.pendingExecRecovery) {
           const page = scope.pendingExecRecovery;
           const keys = executeSqliteQuerySync(

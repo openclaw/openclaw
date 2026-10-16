@@ -52,6 +52,7 @@ type FixtureOptions = {
   liveRun?: boolean;
   sidebarListChurn?: boolean;
   sidebarLiveChurn?: boolean;
+  duplicateBootReads?: boolean;
 };
 
 function personId(index: number) {
@@ -230,6 +231,17 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     role: index % 2 ? "assistant" : "user",
     timestamp: now - (counts.transcriptMessages - index) * 60_000,
     content: [
+      ...(options.duplicateBootReads && index === counts.transcriptMessages - 1
+        ? Array.from({ length: 6 }, (_unused, alias) => ({
+            type: "image",
+            artifactId: "artifact_managed_image_team-scale",
+            url: `/api/chat/media/outgoing/${encodeURIComponent(selectedSessionKey)}/team-scale/full?mediaTicket=historical-${alias}`,
+            alt: `Shared artifact ${alias + 1}`,
+            mimeType: "image/png",
+            width: 1,
+            height: 1,
+          }))
+        : []),
       {
         type: "text",
         text: [
@@ -401,9 +413,26 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       "board.get",
       "canvas.document.view",
       "progressCard.get",
+      ...(options.duplicateBootReads ? ["session.suggestions.list"] : []),
     ],
     methodResponses: {
       "question.list": { questions: [] },
+      ...(options.duplicateBootReads
+        ? {
+            "session.suggestions.list": { suggestions: [], role: "owner" },
+            "artifacts.download": {
+              artifact: {
+                id: "artifact_managed_image_team-scale",
+                title: "Shared artifact",
+                type: "image",
+                mimeType: "image/png",
+                download: { mode: "bytes" },
+              },
+              encoding: "base64",
+              data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=",
+            },
+          }
+        : {}),
       "agents.list": agents,
       "agent.identity.get": {
         cases: agents.agents.map((agent) => ({

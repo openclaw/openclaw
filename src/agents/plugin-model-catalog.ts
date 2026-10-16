@@ -38,6 +38,7 @@ import {
   readPluginModelCatalogEntries,
   replacePluginModelCatalogEntriesInDatabase,
   type PersistedPluginModelCatalog,
+  type PluginModelCatalogReplacement,
 } from "./plugin-model-catalog.kernel.js";
 
 export { isGeneratedPluginModelCatalog };
@@ -163,7 +164,7 @@ function replacePersistedPluginModelCatalogEntries(
         migrationPayloads,
         deleteMissing: false,
         updatedAt: Date.now(),
-      }),
+      }).changed,
     pluginModelCatalogDatabaseOptions(agentDir),
     { operationLabel: "plugin-model-catalog.migrate" },
   );
@@ -544,7 +545,7 @@ export async function replacePersistedPluginModelCatalogs(params: {
   pluginCatalogWrites: Readonly<Record<string, string>>;
   authSnapshot?: PluginModelCatalogAuthSnapshot;
   env?: NodeJS.ProcessEnv;
-}): Promise<boolean> {
+}): Promise<PluginModelCatalogReplacement> {
   const options = {
     ...pluginModelCatalogDatabaseOptions(params.agentDir),
     env: cloneEnvWithPlatformSemantics(params.env ?? process.env),
@@ -564,7 +565,7 @@ export async function replacePersistedPluginModelCatalogs(params: {
       await stat(options.path);
     } catch (error) {
       if (hasErrnoCode(error, "ENOENT")) {
-        return false;
+        return { changed: false, catalogs: [] };
       }
       throw error;
     }

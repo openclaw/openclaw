@@ -7,6 +7,7 @@ import { createCompletionGrantLineageAdmission } from "../../gateway/tool-resolu
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { upsertSessionEntryCore } from "./session-accessor.js";
+import { applySessionEntryOperation } from "./session-accessor.sqlite-entry.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { createMemorySessionActorOwner } from "./session-actor-memory.js";
 import { runWithSessionActorStorage } from "./session-actor-storage-binding.js";
@@ -16,7 +17,7 @@ import {
   prepareSessionGenerationFacts,
 } from "./session-delivery-generation.js";
 import { acquireSessionInputActor } from "./session-input-actor.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:sqlite")>()),
@@ -66,7 +67,7 @@ async function fixture() {
       authority,
     ),
   );
-  const patch = async (value: Partial<SessionEntry>) =>
+  const patch = async (value: Partial<InternalSessionEntry>) =>
     readSessionActorStorageResult(
       await actor.storage!.mutate(
         {
@@ -80,6 +81,43 @@ async function fixture() {
 }
 
 describe("memory actor effect adapters", () => {
+  it("publishes lifecycle failure facts with the memory entry commit", async () => {
+    const f = await fixture();
+    await f.patch({ lifecycleRunId: "failed-run", startedAt: 1_000 });
+    const onCommitted = vi.fn();
+    const result = await runWithSessionActorStorage(f.binding, () =>
+      applySessionEntryOperation(
+        scope,
+        {
+          kind: "lifecycle",
+          lifecycle: {
+            canonicalKey: scope.sessionKey,
+            currentLifecycleGeneration: "test-generation",
+            exactCronRun: false,
+            lastRunError: "Provider disconnected",
+            event: {
+              sessionId: scope.sessionId,
+              runId: "failed-run",
+              ts: 2_000,
+              data: { phase: "error", error: "Provider disconnected", endedAt: 2_000 },
+            },
+          },
+        },
+        { skipMaintenance: true, onCommitted },
+      ),
+    );
+    expect(result).toMatchObject({ status: "failed", lastRunId: "failed-run" });
+    expect(f.actor.snapshot(authority)?.entry).toEqual(result);
+    expect(onCommitted).toHaveBeenCalledExactlyOnceWith(result, undefined, {
+      failedRun: {
+        runId: "failed-run",
+        error: "Provider disconnected",
+        errorKind: undefined,
+        suppressErrorNotice: false,
+      },
+    });
+  });
+
   it("acquires an input handle without transferring the caller's actor lifetime", async () => {
     const f = await fixture();
     const input = await runWithSessionActorStorage(f.binding, () =>

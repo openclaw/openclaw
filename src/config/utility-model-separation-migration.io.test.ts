@@ -61,6 +61,31 @@ function configIO(home: string, env: NodeJS.ProcessEnv = {}) {
 }
 
 describe("utility model separation persistence", () => {
+  it("round-trips existing string utility settings beside per-agent fallback objects", async () => {
+    const home = tempDirs.make("openclaw-utility-fallback-roundtrip-");
+    const io = configIO(home);
+    const agents = {
+      ownership: "explicit" as const,
+      defaults: { model: "local-fixture/chat", utilityModel: "local-fixture/small" },
+      entries: {
+        inherited: {},
+        worker: { utilityModel: { primary: "helper", fallbacks: ["local-fixture/backup"] } },
+        disabled: { utilityModel: "" },
+      },
+    };
+    await fs.writeFile(
+      path.join(home, "openclaw.json"),
+      JSON.stringify({ agents, plugins: { enabled: false } }),
+    );
+    const first = await io.readConfigFileSnapshot();
+    expect(first.valid).toBe(true);
+    expect(first.sourceConfig.agents).toEqual(agents);
+    await io.writeConfigFile({ ...first.sourceConfig, gateway: { mode: "local" } });
+    const second = await io.readConfigFileSnapshot();
+    expect(second.valid).toBe(true);
+    expect(second.sourceConfig.agents).toEqual(agents);
+  });
+
   it.each(["fresh", "existing", "included-models"] as const)(
     "preserves previous source intent for a %s config write",
     async (kind) => {

@@ -233,15 +233,14 @@ export class SpawnBrokerHost {
     if (!this.resourceClaims || !this.process) {
       return;
     }
-    const stderr = this.process.stderr instanceof Socket ? this.process.stderr : undefined;
     if (this.closing || this.resourceClaims.hasOpenClaims || this.requests.size > 0) {
       this.process.ref();
-      stderr?.ref();
+      process.ref(this.process.stderr);
       // Newer Bun releases, like Node, reference IPC independently of the child.
       this.process.channel?.ref?.();
     } else {
       this.process.unref();
-      stderr?.unref();
+      process.unref(this.process.stderr);
       this.process.channel?.unref?.();
     }
   }

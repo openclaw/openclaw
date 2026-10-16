@@ -28,7 +28,10 @@ import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "./models
 import * as modelsPlan from "./models-config.plan.js";
 import * as implicitCatalog from "./models-config.providers.implicit.js";
 import * as catalogAuth from "./plugin-model-catalog-auth.js";
-import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "./plugin-model-catalog.js";
+import {
+  encodePluginModelCatalogRelativePath,
+  PLUGIN_MODEL_CATALOG_GENERATED_BY,
+} from "./plugin-model-catalog.js";
 import * as agentFacts from "./prepared-model-runtime.agent-facts.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
 import { prepareModelCatalogPublication } from "./prepared-model-runtime.catalog-publication.js";
@@ -260,6 +263,18 @@ describe("prepared catalog source composition", () => {
         ).toMatchObject({ id: "persisted-only", provider: providerId });
         const source = await prepareAgentCatalogSource(facts, generation, "static");
         expect(source).toMatchObject({ modelsJsonContents, pluginCatalogs: catalogs });
+        planner.mockResolvedValueOnce({
+          action: "noop",
+          pluginCatalogWrites: {
+            [encodePluginModelCatalogRelativePath(pluginId)]: catalogs[0]!.contents,
+          },
+        });
+        const writableSource = await prepareAgentCatalogSource(
+          { ...facts, input: { ...facts.input, readOnly: false } },
+          generation,
+          "static",
+        );
+        expect(writableSource).toMatchObject({ modelsJsonContents, pluginCatalogs: catalogs });
         const options = {
           env: facts.env,
           pluginMetadataSnapshot: generation.pluginMetadataSnapshot,

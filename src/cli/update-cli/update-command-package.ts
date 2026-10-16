@@ -217,6 +217,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
                 configInputHash: context.inputHash,
                 repair: doctorPolicy.fix,
                 databaseGenerations: context.databaseBackup?.sourceGenerations,
+                databasePluginOwners: context.databaseBackup?.pluginOwners,
                 originalRecoveryCapture: context.originalRecoveryCapture,
               },
             },

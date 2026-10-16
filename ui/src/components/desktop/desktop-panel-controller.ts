@@ -20,7 +20,7 @@ import { SolidPanelController } from "../solid-panel-controller.ts";
 import type { DesktopAppLauncher } from "./desktop-app-launcher.ts";
 import type { DesktopAudio } from "./desktop-audio.ts";
 import * as desktopTransport from "./desktop-client.ts";
-import { DesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
+import type { DesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
 import {
   DesktopConnectionHandoff,
   releaseDesktopObservation,
@@ -129,11 +129,8 @@ export class DesktopPanelController extends SolidPanelController {
       }
     },
   );
-  private readonly mobileKeyboard = new DesktopMobileKeyboard({
-    connection: () => this.connection.handle,
-    controlling: () => this.controlling,
-    input: () => this.renderRoot.querySelector<HTMLTextAreaElement>(".desktop-keyboard-input"),
-  });
+  mobileKeyboard!: DesktopMobileKeyboard;
+  readonly keyboardTarget = () => (this.controlling ? this.connection.handle : null);
   readonly dockLayout = new DockLayoutController(this, {
     layout: desktopPanelLayout,
     reservationPrefix: "desktop",
@@ -320,11 +317,11 @@ export class DesktopPanelController extends SolidPanelController {
     if (this.isConnected) {
       this.audio.close();
       this.pictureInPicture.close();
+      this.mobileKeyboard.reset();
     }
     this.operationId += 1;
     this.pendingConnection = null;
     this.connection.begin(retainViewer);
-    this.mobileKeyboard.reset();
     if (!retainViewer) {
       this.sessionSource.invalidate();
       this.loading = false;

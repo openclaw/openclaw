@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { resolveStateDir } from "../../config/paths.js";
-import { hasMainSessionRecoveryClaim } from "../../config/sessions/restart-recovery-state.js";
 import { readSessionEntrySummariesInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -137,11 +136,10 @@ export async function recoverRestartAbortedMainSessions(params: {
       const entries = await readSessionEntrySummariesInWorker({
         agentId: target.agentId,
         storePath: target.storePath,
+        mainSessionRecovery: true,
       });
       for (const entry of entries) {
-        if (hasMainSessionRecoveryClaim(entry.entry)) {
-          candidates.push({ ...entry, storePath: target.storePath, storeAgentId: target.agentId });
-        }
+        candidates.push({ ...entry, storePath: target.storePath, storeAgentId: target.agentId });
       }
     } catch (error) {
       mainSessionRecoveryLog.warn(

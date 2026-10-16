@@ -15,7 +15,6 @@ import {
   compactSessionMenuViewForValue,
   type CompactSessionMenuView,
 } from "../../../components/session-menu-compact.ts";
-import { useSessionMenuControllers } from "../../../components/session-menu-controllers.ts";
 import { useSessionMenuEntries } from "../../../components/session-menu-view.tsx";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import {
@@ -101,29 +100,20 @@ function ChatHeaderSessionMenuContent(
   host: SolidBridgeElement<HeaderMenuProps, HeaderMenuMethods>,
 ) {
   const menuId = `chat-header-session-${++nextMenuId}`;
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const [compactView, setCompactView] = createSignal<CompactMenuView>("root");
   let menu: MenuHandle | undefined;
   const state = merge(props, { selectionCount: 1, navigationAllowed: true, disabled: false });
   const readState = () => state;
-  const controllerHost = useSessionMenuControllers(
-    host,
-    () => setRevision((value) => value + 1),
-    () => {
-      revision();
-      return Object.values(props);
-    },
-  );
   const close = () => {
     menu?.close();
   };
   const actions = new SessionMenuActions(
-    controllerHost,
+    host,
     readState,
     (action) => props.onAction(action),
     close,
   );
-  const view = useSessionMenuEntries(host, actions, readState, revision, {
+  const view = useSessionMenuEntries(host, actions, readState, {
     openInExtra: () => [
       {
         id: "continue-in-terminal",
@@ -323,7 +313,6 @@ function ChatHeaderSessionMenuContent(
   }
   const backDivider = separator("back-divider");
   const items = createMemo((): MenuEntry[] => {
-    revision();
     const current = compactView();
     if (!props.compact || current === "root") {
       return root();
@@ -459,7 +448,6 @@ function ChatHeaderSessionMenuContent(
       onOpenChange={(open) => {
         if (open) {
           actions.loadOwners();
-          setRevision((value) => value + 1);
           props.onOpen();
         } else {
           setCompactView("root");

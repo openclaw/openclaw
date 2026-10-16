@@ -1,4 +1,4 @@
-import { createMemo, Show } from "solid-js";
+import { createMemo, Show, untrack } from "solid-js";
 import { localEditorFilePath } from "../../../app/native-editor-locality.runtime.ts";
 import "../../../components/mcp-app-catalog.tsx";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
@@ -56,6 +56,9 @@ export function computeFileMatches(content: string, query: string): number[] {
 export type FileViewControls = {
   htmlPreview?: FileHtmlPreviewControls;
   copyFeedback: FileCopyFeedback;
+  editorRef?: (element: HTMLElement) => void;
+  searchInputRef?: (element: HTMLInputElement) => void;
+  searchToggleRef?: (element: HTMLButtonElement) => void;
   currentMatchIndex: number;
   dirty: boolean;
   execNode: string | null;
@@ -92,6 +95,7 @@ function FileAction(props: {
   onClick: () => void;
   class?: string;
   pressed?: boolean;
+  ref?: (element: HTMLButtonElement) => void;
   disabled?: boolean;
 }) {
   return (
@@ -99,6 +103,8 @@ function FileAction(props: {
       <button
         class={["btn btn--sm sidebar-file-view__action", props.class]}
         type="button"
+        // Ref callbacks are stable for this mount, independent of later control snapshots.
+        ref={untrack(() => props.ref)}
         aria-label={props.label}
         aria-pressed={props.pressed === undefined ? undefined : props.pressed ? "true" : "false"}
         disabled={props.disabled}
@@ -227,6 +233,7 @@ export function SidebarFile(props: {
                       icon="search"
                       onClick={() => controls().onToggleSearch()}
                       class="sidebar-file-view__search-toggle"
+                      ref={controls().searchToggleRef}
                       pressed={controls().searchOpen}
                     />
                     <Show when={controls().onReveal}>
@@ -271,6 +278,7 @@ export function SidebarFile(props: {
           <div class="file-view__search" onKeyDown={(event) => controls().onSearchKeydown(event)}>
             <input
               type="search"
+              ref={untrack(() => controls().searchInputRef)}
               aria-label={t("chat.detailPanel.searchInFile")}
               placeholder={t("common.search")}
               value={controls().query}
@@ -346,7 +354,9 @@ export function SidebarFile(props: {
           {(fallback) => <HtmlPreviewSourceFallback {...fallback()} />}
         </Show>
         <Show when={mountIdentity()} keyed>
-          {(_identity) => <div class="file-view__mount" />}
+          {(_identity) => (
+            <div class="file-view__mount" ref={untrack(() => props.controls?.editorRef)} />
+          )}
         </Show>
         <Show when={props.controls?.loadingEditor}>
           <PanelLoadingSkeleton
