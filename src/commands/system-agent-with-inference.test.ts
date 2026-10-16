@@ -25,31 +25,22 @@ vi.mock("../cli/one-shot-exit.js", () => ({
   requestExitAfterOneShotOutput: exitMocks.requestExitAfterOneShotOutput,
 }));
 
-function runtime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn() as unknown as RuntimeEnv["exit"],
-  };
-}
-
 const tty = { isTTY: true } as unknown as NodeJS.ReadableStream & NodeJS.WritableStream;
 const pipe = { isTTY: false } as unknown as NodeJS.ReadableStream & NodeJS.WritableStream;
 const verifiedInference = { execution: { modelLabel: "openai/gpt-5.5" } } as never;
-
-function workingInference() {
-  return {
-    ok: true as const,
-    modelRef: "openai/gpt-5.5",
-    latencyMs: 100,
-    binding: verifiedInference,
-  };
-}
+const expiredAuth = { ok: false, status: "auth", error: "login expired" };
 
 describe("runSystemAgentWithInference", () => {
+  let currentRuntime: RuntimeEnv;
   beforeEach(() => {
     vi.resetAllMocks();
-    inferenceMocks.verifySetupInference.mockResolvedValue(workingInference());
+    currentRuntime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() as RuntimeEnv["exit"] };
+    inferenceMocks.verifySetupInference.mockResolvedValue({
+      ok: true,
+      modelRef: "openai/gpt-5.5",
+      latencyMs: 100,
+      binding: verifiedInference,
+    });
     inferenceMocks.runSystemAgent.mockResolvedValue(undefined);
     inferenceMocks.runGuidedOnboarding.mockResolvedValue(undefined);
     exitMocks.requestExitAfterOneShotOutput.mockReturnValue(false);
@@ -57,7 +48,6 @@ describe("runSystemAgentWithInference", () => {
 
   it("requests a clean process exit after successful noninteractive output", async () => {
     const { runSystemAgent } = inferenceMocks;
-    const currentRuntime = runtime();
 
     await runSystemAgentWithInference({ interactive: false }, currentRuntime);
 
@@ -79,7 +69,6 @@ describe("runSystemAgentWithInference", () => {
   });
 
   it("reports a one-shot execution error once and requests exit code 1", async () => {
-    const currentRuntime = runtime();
     inferenceMocks.runSystemAgent.mockRejectedValue(new Error("Plugin install spec is invalid."));
 
     await runSystemAgentWithInference(
@@ -97,7 +86,6 @@ describe("runSystemAgentWithInference", () => {
 
   it("returns one drained JSON error when inference verification throws", async () => {
     exitMocks.requestExitAfterOneShotOutput.mockReturnValueOnce(true);
-    const currentRuntime = runtime();
     inferenceMocks.verifySetupInference.mockRejectedValue(new Error("verification exploded"));
 
     await runSystemAgentWithInference({ json: true }, currentRuntime);
@@ -115,7 +103,6 @@ describe("runSystemAgentWithInference", () => {
   });
 
   it("lets interactive OpenClaw execution errors propagate", async () => {
-    const currentRuntime = runtime();
     inferenceMocks.runSystemAgent.mockRejectedValue(new Error("interactive operation failed"));
 
     await expect(
@@ -127,12 +114,7 @@ describe("runSystemAgentWithInference", () => {
   });
 
   it("routes an interactive inference failure into guided setup", async () => {
-    const currentRuntime = runtime();
-    inferenceMocks.verifySetupInference.mockResolvedValue({
-      ok: false,
-      status: "auth",
-      error: "login expired",
-    });
+    inferenceMocks.verifySetupInference.mockResolvedValue(expiredAuth);
 
     await runSystemAgentWithInference({ input: tty, output: tty }, currentRuntime, {
       workspace: "/tmp/work",
@@ -148,8 +130,6 @@ describe("runSystemAgentWithInference", () => {
   });
 
   it("rejects an impossible interactive request before probing inference", async () => {
-    const currentRuntime = runtime();
-
     await runSystemAgentWithInference({ input: pipe, output: pipe }, currentRuntime);
 
     expect(currentRuntime.error).toHaveBeenCalledWith(
@@ -160,8 +140,6 @@ describe("runSystemAgentWithInference", () => {
   });
 
   it("returns one structured error for --json --yes without a message", async () => {
-    const currentRuntime = runtime();
-
     await runSystemAgentWithInference({ json: true, yes: true }, currentRuntime);
 
     expect(currentRuntime.log).toHaveBeenCalledWith(
@@ -174,7 +152,6 @@ describe("runSystemAgentWithInference", () => {
   });
 
   it("fails one-shot mode with onboarding guidance when inference is unavailable", async () => {
-    const currentRuntime = runtime();
     inferenceMocks.verifySetupInference.mockResolvedValue({
       ok: false,
       status: "unavailable",
@@ -190,13 +167,7 @@ describe("runSystemAgentWithInference", () => {
   });
 
   it("returns a structured JSON error when inference is unavailable", async () => {
-    const currentRuntime = runtime();
-
-    inferenceMocks.verifySetupInference.mockResolvedValue({
-      ok: false,
-      status: "auth",
-      error: "login expired",
-    });
+    inferenceMocks.verifySetupInference.mockResolvedValue(expiredAuth);
 
     await runSystemAgentWithInference({ json: true }, currentRuntime);
 

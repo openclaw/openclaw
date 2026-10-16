@@ -1,4 +1,3 @@
-// Status runtime shared tests cover gateway health, runtime details, and safe status probe fallbacks.
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
@@ -64,6 +63,17 @@ function gatewayParams(timeoutMs = 4321) {
   };
 }
 
+function snapshot(overrides: Partial<Parameters<typeof resolveStatusRuntimeSnapshot>[0]> = {}) {
+  return resolveStatusRuntimeSnapshot({
+    ...createStatusGatewayProbeBudget(),
+    config: { gateway: {} },
+    sourceConfig: { gateway: {} },
+    deep: true,
+    gatewayReachable: true,
+    ...overrides,
+  });
+}
+
 function anthropicUsage() {
   return { provider: "anthropic", displayName: "Claude", windows: [], error: "HTTP 429" };
 }
@@ -87,9 +97,7 @@ describe("status-runtime-shared", () => {
     mocks.resolveModelAuthLabelAsync.mockReturnValue(undefined);
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  afterEach(() => vi.restoreAllMocks());
 
   it("uses the named system agent for agent-scoped usage credentials", async () => {
     const config = {
@@ -112,57 +120,53 @@ describe("status-runtime-shared", () => {
     });
   });
 
-  it("requires a system owner for usage credentials in an explicit multi-agent roster", async () => {
+  it.each([
+    [undefined, "Set agents.defaults.systemAgent.agentId"],
+    ["ghost", 'Unknown agent id "ghost"'],
+  ] as const)("rejects ambiguous or unknown explicit usage owner %s", async (agentId, error) => {
     await expect(
       resolveStatusUsageSummary({
         ...createStatusGatewayProbeBudget(),
-        config: {
-          agents: {
-            ownership: "explicit",
-            entries: { main: {}, ops: {} },
-          },
-        },
+        config: { agents: { ownership: "explicit", entries: { main: {}, ops: {} } } },
+        agentId,
       }),
-    ).rejects.toThrow("Set agents.defaults.systemAgent.agentId");
+    ).rejects.toThrow(error);
     expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
   });
 
-  it.each([{ elapsedMs: 3456, remainingMs: 0 }])(
-    "shares the usage deadline with Codex synthetic usage ($elapsedMs ms spent)",
-    async ({ elapsedMs, remainingMs }) => {
-      mocks.loadProviderUsageSummary
-        .mockImplementationOnce(async () => {
-          vi.spyOn(performance, "now").mockReturnValue(elapsedMs);
-          return {
-            updatedAt: 1,
-            providers: [anthropicUsage()],
-          };
-        })
-        .mockResolvedValueOnce({
-          updatedAt: 2,
-          providers: [openaiUsage(9)],
-        });
-
-      await expect(resolveStatusUsageSummary(usageParams())).resolves.toEqual({
-        updatedAt: 1,
-        providers: [anthropicUsage(), openaiUsage(9)],
+  it("shares the usage deadline with Codex synthetic usage", async () => {
+    mocks.loadProviderUsageSummary
+      .mockImplementationOnce(async () => {
+        vi.mocked(performance.now).mockReturnValue(3456);
+        return {
+          updatedAt: 1,
+          providers: [anthropicUsage()],
+        };
+      })
+      .mockResolvedValueOnce({
+        updatedAt: 2,
+        providers: [openaiUsage(9)],
       });
 
-      expect(mocks.loadProviderUsageSummary).toHaveBeenNthCalledWith(2, {
-        timeoutMs: remainingMs,
-        providers: ["openai"],
-        auth: [
-          {
-            provider: "openai",
-            token: "codex-app-server",
-            hookProvider: "codex",
-          },
-        ],
-        config: expect.any(Object),
-        agentDir: "/tmp/status-agent",
-      });
-    },
-  );
+    await expect(resolveStatusUsageSummary(usageParams())).resolves.toEqual({
+      updatedAt: 1,
+      providers: [anthropicUsage(), openaiUsage(9)],
+    });
+
+    expect(mocks.loadProviderUsageSummary).toHaveBeenNthCalledWith(2, {
+      timeoutMs: 0,
+      providers: ["openai"],
+      auth: [
+        {
+          provider: "openai",
+          token: "codex-app-server",
+          hookProvider: "codex",
+        },
+      ],
+      config: expect.any(Object),
+      agentDir: "/tmp/status-agent",
+    });
+  });
 
   it("keeps existing OpenAI usage when Codex synthetic usage has no windows", async () => {
     mocks.loadProviderUsageSummary
@@ -231,22 +235,6 @@ describe("status-runtime-shared", () => {
     });
   });
 
-  it("rejects an unknown explicit usage owner", async () => {
-    await expect(
-      resolveStatusUsageSummary({
-        ...createStatusGatewayProbeBudget(),
-        config: {
-          agents: {
-            ownership: "explicit",
-            entries: { alpha: {}, beta: {} },
-          },
-        },
-        agentId: "ghost",
-      }),
-    ).rejects.toThrow('Unknown agent id "ghost"');
-    expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
-  });
-
   it("returns a fallback health error when the gateway is unreachable", async () => {
     await expect(
       resolveStatusGatewayHealthSafe({
@@ -305,13 +293,10 @@ describe("status-runtime-shared", () => {
 
   it("resolves the shared runtime snapshot with security audit and runtime details", async () => {
     await expect(
-      resolveStatusRuntimeSnapshot({
-        config: { gateway: {} },
+      snapshot({
         sourceConfig: { gateway: { mode: "local" } },
         ...createStatusGatewayProbeBudget(1234),
         usage: true,
-        deep: true,
-        gatewayReachable: true,
         includeSecurityAudit: true,
       }),
     ).resolves.toEqual({
@@ -343,12 +328,7 @@ describe("status-runtime-shared", () => {
     mocks.callGateway.mockRejectedValueOnce(new Error("gateway health probe timed out"));
 
     await expect(
-      resolveStatusRuntimeSnapshot({
-        ...createStatusGatewayProbeBudget(),
-        config: { gateway: {} },
-        sourceConfig: { gateway: {} },
-        deep: true,
-        gatewayReachable: true,
+      snapshot({
         suppressHealthErrors: true,
       }),
     ).resolves.toMatchObject({
@@ -358,50 +338,36 @@ describe("status-runtime-shared", () => {
   });
 
   it("shares the readiness deadline with deep health and skips heartbeat when it expires", async () => {
-    const clock = vi.spyOn(performance, "now").mockReturnValue(0);
-    try {
-      mocks.callGateway.mockImplementation(async () => {
-        clock.mockReturnValue(38_000);
-        return { ok: true };
-      });
-      const result = await resolveStatusRuntimeSnapshot({
-        config: {},
-        sourceConfig: {},
-        deep: true,
-        gatewayReachable: true,
-        gatewayProbeDeadlineMs: 38_000,
-      });
+    mocks.callGateway.mockImplementation(async () => {
+      vi.mocked(performance.now).mockReturnValue(38_000);
+      return { ok: true };
+    });
+    const result = await snapshot({
+      config: {},
+      sourceConfig: {},
+      gatewayProbeDeadlineMs: 38_000,
+    });
 
-      expect(result.health).toEqual({ ok: true });
-      expect(result.lastHeartbeat).toBeNull();
-      expect(mocks.callGateway).toHaveBeenCalledExactlyOnceWith({
-        method: "health",
-        params: { probe: true },
-        config: {},
-        timeoutMs: 38_000,
-      });
-    } finally {
-      clock.mockRestore();
-    }
+    expect(result.health).toEqual({ ok: true });
+    expect(result.lastHeartbeat).toBeNull();
+    expect(mocks.callGateway).toHaveBeenCalledExactlyOnceWith({
+      method: "health",
+      params: { probe: true },
+      config: {},
+      timeoutMs: 38_000,
+    });
   });
 
-  it.each([{ gatewayStartupPhase: undefined, health: { error: "connection refused" } }])(
-    "uses the completed initial probe for deep health ($gatewayStartupPhase)",
-    async ({ gatewayStartupPhase, health }) => {
-      const snapshot = await resolveStatusRuntimeSnapshot({
-        ...createStatusGatewayProbeBudget(),
-        config: {},
-        sourceConfig: {},
-        deep: true,
-        gatewayReachable: false,
-        gatewayStartupPhase,
-        gatewayProbeError: "connection refused",
-        suppressHealthErrors: true,
-      });
+  it("uses the completed initial probe for deep health", async () => {
+    const result = await snapshot({
+      config: {},
+      sourceConfig: {},
+      gatewayReachable: false,
+      gatewayProbeError: "connection refused",
+      suppressHealthErrors: true,
+    });
 
-      expect(snapshot.health).toEqual(health);
-      expect(snapshot.lastHeartbeat).toBeNull();
-      expect(mocks.callGateway).not.toHaveBeenCalled();
-    },
-  );
+    expect(result).toMatchObject({ health: { error: "connection refused" }, lastHeartbeat: null });
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
 });

@@ -18,9 +18,9 @@ import {
 } from "../config/io.js";
 import { pinRuntimePaths, resolveStateDir } from "../config/paths.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import type { AgentEntryConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
-import { validateConfigObjectRaw } from "../config/validation-core.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import {
   getInstallationTarget,
@@ -39,21 +39,15 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import * as agentExec from "./agent-exec.js";
 import { renderTriagePrompt } from "./triage-prompt.js";
+import { createTriageRuntime, withTriageTerminal } from "./triage.test-support.js";
 
 const mocks = vi.hoisted(() => ({
-  collectDoctorFindings: vi.fn(),
-  writeDiagnosticSupportExport: vi.fn(),
   agentCommand: vi.fn(),
   runEmbeddedAgent: vi.fn(),
   runEmbeddedAgentEntry: vi.fn(),
 }));
 
-// Diagnostics are fixture leaves; triage, exec, config, env filtering,
-// and child processes stay real so the handoff cannot hide behind an exec mock.
-vi.mock("./doctor-lint-runner.js", () => ({ collectDoctorFindings: mocks.collectDoctorFindings }));
-vi.mock("../logging/diagnostic-support-export.js", () => ({
-  writeDiagnosticSupportExport: mocks.writeDiagnosticSupportExport,
-}));
+// Exec, config, env filtering and child processes stay real.
 vi.mock("./agent.js", () => ({ agentCommand: mocks.agentCommand }));
 vi.mock("../agents/embedded-agent.js", () => ({ runEmbeddedAgent: mocks.runEmbeddedAgent }));
 vi.mock("../agents/embedded-agent-runner/run-entry.js", () => ({
@@ -70,12 +64,48 @@ const tsconfigPath = path.resolve(import.meta.dirname, "../../tsconfig.json");
 const marker = "synthetic-original-installation";
 const secret = "sk-test-triage-target-synthetic-secret-1234567890";
 
-type ChildTarget = {
-  stateDir: string;
-  configPath: string;
+function agentConfig(agent: AgentEntryConfig, config: OpenClawConfig = {}): OpenClawConfig {
+  return {
+    ...config,
+    agents: {
+      ...config.agents,
+      defaults: { systemAgent: { agentId: "diagnostic" } },
+      entries: { diagnostic: agent },
+    },
+  };
+}
+
+function repairFixture(
+  state: OpenClawTestState,
+  config: OpenClawConfig,
+  installRoot = state.workspaceDir,
+) {
+  const { stateDir, configPath, workspaceDir } = state;
+  return {
+    target: { stateDir, configPath, workspaceDir, installRoot },
+    route: {
+      runner: "embedded" as const,
+      provider: "fixture",
+      model: "repair",
+      modelLabel: "fixture/repair",
+      agentId: "diagnostic",
+      agentDir: state.statePath("agents", "diagnostic", "agent"),
+      runConfig: config,
+      sourceConfig: config,
+    },
+  };
+}
+
+const completed = (text: string) => ({ payloads: [{ text }], meta: { durationMs: 1 } });
+
+function installationSelectors() {
+  const { OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH, OPENCLAW_WORKSPACE_DIR } = process.env;
+  return { OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH, OPENCLAW_WORKSPACE_DIR };
+}
+
+type ChildTarget = ReturnType<typeof resolveInstallationTarget> & {
   configExists: boolean;
   marker?: string;
-  defaultWorkspaceDir: string;
   workspaceMarker?: string;
 };
 
@@ -123,33 +153,15 @@ async function inspectInstallation(
   await fs.mkdir(defaultWorkspaceDir, { recursive: true });
   const workspaceMarkerPath = path.join(defaultWorkspaceDir, "workspace-probe.txt");
   await fs.writeFile(workspaceMarkerPath, marker);
-  const terminalDescriptors = [process.stdin, process.stdout].map((stream) =>
-    Object.getOwnPropertyDescriptor(stream, "isTTY"),
-  );
-  for (const stream of [process.stdin, process.stdout]) {
-    Object.defineProperty(stream, "isTTY", { configurable: true, value: true });
-  }
-  try {
-    const config: OpenClawConfig = {
-      meta: { lastTouchedVersion: marker },
-      agents: {
-        ownership: "explicit",
-        defaults: { systemAgent: { agentId: "diagnostic" } },
-        entries: {
-          diagnostic: {
-            model: "fixture/diagnostic-model",
-            runtime: { type: "acp" as const },
-          },
-        },
-      },
-      env: { shellEnv: { enabled: false } },
-      plugins: { enabled: false },
-      gateway: { auth: { mode: "token", token: secret } },
-    };
-    const validatedConfig = validateConfigObjectRaw(config);
-    if (!validatedConfig.ok) {
-      throw new Error(`Invalid triage fixture config: ${JSON.stringify(validatedConfig.issues)}`);
-    }
+  const inspectTurn = async () => {
+    const config = agentConfig(
+      { model: "fixture/diagnostic-model", runtime: { type: "acp" } },
+      { agents: { ownership: "explicit" } },
+    );
+    config.meta = { lastTouchedVersion: marker };
+    config.env = { shellEnv: { enabled: false } };
+    config.plugins = { enabled: false };
+    config.gateway = { auth: { mode: "token", token: secret } };
     await state.writeConfig(config);
 
     const originalConfig = await fs.readFile(state.configPath, "utf8");
@@ -166,16 +178,9 @@ async function inspectInstallation(
         message: `Synthetic diagnostic; Authorization: Bearer ${secret}`,
       },
     ] as const;
-    mocks.collectDoctorFindings.mockResolvedValue(findings);
-    mocks.writeDiagnosticSupportExport.mockResolvedValue({ path: archivePath });
     const target = resolveInstallationTarget();
     const observedTargets: Record<string, ReturnType<typeof getInstallationTarget>> = {};
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-      writeStdout: vi.fn(),
-    };
+    const runtime = createTriageRuntime();
     const execSpy = vi.spyOn(agentExec, "agentExecCommand");
     const before = await inspectChildTarget(sanitizeHostExecEnv(), state.workspaceDir);
     expect(before).toEqual({
@@ -189,11 +194,7 @@ async function inspectInstallation(
     if (layout === "split") {
       expect(path.dirname(state.configPath)).not.toBe(state.stateDir);
     }
-    const originalSelectors = {
-      stateDir: process.env.OPENCLAW_STATE_DIR,
-      configPath: process.env.OPENCLAW_CONFIG_PATH,
-      workspaceDir: process.env.OPENCLAW_WORKSPACE_DIR,
-    };
+    const originalSelectors = installationSelectors();
 
     let runStateDir = "";
     let shellLookup = "";
@@ -253,10 +254,7 @@ async function inspectInstallation(
       if (fails) {
         throw runFailure;
       }
-      return {
-        payloads: [{ text: "Synthetic boundary probes completed." }],
-        meta: { durationMs: 1 },
-      };
+      return completed("Synthetic boundary probes completed.");
     });
 
     expect(getRuntimeConfigSnapshot()).toBeNull();
@@ -283,9 +281,7 @@ async function inspectInstallation(
     expect(execSpy.mock.calls[0]?.[1].stateDir).toBeUndefined();
     expect(execSpy.mock.calls[0]?.[1].cwd).toBe(executionRoot);
 
-    expect(process.env.OPENCLAW_STATE_DIR).toBe(originalSelectors.stateDir);
-    expect(process.env.OPENCLAW_CONFIG_PATH).toBe(originalSelectors.configPath);
-    expect(process.env.OPENCLAW_WORKSPACE_DIR).toBe(originalSelectors.workspaceDir);
+    expect(installationSelectors()).toEqual(originalSelectors);
 
     expect(getRuntimeConfigSnapshot()).toBeNull();
     await expect(fs.stat(runStateDir)).rejects.toMatchObject({ code: "ENOENT" });
@@ -303,15 +299,10 @@ async function inspectInstallation(
     expect
       .soft(childTarget, "child OpenClaw must select the original config and default workspace")
       .toEqual(before);
+  };
+  try {
+    await withTriageTerminal(true, inspectTurn);
   } finally {
-    for (const [index, stream] of [process.stdin, process.stdout].entries()) {
-      const descriptor = terminalDescriptors[index];
-      if (descriptor) {
-        Object.defineProperty(stream, "isTTY", descriptor);
-      } else {
-        Reflect.deleteProperty(stream, "isTTY");
-      }
-    }
     vi.restoreAllMocks();
   }
 }
@@ -327,57 +318,46 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
     "scopes prompt-free repair to its target (candidate=%s) while preserving policy and auth",
     async (candidate) => {
       await withOpenClawTestState({ layout: "split" }, async (state) => {
-        const config: OpenClawConfig = {
-          auth: { order: { fixture: ["preferred", "backup"] } },
-          tools: {
-            profile: candidate ? "minimal" : "coding",
-            allow: ["group:runtime", "group:fs", "browser"],
-            deny: ["browser"],
-            alsoAllow: ["group:runtime", "group:fs", "browser"],
-            exec: { mode: "ask", safeBins: ["cat"] },
-            fs: { workspaceOnly: true },
-            byProvider: {
-              fixture: { deny: ["browser"] },
-              "fixture/blocked": { deny: ["write"] },
-              "blocked-provider": { deny: ["edit"] },
-            },
-          },
-          agents: {
-            defaults: { systemAgent: { agentId: "diagnostic" } },
-            entries: {
-              diagnostic: {
-                model: "fixture/repair@preferred",
-                tools: { exec: { mode: "ask", safeBins: ["sed"] }, deny: ["browser"] },
-              },
-            },
+        const config = agentConfig({
+          model: "fixture/repair@preferred",
+          tools: { exec: { mode: "ask", safeBins: ["sed"] }, deny: ["browser"] },
+        });
+        config.auth = { order: { fixture: ["preferred", "backup"] } };
+        config.tools = {
+          profile: candidate ? "minimal" : "coding",
+          allow: ["group:runtime", "group:fs", "browser"],
+          deny: ["browser"],
+          alsoAllow: ["group:runtime", "group:fs", "browser"],
+          exec: { mode: "ask", safeBins: ["cat"] },
+          fs: { workspaceOnly: true },
+          byProvider: {
+            fixture: { deny: ["browser"] },
+            "fixture/blocked": { deny: ["write"] },
+            "blocked-provider": { deny: ["edit"] },
           },
         };
         const candidateRoot = state.path("candidate");
         await fs.mkdir(candidateRoot);
         const root = candidate ? candidateRoot : state.workspaceDir;
-        const agentDir = state.statePath("agents", "diagnostic", "agent");
+        const { target, route } = repairFixture(state, config, root);
+        const { agentDir } = route;
+        const selection = {
+          provider: "fixture",
+          model: "repair",
+          agentDir,
+          userLockedAuthProfileId: "preferred",
+          fallbacksOverride: ["fixture/fallback"],
+        };
         mocks.runEmbeddedAgentEntry.mockImplementation(
           async (params: {
-            selection: {
-              provider: string;
-              model: string;
-              agentDir: string;
-              userLockedAuthProfileId: string;
-              fallbacksOverride: string[];
-            };
+            selection: typeof selection;
             runCandidate: (
               provider: string,
               model: string,
               options: { agentHarnessRuntimeOverride: string },
             ) => Promise<unknown>;
           }) => {
-            expect(params.selection).toMatchObject({
-              provider: "fixture",
-              model: "repair",
-              agentDir,
-              userLockedAuthProfileId: "preferred",
-              fallbacksOverride: ["fixture/fallback"],
-            });
+            expect(params.selection).toMatchObject(selection);
             const { provider, model } = params.selection;
             const result = await params.runCandidate(provider, model, {
               agentHarnessRuntimeOverride: "openclaw",
@@ -389,13 +369,15 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
           const runConfig = opts.config!;
           const tools = runConfig.tools;
           const diagnostic = runConfig.agents?.entries?.diagnostic;
-          expect(opts.workspaceDir).toBe(root);
-          expect(opts.cwd).toBe(root);
+          expect(opts).toMatchObject({
+            workspaceDir: root,
+            cwd: root,
+            agentDir,
+            authProfileId: "preferred",
+            authProfileIdSource: "user",
+            sessionPersistence: "detached",
+          });
           expect(opts.modelFallbacksOverride).toEqual(["fixture/fallback"]);
-          expect(opts.agentDir).toBe(agentDir);
-          expect(opts.authProfileId).toBe("preferred");
-          expect(opts.authProfileIdSource).toBe("user");
-          expect(opts.sessionPersistence).toBe("detached");
           expect(getInstallationTarget()).toEqual({
             stateDir: state.stateDir,
             configPath: state.configPath,
@@ -419,26 +401,11 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
           });
           expect(runConfig.auth).toEqual(config.auth);
           expect(diagnostic?.model).toBe("fixture/repair@preferred");
-          return { payloads: [{ text: "Fixture completed." }], meta: { durationMs: 1 } };
+          return completed("Fixture completed.");
         });
         const result = await runUpdateRepairTurn({
-          target: {
-            stateDir: state.stateDir,
-            configPath: state.configPath,
-            workspaceDir: state.workspaceDir,
-            installRoot: root,
-          },
-          route: {
-            runner: "embedded",
-            provider: "fixture",
-            model: "repair",
-            modelLabel: "fixture/repair",
-            authProfileId: "preferred",
-            agentId: "diagnostic",
-            agentDir,
-            runConfig: config,
-            sourceConfig: config,
-          },
+          target,
+          route: { ...route, authProfileId: "preferred" },
           modelFallbacks: ["fixture/blocked", "blocked-provider/model", "fixture/fallback"],
           prompt: "Check the installation.",
           timeoutMs: 30_000,
@@ -449,8 +416,8 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
         if (result.status !== "completed") {
           throw new Error(result.reason);
         }
+        expect(result.envelope).toMatchObject({ status: "ok" });
         expect(result.envelope.error).toBeUndefined();
-        expect(result.envelope.status).toBe("ok");
         expect(mocks.runEmbeddedAgentEntry).toHaveBeenCalledOnce();
         expect(mocks.runEmbeddedAgent).toHaveBeenCalledOnce();
         expect(mocks.agentCommand).not.toHaveBeenCalled();
@@ -471,38 +438,16 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
     { name: "provider deny", tools: { byProvider: { fixture: { deny: ["exec"] } } } },
   ])("reports $name as unavailable without an agent turn", async ({ tools, agentTools }) => {
     await withOpenClawTestState({ layout: "split" }, async (state) => {
-      const config: OpenClawConfig = {
-        tools,
-        agents: {
-          defaults: { systemAgent: { agentId: "diagnostic" } },
-          entries: { diagnostic: { tools: agentTools } },
-        },
-      };
+      const config = agentConfig({ tools: agentTools }, { tools });
+      const { target, route } = repairFixture(state, config);
       vi.spyOn(repairRuntime, "prepareUpdateRepairInference").mockResolvedValue({
         ok: true,
-        route: {
-          runner: "embedded",
-          provider: "fixture",
-          model: "repair",
-          modelLabel: "fixture/repair",
-          agentId: "diagnostic",
-          agentDir: state.statePath("agents", "diagnostic", "agent"),
-          runConfig: config,
-          sourceConfig: config,
-        },
+        route,
         modelFallbacks: [],
       });
-      mocks.runEmbeddedAgent.mockResolvedValue({
-        payloads: [{ text: "Should not run" }],
-        meta: { durationMs: 1 },
-      });
+      mocks.runEmbeddedAgent.mockResolvedValue(completed("Should not run"));
       const result = await runUpdateRepairLoop({
-        target: {
-          stateDir: state.stateDir,
-          configPath: state.configPath,
-          workspaceDir: state.workspaceDir,
-          installRoot: state.workspaceDir,
-        },
+        target,
         context: { error: "Synthetic failure", phase: "validating" },
         validate: async () => ({ ok: false, score: -1, summary: "Synthetic failure" }),
       });
@@ -523,19 +468,11 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
     { name: "explicit sandbox", agent: { tools: { exec: { host: "sandbox" as const } } } },
   ])("refuses $name before the fixing turn, without changing ordinary exec", async ({ agent }) => {
     await withOpenClawTestState({ layout: "split" }, async (state) => {
-      const config: OpenClawConfig = {
-        agents: {
-          ownership: "explicit",
-          defaults: { systemAgent: { agentId: "diagnostic" } },
-          entries: { diagnostic: agent },
-        },
-      };
+      const config = agentConfig(agent, { agents: { ownership: "explicit" } });
       setRuntimeConfigSnapshot(config);
-      const runAgent = vi.fn(async () => ({
-        payloads: [{ text: "fixture completed" }],
-        meta: { durationMs: 1 },
-      }));
-      mocks.agentCommand.mockReset().mockImplementation(runAgent);
+      const runAgent = mocks.agentCommand
+        .mockReset()
+        .mockResolvedValue(completed("fixture completed"));
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
       const target = resolveInstallationTarget();
       const result = await withInstallationTarget(target, () =>
@@ -580,8 +517,8 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
         OPENCLAW_WORKSPACE_DIR: undefined,
       });
       try {
-        await withEnvAsync(syntheticEnv, async () => {
-          await withOpenClawTestState(
+        await withEnvAsync(syntheticEnv, () =>
+          withOpenClawTestState(
             {
               layout,
               label: "triage-target",
@@ -589,11 +526,9 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
                 ? { env: { OPENCLAW_STATE_DIR: undefined, OPENCLAW_CONFIG_PATH: undefined } }
                 : {}),
             },
-            async (state) => {
-              await inspectInstallation(state, layout, fails, workspaceSelector);
-            },
-          );
-        });
+            (state) => inspectInstallation(state, layout, fails, workspaceSelector),
+          ),
+        );
       } finally {
         if (previousSnapshot) {
           setRuntimeConfigSnapshot(previousSnapshot);
