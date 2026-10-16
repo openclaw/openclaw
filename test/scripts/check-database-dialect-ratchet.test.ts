@@ -173,6 +173,12 @@ it("retains SQLite JSONB debt without counting PostgreSQL catalog constructors",
     "src/sqlite.ts",
     'const sql = "SELECT jsonb_object(), jsonb_array(), jsonb_extract(value), jsonb_group_array(value) FROM facts";',
   );
+  for (const owner of ["postgres-search-schema", "postgres-vector"]) {
+    write(
+      `src/infra/database-engine/${owner}.ts`,
+      'const sql = "SELECT openclaw_vector(embedding, 3)";',
+    );
+  }
   expect(inventory(root)).toMatchObject([
     {
       file: "src/sqlite.ts",

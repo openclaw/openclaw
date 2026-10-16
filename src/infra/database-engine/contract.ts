@@ -36,6 +36,7 @@ export type StoreSchema = {
     schema: PostgresSchemaDefinition;
   }[];
   postgresFragments?: readonly PostgresSchemaFragment[];
+  search?: SearchSchema;
 };
 export type AdmittedStore = {
   anchor: DatabaseSync;
