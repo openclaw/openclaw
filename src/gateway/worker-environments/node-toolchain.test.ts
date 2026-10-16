@@ -19,8 +19,8 @@ const write = (file: string, text: string, mode = 0o755) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text, { mode });
 };
-const run = (file: string, args: string[], env: NodeJS.ProcessEnv) =>
-  execFileSync(file, args, { env, encoding: "utf8" }).trim();
+const run = (file: string, args: string[], env: NodeJS.ProcessEnv, input?: string) =>
+  execFileSync(file, args, { env, input, encoding: "utf8" }).trim();
 
 function fixture(
   tools: Record<string, string> = Object.fromEntries(
@@ -41,51 +41,40 @@ function fixture(
   execFileSync("tar", ["-czf", archive, "-C", root, "release"]);
   const digest = createHash("sha256").update(fs.readFileSync(archive)).digest("hex");
   write(path.join(bin, "curl"), downloadScript);
-  return {
-    root,
-    bin,
-    digest,
-    env: {
-      ...process.env,
-      HOME: root,
-      PATH: bin + path.delimiter + process.env.PATH,
-    },
-  };
-}
-
-function prepareRepositoryNode(
-  f: ReturnType<typeof fixture>,
-  version: string,
-  releases: string[],
-  packageManager?: string,
-  fetchUrls: string[] = [],
-) {
-  const workspace = path.join(f.root, "workspace");
-  const home = path.join(f.root, "session-home");
-  fs.mkdirSync(home);
-  write(path.join(workspace, ".nvmrc"), version);
-  if (packageManager) {
-    write(path.join(workspace, "package.json"), JSON.stringify({ packageManager }));
-  }
-  const install: (workspace: string, home: string, root: string) => Promise<string> =
-    runInNewContext(`(${PREPARE_REPOSITORY_NODE_JS})`, {
-      require: requireModule,
-      process: { platform: "linux", arch: "x64", execPath: process.execPath, env: f.env },
-      AbortSignal,
-      fetch: async (url: string) => {
-        fetchUrls.push(url);
-        return {
-          ok: true,
-          text: async () =>
+  const env = { ...process.env, HOME: root, PATH: bin + path.delimiter + process.env.PATH };
+  const home = path.join(root, "session-home");
+  function checkout(
+    version: string,
+    releases: string[],
+    packageManager?: string,
+    fetchUrls: string[] = [],
+  ) {
+    const workspace = path.join(root, "workspace");
+    fs.mkdirSync(home);
+    write(path.join(workspace, ".nvmrc"), version);
+    if (packageManager) {
+      write(path.join(workspace, "package.json"), JSON.stringify({ packageManager }));
+    }
+    const index = JSON.stringify(
+      releases.map((releaseVersion) => ({ version: `v${releaseVersion}`, files: ["linux-x64"] })),
+    );
+    const install: (workspace: string, home: string, root: string) => Promise<string> =
+      runInNewContext(`(${PREPARE_REPOSITORY_NODE_JS})`, {
+        require: requireModule,
+        process: { platform: "linux", arch: "x64", execPath: process.execPath, env },
+        AbortSignal,
+        fetch: async (url: string) => {
+          fetchUrls.push(url);
+          return new Response(
             url.endsWith("index.json")
-              ? JSON.stringify(
-                  releases.map((release) => ({ version: `v${release}`, files: ["linux-x64"] })),
-                )
-              : `${f.digest}  node-${url.split("/")[4]}-linux-x64.tar.gz\n`,
-        };
-      },
-    });
-  return { home, prepare: () => install(workspace, home, f.root) };
+              ? index
+              : `${digest}  node-${url.split("/")[4]}-linux-x64.tar.gz\n`,
+          );
+        },
+      });
+    return () => install(workspace, home, root);
+  }
+  return { root, bin, digest, env, home, checkout };
 }
 
 // System Corepack: read-only package, env-node stubs, enable links into its own dist.
@@ -131,14 +120,8 @@ exports.runMain = ([command, ...args]) => {
 
 it("installs verified bytes, reuses them offline, and repairs a damaged installation", () => {
   const f = fixture();
-  const script =
-    NODE_TOOLCHAIN_INSTALL_SH + '\nopenclaw_install_node "22.21.1" "$FIXTURE_DIGEST"\n';
-  const install = () =>
-    execFileSync("sh", ["-s"], {
-      input: script,
-      env: { ...f.env, FIXTURE_DIGEST: f.digest },
-      encoding: "utf8",
-    }).trim();
+  const script = `${NODE_TOOLCHAIN_INSTALL_SH}\nopenclaw_install_node "22.21.1" "${f.digest}"\n`;
+  const install = () => run("sh", ["-s"], f.env, script);
   const bin = install();
   expect(run(path.join(bin, "node"), ["--version"], process.env)).toBe("v22.21.1");
   write(path.join(f.bin, "curl"), "#!/bin/sh\nexit 99\n");
@@ -167,13 +150,8 @@ it("rejects a default-release archive whose digest differs from the source pin",
 it("selects the latest matching repository release and gives session commands its PATH", async () => {
   const f = fixture();
   const fetchUrls: string[] = [];
-  const { home, prepare } = prepareRepositoryNode(
-    f,
-    "22\n",
-    ["24.21.0", "22.20.0", "22.21.1"],
-    undefined,
-    fetchUrls,
-  );
+  const { home } = f;
+  const prepare = f.checkout("22\n", ["24.21.0", "22.20.0", "22.21.1"], undefined, fetchUrls);
   const setupPath = await prepare();
   expect(fetchUrls).toEqual([
     "https://nodejs.org/dist/index.json",
@@ -202,7 +180,8 @@ it.each([
     const corepackBin = workerCorepack(f.root);
     f.env.PATH = corepackBin + path.delimiter + f.env.PATH;
     vi.stubEnv("PATH", corepackBin + path.delimiter + process.env.PATH);
-    const { home, prepare } = prepareRepositoryNode(f, `${version}\n`, [version], "pnpm@10.11.0");
+    const { home } = f;
+    const prepare = f.checkout(`${version}\n`, [version], "pnpm@10.11.0");
     await prepare();
     // A commit refresh prepares the same HOME again; detected installs then re-enable Corepack.
     const setupPath = await prepare();

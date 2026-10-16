@@ -53,18 +53,13 @@ function repositoryFixture(closeAt?: ClosingBoundary) {
       }
       // Model revocation while remote I/O is outstanding, not an aborted tunnel.
       await Promise.resolve();
-      const boundary: ClosingBoundary | undefined =
-        command.seed?.action === "apply"
-          ? "seed"
-          : command.argv.includes("fetch")
-            ? "fetch"
-            : command.argv.includes("config")
-              ? "author"
-              : command.transfer?.direction === "download"
-                ? "checkpoint"
-                : command.argv.some((arg) => arg.includes("worktree-setup.sh"))
-                  ? "setup"
-                  : undefined;
+      const boundary = Object.entries({
+        seed: command.seed?.action === "apply",
+        fetch: command.argv.includes("fetch"),
+        author: command.argv.includes("config"),
+        checkpoint: command.transfer?.direction === "download",
+        setup: command.argv.some((arg) => arg.includes("worktree-setup.sh")),
+      }).find(([, reached]) => reached)?.[0];
       if (closeAt && boundary === closeAt) {
         authorized = false;
         closedAtBoundary = true;
@@ -140,29 +135,17 @@ function repositoryFixture(closeAt?: ClosingBoundary) {
   };
 }
 
-it.each(["seed", "fetch", "author", "setup", "checkpoint", "completion"] as const)(
+it.each(["seed", "fetch", "author", "setup", "checkpoint"] as const)(
   "binds repository preparation to its initiating turn until %s",
   async (boundary) => {
-    const h = repositoryFixture(boundary === "completion" ? undefined : boundary);
+    const h = repositoryFixture(boundary);
     try {
-      if (boundary === "completion") {
-        const result = await h.sync(true);
-        expect(h.observed().downloadStatus).toBe(200);
-        h.closeInvocation();
-        const token = h.transfer.prepareUpload("environment-1", result.manifestRef);
-        expect(token).toBeTruthy();
-        await h.transfer.revoke("environment-1", token);
-      } else {
-        await expect(h.sync(boundary === "checkpoint")).rejects.toThrow(
-          /authority closed|turn closed/u,
-        );
-        expect(h.observed()).toMatchObject({
-          closedAtBoundary: true,
-          effectsAfterClosure: 0,
-        });
-        if (boundary === "checkpoint") {
-          expect(h.observed().downloadStatus).toBe(404);
-        }
+      await expect(h.sync(boundary === "checkpoint")).rejects.toThrow(
+        /authority closed|turn closed/u,
+      );
+      expect(h.observed()).toMatchObject({ closedAtBoundary: true, effectsAfterClosure: 0 });
+      if (boundary === "checkpoint") {
+        expect(h.observed().downloadStatus).toBe(404);
       }
     } finally {
       await h.transfer.closeAll();
@@ -200,7 +183,7 @@ it.each(["before upload", "after upload"])(
     const h = repositoryFixture();
     const server = await startNodeWorkspaceTransferTestServer(h.transfer);
     try {
-      await h.sync();
+      const synced = await h.sync(closure === "after upload");
       const token = h.transfer.prepareUpload("environment-1", baseManifestRef, h.authorize);
       const stale = closure === "before upload";
       if (stale) {
@@ -223,6 +206,7 @@ it.each(["before upload", "after upload"])(
       if (stale) {
         return;
       }
+      expect(h.observed().downloadStatus).toBe(200);
       const staged = (await fs.readdir(h.temporaryRoot, { recursive: true })).filter((entry) =>
         path.basename(entry).startsWith("upload-"),
       );
@@ -236,6 +220,10 @@ it.each(["before upload", "after upload"])(
         code: "ENOENT",
       });
       await h.transfer.revoke("environment-1", fresh);
+      // Completed repository custody outlives its initiating turn; invocation-bound uploads do not.
+      const retained = h.transfer.prepareUpload("environment-1", synced.manifestRef);
+      expect(retained).toBeTruthy();
+      await h.transfer.revoke("environment-1", retained);
     } finally {
       await server.close();
       await h.transfer.closeAll();

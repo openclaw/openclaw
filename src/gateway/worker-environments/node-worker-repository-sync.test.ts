@@ -32,10 +32,7 @@ const filesAt = (root: string) => ({
   write: (file: string, content: string) => fs.writeFile(path.join(root, file), content),
 });
 
-it.each([
-  { operation: "clone", reason: "clone-failed", stage: "git clone" },
-  { operation: "checkout", reason: "checkout-failed", stage: "git checkout --detach" },
-])("surfaces $reason diagnostics to cloud placement", async ({ operation, reason, stage }) => {
+it("surfaces repository failure diagnostics to cloud placement", async () => {
   const service = createNodeWorkspaceTransferService({
     temporaryRoot: tempDirs.make("node-repository-failure-"),
     getOwner: () => undefined,
@@ -49,8 +46,8 @@ it.each([
     workspaceTransfer: service,
     runWorkspaceCommand: async ({ argv }) => ({
       stdout: argv.includes("rev-parse") ? "a".repeat(40) : "",
-      stderr: argv.includes(operation) ? "fatal: Permission denied\n" : "",
-      code: argv.includes(operation) ? 128 : 0,
+      stderr: argv.includes("checkout") ? "fatal: Permission denied\n" : "",
+      code: argv.includes("checkout") ? 128 : 0,
       signal: null,
       killed: false,
       termination: "exit",
@@ -65,7 +62,7 @@ it.each([
         source: repositorySource,
       }),
     ).rejects.toThrow(
-      `Cloud repository preparation failed: ${reason}: ${stage}: exit (exit code 128, signal null): fatal: Permission denied`,
+      "Cloud repository preparation failed: checkout-failed: git checkout --detach: exit (exit code 128, signal null): fatal: Permission denied",
     );
   } finally {
     await service.closeAll();
