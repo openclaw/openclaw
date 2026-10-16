@@ -1,7 +1,4 @@
-import {
-  embeddedAgentLog,
-  type AgentHarnessRuntimeArtifactBinding,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessRuntimeArtifactBinding } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import {

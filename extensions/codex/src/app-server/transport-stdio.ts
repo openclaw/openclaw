@@ -4,6 +4,7 @@
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
@@ -151,6 +152,14 @@ export async function createStdioTransport(
   }
   const register = await prepareCodexAppServerProcessRegistration();
   await assertCurrent?.();
+  embeddedAgentLog.debug("Codex app-server spawn", {
+    command: invocation.command,
+    launcher: options.command,
+    ...(options.cwd ? { cwd: options.cwd } : {}),
+    ...(nativeCommand ? { nativeCommand } : {}),
+    platform: process.platform,
+    arch: process.arch,
+  });
   let child: ChildProcessWithoutNullStreams & Pick<CodexAppServerTransport, "startupFailure">;
   try {
     child = spawn(invocation.command, invocation.argv, {
