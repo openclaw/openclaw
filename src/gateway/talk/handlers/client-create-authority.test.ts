@@ -48,13 +48,7 @@ import { useUserProfileCatalogForTest } from "../../../test-utils/user-profile-c
 import { captureGatewayDeviceRevocation } from "../../device-revocation.js";
 import { makeClient } from "../../server-broadcast.test-helpers.js";
 import { createDirectChatContext } from "../../server-chat.agent-events.test-helpers.js";
-import {
-  bindGatewayRequestHandlerMutationAuthority,
-  bindWebSocketRequestMutationAuthority,
-} from "../../server-methods/session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "../../server-methods/types.js";
-import { SharedGatewaySessionGenerationState } from "../../server-shared-auth-generation.js";
-import { resolveSessionMutationAuthorizationAsync } from "../../session-sharing-authorization-async.js";
 import { closeTalkClientGatewayControlSession } from "../client-gateway-control.js";
 import { cleanupTalkConnection, prepareTalkConnectionClose } from "../session-registry.js";
 import {
@@ -64,7 +58,9 @@ import {
   resolveTalkVoiceSession,
 } from "../voice-selection.js";
 import {
-  createBrowserInvoker,
+  createBrowserHarness,
+  browserAuthority,
+  authorizeBrowserCreate,
   registerClientCreateEnsureTests,
 } from "./client-create-ensure.test-support.js";
 import { registerClientCreateSourceAuthorityTests } from "./client-create-source-authority.test-support.js";
@@ -109,30 +105,41 @@ function configureDelegatedBrowserProvider(
 async function invokeCreate(options: GatewayRequestHandlerOptions, retainRequestAuthority = false) {
   setRuntimeConfigSnapshot(options.context.getRuntimeConfig());
   using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-  const admission = await resolveSessionMutationAuthorizationAsync({
-    method: "talk.client.create",
-    requestParams: options.params,
-    context: options.context,
-    client: options.client,
-  });
+  const admission = await authorizeBrowserCreate(options, retainRequestAuthority);
   if (admission.error) {
     options.respond(false, undefined, admission.error);
     return;
   }
   try {
-    const handlerOptions = { ...options, sessionMutationAuthorization: admission.authorization };
-    await createTalkClient(
-      retainRequestAuthority
-        ? bindGatewayRequestHandlerMutationAuthority(options, handlerOptions, undefined)
-        : handlerOptions,
-    );
+    await createTalkClient(admission.handler);
   } finally {
     admission.authorization?.release?.();
   }
 }
 
-const invokeBrowser = createBrowserInvoker(invokeCreate);
+const browser = (
+  params: Record<string, unknown>,
+  provider?: (request: BrowserRequest) => Promise<typeof browserSession>,
+) =>
+  createBrowserHarness(
+    { configureProvider: configureDelegatedBrowserProvider, invokeCreate },
+    { sessionKey, ...params },
+    provider,
+  );
 
+const ownVoice = (id: string | undefined, key = sessionKey) => {
+  ownedVoiceSessionId = id;
+  ownedVoiceSessionKey = key;
+};
+const harness = {
+  tempDir: () => tempDir,
+  ownVoice,
+  configureProvider: configureDelegatedBrowserProvider,
+  invokeCreate,
+  observeAdmission: (observer: typeof observeAdmission) => {
+    observeAdmission = observer;
+  },
+};
 describe("voice creation authority", () => {
   const prepareProfiles = useUserProfileCatalogForTest();
   const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-voice-authority-");
@@ -207,25 +214,20 @@ describe("voice creation authority", () => {
     );
   });
   it("releases transport authority after a same-session replacement closes", async () => {
-    const fixture = configureDelegatedBrowserProvider(async () => browserSession);
+    const fixture = browser({ provider: "openai" });
     const releaseSubscription = vi.fn();
     const lifetime = captureGatewayDeviceRevocation(fixture.context, {}, () => true, undefined, {
       isCurrent: () => true,
       subscribe: () => releaseSubscription,
     });
     const create = async (voiceSessionId?: string) => {
-      const respond = vi.fn();
-      await invokeCreate({
+      await fixture.create(voiceSessionId ? { voiceSessionId } : {}, {
         req: { type: "req", id: "replace-voice", method: "talk.client.create" },
-        params: { sessionKey, provider: "openai", ...(voiceSessionId ? { voiceSessionId } : {}) },
         isWebchatConnect: () => false,
-        respond,
-        context: fixture.context as never,
-        client: fixture.client as never,
         hasCurrentClientAuthority: lifetime.isCurrent,
       });
-      expect(respond.mock.lastCall?.[0], respond.mock.lastCall?.[2]?.message).toBe(true);
-      ownedVoiceSessionId = respond.mock.lastCall?.[1].voiceSessionId;
+      expect(fixture.reply?.[0], fixture.reply?.[2]?.message).toBe(true);
+      ownedVoiceSessionId = fixture.reply?.[1].voiceSessionId;
       return ownedVoiceSessionId;
     };
     try {
@@ -246,16 +248,13 @@ describe("voice creation authority", () => {
   });
 
   it("replaces a voice on the same chat only after both the browser and provider are ready", async () => {
-    const createBrowserSession = vi.fn(async (request: BrowserRequest) => ({
+    const fixture = browser({ capabilities: ["voice-selection"] }, async (request) => ({
       ...browserSession,
       model: request.model,
       voice: request.voice ?? "cove",
     }));
-    const fixture = configureDelegatedBrowserProvider(createBrowserSession);
     Object.assign(fixture.provider, { voices: ["cove", "ember"] });
-    const respond = vi.fn();
-    const create = (params: Record<string, unknown>) =>
-      invokeBrowser(fixture, respond, { sessionKey, capabilities: ["voice-selection"], ...params });
+    const { create, respond, createBrowserSession } = fixture;
     await create({ provider: "openai", model: "gpt-live-1-codex" });
     expect(respond).toHaveBeenLastCalledWith(
       true,
@@ -383,24 +382,11 @@ describe("voice creation authority", () => {
       const client = workerClient ?? fixture.client;
       fixture.clients.clear();
       fixture.clients.add(client);
-      using deviceAuthority =
-        authority === "worker"
-          ? (() => {
-              const lifetime = captureGatewayDeviceRevocation(fixture.context, {}, () => true);
-              return { ...lifetime, [Symbol.dispose]: lifetime.release };
-            })()
-          : undefined;
-      const generation = new SharedGatewaySessionGenerationState({
-        current: undefined,
-        required: undefined,
-      });
-      const bindAuthority = (options: GatewayRequestHandlerOptions) => {
-        if (deviceAuthority && workerClient) {
-          options.hasCurrentClientAuthority = deviceAuthority.isCurrent;
-          bindWebSocketRequestMutationAuthority(options, workerClient, generation.reader);
-        }
-        return options;
-      };
+      using deviceAuthority = workerClient
+        ? browserAuthority(fixture.context, workerClient)
+        : undefined;
+      const bindAuthority = (options: GatewayRequestHandlerOptions) =>
+        deviceAuthority?.bind(options) ?? options;
       const create = async (voiceChangeId?: string) => {
         await invokeCreate(
           bindAuthority({
@@ -584,29 +570,13 @@ describe("voice creation authority", () => {
           client,
         };
         if (authority === "worker") {
-          const lifetime = captureGatewayDeviceRevocation(fixture.context, {}, () => true);
-          releaseAuthority = lifetime.release;
-          options.hasCurrentClientAuthority = lifetime.isCurrent;
-          const generation = new SharedGatewaySessionGenerationState({
-            current: undefined,
-            required: undefined,
-          });
-          bindWebSocketRequestMutationAuthority(options, client, generation.reader);
-          const admitted = await resolveSessionMutationAuthorizationAsync({
-            method: options.req.method,
-            requestParams: options.params,
-            context: options.context,
-            client,
-          });
+          const deviceAuthority = browserAuthority(fixture.context, client);
+          releaseAuthority = deviceAuthority.release;
+          deviceAuthority.bind(options);
+          const admitted = await authorizeBrowserCreate(options, true);
           expect(admitted.error).toBeNull();
           try {
-            await createTalkClient(
-              bindGatewayRequestHandlerMutationAuthority(
-                options,
-                { ...options, sessionMutationAuthorization: admitted.authorization },
-                undefined,
-              ),
-            );
+            await createTalkClient(admitted.handler);
           } finally {
             admitted.authorization?.release?.();
           }
@@ -627,29 +597,18 @@ describe("voice creation authority", () => {
     },
   );
 
-  registerClientCreateEnsureTests({
-    tempDir: () => tempDir,
-    ownVoice: (id, key) => {
-      ownedVoiceSessionId = id;
-      ownedVoiceSessionKey = key;
-    },
-    configureProvider: configureDelegatedBrowserProvider,
-    invokeCreate,
-    observeAdmission: (observer) => {
-      observeAdmission = observer;
-    },
-  });
+  registerClientCreateEnsureTests(harness);
 
   it.each(["startup-copy", "active-copy", "healthy"] as const)(
     "keeps browser provider writes on their creator source (%s)",
     async (phase) => {
       const persistence = prepareClientVoiceSessionClose();
       let providerRequest: BrowserRequest | undefined;
-      const fixture = configureDelegatedBrowserProvider(async (request) => {
+      const voiceSessionId = "browser-creator-source";
+      const fixture = browser({ provider: "openai", voiceSessionId }, async (request) => {
         providerRequest = request;
         return browserSession;
       });
-      const voiceSessionId = "browser-creator-source";
       const sourcePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
       const displacedPath = `${sourcePath}.creator`;
       let replacementBytes: Buffer | undefined;
@@ -673,10 +632,9 @@ describe("voice creation authority", () => {
           }
           return id;
         });
-      const respond = vi.fn();
       try {
-        await invokeBrowser(fixture, respond, { sessionKey, provider: "openai", voiceSessionId });
-        expect(respond.mock.lastCall?.[0]).toBe(phase !== "startup-copy");
+        await fixture.create();
+        expect(fixture.reply?.[0]).toBe(phase !== "startup-copy");
         if (phase !== "startup-copy") {
           ownedVoiceSessionId = voiceSessionId;
           if (phase === "active-copy") {
@@ -715,8 +673,8 @@ describe("voice creation authority", () => {
   );
 
   it("joins committed browser creation before the real Talk close decides logical state", async () => {
-    const fixture = configureDelegatedBrowserProvider(async () => browserSession);
     const voiceSessionId = "browser-creation-close";
+    const fixture = browser({ provider: "openai", voiceSessionId });
     const committed = createDeferred();
     const releaseCreation = createDeferred();
     const providerClosing = createDeferred();
@@ -733,12 +691,7 @@ describe("voice creation authority", () => {
         return id;
       });
     const close = prepareTalkConnectionClose([fixture.client], fixture.context.logGateway);
-    const respond = vi.fn();
-    const creating = invokeBrowser(fixture, respond, {
-      sessionKey,
-      provider: "openai",
-      voiceSessionId,
-    });
+    const creating = fixture.create();
     let closing: Promise<void> | undefined;
     let closeFinished = false;
     try {
@@ -764,7 +717,7 @@ describe("voice creation authority", () => {
       expect(closeFinished).toBe(false);
       releaseCreation.resolve();
       await Promise.all([creating, closing]);
-      expect(respond.mock.lastCall?.[0]).toBe(false);
+      expect(fixture.reply?.[0]).toBe(false);
       expect(fixture.cancelBrowserSession).toHaveBeenCalledOnce();
       expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.status).toBe("closed");
     } finally {
@@ -774,18 +727,5 @@ describe("voice creation authority", () => {
     }
   });
 
-  registerClientCreateSourceAuthorityTests({
-    tempDir: () => tempDir,
-    ownVoice: (id, key = sessionKey) => {
-      ownedVoiceSessionId = id;
-      ownedVoiceSessionKey = key;
-    },
-    configureProvider: configureDelegatedBrowserProvider,
-    invokeCreate,
-    observeAdmission: (observer) => {
-      observeAdmission = observer;
-    },
-    sessionKey,
-    sessionId,
-  });
+  registerClientCreateSourceAuthorityTests({ ...harness, sessionKey, sessionId });
 });

@@ -14,22 +14,16 @@ import * as voiceSources from "../../../talk/client-voice-session-source.js";
 import * as voiceSessions from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import { captureGatewayDeviceRevocation } from "../../device-revocation.js";
 import { makeClient } from "../../server-broadcast.test-helpers.js";
 import { createDirectChatContext } from "../../server-chat.agent-events.test-helpers.js";
-import {
-  bindGatewayRequestHandlerMutationAuthority,
-  bindWebSocketRequestMutationAuthority,
-} from "../../server-methods/session-mutation-guards.js";
 import type {
   GatewayRequestHandlerOptions,
   SessionMutationAuthorization,
 } from "../../server-methods/types.js";
-import { SharedGatewaySessionGenerationState } from "../../server-shared-auth-generation.js";
-import { resolveSessionMutationAuthorizationAsync } from "../../session-sharing-authorization-async.js";
 import { roleClient, rolePolicyConfig } from "../../session-sharing.test-utils.js";
 import { closeTalkClientGatewayControlSession } from "../client-gateway-control.js";
 import { cleanupTalkConnection } from "../session-registry.js";
+import { authorizeBrowserCreate, browserAuthority } from "./client-create-ensure.test-support.js";
 import { createTalkClient } from "./client-create.js";
 import {
   browserSession,
@@ -47,11 +41,12 @@ describe("cross-store voice creation authority", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.restoreAllMocks());
 
-  it.each(
-    (["membership", "session"] as const).flatMap((revocation) =>
-      (["before", "after"] as const).map((timing) => ({ revocation, timing })),
-    ),
-  )(
+  it.each([
+    { revocation: "membership", timing: "before" },
+    { revocation: "membership", timing: "after" },
+    { revocation: "session", timing: "before" },
+    { revocation: "session", timing: "after" },
+  ] as const)(
     "honors $revocation revocation $timing cross-store voice admission",
     async ({ revocation, timing }) => {
       await withOpenClawTestState(
@@ -97,19 +92,15 @@ describe("cross-store voice creation authority", () => {
             fixture.clients.add(client);
             const identityId = client.authenticatedUserProfile!.profileId;
             const scope = { agentId: "main", sessionKey, storePath };
-            await replaceSessionEntry(scope, {
+            const entry = {
               sessionId,
               updatedAt: 1,
-              visibility: "read-only",
-              createdActor: { type: "human", source: "profile", id: "other-creator" },
-            });
+              visibility: "read-only" as const,
+              createdActor: { type: "human", source: "profile", id: "other-creator" } as const,
+            };
+            await replaceSessionEntry(scope, entry);
             await addSessionMember(scope, { identityId, addedBy: "other-creator" });
-            const lifetime = captureGatewayDeviceRevocation(fixture.context, {}, () => true);
-            using _ = { [Symbol.dispose]: lifetime.release };
-            const generation = new SharedGatewaySessionGenerationState({
-              current: undefined,
-              required: undefined,
-            });
+            using authority = browserAuthority(fixture.context, client);
             const voiceSessionId = `admitted-${revocation}`;
             const respond = vi.fn();
             const options: GatewayRequestHandlerOptions = {
@@ -125,22 +116,11 @@ describe("cross-store voice creation authority", () => {
               }),
               client,
               isWebchatConnect: () => false,
-              hasCurrentClientAuthority: lifetime.isCurrent,
             };
-            bindWebSocketRequestMutationAuthority(options, client, generation.reader);
-            const admission = await resolveSessionMutationAuthorizationAsync({
-              method: options.req.method,
-              requestParams: options.params,
-              context: options.context,
-              client,
-            });
+            authority.bind(options);
+            const admission = await authorizeBrowserCreate(options, true);
             expect(admission.error).toBeNull();
             authorization = admission.authorization!;
-            const handler = bindGatewayRequestHandlerMutationAuthority(
-              options,
-              { ...options, sessionMutationAuthorization: authorization },
-              undefined,
-            );
             let creating = false;
             let revoked = false;
             const revoke = () => {
@@ -152,10 +132,9 @@ describe("cross-store voice creation authority", () => {
                 expect(removeSessionMemberSync(scope, identityId)).toMatchObject({ identityId });
               } else {
                 replaceSessionEntrySync(scope, {
+                  ...entry,
                   sessionId: "successor",
                   updatedAt: 2,
-                  visibility: "read-only",
-                  createdActor: { type: "human", source: "profile", id: "other-creator" },
                 });
               }
             };
@@ -190,15 +169,13 @@ describe("cross-store voice creation authority", () => {
                   admit(request, grant);
                 }, attachment),
             );
-            await createTalkClient(handler);
+            await createTalkClient(admission.handler);
             expect(revoked).toBe(true);
-            if (timing === "after") {
-              expect(persistedId).toBe(voiceSessionId);
-              expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId)).toBeDefined();
-            } else {
-              expect(persistedId).toBeUndefined();
-              expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId)).toBeUndefined();
-            }
+            const committed = timing === "after";
+            expect(persistedId).toBe(committed ? voiceSessionId : undefined);
+            expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId) !== undefined).toBe(
+              committed,
+            );
             expect(respond.mock.lastCall?.[0]).toBe(false);
             expect(fixture.cancelBrowserSession).toHaveBeenCalledOnce();
             expect(() => authorization?.assertCurrent()).toThrow();

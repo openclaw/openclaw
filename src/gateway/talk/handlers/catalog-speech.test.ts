@@ -26,24 +26,24 @@ const capabilities = {
 const unexpectedSession = async () => {
   throw new Error("catalog must not create a session");
 };
-const speechProvider = (
-  isConfiguredAsync: NonNullable<SpeechProviderPlugin["isConfiguredAsync"]>,
-  id = "sample",
-): SpeechProviderPlugin => ({
+const providerFields = <T>(isConfiguredAsync: T, id = "sample") => ({
   id,
   label: id,
   isConfigured: () => false,
   isConfiguredAsync,
+});
+const speechProvider = (
+  isConfiguredAsync: NonNullable<SpeechProviderPlugin["isConfiguredAsync"]>,
+  id = "sample",
+): SpeechProviderPlugin => ({
+  ...providerFields(isConfiguredAsync, id),
   synthesize: unexpectedSession,
 });
 const realtimeProvider = (
   isConfiguredAsync: NonNullable<RealtimeVoiceProviderPlugin["isConfiguredAsync"]>,
   id = "sample",
 ): RealtimeVoiceProviderPlugin => ({
-  id,
-  label: id,
-  isConfigured: () => false,
-  isConfiguredAsync,
+  ...providerFields(isConfiguredAsync, id),
   capabilities,
   createBridge: () => {
     throw new Error("catalog must not create a session");
@@ -209,11 +209,9 @@ it("reuses selected transcription readiness and refreshes it on the next catalog
   const resolveConfig = vi.fn(({ rawConfig }) => rawConfig);
   registry.transcription = [
     {
-      id: "sample",
+      ...providerFields(readAvailability),
       label: "Sample transcription",
       resolveConfig,
-      isConfigured: () => false,
-      isConfiguredAsync: readAvailability,
       createSession: unexpectedSession,
     },
   ];
@@ -354,12 +352,7 @@ it.each(["speech", "realtime", "transcription"] as const)(
       throw new Error("synthetic provider unavailable");
     });
     for (const id of ["healthy", "broken"]) {
-      const provider = {
-        id,
-        label: id,
-        isConfigured: () => false,
-        isConfiguredAsync: id === "broken" ? brokenReadiness : async () => true,
-      };
+      const provider = providerFields(id === "broken" ? brokenReadiness : async () => true, id);
       if (kind === "speech") {
         registry.providers.push({
           ...provider,

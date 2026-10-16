@@ -29,7 +29,14 @@ import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import * as voiceWriters from "../../../talk/client-voice-session-write.js";
 import * as voiceSessions from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
+import { captureGatewayDeviceRevocation } from "../../device-revocation.js";
+import {
+  bindGatewayRequestHandlerMutationAuthority,
+  bindWebSocketRequestMutationAuthority,
+} from "../../server-methods/session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "../../server-methods/types.js";
+import { SharedGatewaySessionGenerationState } from "../../server-shared-auth-generation.js";
+import { resolveSessionMutationAuthorizationAsync } from "../../session-sharing-authorization-async.js";
 import * as sharingGrants from "../../session-sharing-worker-grant.js";
 import { rolePolicyConfig, sharingPolicyClient } from "../../session-sharing.test-utils.js";
 import {
@@ -38,7 +45,7 @@ import {
   type BrowserRequest,
 } from "./client-fixtures.test-support.js";
 
-type EnsureHarness = {
+export type EnsureHarness = {
   tempDir: () => string;
   ownVoice: (id: string | undefined, key: string) => void;
   configureProvider: (
@@ -50,29 +57,118 @@ type EnsureHarness = {
   ) => void;
 };
 
-export function createBrowserInvoker(invokeCreate: EnsureHarness["invokeCreate"]) {
-  return (
-    fixture: Pick<ReturnType<typeof createDelegatedBrowserProviderFixture>, "context" | "client">,
-    respond: GatewayRequestHandlerOptions["respond"],
-    params: Record<string, unknown>,
-  ) => {
-    return invokeCreate({
-      params,
-      respond,
-      context: fixture.context,
-      client: fixture.client,
-    } as never);
+export async function authorizeBrowserCreate(
+  options: GatewayRequestHandlerOptions,
+  retain = false,
+) {
+  const admission = await resolveSessionMutationAuthorizationAsync({
+    method: "talk.client.create",
+    requestParams: options.params,
+    context: options.context,
+    client: options.client,
+  });
+  const handler = { ...options, sessionMutationAuthorization: admission.authorization };
+  return {
+    ...admission,
+    handler:
+      retain && !admission.error
+        ? bindGatewayRequestHandlerMutationAuthority(options, handler, undefined)
+        : handler,
   };
 }
 
+export function browserAuthority(
+  context: object,
+  client: Parameters<typeof bindWebSocketRequestMutationAuthority>[1],
+) {
+  const lifetime = captureGatewayDeviceRevocation(context, {}, () => true);
+  const generation = new SharedGatewaySessionGenerationState({
+    current: undefined,
+    required: undefined,
+  });
+  return {
+    ...lifetime,
+    [Symbol.dispose]: lifetime.release,
+    bind(options: GatewayRequestHandlerOptions) {
+      options.hasCurrentClientAuthority = lifetime.isCurrent;
+      return bindWebSocketRequestMutationAuthority(options, client, generation.reader);
+    },
+  };
+}
+
+export function createBrowserHarness(
+  harness: Pick<EnsureHarness, "configureProvider" | "invokeCreate">,
+  params: Record<string, unknown>,
+  provider: (request: BrowserRequest) => Promise<typeof browserSession> = async () =>
+    browserSession,
+) {
+  const createBrowserSession = vi.fn(provider);
+  const fixture = harness.configureProvider(createBrowserSession);
+  const respond = vi.fn();
+  return {
+    ...fixture,
+    respond,
+    createBrowserSession,
+    get reply() {
+      return respond.mock.lastCall;
+    },
+    create: (
+      overrides: Record<string, unknown> = {},
+      options: Partial<GatewayRequestHandlerOptions> = {},
+    ) =>
+      harness.invokeCreate({
+        params: { ...params, ...overrides },
+        respond,
+        context: fixture.context,
+        client: fixture.client,
+        ...options,
+      } as never),
+  };
+}
+
+export function observeTargetSql(targetPath: string, pattern: RegExp, enabled = () => true) {
+  const targets = new Set([targetPath, readDatabasePathIdentitySync(targetPath).canonicalPath]);
+  const queries: string[] = [];
+  const observed = observeHostDataSql((sql, database) => {
+    if (database && targets.has(database.location() ?? "") && enabled() && pattern.test(sql)) {
+      queries.push(sql);
+    }
+  });
+  return { ...observed, allQueries: observed.queries, queries };
+}
+
 export function registerClientCreateEnsureTests(harness: EnsureHarness) {
-  const invokeBrowser = createBrowserInvoker(harness.invokeCreate);
+  const browser = (key: string, voiceSessionId?: string) =>
+    createBrowserHarness(harness, {
+      sessionKey: key,
+      provider: "openai",
+      ...(voiceSessionId ? { voiceSessionId } : {}),
+    });
+  const setStore = (fixture: ReturnType<typeof browser>, storePath: string) => {
+    const cfg = fixture.context.getRuntimeConfig();
+    fixture.context.getRuntimeConfig = () => ({ ...cfg, session: { store: storePath } });
+  };
+  const observeEnsuring = () => {
+    let active = false;
+    const ensure = voiceWriters.ensureClientVoiceAgentSessionEntry;
+    vi.spyOn(voiceWriters, "ensureClientVoiceAgentSessionEntry").mockImplementation(
+      async (...args) => {
+        active = true;
+        try {
+          return await ensure(...args);
+        } finally {
+          active = false;
+        }
+      },
+    );
+    return () => active;
+  };
   it.for(["missing", "idless"] as const)(
     "refuses a changed %s entry while its transaction authority is being prepared",
     async (kind, { signal }) => {
       const key = `agent:main:entry-authority-${kind}`;
       const scope = { agentId: "main", sessionKey: key };
-      const fixture = harness.configureProvider(async () => browserSession);
+      const fixture = browser(key, "changed-entry-voice");
       const profile = ensureProfileForEmail("voice-entry-owner@example.test");
       setUserProfileRole(profile.id, "write");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
@@ -99,19 +195,14 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
           }
           return grant;
         });
-      const respond = vi.fn();
-      const pending = invokeBrowser(fixture, respond, {
-        sessionKey: key,
-        provider: "openai",
-        voiceSessionId: "changed-entry-voice",
-      });
+      const pending = fixture.create();
       try {
         await withinTest(
           Promise.race([
             prepared.promise,
             pending.then(() => {
               throw new Error(
-                `Creation finished before its authority wait: ${respond.mock.lastCall?.[2]?.message ?? "no error response"}`,
+                `Creation finished before its authority wait: ${fixture.reply?.[2]?.message ?? "no error response"}`,
               );
             }),
           ]),
@@ -125,12 +216,14 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
         });
         resume.resolve();
         await pending;
-        if (respond.mock.lastCall?.[0]) {
-          harness.ownVoice(respond.mock.lastCall[1].voiceSessionId, key);
+        if (fixture.reply?.[0]) {
+          harness.ownVoice(fixture.reply[1].voiceSessionId, key);
         }
-        expect(respond.mock.lastCall?.[0]).toBe(false);
-        expect(loadSessionEntry(scope)?.sessionId).toBe("");
-        expect(loadSessionEntry(scope)?.createdActor?.id).toBe("another-profile");
+        expect(fixture.reply?.[0]).toBe(false);
+        expect(loadSessionEntry(scope)).toMatchObject({
+          sessionId: "",
+          createdActor: { id: "another-profile" },
+        });
         expect(clientVoiceSessionTesting.readRecord("main", "changed-entry-voice")).toBeUndefined();
         expect(fixture.cancelBrowserSession).toHaveBeenCalledOnce();
       } finally {
@@ -149,7 +242,7 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
     "preserves voice admission after a profile $change commit during entry $phase",
     async ({ change, phase }) => {
       const key = `agent:main:entry-profile-${change}-${phase}`;
-      const fixture = harness.configureProvider(async () => browserSession);
+      const fixture = browser(key, "profile-changed-voice");
       const profile = ensureProfileForEmail("voice-entry-profile@example.test");
       setUserProfileRole(profile.id, "write");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
@@ -189,26 +282,19 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
                   },
                 }),
               );
-      const respond = vi.fn();
       try {
-        await invokeBrowser(fixture, respond, {
-          sessionKey: key,
-          provider: "openai",
-          voiceSessionId: "profile-changed-voice",
-        });
-        expect(changed, respond.mock.lastCall?.[2]?.message).toBe(true);
+        await fixture.create();
+        expect(changed, fixture.reply?.[2]?.message).toBe(true);
         const entry = loadSessionEntry({ agentId: "main", sessionKey: key });
         if (phase === "preparation") {
           expect(entry).toBeUndefined();
         } else {
           expect(entry?.sessionId).toBeTruthy();
         }
-        if (respond.mock.lastCall?.[0]) {
-          harness.ownVoice(respond.mock.lastCall[1].voiceSessionId, key);
+        if (fixture.reply?.[0]) {
+          harness.ownVoice(fixture.reply[1].voiceSessionId, key);
         }
-        expect(respond.mock.lastCall?.[0], respond.mock.lastCall?.[2]?.message).toBe(
-          change === "display",
-        );
+        expect(fixture.reply?.[0], fixture.reply?.[2]?.message).toBe(change === "display");
         expect(clientVoiceSessionTesting.readRecord("main", "profile-changed-voice")?.status).toBe(
           change === "display" ? "open" : undefined,
         );
@@ -269,16 +355,12 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
         { sessionId: "", updatedAt: 1, ...creation },
       );
     }
-    const fixture = harness.configureProvider(async () => browserSession);
+    const fixture = browser(key);
     if (storePath) {
       if (!suffix) {
         expect(existsSync(storePath)).toBe(false);
       }
-      const cfg = fixture.context.getRuntimeConfig();
-      fixture.context.getRuntimeConfig = () => ({
-        ...cfg,
-        session: { store: storePath },
-      });
+      setStore(fixture, storePath);
     }
     let entryTransactions = 0;
     harness.observeAdmission((request, run) => {
@@ -293,33 +375,23 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
       : storePath
         ? resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath).path
         : resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    const targetPaths = new Set([entryPath, readDatabasePathIdentitySync(entryPath).canonicalPath]);
-    const targetSchemaSql: string[] = [];
-    const hostSql = observeHostDataSql((sql, database) => {
-      if (
-        database &&
-        targetPaths.has(database.location() ?? "") &&
-        /\b(?:create\s+(?:(?:unique|virtual)\s+)?(?:table|index|trigger|view)|alter\s+table|drop\s+(?:table|index|trigger|view)|quick_check|integrity_check)\b/i.test(
-          sql,
-        )
-      ) {
-        targetSchemaSql.push(sql);
-      }
-    });
-    const respond = vi.fn();
+    const hostSql = observeTargetSql(
+      entryPath,
+      /\b(?:create\s+(?:(?:unique|virtual)\s+)?(?:table|index|trigger|view)|alter\s+table|drop\s+(?:table|index|trigger|view)|quick_check|integrity_check)\b/i,
+    );
     try {
-      await invokeBrowser(fixture, respond, { sessionKey: key, provider: "openai" });
-      expect(respond.mock.lastCall?.[0], JSON.stringify(respond.mock.lastCall?.[2])).toBe(true);
-      const ownedVoiceSessionId = respond.mock.lastCall?.[1].voiceSessionId;
+      await fixture.create();
+      expect(fixture.reply?.[0], JSON.stringify(fixture.reply?.[2])).toBe(true);
+      const ownedVoiceSessionId = fixture.reply?.[1].voiceSessionId;
       harness.ownVoice(ownedVoiceSessionId, key);
       expect(
-        hostSql.queries.filter((sql) =>
+        hostSql.allQueries.filter((sql) =>
           /^\s*(?:insert(?:\s+or\s+\w+)?\s+into|update|delete\s+from)\s+"?session_nodes"?\b/i.test(
             sql,
           ),
         ),
       ).toEqual([]);
-      expect(targetSchemaSql).toEqual([]);
+      expect(hostSql.queries).toEqual([]);
       expect(entryTransactions).toBe(1);
       const entry = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
       expect(entry?.sessionId).toBeTruthy();
@@ -362,10 +434,9 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
       config: {},
     });
     expect(loadSessionEntry({ agentId: "main", sessionKey: key })).toBeUndefined();
-    const fixture = harness.configureProvider(async () => browserSession);
-    const respond = vi.fn();
-    await invokeBrowser(fixture, respond, { sessionKey: key, provider: "openai", voiceSessionId });
-    expect(respond).toHaveBeenLastCalledWith(
+    const fixture = browser(key, voiceSessionId);
+    await fixture.create();
+    expect(fixture.respond).toHaveBeenLastCalledWith(
       false,
       undefined,
       expect.objectContaining({ message: expect.stringContaining("already closed") }),
@@ -390,31 +461,17 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
       symlinkSync(original, alias, "junction");
       openOpenClawAgentDatabase({ agentId: "other", path: path.join(original, "custom.sqlite") });
       const storePath = path.join(alias, "custom.json");
-      const fixture = harness.configureProvider(async () => browserSession);
-      const config = fixture.context.getRuntimeConfig();
-      fixture.context.getRuntimeConfig = () => ({
-        ...config,
-        session: { store: storePath },
-      });
-      const ensure = voiceWriters.ensureClientVoiceAgentSessionEntry;
-      let ensuring = false;
+      const fixture = browser(key);
+      setStore(fixture, storePath);
+      const ensuring = observeEnsuring();
       let changed = false;
       let foreignPath: string | undefined;
-      vi.spyOn(voiceWriters, "ensureClientVoiceAgentSessionEntry").mockImplementation(
-        async (...args) => {
-          ensuring = true;
-          try {
-            return await ensure(...args);
-          } finally {
-            ensuring = false;
-          }
-        },
-      );
+
       const resolve = sqliteTarget.prepareSqliteTargetFromSessionStorePath;
       vi.spyOn(sqliteTarget, "prepareSqliteTargetFromSessionStorePath").mockImplementation(
         async (...args) => {
           const target = await resolve(...args);
-          if (ensuring && !changed) {
+          if (ensuring() && !changed) {
             changed = true;
             if (change === "file") {
               foreignPath = target.path;
@@ -427,10 +484,9 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
           return target;
         },
       );
-      const respond = vi.fn();
-      await invokeBrowser(fixture, respond, { sessionKey: key, provider: "openai" });
+      await fixture.create();
       expect(changed).toBe(true);
-      expect(respond.mock.lastCall?.[0]).toBe(false);
+      expect(fixture.reply?.[0]).toBe(false);
       expect(fixture.cancelBrowserSession).toHaveBeenCalledOnce();
       if (foreignPath) {
         expect(readFileSync(foreignPath, "utf8")).toBe("foreign file appeared after discovery");
@@ -445,48 +501,32 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
     async (revoked) => {
       const key = "agent:main:voice-sdk-cold-ensure";
       const storePath = path.join(harness.tempDir(), "sdk-cold-ensure.sqlite");
-      const fixture = harness.configureProvider(async () => browserSession);
-      const config = fixture.context.getRuntimeConfig();
-      fixture.context.getRuntimeConfig = () => ({
-        ...config,
-        session: { store: storePath },
-      });
-      const ensure = voiceWriters.ensureClientVoiceAgentSessionEntry;
-      let ensuring = false;
+      const fixture = browser(key);
+      setStore(fixture, storePath);
+      const ensuring = observeEnsuring();
       let checkedBeforeCreation = false;
-      vi.spyOn(voiceWriters, "ensureClientVoiceAgentSessionEntry").mockImplementation(
-        async (...args) => {
-          ensuring = true;
-          try {
-            return await ensure(...args);
-          } finally {
-            ensuring = false;
-          }
+
+      await fixture.create(
+        {},
+        {
+          sessionMutationCommitGuard: () => {
+            if (ensuring()) {
+              checkedBeforeCreation ||= !existsSync(storePath);
+              if (revoked) {
+                throw new Error("SDK cold ensure authority revoked");
+              }
+            }
+          },
         },
       );
-      const respond = vi.fn();
-      await harness.invokeCreate({
-        params: { sessionKey: key, provider: "openai" },
-        respond,
-        context: fixture.context,
-        client: fixture.client,
-        sessionMutationCommitGuard: () => {
-          if (ensuring) {
-            checkedBeforeCreation ||= !existsSync(storePath);
-            if (revoked) {
-              throw new Error("SDK cold ensure authority revoked");
-            }
-          }
-        },
-      } as never);
       expect(checkedBeforeCreation).toBe(true);
-      expect(respond.mock.lastCall?.[0], respond.mock.lastCall?.[2]?.message).toBe(!revoked);
+      expect(fixture.reply?.[0], fixture.reply?.[2]?.message).toBe(!revoked);
       if (revoked) {
-        expect(respond.mock.lastCall?.[2]?.message).toContain("SDK cold ensure authority revoked");
+        expect(fixture.reply?.[2]?.message).toContain("SDK cold ensure authority revoked");
         expect(existsSync(storePath)).toBe(false);
         expect(fixture.cancelBrowserSession).toHaveBeenCalledOnce();
       } else {
-        harness.ownVoice(respond.mock.lastCall?.[1].voiceSessionId, key);
+        harness.ownVoice(fixture.reply?.[1].voiceSessionId, key);
         expect(
           loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.sessionId,
         ).toBeTruthy();
