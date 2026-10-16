@@ -79,7 +79,7 @@ function stopAtAttach(pane: TestChatPane) {
     throw error;
   });
   return () => {
-    expect(() => getPaneTestRuntime(pane).connectedCallback()).toThrow(error);
+    expect(() => getPaneTestRuntime(pane).start()).toThrow(error);
     return attach.mock.calls[0]?.[0];
   };
 }

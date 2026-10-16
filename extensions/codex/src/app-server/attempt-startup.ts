@@ -116,6 +116,8 @@ export async function startCodexAttemptThread(params: {
   sandboxExecServerEnabled: boolean;
   sandbox: CodexSandboxContext;
   contextEngineProjection: CodexContextEngineThreadBootstrapProjection | undefined;
+  historyBootstrapItems?: Parameters<typeof startOrResumeThread>[0]["historyBootstrapItems"];
+  historyDeltaItems?: Parameters<typeof startOrResumeThread>[0]["historyDeltaItems"];
   startupTimeoutMs: number;
   signal: AbortSignal;
   onStartupTimeout: () => void | Promise<void>;
@@ -470,6 +472,8 @@ export async function startCodexAttemptThread(params: {
                 environmentSelection: startupEnvironmentSelection,
                 appServerRuntimeFingerprint,
                 contextEngineProjection: params.contextEngineProjection,
+                historyBootstrapItems: params.historyBootstrapItems,
+                historyDeltaItems: params.historyDeltaItems,
                 signal,
                 pluginThreadConfig: createPluginThreadConfig?.({
                   requestTimeoutMs: params.appServer.requestTimeoutMs,

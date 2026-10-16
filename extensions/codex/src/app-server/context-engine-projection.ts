@@ -52,7 +52,7 @@ const MIN_PROMPT_BUDGET_TOKENS = 8_000;
 const CODEX_CONTEXT_SENDER_FIELD_MAX_CHARS = 256;
 
 // Match compaction attribution: stable IDs establish identity; display labels do not.
-function formatCodexContextSenderSuffix(message: AgentMessage): string {
+export function formatCodexContextSenderSuffix(message: AgentMessage): string {
   if (message.role !== "user") {
     return "";
   }
@@ -461,7 +461,7 @@ type MessageRenderOptions = {
   mediaPrepared?: boolean;
 };
 
-function renderMessageBody(message: AgentMessage, options: MessageRenderOptions): string {
+export function renderMessageBody(message: AgentMessage, options: MessageRenderOptions): string {
   // Canonical summaries carry `summary`, not `content`; keep them in the quoted history.
   if (message.role === "compactionSummary" || message.role === "branchSummary") {
     return message.summary.trim();

@@ -6,6 +6,7 @@ import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderCatalogOutcome } from "./provider-catalog-outcome.js";
+import type { ProviderBuildUnknownModelHintContext } from "./provider-transport.types.js";
 
 export type { ProviderCatalogOutcome } from "./provider-catalog-outcome.js";
 
@@ -92,15 +93,7 @@ export type UnifiedModelCatalogProviderPlugin = {
  * @deprecated Use manifest `modelCatalog.suppressions`. Runtime suppression
  * hooks are no longer called by model resolution.
  */
-export type ProviderBuiltInModelSuppressionContext = {
-  config?: OpenClawConfig;
-  agentDir?: string;
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-  provider: string;
-  modelId: string;
-  baseUrl?: string;
-};
+export type ProviderBuiltInModelSuppressionContext = ProviderBuildUnknownModelHintContext;
 
 export type ProviderBuiltInModelSuppressionResult = {
   suppress: boolean;

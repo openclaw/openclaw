@@ -1,5 +1,6 @@
 import type { MockInstance } from "vitest";
 import type { AgentHarnessV2 } from "../../agents/harness/types.js";
+import { withEngineStoreAdmission } from "../../infra/database-engine/admission-scope.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import {
   createPluginStateKeyedStore,
@@ -57,13 +58,13 @@ export type NativeBindingClientTestApi = {
 
 export async function withNativeBindingFixture<T>(
   kind: "codex" | "agentsapi",
-  run: (fixture: Awaited<ReturnType<typeof createFixture>>) => Promise<T>,
+  run: (fixture: Awaited<ReturnType<typeof createNativeBindingFixture>>) => Promise<T>,
   mode: "worker" | "legacy" = "worker",
 ): Promise<T> {
   return withOpenClawTestState(
     { scenario: "minimal", label: "native-binding-settlement" },
     async (state) => {
-      const fixture = await createFixture(kind, mode, state.env);
+      const fixture = await createNativeBindingFixture(kind, mode, state.env);
       try {
         return await run(fixture);
       } finally {
@@ -74,26 +75,34 @@ export async function withNativeBindingFixture<T>(
   );
 }
 
-async function createFixture(
+export async function createNativeBindingFixture(
   kind: "codex" | "agentsapi",
   mode: "worker" | "legacy",
   env: NodeJS.ProcessEnv,
+  sessionId = "native-binding-session",
 ) {
-  const database = openOpenClawAgentDatabase({ agentId: "main", env });
-  const shared = openOpenClawStateDatabase({ env });
+  const database = withEngineStoreAdmission(() =>
+    openOpenClawAgentDatabase({ agentId: "main", env }),
+  );
+  const shared = withEngineStoreAdmission(() => openOpenClawStateDatabase({ env }));
   const scope = {
     agentId: "main",
-    sessionId: "native-binding-session",
-    sessionKey: "agent:main:native-binding",
+    sessionId,
+    sessionKey:
+      sessionId === "native-binding-session"
+        ? "agent:main:native-binding"
+        : `agent:main:${sessionId}`,
     storePath: database.path,
     env,
   };
-  replaceSessionEntrySync(scope, {
-    sessionId: scope.sessionId,
-    lifecycleRevision: "native-binding-generation",
-    updatedAt: 1,
-    agentHarnessId: kind,
-  });
+  withEngineStoreAdmission(() =>
+    replaceSessionEntrySync(scope, {
+      sessionId: scope.sessionId,
+      lifecycleRevision: "native-binding-generation",
+      updatedAt: 1,
+      agentHarnessId: kind,
+    }),
+  );
   const events = [
     {
       type: "session",
@@ -107,7 +116,7 @@ async function createFixture(
       message: { role: "user", content: "Retain this transcript", timestamp: 1 },
     },
   ];
-  replaceTranscriptEventsSync(scope, events);
+  withEngineStoreAdmission(() => replaceTranscriptEventsSync(scope, events));
   const runtime = createPluginRuntimeMock({
     state: {
       openSyncKeyedStore: <Value>(options: Parameters<typeof createPluginStateSyncKeyedStore>[1]) =>
@@ -126,7 +135,7 @@ async function createFixture(
       pluginId: kind,
       artifactBasename: "native-session-binding.test-api.js",
     });
-  const native = createNativeBindingDeletionFixture(runtime, scope);
+  const native = withEngineStoreAdmission(() => createNativeBindingDeletionFixture(runtime, scope));
   const registry = createEmptyPluginRegistry();
   registry.plugins.push(createPluginRecord({ id: kind }));
   registry.agentHarnesses.push({ pluginId: kind, source: "runtime", harness: native.harness });
@@ -156,8 +165,9 @@ async function createFixture(
     harness: native.harness,
     bindingKey: native.key,
     bindingStore: native.store,
-    readEntry: () => readExactSessionEntryRow(database, scope.sessionKey)?.entry,
-    readBinding: () => native.store.lookup(native.key),
+    readEntry: () =>
+      withEngineStoreAdmission(() => readExactSessionEntryRow(database, scope.sessionKey)?.entry),
+    readBinding: () => withEngineStoreAdmission(() => native.store.lookup(native.key)),
     cleanup: () =>
       withPluginRuntimeRegistryScope(registry, () =>
         cleanupSessionLifecycleArtifactsCore({

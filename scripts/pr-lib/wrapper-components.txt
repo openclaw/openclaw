@@ -1834,6 +1834,7 @@ src/state/openclaw-agent-db-lease-provenance.ts
 src/state/openclaw-agent-db-lease.ts
 src/state/openclaw-agent-db-legacy-schema.ts
 src/state/openclaw-agent-db-lifecycle.ts
+src/state/openclaw-agent-db-maintenance-authority.ts
 src/state/openclaw-agent-db-metadata-write.ts
 src/state/openclaw-agent-db-metadata.ts
 src/state/openclaw-agent-db-migration-required.ts

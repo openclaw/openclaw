@@ -20,7 +20,6 @@ import {
 import { parseFeishuCommentTarget, type CommentFileType } from "./comment-target.js";
 import { FeishuDriveSchema, type FeishuDriveParams } from "./drive-schema.js";
 import { withFeishuMessageDispatch } from "./send-context.js";
-import { createFeishuToolClient } from "./tool-account.js";
 import { registerFeishuTool } from "./tool-registration.js";
 import { feishuExternalToolResult as jsonResult, unknownToolActionResult } from "./tool-result.js";
 
@@ -482,15 +481,9 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
     description:
       "Feishu cloud storage operations. Actions: list, info, create_folder, move, delete, list_comments, list_comment_replies, add_comment, reply_comment",
     parameters: FeishuDriveSchema,
-    createExecute(ctx, cfg) {
-      const defaultAccountId = ctx.agentAccountId;
+    createExecute(ctx, _cfg, createClient) {
       return async (p) => {
-        const client = createFeishuToolClient({
-          cfg,
-          executeParams: p,
-          defaultAccountId,
-          requiredTool: { family: "drive", label: "Drive" },
-        });
+        const client = createClient(p, "Drive");
         switch (p.action) {
           case "list":
             return jsonResult(await listFolder(client, p));

@@ -460,6 +460,9 @@ const rootEntries = [
   // audit roots once accept-input, transcript, and delivery callers activate it.
   "src/config/sessions/session-actor-contract.ts!",
   "src/config/sessions/session-actor-durable.ts!",
+  // PR #174294 stages the local credential owner without activating production consumers.
+  // Remove this audit root when the client credential cutover wires those consumers.
+  "src/infra/client-credential-store.ts!",
   // Startup metadata renders source help through a generated child module's file-URL import.
   "src/cli/program/root-help.ts!",
   // Packaged postinstall imports this private compiled entry before stage activation.

@@ -202,6 +202,32 @@ describe("GitHub PR checks through the document loader", () => {
     expect(JSON.stringify(detail)).not.toContain("sensitive upstream");
   });
 
+  it("refreshes a cached failed checks section for the same head", async () => {
+    const input = target();
+    const failed = await loadGitHubDetail(
+      input,
+      undefined,
+      publicFetch(json({}, 503), statuses()),
+      false,
+      "checks",
+    );
+    expect(failed).toMatchObject({
+      revision: sha,
+      partial: true,
+      checks: { state: "unavailable", truncated: true },
+    });
+    const recoveredFetch = publicFetch(runs([run()]), statuses());
+    expect(await loadGitHubDetail(input, undefined, recoveredFetch, false, "checks")).toBe(failed);
+    expect(recoveredFetch).not.toHaveBeenCalled();
+    const recovered = await loadGitHubDetail(input, undefined, recoveredFetch, true, "checks");
+    expect(recovered).toMatchObject({
+      revision: sha,
+      partial: false,
+      checks: { state: "success", commit: sha, truncated: false, total: 1 },
+    });
+    expect(recoveredFetch).toHaveBeenCalledTimes(4);
+  });
+
   it("retains known pending checks above incomplete data", async () => {
     const state = "pending";
     const result = await loadGitHubDetail(
