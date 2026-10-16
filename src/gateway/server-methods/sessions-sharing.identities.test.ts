@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionMembersListEvidenceResultSchema } from "../../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
-import * as combinedStore from "../../config/sessions/combined-store-gateway.js";
+import * as combinedStore from "../../config/sessions/combined-store-gateway.native.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,

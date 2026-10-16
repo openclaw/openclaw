@@ -6,7 +6,7 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/config.js";
 import { encodeSessionArchiveContent } from "../../config/sessions/archive-compression.js";
-import { loadCombinedSessionStoreForGatewayCore } from "../../config/sessions/combined-store-gateway.js";
+import { loadCombinedSessionStoreForGatewayCore } from "../../config/sessions/combined-store-gateway.native.js";
 import {
   listSessionTranscriptInstances,
   loadSessionEntryReadOnly,

@@ -22,7 +22,7 @@ import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import * as configEnv from "../config-env-vars.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { loadCombinedSessionStoreForGatewayCoreAsync } from "./combined-store-gateway-read.js";
-import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.js";
+import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.native.js";
 import { upsertSessionEntryCore } from "./session-accessor.entry.js";
 import { replaceSessionEntrySync } from "./session-accessor.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";

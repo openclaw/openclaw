@@ -28,14 +28,6 @@ const mocks = vi.hoisted(() => ({
   loadBundledPluginPublicArtifactModuleSync: vi.fn(() => ({
     prewarmMemorySearchWorker: mocks.prewarmMemorySearchWorker,
   })),
-  loadCombinedSessionStoreForGatewayCore: vi.fn((_cfg: unknown, options: { agentId: string }) => {
-    mocks.events.push(`sessions.load.${options.agentId}`);
-    return {
-      durableStorePath: `/state/${options.agentId}.sqlite`,
-      storePath: `/state/${options.agentId}.sqlite`,
-      store: {},
-    };
-  }),
   listManagedPlugins: vi.fn(async () => {
     mocks.events.push("plugins");
     return { plugins: [] };
@@ -49,10 +41,6 @@ vi.mock("./worker-environments/local-workspace-prewarm.js", () => ({
 
 vi.mock("./server-history-prewarm.js", () => ({
   prewarmGatewaySessionHistory: mocks.prewarmGatewaySessionHistory,
-}));
-
-vi.mock("../config/sessions/combined-store-gateway.js", () => ({
-  loadCombinedSessionStoreForGatewayCore: mocks.loadCombinedSessionStoreForGatewayCore,
 }));
 
 vi.mock("../plugins/management-service.js", () => ({
@@ -101,7 +89,6 @@ beforeEach(() => {
   mocks.prewarmLocalWorkspaceTemplates.mockClear();
   mocks.prewarmGatewaySessionHistory.mockClear();
   mocks.prewarmContextWindowCacheAfterReady.mockClear();
-  mocks.loadCombinedSessionStoreForGatewayCore.mockClear();
   mocks.listManagedPlugins.mockClear();
   mocks.getMemoryCapabilityRegistration.mockReset();
   mocks.prewarmMemorySearchWorker.mockClear();
@@ -144,7 +131,6 @@ describe("scheduleGatewayHandlerPrewarm", () => {
         isCancelled: expect.any(Function),
       });
       expect(mocks.prewarmContextWindowCacheAfterReady).toHaveBeenCalledOnce();
-      expect(mocks.loadCombinedSessionStoreForGatewayCore).not.toHaveBeenCalled();
       expect(mocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledOnce();
       expect(mocks.prewarmMemorySearchWorker).toHaveBeenCalledOnce();
       const memoryCall = expectDefined(
