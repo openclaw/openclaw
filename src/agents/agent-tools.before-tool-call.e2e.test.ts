@@ -62,7 +62,6 @@ import {
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
 import {
   createSkillInstructionDeliveryCache,
   createSkillInstructionDeliveryMarkers,
@@ -70,6 +69,7 @@ import {
 } from "./agent-tools.read.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { createWriteTool } from "./sessions/index.js";
+import type { ReadToolDetails } from "./sessions/tools/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
@@ -143,8 +143,11 @@ function createStableNoProgressWriteResult() {
   };
 }
 
-function asAgentTool(tool: { name: string; execute: ReturnType<typeof vi.fn> }): AnyAgentTool {
-  return tool as unknown as AnyAgentTool;
+function asAgentTool<TDetails = unknown>(tool: {
+  name: string;
+  execute: ReturnType<typeof vi.fn>;
+}): AnyAgentTool<TDetails> {
+  return tool as unknown as AnyAgentTool<TDetails>;
 }
 
 afterEach(() => {
@@ -1781,7 +1784,7 @@ describe("before_tool_call loop detection behavior", () => {
   ) {
     return wrapToolWithBeforeToolCallHook(
       wrapReadToolWithSkillContent(
-        asAgentTool({ name: "read", execute }),
+        asAgentTool<ReadToolDetails>({ name: "read", execute }),
         [
           {
             filePath: pondLocator,
@@ -1852,11 +1855,12 @@ describe("before_tool_call loop detection behavior", () => {
   }) {
     return wrapToolWithBeforeToolCallHook(
       wrapReadToolWithSkillContent(
-        asAgentTool({ name: "read", execute: params.execute }),
-        (params.materialized.snapshot.resolvedSkills ?? []).map((skill) => ({
-          filePath: skill.filePath,
-          ...(skill.bundleFingerprint ? { bundleFingerprint: skill.bundleFingerprint } : {}),
-        })),
+        asAgentTool<ReadToolDetails>({ name: "read", execute: params.execute }),
+        (params.materialized.snapshot.resolvedSkills ?? []).map((skill) =>
+          skill.bundleFingerprint
+            ? { filePath: skill.filePath, bundleFingerprint: skill.bundleFingerprint }
+            : { filePath: skill.filePath },
+        ),
         {
           instructionDeliveryCache: params.delivery.cache,
           instructionDeliveryMarkers: params.delivery.markers,
@@ -1910,7 +1914,7 @@ describe("before_tool_call loop detection behavior", () => {
     const underlying = vi.fn().mockResolvedValue(asSkillUsageTextResult("# Changed on disk"));
     const tool = wrapToolWithBeforeToolCallHook(
       wrapReadToolWithSkillContent(
-        asAgentTool({ name: "read", execute: underlying }),
+        asAgentTool<ReadToolDetails>({ name: "read", execute: underlying }),
         [
           {
             filePath: pondLocator,
@@ -1978,7 +1982,9 @@ describe("before_tool_call loop detection behavior", () => {
         undefined,
       );
       expect(extractSkillReadText(firstRead)).toContain("complete instructions");
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       await withSkillUsageDiagnosticEvents(async (emitted, _private, flush) => {
         // The already-served re-read short-circuits in the delivery cache: no
@@ -2040,7 +2046,9 @@ describe("before_tool_call loop detection behavior", () => {
       });
       await turnOne.execute("cross-turn-one-read", { path: entryB.filePath }, undefined, undefined);
       // Drain the pre-listener emission so it cannot leak into the captured window.
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       // The worker route releases the scoped materialization at turn end; the
       // next turn's support-file edit delivers a new revision through a real
@@ -2165,7 +2173,7 @@ describe("before_tool_call loop detection behavior", () => {
     const delivery = createSkillDeliveryState();
     const tool = wrapToolWithBeforeToolCallHook(
       wrapReadToolWithSkillContent(
-        asAgentTool({ name: "read", execute: vi.fn() }),
+        asAgentTool<ReadToolDetails>({ name: "read", execute: vi.fn() }),
         [{ filePath: nodeLocator, readContent: pondInstructions }],
         {
           instructionDeliveryCache: delivery.cache,
@@ -2218,7 +2226,7 @@ describe("before_tool_call loop detection behavior", () => {
     const execute = vi.fn().mockResolvedValue(asSkillUsageTextResult(pondInstructions));
     const tool = wrapToolWithBeforeToolCallHook(
       wrapReadToolWithSkillContent(
-        asAgentTool({ name: "read", execute }),
+        asAgentTool<ReadToolDetails>({ name: "read", execute }),
         [{ filePath: pondLocator, bundleFingerprint: "fp-generation-b" }],
         {
           instructionDeliveryCache: delivery.cache,
@@ -2404,7 +2412,7 @@ describe("before_tool_call loop detection behavior", () => {
     });
     const tool = wrapToolWithBeforeToolCallHook(
       wrapReadToolWithSkillContent(
-        asAgentTool({ name: "read", execute }),
+        asAgentTool<ReadToolDetails>({ name: "read", execute }),
         [{ filePath: pondLocator, bundleFingerprint: "fp-generation-b" }],
         {
           instructionDeliveryCache: delivery.cache,
@@ -2603,16 +2611,18 @@ describe("before_tool_call loop detection behavior", () => {
           // Snapshot entries carry their own stamps; the receipt comes from
           // the serving entry's lookup at the delivery boundary, so a
           // deliberately divergent snapshot stamp never substitutes for it.
-          resolvedSkills: skills.map((skill) => ({
-            ...createCanonicalFixtureSkill({
-              name: skill.name,
-              description: skill.description,
-              filePath: pondLocator,
-              baseDir: pondBaseDir,
-              source: "workspace",
-            }),
-            bundleFingerprint: "fp-preparation-stamp",
-          })),
+          resolvedSkills: skills.map((skill) =>
+            Object.assign(
+              createCanonicalFixtureSkill({
+                name: skill.name,
+                description: skill.description,
+                filePath: pondLocator,
+                baseDir: pondBaseDir,
+                source: "workspace",
+              }),
+              { bundleFingerprint: "fp-preparation-stamp" },
+            ),
+          ),
         },
       }),
     );

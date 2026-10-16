@@ -14,7 +14,7 @@ import type { Skill } from "../loading/skill-contract.js";
 import { recordSkillFileHost } from "../skill-file-host.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
-import type { SkillEligibilityContext, SkillSnapshot } from "../types.js";
+import type { SkillSnapshot } from "../types.js";
 import { readSkillResourceFiles } from "./resources.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "./session-snapshot.js";
 import { resolveSkillSnapshotExecutionFileHost } from "./skill-snapshot-provenance.js";
@@ -32,6 +32,8 @@ type SnapshotFixture = {
   skills: unknown[];
   resolvedSkills: unknown[];
   version?: number;
+  // The real projection stamps the current prompt format onto fresh builds.
+  promptFormatVersion?: number;
 };
 type SnapshotBuildOptions = NonNullable<
   Parameters<typeof import("../loading/workspace-skill-prompt.js").buildSkillSnapshot>[1]

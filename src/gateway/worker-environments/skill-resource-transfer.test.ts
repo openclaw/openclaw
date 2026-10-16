@@ -778,7 +778,9 @@ describe("remote-exec skill resources", () => {
             toolName: "skills_read",
             toolCallId: "transfer-skills-read",
           });
-          await new Promise<void>((resolve) => setImmediate(resolve));
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
         } finally {
           stop();
         }
@@ -991,7 +993,9 @@ describe("remote-exec skill resources", () => {
             toolCallId,
           });
         }
-        await new Promise<void>((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
       } finally {
         stop();
       }
@@ -1055,7 +1059,9 @@ describe("remote-exec skill resources", () => {
             toolCallId,
           });
         }
-        await new Promise<void>((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
       } finally {
         stopUnstamped();
       }

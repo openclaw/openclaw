@@ -19,7 +19,6 @@ import {
   stampDiscoveredSkillBundleIdentities,
 } from "../../skills/runtime/resources.js";
 import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
-import type { SkillSnapshot } from "../../skills/types.js";
 import { resolveSkillReadPath } from "../../skills/workspace-skill-read-path.js";
 import {
   findSkillUsageMatch,
@@ -31,6 +30,7 @@ import {
   wrapReadToolWithSkillContent,
 } from "../agent-tools.read.js";
 import { prepareInstalledSkillCatalog } from "../installed-skill-runtime.js";
+import type { ReadToolDetails } from "../sessions/tools/index.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 import { prepareEmbeddedSkills } from "./skill-runtime.js";
@@ -88,8 +88,8 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
     });
   }
 
-  function asAgentTool(tool: { name: string; execute: unknown }): AnyAgentTool {
-    return tool as unknown as AnyAgentTool;
+  function asAgentTool(tool: { name: string; execute: unknown }): AnyAgentTool<ReadToolDetails> {
+    return tool as unknown as AnyAgentTool<ReadToolDetails>;
   }
 
   function asTextResult(text: string) {
@@ -101,9 +101,8 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
 
   function pondWalks(baseDir: string): number {
     const pond = path.resolve(baseDir);
-    return readSkillBundleTreeSpy.mock.calls.filter(
-      (call) => path.resolve(String(call[0])) === pond,
-    ).length;
+    return readSkillBundleTreeSpy.mock.calls.filter((call) => path.resolve(call[0]) === pond)
+      .length;
   }
 
   function wrapLocalReadTool(
@@ -166,11 +165,13 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
     const stop = onInternalDiagnosticEvent((evt) => emitted.push(evt));
     try {
       recordSkillUsed({ match: match!, toolName: "read", toolCallId: params.toolCallId });
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
     } finally {
       stop();
     }
-    const [used] = emitted.filter((evt) => evt.type === "skill.used");
+    const used = emitted.find((evt) => evt.type === "skill.used");
     expect(used).toMatchObject({
       type: "skill.used",
       skillName: "pond",
@@ -195,9 +196,7 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
       // Discovery stamps the loaded bundle's identity once per loaded
       // version, cached per version: no bundle directory is walked twice
       // within one loaded version, and the pond bundle walked exactly once.
-      const walkedBundles = readSkillBundleTreeSpy.mock.calls.map((call) =>
-        path.resolve(String(call[0])),
-      );
+      const walkedBundles = readSkillBundleTreeSpy.mock.calls.map((call) => path.resolve(call[0]));
       expect(new Set(walkedBundles).size).toBe(walkedBundles.length);
       expect(pondWalks(baseDir)).toBe(1);
       const expected = prepareSkillBundle(
@@ -425,12 +424,6 @@ describe("prepareEmbeddedSkills bundle fingerprints", () => {
       }),
       contentHash: "skill-md-digest",
       bundleFingerprint: delivered,
-    };
-    const snapshot: SkillSnapshot = {
-      prompt: "",
-      skills: [{ name: "pond" }],
-      resolvedSkills: [skill],
-      discoverySkills: [skill],
     };
     readSkillBundleTreeSpy.mockClear();
     const stamped = await stampDiscoveredSkillBundleIdentities([skill]);

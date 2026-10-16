@@ -507,17 +507,6 @@ it("stamps a workspace entry through its owning reader when a library selection 
       throw new Error("missing workspace skill fixture");
     }
     recordSkillFileHost(workspaceSkill, "workspace");
-    const snapshot = {
-      ...f.snapshot,
-      librarySelections: [
-        {
-          skillId: "lib-guide",
-          revision: "rev-1",
-          name: workspaceSkill.name,
-          ownerProfileId: null,
-        },
-      ],
-    };
     f.skillResources.readSkillFiles.mockClear();
     registerActiveTracingBridge();
     const stamped = await stampDiscoveredSkillBundleIdentities([workspaceSkill], f.gateway);
@@ -666,7 +655,9 @@ it("walks discovered bundles concurrently and coalesces same-directory siblings"
     // an earlier bundle — and the same-directory sibling joins the guide
     // bundle's single walk instead of starting its own.
     for (let i = 0; i < 100 && gates.length < 3; i += 1) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
     }
     expect(gates.length).toBe(3);
     for (const release of gates) {
