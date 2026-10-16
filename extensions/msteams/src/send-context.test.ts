@@ -63,6 +63,13 @@ vi.mock("./sdk.js", () => ({
   createMSTeamsTokenProvider: sendContextMockState.createMSTeamsTokenProvider,
 }));
 
+const channelId = "19:channel@thread.tacv2";
+const destination = `conversation:${channelId}`;
+
+function resolveContext(params: Partial<Parameters<typeof resolveMSTeamsSendContext>[0]> = {}) {
+  return resolveMSTeamsSendContext({ cfg: createConfig(), to: destination, ...params });
+}
+
 function createConfig(overrides: MSTeamsConfig = {}): OpenClawConfig {
   return {
     channels: {
@@ -81,7 +88,7 @@ function channelRef(params?: Partial<StoredConversationReference>): StoredConver
   return {
     user: { id: "user-1" },
     agent: { id: "agent-1" },
-    conversation: { id: "19:channel@thread.tacv2", conversationType: "channel" },
+    conversation: { id: channelId, conversationType: "channel" },
     channelId: "msteams",
     teamId: "team-1",
     ...params,
@@ -104,23 +111,18 @@ async function resolveMSTeamsProactiveReplyTarget(params: {
     },
   });
   const cfg = createConfig({ appPassword: "placeholder", ...params.cfg });
-  const context = await resolveMSTeamsSendContext({
+  const context = await resolveContext({
     cfg,
     to: `conversation:${params.conversationId}`,
   });
-  return {
-    replyStyle: context.replyStyle,
-    threadActivityId: context.threadActivityId,
-  };
+  return { replyStyle: context.replyStyle, threadActivityId: context.threadActivityId };
 }
 
 beforeEach(() => {
   sendContextMockState.openConversationStore.mockClear();
-  sendContextMockState.store.upsert.mockReset();
-  sendContextMockState.store.get.mockReset();
-  sendContextMockState.store.list.mockReset();
-  sendContextMockState.store.remove.mockReset();
-  sendContextMockState.store.findPreferredDmByUserId.mockReset();
+  for (const mock of Object.values(sendContextMockState.store)) {
+    mock.mockReset();
+  }
   sendContextMockState.loadMSTeamsSdkWithAuth.mockClear();
   sendContextMockState.createMSTeamsTokenProvider.mockClear();
   sendContextMockState.createActivity.mockClear();
@@ -131,24 +133,23 @@ beforeEach(() => {
   vi.unstubAllEnvs();
 });
 
+function teamsConfig(msteams: MSTeamsConfig): OpenClawConfig {
+  return { channels: { msteams } };
+}
+
 describe("resolveMSTeamsSendContext", () => {
   it("rejects an unavailable selected certificate before reading conversation state", async () => {
     const certificatePath = "/private/openclaw-msteams-unavailable-send.pem";
-    const cfg = {
-      channels: {
-        msteams: {
-          enabled: true,
-          appId: "app-id",
-          tenantId: "tenant-id",
-          authType: "federated",
-          certificatePath,
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = teamsConfig({
+      enabled: true,
+      appId: "app-id",
+      tenantId: "tenant-id",
+      authType: "federated",
+      certificatePath,
+    });
 
-    const error = await resolveMSTeamsSendContext({
+    const error = await resolveContext({
       cfg,
-      to: "conversation:19:channel@thread.tacv2",
     }).catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(Error);
@@ -245,87 +246,72 @@ describe("resolveMSTeamsSendContext", () => {
 
   it("resolves Graph team/channel targets through the stored channel conversation", async () => {
     sendContextMockState.store.get.mockResolvedValue(
-      channelRef({
-        serviceUrl: "https://smba.trafficmanager.net/amer/",
-        threadId: "stored-root",
-      }),
+      channelRef({ serviceUrl: "https://smba.trafficmanager.net/amer/", threadId: "stored-root" }),
     );
 
     await expect(
-      resolveMSTeamsSendContext({
+      resolveContext({
         cfg: createConfig({ replyStyle: "top-level" }),
         to: "graph-team/19:channel@thread.tacv2;messageid=graph-root",
       }),
     ).resolves.toMatchObject({
-      conversationId: "19:channel@thread.tacv2",
+      conversationId: channelId,
       ref: { threadId: "graph-root" },
       replyStyle: "thread",
       threadActivityId: "graph-root",
     });
-    expect(sendContextMockState.store.get).toHaveBeenCalledWith("19:channel@thread.tacv2");
+    expect(sendContextMockState.store.get).toHaveBeenCalledWith(channelId);
   });
 
   it("removes stored conversation references with blocked serviceUrl hosts", async () => {
     sendContextMockState.store.get.mockResolvedValue(
-      channelRef({
-        serviceUrl: "https://attacker.example.com/teams/",
-      }),
+      channelRef({ serviceUrl: "https://attacker.example.com/teams/" }),
     );
     sendContextMockState.store.remove.mockResolvedValue(true);
 
     const cfg = createConfig();
 
     await expect(
-      resolveMSTeamsSendContext({
+      resolveContext({
         cfg,
-        to: "conversation:19:channel@thread.tacv2",
       }),
     ).rejects.toThrow(
       /Stored Microsoft Teams conversation reference has blocked serviceUrl host: attacker\.example\.com/,
     );
 
-    expect(sendContextMockState.store.remove).toHaveBeenCalledWith("19:channel@thread.tacv2");
+    expect(sendContextMockState.store.remove).toHaveBeenCalledWith(channelId);
   });
 
   it("uses named account credentials and scoped conversation references", async () => {
     sendContextMockState.store.get.mockResolvedValue(
-      channelRef({
-        serviceUrl: "https://smba.trafficmanager.net/amer/",
-      }),
+      channelRef({ serviceUrl: "https://smba.trafficmanager.net/amer/" }),
     );
 
-    const cfg = {
-      channels: {
-        msteams: {
+    const cfg = teamsConfig({
+      enabled: true,
+      tenantId: "tenant-id",
+      accounts: {
+        default: {
           enabled: true,
-          tenantId: "tenant-id",
-          accounts: {
-            default: {
-              enabled: true,
-              appId: "default-app-id",
-              appPassword: "default-app-password",
-            },
-            secondary: {
-              enabled: true,
-              appId: "secondary-app-id",
-              appPassword: "secondary-app-password",
-            },
-          },
+          appId: "default-app-id",
+          appPassword: "default-app-password",
+        },
+        secondary: {
+          enabled: true,
+          appId: "secondary-app-id",
+          appPassword: "secondary-app-password",
         },
       },
-    } as OpenClawConfig;
-
-    await expect(
-      resolveMSTeamsSendContext({
-        cfg,
-        accountId: "secondary",
-        to: "conversation:19:channel@thread.tacv2",
-      }),
-    ).resolves.toMatchObject({
-      conversationId: "19:channel@thread.tacv2",
     });
 
-    expect(sendContextMockState.store.get).toHaveBeenCalledWith("19:channel@thread.tacv2");
+    await expect(
+      resolveContext({
+        cfg,
+        accountId: "secondary",
+      }),
+    ).resolves.toMatchObject({ conversationId: channelId });
+
+    expect(sendContextMockState.store.get).toHaveBeenCalledWith(channelId);
     expect(sendContextMockState.openConversationStore).toHaveBeenCalledWith({
       accountId: "secondary",
     });
@@ -341,27 +327,22 @@ describe("resolveMSTeamsSendContext", () => {
   });
 
   it("rejects named sends when the Teams channel is disabled globally", async () => {
-    const cfg = {
-      channels: {
-        msteams: {
-          enabled: false,
-          tenantId: "tenant-id",
-          accounts: {
-            support: {
-              enabled: true,
-              appId: "support-app-id",
-              appPassword: "support-app-password",
-            },
-          },
+    const cfg = teamsConfig({
+      enabled: false,
+      tenantId: "tenant-id",
+      accounts: {
+        support: {
+          enabled: true,
+          appId: "support-app-id",
+          appPassword: "support-app-password",
         },
       },
-    } as OpenClawConfig;
+    });
 
     await expect(
-      resolveMSTeamsSendContext({
+      resolveContext({
         cfg,
         accountId: "support",
-        to: "conversation:19:channel@thread.tacv2",
       }),
     ).rejects.toThrow("msteams provider is not enabled");
     expect(sendContextMockState.store.get).not.toHaveBeenCalled();
@@ -417,7 +398,7 @@ describe("resolveMSTeamsProactiveReplyTarget", () => {
     await expect(
       resolveMSTeamsProactiveReplyTarget({
         cfg: {},
-        conversationId: "19:channel@thread.tacv2",
+        conversationId: channelId,
         ref: channelRef({ activityId: "legacy-root-1" }),
         conversationType: "channel",
       }),
@@ -430,7 +411,7 @@ describe("resolveMSTeamsProactiveReplyTarget", () => {
       teams: {
         "team-1": {
           channels: {
-            "19:channel@thread.tacv2": { replyStyle: "top-level" },
+            [channelId]: { replyStyle: "top-level" },
           },
         },
       },
@@ -439,7 +420,7 @@ describe("resolveMSTeamsProactiveReplyTarget", () => {
     await expect(
       resolveMSTeamsProactiveReplyTarget({
         cfg,
-        conversationId: "19:channel@thread.tacv2",
+        conversationId: channelId,
         ref: channelRef({ threadId: "thread-root-1" }),
         conversationType: "channel",
       }),
@@ -483,12 +464,11 @@ describe("stored serviceUrl cloud admission", () => {
   it("rejects a missing URL after SDK setup without creating a token provider or deleting the reference", async () => {
     sendContextMockState.store.get.mockResolvedValue(channelRef());
     await expect(
-      resolveMSTeamsSendContext({
+      resolveContext({
         cfg: createConfig({
           appPassword: "placeholder",
           serviceUrl: "https://smba.trafficmanager.net/teams",
         }),
-        to: "conversation:19:channel@thread.tacv2",
       }),
     ).rejects.toThrow(
       new Error(

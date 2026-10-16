@@ -35,27 +35,31 @@ beforeAll(loadParentContextModule);
 const UNPAIRED_SURROGATE_RE =
   /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
+function message(
+  content: string,
+  from?: GraphThreadMessage["from"],
+  contentType: "text" | "html" = "text",
+): GraphThreadMessage {
+  return { id: "p1", from, body: { content, contentType } };
+}
+
 describe("summarizeParentMessage", () => {
-  it("returns undefined for missing message", () => {
-    expect(summarizeParentMessage(undefined)).toBeUndefined();
-  });
-
-  it("returns undefined when body is blank", () => {
-    const msg: GraphThreadMessage = {
-      id: "p1",
-      from: { user: { displayName: "Alice" } },
-      body: { content: "   ", contentType: "text" },
-    };
-    expect(summarizeParentMessage(msg)).toBeUndefined();
-  });
-
-  it("strips HTML for html contentType", () => {
-    const msg: GraphThreadMessage = {
-      id: "p1",
-      from: { user: { displayName: "Bob" } },
-      body: { content: "<p>Hi <b>there</b></p>", contentType: "html" },
-    };
-    expect(summarizeParentMessage(msg)).toEqual({ sender: "Bob", text: "Hi there" });
+  it.each([
+    ["missing message", undefined, undefined],
+    ["blank body", message("   ", { user: { displayName: "Alice" } }), undefined],
+    [
+      "HTML",
+      message("<p>Hi <b>there</b></p>", { user: { displayName: "Bob" } }, "html"),
+      { sender: "Bob", text: "Hi there" },
+    ],
+    [
+      "application sender",
+      message("heads up", { application: { displayName: "BotApp" } }),
+      { sender: "BotApp", text: "heads up" },
+    ],
+    ["missing sender", message("orphan"), { sender: "unknown", text: "orphan" }],
+  ] as const)("summarizes %s", (_label, input, expected) => {
+    expect(summarizeParentMessage(input)).toEqual(expected);
   });
 
   it("collapses whitespace in text contentType", () => {
@@ -70,31 +74,10 @@ describe("summarizeParentMessage", () => {
     });
   });
 
-  it("falls back to application displayName", () => {
-    const msg: GraphThreadMessage = {
-      id: "p1",
-      from: { application: { displayName: "BotApp" } },
-      body: { content: "heads up", contentType: "text" },
-    };
-    expect(summarizeParentMessage(msg)).toEqual({ sender: "BotApp", text: "heads up" });
-  });
-
-  it("falls back to unknown when sender is missing", () => {
-    const msg: GraphThreadMessage = {
-      id: "p1",
-      body: { content: "orphan", contentType: "text" },
-    };
-    expect(summarizeParentMessage(msg)).toEqual({ sender: "unknown", text: "orphan" });
-  });
-
   it("keeps truncated parent text well-formed when truncating surrogate pairs", () => {
-    const msg: GraphThreadMessage = {
-      id: "p1",
-      from: { user: { displayName: "Dana" } },
-      body: { content: `${"a".repeat(398)}🦞${"b".repeat(50)}`, contentType: "text" },
-    };
-
-    const summary = summarizeParentMessage(msg);
+    const summary = summarizeParentMessage(
+      message(`${"a".repeat(398)}🦞${"b".repeat(50)}`, { user: { displayName: "Dana" } }),
+    );
 
     expect(summary?.text).not.toMatch(UNPAIRED_SURROGATE_RE);
     expect(summary?.text).toBe(`${"a".repeat(398)}…`);
@@ -110,10 +93,7 @@ describe("fetchParentMessageCached", () => {
   });
 
   it("fetches a parent once and returns the cached value on repeat calls", async () => {
-    const mockMsg: GraphThreadMessage = {
-      id: "p1",
-      body: { content: "hi", contentType: "text" },
-    };
+    const mockMsg = message("hi");
     const fetcher = fetchChannelMessage.mockImplementation(async () => mockMsg);
 
     const first = await fetchParentMessageCached("tok", "g1", "c1", "p1");
@@ -155,10 +135,7 @@ describe("fetchParentMessageCached", () => {
 
   it("re-fetches after TTL expires", async () => {
     vi.useFakeTimers();
-    const fetcher = fetchChannelMessage.mockImplementation(async () => ({
-      id: "p1",
-      body: { content: "hi", contentType: "text" },
-    }));
+    const fetcher = fetchChannelMessage.mockResolvedValue(message("hi"));
 
     await fetchParentMessageCached("tok", "g1", "c1", "p1");
     // 5 min TTL: advance just beyond.
