@@ -31,7 +31,7 @@ import {
 import { renderSessionSection as SessionSection } from "./app-sidebar-session-section-render.tsx";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { SIDEBAR_SESSION_PAGE_SIZE } from "./app-sidebar-session-types.ts";
-import { areSessionCatalogsSettled } from "./session-data-controller-catalog.ts";
+import { areSessionCatalogsSettled } from "./session-data-catalog.ts";
 
 registerEnglishCatalog(registerSessionOrganizationEnglish);
 type SessionCatalogRenderSnapshot = {

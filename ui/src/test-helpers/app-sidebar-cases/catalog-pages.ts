@@ -115,7 +115,7 @@ describe("AppSidebar session catalog pagination", () => {
       expect(sidebar.sessionData.loadingMoreSessionCatalogIds.has("codex")).toBe(true);
 
       gateway.publish({ phase: "reconnecting", hello: null });
-      sidebar.sessionData.hostUpdate();
+      sidebar.sessionData.synchronize();
       expect(sidebar.sessionData.loadingMoreSessionCatalogIds.has("codex")).toBe(false);
       await sidebar.updateComplete;
       expect(sidebar.sessionData.sessionCatalogPageDepths.size).toBe(1);

@@ -85,7 +85,7 @@ import {
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import type { SessionAttention } from "./session-attention.ts";
-import { SessionDataController } from "./session-data-controller.ts";
+import { SessionDataOwner } from "./session-data.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
 import { SessionOwnerFilter } from "./session-owner-filter.ts";
 import { SidebarEmptyGroupsPreference } from "./sidebar-empty-groups.ts";
@@ -156,7 +156,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     () => this.context?.gateway,
     () => this.requestUpdate(),
   );
-  readonly sessionData = new SessionDataController(this);
+  readonly sessionData = new SessionDataOwner(this, () => this.requestUpdate());
 
   samePresence(previous: PresencePayload | undefined, next: PresencePayload | undefined): boolean {
     return this.sessionProjection.samePresence(previous, next, sidebarPresenceScope(this));
