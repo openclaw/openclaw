@@ -19,6 +19,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { encodeArchiveContent } from "./state-migrations.transcript-directives-archives.js";
 import { migrateHistoricalTranscriptDirectives } from "./state-migrations.transcript-directives.js";
 import {
@@ -204,7 +205,6 @@ describe("historical transcript masked provider repair", () => {
       const result = await migrateHistoricalTranscriptDirectives({ env });
 
       expect(result.changes).toEqual([
-        expect.stringMatching(/^Saved pre-repair SQLite backup: /u),
         `Restored masked provider on 3 historical transcript row(s) in ${databasePath} from recorded session runtime facts.`,
         `Repaired historical transcripts in ${databasePath}: 1 active session(s), 1 archived transcript(s).`,
       ]);
@@ -228,6 +228,37 @@ describe("historical transcript masked provider repair", () => {
       const restoredArchive = `${JSON.stringify(archived).replace(MASKED, '"provider":"github-copilot"')}\n${JSON.stringify(archivedUser)}\n`;
       expect(readSessionArchiveContentSync(archivePath)).toBe(restoredArchive);
       expect(readMigrationCursor(databasePath)).toEqual({ phase: "complete", version: 2 });
+      const migrated = openNodeSqliteDatabase(databasePath, { readOnly: true });
+      try {
+        // Provider restores record their rows instead of a full database backup.
+        expect(
+          JSON.parse(
+            (
+              migrated
+                .prepare("SELECT app_version FROM schema_meta WHERE meta_key = ?")
+                .get("historical-transcript-masked-provider-restored-v1") as { app_version: string }
+            ).app_version,
+          ),
+        ).toEqual({
+          archiveLines: ["archived-session:archive-gen:1"],
+          transcriptRows: { "multi-session": [0, 2] },
+        });
+        // The session index holds no provider, so it stays current without a rebuild.
+        expect(
+          migrated
+            .prepare(
+              "SELECT needs_rebuild, indexed_seq FROM session_transcript_index_state WHERE session_id = ?",
+            )
+            .get("multi-session"),
+        ).toEqual({ needs_rebuild: 0, indexed_seq: 3 });
+      } finally {
+        migrated.close();
+      }
+      expect(
+        fs
+          .readdirSync(path.dirname(databasePath))
+          .filter((name) => name.startsWith("openclaw-transcript-directives-recovery-")),
+      ).toEqual([]);
 
       const archiveAfterFirstRun = fs.readFileSync(archivePath);
       const generationAfterFirstRun = readGeneration(databasePath, "multi-session");

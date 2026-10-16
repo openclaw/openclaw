@@ -62,6 +62,8 @@ export type HistoricalTranscriptRepairScope = "all" | "masked-provider";
 export type HistoricalTranscriptLineResult = {
   changed: boolean;
   content: string;
+  // Directive edits change searchable text and are not reversible from a recorded row list.
+  directivesChanged: boolean;
   maskedProvider?: "restored" | "unresolved";
 };
 
@@ -75,10 +77,12 @@ export function repairHistoricalTranscriptEventJson(params: {
 }): HistoricalTranscriptLineResult {
   const providerCandidate = params.raw.includes(MASKED_PROVIDER_JSON);
   if (params.scope === "masked-provider" && !providerCandidate) {
-    return { changed: false, content: params.raw };
+    return { changed: false, content: params.raw, directivesChanged: false };
   }
   const event = parseDirectiveMigrationTranscriptEvent(params.raw, params.owner);
-  let changed = params.scope === "all" && transformHistoricalTranscriptEvent(event).changed;
+  const directivesChanged =
+    params.scope === "all" && transformHistoricalTranscriptEvent(event).changed;
+  let changed = directivesChanged;
   let maskedProvider: HistoricalTranscriptLineResult["maskedProvider"];
   if (
     providerCandidate &&
@@ -100,5 +104,10 @@ export function repairHistoricalTranscriptEventJson(params: {
       maskedProvider = "unresolved";
     }
   }
-  return { changed, content: changed ? JSON.stringify(event) : params.raw, maskedProvider };
+  return {
+    changed,
+    content: changed ? JSON.stringify(event) : params.raw,
+    directivesChanged,
+    maskedProvider,
+  };
 }
