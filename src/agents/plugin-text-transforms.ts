@@ -5,8 +5,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
  * Provider and CLI plugins can rewrite prompt/event text without owning the transport implementation.
  */
 import type { AssistantMessage, AssistantMessageEvent } from "../llm/types.js";
+import { mapAssistantMessageStream } from "../llm/utils/stream-wrapper.js";
 import type { PluginTextReplacement, PluginTextTransforms } from "../plugins/cli-backend.types.js";
-import { mapAssistantMessageStream } from "./embedded-agent-runner/run/stream-wrapper.js";
 import type { StreamFn } from "./runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "./stream-compat.js";
 import { createStreamIteratorWrapper } from "./stream-iterator-wrapper.js";
