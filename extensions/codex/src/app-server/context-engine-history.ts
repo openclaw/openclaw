@@ -403,3 +403,41 @@ export async function injectCodexHistoryDelta(
   throwIfAborted();
   assert();
 }
+
+/** A provisional thread must acknowledge its full selection before the binding can commit. */
+export async function seedCodexHistory(
+  params: CodexStartOrResumeThreadParams,
+  options: {
+    response: { thread: { id: string }; model?: string | null; modelProvider?: string | null };
+    expectedModel: string | null | undefined;
+    expectedProvider: string | null | undefined;
+    lifecycleTiming: CodexThreadRequestContext["lifecycleTiming"];
+    assertCurrent: () => void;
+  },
+): Promise<void> {
+  const items = params.historyBootstrapItems;
+  if (items === undefined) {
+    return;
+  }
+  const { response, expectedModel, expectedProvider, lifecycleTiming, assertCurrent } = options;
+  assertCurrent();
+  if (
+    !response.model ||
+    response.model !== expectedModel ||
+    (expectedProvider && response.modelProvider !== expectedProvider)
+  ) {
+    throw new Error(
+      "Codex selected a different model than the assembled context policy; retry with that model's configured budget.",
+    );
+  }
+  if (items.length) {
+    await lifecycleTiming.measure("thread-start-seed-history", () =>
+      params.client.request(
+        "thread/inject_items",
+        { threadId: response.thread.id, items },
+        { signal: params.signal, assertCurrent, withCurrent: params.authority?.withCurrent },
+      ),
+    );
+  }
+  assertCurrent();
+}
