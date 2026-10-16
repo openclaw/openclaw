@@ -1,4 +1,12 @@
-import { createEffect, createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  onCleanup,
+  onSettled,
+  Show,
+  untrack,
+} from "solid-js";
 import {
   availableLinkReaders,
   availableLinkPreviewReaders,
@@ -128,7 +136,8 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
           a.target?.agentId === b.target?.agentId,
       },
     );
-    const progress = projectProgressCard(runtime.readProgressCardScope());
+    // Seed the watch from the same memo identity its first effect will publish.
+    const progress = projectProgressCard(untrack(progressScope));
     const cacheProgress = () => {
       const { target, store, options } = runtime.readProgressCardScope();
       if (target && options.admitAutomaticRead()) {
