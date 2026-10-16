@@ -40,7 +40,7 @@ export function textContent(text: string) {
   return [{ type: "text", text }];
 }
 
-export function chatMessage<T extends object>(role: string, text: string, extra?: T) {
+export function chatMessage(role: string, text: string, extra?: Record<string, unknown>) {
   return { role, content: textContent(text), ...extra };
 }
 

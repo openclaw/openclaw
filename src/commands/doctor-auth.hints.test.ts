@@ -16,6 +16,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const mocks = vi.hoisted(() => ({ ensureAuthProfileStore: vi.fn(), note: vi.fn() }));
 
+// mock-isolation: capture Doctor notes without writing terminal output.
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
 
 vi.mock("../agents/auth-profiles.js", async (importOriginal) => ({

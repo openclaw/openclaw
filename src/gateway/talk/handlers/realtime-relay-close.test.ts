@@ -49,7 +49,7 @@ afterEach(async () => {
   }
   await Promise.allSettled(
     [...drainingRelaySessions].map(
-      (session) => session.closing?.completion ?? session.voiceSessionClose,
+      (session) => session.closing?.completion ?? session.voiceSessionClose ?? Promise.resolve(),
     ),
   );
   vi.restoreAllMocks();

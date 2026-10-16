@@ -282,7 +282,7 @@ it("skips writer admission when the archive budget target is already satisfied",
 }) => {
   const fixture = await publishedArchive();
   const { entered, release } = gate();
-  own(
+  void own(
     runExclusiveSqliteSessionWrite(
       fixture.options,
       async () => {

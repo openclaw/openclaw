@@ -1,51 +1,54 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createUpdateCommandExecutionGuards as executionGuards } from "../cli/update-cli/update-command-execution-guards.js";
+import { createUpdateCommandExecutionGuards } from "../cli/update-cli/update-command-execution-guards.js";
 import * as existingWrites from "../state/openclaw-state-db-existing-write.js";
-import { closeOpenClawStateDatabaseAsync as closeState } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath as databasePath } from "../state/openclaw-state-db.paths.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { isPostgresSqlConnection } from "./sql-connection.js";
 import { readSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
-import { captureUpdateRunRedactionFacts as redactionFacts } from "./update-run-codec.js";
-import { persistInterruptedUpdateObservation as persistInterruption } from "./update-run-interruption-store.js";
+import { captureUpdateRunRedactionFacts } from "./update-run-codec.js";
+import { persistInterruptedUpdateObservation } from "./update-run-interruption-store.js";
 import {
-  createUpdateRun as createRun,
-  finishUpdateRun as finishRun,
-  getUpdateRun as getRun,
-  recordUpdateRunStep as recordStep,
-  recordUpdateRunVerification as recordVerification,
+  createUpdateRun,
+  finishUpdateRun,
+  getUpdateRun,
+  recordUpdateRunStep,
+  recordUpdateRunVerification,
 } from "./update-run-ledger.js";
 import type { UpdateRunWriteCommand } from "./update-run-mutation.types.js";
 import {
   openUpdateRunWriter,
-  recordUpdateRunMutationInWorker as recordMutation,
+  recordUpdateRunMutationInWorker,
 } from "./update-run-mutation.worker.js";
-import { reconcileUpdateRunCandidatesInWorker as reconcileCandidates } from "./update-run-reconciliation.worker.js";
+import { reconcileUpdateRunCandidatesInWorker } from "./update-run-reconciliation.worker.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterAll);
 let options: { env: { HOME: string; OPENCLAW_STATE_DIR: string } };
 let runId: string;
 let writer: ReturnType<typeof openUpdateRunWriter>;
-type Admission = (stage: "transaction" | "commit") => void;
-type StepCommand = Extract<UpdateRunWriteCommand, { type: "updateRuns.recordStep" }>;
 
-beforeAll(() => {
+beforeAll(async () => {
   const home = dirs.make("update-run-contention-");
   options = { env: { HOME: home, OPENCLAW_STATE_DIR: home } };
+  createUpdateRun(
+    { trigger: "cli", settlement: { reason: "fixture", detail: "fixture" } },
+    options,
+  );
+  await closeOpenClawStateDatabaseAsync();
 });
 
 beforeEach(async () => {
-  runId = createRun({ trigger: "cli" }, options).runId;
-  await closeState();
+  runId = createUpdateRun({ trigger: "cli" }, options).runId;
+  await closeOpenClawStateDatabaseAsync();
   writer = openUpdateRunWriter(options);
 });
 
 afterEach(async () => {
   vi.restoreAllMocks();
   writer.close();
-  await closeState();
+  await closeOpenClawStateDatabaseAsync();
 });
 
 function busyError() {
@@ -56,104 +59,134 @@ function busyError() {
   });
 }
 
-function mutate(command: UpdateRunWriteCommand = retentionCommand(), admit: Admission = vi.fn()) {
-  return recordMutation(command, options, admit, () => writer);
-}
-
-const throwError = (error: Error) => () => {
-  throw error;
-};
-function failRun(error = busyError()) {
-  return vi.spyOn(writer, "run").mockImplementationOnce(throwError(error));
-}
-
-function stepCommand(step: StepCommand["input"]["step"]): StepCommand {
-  return {
-    type: "updateRuns.recordStep",
-    input: { runId, redactionFacts: redactionFacts(options.env), step },
-  };
-}
-
-function failNextWrite() {
-  return vi
-    .spyOn(existingWrites, "runExistingOpenClawStateWriteTransaction")
-    .mockImplementationOnce(throwError(busyError()));
-}
-
-const retainedStep = { step: "updater-runtime-retention", status: "completed" } as const;
-function retentionCommand(handedOff = true): StepCommand {
-  const guards = executionGuards({ run: { runId, env: options.env } }, options.env.HOME);
+function retentionCommand(
+  handedOff = true,
+): Extract<UpdateRunWriteCommand, { type: "updateRuns.recordStep" }> {
+  const guards = createUpdateCommandExecutionGuards(
+    { run: { runId, env: options.env } },
+    options.env.HOME,
+  );
   if (handedOff) {
     guards.onStateHandoff();
   }
-  const { requireNoRecovery, busyTimeoutMs } = guards.captureWriteOptions();
-  const command = stepCommand({ ...retainedStep });
-  Object.assign(command.input, { requireNoRecovery, busyTimeoutMs });
-  return command;
+  const captured = guards.captureWriteOptions();
+  return {
+    type: "updateRuns.recordStep",
+    input: {
+      runId,
+      redactionFacts: captureUpdateRunRedactionFacts(options.env),
+      requireNoRecovery: captured.requireNoRecovery,
+      busyTimeoutMs: captured.busyTimeoutMs,
+      step: { step: "updater-runtime-retention", status: "completed" },
+    },
+  };
 }
 
-it.each(["bookkeeping", "verification"] as const)("uses the %s contention policy", (kind) => {
-  const write = failNextWrite();
-  const required = kind === "verification";
-  if (required) {
-    expect(() => recordVerification(runId, { booted: true }, options)).toThrow(
-      "database is locked",
-    );
-    expect(getRun(runId, options)?.verification.booted).toBeUndefined();
-  } else {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    expect(recordStep(runId, retainedStep, { ...options, busyTimeoutMs: 120_000 })).toBeUndefined();
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("The update will continue"),
-    );
-    expect(getRun(runId, options)?.steps).toHaveLength(1);
-    expect(finishRun(runId, { status: "succeeded" }, options).status).toBe("succeeded");
-  }
-  const budget = expect.objectContaining({ busyTimeoutMs: required ? undefined : 1_000 });
-  expect(write).toHaveBeenCalledWith(expect.any(Function), required ? options : budget, budget);
+it("warns on contended bookkeeping and still records the required outcome", () => {
+  const write = vi
+    .spyOn(existingWrites, "runExistingOpenClawStateWriteTransaction")
+    .mockImplementationOnce(() => {
+      throw busyError();
+    });
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  expect(
+    recordUpdateRunStep(
+      runId,
+      { step: "updater-runtime-retention", status: "completed" },
+      { ...options, busyTimeoutMs: 120_000 },
+    ),
+  ).toBeUndefined();
+  expect(write).toHaveBeenCalledWith(
+    expect.any(Function),
+    expect.objectContaining({ busyTimeoutMs: 1_000 }),
+    expect.objectContaining({ busyTimeoutMs: 1_000 }),
+  );
+  expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("The update will continue"));
+  expect(getUpdateRun(runId, options)?.steps).toHaveLength(1);
+  expect(finishUpdateRun(runId, { status: "succeeded" }, options).status).toBe("succeeded");
 });
 
-it.each([true, false])("uses the required recovery budget (critical step=%s)", (critical) => {
-  const command = retentionCommand(critical);
-  if (critical) {
-    command.input.step.step = "finalize:predecessor-stop:fixture";
-  }
-  const run = failRun();
-  expect(() => mutate(command)).toThrow(
-    critical ? /database is locked.*retry `openclaw update`/ : /required recovery evidence/,
+it("keeps Gateway verification at the ordinary writer budget", () => {
+  const write = vi
+    .spyOn(existingWrites, "runExistingOpenClawStateWriteTransaction")
+    .mockImplementationOnce(() => {
+      throw busyError();
+    });
+  expect(() => recordUpdateRunVerification(runId, { booted: true }, options)).toThrow(
+    "database is locked",
+  );
+  expect(write).toHaveBeenCalledWith(
+    expect.any(Function),
+    options,
+    expect.objectContaining({ busyTimeoutMs: undefined }),
+  );
+  expect(getUpdateRun(runId, options)?.verification.booted).toBeUndefined();
+});
+
+it.each(["finalize:predecessor-stop:fixture"])(
+  "gives recovery-critical %s the driver's native busy budget",
+  (step) => {
+    const command = retentionCommand();
+    command.input.step.step = step;
+    const cause = busyError();
+    const run = vi.spyOn(writer, "run").mockImplementationOnce(() => {
+      throw cause;
+    });
+    expect(() => recordUpdateRunMutationInWorker(command, options, vi.fn(), () => writer)).toThrow(
+      /database is locked.*retry `openclaw update`/,
+    );
+    expect(run).toHaveBeenCalledExactlyOnceWith(
+      expect.any(Function),
+      expect.objectContaining({ busyTimeoutMs: 120_000 }),
+    );
+    expect(recordUpdateRunMutationInWorker(command, options, vi.fn(), () => writer)).toMatchObject({
+      kind: "recorded",
+      record: { steps: expect.arrayContaining([{ step, status: "completed" }]) },
+    });
+  },
+);
+
+it("does not turn required recovery admission into optional bookkeeping", () => {
+  const command = retentionCommand(false);
+  const run = vi.spyOn(writer, "run").mockImplementationOnce(() => {
+    throw busyError();
+  });
+  expect(() => recordUpdateRunMutationInWorker(command, options, vi.fn(), () => writer)).toThrow(
+    /required recovery evidence/,
   );
   expect(run).toHaveBeenCalledExactlyOnceWith(
     expect.any(Function),
     expect.objectContaining({ busyTimeoutMs: 120_000 }),
   );
-  if (critical) {
-    expect(mutate(command)).toMatchObject({
-      kind: "recorded",
-      record: {
-        steps: expect.arrayContaining([
-          { step: "finalize:predecessor-stop:fixture", status: "completed" },
-        ]),
-      },
-    });
-  }
 });
 
 it("skips a real SQLite writer lock without waiting or creating a receipt", () => {
   const command = retentionCommand();
   command.input.busyTimeoutMs = 0;
-  {
-    using blocker = new DatabaseSync(databasePath(options.env));
+  const blocker = new DatabaseSync(resolveOpenClawStateSqlitePath(options.env));
+  try {
     blocker.exec("BEGIN IMMEDIATE");
-    expect(mutate(command)).toEqual({ kind: "bookkeeping-skipped" });
+    expect(recordUpdateRunMutationInWorker(command, options, vi.fn(), () => writer)).toEqual({
+      kind: "bookkeeping-skipped",
+    });
     expect(blocker.isTransaction).toBe(true);
+  } finally {
+    if (blocker.isTransaction) {
+      blocker.exec("ROLLBACK");
+    }
+    blocker.close();
   }
-  expect(getRun(runId, options)?.steps).toHaveLength(1);
+  expect(getUpdateRun(runId, options)?.steps).toHaveLength(1);
 });
 
 it("does not swallow a non-contention failure as bookkeeping", () => {
   const failure = new Error("fixture writer failure");
-  failRun(failure);
-  expect(() => mutate()).toThrow(failure);
+  vi.spyOn(writer, "run").mockImplementationOnce(() => {
+    throw failure;
+  });
+  expect(() =>
+    recordUpdateRunMutationInWorker(retentionCommand(), options, vi.fn(), () => writer),
+  ).toThrow(failure);
 });
 
 it("restores the ordinary transaction wait after driver admission", () => {
@@ -172,18 +205,58 @@ it("restores the ordinary transaction wait after driver admission", () => {
       return result;
     }, current),
   );
-  mutate(retentionCommand(false));
+  recordUpdateRunMutationInWorker(retentionCommand(false), options, vi.fn(), () => writer);
   expect(timeout).toBe(5_000);
   expect(connection && readSqliteBusyTimeout(connection)).toBe(5_000);
 });
 
-it.each(["progress step", "run creation", "reconciliation", "interruption settlement"] as const)(
-  "leaves the writer free while the host decides %s admission",
-  (operation) => {
-    using competitor = new DatabaseSync(databasePath(options.env));
-    competitor.exec("PRAGMA busy_timeout = 0");
-    const observed: string[] = [];
-    const admit: Admission = (stage) => {
+it.each([
+  [
+    "progress step",
+    (admit: (stage: "transaction" | "commit") => void) =>
+      recordUpdateRunMutationInWorker(
+        {
+          type: "updateRuns.recordStep",
+          input: {
+            runId,
+            redactionFacts: captureUpdateRunRedactionFacts(options.env),
+            step: { step: "candidate-state-snapshot", status: "in_progress" },
+          },
+        },
+        options,
+        admit,
+        () => writer,
+      ),
+    ["transaction:free", "commit:held"],
+  ],
+  [
+    "run creation",
+    (admit: (stage: "transaction" | "commit") => void) =>
+      createUpdateRun({ trigger: "cli" }, options, admit),
+    ["transaction:free", "commit:held"],
+  ],
+  [
+    "reconciliation",
+    (admit: (stage: "transaction" | "commit") => void) =>
+      reconcileUpdateRunCandidatesInWorker({ candidates: [], selection: {} }, options, admit),
+    ["transaction:free", "commit:held"],
+  ],
+  [
+    "interruption settlement",
+    (admit: (stage: "transaction" | "commit") => void) =>
+      persistInterruptedUpdateObservation(
+        { expected: { ...getUpdateRun(runId, options)!, updatedAtMs: 0 }, detail: "fixture" },
+        options,
+        admit,
+      ),
+    ["transaction:free"],
+  ],
+])("leaves the writer free while the host decides %s admission", (_name, write, expected) => {
+  const competitor = new DatabaseSync(resolveOpenClawStateSqlitePath(options.env));
+  competitor.exec("PRAGMA busy_timeout = 0");
+  const observed: string[] = [];
+  try {
+    write((stage) => {
       try {
         competitor.exec("BEGIN IMMEDIATE");
         competitor.exec("ROLLBACK");
@@ -194,27 +267,12 @@ it.each(["progress step", "run creation", "reconciliation", "interruption settle
         }
         observed.push(`${stage}:held`);
       }
-    };
-    const writes = {
-      "progress step": () =>
-        mutate(stepCommand({ step: "candidate-state-snapshot", status: "in_progress" }), admit),
-      "run creation": () => createRun({ trigger: "cli" }, options, admit),
-      reconciliation: () => reconcileCandidates({ candidates: [], selection: {} }, options, admit),
-      "interruption settlement": () =>
-        persistInterruption(
-          { expected: { ...getRun(runId, options)!, updatedAtMs: 0 }, detail: "fixture" },
-          options,
-          admit,
-        ),
-    };
-    writes[operation]();
-    expect(observed).toEqual(
-      operation === "interruption settlement"
-        ? ["transaction:free"]
-        : ["transaction:free", "commit:held"],
-    );
-  },
-);
+    });
+  } finally {
+    competitor.close();
+  }
+  expect(observed).toEqual(expected);
+});
 
 it("does not replay or discard a lock failure after transaction admission", () => {
   const cause = busyError();
@@ -223,7 +281,9 @@ it("does not replay or discard a lock failure after transaction admission", () =
       throw cause;
     }
   });
-  expect(() => mutate(retentionCommand(), admit)).toThrow(cause);
+  expect(() =>
+    recordUpdateRunMutationInWorker(retentionCommand(), options, admit, () => writer),
+  ).toThrow(cause);
   expect(admit.mock.calls).toEqual([["transaction"], ["commit"]]);
-  expect(getRun(runId, options)?.steps).toHaveLength(1);
+  expect(getUpdateRun(runId, options)?.steps).toHaveLength(1);
 });

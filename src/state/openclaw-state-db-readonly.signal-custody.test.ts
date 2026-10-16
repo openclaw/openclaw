@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import { join } from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi, type Mock } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as sqliteRuntime from "../infra/bun-sqlite-library.js";
 import {
@@ -101,6 +101,7 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 vi.mock("../cli/signal-exit-barrier.js", () => ({ registerSignalExitFinalizer: vi.fn() }));
 vi.mock("../logging/logger.js", () => ({ getChildLogger: () => ({ warn: vi.fn() }) }));
+// mock-isolation: admit only the synthetic source without opening the real SQLite cache.
 vi.mock("./openclaw-state-db-cache.js", () => ({
   captureOpenClawStateDatabaseReadAdmission: mocks.admission,
   registerOpenClawStateDatabaseAsyncResource: (resource: OpenClawStateDatabaseAsyncResource) => {
@@ -115,6 +116,7 @@ vi.mock("./openclaw-state-db-cache.js", () => ({
     assertOpenClawStateDatabaseFreshOpenAllowedAtPath() {},
   },
 }));
+// mock-isolation: supply synthetic worker authority without acquiring real database state.
 vi.mock("./openclaw-state-worker-context.js", () => ({
   captureOpenClawStateReadWorkerContext: ({
     path,
@@ -228,8 +230,8 @@ function stage<T>(value: T, event?: string) {
   return { run, entered: entered.promise, release: finish.resolve };
 }
 
-function hold<TArgs extends unknown[], TResult>(
-  mock: Mock<(...args: TArgs) => Promise<TResult>>,
+function hold<TResult>(
+  mock: { mockImplementation(implementation: () => Promise<TResult>): unknown },
   result: TResult,
   event?: string,
 ) {

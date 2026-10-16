@@ -23,16 +23,11 @@ vi.mock("../../scripts/lib/bun-cli-launcher.mjs", async (importOriginal) => ({
 const fixtureRoot = path.resolve("/fixture");
 const ownerInstall = path.join(fixtureRoot, "owner");
 const globalProject = path.join(ownerInstall, "install", "global");
-const packageRoot = (install: string) =>
-  path.join(install, "install", "global", "node_modules", "openclaw");
-const root = packageRoot(ownerInstall);
+const root = path.join(globalProject, "node_modules", "openclaw");
 const bunPath = path.join(fixtureRoot, "runtime", "bun");
 const binDir = path.join(fixtureRoot, "custom-bin");
 const launcherPath = path.join(binDir, "openclaw");
 const fileStat = fs.statSync(new URL(import.meta.url));
-const inspect = vi.mocked(inspectBunCliLauncher);
-const install = vi.mocked(installBunCliLauncher);
-const resolveBin = vi.mocked(resolveBunGlobalBinDir);
 
 function stubRuntime(bun = true, platform: NodeJS.Platform = "linux", executable = bunPath) {
   vi.stubGlobal(
@@ -52,20 +47,6 @@ function prompter(approved = true) {
   };
 }
 
-function run(prompt = prompter(), packagePath = root) {
-  return noteBunCliLauncherIssues({ root: packagePath, prompter: prompt });
-}
-
-function expectLastNote(message: unknown) {
-  expect(note).toHaveBeenLastCalledWith(message, "Bun CLI launcher");
-}
-
-function expectNoCalls(...mocks: unknown[]) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
-}
-
 describe("Bun-only Doctor CLI launcher repair", () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -80,9 +61,9 @@ describe("Bun-only Doctor CLI launcher repair", () => {
     });
     vi.spyOn(fs, "statSync").mockReturnValue(fileStat);
     vi.spyOn(fs, "realpathSync").mockImplementation((value) => String(value));
-    resolveBin.mockReturnValue(binDir);
-    inspect.mockReturnValue({ path: launcherPath, state: "missing" });
-    install.mockReturnValue({ path: launcherPath, state: "current" });
+    vi.mocked(resolveBunGlobalBinDir).mockReturnValue(binDir);
+    vi.mocked(inspectBunCliLauncher).mockReturnValue({ path: launcherPath, state: "missing" });
+    vi.mocked(installBunCliLauncher).mockReturnValue({ path: launcherPath, state: "current" });
   });
 
   afterEach(() => {
@@ -92,7 +73,7 @@ describe("Bun-only Doctor CLI launcher repair", () => {
   });
 
   it.each(["missing", "stale"] as const)(
-    "repairs %s with consent and owning Bun",
+    "repairs a %s launcher after consent using this package's owner and absolute Bun",
     async (state) => {
       if (state === "missing") {
         vi.stubEnv("PATH", path.join(fixtureRoot, "bun-node-123-abcdef"));
@@ -101,12 +82,12 @@ describe("Bun-only Doctor CLI launcher repair", () => {
           path.basename(String(value)) === "node" ? bunPath : String(value),
         );
       }
-      inspect.mockReturnValue({ path: launcherPath, state });
+      vi.mocked(inspectBunCliLauncher).mockReturnValue({ path: launcherPath, state });
       const prompt = prompter();
 
-      await run(prompt);
+      await noteBunCliLauncherIssues({ root, prompter: prompt });
 
-      expect(resolveBin).toHaveBeenCalledExactlyOnceWith({
+      expect(resolveBunGlobalBinDir).toHaveBeenCalledExactlyOnceWith({
         bunPath,
         cwd: globalProject,
         env: expect.objectContaining({
@@ -119,90 +100,136 @@ describe("Bun-only Doctor CLI launcher repair", () => {
         message: "Repair the openclaw command for this Bun installation?",
         initialValue: false,
       });
-      expect(install).toHaveBeenCalledExactlyOnceWith({ packageRoot: root, bunPath, binDir });
-      expectLastNote(`Repaired the Bun CLI launcher: ${launcherPath}`);
+      expect(installBunCliLauncher).toHaveBeenCalledExactlyOnceWith({
+        packageRoot: root,
+        bunPath,
+        binDir,
+      });
+      expect(note).toHaveBeenLastCalledWith(
+        `Repaired the Bun CLI launcher: ${launcherPath}`,
+        "Bun CLI launcher",
+      );
       expect(process.env.BUN_INSTALL).toBe(path.join(fixtureRoot, "unrelated-bun"));
     },
   );
 
-  it.each(["declined", false, true] as const)("honors repair consent: %s", async (repair) => {
-    const prompt =
-      repair === "declined"
-        ? prompter(false)
-        : createDoctorPrompter({
-            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-            options: { nonInteractive: true, repair },
-          });
-    await run(prompt);
-    expect(install).toHaveBeenCalledTimes(repair === true ? 1 : 0);
-    if (repair === "declined") {
-      expect(note).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining("launcher is missing"),
-        "Bun CLI launcher",
-      );
-    }
-  });
+  it.each(["declined", false, true] as const)(
+    "honors Doctor repair consent: %s",
+    async (repair) => {
+      const prompt =
+        repair === "declined"
+          ? prompter(false)
+          : createDoctorPrompter({
+              runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+              options: { nonInteractive: true, repair },
+            });
+      await noteBunCliLauncherIssues({ root, prompter: prompt });
+      expect(installBunCliLauncher).toHaveBeenCalledTimes(repair === true ? 1 : 0);
+      if (repair === "declined") {
+        expect(note).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining("launcher is missing"),
+          "Bun CLI launcher",
+        );
+      }
+    },
+  );
 
   it.each([
     ["\n", "a newline"],
     ["\r", "a carriage return"],
   ])("explains unsupported path character %j without offering repair", async (character, label) => {
     for (const field of ["install", "runtime"] as const) {
-      const unsupportedRoot = packageRoot(path.join(fixtureRoot, `owner${character}path`));
+      const unsupportedRoot = path.join(
+        fixtureRoot,
+        `owner${character}path`,
+        "install",
+        "global",
+        "node_modules",
+        "openclaw",
+      );
       stubRuntime(
         true,
         "linux",
         field === "runtime" ? path.join(fixtureRoot, `bun${character}runtime`) : bunPath,
       );
       const prompt = prompter();
-      await run(prompt, field === "install" ? unsupportedRoot : root);
-      expectLastNote(
+      await noteBunCliLauncherIssues({
+        root: field === "install" ? unsupportedRoot : root,
+        prompter: prompt,
+      });
+      expect(note).toHaveBeenLastCalledWith(
         expect.stringContaining(
           `${field === "install" ? "Install path" : "Bun executable path"} contains ${label}, which cannot be stored in a launcher data line`,
         ),
+        "Bun CLI launcher",
       );
       expect(vi.mocked(note).mock.calls.at(-1)?.[0]).toContain("openclaw.mjs");
       expect(vi.mocked(note).mock.calls.at(-1)?.[0]).toContain("instead");
-      expectNoCalls(prompt.confirmAutoFix, install, resolveBin);
+      expect(prompt.confirmAutoFix).not.toHaveBeenCalled();
+      expect(installBunCliLauncher).not.toHaveBeenCalled();
+      expect(resolveBunGlobalBinDir).not.toHaveBeenCalled();
     }
   });
 
   it.each([
-    ["Node runtime", () => stubRuntime(false)],
-    ["Windows", () => stubRuntime(true, "win32")],
-    ["persistent Node", () => vi.mocked(fs.accessSync).mockReturnValue(undefined)],
-    ["update", () => vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1")],
-    ["source checkout", () => path.join(fixtureRoot, "source", "openclaw")],
-    ["current", () => inspect.mockReturnValue({ path: launcherPath, state: "current" })],
-    ["conflict", () => inspect.mockReturnValue({ path: launcherPath, state: "conflict" })],
-  ] as const)("leaves %s launchers untouched", async (kind, arrange) => {
-    const arranged = arrange();
-    const prompt = prompter();
-    await run(prompt, typeof arranged === "string" ? arranged : root);
-    if (kind !== "current" && kind !== "conflict") {
-      expectNoCalls(resolveBin, inspect);
+    "Node runtime",
+    "Windows",
+    "persistent Node",
+    "update",
+    "source checkout",
+    "current",
+    "conflict",
+  ] as const)("leaves %s launchers untouched", async (kind) => {
+    if (kind === "Node runtime") {
+      stubRuntime(false);
+    } else if (kind === "Windows") {
+      stubRuntime(true, "win32");
+    } else if (kind === "persistent Node") {
+      vi.mocked(fs.accessSync).mockReturnValue(undefined);
+    } else if (kind === "update") {
+      vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+    } else if (kind === "current" || kind === "conflict") {
+      vi.mocked(inspectBunCliLauncher).mockReturnValue({ path: launcherPath, state: kind });
     }
-    expectNoCalls(prompt.confirmAutoFix, install);
+    const prompt = prompter();
+    await noteBunCliLauncherIssues({
+      root: kind === "source checkout" ? path.join(fixtureRoot, "source", "openclaw") : root,
+      prompter: prompt,
+    });
+    if (kind !== "current" && kind !== "conflict") {
+      expect(resolveBunGlobalBinDir).not.toHaveBeenCalled();
+      expect(inspectBunCliLauncher).not.toHaveBeenCalled();
+    }
+    expect(prompt.confirmAutoFix).not.toHaveBeenCalled();
+    expect(installBunCliLauncher).not.toHaveBeenCalled();
     if (kind === "conflict") {
       expect(note).toHaveBeenCalledExactlyOnceWith(
         expect.stringContaining("belongs to another installation"),
         "Bun CLI launcher",
       );
     } else {
-      expectNoCalls(note);
+      expect(note).not.toHaveBeenCalled();
     }
   });
 
-  it.each(["discovery", "inspection", "repair"] as const)(
+  it.each(["discovery", "inspection", "repair"])(
     "reports %s failures without aborting Doctor",
     async (phase) => {
-      const failing = { discovery: resolveBin, inspection: inspect, repair: install }[phase];
+      const failing =
+        phase === "discovery"
+          ? vi.mocked(resolveBunGlobalBinDir)
+          : phase === "inspection"
+            ? vi.mocked(inspectBunCliLauncher)
+            : vi.mocked(installBunCliLauncher);
       failing.mockImplementation(() => {
         throw new Error("fixture permission denied");
       });
-      await expect(run()).resolves.toBeUndefined();
-      expectLastNote(
+      await expect(
+        noteBunCliLauncherIssues({ root, prompter: prompter() }),
+      ).resolves.toBeUndefined();
+      expect(note).toHaveBeenLastCalledWith(
         expect.stringContaining("Could not repair the Bun CLI launcher: fixture permission denied"),
+        "Bun CLI launcher",
       );
     },
   );
