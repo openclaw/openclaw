@@ -139,6 +139,8 @@ describe("Gateway automatic Workshop learning", () => {
               transport: "sse",
               openaiWsWarmup: false,
             };
+            candidate.ctx.foregroundPromptContext.promptCacheKey = "foreground-cache-affinity";
+            candidate.ctx.foregroundPromptContext.sourceReplyDeliveryMode = "message_tool_only";
             candidate.ctx.foregroundPromptContext.skillsSnapshot = {
               prompt: skillBundle.repeat(3_000),
               skills: [],
@@ -169,6 +171,7 @@ describe("Gateway automatic Workshop learning", () => {
             expect(serialized).not.toContain(workspaceInstructions);
             expect(serialized).not.toContain(skillBundle);
             expect(serialized).not.toContain(foregroundInstructions);
+            expect(serialized).not.toContain("foreground-cache-affinity");
             const payload = JSON.parse(serialized) as ProviderRequest;
             expect(payload.max_output_tokens).toBe(2_048);
             expect(payload.tools?.map((tool) => tool.name)).toEqual(["skill_workshop"]);

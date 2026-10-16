@@ -64,6 +64,8 @@ export async function runSkillWorkshopReview(
       authProfileFailurePolicy: "local_transient",
       requestedRouteResolution: "resolved",
       sessionPersistence: "detached",
+      promptCacheKey: undefined,
+      sourceReplyDeliveryMode: undefined,
       toolsAllow: ["skill_workshop"],
       toolExecutionAllow: ["skill_workshop"],
       codeModeOverride: false,
