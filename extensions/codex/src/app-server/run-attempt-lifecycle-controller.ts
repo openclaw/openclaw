@@ -8,6 +8,7 @@ import {
   resolveFastModeForElapsed,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readCodexNotificationItem, readRawResponseToolCallId } from "./attempt-notifications.js";
+import { FINAL_SOURCE_REPLY_COMPLETION_GRACE_MS } from "./attempt-timeouts.js";
 import { itemName } from "./event-projector-items.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
@@ -58,6 +59,31 @@ export function createCodexAttemptLifecycleController(
     );
     const value = results[0];
     return value && payloads.length > 0 ? { value, payloads } : undefined;
+  };
+  const releaseTurnAfterTerminalDynamicTool = (value: TerminalToolRelease) => {
+    trajectoryRecorder?.recordEvent("turn.dynamic_tool_terminal_release", {
+      threadId: value.call.threadId,
+      turnId: value.call.turnId,
+      toolCallId: value.call.callId,
+      name: value.call.tool,
+      durationMs: value.durationMs,
+    });
+    embeddedAgentLog.info("codex app-server turn released after terminal dynamic tool result", {
+      threadId: value.call.threadId,
+      turnId: value.call.turnId,
+      toolCallId: value.call.callId,
+      tool: value.call.tool,
+      durationMs: value.durationMs,
+    });
+    // Interrupt drops accepted pending input. Reject unconsumed steering first so
+    // completion delivery can use its fallback path instead of reporting success.
+    turnRuntime.steeringQueueRef.current?.cancel();
+    // Foreground yield may complete immediately, but subscription transfer must
+    // join the exact native turn's stop before another parent turn can start.
+    state.abortCleanup = turnRuntime
+      .interruptTurn(value.call.turnId, { locallyCompleted: true })
+      .then(() => {});
+    turnRuntime.completeTurn();
   };
   const scheduleTerminalDynamicToolReleaseCheck = () => {
     if (
@@ -123,29 +149,27 @@ export function createCodexAttemptLifecycleController(
           ...authored.payloads,
         );
       }
-      trajectoryRecorder?.recordEvent("turn.dynamic_tool_terminal_release", {
-        threadId: value.call.threadId,
-        turnId: value.call.turnId,
-        toolCallId: value.call.callId,
-        name: value.call.tool,
-        durationMs: value.durationMs,
-      });
-      embeddedAgentLog.info("codex app-server turn released after terminal dynamic tool result", {
-        threadId: value.call.threadId,
-        turnId: value.call.turnId,
-        toolCallId: value.call.callId,
-        tool: value.call.tool,
-        durationMs: value.durationMs,
-      });
-      // Interrupt drops accepted pending input. Reject unconsumed steering first so
-      // completion delivery can use its fallback path instead of reporting success.
-      turnRuntime.steeringQueueRef.current?.cancel();
-      // Foreground yield may complete immediately, but subscription transfer must
-      // join the exact native turn's stop before another parent turn can start.
-      state.abortCleanup = turnRuntime
-        .interruptTurn(value.call.turnId, { locallyCompleted: true })
-        .then(() => {});
-      turnRuntime.completeTurn();
+      if (deliveredFinal) {
+        // Interrupting here aborts the enclosing native code-mode call and writes
+        // a false user-cancellation marker into Codex's persistent history.
+        // Keep one absolute deadline; further output must not extend the wait.
+        if (!state.finalSourceReplyCompletionTimer) {
+          state.finalSourceReplyCompletionTimer = setTimeout(() => {
+            state.finalSourceReplyCompletionTimer = undefined;
+            if (
+              state.completed ||
+              state.terminalTurnNotificationQueued ||
+              runAbortController.signal.aborted
+            ) {
+              return;
+            }
+            releaseTurnAfterTerminalDynamicTool(value);
+          }, FINAL_SOURCE_REPLY_COMPLETION_GRACE_MS);
+          state.finalSourceReplyCompletionTimer.unref?.();
+        }
+        return;
+      }
+      releaseTurnAfterTerminalDynamicTool(value);
     });
     immediate.unref?.();
   };

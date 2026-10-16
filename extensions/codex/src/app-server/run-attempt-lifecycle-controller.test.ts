@@ -30,7 +30,6 @@ function createTerminalReleaseHarness() {
     activeAppServerTurnRequests: 0,
     activeLocalProjections: 0,
     currentTurnHadNonTerminalDynamicToolResult: false,
-    pendingTerminalDynamicToolRelease: undefined,
     terminalDynamicToolReleaseCheckScheduled: false,
     resolveCompletion: vi.fn(),
   };
@@ -412,8 +411,9 @@ describe("Codex terminal dynamic-tool release", () => {
   );
 
   it.each(["reply", "sibling"] as const)(
-    "completes a delivered final reply after a failed sibling when %s settles first",
+    "bounds native completion after a delivered final reply and failed sibling when %s settles first",
     async (first) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const harness = createTerminalReleaseHarness();
       await harness.observeResponse(["reply", "sibling"]);
       harness.pendingOpenClawDynamicToolCompletionIds.add("reply");
@@ -432,10 +432,9 @@ describe("Codex terminal dynamic-tool release", () => {
           harness.controller.recordDynamicToolResult(results[name]);
           harness.controller.scheduleTerminalDynamicToolReleaseCheck();
           await yieldImmediate();
-          expect(harness.state.completed).toBe(
-            harness.pendingOpenClawDynamicToolCompletionIds.size === 0,
-          );
+          expect(harness.request).not.toHaveBeenCalled();
         }
+        await vi.advanceTimersByTimeAsync(10_000);
         expect(harness.request).toHaveBeenCalledWith(
           "turn/interrupt",
           { threadId: "thread-1", turnId: "turn-1" },
@@ -446,6 +445,7 @@ describe("Codex terminal dynamic-tool release", () => {
       } finally {
         harness.completeTurn();
         await yieldImmediate();
+        vi.useRealTimers();
       }
     },
   );
