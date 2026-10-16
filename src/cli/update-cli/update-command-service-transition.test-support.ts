@@ -8,7 +8,10 @@ import { createCommandResult as commandResult } from "../../test-utils/npm-spec-
 import { VERSION } from "../../version.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { runUpdateFinalizationDoctorInFreshProcess } from "./update-command-fresh-doctor.js";
-import { serviceUpdateResult } from "./update-command-service-recovery.test-support.js";
+import {
+  readyRecoveryHealth,
+  serviceUpdateResult,
+} from "./update-command-service-recovery.test-support.js";
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-revalidation.js";
 import { createShippedUnresolvedServiceStop } from "./update-command-service-state.test-support.js";
 import {
@@ -136,20 +139,14 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
       const verdict = await pendingVerdict;
       let servingBuildId = "previous-build";
       if (mode === "git") {
-        mocks.health.mockImplementation(async ({ port, expectedBuildId }) => ({
-          outcome:
-            mocks.running && (!expectedBuildId || expectedBuildId === servingBuildId)
-              ? "ready"
-              : "failed",
-          healthy: mocks.running && (!expectedBuildId || expectedBuildId === servingBuildId),
-          staleGatewayPids: [],
-          runtime: {
-            status: mocks.running ? "running" : "stopped",
-            pid: mocks.running ? 4242 : undefined,
-          },
-          gatewayBootId: "service-boot",
-          portUsage: { port, status: "busy", listeners: [], hints: [] },
-        }));
+        mocks.health.mockImplementation(async ({ port, expectedBuildId }) => {
+          const healthy = mocks.running && (!expectedBuildId || expectedBuildId === servingBuildId);
+          return {
+            ...readyRecoveryHealth(port, mocks.running),
+            outcome: healthy ? "ready" : "failed",
+            healthy,
+          };
+        });
       }
       mocks.child.mockImplementation(async (argv) => {
         expect(argv).toContain(replacementEntry);

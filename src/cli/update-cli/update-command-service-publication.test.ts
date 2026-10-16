@@ -43,6 +43,28 @@ vi.mock("../../daemon/service.js", async (importOriginal) => ({
 beforeEach(() => mockSystemAccountHome());
 afterEach(() => vi.restoreAllMocks());
 
+async function writeRuntimeRoot(root: string) {
+  await fs.mkdir(path.join(root, "dist"), { recursive: true });
+  await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+  await fs.writeFile(path.join(root, "dist", "entry.js"), "export {};\n");
+}
+
+const publicationOptions = (root: string, env: NodeJS.ProcessEnv) => ({
+  root,
+  env,
+  timeoutMs: 200,
+  assertCurrent() {},
+});
+const serviceRuntime = (status: "running" | "stopped" | "unknown") => ({
+  status,
+  systemd: { managerUid: 2001 },
+});
+const serviceCommand = (root: string) => [
+  process.execPath,
+  path.join(root, "dist", "entry.js"),
+  "gateway",
+];
+
 async function withRuntimePublicationFixture(
   run: (fixture: {
     home: string;
@@ -55,19 +77,14 @@ async function withRuntimePublicationFixture(
   await withServiceHome(async (home) => {
     mockProcessPlatform("linux");
     const root = path.join(home, "checkout");
-    await fs.mkdir(path.join(root, "dist"), { recursive: true });
+    await writeRuntimeRoot(root);
     await fs.mkdir(path.join(root, "dist-runtime"));
-    await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
-    await fs.writeFile(path.join(root, "dist", "entry.js"), "export {};\n");
     const env = { ...process.env };
     const service = createMockGatewayService({
       readCommand: vi.fn(async () => ({
-        programArguments: [process.execPath, path.join(root, "dist", "entry.js"), "gateway"],
+        programArguments: serviceCommand(root),
       })),
-      readRuntime: vi.fn<GatewayService["readRuntime"]>(async () => ({
-        status: "stopped",
-        systemd: { managerUid: 2001 },
-      })),
+      readRuntime: vi.fn<GatewayService["readRuntime"]>(async () => serviceRuntime("stopped")),
       isLoaded: vi.fn(async () => true),
       isEnabled: vi.fn(async () => false),
     });
@@ -333,10 +350,7 @@ it.each([
 ])("refuses changed runtime publication with %s", (scenario) =>
   withRuntimePublicationFixture(async ({ root, env, service }) => {
     if (scenario === "unknown runtime") {
-      vi.mocked(service.readRuntime).mockResolvedValue({
-        status: "unknown",
-        systemd: { managerUid: 2001 },
-      });
+      vi.mocked(service.readRuntime).mockResolvedValue(serviceRuntime("unknown"));
     } else if (scenario === "unknown command") {
       vi.mocked(service.readCommand).mockResolvedValue(null);
     } else if (scenario === "unknown load state") {
@@ -367,10 +381,7 @@ it.each([
     }
     const publish = vi.fn(async () => "published");
     await expect(
-      withGatewayRuntimeArtifactPublication(
-        { root, env, timeoutMs: 200, assertCurrent() {} },
-        publish,
-      ),
+      withGatewayRuntimeArtifactPublication(publicationOptions(root, env), publish),
     ).rejects.toThrow(
       /affected Gateway.*openclaw gateway status --deep.*openclaw gateway stop.*retry the original command/,
     );
@@ -385,10 +396,7 @@ it("refuses changed runtime publication while another process owns Gateway prese
     const publish = vi.fn(async () => "published");
     try {
       await expect(
-        withGatewayRuntimeArtifactPublication(
-          { root, env, timeoutMs: 200, assertCurrent() {} },
-          publish,
-        ),
+        withGatewayRuntimeArtifactPublication(publicationOptions(root, env), publish),
       ).rejects.toThrow(/affected Gateway/);
       expect(publish).not.toHaveBeenCalled();
     } finally {
@@ -401,7 +409,7 @@ it("publishes changed artifacts for an affirmatively absent Gateway", () =>
     service.isAbsent = vi.fn(async () => true);
     await expect(
       withGatewayRuntimeArtifactPublication(
-        { root, env, timeoutMs: 200, assertCurrent() {} },
+        publicationOptions(root, env),
         async (assertCurrent) => {
           await Promise.resolve();
           await assertCurrent();
@@ -417,30 +425,13 @@ it.each(["shared SDK alias", "nested shared output"])(
   (scenario) =>
     withRuntimePublicationFixture(async ({ home, root, env, service, databasePath }) => {
       const snapshot = path.join(home, "releases", "previous");
-      await fs.mkdir(path.join(snapshot, "dist"), { recursive: true });
-      await fs.writeFile(path.join(snapshot, "package.json"), JSON.stringify({ name: "openclaw" }));
-      await fs.writeFile(path.join(snapshot, "dist", "entry.js"), "export {};\n");
+      await writeRuntimeRoot(snapshot);
       const current = path.join(home, "current");
       await fs.symlink(snapshot, current, "junction");
-      if (scenario === "shared overlay") {
-        await fs.symlink(
-          path.join(root, "dist-runtime"),
-          path.join(snapshot, "dist-runtime"),
-          "junction",
-        );
-      } else if (scenario === "shared SDK alias") {
+      if (scenario === "shared SDK alias") {
         const aliasParent = path.join(snapshot, "dist", "extensions", "node_modules");
         await fs.mkdir(aliasParent, { recursive: true });
         await fs.symlink(root, path.join(aliasParent, "openclaw"), "junction");
-      } else if (scenario === "shared SDK parent") {
-        const aliasParent = path.join(root, "dist", "extensions", "node_modules");
-        await fs.mkdir(aliasParent, { recursive: true });
-        await fs.mkdir(path.join(snapshot, "dist", "extensions"));
-        await fs.symlink(
-          aliasParent,
-          path.join(snapshot, "dist", "extensions", "node_modules"),
-          "junction",
-        );
       } else if (scenario === "nested shared output") {
         const nested = path.join(root, "dist-runtime", "extensions", "demo");
         const aliasParent = path.join(snapshot, "dist", "extensions", "node_modules");
@@ -449,15 +440,10 @@ it.each(["shared SDK alias", "nested shared output"])(
         await fs.symlink(nested, path.join(aliasParent, "openclaw"), "junction");
       }
       vi.mocked(service.readCommand).mockResolvedValue({
-        programArguments: [process.execPath, path.join(current, "dist", "entry.js"), "gateway"],
-        managedDefinition: {
-          programArguments: [process.execPath, path.join(root, "dist", "entry.js"), "gateway"],
-        },
+        programArguments: serviceCommand(current),
+        managedDefinition: { programArguments: serviceCommand(root) },
       });
-      vi.mocked(service.readRuntime).mockResolvedValue({
-        status: "running",
-        systemd: { managerUid: 2001 },
-      });
+      vi.mocked(service.readRuntime).mockResolvedValue(serviceRuntime("running"));
       vi.mocked(portProbe.probePortUsage).mockResolvedValue("busy");
       const other = tryAcquireGatewayStateOwner(databasePath);
       expect(other).not.toBeNull();
@@ -467,15 +453,11 @@ it.each(["shared SDK alias", "nested shared output"])(
       });
       try {
         const result = withGatewayRuntimeArtifactPublication(
-          { root, env, timeoutMs: 200, assertCurrent() {} },
+          publicationOptions(root, env),
           publish,
         );
-        if (scenario === "disjoint") {
-          await expect(result).resolves.toBe("published");
-        } else {
-          await expect(result).rejects.toThrow(/affected Gateway/);
-          expect(publish).not.toHaveBeenCalled();
-        }
+        await expect(result).rejects.toThrow(/affected Gateway/);
+        expect(publish).not.toHaveBeenCalled();
       } finally {
         other?.release();
       }
@@ -493,9 +475,7 @@ it.each([
 ])("fences runtime-only publication against a sibling that is $label", ({ late, output, shared }) =>
   withRuntimePublicationFixture(async ({ home, root, env, service }) => {
     const sibling = path.join(home, "sibling");
-    await fs.mkdir(path.join(sibling, "dist"), { recursive: true });
-    await fs.writeFile(path.join(sibling, "package.json"), JSON.stringify({ name: "openclaw" }));
-    await fs.writeFile(path.join(sibling, "dist", "entry.js"), "export {};\n");
+    await writeRuntimeRoot(sibling);
     await fs.mkdir(path.join(root, output), { recursive: true });
     if (shared) {
       await fs.symlink(path.join(root, shared), path.join(sibling, shared), "junction");
@@ -516,11 +496,7 @@ it.each([
       await discoverSibling();
     }
     vi.mocked(service.readCommand).mockImplementation(async (serviceEnv) => ({
-      programArguments: [
-        process.execPath,
-        path.join(serviceEnv?.OPENCLAW_SYSTEMD_UNIT === unit ? sibling : root, "dist", "entry.js"),
-        "gateway",
-      ],
+      programArguments: serviceCommand(serviceEnv?.OPENCLAW_SYSTEMD_UNIT === unit ? sibling : root),
     }));
     vi.mocked(service.readRuntime).mockImplementation(async (serviceEnv) => ({
       status: serviceEnv?.OPENCLAW_SYSTEMD_UNIT === unit ? "running" : "stopped",
@@ -529,7 +505,7 @@ it.each([
     const artifact = path.join(root, output, "published.txt");
     await fs.writeFile(artifact, "original");
     const publication = withGatewayRuntimeArtifactPublication(
-      { root, env, timeoutMs: 200, assertCurrent() {}, outputPaths: [output] },
+      { ...publicationOptions(root, env), outputPaths: [output] },
       async (assertPublicationCurrent) => {
         if (late) {
           await discoverSibling();
@@ -557,16 +533,14 @@ it.each(["inspection", "publication"])(
         vi.mocked(service.readRuntime).mockImplementation(async () => {
           await Promise.resolve();
           current = false;
-          return { status: "stopped", systemd: { managerUid: 2001 } };
+          return serviceRuntime("stopped");
         });
       }
       const mutate = vi.fn();
       await expect(
         withGatewayRuntimeArtifactPublication(
           {
-            root,
-            env,
-            timeoutMs: 200,
+            ...publicationOptions(root, env),
             assertCurrent() {
               if (!current) {
                 throw new Error("publication lease lost");
@@ -591,14 +565,9 @@ it.each(["running", "disjoint becomes unknown"])(
     withRuntimePublicationFixture(async ({ root, env, service }) => {
       if (change.startsWith("disjoint")) {
         const snapshot = path.join(root, ".artifacts", "serving");
-        await fs.mkdir(path.join(snapshot, "dist"), { recursive: true });
-        await fs.writeFile(
-          path.join(snapshot, "package.json"),
-          JSON.stringify({ name: "openclaw" }),
-        );
-        await fs.writeFile(path.join(snapshot, "dist", "entry.js"), "export {};\n");
+        await writeRuntimeRoot(snapshot);
         vi.mocked(service.readCommand).mockResolvedValue({
-          programArguments: [process.execPath, path.join(snapshot, "dist", "entry.js"), "gateway"],
+          programArguments: serviceCommand(snapshot),
         });
       }
       const untouched = path.join(root, "dist-runtime", "unchanged.txt");
@@ -606,17 +575,14 @@ it.each(["running", "disjoint becomes unknown"])(
       const beforePersistentEffect = async () => {
         await Promise.resolve();
         if (change === "running") {
-          vi.mocked(service.readRuntime).mockResolvedValue({
-            status: "running",
-            systemd: { managerUid: 2001 },
-          });
+          vi.mocked(service.readRuntime).mockResolvedValue(serviceRuntime("running"));
         } else if (change === "disjoint becomes unknown") {
           vi.mocked(service.readCommand).mockResolvedValue(null);
         }
       };
       await expect(
         withGatewayRuntimeArtifactPublication(
-          { root, env, timeoutMs: 200, assertCurrent() {} },
+          publicationOptions(root, env),
           async (assertPublicationCurrent) => {
             await beforePersistentEffect();
             await assertPublicationCurrent();
@@ -641,7 +607,7 @@ it.each(["repository", "existing alias parent", "missing alias parent"])(
       }
       await expect(
         withGatewayRuntimeArtifactPublication(
-          { root, env, timeoutMs: 200, assertCurrent() {} },
+          publicationOptions(root, env),
           async (assertPublicationCurrent) => {
             await Promise.resolve();
             if (change === "repository") {
@@ -670,7 +636,7 @@ it("permits its output-root replacement and new alias descendants while retainin
     const previous = path.join(root, "previous-runtime");
     const alias = path.join(root, "dist", "extensions", "node_modules", "openclaw");
     await withGatewayRuntimeArtifactPublication(
-      { root, env, timeoutMs: 200, assertCurrent() {} },
+      publicationOptions(root, env),
       async (assertCurrent) => {
         await assertCurrent();
         await fs.rename(runtime, previous);
@@ -692,7 +658,7 @@ it("holds native and Gateway exclusion through publication rollback and closes i
     let rolledBack = false;
     await expect(
       withGatewayRuntimeArtifactPublication(
-        { root, env, timeoutMs: 200, assertCurrent() {} },
+        publicationOptions(root, env),
         async (assertCurrent) => {
           retainedAssertion = assertCurrent;
           try {
@@ -718,84 +684,70 @@ it("holds native and Gateway exclusion through publication rollback and closes i
     released?.release();
   }));
 
-it.each([false])(
-  "settles cleanup writes and releases publication custody after disposal fails (publication failed: %s)",
-  (publicationFailed) =>
-    withRuntimePublicationFixture(async ({ root, env, databasePath }) => {
-      openOpenClawStateDatabase({ env });
-      const entered = createDeferredCore();
-      const resume = createDeferredCore();
-      const publicationFailure = new Error("publication failed before cleanup");
-      const cleanupFailure = new Error("publication resource disposal failed");
-      let accepted: Promise<void> | undefined;
-      let settled = false;
-      let observedError: unknown;
-      const publication = withGatewayRuntimeArtifactPublication(
-        { root, env, timeoutMs: 200, assertCurrent() {} },
-        async () => {
-          const maintenance = getOpenClawDatabaseMaintenanceScope();
-          if (!maintenance) {
-            throw new Error("Expected publication maintenance authority");
-          }
-          maintenance.own({}, "shared-resources", () => {
-            accepted = maintenance.run(async () => {
-              entered.resolve();
-              await resume.promise;
-              openOpenClawStateDatabase({ env })
-                .db.prepare(
-                  "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES ('publication-cleanup-proof', 'true', 1)",
-                )
-                .run();
-            });
-            throw cleanupFailure;
+it("settles cleanup writes and releases publication custody after disposal fails", () =>
+  withRuntimePublicationFixture(async ({ root, env, databasePath }) => {
+    openOpenClawStateDatabase({ env });
+    const entered = createDeferredCore();
+    const resume = createDeferredCore();
+    const cleanupFailure = new Error("publication resource disposal failed");
+    let accepted: Promise<void> | undefined;
+    let settled = false;
+    let observedError: unknown;
+    const publication = withGatewayRuntimeArtifactPublication(
+      publicationOptions(root, env),
+      async () => {
+        const maintenance = getOpenClawDatabaseMaintenanceScope();
+        if (!maintenance) {
+          throw new Error("Expected publication maintenance authority");
+        }
+        maintenance.own({}, "shared-resources", () => {
+          accepted = maintenance.run(async () => {
+            entered.resolve();
+            await resume.promise;
+            openOpenClawStateDatabase({ env })
+              .db.prepare(
+                "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES ('publication-cleanup-proof', 'true', 1)",
+              )
+              .run();
           });
-          if (publicationFailed) {
-            throw publicationFailure;
-          }
-          return "published";
-        },
-      ).then(
-        () => {
-          settled = true;
-        },
-        (error: unknown) => {
-          settled = true;
-          observedError = error;
-        },
-      );
-      try {
-        await entered.promise;
-        // Let the rejected disposal batch settle while its accepted write is still blocked.
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
+          throw cleanupFailure;
         });
-        expect(settled).toBe(false);
-        expect(tryAcquireGatewayStateOwner(databasePath)).toBeNull();
-        resume.resolve();
-        await publication;
-        await accepted;
-        expect(observedError).toEqual(
-          publicationFailed
-            ? expect.objectContaining({
-                cause: publicationFailure,
-                errors: [publicationFailure, cleanupFailure],
-              })
-            : cleanupFailure,
-        );
-        const next = tryAcquireGatewayStateOwner(databasePath);
-        expect(next).not.toBeNull();
-        next?.release();
-        expect(
-          openOpenClawStateDatabase({ env })
-            .db.prepare(
-              "SELECT value_json FROM config_machine_state WHERE state_key = 'publication-cleanup-proof'",
-            )
-            .get(),
-        ).toEqual({ value_json: "true" });
-      } finally {
-        resume.resolve();
-        await publication;
-        closeOpenClawStateDatabaseForTest();
-      }
-    }),
-);
+        return "published";
+      },
+    ).then(
+      () => {
+        settled = true;
+      },
+      (error: unknown) => {
+        settled = true;
+        observedError = error;
+      },
+    );
+    try {
+      await entered.promise;
+      // Let the rejected disposal batch settle while its accepted write is still blocked.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(settled).toBe(false);
+      expect(tryAcquireGatewayStateOwner(databasePath)).toBeNull();
+      resume.resolve();
+      await publication;
+      await accepted;
+      expect(observedError).toEqual(cleanupFailure);
+      const next = tryAcquireGatewayStateOwner(databasePath);
+      expect(next).not.toBeNull();
+      next?.release();
+      expect(
+        openOpenClawStateDatabase({ env })
+          .db.prepare(
+            "SELECT value_json FROM config_machine_state WHERE state_key = 'publication-cleanup-proof'",
+          )
+          .get(),
+      ).toEqual({ value_json: "true" });
+    } finally {
+      resume.resolve();
+      await publication;
+      closeOpenClawStateDatabaseForTest();
+    }
+  }));

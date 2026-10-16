@@ -29,10 +29,14 @@ function seededOrphans() {
   const root = dirs.make("update-task-delivery-");
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
-  vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
-  vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", undefined);
-  vi.stubEnv("OPENCLAW_POST_CORE_UPDATE", undefined);
-  vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", undefined);
+  for (const key of [
+    "OPENCLAW_UPDATE_RUN_ID",
+    "OPENCLAW_UPDATE_RUN_HANDOFF",
+    "OPENCLAW_POST_CORE_UPDATE",
+    "OPENCLAW_SUPERVISOR_MODE",
+  ]) {
+    vi.stubEnv(key, undefined);
+  }
   const env = { ...process.env };
   const filename = resolveOpenClawStateSqlitePath(env);
   fs.mkdirSync(path.dirname(filename), { recursive: true });
@@ -70,28 +74,32 @@ function inspect<T>(filename: string, run: (db: DatabaseSync) => T): T {
   }
 }
 
+function recoveryDirectories(filename: string) {
+  return fs
+    .readdirSync(path.dirname(filename))
+    .filter((name) => name.startsWith("openclaw-task-delivery-recovery-"));
+}
+
+function expectUnadmitted(filename: string) {
+  inspect(filename, (db) => {
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toHaveLength(18);
+    expect(db.prepare("SELECT count(*) AS count FROM update_runs").get()).toEqual({ count: 0 });
+  });
+}
+
 it("keeps repairable task-delivery state unchanged during update preview", async () => {
   const f = seededOrphans();
   await expect(
     admitUpdateCommandRun({ opts: { dryRun: true }, root: f.root }).then(() => "admitted"),
   ).rejects.toThrow(/repairable[\s\S]*openclaw doctor --fix/iu);
-  inspect(f.filename, (db) => {
-    expect(db.prepare("PRAGMA foreign_key_check").all()).toHaveLength(18);
-    expect(db.prepare("SELECT count(*) AS count FROM update_runs").get()).toEqual({ count: 0 });
-  });
-  expect(
-    fs
-      .readdirSync(path.dirname(f.filename))
-      .filter((name) => name.startsWith("openclaw-task-delivery-recovery-")),
-  ).toEqual([]);
+  expectUnadmitted(f.filename);
+  expect(recoveryDirectories(f.filename)).toEqual([]);
 });
 
 it("admits cascade-owned task-delivery orphans with preservation and a durable recovery record", async () => {
   const f = seededOrphans();
   const run = await admitUpdateCommandRun({ opts: {}, root: f.root });
-  const directories = fs
-    .readdirSync(path.dirname(f.filename))
-    .filter((name) => name.startsWith("openclaw-task-delivery-recovery-"));
+  const directories = recoveryDirectories(f.filename);
   expect(directories).toHaveLength(1);
   const directory = path.join(path.dirname(f.filename), directories[0]!);
   const exported: unknown[] = fs
@@ -121,18 +129,12 @@ it("admits cascade-owned task-delivery orphans with preservation and a durable r
   completeUpdateCommandRun({ status: "ok", mode: "npm", durationMs: 1, steps: [] }, run);
   const record = getUpdateRun(run.runId, { env: f.env });
   expect(record?.status).toBe("succeeded");
-  expect(record?.steps).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        step: "task-delivery-recovery",
-        status: "completed",
-        detail: expect.stringContaining(`18 orphan task delivery rows`),
-      }),
-    ]),
-  );
-  expect(record?.steps.find((step) => step.step === "task-delivery-recovery")?.detail).toContain(
-    directories[0],
-  );
+  const recovery = record?.steps.find((step) => step.step === "task-delivery-recovery");
+  expect(recovery).toMatchObject({
+    status: "completed",
+    detail: expect.stringContaining("18 orphan task delivery rows"),
+  });
+  expect(recovery?.detail).toContain(directories[0]);
 });
 
 it.each(["non-cascade", "structural"] as const)(
@@ -158,11 +160,7 @@ it.each(["non-cascade", "structural"] as const)(
       });
       expect(db.prepare("SELECT count(*) AS count FROM update_runs").get()).toEqual({ count: 0 });
     });
-    expect(
-      fs
-        .readdirSync(path.dirname(f.filename))
-        .filter((name) => name.startsWith("openclaw-task-delivery-recovery-")),
-    ).toEqual([]);
+    expect(recoveryDirectories(f.filename)).toEqual([]);
   },
 );
 
@@ -183,41 +181,32 @@ it("preserves inbound CASCADE dependents when recovery is refused", () => {
   });
 });
 
-it.each(["foreign-gateway"] as const)(
-  "reports repairable orphans and Doctor next action for %s admission",
-  (blocker) => {
-    const f = seededOrphans();
-    const anchor = acquireGatewayStateOwner({ databasePath: f.filename });
-    anchor.release();
-    // Register no local root: recovery must not borrow the foreign Gateway's schema authority.
-    const owner =
-      blocker === "foreign-gateway"
-        ? acquireFileLockSync(anchor.path, {
-            lockPath: anchor.path,
-            retry: { retries: 0 },
-            payload: () => ({
-              pid: process.pid,
-              ownerId: randomUUID(),
-              createdAt: new Date().toISOString(),
-              configPath: path.join(f.root, "openclaw.json"),
-              role: "gateway",
-            }),
-            parsePayload: parseGatewayLockPayload,
-          })
-        : undefined;
-    try {
-      expect(() => createUpdateRun({ trigger: "cli" }, { env: f.env })).toThrow(
-        /repairable[\s\S]*openclaw doctor --fix/iu,
-      );
-      inspect(f.filename, (db) => {
-        expect(db.prepare("PRAGMA foreign_key_check").all()).toHaveLength(18);
-        expect(db.prepare("SELECT count(*) AS count FROM update_runs").get()).toEqual({ count: 0 });
-      });
-    } finally {
-      owner?.release();
-    }
-  },
-);
+it("reports repairable orphans and Doctor next action for foreign-gateway admission", () => {
+  const f = seededOrphans();
+  const anchor = acquireGatewayStateOwner({ databasePath: f.filename });
+  anchor.release();
+  // Register no local root: recovery must not borrow the foreign Gateway's schema authority.
+  const owner = acquireFileLockSync(anchor.path, {
+    lockPath: anchor.path,
+    retry: { retries: 0 },
+    payload: () => ({
+      pid: process.pid,
+      ownerId: randomUUID(),
+      createdAt: new Date().toISOString(),
+      configPath: path.join(f.root, "openclaw.json"),
+      role: "gateway",
+    }),
+    parsePayload: parseGatewayLockPayload,
+  });
+  try {
+    expect(() => createUpdateRun({ trigger: "cli" }, { env: f.env })).toThrow(
+      /repairable[\s\S]*openclaw doctor --fix/iu,
+    );
+    expectUnadmitted(f.filename);
+  } finally {
+    owner?.release();
+  }
+});
 
 it("rolls back recovered rows when ledger schema refuses admission", () => {
   const f = seededOrphans();
@@ -228,13 +217,6 @@ it("rolls back recovered rows when ledger schema refuses admission", () => {
   expect(() => createUpdateRun({ trigger: "cli" }, { env: f.env })).toThrow(
     /unknown_ledger_trigger/,
   );
-  inspect(f.filename, (db) => {
-    expect(db.prepare("PRAGMA foreign_key_check").all()).toHaveLength(18);
-    expect(db.prepare("SELECT count(*) AS count FROM update_runs").get()).toEqual({ count: 0 });
-  });
-  expect(
-    fs
-      .readdirSync(path.dirname(f.filename))
-      .filter((name) => name.startsWith("openclaw-task-delivery-recovery-")),
-  ).toHaveLength(1);
+  expectUnadmitted(f.filename);
+  expect(recoveryDirectories(f.filename)).toHaveLength(1);
 });
