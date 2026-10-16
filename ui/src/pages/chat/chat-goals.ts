@@ -59,7 +59,21 @@ const rejectedGoalReasons = new Set([
   "goal-rebound",
   "capacity",
   "invalid",
+  "session-busy",
 ]);
+
+/**
+ * A typed busy refusal is definitive: pre-admission rejected the Resume before it
+ * started, so there is no commit to reconcile and no ACK to lose.
+ */
+function isGoalSessionBusyRejection(error: unknown): boolean {
+  return (
+    error instanceof GatewayRequestError &&
+    error.code === "UNAVAILABLE" &&
+    isRecord(error.details) &&
+    error.details.reason === "goal-session-busy"
+  );
+}
 
 function rejectGoalOperation(host: ChatHost, message: string): false {
   setChatError(host, message, true);
@@ -415,6 +429,7 @@ async function runGoalOperation(
       if (
         !("action" in params && params.action === "resume") ||
         !targetIsCurrent() ||
+        isGoalSessionBusyRejection(error) ||
         !(
           error instanceof GatewayProtocolRequestTimeoutError ||
           (error instanceof GatewayRequestError && error.code === "UNAVAILABLE")

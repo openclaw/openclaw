@@ -111,6 +111,39 @@ describe("Goal control requests", () => {
     expect(sessionStorage.length).toBe(0);
   });
 
+  it("treats a busy Resume rejection as final and keeps other Goal decisions available", async () => {
+    vi.useFakeTimers();
+    let busy = true;
+    const host = goalHost({
+      "sessions.goal.update": () => {
+        if (busy) {
+          throw new GatewayRequestError({
+            code: "UNAVAILABLE",
+            message:
+              "This session still has active or queued work. Wait for it to finish, then retry the Goal.",
+            details: { reason: "goal-session-busy" },
+          });
+        }
+        return { status: "updated", goalId: goal.id, goal };
+      },
+    });
+    const submitted = mutateChatGoal(host, { action: "resume", goalId: goal.id });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await submitted).toBe(false);
+    // A typed busy refusal is definitive: it is not retried and leaves no recovery behind.
+    expect(
+      host.request.mock.calls.filter(([method]) => method === "sessions.goal.update"),
+    ).toHaveLength(1);
+    expect(chatGoalRecovery(host)).toBeUndefined();
+    expect(sessionStorage.length).toBe(0);
+    expect(host.chatError).toContain("still has active or queued work");
+    // A different Goal decision on the same goal is not blocked by the rejected Resume.
+    busy = false;
+    expect(
+      await mutateChatGoal(host, { action: "edit", goalId: goal.id, objective: "New objective" }),
+    ).toBe(true);
+  });
+
   it.each(["connection", "session", "principal", "expiry"])(
     "does not automatically retry Resume after its %s changes",
     async (changed) => {
