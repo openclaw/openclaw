@@ -208,7 +208,7 @@ async function observeRuntimeCommandTimeout(params: {
   // Freeze the parent's policy clock, not subprocess startup, I/O, readiness or cleanup.
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   try {
-    const command = runtimeSmoke
+    const command: Promise<unknown> = runtimeSmoke
       .runCommand(process.execPath, params.args, {
         detached: params.runDetached,
         timeoutMs: params.timeoutMs,
