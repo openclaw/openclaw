@@ -66,7 +66,7 @@ export const SESSION_ID = "fault-session";
 export const SESSION_KEY = "agent:main:fault-session";
 export const ENVIRONMENT_ID = "fault-environment";
 export const RUN_ID = "fault-run";
-const BUNDLE_HASH = Array.from({ length: 64 }, () => "a").join("");
+const BUNDLE_HASH = "a".repeat(64);
 const CREDENTIAL = ["worker", "fault", "fixture"].join("-");
 const MODEL_REF = { provider: "fake", model: "fault-model" } as const;
 const SSH_ENDPOINT: WorkerSshEndpoint = {
@@ -76,18 +76,13 @@ const SSH_ENDPOINT: WorkerSshEndpoint = {
   hostKey: [["ssh", "ed25519"].join("-"), "AAAA"].join(" "),
   keyRef: { source: "file", provider: "worker-fixtures", id: "/development-key" },
 };
-const HANDSHAKE = {
-  bundleHash: BUNDLE_HASH,
-  openclawVersion: "fault-test",
-  protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
-};
 const BUNDLE_ARTIFACT = {
   install: "bundle" as const,
   bundleHash: BUNDLE_HASH,
-  openclawVersion: HANDSHAKE.openclawVersion,
+  openclawVersion: "fault-test",
   protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
   tarballBytes: 1,
-  tarballSha256: Array.from({ length: 64 }, () => "b").join(""),
+  tarballSha256: "b".repeat(64),
   tarballPath: "/gateway/cache/worker-bundle.tgz",
 };
 const PROVIDER: WorkerProvider = {
@@ -112,8 +107,7 @@ export function doneMessage(text: string): WorkerDoneMessage {
     role: "assistant",
     content: [{ type: "text", text }],
     api: "openai-responses",
-    provider: MODEL_REF.provider,
-    model: MODEL_REF.model,
+    ...MODEL_REF,
     usage: { ...createZeroUsageFixture(), input: 1, output: 1, totalTokens: 2 },
     stopReason: "stop",
     timestamp: 1,
@@ -129,17 +123,14 @@ type FaultRule =
   | { kind: "drop-response"; method: string; restart: boolean }
   | { kind: "partition-after-inference-event"; seq: number };
 
-type TranscriptGate = {
-  phase: "before-apply" | "after-apply";
+type Gate = {
   entered: Deferred<void>;
   release: Deferred<void>;
 };
-
-type LiveEventGate = {
+type TranscriptGate = Gate & { phase: "before-apply" | "after-apply" };
+type LiveEventGate = Gate & {
   stage: "before-service" | "after-service";
   target: "preview" | "finishing";
-  entered: Deferred<void>;
-  release: Deferred<void>;
   claimed: boolean;
 };
 
@@ -215,19 +206,15 @@ export class ComposedGatewayHarness {
     root: string,
     artifact: WorkerInstallationArtifact = BUNDLE_ARTIFACT,
   ): Promise<ComposedGatewayHarness> {
-    const sessionsDir = path.join(root, "agents", "main", "sessions");
-    const storePath = path.join(sessionsDir, "sessions.json");
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: SESSION_KEY, storePath },
-      { sessionId: SESSION_ID, updatedAt: 1 },
-    );
+    const target = {
+      agentId: "main",
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      storePath: path.join(root, "agents", "main", "sessions", "sessions.json"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: SESSION_ID, updatedAt: 1 });
     const sessionTarget = captureSessionTranscriptTargetBinding(
-      await resolveSessionTranscriptRuntimeTarget({
-        agentId: "main",
-        sessionId: SESSION_ID,
-        sessionKey: SESSION_KEY,
-        storePath,
-      }),
+      await resolveSessionTranscriptRuntimeTarget(target),
     );
     const database = stateDb.openOpenClawStateDatabase({
       env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
@@ -306,6 +293,16 @@ export class ComposedGatewayHarness {
 
   addFault(rule: FaultRule): void {
     this.faults.push(rule);
+  }
+
+  planPending() {
+    const plan = {
+      kind: "pending" as const,
+      release: createDeferred<WorkerInferenceTerminalOutcome>(),
+      started: createDeferred<void>(),
+    };
+    this.providerPlan = plan;
+    return plan;
   }
 
   addLiveEventGate(stage: LiveEventGate["stage"], target: LiveEventGate["target"]): LiveEventGate {
@@ -387,9 +384,9 @@ export class ComposedGatewayHarness {
 
   async createClients(params: WorkerClientOptions = {}): Promise<WorkerClients> {
     const descriptor = await this.createDescriptor(params);
-    const epoch = descriptor.admission.ownerEpoch;
+    const { admission, assignment, connectionEndpoint } = descriptor;
     const connection = createWorkerConnection({
-      endpoint: { kind: "unix", socketPath: this.socketPath },
+      endpoint: connectionEndpoint,
       connectParams: buildWorkerConnectParams(descriptor),
       admissionTimeoutMs: 1_000,
       admissionDeadlineMs: 5_000,
@@ -398,13 +395,13 @@ export class ComposedGatewayHarness {
     return {
       connection,
       transcript: new WorkerTranscriptCommitClient(connection, {
-        runEpoch: epoch,
-        baseLeafId: params.baseLeafId ?? null,
-        initialSeq: params.initialSeq ?? 1,
+        runEpoch: admission.ownerEpoch,
+        baseLeafId: assignment.transcript.baseLeafId,
+        initialSeq: assignment.transcript.nextSeq,
       }),
       live: new WorkerLiveEventClient(connection, {
-        runEpoch: epoch,
-        initialAckedSeq: params.initialAckedSeq ?? 0,
+        runEpoch: admission.ownerEpoch,
+        initialAckedSeq: assignment.liveEvents.ackedSeq,
       }),
       inference: new WorkerInferenceProxyClient(connection),
     };
@@ -521,12 +518,11 @@ export class ComposedGatewayHarness {
     this.unsubscribeLive?.();
     this.unsubscribeLive = undefined;
     await this.chat.dispose();
-    await new Promise<void>((resolve) => {
-      this.webSocketServer.close(() => resolve());
-    });
-    await new Promise<void>((resolve) => {
-      this.httpServer.close(() => resolve());
-    });
+    for (const server of [this.webSocketServer, this.httpServer]) {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
     // Session writes can retain maintenance workers after their request settles.
     // Join this fixture's database owners before removing their files.
     await cleanupSessionStateForTest({
