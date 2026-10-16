@@ -438,7 +438,9 @@ describe("channel ingress drain restart-recovery tombstone", () => {
             laneKey: "dm",
             payload: { text: "question" },
             receivedAt: 1,
-            updatedAt: 10_000,
+            // Each transition (prior claim and release, then claim and fail)
+            // moves updatedAt strictly past the frozen clock.
+            updatedAt: 10_004,
             attempts: 1,
             lastAttemptAt: 10,
             failedAt: 10_000,
