@@ -95,34 +95,30 @@ describe("resolveModelAuthLabelAsync", () => {
     expect(label).not.toContain("...");
   });
 
-  it("shows codex cli auth for codex provider without auth profiles", async () => {
-    mocks.readCodexCliCredentialsCached.mockReturnValue(createOAuthRefreshCredential());
-    expect(await labelFor("codex")).toBe("oauth (codex-cli)");
-    expect(mocks.readCodexCliCredentialsCached).toHaveBeenCalledWith({
-      ttlMs: 5_000,
-      allowKeychainPrompt: false,
-    });
-  });
-
-  it("uses Codex CLI auth for Codex-backed OpenAI before env fallback", async () => {
-    mocks.readCodexCliCredentialsCached.mockReturnValue(createOAuthRefreshCredential());
-    mocks.resolveEnvApiKey.mockReturnValue({
-      apiKey: "env-key-placeholder",
-      source: "env: OPENAI_API_KEY",
-    });
-
-    expect(
-      await labelFor("openai", {
-        codexCliCredentialsHome: "/tmp/openclaw-agent/codex-home",
-      }),
-    ).toBe("oauth (codex-cli)");
-    expect(mocks.readCodexCliCredentialsCached).toHaveBeenCalledWith({
-      codexHome: "/tmp/openclaw-agent/codex-home",
-      ttlMs: 5_000,
-      allowKeychainPrompt: false,
-    });
-    expect(mocks.resolveEnvApiKey).not.toHaveBeenCalled();
-  });
+  it.each(["codex", "openai"])(
+    "labels %s Codex CLI auth without leaking credentials",
+    async (provider) => {
+      const codexHome = provider === "openai" ? "/tmp/openclaw-agent/codex-home" : undefined;
+      mocks.readCodexCliCredentialsCached.mockReturnValue(createOAuthRefreshCredential());
+      if (codexHome) {
+        mocks.resolveEnvApiKey.mockReturnValue({
+          apiKey: "env-key-placeholder",
+          source: "env: OPENAI_API_KEY",
+        });
+      }
+      expect(await labelFor(provider, { codexCliCredentialsHome: codexHome })).toBe(
+        "oauth (codex-cli)",
+      );
+      expect(mocks.readCodexCliCredentialsCached).toHaveBeenCalledWith({
+        ...(codexHome ? { codexHome } : {}),
+        ttlMs: 5_000,
+        allowKeychainPrompt: false,
+      });
+      if (codexHome) {
+        expect(mocks.resolveEnvApiKey).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("shows native Claude CLI auth without reading credential storage", async () => {
     expect(await labelFor("claude-cli")).toBe("native (claude-cli)");

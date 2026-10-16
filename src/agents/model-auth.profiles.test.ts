@@ -8,7 +8,6 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
-import type { SecretRef } from "../config/types.secrets.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -16,6 +15,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createApiKeyCredential as keyCredential,
   createAuthProfileStoreFixture as authStore,
+  createOAuthRefreshCredential,
 } from "./auth-profiles/credential-fixtures.test-support.js";
 import { refreshAuthProfileFileState } from "./auth-profiles/file-state.js";
 import { clearAuthProfileMigrationDiagnostics } from "./auth-profiles/legacy-source-diagnostic.js";
@@ -34,6 +34,12 @@ import { upsertAuthProfileWithLockOrThrow } from "./auth-profiles/upsert-with-lo
 import { resolveInlineProviderApiKeyUsageId } from "./auth-profiles/usage.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import {
+  configFor,
+  configForProviders,
+  modelDefinition,
+  providerEntry,
+} from "./model-auth.fixtures.test-support.js";
+import {
   createRuntimeProviderAuthLookup,
   getApiKeyForModelCore as resolveModelAuth,
   hasAvailableAuthForProvider as hasAuth,
@@ -43,54 +49,20 @@ import {
   resolveEnvApiKey,
 } from "./model-auth.js";
 
-function secretRef(source: SecretRef["source"], id: string, provider: string): SecretRef {
-  return { source, id, provider };
-}
-
-function providerEntry(
-  baseUrl: string,
-  options: Omit<ModelProviderConfig, "baseUrl" | "models"> = {},
-): ModelProviderConfig {
-  return { baseUrl, models: [], ...options };
-}
-
-function configForProviders(providers: Record<string, ModelProviderConfig>): OpenClawConfig {
-  return { models: { providers } };
-}
-
-function configFor(provider: string, baseUrl: string, options: Partial<ModelProviderConfig> = {}) {
-  return configForProviders({ [provider]: providerEntry(baseUrl, options) });
-}
-
+const authStateOptions = {
+  layout: "state-only",
+  prefix: "openclaw-auth-",
+  agentEnv: "main",
+} as const;
 function withAuthState(
   run: Parameters<typeof withOpenClawTestState>[1],
   options: Partial<Parameters<typeof withOpenClawTestState>[0]> = {},
 ) {
-  return withOpenClawTestState(
-    {
-      layout: "state-only",
-      prefix: "openclaw-auth-",
-      agentEnv: "main",
-      ...options,
-    },
-    run,
-  );
+  return withOpenClawTestState({ ...authStateOptions, ...options }, run);
 }
 
 function model(id: string, api: Model["api"], extra: Partial<Model> = {}): Model {
   return { id, provider: "openai", api, ...extra } as Model;
-}
-
-function testModelDefinition(id: string): ModelProviderConfig["models"][number] {
-  return {
-    id,
-    name: id,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 8192,
-  };
 }
 
 vi.mock("../plugins/setup-registry.js", () => ({
@@ -199,6 +171,8 @@ const oauthFixture = {
   accountId: "acct_123",
 };
 
+const routerUrl = "https://openrouter.ai/api/v1";
+
 const BEDROCK_PROVIDER_CFG = configFor(
   "amazon-bedrock",
   "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -254,10 +228,6 @@ function cooldownStore(
   };
 }
 
-function configuredAgent(agentDir: string) {
-  return { entries: { configured: { agentDir } } };
-}
-
 function buildDemoLocalStore(keys: string[]) {
   return authStore(
     Object.fromEntries(
@@ -276,84 +246,55 @@ function buildDemoLocalProviderCfg(apiKey: string) {
   });
 }
 
-async function resolveDemoLocalApiKey(params: {
-  envApiKey: string | undefined;
-  storedKeys: string[];
-  configuredApiKey: string;
-}) {
-  return await withEnvAsync({ DEMO_LOCAL_API_KEY: params.envApiKey }, async () => {
-    return await resolveAuth({
-      provider: "demo-local",
-      store: buildDemoLocalStore(params.storedKeys),
-      cfg: buildDemoLocalProviderCfg(params.configuredApiKey),
-    });
-  });
-}
+it.each([
+  ["shared read-through", "shared-state-key", false, undefined],
+  ["legacy main authority", "legacy-main-key", true, undefined],
+  ["agent-local override", "shared-state-key", false, "agent-local-key"],
+] as const)("preserves %s", async (_name, baseKey, legacy, localKey) => {
+  await withAuthState(
+    async (state) => {
+      const profileId = "openai:manual";
+      const mainAgentDir = state.agentDir();
+      const agentDir = state.agentDir("worker");
+      const credential = keyCredential("openai", baseKey);
 
-describe("shared auth profile read-through", () => {
-  it.each([
-    {
-      name: "reads a shared API key without a local profile",
-      baseKey: "shared-state-key",
-      legacy: false,
-      localKey: undefined,
-    },
-    {
-      name: "keeps the populated legacy main store authoritative before relocation",
-      baseKey: "legacy-main-key",
-      legacy: true,
-      localKey: undefined,
-    },
-    {
-      name: "lets an agent-local profile override its shared read-through base",
-      baseKey: "shared-state-key",
-      legacy: false,
-      localKey: "agent-local-key",
-    },
-  ])("$name", async ({ baseKey, legacy, localKey }) => {
-    await withAuthState(
-      async (state) => {
-        const profileId = "openai:manual";
-        const mainAgentDir = state.agentDir();
-        const agentDir = state.agentDir("worker");
-        const credential = keyCredential("openai", baseKey);
-
-        if (legacy) {
-          writePersistedAuthProfileStoreRaw(authStore({ [profileId]: credential }), mainAgentDir);
-        }
-        await upsertAuthProfileWithLockOrThrow({
-          profileId,
-          credential,
-          agentDir: mainAgentDir,
-        });
-        if (localKey) {
-          writePersistedAuthProfileStoreRaw(
-            authStore({ [profileId]: { ...credential, key: localKey } }),
-            agentDir,
-          );
-        }
-
-        expect(inspectPersistedAuthProfileStoreRaw(mainAgentDir).status).toBe(
-          legacy ? "readable" : "missing",
+      if (legacy) {
+        writePersistedAuthProfileStoreRaw(authStore({ [profileId]: credential }), mainAgentDir);
+      }
+      await upsertAuthProfileWithLockOrThrow({
+        profileId,
+        credential,
+        agentDir: mainAgentDir,
+      });
+      if (localKey) {
+        writePersistedAuthProfileStoreRaw(
+          authStore({ [profileId]: { ...credential, key: localKey } }),
+          agentDir,
         );
-        expect(inspectPersistedAuthProfileStoreRaw(agentDir).status).toBe(
-          localKey ? "readable" : "missing",
-        );
+      }
 
-        const inheritedAuthDir = resolveLegacyInheritedAuthDir({}, state.env);
-        const store = ensureAuthProfileStore(agentDir, {
-          allowKeychainPrompt: false,
-          syncExternalCli: false,
-          ...(inheritedAuthDir ? { inheritedAuthDir } : {}),
-        });
-        const resolved = await resolveAuth({ provider: "openai", cfg: {}, agentDir, store });
+      expect(inspectPersistedAuthProfileStoreRaw(mainAgentDir).status).toBe(
+        legacy ? "readable" : "missing",
+      );
+      expect(inspectPersistedAuthProfileStoreRaw(agentDir).status).toBe(
+        localKey ? "readable" : "missing",
+      );
 
-        expect(resolved.apiKey).toBe(localKey ?? baseKey);
-        expect(resolved.source).toBe(`profile:${profileId}`);
-      },
-      { env: { OPENAI_API_KEY: undefined } },
-    );
-  });
+      const inheritedAuthDir = resolveLegacyInheritedAuthDir({}, state.env);
+      const store = ensureAuthProfileStore(agentDir, {
+        allowKeychainPrompt: false,
+        syncExternalCli: false,
+        ...(inheritedAuthDir ? { inheritedAuthDir } : {}),
+      });
+      const resolved = await resolveAuth({ provider: "openai", cfg: {}, agentDir, store });
+
+      expect(resolved).toMatchObject({
+        apiKey: localKey ?? baseKey,
+        source: `profile:${profileId}`,
+      });
+    },
+    { env: { OPENAI_API_KEY: undefined } },
+  );
 });
 
 describe("getApiKeyForModelCore", () => {
@@ -362,11 +303,7 @@ describe("getApiKeyForModelCore", () => {
       setRuntimeConfigSnapshot({});
       await state.writeAuthProfiles(
         authStore({
-          "openai:chatgpt": {
-            type: "oauth" as const,
-            provider: "openai",
-            ...oauthFixture,
-          },
+          "openai:chatgpt": createOAuthRefreshCredential(oauthFixture),
           "openai:api-key": keyCredential("openai", "direct-openai-key"),
         }),
       );
@@ -405,12 +342,10 @@ describe("getApiKeyForModelCore", () => {
         profileId: "openai:shared",
         lockedProfile: true,
         store: authStore({
-          "openai:shared": {
-            type: "oauth",
-            provider: "openai",
+          "openai:shared": createOAuthRefreshCredential({
             ...oauthFixture,
             authFlow: "chatgpt-token-sharing",
-          },
+          }),
         }),
       }),
     ).resolves.toMatchObject({
@@ -443,7 +378,7 @@ describe("getApiKeyForModelCore", () => {
 
         const cfg: OpenClawConfig = {
           ...buildDemoLocalProviderCfg("DEMO_LOCAL_API_KEY"),
-          agents: configuredAgent(state.agentDir("configured")),
+          agents: { entries: { configured: { agentDir: state.agentDir("configured") } } },
         };
 
         await withEnvAsync({ DEMO_LOCAL_API_KEY: "env-demo-key" }, async () => {
@@ -515,7 +450,9 @@ describe("getApiKeyForModelCore", () => {
           [provider]: {
             api: "openai-completions",
             baseUrl,
-            models: [testModelDefinition("fixture-model")],
+            models: [
+              modelDefinition("fixture-model", { reasoning: false, contextWindow: 128_000 }),
+            ],
           },
         }),
         env: {},
@@ -555,29 +492,25 @@ describe("getApiKeyForModelCore", () => {
     },
   );
 
-  it("falls back to the stored synthetic local profile when no real auth exists", async () => {
-    const resolved = await resolveDemoLocalApiKey({
-      envApiKey: undefined,
-      storedKeys: ["demo-local"],
-      configuredApiKey: "DEMO_LOCAL_API_KEY",
-    });
-    expect(resolved).toMatchObject({
-      apiKey: "demo-local",
-      source: "profile:demo-local:default",
-      profileId: "demo-local:default",
-    });
-  });
-
-  it("defers every stored synthetic local profile until real auth sources are checked", async () => {
-    const resolved = await resolveDemoLocalApiKey({
-      envApiKey: "env-demo-key",
-      storedKeys: ["demo-local", "demo-local"],
-      configuredApiKey: "DEMO_LOCAL_API_KEY",
-    });
-    expect(resolved.apiKey).toBe("env-demo-key");
-    expect(resolved.source).toContain("DEMO_LOCAL_API_KEY");
-    expect(resolved.profileId).toBeUndefined();
-  });
+  it.each([undefined, "env-demo-key"])(
+    "defers synthetic profiles to real auth: %s",
+    async (envApiKey) => {
+      await withEnvAsync({ DEMO_LOCAL_API_KEY: envApiKey }, async () => {
+        const resolved = await resolveAuth({
+          provider: "demo-local",
+          store: buildDemoLocalStore(envApiKey ? ["demo-local", "demo-local"] : ["demo-local"]),
+          cfg: buildDemoLocalProviderCfg("DEMO_LOCAL_API_KEY"),
+        });
+        expect(resolved.apiKey).toBe(envApiKey ?? "demo-local");
+        expect(resolved.profileId).toBe(envApiKey ? undefined : "demo-local:default");
+        if (envApiKey) {
+          expect(resolved.source).toContain("DEMO_LOCAL_API_KEY");
+        } else {
+          expect(resolved.source).toBe("profile:demo-local:default");
+        }
+      });
+    },
+  );
 
   it.each([
     ["bearer", "AWS_BEARER_TOKEN_BEDROCK"],
@@ -604,44 +537,31 @@ describe("getApiKeyForModelCore", () => {
     );
   });
 
-  it("resolveEnvApiKey('google-vertex') keeps ADC fallback when manifest env candidates are empty", async () => {
-    const tempDir = tempDirs.make("openclaw-google-adc-candidates-");
-    const credentialsPath = path.join(tempDir, "認証情報-adc.json");
-    await fs.writeFile(credentialsPath, "{}", "utf8");
-
+  it.each([false, true])("honors the explicit ADC path (missing: %s)", async (missing) => {
+    const homeDir = tempDirs.make("openclaw-google-adc-");
+    const credentialsPath = path.join(homeDir, missing ? "missing-adc.json" : "認証情報-adc.json");
+    if (missing) {
+      const fallbackDir = path.join(homeDir, ".config", "gcloud");
+      await fs.mkdir(fallbackDir, { recursive: true });
+      await fs.writeFile(path.join(fallbackDir, "application_default_credentials.json"), "{}");
+    } else {
+      await fs.writeFile(credentialsPath, "{}");
+    }
     const resolved = resolveEnvApiKey(
       "google-vertex",
       {
         GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
         GOOGLE_CLOUD_LOCATION: "us-central1",
         GOOGLE_CLOUD_PROJECT: "vertex-project",
-      } as NodeJS.ProcessEnv,
-      { candidateMap: { "google-vertex": ["GOOGLE_CLOUD_API_KEY"] } },
+        ...(missing ? { HOME: homeDir } : {}),
+      },
+      missing ? undefined : { candidateMap: { "google-vertex": ["GOOGLE_CLOUD_API_KEY"] } },
     );
-
-    expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
-    expect(resolved?.source).toBe("gcloud adc");
-  });
-
-  it("resolveEnvApiKey('google-vertex') rejects missing explicit ADC path before fallback paths", async () => {
-    const homeDir = tempDirs.make("openclaw-google-adc-home-");
-    const fallbackDir = path.join(homeDir, ".config", "gcloud");
-    const missingCredentialsPath = path.join(homeDir, "missing-adc.json");
-    await fs.mkdir(fallbackDir, { recursive: true });
-    await fs.writeFile(
-      path.join(fallbackDir, "application_default_credentials.json"),
-      "{}",
-      "utf8",
-    );
-
-    const resolved = resolveEnvApiKey("google-vertex", {
-      GOOGLE_APPLICATION_CREDENTIALS: missingCredentialsPath,
-      GOOGLE_CLOUD_LOCATION: "us-central1",
-      GOOGLE_CLOUD_PROJECT: "vertex-project",
-      HOME: homeDir,
-    } as NodeJS.ProcessEnv);
-
-    expect(resolved).toBeNull();
+    if (missing) {
+      expect(resolved).toBeNull();
+    } else {
+      expect(resolved).toMatchObject({ apiKey: "gcp-vertex-credentials", source: "gcloud adc" });
+    }
   });
 
   it.each([
@@ -767,34 +687,13 @@ describe("resolveApiKeyForProviderCore — per-entry apiKey as profile ID refere
     );
   });
 
-  it("rejects a retired profile reference before resolving its copied credential through provider auth", async () => {
-    await expect(
-      resolveAuth({
-        provider: "anthropic",
-        cfg: configFor("anthropic", "https://api.anthropic.com", {
-          api: "anthropic-messages",
-          apiKey: "anthropic:claude-cli",
-        }),
-        store: authStore({
-          "anthropic:claude-cli": {
-            type: "oauth",
-            provider: "anthropic",
-            access: "copied-native-access",
-            refresh: "copied-native-refresh",
-            expires: Date.now() + 30 * 60 * 1000,
-          },
-        }),
-      }),
-    ).rejects.toThrow(/anthropic:claude-cli.*retired.*doctor --fix/);
-  });
-
   it("does not treat env SecretRef ids as profile references", async () => {
     await withEnvAsync({ OPENROUTER_PROFILE: "sk-or-env-secret" }, async () => {
       const resolved = await resolveAuth({
         provider: "openrouter-minimax",
         cfg: configFor("openrouter-minimax", "https://openrouter.ai/api/v1", {
           api: "openai-completions" as const,
-          apiKey: secretRef("env", "OPENROUTER_PROFILE", "default"),
+          apiKey: { source: "env", provider: "default", id: "OPENROUTER_PROFILE" },
         }),
         store: authStore({
           OPENROUTER_PROFILE: keyCredential("openrouter", "sk-or-wrong-profile"),
@@ -859,80 +758,74 @@ describe("resolveApiKeyForProviderCore — per-entry apiKey as profile ID refere
     });
   });
 
-  it("applies model auth-mode guards to per-entry token profile references through provider auth", async () => {
-    await expect(
-      resolveAuth({
-        provider: "openai",
-        modelApi: "openai-responses",
-        cfg: configFor("openai", "https://api.openai.com/v1", {
-          api: "openai-responses" as const,
-          apiKey: "openai:token",
-        }),
-        store: authStore({
-          "openai:token": {
-            type: "token",
-            provider: "openai",
-            token: "oauth-token",
-          },
-        }),
-      }),
-    ).rejects.toThrow(/requires an OpenAI API key profile/);
-  });
-
-  it.each<{
-    name: string;
-    provider: string;
-    baseUrl: string;
-    profileId: string;
-    credential: AuthProfileCredential;
-    error: RegExp;
-  }>([
-    {
-      name: "OAuth credential class",
-      provider: "openrouter-minimax",
-      baseUrl: "https://openrouter.ai/api/v1",
-      profileId: "google:oauth-a",
-      credential: {
-        type: "oauth",
-        provider: "google",
-        access: "oauth-access",
-        refresh: "oauth-refresh",
-        expires: 0,
+  type BindingOptions = Partial<Pick<ModelProviderConfig, "baseUrl" | "api">> & {
+    provider?: string;
+    profileId?: string;
+    modelApi?: string;
+    owner?: boolean;
+  };
+  it.each<[string, AuthProfileCredential, RegExp, BindingOptions?]>([
+    [
+      "retired profile",
+      createOAuthRefreshCredential({ provider: "anthropic" }),
+      /anthropic:claude-cli.*retired.*doctor --fix/,
+      {
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        api: "anthropic-messages",
+        profileId: "anthropic:claude-cli",
       },
-      error:
-        /references a "oauth" credential for provider "google", which is not a bearer-style auth class/,
-    },
-    {
-      name: "different provider endpoint",
-      provider: "custom-proxy",
-      baseUrl: "https://example.invalid/v1",
-      profileId: "openrouter:key-b",
-      credential: keyCredential("openrouter", "sk-or-actual-key-b"),
-      error: /not compatible with this provider entry's auth binding/,
-    },
-    {
-      name: "profile with no key material",
-      provider: "openrouter-minimax",
-      baseUrl: "https://openrouter.ai/api/v1",
-      profileId: "openrouter:key-b",
-      credential: { type: "api_key", provider: "openrouter" },
-      error: /matched a stored profile but failed to resolve/,
-    },
+    ],
+    [
+      "model auth mode",
+      { type: "token", provider: "openai", token: "oauth-token" },
+      /requires an OpenAI API key profile/,
+      {
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        profileId: "openai:token",
+        api: "openai-responses",
+        modelApi: "openai-responses",
+        owner: false,
+      },
+    ],
+    [
+      "OAuth credential class",
+      createOAuthRefreshCredential({ provider: "google", expires: 0 }),
+      /references a "oauth" credential for provider "google", which is not a bearer-style auth class/,
+      { profileId: "google:oauth-a" },
+    ],
+    [
+      "different provider endpoint",
+      keyCredential("openrouter", "sk-or-actual-key-b"),
+      /not compatible with this provider entry's auth binding/,
+      { provider: "custom-proxy", baseUrl: "https://example.invalid/v1" },
+    ],
+    [
+      "profile with no key material",
+      { type: "api_key", provider: "openrouter" },
+      /matched a stored profile but failed to resolve/,
+    ],
   ])(
-    "rejects $name instead of sending a profile ID as a literal bearer",
-    async ({ provider, baseUrl, profileId, credential, error }) => {
+    "rejects %s instead of sending a profile ID as a literal bearer",
+    async (_name, credential, error, options = {}) => {
+      const {
+        provider = "openrouter-minimax",
+        baseUrl = routerUrl,
+        profileId = "openrouter:key-b",
+        api = "openai-completions",
+        modelApi,
+        owner = credential.type !== "oauth",
+      } = options;
       await expect(
         resolveAuth({
           provider,
+          modelApi,
           cfg: configForProviders({
-            ...(credential.type === "oauth"
-              ? {}
-              : {
-                  openrouter: providerEntry("https://openrouter.ai/api/v1", {
-                    api: "openai-completions",
-                  }),
-                }),
-            [provider]: providerEntry(baseUrl, { api: "openai-completions", apiKey: profileId }),
+            ...(owner
+              ? { openrouter: providerEntry(routerUrl, { api: "openai-completions" }) }
+              : {}),
+            [provider]: providerEntry(baseUrl, { api, apiKey: profileId }),
           }),
           store: authStore({ [profileId]: credential }),
         }),
