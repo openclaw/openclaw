@@ -44,6 +44,178 @@ final class OpenClawSnapshotUITests: XCTestCase {
         try super.tearDownWithError()
     }
 
+    func testDrawerGroupHeaderControls() throws {
+        self.launchApp(for: Self.chatScreenshotTarget, additionalArguments: ["--openclaw-group-controls-fixture"])
+        let app = try XCTUnwrap(self.app)
+        self.tapSidebarReveal(in: app)
+        let header = app.descendants(matching: .any)["SessionGroup.Header.Projects"].firstMatch
+        self.attachScreenshot(named: "drawer-groups-landing")
+        XCTAssertTrue(header.waitForExistence(timeout: 8))
+        self.attachScreenshot(named: "drawer-groups-expanded")
+        header.press(forDuration: 0.8)
+        for item in [
+            "New Session in This Group",
+            "New Session Defaults…",
+            "Rename Group…",
+            "New Group…",
+            "Move Up",
+            "Move Down",
+            "Delete Group…",
+        ] {
+            XCTAssertTrue(app.buttons[item].waitForExistence(timeout: 4), "Missing group menu item: \(item)")
+        }
+        XCTAssertFalse(app.buttons["Move Up"].isEnabled)
+        XCTAssertTrue(app.buttons["Move Down"].isEnabled)
+        self.attachScreenshot(named: "drawer-groups-menu")
+        app.buttons["New Session Defaults…"].tap()
+        XCTAssertTrue(app.staticTexts["Group defaults"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["/work/repo"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.switches["Separate working copy"].exists)
+        self.attachScreenshot(named: "drawer-groups-defaults")
+        app.buttons["Cancel"].tap()
+        let caret = app.buttons["SessionGroup.Caret.Projects"]
+        XCTAssertTrue(caret.waitForExistence(timeout: 5))
+        self.assertMinimumTouchTarget(caret)
+        XCTAssertGreaterThan(caret.frame.minX, header.frame.maxX - 1, "Drawer caret must trail the group name")
+        XCTAssertNotEqual(caret.value as? String, "1", "Expanded group must hide its count")
+        let expandedCaretFrame = caret.frame
+        caret.tap()
+        XCTAssertEqual(caret.label, "Expand Group")
+        XCTAssertEqual(caret.value as? String, "1", "Collapsed group must show its session count")
+        XCTAssertEqual(caret.frame.minX, expandedCaretFrame.minX, accuracy: 1, "Count must keep its layout space")
+        XCTAssertFalse(app.staticTexts["Project notes"].exists)
+        XCTAssertFalse(app.buttons["New Session Defaults…"].exists, "Caret must not open the context menu")
+        self.attachScreenshot(named: "drawer-groups-collapsed")
+        caret.tap()
+        XCTAssertTrue(app.staticTexts["Project notes"].waitForExistence(timeout: 5))
+        XCTAssertNotEqual(caret.value as? String, "1")
+        self.attachScreenshot(named: "drawer-groups-reexpanded")
+        header.tap()
+        XCTAssertEqual(caret.value as? String, "1", "A tap on the header must fold the group")
+        XCTAssertFalse(app.staticTexts["Project notes"].exists, "A folded group must hide its sessions")
+        XCTAssertFalse(app.buttons["New Session Defaults…"].exists, "A header tap must not open the context menu")
+        header.tap()
+        XCTAssertTrue(app.staticTexts["Project notes"].waitForExistence(timeout: 5))
+        header.press(forDuration: 0.8)
+        app.buttons["Move Down"].tap()
+        let pending = app.descendants(matching: .any)["SessionGroup.Pending.Projects"].firstMatch
+        XCTAssertTrue(pending.waitForExistence(timeout: 4), "Group mutation must show a pending spinner")
+        self.attachScreenshot(named: "drawer-groups-pending")
+        XCTAssertTrue(pending.waitForNonExistence(timeout: 10))
+        let research = app.descendants(matching: .any)["SessionGroup.Header.Research"].firstMatch
+        XCTAssertTrue(research.waitForExistence(timeout: 5))
+        XCTAssertLessThan(research.frame.minY, header.frame.minY)
+        self.attachScreenshot(named: "drawer-groups-reordered")
+        header.press(forDuration: 0.8)
+        app.buttons["New Session in This Group"].tap()
+        if app.buttons["RootTabs.Sidebar.Show"].waitForExistence(timeout: 2) {
+            self.tapSidebarReveal(in: app)
+        }
+        XCTAssertTrue(app.staticTexts["New grouped session"].waitForExistence(timeout: 5))
+        self.attachScreenshot(named: "drawer-groups-new-session")
+        let allSessions = app.buttons["All Sessions…"]
+        XCTAssertTrue(allSessions.waitForExistence(timeout: 5))
+        if !allSessions.isHittable { app.swipeUp() }
+        allSessions.tap()
+        XCTAssertTrue(app.segmentedControls["Sessions.StatusScope"].waitForExistence(timeout: 8))
+        let sessionsHeader = try XCTUnwrap(app.descendants(matching: .any)
+            .matching(identifier: "SessionGroup.Header.Projects").allElementsBoundByIndex
+            .filter(\.isHittable).max { $0.frame.minX < $1.frame.minX })
+        sessionsHeader.press(forDuration: 0.8)
+        XCTAssertTrue(app.buttons["New Session Defaults…"].waitForExistence(timeout: 4))
+        self.attachScreenshot(named: "sessions-groups-menu")
+        app.buttons["New Session Defaults…"].tap()
+        XCTAssertTrue(app.staticTexts["Group defaults"].waitForExistence(timeout: 5))
+        self.attachScreenshot(named: "sessions-groups-defaults")
+        app.buttons["Cancel"].tap()
+        let sessionsCaret = try XCTUnwrap(app.buttons.matching(identifier: "SessionGroup.Caret.Projects")
+            .allElementsBoundByIndex.filter(\.isHittable)
+            // The drawer can remain hittable behind this tab on iPhone; select this header's leading control.
+            .filter { $0.frame.maxX <= sessionsHeader.frame.minX + 1 }
+            .max { $0.frame.minX < $1.frame.minX })
+        XCTAssertLessThan(
+            sessionsCaret.frame.maxX,
+            sessionsHeader.frame.minX + 1,
+            "Sessions tab must keep its leading caret")
+        let projectRows = app.staticTexts.matching(identifier: "Project notes").count
+        sessionsCaret.tap()
+        XCTAssertLessThan(app.staticTexts.matching(identifier: "Project notes").count, projectRows)
+        self.attachScreenshot(named: "sessions-groups-collapsed")
+    }
+
+    func testDrawerGroupHeaderFailedMutationKeepsError() throws {
+        self.launchApp(for: Self.chatScreenshotTarget, additionalArguments: [
+            "--openclaw-group-controls-fixture", "--openclaw-failed-group-change-fixture",
+        ])
+        let app = try XCTUnwrap(self.app)
+        self.tapSidebarReveal(in: app)
+        let header = app.descendants(matching: .any)["SessionGroup.Header.Projects"].firstMatch
+        XCTAssertTrue(header.waitForExistence(timeout: 8))
+        header.press(forDuration: 0.8)
+        app.buttons["Move Down"].tap()
+        XCTAssertTrue(app.staticTexts["Fixture group mutation rejected"].waitForExistence(timeout: 5))
+        XCTAssertLessThan(
+            header.frame.minY,
+            app.descendants(matching: .any)["SessionGroup.Header.Research"].firstMatch.frame.minY)
+        XCTAssertFalse(app.descendants(matching: .any)["SessionGroup.Pending.Projects"].exists)
+        self.attachScreenshot(named: "drawer-groups-failed-mutation")
+    }
+
+    func testSubsessionFolding() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-subsession-fold-fixture"])
+        let app = try XCTUnwrap(self.app)
+        self.tapSidebarReveal(in: app)
+        let parent = app.buttons["RootTabs.Sidebar.Session.Children.agent:main:dashboard:fold-parent"]
+        self.attachScreenshot(named: "subsession-initial")
+        XCTAssertTrue(parent.waitForExistence(timeout: 8), "Parent must offer a child-fold caret")
+        XCTAssertEqual(parent.label, "Show Sub-sessions")
+        XCTAssertEqual(parent.value as? String, "4")
+        XCTAssertFalse(app.buttons["RootTabs.Sidebar.Session.Children.agent:main:dashboard:fold-leaf"].exists)
+        XCTAssertTrue(app.staticTexts["Fold leaf"].exists)
+        XCTAssertFalse(app.staticTexts["Fold child 1"].exists)
+        let collapsedFrame = parent.frame
+        self.attachScreenshot(named: "subsession-collapsed-count")
+        parent.tap()
+        XCTAssertTrue(app.staticTexts["Fold child 1"].waitForExistence(timeout: 5))
+        for index in 1...4 {
+            XCTAssertTrue(app.staticTexts["Fold child \(index)"].exists)
+        }
+        XCTAssertEqual(parent.label, "Hide Sub-sessions")
+        XCTAssertEqual(parent.value as? String ?? "", "")
+        XCTAssertEqual(parent.frame.minX, collapsedFrame.minX, accuracy: 1)
+        XCTAssertEqual(parent.frame.width, collapsedFrame.width, accuracy: 1)
+        self.attachScreenshot(named: "subsession-expanded-no-count")
+        parent.tap()
+        XCTAssertTrue(app.staticTexts["Fold child 1"].waitForNonExistence(timeout: 5))
+        XCTAssertEqual(parent.value as? String, "4")
+        app.buttons["Search sessions"].tap()
+        let search = app.textFields["Search sessions"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.tap()
+        search.typeText("Fold")
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            // Keep the query while dismissing the keyboard; it otherwise covers the lazy session rows.
+            app.buttons["RootTabs.Sidebar.Hide"].tap()
+            self.tapSidebarReveal(in: app)
+            XCTAssertEqual(search.value as? String, "Fold")
+        }
+        XCTAssertTrue(app.staticTexts["Fold child 1"].waitForExistence(timeout: 5))
+        XCTAssertFalse(parent.isEnabled, "Search keeps matching children visible")
+        app.buttons["Clear session search"].tap()
+        XCTAssertTrue(parent.isEnabled)
+        // Dismiss the keyboard before selecting a session row.
+        app.buttons["Search sessions"].tap()
+        parent.tap()
+        app.staticTexts["Fold child 1"].tap()
+        if app.buttons["RootTabs.Sidebar.Show"].exists {
+            self.tapSidebarReveal(in: app)
+        }
+        XCTAssertTrue(app.staticTexts["Fold child 1"].waitForExistence(timeout: 5))
+        XCTAssertFalse(parent.isEnabled, "The selected child must remain reachable")
+    }
+
     func testReleaseControlScreenshot() {
         self.captureReleaseScreenshot(Self.controlScreenshotTarget)
     }

@@ -58,6 +58,14 @@ struct OpenClawTypographyTests {
         #expect(!source.contains(".font(."))
     }
 
+    @Test func `group header controls use branded typography`() throws {
+        let source = try String(contentsOf: Self.sourceURL("Design/CommandSessionGroupHeader.swift"), encoding: .utf8)
+        #expect(source.contains(".font(OpenClawType.caption2Bold)"))
+        #expect(source.contains(".font(OpenClawType.subhead)"))
+        #expect(source.contains(".font(OpenClawType.body)"))
+        #expect(!source.contains(".font(."))
+    }
+
     @Test func `thread controls use branded typography`() throws {
         let support = try String(
             contentsOf: Self.sourceURL("Design/CommandCenterSupport.swift"),
