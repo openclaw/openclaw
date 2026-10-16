@@ -1,129 +1,90 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
-import {
-  resolveSessionTranscriptRuntimeTarget,
-  upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
-import { waitForSessionTranscriptIndexReconcilesInStateDir } from "../../config/sessions/session-transcript-reconcile.js";
+import type { resolveSessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   onInternalSessionTranscriptUpdate,
   onSessionTranscriptUpdate,
 } from "../../sessions/transcript-events.js";
-import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { persistInternalSourceReply } from "../internal-source-reply-persistence.js";
+import type { WorkerTranscriptCommitStore } from "./transcript-commit-ledger.js";
 import {
-  createWorkerTranscriptCommitStore,
-  type WorkerTranscriptCommitStore,
-} from "./transcript-commit-ledger.js";
-import { createWorkerTranscriptCommitter } from "./transcript-commit.js";
+  createTranscriptCommitFixture,
+  IDENTITY,
+  SESSION_KEY,
+} from "./transcript-commit.fixture.test-support.js";
+import type { createWorkerTranscriptCommitter } from "./transcript-commit.js";
 import {
   createInterruptedCommitter,
   createRequest,
-  createTranscriptCommitIdentity,
   createTurnMessages,
-  RUN_EPOCH,
   SESSION_ID,
 } from "./transcript-commit.test-support.js";
 
 type WorkerTranscriptCommitter = ReturnType<typeof createWorkerTranscriptCommitter>;
-const SESSION_KEY = "agent:main:worker-transcript";
-const IDENTITY = createTranscriptCommitIdentity(SESSION_ID, RUN_EPOCH);
 
 describe("worker transcript delivery mirrors", () => {
-  let root: string;
-  let sessionsDir: string;
-  let stateDatabasePath: string;
-  let storePath: string;
   let sessionTarget: Awaited<ReturnType<typeof resolveSessionTranscriptRuntimeTarget>>;
   let ADMITTED_OWNER: Omit<Parameters<WorkerTranscriptCommitter["commit"]>[0], "request">;
   let cfg: OpenClawConfig;
   let committer: WorkerTranscriptCommitter;
   let ledgerStore: WorkerTranscriptCommitStore;
 
-  beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-turn-"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", root);
-    sessionsDir = path.join(root, "agents", "main", "sessions");
-    storePath = path.join(sessionsDir, "sessions.json");
-    cfg = {
-      agents: { entries: { main: {} } },
-      session: {
-        mainKey: "main",
-        store: path.join(root, "agents", "{agentId}", "sessions", "sessions.json"),
-      },
-    };
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: SESSION_KEY, storePath },
-      {
-        lifecycleRevision: "worker-original-revision",
-        sessionId: SESSION_ID,
-        updatedAt: 10,
-      },
-    );
-    sessionTarget = await resolveSessionTranscriptRuntimeTarget({
-      agentId: "main",
-      sessionId: SESSION_ID,
+  const commit = (request: ReturnType<typeof createRequest>) =>
+    committer.commit({ ...ADMITTED_OWNER, request });
+  const mirror = (idempotencyKey: string, runId = expectDefined(IDENTITY.runId, "worker run ID")) =>
+    persistInternalSourceReply({
+      cfg,
       sessionKey: SESSION_KEY,
-      storePath,
+      expectedSessionId: SESSION_ID,
+      agentId: "main",
+      runId,
+      idempotencyKey,
+      payload: { text: "Delivered source reply" },
     });
-    ADMITTED_OWNER = {
-      identity: IDENTITY,
-      sessionTarget: { ...sessionTarget, expectedLifecycleRevision: "worker-original-revision" },
-      assertCurrent: () => undefined,
-    };
-    const database = openOpenClawStateDatabase();
-    stateDatabasePath = database.path;
-    ledgerStore = createWorkerTranscriptCommitStore({ database });
-    committer = createWorkerTranscriptCommitter({
-      getConfig: () => cfg,
-      store: ledgerStore,
-    });
+  const startTurn = async () => {
+    const [user, assistant, toolResult] = createTurnMessages();
+    if (!user || assistant?.role !== "assistant" || toolResult?.role !== "toolResult") {
+      throw new Error("Expected a complete worker tool turn");
+    }
+    return { user, assistant, toolResult };
+  };
+  const commitStart = async (messages: ReturnType<typeof createTurnMessages>) => {
+    const first = await commit(createRequest({ messages }));
+    if (!first.ok) {
+      throw new Error("Expected the worker tool call to commit");
+    }
+    return first.result.newLeafId;
+  };
+
+  let close: Awaited<ReturnType<typeof createTranscriptCommitFixture>>["close"] | undefined;
+
+  beforeEach(async () => {
+    close = undefined;
+    ({
+      cfg,
+      sessionTarget,
+      owner: ADMITTED_OWNER,
+      ledgerStore,
+      committer,
+      close,
+    } = await createTranscriptCommitFixture(() => cfg));
   });
 
   afterEach(async () => {
-    try {
-      await waitForSessionTranscriptIndexReconcilesInStateDir(root);
-      await closeOpenClawAgentDatabasesAsync(root);
-      await closeOpenClawStateDatabaseByPathAsync(stateDatabasePath);
-      await fs.rm(root, { recursive: true, force: true });
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    await close?.();
   });
 
   it.each(["base", "later user"] as const)(
     "recovers a lost mirror-backed batch receipt without changing the winning branch (%s)",
     async (winner) => {
-      const [user, assistant, toolResult] = createTurnMessages();
-      if (!user || assistant?.role !== "assistant" || toolResult?.role !== "toolResult") {
-        throw new Error("Expected a complete worker tool turn");
-      }
-      const first = await committer.commit({
-        ...ADMITTED_OWNER,
-        request: createRequest({ messages: [user, assistant] }),
-      });
-      if (!first.ok) {
-        throw new Error("Expected the worker tool call to commit");
-      }
-      await persistInternalSourceReply({
-        cfg,
-        sessionKey: SESSION_KEY,
-        expectedSessionId: SESSION_ID,
-        agentId: "main",
-        runId: expectDefined(IDENTITY.runId, "worker run ID"),
-        idempotencyKey: "source-reply-before-interrupted-result",
-        payload: { text: "Delivered source reply" },
-      });
+      const { user, assistant, toolResult } = await startTurn();
+      const baseLeafId = await commitStart([user, assistant]);
+      await mirror("source-reply-before-interrupted-result");
       const request = createRequest({
         seq: 2,
-        baseLeafId: first.result.newLeafId,
+        baseLeafId,
         messages: [
           toolResult,
           {
@@ -146,8 +107,8 @@ describe("worker transcript delivery mirrors", () => {
       expect(committedEntryIds).toHaveLength(2);
       // branchAsync only selects this manager's next append; recovery reads durable navigation.
       await manager.appendLeafControlAsync({
-        targetId: first.result.newLeafId,
-        appendParentId: first.result.newLeafId,
+        targetId: baseLeafId,
+        appendParentId: baseLeafId,
       });
       if (winner === "later user") {
         await manager.appendMessageAsync({
@@ -168,7 +129,7 @@ describe("worker transcript delivery mirrors", () => {
         internalUpdates.push(update),
       );
       try {
-        const replay = await committer.commit({ ...ADMITTED_OWNER, request });
+        const replay = await commit(request);
         expect(replay).toEqual({
           ok: true,
           result: { entryIds: committedEntryIds, newLeafId: committedEntryIds.at(-1) },
@@ -178,7 +139,7 @@ describe("worker transcript delivery mirrors", () => {
         expect(reopened.getBranch().map((entry) => entry.id)).toEqual(branchBeforeReplay);
         expect(publicUpdates).toEqual([]);
         expect(internalUpdates).toEqual([]);
-        await expect(committer.commit({ ...ADMITTED_OWNER, request })).resolves.toEqual(replay);
+        await expect(commit(request)).resolves.toEqual(replay);
       } finally {
         offPublic();
         offInternal();
@@ -189,10 +150,7 @@ describe("worker transcript delivery mirrors", () => {
   it.each(["same-run mirror", "different-run mirror", "later user", "later assistant"] as const)(
     "continues a message-tool turn only across its own delivery bookkeeping (%s)",
     async (scenario) => {
-      const [user, assistant, toolResult] = createTurnMessages();
-      if (!user || assistant?.role !== "assistant" || toolResult?.role !== "toolResult") {
-        throw new Error("Expected a complete worker tool turn");
-      }
+      const { user, assistant, toolResult } = await startTurn();
       const runId = expectDefined(IDENTITY.runId, "worker run ID");
       assistant.content = [
         {
@@ -204,25 +162,11 @@ describe("worker transcript delivery mirrors", () => {
       ];
       toolResult.toolCallId = "call-message-1";
       toolResult.toolName = "message";
-      const first = await committer.commit({
-        ...ADMITTED_OWNER,
-        request: createRequest({ messages: [user, assistant] }),
-      });
-      if (!first.ok) {
-        throw new Error("Expected the worker tool call to commit");
-      }
-      const mirror = (idempotencyKey: string) =>
-        persistInternalSourceReply({
-          cfg,
-          sessionKey: SESSION_KEY,
-          expectedSessionId: SESSION_ID,
-          agentId: "main",
-          runId: scenario === "different-run mirror" ? "another-run" : runId,
-          idempotencyKey,
-          payload: { text: "Delivered source reply" },
-        });
+      const baseLeafId = await commitStart([user, assistant]);
+      const mirrorForRun = (key: string) =>
+        mirror(key, scenario === "different-run mirror" ? "another-run" : runId);
       // The real message-tool persistence owner commits before returning its result to the worker.
-      await mirror("source-reply-before-result");
+      await mirrorForRun("source-reply-before-result");
       if (scenario === "later user" || scenario === "later assistant") {
         const manager = await SessionManager.openAsync(sessionTarget);
         await manager.appendMessageAsync(
@@ -237,11 +181,11 @@ describe("worker transcript delivery mirrors", () => {
       }
       const request = createRequest({
         seq: 2,
-        baseLeafId: first.result.newLeafId,
+        baseLeafId,
         messages: [toolResult],
       });
       if (scenario !== "same-run mirror") {
-        expect(await committer.commit({ ...ADMITTED_OWNER, request })).toEqual({
+        expect(await commit(request)).toEqual({
           ok: false,
           reason: "stale-base-leaf",
         });
@@ -253,8 +197,8 @@ describe("worker transcript delivery mirrors", () => {
         "lost result receipt",
       );
       // Delivery bookkeeping can also follow the committed result before its ACK is recovered.
-      await mirror("source-reply-after-result");
-      const recovered = await committer.commit({ ...ADMITTED_OWNER, request });
+      await mirrorForRun("source-reply-after-result");
+      const recovered = await commit(request);
       if (!recovered.ok) {
         throw new Error("Expected the committed tool result receipt to recover");
       }

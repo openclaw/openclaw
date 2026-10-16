@@ -62,28 +62,25 @@ vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => 
   return {
     ...actual,
     runOpenClawStateWorkerOperation: (
-      context: Parameters<typeof actual.runOpenClawStateWorkerOperation>[0],
-      operation: Parameters<typeof actual.runOpenClawStateWorkerOperation>[1],
-      options: Parameters<typeof actual.runOpenClawStateWorkerOperation>[2],
+      ...[context, operation, options]: Parameters<typeof actual.runOpenClawStateWorkerOperation>
     ) =>
       actual.runOpenClawStateWorkerOperation(
         context,
         (scope) =>
           operation({
             execute: async (command, executeOptions) => {
-              if (command.type === "workerEnvironments.createIntent") {
+              const creating = command.type === "workerEnvironments.createIntent";
+              const revoking = command.type === "workerEnvironments.revokeEnvironmentCredential";
+              if (creating) {
                 delivery.intentWrites += 1;
               }
-              if (command.type === "workerEnvironments.revokeEnvironmentCredential") {
+              if (revoking) {
                 delivery.revocationWrites += 1;
               }
               const result = await scope
                 .execute(command, executeOptions)
                 .catch((error: unknown) => {
-                  if (
-                    command.type === "workerEnvironments.revokeEnvironmentCredential" &&
-                    delivery.loseRevocationFailure
-                  ) {
+                  if (revoking && delivery.loseRevocationFailure) {
                     delivery.loseRevocationFailure = false;
                     delivery.hideReceipt = true;
                     delivery.hideSettlement = true;
@@ -91,16 +88,13 @@ vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => 
                   }
                   throw error;
                 });
-              if (command.type === "workerEnvironments.createIntent" && delivery.loseIntentResult) {
+              if (creating && delivery.loseIntentResult) {
                 delivery.loseIntentResult = false;
                 delivery.hideReceipt = true;
                 delivery.hideSettlement = true;
                 throw delivery.resultFailure;
               }
-              if (
-                command.type === "workerEnvironments.revokeEnvironmentCredential" &&
-                delivery.loseRevocationResult
-              ) {
+              if (revoking && delivery.loseRevocationResult) {
                 const recovery = delivery.loseRevocationResult;
                 delivery.loseRevocationResult = undefined;
                 delivery.hideReceipt = recovery !== "receipt";

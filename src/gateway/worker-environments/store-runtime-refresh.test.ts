@@ -59,6 +59,11 @@ describe("worker environment runtime refresh", () => {
     protocolFeatures: BOOTSTRAP_RECEIPT.protocolFeatures.toSorted(),
   };
 
+  const snapshot = (placements: ReturnType<typeof createWorkerSessionPlacementStore>) => [
+    store.get("worker-refresh"),
+    placements.get(REQUEST.sessionId),
+  ];
+
   async function seedRefresh(
     state: "ready" | "idle" | "attached",
     transport: "node" | "ssh" = "node",
@@ -66,27 +71,21 @@ describe("worker environment runtime refresh", () => {
     const environmentId = "worker-refresh";
     if (transport === "ssh") {
       await seedBootstrapping(environmentId, "lease-refresh");
-      await store.transition({
-        environmentId,
-        from: "bootstrapping",
-        to: "ready",
-        patch: readyPatch(),
-      });
     } else {
       await createIntent(environmentId);
       await store.transition({ environmentId, from: "requested", to: "provisioning" });
-      await store.transition({
-        environmentId,
-        from: "provisioning",
-        to: "ready",
-        patch: {
-          ...readyPatch(),
-          leaseId: "lease-refresh",
-          nodeDeviceId: "node-refresh",
-          desktop: DESKTOP,
-        },
-      });
     }
+    await store.transition({
+      environmentId,
+      from: transport === "ssh" ? "bootstrapping" : "provisioning",
+      to: "ready",
+      patch: {
+        ...readyPatch(),
+        ...(transport === "node"
+          ? { leaseId: "lease-refresh", nodeDeviceId: "node-refresh", desktop: DESKTOP }
+          : {}),
+      },
+    });
     if (state !== "ready") {
       await store.transition({
         environmentId,
@@ -162,29 +161,23 @@ describe("worker environment runtime refresh", () => {
   it("rejects stale refresh identity and renewed credentials without changing either receipt", async () => {
     const { environment, placements, placement, input } = await seedRefresh("attached");
     const staleInputs = [
-      { ...input, expectedOwnerEpoch: input.expectedOwnerEpoch + 1 },
-      { ...input, expectedNodeDeviceId: "node-replaced" },
+      { expectedOwnerEpoch: input.expectedOwnerEpoch + 1 },
+      { expectedNodeDeviceId: "node-replaced" },
+      { expectedBootstrapReceipt: { ...BOOTSTRAP_RECEIPT, openclawVersion: "2026.6.1" } },
+      { expectedBootstrapReceipt: { ...BOOTSTRAP_RECEIPT, protocolFeatures: [] } },
       {
-        ...input,
-        expectedBootstrapReceipt: { ...BOOTSTRAP_RECEIPT, openclawVersion: "2026.6.1" },
-      },
-      { ...input, expectedBootstrapReceipt: { ...BOOTSTRAP_RECEIPT, protocolFeatures: [] } },
-      {
-        ...input,
         expectedState: "attached" as const,
         expectedPlacementGeneration: placement!.generation + 1,
       },
       {
-        ...input,
         assertCurrent: () => {
           throw new Error("Worker turn acquired live authority");
         },
       },
     ];
     for (const stale of staleInputs) {
-      await expect(store.refreshBootstrapReceipt(stale)).rejects.toThrow();
-      expect(store.get(environment.environmentId)).toEqual(environment);
-      expect(placements.get(placement!.sessionId)).toEqual(placement);
+      await expect(store.refreshBootstrapReceipt({ ...input, ...stale })).rejects.toThrow();
+      expect(snapshot(placements)).toEqual([environment, placement]);
     }
     await store.renewCredential({
       ...attachedPatch(REQUEST.sessionId, "renewed").credential,
@@ -194,8 +187,7 @@ describe("worker environment runtime refresh", () => {
     await expect(store.refreshBootstrapReceipt(input)).rejects.toThrow(
       "previous credential to be revoked",
     );
-    expect(store.get(environment.environmentId)).toEqual(environment);
-    expect(placements.get(placement!.sessionId)).toEqual(placement);
+    expect(snapshot(placements)).toEqual([environment, placement]);
   });
 
   it("rolls back the placement receipt when the environment write fails", async () => {
@@ -206,8 +198,7 @@ describe("worker environment runtime refresh", () => {
     await expect(store.refreshBootstrapReceipt(input)).rejects.toThrow(
       "runtime receipt write failed",
     );
-    expect(store.get(environment.environmentId)).toEqual(environment);
-    expect(placements.get(placement!.sessionId)).toEqual(placement);
+    expect(snapshot(placements)).toEqual([environment, placement]);
     database.db.exec("DROP TRIGGER reject_runtime_receipt");
     expect((await store.refreshBootstrapReceipt(input)).bootstrapReceipt).toEqual(replacement);
   });
@@ -236,11 +227,9 @@ describe("worker environment runtime refresh", () => {
           expectedGeneration: placement!.generation,
         });
       }
-      const beforeEnvironment = store.get(environment.environmentId);
-      const beforePlacement = placements.get(placement!.sessionId);
+      const before = snapshot(placements);
       await expect(store.refreshBootstrapReceipt(input)).rejects.toThrow();
-      expect(store.get(environment.environmentId)).toEqual(beforeEnvironment);
-      expect(placements.get(placement!.sessionId)).toEqual(beforePlacement);
+      expect(snapshot(placements)).toEqual(before);
     },
   );
 
