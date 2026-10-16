@@ -546,7 +546,7 @@ describe("TwitchClientManager", () => {
           ["testchannel", "a"],
         ]);
         acknowledgment.resolve();
-        await expect(sending).resolves.toMatchObject({ ok: true });
+        await expect(sending).resolves.toEqual(expect.any(String));
       } finally {
         prepared.resolve();
         acknowledgment.resolve();
@@ -598,15 +598,12 @@ describe("TwitchClientManager", () => {
       ]);
     });
 
-    it("should return a formatted send failure", async () => {
+    it("should throw a formatted send failure without the SDK cause", async () => {
       mockSay.mockRejectedValueOnce(new Error("Rate limited"));
 
-      await expect(
-        manager.sendMessage(testAccount, "testchannel", "Test message"),
-      ).resolves.toEqual({
-        ok: false,
-        error: "Rate limited",
-      });
+      const sending = manager.sendMessage(testAccount, "testchannel", "Test message");
+      await expect(sending).rejects.toThrow("Rate limited");
+      await expect(sending).rejects.not.toHaveProperty("cause");
     });
 
     it("should create client if not already connected", async () => {

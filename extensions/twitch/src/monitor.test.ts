@@ -68,7 +68,7 @@ describe("monitorTwitchProvider", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getClient.mockResolvedValue({});
-    mocks.sendMessage.mockResolvedValue({ ok: true, messageId: "message-id" });
+    mocks.sendMessage.mockResolvedValue("message-id");
     mocks.ingressStop.mockImplementation(async () => {
       await Promise.allSettled(mocks.ingressAccept.mock.results.map((result) => result.value));
     });
@@ -279,7 +279,7 @@ describe("monitorTwitchProvider", () => {
       const statusSink = vi.fn();
       const runtimeError = vi.fn();
       if (providerError) {
-        mocks.sendMessage.mockResolvedValueOnce({ ok: false, error: providerError });
+        mocks.sendMessage.mockRejectedValueOnce(new Error(providerError));
       }
       mocks.runInbound.mockImplementation(async (input: InboundRunInput) => {
         const turn = await input.adapter.resolveTurn(input.adapter.ingest(input.raw));

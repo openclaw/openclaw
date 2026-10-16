@@ -42,18 +42,13 @@ export async function sendMessageTwitchInternal(params: {
       `Client manager not found for account: ${params.accountId}. Please start the Twitch gateway first.`,
     );
   }
-  const result = await params.clientManager.sendMessage(
+  const messageId = await params.clientManager.sendMessage(
     params.account,
     params.channel,
     cleanedText,
     params.cfg,
     params.accountId,
   );
-  if (!result.ok) {
-    // The public boundary keeps the formatted message and omits the raw SDK cause.
-    throw new Error(result.error);
-  }
-  const { messageId } = result;
   return {
     messageId,
     receipt: createTwitchSendReceipt(messageId, params.channel),
