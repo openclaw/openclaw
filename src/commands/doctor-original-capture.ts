@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
 import {
   DoctorMaintenanceRefusalError,
@@ -13,16 +15,30 @@ import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js";
 
-// docker-entrypoint.mjs passes a container-local path. Its existence records that
-// this container already sealed a capture, so later starts skip the full copy.
+// docker-entrypoint.mjs passes a container-local path. The marker names the capture
+// this container already sealed, so later starts skip the full copy but keep it.
 const IMAGE_ACTIVATION_MARKER_ENV = "OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER";
+const STANDALONE_CAPTURE_RUN_ID =
+  /^doctor-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
-async function hasImageActivationCapture(marker: string): Promise<boolean> {
+/** A marker counts only while the sealed capture it names is still retained. */
+async function readImageActivationCapture(
+  marker: string,
+  captureRoot: string,
+): Promise<string | undefined> {
   try {
     const stat = await fs.lstat(marker);
-    return stat.isFile() && (process.getuid === undefined || stat.uid === process.getuid());
+    if (!stat.isFile() || (process.getuid !== undefined && stat.uid !== process.getuid())) {
+      return undefined;
+    }
+    const runId = (await fs.readFile(marker, "utf8")).trim();
+    if (!STANDALONE_CAPTURE_RUN_ID.test(runId)) {
+      return undefined;
+    }
+    const manifest = await fs.lstat(path.join(captureRoot, runId, "manifest.json"));
+    return manifest.isFile() ? runId : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -79,11 +95,40 @@ export async function preserveDoctorOriginalState(params: {
       );
       return;
     }
+    const { captureUpdateRecoveryBaseline, retireExpiredStandaloneDoctorCaptures } =
+      await import("../infra/update-recovery-baseline-capture.js");
+    const stateDir = resolvePathViaExistingAncestorSync(resolveStateDir(params.env));
+    const retireExpiredCaptures = async (keepRunId: string) => {
+      try {
+        const retirement = await retireExpiredStandaloneDoctorCaptures({
+          stateDir,
+          keepRunId,
+          assertCurrent,
+        });
+        for (const directory of retirement.retired) {
+          params.runtime.log(
+            `Retired standalone Doctor capture older than 30 days: ${directory}. Take a verified backup before an upgrade when you need a long-term recovery copy.`,
+          );
+        }
+        for (const warning of retirement.warnings) {
+          params.runtime.log(warning);
+        }
+      } catch (error) {
+        params.runtime.log(
+          `Standalone Doctor capture retirement unavailable: ${formatErrorMessage(error)}`,
+        );
+      }
+    };
     const activationMarker = params.env[IMAGE_ACTIVATION_MARKER_ENV]?.trim() || undefined;
-    if (activationMarker && (await hasImageActivationCapture(activationMarker))) {
+    const activationCapture = activationMarker
+      ? await readImageActivationCapture(activationMarker, resolveUpdateCaptureRoot(stateDir))
+      : undefined;
+    if (activationCapture) {
+      assertCurrent();
       params.runtime.log(
-        "This container already retained a pre-repair capture; Doctor skipped a repeated full capture. Repair-specific backups still apply.",
+        `This container already retained a pre-repair capture (${activationCapture}); Doctor skipped a repeated full capture. Repair-specific backups still apply.`,
       );
+      await retireExpiredCaptures(activationCapture);
       return;
     }
     const installRoot = params.root;
@@ -94,8 +139,6 @@ export async function preserveDoctorOriginalState(params: {
     if (!driver) {
       throw new Error("The Doctor process could not be identified for the pre-repair capture.");
     }
-    const { captureUpdateRecoveryBaseline, retireExpiredStandaloneDoctorCaptures } =
-      await import("../infra/update-recovery-baseline-capture.js");
     assertCurrent();
     const standaloneRunId = `doctor-${randomUUID()}`;
     const captured = await captureUpdateRecoveryBaseline({
@@ -113,32 +156,15 @@ export async function preserveDoctorOriginalState(params: {
     );
     if (activationMarker) {
       try {
-        await fs.writeFile(activationMarker, "", { flag: "wx", mode: 0o600 });
+        await fs.rm(activationMarker, { force: true });
+        await fs.writeFile(activationMarker, standaloneRunId, { flag: "wx", mode: 0o600 });
       } catch (error) {
         params.runtime.log(
           `Container activation marker unavailable: ${formatErrorMessage(error)}. The next container start takes another full capture.`,
         );
       }
     }
-    try {
-      const retirement = await retireExpiredStandaloneDoctorCaptures({
-        stateDir: resolvePathViaExistingAncestorSync(resolveStateDir(params.env)),
-        keepRunId: standaloneRunId,
-        assertCurrent,
-      });
-      for (const directory of retirement.retired) {
-        params.runtime.log(
-          `Retired standalone Doctor capture older than 30 days: ${directory}. Take a verified backup before an upgrade when you need a long-term recovery copy.`,
-        );
-      }
-      for (const warning of retirement.warnings) {
-        params.runtime.log(warning);
-      }
-    } catch (error) {
-      params.runtime.log(
-        `Standalone Doctor capture retirement unavailable: ${formatErrorMessage(error)}`,
-      );
-    }
+    await retireExpiredCaptures(standaloneRunId);
     for (const warning of captured.warnings) {
       params.runtime.log(warning.message);
     }

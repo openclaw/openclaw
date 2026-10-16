@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import * as ancestry from "../infra/restart-stale-pids.js";
+import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import * as baselineCapture from "../infra/update-recovery-baseline-capture.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
@@ -60,10 +61,11 @@ it.each(["ancestry-unverified", "missing-capture"] as const)(
   },
 );
 
-it("records the container capture marker only after a sealed capture, then skips repeats", async () => {
+it("keeps one sealed container capture, skips repeats, and still retires old captures", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const marker = state.path("activation-capture-marker");
     const env = { ...state.env, OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER: marker };
+    const captureRoot = resolveUpdateCaptureRoot(state.stateDir);
     const log = vi.fn();
     const preserve = (root: string | null) =>
       preserveDoctorOriginalState({
@@ -81,27 +83,46 @@ it("records the container capture marker only after a sealed capture, then skips
       expect.stringContaining("Original state capture was unavailable"),
     );
 
-    const manifestPath = state.path("capture", "manifest.json");
-    const capture = vi.spyOn(baselineCapture, "captureUpdateRecoveryBaseline").mockResolvedValue({
-      ref: { directory: path.dirname(manifestPath), manifestPath, manifestSha256: "0".repeat(64) },
-      warnings: [],
-      diagnostics: { databaseWarnings: [] },
-    });
-    vi.spyOn(baselineCapture, "retireExpiredStandaloneDoctorCaptures").mockResolvedValue({
-      retired: [],
-      warnings: [],
-    });
+    const capture = vi
+      .spyOn(baselineCapture, "captureUpdateRecoveryBaseline")
+      .mockImplementation(async ({ runId }) => {
+        const directory = path.join(captureRoot, runId);
+        fs.mkdirSync(directory, { recursive: true });
+        fs.writeFileSync(path.join(directory, "manifest.json"), "{}");
+        return {
+          ref: {
+            directory,
+            manifestPath: path.join(directory, "manifest.json"),
+            manifestSha256: "0".repeat(64),
+          },
+          warnings: [],
+          diagnostics: { databaseWarnings: [] },
+        };
+      });
+    const retire = vi
+      .spyOn(baselineCapture, "retireExpiredStandaloneDoctorCaptures")
+      .mockResolvedValue({ retired: [], warnings: [] });
     await preserve(process.cwd());
     expect(capture).toHaveBeenCalledOnce();
-    expect(fs.lstatSync(marker).isFile()).toBe(true);
+    const runId = fs.readFileSync(marker, "utf8");
+    expect(runId).toBe(capture.mock.calls[0]![0].runId);
 
     log.mockClear();
     await preserve(process.cwd());
     expect(capture).toHaveBeenCalledOnce();
     expect(log.mock.calls).toEqual([
       [
-        "This container already retained a pre-repair capture; Doctor skipped a repeated full capture. Repair-specific backups still apply.",
+        `This container already retained a pre-repair capture (${runId}); Doctor skipped a repeated full capture. Repair-specific backups still apply.`,
       ],
     ]);
+    // Repeat starts keep the container's capture while older ones still age out.
+    expect(retire).toHaveBeenCalledTimes(2);
+    expect(retire).toHaveBeenLastCalledWith(expect.objectContaining({ keepRunId: runId }));
+
+    // A marker whose capture is gone no longer suppresses capture.
+    fs.rmSync(path.join(captureRoot, runId), { recursive: true });
+    await preserve(process.cwd());
+    expect(capture).toHaveBeenCalledTimes(2);
+    expect(fs.readFileSync(marker, "utf8")).toBe(capture.mock.calls[1]![0].runId);
   });
 });
