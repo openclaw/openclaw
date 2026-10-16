@@ -28,7 +28,9 @@ describe("sendMessageTwitchInternal", () => {
   };
   installTwitchTestHooks();
   beforeEach(() => {
-    sendMessageSpy = vi.spyOn(clientManager, "sendMessage").mockResolvedValue("twitch-msg-123");
+    sendMessageSpy = vi
+      .spyOn(clientManager, "sendMessage")
+      .mockResolvedValue({ ok: true, messageId: "twitch-msg-123" });
   });
 
   it("keeps empty Markdown unsent with a manager present", async () => {
@@ -69,7 +71,7 @@ describe("sendMessageTwitchInternal", () => {
   });
 
   it("exposes the manager's formatted failure without a cause or another log", async () => {
-    sendMessageSpy.mockRejectedValue(new Error("Connection lost"));
+    sendMessageSpy.mockResolvedValue({ ok: false, error: "Connection lost" });
     const failure = sendMessageTwitchInternal(params);
 
     await expect(failure).rejects.toThrow("Connection lost");

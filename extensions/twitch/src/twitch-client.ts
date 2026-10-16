@@ -329,7 +329,7 @@ export class TwitchClientManager {
     message: string,
     cfg?: OpenClawConfig,
     accountId?: string,
-  ): Promise<string> {
+  ): Promise<{ ok: true; messageId: string } | { ok: false; error: string }> {
     const effect = captureEffectAuthority();
     let preparingUse = false;
     try {
@@ -358,13 +358,13 @@ export class TwitchClientManager {
         throw failure.reason;
       }
 
-      return messageId;
+      return { ok: true, messageId };
     } catch (error) {
       if (preparingUse || isChannelPartialDeliveryError(error)) {
         throw error;
       }
-      // Keep the public message without exposing the raw SDK cause.
-      throw new Error(formatErrorMessage(error));
+      const errorMessage = formatErrorMessage(error);
+      return { ok: false, error: errorMessage };
     }
   }
 }
