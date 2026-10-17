@@ -387,6 +387,14 @@ plugin migration obligations through the existing live shared-state reader or
 worker rather than copying the database and WAL. Each read sees current committed
 rows; it does not cache obligations or grant publication authority. Unobserved
 inspection and inherited artifact-preserving scopes retain private snapshots.
+For CLI plugin metadata (including `config validate` and plugin update inventory
+and ownership), the snapshot child checks the exact database's recorded Gateway
+or embedded-writer owner. A verified live process uses the existing online-backup
+owner in one read transaction while writes continue. Native SQLite may update SHM
+read marks; it does not change stored rows or the WAL. An absent, dead, or
+unverifiable owner retains the artifact-preserving copy path. Explicit inherited
+snapshots and offline maintenance/recovery remain byte-neutral. Snapshot failures
+remain errors with their original diagnostics; they never become empty inventory.
 Migration publication rechecks the current generation inside the same native
 write transaction that protects synchronous publication. Empty historical state
 retains its schema, and absent state remains absent.

@@ -2029,7 +2029,6 @@ src/state/openclaw-state-read-operation-registry.ts
 src/state/openclaw-state-read-pool.ts
 src/state/openclaw-state-read-request.ts
 src/state/openclaw-state-read-scope.ts
-src/state/openclaw-state-read-snapshot.ts
 src/state/openclaw-state-read-worker.ts
 src/state/openclaw-state-read.worker.ts
 src/state/openclaw-state-schema-compatibility.ts
