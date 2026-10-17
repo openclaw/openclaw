@@ -30,6 +30,10 @@ export const devicePairingOperations = {
   "devicePairing.remove": devicePairingMutation((input: { deviceId: string; nowMs: number }) =>
     core.removePairedDeviceInWorker(input.deviceId, input.nowMs),
   ),
+  "devicePairing.clear": devicePairingMutation(
+    (input: Parameters<typeof core.clearDevicePairingInWorker>[1], { database }) =>
+      core.clearDevicePairingInWorker(database, input),
+  ),
   "devicePairing.pruneSilent": devicePairingMutation(
     core.pruneSupersededSilentPairedDevicesInWorker,
   ),

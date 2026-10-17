@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { approveDevicePairing } from "../../../infra/device-pairing-approval.js";
 import * as deviceTokens from "../../../infra/device-pairing-tokens.js";
+import * as devicePairing from "../../../infra/device-pairing.js";
 import { getPairedDevice, requestDevicePairing } from "../../../infra/device-pairing.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -42,6 +43,95 @@ function createFixture() {
 describe("policy writer response ownership", () => {
   beforeEach(() => {
     runtime.handler.mockReset();
+  });
+
+  it("delivers a bulk clear result before closing its removed caller", async () => {
+    const fixture = createFixture();
+    const committed = createDeferredCore();
+    const release = createDeferredCore();
+    const clear = vi
+      .spyOn(devicePairing, "clearDevicePairing")
+      .mockImplementationOnce(async (options) => {
+        options.assertCurrent?.();
+        disconnectStaleSharedGatewayAuthClients({
+          clients: [fixture.client],
+          expectedGeneration: null,
+        });
+        committed.resolve();
+        await release.promise;
+        return {
+          removedDevices: ["self"],
+          rejectedRequests: [{ requestId: "repair", deviceId: "self" }],
+        };
+      });
+    runtime.handler.mockImplementation(async (options) => {
+      await expectDefined(
+        deviceHandlers["device.pair.clear"],
+        "clear handler",
+      )({
+        ...options,
+        params: { pending: true },
+        context: {
+          ...options.context,
+          nodeRegistry: { updateSurface: vi.fn() } as never,
+          logGateway: { ...createSubsystemLogger("gateway-test"), ...fixture.harness.logGateway },
+          invalidateClientsForDevice: vi.fn(),
+          disconnectClientsForDevice: vi.fn(),
+        },
+      });
+    });
+    const dispatch = fixture.dispatch("clear", "device.pair.clear");
+    try {
+      await committed.promise;
+      expect(fixture.socketClose).not.toHaveBeenCalled();
+      release.resolve();
+      expect(await fixture.harness.awaitResponseFrame("clear")).toMatchObject({
+        ok: true,
+        payload: { removedDevices: ["self"], rejectedPending: ["repair"] },
+      });
+      await fixture.closed.promise;
+      expect(fixture.harness.send).toHaveBeenCalledBefore(fixture.socketClose);
+      await fixture.dispatch("retired", "health");
+      expect(runtime.handler).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+      await dispatch;
+      clear.mockRestore();
+    }
+  });
+
+  it("releases a clear response reservation when its transaction rolls back", async () => {
+    const fixture = createFixture();
+    const clear = vi
+      .spyOn(devicePairing, "clearDevicePairing")
+      .mockImplementationOnce(async (options) => {
+        // The owner checks admission repeatedly while preparing and committing.
+        options.assertCurrent?.();
+        options.assertCurrent?.();
+        options.assertCurrent?.();
+        throw new Error("synthetic clear rollback");
+      });
+    runtime.handler.mockImplementation(async (options) => {
+      await expectDefined(
+        deviceHandlers["device.pair.clear"],
+        "clear handler",
+      )({ ...options, params: { pending: true } });
+    });
+    try {
+      await fixture.dispatch("clear", "device.pair.clear");
+      expect(await fixture.harness.awaitResponseFrame("clear")).toMatchObject({
+        ok: false,
+        error: { message: expect.stringContaining("synthetic clear rollback") },
+      });
+      expect(fixture.socketClose).not.toHaveBeenCalled();
+      disconnectStaleSharedGatewayAuthClients({
+        clients: [fixture.client],
+        expectedGeneration: null,
+      });
+      expect(fixture.socketClose).toHaveBeenCalledOnce();
+    } finally {
+      clear.mockRestore();
+    }
   });
 
   it("keeps a later revoke final across failed profile preparation", async () => {

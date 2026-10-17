@@ -19,6 +19,7 @@ const policyMethods = new Set([
   "secrets.store.import",
   "secrets.store.allowedHosts",
   "device.pair.remove",
+  "device.pair.clear",
   "device.token.rotate",
   "device.token.revoke",
   "users.setRole",

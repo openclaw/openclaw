@@ -280,6 +280,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["device.pair.approve", "devices", "operator.pairing", "<=2026.7"],
   ["device.pair.reject", "devices", "operator.pairing", "<=2026.7"],
   ["device.pair.remove", "devices", "operator.pairing", "<=2026.7"],
+  ["device.pair.clear", "devices", "operator.pairing", "2026.10"],
   ["device.pair.rename", "devices", "operator.pairing", "2026.7"],
   ["device.token.rotate", "devices", "operator.pairing", "<=2026.7"],
   ["device.token.revoke", "devices", "operator.pairing", "<=2026.7"],
