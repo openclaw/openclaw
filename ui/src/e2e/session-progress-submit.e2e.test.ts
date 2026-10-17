@@ -1,10 +1,8 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { openChatDetails } from "./chat-details.test-support.ts";
 import {
-  captureUiProof,
+  chatMessage,
   createChatFlowE2eSuite,
   installMockGateway,
   waitForChatScrollIdle,
@@ -12,6 +10,7 @@ import {
 import { progressSubmitScenario } from "./session-progress-submit.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const progressSelector = '[data-progress-card-placement="details"]';
 
 function observeDetailsSubmit(page: Page) {
   return page.locator(".agent-chat__composer-combobox textarea").evaluateHandle((textarea) => {
@@ -96,17 +95,16 @@ suite.define(() => {
   ])(
     "keeps task progress steady through Enter, streaming, and refresh: $name",
     async ({ name, mobile, expanded, multiline }) => {
-      const context = await suite.newBrowserContext({
+      const contextOptions = {
         viewport: mobile ? { width: 390, height: 844 } : { width: 1280, height: 900 },
         isMobile: mobile,
         hasTouch: mobile,
-      });
-      const page = await context.newPage();
-      try {
+      };
+      await suite.withPage(contextOptions, async ({ page }) => {
         const scenario = progressSubmitScenario(name === "active run default mode");
         const gateway = await installMockGateway(page, scenario);
         await page.goto(`${suite.server.baseUrl}chat`);
-        const card = page.locator('[data-progress-card-placement="details"]');
+        const card = page.locator(progressSelector);
         await card.waitFor({ state: "attached" });
         expect(await page.locator(".chat-details:popover-open").count()).toBe(0);
         expect(await page.locator('[data-progress-card-placement="composer"]').count()).toBe(0);
@@ -118,9 +116,6 @@ suite.define(() => {
           }
         }
         await waitForChatScrollIdle(page);
-        if (mobile) {
-          await captureUiProof(suite, page, "mobile-progress", "initial.png");
-        }
         const textarea = page.locator(".agent-chat__composer-combobox textarea");
         await textarea.fill(
           multiline
@@ -137,10 +132,7 @@ suite.define(() => {
           sessionKey: scenario.sessionKey,
           runId,
           state: "delta",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "Checking the workspace." }],
-          },
+          message: chatMessage("assistant", "Checking the workspace."),
         });
         await gateway.setMethodResponse("progressCard.get", {
           card: { ...scenario.methodResponses["progressCard.get"].card, revision: 2 },
@@ -159,43 +151,25 @@ suite.define(() => {
           .toBeGreaterThan(1);
         const samples = await observation.evaluate((probe) => probe.finish());
         await observation.dispose();
-        await writeFile(
-          path.join(suite.artifactDir, `${name.replaceAll(" ", "-")}.json`),
-          JSON.stringify(samples),
-        );
-        if (name === "Details-closed desktop") {
-          await captureUiProof(suite, page, "Details-closed", "after-send.png");
-        }
         const initial = samples[0]!;
         expect(samples.filter((sample) => sample.source === "frame").length).toBeGreaterThan(1);
-        expect(
-          samples.every(
-            (sample) =>
-              sample.retained &&
-              sample.open === initial.open &&
-              sample.reveal === initial.reveal &&
-              sample.detailsOpen === detailsOpen,
-          ),
-        ).toBe(true);
-        expect(samples.every((sample) => Math.abs(sample.height - initial.height) <= 1)).toBe(true);
-        expect(samples.every((sample) => sample.queueRows === 0)).toBe(true);
-        // Details is out of flow: card geometry must not move with the composer.
-        expect(samples.every((sample) => Math.abs(sample.top - initial.top) <= 1)).toBe(true);
-        if (!multiline) {
-          expect(
-            samples.every((sample) => Math.abs(sample.composerTop - initial.composerTop) <= 1),
-          ).toBe(true);
-          expect(
-            samples.every(
-              (sample) => Math.abs(sample.composerHeight - initial.composerHeight) <= 1,
-            ),
-          ).toBe(true);
+        const dimensions = multiline
+          ? (["height", "top"] as const)
+          : (["height", "top", "composerTop", "composerHeight"] as const);
+        for (const sample of samples) {
+          expect(sample).toMatchObject({
+            retained: true,
+            open: initial.open,
+            reveal: initial.reveal,
+            detailsOpen,
+            queueRows: 0,
+          });
+          for (const dimension of dimensions) {
+            expect(Math.abs(sample[dimension] - initial[dimension])).toBeLessThanOrEqual(1);
+          }
         }
         expect(initial.open).toBe(detailsOpen ? expanded : true);
         expect(initial.detailsOpen).toBe(detailsOpen);
-        if (mobile) {
-          await captureUiProof(suite, page, "mobile-progress", "after-send.png");
-        }
         expect(await textarea.inputValue()).toBe("");
         expect(await gateway.getRequests("chat.send")).toHaveLength(1);
         if (
@@ -224,9 +198,7 @@ suite.define(() => {
           await card.waitFor();
           expect(await card.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(true);
         }
-      } finally {
-        await suite.closeBrowserContext(context);
-      }
+      });
     },
   );
 });

@@ -1,10 +1,8 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { openChatDetails } from "./chat-details.test-support.ts";
 import {
-  captureUiProof,
+  chatMessage,
   createChatFlowE2eSuite,
   installMockGateway,
   waitForChatScrollIdle,
@@ -29,21 +27,12 @@ function refreshScenario() {
       { ...sessionInfo, kind: "direct" as const, label: "Main", updatedAt: sessionInfo.endedAt },
     ],
     historyMessages: [
-      {
-        role: "user",
-        content: [{ type: "text", text: "Review the workspace and keep the work card current." }],
-        timestamp: 1,
-      },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "text",
-            text: "The workspace review is ready. The work card tracks the remaining checks.",
-          },
-        ],
-        timestamp: 2,
-      },
+      chatMessage("user", "Review the workspace and keep the work card current.", { timestamp: 1 }),
+      chatMessage(
+        "assistant",
+        "The workspace review is ready. The work card tracks the remaining checks.",
+        { timestamp: 2 },
+      ),
     ],
     featureMethods: [...scenario.featureMethods, "progressCard.refresh"],
     deferredMethods: [],
@@ -68,34 +57,39 @@ async function transcriptSnapshot(page: Page) {
   };
 }
 
+async function openRefreshCard(page: Page, draft?: string) {
+  const scenario = refreshScenario();
+  const gateway = await installMockGateway(page, scenario);
+  await page.goto(`${suite.server.baseUrl}chat`);
+  const card = page.locator('[data-progress-card-placement="details"]');
+  if (draft) {
+    await page.locator(".agent-chat__composer-combobox textarea").fill(draft);
+  }
+  await openChatDetails(page);
+  await card.waitFor();
+  return {
+    scenario,
+    gateway,
+    card,
+    options: card.getByRole("button", { name: "Task progress options", exact: true }),
+    button: card.locator(".session-progress-card__refresh[aria-busy]"),
+    time: card.locator("time"),
+  };
+}
+
 suite.define(() => {
   it.each([
-    {
-      name: "desktop-expanded",
-      width: 1280,
-      height: 900,
-      collapsed: false,
-      reducedMotion: "no-preference" as const,
-    },
-    {
-      name: "narrow-collapsed",
-      width: 390,
-      height: 844,
-      collapsed: true,
-      reducedMotion: "reduce" as const,
-    },
-  ])(
-    "refreshes only the work card and preserves disclosure: $name",
-    async ({ name, width, height, collapsed, reducedMotion }) => {
+    [1280, 900, false, "no-preference"],
+    [390, 844, true, "reduce"],
+  ] as const)(
+    "refreshes only the work card and preserves disclosure: %s × %s",
+    async (width, height, collapsed, reducedMotion) => {
       await suite.withPage({ viewport: { width, height } }, async ({ page }) => {
         await page.emulateMedia({ reducedMotion });
-        const scenario = refreshScenario();
-        const gateway = await installMockGateway(page, scenario);
-        await page.goto(`${suite.server.baseUrl}chat`);
-        const card = page.locator('[data-progress-card-placement="details"]');
-        await page.locator(".agent-chat__composer-combobox textarea").fill("Keep this draft.");
-        await openChatDetails(page);
-        await card.waitFor();
+        const { scenario, gateway, card, options, button, time } = await openRefreshCard(
+          page,
+          "Keep this draft.",
+        );
         if (collapsed) {
           await card.locator("summary").click();
         }
@@ -103,11 +97,11 @@ suite.define(() => {
         await expect
           .poll(() => card.evaluate((element) => (element as HTMLDetailsElement).open))
           .toBe(!collapsed);
-        const options = card.getByRole("button", { name: "Task progress options", exact: true });
+        const summary = card.locator("summary");
+        const cardMarkdown = card.locator(".session-progress-card__markdown");
         expect(await card.locator("summary button:visible").count()).toBe(1);
         await options.click();
         await card.getByRole("menuitem", { name: "Refresh task progress", exact: true }).waitFor();
-        const button = card.locator(".session-progress-card__refresh[aria-busy]");
         await button.locator("svg path").first().waitFor({ state: "attached" });
         const idleIcon = await button.locator("svg").innerHTML();
         const iconBounds = await button.locator("svg").boundingBox();
@@ -118,14 +112,11 @@ suite.define(() => {
         expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
         const initial = await transcriptSnapshot(page);
         const originalCard = await card.elementHandle();
-        const timestamp = await card.locator("time").getAttribute("datetime");
-        const summaryHeight = await card
-          .locator("summary")
-          .evaluate((element) => element.getBoundingClientRect().height);
-        const markdown = await card.locator(".session-progress-card__markdown").textContent();
+        const timestamp = await time.getAttribute("datetime");
+        const summaryHeight = await summary.evaluate((el) => el.getBoundingClientRect().height);
+        const markdown = await cardMarkdown.textContent();
         await page.keyboard.press("Escape");
         await page.mouse.move(0, 0);
-        await captureUiProof(suite, page, name, "after-idle.png");
         await options.click();
         await button.click();
         const request = await gateway.waitForRequest("progressCard.refresh");
@@ -139,7 +130,6 @@ suite.define(() => {
         expect(await button.getAttribute("aria-busy")).toBe("true");
         const pendingIcon = button.locator("svg");
         await page.mouse.move(0, 0);
-        await captureUiProof(suite, page, name, "after-pending.png");
         if (reducedMotion === "reduce") {
           expect(
             await pendingIcon.evaluate((element) => getComputedStyle(element).animationName),
@@ -151,19 +141,17 @@ suite.define(() => {
             await pendingIcon.evaluate((element) => element.getAnimations()[0]?.playState),
           ).toBe("running");
         }
-        expect(
-          await card
-            .locator("summary")
-            .evaluate((element) => element.getBoundingClientRect().height),
-        ).toBe(summaryHeight);
+        expect(await summary.evaluate((el) => el.getBoundingClientRect().height)).toBe(
+          summaryHeight,
+        );
         await page.keyboard.press("Escape");
         const pendingStatus = card.locator(".session-progress-card__refresh-status");
         expect(
           await pendingStatus.evaluate((element) => element.getBoundingClientRect().width),
         ).toBeLessThanOrEqual(1);
         expect(await transcriptSnapshot(page)).toEqual(initial);
-        expect(await card.locator("time").getAttribute("datetime")).toBe(timestamp);
-        expect(await card.locator(".session-progress-card__markdown").textContent()).toBe(markdown);
+        expect(await time.getAttribute("datetime")).toBe(timestamp);
+        expect(await cardMarkdown.textContent()).toBe(markdown);
         await gateway.resolveDeferred("progressCard.refresh", {
           runId: "hidden-refresh-run",
           status: "accepted",
@@ -178,7 +166,7 @@ suite.define(() => {
         });
         await gateway.waitForRequest("progressCard.get", { after: reads });
         expect(await options.getAttribute("data-state")).toBe("pending");
-        expect(await card.locator("time").getAttribute("datetime")).toBe(timestamp);
+        expect(await time.getAttribute("datetime")).toBe(timestamp);
         const nextCard = {
           ...scenario.methodResponses["progressCard.get"].card,
           revision: 2,
@@ -199,12 +187,10 @@ suite.define(() => {
         await options.click();
         expect(await button.isDisabled()).toBe(false);
         await page.keyboard.press("Escape");
-        expect(await card.locator("time").getAttribute("datetime")).toBe(
+        expect(await time.getAttribute("datetime")).toBe(
           new Date(nextCard.updatedAt).toISOString(),
         );
-        expect(await card.locator(".session-progress-card__markdown").textContent()).toContain(
-          nextCard.markdown,
-        );
+        expect(await cardMarkdown.textContent()).toContain(nextCard.markdown);
         expect(await card.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(
           !collapsed,
         );
@@ -215,11 +201,6 @@ suite.define(() => {
         expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
         expect(await gateway.getRequests("progressCard.refresh")).toHaveLength(1);
         await page.mouse.move(0, 0);
-        await captureUiProof(suite, page, name, "after-updated.png");
-        await writeFile(
-          path.join(suite.artifactDir, name + "-requests.json"),
-          JSON.stringify(await gateway.getRequests(), null, 2),
-        );
         await originalCard!.dispose();
       });
     },
@@ -227,18 +208,11 @@ suite.define(() => {
 
   it("keeps the old card on failure and retries the same hidden intent", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const scenario = refreshScenario();
-      const gateway = await installMockGateway(page, scenario);
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const card = page.locator('[data-progress-card-placement="details"]');
-      await openChatDetails(page);
-      await card.waitFor();
+      const { scenario, gateway, card, options, button, time } = await openRefreshCard(page);
       await waitForChatScrollIdle(page);
       const initial = await transcriptSnapshot(page);
-      const timestamp = await card.locator("time").getAttribute("datetime");
-      const options = card.getByRole("button", { name: "Task progress options", exact: true });
+      const timestamp = await time.getAttribute("datetime");
       await options.click();
-      const button = card.locator(".session-progress-card__refresh[aria-busy]");
       await button.click();
       const request = await gateway.waitForRequest("progressCard.refresh");
       await gateway.rejectDeferred("progressCard.refresh", {
@@ -254,10 +228,9 @@ suite.define(() => {
         await failureStatus.evaluate((element) => element.getBoundingClientRect().height),
       ).toBeGreaterThan(1);
       expect(await failureStatus.isVisible()).toBe(true);
-      expect(await card.locator("time").getAttribute("datetime")).toBe(timestamp);
+      expect(await time.getAttribute("datetime")).toBe(timestamp);
       expect(await transcriptSnapshot(page)).toEqual(initial);
       await page.mouse.move(0, 0);
-      await captureUiProof(suite, page, "desktop-error", "after-error.png");
       // Releasing a held method also ends its hold; reserve the next retry explicitly.
       await gateway.deferNext("progressCard.refresh");
       await button.click();
