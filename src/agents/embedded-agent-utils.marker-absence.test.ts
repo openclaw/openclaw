@@ -61,15 +61,17 @@ it.each([
 });
 
 it("keeps marker probes and checkpoint deltas bounded after stripping a trace", () => {
-  const answer = "<article>Array<string>: a < b and c > d.</article>\n".repeat(96) + "Done.";
+  const line = "<article>Array<string>: a < b and c > d.</article>\n";
+  const answer = line.repeat(256) + "Done.";
   const source = "tool call: hidden\n" + answer;
   const stream = createAssistantVisibleStreamText("final_answer");
   const comparisons = vi.spyOn(String.prototype, "startsWith");
   let comparedCharacters = 0;
   let delivered = "";
   try {
-    for (let offset = 0; offset < source.length; offset += 4) {
-      const result = stream.append(source.slice(offset, offset + 4));
+    // Complete lines isolate checkpoint/probe work from provisional XML tool-tag handling.
+    for (const chunk of ["tool call: hidden\n", ...Array<string>(256).fill(line), "Done."]) {
+      const result = stream.append(chunk);
       delivered = result.delta === null ? result.text : delivered + result.delta;
     }
     comparedCharacters = comparisons.mock.calls.reduce((sum, [text]) => sum + text.length, 0);
