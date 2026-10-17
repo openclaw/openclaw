@@ -1,4 +1,3 @@
-// Transcript appends preserve source text while normalizing replay metadata.
 import { describe, expect, it } from "vitest";
 import {
   onInternalSessionTranscriptUpdate,
@@ -41,7 +40,6 @@ describe("appendExactAssistantMessageToSessionTranscript - source fidelity", () 
 
   it("retains validated opaque provider replay state exactly", async () => {
     const { sessionId, sessionKey, storePath } = await seedSessionEntry();
-
     const publicUpdates: Array<{ message?: unknown }> = [];
     const internalUpdates: Array<{ message?: unknown }> = [];
     const unsubscribe = onSessionTranscriptUpdate((update) => publicUpdates.push(update));
@@ -81,7 +79,6 @@ describe("appendExactAssistantMessageToSessionTranscript - source fidelity", () 
       unsubscribe();
       unsubscribeInternal();
     }
-
     expect(result.ok).toBe(true);
     const [stored] = (await readStoredMessages({ sessionId, sessionKey, storePath })) as Array<{
       providerReplay?: { data?: string; sessionHash?: string; authProfileHash?: string };
@@ -100,7 +97,6 @@ describe("appendExactAssistantMessageToSessionTranscript - source fidelity", () 
 
   it("preserves secret-shaped text in exact assistant transcript appends", async () => {
     const { sessionId, sessionKey, storePath } = await seedSessionEntry();
-
     const fakeApiKey = "sk-proj-FAKEKEYFORTESTINGONLY1234567890";
     const signature = JSON.stringify({
       id: "A".repeat(416),
@@ -108,7 +104,6 @@ describe("appendExactAssistantMessageToSessionTranscript - source fidelity", () 
       summary: [],
       encrypted_content: "Q".repeat(32) + "/LTAI" + "B".repeat(20) + "/" + "C".repeat(6),
     });
-
     const result = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
       storePath,
@@ -122,12 +117,7 @@ describe("appendExactAssistantMessageToSessionTranscript - source fidelity", () 
         model: "test-model",
       }),
     });
-
     expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-
     const stored = await readStoredMessages({ sessionId, sessionKey, storePath });
     expect(stored).toMatchObject([
       { content: [{ type: "text" }, { thinkingSignature: signature }] },
@@ -138,7 +128,6 @@ describe("appendExactAssistantMessageToSessionTranscript - source fidelity", () 
 
   it("emits the persisted assistant source text for inline transcript updates", async () => {
     const { sessionId, sessionKey, storePath } = await seedSessionEntry();
-
     const fakeApiKey = "sk-proj-FAKEKEYFORTESTINGONLY1234567890";
     const updates: Array<{ message?: unknown }> = [];
     const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
@@ -156,9 +145,6 @@ describe("appendExactAssistantMessageToSessionTranscript - source fidelity", () 
       });
 
       expect(result.ok).toBe(true);
-      if (!result.ok) {
-        return;
-      }
 
       const [diskMessage] = await readStoredMessages({ sessionId, sessionKey, storePath });
       expect(JSON.stringify(diskMessage)).toContain(fakeApiKey);
@@ -170,58 +156,31 @@ describe("appendExactAssistantMessageToSessionTranscript - source fidelity", () 
     }
   });
 
-  it("dedupes delivery mirrors against exact persisted text", async () => {
-    const { sessionId, sessionKey, storePath } = await seedSessionEntry();
-
-    const fakeApiKey = "sk-proj-FAKEKEYFORTESTINGONLY1234567890";
-
-    const params = { sessionKey, storePath, config: {}, text: `Here is your key: ${fakeApiKey}` };
-    const first = await appendAssistantMessageToSessionTranscript(params);
+  it.each([false, true])("dedupes persisted secret-shaped text (legacy=%s)", async (legacy) => {
+    const scope = await seedSessionEntry();
+    const fakeApiKey = legacy
+      ? "sk-proj-OLDERUNREDACTEDTRANSCRIPT1234567890"
+      : "sk-proj-FAKEKEYFORTESTINGONLY1234567890";
+    const text = `Here is your key: ${fakeApiKey}`;
+    const params = { ...scope, config: {}, text };
+    const first = legacy
+      ? await appendExactAssistantMessageToSessionTranscript({
+          ...params,
+          message: createExactAssistantMessage({
+            text,
+            provider: "openclaw",
+            model: "legacy-assistant",
+          }),
+        })
+      : await appendAssistantMessageToSessionTranscript(params);
     const second = await appendAssistantMessageToSessionTranscript(params);
-
     expect(first.ok).toBe(true);
     expect(second.ok).toBe(true);
     if (!first.ok || !second.ok) {
-      return;
+      throw new Error("expected successful transcript appends");
     }
     expect(second.messageId).toBe(first.messageId);
-
-    const events = await loadTranscriptEvents({ sessionId, sessionKey, storePath });
-    expect(JSON.stringify(events)).toContain(fakeApiKey);
-    expect(events.filter((event) => (event as { type?: unknown }).type === "message")).toHaveLength(
-      1,
-    );
-  });
-
-  it("dedupes delivery mirrors against existing assistant entries", async () => {
-    const { sessionId, sessionKey, storePath } = await seedSessionEntry();
-
-    const fakeApiKey = "sk-proj-OLDERUNREDACTEDTRANSCRIPT1234567890";
-    const unredacted = await appendExactAssistantMessageToSessionTranscript({
-      sessionKey,
-      storePath,
-      config: {},
-      message: createExactAssistantMessage({
-        content: [{ type: "text", text: `Here is your key: ${fakeApiKey}` }],
-        provider: "openclaw",
-        model: "legacy-assistant",
-      }),
-    });
-    const deduped = await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      storePath,
-      config: {},
-      text: `Here is your key: ${fakeApiKey}`,
-    });
-
-    expect(unredacted.ok).toBe(true);
-    expect(deduped.ok).toBe(true);
-    if (!unredacted.ok || !deduped.ok) {
-      return;
-    }
-    expect(deduped.messageId).toBe(unredacted.messageId);
-
-    const events = await loadTranscriptEvents({ sessionId, sessionKey, storePath });
+    const events = await loadTranscriptEvents(scope);
     expect(JSON.stringify(events)).toContain(fakeApiKey);
     expect(events.filter((event) => (event as { type?: unknown }).type === "message")).toHaveLength(
       1,
