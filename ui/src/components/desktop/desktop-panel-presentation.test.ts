@@ -20,19 +20,25 @@ import {
 } from "./desktop-panel.test-support.ts";
 
 const restore: (() => void)[] = [];
+type Panel = ReturnType<typeof createPanel>;
 const observed = { transport: "rfb", wsPath: "/desktop/observe", control: false };
 const connecting = (handle = createConnectionHandle()) =>
   vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
     options.onConnect?.();
     return handle;
   });
-const toggle = (detail: { open: boolean; environmentId?: string }) =>
+async function toggle(panel: Panel, detail: { open: boolean; environmentId?: string }) {
   window.dispatchEvent(new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, { detail }));
-async function setPresented(panel: ReturnType<typeof createPanel>, presented: boolean) {
-  updatePanel(panel, { presented });
   await panel.updateComplete;
 }
-async function viewer(options: Partial<ReturnType<typeof createPanel>> = {}) {
+function expectRequests(request: { mock: { calls: unknown[][] } }, method: string, count: number) {
+  expect(request.mock.calls.filter(([name]) => name === method)).toHaveLength(count);
+}
+async function update(panel: Panel, changes: Partial<Panel>) {
+  updatePanel(panel, changes);
+  await panel.updateComplete;
+}
+async function viewer(options: Partial<Panel> = {}) {
   const request = vi.fn(async (method: string) =>
     method === (options.requestedSource ? "environments.status" : "environments.list")
       ? options.requestedSource
@@ -57,7 +63,7 @@ async function viewer(options: Partial<ReturnType<typeof createPanel>> = {}) {
 async function mount(
   request: unknown,
   connect: DesktopClient["connect"],
-  options: Partial<ReturnType<typeof createPanel>> = {},
+  options: Partial<Panel> = {},
 ) {
   const panel = createPanel();
   updatePanel(panel, {
@@ -72,11 +78,10 @@ async function mount(
   return panel;
 }
 
-async function openStandalone(panel: ReturnType<typeof createPanel>) {
+async function openStandalone(panel: Panel) {
   updatePanel(panel, { available: true });
   await mountPanel(panel);
-  toggle({ open: true });
-  await panel.updateComplete;
+  await toggle(panel, { open: true });
   return panel.querySelector<HTMLButtonElement>(".desktop-fullscreen-button")!;
 }
 
@@ -137,27 +142,21 @@ describe("desktop panel presentation lifecycle", () => {
     const panel = createPanel();
     updatePanel(panel, { available: true, client: createGatewayClient(request).client });
     await mountPanel(panel);
-    toggle({ open: true });
-    await panel.updateComplete;
+    await toggle(panel, { open: true });
     expect(panel.querySelector("section.bp")).not.toBeNull();
 
-    updatePanel(panel, { embedded: true, presented: true });
-    await panel.updateComplete;
+    await update(panel, { embedded: true, presented: true });
     request.mockClear();
-    toggle({ open: true, environmentId: "ignored-global-target" });
-    await panel.updateComplete;
+    await toggle(panel, { open: true, environmentId: "ignored-global-target" });
     expect(request).not.toHaveBeenCalled();
 
-    updatePanel(panel, { embedded: false });
-    await panel.updateComplete;
-    toggle({ open: false });
-    await panel.updateComplete;
+    await update(panel, { embedded: false });
+    await toggle(panel, { open: false });
     expect(panel.querySelector("section.bp")).toBeNull();
 
     await unmountPanel(panel);
     request.mockClear();
-    toggle({ open: true });
-    await panel.updateComplete;
+    await toggle(panel, { open: true });
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -188,7 +187,7 @@ describe("desktop panel presentation lifecycle", () => {
     const button = panel.querySelector<HTMLButtonElement>(".desktop-app-button")!;
     button.click();
     button.click();
-    expect(request.mock.calls.filter(([method]) => method === "desktop.launch")).toHaveLength(1);
+    expectRequests(request, "desktop.launch", 1);
     await waitForSolid(() => expect(button.getAttribute("aria-busy")).toBe("true"));
     launch.reject(new Error("App launch unavailable"));
     await waitForSolid(() => {
@@ -256,14 +255,12 @@ describe("desktop panel presentation lifecycle", () => {
 
     document.dispatchEvent(new Event("fullscreenchange"));
     updatePanel(panel, { available: true });
-    toggle({ open: true });
-    await panel.updateComplete;
+    await toggle(panel, { open: true });
     const button = panel.querySelector(".desktop-fullscreen-button");
     expect(button).not.toBeNull();
     expect.soft(button?.getAttribute("aria-pressed")).toBe("false");
 
-    updatePanel(panel, { available: false });
-    await panel.updateComplete;
+    await update(panel, { available: false });
     expect(panel.querySelector("section.bp")).toBeNull();
     await unmountPanel(panel);
     expect(fullscreen.exit).not.toHaveBeenCalled();
@@ -289,50 +286,44 @@ describe("desktop panel presentation lifecycle", () => {
     );
     expect(panel.querySelector("[aria-busy='true']")).toBeNull();
     expect(panel.querySelector(".desktop-status button")?.textContent).toContain("Reconnect");
-    await setPresented(panel, false);
-    await setPresented(panel, true);
+    await update(panel, { presented: false });
+    await update(panel, { presented: true });
     expect(request.mock.calls).toHaveLength(1);
     clickPanelButton(panel, ".desktop-status button");
     await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
-    expect(request.mock.calls.filter(([method]) => method === "environments.status")).toHaveLength(
-      2,
-    );
+    expectRequests(request, "environments.status", 2);
   });
 
   it("reuses a briefly hidden viewer and releases it after 30 seconds away", async () => {
-    const {
-      request,
-      connect,
-      panel,
-      handle: { disconnect },
-    } = await viewer();
-    expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(1);
+    const { request, connect, panel, handle } = await viewer();
+    const { disconnect } = handle;
+    expectRequests(request, "environments.list", 1);
     const surface = panel.querySelector(".desktop-surface");
     selectSizing(panel, "actual");
     vi.useFakeTimers();
 
-    await setPresented(panel, false);
+    await update(panel, { presented: false });
 
     expect(disconnect).not.toHaveBeenCalled();
     expect(panel.isConnected).toBe(true);
     await vi.advanceTimersByTimeAsync(29_000);
 
-    await setPresented(panel, true);
+    await update(panel, { presented: true });
     await vi.advanceTimersByTimeAsync(2_000);
     expect(disconnect).not.toHaveBeenCalled();
     expect(panel.querySelector(".desktop-surface")).toBe(surface);
     expect(sizingMenu(panel).value).toBe("actual");
-    expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(1);
-    expect(request.mock.calls.filter(([method]) => method === "desktop.observe")).toHaveLength(1);
+    expectRequests(request, "environments.list", 1);
+    expectRequests(request, "desktop.observe", 1);
     expect(connect).toHaveBeenCalledOnce();
 
-    await setPresented(panel, false);
+    await update(panel, { presented: false });
     await vi.advanceTimersByTimeAsync(30_000);
     expect(disconnect).toHaveBeenCalledOnce();
     expect(panel.querySelector(".desktop-surface")).toBeNull();
-    await setPresented(panel, true);
+    await update(panel, { presented: true });
     await vi.advanceTimersByTimeAsync(0);
-    expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(2);
+    expectRequests(request, "environments.list", 2);
     expect(panel.querySelector(".desktop-picker")).not.toBeNull();
   });
 
@@ -352,33 +343,33 @@ describe("desktop panel presentation lifecycle", () => {
     expect(panel.querySelector(".desktop-status button")?.textContent).toContain("Reconnect");
   });
 
-  it.each(["session", "source", "client", "unavailable", "unmount"] as const)(
-    "immediately releases a hidden viewer on %s change",
-    async (change) => {
-      const { request, handle, connect, panel } = await viewer({
-        sessionKey: "main",
-        requestedSource: desktopEnvironment.id,
-      });
-      vi.useFakeTimers();
-      await setPresented(panel, false);
-      expect(handle.disconnect).not.toHaveBeenCalled();
-      expect(handle.setPresented).toHaveBeenCalledWith(false);
-      if (change === "session") {
-        updatePanel(panel, { sessionKey: "other" });
-      } else if (change === "source") {
-        updatePanel(panel, { requestedSource: "node:other" });
-      } else if (change === "client") {
-        updatePanel(panel, { client: createGatewayClient(request).client });
-      } else if (change === "unavailable") {
-        updatePanel(panel, { available: false });
-      } else {
-        await unmountPanel(panel);
-      }
-      await panel.updateComplete;
-      expect(handle.disconnect).toHaveBeenCalledOnce();
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(handle.disconnect).toHaveBeenCalledOnce();
-      expect(connect).toHaveBeenCalledOnce();
-    },
-  );
+  it.each([
+    ["session", { sessionKey: "other" }],
+    ["source", { requestedSource: "node:other" }],
+    ["client", "client"],
+    ["unavailable", { available: false }],
+    ["unmount", "unmount"],
+  ] as const)("immediately releases a hidden viewer on %s change", async (_name, change) => {
+    const { request, handle, connect, panel } = await viewer({
+      sessionKey: "main",
+      requestedSource: desktopEnvironment.id,
+    });
+    vi.useFakeTimers();
+    await update(panel, { presented: false });
+    expect(handle.disconnect).not.toHaveBeenCalled();
+    expect(handle.setPresented).toHaveBeenCalledWith(false);
+    if (change === "unmount") {
+      await unmountPanel(panel);
+    } else {
+      updatePanel(
+        panel,
+        change === "client" ? { client: createGatewayClient(request).client } : change,
+      );
+    }
+    await panel.updateComplete;
+    expect(handle.disconnect).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(handle.disconnect).toHaveBeenCalledOnce();
+    expect(connect).toHaveBeenCalledOnce();
+  });
 });

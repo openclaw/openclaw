@@ -37,6 +37,14 @@ function waitForStatus(request: unknown) {
     }),
   );
 }
+type Params = { control?: boolean; environmentId?: string };
+type Reply = (params?: Params) => unknown;
+function requests(handlers: Record<string, Reply>, fallback: Reply = () => observation) {
+  return vi.fn(async (method: string, params?: Params) => (handlers[method] ?? fallback)(params));
+}
+const describeSession = (key: string, environmentId = desktopEnvironment.id) => ({
+  session: { key, placement: { state: "active", environmentId } },
+});
 
 describe("session desktop connection", () => {
   beforeEach(() => {
@@ -50,10 +58,7 @@ describe("session desktop connection", () => {
   });
 
   async function mount(
-    request: (
-      method: string,
-      params?: { control?: boolean; environmentId?: string },
-    ) => Promise<unknown>,
+    request: ReturnType<typeof requests>,
     options: Partial<
       Pick<
         ReturnType<typeof createPanel>,
@@ -92,12 +97,13 @@ describe("session desktop connection", () => {
   ])("preserves the $phase source on show (explicit=$explicit)", async ({ phase, explicit }) => {
     const observed = createDeferred<{ transport: "rfb"; wsPath: string; control: boolean }>();
     let first = true;
-    const request = vi.fn(
-      async (method: string, params?: { control?: boolean; environmentId?: string }) => {
-        if (method === "environments.status") {
-          return { ...desktopEnvironment, id: params?.environmentId ?? desktopEnvironment.id };
-        }
-        if (method === "desktop.observe" && first) {
+    const request = requests({
+      "environments.status": (params) => ({
+        ...desktopEnvironment,
+        id: params?.environmentId ?? desktopEnvironment.id,
+      }),
+      "desktop.observe": (params) => {
+        if (first) {
           first = false;
           if (phase === "opening") {
             return observed.promise;
@@ -105,7 +111,7 @@ describe("session desktop connection", () => {
         }
         return { ...observation, control: params?.control ?? false };
       },
-    );
+    });
     const onFocusTargetChange = vi.fn();
     const { panel, connect, disconnect } = await mount(request, { onFocusTargetChange });
     if (phase === "opening") {
@@ -168,15 +174,14 @@ describe("session desktop connection", () => {
         desktop: false,
       };
       let reads = 0;
-      const request = vi.fn(async (method: string, params?: { environmentId?: string }) => {
-        if (method === "environments.status") {
+      const request = requests({
+        "environments.status": (params) => {
           if (params?.environmentId === replacement.id) {
             return replacement;
           }
           reads += 1;
           return outcome === "retired" && reads > 1 ? oldReady.promise : environment;
-        }
-        return observation;
+        },
       });
       const { panel, connect } = await mount(request, { documentMode }, outcome === "ready");
       await waitForStatus(request);
@@ -218,36 +223,6 @@ describe("session desktop connection", () => {
     },
   );
 
-  it("passes the worker observe password to the desktop client without an auth discriminator", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "environments.list") {
-        return { environments: [desktopEnvironment] };
-      }
-      return {
-        transport: "rfb",
-        wsPath: "/desktop/observe?token=worker",
-        expiresAtMs: 60_000,
-        control: false,
-        vncPassword: "synthetic-worker-password",
-      };
-    });
-    const { panel, connect } = await mount(request, {
-      embedded: false,
-      documentMode: true,
-      sessionKey: null,
-      requestedSource: null,
-    });
-
-    await waitForSolid(() =>
-      expect(panel.querySelector(".desktop-environment button")).not.toBeNull(),
-    );
-    clickPanelButton(panel);
-    await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
-    expect(connect.mock.calls[0]?.[0].credentials).toEqual({
-      password: "synthetic-worker-password",
-    });
-  });
-
   it.each([
     { presentation: "embedded", failure: "status" },
     { presentation: "session document", failure: "status" },
@@ -257,35 +232,25 @@ describe("session desktop connection", () => {
     "retries $failure lookup in the $presentation without global inventory",
     async ({ presentation, failure }) => {
       const sessionKey = "agent:main:cloud";
-      const described = {
-        session: {
-          key: sessionKey,
-          placement: { state: "active", environmentId: desktopEnvironment.id },
-        },
-      };
+      const described = describeSession(sessionKey);
       const pending = createDeferred<EnvironmentSummary | typeof described>();
       let response = pending.promise;
       let failRefresh = false;
-      const request = vi.fn(async (method: string) => {
-        if (method === "sessions.describe") {
-          if (failRefresh) {
-            throw new Error("Session lookup unavailable");
-          }
-          return failure === "session" ? response : described;
-        }
-        if (method === "environments.status") {
-          return failure === "status" ? response : desktopEnvironment;
-        }
-        if (method === "desktop.observe") {
-          return {
-            transport: "rfb",
-            wsPath: "/desktop/observe?token=session",
-            expiresAtMs: 60_000,
-            control: false,
-          };
-        }
-        throw new Error("Global inventory unavailable");
-      });
+      const request = requests(
+        {
+          "sessions.describe": () => {
+            if (failRefresh) {
+              throw new Error("Session lookup unavailable");
+            }
+            return failure === "session" ? response : described;
+          },
+          "environments.status": () => (failure === "status" ? response : desktopEnvironment),
+          "desktop.observe": () => observation,
+        },
+        () => {
+          throw new Error("Global inventory unavailable");
+        },
+      );
       const { panel, gateway, connect, disconnect } = await mount(request, {
         embedded: presentation === "embedded",
         documentMode: presentation !== "embedded",
@@ -338,24 +303,18 @@ describe("session desktop connection", () => {
       const nextSession = createDeferred<unknown>();
       const replacement = { ...desktopEnvironment, id: "worker-replacement" };
       const sessionKey = "agent:main:target-race";
-      let session: Promise<unknown> = Promise.resolve({
-        session: {
-          key: sessionKey,
-          placement: { state: "active", environmentId: desktopEnvironment.id },
+      let session: Promise<unknown> = Promise.resolve(describeSession(sessionKey));
+      const request = requests(
+        {
+          "sessions.describe": () => session,
+          "environments.status": (params) =>
+            params?.environmentId === replacement.id ? replacement : previous.promise,
+          "desktop.observe": () => observation,
         },
-      });
-      const request = vi.fn(async (method: string, params?: { environmentId?: string }) => {
-        if (method === "sessions.describe") {
-          return session;
-        }
-        if (method === "environments.status") {
-          return params?.environmentId === replacement.id ? replacement : previous.promise;
-        }
-        if (method === "desktop.observe") {
-          return { transport: "rfb", wsPath: "/desktop/observe?token=current", control: false };
-        }
-        throw new Error("Global inventory must not participate");
-      });
+        () => {
+          throw new Error("Global inventory must not participate");
+        },
+      );
       const { panel, gateway, connect } = await mount(request, {
         embedded: false,
         documentMode: true,
@@ -386,9 +345,7 @@ describe("session desktop connection", () => {
         expect(rpcCalls(request, "environments.list")).toHaveLength(0);
         return;
       }
-      nextSession.resolve({
-        session: { key: sessionKey, placement: { state: "active", environmentId: replacement.id } },
-      });
+      nextSession.resolve(describeSession(sessionKey, replacement.id));
       await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
       expectObserve(request, replacement.id);
       expect(rpcCalls(request, "sessions.describe")).toHaveLength(2);

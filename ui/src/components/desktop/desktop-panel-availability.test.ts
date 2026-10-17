@@ -33,6 +33,10 @@ const refresh = (
 ) => gateway.emit("node.runnerInventory.changed", { nodeId });
 
 const observed = { transport: "rfb", wsPath: "/desktop/observe", control: false };
+const statusRequest = (read: (params?: { environmentId?: string }) => unknown) =>
+  vi.fn(async (method: string, params?: { environmentId?: string }) =>
+    method === "environments.status" ? read(params) : observed,
+  );
 
 afterEach(() => document.body.replaceChildren());
 
@@ -61,9 +65,7 @@ async function mount(
 describe("Desktop native availability", () => {
   it("refreshes the same node after a DOM reconnect without accepting its old availability", async () => {
     let statusReply = Promise.resolve(unlocked);
-    const request = vi.fn(async (method: string) =>
-      method === "environments.status" ? statusReply : observed,
-    );
+    const request = statusRequest(() => statusReply);
     const { gateway, connect, panel } = await mount(request, { documentMode: true });
     await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
     statusReply = Promise.resolve(workstation);
@@ -141,15 +143,12 @@ describe("Desktop native availability", () => {
       [other.id, Promise.resolve(other)],
     ]);
     let firstStatus = true;
-    const request = vi.fn(async (method: string, params?: { environmentId?: string }) => {
-      if (method === "environments.status") {
-        if (firstStatus) {
-          firstStatus = false;
-          return initialStatus.promise;
-        }
-        return replies.get(params?.environmentId ?? "");
+    const request = statusRequest((params) => {
+      if (firstStatus) {
+        firstStatus = false;
+        return initialStatus.promise;
       }
-      return observed;
+      return replies.get(params?.environmentId ?? "");
     });
     const { gateway, connect, panel } = await mount(request, {
       embedded: true,
@@ -193,11 +192,7 @@ describe("Desktop native availability", () => {
 
     const releaseGateway = hold(other.id);
     let replacementStatus = other;
-    const replacement = createGatewayClient(
-      vi.fn(async (method: string) =>
-        method === "environments.status" ? replacementStatus : observed,
-      ),
-    );
+    const replacement = createGatewayClient(statusRequest(() => replacementStatus));
     updatePanel(panel, { client: replacement.client });
     await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(3));
     await releaseGateway(native("locked", other.id));
